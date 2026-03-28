@@ -1,0 +1,14 @@
+<Configuration>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>D:\projects\bro</HostFolder>
+      <SandboxFolder>C:\bro</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <MemoryInMB>4096</MemoryInMB>
+  <vGPU>Enable</vGPU>
+  <LogonCommand>
+    <Command>C:\bro\sandbox_start.cmd</Command>
+  </LogonCommand>
+</Configuration>

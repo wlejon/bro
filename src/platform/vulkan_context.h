@@ -36,6 +36,18 @@ public:
     VkRenderPass getRenderPass() const { return m_renderPass; }
     VkCommandBuffer getCurrentCommandBuffer() const { return m_currentCommandBuffer; }
     uint32_t getCurrentImageIndex() const { return m_currentImageIndex; }
+    VkQueue getPresentQueue() const { return m_presentQueue; }
+    uint32_t getPresentQueueFamily() const { return m_presentQueueFamily; }
+    uint32_t getSwapchainImageCount() const { return static_cast<uint32_t>(m_swapchainImages.size()); }
+    VkImage getSwapchainImage(uint32_t index) const { return m_swapchainImages[index]; }
+
+    // Lightweight frame management for Skia (no render pass)
+    struct AcquiredImage {
+        uint32_t index;
+        VkSemaphore imageAvailable;
+    };
+    AcquiredImage acquireNextImage();
+    void present(VkSemaphore renderComplete);
 
 private:
     void createInstance(Window& window);

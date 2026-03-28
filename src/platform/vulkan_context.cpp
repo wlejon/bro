@@ -225,7 +225,7 @@ void VulkanContext::createSwapchain(uint32_t width, uint32_t height) {
 
     VkSurfaceFormatKHR chosenFormat = formats[0];
     for (const auto& format : formats) {
-        if (format.format == VK_FORMAT_B8G8R8A8_SRGB &&
+        if (format.format == VK_FORMAT_B8G8R8A8_UNORM &&
             format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             chosenFormat = format;
             break;
@@ -239,15 +239,14 @@ void VulkanContext::createSwapchain(uint32_t width, uint32_t height) {
     std::vector<VkPresentModeKHR> presentModes(presentModeCount);
     vkGetPhysicalDeviceSurfacePresentModesKHR(m_physicalDevice, m_surface, &presentModeCount, presentModes.data());
 
-    // Prefer IMMEDIATE (uncapped) > MAILBOX (low-latency vsync) > FIFO (vsync)
+    // Prefer MAILBOX (low-latency vsync) > FIFO (vsync).
+    // IMMEDIATE is avoided — it can overwhelm paravirtualized GPUs and
+    // trigger TDR (Timeout Detection and Recovery) on some drivers.
     VkPresentModeKHR chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
     for (const auto& mode : presentModes) {
-        if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
-            chosenPresentMode = mode;
-            break;
-        }
         if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
             chosenPresentMode = mode;
+            break;
         }
     }
 
@@ -274,7 +273,9 @@ void VulkanContext::createSwapchain(uint32_t width, uint32_t height) {
     createInfo.imageColorSpace = chosenFormat.colorSpace;
     createInfo.imageExtent = m_swapchainExtent;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                          | VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                          | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
     uint32_t queueFamilyIndices[] = {m_graphicsQueueFamily, m_presentQueueFamily};
     if (m_graphicsQueueFamily != m_presentQueueFamily) {
@@ -543,6 +544,50 @@ void VulkanContext::endFrame() {
         recreateSwapchain(m_swapchainExtent.width, m_swapchainExtent.height);
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("Failed to present swapchain image");
+    }
+
+    m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+VulkanContext::AcquiredImage VulkanContext::acquireNextImage() {
+    uint32_t imageIndex;
+    VkResult result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
+        m_imageAvailableSemaphores[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        recreateSwapchain(m_swapchainExtent.width, m_swapchainExtent.height);
+        result = vkAcquireNextImageKHR(m_device, m_swapchain, UINT64_MAX,
+            m_imageAvailableSemaphores[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+    }
+    if (result == VK_ERROR_DEVICE_LOST) {
+        LOG_ERROR("Vulkan device lost during image acquire");
+        throw std::runtime_error("Vulkan device lost");
+    }
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        LOG_ERROR("Failed to acquire swapchain image (VkResult: %d)", result);
+        throw std::runtime_error("Failed to acquire swapchain image");
+    }
+
+    m_currentImageIndex = imageIndex;
+    return { imageIndex, m_imageAvailableSemaphores[m_currentFrame] };
+}
+
+void VulkanContext::present(VkSemaphore renderComplete) {
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = &renderComplete;
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = &m_swapchain;
+    presentInfo.pImageIndices = &m_currentImageIndex;
+
+    VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+    if (result == VK_ERROR_DEVICE_LOST) {
+        LOG_ERROR("Vulkan device lost during present");
+        throw std::runtime_error("Vulkan device lost");
+    }
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        recreateSwapchain(m_swapchainExtent.width, m_swapchainExtent.height);
     }
 
     m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;

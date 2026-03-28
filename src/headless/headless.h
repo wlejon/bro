@@ -48,6 +48,9 @@ public:
     /// Run a script file with commands.
     void runScript(const std::string& path);
 
+    /// Render the current page to a PNG file.
+    bool screenshot(const std::string& path);
+
     /// Process a single command line. Returns false on "quit"/"exit".
     bool processCommand(const std::string& line);
 

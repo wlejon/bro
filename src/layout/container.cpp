@@ -53,10 +53,14 @@ void BroContainer::draw_text(litehtml::uint_ptr /*hdc*/, const char* text,
                               litehtml::web_color color,
                               const litehtml::position& pos) {
     render::Color c{color.red, color.green, color.blue, color.alpha};
+    // litehtml gives pos.y as the top of the text box, but Skia's
+    // drawSimpleText expects the baseline y. Offset by the font ascent.
+    uint64_t handle = static_cast<uint64_t>(hFont);
+    auto metrics = fontManager_.getMetrics(handle);
     renderer_->drawText(text,
                         static_cast<float>(pos.x),
-                        static_cast<float>(pos.y),
-                        static_cast<uint64_t>(hFont), c);
+                        static_cast<float>(pos.y) + metrics.ascent,
+                        handle, c);
 }
 
 litehtml::pixel_t BroContainer::pt_to_px(float pt) const {

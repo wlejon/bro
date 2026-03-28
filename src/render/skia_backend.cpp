@@ -1,6 +1,5 @@
 #include "render/skia_backend.h"
 #include "platform/sdl_window.h"
-#include "platform/vulkan_context.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -17,13 +16,10 @@
 #include <include/core/SkRRect.h>
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
+#include <include/core/SkImageInfo.h>
 #include <include/core/SkFontMgr.h>
 #include <include/codec/SkCodec.h>
-#include <include/gpu/ganesh/GrBackendSurface.h>
-#include <include/gpu/ganesh/SkSurfaceGanesh.h>
 #include <include/ports/SkTypeface_win.h>
-#include <src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h>
-#include <src/gpu/GpuTypesPriv.h>
 #endif
 
 namespace bro::render {
@@ -300,57 +296,29 @@ std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/,
 // ===========================================================================
 #else // Skia IS available
 // ===========================================================================
-// SkiaRenderer implementation
+// SkiaRenderer — Skia raster rendering + SDL display
+//
+// Renders to a CPU-side Skia surface for full-quality text and graphics,
+// then uploads the pixels to an SDL texture for GPU-accelerated display.
+// This completely avoids Vulkan swapchain synchronization complexity.
 // ===========================================================================
 
-SkiaRenderer::SkiaRenderer(platform::VulkanContext& vk)
-    : vk_(vk)
-{
-    skgpu::VulkanBackendContext backend_ctx{};
-    backend_ctx.fInstance = vk.getInstance();
-    backend_ctx.fPhysicalDevice = vk.getPhysicalDevice();
-    backend_ctx.fDevice = vk.getDevice();
-    backend_ctx.fQueue = vk.getGraphicsQueue();
-    backend_ctx.fGraphicsQueueIndex = vk.getGraphicsQueueFamily();
-    backend_ctx.fMaxAPIVersion = VK_API_VERSION_1_2;
-    backend_ctx.fGetProc = [](const char* name, VkInstance inst, VkDevice dev) -> PFN_vkVoidFunction {
-        if (dev) return vkGetDeviceProcAddr(dev, name);
-        return vkGetInstanceProcAddr(inst, name);
-    };
-
-    // Tell Skia which extensions are enabled
-    const char* instanceExts[] = { VK_KHR_SURFACE_EXTENSION_NAME,
-#ifdef _WIN32
-                                   "VK_KHR_win32_surface",
-#endif
-                                 };
-    const char* deviceExts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-    vk_extensions_.init(backend_ctx.fGetProc,
-                        vk.getInstance(), vk.getPhysicalDevice(),
-                        sizeof(instanceExts) / sizeof(instanceExts[0]), instanceExts,
-                        sizeof(deviceExts) / sizeof(deviceExts[0]), deviceExts);
-    backend_ctx.fVkExtensions = &vk_extensions_;
-
-    // Tell Skia which device features are enabled
-    vkGetPhysicalDeviceFeatures(vk.getPhysicalDevice(), &device_features_);
-    backend_ctx.fDeviceFeatures = &device_features_;
-
-    // Provide a memory allocator (required by Skia)
-    backend_ctx.fMemoryAllocator =
-        skgpu::VulkanMemoryAllocators::Make(backend_ctx, skgpu::ThreadSafe::kNo);
-
-    gr_context_ = GrDirectContexts::MakeVulkan(backend_ctx);
-    if (!gr_context_) {
-        LOG_ERROR("Failed to create GrDirectContext from Vulkan backend");
+SkiaRenderer::SkiaRenderer(platform::Window& window) {
+    sdlRenderer_ = SDL_CreateRenderer(window.getSDLWindow(), nullptr);
+    if (!sdlRenderer_) {
+        LOG_ERROR("Failed to create SDL_Renderer: %s", SDL_GetError());
+        return;
     }
+    const char* name = SDL_GetRendererName(sdlRenderer_);
+    LOG_INFO("SkiaRenderer created (SDL backend: %s)", name ? name : "unknown");
+    SDL_SetRenderVSync(sdlRenderer_, 1);
 }
 
 SkiaRenderer::~SkiaRenderer() {
     fonts_.clear();
     surface_.reset();
-    if (gr_context_) {
-        gr_context_->abandonContext();
-    }
+    if (sdlTexture_) SDL_DestroyTexture(sdlTexture_);
+    if (sdlRenderer_) SDL_DestroyRenderer(sdlRenderer_);
 }
 
 SkColor SkiaRenderer::toSkColor(Color c) const {
@@ -414,7 +382,21 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
                       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
 
     sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_DirectWrite();
-    sk_sp<SkTypeface> typeface = font_mgr->matchFamilyStyle(std::string(family).c_str(), style);
+
+    // CSS font-family is comma-separated (e.g. "Arial,sans-serif").
+    // Try each family name in order until one matches.
+    sk_sp<SkTypeface> typeface;
+    std::string families(family);
+    std::istringstream stream(families);
+    std::string name;
+    while (std::getline(stream, name, ',')) {
+        // Trim whitespace and quotes
+        while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
+        if (name.empty()) continue;
+        typeface = font_mgr->matchFamilyStyle(name.c_str(), style);
+        if (typeface) break;
+    }
     if (!typeface) {
         typeface = font_mgr->matchFamilyStyle(nullptr, SkFontStyle());
     }
@@ -463,34 +445,51 @@ void SkiaRenderer::resetClip() {
 }
 
 void SkiaRenderer::beginFrame(int width, int height) {
+    if (!sdlRenderer_) { canvas_ = nullptr; return; }
+
+    // (Re)create raster surface if size changed
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
-        SkImageInfo info = SkImageInfo::MakeN32Premul(width, height);
-        surface_ = SkSurfaces::RenderTarget(gr_context_.get(), skgpu::Budgeted::kNo, info);
-        if (!surface_) {
-            canvas_ = nullptr;
-            return;
-        }
+        surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+        // (Re)create SDL texture to match
+        if (sdlTexture_) SDL_DestroyTexture(sdlTexture_);
+        sdlTexture_ = SDL_CreateTexture(sdlRenderer_, SDL_PIXELFORMAT_ARGB8888,
+                                         SDL_TEXTUREACCESS_STREAMING, width, height);
+        textureWidth_ = width;
+        textureHeight_ = height;
     }
+
     canvas_ = surface_->getCanvas();
     canvas_->save();
 }
 
 void SkiaRenderer::endFrame() {
     if (canvas_) canvas_->restore();
-    if (gr_context_) gr_context_->flushAndSubmit();
     canvas_ = nullptr;
+
+    if (!sdlRenderer_ || !surface_ || !sdlTexture_) return;
+
+    // Read pixels from Skia raster surface
+    SkPixmap pixmap;
+    if (!surface_->peekPixels(&pixmap)) return;
+
+    // Upload to SDL texture
+    SDL_UpdateTexture(sdlTexture_, nullptr, pixmap.addr(), (int)pixmap.rowBytes());
+
+    // Render the texture to screen
+    SDL_RenderTexture(sdlRenderer_, sdlTexture_, nullptr, nullptr);
+    SDL_RenderPresent(sdlRenderer_);
 }
 
 // ---------------------------------------------------------------------------
 // Factory (Skia available)
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* vk,
-                                          platform::Window* /*window*/) {
-    if (vk) {
-        LOG_INFO("Creating SkiaRenderer with Vulkan backend");
-        return std::make_unique<SkiaRenderer>(*vk);
+std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/,
+                                          platform::Window* window) {
+    if (window) {
+        LOG_INFO("Creating SkiaRenderer (Skia raster + SDL display)");
+        return std::make_unique<SkiaRenderer>(*window);
     }
-    LOG_ERROR("createRenderer: VulkanContext is null, cannot create SkiaRenderer");
+    LOG_ERROR("createRenderer: no Window provided");
     return nullptr;
 }
 

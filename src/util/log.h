@@ -27,6 +27,7 @@ inline void log(LogLevel level, const char* file, int line, const char* fmt, ...
     va_end(args);
 
     std::fprintf(stderr, "\n");
+    std::fflush(stderr);
 }
 
 } // namespace bro::util

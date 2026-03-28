@@ -231,7 +231,9 @@ void Document::buildTreeFromLitehtml(litehtml::element::ptr root, Element* paren
 
         if (tag.empty()) {
             // Text node - litehtml represents text as elements with empty tag
-            auto textNode = std::make_shared<TextNode>("");
+            litehtml::string text;
+            lh_child->get_text(text);
+            auto textNode = std::make_shared<TextNode>(text);
             parentElem->appendChild(std::move(textNode));
         } else {
             auto childElem = std::make_shared<Element>(tag);

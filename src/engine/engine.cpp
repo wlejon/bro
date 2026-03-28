@@ -38,17 +38,8 @@ Engine::Engine(const std::string& appDir, int width, int height)
     window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(width),
                                                   static_cast<uint32_t>(height));
 
-    // 2. Renderer
-#ifndef BRO_NO_SKIA
-    try {
-        vulkan_ = std::make_unique<platform::VulkanContext>();
-        vulkan_->init(*window_);
-    } catch (const std::exception& e) {
-        LOG_WARN("Vulkan init failed (%s) -- falling back to SDL renderer", e.what());
-        vulkan_.reset();
-    }
-#endif
-    renderer_ = render::createRenderer(vulkan_.get(), window_.get());
+    // 2. Renderer (Skia raster + SDL display, no Vulkan needed)
+    renderer_ = render::createRenderer(nullptr, window_.get());
     if (!renderer_) {
         throw std::runtime_error("Failed to create renderer");
     }
@@ -244,11 +235,8 @@ void Engine::handleResize(int w, int h) {
     viewportWidth_ = w;
     viewportHeight_ = h;
     container_->setViewport(w, h);
-#ifndef BRO_NO_SKIA
-    if (vulkan_) {
-        vulkan_->recreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
-    }
-#endif
+    // Swapchain resize is handled by SkiaRenderer::beginFrame() when it detects
+    // a size mismatch, so we don't call recreateSwapchain here.
     if (sceneLayer_) {
         sceneLayer_->onResize(w, h);
     }

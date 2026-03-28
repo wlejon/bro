@@ -13,12 +13,6 @@
 #include <include/core/SkFont.h>
 #include <include/core/SkTypeface.h>
 #include <include/core/SkFontMgr.h>
-#include <include/gpu/ganesh/GrDirectContext.h>
-#include <include/gpu/ganesh/vk/GrVkDirectContext.h>
-#include <include/gpu/ganesh/GrBackendSurface.h>
-#include <include/gpu/ganesh/SkSurfaceGanesh.h>
-#include <include/gpu/vk/VulkanBackendContext.h>
-#include <include/gpu/vk/VulkanExtensions.h>
 #endif
 
 struct SDL_Renderer;
@@ -32,7 +26,62 @@ namespace bro::platform {
 
 namespace bro::render {
 
-#ifdef BRO_NO_SKIA
+// ---------------------------------------------------------------------------
+// SkiaRenderer -- Skia raster rendering + SDL display
+//
+// Renders to a CPU-side Skia surface (full quality fonts, antialiasing),
+// then uploads the result to an SDL texture for GPU-accelerated display.
+// This avoids all Vulkan synchronization complexity while keeping Skia's
+// rendering quality.
+// ---------------------------------------------------------------------------
+#ifndef BRO_NO_SKIA
+
+class SkiaRenderer final : public Renderer {
+public:
+    explicit SkiaRenderer(platform::Window& window);
+    ~SkiaRenderer() override;
+
+    void clear(Color color) override;
+
+    void drawRect(float x, float y, float w, float h, Color color) override;
+    void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) override;
+    void fillRect(float x, float y, float w, float h, Color color) override;
+
+    void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) override;
+    TextMetrics measureText(std::string_view text, uint64_t font_handle) override;
+
+    uint64_t createFont(std::string_view family, float size, int weight, bool italic) override;
+    void deleteFont(uint64_t font_handle) override;
+
+    void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) override;
+    void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
+
+    void setClip(float x, float y, float w, float h) override;
+    void resetClip() override;
+
+    void beginFrame(int width, int height) override;
+    void endFrame() override;
+
+private:
+    SkColor toSkColor(Color c) const;
+
+    SDL_Renderer* sdlRenderer_ = nullptr;
+    SDL_Texture* sdlTexture_ = nullptr;
+    int textureWidth_ = 0;
+    int textureHeight_ = 0;
+
+    sk_sp<SkSurface> surface_;
+    SkCanvas* canvas_ = nullptr;
+
+    struct FontEntry {
+        sk_sp<SkTypeface> typeface;
+        std::unique_ptr<SkFont> font;
+    };
+    std::unordered_map<uint64_t, FontEntry> fonts_;
+    uint64_t next_font_handle_ = 1;
+};
+
+#else // BRO_NO_SKIA
 
 // ---------------------------------------------------------------------------
 // SDLRenderer -- uses SDL3's 2D renderer for real on-screen output
@@ -82,59 +131,10 @@ private:
     int frameHeight_ = 0;
 };
 
-#else // Skia is available
-
-// ---------------------------------------------------------------------------
-// SkiaRenderer -- real GPU-accelerated renderer via Skia + Vulkan
-// ---------------------------------------------------------------------------
-class SkiaRenderer final : public Renderer {
-public:
-    explicit SkiaRenderer(platform::VulkanContext& vk);
-    ~SkiaRenderer() override;
-
-    void clear(Color color) override;
-
-    void drawRect(float x, float y, float w, float h, Color color) override;
-    void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) override;
-    void fillRect(float x, float y, float w, float h, Color color) override;
-
-    void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) override;
-    TextMetrics measureText(std::string_view text, uint64_t font_handle) override;
-
-    uint64_t createFont(std::string_view family, float size, int weight, bool italic) override;
-    void deleteFont(uint64_t font_handle) override;
-
-    void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) override;
-    void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
-
-    void setClip(float x, float y, float w, float h) override;
-    void resetClip() override;
-
-    void beginFrame(int width, int height) override;
-    void endFrame() override;
-
-private:
-    SkColor toSkColor(Color c) const;
-
-    platform::VulkanContext& vk_;
-    skgpu::VulkanExtensions vk_extensions_;
-    VkPhysicalDeviceFeatures device_features_{};
-    sk_sp<GrDirectContext> gr_context_;
-    sk_sp<SkSurface> surface_;
-    SkCanvas* canvas_ = nullptr; // owned by surface_
-
-    struct FontEntry {
-        sk_sp<SkTypeface> typeface;
-        std::unique_ptr<SkFont> font;
-    };
-    std::unordered_map<uint64_t, FontEntry> fonts_;
-    uint64_t next_font_handle_ = 1;
-};
-
 #endif // BRO_NO_SKIA
 
 // ---------------------------------------------------------------------------
-// Factory -- returns the appropriate renderer for the current build.
+// Factory
 // ---------------------------------------------------------------------------
 std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* vk,
                                           platform::Window* window = nullptr);

@@ -22,9 +22,211 @@
 #include <algorithm>
 #include <cstring>
 
-// Minimal null renderer for headless mode -- does nothing, but satisfies
-// the Renderer interface so BroContainer can measure text.
+#ifndef BRO_NO_SKIA
+#include <include/core/SkCanvas.h>
+#include <include/core/SkSurface.h>
+#include <include/core/SkFont.h>
+#include <include/core/SkFontMgr.h>
+#include <include/core/SkPaint.h>
+#include <include/core/SkRect.h>
+#include <include/core/SkRRect.h>
+#include <include/core/SkData.h>
+#include <include/core/SkImage.h>
+#include <include/codec/SkCodec.h>
+#include <include/ports/SkTypeface_win.h>
+#endif
+
+// Skia raster renderer for headless mode — renders to a CPU surface with
+// accurate text measurement and PNG screenshot support.
 namespace {
+
+#ifndef BRO_NO_SKIA
+
+class RasterRenderer final : public bro::render::Renderer {
+public:
+    RasterRenderer() = default;
+    ~RasterRenderer() override = default;
+
+    void clear(bro::render::Color c) override {
+        if (canvas_) canvas_->clear(toSkColor(c));
+    }
+
+    void drawRect(float x, float y, float w, float h, bro::render::Color c) override {
+        if (!canvas_) return;
+        SkPaint paint;
+        paint.setColor(toSkColor(c));
+        paint.setStyle(SkPaint::kStroke_Style);
+        canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+    }
+
+    void drawRoundRect(float x, float y, float w, float h, float rx, float ry,
+                       bro::render::Color c) override {
+        if (!canvas_) return;
+        SkPaint paint;
+        paint.setColor(toSkColor(c));
+        paint.setStyle(SkPaint::kStroke_Style);
+        canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(x, y, w, h), rx, ry), paint);
+    }
+
+    void fillRect(float x, float y, float w, float h, bro::render::Color c) override {
+        if (!canvas_) return;
+        SkPaint paint;
+        paint.setColor(toSkColor(c));
+        paint.setStyle(SkPaint::kFill_Style);
+        canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+    }
+
+    void drawText(std::string_view text, float x, float y, uint64_t font_handle,
+                  bro::render::Color c) override {
+        if (!canvas_) return;
+        auto it = fonts_.find(font_handle);
+        if (it == fonts_.end()) return;
+        SkPaint paint;
+        paint.setColor(toSkColor(c));
+        canvas_->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
+                                x, y, *it->second.font, paint);
+    }
+
+    bro::render::TextMetrics measureText(std::string_view text, uint64_t font_handle) override {
+        auto it = fonts_.find(font_handle);
+        if (it == fonts_.end()) return {};
+        const SkFont& font = *it->second.font;
+        SkRect bounds;
+        float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
+        return { width, bounds.height() };
+    }
+
+    uint64_t createFont(std::string_view family, float size, int weight, bool italic) override {
+        SkFontStyle style(weight, SkFontStyle::kNormal_Width,
+                          italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
+        sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+        // CSS font-family is comma-separated — try each name in order.
+        sk_sp<SkTypeface> typeface;
+        std::string families(family);
+        std::istringstream stream(families);
+        std::string name;
+        while (std::getline(stream, name, ',')) {
+            while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
+            while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
+            if (name.empty()) continue;
+            typeface = mgr->matchFamilyStyle(name.c_str(), style);
+            if (typeface) break;
+        }
+        if (!typeface) typeface = mgr->matchFamilyStyle(nullptr, SkFontStyle());
+        auto sk_font = std::make_unique<SkFont>(typeface, size);
+        sk_font->setEdging(SkFont::Edging::kSubpixelAntiAlias);
+        sk_font->setSubpixel(true);
+        uint64_t handle = nextHandle_++;
+        fonts_[handle] = { std::move(typeface), std::move(sk_font) };
+        return handle;
+    }
+
+    void deleteFont(uint64_t h) override { fonts_.erase(h); }
+
+    void drawLine(float x1, float y1, float x2, float y2, bro::render::Color c,
+                  float thickness) override {
+        if (!canvas_) return;
+        SkPaint paint;
+        paint.setColor(toSkColor(c));
+        paint.setStrokeWidth(thickness);
+        paint.setStyle(SkPaint::kStroke_Style);
+        canvas_->drawLine(x1, y1, x2, y2, paint);
+    }
+
+    void drawImage(const void* data, size_t len, float x, float y, float w, float h) override {
+        if (!canvas_) return;
+        auto sk_data = SkData::MakeWithoutCopy(data, len);
+        auto codec = SkCodec::MakeFromData(sk_data);
+        if (!codec) return;
+        auto [image, result] = codec->getImage();
+        if (!image) return;
+        canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+    }
+
+    void setClip(float x, float y, float w, float h) override {
+        if (canvas_) canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
+    }
+
+    void resetClip() override {
+        if (!canvas_) return;
+        canvas_->restore();
+        canvas_->save();
+    }
+
+    void beginFrame(int width, int height) override {
+        if (!surface_ || surface_->width() != width || surface_->height() != height) {
+            surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+        }
+        canvas_ = surface_->getCanvas();
+        canvas_->save();
+    }
+
+    void endFrame() override {
+        if (canvas_) canvas_->restore();
+        canvas_ = nullptr;
+    }
+
+    bool saveScreenshot(const std::string& path) {
+        if (!surface_) return false;
+        sk_sp<SkImage> image = surface_->makeImageSnapshot();
+        if (!image) return false;
+        SkPixmap pixmap;
+        if (!image->peekPixels(&pixmap)) return false;
+
+        int w = pixmap.width(), h = pixmap.height();
+        int rowBytes = ((w * 3 + 3) / 4) * 4; // BMP rows are 4-byte aligned
+        int dataSize = rowBytes * h;
+
+        // BMP file header (14 bytes) + BITMAPINFOHEADER (40 bytes)
+        uint8_t header[54] = {};
+        auto put16 = [&](int off, uint16_t v) { memcpy(header + off, &v, 2); };
+        auto put32 = [&](int off, uint32_t v) { memcpy(header + off, &v, 4); };
+        header[0] = 'B'; header[1] = 'M';
+        put32(2, 54 + dataSize);   // file size
+        put32(10, 54);             // pixel data offset
+        put32(14, 40);             // info header size
+        put32(18, w);
+        put32(22, h);
+        put16(26, 1);              // planes
+        put16(28, 24);             // bits per pixel
+        put32(34, dataSize);
+
+        std::ofstream out(path, std::ios::binary);
+        if (!out) return false;
+        out.write(reinterpret_cast<char*>(header), 54);
+
+        // BMP is bottom-to-top, BGR
+        std::vector<uint8_t> row(rowBytes, 0);
+        for (int y = h - 1; y >= 0; --y) {
+            const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr32(0, y));
+            for (int x = 0; x < w; ++x) {
+                // N32 on Windows = BGRA premultiplied
+                row[x * 3 + 0] = src[x * 4 + 0]; // B
+                row[x * 3 + 1] = src[x * 4 + 1]; // G
+                row[x * 3 + 2] = src[x * 4 + 2]; // R
+            }
+            out.write(reinterpret_cast<char*>(row.data()), rowBytes);
+        }
+        return out.good();
+    }
+
+private:
+    static SkColor toSkColor(bro::render::Color c) {
+        return SkColorSetARGB(c.a, c.r, c.g, c.b);
+    }
+
+    struct FontEntry {
+        sk_sp<SkTypeface> typeface;
+        std::unique_ptr<SkFont> font;
+    };
+
+    sk_sp<SkSurface> surface_;
+    SkCanvas* canvas_ = nullptr;
+    std::unordered_map<uint64_t, FontEntry> fonts_;
+    uint64_t nextHandle_ = 1;
+};
+
+#else // BRO_NO_SKIA — fallback null renderer
 
 class NullRenderer final : public bro::render::Renderer {
 public:
@@ -60,6 +262,8 @@ private:
     uint64_t nextHandle_ = 1;
 };
 
+#endif // BRO_NO_SKIA
+
 } // anonymous namespace
 
 namespace bro::headless {
@@ -73,8 +277,11 @@ using namespace bro::engine;
 Headless::Headless(const std::string& appDir, int width, int height)
     : viewportWidth_(width), viewportHeight_(height)
 {
-    // 1. Null renderer (text measurement only)
+#ifndef BRO_NO_SKIA
+    renderer_ = std::make_unique<RasterRenderer>();
+#else
     renderer_ = std::make_unique<NullRenderer>();
+#endif
 
     // 2. JS runtime
     jsRuntime_ = std::make_unique<js::Runtime>();
@@ -242,6 +449,30 @@ void Headless::flush() {
     }
 }
 
+bool Headless::screenshot(const std::string& path) {
+#ifndef BRO_NO_SKIA
+    if (!litehtmlDoc_) return false;
+
+    // Render a frame to the raster surface
+    renderer_->beginFrame(viewportWidth_, viewportHeight_);
+    renderer_->clear({255, 255, 255, 255});
+
+    litehtml::position clip(0, 0, viewportWidth_, viewportHeight_);
+    litehtmlDoc_->draw(
+        reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
+
+    renderer_->endFrame();
+
+    // Save the surface as PNG
+    auto* raster = static_cast<RasterRenderer*>(renderer_.get());
+    return raster->saveScreenshot(path);
+#else
+    (void)path;
+    std::cout << "[headless] screenshot not available without Skia\n";
+    return false;
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Query
 // ---------------------------------------------------------------------------
@@ -351,6 +582,16 @@ bool Headless::processCommand(const std::string& line) {
         return true;
     }
 
+    if (cmd.substr(0, 11) == "screenshot ") {
+        std::string path = cmd.substr(11);
+        if (screenshot(path)) {
+            std::cout << "[headless] saved screenshot to " << path << "\n";
+        } else {
+            std::cout << "[headless] screenshot failed\n";
+        }
+        return true;
+    }
+
     if (cmd == "help") {
         std::cout << "Commands:\n"
                   << "  dump              Dump full DOM as HTML\n"
@@ -359,6 +600,7 @@ bool Headless::processCommand(const std::string& line) {
                   << "  click <selector>  Simulate a click (e.g. click #btn)\n"
                   << "  eval <js>         Evaluate JavaScript, print result\n"
                   << "  wait <ms>         Advance virtual time by N ms\n"
+                  << "  screenshot <path> Render to PNG file\n"
                   << "  quit              Exit\n"
                   << "  # comment         Ignored\n";
         return true;
