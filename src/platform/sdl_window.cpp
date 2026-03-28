@@ -16,7 +16,7 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height)
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
     }
 
-    Uint32 flags = SDL_WINDOW_RESIZABLE;
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
 #ifndef BRO_NO_SKIA
     flags |= SDL_WINDOW_VULKAN;
 #endif

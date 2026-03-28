@@ -5,30 +5,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build Commands
 
 ```bash
-# Configure (debug)
-cmake --preset debug
+# Configure
+cmake -B build
 
 # Build (debug)
-cmake --build build-debug
+cmake --build build --config Debug
 
-# Configure + build (release)
-cmake --preset default
-cmake --build build
+# Build (release)
+cmake --build build --config Release
 
 # Run windowed app
-./build-debug/bro apps/hello
+./build/src/Debug/bro.exe apps/hello
 
 # Run headless (interactive)
-./build-debug/bro-headless apps/hello
+./build/src/headless/Debug/bro-headless.exe apps/hello
 
 # Run headless (piped)
-echo -e "click #btn\ndump #counter\nquit" | ./build-debug/bro-headless apps/hello 2>/dev/null
+echo -e "click #btn\ndump #counter\nquit" | ./build/src/headless/Debug/bro-headless.exe apps/hello 2>/dev/null
 
 # Run headless (script file)
-./build-debug/bro-headless apps/hello test.txt
+./build/src/headless/Debug/bro-headless.exe apps/hello test.txt
 ```
 
-Build uses Ninja + MSVC. Do not use MinGW (GCC is broken, clang+MinGW has pthread issues).
+Uses the Visual Studio generator (multi-config). Vcpkg at D:/vcpkg is auto-detected. Do not use MinGW.
 
 Submodules must be initialized: `git submodule update --init`
 
@@ -79,7 +78,7 @@ engine  (orchestrates all subsystems, main loop)
 |---------|--------|-------|
 | QuickJS | `qjs` | JS engine, built as library |
 | LiteHTML | `litehtml` | HTML/CSS layout |
-| SDL3 | `SDL3::SDL3-static` | Static build, Vulkan enabled |
+| SDL3 | `SDL3::SDL3` | From vcpkg (shared) or submodule (static) |
 | Vulkan-Headers | `Vulkan::Headers` | Falls back to bundled if SDK not found |
 | Skia | `skia` (imported) | Pre-built binaries, optional (`BRO_USE_SKIA`) |
 

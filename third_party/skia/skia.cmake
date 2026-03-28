@@ -14,7 +14,5 @@ if(BRO_USE_SKIA)
     )
     target_link_libraries(skia INTERFACE Vulkan::Vulkan)
 else()
-    # Stub target so downstream can link unconditionally
     add_library(skia INTERFACE)
-    target_compile_definitions(skia INTERFACE BRO_NO_SKIA)
 endif()
