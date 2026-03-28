@@ -131,6 +131,10 @@ Engine::~Engine() {
     if (jsRuntime_) {
         js::DomBindings::cleanup(jsRuntime_->getContext());
     }
+    // Destroy litehtml doc before container_ — litehtml::document::~document()
+    // calls deleteFont which needs the FontManager inside container_ to be alive.
+    litehtmlDoc_.reset();
+    document_.reset();
 }
 
 // ---------------------------------------------------------------------------
