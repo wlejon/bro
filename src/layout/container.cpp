@@ -117,6 +117,15 @@ void BroContainer::draw_solid_fill(litehtml::uint_ptr /*hdc*/,
                                     const litehtml::background_layer& layer,
                                     const litehtml::web_color& color) {
     if (color.alpha == 0) return; // transparent — let scene show through
+
+    // In scene mode, skip backgrounds that span the full viewport (html/body).
+    // This lets the scene layer show through while keeping content container
+    // backgrounds (e.g. a card div) intact.
+    if (sceneMode_) {
+        float lw = static_cast<float>(layer.border_box.width);
+        if (lw >= static_cast<float>(viewportWidth_)) return;
+    }
+
     render::Color c{color.red, color.green, color.blue, color.alpha};
     renderer_->fillRect(static_cast<float>(layer.border_box.x),
                         static_cast<float>(layer.border_box.y),

@@ -64,6 +64,7 @@ public:
     void setViewport(int w, int h) { viewportWidth_ = w; viewportHeight_ = h; }
     const std::string& baseUrl() const { return baseUrl_; }
     const std::string& caption() const { return caption_; }
+    void setSceneMode(bool enabled) { sceneMode_ = enabled; }
 
 private:
     render::Renderer* renderer_;
@@ -73,6 +74,7 @@ private:
     std::string baseUrl_;
     std::string caption_;
     std::string cursor_;
+    bool sceneMode_ = false;
 
     struct ClipEntry {
         litehtml::position pos;
