@@ -1,0 +1,199 @@
+body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #0f1923;
+    color: #e0e0e0;
+}
+
+/* --- Top bar --- */
+.topbar {
+    background-color: #1a2733;
+    padding: 12px 24px;
+    display: flex;
+    border-bottom: 2px solid #2a3f50;
+}
+.topbar-title {
+    font-size: 18px;
+    font-weight: bold;
+    color: #4fc3f7;
+    flex-grow: 1;
+}
+.topbar-clock {
+    font-size: 16px;
+    color: #80cbc4;
+    font-weight: bold;
+}
+
+/* --- Entrance animation states --- */
+.hidden-top { margin-top: -60px; }
+.hidden-left { margin-left: -200px; }
+.hidden-right { margin-left: 400px; }
+.hidden-bottom { margin-top: 100px; }
+
+/* --- Layout --- */
+.main {
+    display: flex;
+}
+.sidebar {
+    width: 160px;
+    min-height: 500px;
+    background-color: #152028;
+    padding: 8px 0;
+    border-right: 1px solid #2a3f50;
+}
+.nav-item {
+    padding: 10px 20px;
+    font-size: 13px;
+    color: #78909c;
+    cursor: pointer;
+}
+.nav-active {
+    color: #4fc3f7;
+    background-color: #1a2f3f;
+    border-left: 3px solid #4fc3f7;
+}
+.content {
+    flex-grow: 1;
+    padding: 16px;
+}
+
+/* --- Stats cards --- */
+.cards-row {
+    display: flex;
+    margin-bottom: 16px;
+}
+.card {
+    flex-grow: 1;
+    background-color: #1a2733;
+    padding: 16px;
+    margin-right: 12px;
+    border: 1px solid #2a3f50;
+}
+.card-label {
+    font-size: 11px;
+    color: #78909c;
+    margin-bottom: 4px;
+}
+.card-value {
+    font-size: 28px;
+    font-weight: bold;
+    color: #ffffff;
+    margin-bottom: 10px;
+}
+.progress-track {
+    height: 6px;
+    background-color: #0d1520;
+}
+.progress-bar {
+    height: 6px;
+    width: 0px;
+}
+
+/* Bar colors */
+.bar-blue { background-color: #4fc3f7; }
+.bar-green { background-color: #66bb6a; }
+.bar-purple { background-color: #ab47bc; }
+.bar-orange { background-color: #ffa726; }
+
+/* --- Charts --- */
+.charts-row {
+    display: flex;
+    margin-bottom: 16px;
+}
+.panel {
+    flex-grow: 1;
+    background-color: #1a2733;
+    padding: 16px;
+    margin-right: 12px;
+    border: 1px solid #2a3f50;
+}
+.panel-title {
+    font-size: 13px;
+    color: #78909c;
+    margin-bottom: 12px;
+    font-weight: bold;
+}
+.chart {
+    display: flex;
+    height: 120px;
+    align-items: flex-end;
+}
+.chart-bar {
+    flex-grow: 1;
+    background-color: #4fc3f7;
+    margin-right: 4px;
+    min-height: 4px;
+    height: 4px;
+}
+.chart-labels {
+    display: flex;
+    margin-top: 6px;
+}
+.chart-label {
+    flex-grow: 1;
+    font-size: 10px;
+    color: #546e7a;
+    text-align: center;
+}
+
+/* --- Feed --- */
+.feed {
+    min-height: 120px;
+    max-height: 160px;
+    overflow: hidden;
+}
+.feed-item {
+    padding: 6px 10px;
+    font-size: 12px;
+    margin-bottom: 4px;
+    border-left: 3px solid #546e7a;
+}
+.feed-ok {
+    border-left-color: #66bb6a;
+    color: #a5d6a7;
+}
+.feed-warn {
+    border-left-color: #ffa726;
+    color: #ffcc80;
+}
+.feed-err {
+    border-left-color: #ef5350;
+    color: #ef9a9a;
+}
+.feed-info {
+    border-left-color: #4fc3f7;
+    color: #b3e5fc;
+}
+
+/* --- Gauges --- */
+.gauges-row {
+    display: flex;
+}
+.gauge {
+    flex-grow: 1;
+    background-color: #1a2733;
+    padding: 12px;
+    margin-right: 12px;
+    border: 1px solid #2a3f50;
+    text-align: center;
+}
+.gauge-label {
+    font-size: 11px;
+    color: #78909c;
+    margin-bottom: 4px;
+}
+.gauge-value {
+    font-size: 20px;
+    font-weight: bold;
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+.gauge-bar-track {
+    height: 4px;
+    background-color: #0d1520;
+}
+.gauge-bar {
+    height: 4px;
+    width: 0px;
+}

@@ -52,6 +52,9 @@ public:
     std::vector<Element*> children() const;
     Element* parentElement() const;
 
+    // Sync inline styles to litehtml element
+    void syncStylesToLitehtml();
+
     // Dirty tracking
     void markDirty();
     bool isDirty() const { return dirty_; }

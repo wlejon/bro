@@ -97,6 +97,9 @@ std::string Element::getAttribute(const std::string& name) const {
 
 void Element::setAttribute(const std::string& name, const std::string& val) {
     attributes_[name] = val;
+    if (litehtml_element_) {
+        litehtml_element_->set_attr(name.c_str(), val.c_str());
+    }
     markDirty();
 }
 
@@ -216,6 +219,20 @@ Element* Element::parentElement() const {
         return static_cast<Element*>(parent_);
     }
     return nullptr;
+}
+
+void Element::syncStylesToLitehtml() {
+    if (!litehtml_element_) return;
+    std::string css = style_.cssText();
+    if (css.empty()) {
+        litehtml_element_->set_attr("style", nullptr);
+    } else {
+        litehtml_element_->set_attr("style", css.c_str());
+    }
+    // Clear and re-apply stylesheet rules, then add inline style on top.
+    // This ensures inline styles override correctly without accumulation.
+    litehtml_element_->refresh_styles();
+    litehtml_element_->compute_styles(false);
 }
 
 void Element::markDirty() {

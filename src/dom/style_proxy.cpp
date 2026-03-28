@@ -21,6 +21,7 @@ std::string StyleProxy::getProperty(const std::string& name) const {
 void StyleProxy::setProperty(const std::string& name, const std::string& value) {
     properties_[name] = value;
     if (owner_) {
+        owner_->syncStylesToLitehtml();
         owner_->markDirty();
     }
 }
@@ -28,6 +29,7 @@ void StyleProxy::setProperty(const std::string& name, const std::string& value) 
 void StyleProxy::removeProperty(const std::string& name) {
     if (properties_.erase(name) > 0) {
         if (owner_) {
+            owner_->syncStylesToLitehtml();
             owner_->markDirty();
         }
     }
@@ -80,6 +82,7 @@ void StyleProxy::setCssText(const std::string& text) {
     }
 
     if (owner_) {
+        owner_->syncStylesToLitehtml();
         owner_->markDirty();
     }
 }
