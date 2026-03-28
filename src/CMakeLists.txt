@@ -1,0 +1,15 @@
+add_subdirectory(util)
+add_subdirectory(platform)
+add_subdirectory(render)
+add_subdirectory(js)
+add_subdirectory(dom)
+add_subdirectory(layout)
+add_subdirectory(engine)
+
+add_executable(bro main.cpp)
+target_link_libraries(bro PRIVATE bro_engine)
+target_include_directories(bro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(WIN32)
+    target_link_libraries(bro PRIVATE ws2_32)
+endif()

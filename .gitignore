@@ -1,0 +1,33 @@
+# Build
+build/
+build-debug/
+out/
+cmake-build-*/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+compile_commands.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Skia pre-built (large binaries)
+third_party/skia/lib/
+third_party/skia/include/
+
+# Generated Vulkan import lib (MinGW only)
+third_party/libvulkan-1.a
+third_party/vulkan-1.def
+
+# Temp files
+*.log
+build_log.txt
+build.bat
