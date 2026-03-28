@@ -25,6 +25,9 @@ public:
 
     /// Wrap a bro::dom::Document* into a JS Document object.
     static JSValue wrapDocument(JSContext* ctx, void* document_ptr);
+
+    /// Free static prototypes to allow clean JS runtime shutdown.
+    static void cleanup(JSContext* ctx);
 };
 
 } // namespace bro::js

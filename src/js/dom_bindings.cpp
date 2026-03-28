@@ -1014,4 +1014,17 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JS_FreeValue(ctx, global);
 }
 
+void DomBindings::cleanup(JSContext* ctx) {
+    JS_FreeValue(ctx, document_proto);
+    JS_FreeValue(ctx, element_proto);
+    JS_FreeValue(ctx, event_proto);
+    JS_FreeValue(ctx, nodelist_proto);
+    JS_FreeValue(ctx, cssstyle_proto);
+    document_proto = JS_UNINITIALIZED;
+    element_proto  = JS_UNINITIALIZED;
+    event_proto    = JS_UNINITIALIZED;
+    nodelist_proto = JS_UNINITIALIZED;
+    cssstyle_proto = JS_UNINITIALIZED;
+}
+
 } // namespace bro::js

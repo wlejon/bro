@@ -5,6 +5,7 @@ add_subdirectory(js)
 add_subdirectory(dom)
 add_subdirectory(layout)
 add_subdirectory(engine)
+add_subdirectory(headless)
 
 add_executable(bro main.cpp)
 target_link_libraries(bro PRIVATE bro_engine)
