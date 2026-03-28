@@ -228,7 +228,7 @@ void Element::syncStylesToLitehtml() {
     if (!litehtml_element_) return;
     std::string css = style_.cssText();
     if (css.empty()) {
-        litehtml_element_->set_attr("style", nullptr);
+        litehtml_element_->set_attr("style", "");
     } else {
         litehtml_element_->set_attr("style", css.c_str());
     }
