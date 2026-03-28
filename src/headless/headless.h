@@ -9,6 +9,7 @@ namespace bro::js { class Runtime; class Timers; }
 namespace bro::dom { class Document; class Element; class Event; }
 namespace bro::layout { class BroContainer; }
 namespace bro::render { class Renderer; }
+namespace bro::canvas { class CanvasScene; }
 
 namespace bro::headless {
 
@@ -71,6 +72,8 @@ private:
     int viewportHeight_;
     double virtualTime_ = 0.0;
     std::string lastDump_; // for diff
+    std::unique_ptr<canvas::CanvasScene> canvasScene_;
+    canvas::CanvasScene* canvasScenePtr_ = nullptr; // raw ptr for JS
 };
 
 } // namespace bro::headless

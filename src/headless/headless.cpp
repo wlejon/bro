@@ -7,6 +7,11 @@
 #include "js/console.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
+#include "js/canvas_bindings.h"
+#include "js/audio_bindings.h"
+#include "js/storage_bindings.h"
+#include "canvas/canvas_scene.h"
+#include "canvas/canvas2d.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/node.h"
@@ -319,6 +324,23 @@ Headless::Headless(const std::string& appDir, int width, int height)
     // 7. Install JS DOM bindings
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
 
+    // 7b. Install Canvas 2D bindings with headless factory
+    js::CanvasBindings::install(jsRuntime_->getContext());
+    js::DomBindings::setGetContextFactory(
+        [this](JSContext* ctx, dom::Element*, const std::string&) -> JSValue {
+            canvasScene_ = std::make_unique<canvas::CanvasScene>(renderer_.get());
+            canvasScenePtr_ = canvasScene_.get();
+            canvasScene_->onInit(nullptr, viewportWidth_, viewportHeight_);
+            return js::CanvasBindings::wrapContext2D(ctx, canvasScenePtr_);
+        });
+
+    // 7c. Audio bindings (no-op in headless — AudioContext constructor will throw,
+    //     JS code catches and falls back gracefully)
+    js::AudioBindings::install(jsRuntime_->getContext(), nullptr);
+
+    // 7d. localStorage
+    js::StorageBindings::install(jsRuntime_->getContext(), manifest.basePath + "/.storage.json");
+
     // 8. Execute scripts
     for (auto& scriptPath : manifest.scriptPaths) {
         std::string code = AppLoader::loadFile(scriptPath);
@@ -346,6 +368,8 @@ Headless::~Headless() {
     // 2. Clear the JS elem map and prototypes (prevent leaked references)
     if (jsRuntime_) {
         JSContext* ctx = jsRuntime_->getContext();
+        js::AudioBindings::cleanup(ctx);
+        js::StorageBindings::cleanup(ctx);
         JSValue global = JS_GetGlobalObject(ctx);
         JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "__bro_elem_map"), 0);
         JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "document"), 0);
@@ -355,6 +379,7 @@ Headless::~Headless() {
         jsRuntime_->executePendingJobs();
         JS_RunGC(jsRuntime_->getRuntime());
     }
+    canvasScene_.reset();
     // 3. Release litehtml doc before document (it holds element refs)
     litehtmlDoc_.reset();
     document_.reset();
@@ -453,17 +478,52 @@ bool Headless::screenshot(const std::string& path) {
 #ifndef BRO_NO_SKIA
     if (!litehtmlDoc_) return false;
 
+    // Fire any pending rAF callbacks so canvas commands are up to date
+    timers_->fireAnimationFrames(virtualTime_);
+    jsRuntime_->executePendingJobs();
+
     // Render a frame to the raster surface
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
-    renderer_->clear({255, 255, 255, 255});
+    renderer_->clear({0, 0, 0, 255});
 
+    // Render canvas scene first (behind HTML)
+    if (canvasScenePtr_) {
+        auto& cmds = canvasScenePtr_->canvas().commands();
+        uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
+        float globalAlpha = 1.0f;
+
+        for (auto& cmd : cmds) {
+            using CT = canvas::CmdType;
+            switch (cmd.type) {
+            case CT::SetFillStyle:
+                fillR = cmd.r; fillG = cmd.g; fillB = cmd.b; fillA = cmd.a;
+                break;
+            case CT::SetGlobalAlpha:
+                globalAlpha = cmd.f;
+                break;
+            case CT::FillRect: {
+                uint8_t a = static_cast<uint8_t>(fillA * globalAlpha);
+                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h,
+                                    {fillR, fillG, fillB, a});
+                break;
+            }
+            case CT::ClearRect:
+                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h, {0, 0, 0, 255});
+                break;
+            case CT::StrokeRect: break; // skip in headless for now
+            default: break;
+            }
+        }
+    }
+
+    // Render HTML/CSS overlay on top
     litehtml::position clip(0, 0, viewportWidth_, viewportHeight_);
     litehtmlDoc_->draw(
         reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
 
     renderer_->endFrame();
 
-    // Save the surface as PNG
+    // Save the surface as BMP
     auto* raster = static_cast<RasterRenderer*>(renderer_.get());
     return raster->saveScreenshot(path);
 #else
