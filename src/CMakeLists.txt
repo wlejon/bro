@@ -1,6 +1,7 @@
 add_subdirectory(util)
 add_subdirectory(platform)
 add_subdirectory(render)
+add_subdirectory(audio)
 add_subdirectory(js)
 add_subdirectory(dom)
 add_subdirectory(layout)

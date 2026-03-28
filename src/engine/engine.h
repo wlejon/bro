@@ -7,6 +7,7 @@
 #include <string>
 
 namespace bro::render { class SceneLayer; }
+namespace bro::audio { class AudioEngine; }
 
 namespace bro::platform {
     class Window;
@@ -38,8 +39,8 @@ public:
     void handleMouseDown(float x, float y, int button);
     void handleMouseUp(float x, float y, int button);
     void handleMouseMove(float x, float y);
-    void handleKeyDown(int keycode, int scancode, int mod);
-    void handleKeyUp(int keycode, int scancode, int mod);
+    void handleKeyDown(int keycode, int scancode, int mod, bool repeat);
+    void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
 
 private:
     dom::Element* hitTest(float x, float y);
@@ -61,6 +62,7 @@ private:
     int viewportHeight_;
     AppManifest manifest_;
     std::unique_ptr<render::SceneLayer> sceneLayer_;
+    std::unique_ptr<audio::AudioEngine> audioEngine_;
 
     // Stats overlay
     uint64_t statsFont_ = 0;

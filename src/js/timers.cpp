@@ -4,6 +4,7 @@
 #include "util/time.h"
 
 #include <vector>
+#include <algorithm>
 
 extern "C" {
 #include "quickjs.h"
@@ -15,10 +16,6 @@ namespace bro::js {
 // Helpers – store / retrieve the Timers* via JS context opaque
 // ---------------------------------------------------------------------------
 
-// We stash the Timers pointer on a well-known property of globalThis so we
-// don't collide with other opaque users.  A hidden Symbol would be nicer,
-// but a simple string property with an unusual name is fine for now.
-
 static const char* kTimersKey = "__bro_timers_ptr";
 
 static Timers* getTimers(JSContext* ctx)
@@ -27,7 +24,6 @@ static Timers* getTimers(JSContext* ctx)
     JSValue val = JS_GetPropertyStr(ctx, global, kTimersKey);
     Timers* t = nullptr;
     if (JS_IsNumber(val)) {
-        // Stored as a double-punned pointer – use intptr_t.
         int64_t ptr = 0;
         JS_ToInt64(ctx, &ptr, val);
         t = reinterpret_cast<Timers*>(static_cast<intptr_t>(ptr));
@@ -43,10 +39,11 @@ static Timers* getTimers(JSContext* ctx)
 
 Timers::~Timers()
 {
-    // Caller should have called clearAll() before destroying the context.
-    // We cannot free JSValues here without a context, so just warn.
     if (!timers_.empty()) {
         LOG_WARN("Timers destroyed with %zu pending timers", timers_.size());
+    }
+    if (!rafPending_.empty()) {
+        LOG_WARN("Timers destroyed with %zu pending rAF callbacks", rafPending_.size());
     }
 }
 
@@ -56,10 +53,15 @@ void Timers::clearAll(JSContext* ctx)
         JS_FreeValue(ctx, entry.callback);
     }
     timers_.clear();
+
+    for (auto& entry : rafPending_) {
+        JS_FreeValue(ctx, entry.callback);
+    }
+    rafPending_.clear();
 }
 
 // ---------------------------------------------------------------------------
-// Core logic
+// Timer core logic
 // ---------------------------------------------------------------------------
 
 int32_t Timers::addTimer(JSContext* ctx, JSValue callback, double delayMs,
@@ -89,7 +91,6 @@ void Timers::removeTimer(int32_t id)
 
 void Timers::tick(double currentTimeMs)
 {
-    // Collect expired timer ids first to avoid modifying the map while iterating.
     std::vector<int32_t> expired;
     for (auto& [id, entry] : timers_) {
         if (currentTimeMs >= entry.nextFireTime) {
@@ -100,7 +101,7 @@ void Timers::tick(double currentTimeMs)
     for (int32_t id : expired) {
         auto it = timers_.find(id);
         if (it == timers_.end())
-            continue; // may have been removed by a previous callback
+            continue;
 
         TimerEntry& entry = it->second;
         JSContext* ctx = entry.ctx;
@@ -123,6 +124,52 @@ void Timers::tick(double currentTimeMs)
             JS_FreeValue(ctx, it->second.callback);
             timers_.erase(it);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// requestAnimationFrame core logic
+// ---------------------------------------------------------------------------
+
+int32_t Timers::addAnimationFrame(JSContext* ctx, JSValue callback)
+{
+    int32_t id = nextRafId_++;
+    RafEntry entry;
+    entry.id       = id;
+    entry.callback = JS_DupValue(ctx, callback);
+    entry.ctx      = ctx;
+    rafPending_.push_back(entry);
+    return id;
+}
+
+void Timers::removeAnimationFrame(int32_t id)
+{
+    auto it = std::find_if(rafPending_.begin(), rafPending_.end(),
+                           [id](const RafEntry& e) { return e.id == id; });
+    if (it != rafPending_.end()) {
+        JS_FreeValue(it->ctx, it->callback);
+        rafPending_.erase(it);
+    }
+}
+
+void Timers::fireAnimationFrames(double timestampMs)
+{
+    if (rafPending_.empty()) return;
+
+    // Move current callbacks out so new rAF calls during firing go to next frame
+    std::vector<RafEntry> current = std::move(rafPending_);
+    rafPending_.clear();
+
+    for (auto& entry : current) {
+        JSValue ts = JS_NewFloat64(entry.ctx, timestampMs);
+        JSValue ret = JS_Call(entry.ctx, entry.callback, JS_UNDEFINED, 1, &ts);
+        JS_FreeValue(entry.ctx, ts);
+        if (Runtime::checkException(entry.ctx, ret)) {
+            // Exception already logged
+        } else {
+            JS_FreeValue(entry.ctx, ret);
+        }
+        JS_FreeValue(entry.ctx, entry.callback);
     }
 }
 
@@ -184,8 +231,40 @@ JSValue Timers::js_clearTimeout(JSContext* ctx, JSValueConst /*this_val*/,
 JSValue Timers::js_clearInterval(JSContext* ctx, JSValueConst /*this_val*/,
                                  int argc, JSValueConst* argv)
 {
-    // clearInterval and clearTimeout are interchangeable per spec.
     return js_clearTimeout(ctx, JS_UNDEFINED, argc, argv);
+}
+
+JSValue Timers::js_requestAnimationFrame(JSContext* ctx, JSValueConst /*this_val*/,
+                                         int argc, JSValueConst* argv)
+{
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "requestAnimationFrame: first argument must be a function");
+    }
+
+    Timers* t = getTimers(ctx);
+    if (!t) return JS_UNDEFINED;
+
+    int32_t id = t->addAnimationFrame(ctx, argv[0]);
+    return JS_NewInt32(ctx, id);
+}
+
+JSValue Timers::js_cancelAnimationFrame(JSContext* ctx, JSValueConst /*this_val*/,
+                                        int argc, JSValueConst* argv)
+{
+    if (argc < 1) return JS_UNDEFINED;
+
+    int32_t id = 0;
+    JS_ToInt32(ctx, &id, argv[0]);
+
+    Timers* t = getTimers(ctx);
+    if (t) t->removeAnimationFrame(id);
+    return JS_UNDEFINED;
+}
+
+JSValue Timers::js_performanceNow(JSContext* ctx, JSValueConst /*this_val*/,
+                                  int /*argc*/, JSValueConst* /*argv*/)
+{
+    return JS_NewFloat64(ctx, bro::util::currentTimeMs());
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +288,16 @@ void Timers::install(JSContext* ctx, Timers* instance)
                       JS_NewCFunction(ctx, js_clearTimeout, "clearTimeout", 1));
     JS_SetPropertyStr(ctx, global, "clearInterval",
                       JS_NewCFunction(ctx, js_clearInterval, "clearInterval", 1));
+    JS_SetPropertyStr(ctx, global, "requestAnimationFrame",
+                      JS_NewCFunction(ctx, js_requestAnimationFrame, "requestAnimationFrame", 1));
+    JS_SetPropertyStr(ctx, global, "cancelAnimationFrame",
+                      JS_NewCFunction(ctx, js_cancelAnimationFrame, "cancelAnimationFrame", 1));
+
+    // performance.now()
+    JSValue perf = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, perf, "now",
+                      JS_NewCFunction(ctx, js_performanceNow, "now", 0));
+    JS_SetPropertyStr(ctx, global, "performance", perf);
 
     JS_FreeValue(ctx, global);
 }

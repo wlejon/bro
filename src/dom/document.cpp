@@ -244,7 +244,9 @@ void Document::buildTreeFromLitehtml(litehtml::element::ptr root, Element* paren
             // Copy known attributes
             static const char* commonAttrs[] = {
                 "id", "class", "style", "href", "src", "alt", "title",
-                "name", "value", "type", "placeholder", "data-*",
+                "name", "value", "type", "placeholder",
+                "data-action", "data-setting", "data-control",
+                "width", "height", "disabled", "checked", "selected",
                 nullptr
             };
             for (int a = 0; commonAttrs[a] != nullptr; ++a) {

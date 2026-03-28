@@ -17,8 +17,8 @@ public:
     std::function<void(float x, float y, uint8_t button)> onMouseDown;
     std::function<void(float x, float y, uint8_t button)> onMouseUp;
     std::function<void(float x, float y)> onMouseMove;
-    std::function<void(int32_t keycode, int32_t scancode, uint16_t mod)> onKeyDown;
-    std::function<void(int32_t keycode, int32_t scancode, uint16_t mod)> onKeyUp;
+    std::function<void(int32_t keycode, int32_t scancode, uint16_t mod, bool repeat)> onKeyDown;
+    std::function<void(int32_t keycode, int32_t scancode, uint16_t mod, bool repeat)> onKeyUp;
     std::function<void(const std::string& text)> onTextInput;
 
     /// Polls all pending SDL events and dispatches to callbacks.

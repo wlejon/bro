@@ -43,7 +43,8 @@ void EventLoop::pollEvents() {
                 if (onKeyDown) {
                     onKeyDown(static_cast<int32_t>(event.key.key),
                               static_cast<int32_t>(event.key.scancode),
-                              event.key.mod);
+                              event.key.mod,
+                              event.key.repeat);
                 }
                 break;
 
@@ -51,7 +52,8 @@ void EventLoop::pollEvents() {
                 if (onKeyUp) {
                     onKeyUp(static_cast<int32_t>(event.key.key),
                             static_cast<int32_t>(event.key.scancode),
-                            event.key.mod);
+                            event.key.mod,
+                            false);
                 }
                 break;
 

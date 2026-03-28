@@ -137,11 +137,14 @@ void Element::setTextContent(const std::string& text) {
 
     // Sync to litehtml so the rendered output updates
     if (litehtml_element_) {
-        auto doc = litehtml_element_->get_document();
-        if (doc) {
-            // Use litehtml's built-in method to replace children with parsed content.
-            // Plain text needs no HTML tags — litehtml will create el_text nodes.
-            doc->append_children_from_string(*litehtml_element_, text.c_str(), true);
+        // Only call append_children_from_string if the element has a render item,
+        // otherwise litehtml will crash dereferencing a null render_item pointer.
+        auto renderItem = litehtml_element_->get_render_item();
+        if (renderItem) {
+            auto doc = litehtml_element_->get_document();
+            if (doc) {
+                doc->append_children_from_string(*litehtml_element_, text.c_str(), true);
+            }
         }
     }
 
