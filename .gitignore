@@ -19,9 +19,10 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Skia pre-built (large binaries)
+# Skia pre-built (large binaries) and source checkout
 third_party/skia/lib/
 third_party/skia/include/
+third_party/skia/src/
 
 # Generated Vulkan import lib (MinGW only)
 third_party/libvulkan-1.a
