@@ -1,5 +1,7 @@
 #include "dom/element.h"
+#include "dom/document.h"
 #include "dom/text_node.h"
+#include <litehtml.h>
 #include <algorithm>
 #include <sstream>
 
@@ -129,6 +131,17 @@ void Element::setTextContent(const std::string& text) {
         auto textNode = std::make_shared<TextNode>(text);
         appendChild(std::move(textNode));
     }
+
+    // Sync to litehtml so the rendered output updates
+    if (litehtml_element_) {
+        auto doc = litehtml_element_->get_document();
+        if (doc) {
+            // Use litehtml's built-in method to replace children with parsed content.
+            // Plain text needs no HTML tags — litehtml will create el_text nodes.
+            doc->append_children_from_string(*litehtml_element_, text.c_str(), true);
+        }
+    }
+
     markDirty();
 }
 
@@ -207,6 +220,9 @@ Element* Element::parentElement() const {
 
 void Element::markDirty() {
     dirty_ = true;
+    if (document_) {
+        document_->markDirty();
+    }
 }
 
 } // namespace bro::dom

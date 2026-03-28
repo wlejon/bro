@@ -10,6 +10,7 @@
 
 namespace bro::dom {
 
+class Document;
 class TextNode;
 
 class Element : public Node {
@@ -56,6 +57,10 @@ public:
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
 
+    // Owner document
+    void setDocument(Document* doc) { document_ = doc; }
+    Document* document() const { return document_; }
+
     // Litehtml integration
     void setLitehtmlElement(litehtml::element::ptr elem) { litehtml_element_ = std::move(elem); }
     litehtml::element::ptr litehtmlElement() const { return litehtml_element_; }
@@ -66,6 +71,7 @@ private:
     StyleProxy style_;
     std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
     litehtml::element::ptr litehtml_element_;
+    Document* document_ = nullptr;
     bool dirty_ = false;
 };
 

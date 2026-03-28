@@ -26,6 +26,7 @@ void Document::parse(const std::string& html, litehtml::document_container* cont
     const char* rootTag = lh_root->get_tagName();
     auto rootElem = std::make_shared<Element>(rootTag ? rootTag : "html");
     rootElem->setLitehtmlElement(lh_root);
+    rootElem->setDocument(this);
     litehtmlMap_[lh_root] = rootElem.get();
     root_ = rootElem;
     documentElement_ = rootElem.get();
@@ -71,6 +72,7 @@ void Document::buildFrom(litehtml::document::ptr doc) {
     const char* rootTag = lh_root->get_tagName();
     auto rootElem = std::make_shared<Element>(rootTag ? rootTag : "html");
     rootElem->setLitehtmlElement(lh_root);
+    rootElem->setDocument(this);
     litehtmlMap_[lh_root] = rootElem.get();
     root_ = rootElem;
     documentElement_ = rootElem.get();
@@ -108,6 +110,7 @@ void Document::reparse(litehtml::document_container* container) {
 
 std::shared_ptr<Element> Document::createElement(const std::string& tag) {
     auto elem = std::make_shared<Element>(tag);
+    elem->setDocument(this);
     orphans_.push_back(elem);
     return elem;
 }
@@ -233,6 +236,7 @@ void Document::buildTreeFromLitehtml(litehtml::element::ptr root, Element* paren
         } else {
             auto childElem = std::make_shared<Element>(tag);
             childElem->setLitehtmlElement(lh_child);
+            childElem->setDocument(this);
             litehtmlMap_[lh_child] = childElem.get();
 
             // Copy known attributes
