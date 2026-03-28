@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include <functional>
 
 namespace bro::dom {
 
@@ -49,6 +50,12 @@ public:
     void registerElementId(const std::string& id, Element* elem);
     void unregisterElementId(const std::string& id);
 
+    // Transfer ownership of an orphan element (created via createElement) to its new parent.
+    void adoptOrphan(Element* elem);
+
+    // Access orphan list (for shared_ptr lookup during appendChild).
+    const std::vector<std::shared_ptr<Element>>& orphans() const { return orphans_; }
+
     // Find our Element wrapper for a litehtml element pointer
     Element* findElementByLitehtml(const litehtml::element::ptr& lhElem);
 
@@ -62,6 +69,23 @@ private:
     bool dirty_ = false;
     litehtml::document::ptr litehtml_doc_;
     std::unordered_map<std::string, Element*> idMap_;
+
+    // Fast lookup: litehtml element raw pointer -> our Element wrapper.
+    struct LitehtmlPtrHash {
+        size_t operator()(const litehtml::element::ptr& p) const {
+            return std::hash<void*>{}(p.get());
+        }
+    };
+    struct LitehtmlPtrEqual {
+        bool operator()(const litehtml::element::ptr& a, const litehtml::element::ptr& b) const {
+            return a.get() == b.get();
+        }
+    };
+    std::unordered_map<litehtml::element::ptr, Element*, LitehtmlPtrHash, LitehtmlPtrEqual> litehtmlMap_;
+
+    // Orphan elements created via createElement that haven't been appended yet.
+    // Prevents use-after-free when JS holds a reference to a created element.
+    std::vector<std::shared_ptr<Element>> orphans_;
 };
 
 } // namespace bro::dom

@@ -15,17 +15,30 @@ namespace bro::js {
 // Module loader helpers (file-based)
 // ---------------------------------------------------------------------------
 
-static char* module_normalize(JSContext* /*ctx*/, const char* base_name,
+static char* module_normalize(JSContext* ctx, const char* base_name,
                               const char* name, void* /*opaque*/)
 {
-    // Very simple path resolution – just return a copy of the name.
-    // A real implementation would resolve relative to base_name.
-    (void)base_name;
-    char* buf = static_cast<char*>(js_malloc_rt(JS_GetRuntime(JS_GetContextOpaque(nullptr) ? nullptr : nullptr), std::strlen(name) + 1));
-    // Fallback: use C malloc since we don't have a clean rt handle here.
-    buf = static_cast<char*>(malloc(std::strlen(name) + 1));
-    if (buf)
-        std::strcpy(buf, name);
+    // If the name is already absolute or doesn't start with '.', return as-is.
+    if (!name) return nullptr;
+
+    std::string result;
+    if (name[0] == '.' && base_name) {
+        // Resolve relative to the directory of the base module.
+        std::string base(base_name);
+        auto slash = base.find_last_of("/\\");
+        if (slash != std::string::npos) {
+            result = base.substr(0, slash + 1) + name;
+        } else {
+            result = name;
+        }
+    } else {
+        result = name;
+    }
+
+    char* buf = static_cast<char*>(js_malloc(ctx, result.size() + 1));
+    if (buf) {
+        std::memcpy(buf, result.c_str(), result.size() + 1);
+    }
     return buf;
 }
 

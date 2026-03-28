@@ -9,6 +9,7 @@
 #include "js/console.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
+#include "js/event_dispatch.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/node.h"
@@ -16,8 +17,9 @@
 #include <litehtml/render_item.h>
 #include "layout/container.h"
 #include "util/log.h"
+#include "util/time.h"
 
-#include <windows.h>
+#include <SDL3/SDL.h>
 #include <stdexcept>
 
 namespace bro::engine {
@@ -53,6 +55,7 @@ Engine::Engine(const std::string& appDir, int width, int height)
 
     // 4. JS runtime + bindings
     jsRuntime_ = std::make_unique<js::Runtime>();
+    jsRuntime_->setModuleLoader();
     js::Console::install(jsRuntime_->getContext());
     timers_ = std::make_unique<js::Timers>();
     js::Timers::install(jsRuntime_->getContext(), timers_.get());
@@ -108,6 +111,9 @@ Engine::~Engine() {
     if (timers_ && jsRuntime_) {
         timers_->clearAll(jsRuntime_->getContext());
     }
+    if (jsRuntime_) {
+        js::DomBindings::cleanup(jsRuntime_->getContext());
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,21 +144,14 @@ void Engine::run() {
         handleKeyUp(keycode, scancode, static_cast<int>(mod));
     };
 
-    auto getTimeMs = []() -> double {
-        LARGE_INTEGER freq, counter;
-        QueryPerformanceFrequency(&freq);
-        QueryPerformanceCounter(&counter);
-        return static_cast<double>(counter.QuadPart) * 1000.0
-             / static_cast<double>(freq.QuadPart);
-    };
-
     // Initial layout
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
     }
 
-
     while (running_) {
+        double frameStart = util::currentTimeMs();
+
         // 1. Poll platform events
         eventLoop_->pollEvents();
         if (eventLoop_->shouldQuit()) {
@@ -161,7 +160,7 @@ void Engine::run() {
         }
 
         // 2. Tick timers
-        double now = getTimeMs();
+        double now = util::currentTimeMs();
         timers_->tick(now);
 
         // 3. Run pending JS jobs (promises, etc.)
@@ -186,6 +185,13 @@ void Engine::run() {
         }
 
         renderer_->endFrame();
+
+        // 6. Frame rate limiting (~60fps target)
+        double elapsed = util::currentTimeMs() - frameStart;
+        constexpr double targetFrameMs = 16.0;
+        if (elapsed < targetFrameMs) {
+            SDL_Delay(static_cast<uint32_t>(targetFrameMs - elapsed));
+        }
     }
 }
 
@@ -196,7 +202,6 @@ void Engine::run() {
 void Engine::handleResize(int w, int h) {
     viewportWidth_ = w;
     viewportHeight_ = h;
-    window_->setSize(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
     container_->setViewport(w, h);
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
@@ -324,112 +329,12 @@ dom::Element* Engine::hitTest(float x, float y) {
 }
 
 // ---------------------------------------------------------------------------
-// Event dispatch to JS (with bubbling)
+// Event dispatch to JS (delegates to shared implementation)
 // ---------------------------------------------------------------------------
 
 void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     if (!target || !jsRuntime_) return;
-
-    event.setTarget(target);
-    JSContext* ctx = jsRuntime_->getContext();
-
-    // Walk from target up to root (bubble phase)
-    for (dom::Element* current = target; current != nullptr;
-         current = current->parentElement()) {
-
-        if (event.propagationStopped()) break;
-        event.setCurrentTarget(current);
-
-        // Check if this element has listeners for this event type
-        auto& listeners = current->listeners();
-        auto it = listeners.find(event.type());
-        if (it == listeners.end() || it->second.empty()) continue;
-
-        // Find the JS wrapper for this element to get the __bro_listeners array.
-        // We look up the element by scanning the JS element registry.
-        // The JS wrapper is stored via DomBindings — we need to find the
-        // callback from the __bro_listeners array on the JS element object.
-        //
-        // Strategy: DomBindings stores each callback in the __bro_listeners
-        // array on the JS element wrapper. The listener IDs stored in the C++
-        // Element are the array indices. We need the JS element object to read
-        // from it.
-        //
-        // Approach: use a global map from Element* -> JSValue wrapper.
-        // DomBindings already created these wrappers. We store a lookup in
-        // a global __bro_elem_map keyed by the element's C++ id.
-
-        JSValue global = jsRuntime_->getGlobalObject();
-        JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
-        if (JS_IsUndefined(elemMap)) {
-            JS_FreeValue(ctx, global);
-            continue;
-        }
-
-        std::string elemKey = std::to_string(current->nodeId());
-        JSValue jsElem = JS_GetPropertyStr(ctx, elemMap, elemKey.c_str());
-        JS_FreeValue(ctx, elemMap);
-
-        if (JS_IsUndefined(jsElem) || JS_IsNull(jsElem)) {
-            JS_FreeValue(ctx, jsElem);
-            JS_FreeValue(ctx, global);
-            continue;
-        }
-
-        JSValue listenersArr = JS_GetPropertyStr(ctx, jsElem, "__bro_listeners");
-        if (JS_IsUndefined(listenersArr) || !JS_IsArray(listenersArr)) {
-            JS_FreeValue(ctx, listenersArr);
-            JS_FreeValue(ctx, jsElem);
-            JS_FreeValue(ctx, global);
-            continue;
-        }
-
-        // Iterate the listeners array, call matching callbacks
-        int64_t len = 0;
-        JSValue lenVal = JS_GetPropertyStr(ctx, listenersArr, "length");
-        JS_ToInt64(ctx, &len, lenVal);
-        JS_FreeValue(ctx, lenVal);
-
-        // Build a minimal JS event object
-        JSValue jsEvent = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, jsEvent, "type",
-                          JS_NewString(ctx, event.type().c_str()));
-        JS_SetPropertyStr(ctx, jsEvent, "timeStamp",
-                          JS_NewFloat64(ctx, event.timeStamp()));
-
-        for (int64_t i = 0; i < len; i++) {
-            JSValue entry = JS_GetPropertyInt64(ctx, listenersArr, i);
-            if (JS_IsObject(entry)) {
-                JSValue typeVal = JS_GetPropertyStr(ctx, entry, "type");
-                const char* entryType = JS_ToCString(ctx, typeVal);
-                bool match = entryType && event.type() == entryType;
-                JS_FreeCString(ctx, entryType);
-                JS_FreeValue(ctx, typeVal);
-
-                if (match) {
-                    JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
-                    if (JS_IsFunction(ctx, cb)) {
-                        JSValue result = JS_Call(ctx, cb, jsElem, 1, &jsEvent);
-                        if (JS_IsException(result)) {
-                            js::Runtime::checkException(ctx, result);
-                        }
-                        JS_FreeValue(ctx, result);
-                    }
-                    JS_FreeValue(ctx, cb);
-                }
-            }
-            JS_FreeValue(ctx, entry);
-
-            if (event.propagationStopped()) break;
-        }
-
-        JS_FreeValue(ctx, jsEvent);
-        JS_FreeValue(ctx, listenersArr);
-        JS_FreeValue(ctx, jsElem);
-        JS_FreeValue(ctx, global);
-
-        if (!event.bubbles()) break;
-    }
+    js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
 } // namespace bro::engine

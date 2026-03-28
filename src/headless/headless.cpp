@@ -13,6 +13,7 @@
 #include "dom/event.h"
 #include "layout/container.h"
 #include "js/dom_bindings.h"
+#include "js/event_dispatch.h"
 #include "util/log.h"
 
 #include <iostream>
@@ -257,92 +258,13 @@ dom::Element* Headless::querySelector(const std::string& selector) const {
 }
 
 // ---------------------------------------------------------------------------
-// Event dispatch (mirrors Engine::dispatchEvent)
+// Event dispatch (delegates to shared implementation)
 // ---------------------------------------------------------------------------
 
 void Headless::dispatchClickOn(dom::Element* target) {
     if (!target || !jsRuntime_) return;
-
     dom::MouseEvent event("click");
-    event.setTarget(target);
-    JSContext* ctx = jsRuntime_->getContext();
-
-    for (dom::Element* current = target; current != nullptr;
-         current = current->parentElement()) {
-
-        if (event.propagationStopped()) break;
-        event.setCurrentTarget(current);
-
-        auto& listeners = current->listeners();
-        auto it = listeners.find("click");
-        if (it == listeners.end() || it->second.empty()) continue;
-
-        JSValue global = jsRuntime_->getGlobalObject();
-        JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
-        if (JS_IsUndefined(elemMap)) {
-            JS_FreeValue(ctx, global);
-            continue;
-        }
-
-        std::string elemKey = std::to_string(current->nodeId());
-        JSValue jsElem = JS_GetPropertyStr(ctx, elemMap, elemKey.c_str());
-        JS_FreeValue(ctx, elemMap);
-
-        if (JS_IsUndefined(jsElem) || JS_IsNull(jsElem)) {
-            JS_FreeValue(ctx, jsElem);
-            JS_FreeValue(ctx, global);
-            continue;
-        }
-
-        JSValue listenersArr = JS_GetPropertyStr(ctx, jsElem, "__bro_listeners");
-        if (JS_IsUndefined(listenersArr) || !JS_IsArray(listenersArr)) {
-            JS_FreeValue(ctx, listenersArr);
-            JS_FreeValue(ctx, jsElem);
-            JS_FreeValue(ctx, global);
-            continue;
-        }
-
-        int64_t len = 0;
-        JSValue lenVal = JS_GetPropertyStr(ctx, listenersArr, "length");
-        JS_ToInt64(ctx, &len, lenVal);
-        JS_FreeValue(ctx, lenVal);
-
-        JSValue jsEvent = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, jsEvent, "type", JS_NewString(ctx, "click"));
-        JS_SetPropertyStr(ctx, jsEvent, "timeStamp", JS_NewFloat64(ctx, virtualTime_));
-
-        for (int64_t i = 0; i < len; i++) {
-            JSValue entry = JS_GetPropertyInt64(ctx, listenersArr, i);
-            if (JS_IsObject(entry)) {
-                JSValue typeVal = JS_GetPropertyStr(ctx, entry, "type");
-                const char* entryType = JS_ToCString(ctx, typeVal);
-                bool match = entryType && std::strcmp(entryType, "click") == 0;
-                JS_FreeCString(ctx, entryType);
-                JS_FreeValue(ctx, typeVal);
-
-                if (match) {
-                    JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
-                    if (JS_IsFunction(ctx, cb)) {
-                        JSValue result = JS_Call(ctx, cb, jsElem, 1, &jsEvent);
-                        if (JS_IsException(result)) {
-                            js::Runtime::checkException(ctx, result);
-                        }
-                        JS_FreeValue(ctx, result);
-                    }
-                    JS_FreeValue(ctx, cb);
-                }
-            }
-            JS_FreeValue(ctx, entry);
-            if (event.propagationStopped()) break;
-        }
-
-        JS_FreeValue(ctx, jsEvent);
-        JS_FreeValue(ctx, listenersArr);
-        JS_FreeValue(ctx, jsElem);
-        JS_FreeValue(ctx, global);
-
-        if (!event.bubbles()) break;
-    }
+    js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
 // ---------------------------------------------------------------------------

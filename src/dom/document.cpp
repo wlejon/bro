@@ -17,6 +17,7 @@ void Document::parse(const std::string& html, litehtml::document_container* cont
     documentElement_ = nullptr;
     body_ = nullptr;
     idMap_.clear();
+    litehtmlMap_.clear();
 
     // Build our Element tree from the litehtml tree
     auto lh_root = litehtml_doc_->root();
@@ -25,6 +26,7 @@ void Document::parse(const std::string& html, litehtml::document_container* cont
     const char* rootTag = lh_root->get_tagName();
     auto rootElem = std::make_shared<Element>(rootTag ? rootTag : "html");
     rootElem->setLitehtmlElement(lh_root);
+    litehtmlMap_[lh_root] = rootElem.get();
     root_ = rootElem;
     documentElement_ = rootElem.get();
 
@@ -61,6 +63,7 @@ void Document::buildFrom(litehtml::document::ptr doc) {
     documentElement_ = nullptr;
     body_ = nullptr;
     idMap_.clear();
+    litehtmlMap_.clear();
 
     auto lh_root = litehtml_doc_->root();
     if (!lh_root) return;
@@ -68,6 +71,7 @@ void Document::buildFrom(litehtml::document::ptr doc) {
     const char* rootTag = lh_root->get_tagName();
     auto rootElem = std::make_shared<Element>(rootTag ? rootTag : "html");
     rootElem->setLitehtmlElement(lh_root);
+    litehtmlMap_[lh_root] = rootElem.get();
     root_ = rootElem;
     documentElement_ = rootElem.get();
 
@@ -103,11 +107,20 @@ void Document::reparse(litehtml::document_container* container) {
 }
 
 std::shared_ptr<Element> Document::createElement(const std::string& tag) {
-    return std::make_shared<Element>(tag);
+    auto elem = std::make_shared<Element>(tag);
+    orphans_.push_back(elem);
+    return elem;
 }
 
 std::shared_ptr<TextNode> Document::createTextNode(const std::string& text) {
     return std::make_shared<TextNode>(text);
+}
+
+void Document::adoptOrphan(Element* elem) {
+    orphans_.erase(
+        std::remove_if(orphans_.begin(), orphans_.end(),
+            [elem](const std::shared_ptr<Element>& e) { return e.get() == elem; }),
+        orphans_.end());
 }
 
 Element* Document::getElementById(const std::string& id) {
@@ -220,6 +233,7 @@ void Document::buildTreeFromLitehtml(litehtml::element::ptr root, Element* paren
         } else {
             auto childElem = std::make_shared<Element>(tag);
             childElem->setLitehtmlElement(lh_child);
+            litehtmlMap_[lh_child] = childElem.get();
 
             // Copy known attributes
             static const char* commonAttrs[] = {
@@ -254,15 +268,9 @@ void Document::collectElements(Node* node, std::vector<Element*>& out) {
 }
 
 Element* Document::findElementByLitehtml(const litehtml::element::ptr& lhElem) {
-    if (!lhElem || !root_) return nullptr;
-    std::vector<Element*> allElems;
-    collectElements(root_.get(), allElems);
-    for (auto* elem : allElems) {
-        if (elem->litehtmlElement() == lhElem) {
-            return elem;
-        }
-    }
-    return nullptr;
+    if (!lhElem) return nullptr;
+    auto it = litehtmlMap_.find(lhElem);
+    return (it != litehtmlMap_.end()) ? it->second : nullptr;
 }
 
 } // namespace bro::dom

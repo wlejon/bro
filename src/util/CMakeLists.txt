@@ -1,2 +1,2 @@
-add_library(bro_util STATIC log.cpp string_utils.cpp)
+add_library(bro_util STATIC log.cpp string_utils.cpp time.cpp)
 target_include_directories(bro_util PUBLIC ${CMAKE_SOURCE_DIR}/src)

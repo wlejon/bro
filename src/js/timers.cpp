@@ -1,6 +1,7 @@
 #include "js/timers.h"
 #include "js/runtime.h"
 #include "util/log.h"
+#include "util/time.h"
 
 #include <vector>
 
@@ -143,8 +144,8 @@ JSValue Timers::js_setTimeout(JSContext* ctx, JSValueConst /*this_val*/,
     Timers* t = getTimers(ctx);
     if (!t) return JS_UNDEFINED;
 
-    // Use 0 as "now" – the caller's tick() supplies real time.
-    int32_t id = t->addTimer(ctx, argv[0], delay, false, 0);
+    double now = bro::util::currentTimeMs();
+    int32_t id = t->addTimer(ctx, argv[0], delay, false, now);
     return JS_NewInt32(ctx, id);
 }
 
@@ -162,7 +163,8 @@ JSValue Timers::js_setInterval(JSContext* ctx, JSValueConst /*this_val*/,
     Timers* t = getTimers(ctx);
     if (!t) return JS_UNDEFINED;
 
-    int32_t id = t->addTimer(ctx, argv[0], delay, true, 0);
+    double now = bro::util::currentTimeMs();
+    int32_t id = t->addTimer(ctx, argv[0], delay, true, now);
     return JS_NewInt32(ctx, id);
 }
 

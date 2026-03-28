@@ -37,6 +37,9 @@ static JSValue event_proto    = JS_UNINITIALIZED;
 static JSValue nodelist_proto = JS_UNINITIALIZED;
 static JSValue cssstyle_proto = JS_UNINITIALIZED;
 
+// Stashed Document pointer so appendChild can manage orphan ownership.
+static bro::dom::Document* s_document = nullptr;
+
 // ===========================================================================
 // String conversion helpers
 // ===========================================================================
@@ -570,6 +573,27 @@ static JSValue js_element_removeAttribute(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+static std::shared_ptr<bro::dom::Node> findSharedPtr(bro::dom::Element* child) {
+    // If the child has a parent, it's in that parent's children_ vector.
+    if (child->parentNode()) {
+        for (auto& c : child->parentNode()->childNodes()) {
+            if (c.get() == child) return c;
+        }
+    }
+    // Otherwise check orphans in the document.
+    if (s_document) {
+        // Look through orphans_ -- Document::createElement stores them there.
+        // We need to find the shared_ptr that owns this element.
+        // adoptOrphan removes it, but we need to get it first.
+        // For now, create a shared_ptr from orphans by scanning.
+        for (auto& orphan : s_document->orphans()) {
+            if (orphan.get() == child) return orphan;
+        }
+    }
+    // Fallback: no-op deleter (shouldn't happen if createElement is used properly)
+    return std::shared_ptr<bro::dom::Node>(child, [](bro::dom::Node*){});
+}
+
 static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv)
 {
@@ -577,7 +601,12 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
     if (!el || argc < 1) return JS_UNDEFINED;
     auto* child = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
-    if (child) el->appendChild(std::shared_ptr<bro::dom::Node>(child, [](bro::dom::Node*){}));
+    if (child) {
+        auto childPtr = findSharedPtr(child);
+        el->appendChild(childPtr);
+        // Remove from orphans if it was there (Document now doesn't need to keep it alive).
+        if (s_document) s_document->adoptOrphan(child);
+    }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
 
@@ -599,16 +628,15 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
     if (!el || argc < 2) return JS_UNDEFINED;
     auto* newChild = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
-    // Reference child may be null
     bro::dom::Element* refChild = nullptr;
     if (!JS_IsNull(argv[1])) {
         refChild = static_cast<bro::dom::Element*>(
             DomBindings::unwrapElement(ctx, argv[1]));
     }
     if (newChild) {
-        // DOM spec: if refChild is null, append.
-        // TODO: implement insertBefore in dom::Element
-        el->appendChild(std::shared_ptr<bro::dom::Node>(newChild, [](bro::dom::Node*){}));
+        auto childPtr = findSharedPtr(newChild);
+        el->insertBefore(childPtr, static_cast<bro::dom::Node*>(refChild));
+        if (s_document) s_document->adoptOrphan(newChild);
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
@@ -839,6 +867,8 @@ static JSValue js_document_createElement(JSContext* ctx,
     std::string tag = jsToStdString(ctx, argv[0]);
     auto el = doc->createElement(tag);
     if (!el) return JS_NULL;
+    // Document::createElement stores the element in orphans_, keeping it alive
+    // until it is appended to a parent.
     return DomBindings::wrapElement(ctx, el.get());
 }
 
@@ -851,8 +881,8 @@ static JSValue js_document_createTextNode(JSContext* ctx,
     if (!doc || argc < 1) return JS_NULL;
     std::string text = jsToStdString(ctx, argv[0]);
     auto el = doc->createElement("#text");
-    if (el) el->setTextContent(text);
     if (!el) return JS_NULL;
+    el->setTextContent(text);
     return DomBindings::wrapElement(ctx, el.get());
 }
 
@@ -1007,6 +1037,9 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
                                sizeof(js_cssstyle_proto_funcs) / sizeof(js_cssstyle_proto_funcs[0]));
     JS_SetClassProto(ctx, js_cssstyle_class_id, JS_DupValue(ctx, cssstyle_proto));
 
+    // ----- Stash Document pointer for orphan management -----
+    s_document = static_cast<bro::dom::Document*>(document_ptr);
+
     // ----- Set global `document` -----
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue docObj = wrapDocument(ctx, document_ptr);
@@ -1025,6 +1058,7 @@ void DomBindings::cleanup(JSContext* ctx) {
     event_proto    = JS_UNINITIALIZED;
     nodelist_proto = JS_UNINITIALIZED;
     cssstyle_proto = JS_UNINITIALIZED;
+    s_document = nullptr;
 }
 
 } // namespace bro::js

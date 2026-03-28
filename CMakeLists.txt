@@ -11,5 +11,15 @@ if(MSVC)
     add_compile_options(/MP /permissive- /utf-8)
 endif()
 
+# --- Find system/vcpkg packages before descending into third_party ---
+find_package(SDL3 CONFIG QUIET)
+if(SDL3_FOUND)
+    message(STATUS "SDL3 found via find_package (vcpkg or system)")
+    set(BRO_SDL3_FROM_PACKAGE TRUE)
+else()
+    message(STATUS "SDL3 not found via find_package -- will build from submodule")
+    set(BRO_SDL3_FROM_PACKAGE FALSE)
+endif()
+
 add_subdirectory(third_party)
 add_subdirectory(src)
