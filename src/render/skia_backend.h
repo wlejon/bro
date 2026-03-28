@@ -16,8 +16,13 @@
 #include <include/gpu/vk/GrVkBackendContext.h>
 #endif
 
+struct SDL_Renderer;
+struct SDL_Window;
+struct SDL_Texture;
+
 namespace bro::platform {
     class VulkanContext;
+    class Window;
 } // namespace bro::platform
 
 namespace bro::render {
@@ -25,12 +30,12 @@ namespace bro::render {
 #ifdef BRO_NO_SKIA
 
 // ---------------------------------------------------------------------------
-// SoftwareRenderer -- stub when Skia is not available
+// SDLRenderer -- uses SDL3's 2D renderer for real on-screen output
 // ---------------------------------------------------------------------------
-class SoftwareRenderer final : public Renderer {
+class SDLRenderer final : public Renderer {
 public:
-    SoftwareRenderer();
-    ~SoftwareRenderer() override;
+    explicit SDLRenderer(platform::Window& window);
+    ~SDLRenderer() override;
 
     void clear(Color color) override;
 
@@ -53,20 +58,23 @@ public:
     void beginFrame(int width, int height) override;
     void endFrame() override;
 
-    // Debug access to recorded commands.
-    const std::vector<std::string>& commands() const { return commands_; }
-
 private:
+    void renderTextToTexture(std::string_view text, uint64_t font_handle, Color color,
+                             float x, float y);
+
     struct FontInfo {
         std::string family;
         float size = 0.0f;
         int weight = 400;
         bool italic = false;
+        void* hfont = nullptr; // HFONT handle for Win32 GDI text
     };
 
-    std::vector<std::string> commands_;
+    SDL_Renderer* sdlRenderer_ = nullptr;
     std::unordered_map<uint64_t, FontInfo> fonts_;
-    uint64_t next_font_handle_ = 1;
+    uint64_t nextFontHandle_ = 1;
+    int frameWidth_ = 0;
+    int frameHeight_ = 0;
 };
 
 #else // Skia is available
@@ -121,6 +129,7 @@ private:
 // ---------------------------------------------------------------------------
 // Factory -- returns the appropriate renderer for the current build.
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* vk);
+std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* vk,
+                                          platform::Window* window = nullptr);
 
 } // namespace bro::render

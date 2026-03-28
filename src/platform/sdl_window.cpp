@@ -16,10 +16,14 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height)
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
     }
 
+    Uint32 flags = SDL_WINDOW_RESIZABLE;
+#ifndef BRO_NO_SKIA
+    flags |= SDL_WINDOW_VULKAN;
+#endif
     m_window = SDL_CreateWindow(title.c_str(),
                                 static_cast<int>(width),
                                 static_cast<int>(height),
-                                SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+                                flags);
 
     if (!m_window) {
         LOG_ERROR("Failed to create SDL window: %s", SDL_GetError());

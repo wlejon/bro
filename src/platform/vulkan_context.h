@@ -1,5 +1,7 @@
 #pragma once
 
+#ifndef BRO_NO_SKIA
+
 #include <vulkan/vulkan.h>
 #include <vector>
 #include <cstdint>
@@ -91,3 +93,9 @@ private:
 };
 
 } // namespace bro::platform
+
+#else // BRO_NO_SKIA
+namespace bro::platform {
+    class VulkanContext {}; // stub
+} // namespace bro::platform
+#endif // BRO_NO_SKIA

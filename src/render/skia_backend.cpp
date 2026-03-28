@@ -1,8 +1,14 @@
 #include "render/skia_backend.h"
+#include "platform/sdl_window.h"
 #include "util/log.h"
 
+#include <SDL3/SDL.h>
 #include <cstring>
 #include <sstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #ifndef BRO_NO_SKIA
 #include <include/core/SkPaint.h>
@@ -19,124 +25,266 @@ namespace bro::render {
 // ===========================================================================
 #ifdef BRO_NO_SKIA
 // ===========================================================================
-// SoftwareRenderer implementation (stub / debug)
+// SDLRenderer -- real on-screen rendering via SDL3's 2D renderer + Win32 GDI text
 // ===========================================================================
 
-SoftwareRenderer::SoftwareRenderer() {
-    LOG_INFO("SoftwareRenderer created (Skia not available)");
-}
-
-SoftwareRenderer::~SoftwareRenderer() = default;
-
-void SoftwareRenderer::clear(Color color) {
-    LOG_INFO("SoftwareRenderer::clear(%u, %u, %u, %u)", color.r, color.g, color.b, color.a);
-    std::ostringstream os;
-    os << "clear(" << (int)color.r << "," << (int)color.g << "," << (int)color.b << "," << (int)color.a << ")";
-    commands_.push_back(os.str());
-}
-
-void SoftwareRenderer::drawRect(float x, float y, float w, float h, Color color) {
-    LOG_INFO("SoftwareRenderer::drawRect(%.1f, %.1f, %.1f, %.1f, rgba(%u,%u,%u,%u))",
-             x, y, w, h, color.r, color.g, color.b, color.a);
-    std::ostringstream os;
-    os << "drawRect(" << x << "," << y << "," << w << "," << h << ")";
-    commands_.push_back(os.str());
-}
-
-void SoftwareRenderer::drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) {
-    LOG_INFO("SoftwareRenderer::drawRoundRect(%.1f, %.1f, %.1f, %.1f, rx=%.1f, ry=%.1f, rgba(%u,%u,%u,%u))",
-             x, y, w, h, rx, ry, color.r, color.g, color.b, color.a);
-    std::ostringstream os;
-    os << "drawRoundRect(" << x << "," << y << "," << w << "," << h << "," << rx << "," << ry << ")";
-    commands_.push_back(os.str());
-}
-
-void SoftwareRenderer::fillRect(float x, float y, float w, float h, Color color) {
-    LOG_INFO("SoftwareRenderer::fillRect(%.1f, %.1f, %.1f, %.1f, rgba(%u,%u,%u,%u))",
-             x, y, w, h, color.r, color.g, color.b, color.a);
-    std::ostringstream os;
-    os << "fillRect(" << x << "," << y << "," << w << "," << h << ")";
-    commands_.push_back(os.str());
-}
-
-void SoftwareRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) {
-    LOG_INFO("SoftwareRenderer::drawText(\"%.*s\", %.1f, %.1f, font=%llu, rgba(%u,%u,%u,%u))",
-             static_cast<int>(text.size()), text.data(), x, y,
-             static_cast<unsigned long long>(font_handle),
-             color.r, color.g, color.b, color.a);
-    std::ostringstream os;
-    os << "drawText(\"" << text << "\"," << x << "," << y << ",font=" << font_handle << ")";
-    commands_.push_back(os.str());
-}
-
-TextMetrics SoftwareRenderer::measureText(std::string_view text, uint64_t font_handle) {
-    float font_size = 16.0f; // default
-    auto it = fonts_.find(font_handle);
-    if (it != fonts_.end()) {
-        font_size = it->second.size;
+SDLRenderer::SDLRenderer(platform::Window& window) {
+    // Create SDL renderer on the existing window (picks best backend: D3D11/12, Vulkan, OGL)
+    sdlRenderer_ = SDL_CreateRenderer(window.getSDLWindow(), nullptr);
+    if (!sdlRenderer_) {
+        LOG_ERROR("Failed to create SDL_Renderer: %s", SDL_GetError());
+    } else {
+        const char* name = SDL_GetRendererName(sdlRenderer_);
+        LOG_INFO("SDLRenderer created (backend: %s)", name ? name : "unknown");
     }
-    TextMetrics m;
-    m.width  = static_cast<float>(text.size()) * font_size * 0.6f;
-    m.height = font_size;
+}
+
+SDLRenderer::~SDLRenderer() {
+    // Clean up Win32 fonts
+    for (auto& [handle, info] : fonts_) {
+#ifdef _WIN32
+        if (info.hfont) DeleteObject((HFONT)info.hfont);
+#endif
+    }
+    if (sdlRenderer_) {
+        SDL_DestroyRenderer(sdlRenderer_);
+    }
+}
+
+void SDLRenderer::clear(Color color) {
+    if (!sdlRenderer_) return;
+    SDL_SetRenderDrawColor(sdlRenderer_, color.r, color.g, color.b, color.a);
+    SDL_RenderClear(sdlRenderer_);
+}
+
+void SDLRenderer::drawRect(float x, float y, float w, float h, Color color) {
+    if (!sdlRenderer_) return;
+    SDL_SetRenderDrawColor(sdlRenderer_, color.r, color.g, color.b, color.a);
+    SDL_FRect rect = {x, y, w, h};
+    SDL_RenderRect(sdlRenderer_, &rect);
+}
+
+void SDLRenderer::drawRoundRect(float x, float y, float w, float h, float /*rx*/, float /*ry*/, Color color) {
+    // SDL doesn't have native round rect -- draw a regular rect
+    drawRect(x, y, w, h, color);
+}
+
+void SDLRenderer::fillRect(float x, float y, float w, float h, Color color) {
+    if (!sdlRenderer_) return;
+    SDL_SetRenderDrawColor(sdlRenderer_, color.r, color.g, color.b, color.a);
+    SDL_FRect rect = {x, y, w, h};
+    SDL_RenderFillRect(sdlRenderer_, &rect);
+}
+
+void SDLRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) {
+    if (!sdlRenderer_ || text.empty()) return;
+#ifdef _WIN32
+    auto it = fonts_.find(font_handle);
+    if (it == fonts_.end()) return;
+
+    HFONT hfont = (HFONT)it->second.hfont;
+    if (!hfont) return;
+    float fontSize = it->second.size;
+
+    // Render text to a small DIB via GDI, then upload as SDL texture
+    std::string str(text);
+
+    HDC hdc = CreateCompatibleDC(nullptr);
+    SelectObject(hdc, hfont);
+
+    SIZE textSize;
+    GetTextExtentPoint32A(hdc, str.c_str(), (int)str.size(), &textSize);
+    if (textSize.cx <= 0 || textSize.cy <= 0) {
+        DeleteDC(hdc);
+        return;
+    }
+
+    BITMAPINFO bmi = {};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = textSize.cx;
+    bmi.bmiHeader.biHeight = -textSize.cy; // top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HBITMAP hbmp = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!hbmp || !bits) {
+        DeleteDC(hdc);
+        return;
+    }
+
+    SelectObject(hdc, hbmp);
+    SelectObject(hdc, hfont);
+
+    // Draw white text on black background, we'll use it as alpha mask
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    TextOutA(hdc, 0, 0, str.c_str(), (int)str.size());
+    GdiFlush();
+
+    // Convert: set color channels to requested color, alpha from GDI luminance
+    uint8_t* pixels = (uint8_t*)bits;
+    for (int i = 0; i < textSize.cx * textSize.cy; i++) {
+        uint8_t alpha = pixels[i * 4 + 0]; // blue channel (all channels are same for white)
+        pixels[i * 4 + 0] = color.b;
+        pixels[i * 4 + 1] = color.g;
+        pixels[i * 4 + 2] = color.r;
+        pixels[i * 4 + 3] = alpha;
+    }
+
+    SDL_Surface* surf = SDL_CreateSurfaceFrom(textSize.cx, textSize.cy,
+                                               SDL_PIXELFORMAT_ARGB8888,
+                                               bits, textSize.cx * 4);
+    if (surf) {
+        SDL_Texture* tex = SDL_CreateTextureFromSurface(sdlRenderer_, surf);
+        if (tex) {
+            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+            SDL_FRect dst = {x, y, (float)textSize.cx, (float)textSize.cy};
+            SDL_RenderTexture(sdlRenderer_, tex, nullptr, &dst);
+            SDL_DestroyTexture(tex);
+        }
+        SDL_DestroySurface(surf);
+    }
+
+    DeleteObject(hbmp);
+    DeleteDC(hdc);
+#else
+    (void)text; (void)x; (void)y; (void)font_handle; (void)color;
+#endif
+}
+
+TextMetrics SDLRenderer::measureText(std::string_view text, uint64_t font_handle) {
+    TextMetrics m = {};
+#ifdef _WIN32
+    auto it = fonts_.find(font_handle);
+    if (it == fonts_.end()) {
+        m.width = static_cast<float>(text.size()) * 8.0f;
+        m.height = 16.0f;
+        return m;
+    }
+
+    HFONT hfont = (HFONT)it->second.hfont;
+    if (!hfont) {
+        m.width = static_cast<float>(text.size()) * it->second.size * 0.6f;
+        m.height = it->second.size;
+        return m;
+    }
+
+    HDC hdc = CreateCompatibleDC(nullptr);
+    SelectObject(hdc, hfont);
+
+    std::string str(text);
+    SIZE textSize;
+    GetTextExtentPoint32A(hdc, str.c_str(), (int)str.size(), &textSize);
+    DeleteDC(hdc);
+
+    m.width = (float)textSize.cx;
+    m.height = (float)textSize.cy;
+#else
+    auto it = fonts_.find(font_handle);
+    float sz = (it != fonts_.end()) ? it->second.size : 16.0f;
+    m.width = static_cast<float>(text.size()) * sz * 0.6f;
+    m.height = sz;
+#endif
     return m;
 }
 
-uint64_t SoftwareRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
-    uint64_t handle = next_font_handle_++;
-    fonts_[handle] = FontInfo{std::string(family), size, weight, italic};
-    LOG_INFO("SoftwareRenderer::createFont(\"%.*s\", size=%.1f, weight=%d, italic=%d) -> handle %llu",
-             static_cast<int>(family.size()), family.data(), size, weight, italic ? 1 : 0,
-             static_cast<unsigned long long>(handle));
+uint64_t SDLRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
+    uint64_t handle = nextFontHandle_++;
+    FontInfo info;
+    info.family = std::string(family);
+    info.size = size;
+    info.weight = weight;
+    info.italic = italic;
+
+#ifdef _WIN32
+    // Extract first font family name (before comma)
+    std::string fam(family);
+    auto comma = fam.find(',');
+    if (comma != std::string::npos) fam = fam.substr(0, comma);
+    // Trim whitespace
+    while (!fam.empty() && fam.front() == ' ') fam.erase(fam.begin());
+    while (!fam.empty() && fam.back() == ' ') fam.pop_back();
+
+    int lfWeight = FW_NORMAL;
+    if (weight >= 700) lfWeight = FW_BOLD;
+    else if (weight >= 600) lfWeight = FW_SEMIBOLD;
+    else if (weight >= 500) lfWeight = FW_MEDIUM;
+    else if (weight <= 300) lfWeight = FW_LIGHT;
+
+    HFONT hfont = CreateFontA(
+        -(int)(size * 96.0f / 72.0f),  // height in pixels (negative = char height)
+        0, 0, 0,
+        lfWeight,
+        italic ? TRUE : FALSE,
+        FALSE, FALSE,
+        DEFAULT_CHARSET,
+        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        fam.c_str()
+    );
+    info.hfont = (void*)hfont;
+#endif
+
+    fonts_[handle] = std::move(info);
     return handle;
 }
 
-void SoftwareRenderer::deleteFont(uint64_t font_handle) {
-    fonts_.erase(font_handle);
-    LOG_INFO("SoftwareRenderer::deleteFont(%llu)", static_cast<unsigned long long>(font_handle));
+void SDLRenderer::deleteFont(uint64_t font_handle) {
+    auto it = fonts_.find(font_handle);
+    if (it != fonts_.end()) {
+#ifdef _WIN32
+        if (it->second.hfont) DeleteObject((HFONT)it->second.hfont);
+#endif
+        fonts_.erase(it);
+    }
 }
 
-void SoftwareRenderer::drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) {
-    LOG_INFO("SoftwareRenderer::drawLine(%.1f, %.1f -> %.1f, %.1f, thickness=%.1f, rgba(%u,%u,%u,%u))",
-             x1, y1, x2, y2, thickness, color.r, color.g, color.b, color.a);
-    std::ostringstream os;
-    os << "drawLine(" << x1 << "," << y1 << "," << x2 << "," << y2 << ",t=" << thickness << ")";
-    commands_.push_back(os.str());
+void SDLRenderer::drawLine(float x1, float y1, float x2, float y2, Color color, float /*thickness*/) {
+    if (!sdlRenderer_) return;
+    SDL_SetRenderDrawColor(sdlRenderer_, color.r, color.g, color.b, color.a);
+    SDL_RenderLine(sdlRenderer_, x1, y1, x2, y2);
 }
 
-void SoftwareRenderer::drawImage(const void* /*data*/, size_t len, float x, float y, float w, float h) {
-    LOG_INFO("SoftwareRenderer::drawImage(%zu bytes, %.1f, %.1f, %.1f, %.1f)", len, x, y, w, h);
-    std::ostringstream os;
-    os << "drawImage(" << len << " bytes," << x << "," << y << "," << w << "," << h << ")";
-    commands_.push_back(os.str());
+void SDLRenderer::drawImage(const void* /*data*/, size_t /*len*/, float /*x*/, float /*y*/, float /*w*/, float /*h*/) {
+    // TODO: decode image and render
 }
 
-void SoftwareRenderer::setClip(float x, float y, float w, float h) {
-    LOG_INFO("SoftwareRenderer::setClip(%.1f, %.1f, %.1f, %.1f)", x, y, w, h);
-    std::ostringstream os;
-    os << "setClip(" << x << "," << y << "," << w << "," << h << ")";
-    commands_.push_back(os.str());
+void SDLRenderer::setClip(float x, float y, float w, float h) {
+    if (!sdlRenderer_) return;
+    SDL_Rect r = {(int)x, (int)y, (int)w, (int)h};
+    SDL_SetRenderClipRect(sdlRenderer_, &r);
 }
 
-void SoftwareRenderer::resetClip() {
-    LOG_INFO("SoftwareRenderer::resetClip()");
-    commands_.push_back("resetClip()");
+void SDLRenderer::resetClip() {
+    if (!sdlRenderer_) return;
+    SDL_SetRenderClipRect(sdlRenderer_, nullptr);
 }
 
-void SoftwareRenderer::beginFrame(int width, int height) {
-    LOG_INFO("SoftwareRenderer::beginFrame(%d, %d)", width, height);
-    commands_.clear();
+void SDLRenderer::beginFrame(int width, int height) {
+    frameWidth_ = width;
+    frameHeight_ = height;
+    // SDL renderer manages its own frame -- nothing needed here
 }
 
-void SoftwareRenderer::endFrame() {
-    LOG_INFO("SoftwareRenderer::endFrame() -- %zu commands recorded", commands_.size());
+void SDLRenderer::endFrame() {
+    if (!sdlRenderer_) return;
+    SDL_RenderPresent(sdlRenderer_);
 }
 
 // ---------------------------------------------------------------------------
 // Factory (no Skia)
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/) {
-    LOG_INFO("Creating SoftwareRenderer (BRO_NO_SKIA defined)");
-    return std::make_unique<SoftwareRenderer>();
+std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/,
+                                          platform::Window* window) {
+    if (window) {
+        LOG_INFO("Creating SDLRenderer (Skia not available)");
+        return std::make_unique<SDLRenderer>(*window);
+    }
+    LOG_ERROR("createRenderer: no Window provided, cannot create SDLRenderer");
+    return nullptr;
 }
 
 // ===========================================================================
@@ -202,10 +350,7 @@ void SkiaRenderer::fillRect(float x, float y, float w, float h, Color color) {
 void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) {
     if (!canvas_) return;
     auto it = fonts_.find(font_handle);
-    if (it == fonts_.end()) {
-        LOG_WARN("drawText: unknown font handle %llu", static_cast<unsigned long long>(font_handle));
-        return;
-    }
+    if (it == fonts_.end()) return;
     SkPaint paint;
     paint.setColor(toSkColor(color));
     canvas_->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8, x, y, *it->second.font, paint);
@@ -213,10 +358,7 @@ void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t fo
 
 TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handle) {
     auto it = fonts_.find(font_handle);
-    if (it == fonts_.end()) {
-        LOG_WARN("measureText: unknown font handle %llu", static_cast<unsigned long long>(font_handle));
-        return {};
-    }
+    if (it == fonts_.end()) return {};
     const SkFont& font = *it->second.font;
     SkRect bounds;
     float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
@@ -263,10 +405,7 @@ void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, flo
     if (!canvas_) return;
     sk_sp<SkData> sk_data = SkData::MakeWithoutCopy(data, len);
     sk_sp<SkImage> image = SkImage::MakeFromEncoded(sk_data);
-    if (!image) {
-        LOG_WARN("drawImage: failed to decode image (%zu bytes)", len);
-        return;
-    }
+    if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
 }
 
@@ -282,13 +421,10 @@ void SkiaRenderer::resetClip() {
 }
 
 void SkiaRenderer::beginFrame(int width, int height) {
-    // TODO: acquire swapchain image from vk_, wrap as SkSurface
-    // For now, create an offscreen surface if dimensions changed or surface is null.
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
         SkImageInfo info = SkImageInfo::MakeN32Premul(width, height);
         surface_ = SkSurface::MakeRenderTarget(gr_context_.get(), SkBudgeted::kNo, info);
         if (!surface_) {
-            LOG_ERROR("SkiaRenderer::beginFrame: failed to create SkSurface (%dx%d)", width, height);
             canvas_ = nullptr;
             return;
         }
@@ -298,20 +434,16 @@ void SkiaRenderer::beginFrame(int width, int height) {
 }
 
 void SkiaRenderer::endFrame() {
-    if (canvas_) {
-        canvas_->restore();
-    }
-    if (surface_) {
-        surface_->flushAndSubmit();
-    }
-    // TODO: present swapchain image via vk_
+    if (canvas_) canvas_->restore();
+    if (surface_) surface_->flushAndSubmit();
     canvas_ = nullptr;
 }
 
 // ---------------------------------------------------------------------------
 // Factory (Skia available)
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* vk) {
+std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* vk,
+                                          platform::Window* /*window*/) {
     if (vk) {
         LOG_INFO("Creating SkiaRenderer with Vulkan backend");
         return std::make_unique<SkiaRenderer>(*vk);

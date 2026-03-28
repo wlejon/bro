@@ -32,17 +32,19 @@ Engine::Engine(const std::string& appDir, int width, int height)
     window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(width),
                                                   static_cast<uint32_t>(height));
 
-    // 2. Vulkan (optional -- fall back if GPU init fails)
+    // 2. Renderer
+    // When Skia is available, init Vulkan and use SkiaRenderer.
+    // Otherwise, use SDL's built-in 2D renderer (handles its own GPU context).
+#ifndef BRO_NO_SKIA
     try {
         vulkan_ = std::make_unique<platform::VulkanContext>();
         vulkan_->init(*window_);
     } catch (const std::exception& e) {
-        LOG_WARN("Vulkan init failed (%s) -- falling back to software rendering", e.what());
+        LOG_WARN("Vulkan init failed (%s) -- falling back to SDL renderer", e.what());
         vulkan_.reset();
     }
-
-    // 3. Renderer
-    renderer_ = render::createRenderer(vulkan_.get());
+#endif
+    renderer_ = render::createRenderer(vulkan_.get(), window_.get());
     if (!renderer_) {
         throw std::runtime_error("Failed to create renderer");
     }
@@ -196,9 +198,11 @@ void Engine::handleResize(int w, int h) {
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
     }
+#ifndef BRO_NO_SKIA
     if (vulkan_) {
         vulkan_->recreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
     }
+#endif
 }
 
 // ---------------------------------------------------------------------------
