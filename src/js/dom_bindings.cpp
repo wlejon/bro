@@ -900,10 +900,40 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
 {
     if (!element_ptr) return JS_NULL;
 
+    auto* elem = static_cast<bro::dom::Element*>(element_ptr);
+
+    // Check if we already have a wrapper in __bro_elem_map
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+    if (JS_IsUndefined(elemMap)) {
+        elemMap = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "__bro_elem_map", JS_DupValue(ctx, elemMap));
+    }
+
+    std::string key = std::to_string(elem->nodeId());
+    JSValue existing = JS_GetPropertyStr(ctx, elemMap, key.c_str());
+    if (!JS_IsUndefined(existing) && !JS_IsNull(existing)) {
+        // Return existing wrapper (prevents duplicates)
+        JS_FreeValue(ctx, elemMap);
+        JS_FreeValue(ctx, global);
+        return existing;
+    }
+    JS_FreeValue(ctx, existing);
+
     JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_element_class_id));
-    if (JS_IsException(obj)) return obj;
+    if (JS_IsException(obj)) {
+        JS_FreeValue(ctx, elemMap);
+        JS_FreeValue(ctx, global);
+        return obj;
+    }
     JS_SetOpaque(obj, element_ptr);
     JS_SetPrototype(ctx, obj, JS_DupValue(ctx, element_proto));
+
+    // Register in the element map for event dispatch lookup
+    JS_SetPropertyStr(ctx, elemMap, key.c_str(), JS_DupValue(ctx, obj));
+
+    JS_FreeValue(ctx, elemMap);
+    JS_FreeValue(ctx, global);
     return obj;
 }
 

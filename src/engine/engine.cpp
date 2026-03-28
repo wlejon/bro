@@ -11,7 +11,9 @@
 #include "js/dom_bindings.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/node.h"
 #include "dom/event.h"
+#include <litehtml/render_item.h>
 #include "layout/container.h"
 #include "util/log.h"
 
@@ -210,22 +212,18 @@ void Engine::handleResize(int w, int h) {
 // ---------------------------------------------------------------------------
 
 void Engine::handleMouseDown(float x, float y, int button) {
-    // Forward to litehtml for hit testing.
     if (litehtmlDoc_) {
         litehtml::position::vector redraw;
         litehtmlDoc_->on_lbutton_down(static_cast<int>(x), static_cast<int>(y),
                                        static_cast<int>(x), static_cast<int>(y), redraw);
     }
 
-    // Dispatch to JS listeners on the bro::dom side.
     if (document_) {
         dom::MouseEvent evt("mousedown");
         evt.setClientX(static_cast<double>(x));
         evt.setClientY(static_cast<double>(y));
         evt.setButton(button);
-        // Simple hit test: find the deepest element at (x,y).
-        // For now, dispatch to body.
-        dom::Element* target = document_->body();
+        dom::Element* target = hitTest(x, y);
         if (target) {
             dispatchEvent(target, evt);
         }
@@ -240,12 +238,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
     }
 
     if (document_) {
-        // Dispatch click event.
         dom::MouseEvent clickEvt("click");
         clickEvt.setClientX(static_cast<double>(x));
         clickEvt.setClientY(static_cast<double>(y));
         clickEvt.setButton(button);
-        dom::Element* target = document_->body();
+        dom::Element* target = hitTest(x, y);
         if (target) {
             dispatchEvent(target, clickEvt);
         }
@@ -295,49 +292,133 @@ void Engine::handleKeyUp(int keycode, int /*scancode*/, int mod) {
 }
 
 // ---------------------------------------------------------------------------
-// Event dispatch to JS
+// Hit testing
+// ---------------------------------------------------------------------------
+
+dom::Element* Engine::hitTest(float x, float y) {
+    if (!litehtmlDoc_ || !document_) return document_ ? document_->body() : nullptr;
+
+    auto rootRender = litehtmlDoc_->root_render();
+    if (!rootRender) return document_->body();
+
+    auto lhElem = rootRender->get_element_by_point(
+        static_cast<int>(x), static_cast<int>(y),
+        static_cast<int>(x), static_cast<int>(y),
+        [](const std::shared_ptr<litehtml::render_item>&) { return true; });
+
+    if (!lhElem) return document_->body();
+
+    dom::Element* found = document_->findElementByLitehtml(lhElem);
+    return found ? found : document_->body();
+}
+
+// ---------------------------------------------------------------------------
+// Event dispatch to JS (with bubbling)
 // ---------------------------------------------------------------------------
 
 void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     if (!target || !jsRuntime_) return;
 
     event.setTarget(target);
-    event.setCurrentTarget(target);
-
-    auto& listeners = target->listeners();
-    auto it = listeners.find(event.type());
-    if (it == listeners.end()) return;
-
     JSContext* ctx = jsRuntime_->getContext();
-    JSValue global = jsRuntime_->getGlobalObject();
 
-    for (uint64_t listenerId : it->second) {
-        // Listener IDs are indices into a global listener registry managed by
-        // DomBindings. The JS callback is stored as a property on the global
-        // object under the key "__bro_listener_<id>".
-        std::string key = "__bro_listener_" + std::to_string(listenerId);
-        JSValue fn = JS_GetPropertyStr(ctx, global, key.c_str());
-        if (JS_IsFunction(ctx, fn)) {
-            // Create a minimal event object to pass to JS.
-            JSValue jsEvent = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, jsEvent, "type",
-                              JS_NewString(ctx, event.type().c_str()));
-            JS_SetPropertyStr(ctx, jsEvent, "timeStamp",
-                              JS_NewFloat64(ctx, event.timeStamp()));
-
-            JSValue result = JS_Call(ctx, fn, JS_UNDEFINED, 1, &jsEvent);
-            if (JS_IsException(result)) {
-                js::Runtime::checkException(ctx, result);
-            }
-            JS_FreeValue(ctx, result);
-            JS_FreeValue(ctx, jsEvent);
-        }
-        JS_FreeValue(ctx, fn);
+    // Walk from target up to root (bubble phase)
+    for (dom::Element* current = target; current != nullptr;
+         current = current->parentElement()) {
 
         if (event.propagationStopped()) break;
-    }
+        event.setCurrentTarget(current);
 
-    JS_FreeValue(ctx, global);
+        // Check if this element has listeners for this event type
+        auto& listeners = current->listeners();
+        auto it = listeners.find(event.type());
+        if (it == listeners.end() || it->second.empty()) continue;
+
+        // Find the JS wrapper for this element to get the __bro_listeners array.
+        // We look up the element by scanning the JS element registry.
+        // The JS wrapper is stored via DomBindings — we need to find the
+        // callback from the __bro_listeners array on the JS element object.
+        //
+        // Strategy: DomBindings stores each callback in the __bro_listeners
+        // array on the JS element wrapper. The listener IDs stored in the C++
+        // Element are the array indices. We need the JS element object to read
+        // from it.
+        //
+        // Approach: use a global map from Element* -> JSValue wrapper.
+        // DomBindings already created these wrappers. We store a lookup in
+        // a global __bro_elem_map keyed by the element's C++ id.
+
+        JSValue global = jsRuntime_->getGlobalObject();
+        JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+        if (JS_IsUndefined(elemMap)) {
+            JS_FreeValue(ctx, global);
+            continue;
+        }
+
+        std::string elemKey = std::to_string(current->nodeId());
+        JSValue jsElem = JS_GetPropertyStr(ctx, elemMap, elemKey.c_str());
+        JS_FreeValue(ctx, elemMap);
+
+        if (JS_IsUndefined(jsElem) || JS_IsNull(jsElem)) {
+            JS_FreeValue(ctx, jsElem);
+            JS_FreeValue(ctx, global);
+            continue;
+        }
+
+        JSValue listenersArr = JS_GetPropertyStr(ctx, jsElem, "__bro_listeners");
+        if (JS_IsUndefined(listenersArr) || !JS_IsArray(listenersArr)) {
+            JS_FreeValue(ctx, listenersArr);
+            JS_FreeValue(ctx, jsElem);
+            JS_FreeValue(ctx, global);
+            continue;
+        }
+
+        // Iterate the listeners array, call matching callbacks
+        int64_t len = 0;
+        JSValue lenVal = JS_GetPropertyStr(ctx, listenersArr, "length");
+        JS_ToInt64(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+
+        // Build a minimal JS event object
+        JSValue jsEvent = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, jsEvent, "type",
+                          JS_NewString(ctx, event.type().c_str()));
+        JS_SetPropertyStr(ctx, jsEvent, "timeStamp",
+                          JS_NewFloat64(ctx, event.timeStamp()));
+
+        for (int64_t i = 0; i < len; i++) {
+            JSValue entry = JS_GetPropertyInt64(ctx, listenersArr, i);
+            if (JS_IsObject(entry)) {
+                JSValue typeVal = JS_GetPropertyStr(ctx, entry, "type");
+                const char* entryType = JS_ToCString(ctx, typeVal);
+                bool match = entryType && event.type() == entryType;
+                JS_FreeCString(ctx, entryType);
+                JS_FreeValue(ctx, typeVal);
+
+                if (match) {
+                    JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
+                    if (JS_IsFunction(ctx, cb)) {
+                        JSValue result = JS_Call(ctx, cb, jsElem, 1, &jsEvent);
+                        if (JS_IsException(result)) {
+                            js::Runtime::checkException(ctx, result);
+                        }
+                        JS_FreeValue(ctx, result);
+                    }
+                    JS_FreeValue(ctx, cb);
+                }
+            }
+            JS_FreeValue(ctx, entry);
+
+            if (event.propagationStopped()) break;
+        }
+
+        JS_FreeValue(ctx, jsEvent);
+        JS_FreeValue(ctx, listenersArr);
+        JS_FreeValue(ctx, jsElem);
+        JS_FreeValue(ctx, global);
+
+        if (!event.bubbles()) break;
+    }
 }
 
 } // namespace bro::engine

@@ -36,6 +36,7 @@ public:
     void handleKeyUp(int keycode, int scancode, int mod);
 
 private:
+    dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
 
     std::unique_ptr<platform::Window> window_;

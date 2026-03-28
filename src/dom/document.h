@@ -48,6 +48,9 @@ public:
     void registerElementId(const std::string& id, Element* elem);
     void unregisterElementId(const std::string& id);
 
+    // Find our Element wrapper for a litehtml element pointer
+    Element* findElementByLitehtml(const litehtml::element::ptr& lhElem);
+
 private:
     void buildTreeFromLitehtml(litehtml::element::ptr root, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);

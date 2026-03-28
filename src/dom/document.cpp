@@ -214,4 +214,16 @@ void Document::collectElements(Node* node, std::vector<Element*>& out) {
     }
 }
 
+Element* Document::findElementByLitehtml(const litehtml::element::ptr& lhElem) {
+    if (!lhElem || !root_) return nullptr;
+    std::vector<Element*> allElems;
+    collectElements(root_.get(), allElems);
+    for (auto* elem : allElems) {
+        if (elem->litehtmlElement() == lhElem) {
+            return elem;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace bro::dom

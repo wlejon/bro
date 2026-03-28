@@ -30,7 +30,7 @@ public:
     void removeChild(Node* child);
     void insertBefore(std::shared_ptr<Node> newChild, Node* refChild);
 
-    uint32_t id() const { return id_; }
+    uint32_t nodeId() const { return id_; }
 
 protected:
     Node* parent_ = nullptr;
