@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tetris</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="game"></canvas>
+
+    <div id="hud">
+        <div class="hud-title">TETRIS</div>
+        <div class="hud-row">
+            <div class="hud-label">Score</div>
+            <div id="score" class="hud-value">0</div>
+        </div>
+        <div class="hud-row">
+            <div class="hud-label">Level</div>
+            <div id="level" class="hud-value">1</div>
+        </div>
+        <div class="hud-row">
+            <div class="hud-label">Lines</div>
+            <div id="lines" class="hud-value">0</div>
+        </div>
+    </div>
+
+    <div id="overlay">
+        <div id="overlay-title" class="overlay-title">TETRIS</div>
+        <div id="overlay-sub" class="overlay-sub">Press ENTER to start</div>
+        <div class="overlay-hint">Arrows to move, Up to rotate, Space to drop</div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

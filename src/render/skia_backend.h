@@ -69,6 +69,11 @@ public:
     /// Access the UI overlay texture (alpha-blended Skia content).
     SDL_Texture* getUITexture() const { return uiTexture_; }
 
+    /// Render text to a standalone SDL texture (for scene-layer text).
+    /// Caller does NOT own the texture — it is cached internally.
+    SDL_Texture* renderTextToTexture(std::string_view text, uint64_t font_handle,
+                                      Color color, int& outW, int& outH);
+
 private:
     SkColor toSkColor(Color c) const;
 
@@ -86,6 +91,10 @@ private:
     };
     std::unordered_map<uint64_t, FontEntry> fonts_;
     uint64_t next_font_handle_ = 1;
+
+    // Cached text textures for scene-layer rendering
+    struct TextCacheEntry { SDL_Texture* tex; int w; int h; };
+    std::unordered_map<std::string, TextCacheEntry> textTexCache_;
 };
 
 #else // BRO_NO_SKIA

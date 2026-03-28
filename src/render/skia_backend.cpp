@@ -316,6 +316,8 @@ SkiaRenderer::SkiaRenderer(platform::Window& window) {
 }
 
 SkiaRenderer::~SkiaRenderer() {
+    for (auto& [k, e] : textTexCache_) SDL_DestroyTexture(e.tex);
+    textTexCache_.clear();
     fonts_.clear();
     surface_.reset();
     if (uiTexture_) SDL_DestroyTexture(uiTexture_);
@@ -475,6 +477,63 @@ void SkiaRenderer::endFrame() {
     if (!surface_->peekPixels(&pixmap)) return;
     SDL_UpdateTexture(uiTexture_, nullptr, pixmap.addr(), (int)pixmap.rowBytes());
     // NOTE: Does NOT present. The engine handles compositing and presentation.
+}
+
+SDL_Texture* SkiaRenderer::renderTextToTexture(std::string_view text, uint64_t font_handle,
+                                                Color color, int& outW, int& outH) {
+    if (!sdlRenderer_ || text.empty()) return nullptr;
+
+    // Cache key
+    char key[256];
+    std::snprintf(key, sizeof(key), "%.*s|%llu|%u%u%u%u",
+                  (int)text.size(), text.data(), (unsigned long long)font_handle,
+                  color.r, color.g, color.b, color.a);
+    std::string cacheKey(key);
+
+    auto it = textTexCache_.find(cacheKey);
+    if (it != textTexCache_.end()) {
+        outW = it->second.w;
+        outH = it->second.h;
+        return it->second.tex;
+    }
+
+    // Measure
+    auto fit = fonts_.find(font_handle);
+    if (fit == fonts_.end()) return nullptr;
+    const SkFont& font = *fit->second.font;
+
+    SkRect bounds;
+    float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
+    int tw = (int)std::ceil(width) + 4;
+    int th = (int)std::ceil(bounds.height()) + 4;
+    if (tw <= 0 || th <= 0) return nullptr;
+
+    // Render to a temporary Skia surface
+    auto tmpSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(tw, th));
+    if (!tmpSurface) return nullptr;
+
+    auto* c = tmpSurface->getCanvas();
+    c->clear(SK_ColorTRANSPARENT);
+
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    c->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
+                      -bounds.left() + 1, -bounds.top() + 1, font, paint);
+
+    // Extract pixels and upload to SDL texture
+    SkPixmap pixmap;
+    if (!tmpSurface->peekPixels(&pixmap)) return nullptr;
+
+    SDL_Texture* tex = SDL_CreateTexture(sdlRenderer_, SDL_PIXELFORMAT_ARGB8888,
+                                          SDL_TEXTUREACCESS_STATIC, tw, th);
+    if (!tex) return nullptr;
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_UpdateTexture(tex, nullptr, pixmap.addr(), (int)pixmap.rowBytes());
+
+    textTexCache_[cacheKey] = {tex, tw, th};
+    outW = tw;
+    outH = th;
+    return tex;
 }
 
 // ---------------------------------------------------------------------------

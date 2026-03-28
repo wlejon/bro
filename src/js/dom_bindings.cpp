@@ -40,6 +40,13 @@ static JSValue cssstyle_proto = JS_UNINITIALIZED;
 // Stashed Document pointer so appendChild can manage orphan ownership.
 static bro::dom::Document* s_document = nullptr;
 
+// Factory callback for element.getContext()
+static DomBindings::GetContextFactory s_getContextFactory;
+
+void DomBindings::setGetContextFactory(GetContextFactory factory) {
+    s_getContextFactory = std::move(factory);
+}
+
 // ===========================================================================
 // String conversion helpers
 // ===========================================================================
@@ -769,6 +776,22 @@ static JSValue js_element_querySelectorAll(JSContext* ctx,
     return JS_NewArray(ctx);
 }
 
+static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_NULL;
+    // Only canvas elements support getContext
+    if (el->tagName() != "canvas" && el->tagName() != "CANVAS") return JS_NULL;
+    const char* typeStr = JS_ToCString(ctx, argv[0]);
+    std::string type = typeStr ? typeStr : "";
+    if (typeStr) JS_FreeCString(ctx, typeStr);
+    if (type != "2d") return JS_NULL;
+    if (s_getContextFactory) {
+        return s_getContextFactory(ctx, el, type);
+    }
+    return JS_NULL;
+}
+
 // ---- Function list --------------------------------------------------------
 
 static const JSCFunctionListEntry js_element_proto_funcs[] = {
@@ -794,6 +817,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("querySelector",       1, js_element_querySelector),
     JS_CFUNC_DEF("querySelectorAll",    1, js_element_querySelectorAll),
     JS_CFUNC_DEF("remove",             0, js_element_remove),
+    JS_CFUNC_DEF("getContext",          1, js_element_getContext),
 };
 
 // ===========================================================================

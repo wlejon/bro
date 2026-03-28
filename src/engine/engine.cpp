@@ -10,7 +10,9 @@
 #include "js/console.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
+#include "js/canvas_bindings.h"
 #include "js/event_dispatch.h"
+#include "canvas/canvas_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/node.h"
@@ -83,6 +85,16 @@ Engine::Engine(const std::string& appDir, int width, int height)
 
     // 9. Install DOM JS bindings
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
+
+    // 9b. Install Canvas 2D bindings and getContext factory
+    js::CanvasBindings::install(jsRuntime_->getContext());
+    js::DomBindings::setGetContextFactory(
+        [this](JSContext* ctx, dom::Element*, const std::string&) -> JSValue {
+            auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+            auto* ptr = scene.get();
+            setSceneLayer(std::move(scene));
+            return js::CanvasBindings::wrapContext2D(ctx, ptr);
+        });
 
     // 10. Load and execute scripts
     for (auto& scriptPath : manifest_.scriptPaths) {
