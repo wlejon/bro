@@ -79,13 +79,13 @@ Engine::Engine(const std::string& appDir, int width, int height)
         }
     }
 
-    // 7. Parse HTML with litehtml
+    // 7. Parse HTML with litehtml (single parse, shared by layout + DOM)
     litehtmlDoc_ = litehtml::document::createFromString(html, container_.get(),
                                                          litehtml::master_css, userStyles);
 
-    // 8. Build bro::dom tree
+    // 8. Build bro::dom tree from the same litehtml document
     document_ = std::make_unique<dom::Document>();
-    document_->parse(html, container_.get());
+    document_->buildFrom(litehtmlDoc_);
 
     // 9. Install DOM JS bindings
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
@@ -150,6 +150,7 @@ void Engine::run() {
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
     }
+
 
     while (running_) {
         // 1. Poll platform events
@@ -309,6 +310,16 @@ dom::Element* Engine::hitTest(float x, float y) {
     if (!lhElem) return document_->body();
 
     dom::Element* found = document_->findElementByLitehtml(lhElem);
+    if (!found) {
+        // The hit element might be a text node or anonymous element.
+        // Walk up litehtml's parent chain to find a mapped element.
+        auto parent = lhElem->parent();
+        while (parent && !found) {
+            found = document_->findElementByLitehtml(parent);
+            if (!found) parent = parent->parent();
+        }
+    }
+
     return found ? found : document_->body();
 }
 

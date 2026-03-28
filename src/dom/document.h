@@ -17,6 +17,7 @@ public:
 
     // Parsing
     void parse(const std::string& html, litehtml::document_container* container);
+    void buildFrom(litehtml::document::ptr doc);
     void reparse(litehtml::document_container* container);
 
     // Node creation

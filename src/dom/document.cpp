@@ -53,6 +53,45 @@ void Document::parse(const std::string& html, litehtml::document_container* cont
     dirty_ = false;
 }
 
+void Document::buildFrom(litehtml::document::ptr doc) {
+    litehtml_doc_ = doc;
+    if (!litehtml_doc_) return;
+
+    root_.reset();
+    documentElement_ = nullptr;
+    body_ = nullptr;
+    idMap_.clear();
+
+    auto lh_root = litehtml_doc_->root();
+    if (!lh_root) return;
+
+    const char* rootTag = lh_root->get_tagName();
+    auto rootElem = std::make_shared<Element>(rootTag ? rootTag : "html");
+    rootElem->setLitehtmlElement(lh_root);
+    root_ = rootElem;
+    documentElement_ = rootElem.get();
+
+    buildTreeFromLitehtml(lh_root, rootElem.get());
+
+    for (auto* child : rootElem->children()) {
+        if (child->tagName() == "BODY") {
+            body_ = child;
+            break;
+        }
+    }
+
+    std::vector<Element*> allElems;
+    collectElements(root_.get(), allElems);
+    for (auto* elem : allElems) {
+        std::string elemId = elem->id();
+        if (!elemId.empty()) {
+            idMap_[elemId] = elem;
+        }
+    }
+
+    dirty_ = false;
+}
+
 void Document::reparse(litehtml::document_container* container) {
     if (!documentElement_) return;
 
