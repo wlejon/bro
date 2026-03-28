@@ -1,5 +1,6 @@
 #include "render/skia_backend.h"
 #include "platform/sdl_window.h"
+#include "platform/vulkan_context.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -17,7 +18,10 @@
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkFontMgr.h>
-#include <include/gpu/GrBackendSurface.h>
+#include <include/codec/SkCodec.h>
+#include <include/gpu/ganesh/GrBackendSurface.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
+#include <include/ports/SkTypeface_win.h>
 #endif
 
 namespace bro::render {
@@ -38,6 +42,8 @@ SDLRenderer::SDLRenderer(platform::Window& window) {
         LOG_INFO("SDLRenderer created (backend: %s)", name ? name : "unknown");
         // Disable vsync for uncapped framerate
         SDL_SetRenderVSync(sdlRenderer_, SDL_RENDERER_VSYNC_DISABLED);
+        // Enable alpha blending so transparent UI elements show the scene behind
+        SDL_SetRenderDrawBlendMode(sdlRenderer_, SDL_BLENDMODE_BLEND);
     }
 }
 
@@ -72,7 +78,7 @@ void SDLRenderer::drawRoundRect(float x, float y, float w, float h, float /*rx*/
 }
 
 void SDLRenderer::fillRect(float x, float y, float w, float h, Color color) {
-    if (!sdlRenderer_) return;
+    if (!sdlRenderer_ || color.a == 0) return;
     SDL_SetRenderDrawColor(sdlRenderer_, color.r, color.g, color.b, color.a);
     SDL_FRect rect = {x, y, w, h};
     SDL_RenderFillRect(sdlRenderer_, &rect);
@@ -298,10 +304,19 @@ std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/,
 SkiaRenderer::SkiaRenderer(platform::VulkanContext& vk)
     : vk_(vk)
 {
-    GrVkBackendContext backend_ctx{};
-    // TODO: populate backend_ctx from vk_ (instance, device, queue, etc.)
+    skgpu::VulkanBackendContext backend_ctx{};
+    backend_ctx.fInstance = vk.getInstance();
+    backend_ctx.fPhysicalDevice = vk.getPhysicalDevice();
+    backend_ctx.fDevice = vk.getDevice();
+    backend_ctx.fQueue = vk.getGraphicsQueue();
+    backend_ctx.fGraphicsQueueIndex = 0;
+    backend_ctx.fMaxAPIVersion = VK_API_VERSION_1_1;
+    backend_ctx.fGetProc = [](const char* name, VkInstance inst, VkDevice dev) -> PFN_vkVoidFunction {
+        if (dev) return vkGetDeviceProcAddr(dev, name);
+        return vkGetInstanceProcAddr(inst, name);
+    };
 
-    gr_context_ = GrDirectContext::MakeVulkan(backend_ctx);
+    gr_context_ = GrDirectContexts::MakeVulkan(backend_ctx);
     if (!gr_context_) {
         LOG_ERROR("Failed to create GrDirectContext from Vulkan backend");
     }
@@ -375,10 +390,10 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
                       SkFontStyle::kNormal_Width,
                       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
 
-    sk_sp<SkFontMgr> font_mgr = SkFontMgr::RefDefault();
+    sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_DirectWrite();
     sk_sp<SkTypeface> typeface = font_mgr->matchFamilyStyle(std::string(family).c_str(), style);
     if (!typeface) {
-        typeface = SkTypeface::MakeDefault();
+        typeface = font_mgr->matchFamilyStyle(nullptr, SkFontStyle());
     }
 
     auto sk_font = std::make_unique<SkFont>(typeface, size);
@@ -406,7 +421,9 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, Color color,
 void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h) {
     if (!canvas_) return;
     sk_sp<SkData> sk_data = SkData::MakeWithoutCopy(data, len);
-    sk_sp<SkImage> image = SkImage::MakeFromEncoded(sk_data);
+    auto codec = SkCodec::MakeFromData(sk_data);
+    if (!codec) return;
+    auto [image, result] = codec->getImage();
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
 }
@@ -425,7 +442,7 @@ void SkiaRenderer::resetClip() {
 void SkiaRenderer::beginFrame(int width, int height) {
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
         SkImageInfo info = SkImageInfo::MakeN32Premul(width, height);
-        surface_ = SkSurface::MakeRenderTarget(gr_context_.get(), SkBudgeted::kNo, info);
+        surface_ = SkSurfaces::RenderTarget(gr_context_.get(), skgpu::Budgeted::kNo, info);
         if (!surface_) {
             canvas_ = nullptr;
             return;
@@ -437,7 +454,7 @@ void SkiaRenderer::beginFrame(int width, int height) {
 
 void SkiaRenderer::endFrame() {
     if (canvas_) canvas_->restore();
-    if (surface_) surface_->flushAndSubmit();
+    if (gr_context_) gr_context_->flushAndSubmit();
     canvas_ = nullptr;
 }
 

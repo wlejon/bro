@@ -1,7 +1,4 @@
 #include "platform/vulkan_context.h"
-
-#ifndef BRO_NO_SKIA // Vulkan context only used when Skia is available
-
 #include "platform/sdl_window.h"
 #include "util/log.h"
 
@@ -552,5 +549,3 @@ void VulkanContext::endFrame() {
 }
 
 } // namespace bro::platform
-
-#endif // !BRO_NO_SKIA

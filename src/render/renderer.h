@@ -42,6 +42,7 @@ public:
 
     virtual void beginFrame(int width, int height) = 0;
     virtual void endFrame() = 0;
+
 };
 
 } // namespace bro::render

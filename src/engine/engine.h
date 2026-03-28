@@ -6,6 +6,8 @@
 #include <memory>
 #include <string>
 
+namespace bro::render { class SceneLayer; }
+
 namespace bro::platform {
     class Window;
     class VulkanContext;
@@ -25,6 +27,9 @@ public:
 
     /// Run the main event / render loop. Returns when the window is closed.
     void run();
+
+    /// Set a scene layer that renders behind the UI (takes ownership).
+    void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
 
     /// Handle a window resize.
     void handleResize(int w, int h);
@@ -55,6 +60,7 @@ private:
     int viewportWidth_;
     int viewportHeight_;
     AppManifest manifest_;
+    std::unique_ptr<render::SceneLayer> sceneLayer_;
 
     // Stats overlay
     uint64_t statsFont_ = 0;
@@ -64,6 +70,7 @@ private:
     double statsFrameTimeMs_ = 0.0;
     double statsMinFrameMs_ = 999.0;
     double statsMaxFrameMs_ = 0.0;
+    double totalFrameMs_ = 0.0;
 };
 
 } // namespace bro::engine

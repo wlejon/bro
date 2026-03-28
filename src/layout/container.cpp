@@ -112,6 +112,7 @@ void BroContainer::draw_image(litehtml::uint_ptr /*hdc*/,
 void BroContainer::draw_solid_fill(litehtml::uint_ptr /*hdc*/,
                                     const litehtml::background_layer& layer,
                                     const litehtml::web_color& color) {
+    if (color.alpha == 0) return; // transparent — let scene show through
     render::Color c{color.red, color.green, color.blue, color.alpha};
     renderer_->fillRect(static_cast<float>(layer.border_box.x),
                         static_cast<float>(layer.border_box.y),

@@ -4,6 +4,7 @@
 #include "platform/vulkan_context.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
+#include "render/scene_layer.h"
 #include "render/skia_backend.h"
 #include "js/runtime.h"
 #include "js/console.h"
@@ -38,8 +39,6 @@ Engine::Engine(const std::string& appDir, int width, int height)
                                                   static_cast<uint32_t>(height));
 
     // 2. Renderer
-    // When Skia is available, init Vulkan and use SkiaRenderer.
-    // Otherwise, use SDL's built-in 2D renderer (handles its own GPU context).
 #ifndef BRO_NO_SKIA
     try {
         vulkan_ = std::make_unique<platform::VulkanContext>();
@@ -111,7 +110,18 @@ Engine::Engine(const std::string& appDir, int width, int height)
     statsFont_ = renderer_->createFont("Consolas", 13.0f, 400, false);
 }
 
+void Engine::setSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
+    sceneLayer_ = std::move(layer);
+    if (sceneLayer_ && renderer_) {
+        sceneLayer_->onInit(*renderer_, viewportWidth_, viewportHeight_);
+    }
+}
+
 Engine::~Engine() {
+    if (sceneLayer_) {
+        sceneLayer_->onCleanup();
+    }
+    sceneLayer_.reset();
     if (statsFont_ && renderer_) {
         renderer_->deleteFont(statsFont_);
     }
@@ -181,8 +191,16 @@ void Engine::run() {
 
         // 5. Render
         renderer_->beginFrame(viewportWidth_, viewportHeight_);
-        renderer_->clear({255, 255, 255, 255});
 
+        if (sceneLayer_) {
+            // Scene layer fills the background
+            sceneLayer_->onRender(*renderer_, viewportWidth_, viewportHeight_,
+                                  totalFrameMs_);
+        } else {
+            renderer_->clear({255, 255, 255, 255});
+        }
+
+        // HTML/CSS UI composited on top (transparent backgrounds show scene)
         if (litehtmlDoc_) {
             litehtml::position clip(0, 0,
                                     static_cast<litehtml::pixel_t>(viewportWidth_),
@@ -191,14 +209,14 @@ void Engine::run() {
                 reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
         }
 
-        // 5b. Stats overlay (render time = time spent up to this point)
         double renderElapsed = util::currentTimeMs() - frameStart;
         drawStatsOverlay(renderElapsed);
 
         renderer_->endFrame();
 
         // 6. Frame time tracking
-        double totalFrameMs = util::currentTimeMs() - frameStart;
+        totalFrameMs_ = util::currentTimeMs() - frameStart;
+        double totalFrameMs = totalFrameMs_;
         statsAccumMs_ += totalFrameMs;
         statsFrameCount_++;
         if (totalFrameMs < statsMinFrameMs_) statsMinFrameMs_ = totalFrameMs;
@@ -222,14 +240,17 @@ void Engine::handleResize(int w, int h) {
     viewportWidth_ = w;
     viewportHeight_ = h;
     container_->setViewport(w, h);
-    if (litehtmlDoc_) {
-        litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
-    }
 #ifndef BRO_NO_SKIA
     if (vulkan_) {
         vulkan_->recreateSwapchain(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
     }
 #endif
+    if (sceneLayer_) {
+        sceneLayer_->onResize(w, h);
+    }
+    if (litehtmlDoc_) {
+        litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
+    }
 }
 
 // ---------------------------------------------------------------------------
