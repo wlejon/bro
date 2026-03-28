@@ -104,7 +104,8 @@ Engine::Engine(const std::string& appDir, int width, int height)
 void Engine::setSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
     sceneLayer_ = std::move(layer);
     if (sceneLayer_ && renderer_) {
-        sceneLayer_->onInit(*renderer_, viewportWidth_, viewportHeight_);
+        auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
+        sceneLayer_->onInit(skia->getSDLRenderer(), viewportWidth_, viewportHeight_);
     }
 }
 
@@ -165,6 +166,9 @@ void Engine::run() {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
     }
 
+    auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
+    SDL_Renderer* sdl = skia->getSDLRenderer();
+
     while (running_) {
         double frameStart = util::currentTimeMs();
 
@@ -186,32 +190,49 @@ void Engine::run() {
         if (document_ && document_->isDirty() && litehtmlDoc_) {
             litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
             document_->clearDirty();
+            uiDirty_ = true;
         }
 
-        // 5. Render
-        renderer_->beginFrame(viewportWidth_, viewportHeight_);
+        // === GPU FRAME ===
 
+        // 5a. Clear backbuffer
+        SDL_SetRenderDrawColor(sdl, 0, 0, 0, 255);
+        SDL_RenderClear(sdl);
+
+        // 5b. Scene layer renders directly to GPU
         if (sceneLayer_) {
-            // Scene layer fills the background
-            sceneLayer_->onRender(*renderer_, viewportWidth_, viewportHeight_,
+            sceneLayer_->onRender(sdl, viewportWidth_, viewportHeight_,
                                   totalFrameMs_);
-        } else {
-            renderer_->clear({255, 255, 255, 255});
         }
 
-        // HTML/CSS UI composited on top (transparent backgrounds show scene)
-        if (litehtmlDoc_) {
-            litehtml::position clip(0, 0,
-                                    static_cast<litehtml::pixel_t>(viewportWidth_),
-                                    static_cast<litehtml::pixel_t>(viewportHeight_));
-            litehtmlDoc_->draw(
-                reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
+        // 5c. Re-rasterize UI texture only when content changed
+        if (uiDirty_ || !hasRenderedOnce_) {
+            renderer_->beginFrame(viewportWidth_, viewportHeight_);
+
+            if (litehtmlDoc_) {
+                litehtml::position clip(0, 0,
+                                        static_cast<litehtml::pixel_t>(viewportWidth_),
+                                        static_cast<litehtml::pixel_t>(viewportHeight_));
+                litehtmlDoc_->draw(
+                    reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
+            }
+
+            double renderElapsed = util::currentTimeMs() - frameStart;
+            drawStatsOverlay(renderElapsed);
+
+            renderer_->endFrame();  // uploads to UI texture, does NOT present
+            hasRenderedOnce_ = true;
+            uiDirty_ = false;
         }
 
-        double renderElapsed = util::currentTimeMs() - frameStart;
-        drawStatsOverlay(renderElapsed);
+        // 5d. Composite UI texture over scene (alpha-blended)
+        SDL_Texture* uiTex = skia->getUITexture();
+        if (uiTex) {
+            SDL_RenderTexture(sdl, uiTex, nullptr, nullptr);
+        }
 
-        renderer_->endFrame();
+        // 5e. Present
+        SDL_RenderPresent(sdl);
 
         // 6. Frame time tracking
         totalFrameMs_ = util::currentTimeMs() - frameStart;
@@ -227,6 +248,7 @@ void Engine::run() {
             statsFrameCount_ = 0;
             statsMinFrameMs_ = 999.0;
             statsMaxFrameMs_ = 0.0;
+            uiDirty_ = true;  // refresh stats overlay text
         }
     }
 }
@@ -238,6 +260,8 @@ void Engine::run() {
 void Engine::handleResize(int w, int h) {
     viewportWidth_ = w;
     viewportHeight_ = h;
+    uiDirty_ = true;
+    hasRenderedOnce_ = false;
     container_->setViewport(w, h);
     // Swapchain resize is handled by SkiaRenderer::beginFrame() when it detects
     // a size mismatch, so we don't call recreateSwapchain here.
@@ -383,52 +407,36 @@ void Engine::drawStatsOverlay(double frameTimeMs) {
     using render::Color;
     constexpr float pad = 6.0f;
     constexpr float lineH = 16.0f;
-    constexpr int numLines = 5;
-    const float boxW = 220.0f;
+    constexpr int numLines = 2;
+    const float boxW = 320.0f;
     const float boxH = pad * 2 + lineH * numLines;
     const float boxX = static_cast<float>(viewportWidth_) - boxW - 8.0f;
     const float boxY = 8.0f;
 
-    // Semi-transparent background
-    renderer_->fillRect(boxX, boxY, boxW, boxH, {0, 0, 0, 190});
-    renderer_->drawRect(boxX, boxY, boxW, boxH, {80, 80, 80, 200});
+    // Opaque background — covers previous frame's overlay without re-compositing
+    renderer_->fillRect(boxX, boxY, boxW, boxH, {0, 0, 0, 255});
 
     float y = boxY + pad;
     float x = boxX + pad;
-    Color white{220, 220, 220, 255};
-    Color label{140, 140, 140, 255};
     Color green{100, 220, 100, 255};
     Color yellow{220, 200, 80, 255};
     Color red{220, 80, 80, 255};
+    Color label{140, 140, 140, 255};
 
-    // FPS color: green >= 55, yellow >= 30, red < 30
     Color fpsColor = statsFps_ >= 55.0 ? green : (statsFps_ >= 30.0 ? yellow : red);
 
-    char buf[64];
+    char buf[128];
 
-    // Line 1: FPS
-    std::snprintf(buf, sizeof(buf), "FPS: %.0f", statsFps_);
+    // Line 1: FPS + frame time + render time
+    std::snprintf(buf, sizeof(buf), "FPS: %.0f  Frame: %.1fms  Render: %.1fms",
+                  statsFps_, statsFrameTimeMs_, frameTimeMs);
     renderer_->drawText(buf, x, y, statsFont_, fpsColor);
     y += lineH;
 
-    // Line 2: Frame time (avg)
-    std::snprintf(buf, sizeof(buf), "Frame: %.1f ms", statsFrameTimeMs_);
-    renderer_->drawText(buf, x, y, statsFont_, white);
-    y += lineH;
-
-    // Line 3: Current frame (render only, no sleep)
-    std::snprintf(buf, sizeof(buf), "Render: %.1f ms", frameTimeMs);
-    renderer_->drawText(buf, x, y, statsFont_, white);
-    y += lineH;
-
-    // Line 4: Min/Max
+    // Line 2: Min/Max + viewport
     double dispMin = statsMinFrameMs_ < 999.0 ? statsMinFrameMs_ : 0.0;
-    std::snprintf(buf, sizeof(buf), "Min/Max: %.1f / %.1f ms", dispMin, statsMaxFrameMs_);
-    renderer_->drawText(buf, x, y, statsFont_, label);
-    y += lineH;
-
-    // Line 5: Viewport
-    std::snprintf(buf, sizeof(buf), "Viewport: %d x %d", viewportWidth_, viewportHeight_);
+    std::snprintf(buf, sizeof(buf), "Min/Max: %.1f/%.1fms  Viewport: %dx%d",
+                  dispMin, statsMaxFrameMs_, viewportWidth_, viewportHeight_);
     renderer_->drawText(buf, x, y, statsFont_, label);
 }
 

@@ -4,29 +4,28 @@ struct SDL_Renderer;
 
 namespace bro::render {
 
-class Renderer;
-
-/// Abstract interface for rendering a 3D scene behind the HTML/CSS UI.
+/// Abstract interface for rendering a scene behind the HTML/CSS UI.
 ///
-/// The scene layer draws first each frame. The HTML/CSS UI is composited
-/// on top with alpha blending, so CSS `background: transparent` lets the
-/// scene show through.
+/// The scene layer draws directly to SDL_Renderer (GPU-accelerated via
+/// D3D11/Vulkan/Metal). The HTML/CSS UI is composited on top as a
+/// transparent texture, so CSS `background: transparent` lets the scene
+/// show through.
 ///
-/// For GPU-accelerated 3D, use SDL_RenderGeometry() to submit triangles
-/// through the hardware-accelerated SDL renderer pipeline.
+/// Use SDL_RenderFillRect, SDL_RenderLine, SDL_RenderGeometry, etc.
+/// for GPU-accelerated drawing.
 class SceneLayer {
 public:
     virtual ~SceneLayer() = default;
 
-    /// Called once after the renderer is ready.
-    virtual void onInit(Renderer& renderer, int width, int height) = 0;
+    /// Called once after the SDL renderer is ready.
+    virtual void onInit(SDL_Renderer* sdlRenderer, int width, int height) = 0;
 
     /// Called when the window is resized.
     virtual void onResize(int width, int height) = 0;
 
-    /// Called every frame before the UI draw.
-    /// Use the Renderer to draw, or SDL_Renderer directly for advanced ops.
-    virtual void onRender(Renderer& renderer, int width, int height,
+    /// Called every frame before the UI overlay.
+    /// Draw directly to sdlRenderer for GPU-accelerated rendering.
+    virtual void onRender(SDL_Renderer* sdlRenderer, int width, int height,
                           double deltaTimeMs) = 0;
 
     /// Called before destruction.

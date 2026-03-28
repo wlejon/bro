@@ -71,6 +71,8 @@ private:
     double statsMinFrameMs_ = 999.0;
     double statsMaxFrameMs_ = 0.0;
     double totalFrameMs_ = 0.0;
+    bool uiDirty_ = true;
+    bool hasRenderedOnce_ = false;
 };
 
 } // namespace bro::engine

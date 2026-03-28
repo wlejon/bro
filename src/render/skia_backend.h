@@ -27,12 +27,11 @@ namespace bro::platform {
 namespace bro::render {
 
 // ---------------------------------------------------------------------------
-// SkiaRenderer -- Skia raster rendering + SDL display
+// SkiaRenderer -- Skia raster UI + SDL GPU scene compositing
 //
-// Renders to a CPU-side Skia surface (full quality fonts, antialiasing),
-// then uploads the result to an SDL texture for GPU-accelerated display.
-// This avoids all Vulkan synchronization complexity while keeping Skia's
-// rendering quality.
+// The UI (HTML/CSS) is rendered to a CPU-side Skia surface with transparency,
+// uploaded to an SDL texture, and composited over GPU-rendered scene content.
+// The scene layer draws directly to SDL_Renderer (GPU-accelerated).
 // ---------------------------------------------------------------------------
 #ifndef BRO_NO_SKIA
 
@@ -59,14 +58,22 @@ public:
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;
 
+    // beginFrame/endFrame manage the Skia raster surface for UI rendering.
+    // They do NOT call SDL_RenderPresent — the engine handles presentation.
     void beginFrame(int width, int height) override;
     void endFrame() override;
+
+    /// Access the underlying SDL GPU renderer (for scene layers and compositing).
+    SDL_Renderer* getSDLRenderer() const { return sdlRenderer_; }
+
+    /// Access the UI overlay texture (alpha-blended Skia content).
+    SDL_Texture* getUITexture() const { return uiTexture_; }
 
 private:
     SkColor toSkColor(Color c) const;
 
     SDL_Renderer* sdlRenderer_ = nullptr;
-    SDL_Texture* sdlTexture_ = nullptr;
+    SDL_Texture* uiTexture_ = nullptr;
     int textureWidth_ = 0;
     int textureHeight_ = 0;
 
@@ -111,6 +118,8 @@ public:
 
     void beginFrame(int width, int height) override;
     void endFrame() override;
+
+    SDL_Renderer* getSDLRenderer() const { return sdlRenderer_; }
 
 private:
     void renderTextToTexture(std::string_view text, uint64_t font_handle, Color color,

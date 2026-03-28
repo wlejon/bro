@@ -311,13 +311,14 @@ SkiaRenderer::SkiaRenderer(platform::Window& window) {
     }
     const char* name = SDL_GetRendererName(sdlRenderer_);
     LOG_INFO("SkiaRenderer created (SDL backend: %s)", name ? name : "unknown");
-    SDL_SetRenderVSync(sdlRenderer_, 1);
+    SDL_SetRenderVSync(sdlRenderer_, SDL_RENDERER_VSYNC_DISABLED);
+    SDL_SetRenderDrawBlendMode(sdlRenderer_, SDL_BLENDMODE_BLEND);
 }
 
 SkiaRenderer::~SkiaRenderer() {
     fonts_.clear();
     surface_.reset();
-    if (sdlTexture_) SDL_DestroyTexture(sdlTexture_);
+    if (uiTexture_) SDL_DestroyTexture(uiTexture_);
     if (sdlRenderer_) SDL_DestroyRenderer(sdlRenderer_);
 }
 
@@ -402,8 +403,7 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
     }
 
     auto sk_font = std::make_unique<SkFont>(typeface, size);
-    sk_font->setEdging(SkFont::Edging::kSubpixelAntiAlias);
-    sk_font->setSubpixel(true);
+    sk_font->setEdging(SkFont::Edging::kAntiAlias);
 
     uint64_t handle = next_font_handle_++;
     fonts_[handle] = FontEntry{std::move(typeface), std::move(sk_font)};
@@ -447,18 +447,20 @@ void SkiaRenderer::resetClip() {
 void SkiaRenderer::beginFrame(int width, int height) {
     if (!sdlRenderer_) { canvas_ = nullptr; return; }
 
-    // (Re)create raster surface if size changed
+    // (Re)create raster surface and UI texture if size changed
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
         surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
-        // (Re)create SDL texture to match
-        if (sdlTexture_) SDL_DestroyTexture(sdlTexture_);
-        sdlTexture_ = SDL_CreateTexture(sdlRenderer_, SDL_PIXELFORMAT_ARGB8888,
-                                         SDL_TEXTUREACCESS_STREAMING, width, height);
+        if (uiTexture_) SDL_DestroyTexture(uiTexture_);
+        uiTexture_ = SDL_CreateTexture(sdlRenderer_, SDL_PIXELFORMAT_ARGB8888,
+                                        SDL_TEXTUREACCESS_STREAMING, width, height);
+        SDL_SetTextureBlendMode(uiTexture_, SDL_BLENDMODE_BLEND);
         textureWidth_ = width;
         textureHeight_ = height;
     }
 
     canvas_ = surface_->getCanvas();
+    // Clear to fully transparent so scene shows through
+    canvas_->clear(SK_ColorTRANSPARENT);
     canvas_->save();
 }
 
@@ -466,18 +468,13 @@ void SkiaRenderer::endFrame() {
     if (canvas_) canvas_->restore();
     canvas_ = nullptr;
 
-    if (!sdlRenderer_ || !surface_ || !sdlTexture_) return;
+    if (!sdlRenderer_ || !surface_ || !uiTexture_) return;
 
-    // Read pixels from Skia raster surface
+    // Upload Skia raster pixels to the UI overlay texture
     SkPixmap pixmap;
     if (!surface_->peekPixels(&pixmap)) return;
-
-    // Upload to SDL texture
-    SDL_UpdateTexture(sdlTexture_, nullptr, pixmap.addr(), (int)pixmap.rowBytes());
-
-    // Render the texture to screen
-    SDL_RenderTexture(sdlRenderer_, sdlTexture_, nullptr, nullptr);
-    SDL_RenderPresent(sdlRenderer_);
+    SDL_UpdateTexture(uiTexture_, nullptr, pixmap.addr(), (int)pixmap.rowBytes());
+    // NOTE: Does NOT present. The engine handles compositing and presentation.
 }
 
 // ---------------------------------------------------------------------------
