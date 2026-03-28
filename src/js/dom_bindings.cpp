@@ -351,7 +351,11 @@ static int js_cssstyle_set_property(JSContext* ctx, JSValueConst obj,
 
     std::string cssName = camelToKebab(nameStr);
     std::string value   = jsToStdString(ctx, val);
-    style->setProperty(cssName, value);
+    if (value.empty()) {
+        style->removeProperty(cssName);
+    } else {
+        style->setProperty(cssName, value);
+    }
     return 1;
 }
 
