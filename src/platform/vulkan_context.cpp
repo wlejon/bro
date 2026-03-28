@@ -242,11 +242,15 @@ void VulkanContext::createSwapchain(uint32_t width, uint32_t height) {
     std::vector<VkPresentModeKHR> presentModes(presentModeCount);
     vkGetPhysicalDeviceSurfacePresentModesKHR(m_physicalDevice, m_surface, &presentModeCount, presentModes.data());
 
+    // Prefer IMMEDIATE (uncapped) > MAILBOX (low-latency vsync) > FIFO (vsync)
     VkPresentModeKHR chosenPresentMode = VK_PRESENT_MODE_FIFO_KHR;
     for (const auto& mode : presentModes) {
-        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+        if (mode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
             chosenPresentMode = mode;
             break;
+        }
+        if (mode == VK_PRESENT_MODE_MAILBOX_KHR) {
+            chosenPresentMode = mode;
         }
     }
 

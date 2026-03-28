@@ -36,6 +36,8 @@ SDLRenderer::SDLRenderer(platform::Window& window) {
     } else {
         const char* name = SDL_GetRendererName(sdlRenderer_);
         LOG_INFO("SDLRenderer created (backend: %s)", name ? name : "unknown");
+        // Disable vsync for uncapped framerate
+        SDL_SetRenderVSync(sdlRenderer_, SDL_RENDERER_VSYNC_DISABLED);
     }
 }
 

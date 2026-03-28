@@ -2,6 +2,7 @@
 
 #include "engine/app_loader.h"
 #include <litehtml.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -38,6 +39,7 @@ public:
 private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
+    void drawStatsOverlay(double frameTimeMs);
 
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<platform::VulkanContext> vulkan_;
@@ -53,6 +55,15 @@ private:
     int viewportWidth_;
     int viewportHeight_;
     AppManifest manifest_;
+
+    // Stats overlay
+    uint64_t statsFont_ = 0;
+    double statsAccumMs_ = 0.0;
+    int statsFrameCount_ = 0;
+    double statsFps_ = 0.0;
+    double statsFrameTimeMs_ = 0.0;
+    double statsMinFrameMs_ = 999.0;
+    double statsMaxFrameMs_ = 0.0;
 };
 
 } // namespace bro::engine

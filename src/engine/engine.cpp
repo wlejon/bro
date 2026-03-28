@@ -20,6 +20,7 @@
 #include "util/time.h"
 
 #include <SDL3/SDL.h>
+#include <cstdio>
 #include <stdexcept>
 
 namespace bro::engine {
@@ -105,9 +106,15 @@ Engine::Engine(const std::string& appDir, int width, int height)
 
     // 11. Event loop
     eventLoop_ = std::make_unique<platform::EventLoop>();
+
+    // 12. Stats overlay font
+    statsFont_ = renderer_->createFont("Consolas", 13.0f, 400, false);
 }
 
 Engine::~Engine() {
+    if (statsFont_ && renderer_) {
+        renderer_->deleteFont(statsFont_);
+    }
     if (timers_ && jsRuntime_) {
         timers_->clearAll(jsRuntime_->getContext());
     }
@@ -184,13 +191,25 @@ void Engine::run() {
                 reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
         }
 
+        // 5b. Stats overlay (render time = time spent up to this point)
+        double renderElapsed = util::currentTimeMs() - frameStart;
+        drawStatsOverlay(renderElapsed);
+
         renderer_->endFrame();
 
-        // 6. Frame rate limiting (~60fps target)
-        double elapsed = util::currentTimeMs() - frameStart;
-        constexpr double targetFrameMs = 16.0;
-        if (elapsed < targetFrameMs) {
-            SDL_Delay(static_cast<uint32_t>(targetFrameMs - elapsed));
+        // 6. Frame time tracking
+        double totalFrameMs = util::currentTimeMs() - frameStart;
+        statsAccumMs_ += totalFrameMs;
+        statsFrameCount_++;
+        if (totalFrameMs < statsMinFrameMs_) statsMinFrameMs_ = totalFrameMs;
+        if (totalFrameMs > statsMaxFrameMs_) statsMaxFrameMs_ = totalFrameMs;
+        if (statsAccumMs_ >= 500.0) {
+            statsFps_ = statsFrameCount_ / (statsAccumMs_ / 1000.0);
+            statsFrameTimeMs_ = statsAccumMs_ / statsFrameCount_;
+            statsAccumMs_ = 0.0;
+            statsFrameCount_ = 0;
+            statsMinFrameMs_ = 999.0;
+            statsMaxFrameMs_ = 0.0;
         }
     }
 }
@@ -335,6 +354,65 @@ dom::Element* Engine::hitTest(float x, float y) {
 void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     if (!target || !jsRuntime_) return;
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
+}
+
+// ---------------------------------------------------------------------------
+// Stats overlay
+// ---------------------------------------------------------------------------
+
+void Engine::drawStatsOverlay(double frameTimeMs) {
+    if (!statsFont_) return;
+
+    using render::Color;
+    constexpr float pad = 6.0f;
+    constexpr float lineH = 16.0f;
+    constexpr int numLines = 5;
+    const float boxW = 220.0f;
+    const float boxH = pad * 2 + lineH * numLines;
+    const float boxX = static_cast<float>(viewportWidth_) - boxW - 8.0f;
+    const float boxY = 8.0f;
+
+    // Semi-transparent background
+    renderer_->fillRect(boxX, boxY, boxW, boxH, {0, 0, 0, 190});
+    renderer_->drawRect(boxX, boxY, boxW, boxH, {80, 80, 80, 200});
+
+    float y = boxY + pad;
+    float x = boxX + pad;
+    Color white{220, 220, 220, 255};
+    Color label{140, 140, 140, 255};
+    Color green{100, 220, 100, 255};
+    Color yellow{220, 200, 80, 255};
+    Color red{220, 80, 80, 255};
+
+    // FPS color: green >= 55, yellow >= 30, red < 30
+    Color fpsColor = statsFps_ >= 55.0 ? green : (statsFps_ >= 30.0 ? yellow : red);
+
+    char buf[64];
+
+    // Line 1: FPS
+    std::snprintf(buf, sizeof(buf), "FPS: %.0f", statsFps_);
+    renderer_->drawText(buf, x, y, statsFont_, fpsColor);
+    y += lineH;
+
+    // Line 2: Frame time (avg)
+    std::snprintf(buf, sizeof(buf), "Frame: %.1f ms", statsFrameTimeMs_);
+    renderer_->drawText(buf, x, y, statsFont_, white);
+    y += lineH;
+
+    // Line 3: Current frame (render only, no sleep)
+    std::snprintf(buf, sizeof(buf), "Render: %.1f ms", frameTimeMs);
+    renderer_->drawText(buf, x, y, statsFont_, white);
+    y += lineH;
+
+    // Line 4: Min/Max
+    double dispMin = statsMinFrameMs_ < 999.0 ? statsMinFrameMs_ : 0.0;
+    std::snprintf(buf, sizeof(buf), "Min/Max: %.1f / %.1f ms", dispMin, statsMaxFrameMs_);
+    renderer_->drawText(buf, x, y, statsFont_, label);
+    y += lineH;
+
+    // Line 5: Viewport
+    std::snprintf(buf, sizeof(buf), "Viewport: %d x %d", viewportWidth_, viewportHeight_);
+    renderer_->drawText(buf, x, y, statsFont_, label);
 }
 
 } // namespace bro::engine
