@@ -22,6 +22,8 @@
 #include <include/gpu/ganesh/GrBackendSurface.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
 #include <include/ports/SkTypeface_win.h>
+#include <src/gpu/vk/vulkanmemoryallocator/VulkanMemoryAllocatorPriv.h>
+#include <src/gpu/GpuTypesPriv.h>
 #endif
 
 namespace bro::render {
@@ -309,12 +311,33 @@ SkiaRenderer::SkiaRenderer(platform::VulkanContext& vk)
     backend_ctx.fPhysicalDevice = vk.getPhysicalDevice();
     backend_ctx.fDevice = vk.getDevice();
     backend_ctx.fQueue = vk.getGraphicsQueue();
-    backend_ctx.fGraphicsQueueIndex = 0;
-    backend_ctx.fMaxAPIVersion = VK_API_VERSION_1_1;
+    backend_ctx.fGraphicsQueueIndex = vk.getGraphicsQueueFamily();
+    backend_ctx.fMaxAPIVersion = VK_API_VERSION_1_2;
     backend_ctx.fGetProc = [](const char* name, VkInstance inst, VkDevice dev) -> PFN_vkVoidFunction {
         if (dev) return vkGetDeviceProcAddr(dev, name);
         return vkGetInstanceProcAddr(inst, name);
     };
+
+    // Tell Skia which extensions are enabled
+    const char* instanceExts[] = { VK_KHR_SURFACE_EXTENSION_NAME,
+#ifdef _WIN32
+                                   "VK_KHR_win32_surface",
+#endif
+                                 };
+    const char* deviceExts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    vk_extensions_.init(backend_ctx.fGetProc,
+                        vk.getInstance(), vk.getPhysicalDevice(),
+                        sizeof(instanceExts) / sizeof(instanceExts[0]), instanceExts,
+                        sizeof(deviceExts) / sizeof(deviceExts[0]), deviceExts);
+    backend_ctx.fVkExtensions = &vk_extensions_;
+
+    // Tell Skia which device features are enabled
+    vkGetPhysicalDeviceFeatures(vk.getPhysicalDevice(), &device_features_);
+    backend_ctx.fDeviceFeatures = &device_features_;
+
+    // Provide a memory allocator (required by Skia)
+    backend_ctx.fMemoryAllocator =
+        skgpu::VulkanMemoryAllocators::Make(backend_ctx, skgpu::ThreadSafe::kNo);
 
     gr_context_ = GrDirectContexts::MakeVulkan(backend_ctx);
     if (!gr_context_) {

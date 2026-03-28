@@ -18,6 +18,7 @@
 #include <include/gpu/ganesh/GrBackendSurface.h>
 #include <include/gpu/ganesh/SkSurfaceGanesh.h>
 #include <include/gpu/vk/VulkanBackendContext.h>
+#include <include/gpu/vk/VulkanExtensions.h>
 #endif
 
 struct SDL_Renderer;
@@ -116,6 +117,8 @@ private:
     SkColor toSkColor(Color c) const;
 
     platform::VulkanContext& vk_;
+    skgpu::VulkanExtensions vk_extensions_;
+    VkPhysicalDeviceFeatures device_features_{};
     sk_sp<GrDirectContext> gr_context_;
     sk_sp<SkSurface> surface_;
     SkCanvas* canvas_ = nullptr; // owned by surface_

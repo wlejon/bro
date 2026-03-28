@@ -29,6 +29,7 @@ public:
     VkDevice getDevice() const { return m_device; }
     VkPhysicalDevice getPhysicalDevice() const { return m_physicalDevice; }
     VkQueue getGraphicsQueue() const { return m_graphicsQueue; }
+    uint32_t getGraphicsQueueFamily() const { return m_graphicsQueueFamily; }
     VkSwapchainKHR getSwapchain() const { return m_swapchain; }
     VkFormat getSwapchainFormat() const { return m_swapchainFormat; }
     VkExtent2D getSwapchainExtent() const { return m_swapchainExtent; }
