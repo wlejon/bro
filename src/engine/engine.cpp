@@ -400,7 +400,6 @@ void Engine::run() {
 
     // Tell the layout container to skip full-viewport backgrounds when a scene
     // layer is active, so the scene shows through behind the HTML UI.
-    container_->setSceneMode(sceneLayer_ != nullptr);
 
     // Initial layout
     if (litehtmlDoc_) {

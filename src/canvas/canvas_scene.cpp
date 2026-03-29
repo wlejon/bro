@@ -239,6 +239,10 @@ void CanvasScene::onRender(render::GLContext* gl, int w, int h, double) {
 
     float viewport[2] = {(float)w, (float)h};
 
+    // Canvas 2D is flat — disable depth testing so quads aren't rejected
+    // by stale depth-buffer values from the previous frame.
+    glDisable(GL_DEPTH_TEST);
+
     // Draw colored geometry
     if (colorVertCount_ > 0) {
         glUseProgram(gl->colorProgram());
