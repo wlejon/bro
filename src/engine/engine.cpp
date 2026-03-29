@@ -674,6 +674,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         litehtml::position::vector redraw;
         litehtmlDoc_->on_lbutton_down(static_cast<int>(x), static_cast<int>(y),
                                        static_cast<int>(x), static_cast<int>(y), redraw);
+        if (!redraw.empty()) uiDirty_ = true;
     }
 
     if (document_) {
@@ -693,6 +694,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         litehtml::position::vector redraw;
         litehtmlDoc_->on_lbutton_up(static_cast<int>(x), static_cast<int>(y),
                                      static_cast<int>(x), static_cast<int>(y), redraw);
+        if (!redraw.empty()) uiDirty_ = true;
     }
 
     if (document_) {
@@ -712,6 +714,9 @@ void Engine::handleMouseMove(float x, float y) {
         litehtml::position::vector redraw;
         litehtmlDoc_->on_mouse_over(static_cast<int>(x), static_cast<int>(y),
                                      static_cast<int>(x), static_cast<int>(y), redraw);
+        if (!redraw.empty()) {
+            uiDirty_ = true;
+        }
     }
 }
 

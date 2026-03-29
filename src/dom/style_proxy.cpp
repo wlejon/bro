@@ -22,23 +22,31 @@ void StyleProxy::setProperty(const std::string& name, const std::string& value) 
     // Skip if value unchanged — avoids expensive syncStylesToLitehtml + layout
     auto it = properties_.find(name);
     if (it != properties_.end() && it->second == value) return;
+    bool displayChanged = (name == "display");
     properties_[name] = value;
     if (owner_) {
-        owner_->syncStylesToLitehtml();
-        // Only mark document dirty if this element has a litehtml counterpart
-        // (dynamic elements don't affect litehtml layout)
+        owner_->syncStylesToLitehtml(displayChanged);
         if (owner_->litehtmlElement()) {
-            owner_->markDirty();
+            if (displayChanged) {
+                owner_->markStructureDirty();
+            } else {
+                owner_->markDirty();
+            }
         }
     }
 }
 
 void StyleProxy::removeProperty(const std::string& name) {
     if (properties_.erase(name) > 0) {
+        bool displayChanged = (name == "display");
         if (owner_) {
-            owner_->syncStylesToLitehtml();
+            owner_->syncStylesToLitehtml(displayChanged);
             if (owner_->litehtmlElement()) {
-                owner_->markDirty();
+                if (displayChanged) {
+                    owner_->markStructureDirty();
+                } else {
+                    owner_->markDirty();
+                }
             }
         }
     }

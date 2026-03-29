@@ -410,7 +410,7 @@ Element* Element::querySelectorSimple(const std::string& selector) {
     return results.empty() ? nullptr : results[0];
 }
 
-void Element::syncStylesToLitehtml() {
+void Element::syncStylesToLitehtml(bool displayChanged) {
     if (!litehtml_element_) return;
     std::string css = style_.cssText();
     if (css.empty()) {
@@ -418,11 +418,12 @@ void Element::syncStylesToLitehtml() {
     } else {
         litehtml_element_->set_attr("style", css.c_str());
     }
-    // Only recompute this element's styles (fast).
-    // refresh_styles() walks the entire subtree and recomputes all CSS rules
-    // from stylesheets — that's expensive and unnecessary for inline style changes.
-    // set_attr("style",...) already updated the inline style string, and
-    // compute_styles will pick it up.
+    if (displayChanged) {
+        // display changes need refresh_styles() to re-evaluate stylesheet
+        // rules (e.g. removing inline display:none must restore the
+        // stylesheet display value).  This also triggers render tree rebuild.
+        litehtml_element_->refresh_styles();
+    }
     litehtml_element_->compute_styles(false);
 }
 
@@ -430,6 +431,13 @@ void Element::markDirty() {
     dirty_ = true;
     if (document_) {
         document_->markDirty();
+    }
+}
+
+void Element::markStructureDirty() {
+    dirty_ = true;
+    if (document_) {
+        document_->markStructureDirty();
     }
 }
 

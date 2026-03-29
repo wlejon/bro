@@ -65,10 +65,11 @@ public:
     Element* querySelectorSimple(const std::string& selector);
 
     // Sync inline styles to litehtml element
-    void syncStylesToLitehtml();
+    void syncStylesToLitehtml(bool displayChanged = false);
 
     // Dirty tracking
     void markDirty();
+    void markStructureDirty();
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
 
