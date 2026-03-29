@@ -1,6 +1,19 @@
 // Minimal WebGL2 test: colored triangle
 
+// Test Phase 4 stubs
+console.log('devicePixelRatio: ' + window.devicePixelRatio);
+console.log('navigator.userAgent: ' + navigator.userAgent);
+console.log('innerWidth x innerHeight: ' + innerWidth + 'x' + innerHeight);
+
+var img = new Image();
+console.log('Image created, complete=' + img.complete);
+img.onload = function() { console.log('Image onload fired: ' + img.width + 'x' + img.height); };
+img.src = 'test.png';
+
 var canvas = document.querySelector('#c');
+console.log('canvas.width=' + canvas.width + ' canvas.height=' + canvas.height);
+console.log('canvas.clientWidth=' + canvas.clientWidth + ' canvas.clientHeight=' + canvas.clientHeight);
+
 var gl = canvas.getContext('webgl2');
 
 if (!gl) {
@@ -9,8 +22,7 @@ if (!gl) {
     console.log('WebGL2 context created successfully!');
     console.log('  VERSION: ' + gl.getParameter(gl.VERSION));
     console.log('  RENDERER: ' + gl.getParameter(gl.RENDERER));
-    console.log('  drawingBufferWidth: ' + gl.drawingBufferWidth);
-    console.log('  drawingBufferHeight: ' + gl.drawingBufferHeight);
+    console.log('  MAX_TEXTURE_SIZE: ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
 
     // Vertex shader
     var vsSource = `#version 300 es
@@ -57,10 +69,9 @@ if (!gl) {
 
     // Triangle vertices: position (x,y) + color (r,g,b)
     var vertices = new Float32Array([
-        // pos       color
-         0.0,  0.5,  1.0, 0.0, 0.0,  // top - red
-        -0.5, -0.5,  0.0, 1.0, 0.0,  // bottom left - green
-         0.5, -0.5,  0.0, 0.0, 1.0,  // bottom right - blue
+         0.0,  0.5,  1.0, 0.0, 0.0,
+        -0.5, -0.5,  0.0, 1.0, 0.0,
+         0.5, -0.5,  0.0, 0.0, 1.0,
     ]);
 
     var vao = gl.createVertexArray();
@@ -70,10 +81,8 @@ if (!gl) {
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
 
-    // position
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 20, 0);
-    // color
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 20, 8);
 
@@ -81,7 +90,6 @@ if (!gl) {
 
     console.log('Setup complete, starting render loop');
 
-    var frame = 0;
     function render() {
         gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
         gl.clearColor(0.1, 0.1, 0.15, 1.0);
@@ -91,7 +99,6 @@ if (!gl) {
         gl.bindVertexArray(vao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
 
-        frame++;
         requestAnimationFrame(render);
     }
     requestAnimationFrame(render);

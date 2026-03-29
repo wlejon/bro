@@ -15,6 +15,7 @@
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
 #include "js/webgl2_bindings.h"
+#include "js/image_bindings.h"
 #include "audio/audio_engine.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
@@ -248,6 +249,7 @@ Engine::Engine(const std::string& appDir, int width, int height)
     // 9b. Install Canvas 2D and WebGL2 bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::WebGL2Bindings::install(jsRuntime_->getContext());
+    js::ImageBindings::install(jsRuntime_->getContext());
     js::DomBindings::setGetContextFactory(
         [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
             if (type == "2d") {
@@ -265,6 +267,34 @@ Engine::Engine(const std::string& appDir, int width, int height)
             }
             return JS_NULL;
         });
+
+    // 9c. Set up window/navigator stubs for three.js compatibility
+    {
+        JSContext* ctx = jsRuntime_->getContext();
+        JSValue global = JS_GetGlobalObject(ctx);
+
+        // window = globalThis (browsers expose the global as window)
+        JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
+
+        // window.devicePixelRatio
+        JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
+
+        // window.innerWidth / innerHeight
+        JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth_));
+        JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight_));
+
+        // navigator stub
+        JSValue nav = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
+        JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
+        JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
+        JS_SetPropertyStr(ctx, global, "navigator", nav);
+
+        // document.createElementNS stub (three.js uses this for canvas creation)
+        // Already handled by dom_bindings if needed.
+
+        JS_FreeValue(ctx, global);
+    }
 
     // 10. Load and execute scripts
     for (auto& scriptPath : manifest_.scriptPaths) {

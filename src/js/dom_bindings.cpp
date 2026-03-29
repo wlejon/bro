@@ -798,6 +798,46 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
 
 // ---- Function list --------------------------------------------------------
 
+// --- width / height (canvas element support, also used by three.js) ---
+
+static JSValue js_element_get_width(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
+    std::string v = el->getAttribute("width");
+    if (!v.empty()) return JS_NewInt32(ctx, std::atoi(v.c_str()));
+    return JS_NewInt32(ctx, 300); // canvas default
+}
+
+static JSValue js_element_set_width(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
+    int w; JS_ToInt32(ctx, &w, val);
+    el->setAttribute("width", std::to_string(w));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_height(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
+    std::string v = el->getAttribute("height");
+    if (!v.empty()) return JS_NewInt32(ctx, std::atoi(v.c_str()));
+    return JS_NewInt32(ctx, 150); // canvas default
+}
+
+static JSValue js_element_set_height(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
+    int h; JS_ToInt32(ctx, &h, val);
+    el->setAttribute("height", std::to_string(h));
+    return JS_UNDEFINED;
+}
+
+// --- clientWidth / clientHeight (read-only, same as width/height for now) ---
+
+static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val) {
+    return js_element_get_width(ctx, this_val);
+}
+
+static JSValue js_element_get_clientHeight(JSContext* ctx, JSValueConst this_val) {
+    return js_element_get_height(ctx, this_val);
+}
+
 static const JSCFunctionListEntry js_element_proto_funcs[] = {
     // Properties
     JS_CGETSET_DEF("id",            js_element_get_id,          js_element_set_id),
@@ -809,6 +849,10 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("children",      js_element_get_children,    nullptr),
     JS_CGETSET_DEF("childNodes",    js_element_get_childNodes,  nullptr),
     JS_CGETSET_DEF("style",         js_element_get_style,       nullptr),
+    JS_CGETSET_DEF("width",         js_element_get_width,       js_element_set_width),
+    JS_CGETSET_DEF("height",        js_element_get_height,      js_element_set_height),
+    JS_CGETSET_DEF("clientWidth",   js_element_get_clientWidth, nullptr),
+    JS_CGETSET_DEF("clientHeight",  js_element_get_clientHeight, nullptr),
     // Methods
     JS_CFUNC_DEF("getAttribute",        1, js_element_getAttribute),
     JS_CFUNC_DEF("setAttribute",        2, js_element_setAttribute),
