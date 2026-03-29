@@ -292,15 +292,34 @@ Engine::Engine(const std::string& appDir, int width, int height)
         JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
         JS_SetPropertyStr(ctx, global, "navigator", nav);
 
-        // window.addEventListener / removeEventListener stubs
-        // three.js registers resize + contextlost listeners on window
-        auto stubFn = [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
-            return JS_UNDEFINED;
-        };
-        JS_SetPropertyStr(ctx, global, "addEventListener",
-            JS_NewCFunction(ctx, stubFn, "addEventListener", 2));
-        JS_SetPropertyStr(ctx, global, "removeEventListener",
-            JS_NewCFunction(ctx, stubFn, "removeEventListener", 2));
+        // window.addEventListener / removeEventListener — real event dispatch
+        // Stores listeners in __bro_win_listeners map by event type
+        const char* windowEventPolyfill = R"JS(
+(function() {
+    var listeners = {};
+    globalThis.__bro_win_listeners = listeners;
+    globalThis.addEventListener = function(type, fn) {
+        if (!listeners[type]) listeners[type] = [];
+        listeners[type].push(fn);
+    };
+    globalThis.removeEventListener = function(type, fn) {
+        var arr = listeners[type];
+        if (!arr) return;
+        var idx = arr.indexOf(fn);
+        if (idx >= 0) arr.splice(idx, 1);
+    };
+    globalThis.__bro_dispatch_window_event = function(type, event) {
+        var arr = listeners[type];
+        if (!arr) return;
+        for (var i = 0; i < arr.length; i++) {
+            try { arr[i](event); } catch(e) { console.error('Event handler error:', e); }
+        }
+    };
+})();
+)JS";
+        JSValue r = JS_Eval(ctx, windowEventPolyfill, strlen(windowEventPolyfill),
+                            "<window-events>", JS_EVAL_TYPE_GLOBAL);
+        JS_FreeValue(ctx, r);
 
         // document.createElementNS — handled by dom_bindings
 
@@ -600,6 +619,52 @@ void Engine::handleResize(int w, int h) {
     }
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
+    }
+
+    // Update JS globals and dispatch resize event to window listeners
+    if (jsRuntime_) {
+        JSContext* ctx = jsRuntime_->getContext();
+        JSValue global = JS_GetGlobalObject(ctx);
+
+        // Update innerWidth / innerHeight
+        JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, w));
+        JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, h));
+
+        // Update canvas element width/height attributes via JS
+        const char* updateScript = R"JS(
+            (function(w, h) {
+                var c = document.querySelector('canvas');
+                if (c) { c.width = w; c.height = h; }
+            })
+        )JS";
+        JSValue fn = JS_Eval(ctx, updateScript, strlen(updateScript),
+                             "<resize>", JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsFunction(ctx, fn)) {
+            JSValue args[2] = { JS_NewInt32(ctx, w), JS_NewInt32(ctx, h) };
+            JSValue ret = JS_Call(ctx, fn, global, 2, args);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, args[0]);
+            JS_FreeValue(ctx, args[1]);
+        }
+        JS_FreeValue(ctx, fn);
+
+        // Dispatch resize event to window listeners
+        JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
+        if (JS_IsFunction(ctx, dispatch)) {
+            JSValue evtType = JS_NewString(ctx, "resize");
+            JSValue evt = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, evt, "type", JS_NewString(ctx, "resize"));
+            JS_SetPropertyStr(ctx, evt, "target", JS_DupValue(ctx, global));
+            JSValue dArgs[2] = { evtType, evt };
+            JSValue ret = JS_Call(ctx, dispatch, global, 2, dArgs);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, evtType);
+            JS_FreeValue(ctx, evt);
+        }
+        JS_FreeValue(ctx, dispatch);
+
+        JS_FreeValue(ctx, global);
+        jsRuntime_->executePendingJobs();
     }
 }
 

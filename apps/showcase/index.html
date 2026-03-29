@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: sans-serif; color: #eee; overflow: hidden; }
+        canvas { width: 100%; height: 100%; display: block; }
+
+        #ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 240px;
+            height: 100%;
+            background: rgba(20, 22, 30, 0.88);
+            padding: 14px;
+        }
+
+        h1 {
+            font-size: 16px;
+            margin-bottom: 10px;
+            color: #7bf;
+            border-bottom: 1px solid #334;
+            padding-bottom: 6px;
+        }
+
+        .section {
+            margin-bottom: 12px;
+        }
+
+        .section h2 {
+            font-size: 11px;
+            color: #9cf;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .section p {
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 6px;
+            line-height: 1.3;
+        }
+
+        .btn-row {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+
+        button {
+            background: #2a3a50;
+            color: #cde;
+            border: 1px solid #445;
+            padding: 4px 8px;
+            font-size: 10px;
+            cursor: pointer;
+        }
+
+        button.active {
+            background: #4488bb;
+            color: #fff;
+            border-color: #6af;
+        }
+
+        #info {
+            position: absolute;
+            bottom: 8px;
+            right: 10px;
+            font-size: 10px;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="c" width="1024" height="768"></canvas>
+
+    <div id="ui">
+        <h1>bro engine showcase</h1>
+
+        <div class="section">
+            <h2>Scene</h2>
+            <p>Switch demo scenes to test different rendering features.</p>
+            <div class="btn-row" id="scene-btns">
+                <button class="active" id="btn-pbr">PBR</button>
+                <button id="btn-textured">Textured</button>
+                <button id="btn-shadows">Shadows</button>
+                <button id="btn-gltf">glTF</button>
+                <button id="btn-multi">All</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Geometry</h2>
+            <div class="btn-row" id="geo-btns">
+                <button class="active" id="btn-box">Box</button>
+                <button id="btn-sphere">Sphere</button>
+                <button id="btn-torus">Torus</button>
+                <button id="btn-knot">Knot</button>
+                <button id="btn-cylinder">Cylinder</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Material Color</h2>
+            <div class="btn-row">
+                <button id="btn-color-blue" style="background:#4488ff">Blue</button>
+                <button id="btn-color-red" style="background:#ff4444">Red</button>
+                <button id="btn-color-green" style="background:#44ff44;color:#222">Green</button>
+                <button id="btn-color-gold" style="background:#ddaa22;color:#222">Gold</button>
+                <button id="btn-color-white" style="background:#ddd;color:#222">White</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Material Properties</h2>
+            <div class="btn-row">
+                <button id="btn-rough-lo">Smooth</button>
+                <button id="btn-rough-mid" class="active">Medium</button>
+                <button id="btn-rough-hi">Rough</button>
+            </div>
+            <div class="btn-row">
+                <button id="btn-metal-lo" class="active">Dielectric</button>
+                <button id="btn-metal-mid">Semi-Metal</button>
+                <button id="btn-metal-hi">Metal</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Animation</h2>
+            <div class="btn-row">
+                <button id="btn-slow">Slow</button>
+                <button id="btn-normal" class="active">Normal</button>
+                <button id="btn-fast">Fast</button>
+                <button id="btn-pause">Pause</button>
+                <button id="btn-reset">Reset</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Lighting</h2>
+            <div class="btn-row">
+                <button id="btn-light-dim">Dim</button>
+                <button id="btn-light-normal" class="active">Normal</button>
+                <button id="btn-light-bright">Bright</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Display</h2>
+            <div class="btn-row">
+                <button id="btn-wireframe">Wireframe</button>
+                <button id="btn-bg-dark" class="active">Dark BG</button>
+                <button id="btn-bg-light">Light BG</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="info">
+        <span id="fps">--</span> fps | <span id="dims">1024x768</span>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="GLTFLoader.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
