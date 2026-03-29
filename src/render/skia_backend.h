@@ -13,27 +13,24 @@
 #include <include/core/SkTypeface.h>
 #include <include/core/SkFontMgr.h>
 
-struct SDL_Renderer;
-struct SDL_Window;
-struct SDL_Texture;
-
-namespace bro::platform {
-    class Window;
-} // namespace bro::platform
+struct SDL_GPUTexture;
+struct SDL_GPUCommandBuffer;
 
 namespace bro::render {
 
+class GPUContext;
+
 // ---------------------------------------------------------------------------
-// SkiaRenderer -- Skia raster UI + SDL GPU scene compositing
+// SkiaRenderer -- Skia raster UI + SDL_GPU display
 //
 // The UI (HTML/CSS) is rendered to a CPU-side Skia surface with transparency,
-// uploaded to an SDL texture, and composited over GPU-rendered scene content.
-// The scene layer draws directly to SDL_Renderer (GPU-accelerated).
+// uploaded to an SDL_GPU texture, and composited over GPU-rendered scene
+// content via the texture pipeline.
 // ---------------------------------------------------------------------------
 
 class SkiaRenderer final : public Renderer {
 public:
-    explicit SkiaRenderer(platform::Window& window);
+    explicit SkiaRenderer(GPUContext& gpu);
     ~SkiaRenderer() override;
 
     void clear(Color color) override;
@@ -55,26 +52,29 @@ public:
     void resetClip() override;
 
     // beginFrame/endFrame manage the Skia raster surface for UI rendering.
-    // They do NOT call SDL_RenderPresent — the engine handles presentation.
     void beginFrame(int width, int height) override;
     void endFrame() override;
 
-    /// Access the underlying SDL GPU renderer (for scene layers and compositing).
-    SDL_Renderer* getSDLRenderer() const { return sdlRenderer_; }
+    /// Upload Skia pixels to the GPU texture. Call after endFrame(),
+    /// within an active command buffer (before any render pass).
+    void uploadToGPU(SDL_GPUCommandBuffer* cmd);
 
-    /// Access the UI overlay texture (alpha-blended Skia content).
-    SDL_Texture* getUITexture() const { return uiTexture_; }
+    /// Access the UI overlay GPU texture (BGRA8, premultiplied alpha).
+    SDL_GPUTexture* getUITexture() const { return uiTexture_; }
 
-    /// Render text to a standalone SDL texture (for scene-layer text).
+    /// Render text to a GPU texture (for scene-layer text).
     /// Caller does NOT own the texture — it is cached internally.
-    SDL_Texture* renderTextToTexture(std::string_view text, uint64_t font_handle,
-                                      Color color, int& outW, int& outH);
+    SDL_GPUTexture* renderTextToTexture(SDL_GPUCommandBuffer* cmd,
+                                         std::string_view text, uint64_t font_handle,
+                                         Color color, int& outW, int& outH);
+
+    GPUContext* gpu() const { return gpu_; }
 
 private:
     SkColor toSkColor(Color c) const;
 
-    SDL_Renderer* sdlRenderer_ = nullptr;
-    SDL_Texture* uiTexture_ = nullptr;
+    GPUContext* gpu_ = nullptr;
+    SDL_GPUTexture* uiTexture_ = nullptr;
     int textureWidth_ = 0;
     int textureHeight_ = 0;
 
@@ -89,13 +89,16 @@ private:
     uint64_t next_font_handle_ = 1;
 
     // Cached text textures for scene-layer rendering
-    struct TextCacheEntry { SDL_Texture* tex; int w; int h; };
+    struct TextCacheEntry { SDL_GPUTexture* tex; int w; int h; };
     std::unordered_map<std::string, TextCacheEntry> textTexCache_;
+
+    // Pending pixel data for upload
+    bool pixelsPending_ = false;
 };
 
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::Window* window);
+std::unique_ptr<Renderer> createRenderer(GPUContext* gpu);
 
 } // namespace bro::render

@@ -62,7 +62,8 @@ engine  (orchestrates all subsystems, main loop)
 ### Key design patterns
 
 - **Dual DOM:** LiteHTML parses HTML and owns layout. A parallel `bro::dom` tree is built from it for JS interaction. Both are kept in sync via dirty tracking.
-- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface. `SkiaRenderer` renders to a CPU-side Skia surface, uploads to an SDL texture for GPU display. SDL picks the best GPU backend (D3D11/12, Metal, etc.).
+- **GPU rendering:** `GPUContext` owns the `SDL_GPUDevice`, shader pipelines (color + texture), and manages the D3D12 render passes. `SkiaRenderer` rasterizes HTML/CSS to a Skia surface, uploads to a `SDL_GPUTexture` via transfer buffers, and composites as a fullscreen textured quad. Canvas 2D commands are batched into vertex buffers and drawn via the color pipeline.
+- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization (used by both `SkiaRenderer` for windowed mode and `RasterRenderer` for headless).
 - **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via LiteHTML → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners.
 - **Dirty tracking:** DOM mutations call `document_->markDirty()`. Main loop only re-layouts when `isDirty()` is true.
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.

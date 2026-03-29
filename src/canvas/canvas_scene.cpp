@@ -1,5 +1,9 @@
 #include "canvas/canvas_scene.h"
 #include "render/skia_backend.h"
+#include "render/gpu_context.h"
+
+#include <SDL3/SDL_gpu.h>
+#include <cmath>
 
 namespace bro::canvas {
 
@@ -13,9 +17,33 @@ uint64_t CanvasScene::getOrCreateFont(const std::string& fontStr) {
     return handle;
 }
 
-void CanvasScene::onRender(SDL_Renderer* sdl, int w, int h, double) {
+void CanvasScene::onCleanup() {
+    textCache_.clear();
+    for (auto& [k, h] : fontCache_) renderer_->deleteFont(h);
+    fontCache_.clear();
+    if (vertexBuf_ && gpu_) {
+        gpu_->releaseBuffer(vertexBuf_);
+        vertexBuf_ = nullptr;
+        vertexBufSize_ = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// prepareFrame — build vertex data and upload to GPU (before render pass)
+// ---------------------------------------------------------------------------
+
+void CanvasScene::prepareFrame(render::GPUContext* gpu, SDL_GPUCommandBuffer* cmd,
+                                int w, int h) {
+    if (!gpu || !cmd) return;
     width_ = w;
     height_ = h;
+
+    using CV = render::ColorVertex;
+    using TV = render::TextureVertex;
+
+    std::vector<CV> colorVerts;
+    std::vector<TV> texVerts;
+    textDraws_.clear();
 
     uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
     uint8_t strokeR = 0, strokeG = 0, strokeB = 0, strokeA = 255;
@@ -33,61 +61,92 @@ void CanvasScene::onRender(SDL_Renderer* sdl, int w, int h, double) {
     };
     std::vector<SavedState> stack;
 
-    SDL_SetRenderDrawBlendMode(sdl, SDL_BLENDMODE_BLEND);
+    auto pushQuad = [&](float x, float y, float qw, float qh,
+                        float r, float g, float b, float a) {
+        float x2 = x + qw, y2 = y + qh;
+        colorVerts.push_back({x,  y,  r, g, b, a});
+        colorVerts.push_back({x2, y,  r, g, b, a});
+        colorVerts.push_back({x2, y2, r, g, b, a});
+        colorVerts.push_back({x,  y,  r, g, b, a});
+        colorVerts.push_back({x2, y2, r, g, b, a});
+        colorVerts.push_back({x,  y2, r, g, b, a});
+    };
 
-    for (auto& cmd : canvas_.commands()) {
-        switch (cmd.type) {
+    auto pushLine = [&](float x1, float y1, float x2, float y2,
+                        float r, float g, float b, float a, float thickness) {
+        float dx = x2 - x1, dy = y2 - y1;
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 0.001f) return;
+        float nx = -dy / len * thickness * 0.5f;
+        float ny =  dx / len * thickness * 0.5f;
+        colorVerts.push_back({x1 + nx, y1 + ny, r, g, b, a});
+        colorVerts.push_back({x1 - nx, y1 - ny, r, g, b, a});
+        colorVerts.push_back({x2 - nx, y2 - ny, r, g, b, a});
+        colorVerts.push_back({x1 + nx, y1 + ny, r, g, b, a});
+        colorVerts.push_back({x2 - nx, y2 - ny, r, g, b, a});
+        colorVerts.push_back({x2 + nx, y2 + ny, r, g, b, a});
+    };
+
+    auto* skia = static_cast<render::SkiaRenderer*>(renderer_);
+
+    for (auto& c : canvas_.commands()) {
+        switch (c.type) {
         case CmdType::SetFillStyle:
-            fillR = cmd.r; fillG = cmd.g; fillB = cmd.b; fillA = cmd.a;
+            fillR = c.r; fillG = c.g; fillB = c.b; fillA = c.a;
             break;
         case CmdType::SetStrokeStyle:
-            strokeR = cmd.r; strokeG = cmd.g; strokeB = cmd.b; strokeA = cmd.a;
+            strokeR = c.r; strokeG = c.g; strokeB = c.b; strokeA = c.a;
             break;
         case CmdType::SetLineWidth:
-            lineWidth = cmd.f;
+            lineWidth = c.f;
             break;
         case CmdType::SetGlobalAlpha:
-            globalAlpha = cmd.f;
+            globalAlpha = c.f;
             break;
         case CmdType::SetFont:
-            currentFont = cmd.text;
+            currentFont = c.text;
             fontHandle = getOrCreateFont(currentFont);
             break;
 
         case CmdType::FillRect: {
-            uint8_t a = (uint8_t)(fillA * globalAlpha);
-            SDL_SetRenderDrawColor(sdl, fillR, fillG, fillB, a);
-            SDL_FRect r = {cmd.x + tx, cmd.y + ty, cmd.w, cmd.h};
-            SDL_RenderFillRect(sdl, &r);
+            float a = (fillA / 255.0f) * globalAlpha;
+            pushQuad(c.x + tx, c.y + ty, c.w, c.h,
+                     fillR / 255.0f, fillG / 255.0f, fillB / 255.0f, a);
             break;
         }
         case CmdType::StrokeRect: {
-            uint8_t a = (uint8_t)(strokeA * globalAlpha);
-            SDL_SetRenderDrawColor(sdl, strokeR, strokeG, strokeB, a);
-            float x = cmd.x + tx, y = cmd.y + ty;
-            SDL_RenderLine(sdl, x, y, x + cmd.w, y);
-            SDL_RenderLine(sdl, x + cmd.w, y, x + cmd.w, y + cmd.h);
-            SDL_RenderLine(sdl, x + cmd.w, y + cmd.h, x, y + cmd.h);
-            SDL_RenderLine(sdl, x, y + cmd.h, x, y);
+            float a = (strokeA / 255.0f) * globalAlpha;
+            float r = strokeR / 255.0f, g = strokeG / 255.0f, b = strokeB / 255.0f;
+            float x = c.x + tx, y = c.y + ty;
+            float lw = std::max(lineWidth, 1.0f);
+            pushLine(x, y, x + c.w, y, r, g, b, a, lw);
+            pushLine(x + c.w, y, x + c.w, y + c.h, r, g, b, a, lw);
+            pushLine(x + c.w, y + c.h, x, y + c.h, r, g, b, a, lw);
+            pushLine(x, y + c.h, x, y, r, g, b, a, lw);
             break;
         }
         case CmdType::ClearRect: {
-            SDL_SetRenderDrawBlendMode(sdl, SDL_BLENDMODE_NONE);
-            SDL_SetRenderDrawColor(sdl, 0, 0, 0, 255);
-            SDL_FRect r = {cmd.x + tx, cmd.y + ty, cmd.w, cmd.h};
-            SDL_RenderFillRect(sdl, &r);
-            SDL_SetRenderDrawBlendMode(sdl, SDL_BLENDMODE_BLEND);
+            pushQuad(c.x + tx, c.y + ty, c.w, c.h,
+                     0.0f, 0.0f, 0.0f, 1.0f);
             break;
         }
         case CmdType::FillText: {
             if (!fontHandle) fontHandle = getOrCreateFont(currentFont);
-            auto* skia = static_cast<render::SkiaRenderer*>(renderer_);
             render::Color col{fillR, fillG, fillB, (uint8_t)(fillA * globalAlpha)};
             int tw = 0, th = 0;
-            SDL_Texture* tex = skia->renderTextToTexture(cmd.text, fontHandle, col, tw, th);
+            SDL_GPUTexture* tex = skia->renderTextToTexture(cmd, c.text, fontHandle, col, tw, th);
             if (tex) {
-                SDL_FRect dst = {cmd.x + tx, cmd.y + ty - th * 0.75f, (float)tw, (float)th};
-                SDL_RenderTexture(sdl, tex, nullptr, &dst);
+                float dx = c.x + tx;
+                float dy = c.y + ty - th * 0.75f;
+                uint32_t base = (uint32_t)texVerts.size();
+                float fw = (float)tw, fh = (float)th;
+                texVerts.push_back({dx,      dy,      0.0f, 0.0f});
+                texVerts.push_back({dx + fw, dy,      1.0f, 0.0f});
+                texVerts.push_back({dx + fw, dy + fh, 1.0f, 1.0f});
+                texVerts.push_back({dx,      dy,      0.0f, 0.0f});
+                texVerts.push_back({dx + fw, dy + fh, 1.0f, 1.0f});
+                texVerts.push_back({dx,      dy + fh, 0.0f, 1.0f});
+                textDraws_.push_back({tex, base, 6});
             }
             break;
         }
@@ -107,11 +166,81 @@ void CanvasScene::onRender(SDL_Renderer* sdl, int w, int h, double) {
             }
             break;
         case CmdType::Translate:
-            tx += cmd.x; ty += cmd.y;
+            tx += c.x; ty += c.y;
             break;
         case CmdType::Rotate:
         case CmdType::Scale:
             break;
+        }
+    }
+
+    // Store counts for onRender
+    colorVertCount_ = (uint32_t)colorVerts.size();
+    colorBytes_ = (uint32_t)(colorVerts.size() * sizeof(CV));
+    uint32_t texBytes = (uint32_t)(texVerts.size() * sizeof(TV));
+    uint32_t totalBytes = colorBytes_ + texBytes;
+
+    if (totalBytes == 0) return;
+
+    // Ensure GPU vertex buffer is large enough
+    if (!vertexBuf_ || vertexBufSize_ < totalBytes) {
+        if (vertexBuf_) gpu->releaseBuffer(vertexBuf_);
+        uint32_t size = 65536;
+        while (size < totalBytes) size *= 2;
+        vertexBuf_ = gpu->createVertexBuffer(size);
+        vertexBufSize_ = size;
+    }
+
+    // Combine into one upload: [color verts | texture verts]
+    std::vector<uint8_t> combined(totalBytes);
+    if (colorBytes_ > 0)
+        memcpy(combined.data(), colorVerts.data(), colorBytes_);
+    if (texBytes > 0)
+        memcpy(combined.data() + colorBytes_, texVerts.data(), texBytes);
+
+    gpu->uploadToBuffer(cmd, vertexBuf_, combined.data(), totalBytes);
+}
+
+// ---------------------------------------------------------------------------
+// onRender — issue draw calls (inside render pass, vertex data already uploaded)
+// ---------------------------------------------------------------------------
+
+void CanvasScene::onRender(render::GPUContext* gpu, SDL_GPUCommandBuffer* cmd,
+                            SDL_GPURenderPass* pass,
+                            int w, int h, double) {
+    if (!gpu || !cmd || !pass || !vertexBuf_) return;
+    if (colorVertCount_ == 0 && textDraws_.empty()) return;
+
+    float viewport[2] = {(float)w, (float)h};
+
+    // Draw colored geometry
+    if (colorVertCount_ > 0) {
+        SDL_BindGPUGraphicsPipeline(pass, gpu->colorPipeline());
+        SDL_PushGPUVertexUniformData(cmd, 0, viewport, sizeof(viewport));
+
+        SDL_GPUBufferBinding binding = {};
+        binding.buffer = vertexBuf_;
+        binding.offset = 0;
+        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+        SDL_DrawGPUPrimitives(pass, colorVertCount_, 1, 0, 0);
+    }
+
+    // Draw textured quads (text)
+    if (!textDraws_.empty()) {
+        SDL_BindGPUGraphicsPipeline(pass, gpu->texturePipeline());
+        SDL_PushGPUVertexUniformData(cmd, 0, viewport, sizeof(viewport));
+
+        SDL_GPUBufferBinding binding = {};
+        binding.buffer = vertexBuf_;
+        binding.offset = colorBytes_;
+        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+
+        for (auto& td : textDraws_) {
+            SDL_GPUTextureSamplerBinding texBind = {};
+            texBind.texture = td.tex;
+            texBind.sampler = gpu->linearSampler();
+            SDL_BindGPUFragmentSamplers(pass, 0, &texBind, 1);
+            SDL_DrawGPUPrimitives(pass, td.vertexCount, 1, td.firstVertex, 0);
         }
     }
 }
