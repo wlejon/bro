@@ -99,6 +99,12 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
     attributes_[name] = val;
     if (litehtml_element_) {
         litehtml_element_->set_attr(name.c_str(), val.c_str());
+        // Class/id changes require CSS re-evaluation so selectors like
+        // .active { ... } take effect immediately.
+        if (name == "class" || name == "id") {
+            litehtml_element_->refresh_styles();
+            litehtml_element_->compute_styles(false);
+        }
     }
     markDirty();
 }
