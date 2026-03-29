@@ -474,6 +474,8 @@ void Engine::run() {
         if (uiDirty_ || !hasRenderedOnce_) {
             renderer_->beginFrame(viewportWidth_, viewportHeight_);
 
+            container_->drawStats.reset();
+            double tDraw0 = util::currentTimeMs();
             if (litehtmlDoc_) {
                 litehtml::position clip(0, 0,
                                         static_cast<litehtml::pixel_t>(viewportWidth_),
@@ -481,6 +483,7 @@ void Engine::run() {
                 litehtmlDoc_->draw(
                     reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
             }
+            accumDrawMs_ += util::currentTimeMs() - tDraw0;
 
             double renderElapsed = util::currentTimeMs() - frameStart;
             drawStatsOverlay(renderElapsed);
@@ -492,7 +495,9 @@ void Engine::run() {
         }
 
         // 5b. Upload Skia pixels to GL texture
+        double tUpload0 = util::currentTimeMs();
         skia->uploadToGPU();
+        accumUploadMs_ += util::currentTimeMs() - tUpload0;
         accumRasterMs_ += util::currentTimeMs() - tLayout;
 
         double tGpu = util::currentTimeMs();
@@ -584,7 +589,10 @@ void Engine::run() {
             phaseRasterMs_ = accumRasterMs_ / n;
             phaseGpuMs_ = accumGpuMs_ / n;
             phaseGlStateMs_ = accumGlStateMs_ / n;
+            phaseDrawMs_ = accumDrawMs_ / n;
+            phaseUploadMs_ = accumUploadMs_ / n;
             accumJsMs_ = accumLayoutMs_ = accumRasterMs_ = accumGpuMs_ = accumGlStateMs_ = 0.0;
+            accumDrawMs_ = accumUploadMs_ = 0.0;
             statsAccumMs_ = 0.0;
             statsFrameCount_ = 0;
             statsMinFrameMs_ = 999.0;
@@ -796,8 +804,8 @@ void Engine::drawStatsOverlay(double frameTimeMs) {
     using render::Color;
     constexpr float pad = 6.0f;
     constexpr float lineH = 16.0f;
-    constexpr int numLines = 4;
-    const float boxW = 360.0f;
+    constexpr int numLines = 5;
+    const float boxW = 400.0f;
     const float boxH = pad * 2 + lineH * numLines;
     const float boxX = static_cast<float>(viewportWidth_) - boxW - 8.0f;
     const float boxY = 8.0f;
@@ -834,9 +842,16 @@ void Engine::drawStatsOverlay(double frameTimeMs) {
     renderer_->drawText(buf, x, y, statsFont_, label);
     y += lineH;
 
-    // Line 4: GL state overhead
-    std::snprintf(buf, sizeof(buf), "GLstate: %.2f  UI interval: %.0fms",
-                  phaseGlStateMs_, kUIFrameIntervalMs);
+    // Line 4: Raster breakdown
+    std::snprintf(buf, sizeof(buf), "Draw: %.2f  Upload: %.2f  UI interval: %.0fms",
+                  phaseDrawMs_, phaseUploadMs_, kUIFrameIntervalMs);
+    renderer_->drawText(buf, x, y, statsFont_, label);
+    y += lineH;
+
+    // Line 5: Draw call counts
+    auto& ds = container_->drawStats;
+    std::snprintf(buf, sizeof(buf), "Fills: %d  Texts: %d  Borders: %d",
+                  ds.fills, ds.texts, ds.borders);
     renderer_->drawText(buf, x, y, statsFont_, label);
 }
 

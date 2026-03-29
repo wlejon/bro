@@ -53,6 +53,13 @@ void BroContainer::draw_text(litehtml::uint_ptr /*hdc*/, const char* text,
                               litehtml::uint_ptr hFont,
                               litehtml::web_color color,
                               const litehtml::position& pos) {
+    // Skip whitespace-only text nodes (litehtml generates many between elements)
+    if (!text || !*text) return;
+    const char* p = text;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (!*p) return;
+
+    drawStats.texts++;
     render::Color c{color.red, color.green, color.blue, color.alpha};
     // litehtml gives pos.y as the top of the text box, but Skia's
     // drawSimpleText expects the baseline y. Offset by the font ascent.
@@ -127,6 +134,7 @@ void BroContainer::draw_solid_fill(litehtml::uint_ptr /*hdc*/,
         if (lw >= static_cast<float>(viewportWidth_)) return;
     }
 
+    drawStats.fills++;
     render::Color c{color.red, color.green, color.blue, color.alpha};
     renderer_->fillRect(static_cast<float>(layer.border_box.x),
                         static_cast<float>(layer.border_box.y),
@@ -182,6 +190,7 @@ void BroContainer::draw_borders(litehtml::uint_ptr /*hdc*/,
                                  const litehtml::borders& borders,
                                  const litehtml::position& draw_pos,
                                  bool /*root*/) {
+    drawStats.borders++;
     float x = static_cast<float>(draw_pos.x);
     float y = static_cast<float>(draw_pos.y);
     float w = static_cast<float>(draw_pos.width);

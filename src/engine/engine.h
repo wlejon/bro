@@ -76,7 +76,7 @@ private:
     bool hasRenderedOnce_ = false;
 
     // UI render throttle — layout+rasterize at most every ~60fps
-    static constexpr double kUIFrameIntervalMs = 83.0;
+    static constexpr double kUIFrameIntervalMs = 8.0;
     double lastUIRenderMs_ = 0.0;
 
     // Per-phase timing (smoothed over stats window)
@@ -85,12 +85,17 @@ private:
     double phaseRasterMs_ = 0.0;   // Skia rasterization + upload
     double phaseGpuMs_ = 0.0;      // GL composite + swap
     double phaseGlStateMs_ = 0.0;  // GL state save/restore
+    // Raster sub-phase timing
+    double phaseDrawMs_ = 0.0;     // litehtml draw (Skia commands)
+    double phaseUploadMs_ = 0.0;   // texture upload to GPU
     // Accumulators for averaging
     double accumJsMs_ = 0.0;
     double accumLayoutMs_ = 0.0;
     double accumRasterMs_ = 0.0;
     double accumGpuMs_ = 0.0;
     double accumGlStateMs_ = 0.0;
+    double accumDrawMs_ = 0.0;
+    double accumUploadMs_ = 0.0;
 
     // UI overlay quad (OpenGL)
     GLuint uiQuadVAO_ = 0;

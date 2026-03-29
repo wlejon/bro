@@ -66,6 +66,15 @@ public:
     const std::string& caption() const { return caption_; }
     void setSceneMode(bool enabled) { sceneMode_ = enabled; }
 
+    // Draw call counters (reset each frame by engine)
+    struct DrawStats {
+        int fills = 0;
+        int texts = 0;
+        int borders = 0;
+        void reset() { fills = texts = borders = 0; }
+    };
+    DrawStats drawStats;
+
 private:
     render::Renderer* renderer_;
     FontManager fontManager_;

@@ -12,6 +12,7 @@
 #include <include/core/SkFont.h>
 #include <include/core/SkTypeface.h>
 #include <include/core/SkFontMgr.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <glad/gl.h>
 
@@ -75,8 +76,13 @@ private:
     int textureWidth_ = 0;
     int textureHeight_ = 0;
 
+    // Skia GPU context (Ganesh GL backend)
+    sk_sp<GrDirectContext> grContext_;
+    GLuint gpuFBO_ = 0;         // FBO that wraps uiTexture_ for Skia GPU rendering
+
     sk_sp<SkSurface> surface_;
     SkCanvas* canvas_ = nullptr;
+    bool gpuMode_ = false;      // true if GPU backend active
 
     struct FontEntry {
         sk_sp<SkTypeface> typeface;

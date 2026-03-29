@@ -13,8 +13,15 @@
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkFontMgr.h>
+#include <include/core/SkColorSpace.h>
 #include <include/codec/SkCodec.h>
 #include <include/ports/SkTypeface_win.h>
+#include <include/gpu/ganesh/GrBackendSurface.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
+#include <include/gpu/ganesh/gl/GrGLBackendSurface.h>
+#include <include/gpu/ganesh/gl/GrGLDirectContext.h>
+#include <include/gpu/ganesh/gl/GrGLInterface.h>
 
 namespace bro::render {
 
@@ -23,7 +30,17 @@ namespace bro::render {
 // ===========================================================================
 
 SkiaRenderer::SkiaRenderer(GLContext& gl) : gl_(&gl) {
-    LOG_INFO("SkiaRenderer created (OpenGL backend)");
+    // Try to create Skia GPU (Ganesh GL) context
+    auto glInterface = GrGLMakeNativeInterface();
+    if (glInterface) {
+        grContext_ = GrDirectContexts::MakeGL(glInterface);
+    }
+    if (grContext_) {
+        gpuMode_ = true;
+        LOG_INFO("SkiaRenderer created (GPU-accelerated Ganesh GL backend)");
+    } else {
+        LOG_INFO("SkiaRenderer created (CPU raster fallback)");
+    }
 }
 
 SkiaRenderer::~SkiaRenderer() {
@@ -69,12 +86,14 @@ void SkiaRenderer::fillRect(float x, float y, float w, float h, Color color) {
 }
 
 void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) {
-    if (!canvas_) return;
-    auto it = fonts_.find(font_handle);
-    if (it == fonts_.end()) return;
+    if (!canvas_ || text.empty()) return;
+    auto fontIt = fonts_.find(font_handle);
+    if (fontIt == fonts_.end()) return;
+
     SkPaint paint;
     paint.setColor(toSkColor(color));
-    canvas_->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8, x, y, *it->second.font, paint);
+    canvas_->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
+                            x, y, *fontIt->second.font, paint);
 }
 
 TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handle) {
@@ -167,13 +186,47 @@ void SkiaRenderer::resetClip() {
 }
 
 void SkiaRenderer::beginFrame(int width, int height) {
-    // (Re)create raster surface and GL texture if size changed
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
-        surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+        surface_.reset();
+
         if (uiTexture_) gl_->deleteTexture(uiTexture_);
         uiTexture_ = gl_->createTexture2D(width, height, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
         textureWidth_ = width;
         textureHeight_ = height;
+
+        if (gpuMode_ && grContext_) {
+            // Create FBO wrapping our texture for Skia GPU rendering
+            if (gpuFBO_) glDeleteFramebuffers(1, &gpuFBO_);
+            glGenFramebuffers(1, &gpuFBO_);
+            glBindFramebuffer(GL_FRAMEBUFFER, gpuFBO_);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                   GL_TEXTURE_2D, uiTexture_, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            // Wrap the FBO as a Skia GPU render target
+            GrGLFramebufferInfo fbInfo;
+            fbInfo.fFBOID = gpuFBO_;
+            fbInfo.fFormat = GL_RGBA8;
+            fbInfo.fProtected = skgpu::Protected::kNo;
+            auto backendRT = GrBackendRenderTargets::MakeGL(
+                width, height, 0, 0, fbInfo);
+            surface_ = SkSurfaces::WrapBackendRenderTarget(
+                grContext_.get(), backendRT,
+                kTopLeft_GrSurfaceOrigin,
+                kRGBA_8888_SkColorType,
+                SkColorSpace::MakeSRGB(), nullptr);
+        }
+
+        if (!surface_) {
+            // Fallback to CPU raster
+            gpuMode_ = false;
+            surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+        }
+    }
+
+    if (gpuMode_ && grContext_) {
+        // Reset Skia's GL state tracking (we share the context with Three.js)
+        grContext_->resetContext();
     }
 
     canvas_ = surface_->getCanvas();
@@ -184,10 +237,18 @@ void SkiaRenderer::beginFrame(int width, int height) {
 void SkiaRenderer::endFrame() {
     if (canvas_) canvas_->restore();
     canvas_ = nullptr;
-    pixelsPending_ = (surface_ && uiTexture_);
+
+    if (gpuMode_ && grContext_) {
+        // Flush Skia GPU commands — renders directly to uiTexture_ via FBO
+        grContext_->flushAndSubmit(surface_.get());
+        pixelsPending_ = false;
+    } else {
+        pixelsPending_ = (surface_ && uiTexture_);
+    }
 }
 
 void SkiaRenderer::uploadToGPU() {
+    // GPU mode: already rendered to texture, nothing to upload
     if (!pixelsPending_ || !surface_ || !uiTexture_) return;
     pixelsPending_ = false;
 
