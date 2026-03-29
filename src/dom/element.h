@@ -52,6 +52,12 @@ public:
     std::vector<Element*> children() const;
     Element* parentElement() const;
 
+    // Selectors
+    std::vector<Element*> querySelectorAll(const std::string& selector);
+    Element* querySelector(const std::string& selector);
+    bool matches(const std::string& selector) const;
+    Element* closest(const std::string& selector);
+
     // Sync inline styles to litehtml element
     void syncStylesToLitehtml();
 

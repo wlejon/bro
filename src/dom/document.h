@@ -2,6 +2,7 @@
 #include "dom/node.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
+#include "dom/document_fragment.h"
 #include <litehtml.h>
 #include <string>
 #include <memory>
@@ -24,6 +25,7 @@ public:
     // Node creation
     std::shared_ptr<Element> createElement(const std::string& tag);
     std::shared_ptr<TextNode> createTextNode(const std::string& text);
+    std::shared_ptr<DocumentFragment> createDocumentFragment();
 
     // Queries
     Element* getElementById(const std::string& id);

@@ -119,6 +119,10 @@ std::shared_ptr<TextNode> Document::createTextNode(const std::string& text) {
     return std::make_shared<TextNode>(text);
 }
 
+std::shared_ptr<DocumentFragment> Document::createDocumentFragment() {
+    return std::make_shared<DocumentFragment>();
+}
+
 void Document::adoptOrphan(Element* elem) {
     orphans_.erase(
         std::remove_if(orphans_.begin(), orphans_.end(),

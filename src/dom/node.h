@@ -9,7 +9,8 @@ namespace bro::dom {
 enum class NodeType : uint8_t {
     Element = 1,
     Text = 3,
-    Document = 9
+    Document = 9,
+    DocumentFragment = 11
 };
 
 class Element;  // forward

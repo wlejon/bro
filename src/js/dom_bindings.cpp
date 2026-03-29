@@ -11,6 +11,7 @@
 #include <memory>
 #include <cctype>
 #include <cstring>
+#include <sstream>
 
 extern "C" {
 #include "quickjs.h"
@@ -435,6 +436,189 @@ static JSValue wrapStyleProxy(JSContext* ctx, bro::dom::StyleProxy* style)
 }
 
 // ===========================================================================
+// DOMTokenList wrapper (classList)
+// ===========================================================================
+
+static JSClassID js_tokenlist_class_id = 0;
+
+static JSClassDef js_tokenlist_class = {
+    "DOMTokenList",
+    nullptr, nullptr, nullptr, nullptr
+};
+
+// The DOMTokenList stores a pointer back to its owning Element.
+// All operations read/write the element's "class" attribute directly.
+
+static inline bro::dom::Element* getTokenListElement(JSValueConst val) {
+    return static_cast<bro::dom::Element*>(
+        JS_GetOpaque(val, js_tokenlist_class_id));
+}
+
+// Helper: split class attribute into tokens
+static std::vector<std::string> splitClasses(const std::string& cls) {
+    std::vector<std::string> tokens;
+    std::istringstream iss(cls);
+    std::string tok;
+    while (iss >> tok) tokens.push_back(tok);
+    return tokens;
+}
+
+// Helper: join tokens back to string
+static std::string joinClasses(const std::vector<std::string>& tokens) {
+    std::string result;
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (i > 0) result += ' ';
+        result += tokens[i];
+    }
+    return result;
+}
+
+static JSValue js_tokenlist_get_length(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getTokenListElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    auto tokens = splitClasses(el->className());
+    return JS_NewInt32(ctx, static_cast<int32_t>(tokens.size()));
+}
+
+static JSValue js_tokenlist_get_value(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getTokenListElement(this_val);
+    if (!el) return JS_NewString(ctx, "");
+    return JS_NewString(ctx, el->className().c_str());
+}
+
+static JSValue js_tokenlist_set_value(JSContext* ctx, JSValueConst this_val,
+                                      JSValueConst val) {
+    auto* el = getTokenListElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setClassName(jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_tokenlist_item(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* el = getTokenListElement(this_val);
+    if (!el || argc < 1) return JS_NULL;
+    int32_t idx = 0;
+    JS_ToInt32(ctx, &idx, argv[0]);
+    auto tokens = splitClasses(el->className());
+    if (idx < 0 || static_cast<size_t>(idx) >= tokens.size()) return JS_NULL;
+    return JS_NewString(ctx, tokens[static_cast<size_t>(idx)].c_str());
+}
+
+static JSValue js_tokenlist_contains(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* el = getTokenListElement(this_val);
+    if (!el || argc < 1) return JS_FALSE;
+    std::string token = jsToStdString(ctx, argv[0]);
+    auto tokens = splitClasses(el->className());
+    for (auto& t : tokens) {
+        if (t == token) return JS_TRUE;
+    }
+    return JS_FALSE;
+}
+
+static JSValue js_tokenlist_add(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* el = getTokenListElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto tokens = splitClasses(el->className());
+    for (int i = 0; i < argc; ++i) {
+        std::string token = jsToStdString(ctx, argv[i]);
+        if (token.empty()) continue;
+        bool found = false;
+        for (auto& t : tokens) { if (t == token) { found = true; break; } }
+        if (!found) tokens.push_back(token);
+    }
+    el->setClassName(joinClasses(tokens));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_tokenlist_remove(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* el = getTokenListElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto tokens = splitClasses(el->className());
+    for (int i = 0; i < argc; ++i) {
+        std::string token = jsToStdString(ctx, argv[i]);
+        tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
+    }
+    el->setClassName(joinClasses(tokens));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_tokenlist_toggle(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* el = getTokenListElement(this_val);
+    if (!el || argc < 1) return JS_FALSE;
+    std::string token = jsToStdString(ctx, argv[0]);
+    auto tokens = splitClasses(el->className());
+
+    auto it = std::find(tokens.begin(), tokens.end(), token);
+    bool hasForce = (argc >= 2 && !JS_IsUndefined(argv[1]));
+
+    if (it != tokens.end()) {
+        // Token present
+        if (hasForce && JS_ToBool(ctx, argv[1])) {
+            // force=true: keep it
+            el->setClassName(joinClasses(tokens));
+            return JS_TRUE;
+        }
+        tokens.erase(it);
+        el->setClassName(joinClasses(tokens));
+        return JS_FALSE;
+    } else {
+        // Token absent
+        if (hasForce && !JS_ToBool(ctx, argv[1])) {
+            // force=false: don't add
+            return JS_FALSE;
+        }
+        tokens.push_back(token);
+        el->setClassName(joinClasses(tokens));
+        return JS_TRUE;
+    }
+}
+
+static JSValue js_tokenlist_replace(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* el = getTokenListElement(this_val);
+    if (!el || argc < 2) return JS_FALSE;
+    std::string oldToken = jsToStdString(ctx, argv[0]);
+    std::string newToken = jsToStdString(ctx, argv[1]);
+    auto tokens = splitClasses(el->className());
+    auto it = std::find(tokens.begin(), tokens.end(), oldToken);
+    if (it == tokens.end()) return JS_FALSE;
+    *it = newToken;
+    el->setClassName(joinClasses(tokens));
+    return JS_TRUE;
+}
+
+static JSValue js_tokenlist_toString(JSContext* ctx, JSValueConst this_val,
+                                     int /*argc*/, JSValueConst* /*argv*/) {
+    return js_tokenlist_get_value(ctx, this_val);
+}
+
+static const JSCFunctionListEntry js_tokenlist_proto_funcs[] = {
+    JS_CGETSET_DEF("length", js_tokenlist_get_length, nullptr),
+    JS_CGETSET_DEF("value",  js_tokenlist_get_value,  js_tokenlist_set_value),
+    JS_CFUNC_DEF("item",     1, js_tokenlist_item),
+    JS_CFUNC_DEF("contains", 1, js_tokenlist_contains),
+    JS_CFUNC_DEF("add",      1, js_tokenlist_add),
+    JS_CFUNC_DEF("remove",   1, js_tokenlist_remove),
+    JS_CFUNC_DEF("toggle",   1, js_tokenlist_toggle),
+    JS_CFUNC_DEF("replace",  2, js_tokenlist_replace),
+    JS_CFUNC_DEF("toString", 0, js_tokenlist_toString),
+};
+
+static JSValue tokenlist_proto = JS_UNINITIALIZED;
+
+static JSValue wrapTokenList(JSContext* ctx, bro::dom::Element* elem) {
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_tokenlist_class_id));
+    if (JS_IsException(obj)) return obj;
+    JS_SetOpaque(obj, elem);
+    return obj;
+}
+
+// ===========================================================================
 // Element wrapper
 // ===========================================================================
 
@@ -546,6 +730,150 @@ static JSValue js_element_get_childNodes(JSContext* ctx, JSValueConst this_val)
     return js_element_get_children(ctx, this_val);
 }
 
+static JSValue js_element_get_classList(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return wrapTokenList(ctx, el);
+}
+
+static JSValue js_element_get_parentNode(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    auto* parent = el->parentNode();
+    if (!parent || parent->nodeType() != bro::dom::NodeType::Element) return JS_NULL;
+    return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(parent));
+}
+
+static JSValue js_element_get_firstChild(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el || el->childNodes().empty()) return JS_NULL;
+    auto* first = el->childNodes().front().get();
+    if (first->nodeType() == bro::dom::NodeType::Element)
+        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(first));
+    return JS_NULL; // text nodes not wrapped yet
+}
+
+static JSValue js_element_get_lastChild(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el || el->childNodes().empty()) return JS_NULL;
+    auto* last = el->childNodes().back().get();
+    if (last->nodeType() == bro::dom::NodeType::Element)
+        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(last));
+    return JS_NULL;
+}
+
+static JSValue js_element_get_nextSibling(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el || !el->parentNode()) return JS_NULL;
+    auto& siblings = el->parentNode()->childNodes();
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        if (siblings[i].get() == el && i + 1 < siblings.size()) {
+            auto* next = siblings[i + 1].get();
+            if (next->nodeType() == bro::dom::NodeType::Element)
+                return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(next));
+            return JS_NULL;
+        }
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_previousSibling(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el || !el->parentNode()) return JS_NULL;
+    auto& siblings = el->parentNode()->childNodes();
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        if (siblings[i].get() == el && i > 0) {
+            auto* prev = siblings[i - 1].get();
+            if (prev->nodeType() == bro::dom::NodeType::Element)
+                return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(prev));
+            return JS_NULL;
+        }
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_nextElementSibling(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el || !el->parentNode()) return JS_NULL;
+    auto& siblings = el->parentNode()->childNodes();
+    bool found = false;
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        if (siblings[i].get() == el) { found = true; continue; }
+        if (found && siblings[i]->nodeType() == bro::dom::NodeType::Element)
+            return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(siblings[i].get()));
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_previousElementSibling(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el || !el->parentNode()) return JS_NULL;
+    auto& siblings = el->parentNode()->childNodes();
+    bro::dom::Element* lastElem = nullptr;
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        if (siblings[i].get() == el) return lastElem ? DomBindings::wrapElement(ctx, lastElem) : JS_NULL;
+        if (siblings[i]->nodeType() == bro::dom::NodeType::Element)
+            lastElem = static_cast<bro::dom::Element*>(siblings[i].get());
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_firstElementChild(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    for (auto& child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element)
+            return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child.get()));
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_lastElementChild(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    auto& kids = el->childNodes();
+    for (auto it = kids.rbegin(); it != kids.rend(); ++it) {
+        if ((*it)->nodeType() == bro::dom::NodeType::Element)
+            return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>((*it).get()));
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_childElementCount(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    int32_t count = 0;
+    for (auto& child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) ++count;
+    }
+    return JS_NewInt32(ctx, count);
+}
+
+static JSValue js_element_get_nodeType(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewInt32(ctx, static_cast<int32_t>(el->nodeType()));
+}
+
+static JSValue js_element_get_nodeName(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewString(ctx, el->nodeName().c_str());
+}
+
 static JSValue js_element_get_style(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
@@ -614,10 +942,19 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
     auto* child = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
     if (child) {
-        auto childPtr = findSharedPtr(child);
-        el->appendChild(childPtr);
-        // Remove from orphans if it was there (Document now doesn't need to keep it alive).
-        if (s_document) s_document->adoptOrphan(child);
+        // DocumentFragment: move all children to parent instead
+        if (child->tagName() == "#DOCUMENT-FRAGMENT") {
+            // Copy children vector since we're modifying it during iteration
+            auto kids = child->childNodes();
+            for (auto& kid : kids) {
+                el->appendChild(kid);
+            }
+            if (s_document) s_document->adoptOrphan(child);
+        } else {
+            auto childPtr = findSharedPtr(child);
+            el->appendChild(childPtr);
+            if (s_document) s_document->adoptOrphan(child);
+        }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
@@ -651,6 +988,85 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
         if (s_document) s_document->adoptOrphan(newChild);
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+}
+
+static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || argc < 2) return JS_UNDEFINED;
+    auto* newChild = static_cast<bro::dom::Element*>(
+        DomBindings::unwrapElement(ctx, argv[0]));
+    auto* oldChild = static_cast<bro::dom::Element*>(
+        DomBindings::unwrapElement(ctx, argv[1]));
+    if (newChild && oldChild) {
+        auto newPtr = findSharedPtr(newChild);
+        // insertBefore newChild before oldChild, then remove oldChild
+        el->insertBefore(newPtr, static_cast<bro::dom::Node*>(oldChild));
+        el->removeChild(static_cast<bro::dom::Node*>(oldChild));
+        if (s_document) s_document->adoptOrphan(newChild);
+    }
+    return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
+}
+
+static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || !s_document) return JS_NULL;
+
+    bool deep = false;
+    if (argc >= 1) deep = JS_ToBool(ctx, argv[0]);
+
+    // Create a new element with the same tag
+    auto clone = s_document->createElement(el->tagName());
+    if (!clone) return JS_NULL;
+
+    // Copy attributes
+    // We need to read attributes - use getAttribute for known ones
+    // Since attributes_ is private, we'll copy via the public API
+    // Copy class and id which are the most important
+    std::string cls = el->className();
+    if (!cls.empty()) clone->setClassName(cls);
+    std::string id = el->id();
+    if (!id.empty()) clone->setId(id);
+
+    // Copy common attributes
+    static const char* attrs[] = {
+        "style", "href", "src", "alt", "title", "name", "value", "type",
+        "placeholder", "data-action", "data-setting", "data-control",
+        "width", "height", "disabled", "checked", "selected", nullptr
+    };
+    for (int i = 0; attrs[i]; ++i) {
+        std::string val = el->getAttribute(attrs[i]);
+        if (!val.empty()) clone->setAttribute(attrs[i], val);
+    }
+
+    if (deep) {
+        // Deep clone: recursively clone children
+        for (auto& child : el->childNodes()) {
+            if (child->nodeType() == bro::dom::NodeType::Element) {
+                // Wrap child, call cloneNode(true), unwrap, appendChild
+                JSValue childJs = DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child.get()));
+                JSValue trueVal = JS_TRUE;
+                JSValue clonedJs = js_element_cloneNode(ctx, childJs, 1, &trueVal);
+                auto* clonedElem = static_cast<bro::dom::Element*>(DomBindings::unwrapElement(ctx, clonedJs));
+                if (clonedElem) {
+                    auto clonedPtr = findSharedPtr(clonedElem);
+                    clone->appendChild(clonedPtr);
+                    if (s_document) s_document->adoptOrphan(clonedElem);
+                }
+                JS_FreeValue(ctx, clonedJs);
+                JS_FreeValue(ctx, childJs);
+            } else if (child->nodeType() == bro::dom::NodeType::Text) {
+                auto* textNode = static_cast<bro::dom::TextNode*>(child.get());
+                auto clonedText = std::make_shared<bro::dom::TextNode>(textNode->data());
+                clone->appendChild(clonedText);
+            }
+        }
+    }
+
+    return DomBindings::wrapElement(ctx, clone.get());
 }
 
 static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
@@ -766,19 +1182,43 @@ static JSValue js_element_removeEventListener(JSContext* ctx,
 static JSValue js_element_querySelector(JSContext* ctx, JSValueConst this_val,
                                         int argc, JSValueConst* argv)
 {
-    // TODO: implement querySelectorAll on Element; for now return null
-    (void)this_val; (void)argc; (void)argv;
-    (void)ctx;
-    return JS_NULL;
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_NULL;
+    std::string sel = jsToStdString(ctx, argv[0]);
+    auto* found = el->querySelector(sel);
+    if (!found) return JS_NULL;
+    return DomBindings::wrapElement(ctx, found);
 }
 
 static JSValue js_element_querySelectorAll(JSContext* ctx,
                                            JSValueConst this_val,
                                            int argc, JSValueConst* argv)
 {
-    // TODO: implement querySelectorAll on Element; for now return empty array
-    (void)this_val; (void)argc; (void)argv;
-    return JS_NewArray(ctx);
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_NewArray(ctx);
+    std::string sel = jsToStdString(ctx, argv[0]);
+    auto results = el->querySelectorAll(sel);
+    return wrapNodeList(ctx, results);
+}
+
+static JSValue js_element_closest(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_NULL;
+    std::string sel = jsToStdString(ctx, argv[0]);
+    auto* found = el->closest(sel);
+    if (!found) return JS_NULL;
+    return DomBindings::wrapElement(ctx, found);
+}
+
+static JSValue js_element_matches(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_FALSE;
+    std::string sel = jsToStdString(ctx, argv[0]);
+    return JS_NewBool(ctx, el->matches(sel));
 }
 
 static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
@@ -846,10 +1286,23 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("className",     js_element_get_className,   js_element_set_className),
     JS_CGETSET_DEF("textContent",   js_element_get_textContent, js_element_set_textContent),
     JS_CGETSET_DEF("innerHTML",     js_element_get_innerHTML,   js_element_set_innerHTML),
-    JS_CGETSET_DEF("parentElement", js_element_get_parentElement, nullptr),
-    JS_CGETSET_DEF("children",      js_element_get_children,    nullptr),
-    JS_CGETSET_DEF("childNodes",    js_element_get_childNodes,  nullptr),
-    JS_CGETSET_DEF("style",         js_element_get_style,       nullptr),
+    JS_CGETSET_DEF("parentElement",          js_element_get_parentElement,          nullptr),
+    JS_CGETSET_DEF("parentNode",             js_element_get_parentNode,             nullptr),
+    JS_CGETSET_DEF("children",               js_element_get_children,               nullptr),
+    JS_CGETSET_DEF("childNodes",             js_element_get_childNodes,             nullptr),
+    JS_CGETSET_DEF("firstChild",             js_element_get_firstChild,             nullptr),
+    JS_CGETSET_DEF("lastChild",              js_element_get_lastChild,              nullptr),
+    JS_CGETSET_DEF("nextSibling",            js_element_get_nextSibling,            nullptr),
+    JS_CGETSET_DEF("previousSibling",        js_element_get_previousSibling,        nullptr),
+    JS_CGETSET_DEF("nextElementSibling",     js_element_get_nextElementSibling,     nullptr),
+    JS_CGETSET_DEF("previousElementSibling", js_element_get_previousElementSibling, nullptr),
+    JS_CGETSET_DEF("firstElementChild",      js_element_get_firstElementChild,      nullptr),
+    JS_CGETSET_DEF("lastElementChild",       js_element_get_lastElementChild,       nullptr),
+    JS_CGETSET_DEF("childElementCount",      js_element_get_childElementCount,      nullptr),
+    JS_CGETSET_DEF("nodeType",               js_element_get_nodeType,               nullptr),
+    JS_CGETSET_DEF("nodeName",               js_element_get_nodeName,               nullptr),
+    JS_CGETSET_DEF("classList",              js_element_get_classList,              nullptr),
+    JS_CGETSET_DEF("style",                  js_element_get_style,                  nullptr),
     JS_CGETSET_DEF("width",         js_element_get_width,       js_element_set_width),
     JS_CGETSET_DEF("height",        js_element_get_height,      js_element_set_height),
     JS_CGETSET_DEF("clientWidth",   js_element_get_clientWidth, nullptr),
@@ -865,6 +1318,10 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("removeEventListener", 2, js_element_removeEventListener),
     JS_CFUNC_DEF("querySelector",       1, js_element_querySelector),
     JS_CFUNC_DEF("querySelectorAll",    1, js_element_querySelectorAll),
+    JS_CFUNC_DEF("replaceChild",        2, js_element_replaceChild),
+    JS_CFUNC_DEF("cloneNode",           1, js_element_cloneNode),
+    JS_CFUNC_DEF("closest",             1, js_element_closest),
+    JS_CFUNC_DEF("matches",             1, js_element_matches),
     JS_CFUNC_DEF("remove",             0, js_element_remove),
     JS_CFUNC_DEF("getContext",          1, js_element_getContext),
 };
@@ -977,6 +1434,19 @@ static JSValue js_document_createTextNode(JSContext* ctx,
     return DomBindings::wrapElement(ctx, el.get());
 }
 
+static JSValue js_document_createDocumentFragment(JSContext* ctx,
+                                                  JSValueConst this_val,
+                                                  int /*argc*/, JSValueConst* /*argv*/)
+{
+    // Model fragment as an element with tag "#document-fragment".
+    // When appendChild receives a fragment, it should move all children.
+    auto* doc = getDocument(this_val);
+    if (!doc) return JS_NULL;
+    auto el = doc->createElement("#document-fragment");
+    if (!el) return JS_NULL;
+    return DomBindings::wrapElement(ctx, el.get());
+}
+
 static JSValue js_document_querySelector(JSContext* ctx,
                                          JSValueConst this_val,
                                          int argc, JSValueConst* argv)
@@ -1009,7 +1479,8 @@ static const JSCFunctionListEntry js_document_proto_funcs[] = {
     JS_CFUNC_DEF("getElementById",  1, js_document_getElementById),
     JS_CFUNC_DEF("createElement",   1, js_document_createElement),
     JS_CFUNC_DEF("createElementNS", 2, js_document_createElementNS),
-    JS_CFUNC_DEF("createTextNode",  1, js_document_createTextNode),
+    JS_CFUNC_DEF("createTextNode",           1, js_document_createTextNode),
+    JS_CFUNC_DEF("createDocumentFragment",  0, js_document_createDocumentFragment),
     JS_CFUNC_DEF("querySelector",   1, js_document_querySelector),
     JS_CFUNC_DEF("querySelectorAll",1, js_document_querySelectorAll),
 };
@@ -1089,6 +1560,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JS_NewClassID(rt, &js_event_class_id);
     JS_NewClassID(rt, &js_nodelist_class_id);
     JS_NewClassID(rt, &js_cssstyle_class_id);
+    JS_NewClassID(rt, &js_tokenlist_class_id);
 
     // ----- Register classes on the runtime -----
     JS_NewClass(rt, js_document_class_id, &js_document_class);
@@ -1096,6 +1568,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JS_NewClass(rt, js_event_class_id,    &js_event_class);
     JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class);
     JS_NewClass(rt, js_cssstyle_class_id, &js_cssstyle_class);
+    JS_NewClass(rt, js_tokenlist_class_id, &js_tokenlist_class);
 
     // ----- Create prototypes -----
 
@@ -1129,6 +1602,12 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
                                sizeof(js_cssstyle_proto_funcs) / sizeof(js_cssstyle_proto_funcs[0]));
     JS_SetClassProto(ctx, js_cssstyle_class_id, JS_DupValue(ctx, cssstyle_proto));
 
+    // DOMTokenList prototype
+    tokenlist_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, tokenlist_proto, js_tokenlist_proto_funcs,
+                               sizeof(js_tokenlist_proto_funcs) / sizeof(js_tokenlist_proto_funcs[0]));
+    JS_SetClassProto(ctx, js_tokenlist_class_id, JS_DupValue(ctx, tokenlist_proto));
+
     // ----- Stash Document pointer for orphan management -----
     s_document = static_cast<bro::dom::Document*>(document_ptr);
 
@@ -1145,11 +1624,13 @@ void DomBindings::cleanup(JSContext* ctx) {
     JS_FreeValue(ctx, event_proto);
     JS_FreeValue(ctx, nodelist_proto);
     JS_FreeValue(ctx, cssstyle_proto);
+    JS_FreeValue(ctx, tokenlist_proto);
     document_proto = JS_UNINITIALIZED;
     element_proto  = JS_UNINITIALIZED;
     event_proto    = JS_UNINITIALIZED;
     nodelist_proto = JS_UNINITIALIZED;
     cssstyle_proto = JS_UNINITIALIZED;
+    tokenlist_proto = JS_UNINITIALIZED;
     s_document = nullptr;
 }
 

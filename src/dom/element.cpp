@@ -230,6 +230,51 @@ Element* Element::parentElement() const {
     return nullptr;
 }
 
+std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
+    std::vector<Element*> result;
+    if (!litehtml_element_ || !document_) return result;
+
+    auto found = litehtml_element_->select_all(selector);
+    for (auto& lh : found) {
+        auto* elem = document_->findElementByLitehtml(lh);
+        if (elem) result.push_back(elem);
+    }
+    return result;
+}
+
+Element* Element::querySelector(const std::string& selector) {
+    if (!litehtml_element_ || !document_) return nullptr;
+
+    auto found = litehtml_element_->select_one(selector);
+    if (found) {
+        return document_->findElementByLitehtml(found);
+    }
+    return nullptr;
+}
+
+bool Element::matches(const std::string& selector) const {
+    if (!litehtml_element_ || !document_) return false;
+
+    // Check if this element appears in parent's select_all results
+    auto parent = litehtml_element_->parent();
+    if (!parent) return false;
+    auto found = parent->select_all(selector);
+    for (auto& lh : found) {
+        if (lh.get() == litehtml_element_.get()) return true;
+    }
+    return false;
+}
+
+Element* Element::closest(const std::string& selector) {
+    // Walk up the tree checking matches()
+    Element* current = this;
+    while (current) {
+        if (current->matches(selector)) return current;
+        current = current->parentElement();
+    }
+    return nullptr;
+}
+
 void Element::syncStylesToLitehtml() {
     if (!litehtml_element_) return;
     std::string css = style_.cssText();
