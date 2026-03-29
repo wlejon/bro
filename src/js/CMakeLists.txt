@@ -11,6 +11,6 @@ add_library(bro_js STATIC
     image_bindings.cpp
 )
 target_include_directories(bro_js PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bro_js PUBLIC qjs bro_dom bro_util bro_canvas bro_audio bro_webgl)
+target_link_libraries(bro_js PUBLIC qjs bro_dom bro_util bro_canvas bro_audio bro_webgl stb_image)
 # QuickJS headers
 target_include_directories(bro_js PRIVATE ${CMAKE_SOURCE_DIR}/third_party/quickjs)

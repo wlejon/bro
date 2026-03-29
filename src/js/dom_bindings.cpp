@@ -1,5 +1,6 @@
 #include "js/dom_bindings.h"
 #include "js/runtime.h"
+#include "js/image_bindings.h"
 #include "util/log.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -937,6 +938,9 @@ static JSValue js_document_createElement(JSContext* ctx,
     auto* doc = getDocument(this_val);
     if (!doc || argc < 1) return JS_NULL;
     std::string tag = jsToStdString(ctx, argv[0]);
+    // Return an Image object for <img> elements (supports src loading + texImage2D)
+    if (tag == "img" || tag == "IMG")
+        return ImageBindings::createImage(ctx);
     auto el = doc->createElement(tag);
     if (!el) return JS_NULL;
     // Document::createElement stores the element in orphans_, keeping it alive
@@ -952,6 +956,8 @@ static JSValue js_document_createElementNS(JSContext* ctx,
     auto* doc = getDocument(this_val);
     if (!doc || argc < 2) return JS_NULL;
     std::string tag = jsToStdString(ctx, argv[1]);
+    if (tag == "img" || tag == "IMG")
+        return ImageBindings::createImage(ctx);
     auto el = doc->createElement(tag);
     if (!el) return JS_NULL;
     return DomBindings::wrapElement(ctx, el.get());

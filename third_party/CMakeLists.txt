@@ -22,5 +22,9 @@ endif()
 # --- glad2 (OpenGL 3.3 Core loader) ---
 add_subdirectory(glad EXCLUDE_FROM_ALL)
 
+# --- stb (single-file image loading) ---
+add_library(stb_image STATIC stb/stb_image.cpp)
+target_include_directories(stb_image PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/stb)
+
 # --- Skia (pre-built, optional) ---
 include(skia/skia.cmake)

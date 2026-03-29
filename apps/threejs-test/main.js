@@ -1,4 +1,4 @@
-// three.js test - spinning cube with Phong lighting
+// three.js test - spinning textured cube with Phong lighting
 var canvas = document.getElementById('c');
 console.log('THREE version:', THREE.REVISION);
 
@@ -11,9 +11,16 @@ scene.background = new THREE.Color(0x334455);
 var camera = new THREE.PerspectiveCamera(75, 1024 / 768, 0.1, 1000);
 camera.position.z = 3;
 
-// Geometry + material
+// Load texture
+var textureLoader = new THREE.TextureLoader();
+var texture = textureLoader.load('checker.png');
+
+// Geometry + textured material
 var geometry = new THREE.BoxGeometry(1, 1, 1);
-var material = new THREE.MeshPhongMaterial({ color: 0x4488ff, shininess: 60 });
+var material = new THREE.MeshPhongMaterial({
+    map: texture,
+    shininess: 60
+});
 var cube = new THREE.Mesh(geometry, material);
 scene.add(cube);
 
@@ -29,7 +36,7 @@ var light2 = new THREE.DirectionalLight(0x4466aa, 0.5);
 light2.position.set(-2, -1, 1);
 scene.add(light2);
 
-console.log('Scene ready: cube + 2 directional lights');
+console.log('Scene ready: textured cube + lighting');
 
 // Animation loop
 function animate() {
