@@ -16,7 +16,7 @@ class TextNode;
 class Element : public Node {
 public:
     explicit Element(const std::string& tag);
-    ~Element() override = default;
+    ~Element() override { magic_ = 0xDEAD; }
 
     NodeType nodeType() const override { return NodeType::Element; }
     std::string nodeName() const override { return tag_; }
@@ -79,6 +79,9 @@ public:
     void setLitehtmlElement(litehtml::element::ptr elem) { litehtml_element_ = std::move(elem); }
     litehtml::element::ptr litehtmlElement() const { return litehtml_element_; }
 
+    // Debug: detect use-after-free
+    bool isAlive() const { return magic_ == 0xB00E; }
+
 private:
     std::string tag_;
     std::unordered_map<std::string, std::string> attributes_;
@@ -87,6 +90,7 @@ private:
     litehtml::element::ptr litehtml_element_;
     Document* document_ = nullptr;
     bool dirty_ = false;
+    uint32_t magic_ = 0xB00E;
 };
 
 } // namespace bro::dom

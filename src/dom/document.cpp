@@ -123,6 +123,14 @@ std::shared_ptr<DocumentFragment> Document::createDocumentFragment() {
     return std::make_shared<DocumentFragment>();
 }
 
+void Document::retainOrphan(std::shared_ptr<Element> elem) {
+    if (!elem) return;
+    for (auto& o : orphans_) {
+        if (o.get() == elem.get()) return; // already retained
+    }
+    orphans_.push_back(std::move(elem));
+}
+
 void Document::adoptOrphan(Element* elem) {
     orphans_.erase(
         std::remove_if(orphans_.begin(), orphans_.end(),

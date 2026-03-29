@@ -55,6 +55,9 @@ public:
     // Transfer ownership of an orphan element (created via createElement) to its new parent.
     void adoptOrphan(Element* elem);
 
+    // Keep a detached element alive (prevents use-after-free when JS holds a reference).
+    void retainOrphan(std::shared_ptr<Element> elem);
+
     // Access orphan list (for shared_ptr lookup during appendChild).
     const std::vector<std::shared_ptr<Element>>& orphans() const { return orphans_; }
 
