@@ -14,8 +14,11 @@
 #include "js/event_dispatch.h"
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
+#include "js/webgl2_bindings.h"
 #include "audio/audio_engine.h"
 #include "canvas/canvas_scene.h"
+#include "webgl/webgl2_context.h"
+#include "webgl/webgl_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/node.h"
@@ -242,14 +245,25 @@ Engine::Engine(const std::string& appDir, int width, int height)
     // 9. Install DOM JS bindings
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
 
-    // 9b. Install Canvas 2D bindings and getContext factory
+    // 9b. Install Canvas 2D and WebGL2 bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());
+    js::WebGL2Bindings::install(jsRuntime_->getContext());
     js::DomBindings::setGetContextFactory(
-        [this](JSContext* ctx, dom::Element*, const std::string&) -> JSValue {
-            auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
-            auto* ptr = scene.get();
-            setSceneLayer(std::move(scene));
-            return js::CanvasBindings::wrapContext2D(ctx, ptr);
+        [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
+            if (type == "2d") {
+                auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                auto* ptr = scene.get();
+                setSceneLayer(std::move(scene));
+                return js::CanvasBindings::wrapContext2D(ctx, ptr);
+            }
+            if (type == "webgl2" || type == "webgl") {
+                auto* webglCtx = new webgl::WebGL2RenderingContext(
+                    viewportWidth_, viewportHeight_);
+                auto scene = std::make_unique<webgl::WebGLScene>(webglCtx);
+                setSceneLayer(std::move(scene));
+                return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
+            }
+            return JS_NULL;
         });
 
     // 10. Load and execute scripts
@@ -294,6 +308,7 @@ Engine::~Engine() {
     if (jsRuntime_) {
         js::AudioBindings::cleanup(jsRuntime_->getContext());
         js::StorageBindings::cleanup(jsRuntime_->getContext());
+        js::WebGL2Bindings::cleanup(jsRuntime_->getContext());
         js::DomBindings::cleanup(jsRuntime_->getContext());
     }
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
@@ -358,11 +373,22 @@ void Engine::run() {
         double now = util::currentTimeMs();
         timers_->tick(now);
 
-        // 3. Fire requestAnimationFrame callbacks
+        // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)
+        auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+        if (webglScene && webglScene->webglContext()) {
+            webglScene->webglContext()->bindCanvasFBO();
+        }
+
+        // 3a. Fire requestAnimationFrame callbacks
         timers_->fireAnimationFrames(now);
 
         // 3b. Run pending JS jobs (promises, etc.)
         jsRuntime_->executePendingJobs();
+
+        // 3c. Unbind WebGL FBO
+        if (webglScene && webglScene->webglContext()) {
+            webglScene->webglContext()->unbindCanvasFBO();
+        }
 
         // 4. Re-layout if DOM is dirty
         if (document_ && document_->isDirty() && litehtmlDoc_) {
