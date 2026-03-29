@@ -6,6 +6,7 @@ add_subdirectory(js)
 add_subdirectory(dom)
 add_subdirectory(layout)
 add_subdirectory(canvas)
+add_subdirectory(webgl)
 add_subdirectory(engine)
 add_subdirectory(headless)
 
