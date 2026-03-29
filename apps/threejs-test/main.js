@@ -6,26 +6,30 @@ var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: false });
 renderer.setSize(1024, 768, false);
 
 var scene = new THREE.Scene();
-scene.background = new THREE.Color(0x222233);
+scene.background = new THREE.Color(0x334455);
 
 var camera = new THREE.PerspectiveCamera(75, 1024 / 768, 0.1, 1000);
 camera.position.z = 3;
 
 // Geometry + material
 var geometry = new THREE.BoxGeometry(1, 1, 1);
-var material = new THREE.MeshPhongMaterial({ color: 0x4488ff });
+var material = new THREE.MeshPhongMaterial({ color: 0x4488ff, shininess: 60 });
 var cube = new THREE.Mesh(geometry, material);
 scene.add(cube);
 
 // Lights
-var ambient = new THREE.AmbientLight(0x404040);
+var ambient = new THREE.AmbientLight(0x808080);
 scene.add(ambient);
 
-var directional = new THREE.DirectionalLight(0xffffff, 1.0);
-directional.position.set(1, 1, 1);
-scene.add(directional);
+var light1 = new THREE.DirectionalLight(0xffffff, 1.0);
+light1.position.set(2, 3, 2);
+scene.add(light1);
 
-console.log('Scene ready: cube + directional light');
+var light2 = new THREE.DirectionalLight(0x4466aa, 0.5);
+light2.position.set(-2, -1, 1);
+scene.add(light2);
+
+console.log('Scene ready: cube + 2 directional lights');
 
 // Animation loop
 function animate() {
