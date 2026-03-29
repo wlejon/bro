@@ -278,6 +278,52 @@ Headless::Headless(const std::string& appDir, int width, int height)
     // 7. Install JS DOM bindings
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
 
+    // 7a. Set up window/navigator globals (needed for jQuery, three.js, etc.)
+    {
+        JSContext* ctx = jsRuntime_->getContext();
+        JSValue global = JS_GetGlobalObject(ctx);
+
+        JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
+        JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
+        JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth_));
+        JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight_));
+
+        JSValue nav = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
+        JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
+        JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
+        JS_SetPropertyStr(ctx, global, "navigator", nav);
+
+        const char* windowEventPolyfill = R"JS(
+(function() {
+    var listeners = {};
+    globalThis.__bro_win_listeners = listeners;
+    globalThis.addEventListener = function(type, fn) {
+        if (!listeners[type]) listeners[type] = [];
+        listeners[type].push(fn);
+    };
+    globalThis.removeEventListener = function(type, fn) {
+        var arr = listeners[type];
+        if (!arr) return;
+        var idx = arr.indexOf(fn);
+        if (idx >= 0) arr.splice(idx, 1);
+    };
+    globalThis.__bro_dispatch_window_event = function(type, event) {
+        var arr = listeners[type];
+        if (!arr) return;
+        for (var i = 0; i < arr.length; i++) {
+            try { arr[i](event); } catch(e) { console.error('Event handler error:', e); }
+        }
+    };
+})();
+)JS";
+        JSValue r = JS_Eval(ctx, windowEventPolyfill, strlen(windowEventPolyfill),
+                            "<window-events>", JS_EVAL_TYPE_GLOBAL);
+        JS_FreeValue(ctx, r);
+
+        JS_FreeValue(ctx, global);
+    }
+
     // 7b. Install Canvas 2D bindings with headless factory
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::DomBindings::setGetContextFactory(

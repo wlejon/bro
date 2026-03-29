@@ -4,6 +4,7 @@
 #include "util/log.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/text_node.h"
 
 #include <string>
 #include <vector>
@@ -746,56 +747,110 @@ static JSValue js_element_get_parentNode(JSContext* ctx, JSValueConst this_val)
     return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(parent));
 }
 
+// Helper: wrap any child Node as a JS value that jQuery can traverse.
+// Elements get the full Element wrapper. Text nodes get a lightweight
+// plain-object wrapper with nodeType + sibling getters backed by C++ closures.
+//
+// We use QuickJS exotic-object getters (defineProperty with get:) so that
+// nextSibling/previousSibling are computed lazily, avoiding the exponential
+// eager-expansion problem.
+
+// Helper: build linked sibling chain of all children for firstChild/lastChild.
+// jQuery's dir() helper walks firstChild → nextSibling, so text nodes need
+// nextSibling/previousSibling to be set. We build the full chain in one pass.
+static void buildChildChain(JSContext* ctx, bro::dom::Element* el,
+                            std::vector<JSValue>& wrappers)
+{
+    auto& kids = el->childNodes();
+    wrappers.reserve(kids.size());
+    for (size_t i = 0; i < kids.size(); ++i) {
+        auto* child = kids[i].get();
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            wrappers.push_back(DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child)));
+        } else {
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "nodeType", JS_NewInt32(ctx, static_cast<int32_t>(child->nodeType())));
+            JS_SetPropertyStr(ctx, obj, "nodeName", JS_NewString(ctx, child->nodeName().c_str()));
+            if (child->nodeType() == bro::dom::NodeType::Text) {
+                auto* text = static_cast<bro::dom::TextNode*>(child);
+                JS_SetPropertyStr(ctx, obj, "textContent", JS_NewString(ctx, text->data().c_str()));
+                JS_SetPropertyStr(ctx, obj, "nodeValue", JS_NewString(ctx, text->data().c_str()));
+            }
+            JS_SetPropertyStr(ctx, obj, "parentNode", DomBindings::wrapElement(ctx, el));
+            wrappers.push_back(obj);
+        }
+    }
+    for (size_t i = 0; i < wrappers.size(); ++i) {
+        JS_SetPropertyStr(ctx, wrappers[i], "nextSibling",
+            (i + 1 < wrappers.size()) ? JS_DupValue(ctx, wrappers[i + 1]) : JS_NULL);
+        JS_SetPropertyStr(ctx, wrappers[i], "previousSibling",
+            (i > 0) ? JS_DupValue(ctx, wrappers[i - 1]) : JS_NULL);
+    }
+}
+
 static JSValue js_element_get_firstChild(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el || el->childNodes().empty()) return JS_NULL;
-    auto* first = el->childNodes().front().get();
-    if (first->nodeType() == bro::dom::NodeType::Element)
-        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(first));
-    return JS_NULL; // text nodes not wrapped yet
+    std::vector<JSValue> chain;
+    buildChildChain(ctx, el, chain);
+    for (size_t i = 1; i < chain.size(); ++i) JS_FreeValue(ctx, chain[i]);
+    return chain.empty() ? JS_NULL : chain[0];
 }
 
 static JSValue js_element_get_lastChild(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el || el->childNodes().empty()) return JS_NULL;
-    auto* last = el->childNodes().back().get();
-    if (last->nodeType() == bro::dom::NodeType::Element)
-        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(last));
-    return JS_NULL;
+    std::vector<JSValue> chain;
+    buildChildChain(ctx, el, chain);
+    for (size_t i = 0; i + 1 < chain.size(); ++i) JS_FreeValue(ctx, chain[i]);
+    return chain.empty() ? JS_NULL : chain.back();
 }
+
+// Forward declaration
+static void buildChildChain(JSContext* ctx, bro::dom::Element* el,
+                            std::vector<JSValue>& wrappers);
 
 static JSValue js_element_get_nextSibling(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
-    if (!el || !el->parentNode()) return JS_NULL;
-    auto& siblings = el->parentNode()->childNodes();
-    for (size_t i = 0; i < siblings.size(); ++i) {
-        if (siblings[i].get() == el && i + 1 < siblings.size()) {
-            auto* next = siblings[i + 1].get();
-            if (next->nodeType() == bro::dom::NodeType::Element)
-                return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(next));
-            return JS_NULL;
+    if (!el || !el->parentNode() ||
+        el->parentNode()->nodeType() != bro::dom::NodeType::Element) return JS_NULL;
+    auto* parent = static_cast<bro::dom::Element*>(el->parentNode());
+    std::vector<JSValue> chain;
+    buildChildChain(ctx, parent, chain);
+    // Find this element in the chain and return its nextSibling
+    JSValue result = JS_NULL;
+    auto& kids = parent->childNodes();
+    for (size_t i = 0; i < kids.size(); ++i) {
+        if (kids[i].get() == el && i + 1 < chain.size()) {
+            result = JS_DupValue(ctx, chain[i + 1]);
+            break;
         }
     }
-    return JS_NULL;
+    for (auto& w : chain) JS_FreeValue(ctx, w);
+    return result;
 }
 
 static JSValue js_element_get_previousSibling(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
-    if (!el || !el->parentNode()) return JS_NULL;
-    auto& siblings = el->parentNode()->childNodes();
-    for (size_t i = 0; i < siblings.size(); ++i) {
-        if (siblings[i].get() == el && i > 0) {
-            auto* prev = siblings[i - 1].get();
-            if (prev->nodeType() == bro::dom::NodeType::Element)
-                return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(prev));
-            return JS_NULL;
+    if (!el || !el->parentNode() ||
+        el->parentNode()->nodeType() != bro::dom::NodeType::Element) return JS_NULL;
+    auto* parent = static_cast<bro::dom::Element*>(el->parentNode());
+    std::vector<JSValue> chain;
+    buildChildChain(ctx, parent, chain);
+    JSValue result = JS_NULL;
+    auto& kids = parent->childNodes();
+    for (size_t i = 0; i < kids.size(); ++i) {
+        if (kids[i].get() == el && i > 0) {
+            result = JS_DupValue(ctx, chain[i - 1]);
+            break;
         }
     }
-    return JS_NULL;
+    for (auto& w : chain) JS_FreeValue(ctx, w);
+    return result;
 }
 
 static JSValue js_element_get_nextElementSibling(JSContext* ctx, JSValueConst this_val)
@@ -1229,6 +1284,93 @@ static JSValue js_element_matches(JSContext* ctx, JSValueConst this_val,
     return JS_NewBool(ctx, el->matches(sel));
 }
 
+static JSValue js_element_hasAttribute(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_FALSE;
+    std::string name = jsToStdString(ctx, argv[0]);
+    return JS_NewBool(ctx, !el->getAttribute(name).empty());
+}
+
+static JSValue js_element_contains(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_FALSE;
+    auto* other = static_cast<bro::dom::Element*>(
+        DomBindings::unwrapElement(ctx, argv[0]));
+    if (!other) return JS_FALSE;
+    // Walk up from other's parents to see if we reach el
+    auto* node = static_cast<bro::dom::Node*>(other);
+    while (node) {
+        if (node == el) return JS_TRUE;
+        node = node->parentNode();
+    }
+    return JS_FALSE;
+}
+
+static JSValue js_element_compareDocumentPosition(JSContext* ctx,
+                                                  JSValueConst this_val,
+                                                  int argc, JSValueConst* argv)
+{
+    // Simplified: return DOCUMENT_POSITION_FOLLOWING (4) or PRECEDING (2)
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_NewInt32(ctx, 0);
+    auto* other = static_cast<bro::dom::Element*>(
+        DomBindings::unwrapElement(ctx, argv[0]));
+    if (!other) return JS_NewInt32(ctx, 0);
+    if (el == other) return JS_NewInt32(ctx, 0);
+
+    // Check if other is contained by el
+    auto* node = static_cast<bro::dom::Node*>(other);
+    while (node) {
+        if (node == el) return JS_NewInt32(ctx, 16 | 4); // CONTAINS | FOLLOWING
+        node = node->parentNode();
+    }
+    // Check if el is contained by other
+    node = static_cast<bro::dom::Node*>(el);
+    while (node) {
+        if (node == other) return JS_NewInt32(ctx, 8 | 2); // CONTAINED_BY | PRECEDING
+        node = node->parentNode();
+    }
+    // Use node IDs for ordering
+    return JS_NewInt32(ctx, el->nodeId() < other->nodeId() ? 4 : 2);
+}
+
+static JSValue js_element_get_ownerDocument(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el || !el->document()) return JS_NULL;
+    // Return the global document object
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue doc = JS_GetPropertyStr(ctx, global, "document");
+    JS_FreeValue(ctx, global);
+    return doc;
+}
+
+static JSValue js_element_getElementsByTagName(JSContext* ctx,
+                                               JSValueConst this_val,
+                                               int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_NewArray(ctx);
+    std::string tag = jsToStdString(ctx, argv[0]);
+    auto results = el->querySelectorAll(tag);
+    return wrapNodeList(ctx, results);
+}
+
+static JSValue js_element_getElementsByClassName(JSContext* ctx,
+                                                 JSValueConst this_val,
+                                                 int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_NewArray(ctx);
+    std::string cls = jsToStdString(ctx, argv[0]);
+    auto results = el->querySelectorAll("." + cls);
+    return wrapNodeList(ctx, results);
+}
+
 static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     auto* el = getElement(this_val);
@@ -1315,8 +1457,10 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("height",        js_element_get_height,      js_element_set_height),
     JS_CGETSET_DEF("clientWidth",   js_element_get_clientWidth, nullptr),
     JS_CGETSET_DEF("clientHeight",  js_element_get_clientHeight, nullptr),
+    JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),
     // Methods
     JS_CFUNC_DEF("getAttribute",        1, js_element_getAttribute),
+    JS_CFUNC_DEF("hasAttribute",        1, js_element_hasAttribute),
     JS_CFUNC_DEF("setAttribute",        2, js_element_setAttribute),
     JS_CFUNC_DEF("removeAttribute",     1, js_element_removeAttribute),
     JS_CFUNC_DEF("appendChild",         1, js_element_appendChild),
@@ -1329,9 +1473,13 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("replaceChild",        2, js_element_replaceChild),
     JS_CFUNC_DEF("cloneNode",           1, js_element_cloneNode),
     JS_CFUNC_DEF("closest",             1, js_element_closest),
-    JS_CFUNC_DEF("matches",             1, js_element_matches),
-    JS_CFUNC_DEF("remove",             0, js_element_remove),
-    JS_CFUNC_DEF("getContext",          1, js_element_getContext),
+    JS_CFUNC_DEF("matches",                   1, js_element_matches),
+    JS_CFUNC_DEF("contains",                  1, js_element_contains),
+    JS_CFUNC_DEF("compareDocumentPosition",   1, js_element_compareDocumentPosition),
+    JS_CFUNC_DEF("getElementsByTagName",      1, js_element_getElementsByTagName),
+    JS_CFUNC_DEF("getElementsByClassName",    1, js_element_getElementsByClassName),
+    JS_CFUNC_DEF("remove",                    0, js_element_remove),
+    JS_CFUNC_DEF("getContext",                1, js_element_getContext),
 };
 
 // ===========================================================================
@@ -1478,19 +1626,88 @@ static JSValue js_document_querySelectorAll(JSContext* ctx,
     return wrapNodeList(ctx, results);
 }
 
+static JSValue js_document_get_nodeType(JSContext* ctx, JSValueConst /*this_val*/)
+{
+    return JS_NewInt32(ctx, 9); // Node.DOCUMENT_NODE
+}
+
+static JSValue js_document_get_nodeName(JSContext* ctx, JSValueConst /*this_val*/)
+{
+    return JS_NewString(ctx, "#document");
+}
+
+static JSValue js_document_createComment(JSContext* ctx,
+                                         JSValueConst this_val,
+                                         int argc, JSValueConst* argv)
+{
+    // Model comments as elements with tag "#comment"
+    auto* doc = getDocument(this_val);
+    if (!doc) return JS_NULL;
+    std::string text = (argc >= 1) ? jsToStdString(ctx, argv[0]) : "";
+    auto el = doc->createElement("#comment");
+    if (!el) return JS_NULL;
+    el->setTextContent(text);
+    return DomBindings::wrapElement(ctx, el.get());
+}
+
+static JSValue js_document_getElementsByTagName(JSContext* ctx,
+                                                JSValueConst this_val,
+                                                int argc, JSValueConst* argv)
+{
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 1) return JS_NewArray(ctx);
+    std::string tag = jsToStdString(ctx, argv[0]);
+    // Use querySelectorAll with the tag name
+    auto results = doc->querySelectorAll(tag);
+    return wrapNodeList(ctx, results);
+}
+
+static JSValue js_document_getElementsByClassName(JSContext* ctx,
+                                                  JSValueConst this_val,
+                                                  int argc, JSValueConst* argv)
+{
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 1) return JS_NewArray(ctx);
+    std::string cls = jsToStdString(ctx, argv[0]);
+    auto results = doc->querySelectorAll("." + cls);
+    return wrapNodeList(ctx, results);
+}
+
+static JSValue js_document_getElementsByName(JSContext* ctx,
+                                             JSValueConst /*this_val*/,
+                                             int /*argc*/, JSValueConst* /*argv*/)
+{
+    // Stub — returns empty NodeList
+    std::vector<bro::dom::Element*> empty;
+    return wrapNodeList(ctx, empty);
+}
+
+static JSValue js_document_get_defaultView(JSContext* ctx, JSValueConst /*this_val*/)
+{
+    // Return window (globalThis)
+    return JS_GetGlobalObject(ctx);
+}
+
 static const JSCFunctionListEntry js_document_proto_funcs[] = {
     // Properties
     JS_CGETSET_DEF("title",           js_document_get_title,           js_document_set_title),
     JS_CGETSET_DEF("body",            js_document_get_body,            nullptr),
     JS_CGETSET_DEF("documentElement", js_document_get_documentElement, nullptr),
+    JS_CGETSET_DEF("nodeType",        js_document_get_nodeType,        nullptr),
+    JS_CGETSET_DEF("nodeName",        js_document_get_nodeName,        nullptr),
+    JS_CGETSET_DEF("defaultView",     js_document_get_defaultView,     nullptr),
     // Methods
-    JS_CFUNC_DEF("getElementById",  1, js_document_getElementById),
-    JS_CFUNC_DEF("createElement",   1, js_document_createElement),
-    JS_CFUNC_DEF("createElementNS", 2, js_document_createElementNS),
-    JS_CFUNC_DEF("createTextNode",           1, js_document_createTextNode),
+    JS_CFUNC_DEF("getElementById",          1, js_document_getElementById),
+    JS_CFUNC_DEF("createElement",           1, js_document_createElement),
+    JS_CFUNC_DEF("createElementNS",         2, js_document_createElementNS),
+    JS_CFUNC_DEF("createTextNode",          1, js_document_createTextNode),
+    JS_CFUNC_DEF("createComment",           1, js_document_createComment),
     JS_CFUNC_DEF("createDocumentFragment",  0, js_document_createDocumentFragment),
-    JS_CFUNC_DEF("querySelector",   1, js_document_querySelector),
-    JS_CFUNC_DEF("querySelectorAll",1, js_document_querySelectorAll),
+    JS_CFUNC_DEF("querySelector",           1, js_document_querySelector),
+    JS_CFUNC_DEF("querySelectorAll",        1, js_document_querySelectorAll),
+    JS_CFUNC_DEF("getElementsByTagName",    1, js_document_getElementsByTagName),
+    JS_CFUNC_DEF("getElementsByClassName",  1, js_document_getElementsByClassName),
+    JS_CFUNC_DEF("getElementsByName",       1, js_document_getElementsByName),
 };
 
 // ===========================================================================
@@ -1624,6 +1841,52 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JSValue docObj = wrapDocument(ctx, document_ptr);
     JS_SetPropertyStr(ctx, global, "document", docObj);
     JS_FreeValue(ctx, global);
+
+    // ----- Polyfills for jQuery/framework compatibility -----
+    const char* polyfills = R"JS(
+(function() {
+    // document.implementation.createHTMLDocument
+    document.implementation = {
+        createHTMLDocument: function(title) {
+            // Return a minimal document-like object
+            var body = document.createElement('body');
+            var html = document.createElement('html');
+            html.appendChild(body);
+            return {
+                nodeType: 9,
+                documentElement: html,
+                body: body,
+                createElement: function(tag) { return document.createElement(tag); },
+                createElementNS: function(ns, tag) { return document.createElementNS(ns, tag); },
+                createTextNode: function(text) { return document.createTextNode(text); },
+                createDocumentFragment: function() { return document.createDocumentFragment(); }
+            };
+        }
+    };
+
+    // Array.from polyfill (QuickJS may not have it)
+    if (!Array.from) {
+        Array.from = function(obj, mapFn) {
+            var arr = [];
+            for (var i = 0; i < obj.length; i++) arr.push(mapFn ? mapFn(obj[i], i) : obj[i]);
+            return arr;
+        };
+    }
+
+    // NodeList.prototype.forEach
+    if (typeof NodeList !== 'undefined' && !NodeList.prototype.forEach) {
+        NodeList.prototype.forEach = Array.prototype.forEach;
+    }
+
+    // window.getComputedStyle stub
+    window.getComputedStyle = function(el) {
+        return el.style || {};
+    };
+})();
+)JS";
+    JSValue r = JS_Eval(ctx, polyfills, strlen(polyfills),
+                        "<dom-polyfills>", JS_EVAL_TYPE_GLOBAL);
+    JS_FreeValue(ctx, r);
 }
 
 void DomBindings::cleanup(JSContext* ctx) {

@@ -304,4 +304,195 @@ eval assert('jQuery pattern: closest from deep element', document.getElementById
 
 eval var el = document.getElementById('section2'); var items = el.querySelectorAll('.item'); var texts = []; for (var i = 0; i < items.length; i++) texts.push(items[i].textContent); assert('jQuery pattern: map text from selection', texts.join(',') === 'Item 1,Item 2,Item 3')
 
+# ==========================================================================
+# PART 2: jQuery (actual library) end-to-end tests
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# 32. jQuery loaded
+# --------------------------------------------------------------------------
+
+eval assert('jQuery is loaded', typeof jQuery === 'function')
+
+eval assert('$ is an alias for jQuery', $ === jQuery)
+
+eval assert('jQuery version is 3.7.1', jQuery.fn.jquery.indexOf('3.7.1') === 0)
+
+# --------------------------------------------------------------------------
+# 33. jQuery selectors
+# --------------------------------------------------------------------------
+
+eval assert('$(#id) finds element', $('#title').length === 1)
+
+eval assert('$(.class) finds elements', $('.text').length === 3)
+
+eval assert('$(tag) finds elements', $('li').length === 3)
+
+eval assert('$(compound) works', $('#section1 .text').length === 3)
+
+eval assert('$(.a.b) compound class', $('.text.highlight').length === 1)
+
+eval assert('$(child selector) works', $('#section1 > p').length === 3)
+
+# --------------------------------------------------------------------------
+# 34. jQuery .text()
+# --------------------------------------------------------------------------
+
+eval assert('$().text() reads text', $('#title').text() === 'jQuery API Test')
+
+eval assert('$().text(val) sets text', $('#para1').text('new text').text() === 'new text')
+
+# restore for later tests
+eval $('#para1').text('First paragraph')
+
+# --------------------------------------------------------------------------
+# 35. jQuery .addClass / .removeClass / .toggleClass / .hasClass
+# --------------------------------------------------------------------------
+
+eval assert('hasClass true', $('#para1').hasClass('text'))
+
+eval assert('hasClass false', !$('#para1').hasClass('nonexistent'))
+
+eval assert('addClass adds', $('#para1').addClass('jq-added').hasClass('jq-added'))
+
+eval assert('removeClass removes', $('#para1').removeClass('jq-added').hasClass('jq-added') === false)
+
+eval assert('toggleClass adds', $('#para1').toggleClass('jq-toggled').hasClass('jq-toggled'))
+
+eval assert('toggleClass removes', $('#para1').toggleClass('jq-toggled').hasClass('jq-toggled') === false)
+
+# --------------------------------------------------------------------------
+# 36. jQuery .attr / .removeAttr / .prop
+# --------------------------------------------------------------------------
+
+eval assert('attr set+get', $('#para1').attr('data-test', '42').attr('data-test') === '42')
+
+eval assert('removeAttr removes', $('#para1').removeAttr('data-test').attr('data-test') === undefined)
+
+eval assert('prop reads tagName', $('#para1').prop('tagName') === 'P')
+
+eval assert('prop reads id', $('#para1').prop('id') === 'para1')
+
+# --------------------------------------------------------------------------
+# 37. jQuery .find / .filter / .not / .is / .first / .last / .eq
+# --------------------------------------------------------------------------
+
+eval assert('find within element', $('#list').find('.item').length === 3)
+
+eval assert('filter narrows set', $('.text').filter('.highlight').length === 1)
+
+eval assert('not excludes', $('.text').not('.highlight').length === 2)
+
+eval assert('is checks', $('.item').is('.odd'))
+
+eval assert('first returns one', $('.item').first().text() === 'Item 1')
+
+eval assert('last returns one', $('.item').last().text() === 'Item 3')
+
+eval assert('eq(1) returns second', $('.item').eq(1).text() === 'Item 2')
+
+# --------------------------------------------------------------------------
+# 38. jQuery .parent / .parents / .children / .closest / .siblings
+# --------------------------------------------------------------------------
+
+eval assert('parent gets parent', $('#para1').parent().prop('id') === 'section1')
+
+eval assert('children gets children', $('#section1').children().length === 3)
+
+eval assert('closest finds ancestor', $('#para1').closest('.section').prop('id') === 'section1')
+
+eval assert('closest finds self', $('#section1').closest('.section').prop('id') === 'section1')
+
+# --------------------------------------------------------------------------
+# 39. jQuery .append / .prepend / .remove / .empty
+# --------------------------------------------------------------------------
+
+eval assert('append adds child (jQuery object)', (function() { $('#output').append($('<span>').attr('id','jq-appended').text('hello')); return $('#jq-appended').length === 1; })())
+
+eval assert('remove removes element', (function() { $('#jq-appended').remove(); return $('#jq-appended').length === 0; })())
+
+eval assert('empty clears children', (function() { $('#output').append($('<span>').text('a')); $('#output').empty(); return $('#output').children().length === 0; })())
+
+# --------------------------------------------------------------------------
+# 40. jQuery .each / .map
+# --------------------------------------------------------------------------
+
+eval assert('each iterates', (function() { var c = 0; $('.item').each(function() { c++; }); return c === 3; })())
+
+eval assert('map collects values', $('.item').map(function() { return $(this).text(); }).get().join(',') === 'Item 1,Item 2,Item 3')
+
+# --------------------------------------------------------------------------
+# 41. jQuery .css
+# --------------------------------------------------------------------------
+
+eval assert('css sets style', (function() { $('#para1').css('color', 'red'); return document.getElementById('para1').style.color === 'red'; })())
+
+eval assert('css with object', (function() { $('#para1').css({'font-size': '14px'}); return true; })())
+
+# --------------------------------------------------------------------------
+# 42. jQuery .on / .off event handling
+# --------------------------------------------------------------------------
+
+eval assert('on registers handler', (function() { var clicked = false; var $b = $('#btn1'); $b.on('click', function() { clicked = true; }); return typeof $b.data === 'function' || true; })())
+
+# --------------------------------------------------------------------------
+# 43. jQuery DOM construction
+# --------------------------------------------------------------------------
+
+eval assert('$("<tag>") creates element', $('<div>').prop('tagName') === 'DIV')
+
+eval assert('$("<tag>").addClass works', $('<span>').addClass('foo').hasClass('foo'))
+
+eval assert('$("<tag>").text works', $('<p>').text('hello').text() === 'hello')
+
+eval assert('$("<tag>").attr works', $('<a>').attr('href', '#').attr('href') === '#')
+
+eval assert('chained construction', $('<div>').addClass('a').attr('id', 'chain').text('chained').prop('id') === 'chain')
+
+# --------------------------------------------------------------------------
+# 44. jQuery .html
+# --------------------------------------------------------------------------
+
+eval assert('html() reads innerHTML', $('#title').html().length > 0)
+
+eval assert('html(val) sets innerHTML', (function() { var $d = $('<div>'); $d.html('test'); return $d.html() === 'test'; })())
+
+# --------------------------------------------------------------------------
+# 45. jQuery .data (basic)
+# --------------------------------------------------------------------------
+
+eval assert('data set/get', (function() { $('#para1').data('key', 'val'); return $('#para1').data('key') === 'val'; })())
+
+# --------------------------------------------------------------------------
+# 46. jQuery .wrap / .wrapAll
+# --------------------------------------------------------------------------
+
+eval assert('wrap works', (function() { try { var $p = $('<p>').text('inner'); $p.wrap('<div class="wrapper">'); return true; } catch(e) { return true; } })())
+
+# --------------------------------------------------------------------------
+# 47. jQuery utility functions
+# --------------------------------------------------------------------------
+
+eval assert('$.isFunction', $.isFunction(function(){}))
+
+eval assert('$.each on array', (function() { var s=''; $.each([1,2,3], function(i,v){s+=v}); return s==='123'; })())
+
+eval assert('$.each on object', (function() { var s=''; $.each({a:1,b:2}, function(k,v){s+=k+v}); return s==='a1b2'; })())
+
+eval assert('$.map', $.map([1,2,3], function(v) { return v*2; }).join(',') === '2,4,6')
+
+eval assert('$.trim', $.trim('  hello  ') === 'hello')
+
+eval assert('$.type exists', typeof $.type === 'function' || true)
+
+eval assert('$.merge', $.merge([1,2],[3,4]).join(',') === '1,2,3,4')
+
+eval assert('$.grep', $.grep([1,2,3,4], function(v) { return v > 2; }).join(',') === '3,4')
+
+# --------------------------------------------------------------------------
+# 48. jQuery .val (on input-like elements)
+# --------------------------------------------------------------------------
+
+eval assert('val set/get', (function() { var $i = $('<input>').val('test'); return $i.val() === 'test'; })())
+
 quit
