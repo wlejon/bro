@@ -22,10 +22,4 @@ endif()
 find_package(SDL3 CONFIG QUIET)
 add_subdirectory(third_party)
 
-# BRO_USE_SKIA is defined in third_party/skia/skia.cmake (option, default OFF).
-# When Skia is not available, define BRO_NO_SKIA project-wide.
-if(NOT BRO_USE_SKIA)
-    add_compile_definitions(BRO_NO_SKIA)
-endif()
-
 add_subdirectory(src)

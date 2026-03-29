@@ -28,9 +28,6 @@ public:
     /// Run the main event / render loop. Returns when the window is closed.
     void run();
 
-    /// Set a scene layer that renders behind the UI (takes ownership).
-    void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
-
     /// Handle a window resize.
     void handleResize(int w, int h);
 
@@ -44,6 +41,7 @@ public:
 private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
+    void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
     void drawStatsOverlay(double frameTimeMs);
 
     std::unique_ptr<platform::Window> window_;

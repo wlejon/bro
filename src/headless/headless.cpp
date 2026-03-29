@@ -27,7 +27,6 @@
 #include <algorithm>
 #include <cstring>
 
-#ifndef BRO_NO_SKIA
 #include <include/core/SkCanvas.h>
 #include <include/core/SkSurface.h>
 #include <include/core/SkFont.h>
@@ -39,13 +38,10 @@
 #include <include/core/SkImage.h>
 #include <include/codec/SkCodec.h>
 #include <include/ports/SkTypeface_win.h>
-#endif
 
 // Skia raster renderer for headless mode — renders to a CPU surface with
 // accurate text measurement and PNG screenshot support.
 namespace {
-
-#ifndef BRO_NO_SKIA
 
 class RasterRenderer final : public bro::render::Renderer {
 public:
@@ -231,44 +227,6 @@ private:
     uint64_t nextHandle_ = 1;
 };
 
-#else // BRO_NO_SKIA — fallback null renderer
-
-class NullRenderer final : public bro::render::Renderer {
-public:
-    void clear(bro::render::Color) override {}
-    void drawRect(float, float, float, float, bro::render::Color) override {}
-    void drawRoundRect(float, float, float, float, float, float, bro::render::Color) override {}
-    void fillRect(float, float, float, float, bro::render::Color) override {}
-    void drawText(std::string_view, float, float, uint64_t, bro::render::Color) override {}
-
-    bro::render::TextMetrics measureText(std::string_view text, uint64_t font_handle) override {
-        float sz = 16.0f;
-        auto it = fonts_.find(font_handle);
-        if (it != fonts_.end()) sz = it->second;
-        return { static_cast<float>(text.size()) * sz * 0.6f, sz };
-    }
-
-    uint64_t createFont(std::string_view, float size, int, bool) override {
-        uint64_t h = nextHandle_++;
-        fonts_[h] = size;
-        return h;
-    }
-    void deleteFont(uint64_t h) override { fonts_.erase(h); }
-
-    void drawLine(float, float, float, float, bro::render::Color, float) override {}
-    void drawImage(const void*, size_t, float, float, float, float) override {}
-    void setClip(float, float, float, float) override {}
-    void resetClip() override {}
-    void beginFrame(int, int) override {}
-    void endFrame() override {}
-
-private:
-    std::unordered_map<uint64_t, float> fonts_;
-    uint64_t nextHandle_ = 1;
-};
-
-#endif // BRO_NO_SKIA
-
 } // anonymous namespace
 
 namespace bro::headless {
@@ -282,11 +240,7 @@ using namespace bro::engine;
 Headless::Headless(const std::string& appDir, int width, int height)
     : viewportWidth_(width), viewportHeight_(height)
 {
-#ifndef BRO_NO_SKIA
     renderer_ = std::make_unique<RasterRenderer>();
-#else
-    renderer_ = std::make_unique<NullRenderer>();
-#endif
 
     // 2. JS runtime
     jsRuntime_ = std::make_unique<js::Runtime>();
@@ -475,7 +429,6 @@ void Headless::flush() {
 }
 
 bool Headless::screenshot(const std::string& path) {
-#ifndef BRO_NO_SKIA
     if (!litehtmlDoc_) return false;
 
     // Fire any pending rAF callbacks so canvas commands are up to date
@@ -526,11 +479,6 @@ bool Headless::screenshot(const std::string& path) {
     // Save the surface as BMP
     auto* raster = static_cast<RasterRenderer*>(renderer_.get());
     return raster->saveScreenshot(path);
-#else
-    (void)path;
-    std::cout << "[headless] screenshot not available without Skia\n";
-    return false;
-#endif
 }
 
 // ---------------------------------------------------------------------------

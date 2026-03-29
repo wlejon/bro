@@ -82,7 +82,7 @@ cmake --preset default
 cmake --build build
 ```
 
-The default build uses `BRO_NO_SKIA` (SDL software renderer). To enable Skia rendering, place pre-built Skia libraries in `third_party/skia/lib/` and headers in `third_party/skia/include/`, then configure with `-DBRO_USE_SKIA=ON`.
+Skia is required. Place pre-built Skia libraries in `third_party/skia/lib/` and headers in `third_party/skia/include/`. The build auto-detects `skia.lib`/`libskia.a` and enables Skia automatically.
 
 ## Usage
 
