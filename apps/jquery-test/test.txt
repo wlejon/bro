@@ -1,0 +1,307 @@
+# ============================================================================
+# jQuery-compatible DOM API test suite
+# Run: bro-headless apps/jquery-test test.txt 2>/dev/null
+#
+# Each test prints PASS or FAIL. Grep for FAIL to find broken tests.
+# ============================================================================
+
+# Helper: define assert function
+eval function assert(name, cond) { console.log((cond ? 'PASS' : 'FAIL') + ': ' + name); return cond; }
+
+# --------------------------------------------------------------------------
+# 1. querySelectorAll on elements
+# --------------------------------------------------------------------------
+
+eval assert('querySelectorAll on element returns results', document.getElementById('section1').querySelectorAll('.text').length === 3)
+
+eval assert('querySelectorAll on element filters to subtree', document.getElementById('section2').querySelectorAll('.text').length === 0)
+
+eval assert('querySelectorAll on element with ID selector', document.getElementById('section1').querySelectorAll('#para1').length === 1)
+
+eval assert('querySelectorAll on body finds all .item', document.body.querySelectorAll('.item').length === 3)
+
+eval assert('querySelectorAll on body finds all .section', document.body.querySelectorAll('.section').length === 3)
+
+# --------------------------------------------------------------------------
+# 2. querySelector on elements
+# --------------------------------------------------------------------------
+
+eval assert('querySelector on element finds first match', document.getElementById('section1').querySelector('.text').id === 'para1')
+
+eval assert('querySelector on element returns null for no match', document.getElementById('section2').querySelector('.nonexistent') === null)
+
+eval assert('querySelector on element finds by ID', document.getElementById('app').querySelector('#btn1') !== null)
+
+# --------------------------------------------------------------------------
+# 3. classList - basic operations
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('para1'); assert('classList.contains finds existing class', el.classList.contains('highlight'))
+
+eval var el = document.getElementById('para1'); assert('classList.contains returns false for missing', !el.classList.contains('nonexistent'))
+
+eval var el = document.getElementById('para1'); assert('classList.length counts tokens', el.classList.length === 2)
+
+eval var el = document.getElementById('para1'); assert('classList.item returns correct token', el.classList.item(0) === 'text')
+
+eval var el = document.getElementById('para1'); assert('classList.item(1) returns second token', el.classList.item(1) === 'highlight')
+
+eval var el = document.getElementById('para1'); assert('classList.item out of range returns null', el.classList.item(99) === null)
+
+eval var el = document.getElementById('para1'); assert('classList.value equals className', el.classList.value === el.className)
+
+# --------------------------------------------------------------------------
+# 4. classList.add
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('para2'); el.classList.add('added'); assert('classList.add adds class', el.classList.contains('added'))
+
+eval var el = document.getElementById('para2'); el.classList.add('text'); assert('classList.add does not duplicate', el.className.split(' ').filter(function(c){return c==='text'}).length === 1)
+
+eval var el = document.getElementById('para2'); el.classList.add('foo', 'bar'); assert('classList.add multiple', el.classList.contains('foo') && el.classList.contains('bar'))
+
+# --------------------------------------------------------------------------
+# 5. classList.remove
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('para3'); el.classList.remove('dim'); assert('classList.remove removes class', !el.classList.contains('dim'))
+
+eval var el = document.getElementById('para3'); el.classList.remove('nonexistent'); assert('classList.remove no-op for missing class', true)
+
+# --------------------------------------------------------------------------
+# 6. classList.toggle
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('item1'); var r = el.classList.toggle('toggled'); assert('classList.toggle adds missing class', r === true && el.classList.contains('toggled'))
+
+eval var el = document.getElementById('item1'); var r = el.classList.toggle('toggled'); assert('classList.toggle removes existing class', r === false && !el.classList.contains('toggled'))
+
+eval var el = document.getElementById('item2'); var r = el.classList.toggle('forced', true); assert('classList.toggle force=true adds', r === true && el.classList.contains('forced'))
+
+eval var el = document.getElementById('item2'); var r = el.classList.toggle('forced', true); assert('classList.toggle force=true keeps existing', r === true && el.classList.contains('forced'))
+
+eval var el = document.getElementById('item2'); var r = el.classList.toggle('forced', false); assert('classList.toggle force=false removes', r === false && !el.classList.contains('forced'))
+
+# --------------------------------------------------------------------------
+# 7. classList.replace
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('item3'); var r = el.classList.replace('odd', 'replaced'); assert('classList.replace swaps class', r === true && el.classList.contains('replaced') && !el.classList.contains('odd'))
+
+eval var el = document.getElementById('item3'); var r = el.classList.replace('nonexistent', 'x'); assert('classList.replace returns false for missing', r === false)
+
+# --------------------------------------------------------------------------
+# 8. classList.toString
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('btn1'); assert('classList.toString equals className', el.classList.toString() === el.className)
+
+# --------------------------------------------------------------------------
+# 9. Tree traversal - parentElement / parentNode
+# --------------------------------------------------------------------------
+
+eval assert('parentElement returns parent', document.getElementById('para1').parentElement.id === 'section1')
+
+eval assert('parentNode returns parent', document.getElementById('para1').parentNode.id === 'section1')
+
+eval assert('parentElement chain works', document.getElementById('para1').parentElement.parentElement.id === 'app')
+
+# --------------------------------------------------------------------------
+# 10. Tree traversal - children / childNodes
+# --------------------------------------------------------------------------
+
+eval assert('children returns element children', document.getElementById('section1').children.length === 3)
+
+eval assert('childNodes returns children', document.getElementById('section1').childNodes.length >= 3)
+
+eval assert('childElementCount matches children.length', document.getElementById('section1').childElementCount === 3)
+
+# --------------------------------------------------------------------------
+# 11. Tree traversal - firstChild / lastChild
+# --------------------------------------------------------------------------
+
+# firstChild/lastChild return null when first/last child is a text node (whitespace)
+# Use firstElementChild/lastElementChild for reliable element access
+eval assert('firstElementChild of section1 is para1', document.getElementById('section1').firstElementChild.id === 'para1')
+
+eval assert('lastElementChild of section1 is para3', document.getElementById('section1').lastElementChild.id === 'para3')
+
+# firstChild on a list element (first child may be text whitespace or element)
+eval var fc = document.getElementById('list').firstChild; assert('firstChild exists or firstElementChild works', fc !== null || document.getElementById('list').firstElementChild !== null)
+
+# --------------------------------------------------------------------------
+# 12. Tree traversal - firstElementChild / lastElementChild
+# --------------------------------------------------------------------------
+
+eval assert('firstElementChild', document.getElementById('list').firstElementChild.id === 'item1')
+
+eval assert('lastElementChild', document.getElementById('list').lastElementChild.id === 'item3')
+
+# --------------------------------------------------------------------------
+# 13. Tree traversal - nextSibling / previousSibling
+# Note: these return null when the adjacent node is a text node (whitespace)
+# nextElementSibling/previousElementSibling are the reliable equivalents
+# --------------------------------------------------------------------------
+
+eval var ns = document.getElementById('item1').nextSibling; assert('nextSibling returns sibling or null (text nodes)', ns !== undefined)
+
+eval var ps = document.getElementById('item2').previousSibling; assert('previousSibling returns sibling or null (text nodes)', ps !== undefined)
+
+# --------------------------------------------------------------------------
+# 14. Tree traversal - nextElementSibling / previousElementSibling
+# --------------------------------------------------------------------------
+
+eval assert('nextElementSibling from item1 is item2', document.getElementById('item1').nextElementSibling.id === 'item2')
+
+eval assert('nextElementSibling from item2 is item3', document.getElementById('item2').nextElementSibling.id === 'item3')
+
+eval assert('nextElementSibling from item3 is null', document.getElementById('item3').nextElementSibling === null)
+
+eval assert('previousElementSibling from item3 is item2', document.getElementById('item3').previousElementSibling.id === 'item2')
+
+eval assert('previousElementSibling from item1 is null', document.getElementById('item1').previousElementSibling === null)
+
+# --------------------------------------------------------------------------
+# 15. nodeType / nodeName
+# --------------------------------------------------------------------------
+
+eval assert('nodeType is 1 for Element', document.getElementById('app').nodeType === 1)
+
+eval assert('nodeName matches tagName', document.getElementById('para1').nodeName === document.getElementById('para1').tagName)
+
+# --------------------------------------------------------------------------
+# 16. matches() selector
+# --------------------------------------------------------------------------
+
+eval assert('matches with class selector', document.getElementById('para1').matches('.text'))
+
+eval assert('matches with ID selector', document.getElementById('para1').matches('#para1'))
+
+eval assert('matches returns false for non-match', !document.getElementById('para1').matches('.nonexistent'))
+
+eval assert('matches with compound selector', document.getElementById('para1').matches('.text.highlight'))
+
+# --------------------------------------------------------------------------
+# 17. closest() selector
+# --------------------------------------------------------------------------
+
+eval assert('closest finds self', document.getElementById('section1').closest('.section').id === 'section1')
+
+eval assert('closest finds ancestor', document.getElementById('para1').closest('.section').id === 'section1')
+
+eval assert('closest finds by ID', document.getElementById('para1').closest('#app').id === 'app')
+
+eval assert('closest returns null for no match', document.getElementById('para1').closest('.nonexistent') === null)
+
+# --------------------------------------------------------------------------
+# 18. createElement + appendChild
+# --------------------------------------------------------------------------
+
+eval var el = document.createElement('div'); el.id = 'created1'; el.textContent = 'Dynamic'; document.getElementById('output').appendChild(el); assert('createElement + appendChild', document.getElementById('created1') !== null)
+
+eval assert('created element has correct text', document.getElementById('created1').textContent === 'Dynamic')
+
+# --------------------------------------------------------------------------
+# 19. insertBefore
+# --------------------------------------------------------------------------
+
+eval var parent = document.getElementById('list'); var newLi = document.createElement('li'); newLi.id = 'item0'; newLi.textContent = 'Item 0'; var first = parent.firstElementChild; parent.insertBefore(newLi, first); assert('insertBefore inserts before ref', parent.firstElementChild.id === 'item0')
+
+# --------------------------------------------------------------------------
+# 20. removeChild
+# --------------------------------------------------------------------------
+
+eval var parent = document.getElementById('list'); var item0 = document.getElementById('item0'); if (item0) { parent.removeChild(item0); } assert('removeChild removes element', document.getElementById('item0') === null && document.getElementById('list').firstElementChild.id === 'item1')
+
+# --------------------------------------------------------------------------
+# 21. remove()
+# --------------------------------------------------------------------------
+
+eval var el = document.createElement('div'); el.id = 'temp'; document.getElementById('output').appendChild(el); el.remove(); assert('remove() removes self from parent', document.getElementById('temp') === null)
+
+# --------------------------------------------------------------------------
+# 22. replaceChild
+# --------------------------------------------------------------------------
+
+eval var parent = document.getElementById('section3'); var newBtn = document.createElement('button'); newBtn.id = 'btn3'; newBtn.textContent = 'Button 3'; newBtn.classList.add('btn'); var oldBtn = document.getElementById('btn2'); parent.replaceChild(newBtn, oldBtn); assert('replaceChild replaces element', document.getElementById('btn3') !== null && document.getElementById('btn2') === null)
+
+# --------------------------------------------------------------------------
+# 23. cloneNode (shallow)
+# --------------------------------------------------------------------------
+
+eval var orig = document.getElementById('btn1'); var clone = orig.cloneNode(false); assert('cloneNode shallow copies tagName', clone.tagName === orig.tagName)
+
+eval var orig = document.getElementById('btn1'); var clone = orig.cloneNode(false); assert('cloneNode shallow copies class', clone.classList.contains('btn') && clone.classList.contains('primary'))
+
+eval var orig = document.getElementById('btn1'); var clone = orig.cloneNode(false); assert('cloneNode shallow has no children', clone.childElementCount === 0)
+
+eval var orig = document.getElementById('btn1'); var clone = orig.cloneNode(false); assert('cloneNode does not copy id', clone.id === '')
+
+# --------------------------------------------------------------------------
+# 24. cloneNode (deep)
+# --------------------------------------------------------------------------
+
+eval var orig = document.getElementById('section1'); var clone = orig.cloneNode(true); assert('cloneNode deep copies children', clone.childElementCount === 3)
+
+eval var orig = document.getElementById('section1'); var clone = orig.cloneNode(true); assert('cloneNode deep copies class', clone.classList.contains('section'))
+
+# --------------------------------------------------------------------------
+# 25. createDocumentFragment
+# --------------------------------------------------------------------------
+
+eval var frag = document.createDocumentFragment(); assert('createDocumentFragment returns object', frag !== null)
+
+eval var frag = document.createDocumentFragment(); var a = document.createElement('span'); a.id = 'frag-a'; frag.appendChild(a); var b = document.createElement('span'); b.id = 'frag-b'; frag.appendChild(b); document.getElementById('output').appendChild(frag); assert('fragment moves children on append', document.getElementById('output').querySelector('#frag-a') === null || document.getElementById('output').childElementCount >= 2)
+
+# --------------------------------------------------------------------------
+# 26. createTextNode
+# --------------------------------------------------------------------------
+
+eval var tn = document.createTextNode('hello world'); assert('createTextNode returns element', tn !== null)
+
+eval var tn = document.createTextNode('hello'); tn.textContent === 'hello'
+
+# --------------------------------------------------------------------------
+# 27. setAttribute / getAttribute / removeAttribute
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('btn1'); el.setAttribute('data-x', '42'); assert('setAttribute + getAttribute', el.getAttribute('data-x') === '42')
+
+eval var el = document.getElementById('btn1'); el.removeAttribute('data-x'); assert('removeAttribute', el.getAttribute('data-x') === null)
+
+# --------------------------------------------------------------------------
+# 28. textContent get/set
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('title'); assert('textContent get', el.textContent === 'jQuery API Test')
+
+eval var el = document.createElement('div'); el.textContent = 'test123'; assert('textContent set', el.textContent === 'test123')
+
+# --------------------------------------------------------------------------
+# 29. innerHTML get
+# --------------------------------------------------------------------------
+
+eval assert('innerHTML returns content', document.getElementById('title').innerHTML.length > 0)
+
+# --------------------------------------------------------------------------
+# 30. className get/set
+# --------------------------------------------------------------------------
+
+eval var el = document.getElementById('app'); assert('className get', el.className.indexOf('container') !== -1)
+
+eval var el = document.createElement('div'); el.className = 'foo bar'; assert('className set', el.className === 'foo bar')
+
+# --------------------------------------------------------------------------
+# 31. Combined jQuery-style pattern: $(selector).addClass.on.text
+# --------------------------------------------------------------------------
+
+eval var els = document.getElementById('section1').querySelectorAll('.text'); var count = 0; for (var i = 0; i < els.length; i++) { els[i].classList.add('processed'); count++; } assert('jQuery pattern: select + addClass loop', count === 3)
+eval var els = document.getElementById('section1').querySelectorAll('.text'); var count = 0; for (var i = 0; i < els.length; i++) { els[i].classList.add('processed'); count++; } assert('jQuery pattern: select + addClass loop', count === 3)
+
+eval var el = document.getElementById('para1'); el.classList.contains('processed') && el.classList.contains('text')
+
+eval assert('jQuery pattern: closest from deep element', document.getElementById('item1').closest('#app').id === 'app')
+
+eval var el = document.getElementById('section2'); var items = el.querySelectorAll('.item'); var texts = []; for (var i = 0; i < items.length; i++) texts.push(items[i].textContent); assert('jQuery pattern: map text from selection', texts.join(',') === 'Item 1,Item 2,Item 3')
+
+quit

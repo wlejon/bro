@@ -96,6 +96,12 @@ std::string Element::getAttribute(const std::string& name) const {
 }
 
 void Element::setAttribute(const std::string& name, const std::string& val) {
+    // If changing ID, unregister old and register new with the document
+    if (name == "id" && document_) {
+        std::string oldId = getAttribute("id");
+        if (!oldId.empty()) document_->unregisterElementId(oldId);
+        if (!val.empty()) document_->registerElementId(val, this);
+    }
     attributes_[name] = val;
     if (litehtml_element_) {
         litehtml_element_->set_attr(name.c_str(), val.c_str());
@@ -110,6 +116,10 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
 }
 
 void Element::removeAttribute(const std::string& name) {
+    if (name == "id" && document_) {
+        std::string oldId = getAttribute("id");
+        if (!oldId.empty()) document_->unregisterElementId(oldId);
+    }
     attributes_.erase(name);
     markDirty();
 }

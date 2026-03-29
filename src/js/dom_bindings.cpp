@@ -966,7 +966,13 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
     if (!el || argc < 1) return JS_UNDEFINED;
     auto* child = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
-    if (child) el->removeChild(static_cast<bro::dom::Node*>(child));
+    if (child) {
+        // Unregister ID from document so getElementById won't find detached elements
+        if (s_document && !child->id().empty()) {
+            s_document->unregisterElementId(child->id());
+        }
+        el->removeChild(static_cast<bro::dom::Node*>(child));
+    }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
 
@@ -1003,6 +1009,9 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         auto newPtr = findSharedPtr(newChild);
         // insertBefore newChild before oldChild, then remove oldChild
         el->insertBefore(newPtr, static_cast<bro::dom::Node*>(oldChild));
+        if (s_document && !oldChild->id().empty()) {
+            s_document->unregisterElementId(oldChild->id());
+        }
         el->removeChild(static_cast<bro::dom::Node*>(oldChild));
         if (s_document) s_document->adoptOrphan(newChild);
     }
@@ -1022,16 +1031,10 @@ static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
     auto clone = s_document->createElement(el->tagName());
     if (!clone) return JS_NULL;
 
-    // Copy attributes
-    // We need to read attributes - use getAttribute for known ones
-    // Since attributes_ is private, we'll copy via the public API
-    // Copy class and id which are the most important
+    // Copy attributes (skip "id" — cloned nodes must not duplicate IDs)
     std::string cls = el->className();
     if (!cls.empty()) clone->setClassName(cls);
-    std::string id = el->id();
-    if (!id.empty()) clone->setId(id);
 
-    // Copy common attributes
     static const char* attrs[] = {
         "style", "href", "src", "alt", "title", "name", "value", "type",
         "placeholder", "data-action", "data-setting", "data-control",
@@ -1075,7 +1078,12 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
     auto* parent = el->parentElement();
-    if (parent) parent->removeChild(static_cast<bro::dom::Node*>(el));
+    if (parent) {
+        if (s_document && !el->id().empty()) {
+            s_document->unregisterElementId(el->id());
+        }
+        parent->removeChild(static_cast<bro::dom::Node*>(el));
+    }
     (void)ctx;
     return JS_UNDEFINED;
 }

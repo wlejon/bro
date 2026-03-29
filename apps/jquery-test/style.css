@@ -1,0 +1,15 @@
+body { font-family: sans-serif; margin: 10px; }
+.container { padding: 10px; }
+.section { margin: 5px 0; padding: 5px; }
+.active { font-weight: bold; }
+.highlight { color: blue; }
+.dim { color: gray; }
+.text { margin: 2px 0; }
+.item { padding: 2px; }
+.odd { background: #f0f0f0; }
+.even { background: #e0e0e0; }
+.btn { padding: 5px 10px; margin: 2px; }
+.primary { background: blue; color: white; }
+.secondary { background: gray; color: white; }
+.added { border: 1px solid red; }
+.replaced { font-style: italic; }
