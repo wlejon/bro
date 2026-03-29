@@ -944,6 +944,19 @@ static JSValue js_document_createElement(JSContext* ctx,
     return DomBindings::wrapElement(ctx, el.get());
 }
 
+static JSValue js_document_createElementNS(JSContext* ctx,
+                                           JSValueConst this_val,
+                                           int argc, JSValueConst* argv)
+{
+    // createElementNS(namespaceURI, qualifiedName) — ignore namespace, just create element
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 2) return JS_NULL;
+    std::string tag = jsToStdString(ctx, argv[1]);
+    auto el = doc->createElement(tag);
+    if (!el) return JS_NULL;
+    return DomBindings::wrapElement(ctx, el.get());
+}
+
 static JSValue js_document_createTextNode(JSContext* ctx,
                                           JSValueConst this_val,
                                           int argc, JSValueConst* argv)
@@ -989,6 +1002,7 @@ static const JSCFunctionListEntry js_document_proto_funcs[] = {
     // Methods
     JS_CFUNC_DEF("getElementById",  1, js_document_getElementById),
     JS_CFUNC_DEF("createElement",   1, js_document_createElement),
+    JS_CFUNC_DEF("createElementNS", 2, js_document_createElementNS),
     JS_CFUNC_DEF("createTextNode",  1, js_document_createTextNode),
     JS_CFUNC_DEF("querySelector",   1, js_document_querySelector),
     JS_CFUNC_DEF("querySelectorAll",1, js_document_querySelectorAll),

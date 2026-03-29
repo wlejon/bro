@@ -594,12 +594,27 @@ std::string WebGL2RenderingContext::getShadingLanguageVersion() {
 }
 
 std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
-    // Return a subset of extensions that WebGL2 typically exposes
+    // Return extensions that WebGL2 typically exposes (all are core in GL 3.3)
     return {
         "EXT_color_buffer_float",
         "EXT_float_blend",
         "OES_texture_float_linear",
         "EXT_texture_filter_anisotropic",
+        "EXT_blend_minmax",
+        "OES_vertex_array_object",
+        "OES_element_index_uint",
+        "OES_standard_derivatives",
+        "OES_fbo_render_mipmap",
+        "WEBGL_depth_texture",
+        "WEBGL_draw_buffers",
+        "EXT_shader_texture_lod",
+        "EXT_sRGB",
+        "EXT_frag_depth",
+        "ANGLE_instanced_arrays",
+        "OES_texture_half_float",
+        "OES_texture_half_float_linear",
+        "WEBGL_lose_context",
+        "WEBGL_compressed_texture_s3tc",
     };
 }
 

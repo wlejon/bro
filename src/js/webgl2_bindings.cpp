@@ -500,6 +500,21 @@ void WebGL2Bindings::install(JSContext* ctx) {
     JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_framebuffer_funcs, webgl2_framebuffer_funcs_count);
     JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_query_funcs, webgl2_query_funcs_count);
 
+    // Create a constructor function for WebGL2RenderingContext
+    // three.js checks: typeof WebGL2RenderingContext !== "undefined"
+    // three.js checks: ctx.constructor.name === "WebGL2RenderingContext"
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_NewObject(ctx);
+    JSAtom nameAtom = JS_NewAtom(ctx, "name");
+    JS_DefinePropertyValue(ctx, ctor, nameAtom, JS_NewString(ctx, "WebGL2RenderingContext"),
+                           JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, nameAtom);
+
+    // Set constructor on prototype so instances get constructor.name
+    JS_SetPropertyStr(ctx, js_webgl2_proto, "constructor", JS_DupValue(ctx, ctor));
+    JS_SetPropertyStr(ctx, global, "WebGL2RenderingContext", ctor);
+    JS_FreeValue(ctx, global);
+
     JS_SetClassProto(ctx, js_webgl2_ctx_class_id, js_webgl2_proto);
 }
 

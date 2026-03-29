@@ -1,4 +1,5 @@
 #include "js/webgl2_bindings_util.h"
+#include <glad/gl.h>
 
 namespace bro::js::webgl2 {
 
@@ -20,6 +21,71 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
         case 0x1F00: { // GL_VENDOR
             std::string s = gl->getParameterString(pname);
             return JS_NewString(ctx, s.c_str());
+        }
+
+        // Float parameters
+        case 0x0B73: // GL_DEPTH_CLEAR_VALUE
+        case 0x0B11: // GL_LINE_WIDTH
+        case 0x8005: // GL_SAMPLE_COVERAGE_VALUE
+        case 0x8066: // GL_POLYGON_OFFSET_FACTOR
+        case 0x2A00: { // GL_POLYGON_OFFSET_UNITS
+            return JS_NewFloat64(ctx, gl->getParameterFloat(pname));
+        }
+
+        // Int32Array[4] parameters (viewport, scissor box)
+        case 0x0BA2: // GL_VIEWPORT
+        case 0x0C10: { // GL_SCISSOR_BOX
+            GLint v[4]; glGetIntegerv(pname, v);
+            JSValue arr = JS_NewArray(ctx);  // WebGL returns Int32Array but plain array works
+            for (int i = 0; i < 4; i++)
+                JS_SetPropertyUint32(ctx, arr, i, JS_NewInt32(ctx, v[i]));
+            return arr;
+        }
+
+        // Float32Array[4] parameters
+        case 0x0C22: // GL_COLOR_CLEAR_VALUE
+        case 0x0BE0: { // GL_BLEND_COLOR
+            GLfloat v[4]; glGetFloatv(pname, v);
+            JSValue arr = JS_NewArray(ctx);
+            for (int i = 0; i < 4; i++)
+                JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, v[i]));
+            return arr;
+        }
+
+        // Float32Array[2] parameters
+        case 0x0B70: { // GL_DEPTH_RANGE
+            GLfloat v[2]; glGetFloatv(pname, v);
+            JSValue arr = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, v[0]));
+            JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, v[1]));
+            return arr;
+        }
+
+        // Boolean[4] parameters
+        case 0x0C23: { // GL_COLOR_WRITEMASK
+            GLboolean v[4]; glGetBooleanv(pname, v);
+            JSValue arr = JS_NewArray(ctx);
+            for (int i = 0; i < 4; i++)
+                JS_SetPropertyUint32(ctx, arr, i, JS_NewBool(ctx, v[i]));
+            return arr;
+        }
+
+        // Null parameters (binding queries that return WebGL objects)
+        case 0x8894: // GL_ARRAY_BUFFER_BINDING
+        case 0x8895: // GL_ELEMENT_ARRAY_BUFFER_BINDING
+        case 0x8B8D: // GL_CURRENT_PROGRAM
+        case 0x8CA6: // GL_FRAMEBUFFER_BINDING
+        case 0x8CA7: // GL_RENDERBUFFER_BINDING
+        case 0x8069: // GL_TEXTURE_BINDING_2D
+        case 0x8514: // GL_TEXTURE_BINDING_CUBE_MAP
+        case 0x85B5: // GL_VERTEX_ARRAY_BINDING
+            // three.js probes these but we can't return wrapped objects from here.
+            // Return null (unbound) — three.js handles this gracefully.
+            return JS_NULL;
+
+        // Compressed texture formats — return empty array
+        case 0x86A3: { // GL_COMPRESSED_TEXTURE_FORMATS
+            return JS_NewArray(ctx);
         }
 
         // Boolean parameters
@@ -76,6 +142,20 @@ static JSValue js_isContextLost(JSContext* ctx, JSValueConst, int, JSValueConst*
     return JS_NewBool(ctx, 0);
 }
 
+static JSValue js_getContextAttributes(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "alpha", JS_TRUE);
+    JS_SetPropertyStr(ctx, obj, "depth", JS_TRUE);
+    JS_SetPropertyStr(ctx, obj, "stencil", JS_TRUE);
+    JS_SetPropertyStr(ctx, obj, "antialias", JS_FALSE);
+    JS_SetPropertyStr(ctx, obj, "premultipliedAlpha", JS_TRUE);
+    JS_SetPropertyStr(ctx, obj, "preserveDrawingBuffer", JS_FALSE);
+    JS_SetPropertyStr(ctx, obj, "powerPreference", JS_NewString(ctx, "default"));
+    JS_SetPropertyStr(ctx, obj, "failIfMajorPerformanceCaveat", JS_FALSE);
+    JS_SetPropertyStr(ctx, obj, "desynchronized", JS_FALSE);
+    return obj;
+}
+
 // ===========================================================================
 // Property getters: drawingBufferWidth, drawingBufferHeight
 // ===========================================================================
@@ -100,6 +180,7 @@ const JSCFunctionListEntry webgl2_query_funcs[] = {
     JS_CFUNC_DEF("getSupportedExtensions", 0, js_getSupportedExtensions),
     JS_CFUNC_DEF("getShaderPrecisionFormat", 2, js_getShaderPrecisionFormat),
     JS_CFUNC_DEF("isContextLost", 0, js_isContextLost),
+    JS_CFUNC_DEF("getContextAttributes", 0, js_getContextAttributes),
     JS_CGETSET_DEF("drawingBufferWidth", js_get_drawingBufferWidth, NULL),
     JS_CGETSET_DEF("drawingBufferHeight", js_get_drawingBufferHeight, NULL),
 };

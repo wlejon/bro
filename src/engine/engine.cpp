@@ -290,8 +290,17 @@ Engine::Engine(const std::string& appDir, int width, int height)
         JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
         JS_SetPropertyStr(ctx, global, "navigator", nav);
 
-        // document.createElementNS stub (three.js uses this for canvas creation)
-        // Already handled by dom_bindings if needed.
+        // window.addEventListener / removeEventListener stubs
+        // three.js registers resize + contextlost listeners on window
+        auto stubFn = [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+            return JS_UNDEFINED;
+        };
+        JS_SetPropertyStr(ctx, global, "addEventListener",
+            JS_NewCFunction(ctx, stubFn, "addEventListener", 2));
+        JS_SetPropertyStr(ctx, global, "removeEventListener",
+            JS_NewCFunction(ctx, stubFn, "removeEventListener", 2));
+
+        // document.createElementNS — handled by dom_bindings
 
         JS_FreeValue(ctx, global);
     }
