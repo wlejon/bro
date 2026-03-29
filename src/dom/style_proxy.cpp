@@ -19,6 +19,9 @@ std::string StyleProxy::getProperty(const std::string& name) const {
 }
 
 void StyleProxy::setProperty(const std::string& name, const std::string& value) {
+    // Skip if value unchanged — avoids expensive syncStylesToLitehtml + layout
+    auto it = properties_.find(name);
+    if (it != properties_.end() && it->second == value) return;
     properties_[name] = value;
     if (owner_) {
         owner_->syncStylesToLitehtml();

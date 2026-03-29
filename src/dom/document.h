@@ -46,6 +46,11 @@ public:
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
 
+    // Structure dirty — DOM nodes added/removed, render tree needs rebuild
+    void markStructureDirty() { structureDirty_ = true; dirty_ = true; }
+    bool isStructureDirty() const { return structureDirty_; }
+    void clearStructureDirty() { structureDirty_ = false; }
+
     // Litehtml integration
     litehtml::document::ptr litehtmlDocument() const { return litehtml_doc_; }
 
@@ -68,14 +73,22 @@ public:
     // Find our Element wrapper for a litehtml element pointer
     Element* findElementByLitehtml(const litehtml::element::ptr& lhElem);
 
+    // Sync dynamic DOM mutations to litehtml tree for rendering
+    void syncAppendToLitehtml(Element* child, Element* parent);
+    void syncInsertBeforeLitehtml(Element* newChild, Element* refChild, Element* parent);
+    void syncRemoveFromLitehtml(Element* child, Element* parent);
+
 private:
     void buildTreeFromLitehtml(litehtml::element::ptr root, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
+    void linkElementToLitehtml(litehtml::element::ptr lh, Element* elem);
+    void unlinkLitehtmlRecursive(Element* elem);
 
     std::shared_ptr<Node> root_;
     Element* documentElement_ = nullptr;
     Element* body_ = nullptr;
     bool dirty_ = false;
+    bool structureDirty_ = false;
     litehtml::document::ptr litehtml_doc_;
     std::unordered_map<std::string, Element*> idMap_;
 

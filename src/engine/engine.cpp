@@ -470,6 +470,12 @@ void Engine::run() {
 
         // 4. Re-layout if DOM is dirty
         if (document_ && document_->isDirty() && litehtmlDoc_) {
+            // Rebuild litehtml render tree when DOM structure changed
+            // (elements added/removed). Style-only changes reuse existing tree.
+            if (document_->isStructureDirty()) {
+                litehtmlDoc_->rebuild_render_tree();
+                document_->clearStructureDirty();
+            }
             litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
             document_->clearDirty();
             uiDirty_ = true;

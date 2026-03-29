@@ -1056,13 +1056,22 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             // Copy children vector since we're modifying it during iteration
             auto kids = child->childNodes();
             for (auto& kid : kids) {
-                el->appendChild(kid);
+                if (kid->nodeType() == bro::dom::NodeType::Element) {
+                    auto* kidElem = static_cast<bro::dom::Element*>(kid.get());
+                    el->appendChild(kid);
+                    if (s_document) s_document->syncAppendToLitehtml(kidElem, el);
+                } else {
+                    el->appendChild(kid);
+                }
             }
             if (s_document) s_document->adoptOrphan(child);
         } else {
             auto childPtr = findSharedPtr(child);
             el->appendChild(childPtr);
-            if (s_document) s_document->adoptOrphan(child);
+            if (s_document) {
+                s_document->adoptOrphan(child);
+                s_document->syncAppendToLitehtml(child, el);
+            }
         }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
@@ -1078,6 +1087,8 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
     if (child) {
         if (s_document && !child->id().empty())
             s_document->unregisterElementId(child->id());
+        // Remove from litehtml tree before removing from bro::dom tree
+        if (s_document) s_document->syncRemoveFromLitehtml(child, el);
         // Save shared_ptr to orphans so the element survives removal
         // (caller may re-append it elsewhere — spec returns the removed node).
         auto saved = findSharedPtr(child);
@@ -1105,7 +1116,14 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
     if (newChild) {
         auto childPtr = findSharedPtr(newChild);
         el->insertBefore(childPtr, static_cast<bro::dom::Node*>(refChild));
-        if (s_document) s_document->adoptOrphan(newChild);
+        if (s_document) {
+            s_document->adoptOrphan(newChild);
+            if (refChild) {
+                s_document->syncInsertBeforeLitehtml(newChild, refChild, el);
+            } else {
+                s_document->syncAppendToLitehtml(newChild, el);
+            }
+        }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
@@ -1122,9 +1140,14 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
     if (newChild && oldChild) {
         auto newPtr = findSharedPtr(newChild);
         auto oldSaved = findSharedPtr(oldChild);
+        // Sync: insert new before old, then remove old
         el->insertBefore(newPtr, static_cast<bro::dom::Node*>(oldChild));
+        if (s_document) {
+            s_document->syncInsertBeforeLitehtml(newChild, oldChild, el);
+        }
         if (s_document && !oldChild->id().empty())
             s_document->unregisterElementId(oldChild->id());
+        if (s_document) s_document->syncRemoveFromLitehtml(oldChild, el);
         el->removeChild(static_cast<bro::dom::Node*>(oldChild));
         if (s_document) {
             s_document->adoptOrphan(newChild);
@@ -1200,6 +1223,11 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
     if (parent) {
         if (s_document && !el->id().empty())
             s_document->unregisterElementId(el->id());
+        // Remove from litehtml tree before removing from bro::dom tree
+        if (s_document && parent->nodeType() == bro::dom::NodeType::Element) {
+            s_document->syncRemoveFromLitehtml(
+                el, static_cast<bro::dom::Element*>(parent));
+        }
         auto saved = findSharedPtr(el);
         parent->removeChild(static_cast<bro::dom::Node*>(el));
         if (s_document && saved) {

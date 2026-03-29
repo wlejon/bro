@@ -37,6 +37,7 @@ public:
     std::string textContent() const;
     void setTextContent(const std::string& text);
     std::string innerHTML() const;
+    std::string outerHTML() const;
     void setInnerHTML(const std::string& html);
 
     // Style

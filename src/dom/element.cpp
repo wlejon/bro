@@ -96,6 +96,9 @@ std::string Element::getAttribute(const std::string& name) const {
 }
 
 void Element::setAttribute(const std::string& name, const std::string& val) {
+    // Skip if value unchanged — avoids expensive CSS recomputation + layout
+    auto existing = attributes_.find(name);
+    if (existing != attributes_.end() && existing->second == val) return;
     // If changing ID, unregister old and register new with the document
     if (name == "id" && document_) {
         std::string oldId = getAttribute("id");
@@ -139,6 +142,11 @@ std::string Element::textContent() const {
 }
 
 void Element::setTextContent(const std::string& text) {
+    // Skip if text unchanged — avoids expensive litehtml rebuild + layout
+    if (children_.size() == 1 && children_[0]->nodeType() == NodeType::Text) {
+        auto* existing = static_cast<TextNode*>(children_[0].get());
+        if (existing->data() == text) return;
+    }
     for (auto& child : children_) {
         child->setParent(nullptr);
     }
@@ -174,20 +182,32 @@ std::string Element::innerHTML() const {
             oss << text->data();
         } else if (child->nodeType() == NodeType::Element) {
             auto* elem = static_cast<const Element*>(child.get());
-            // Opening tag
-            std::string lower_tag = elem->tagName();
-            for (auto& c : lower_tag) {
-                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            }
-            oss << "<" << lower_tag;
-            for (const auto& [key, val] : elem->attributes_) {
-                oss << " " << key << "=\"" << val << "\"";
-            }
-            oss << ">";
-            oss << elem->innerHTML();
-            oss << "</" << lower_tag << ">";
+            oss << elem->outerHTML();
         }
     }
+    return oss.str();
+}
+
+std::string Element::outerHTML() const {
+    std::ostringstream oss;
+    std::string lower_tag = tag_;
+    for (auto& c : lower_tag) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    oss << "<" << lower_tag;
+    for (const auto& [key, val] : attributes_) {
+        oss << " " << key << "=\"" << val << "\"";
+    }
+    // Include inline styles from StyleProxy if not already in attributes
+    if (attributes_.find("style") == attributes_.end()) {
+        std::string css = style_.cssText();
+        if (!css.empty()) {
+            oss << " style=\"" << css << "\"";
+        }
+    }
+    oss << ">";
+    oss << innerHTML();
+    oss << "</" << lower_tag << ">";
     return oss.str();
 }
 
@@ -245,6 +265,9 @@ std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
     if (litehtml_element_ && document_) {
         auto found = litehtml_element_->select_all(selector);
         for (auto& lh : found) {
+            // select_all may include `this` element — DOM spec says
+            // querySelectorAll only returns descendants, never self.
+            if (lh == litehtml_element_) continue;
             auto* elem = document_->findElementByLitehtml(lh);
             if (elem) result.push_back(elem);
         }

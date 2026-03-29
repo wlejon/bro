@@ -1,6 +1,13 @@
 #include "dom/document.h"
+#include <litehtml/html_tag.h>
 #include <algorithm>
 #include <sstream>
+
+// Helper: get mutable children list from a litehtml element.
+// element::children() is const; html_tag::children() is non-const.
+static std::list<litehtml::element::ptr>& mutableChildren(litehtml::element::ptr& el) {
+    return static_cast<litehtml::html_tag*>(el.get())->children();
+}
 
 namespace bro::dom {
 
@@ -294,6 +301,123 @@ Element* Document::findElementByLitehtml(const litehtml::element::ptr& lhElem) {
     if (!lhElem) return nullptr;
     auto it = litehtmlMap_.find(lhElem);
     return (it != litehtmlMap_.end()) ? it->second : nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic DOM → litehtml sync
+// ---------------------------------------------------------------------------
+
+void Document::syncAppendToLitehtml(Element* child, Element* parent) {
+    if (!child || !parent || !litehtml_doc_) return;
+    auto parentLh = parent->litehtmlElement();
+    if (!parentLh) return;
+    if (child->litehtmlElement()) return; // already linked
+
+    std::string html = child->outerHTML();
+    size_t beforeCount = parentLh->children().size();
+
+    // Add to litehtml element tree (CSS is applied, render items are NOT
+    // reliably created here — the render tree rebuild handles that).
+    litehtml_doc_->append_children_from_string(*parentLh, html.c_str(), false);
+
+    // Link the newly created litehtml element to our bro::dom element
+    auto& lhChildren = parentLh->children();
+    if (lhChildren.size() > beforeCount) {
+        auto it = lhChildren.begin();
+        std::advance(it, beforeCount);
+        linkElementToLitehtml(*it, child);
+    }
+
+    markStructureDirty();
+}
+
+void Document::syncInsertBeforeLitehtml(Element* newChild, Element* refChild,
+                                         Element* parent) {
+    if (!newChild || !parent || !litehtml_doc_) return;
+    auto parentLh = parent->litehtmlElement();
+    if (!parentLh) return;
+    if (newChild->litehtmlElement()) return;
+
+    std::string html = newChild->outerHTML();
+    size_t beforeCount = parentLh->children().size();
+
+    litehtml_doc_->append_children_from_string(*parentLh, html.c_str(), false);
+
+    auto& lhChildren = parentLh->children();
+    if (lhChildren.size() <= beforeCount) return;
+
+    // Link the new element (currently at end)
+    auto newLh = lhChildren.back();
+    linkElementToLitehtml(newLh, newChild);
+
+    // Move to before the reference element in the litehtml children list
+    if (refChild && refChild->litehtmlElement()) {
+        auto refLh = refChild->litehtmlElement();
+        auto& mutChildren = mutableChildren(parentLh);
+        auto newIt = std::prev(mutChildren.end());
+        auto refIt = std::find(mutChildren.begin(), mutChildren.end(), refLh);
+        if (refIt != mutChildren.end() && newIt != refIt) {
+            mutChildren.splice(refIt, mutChildren, newIt);
+        }
+    }
+
+    markStructureDirty();
+}
+
+void Document::syncRemoveFromLitehtml(Element* child, Element* parent) {
+    if (!child || !parent) return;
+    auto childLh = child->litehtmlElement();
+    auto parentLh = parent->litehtmlElement();
+    if (!childLh || !parentLh) return;
+
+    // Remove from litehtml element tree
+    parentLh->removeChild(childLh);
+
+    // Clean up litehtmlMap entries for the whole subtree
+    unlinkLitehtmlRecursive(child);
+
+    markStructureDirty();
+}
+
+void Document::linkElementToLitehtml(litehtml::element::ptr lh, Element* elem) {
+    if (!lh || !elem) return;
+    elem->setLitehtmlElement(lh);
+    litehtmlMap_[lh] = elem;
+
+    // Register ID if present
+    std::string elemId = elem->id();
+    if (!elemId.empty()) {
+        idMap_[elemId] = elem;
+    }
+
+    // Recursively link child elements (skip litehtml text nodes)
+    auto& lhChildren = lh->children();
+    auto broChildren = elem->children(); // Element children only
+
+    auto lhIt = lhChildren.begin();
+    size_t broIdx = 0;
+
+    while (lhIt != lhChildren.end() && broIdx < broChildren.size()) {
+        const char* tag = (*lhIt)->get_tagName();
+        if (tag && tag[0] != '\0') {
+            // Element node — link to corresponding bro::dom child
+            linkElementToLitehtml(*lhIt, broChildren[broIdx]);
+            broIdx++;
+        }
+        ++lhIt;
+    }
+}
+
+void Document::unlinkLitehtmlRecursive(Element* elem) {
+    if (!elem) return;
+    auto lh = elem->litehtmlElement();
+    if (lh) {
+        litehtmlMap_.erase(lh);
+        elem->setLitehtmlElement(nullptr);
+    }
+    for (auto* child : elem->children()) {
+        unlinkLitehtmlRecursive(child);
+    }
 }
 
 } // namespace bro::dom

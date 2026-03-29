@@ -11,6 +11,8 @@
     var tickCount = 0;
     var fpsFrames = 0;
     var lastFpsTime = performance.now();
+    var lastUpdateTime = 0;
+    var UPDATE_INTERVAL = 16; // ~60fps DOM updates (ms)
 
     // Simulated metrics with momentum
     var metrics = {
@@ -72,6 +74,29 @@
     ];
     var taskId = 0;
 
+    // -- Cached jQuery selectors ---------------------------------------------
+    var $bars = {};
+    var $vals = {};
+    var $sparkContainers = {};
+    var $clock, $fpsDisplay, $updateCountEl, $feedList, $cardContainer, $todoList, $todoCount;
+
+    function cacheSelectors() {
+        $.each(['cpu', 'mem', 'net', 'disk'], function(_, key) {
+            $bars[key] = $('#' + key + '-bar');
+            $vals[key] = $('#' + key + '-val');
+        });
+        $.each(['cpu', 'mem', 'net'], function(_, key) {
+            $sparkContainers[key] = $('#spark-' + key);
+        });
+        $clock = $('#clock');
+        $fpsDisplay = $('#fps-display');
+        $updateCountEl = $('#update-count');
+        $feedList = $('#feed-list');
+        $cardContainer = $('#card-container');
+        $todoList = $('#todo-list');
+        $todoCount = $('#todo-count');
+    }
+
     // -- Utility -------------------------------------------------------------
     function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
     function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -86,6 +111,8 @@
     }
 
     // -- Stats ---------------------------------------------------------------
+    var lastMetricPcts = {};
+
     function updateMetrics() {
         $.each(metrics, function(key, m) {
             // Occasionally pick a new target
@@ -97,8 +124,12 @@
             m.value = clamp(m.value, 0, 100);
 
             var pct = Math.round(m.value);
-            $('#' + key + '-bar').css('width', pct + '%');
-            $('#' + key + '-val').text(pct + '%');
+            // Only touch DOM if value actually changed
+            if (lastMetricPcts[key] !== pct) {
+                lastMetricPcts[key] = pct;
+                $bars[key].css('width', pct + '%');
+                $vals[key].text(pct + '%');
+            }
         });
 
         // Record history
@@ -113,17 +144,27 @@
     }
 
     // -- Sparklines ----------------------------------------------------------
+    // Pre-created bar elements for reuse (avoid destroy/recreate churn)
+    var sparkBars = { cpu: [], mem: [], net: [] };
+
+    function initSparklines() {
+        $.each(['cpu', 'mem', 'net'], function(_, key) {
+            var $container = $sparkContainers[key];
+            for (var i = 0; i < maxHistory; i++) {
+                var $bar = $('<div>').addClass('spark-bar ' + key).css('height', '1px');
+                $container.append($bar);
+                sparkBars[key].push($bar);
+            }
+        });
+    }
+
     function renderSparklines() {
         $.each(['cpu', 'mem', 'net'], function(_, key) {
-            var $container = $('#spark-' + key);
-            $container.empty();
             var data = history[key];
-            for (var i = 0; i < data.length; i++) {
-                var h = Math.max(1, Math.round(data[i] / 100 * 28));
-                $container.append(
-                    $('<div>').addClass('spark-bar ' + key)
-                              .css('height', h + 'px')
-                );
+            var bars = sparkBars[key];
+            for (var i = 0; i < maxHistory; i++) {
+                var h = i < data.length ? Math.max(1, Math.round(data[i] / 100 * 28)) : 1;
+                bars[i].css('height', h + 'px');
             }
         });
     }
@@ -137,7 +178,7 @@
         $item.append($('<span>').addClass('time').text(formatTime()));
         $item.append($('<span>').addClass('msg').text(entry.msg));
 
-        $('#feed-list').prepend($item);
+        $feedList.prepend($item);
 
         // Remove highlight after a moment
         setTimeout(function() {
@@ -145,7 +186,7 @@
         }, 800);
 
         // Keep feed to 8 items max
-        var $items = $('#feed-list').children();
+        var $items = $feedList.children();
         if ($items.length > 8) {
             $items.last().remove();
         }
@@ -153,7 +194,6 @@
 
     // -- Cards ---------------------------------------------------------------
     function initCards() {
-        var $container = $('#card-container');
         $.each(cardData, function(i, card) {
             var $card = $('<div>').addClass('card').attr('data-idx', i);
             $card.append($('<div>').addClass('card-title').text(card.title));
@@ -165,12 +205,12 @@
                 $(this).toggleClass('highlight');
             });
 
-            $container.append($card);
+            $cardContainer.append($card);
         });
     }
 
     function updateCards() {
-        $('#card-container .card').each(function() {
+        $cardContainer.children('.card').each(function() {
             var $card = $(this);
             var idx = parseInt($card.attr('data-idx'));
             if (isNaN(idx) || idx >= cardData.length) return;
@@ -219,15 +259,14 @@
         $card.append($('<div>').addClass('card-delta flat').text('new'));
         $card.on('click', function() { $(this).toggleClass('highlight'); });
 
-        $('#card-container').append($card);
+        $cardContainer.append($card);
 
         // Remove highlight after 2s
         setTimeout(function() { $card.removeClass('highlight'); }, 2000);
     }
 
     function sortCards() {
-        var $container = $('#card-container');
-        var $cards = $container.children('.card');
+        var $cards = $cardContainer.children('.card');
         var arr = [];
         $cards.each(function() { arr.push($(this)); });
 
@@ -235,13 +274,12 @@
             return a.find('.card-title').text().localeCompare(b.find('.card-title').text());
         });
 
-        $container.empty();
-        $.each(arr, function(_, $c) { $container.append($c); });
+        $cardContainer.empty();
+        $.each(arr, function(_, $c) { $cardContainer.append($c); });
     }
 
     function shuffleCards() {
-        var $container = $('#card-container');
-        var $cards = $container.children('.card');
+        var $cards = $cardContainer.children('.card');
         var arr = [];
         $cards.each(function() { arr.push($(this)); });
 
@@ -251,8 +289,8 @@
             var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
         }
 
-        $container.empty();
-        $.each(arr, function(_, $c) { $container.append($c); });
+        $cardContainer.empty();
+        $.each(arr, function(_, $c) { $cardContainer.append($c); });
     }
 
     // -- Todos ---------------------------------------------------------------
@@ -277,19 +315,32 @@
         });
 
         $li.append($text).append($done).append($del);
-        $('#todo-list').append($li);
+        $todoList.append($li);
+
+        // Cap todo list to prevent unbounded element growth
+        var $todos = $todoList.children('.todo-item');
+        if ($todos.length > 10) {
+            $todos.first().remove();
+        }
+
         updateTodoCount();
     }
 
     function updateTodoCount() {
-        var total = $('#todo-list .todo-item').length;
-        var done = $('#todo-list .todo-item.done').length;
-        $('#todo-count').text(done + '/' + total + ' done');
+        var total = $todoList.children('.todo-item').length;
+        var done = $todoList.find('.todo-item.done').length;
+        $todoCount.text(done + '/' + total + ' done');
     }
 
     // -- Clock & FPS ---------------------------------------------------------
+    var lastClockText = '';
+
     function updateClock() {
-        $('#clock').text(formatTime());
+        var t = formatTime();
+        if (t !== lastClockText) {
+            lastClockText = t;
+            $clock.text(t);
+        }
     }
 
     function updateFps() {
@@ -298,29 +349,38 @@
         var elapsed = now - lastFpsTime;
         if (elapsed >= 1000) {
             var fps = Math.round(fpsFrames * 1000 / elapsed);
-            $('#fps-display').text(fps + ' fps');
+            $fpsDisplay.text(fps + ' fps');
             fpsFrames = 0;
             lastFpsTime = now;
         }
     }
 
     // -- Main tick -----------------------------------------------------------
+    // Track update cadence separately from frame rate.
+    // DOM mutations are throttled to ~30fps to avoid triggering expensive
+    // litehtml layout + Skia rasterization on every frame.
+    var updateTick = 0;
+
     function tick() {
-        if (!paused) {
+        var now = performance.now();
+
+        if (!paused && (now - lastUpdateTime >= UPDATE_INTERVAL)) {
+            lastUpdateTime = now;
             tickCount++;
+            updateTick++;
             updateCount++;
 
             updateMetrics();
             updateClock();
 
             // Stagger updates for visual interest
-            if (tickCount % 3 === 0) addFeedItem();
-            if (tickCount % 2 === 0) updateCards();
-            if (tickCount % 4 === 0) renderSparklines();
-            if (tickCount % 15 === 0) addTodo();
+            if (updateTick % 3 === 0) addFeedItem();
+            if (updateTick % 2 === 0) updateCards();
+            if (updateTick % 4 === 0) renderSparklines();
+            if (updateTick % 15 === 0) addTodo();
 
             // Periodic highlights
-            if (tickCount % 10 === 0) {
+            if (updateTick % 10 === 0) {
                 var $panels = $('.panel');
                 var idx = rand(0, $panels.length - 1);
                 // brief border flash on a random panel
@@ -331,7 +391,7 @@
                 }, 500);
             }
 
-            $('#update-count').text(updateCount + ' updates');
+            $updateCountEl.text(updateCount + ' updates');
         }
 
         updateFps();
@@ -356,7 +416,7 @@
         });
 
         $('#btn-clear').on('click', function() {
-            $('#feed-list').empty();
+            $feedList.empty();
         });
 
         $('#btn-add').on('click', function() {
@@ -378,6 +438,8 @@
 
     // -- Init ----------------------------------------------------------------
     function init() {
+        cacheSelectors();
+
         $('#jquery-version').text('jQuery ' + $.fn.jquery.split(' ')[0]);
 
         initCards();
@@ -387,6 +449,7 @@
         for (var i = 0; i < 5; i++) {
             updateMetrics();
         }
+        initSparklines();
         renderSparklines();
         addFeedItem();
         addFeedItem();
