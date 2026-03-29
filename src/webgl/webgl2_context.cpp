@@ -414,10 +414,45 @@ void WebGL2RenderingContext::texParameterf(GLenum target, GLenum pname, GLfloat 
     glTexParameterf(target, pname, param);
 }
 
+// Translate WebGL2 unsized internal formats to GL 3.3 Core sized formats
+static GLint translateInternalFormat(GLint internalformat, GLenum type) {
+    switch (internalformat) {
+        case 0x1908: // GL_RGBA
+            switch (type) {
+                case GL_UNSIGNED_BYTE: return GL_RGBA8;
+                case GL_FLOAT: return GL_RGBA32F;
+                case GL_HALF_FLOAT: return GL_RGBA16F;
+                default: return GL_RGBA8;
+            }
+        case 0x1907: // GL_RGB
+            switch (type) {
+                case GL_UNSIGNED_BYTE: return GL_RGB8;
+                case GL_FLOAT: return GL_RGB32F;
+                case GL_HALF_FLOAT: return GL_RGB16F;
+                default: return GL_RGB8;
+            }
+        case 0x190A: return GL_RG8;   // GL_LUMINANCE_ALPHA → approximate
+        case 0x1909: return GL_R8;    // GL_LUMINANCE → approximate
+        case 0x1906: return GL_R8;    // GL_ALPHA → approximate
+        case GL_RED: return (type == GL_FLOAT) ? GL_R32F : GL_R8;
+        case GL_RG: return (type == GL_FLOAT) ? GL_RG32F : GL_RG8;
+        case GL_DEPTH_COMPONENT:
+            switch (type) {
+                case GL_UNSIGNED_SHORT: return GL_DEPTH_COMPONENT16;
+                case GL_UNSIGNED_INT: return GL_DEPTH_COMPONENT24;
+                case GL_FLOAT: return GL_DEPTH_COMPONENT32F;
+                default: return GL_DEPTH_COMPONENT24;
+            }
+        case GL_DEPTH_STENCIL: return GL_DEPTH24_STENCIL8;
+        default: return internalformat; // Already sized (e.g. GL_RGBA8, GL_R16F)
+    }
+}
+
 void WebGL2RenderingContext::texImage2D(GLenum target, GLint level, GLint internalformat,
                                          GLsizei width, GLsizei height, GLint border,
                                          GLenum format, GLenum type, const void* pixels) {
-    glTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
+    glTexImage2D(target, level, translateInternalFormat(internalformat, type),
+                 width, height, border, format, type, pixels);
 }
 
 void WebGL2RenderingContext::texSubImage2D(GLenum target, GLint level,
@@ -474,6 +509,7 @@ void WebGL2RenderingContext::bindFramebuffer(GLenum target, WebGLFramebuffer fbo
     GLuint id = fbo.id ? fbo.id : canvasFBO_;
     glBindFramebuffer(target, id);
 }
+
 
 void WebGL2RenderingContext::framebufferTexture2D(GLenum target, GLenum attachment,
                                                    GLenum textarget, WebGLTexture tex, GLint level) {

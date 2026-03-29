@@ -37,6 +37,9 @@ void WebGLScene::onRender(render::GLContext* gl, int width, int height, double /
     GLuint tex = ctx_->colorTexture();
     if (!tex) return;
 
+    // Drain pre-existing GL errors from WebGL app
+    while (glGetError() != GL_NO_ERROR) {}
+
     float w = (float)width, h = (float)height;
     render::TextureVertex quad[6] = {
         {0, 0, 0, 1}, {w, 0, 1, 1}, {w, h, 1, 0},
@@ -61,12 +64,16 @@ void WebGLScene::onRender(render::GLContext* gl, int width, int height, double /
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
 
-    // No blending — the WebGL scene is fully opaque in the scene pass
+    // Ensure clean state for the fullscreen quad
     glDisable(GL_BLEND);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    glBindVertexArray(0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
 void WebGLScene::onCleanup() {

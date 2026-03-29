@@ -467,8 +467,28 @@ void Engine::run() {
             canvasScene->prepareFrame(gl_.get(), viewportWidth_, viewportHeight_);
         }
 
+        // Save GL state that three.js / WebGL apps cache internally.
+        // The engine's compositor uses its own VAO, program, etc. Without
+        // saving/restoring, three.js sees stale state on the next frame.
+        GLint savedProg, savedVao, savedVbo, savedEbo, savedActiveTex, savedTex0;
+        GLint savedFbo, savedViewport[4];
+        GLboolean savedBlend, savedDepth, savedCull, savedScissor;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &savedProg);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVbo);
+        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &savedEbo);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTex);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTex0);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFbo);
+        glGetIntegerv(GL_VIEWPORT, savedViewport);
+        savedBlend = glIsEnabled(GL_BLEND);
+        savedDepth = glIsEnabled(GL_DEPTH_TEST);
+        savedCull = glIsEnabled(GL_CULL_FACE);
+        savedScissor = glIsEnabled(GL_SCISSOR_TEST);
+
         // 5d. Set viewport and clear
         glViewport(0, 0, viewportWidth_, viewportHeight_);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
@@ -501,7 +521,9 @@ void Engine::run() {
             glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
             glUniform1i(gl_->textureSamplerLoc(), 0);
 
-            // Premultiplied alpha blend (Skia output is premultiplied)
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_SCISSOR_TEST);
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -509,11 +531,21 @@ void Engine::run() {
             glBindTexture(GL_TEXTURE_2D, uiTex);
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
-
-            glBindVertexArray(0);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            glDisable(GL_BLEND);
         }
+
+        // Restore GL state for three.js
+        glUseProgram(savedProg);
+        glBindVertexArray(savedVao);
+        glBindBuffer(GL_ARRAY_BUFFER, savedVbo);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, savedEbo);
+        glActiveTexture(savedActiveTex);
+        glBindTexture(GL_TEXTURE_2D, savedTex0);
+        glBindFramebuffer(GL_FRAMEBUFFER, savedFbo);
+        glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+        if (savedBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+        if (savedDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+        if (savedCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+        if (savedScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
 
         // 5g. Swap buffers
         gl_->swapBuffers();
