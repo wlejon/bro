@@ -689,55 +689,39 @@ static JSValue js_element_get_textContent(JSContext* ctx, JSValueConst this_val)
     return JS_NewString(ctx, el->textContent().c_str());
 }
 
-// Prune orphans whose JS wrappers have been GC'd from __bro_elem_map.
-// Called periodically to prevent unbounded growth from create/remove cycles.
-static void pruneOrphans(JSContext* ctx) {
-    if (!s_document || s_document->orphans().size() < 500) return;
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
-
-    auto& orphans = const_cast<std::vector<std::shared_ptr<bro::dom::Element>>&>(
-        s_document->orphans());
-
-    orphans.erase(
-        std::remove_if(orphans.begin(), orphans.end(),
-            [&](const std::shared_ptr<bro::dom::Element>& elem) {
-                // Keep if element is attached to the tree (has a parent)
-                if (elem->parentNode()) return false;
-                // Keep if element is still in the elem map (JS holds a reference)
-                std::string key = std::to_string(elem->nodeId());
-                JSValue val = JS_GetPropertyStr(ctx, elemMap, key.c_str());
-                bool inMap = !JS_IsUndefined(val);
-                JS_FreeValue(ctx, val);
-                return !inMap; // remove if not in map
-            }),
-        orphans.end());
-
-    JS_FreeValue(ctx, elemMap);
-    JS_FreeValue(ctx, global);
-}
-
-// Remove __bro_elem_map entries for an element and all its descendants.
-// The C++ objects must already be retained (in orphans) before calling this.
-static void removeFromElemMap(JSContext* ctx, bro::dom::Element* elem) {
+// Invalidate a JS wrapper by nulling its opaque pointer and removing from elem map.
+// After this, getElement() returns nullptr for stale wrappers (canary check).
+// Must be called BEFORE the C++ Element is freed.
+static void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem) {
     if (!elem) return;
+
+    // Recurse into children first
     for (auto& child : elem->childNodes()) {
         if (child->nodeType() == bro::dom::NodeType::Element)
-            removeFromElemMap(ctx, static_cast<bro::dom::Element*>(child.get()));
+            invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child.get()));
     }
+
+    if (s_document && !elem->id().empty())
+        s_document->unregisterElementId(elem->id());
+
+    // Find and null-out the JS wrapper
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
     if (!JS_IsUndefined(elemMap)) {
         std::string key = std::to_string(elem->nodeId());
+        JSValue wrapper = JS_GetPropertyStr(ctx, elemMap, key.c_str());
+        if (!JS_IsUndefined(wrapper) && !JS_IsNull(wrapper)) {
+            // Null the opaque pointer so getElement() returns nullptr
+            JS_SetOpaque(wrapper, nullptr);
+            JS_FreeValue(ctx, wrapper);
+        }
+        // Delete from map
         JSAtom atom = JS_NewAtom(ctx, key.c_str());
         JS_DeleteProperty(ctx, elemMap, atom, 0);
         JS_FreeAtom(ctx, atom);
     }
     JS_FreeValue(ctx, elemMap);
     JS_FreeValue(ctx, global);
-    if (s_document && !elem->id().empty())
-        s_document->unregisterElementId(elem->id());
 }
 
 static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
@@ -745,16 +729,12 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    // Collect children before they're cleared (setTextContent retains them as orphans)
-    std::vector<bro::dom::Element*> kids;
+    // Invalidate JS wrappers for children that will be freed
     for (auto& child : el->childNodes()) {
         if (child->nodeType() == bro::dom::NodeType::Element)
-            kids.push_back(static_cast<bro::dom::Element*>(child.get()));
+            invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child.get()));
     }
     el->setTextContent(jsToStdString(ctx, val));
-    // Now safe to remove from elem map — C++ objects are alive in orphans
-    for (auto* kid : kids) removeFromElemMap(ctx, kid);
-    pruneOrphans(ctx);
     return JS_UNDEFINED;
 }
 
@@ -770,14 +750,11 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    std::vector<bro::dom::Element*> kids;
     for (auto& child : el->childNodes()) {
         if (child->nodeType() == bro::dom::NodeType::Element)
-            kids.push_back(static_cast<bro::dom::Element*>(child.get()));
+            invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child.get()));
     }
     el->setInnerHTML(jsToStdString(ctx, val));
-    for (auto* kid : kids) removeFromElemMap(ctx, kid);
-    pruneOrphans(ctx);
     return JS_UNDEFINED;
 }
 
@@ -1099,12 +1076,16 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
     auto* child = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
     if (child) {
-        // Unregister ID so getElementById doesn't find detached elements
-        if (s_document && !child->id().empty()) {
+        if (s_document && !child->id().empty())
             s_document->unregisterElementId(child->id());
-        }
-        // Node::removeChild retains Element children as orphans automatically
+        // Save shared_ptr to orphans so the element survives removal
+        // (caller may re-append it elsewhere — spec returns the removed node).
+        auto saved = findSharedPtr(child);
         el->removeChild(static_cast<bro::dom::Node*>(child));
+        if (s_document && saved) {
+            auto elemSaved = std::static_pointer_cast<bro::dom::Element>(saved);
+            s_document->retainOrphan(std::move(elemSaved));
+        }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
@@ -1140,12 +1121,18 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         DomBindings::unwrapElement(ctx, argv[1]));
     if (newChild && oldChild) {
         auto newPtr = findSharedPtr(newChild);
+        auto oldSaved = findSharedPtr(oldChild);
         el->insertBefore(newPtr, static_cast<bro::dom::Node*>(oldChild));
-        if (s_document && !oldChild->id().empty()) {
+        if (s_document && !oldChild->id().empty())
             s_document->unregisterElementId(oldChild->id());
-        }
         el->removeChild(static_cast<bro::dom::Node*>(oldChild));
-        if (s_document) s_document->adoptOrphan(newChild);
+        if (s_document) {
+            s_document->adoptOrphan(newChild);
+            if (oldSaved) {
+                s_document->retainOrphan(
+                    std::static_pointer_cast<bro::dom::Element>(oldSaved));
+            }
+        }
     }
     return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
 }
@@ -1209,12 +1196,16 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    auto* parent = el->parentElement();
+    auto* parent = el->parentNode();
     if (parent) {
-        if (s_document && !el->id().empty()) {
+        if (s_document && !el->id().empty())
             s_document->unregisterElementId(el->id());
-        }
+        auto saved = findSharedPtr(el);
         parent->removeChild(static_cast<bro::dom::Node*>(el));
+        if (s_document && saved) {
+            auto elemSaved = std::static_pointer_cast<bro::dom::Element>(saved);
+            s_document->retainOrphan(std::move(elemSaved));
+        }
     }
     (void)ctx;
     return JS_UNDEFINED;

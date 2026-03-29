@@ -30,15 +30,6 @@ void Node::removeChild(Node* child) {
         [child](const std::shared_ptr<Node>& n) { return n.get() == child; });
 
     if (it != children_.end()) {
-        // If the child is an Element with a document, retain it as an orphan
-        // so it stays alive if JS still holds a reference to its wrapper.
-        if ((*it)->nodeType() == NodeType::Element) {
-            auto* elem = static_cast<Element*>((*it).get());
-            if (elem->document()) {
-                elem->document()->retainOrphan(
-                    std::static_pointer_cast<Element>(*it));
-            }
-        }
         (*it)->parent_ = nullptr;
         children_.erase(it);
     }
@@ -148,14 +139,6 @@ std::string Element::textContent() const {
 }
 
 void Element::setTextContent(const std::string& text) {
-    // Move Element children to orphans so they stay alive if JS holds references.
-    if (document_) {
-        for (auto& child : children_) {
-            if (child->nodeType() == NodeType::Element) {
-                document_->retainOrphan(std::static_pointer_cast<Element>(child));
-            }
-        }
-    }
     for (auto& child : children_) {
         child->setParent(nullptr);
     }
@@ -209,13 +192,6 @@ std::string Element::innerHTML() const {
 }
 
 void Element::setInnerHTML(const std::string& html) {
-    if (document_) {
-        for (auto& child : children_) {
-            if (child->nodeType() == NodeType::Element) {
-                document_->retainOrphan(std::static_pointer_cast<Element>(child));
-            }
-        }
-    }
     for (auto& child : children_) {
         child->setParent(nullptr);
     }
@@ -419,9 +395,11 @@ void Element::syncStylesToLitehtml() {
     } else {
         litehtml_element_->set_attr("style", css.c_str());
     }
-    // Clear and re-apply stylesheet rules, then add inline style on top.
-    // This ensures inline styles override correctly without accumulation.
-    litehtml_element_->refresh_styles();
+    // Only recompute this element's styles (fast).
+    // refresh_styles() walks the entire subtree and recomputes all CSS rules
+    // from stylesheets — that's expensive and unnecessary for inline style changes.
+    // set_attr("style",...) already updated the inline style string, and
+    // compute_styles will pick it up.
     litehtml_element_->compute_styles(false);
 }
 
