@@ -7,7 +7,7 @@ namespace bro::render {
 /// Abstract interface for rendering a scene behind the HTML/CSS UI.
 ///
 /// The scene layer draws directly to SDL_Renderer (GPU-accelerated via
-/// D3D11/Vulkan/Metal). The HTML/CSS UI is composited on top as a
+/// D3D11/D3D12/Metal). The HTML/CSS UI is composited on top as a
 /// transparent texture, so CSS `background: transparent` lets the scene
 /// show through.
 ///

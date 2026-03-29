@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <vector>
 #include <cstdint>
 
 struct SDL_Window;
@@ -21,8 +20,6 @@ public:
     uint32_t getHeight() const { return m_height; }
 
     void setSize(uint32_t width, uint32_t height) { m_width = width; m_height = height; }
-
-    std::vector<const char*> getVulkanInstanceExtensions() const;
 
 private:
     SDL_Window* m_window = nullptr;

@@ -1,7 +1,6 @@
 #include "engine/engine.h"
 
 #include "platform/sdl_window.h"
-#include "platform/vulkan_context.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
 #include "render/scene_layer.h"
@@ -183,8 +182,8 @@ Engine::Engine(const std::string& appDir, int width, int height)
     window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(width),
                                                   static_cast<uint32_t>(height));
 
-    // 2. Renderer (Skia raster + SDL display, no Vulkan needed)
-    renderer_ = render::createRenderer(nullptr, window_.get());
+    // 2. Renderer (Skia raster + SDL display)
+    renderer_ = render::createRenderer(window_.get());
     if (!renderer_) {
         throw std::runtime_error("Failed to create renderer");
     }

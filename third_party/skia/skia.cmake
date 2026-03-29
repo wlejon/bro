@@ -6,15 +6,17 @@
 #   bin/gn gen out/Release --args='...'  (see CLAUDE.md)
 #   ninja -C out/Release skia
 
-option(BRO_USE_SKIA "Link against pre-built Skia" OFF)
-
-# Auto-detect: if lib exists, enable Skia
-if(NOT DEFINED CACHE{BRO_USE_SKIA})
+# Auto-detect: if lib exists and user didn't explicitly set BRO_USE_SKIA, enable it
+if(NOT DEFINED BRO_USE_SKIA)
     if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/lib/skia.lib" OR
        EXISTS "${CMAKE_CURRENT_LIST_DIR}/lib/libskia.a")
         set(BRO_USE_SKIA ON CACHE BOOL "Link against pre-built Skia" FORCE)
         message(STATUS "Skia library found — enabling BRO_USE_SKIA")
+    else()
+        set(BRO_USE_SKIA OFF CACHE BOOL "Link against pre-built Skia")
     endif()
+else()
+    option(BRO_USE_SKIA "Link against pre-built Skia" OFF)
 endif()
 
 if(BRO_USE_SKIA)
@@ -29,12 +31,6 @@ if(BRO_USE_SKIA)
     )
     # Skia headers use #include <include/core/...> so the include root is the parent
     target_include_directories(skia INTERFACE "${CMAKE_CURRENT_LIST_DIR}/src")
-    # Skia's Vulkan backend needs the Vulkan loader
-    if(TARGET Vulkan::Vulkan)
-        target_link_libraries(skia INTERFACE Vulkan::Vulkan)
-    elseif(WIN32)
-        target_link_libraries(skia INTERFACE vulkan-1)
-    endif()
 else()
     add_library(skia INTERFACE)
 endif()

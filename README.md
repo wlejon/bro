@@ -15,8 +15,8 @@ A lightweight desktop application framework that runs HTML/CSS/JS apps as native
 
 - **QuickJS** -- ES2023 JavaScript engine. Runs app scripts with a DOM API (`document.getElementById`, `addEventListener`, `textContent`, `style`, etc.).
 - **LiteHTML** -- HTML/CSS parser and layout engine. Handles box model, selectors, text flow, and CSS styling.
-- **Skia** (optional) -- GPU-accelerated 2D rendering via Vulkan. When not available, falls back to an SDL3 2D renderer with Win32 GDI text.
-- **SDL3** -- Cross-platform windowing, input events, and software rendering fallback.
+- **Skia** (optional) -- High-quality 2D rasterization (text, paths, images). When not available, falls back to an SDL3 2D renderer with Win32 GDI text.
+- **SDL3** -- Cross-platform windowing, input events, and GPU-accelerated display.
 
 ## Status
 
@@ -59,7 +59,7 @@ Early prototype. The framework can load an HTML/CSS/JS app, render it in a windo
 - **MSVC** (Visual Studio 2022+) -- MinGW is not supported
 - **CMake** 3.28+
 - **Ninja** (recommended)
-- Git submodules: QuickJS, LiteHTML, SDL3, Vulkan-Headers
+- Git submodules: QuickJS, LiteHTML, SDL3
 
 ### Setup
 
@@ -82,7 +82,7 @@ cmake --preset default
 cmake --build build
 ```
 
-The default build uses `BRO_NO_SKIA` (SDL software renderer). To enable Skia+Vulkan rendering, place pre-built Skia libraries in `third_party/skia/lib/` and headers in `third_party/skia/include/`, then configure with `-DBRO_USE_SKIA=ON`.
+The default build uses `BRO_NO_SKIA` (SDL software renderer). To enable Skia rendering, place pre-built Skia libraries in `third_party/skia/lib/` and headers in `third_party/skia/include/`, then configure with `-DBRO_USE_SKIA=ON`.
 
 ## Usage
 
@@ -129,14 +129,13 @@ src/
   js/                   # QuickJS bindings: Runtime, Console, Timers, DomBindings
   layout/               # LiteHTML container implementation, font management
   render/               # Renderer interface + Skia/SDL backends
-  platform/             # SDL window, Vulkan context, event loop
+  platform/             # SDL window, event loop
   headless/             # Headless testing tool
   util/                 # Logging, string utilities
 third_party/
   quickjs/              # JS engine (git submodule)
   litehtml/             # HTML/CSS layout (git submodule)
   SDL/                  # Windowing + input (git submodule)
-  Vulkan-Headers/       # Vulkan type definitions (git submodule)
   skia/                 # Pre-built Skia (not included, optional)
 apps/
   hello/                # Example app

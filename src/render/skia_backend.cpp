@@ -31,7 +31,7 @@ namespace bro::render {
 // ===========================================================================
 
 SDLRenderer::SDLRenderer(platform::Window& window) {
-    // Create SDL renderer on the existing window (picks best backend: D3D11/12, Vulkan, OGL)
+    // Create SDL renderer on the existing window (picks best GPU backend)
     sdlRenderer_ = SDL_CreateRenderer(window.getSDLWindow(), nullptr);
     if (!sdlRenderer_) {
         LOG_ERROR("Failed to create SDL_Renderer: %s", SDL_GetError());
@@ -283,8 +283,7 @@ void SDLRenderer::endFrame() {
 // ---------------------------------------------------------------------------
 // Factory (no Skia)
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/,
-                                          platform::Window* window) {
+std::unique_ptr<Renderer> createRenderer(platform::Window* window) {
     if (window) {
         LOG_INFO("Creating SDLRenderer (Skia not available)");
         return std::make_unique<SDLRenderer>(*window);
@@ -300,7 +299,7 @@ std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/,
 //
 // Renders to a CPU-side Skia surface for full-quality text and graphics,
 // then uploads the pixels to an SDL texture for GPU-accelerated display.
-// This completely avoids Vulkan swapchain synchronization complexity.
+// SDL handles GPU backend selection (D3D11/12, Metal, etc.).
 // ===========================================================================
 
 SkiaRenderer::SkiaRenderer(platform::Window& window) {
@@ -539,8 +538,7 @@ SDL_Texture* SkiaRenderer::renderTextToTexture(std::string_view text, uint64_t f
 // ---------------------------------------------------------------------------
 // Factory (Skia available)
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* /*vk*/,
-                                          platform::Window* window) {
+std::unique_ptr<Renderer> createRenderer(platform::Window* window) {
     if (window) {
         LOG_INFO("Creating SkiaRenderer (Skia raster + SDL display)");
         return std::make_unique<SkiaRenderer>(*window);

@@ -20,7 +20,6 @@ struct SDL_Window;
 struct SDL_Texture;
 
 namespace bro::platform {
-    class VulkanContext;
     class Window;
 } // namespace bro::platform
 
@@ -154,7 +153,6 @@ private:
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(platform::VulkanContext* vk,
-                                          platform::Window* window = nullptr);
+std::unique_ptr<Renderer> createRenderer(platform::Window* window);
 
 } // namespace bro::render

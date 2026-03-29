@@ -11,7 +11,6 @@ namespace bro::audio { class AudioEngine; }
 
 namespace bro::platform {
     class Window;
-    class VulkanContext;
     class EventLoop;
 }
 namespace bro::render { class Renderer; }
@@ -48,7 +47,6 @@ private:
     void drawStatsOverlay(double frameTimeMs);
 
     std::unique_ptr<platform::Window> window_;
-    std::unique_ptr<platform::VulkanContext> vulkan_;
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<js::Runtime> jsRuntime_;
     std::unique_ptr<js::Timers> timers_;

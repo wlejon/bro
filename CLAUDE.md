@@ -35,7 +35,7 @@ Submodules must be initialized: `git submodule update --init`
 
 Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~6K LOC of C++20.
 
-**Stack:** QuickJS (JS engine) + LiteHTML (HTML/CSS layout) + Skia (GPU rendering via Vulkan) + SDL3 (windowing)
+**Stack:** QuickJS (JS engine) + LiteHTML (HTML/CSS layout) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 
 **Two executables:**
 - `bro` — windowed app runner
@@ -46,7 +46,7 @@ Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleratio
 ```
 util  (logging, string helpers — standalone)
   ↑
-platform  (SDL3 window, Vulkan context, event loop)
+platform  (SDL3 window, event loop)
   ↑
 render  (abstract Renderer interface, SkiaRenderer or SDLRenderer)
   ↑
@@ -62,7 +62,7 @@ engine  (orchestrates all subsystems, main loop)
 ### Key design patterns
 
 - **Dual DOM:** LiteHTML parses HTML and owns layout. A parallel `bro::dom` tree is built from it for JS interaction. Both are kept in sync via dirty tracking.
-- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface. Two implementations: `SkiaRenderer` (GPU, Vulkan, requires `BRO_USE_SKIA=ON` + pre-built Skia) and `SDLRenderer` (2D fallback, default).
+- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface. Two implementations: `SkiaRenderer` (Skia raster + SDL display, requires `BRO_USE_SKIA=ON` + pre-built Skia) and `SDLRenderer` (2D fallback, default). SDL picks the best GPU backend (D3D11/12, Metal, etc.).
 - **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via LiteHTML → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners.
 - **Dirty tracking:** DOM mutations call `document_->markDirty()`. Main loop only re-layouts when `isDirty()` is true.
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.
@@ -79,7 +79,6 @@ engine  (orchestrates all subsystems, main loop)
 | QuickJS | `qjs` | JS engine, built as library |
 | LiteHTML | `litehtml` | HTML/CSS layout |
 | SDL3 | `SDL3::SDL3` | From vcpkg (shared) or submodule (static) |
-| Vulkan-Headers | `Vulkan::Headers` | Falls back to bundled if SDK not found |
 | Skia | `skia` (imported) | Pre-built binaries, optional (`BRO_USE_SKIA`) |
 
 ## Namespace

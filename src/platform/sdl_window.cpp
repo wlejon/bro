@@ -2,8 +2,6 @@
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
-
 #include <stdexcept>
 
 namespace bro::platform {
@@ -17,9 +15,6 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height)
     }
 
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE;
-#ifndef BRO_NO_SKIA
-    flags |= SDL_WINDOW_VULKAN;
-#endif
     m_window = SDL_CreateWindow(title.c_str(),
                                 static_cast<int>(width),
                                 static_cast<int>(height),
@@ -39,18 +34,6 @@ Window::~Window() {
         m_window = nullptr;
     }
     SDL_Quit();
-}
-
-std::vector<const char*> Window::getVulkanInstanceExtensions() const {
-    Uint32 count = 0;
-    const char* const* names = SDL_Vulkan_GetInstanceExtensions(&count);
-    if (!names) {
-        LOG_ERROR("Failed to get Vulkan instance extensions: %s", SDL_GetError());
-        return {};
-    }
-
-    std::vector<const char*> extensions(names, names + count);
-    return extensions;
 }
 
 } // namespace bro::platform

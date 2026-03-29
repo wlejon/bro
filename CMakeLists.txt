@@ -20,8 +20,6 @@ endif()
 
 # Find system packages at root scope so IMPORTED targets are globally visible
 find_package(SDL3 CONFIG QUIET)
-find_package(Vulkan QUIET)
-
 add_subdirectory(third_party)
 
 # BRO_USE_SKIA is defined in third_party/skia/skia.cmake (option, default OFF).
