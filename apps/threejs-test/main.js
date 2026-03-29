@@ -1,4 +1,4 @@
-// three.js test - spinning textured cube with lighting
+// three.js test - GLTFLoader loading a .glb model
 var canvas = document.getElementById('c');
 console.log('THREE version:', THREE.REVISION);
 
@@ -9,43 +9,55 @@ var scene = new THREE.Scene();
 scene.background = new THREE.Color(0x334455);
 
 var camera = new THREE.PerspectiveCamera(75, 1024 / 768, 0.1, 1000);
-camera.position.z = 4;
+camera.position.set(1.5, 1.5, 2.5);
+camera.lookAt(0, 0, 0);
 
-// Load checkerboard texture
-var textureLoader = new THREE.TextureLoader();
-var texture = textureLoader.load('checker.png');
+// Lighting
+var ambientLight = new THREE.AmbientLight(0x404040, 2.0);
+scene.add(ambientLight);
 
-// Textured cube (center) - unlit to test texture
-var cube = new THREE.Mesh(
-    new THREE.BoxGeometry(1.2, 1.2, 1.2),
-    new THREE.MeshBasicMaterial({ map: texture })
+var dirLight = new THREE.DirectionalLight(0xffffff, 3.0);
+dirLight.position.set(5, 5, 5);
+scene.add(dirLight);
+
+// Load glTF model
+var loader = new THREE.GLTFLoader();
+console.log('Loading cube.glb...');
+
+var model = null;
+
+loader.load('cube.glb',
+    function(gltf) {
+        console.log('glTF loaded successfully!');
+        console.log('  scenes:', gltf.scenes.length);
+        console.log('  animations:', gltf.animations.length);
+        model = gltf.scene;
+        scene.add(model);
+    },
+    function(progress) {
+        // Progress callback
+    },
+    function(error) {
+        console.error('glTF load error:', error);
+    }
 );
-scene.add(cube);
 
-// Red cube (right)
-var cube2 = new THREE.Mesh(
-    new THREE.BoxGeometry(0.6, 0.6, 0.6),
-    new THREE.MeshBasicMaterial({ color: 0xff4444 })
+// Also add a reference cube so we can see something while model loads
+var refCube = new THREE.Mesh(
+    new THREE.BoxGeometry(0.3, 0.3, 0.3),
+    new THREE.MeshStandardMaterial({ color: 0xff4444, roughness: 0.5 })
 );
-cube2.position.x = 2.5;
-scene.add(cube2);
+refCube.position.set(2, 0, 0);
+scene.add(refCube);
 
-// Green cube (left)
-var cube3 = new THREE.Mesh(
-    new THREE.BoxGeometry(0.6, 0.6, 0.6),
-    new THREE.MeshBasicMaterial({ color: 0x44ff44 })
-);
-cube3.position.x = -2.5;
-scene.add(cube3);
-
-console.log('Scene ready');
+console.log('Scene ready - GLTFLoader test');
 
 function animate() {
     requestAnimationFrame(animate);
-    cube.rotation.x += 0.01;
-    cube.rotation.y += 0.02;
-    cube2.rotation.y += 0.03;
-    cube3.rotation.x += 0.02;
+    if (model) {
+        model.rotation.y += 0.01;
+    }
+    refCube.rotation.y += 0.02;
     renderer.render(scene, camera);
 }
 animate();

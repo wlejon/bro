@@ -16,6 +16,7 @@
 #include "js/storage_bindings.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
+#include "js/fetch_bindings.h"
 #include "audio/audio_engine.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
@@ -250,6 +251,7 @@ Engine::Engine(const std::string& appDir, int width, int height)
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::WebGL2Bindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+    js::FetchBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::DomBindings::setGetContextFactory(
         [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
             if (type == "2d") {
