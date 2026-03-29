@@ -19,5 +19,8 @@ else()
     message(STATUS "SDL3 found via find_package")
 endif()
 
+# --- glad2 (OpenGL 3.3 Core loader) ---
+add_subdirectory(glad EXCLUDE_FROM_ALL)
+
 # --- Skia (pre-built, optional) ---
 include(skia/skia.cmake)

@@ -1,9 +1,9 @@
 #include "canvas/canvas_scene.h"
 #include "render/skia_backend.h"
-#include "render/gpu_context.h"
+#include "render/gl_context.h"
 
-#include <SDL3/SDL_gpu.h>
 #include <cmath>
+#include <cstring>
 
 namespace bro::canvas {
 
@@ -21,20 +21,21 @@ void CanvasScene::onCleanup() {
     textCache_.clear();
     for (auto& [k, h] : fontCache_) renderer_->deleteFont(h);
     fontCache_.clear();
-    if (vertexBuf_ && gpu_) {
-        gpu_->releaseBuffer(vertexBuf_);
-        vertexBuf_ = nullptr;
+    if (vertexBuf_) {
+        glDeleteBuffers(1, &vertexBuf_);
+        vertexBuf_ = 0;
         vertexBufSize_ = 0;
     }
+    if (colorVAO_) { glDeleteVertexArrays(1, &colorVAO_); colorVAO_ = 0; }
+    if (textureVAO_) { glDeleteVertexArrays(1, &textureVAO_); textureVAO_ = 0; }
 }
 
 // ---------------------------------------------------------------------------
-// prepareFrame — build vertex data and upload to GPU (before render pass)
+// prepareFrame — build vertex data and upload to GPU
 // ---------------------------------------------------------------------------
 
-void CanvasScene::prepareFrame(render::GPUContext* gpu, SDL_GPUCommandBuffer* cmd,
-                                int w, int h) {
-    if (!gpu || !cmd) return;
+void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
+    if (!gl) return;
     width_ = w;
     height_ = h;
 
@@ -134,7 +135,7 @@ void CanvasScene::prepareFrame(render::GPUContext* gpu, SDL_GPUCommandBuffer* cm
             if (!fontHandle) fontHandle = getOrCreateFont(currentFont);
             render::Color col{fillR, fillG, fillB, (uint8_t)(fillA * globalAlpha)};
             int tw = 0, th = 0;
-            SDL_GPUTexture* tex = skia->renderTextToTexture(cmd, c.text, fontHandle, col, tw, th);
+            GLuint tex = skia->renderTextToTexture(c.text, fontHandle, col, tw, th);
             if (tex) {
                 float dx = c.x + tx;
                 float dy = c.y + ty - th * 0.75f;
@@ -182,12 +183,15 @@ void CanvasScene::prepareFrame(render::GPUContext* gpu, SDL_GPUCommandBuffer* cm
 
     if (totalBytes == 0) return;
 
-    // Ensure GPU vertex buffer is large enough
+    // Ensure GL vertex buffer is large enough
     if (!vertexBuf_ || vertexBufSize_ < totalBytes) {
-        if (vertexBuf_) gpu->releaseBuffer(vertexBuf_);
+        if (vertexBuf_) glDeleteBuffers(1, &vertexBuf_);
         uint32_t size = 65536;
         while (size < totalBytes) size *= 2;
-        vertexBuf_ = gpu->createVertexBuffer(size);
+        glGenBuffers(1, &vertexBuf_);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
+        glBufferData(GL_ARRAY_BUFFER, size, nullptr, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
         vertexBufSize_ = size;
     }
 
@@ -198,50 +202,76 @@ void CanvasScene::prepareFrame(render::GPUContext* gpu, SDL_GPUCommandBuffer* cm
     if (texBytes > 0)
         memcpy(combined.data() + colorBytes_, texVerts.data(), texBytes);
 
-    gpu->uploadToBuffer(cmd, vertexBuf_, combined.data(), totalBytes);
+    glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, totalBytes, combined.data());
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    // Create VAOs if needed (re-bind buffer each time since buffer may be reallocated)
+    if (!colorVAO_) glGenVertexArrays(1, &colorVAO_);
+    if (!textureVAO_) glGenVertexArrays(1, &textureVAO_);
+
+    // Setup color VAO
+    glBindVertexArray(colorVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)offsetof(CV, r));
+    glBindVertexArray(0);
+
+    // Setup texture VAO (vertices start at colorBytes_ offset)
+    glBindVertexArray(textureVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)colorBytes_);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)(colorBytes_ + offsetof(TV, u)));
+    glBindVertexArray(0);
 }
 
 // ---------------------------------------------------------------------------
-// onRender — issue draw calls (inside render pass, vertex data already uploaded)
+// onRender — issue draw calls
 // ---------------------------------------------------------------------------
 
-void CanvasScene::onRender(render::GPUContext* gpu, SDL_GPUCommandBuffer* cmd,
-                            SDL_GPURenderPass* pass,
-                            int w, int h, double) {
-    if (!gpu || !cmd || !pass || !vertexBuf_) return;
+void CanvasScene::onRender(render::GLContext* gl, int w, int h, double) {
+    if (!gl || !vertexBuf_) return;
     if (colorVertCount_ == 0 && textDraws_.empty()) return;
 
     float viewport[2] = {(float)w, (float)h};
 
     // Draw colored geometry
     if (colorVertCount_ > 0) {
-        SDL_BindGPUGraphicsPipeline(pass, gpu->colorPipeline());
-        SDL_PushGPUVertexUniformData(cmd, 0, viewport, sizeof(viewport));
+        glUseProgram(gl->colorProgram());
+        glUniform2fv(gl->colorViewportLoc(), 1, viewport);
 
-        SDL_GPUBufferBinding binding = {};
-        binding.buffer = vertexBuf_;
-        binding.offset = 0;
-        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
-        SDL_DrawGPUPrimitives(pass, colorVertCount_, 1, 0, 0);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        glBindVertexArray(colorVAO_);
+        glDrawArrays(GL_TRIANGLES, 0, colorVertCount_);
+        glBindVertexArray(0);
     }
 
     // Draw textured quads (text)
     if (!textDraws_.empty()) {
-        SDL_BindGPUGraphicsPipeline(pass, gpu->texturePipeline());
-        SDL_PushGPUVertexUniformData(cmd, 0, viewport, sizeof(viewport));
+        glUseProgram(gl->textureProgram());
+        glUniform2fv(gl->textureViewportLoc(), 1, viewport);
+        glUniform1i(gl->textureSamplerLoc(), 0);
 
-        SDL_GPUBufferBinding binding = {};
-        binding.buffer = vertexBuf_;
-        binding.offset = colorBytes_;
-        SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+        // Premultiplied alpha blend for text
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+        glBindVertexArray(textureVAO_);
 
         for (auto& td : textDraws_) {
-            SDL_GPUTextureSamplerBinding texBind = {};
-            texBind.texture = td.tex;
-            texBind.sampler = gpu->linearSampler();
-            SDL_BindGPUFragmentSamplers(pass, 0, &texBind, 1);
-            SDL_DrawGPUPrimitives(pass, td.vertexCount, 1, td.firstVertex, 0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, td.tex);
+            glDrawArrays(GL_TRIANGLES, td.firstVertex, td.vertexCount);
         }
+
+        glBindVertexArray(0);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 }
 

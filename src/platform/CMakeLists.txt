@@ -10,4 +10,4 @@ else()
     message(FATAL_ERROR "No SDL3 target found")
 endif()
 
-target_link_libraries(bro_platform PUBLIC bro_util)
+target_link_libraries(bro_platform PUBLIC bro_util glad)

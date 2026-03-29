@@ -6,9 +6,9 @@
 #include <memory>
 #include <string>
 
-struct SDL_GPUBuffer;
+#include <glad/gl.h>
 
-namespace bro::render { class SceneLayer; class GPUContext; }
+namespace bro::render { class SceneLayer; class GLContext; }
 namespace bro::audio { class AudioEngine; }
 
 namespace bro::platform {
@@ -47,7 +47,7 @@ private:
     void drawStatsOverlay(double frameTimeMs);
 
     std::unique_ptr<platform::Window> window_;
-    std::unique_ptr<render::GPUContext> gpu_;
+    std::unique_ptr<render::GLContext> gl_;
     std::unique_ptr<render::Renderer> renderer_;
     std::unique_ptr<js::Runtime> jsRuntime_;
     std::unique_ptr<js::Timers> timers_;
@@ -75,8 +75,9 @@ private:
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
 
-    // Cached GPU buffer for UI overlay quad
-    SDL_GPUBuffer* uiQuadBuf_ = nullptr;
+    // UI overlay quad (OpenGL)
+    GLuint uiQuadVAO_ = 0;
+    GLuint uiQuadVBO_ = 0;
 };
 
 } // namespace bro::engine

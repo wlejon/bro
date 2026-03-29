@@ -5,7 +5,7 @@
 #include "render/renderer.h"
 #include "render/scene_layer.h"
 #include "render/skia_backend.h"
-#include "render/gpu_context.h"
+#include "render/gl_context.h"
 #include "js/runtime.h"
 #include "js/console.h"
 #include "js/timers.h"
@@ -26,8 +26,8 @@
 #include "util/time.h"
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_gpu.h>
 #include <SDL3/SDL_keycode.h>
+#include <glad/gl.h>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -180,15 +180,15 @@ Engine::Engine(const std::string& appDir, int width, int height)
     : viewportWidth_(width)
     , viewportHeight_(height) {
 
-    // 1. Window
+    // 1. Window (now creates OpenGL context)
     window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(width),
                                                   static_cast<uint32_t>(height));
 
-    // 2. GPU context (SDL_GPU device + pipelines)
-    gpu_ = std::make_unique<render::GPUContext>(*window_);
+    // 2. GL context (shader programs + helpers)
+    gl_ = std::make_unique<render::GLContext>(*window_);
 
-    // 3. Renderer (Skia raster + SDL_GPU display)
-    renderer_ = render::createRenderer(gpu_.get());
+    // 3. Renderer (Skia raster + OpenGL display)
+    renderer_ = render::createRenderer(gl_.get());
     if (!renderer_) {
         throw std::runtime_error("Failed to create renderer");
     }
@@ -267,12 +267,16 @@ Engine::Engine(const std::string& appDir, int width, int height)
 
     // 12. Stats overlay font
     statsFont_ = renderer_->createFont("Consolas", 13.0f, 400, false);
+
+    // 13. Create UI overlay quad VAO/VBO
+    glGenVertexArrays(1, &uiQuadVAO_);
+    glGenBuffers(1, &uiQuadVBO_);
 }
 
 void Engine::setSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
     sceneLayer_ = std::move(layer);
     if (sceneLayer_) {
-        sceneLayer_->onInit(gpu_.get(), viewportWidth_, viewportHeight_);
+        sceneLayer_->onInit(gl_.get(), viewportWidth_, viewportHeight_);
     }
 }
 
@@ -292,10 +296,8 @@ Engine::~Engine() {
         js::StorageBindings::cleanup(jsRuntime_->getContext());
         js::DomBindings::cleanup(jsRuntime_->getContext());
     }
-    if (uiQuadBuf_ && gpu_) {
-        gpu_->releaseBuffer(uiQuadBuf_);
-        uiQuadBuf_ = nullptr;
-    }
+    if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
+    if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
     audioEngine_.reset();
     // Destroy litehtml doc before container_ — litehtml::document::~document()
     // calls deleteFont which needs the FontManager inside container_ to be alive.
@@ -333,7 +335,6 @@ void Engine::run() {
 
     // Tell the layout container to skip full-viewport backgrounds when a scene
     // layer is active, so the scene shows through behind the HTML UI.
-    // Note: sceneLayer_ may be set during script execution, so check again later.
     container_->setSceneMode(sceneLayer_ != nullptr);
 
     // Initial layout
@@ -370,7 +371,7 @@ void Engine::run() {
             uiDirty_ = true;
         }
 
-        // === GPU FRAME ===
+        // === GPU FRAME (OpenGL) ===
 
         // 5a. Rasterize UI to Skia surface (CPU) if dirty
         if (uiDirty_ || !hasRenderedOnce_) {
@@ -392,90 +393,65 @@ void Engine::run() {
             uiDirty_ = false;
         }
 
-        // 5b. Begin GPU command buffer
-        SDL_GPUCommandBuffer* cmd = gpu_->beginFrame();
-        if (!cmd) continue;
+        // 5b. Upload Skia pixels to GL texture
+        skia->uploadToGPU();
 
-        // 5c. Upload Skia pixels to GPU texture (copy pass)
-        skia->uploadToGPU(cmd);
-
-        // 5d. Scene layer prepares vertex data (copy pass)
+        // 5c. Scene layer prepares vertex data
         auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sceneLayer_.get());
         if (canvasScene) {
-            canvasScene->prepareFrame(gpu_.get(), cmd, viewportWidth_, viewportHeight_);
+            canvasScene->prepareFrame(gl_.get(), viewportWidth_, viewportHeight_);
         }
 
-        // 5e. Acquire swapchain texture
-        SDL_GPUTexture* swapchain = nullptr;
-        uint32_t swW = 0, swH = 0;
-        if (!gpu_->acquireSwapchain(cmd, swapchain, swW, swH) || !swapchain) {
-            SDL_CancelGPUCommandBuffer(cmd);
-            continue;
+        // 5d. Set viewport and clear
+        glViewport(0, 0, viewportWidth_, viewportHeight_);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // 5e. Render pass 1: scene draws (directly to default framebuffer)
+        if (sceneLayer_) {
+            sceneLayer_->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
         }
 
-        // 5f. Render pass 1: scene draws to swapchain (clear to black)
-        {
-            SDL_GPUColorTargetInfo colorTarget = {};
-            colorTarget.texture = swapchain;
-            colorTarget.load_op = SDL_GPU_LOADOP_CLEAR;
-            colorTarget.store_op = SDL_GPU_STOREOP_STORE;
-            colorTarget.clear_color = {0.0f, 0.0f, 0.0f, 1.0f};
-            colorTarget.cycle = false;
-
-            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &colorTarget, 1, nullptr);
-            if (pass) {
-                if (sceneLayer_) {
-                    sceneLayer_->onRender(gpu_.get(), cmd, pass, viewportWidth_, viewportHeight_,
-                                          totalFrameMs_);
-                }
-                SDL_EndGPURenderPass(pass);
-            }
-        }
-
-        // 5g. Render pass 2: composite UI overlay (premultiplied alpha)
-        SDL_GPUTexture* uiTex = skia->getUITexture();
+        // 5f. Render pass 2: composite UI overlay (premultiplied alpha)
+        GLuint uiTex = skia->getUITexture();
         if (uiTex) {
-            SDL_GPUColorTargetInfo colorTarget = {};
-            colorTarget.texture = swapchain;
-            colorTarget.load_op = SDL_GPU_LOADOP_LOAD;  // preserve scene content
-            colorTarget.store_op = SDL_GPU_STOREOP_STORE;
-            colorTarget.cycle = false;
+            float w = (float)viewportWidth_, h = (float)viewportHeight_;
+            render::TextureVertex quad[6] = {
+                {0, 0, 0, 0}, {w, 0, 1, 0}, {w, h, 1, 1},
+                {0, 0, 0, 0}, {w, h, 1, 1}, {0, h, 0, 1},
+            };
 
-            SDL_GPURenderPass* pass = SDL_BeginGPURenderPass(cmd, &colorTarget, 1, nullptr);
-            if (pass) {
-                // Fullscreen textured quad
-                float w = (float)swW, h = (float)swH;
-                render::TextureVertex quad[6] = {
-                    {0, 0, 0, 0}, {w, 0, 1, 0}, {w, h, 1, 1},
-                    {0, 0, 0, 0}, {w, h, 1, 1}, {0, h, 0, 1},
-                };
+            glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
 
-                if (!uiQuadBuf_) {
-                    uiQuadBuf_ = gpu_->createVertexBuffer(sizeof(quad));
-                }
-                gpu_->uploadToBuffer(cmd, uiQuadBuf_, quad, sizeof(quad));
+            glBindVertexArray(uiQuadVAO_);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
 
-                SDL_BindGPUGraphicsPipeline(pass, gpu_->texturePipeline());
-                float viewport[2] = {w, h};
-                SDL_PushGPUVertexUniformData(cmd, 0, viewport, sizeof(viewport));
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {w, h};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
 
-                SDL_GPUBufferBinding binding = {};
-                binding.buffer = uiQuadBuf_;
-                binding.offset = 0;
-                SDL_BindGPUVertexBuffers(pass, 0, &binding, 1);
+            // Premultiplied alpha blend (Skia output is premultiplied)
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-                SDL_GPUTextureSamplerBinding texBind = {};
-                texBind.texture = uiTex;
-                texBind.sampler = gpu_->linearSampler();
-                SDL_BindGPUFragmentSamplers(pass, 0, &texBind, 1);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, uiTex);
 
-                SDL_DrawGPUPrimitives(pass, 6, 1, 0, 0);
-                SDL_EndGPURenderPass(pass);
-            }
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            glBindVertexArray(0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glDisable(GL_BLEND);
         }
 
-        // 5h. Submit
-        gpu_->submit(cmd);
+        // 5g. Swap buffers
+        gl_->swapBuffers();
 
         // 6. Frame time tracking
         totalFrameMs_ = util::currentTimeMs() - frameStart;
@@ -506,8 +482,6 @@ void Engine::handleResize(int w, int h) {
     uiDirty_ = true;
     hasRenderedOnce_ = false;
     container_->setViewport(w, h);
-    // Swapchain resize is handled by SkiaRenderer::beginFrame() when it detects
-    // a size mismatch, so we don't call recreateSwapchain here.
     if (sceneLayer_) {
         sceneLayer_->onResize(w, h);
     }

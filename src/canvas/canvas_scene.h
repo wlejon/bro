@@ -3,14 +3,13 @@
 #include "canvas/canvas2d.h"
 #include "render/scene_layer.h"
 #include "render/renderer.h"
-#include "render/gpu_context.h"
+#include "render/gl_context.h"
 
 #include <unordered_map>
 #include <string>
 #include <vector>
 
-struct SDL_GPUTexture;
-struct SDL_GPUBuffer;
+#include <glad/gl.h>
 
 namespace bro::canvas {
 
@@ -19,8 +18,8 @@ public:
     explicit CanvasScene(render::Renderer* renderer) : renderer_(renderer) {}
     ~CanvasScene() override { onCleanup(); }
 
-    void onInit(render::GPUContext* gpu, int w, int h) override {
-        gpu_ = gpu;
+    void onInit(render::GLContext* gl, int w, int h) override {
+        gl_ = gl;
         width_ = w;
         height_ = h;
     }
@@ -32,32 +31,34 @@ public:
     int width() const { return width_; }
     int height() const { return height_; }
 
-    /// Upload per-frame vertex data to GPU. Call before the render pass.
-    void prepareFrame(render::GPUContext* gpu, SDL_GPUCommandBuffer* cmd, int w, int h);
+    /// Build per-frame vertex data and upload to GPU. Call before onRender.
+    void prepareFrame(render::GLContext* gl, int w, int h);
 
-    void onRender(render::GPUContext* gpu, SDL_GPUCommandBuffer* cmd,
-                  SDL_GPURenderPass* pass,
-                  int w, int h, double deltaTimeMs) override;
+    void onRender(render::GLContext* gl, int w, int h, double deltaTimeMs) override;
 
 private:
     uint64_t getOrCreateFont(const std::string& fontStr);
 
     Canvas2D canvas_;
     render::Renderer* renderer_;
-    render::GPUContext* gpu_ = nullptr;
+    render::GLContext* gl_ = nullptr;
     int width_ = 0, height_ = 0;
 
     std::unordered_map<std::string, uint64_t> fontCache_;
 
-    // GPU vertex buffer (grown as needed)
-    SDL_GPUBuffer* vertexBuf_ = nullptr;
+    // GL vertex buffer (grown as needed)
+    GLuint vertexBuf_ = 0;
     uint32_t vertexBufSize_ = 0;
+
+    // VAOs for this scene
+    GLuint colorVAO_ = 0;
+    GLuint textureVAO_ = 0;
 
     // Prepared frame data (filled by prepareFrame, drawn by onRender)
     uint32_t colorVertCount_ = 0;
     uint32_t colorBytes_ = 0;
     struct TextDraw {
-        SDL_GPUTexture* tex;
+        GLuint tex;
         uint32_t firstVertex;
         uint32_t vertexCount;
     };
@@ -65,7 +66,7 @@ private:
 
     // Text texture cache
     struct CachedText {
-        SDL_GPUTexture* texture;
+        GLuint texture;
         int w, h;
     };
     std::unordered_map<std::string, CachedText> textCache_;

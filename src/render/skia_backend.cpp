@@ -1,8 +1,7 @@
 #include "render/skia_backend.h"
-#include "render/gpu_context.h"
+#include "render/gl_context.h"
 #include "util/log.h"
 
-#include <SDL3/SDL_gpu.h>
 #include <cstring>
 #include <sstream>
 #include <cmath>
@@ -20,21 +19,21 @@
 namespace bro::render {
 
 // ===========================================================================
-// SkiaRenderer — Skia raster rendering + SDL_GPU display
+// SkiaRenderer — Skia raster rendering + OpenGL display
 // ===========================================================================
 
-SkiaRenderer::SkiaRenderer(GPUContext& gpu) : gpu_(&gpu) {
-    LOG_INFO("SkiaRenderer created (SDL_GPU backend)");
+SkiaRenderer::SkiaRenderer(GLContext& gl) : gl_(&gl) {
+    LOG_INFO("SkiaRenderer created (OpenGL backend)");
 }
 
 SkiaRenderer::~SkiaRenderer() {
     for (auto& [k, e] : textTexCache_) {
-        gpu_->releaseTexture(e.tex);
+        gl_->deleteTexture(e.tex);
     }
     textTexCache_.clear();
     fonts_.clear();
     surface_.reset();
-    if (uiTexture_) gpu_->releaseTexture(uiTexture_);
+    if (uiTexture_) gl_->deleteTexture(uiTexture_);
 }
 
 SkColor SkiaRenderer::toSkColor(Color c) const {
@@ -151,14 +150,11 @@ void SkiaRenderer::resetClip() {
 }
 
 void SkiaRenderer::beginFrame(int width, int height) {
-    // (Re)create raster surface and GPU texture if size changed
+    // (Re)create raster surface and GL texture if size changed
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
         surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
-        if (uiTexture_) gpu_->releaseTexture(uiTexture_);
-        uiTexture_ = gpu_->createTexture2D(
-            width, height,
-            SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
-            SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        if (uiTexture_) gl_->deleteTexture(uiTexture_);
+        uiTexture_ = gl_->createTexture2D(width, height, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
         textureWidth_ = width;
         textureHeight_ = height;
     }
@@ -174,26 +170,24 @@ void SkiaRenderer::endFrame() {
     pixelsPending_ = (surface_ && uiTexture_);
 }
 
-void SkiaRenderer::uploadToGPU(SDL_GPUCommandBuffer* cmd) {
+void SkiaRenderer::uploadToGPU() {
     if (!pixelsPending_ || !surface_ || !uiTexture_) return;
     pixelsPending_ = false;
 
     SkPixmap pixmap;
     if (!surface_->peekPixels(&pixmap)) return;
 
-    gpu_->uploadToTexture(cmd, uiTexture_,
-                          pixmap.addr(),
-                          static_cast<uint32_t>(pixmap.width()),
-                          static_cast<uint32_t>(pixmap.height()),
-                          static_cast<uint32_t>(pixmap.rowBytes()));
+    gl_->uploadTexture2D(uiTexture_, pixmap.addr(),
+                         static_cast<uint32_t>(pixmap.width()),
+                         static_cast<uint32_t>(pixmap.height()),
+                         GL_BGRA, GL_UNSIGNED_BYTE);
 }
 
-SDL_GPUTexture* SkiaRenderer::renderTextToTexture(SDL_GPUCommandBuffer* cmd,
-                                                    std::string_view text,
-                                                    uint64_t font_handle,
-                                                    Color color,
-                                                    int& outW, int& outH) {
-    if (text.empty()) return nullptr;
+GLuint SkiaRenderer::renderTextToTexture(std::string_view text,
+                                          uint64_t font_handle,
+                                          Color color,
+                                          int& outW, int& outH) {
+    if (text.empty()) return 0;
 
     // Cache key
     char key[256];
@@ -211,18 +205,18 @@ SDL_GPUTexture* SkiaRenderer::renderTextToTexture(SDL_GPUCommandBuffer* cmd,
 
     // Measure
     auto fit = fonts_.find(font_handle);
-    if (fit == fonts_.end()) return nullptr;
+    if (fit == fonts_.end()) return 0;
     const SkFont& font = *fit->second.font;
 
     SkRect bounds;
     float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
     int tw = (int)std::ceil(width) + 4;
     int th = (int)std::ceil(bounds.height()) + 4;
-    if (tw <= 0 || th <= 0) return nullptr;
+    if (tw <= 0 || th <= 0) return 0;
 
     // Render to a temporary Skia surface
     auto tmpSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(tw, th));
-    if (!tmpSurface) return nullptr;
+    if (!tmpSurface) return 0;
 
     auto* c = tmpSurface->getCanvas();
     c->clear(SK_ColorTRANSPARENT);
@@ -232,15 +226,14 @@ SDL_GPUTexture* SkiaRenderer::renderTextToTexture(SDL_GPUCommandBuffer* cmd,
     c->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
                       -bounds.left() + 1, -bounds.top() + 1, font, paint);
 
-    // Create GPU texture and upload
+    // Create GL texture and upload
     SkPixmap pixmap;
-    if (!tmpSurface->peekPixels(&pixmap)) return nullptr;
+    if (!tmpSurface->peekPixels(&pixmap)) return 0;
 
-    SDL_GPUTexture* tex = gpu_->createTexture2D(
-        tw, th, SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    if (!tex) return nullptr;
+    GLuint tex = gl_->createTexture2D(tw, th, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
+    if (!tex) return 0;
 
-    gpu_->uploadToTexture(cmd, tex, pixmap.addr(), tw, th, (uint32_t)pixmap.rowBytes());
+    gl_->uploadTexture2D(tex, pixmap.addr(), tw, th, GL_BGRA, GL_UNSIGNED_BYTE);
 
     textTexCache_[cacheKey] = {tex, tw, th};
     outW = tw;
@@ -251,12 +244,12 @@ SDL_GPUTexture* SkiaRenderer::renderTextToTexture(SDL_GPUCommandBuffer* cmd,
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
-std::unique_ptr<Renderer> createRenderer(GPUContext* gpu) {
-    if (gpu) {
-        LOG_INFO("Creating SkiaRenderer (Skia raster + SDL_GPU display)");
-        return std::make_unique<SkiaRenderer>(*gpu);
+std::unique_ptr<Renderer> createRenderer(GLContext* gl) {
+    if (gl) {
+        LOG_INFO("Creating SkiaRenderer (Skia raster + OpenGL display)");
+        return std::make_unique<SkiaRenderer>(*gl);
     }
-    LOG_ERROR("createRenderer: no GPUContext provided");
+    LOG_ERROR("createRenderer: no GLContext provided");
     return nullptr;
 }
 
