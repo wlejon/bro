@@ -419,8 +419,9 @@ void Engine::run() {
             break;
         }
 
-        // 2. Tick timers
+        // 2. Tick timers + JS execution
         double now = util::currentTimeMs();
+        double t0 = now;
         timers_->tick(now);
 
         // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)
@@ -432,33 +433,7 @@ void Engine::run() {
         // 3a. Fire requestAnimationFrame callbacks
         timers_->fireAnimationFrames(now);
 
-        // Save GL state immediately after JS rendering, before anything else
-        // touches GL. Three.js caches state internally and won't re-bind if
-        // it thinks state hasn't changed. We must capture and restore exactly
-        // what three.js left behind.
-        GLint savedProg, savedVao, savedVbo, savedEbo, savedActiveTex;
-        GLint savedFbo, savedViewport[4];
-        GLboolean savedBlend, savedDepth, savedCull, savedScissor;
-        glGetIntegerv(GL_CURRENT_PROGRAM, &savedProg);
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
-        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVbo);
-        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &savedEbo);
-        glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTex);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFbo);
-        glGetIntegerv(GL_VIEWPORT, savedViewport);
-        savedBlend = glIsEnabled(GL_BLEND);
-        savedDepth = glIsEnabled(GL_DEPTH_TEST);
-        savedCull = glIsEnabled(GL_CULL_FACE);
-        savedScissor = glIsEnabled(GL_SCISSOR_TEST);
-        GLint savedTexOnActiveUnit, savedTexOnUnit0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexOnActiveUnit);
-        if (savedActiveTex != GL_TEXTURE0) {
-            glActiveTexture(GL_TEXTURE0);
-            glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexOnUnit0);
-            glActiveTexture(savedActiveTex);
-        } else {
-            savedTexOnUnit0 = savedTexOnActiveUnit;
-        }
+        double tGlSave = util::currentTimeMs();
 
         // 3b. Run pending JS jobs (promises, etc.)
         jsRuntime_->executePendingJobs();
@@ -468,10 +443,18 @@ void Engine::run() {
             webglScene->webglContext()->unbindCanvasFBO();
         }
 
-        // 4. Re-layout if DOM is dirty
-        if (document_ && document_->isDirty() && litehtmlDoc_) {
-            // Rebuild litehtml render tree when DOM structure changed
-            // (elements added/removed). Style-only changes reuse existing tree.
+        double tJs = util::currentTimeMs();
+        accumJsMs_ += tJs - t0;
+        accumGlStateMs_ += tJs - tGlSave;  // GL save is inside JS phase
+
+        // 4. Re-layout + rasterize UI at most ~60fps.
+        //    DOM mutations accumulate between UI frames; the cached Skia
+        //    texture is composited every frame regardless (cheap).
+        bool uiFrameDue = (now - lastUIRenderMs_ >= kUIFrameIntervalMs)
+                          || !hasRenderedOnce_;
+
+        double tLayout = tJs;
+        if (document_ && document_->isDirty() && litehtmlDoc_ && uiFrameDue) {
             if (document_->isStructureDirty()) {
                 litehtmlDoc_->rebuild_render_tree();
                 document_->clearStructureDirty();
@@ -479,11 +462,15 @@ void Engine::run() {
             litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
             document_->clearDirty();
             uiDirty_ = true;
+            lastUIRenderMs_ = now;
+            tLayout = util::currentTimeMs();
         }
+        accumLayoutMs_ += tLayout - tJs;
 
         // === GPU FRAME (OpenGL) ===
 
         // 5a. Rasterize UI to Skia surface (CPU) if dirty
+        double tRaster = tLayout;
         if (uiDirty_ || !hasRenderedOnce_) {
             renderer_->beginFrame(viewportWidth_, viewportHeight_);
 
@@ -501,10 +488,14 @@ void Engine::run() {
             renderer_->endFrame();
             hasRenderedOnce_ = true;
             uiDirty_ = false;
+            tRaster = util::currentTimeMs();
         }
 
         // 5b. Upload Skia pixels to GL texture
         skia->uploadToGPU();
+        accumRasterMs_ += util::currentTimeMs() - tLayout;
+
+        double tGpu = util::currentTimeMs();
 
         // 5c. Scene layer prepares vertex data
         auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sceneLayer_.get());
@@ -559,27 +550,23 @@ void Engine::run() {
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
 
-        // Restore GL state for three.js
-        glUseProgram(savedProg);
-        glBindVertexArray(savedVao);
-        glBindBuffer(GL_ARRAY_BUFFER, savedVbo);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, savedEbo);
-        // Restore texture bindings: first unit 0 (used by compositor), then the active unit
+        // Reset GL to clean defaults so Three.js/WebGL re-binds everything
+        // it needs on the next frame. This avoids expensive glGetIntegerv
+        // queries which force GPU pipeline flushes.
+        glUseProgram(0);
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, savedTexOnUnit0);
-        if (savedActiveTex != GL_TEXTURE0) {
-            glActiveTexture(savedActiveTex);
-            glBindTexture(GL_TEXTURE_2D, savedTexOnActiveUnit);
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, savedFbo);
-        glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
-        if (savedBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
-        if (savedDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-        if (savedCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
-        if (savedScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
+        glDisable(GL_SCISSOR_TEST);
 
         // 5g. Swap buffers
         gl_->swapBuffers();
+        accumGpuMs_ += util::currentTimeMs() - tGpu;
 
         // 6. Frame time tracking
         totalFrameMs_ = util::currentTimeMs() - frameStart;
@@ -591,6 +578,13 @@ void Engine::run() {
         if (statsAccumMs_ >= 500.0) {
             statsFps_ = statsFrameCount_ / (statsAccumMs_ / 1000.0);
             statsFrameTimeMs_ = statsAccumMs_ / statsFrameCount_;
+            double n = statsFrameCount_;
+            phaseJsMs_ = accumJsMs_ / n;
+            phaseLayoutMs_ = accumLayoutMs_ / n;
+            phaseRasterMs_ = accumRasterMs_ / n;
+            phaseGpuMs_ = accumGpuMs_ / n;
+            phaseGlStateMs_ = accumGlStateMs_ / n;
+            accumJsMs_ = accumLayoutMs_ = accumRasterMs_ = accumGpuMs_ = accumGlStateMs_ = 0.0;
             statsAccumMs_ = 0.0;
             statsFrameCount_ = 0;
             statsMinFrameMs_ = 999.0;
@@ -802,13 +796,12 @@ void Engine::drawStatsOverlay(double frameTimeMs) {
     using render::Color;
     constexpr float pad = 6.0f;
     constexpr float lineH = 16.0f;
-    constexpr int numLines = 2;
-    const float boxW = 320.0f;
+    constexpr int numLines = 4;
+    const float boxW = 360.0f;
     const float boxH = pad * 2 + lineH * numLines;
     const float boxX = static_cast<float>(viewportWidth_) - boxW - 8.0f;
     const float boxY = 8.0f;
 
-    // Opaque background — covers previous frame's overlay without re-compositing
     renderer_->fillRect(boxX, boxY, boxW, boxH, {0, 0, 0, 255});
 
     float y = boxY + pad;
@@ -820,7 +813,7 @@ void Engine::drawStatsOverlay(double frameTimeMs) {
 
     Color fpsColor = statsFps_ >= 55.0 ? green : (statsFps_ >= 30.0 ? yellow : red);
 
-    char buf[128];
+    char buf[256];
 
     // Line 1: FPS + frame time + render time
     std::snprintf(buf, sizeof(buf), "FPS: %.0f  Frame: %.1fms  Render: %.1fms",
@@ -832,6 +825,18 @@ void Engine::drawStatsOverlay(double frameTimeMs) {
     double dispMin = statsMinFrameMs_ < 999.0 ? statsMinFrameMs_ : 0.0;
     std::snprintf(buf, sizeof(buf), "Min/Max: %.1f/%.1fms  Viewport: %dx%d",
                   dispMin, statsMaxFrameMs_, viewportWidth_, viewportHeight_);
+    renderer_->drawText(buf, x, y, statsFont_, label);
+    y += lineH;
+
+    // Line 3: Per-phase breakdown (averaged)
+    std::snprintf(buf, sizeof(buf), "JS: %.2f  Layout: %.2f  Raster: %.2f  GPU: %.2f",
+                  phaseJsMs_, phaseLayoutMs_, phaseRasterMs_, phaseGpuMs_);
+    renderer_->drawText(buf, x, y, statsFont_, label);
+    y += lineH;
+
+    // Line 4: GL state overhead
+    std::snprintf(buf, sizeof(buf), "GLstate: %.2f  UI interval: %.0fms",
+                  phaseGlStateMs_, kUIFrameIntervalMs);
     renderer_->drawText(buf, x, y, statsFont_, label);
 }
 

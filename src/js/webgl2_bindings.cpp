@@ -522,6 +522,13 @@ JSValue WebGL2Bindings::wrapContext(JSContext* ctx, webgl::WebGL2RenderingContex
     JSValue obj = JS_NewObjectClass(ctx, (int)js_webgl2_ctx_class_id);
     if (JS_IsException(obj)) return obj;
     JS_SetOpaque(obj, glCtx);
+
+    // Three.js state.reset() accesses gl.canvas.width / gl.canvas.height
+    JSValue canvas = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, canvas, "width", JS_NewInt32(ctx, glCtx->canvasWidth()));
+    JS_SetPropertyStr(ctx, canvas, "height", JS_NewInt32(ctx, glCtx->canvasHeight()));
+    JS_SetPropertyStr(ctx, obj, "canvas", canvas);
+
     return obj;
 }
 
