@@ -165,27 +165,14 @@
     };
 
     // --- UI helpers ---
-    // Use inline styles for active state because litehtml doesn't re-evaluate
-    // CSS class selectors after className changes at runtime.
-    var ACTIVE_BG = '#4488bb';
-    var ACTIVE_BORDER = '#66aaff';
-    var NORMAL_BG = '#2a3a50';
-    var NORMAL_BORDER = '#444455';
-
     function $(id) { return document.getElementById(id); }
-
-    function styleActive(el, active) {
-        if (!el) return;
-        el.style.backgroundColor = active ? ACTIVE_BG : NORMAL_BG;
-        el.style.borderColor = active ? ACTIVE_BORDER : NORMAL_BORDER;
-    }
 
     function setActive(groupId, btnId) {
         var g = $(groupId);
         if (!g) return;
         var kids = g.children;
         for (var i = 0; i < kids.length; i++) {
-            styleActive(kids[i], kids[i].id === btnId);
+            kids[i].className = (kids[i].id === btnId) ? 'active' : '';
         }
     }
 
@@ -216,36 +203,21 @@
     on('btn-color-white', function() { mainMaterial.color.setHex(0xdddddd); });
 
     // --- Material property buttons ---
-    function setRoughGroup(active) {
-        styleActive($('btn-rough-lo'), active === 'lo');
-        styleActive($('btn-rough-mid'), active === 'mid');
-        styleActive($('btn-rough-hi'), active === 'hi');
-    }
-    on('btn-rough-lo',  function() { mainMaterial.roughness = 0.05; setRoughGroup('lo'); });
-    on('btn-rough-mid', function() { mainMaterial.roughness = 0.5;  setRoughGroup('mid'); });
-    on('btn-rough-hi',  function() { mainMaterial.roughness = 0.95; setRoughGroup('hi'); });
+    on('btn-rough-lo',  function() { mainMaterial.roughness = 0.05; $('btn-rough-lo').className='active'; $('btn-rough-mid').className=''; $('btn-rough-hi').className=''; });
+    on('btn-rough-mid', function() { mainMaterial.roughness = 0.5;  $('btn-rough-lo').className=''; $('btn-rough-mid').className='active'; $('btn-rough-hi').className=''; });
+    on('btn-rough-hi',  function() { mainMaterial.roughness = 0.95; $('btn-rough-lo').className=''; $('btn-rough-mid').className=''; $('btn-rough-hi').className='active'; });
 
-    function setMetalGroup(active) {
-        styleActive($('btn-metal-lo'), active === 'lo');
-        styleActive($('btn-metal-mid'), active === 'mid');
-        styleActive($('btn-metal-hi'), active === 'hi');
-    }
-    on('btn-metal-lo',  function() { mainMaterial.metalness = 0.0; setMetalGroup('lo'); });
-    on('btn-metal-mid', function() { mainMaterial.metalness = 0.5; setMetalGroup('mid'); });
-    on('btn-metal-hi',  function() { mainMaterial.metalness = 1.0; setMetalGroup('hi'); });
+    on('btn-metal-lo',  function() { mainMaterial.metalness = 0.0; $('btn-metal-lo').className='active'; $('btn-metal-mid').className=''; $('btn-metal-hi').className=''; });
+    on('btn-metal-mid', function() { mainMaterial.metalness = 0.5; $('btn-metal-lo').className=''; $('btn-metal-mid').className='active'; $('btn-metal-hi').className=''; });
+    on('btn-metal-hi',  function() { mainMaterial.metalness = 1.0; $('btn-metal-lo').className=''; $('btn-metal-mid').className=''; $('btn-metal-hi').className='active'; });
 
     // --- Animation buttons ---
-    function setSpeedGroup(active) {
-        styleActive($('btn-slow'), active === 'slow');
-        styleActive($('btn-normal'), active === 'normal');
-        styleActive($('btn-fast'), active === 'fast');
-    }
-    on('btn-slow',   function() { speed = 0.3;  setSpeedGroup('slow'); });
-    on('btn-normal', function() { speed = 1.0;  setSpeedGroup('normal'); });
-    on('btn-fast',   function() { speed = 3.0;  setSpeedGroup('fast'); });
+    on('btn-slow',   function() { speed = 0.3;  $('btn-slow').className='active'; $('btn-normal').className=''; $('btn-fast').className=''; });
+    on('btn-normal', function() { speed = 1.0;  $('btn-slow').className=''; $('btn-normal').className='active'; $('btn-fast').className=''; });
+    on('btn-fast',   function() { speed = 3.0;  $('btn-slow').className=''; $('btn-normal').className=''; $('btn-fast').className='active'; });
     on('btn-pause',  function() {
         paused = !paused;
-        styleActive($('btn-pause'), paused);
+        $('btn-pause').className = paused ? 'active' : '';
         $('btn-pause').textContent = paused ? 'Resume' : 'Pause';
     });
     on('btn-reset', function() {
@@ -255,39 +227,25 @@
     });
 
     // --- Lighting buttons ---
-    function setLightGroup(active) {
-        styleActive($('btn-light-dim'), active === 'dim');
-        styleActive($('btn-light-normal'), active === 'normal');
-        styleActive($('btn-light-bright'), active === 'bright');
-    }
-    on('btn-light-dim',    function() { dirLight.intensity = 1.0; ambientLight.intensity = 0.3; setLightGroup('dim'); });
-    on('btn-light-normal', function() { dirLight.intensity = 3.0; ambientLight.intensity = 1.0; setLightGroup('normal'); });
-    on('btn-light-bright', function() { dirLight.intensity = 6.0; ambientLight.intensity = 2.0; setLightGroup('bright'); });
+    on('btn-light-dim',    function() { dirLight.intensity = 1.0; ambientLight.intensity = 0.3; $('btn-light-dim').className='active'; $('btn-light-normal').className=''; $('btn-light-bright').className=''; });
+    on('btn-light-normal', function() { dirLight.intensity = 3.0; ambientLight.intensity = 1.0; $('btn-light-dim').className=''; $('btn-light-normal').className='active'; $('btn-light-bright').className=''; });
+    on('btn-light-bright', function() { dirLight.intensity = 6.0; ambientLight.intensity = 2.0; $('btn-light-dim').className=''; $('btn-light-normal').className=''; $('btn-light-bright').className='active'; });
 
     // --- Display buttons ---
     on('btn-wireframe', function() {
         mainMaterial.wireframe = !mainMaterial.wireframe;
-        styleActive($('btn-wireframe'), mainMaterial.wireframe);
+        $('btn-wireframe').className = mainMaterial.wireframe ? 'active' : '';
     });
     on('btn-bg-dark', function() {
         scene.background = new THREE.Color(0x1a1e2e);
-        styleActive($('btn-bg-dark'), true);
-        styleActive($('btn-bg-light'), false);
+        $('btn-bg-dark').className = 'active';
+        $('btn-bg-light').className = '';
     });
     on('btn-bg-light', function() {
         scene.background = new THREE.Color(0xc0c8d0);
-        styleActive($('btn-bg-dark'), false);
-        styleActive($('btn-bg-light'), true);
+        $('btn-bg-dark').className = '';
+        $('btn-bg-light').className = 'active';
     });
-
-    // --- Set initial active states via inline styles ---
-    setActive('scene-btns', 'btn-pbr');
-    setActive('geo-btns', 'btn-box');
-    setRoughGroup('mid');
-    setMetalGroup('lo');
-    setSpeedGroup('normal');
-    setLightGroup('normal');
-    styleActive($('btn-bg-dark'), true);
 
     // --- Resize handler ---
     window.addEventListener('resize', function() {

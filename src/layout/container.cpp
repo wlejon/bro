@@ -1,4 +1,5 @@
 #include "layout/container.h"
+#include "layout/bro_element.h"
 #include "render/renderer.h"
 #include "util/log.h"
 #include <algorithm>
@@ -343,10 +344,30 @@ void BroContainer::get_viewport(litehtml::position& viewport) const {
 }
 
 litehtml::element::ptr BroContainer::create_element(
-    const char* /*tag_name*/,
+    const char* tag_name,
     const litehtml::string_map& /*attributes*/,
-    const std::shared_ptr<litehtml::document>& /*doc*/) {
-    return nullptr; // Let litehtml create default elements.
+    const std::shared_ptr<litehtml::document>& doc) {
+    // litehtml has specialized subclasses for certain HTML tags that
+    // override behavior (e.g. el_style parses CSS, el_image loads images).
+    // We return nullptr for those so litehtml creates the right subclass.
+    // For everything else, we return BroElement which extends html_tag
+    // with runtime CSS class selector support.
+    // Only defer to litehtml for tags with non-trivial subclass behavior:
+    //   style/script/link: parse CSS/JS, must not be html_tag
+    //   img: image loading via compute_styles
+    //   table/td/th/tr: table layout model (render_item_table)
+    //   br: line break semantics
+    //   base: sets document base URL
+    static const char* specialized_tags[] = {
+        "style", "script", "link", "img", "table", "td", "th", "tr",
+        "br", "base",
+        nullptr
+    };
+    for (const char** t = specialized_tags; *t; ++t) {
+        if (strcmp(tag_name, *t) == 0)
+            return nullptr;
+    }
+    return std::make_shared<BroElement>(doc);
 }
 
 void BroContainer::get_media_features(litehtml::media_features& media) const {
