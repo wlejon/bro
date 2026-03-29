@@ -758,99 +758,103 @@ static JSValue js_element_get_parentNode(JSContext* ctx, JSValueConst this_val)
 // Helper: build linked sibling chain of all children for firstChild/lastChild.
 // jQuery's dir() helper walks firstChild → nextSibling, so text nodes need
 // nextSibling/previousSibling to be set. We build the full chain in one pass.
-static void buildChildChain(JSContext* ctx, bro::dom::Element* el,
-                            std::vector<JSValue>& wrappers)
-{
-    auto& kids = el->childNodes();
-    wrappers.reserve(kids.size());
+// Wrap a single Node as a JS value. For Elements, returns the cached wrapper.
+// For text nodes, creates a minimal object with nodeType + nodeValue.
+// Does NOT set nextSibling/previousSibling (caller sets if needed).
+static JSValue wrapSingleChild(JSContext* ctx, bro::dom::Node* node,
+                                bro::dom::Node* parentNode = nullptr) {
+    if (!node) return JS_NULL;
+    if (node->nodeType() == bro::dom::NodeType::Element)
+        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(node));
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "nodeType", JS_NewInt32(ctx, 3));
+    JS_SetPropertyStr(ctx, obj, "nodeName", JS_NewString(ctx, "#text"));
+    if (node->nodeType() == bro::dom::NodeType::Text) {
+        auto* t = static_cast<bro::dom::TextNode*>(node);
+        JS_SetPropertyStr(ctx, obj, "textContent", JS_NewString(ctx, t->data().c_str()));
+        JS_SetPropertyStr(ctx, obj, "nodeValue", JS_NewString(ctx, t->data().c_str()));
+    }
+    if (parentNode && parentNode->nodeType() == bro::dom::NodeType::Element)
+        JS_SetPropertyStr(ctx, obj, "parentNode",
+            DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(parentNode)));
+    return obj;
+}
+
+// Find node's index in parent's childNodes
+static int findChildIndex(bro::dom::Node* node) {
+    if (!node || !node->parentNode()) return -1;
+    auto& kids = node->parentNode()->childNodes();
     for (size_t i = 0; i < kids.size(); ++i) {
-        auto* child = kids[i].get();
-        if (child->nodeType() == bro::dom::NodeType::Element) {
-            wrappers.push_back(DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child)));
-        } else {
-            JSValue obj = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, obj, "nodeType", JS_NewInt32(ctx, static_cast<int32_t>(child->nodeType())));
-            JS_SetPropertyStr(ctx, obj, "nodeName", JS_NewString(ctx, child->nodeName().c_str()));
-            if (child->nodeType() == bro::dom::NodeType::Text) {
-                auto* text = static_cast<bro::dom::TextNode*>(child);
-                JS_SetPropertyStr(ctx, obj, "textContent", JS_NewString(ctx, text->data().c_str()));
-                JS_SetPropertyStr(ctx, obj, "nodeValue", JS_NewString(ctx, text->data().c_str()));
-            }
-            JS_SetPropertyStr(ctx, obj, "parentNode", DomBindings::wrapElement(ctx, el));
-            wrappers.push_back(obj);
-        }
+        if (kids[i].get() == node) return static_cast<int>(i);
     }
-    for (size_t i = 0; i < wrappers.size(); ++i) {
-        JS_SetPropertyStr(ctx, wrappers[i], "nextSibling",
-            (i + 1 < wrappers.size()) ? JS_DupValue(ctx, wrappers[i + 1]) : JS_NULL);
-        JS_SetPropertyStr(ctx, wrappers[i], "previousSibling",
-            (i > 0) ? JS_DupValue(ctx, wrappers[i - 1]) : JS_NULL);
+    return -1;
+}
+
+// Get next sibling as a wrapped JS value with its own nextSibling set
+// to enable jQuery's firstChild→nextSibling chain traversal.
+// Only creates 1 wrapper per call (the immediate sibling).
+// Wrap child at index, setting nextSibling on text nodes so jQuery can
+// traverse firstChild→nextSibling chains. Only recurses forward, and
+// Element nodes already have nextSibling via their prototype getter.
+static JSValue wrapChildAtIndex(JSContext* ctx, bro::dom::Node* parent, size_t idx) {
+    if (!parent) return JS_NULL;
+    auto& kids = parent->childNodes();
+    if (idx >= kids.size()) return JS_NULL;
+
+    auto* child = kids[idx].get();
+    if (child->nodeType() == bro::dom::NodeType::Element)
+        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child));
+
+    // Text node: build a wrapper with nextSibling chain
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "nodeType", JS_NewInt32(ctx, 3));
+    JS_SetPropertyStr(ctx, obj, "nodeName", JS_NewString(ctx, "#text"));
+    if (child->nodeType() == bro::dom::NodeType::Text) {
+        auto* t = static_cast<bro::dom::TextNode*>(child);
+        JS_SetPropertyStr(ctx, obj, "textContent", JS_NewString(ctx, t->data().c_str()));
+        JS_SetPropertyStr(ctx, obj, "nodeValue", JS_NewString(ctx, t->data().c_str()));
     }
+    if (parent->nodeType() == bro::dom::NodeType::Element)
+        JS_SetPropertyStr(ctx, obj, "parentNode",
+            DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(parent)));
+
+    // Set nextSibling (forward chain only — this is what jQuery walks)
+    JS_SetPropertyStr(ctx, obj, "nextSibling",
+        (idx + 1 < kids.size()) ? wrapChildAtIndex(ctx, parent, idx + 1) : JS_NULL);
+    JS_SetPropertyStr(ctx, obj, "previousSibling", JS_NULL);
+    return obj;
 }
 
 static JSValue js_element_get_firstChild(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el || el->childNodes().empty()) return JS_NULL;
-    std::vector<JSValue> chain;
-    buildChildChain(ctx, el, chain);
-    for (size_t i = 1; i < chain.size(); ++i) JS_FreeValue(ctx, chain[i]);
-    return chain.empty() ? JS_NULL : chain[0];
+    return wrapChildAtIndex(ctx, el, 0);
 }
 
 static JSValue js_element_get_lastChild(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el || el->childNodes().empty()) return JS_NULL;
-    std::vector<JSValue> chain;
-    buildChildChain(ctx, el, chain);
-    for (size_t i = 0; i + 1 < chain.size(); ++i) JS_FreeValue(ctx, chain[i]);
-    return chain.empty() ? JS_NULL : chain.back();
+    return wrapChildAtIndex(ctx, el, el->childNodes().size() - 1);
 }
-
-// Forward declaration
-static void buildChildChain(JSContext* ctx, bro::dom::Element* el,
-                            std::vector<JSValue>& wrappers);
 
 static JSValue js_element_get_nextSibling(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
-    if (!el || !el->parentNode() ||
-        el->parentNode()->nodeType() != bro::dom::NodeType::Element) return JS_NULL;
-    auto* parent = static_cast<bro::dom::Element*>(el->parentNode());
-    std::vector<JSValue> chain;
-    buildChildChain(ctx, parent, chain);
-    // Find this element in the chain and return its nextSibling
-    JSValue result = JS_NULL;
-    auto& kids = parent->childNodes();
-    for (size_t i = 0; i < kids.size(); ++i) {
-        if (kids[i].get() == el && i + 1 < chain.size()) {
-            result = JS_DupValue(ctx, chain[i + 1]);
-            break;
-        }
-    }
-    for (auto& w : chain) JS_FreeValue(ctx, w);
-    return result;
+    if (!el || !el->parentNode()) return JS_NULL;
+    int idx = findChildIndex(el);
+    if (idx < 0) return JS_NULL;
+    return wrapChildAtIndex(ctx, el->parentNode(), static_cast<size_t>(idx + 1));
 }
 
 static JSValue js_element_get_previousSibling(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
-    if (!el || !el->parentNode() ||
-        el->parentNode()->nodeType() != bro::dom::NodeType::Element) return JS_NULL;
-    auto* parent = static_cast<bro::dom::Element*>(el->parentNode());
-    std::vector<JSValue> chain;
-    buildChildChain(ctx, parent, chain);
-    JSValue result = JS_NULL;
-    auto& kids = parent->childNodes();
-    for (size_t i = 0; i < kids.size(); ++i) {
-        if (kids[i].get() == el && i > 0) {
-            result = JS_DupValue(ctx, chain[i - 1]);
-            break;
-        }
-    }
-    for (auto& w : chain) JS_FreeValue(ctx, w);
-    return result;
+    if (!el || !el->parentNode()) return JS_NULL;
+    int idx = findChildIndex(el);
+    if (idx <= 0) return JS_NULL;
+    return wrapChildAtIndex(ctx, el->parentNode(), static_cast<size_t>(idx - 1));
 }
 
 static JSValue js_element_get_nextElementSibling(JSContext* ctx, JSValueConst this_val)
