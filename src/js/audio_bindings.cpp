@@ -86,7 +86,9 @@ struct OscNodeData {
 static void js_oscnode_finalizer(JSRuntime*, JSValue val) {
     auto* d = static_cast<OscNodeData*>(JS_GetOpaque(val, js_oscnode_class_id));
     if (d) {
-        d->engine->removeVoice(d->voiceId);
+        // Don't remove the voice — let it play to completion.
+        // The audio engine will deactivate it when stopTime is reached,
+        // and inactive voices are cleaned up lazily.
         delete d;
     }
 }

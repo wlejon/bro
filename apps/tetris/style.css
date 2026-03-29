@@ -104,4 +104,4 @@ canvas { display: none; }
     color: #fff;
     background-color: rgba(79,195,247,0.15);
 }
-.hidden { display: none; }
+.hidden { visibility: hidden; height: 0; overflow: hidden; }

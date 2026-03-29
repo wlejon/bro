@@ -199,6 +199,12 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
         buffer[i] = std::clamp(buffer[i], -1.0f, 1.0f);
     }
 
+    // Clean up finished voices
+    voices_.erase(
+        std::remove_if(voices_.begin(), voices_.end(),
+                       [](const Voice& v) { return v.started && !v.active; }),
+        voices_.end());
+
     samplesGenerated_.fetch_add(static_cast<uint64_t>(numSamples), std::memory_order_relaxed);
 }
 

@@ -165,8 +165,9 @@ function playTone(freq, duration, type, vol) {
         gain.gain.value = v * 0.15;
         osc.connect(gain);
         gain.connect(audioCtx.destination);
-        osc.start(audioCtx.currentTime);
-        osc.stop(audioCtx.currentTime + duration);
+        var t = audioCtx.currentTime;
+        osc.start(t);
+        osc.stop(t + duration);
     } catch(e) {}
 }
 
@@ -684,6 +685,10 @@ function showMenu(menuId) {
     currentMenu = menuId;
     menuIndex = 0;
     rebinding = false;
+
+    // Hide rebind prompt whenever entering controls menu
+    var prompt = document.getElementById("rebind-prompt");
+    if (prompt) prompt.style.display = "none";
 
     if (menuId === "menu-controls") buildControlsList();
     if (menuId === "menu-settings") updateSettingsDisplay();
