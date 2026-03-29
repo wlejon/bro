@@ -683,11 +683,24 @@ static JSValue js_element_get_textContent(JSContext* ctx, JSValueConst this_val)
     return JS_NewString(ctx, el->textContent().c_str());
 }
 
+// Forward declaration
+static void cleanupRemovedElement(JSContext* ctx, bro::dom::Element* elem);
+
+// Helper: clean up elem map entries for all Element children (before clearing)
+static void cleanupChildElements(JSContext* ctx, bro::dom::Element* el) {
+    for (auto& child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            cleanupRemovedElement(ctx, static_cast<bro::dom::Element*>(child.get()));
+        }
+    }
+}
+
 static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
                                           JSValueConst val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    cleanupChildElements(ctx, el);
     el->setTextContent(jsToStdString(ctx, val));
     return JS_UNDEFINED;
 }
@@ -703,6 +716,7 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
                                         JSValueConst val)
 {
     auto* el = getElement(this_val);
+    if (el) cleanupChildElements(ctx, el);
     if (!el) return JS_UNDEFINED;
     el->setInnerHTML(jsToStdString(ctx, val));
     return JS_UNDEFINED;
@@ -1018,6 +1032,41 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
 
+// Helper: find the shared_ptr for a child in its parent's children_ vector
+static std::shared_ptr<bro::dom::Node> findChildSharedPtr(
+    bro::dom::Node* parent, bro::dom::Node* child) {
+    if (!parent) return nullptr;
+    for (auto& c : parent->childNodes()) {
+        if (c.get() == child) return c;
+    }
+    return nullptr;
+}
+
+// Helper: recursively unregister IDs and clean up elem map for a removed subtree
+static void cleanupRemovedElement(JSContext* ctx, bro::dom::Element* elem) {
+    if (!elem) return;
+    // Unregister ID
+    if (s_document && !elem->id().empty()) {
+        s_document->unregisterElementId(elem->id());
+    }
+    // Remove from __bro_elem_map so the dangling wrapper can be GC'd
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+    if (!JS_IsUndefined(elemMap)) {
+        std::string key = std::to_string(elem->nodeId());
+        JS_DeleteProperty(ctx, elemMap, JS_NewAtom(ctx, key.c_str()), 0);
+    }
+    JS_FreeValue(ctx, elemMap);
+    JS_FreeValue(ctx, global);
+
+    // Recurse into children
+    for (auto& child : elem->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            cleanupRemovedElement(ctx, static_cast<bro::dom::Element*>(child.get()));
+        }
+    }
+}
+
 static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv)
 {
@@ -1026,10 +1075,7 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
     auto* child = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
     if (child) {
-        // Unregister ID from document so getElementById won't find detached elements
-        if (s_document && !child->id().empty()) {
-            s_document->unregisterElementId(child->id());
-        }
+        cleanupRemovedElement(ctx, child);
         el->removeChild(static_cast<bro::dom::Node*>(child));
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
@@ -1066,11 +1112,8 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         DomBindings::unwrapElement(ctx, argv[1]));
     if (newChild && oldChild) {
         auto newPtr = findSharedPtr(newChild);
-        // insertBefore newChild before oldChild, then remove oldChild
         el->insertBefore(newPtr, static_cast<bro::dom::Node*>(oldChild));
-        if (s_document && !oldChild->id().empty()) {
-            s_document->unregisterElementId(oldChild->id());
-        }
+        cleanupRemovedElement(ctx, oldChild);
         el->removeChild(static_cast<bro::dom::Node*>(oldChild));
         if (s_document) s_document->adoptOrphan(newChild);
     }
@@ -1138,12 +1181,9 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
     if (!el) return JS_UNDEFINED;
     auto* parent = el->parentElement();
     if (parent) {
-        if (s_document && !el->id().empty()) {
-            s_document->unregisterElementId(el->id());
-        }
+        cleanupRemovedElement(ctx, el);
         parent->removeChild(static_cast<bro::dom::Node*>(el));
     }
-    (void)ctx;
     return JS_UNDEFINED;
 }
 
