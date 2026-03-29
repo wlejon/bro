@@ -10,6 +10,7 @@
 
 namespace bro::render { class SceneLayer; class GLContext; }
 namespace bro::audio { class AudioEngine; }
+namespace bro::engine { class SystemOverlay; }
 
 namespace bro::platform {
     class Window;
@@ -44,7 +45,6 @@ private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
     void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
-    void drawStatsOverlay(double frameTimeMs);
 
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<render::GLContext> gl_;
@@ -62,9 +62,9 @@ private:
     AppManifest manifest_;
     std::unique_ptr<render::SceneLayer> sceneLayer_;
     std::unique_ptr<audio::AudioEngine> audioEngine_;
+    std::unique_ptr<SystemOverlay> systemOverlay_;
 
-    // Stats overlay
-    uint64_t statsFont_ = 0;
+    // Stats tracking
     double statsAccumMs_ = 0.0;
     int statsFrameCount_ = 0;
     double statsFps_ = 0.0;

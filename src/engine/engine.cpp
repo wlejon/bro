@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/system_overlay.h"
 
 #include "platform/sdl_window.h"
 #include "platform/event_loop.h"
@@ -34,6 +35,7 @@
 #include <SDL3/SDL_keycode.h>
 #include <glad/gl.h>
 #include <cstdio>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -329,8 +331,17 @@ Engine::Engine(const std::string& appDir, int width, int height)
     // 11. Event loop
     eventLoop_ = std::make_unique<platform::EventLoop>();
 
-    // 12. Stats overlay font
-    statsFont_ = renderer_->createFont("Consolas", 13.0f, 400, false);
+    // 12. System overlay (loads panels from system/ sibling directory)
+    systemOverlay_ = std::make_unique<SystemOverlay>(renderer_.get(),
+                                                      viewportWidth_, viewportHeight_);
+    {
+        // Resolve system dir as sibling of the app's parent directory
+        // e.g., appDir = "apps/hello" -> parent_path = "apps" -> parent = "." -> system = "./system"
+        namespace fs = std::filesystem;
+        fs::path appPath(appDir);
+        fs::path systemDir = appPath.parent_path().parent_path() / "system";
+        systemOverlay_->loadPanels(systemDir.string());
+    }
 
     // 13. Create UI overlay quad VAO/VBO
     glGenVertexArrays(1, &uiQuadVAO_);
@@ -349,9 +360,7 @@ Engine::~Engine() {
         sceneLayer_->onCleanup();
     }
     sceneLayer_.reset();
-    if (statsFont_ && renderer_) {
-        renderer_->deleteFont(statsFont_);
-    }
+    systemOverlay_.reset();
     if (timers_ && jsRuntime_) {
         timers_->clearAll(jsRuntime_->getContext());
     }
@@ -423,6 +432,11 @@ void Engine::run() {
         double t0 = now;
         timers_->tick(now);
 
+        // 2b. Tick system overlay timers
+        if (systemOverlay_) {
+            systemOverlay_->tick(now);
+        }
+
         // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)
         auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
         if (webglScene && webglScene->webglContext()) {
@@ -484,8 +498,10 @@ void Engine::run() {
             }
             accumDrawMs_ += util::currentTimeMs() - tDraw0;
 
-            double renderElapsed = util::currentTimeMs() - frameStart;
-            drawStatsOverlay(renderElapsed);
+            // Render system overlay panels on top
+            if (systemOverlay_) {
+                systemOverlay_->render(viewportWidth_, viewportHeight_);
+            }
 
             renderer_->endFrame();
             hasRenderedOnce_ = true;
@@ -596,7 +612,16 @@ void Engine::run() {
             statsFrameCount_ = 0;
             statsMinFrameMs_ = 999.0;
             statsMaxFrameMs_ = 0.0;
-            uiDirty_ = true;  // refresh stats overlay text
+            uiDirty_ = true;  // refresh overlay
+
+            // Push perf data to system overlay JS
+            if (systemOverlay_) {
+                systemOverlay_->updatePerf(statsFps_, statsFrameTimeMs_,
+                                           phaseJsMs_, phaseLayoutMs_,
+                                           phaseRasterMs_, phaseGpuMs_,
+                                           phaseDrawMs_,
+                                           viewportWidth_, viewportHeight_);
+            }
         }
     }
 }
@@ -613,6 +638,9 @@ void Engine::handleResize(int w, int h) {
     container_->setViewport(w, h);
     if (sceneLayer_) {
         sceneLayer_->onResize(w, h);
+    }
+    if (systemOverlay_) {
+        systemOverlay_->onResize(w, h);
     }
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
@@ -725,6 +753,15 @@ void Engine::handleMouseMove(float x, float y) {
 // ---------------------------------------------------------------------------
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
+    // F8 toggles system overlay
+    if (keycode == SDLK_F8 && !repeat) {
+        if (systemOverlay_) {
+            systemOverlay_->toggle();
+            uiDirty_ = true;
+        }
+        return;
+    }
+
     if (document_) {
         dom::KeyboardEvent evt("keydown");
         evt.setKey(sdlKeycodeToWebKey(keycode, mod));
@@ -798,65 +835,5 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
-// ---------------------------------------------------------------------------
-// Stats overlay
-// ---------------------------------------------------------------------------
-
-void Engine::drawStatsOverlay(double frameTimeMs) {
-    if (!statsFont_) return;
-
-    using render::Color;
-    constexpr float pad = 6.0f;
-    constexpr float lineH = 16.0f;
-    constexpr int numLines = 5;
-    const float boxW = 400.0f;
-    const float boxH = pad * 2 + lineH * numLines;
-    const float boxX = static_cast<float>(viewportWidth_) - boxW - 8.0f;
-    const float boxY = 8.0f;
-
-    renderer_->fillRect(boxX, boxY, boxW, boxH, {0, 0, 0, 255});
-
-    float y = boxY + pad;
-    float x = boxX + pad;
-    Color green{100, 220, 100, 255};
-    Color yellow{220, 200, 80, 255};
-    Color red{220, 80, 80, 255};
-    Color label{140, 140, 140, 255};
-
-    Color fpsColor = statsFps_ >= 55.0 ? green : (statsFps_ >= 30.0 ? yellow : red);
-
-    char buf[256];
-
-    // Line 1: FPS + frame time + render time
-    std::snprintf(buf, sizeof(buf), "FPS: %.0f  Frame: %.1fms  Render: %.1fms",
-                  statsFps_, statsFrameTimeMs_, frameTimeMs);
-    renderer_->drawText(buf, x, y, statsFont_, fpsColor);
-    y += lineH;
-
-    // Line 2: Min/Max + viewport
-    double dispMin = statsMinFrameMs_ < 999.0 ? statsMinFrameMs_ : 0.0;
-    std::snprintf(buf, sizeof(buf), "Min/Max: %.1f/%.1fms  Viewport: %dx%d",
-                  dispMin, statsMaxFrameMs_, viewportWidth_, viewportHeight_);
-    renderer_->drawText(buf, x, y, statsFont_, label);
-    y += lineH;
-
-    // Line 3: Per-phase breakdown (averaged)
-    std::snprintf(buf, sizeof(buf), "JS: %.2f  Layout: %.2f  Raster: %.2f  GPU: %.2f",
-                  phaseJsMs_, phaseLayoutMs_, phaseRasterMs_, phaseGpuMs_);
-    renderer_->drawText(buf, x, y, statsFont_, label);
-    y += lineH;
-
-    // Line 4: Raster breakdown
-    std::snprintf(buf, sizeof(buf), "Draw: %.2f  Upload: %.2f  UI interval: %.0fms",
-                  phaseDrawMs_, phaseUploadMs_, kUIFrameIntervalMs);
-    renderer_->drawText(buf, x, y, statsFont_, label);
-    y += lineH;
-
-    // Line 5: Draw call counts
-    auto& ds = container_->drawStats;
-    std::snprintf(buf, sizeof(buf), "Fills: %d  Texts: %d  Borders: %d",
-                  ds.fills, ds.texts, ds.borders);
-    renderer_->drawText(buf, x, y, statsFont_, label);
-}
 
 } // namespace bro::engine

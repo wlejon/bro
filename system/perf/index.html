@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #e0e0e0;
+    overflow: hidden;
+}
+
+#panel {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 300px;
+    background: rgba(0, 0, 0, 0.88);
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 10px;
+}
+
+.stats-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.stat-label {
+    color: #888;
+}
+
+.stat-value {
+    font-weight: bold;
+}
+
+#fps-value {
+    color: #64dc64;
+}
+
+.divider {
+    border-top: 1px solid #333;
+    margin: 8px 0;
+}
+
+.chart-title {
+    color: #888;
+    margin-bottom: 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.bar-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 3px;
+    height: 14px;
+}
+
+.bar-label {
+    width: 52px;
+    font-size: 11px;
+    color: #999;
+    flex-shrink: 0;
+}
+
+.bar-track {
+    flex: 1;
+    height: 10px;
+    background: #1a1a1a;
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+}
+
+.bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    min-width: 1px;
+    transition: width 0.15s ease;
+}
+
+.bar-ms {
+    width: 44px;
+    text-align: right;
+    font-size: 10px;
+    color: #777;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+.bar-js     .bar-fill { background: #f0c040; }
+.bar-layout .bar-fill { background: #40a0f0; }
+.bar-raster .bar-fill { background: #f06040; }
+.bar-gpu    .bar-fill { background: #40e080; }
+.bar-draw   .bar-fill { background: #c060f0; }
+</style>
+</head>
+<body>
+<div id="panel">
+    <div class="stats-row">
+        <span class="stat-label">FPS</span>
+        <span id="fps-value" class="stat-value">0</span>
+    </div>
+    <div class="stats-row">
+        <span class="stat-label">Frame</span>
+        <span id="frame-value" class="stat-value">0.0ms</span>
+    </div>
+    <div class="stats-row">
+        <span class="stat-label">Viewport</span>
+        <span id="viewport-value" class="stat-value">0x0</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="chart-title">Phase Timing</div>
+
+    <div class="bar-row bar-js">
+        <span class="bar-label">JS</span>
+        <div class="bar-track"><div id="bar-js" class="bar-fill"></div></div>
+        <span id="ms-js" class="bar-ms">0ms</span>
+    </div>
+    <div class="bar-row bar-layout">
+        <span class="bar-label">Layout</span>
+        <div class="bar-track"><div id="bar-layout" class="bar-fill"></div></div>
+        <span id="ms-layout" class="bar-ms">0ms</span>
+    </div>
+    <div class="bar-row bar-raster">
+        <span class="bar-label">Raster</span>
+        <div class="bar-track"><div id="bar-raster" class="bar-fill"></div></div>
+        <span id="ms-raster" class="bar-ms">0ms</span>
+    </div>
+    <div class="bar-row bar-gpu">
+        <span class="bar-label">GPU</span>
+        <div class="bar-track"><div id="bar-gpu" class="bar-fill"></div></div>
+        <span id="ms-gpu" class="bar-ms">0ms</span>
+    </div>
+    <div class="bar-row bar-draw">
+        <span class="bar-label">Draw</span>
+        <div class="bar-track"><div id="bar-draw" class="bar-fill"></div></div>
+        <span id="ms-draw" class="bar-ms">0ms</span>
+    </div>
+</div>
+
+<script>
+(function() {
+    var fpsEl = document.getElementById('fps-value');
+    var frameEl = document.getElementById('frame-value');
+    var vpEl = document.getElementById('viewport-value');
+
+    var barJs = document.getElementById('bar-js');
+    var barLayout = document.getElementById('bar-layout');
+    var barRaster = document.getElementById('bar-raster');
+    var barGpu = document.getElementById('bar-gpu');
+    var barDraw = document.getElementById('bar-draw');
+
+    var msJs = document.getElementById('ms-js');
+    var msLayout = document.getElementById('ms-layout');
+    var msRaster = document.getElementById('ms-raster');
+    var msGpu = document.getElementById('ms-gpu');
+    var msDraw = document.getElementById('ms-draw');
+
+    function update() {
+        var p = __bro.perf;
+        var v = __bro.viewport;
+
+        if (fpsEl) fpsEl.textContent = Math.round(p.fps).toString();
+        if (frameEl) frameEl.textContent = p.frameTime.toFixed(1) + 'ms';
+        if (vpEl) vpEl.textContent = v.width + 'x' + v.height;
+
+        // Scale bars: max 8ms = 100% width
+        var maxMs = 8.0;
+        var phases = [
+            [barJs, msJs, p.js],
+            [barLayout, msLayout, p.layout],
+            [barRaster, msRaster, p.raster],
+            [barGpu, msGpu, p.gpu],
+            [barDraw, msDraw, p.draw]
+        ];
+
+        for (var i = 0; i < phases.length; i++) {
+            var bar = phases[i][0];
+            var label = phases[i][1];
+            var ms = phases[i][2];
+            var pct = Math.min(100, (ms / maxMs) * 100);
+            if (bar) bar.style.setProperty('width', pct.toFixed(1) + '%');
+            if (label) label.textContent = ms.toFixed(2) + 'ms';
+        }
+    }
+
+    setInterval(update, 100);
+})();
+</script>
+</body>
+</html>
