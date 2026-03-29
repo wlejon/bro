@@ -479,7 +479,43 @@ void WebGL2RenderingContext::generateMipmap(GLenum target) { glGenerateMipmap(ta
 
 void WebGL2RenderingContext::texStorage2D(GLenum target, GLsizei levels, GLenum internalformat,
                                            GLsizei width, GLsizei height) {
-    glTexStorage2D(target, levels, internalformat, width, height);
+    // Emulate texStorage2D with texImage2D calls. three.js calls texImage2D(1x1)
+    // as a placeholder, then texStorage2D to allocate the real size. Real
+    // glTexStorage2D would fail because the texture already has mutable data.
+    // Using texImage2D for each level avoids the immutability conflict.
+    GLenum format, type;
+    switch (internalformat) {
+        case GL_RGBA8: case GL_SRGB8_ALPHA8: format = GL_RGBA; type = GL_UNSIGNED_BYTE; break;
+        case GL_RGB8: case GL_SRGB8: format = GL_RGB; type = GL_UNSIGNED_BYTE; break;
+        case GL_R8: format = GL_RED; type = GL_UNSIGNED_BYTE; break;
+        case GL_RG8: format = GL_RG; type = GL_UNSIGNED_BYTE; break;
+        case GL_RGBA16F: format = GL_RGBA; type = GL_HALF_FLOAT; break;
+        case GL_RGB16F: format = GL_RGB; type = GL_HALF_FLOAT; break;
+        case GL_RGBA32F: format = GL_RGBA; type = GL_FLOAT; break;
+        case GL_RGB32F: format = GL_RGB; type = GL_FLOAT; break;
+        case GL_R16F: format = GL_RED; type = GL_HALF_FLOAT; break;
+        case GL_R32F: format = GL_RED; type = GL_FLOAT; break;
+        case GL_DEPTH_COMPONENT16: format = GL_DEPTH_COMPONENT; type = GL_UNSIGNED_SHORT; break;
+        case GL_DEPTH_COMPONENT24: format = GL_DEPTH_COMPONENT; type = GL_UNSIGNED_INT; break;
+        case GL_DEPTH_COMPONENT32F: format = GL_DEPTH_COMPONENT; type = GL_FLOAT; break;
+        case GL_DEPTH24_STENCIL8: format = GL_DEPTH_STENCIL; type = GL_UNSIGNED_INT_24_8; break;
+        default: format = GL_RGBA; type = GL_UNSIGNED_BYTE; break;
+    }
+
+    if (target == GL_TEXTURE_CUBE_MAP) {
+        for (GLsizei i = 0; i < levels; i++) {
+            GLsizei w = std::max(1, width >> i), h = std::max(1, height >> i);
+            for (int face = 0; face < 6; face++) {
+                glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, i,
+                             internalformat, w, h, 0, format, type, nullptr);
+            }
+        }
+    } else {
+        for (GLsizei i = 0; i < levels; i++) {
+            GLsizei w = std::max(1, width >> i), h = std::max(1, height >> i);
+            glTexImage2D(target, i, internalformat, w, h, 0, format, type, nullptr);
+        }
+    }
 }
 
 void WebGL2RenderingContext::texStorage3D(GLenum target, GLsizei levels, GLenum internalformat,

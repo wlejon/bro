@@ -421,6 +421,34 @@ void Engine::run() {
         // 3a. Fire requestAnimationFrame callbacks
         timers_->fireAnimationFrames(now);
 
+        // Save GL state immediately after JS rendering, before anything else
+        // touches GL. Three.js caches state internally and won't re-bind if
+        // it thinks state hasn't changed. We must capture and restore exactly
+        // what three.js left behind.
+        GLint savedProg, savedVao, savedVbo, savedEbo, savedActiveTex;
+        GLint savedFbo, savedViewport[4];
+        GLboolean savedBlend, savedDepth, savedCull, savedScissor;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &savedProg);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
+        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVbo);
+        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &savedEbo);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTex);
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFbo);
+        glGetIntegerv(GL_VIEWPORT, savedViewport);
+        savedBlend = glIsEnabled(GL_BLEND);
+        savedDepth = glIsEnabled(GL_DEPTH_TEST);
+        savedCull = glIsEnabled(GL_CULL_FACE);
+        savedScissor = glIsEnabled(GL_SCISSOR_TEST);
+        GLint savedTexOnActiveUnit, savedTexOnUnit0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexOnActiveUnit);
+        if (savedActiveTex != GL_TEXTURE0) {
+            glActiveTexture(GL_TEXTURE0);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexOnUnit0);
+            glActiveTexture(savedActiveTex);
+        } else {
+            savedTexOnUnit0 = savedTexOnActiveUnit;
+        }
+
         // 3b. Run pending JS jobs (promises, etc.)
         jsRuntime_->executePendingJobs();
 
@@ -466,25 +494,6 @@ void Engine::run() {
         if (canvasScene) {
             canvasScene->prepareFrame(gl_.get(), viewportWidth_, viewportHeight_);
         }
-
-        // Save GL state that three.js / WebGL apps cache internally.
-        // The engine's compositor uses its own VAO, program, etc. Without
-        // saving/restoring, three.js sees stale state on the next frame.
-        GLint savedProg, savedVao, savedVbo, savedEbo, savedActiveTex, savedTex0;
-        GLint savedFbo, savedViewport[4];
-        GLboolean savedBlend, savedDepth, savedCull, savedScissor;
-        glGetIntegerv(GL_CURRENT_PROGRAM, &savedProg);
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
-        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVbo);
-        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &savedEbo);
-        glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTex);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTex0);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFbo);
-        glGetIntegerv(GL_VIEWPORT, savedViewport);
-        savedBlend = glIsEnabled(GL_BLEND);
-        savedDepth = glIsEnabled(GL_DEPTH_TEST);
-        savedCull = glIsEnabled(GL_CULL_FACE);
-        savedScissor = glIsEnabled(GL_SCISSOR_TEST);
 
         // 5d. Set viewport and clear
         glViewport(0, 0, viewportWidth_, viewportHeight_);
@@ -538,8 +547,13 @@ void Engine::run() {
         glBindVertexArray(savedVao);
         glBindBuffer(GL_ARRAY_BUFFER, savedVbo);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, savedEbo);
-        glActiveTexture(savedActiveTex);
-        glBindTexture(GL_TEXTURE_2D, savedTex0);
+        // Restore texture bindings: first unit 0 (used by compositor), then the active unit
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, savedTexOnUnit0);
+        if (savedActiveTex != GL_TEXTURE0) {
+            glActiveTexture(savedActiveTex);
+            glBindTexture(GL_TEXTURE_2D, savedTexOnActiveUnit);
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, savedFbo);
         glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
         if (savedBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);

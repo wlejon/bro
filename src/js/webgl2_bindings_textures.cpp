@@ -59,6 +59,7 @@ static JSValue js_texImage2D(JSContext* ctx, JSValueConst this_val, int argc, JS
     ImagePixels img;
     bool is6Arg = (argc == 6) || (argc >= 6 && ImageBindings::getImagePixels(argv[5], img));
 
+
     if (is6Arg) {
         uint32_t target, format, type;
         int level, internalformat;
@@ -116,6 +117,9 @@ static JSValue js_texSubImage2D(JSContext* ctx, JSValueConst this_val, int argc,
         if (ImageBindings::getImagePixels(argv[6], img)) {
             gl->texSubImage2D(target, level, xoffset, yoffset, img.width, img.height,
                               format, type, img.data);
+            if (level == 0) {
+                gl->generateMipmap(target);
+            }
         }
     } else {
         // 9-arg form
