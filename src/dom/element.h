@@ -58,6 +58,11 @@ public:
     bool matches(const std::string& selector) const;
     Element* closest(const std::string& selector);
 
+    // Simple selector matching (works without litehtml for dynamic elements)
+    bool matchesSimple(const std::string& selector) const;
+    void querySelectorAllSimple(const std::string& selector, std::vector<Element*>& out);
+    Element* querySelectorSimple(const std::string& selector);
+
     // Sync inline styles to litehtml element
     void syncStylesToLitehtml();
 

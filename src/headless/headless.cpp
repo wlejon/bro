@@ -275,10 +275,8 @@ Headless::Headless(const std::string& appDir, int width, int height)
     document_ = std::make_unique<dom::Document>();
     document_->buildFrom(litehtmlDoc_);
 
-    // 7. Install JS DOM bindings
-    js::DomBindings::install(jsRuntime_->getContext(), document_.get());
-
-    // 7a. Set up window/navigator globals (needed for jQuery, three.js, etc.)
+    // 7. Set up window/navigator globals BEFORE DOM bindings
+    //    (DOM bindings install polyfills that reference window)
     {
         JSContext* ctx = jsRuntime_->getContext();
         JSValue global = JS_GetGlobalObject(ctx);
@@ -323,6 +321,9 @@ Headless::Headless(const std::string& appDir, int width, int height)
 
         JS_FreeValue(ctx, global);
     }
+
+    // 7a. Install JS DOM bindings (after window setup so polyfills work)
+    js::DomBindings::install(jsRuntime_->getContext(), document_.get());
 
     // 7b. Install Canvas 2D bindings with headless factory
     js::CanvasBindings::install(jsRuntime_->getContext());

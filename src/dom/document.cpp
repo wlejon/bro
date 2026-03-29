@@ -139,19 +139,17 @@ Element* Document::getElementById(const std::string& id) {
 }
 
 Element* Document::querySelector(const std::string& selector) {
-    // Try using litehtml's select_one if we have a litehtml document
+    // Try litehtml first
     if (litehtml_doc_ && litehtml_doc_->root()) {
         auto found = litehtml_doc_->root()->select_one(selector);
         if (found) {
-            // Walk our tree to find the matching element by litehtml pointer
-            std::vector<Element*> allElems;
-            collectElements(root_.get(), allElems);
-            for (auto* elem : allElems) {
-                if (elem->litehtmlElement() == found) {
-                    return elem;
-                }
-            }
+            auto it = litehtmlMap_.find(found);
+            if (it != litehtmlMap_.end()) return it->second;
         }
+    }
+    // Fallback: simple selector matching on bro::dom tree (for dynamic elements)
+    if (root_ && root_->nodeType() == NodeType::Element) {
+        return static_cast<Element*>(root_.get())->querySelectorSimple(selector);
     }
     return nullptr;
 }
@@ -159,23 +157,25 @@ Element* Document::querySelector(const std::string& selector) {
 std::vector<Element*> Document::querySelectorAll(const std::string& selector) {
     std::vector<Element*> result;
 
+    // litehtml results
     if (litehtml_doc_ && litehtml_doc_->root()) {
         auto found = litehtml_doc_->root()->select_all(selector);
-
-        if (!found.empty()) {
-            std::vector<Element*> allElems;
-            collectElements(root_.get(), allElems);
-
-            for (auto& lh_elem : found) {
-                for (auto* elem : allElems) {
-                    if (elem->litehtmlElement() == lh_elem) {
-                        result.push_back(elem);
-                        break;
-                    }
-                }
+        for (auto& lh_elem : found) {
+            auto it = litehtmlMap_.find(lh_elem);
+            if (it != litehtmlMap_.end()) {
+                result.push_back(it->second);
             }
         }
     }
+
+    // Also search dynamic elements via simple matching
+    if (root_ && root_->nodeType() == NodeType::Element) {
+        static_cast<Element*>(root_.get())->querySelectorAllSimple(selector, result);
+    }
+
+    // Deduplicate
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
 
     return result;
 }

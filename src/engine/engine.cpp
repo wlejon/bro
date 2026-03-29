@@ -244,56 +244,22 @@ Engine::Engine(const std::string& appDir, int width, int height)
     document_ = std::make_unique<dom::Document>();
     document_->buildFrom(litehtmlDoc_);
 
-    // 9. Install DOM JS bindings
-    js::DomBindings::install(jsRuntime_->getContext(), document_.get());
-
-    // 9b. Install Canvas 2D and WebGL2 bindings + getContext factory
-    js::CanvasBindings::install(jsRuntime_->getContext());
-    js::WebGL2Bindings::install(jsRuntime_->getContext());
-    js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
-    js::FetchBindings::install(jsRuntime_->getContext(), manifest_.basePath);
-    js::DomBindings::setGetContextFactory(
-        [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
-            if (type == "2d") {
-                auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
-                auto* ptr = scene.get();
-                setSceneLayer(std::move(scene));
-                return js::CanvasBindings::wrapContext2D(ctx, ptr);
-            }
-            if (type == "webgl2" || type == "webgl") {
-                auto* webglCtx = new webgl::WebGL2RenderingContext(
-                    viewportWidth_, viewportHeight_);
-                auto scene = std::make_unique<webgl::WebGLScene>(webglCtx);
-                setSceneLayer(std::move(scene));
-                return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
-            }
-            return JS_NULL;
-        });
-
-    // 9c. Set up window/navigator stubs for three.js compatibility
+    // 9. Set up window/navigator BEFORE DOM bindings (polyfills reference window)
     {
         JSContext* ctx = jsRuntime_->getContext();
         JSValue global = JS_GetGlobalObject(ctx);
 
-        // window = globalThis (browsers expose the global as window)
         JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
-
-        // window.devicePixelRatio
         JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
-
-        // window.innerWidth / innerHeight
         JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth_));
         JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight_));
 
-        // navigator stub
         JSValue nav = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
         JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
         JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
         JS_SetPropertyStr(ctx, global, "navigator", nav);
 
-        // window.addEventListener / removeEventListener — real event dispatch
-        // Stores listeners in __bro_win_listeners map by event type
         const char* windowEventPolyfill = R"JS(
 (function() {
     var listeners = {};
@@ -321,10 +287,34 @@ Engine::Engine(const std::string& appDir, int width, int height)
                             "<window-events>", JS_EVAL_TYPE_GLOBAL);
         JS_FreeValue(ctx, r);
 
-        // document.createElementNS — handled by dom_bindings
-
         JS_FreeValue(ctx, global);
     }
+
+    // 9a. Install DOM JS bindings (after window so polyfills work)
+    js::DomBindings::install(jsRuntime_->getContext(), document_.get());
+
+    // 9b. Install Canvas 2D and WebGL2 bindings + getContext factory
+    js::CanvasBindings::install(jsRuntime_->getContext());
+    js::WebGL2Bindings::install(jsRuntime_->getContext());
+    js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+    js::FetchBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+    js::DomBindings::setGetContextFactory(
+        [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
+            if (type == "2d") {
+                auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                auto* ptr = scene.get();
+                setSceneLayer(std::move(scene));
+                return js::CanvasBindings::wrapContext2D(ctx, ptr);
+            }
+            if (type == "webgl2" || type == "webgl") {
+                auto* webglCtx = new webgl::WebGL2RenderingContext(
+                    viewportWidth_, viewportHeight_);
+                auto scene = std::make_unique<webgl::WebGLScene>(webglCtx);
+                setSceneLayer(std::move(scene));
+                return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
+            }
+            return JS_NULL;
+        });
 
     // 10. Load and execute scripts
     for (auto& scriptPath : manifest_.scriptPaths) {

@@ -242,24 +242,38 @@ Element* Element::parentElement() const {
 
 std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
     std::vector<Element*> result;
-    if (!litehtml_element_ || !document_) return result;
 
-    auto found = litehtml_element_->select_all(selector);
-    for (auto& lh : found) {
-        auto* elem = document_->findElementByLitehtml(lh);
-        if (elem) result.push_back(elem);
+    // Try litehtml first (works for parsed elements)
+    if (litehtml_element_ && document_) {
+        auto found = litehtml_element_->select_all(selector);
+        for (auto& lh : found) {
+            auto* elem = document_->findElementByLitehtml(lh);
+            if (elem) result.push_back(elem);
+        }
     }
+
+    // Also search dynamically created children (no litehtml counterpart)
+    querySelectorAllSimple(selector, result);
+
+    // Deduplicate (elements found by both paths)
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+
     return result;
 }
 
 Element* Element::querySelector(const std::string& selector) {
-    if (!litehtml_element_ || !document_) return nullptr;
-
-    auto found = litehtml_element_->select_one(selector);
-    if (found) {
-        return document_->findElementByLitehtml(found);
+    // Try litehtml first
+    if (litehtml_element_ && document_) {
+        auto found = litehtml_element_->select_one(selector);
+        if (found) {
+            auto* elem = document_->findElementByLitehtml(found);
+            if (elem) return elem;
+        }
     }
-    return nullptr;
+
+    // Fallback to simple matching
+    return querySelectorSimple(selector);
 }
 
 bool Element::matches(const std::string& selector) const {
@@ -283,6 +297,104 @@ Element* Element::closest(const std::string& selector) {
         current = current->parentElement();
     }
     return nullptr;
+}
+
+// Simple CSS selector matching for dynamically created elements (no litehtml).
+// Supports: tag, .class, #id, tag.class, .class1.class2, tag#id
+bool Element::matchesSimple(const std::string& selector) const {
+    if (selector.empty()) return false;
+    // Skip pseudo selectors like :scope
+    if (selector[0] == ':') return false;
+
+    // Parse selector into tag, id, and class parts
+    std::string reqTag, reqId;
+    std::vector<std::string> reqClasses;
+
+    std::string current;
+    enum Part { TAG, CLASS, ID } part = TAG;
+
+    for (size_t i = 0; i <= selector.size(); ++i) {
+        char c = (i < selector.size()) ? selector[i] : '\0';
+        if (c == '.' || c == '#' || c == '\0') {
+            if (!current.empty()) {
+                if (part == TAG) reqTag = current;
+                else if (part == CLASS) reqClasses.push_back(current);
+                else if (part == ID) reqId = current;
+            }
+            current.clear();
+            if (c == '.') part = CLASS;
+            else if (c == '#') part = ID;
+        } else {
+            current += c;
+        }
+    }
+
+    // Match tag (case-insensitive)
+    if (!reqTag.empty()) {
+        std::string upper = reqTag;
+        for (auto& ch : upper) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        if (tag_ != upper) return false;
+    }
+
+    // Match id
+    if (!reqId.empty() && getAttribute("id") != reqId) return false;
+
+    // Match classes
+    if (!reqClasses.empty()) {
+        std::string cls = getAttribute("class");
+        for (auto& rc : reqClasses) {
+            // Check if rc appears as a whole word in cls
+            bool found = false;
+            std::istringstream iss(cls);
+            std::string tok;
+            while (iss >> tok) {
+                if (tok == rc) { found = true; break; }
+            }
+            if (!found) return false;
+        }
+    }
+    return true;
+}
+
+void Element::querySelectorAllSimple(const std::string& selector, std::vector<Element*>& out) {
+    // Handle simple descendant selectors: "div .class" or "#id .class"
+    // For now, split on spaces and match the last part against descendants
+    // More complex selectors (>, +, ~) are not supported in this fallback
+    std::string simpleSelector = selector;
+
+    // Strip leading/trailing spaces
+    while (!simpleSelector.empty() && simpleSelector.front() == ' ') simpleSelector.erase(0, 1);
+    while (!simpleSelector.empty() && simpleSelector.back() == ' ') simpleSelector.pop_back();
+
+    // If compound (has spaces), use last part for matching
+    auto spacePos = simpleSelector.rfind(' ');
+    if (spacePos != std::string::npos) {
+        simpleSelector = simpleSelector.substr(spacePos + 1);
+    }
+
+    // Also handle > child selector
+    auto gtPos = simpleSelector.rfind('>');
+    if (gtPos != std::string::npos) {
+        simpleSelector = simpleSelector.substr(gtPos + 1);
+        while (!simpleSelector.empty() && simpleSelector.front() == ' ') simpleSelector.erase(0, 1);
+    }
+
+    // Walk all descendants
+    for (auto& child : children_) {
+        if (child->nodeType() == NodeType::Element) {
+            auto* elem = static_cast<Element*>(child.get());
+            if (elem->matchesSimple(simpleSelector)) {
+                out.push_back(elem);
+            }
+            elem->querySelectorAllSimple(selector, out);
+        }
+    }
+}
+
+Element* Element::querySelectorSimple(const std::string& selector) {
+    std::vector<Element*> results;
+    querySelectorAllSimple(selector, results);
+    return results.empty() ? nullptr : results[0];
 }
 
 void Element::syncStylesToLitehtml() {

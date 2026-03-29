@@ -1880,7 +1880,13 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
 
     // window.getComputedStyle stub
     window.getComputedStyle = function(el) {
-        return el.style || {};
+        if (el && el.style) return el.style;
+        // Return a minimal object with getPropertyValue for elements without style
+        return {
+            getPropertyValue: function() { return ''; },
+            setProperty: function() {},
+            length: 0
+        };
     };
 })();
 )JS";
