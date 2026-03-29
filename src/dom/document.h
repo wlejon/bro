@@ -7,6 +7,7 @@
 #include <string>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <functional>
 
@@ -58,6 +59,9 @@ public:
     // Keep a detached element alive (prevents use-after-free when JS holds a reference).
     void retainOrphan(std::shared_ptr<Element> elem);
 
+    // Fast check if an element is already an orphan
+    bool isOrphan(Element* elem) const { return orphanSet_.count(elem) > 0; }
+
     // Access orphan list (for shared_ptr lookup during appendChild).
     const std::vector<std::shared_ptr<Element>>& orphans() const { return orphans_; }
 
@@ -91,6 +95,7 @@ private:
     // Orphan elements created via createElement that haven't been appended yet.
     // Prevents use-after-free when JS holds a reference to a created element.
     std::vector<std::shared_ptr<Element>> orphans_;
+    std::unordered_set<Element*> orphanSet_;  // O(1) duplicate check
 };
 
 } // namespace bro::dom

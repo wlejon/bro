@@ -265,7 +265,7 @@ Element* Element::parentElement() const {
 std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
     std::vector<Element*> result;
 
-    // Try litehtml first (works for parsed elements)
+    // Try litehtml first (fast, covers parsed HTML elements)
     if (litehtml_element_ && document_) {
         auto found = litehtml_element_->select_all(selector);
         for (auto& lh : found) {
@@ -274,12 +274,14 @@ std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
         }
     }
 
-    // Also search dynamically created children (no litehtml counterpart)
+    // Search dynamic children only — skip subtrees rooted at litehtml elements
+    // since litehtml already searched them above.
+    size_t before = result.size();
     querySelectorAllSimple(selector, result);
-
-    // Deduplicate (elements found by both paths)
-    std::sort(result.begin(), result.end());
-    result.erase(std::unique(result.begin(), result.end()), result.end());
+    if (result.size() > before) {
+        std::sort(result.begin(), result.end());
+        result.erase(std::unique(result.begin(), result.end()), result.end());
+    }
 
     return result;
 }
@@ -379,33 +381,23 @@ bool Element::matchesSimple(const std::string& selector) const {
 }
 
 void Element::querySelectorAllSimple(const std::string& selector, std::vector<Element*>& out) {
-    // Handle simple descendant selectors: "div .class" or "#id .class"
-    // For now, split on spaces and match the last part against descendants
-    // More complex selectors (>, +, ~) are not supported in this fallback
     std::string simpleSelector = selector;
-
-    // Strip leading/trailing spaces
     while (!simpleSelector.empty() && simpleSelector.front() == ' ') simpleSelector.erase(0, 1);
     while (!simpleSelector.empty() && simpleSelector.back() == ' ') simpleSelector.pop_back();
-
-    // If compound (has spaces), use last part for matching
     auto spacePos = simpleSelector.rfind(' ');
-    if (spacePos != std::string::npos) {
-        simpleSelector = simpleSelector.substr(spacePos + 1);
-    }
-
-    // Also handle > child selector
+    if (spacePos != std::string::npos) simpleSelector = simpleSelector.substr(spacePos + 1);
     auto gtPos = simpleSelector.rfind('>');
     if (gtPos != std::string::npos) {
         simpleSelector = simpleSelector.substr(gtPos + 1);
         while (!simpleSelector.empty() && simpleSelector.front() == ' ') simpleSelector.erase(0, 1);
     }
 
-    // Walk all descendants
     for (auto& child : children_) {
         if (child->nodeType() == NodeType::Element) {
             auto* elem = static_cast<Element*>(child.get());
-            if (elem->matchesSimple(simpleSelector)) {
+            // Only match dynamic elements (no litehtml counterpart) — litehtml
+            // already searched its own elements via select_all above.
+            if (!elem->litehtmlElement() && elem->matchesSimple(simpleSelector)) {
                 out.push_back(elem);
             }
             elem->querySelectorAllSimple(selector, out);

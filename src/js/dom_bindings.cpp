@@ -718,12 +718,42 @@ static void pruneOrphans(JSContext* ctx) {
     JS_FreeValue(ctx, global);
 }
 
+// Remove __bro_elem_map entries for an element and all its descendants.
+// The C++ objects must already be retained (in orphans) before calling this.
+static void removeFromElemMap(JSContext* ctx, bro::dom::Element* elem) {
+    if (!elem) return;
+    for (auto& child : elem->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element)
+            removeFromElemMap(ctx, static_cast<bro::dom::Element*>(child.get()));
+    }
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+    if (!JS_IsUndefined(elemMap)) {
+        std::string key = std::to_string(elem->nodeId());
+        JSAtom atom = JS_NewAtom(ctx, key.c_str());
+        JS_DeleteProperty(ctx, elemMap, atom, 0);
+        JS_FreeAtom(ctx, atom);
+    }
+    JS_FreeValue(ctx, elemMap);
+    JS_FreeValue(ctx, global);
+    if (s_document && !elem->id().empty())
+        s_document->unregisterElementId(elem->id());
+}
+
 static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
                                           JSValueConst val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    // Collect children before they're cleared (setTextContent retains them as orphans)
+    std::vector<bro::dom::Element*> kids;
+    for (auto& child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element)
+            kids.push_back(static_cast<bro::dom::Element*>(child.get()));
+    }
     el->setTextContent(jsToStdString(ctx, val));
+    // Now safe to remove from elem map — C++ objects are alive in orphans
+    for (auto* kid : kids) removeFromElemMap(ctx, kid);
     pruneOrphans(ctx);
     return JS_UNDEFINED;
 }
@@ -740,7 +770,14 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    std::vector<bro::dom::Element*> kids;
+    for (auto& child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element)
+            kids.push_back(static_cast<bro::dom::Element*>(child.get()));
+    }
     el->setInnerHTML(jsToStdString(ctx, val));
+    for (auto* kid : kids) removeFromElemMap(ctx, kid);
+    pruneOrphans(ctx);
     return JS_UNDEFINED;
 }
 

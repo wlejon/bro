@@ -124,14 +124,14 @@ std::shared_ptr<DocumentFragment> Document::createDocumentFragment() {
 }
 
 void Document::retainOrphan(std::shared_ptr<Element> elem) {
-    if (!elem) return;
-    for (auto& o : orphans_) {
-        if (o.get() == elem.get()) return; // already retained
-    }
+    if (!elem || orphanSet_.count(elem.get())) return;
+    orphanSet_.insert(elem.get());
     orphans_.push_back(std::move(elem));
 }
 
 void Document::adoptOrphan(Element* elem) {
+    if (!orphanSet_.count(elem)) return;
+    orphanSet_.erase(elem);
     orphans_.erase(
         std::remove_if(orphans_.begin(), orphans_.end(),
             [elem](const std::shared_ptr<Element>& e) { return e.get() == elem; }),
@@ -165,7 +165,7 @@ Element* Document::querySelector(const std::string& selector) {
 std::vector<Element*> Document::querySelectorAll(const std::string& selector) {
     std::vector<Element*> result;
 
-    // litehtml results
+    // litehtml results (fast, covers parsed HTML elements)
     if (litehtml_doc_ && litehtml_doc_->root()) {
         auto found = litehtml_doc_->root()->select_all(selector);
         for (auto& lh_elem : found) {
@@ -176,14 +176,17 @@ std::vector<Element*> Document::querySelectorAll(const std::string& selector) {
         }
     }
 
-    // Also search dynamic elements via simple matching
-    if (root_ && root_->nodeType() == NodeType::Element) {
+    // Only search dynamic elements if there are orphans (dynamically created elements).
+    // This avoids an expensive full-tree walk when all elements came from the parser.
+    if (!orphans_.empty() && root_ && root_->nodeType() == NodeType::Element) {
+        size_t before = result.size();
         static_cast<Element*>(root_.get())->querySelectorAllSimple(selector, result);
+        // Deduplicate only if we added new results
+        if (result.size() > before) {
+            std::sort(result.begin(), result.end());
+            result.erase(std::unique(result.begin(), result.end()), result.end());
+        }
     }
-
-    // Deduplicate
-    std::sort(result.begin(), result.end());
-    result.erase(std::unique(result.begin(), result.end()), result.end());
 
     return result;
 }
