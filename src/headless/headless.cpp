@@ -360,9 +360,9 @@ Headless::Headless(const std::string& appDir, int width, int height)
         litehtmlDoc_->render(viewportWidth_);
     }
 
-    // 10. System overlay (no GL in headless — pass nullptr)
+    // 10. System overlay (shares JS runtime, no GL in headless)
     systemOverlay_ = std::make_unique<engine::SystemOverlay>(
-        nullptr, viewportWidth_, viewportHeight_);
+        jsRuntime_.get(), nullptr, viewportWidth_, viewportHeight_);
     systemOverlay_->loadPanels("system");
 
     flush();

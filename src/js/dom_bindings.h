@@ -34,8 +34,11 @@ public:
     /// Wrap a bro::dom::Document* into a JS Document object.
     static JSValue wrapDocument(JSContext* ctx, void* document_ptr);
 
-    /// Free static prototypes to allow clean JS runtime shutdown.
+    /// Free per-context state. Call before destroying the JSContext.
     static void cleanup(JSContext* ctx);
+
+    /// Free per-runtime state. Call before destroying the JSRuntime.
+    static void cleanupRuntime(JSRuntime* rt);
 };
 
 } // namespace bro::js

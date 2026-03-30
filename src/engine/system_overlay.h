@@ -20,7 +20,7 @@ extern "C" {
 namespace bro::render { class GLContext; }
 namespace bro::layout { class BroContainer; }
 namespace bro::dom { class Document; }
-namespace bro::js { class Timers; }
+namespace bro::js { class Runtime; class Timers; }
 
 namespace bro::engine {
 
@@ -76,7 +76,8 @@ private:
 
 class SystemOverlay {
 public:
-    SystemOverlay(render::GLContext* gl, int vpW, int vpH);
+    /// Construct with shared JS runtime. Each panel gets its own JSContext.
+    SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH);
     ~SystemOverlay();
 
     /// Scan systemDir for subdirectories containing index.html and load each as a panel.
@@ -107,28 +108,23 @@ public:
 
     struct Panel {
         std::string name;
+        JSContext* jsCtx = nullptr;
+        std::unique_ptr<js::Timers> timers;
         litehtml::document::ptr litehtmlDoc;
         std::unique_ptr<layout::BroContainer> container;
         std::unique_ptr<dom::Document> document;
+        JSValue broPerfObj = JS_UNDEFINED;  // cached ref for fast updates
     };
 
 private:
-    void installMinimalBindings();
-    void installBroObject();
+    void installBroObject(Panel& panel);
 
+    js::Runtime* jsRuntime_;  // shared, not owned
     render::GLContext* gl_;
     std::unique_ptr<SystemRenderer> renderer_;
     int viewportWidth_;
     int viewportHeight_;
     bool visible_ = false;
-
-    // Own JS environment (isolated from the app)
-    JSRuntime* jsRt_ = nullptr;
-    JSContext* jsCtx_ = nullptr;
-    std::unique_ptr<js::Timers> timers_;
-
-    // __bro.perf JS object references (for fast property updates)
-    JSValue broPerfObj_ = JS_UNDEFINED;
 
     std::vector<Panel> panels_;
 };

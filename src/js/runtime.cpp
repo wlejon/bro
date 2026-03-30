@@ -159,6 +159,12 @@ void Runtime::executePendingJobs()
     }
 }
 
+JSContext* Runtime::createContext()
+{
+    if (!rt_) return nullptr;
+    return JS_NewContext(rt_);
+}
+
 void Runtime::setModuleLoader()
 {
     JS_SetModuleLoaderFunc(rt_, module_normalize, module_loader, nullptr);

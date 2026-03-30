@@ -28,11 +28,15 @@ public:
     /// Read a file from disk and evaluate it as a script. Returns true on success.
     bool loadFile(const std::string& path);
 
-    /// Get the underlying JSContext.
+    /// Get the underlying JSContext (the primary/app context).
     JSContext* getContext() const { return ctx_; }
 
     /// Get the underlying JSRuntime.
     JSRuntime* getRuntime() const { return rt_; }
+
+    /// Create an additional JSContext on the same runtime.
+    /// The caller owns the returned context and must free it with JS_FreeContext.
+    JSContext* createContext();
 
     /// Get the global object (caller must JS_FreeValue when done).
     JSValue getGlobalObject() const;

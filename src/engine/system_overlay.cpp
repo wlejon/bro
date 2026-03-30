@@ -4,9 +4,10 @@
 #include "render/gl_context.h"
 #include "layout/container.h"
 #include "dom/document.h"
-#include "dom/element.h"
+#include "js/runtime.h"
 #include "js/console.h"
 #include "js/timers.h"
+#include "js/dom_bindings.h"
 #include "util/log.h"
 
 #include <include/core/SkPaint.h>
@@ -210,331 +211,77 @@ void SystemRenderer::uploadToGPU() {
 namespace bro::engine {
 
 // ---------------------------------------------------------------------------
-// Minimal DOM bindings for system panels
+// SystemOverlay implementation — uses shared JS runtime with per-panel contexts
 // ---------------------------------------------------------------------------
 
-static JSClassID s_elementProxyClassId = 0;
-static JSClassID s_styleProxyClassId = 0;
-
-struct ElementProxyData {
-    dom::Element* element;
-    dom::Document* document;
-};
-
-struct StyleProxyData {
-    dom::Element* element;
-    dom::Document* document;
-};
-
-// --- Style proxy ---
-
-static JSValue style_proxy_set(JSContext* ctx, JSValueConst this_val,
-                                int argc, JSValueConst* argv) {
-    auto* data = static_cast<StyleProxyData*>(
-        JS_GetOpaque(this_val, s_styleProxyClassId));
-    if (!data || !data->element || argc < 2) return JS_UNDEFINED;
-
-    const char* prop = JS_ToCString(ctx, argv[0]);
-    const char* val = JS_ToCString(ctx, argv[1]);
-    if (prop && val) {
-        // Convert camelCase to kebab-case
-        std::string kebab = dom::StyleProxy::camelToKebab(prop);
-        data->element->style().setProperty(kebab, val);
-        data->element->syncStylesToLitehtml();
-    }
-    if (prop) JS_FreeCString(ctx, prop);
-    if (val) JS_FreeCString(ctx, val);
-    return JS_UNDEFINED;
-}
-
-static JSValue style_proxy_get_prop(JSContext* ctx, JSValueConst this_val,
-                                     int argc, JSValueConst* argv) {
-    auto* data = static_cast<StyleProxyData*>(
-        JS_GetOpaque(this_val, s_styleProxyClassId));
-    if (!data || !data->element || argc < 1) return JS_UNDEFINED;
-
-    const char* prop = JS_ToCString(ctx, argv[0]);
-    if (!prop) return JS_UNDEFINED;
-    std::string kebab = dom::StyleProxy::camelToKebab(prop);
-    std::string val = data->element->style().getProperty(kebab);
-    JS_FreeCString(ctx, prop);
-    return JS_NewString(ctx, val.c_str());
-}
-
-// Use a Proxy-like approach: style.width = "10px" via JS setter magic
-// We'll use a JS wrapper instead: __bro_style_set(elem_proxy, "width", "10px")
-// But for a nicer API, we install the style as an object with set() method
-// and wrap it in JS to intercept property assignments.
-
-static void style_proxy_finalizer(JSRuntime*, JSValue val) {
-    auto* data = static_cast<StyleProxyData*>(
-        JS_GetOpaque(val, s_styleProxyClassId));
-    delete data;
-}
-
-static JSClassDef styleProxyClassDef = {
-    "SystemStyleProxy",
-    style_proxy_finalizer,
-    nullptr, nullptr, nullptr
-};
-
-// --- Element proxy ---
-
-static JSValue elem_get_textContent(JSContext* ctx, JSValueConst this_val) {
-    auto* data = static_cast<ElementProxyData*>(
-        JS_GetOpaque(this_val, s_elementProxyClassId));
-    if (!data || !data->element) return JS_UNDEFINED;
-    std::string text = data->element->textContent();
-    return JS_NewString(ctx, text.c_str());
-}
-
-static JSValue elem_set_textContent(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* data = static_cast<ElementProxyData*>(
-        JS_GetOpaque(this_val, s_elementProxyClassId));
-    if (!data || !data->element) return JS_UNDEFINED;
-    const char* str = JS_ToCString(ctx, val);
-    if (str) {
-        data->element->setTextContent(str);
-        JS_FreeCString(ctx, str);
-    }
-    return JS_UNDEFINED;
-}
-
-static JSValue elem_get_className(JSContext* ctx, JSValueConst this_val) {
-    auto* data = static_cast<ElementProxyData*>(
-        JS_GetOpaque(this_val, s_elementProxyClassId));
-    if (!data || !data->element) return JS_UNDEFINED;
-    return JS_NewString(ctx, data->element->className().c_str());
-}
-
-static JSValue elem_set_className(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* data = static_cast<ElementProxyData*>(
-        JS_GetOpaque(this_val, s_elementProxyClassId));
-    if (!data || !data->element) return JS_UNDEFINED;
-    const char* str = JS_ToCString(ctx, val);
-    if (str) {
-        data->element->setClassName(str);
-        JS_FreeCString(ctx, str);
-    }
-    return JS_UNDEFINED;
-}
-
-static JSValue elem_get_innerHTML(JSContext* ctx, JSValueConst this_val) {
-    auto* data = static_cast<ElementProxyData*>(
-        JS_GetOpaque(this_val, s_elementProxyClassId));
-    if (!data || !data->element) return JS_UNDEFINED;
-    return JS_NewString(ctx, data->element->innerHTML().c_str());
-}
-
-static JSValue elem_set_innerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* data = static_cast<ElementProxyData*>(
-        JS_GetOpaque(this_val, s_elementProxyClassId));
-    if (!data || !data->element) return JS_UNDEFINED;
-    const char* str = JS_ToCString(ctx, val);
-    if (str) {
-        data->element->setInnerHTML(str);
-        JS_FreeCString(ctx, str);
-    }
-    return JS_UNDEFINED;
-}
-
-static void elem_proxy_finalizer(JSRuntime*, JSValue val) {
-    auto* data = static_cast<ElementProxyData*>(
-        JS_GetOpaque(val, s_elementProxyClassId));
-    delete data;
-}
-
-static JSClassDef elementProxyClassDef = {
-    "SystemElementProxy",
-    elem_proxy_finalizer,
-    nullptr, nullptr, nullptr
-};
-
-static JSValue wrap_element_proxy(JSContext* ctx, dom::Element* elem, dom::Document* doc) {
-    if (!elem) return JS_NULL;
-
-    // Create element proxy
-    JSValue obj = JS_NewObjectClass(ctx, s_elementProxyClassId);
-    auto* edata = new ElementProxyData{elem, doc};
-    JS_SetOpaque(obj, edata);
-
-    // Create style sub-object with set/get methods
-    JSValue styleObj = JS_NewObjectClass(ctx, s_styleProxyClassId);
-    auto* sdata = new StyleProxyData{elem, doc};
-    JS_SetOpaque(styleObj, sdata);
-    JS_SetPropertyStr(ctx, styleObj, "setProperty",
-                      JS_NewCFunction(ctx, style_proxy_set, "setProperty", 2));
-    JS_SetPropertyStr(ctx, styleObj, "getPropertyValue",
-                      JS_NewCFunction(ctx, style_proxy_get_prop, "getPropertyValue", 1));
-    JS_SetPropertyStr(ctx, obj, "style", styleObj);
-
-    return obj;
-}
-
-// document.getElementById
-static JSValue sys_getElementById(JSContext* ctx, JSValueConst this_val,
-                                   int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_NULL;
-    const char* id = JS_ToCString(ctx, argv[0]);
-    if (!id) return JS_NULL;
-
-    // The panels pointer is stored as an int64 property on the document object
-    JSValue ptrVal = JS_GetPropertyStr(ctx, this_val, "__panels_ptr");
-    int64_t ptrInt = 0;
-    JS_ToInt64(ctx, &ptrInt, ptrVal);
-    JS_FreeValue(ctx, ptrVal);
-    auto* panels = reinterpret_cast<std::vector<SystemOverlay::Panel>*>(ptrInt);
-
-    // Search all panels for the element
-    dom::Element* found = nullptr;
-    dom::Document* foundDoc = nullptr;
-    if (panels) {
-        for (auto& panel : *panels) {
-            if (panel.document) {
-                found = panel.document->getElementById(id);
-                if (found) {
-                    foundDoc = panel.document.get();
-                    break;
-                }
-            }
-        }
-    }
-
-    JS_FreeCString(ctx, id);
-    if (!found) return JS_NULL;
-    return wrap_element_proxy(ctx, found, foundDoc);
-}
-
-// ---------------------------------------------------------------------------
-// SystemOverlay implementation
-// ---------------------------------------------------------------------------
-
-SystemOverlay::SystemOverlay(render::GLContext* gl, int vpW, int vpH)
-    : gl_(gl)
+SystemOverlay::SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH)
+    : jsRuntime_(jsRuntime)
+    , gl_(gl)
     , viewportWidth_(vpW)
     , viewportHeight_(vpH) {
 
     // Create CPU-raster renderer (no Ganesh — avoids dual-GPU-context conflicts)
     renderer_ = std::make_unique<SystemRenderer>(gl_);
-
-    // Create isolated JS environment
-    jsRt_ = JS_NewRuntime();
-    JS_SetMemoryLimit(jsRt_, 32 * 1024 * 1024); // 32 MB
-    JS_SetMaxStackSize(jsRt_, 512 * 1024);
-
-    jsCtx_ = JS_NewContext(jsRt_);
-
-    // Register class IDs (safe because these are unique statics)
-    if (s_elementProxyClassId == 0) {
-        JS_NewClassID(jsRt_, &s_elementProxyClassId);
-    }
-    if (s_styleProxyClassId == 0) {
-        JS_NewClassID(jsRt_, &s_styleProxyClassId);
-    }
-    JS_NewClass(jsRt_, s_elementProxyClassId, &elementProxyClassDef);
-    JS_NewClass(jsRt_, s_styleProxyClassId, &styleProxyClassDef);
-
-    // Set up element proxy prototype with getters/setters
-    JSValue elemProto = JS_NewObject(jsCtx_);
-    JS_DefinePropertyGetSet(jsCtx_, elemProto,
-        JS_NewAtom(jsCtx_, "textContent"),
-        JS_NewCFunction(jsCtx_, (JSCFunction*)elem_get_textContent, "get textContent", 0),
-        JS_NewCFunction(jsCtx_, (JSCFunction*)elem_set_textContent, "set textContent", 1),
-        JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyGetSet(jsCtx_, elemProto,
-        JS_NewAtom(jsCtx_, "className"),
-        JS_NewCFunction(jsCtx_, (JSCFunction*)elem_get_className, "get className", 0),
-        JS_NewCFunction(jsCtx_, (JSCFunction*)elem_set_className, "set className", 1),
-        JS_PROP_CONFIGURABLE);
-    JS_DefinePropertyGetSet(jsCtx_, elemProto,
-        JS_NewAtom(jsCtx_, "innerHTML"),
-        JS_NewCFunction(jsCtx_, (JSCFunction*)elem_get_innerHTML, "get innerHTML", 0),
-        JS_NewCFunction(jsCtx_, (JSCFunction*)elem_set_innerHTML, "set innerHTML", 1),
-        JS_PROP_CONFIGURABLE);
-    JS_SetClassProto(jsCtx_, s_elementProxyClassId, elemProto);
-
-    // Install console + timers
-    js::Console::install(jsCtx_);
-    timers_ = std::make_unique<js::Timers>();
-    js::Timers::install(jsCtx_, timers_.get());
-
-    // Install __bro object
-    installBroObject();
-
-    // Install minimal document object
-    installMinimalBindings();
 }
 
 SystemOverlay::~SystemOverlay() {
-    // Clear panels before JS cleanup (they hold litehtml docs)
+    // Tear down panels in reverse order, cleaning up per-panel JS state
+    for (auto& panel : panels_) {
+        if (panel.timers && panel.jsCtx) {
+            panel.timers->clearAll(panel.jsCtx);
+        }
+        panel.timers.reset();
+
+        if (!JS_IsUndefined(panel.broPerfObj) && panel.jsCtx) {
+            JS_FreeValue(panel.jsCtx, panel.broPerfObj);
+            panel.broPerfObj = JS_UNDEFINED;
+        }
+
+        // Clean up DomBindings state for this context
+        if (panel.jsCtx) {
+            js::DomBindings::cleanup(panel.jsCtx);
+        }
+
+        // Must release litehtml doc before container (it calls deleteFont)
+        panel.litehtmlDoc.reset();
+        panel.document.reset();
+        panel.container.reset();
+
+        if (panel.jsCtx) {
+            JS_FreeContext(panel.jsCtx);
+            panel.jsCtx = nullptr;
+        }
+    }
     panels_.clear();
-
-    if (timers_ && jsCtx_) {
-        timers_->clearAll(jsCtx_);
-    }
-    timers_.reset();
-
-    if (!JS_IsUndefined(broPerfObj_)) {
-        JS_FreeValue(jsCtx_, broPerfObj_);
-    }
-
-    if (jsCtx_) {
-        JS_FreeContext(jsCtx_);
-        jsCtx_ = nullptr;
-    }
-    if (jsRt_) {
-        JS_FreeRuntime(jsRt_);
-        jsRt_ = nullptr;
-    }
 }
 
-void SystemOverlay::installBroObject() {
-    JSValue global = JS_GetGlobalObject(jsCtx_);
+void SystemOverlay::installBroObject(Panel& panel) {
+    JSContext* ctx = panel.jsCtx;
+    JSValue global = JS_GetGlobalObject(ctx);
 
-    JSValue bro = JS_NewObject(jsCtx_);
-    JSValue perf = JS_NewObject(jsCtx_);
+    JSValue bro = JS_NewObject(ctx);
+    JSValue perf = JS_NewObject(ctx);
 
-    JS_SetPropertyStr(jsCtx_, perf, "fps", JS_NewFloat64(jsCtx_, 0.0));
-    JS_SetPropertyStr(jsCtx_, perf, "frameTime", JS_NewFloat64(jsCtx_, 0.0));
-    JS_SetPropertyStr(jsCtx_, perf, "js", JS_NewFloat64(jsCtx_, 0.0));
-    JS_SetPropertyStr(jsCtx_, perf, "layout", JS_NewFloat64(jsCtx_, 0.0));
-    JS_SetPropertyStr(jsCtx_, perf, "raster", JS_NewFloat64(jsCtx_, 0.0));
-    JS_SetPropertyStr(jsCtx_, perf, "gpu", JS_NewFloat64(jsCtx_, 0.0));
-    JS_SetPropertyStr(jsCtx_, perf, "draw", JS_NewFloat64(jsCtx_, 0.0));
+    JS_SetPropertyStr(ctx, perf, "fps", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, perf, "frameTime", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, perf, "js", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, perf, "layout", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, perf, "raster", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, perf, "gpu", JS_NewFloat64(ctx, 0.0));
+    JS_SetPropertyStr(ctx, perf, "draw", JS_NewFloat64(ctx, 0.0));
 
-    JSValue viewport = JS_NewObject(jsCtx_);
-    JS_SetPropertyStr(jsCtx_, viewport, "width", JS_NewInt32(jsCtx_, viewportWidth_));
-    JS_SetPropertyStr(jsCtx_, viewport, "height", JS_NewInt32(jsCtx_, viewportHeight_));
-    JS_SetPropertyStr(jsCtx_, bro, "viewport", viewport);
+    JSValue viewport = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, viewport, "width", JS_NewInt32(ctx, viewportWidth_));
+    JS_SetPropertyStr(ctx, viewport, "height", JS_NewInt32(ctx, viewportHeight_));
+    JS_SetPropertyStr(ctx, bro, "viewport", viewport);
 
-    JS_SetPropertyStr(jsCtx_, bro, "perf", perf);
-    JS_SetPropertyStr(jsCtx_, global, "__bro", bro);
+    JS_SetPropertyStr(ctx, bro, "perf", perf);
+    JS_SetPropertyStr(ctx, global, "__bro", bro);
 
     // Keep a reference to perf for fast updates
-    broPerfObj_ = JS_DupValue(jsCtx_, perf);
+    panel.broPerfObj = JS_DupValue(ctx, perf);
 
-    JS_FreeValue(jsCtx_, global);
-}
-
-void SystemOverlay::installMinimalBindings() {
-    JSValue global = JS_GetGlobalObject(jsCtx_);
-
-    // Create document object
-    JSValue doc = JS_NewObject(jsCtx_);
-
-    // Store panels pointer as int64 property for getElementById lookup
-    JS_SetPropertyStr(jsCtx_, doc, "__panels_ptr",
-                      JS_NewInt64(jsCtx_, reinterpret_cast<int64_t>(&panels_)));
-
-    JS_SetPropertyStr(jsCtx_, doc, "getElementById",
-                      JS_NewCFunction(jsCtx_, sys_getElementById, "getElementById", 1));
-
-    JS_SetPropertyStr(jsCtx_, global, "document", doc);
-
-    // Also set window = globalThis
-    JS_SetPropertyStr(jsCtx_, global, "window", JS_DupValue(jsCtx_, global));
-
-    JS_FreeValue(jsCtx_, global);
+    JS_FreeValue(ctx, global);
 }
 
 void SystemOverlay::loadPanels(const std::string& systemDir) {
@@ -588,6 +335,25 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
         panel.document = std::make_unique<dom::Document>();
         panel.document->buildFrom(panel.litehtmlDoc);
 
+        // Create a dedicated JSContext for this panel on the shared runtime
+        panel.jsCtx = jsRuntime_->createContext();
+
+        // Install standard bindings on the panel's context
+        js::Console::install(panel.jsCtx);
+        panel.timers = std::make_unique<js::Timers>();
+        js::Timers::install(panel.jsCtx, panel.timers.get());
+
+        // Set window = globalThis
+        JSValue global = JS_GetGlobalObject(panel.jsCtx);
+        JS_SetPropertyStr(panel.jsCtx, global, "window", JS_DupValue(panel.jsCtx, global));
+        JS_FreeValue(panel.jsCtx, global);
+
+        // Install full DOM bindings (same code path as the app)
+        js::DomBindings::install(panel.jsCtx, panel.document.get());
+
+        // Install __bro perf object
+        installBroObject(panel);
+
         // Initial layout
         panel.litehtmlDoc->render(static_cast<litehtml::pixel_t>(viewportWidth_));
 
@@ -603,19 +369,19 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
                 std::string code = (*it)[1].str();
                 if (!code.empty()) {
                     std::string filename = "<system/" + panel.name + ">";
-                    JSValue result = JS_Eval(jsCtx_, code.c_str(), code.size(),
+                    JSValue result = JS_Eval(panel.jsCtx, code.c_str(), code.size(),
                                              filename.c_str(), JS_EVAL_TYPE_GLOBAL);
                     if (JS_IsException(result)) {
-                        JSValue ex = JS_GetException(jsCtx_);
-                        const char* str = JS_ToCString(jsCtx_, ex);
+                        JSValue ex = JS_GetException(panel.jsCtx);
+                        const char* str = JS_ToCString(panel.jsCtx, ex);
                         if (str) {
                             LOG_ERROR("SystemOverlay JS error in '%s': %s",
                                       panel.name.c_str(), str);
-                            JS_FreeCString(jsCtx_, str);
+                            JS_FreeCString(panel.jsCtx, str);
                         }
-                        JS_FreeValue(jsCtx_, ex);
+                        JS_FreeValue(panel.jsCtx, ex);
                     }
-                    JS_FreeValue(jsCtx_, result);
+                    JS_FreeValue(panel.jsCtx, result);
                 }
             }
         }
@@ -634,36 +400,41 @@ void SystemOverlay::toggle() {
 void SystemOverlay::updatePerf(double fps, double frameTime, double js, double layout,
                                 double raster, double gpu, double draw,
                                 int vpW, int vpH) {
-    if (JS_IsUndefined(broPerfObj_)) return;
+    for (auto& panel : panels_) {
+        if (JS_IsUndefined(panel.broPerfObj) || !panel.jsCtx) continue;
+        JSContext* ctx = panel.jsCtx;
 
-    JS_SetPropertyStr(jsCtx_, broPerfObj_, "fps", JS_NewFloat64(jsCtx_, fps));
-    JS_SetPropertyStr(jsCtx_, broPerfObj_, "frameTime", JS_NewFloat64(jsCtx_, frameTime));
-    JS_SetPropertyStr(jsCtx_, broPerfObj_, "js", JS_NewFloat64(jsCtx_, js));
-    JS_SetPropertyStr(jsCtx_, broPerfObj_, "layout", JS_NewFloat64(jsCtx_, layout));
-    JS_SetPropertyStr(jsCtx_, broPerfObj_, "raster", JS_NewFloat64(jsCtx_, raster));
-    JS_SetPropertyStr(jsCtx_, broPerfObj_, "gpu", JS_NewFloat64(jsCtx_, gpu));
-    JS_SetPropertyStr(jsCtx_, broPerfObj_, "draw", JS_NewFloat64(jsCtx_, draw));
+        JS_SetPropertyStr(ctx, panel.broPerfObj, "fps", JS_NewFloat64(ctx, fps));
+        JS_SetPropertyStr(ctx, panel.broPerfObj, "frameTime", JS_NewFloat64(ctx, frameTime));
+        JS_SetPropertyStr(ctx, panel.broPerfObj, "js", JS_NewFloat64(ctx, js));
+        JS_SetPropertyStr(ctx, panel.broPerfObj, "layout", JS_NewFloat64(ctx, layout));
+        JS_SetPropertyStr(ctx, panel.broPerfObj, "raster", JS_NewFloat64(ctx, raster));
+        JS_SetPropertyStr(ctx, panel.broPerfObj, "gpu", JS_NewFloat64(ctx, gpu));
+        JS_SetPropertyStr(ctx, panel.broPerfObj, "draw", JS_NewFloat64(ctx, draw));
 
-    // Update viewport
-    JSValue global = JS_GetGlobalObject(jsCtx_);
-    JSValue bro = JS_GetPropertyStr(jsCtx_, global, "__bro");
-    JSValue viewport = JS_GetPropertyStr(jsCtx_, bro, "viewport");
-    JS_SetPropertyStr(jsCtx_, viewport, "width", JS_NewInt32(jsCtx_, vpW));
-    JS_SetPropertyStr(jsCtx_, viewport, "height", JS_NewInt32(jsCtx_, vpH));
-    JS_FreeValue(jsCtx_, viewport);
-    JS_FreeValue(jsCtx_, bro);
-    JS_FreeValue(jsCtx_, global);
+        // Update viewport
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue bro = JS_GetPropertyStr(ctx, global, "__bro");
+        JSValue viewport = JS_GetPropertyStr(ctx, bro, "viewport");
+        JS_SetPropertyStr(ctx, viewport, "width", JS_NewInt32(ctx, vpW));
+        JS_SetPropertyStr(ctx, viewport, "height", JS_NewInt32(ctx, vpH));
+        JS_FreeValue(ctx, viewport);
+        JS_FreeValue(ctx, bro);
+        JS_FreeValue(ctx, global);
+    }
 }
 
 void SystemOverlay::tick(double nowMs) {
     if (!visible_) return;
 
-    timers_->tick(nowMs);
-    timers_->fireAnimationFrames(nowMs);
+    for (auto& panel : panels_) {
+        if (!panel.timers) continue;
+        panel.timers->tick(nowMs);
+        panel.timers->fireAnimationFrames(nowMs);
+    }
 
-    // Drain pending jobs
-    JSContext* pctx = nullptr;
-    while (JS_ExecutePendingJob(jsRt_, &pctx) > 0) {}
+    // Drain pending jobs on the shared runtime
+    jsRuntime_->executePendingJobs();
 }
 
 void SystemOverlay::render(int vpW, int vpH) {

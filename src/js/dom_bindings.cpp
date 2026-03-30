@@ -13,6 +13,7 @@
 #include <cctype>
 #include <cstring>
 #include <sstream>
+#include <unordered_map>
 
 extern "C" {
 #include "quickjs.h"
@@ -31,17 +32,20 @@ static JSClassID js_nodelist_class_id = 0;
 static JSClassID js_cssstyle_class_id = 0;
 
 // ===========================================================================
-// Forward declarations of prototypes (set during install)
+// Per-context state (supports multiple JSContexts on the same runtime)
 // ===========================================================================
 
-static JSValue document_proto = JS_UNINITIALIZED;
-static JSValue element_proto  = JS_UNINITIALIZED;
-static JSValue event_proto    = JS_UNINITIALIZED;
-static JSValue nodelist_proto = JS_UNINITIALIZED;
-static JSValue cssstyle_proto = JS_UNINITIALIZED;
+// Track whether JS classes have been registered on a given runtime.
+static std::unordered_map<JSRuntime*, bool> s_classes_registered;
 
-// Stashed Document pointer so appendChild can manage orphan ownership.
-static bro::dom::Document* s_document = nullptr;
+// Per-context Document pointer so element callbacks (appendChild etc.)
+// can manage orphan ownership without a single static.
+static std::unordered_map<JSContext*, bro::dom::Document*> s_ctx_documents;
+
+static bro::dom::Document* getDocumentForCtx(JSContext* ctx) {
+    auto it = s_ctx_documents.find(ctx);
+    return it != s_ctx_documents.end() ? it->second : nullptr;
+}
 
 // Factory callback for element.getContext()
 static DomBindings::GetContextFactory s_getContextFactory;
@@ -610,8 +614,6 @@ static const JSCFunctionListEntry js_tokenlist_proto_funcs[] = {
     JS_CFUNC_DEF("toString", 0, js_tokenlist_toString),
 };
 
-static JSValue tokenlist_proto = JS_UNINITIALIZED;
-
 static JSValue wrapTokenList(JSContext* ctx, bro::dom::Element* elem) {
     JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_tokenlist_class_id));
     if (JS_IsException(obj)) return obj;
@@ -701,8 +703,9 @@ static void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem) {
             invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child.get()));
     }
 
-    if (s_document && !elem->id().empty())
-        s_document->unregisterElementId(elem->id());
+    auto* ctxDoc = getDocumentForCtx(ctx);
+    if (ctxDoc && !elem->id().empty())
+        ctxDoc->unregisterElementId(elem->id());
 
     // Find and null-out the JS wrapper
     JSValue global = JS_GetGlobalObject(ctx);
@@ -1022,7 +1025,7 @@ static JSValue js_element_removeAttribute(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static std::shared_ptr<bro::dom::Node> findSharedPtr(bro::dom::Element* child) {
+static std::shared_ptr<bro::dom::Node> findSharedPtr(JSContext* ctx, bro::dom::Element* child) {
     // If the child has a parent, it's in that parent's children_ vector.
     if (child->parentNode()) {
         for (auto& c : child->parentNode()->childNodes()) {
@@ -1030,12 +1033,9 @@ static std::shared_ptr<bro::dom::Node> findSharedPtr(bro::dom::Element* child) {
         }
     }
     // Otherwise check orphans in the document.
-    if (s_document) {
-        // Look through orphans_ -- Document::createElement stores them there.
-        // We need to find the shared_ptr that owns this element.
-        // adoptOrphan removes it, but we need to get it first.
-        // For now, create a shared_ptr from orphans by scanning.
-        for (auto& orphan : s_document->orphans()) {
+    auto* doc = getDocumentForCtx(ctx);
+    if (doc) {
+        for (auto& orphan : doc->orphans()) {
             if (orphan.get() == child) return orphan;
         }
     }
@@ -1051,6 +1051,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
     auto* child = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
     if (child) {
+        auto* doc = getDocumentForCtx(ctx);
         // DocumentFragment: move all children to parent instead
         if (child->tagName() == "#DOCUMENT-FRAGMENT") {
             // Copy children vector since we're modifying it during iteration
@@ -1059,18 +1060,18 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 if (kid->nodeType() == bro::dom::NodeType::Element) {
                     auto* kidElem = static_cast<bro::dom::Element*>(kid.get());
                     el->appendChild(kid);
-                    if (s_document) s_document->syncAppendToLitehtml(kidElem, el);
+                    if (doc) doc->syncAppendToLitehtml(kidElem, el);
                 } else {
                     el->appendChild(kid);
                 }
             }
-            if (s_document) s_document->adoptOrphan(child);
+            if (doc) doc->adoptOrphan(child);
         } else {
-            auto childPtr = findSharedPtr(child);
+            auto childPtr = findSharedPtr(ctx, child);
             el->appendChild(childPtr);
-            if (s_document) {
-                s_document->adoptOrphan(child);
-                s_document->syncAppendToLitehtml(child, el);
+            if (doc) {
+                doc->adoptOrphan(child);
+                doc->syncAppendToLitehtml(child, el);
             }
         }
     }
@@ -1085,17 +1086,18 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
     auto* child = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[0]));
     if (child) {
-        if (s_document && !child->id().empty())
-            s_document->unregisterElementId(child->id());
+        auto* doc = getDocumentForCtx(ctx);
+        if (doc && !child->id().empty())
+            doc->unregisterElementId(child->id());
         // Remove from litehtml tree before removing from bro::dom tree
-        if (s_document) s_document->syncRemoveFromLitehtml(child, el);
+        if (doc) doc->syncRemoveFromLitehtml(child, el);
         // Save shared_ptr to orphans so the element survives removal
         // (caller may re-append it elsewhere — spec returns the removed node).
-        auto saved = findSharedPtr(child);
+        auto saved = findSharedPtr(ctx, child);
         el->removeChild(static_cast<bro::dom::Node*>(child));
-        if (s_document && saved) {
+        if (doc && saved) {
             auto elemSaved = std::static_pointer_cast<bro::dom::Element>(saved);
-            s_document->retainOrphan(std::move(elemSaved));
+            doc->retainOrphan(std::move(elemSaved));
         }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
@@ -1114,14 +1116,15 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
             DomBindings::unwrapElement(ctx, argv[1]));
     }
     if (newChild) {
-        auto childPtr = findSharedPtr(newChild);
+        auto childPtr = findSharedPtr(ctx, newChild);
         el->insertBefore(childPtr, static_cast<bro::dom::Node*>(refChild));
-        if (s_document) {
-            s_document->adoptOrphan(newChild);
+        auto* doc = getDocumentForCtx(ctx);
+        if (doc) {
+            doc->adoptOrphan(newChild);
             if (refChild) {
-                s_document->syncInsertBeforeLitehtml(newChild, refChild, el);
+                doc->syncInsertBeforeLitehtml(newChild, refChild, el);
             } else {
-                s_document->syncAppendToLitehtml(newChild, el);
+                doc->syncAppendToLitehtml(newChild, el);
             }
         }
     }
@@ -1138,21 +1141,22 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
     auto* oldChild = static_cast<bro::dom::Element*>(
         DomBindings::unwrapElement(ctx, argv[1]));
     if (newChild && oldChild) {
-        auto newPtr = findSharedPtr(newChild);
-        auto oldSaved = findSharedPtr(oldChild);
+        auto* doc = getDocumentForCtx(ctx);
+        auto newPtr = findSharedPtr(ctx, newChild);
+        auto oldSaved = findSharedPtr(ctx, oldChild);
         // Sync: insert new before old, then remove old
         el->insertBefore(newPtr, static_cast<bro::dom::Node*>(oldChild));
-        if (s_document) {
-            s_document->syncInsertBeforeLitehtml(newChild, oldChild, el);
+        if (doc) {
+            doc->syncInsertBeforeLitehtml(newChild, oldChild, el);
         }
-        if (s_document && !oldChild->id().empty())
-            s_document->unregisterElementId(oldChild->id());
-        if (s_document) s_document->syncRemoveFromLitehtml(oldChild, el);
+        if (doc && !oldChild->id().empty())
+            doc->unregisterElementId(oldChild->id());
+        if (doc) doc->syncRemoveFromLitehtml(oldChild, el);
         el->removeChild(static_cast<bro::dom::Node*>(oldChild));
-        if (s_document) {
-            s_document->adoptOrphan(newChild);
+        if (doc) {
+            doc->adoptOrphan(newChild);
             if (oldSaved) {
-                s_document->retainOrphan(
+                doc->retainOrphan(
                     std::static_pointer_cast<bro::dom::Element>(oldSaved));
             }
         }
@@ -1164,13 +1168,14 @@ static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv)
 {
     auto* el = getElement(this_val);
-    if (!el || !s_document) return JS_NULL;
+    auto* doc = getDocumentForCtx(ctx);
+    if (!el || !doc) return JS_NULL;
 
     bool deep = false;
     if (argc >= 1) deep = JS_ToBool(ctx, argv[0]);
 
     // Create a new element with the same tag
-    auto clone = s_document->createElement(el->tagName());
+    auto clone = doc->createElement(el->tagName());
     if (!clone) return JS_NULL;
 
     // Copy attributes (skip "id" — cloned nodes must not duplicate IDs)
@@ -1197,9 +1202,9 @@ static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
                 JSValue clonedJs = js_element_cloneNode(ctx, childJs, 1, &trueVal);
                 auto* clonedElem = static_cast<bro::dom::Element*>(DomBindings::unwrapElement(ctx, clonedJs));
                 if (clonedElem) {
-                    auto clonedPtr = findSharedPtr(clonedElem);
+                    auto clonedPtr = findSharedPtr(ctx, clonedElem);
                     clone->appendChild(clonedPtr);
-                    if (s_document) s_document->adoptOrphan(clonedElem);
+                    if (doc) doc->adoptOrphan(clonedElem);
                 }
                 JS_FreeValue(ctx, clonedJs);
                 JS_FreeValue(ctx, childJs);
@@ -1221,21 +1226,21 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
     if (!el) return JS_UNDEFINED;
     auto* parent = el->parentNode();
     if (parent) {
-        if (s_document && !el->id().empty())
-            s_document->unregisterElementId(el->id());
+        auto* doc = getDocumentForCtx(ctx);
+        if (doc && !el->id().empty())
+            doc->unregisterElementId(el->id());
         // Remove from litehtml tree before removing from bro::dom tree
-        if (s_document && parent->nodeType() == bro::dom::NodeType::Element) {
-            s_document->syncRemoveFromLitehtml(
+        if (doc && parent->nodeType() == bro::dom::NodeType::Element) {
+            doc->syncRemoveFromLitehtml(
                 el, static_cast<bro::dom::Element*>(parent));
         }
-        auto saved = findSharedPtr(el);
+        auto saved = findSharedPtr(ctx, el);
         parent->removeChild(static_cast<bro::dom::Node*>(el));
-        if (s_document && saved) {
+        if (doc && saved) {
             auto elemSaved = std::static_pointer_cast<bro::dom::Element>(saved);
-            s_document->retainOrphan(std::move(elemSaved));
+            doc->retainOrphan(std::move(elemSaved));
         }
     }
-    (void)ctx;
     return JS_UNDEFINED;
 }
 
@@ -1841,7 +1846,6 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
         return obj;
     }
     JS_SetOpaque(obj, element_ptr);
-    JS_SetPrototype(ctx, obj, JS_DupValue(ctx, element_proto));
 
     // Register in the element map for event dispatch lookup
     JS_SetPropertyStr(ctx, elemMap, key.c_str(), JS_DupValue(ctx, obj));
@@ -1863,7 +1867,6 @@ JSValue DomBindings::wrapDocument(JSContext* ctx, void* document_ptr)
     JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_document_class_id));
     if (JS_IsException(obj)) return obj;
     JS_SetOpaque(obj, document_ptr);
-    JS_SetPrototype(ctx, obj, JS_DupValue(ctx, document_proto));
     return obj;
 }
 
@@ -1875,7 +1878,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
 {
     JSRuntime* rt = JS_GetRuntime(ctx);
 
-    // ----- Allocate class IDs -----
+    // ----- Allocate class IDs (idempotent — no-op if already non-zero) -----
     JS_NewClassID(rt, &js_document_class_id);
     JS_NewClassID(rt, &js_element_class_id);
     JS_NewClassID(rt, &js_event_class_id);
@@ -1883,54 +1886,57 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JS_NewClassID(rt, &js_cssstyle_class_id);
     JS_NewClassID(rt, &js_tokenlist_class_id);
 
-    // ----- Register classes on the runtime -----
-    JS_NewClass(rt, js_document_class_id, &js_document_class);
-    JS_NewClass(rt, js_element_class_id,  &js_element_class);
-    JS_NewClass(rt, js_event_class_id,    &js_event_class);
-    JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class);
-    JS_NewClass(rt, js_cssstyle_class_id, &js_cssstyle_class);
-    JS_NewClass(rt, js_tokenlist_class_id, &js_tokenlist_class);
+    // ----- Register classes on the runtime (once per runtime) -----
+    if (!s_classes_registered[rt]) {
+        JS_NewClass(rt, js_document_class_id, &js_document_class);
+        JS_NewClass(rt, js_element_class_id,  &js_element_class);
+        JS_NewClass(rt, js_event_class_id,    &js_event_class);
+        JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class);
+        JS_NewClass(rt, js_cssstyle_class_id, &js_cssstyle_class);
+        JS_NewClass(rt, js_tokenlist_class_id, &js_tokenlist_class);
+        s_classes_registered[rt] = true;
+    }
 
-    // ----- Create prototypes -----
+    // ----- Create prototypes (per-context via JS_SetClassProto) -----
 
     // Document prototype
-    document_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, document_proto, js_document_proto_funcs,
+    JSValue doc_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, doc_proto, js_document_proto_funcs,
                                sizeof(js_document_proto_funcs) / sizeof(js_document_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_document_class_id, JS_DupValue(ctx, document_proto));
+    JS_SetClassProto(ctx, js_document_class_id, doc_proto);
 
     // Element prototype
-    element_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, element_proto, js_element_proto_funcs,
+    JSValue elem_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, elem_proto, js_element_proto_funcs,
                                sizeof(js_element_proto_funcs) / sizeof(js_element_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_element_class_id, JS_DupValue(ctx, element_proto));
+    JS_SetClassProto(ctx, js_element_class_id, elem_proto);
 
     // Event prototype
-    event_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, event_proto, js_event_proto_funcs,
+    JSValue evt_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, evt_proto, js_event_proto_funcs,
                                sizeof(js_event_proto_funcs) / sizeof(js_event_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_event_class_id, JS_DupValue(ctx, event_proto));
+    JS_SetClassProto(ctx, js_event_class_id, evt_proto);
 
     // NodeList prototype
-    nodelist_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, nodelist_proto, js_nodelist_proto_funcs,
+    JSValue nl_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, nl_proto, js_nodelist_proto_funcs,
                                sizeof(js_nodelist_proto_funcs) / sizeof(js_nodelist_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_nodelist_class_id, JS_DupValue(ctx, nodelist_proto));
+    JS_SetClassProto(ctx, js_nodelist_class_id, nl_proto);
 
     // CSSStyleDeclaration prototype
-    cssstyle_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, cssstyle_proto, js_cssstyle_proto_funcs,
+    JSValue css_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, css_proto, js_cssstyle_proto_funcs,
                                sizeof(js_cssstyle_proto_funcs) / sizeof(js_cssstyle_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_cssstyle_class_id, JS_DupValue(ctx, cssstyle_proto));
+    JS_SetClassProto(ctx, js_cssstyle_class_id, css_proto);
 
     // DOMTokenList prototype
-    tokenlist_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, tokenlist_proto, js_tokenlist_proto_funcs,
+    JSValue tl_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, tl_proto, js_tokenlist_proto_funcs,
                                sizeof(js_tokenlist_proto_funcs) / sizeof(js_tokenlist_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_tokenlist_class_id, JS_DupValue(ctx, tokenlist_proto));
+    JS_SetClassProto(ctx, js_tokenlist_class_id, tl_proto);
 
-    // ----- Stash Document pointer for orphan management -----
-    s_document = static_cast<bro::dom::Document*>(document_ptr);
+    // ----- Stash Document pointer for orphan management (per-context) -----
+    s_ctx_documents[ctx] = static_cast<bro::dom::Document*>(document_ptr);
 
     // ----- Set global `document` -----
     JSValue global = JS_GetGlobalObject(ctx);
@@ -1992,19 +1998,13 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
 }
 
 void DomBindings::cleanup(JSContext* ctx) {
-    JS_FreeValue(ctx, document_proto);
-    JS_FreeValue(ctx, element_proto);
-    JS_FreeValue(ctx, event_proto);
-    JS_FreeValue(ctx, nodelist_proto);
-    JS_FreeValue(ctx, cssstyle_proto);
-    JS_FreeValue(ctx, tokenlist_proto);
-    document_proto = JS_UNINITIALIZED;
-    element_proto  = JS_UNINITIALIZED;
-    event_proto    = JS_UNINITIALIZED;
-    nodelist_proto = JS_UNINITIALIZED;
-    cssstyle_proto = JS_UNINITIALIZED;
-    tokenlist_proto = JS_UNINITIALIZED;
-    s_document = nullptr;
+    // Per-context prototypes are owned by JS_SetClassProto and freed
+    // when the context is destroyed — no manual free needed.
+    s_ctx_documents.erase(ctx);
+}
+
+void DomBindings::cleanupRuntime(JSRuntime* rt) {
+    s_classes_registered.erase(rt);
 }
 
 } // namespace bro::js

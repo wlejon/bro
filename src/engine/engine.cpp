@@ -331,7 +331,8 @@ Engine::Engine(const std::string& appDir, int width, int height)
     eventLoop_ = std::make_unique<platform::EventLoop>();
 
     // 12. System overlay (loads panels from system/ sibling directory)
-    systemOverlay_ = std::make_unique<SystemOverlay>(gl_.get(),
+    //     Shares the JS runtime — each panel gets its own JSContext.
+    systemOverlay_ = std::make_unique<SystemOverlay>(jsRuntime_.get(), gl_.get(),
                                                       viewportWidth_, viewportHeight_);
     systemOverlay_->loadPanels("system");
 
