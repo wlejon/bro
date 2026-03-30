@@ -10,6 +10,12 @@ static std::list<litehtml::element::ptr>& mutableChildren(litehtml::element::ptr
     return static_cast<litehtml::html_tag*>(el.get())->children();
 }
 
+// Access litehtml::html_tag::m_attrs (protected) via pointer-to-member.
+struct LitehtmlTagAccess : litehtml::html_tag {
+    static auto attrsPtr() { return &LitehtmlTagAccess::m_attrs; }
+};
+static const auto kAttrsPtr = LitehtmlTagAccess::attrsPtr();
+
 namespace bro::dom {
 
 Document::Document() = default;
@@ -149,7 +155,9 @@ void Document::freeNode(Node* node) {
     auto it = std::find_if(ownedNodes_.begin(), ownedNodes_.end(),
         [node](const std::unique_ptr<Node>& p) { return p.get() == node; });
     if (it != ownedNodes_.end()) {
-        ownedNodes_.erase(it);
+        // Swap with last element then pop — O(1) instead of O(n) shift.
+        std::swap(*it, ownedNodes_.back());
+        ownedNodes_.pop_back();
     }
 }
 
@@ -271,18 +279,12 @@ void Document::buildTreeFromLitehtml(litehtml::element::ptr root, Element* paren
             childElem->setDocument(this);
             litehtmlMap_[lh_child] = childElem;
 
-            // Copy known attributes
-            static const char* commonAttrs[] = {
-                "id", "class", "style", "href", "src", "alt", "title",
-                "name", "value", "type", "placeholder",
-                "data-action", "data-setting", "data-control",
-                "width", "height", "disabled", "checked", "selected",
-                nullptr
-            };
-            for (int a = 0; commonAttrs[a] != nullptr; ++a) {
-                const char* val = lh_child->get_attr(commonAttrs[a]);
-                if (val) {
-                    childElem->setAttribute(commonAttrs[a], val);
+            // Copy all attributes from litehtml's html_tag attribute map.
+            auto* htmlTag = dynamic_cast<litehtml::html_tag*>(lh_child.get());
+            if (htmlTag) {
+                auto& attrs = htmlTag->*kAttrsPtr;
+                for (auto& [name, val] : attrs) {
+                    childElem->setAttribute(name, val);
                 }
             }
 

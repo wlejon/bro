@@ -32,6 +32,7 @@ public:
     std::string getAttribute(const std::string& name) const;
     void setAttribute(const std::string& name, const std::string& val);
     void removeAttribute(const std::string& name);
+    const std::unordered_map<std::string, std::string>& attributes() const { return attributes_; }
 
     // Content
     std::string textContent() const;

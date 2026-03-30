@@ -176,18 +176,10 @@ void Element::setTextContent(const std::string& text) {
         }
     }
 
-    // Add a single text node. If we have an owner document, allocate via it.
-    // Otherwise create an unowned TextNode (for elements not yet in a document).
-    if (!text.empty()) {
-        if (document_) {
-            auto* textNode = document_->createTextNode(text);
-            appendChild(textNode);
-        } else {
-            // Fallback: create text node that will be owned when added to a document.
-            // This path is used during initial tree building before document is set.
-            auto* textNode = new TextNode(text);
-            appendChild(textNode);
-        }
+    // Add a single text node via the owner document (which tracks ownership).
+    if (!text.empty() && document_) {
+        auto* textNode = document_->createTextNode(text);
+        appendChild(textNode);
     }
 
     // Sync to litehtml so the rendered output updates.
@@ -253,6 +245,21 @@ std::string Element::innerHTML() const {
     return oss.str();
 }
 
+static std::string htmlEscapeAttr(const std::string& val) {
+    std::string result;
+    result.reserve(val.size());
+    for (char c : val) {
+        switch (c) {
+            case '"':  result += "&quot;"; break;
+            case '&':  result += "&amp;"; break;
+            case '<':  result += "&lt;"; break;
+            case '>':  result += "&gt;"; break;
+            default:   result += c; break;
+        }
+    }
+    return result;
+}
+
 std::string Element::outerHTML() const {
     std::ostringstream oss;
     std::string lower_tag = tag_;
@@ -261,7 +268,7 @@ std::string Element::outerHTML() const {
     }
     oss << "<" << lower_tag;
     for (const auto& [key, val] : attributes_) {
-        oss << " " << key << "=\"" << val << "\"";
+        oss << " " << key << "=\"" << htmlEscapeAttr(val) << "\"";
     }
     // Include inline styles from StyleProxy if not already in attributes
     if (attributes_.find("style") == attributes_.end()) {
@@ -283,17 +290,12 @@ void Element::setInnerHTML(const std::string& html) {
         return;
     }
 
-    // No document — fallback to storing as text (pre-insertion elements)
+    // No document — clear children (cannot create owned nodes without a document).
     auto oldKids = children_;
     for (auto& child : oldKids) {
         child->setParent(nullptr);
     }
     children_.clear();
-
-    if (!html.empty()) {
-        auto* textNode = new TextNode(html);
-        appendChild(textNode);
-    }
     markDirty();
 }
 
@@ -371,9 +373,12 @@ Element* Element::querySelector(const std::string& selector) {
 }
 
 bool Element::matches(const std::string& selector) const {
-    if (!litehtml_element_ || !document_) return false;
+    // Fast path: simple selectors (no combinators) can be checked directly.
+    bool isSimple = selector.find_first_of(" >+~,") == std::string::npos;
+    if (isSimple) return matchesSimple(selector);
 
-    // Check if this element appears in parent's select_all results
+    // Complex selectors need litehtml's CSS engine.
+    if (!litehtml_element_ || !document_) return false;
     auto parent = litehtml_element_->parent();
     if (!parent) return false;
     auto found = parent->select_all(selector);

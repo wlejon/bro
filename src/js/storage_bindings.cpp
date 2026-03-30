@@ -13,18 +13,36 @@ extern "C" {
 namespace bro::js {
 
 // ---------------------------------------------------------------------------
-// Simple JSON-backed key-value store
+// Per-context storage state (heap-allocated, pointer stashed in JS global)
 // ---------------------------------------------------------------------------
 
-static std::map<std::string, std::string> s_storage;
-static std::string s_storagePath;
+struct StorageState {
+    std::map<std::string, std::string> storage;
+    std::string storagePath;
+};
 
-static void loadStorage()
+static const char* kStorageKey = "__bro_storage_ptr";
+
+static StorageState* getStorageState(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue val = JS_GetPropertyStr(ctx, global, kStorageKey);
+    StorageState* state = nullptr;
+    if (JS_IsNumber(val)) {
+        int64_t ptr = 0;
+        JS_ToInt64(ctx, &ptr, val);
+        state = reinterpret_cast<StorageState*>(static_cast<intptr_t>(ptr));
+    }
+    JS_FreeValue(ctx, val);
+    JS_FreeValue(ctx, global);
+    return state;
+}
+
+static void loadStorage(StorageState* state)
 {
-    s_storage.clear();
-    if (s_storagePath.empty()) return;
+    state->storage.clear();
+    if (state->storagePath.empty()) return;
 
-    std::ifstream file(s_storagePath);
+    std::ifstream file(state->storagePath);
     if (!file.is_open()) return;
 
     std::string content((std::istreambuf_iterator<char>(file)),
@@ -73,16 +91,16 @@ static void loadStorage()
 
         std::string value = parseString(pos);
         if (!key.empty()) {
-            s_storage[key] = value;
+            state->storage[key] = value;
         }
     }
 }
 
-static void saveStorage()
+static void saveStorage(StorageState* state)
 {
-    if (s_storagePath.empty()) return;
+    if (!state || state->storagePath.empty()) return;
 
-    std::ofstream file(s_storagePath);
+    std::ofstream file(state->storagePath);
     if (!file.is_open()) return;
 
     auto escapeJson = [](const std::string& s) -> std::string {
@@ -101,7 +119,7 @@ static void saveStorage()
 
     file << "{\n";
     bool first = true;
-    for (auto& [key, val] : s_storage) {
+    for (auto& [key, val] : state->storage) {
         if (!first) file << ",\n";
         file << "  \"" << escapeJson(key) << "\": \"" << escapeJson(val) << "\"";
         first = false;
@@ -122,47 +140,59 @@ static std::string jsStr(JSContext* ctx, JSValueConst val) {
 
 static JSValue js_getItem(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
+    auto* state = getStorageState(ctx);
+    if (!state) return JS_NULL;
     std::string key = jsStr(ctx, argv[0]);
-    auto it = s_storage.find(key);
-    if (it == s_storage.end()) return JS_NULL;
+    auto it = state->storage.find(key);
+    if (it == state->storage.end()) return JS_NULL;
     return JS_NewString(ctx, it->second.c_str());
 }
 
 static JSValue js_setItem(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
+    auto* state = getStorageState(ctx);
+    if (!state) return JS_UNDEFINED;
     std::string key = jsStr(ctx, argv[0]);
     std::string val = jsStr(ctx, argv[1]);
-    s_storage[key] = val;
-    saveStorage();
+    state->storage[key] = val;
+    saveStorage(state);
     return JS_UNDEFINED;
 }
 
 static JSValue js_removeItem(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
+    auto* state = getStorageState(ctx);
+    if (!state) return JS_UNDEFINED;
     std::string key = jsStr(ctx, argv[0]);
-    s_storage.erase(key);
-    saveStorage();
+    state->storage.erase(key);
+    saveStorage(state);
     return JS_UNDEFINED;
 }
 
-static JSValue js_clear(JSContext*, JSValueConst, int, JSValueConst*) {
-    s_storage.clear();
-    saveStorage();
+static JSValue js_clear(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* state = getStorageState(ctx);
+    if (!state) return JS_UNDEFINED;
+    state->storage.clear();
+    saveStorage(state);
     return JS_UNDEFINED;
 }
 
 static JSValue js_key(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
+    auto* state = getStorageState(ctx);
+    if (!state) return JS_NULL;
     int32_t index = 0;
     JS_ToInt32(ctx, &index, argv[0]);
-    if (index < 0 || static_cast<size_t>(index) >= s_storage.size()) return JS_NULL;
-    auto it = s_storage.begin();
+    if (index < 0 || static_cast<size_t>(index) >= state->storage.size()) return JS_NULL;
+    auto it = state->storage.begin();
     std::advance(it, index);
     return JS_NewString(ctx, it->first.c_str());
 }
 
 static JSValue js_get_length(JSContext* ctx, JSValueConst) {
-    return JS_NewInt32(ctx, static_cast<int32_t>(s_storage.size()));
+    auto* state = getStorageState(ctx);
+    if (!state) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, static_cast<int32_t>(state->storage.size()));
 }
 
 static const JSCFunctionListEntry js_storage_funcs[] = {
@@ -180,10 +210,17 @@ static const JSCFunctionListEntry js_storage_funcs[] = {
 
 void StorageBindings::install(JSContext* ctx, const std::string& storagePath)
 {
-    s_storagePath = storagePath;
-    loadStorage();
+    auto* state = new StorageState();
+    state->storagePath = storagePath;
+    loadStorage(state);
 
     JSValue global = JS_GetGlobalObject(ctx);
+
+    // Stash state pointer in JS global for retrieval by C callbacks.
+    JS_SetPropertyStr(ctx, global, kStorageKey,
+                      JS_NewInt64(ctx, static_cast<int64_t>(
+                          reinterpret_cast<intptr_t>(state))));
+
     JSValue storage = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, storage, js_storage_funcs,
                                sizeof(js_storage_funcs) / sizeof(js_storage_funcs[0]));
@@ -191,10 +228,15 @@ void StorageBindings::install(JSContext* ctx, const std::string& storagePath)
     JS_FreeValue(ctx, global);
 }
 
-void StorageBindings::cleanup(JSContext*)
+void StorageBindings::cleanup(JSContext* ctx)
 {
-    s_storage.clear();
-    s_storagePath.clear();
+    auto* state = getStorageState(ctx);
+    delete state;
+
+    // Clear the stashed pointer
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, kStorageKey, JS_UNDEFINED);
+    JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js

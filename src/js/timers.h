@@ -33,6 +33,10 @@ public:
     /// Cancel all pending timers and rAF callbacks (called on teardown).
     void clearAll(JSContext* ctx);
 
+    /// Cancel only timers/rAF callbacks registered on a specific context.
+    /// Call this before destroying a JSContext to prevent use-after-free.
+    void clearForContext(JSContext* ctx);
+
 private:
     struct TimerEntry {
         JSValue   callback;     // DupValue'd

@@ -9,9 +9,22 @@
 
 namespace bro::js {
 
-static std::string s_fetchBasePath;
+static const char* kFetchBaseKey = "__bro_fetch_base";
 
-static std::string resolveUrl(const std::string& url) {
+static std::string getFetchBasePath(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue val = JS_GetPropertyStr(ctx, global, kFetchBaseKey);
+    std::string result;
+    if (!JS_IsUndefined(val)) {
+        const char* s = JS_ToCString(ctx, val);
+        if (s) { result = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, val);
+    JS_FreeValue(ctx, global);
+    return result;
+}
+
+static std::string resolveUrl(JSContext* ctx, const std::string& url) {
     // Strip leading ./
     std::string clean = url;
     if (clean.size() >= 2 && clean[0] == '.' && clean[1] == '/') {
@@ -21,10 +34,10 @@ static std::string resolveUrl(const std::string& url) {
     if (clean.size() >= 2 && clean[1] == ':') return clean;
     if (!clean.empty() && (clean[0] == '/' || clean[0] == '\\')) return clean;
     // Relative — join with base
-    if (s_fetchBasePath.empty()) return clean;
-    std::string path = s_fetchBasePath;
-    if (path.back() != '/' && path.back() != '\\') path += '/';
-    return path + clean;
+    std::string basePath = getFetchBasePath(ctx);
+    if (basePath.empty()) return clean;
+    if (basePath.back() != '/' && basePath.back() != '\\') basePath += '/';
+    return basePath + clean;
 }
 
 // __bro_readFile(path) -> ArrayBuffer | null
@@ -35,7 +48,7 @@ static JSValue js_bro_readFile(JSContext* ctx, JSValueConst /*this_val*/,
     if (!url) return JS_NULL;
 
     std::string urlStr(url);
-    std::string path = resolveUrl(urlStr);
+    std::string path = resolveUrl(ctx, urlStr);
     JS_FreeCString(ctx, url);
 
     std::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
@@ -73,17 +86,33 @@ static const char* FETCH_POLYFILL = R"JS(
             } else {
                 return '';
             }
-            // Fast path: build string from char codes in chunks
+            // Decode UTF-8 byte sequences correctly
             var result = '';
             var len = bytes.length;
-            for (var i = 0; i < len; i += 4096) {
-                var end = i + 4096;
-                if (end > len) end = len;
-                var chunk = '';
-                for (var j = i; j < end; j++) {
-                    chunk += String.fromCharCode(bytes[j]);
+            for (var i = 0; i < len; ) {
+                var b = bytes[i];
+                var cp;
+                if (b < 0x80) {
+                    cp = b; i += 1;
+                } else if ((b & 0xE0) === 0xC0) {
+                    cp = ((b & 0x1F) << 6) | (bytes[i+1] & 0x3F);
+                    i += 2;
+                } else if ((b & 0xF0) === 0xE0) {
+                    cp = ((b & 0x0F) << 12) | ((bytes[i+1] & 0x3F) << 6) | (bytes[i+2] & 0x3F);
+                    i += 3;
+                } else if ((b & 0xF8) === 0xF0) {
+                    cp = ((b & 0x07) << 18) | ((bytes[i+1] & 0x3F) << 12) | ((bytes[i+2] & 0x3F) << 6) | (bytes[i+3] & 0x3F);
+                    i += 4;
+                } else {
+                    cp = 0xFFFD; i += 1; // replacement character
                 }
-                result += chunk;
+                if (cp <= 0xFFFF) {
+                    result += String.fromCharCode(cp);
+                } else {
+                    // Surrogate pair for code points above BMP
+                    cp -= 0x10000;
+                    result += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+                }
             }
             return result;
         };
@@ -99,12 +128,23 @@ static const char* FETCH_POLYFILL = R"JS(
             var arr = [];
             for (var i = 0; i < str.length; i++) {
                 var c = str.charCodeAt(i);
-                if (c < 128) {
+                // Handle surrogate pairs
+                if (c >= 0xD800 && c <= 0xDBFF && i + 1 < str.length) {
+                    var lo = str.charCodeAt(i + 1);
+                    if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                        c = ((c - 0xD800) << 10) + (lo - 0xDC00) + 0x10000;
+                        i++;
+                    }
+                }
+                if (c < 0x80) {
                     arr.push(c);
-                } else if (c < 2048) {
+                } else if (c < 0x800) {
                     arr.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F));
-                } else {
+                } else if (c < 0x10000) {
                     arr.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+                } else {
+                    arr.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 0x3F),
+                             0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
                 }
             }
             return new Uint8Array(arr);
@@ -262,10 +302,12 @@ static const char* FETCH_POLYFILL = R"JS(
 )JS";
 
 void FetchBindings::install(JSContext* ctx, const std::string& basePath) {
-    s_fetchBasePath = basePath;
+    // Store base path per-context in the JS global object.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, kFetchBaseKey,
+                      JS_NewString(ctx, basePath.c_str()));
 
     // Register native __bro_readFile
-    JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "__bro_readFile",
         JS_NewCFunction(ctx, js_bro_readFile, "__bro_readFile", 1));
     JS_FreeValue(ctx, global);

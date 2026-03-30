@@ -52,11 +52,11 @@ static bro::dom::Document* getDocumentForCtx(JSContext* ctx) {
     return it != s_ctx_documents.end() ? it->second : nullptr;
 }
 
-// Factory callback for element.getContext()
-static DomBindings::GetContextFactory s_getContextFactory;
+// Per-context factory callback for element.getContext()
+static std::unordered_map<JSContext*, DomBindings::GetContextFactory> s_ctx_factories;
 
-void DomBindings::setGetContextFactory(GetContextFactory factory) {
-    s_getContextFactory = std::move(factory);
+void DomBindings::setGetContextFactory(JSContext* ctx, GetContextFactory factory) {
+    s_ctx_factories[ctx] = std::move(factory);
 }
 
 // ===========================================================================
@@ -1197,8 +1197,20 @@ static JSValue js_element_get_children(JSContext* ctx, JSValueConst this_val)
 
 static JSValue js_element_get_childNodes(JSContext* ctx, JSValueConst this_val)
 {
-    // For now childNodes == children (we don't have text nodes as separate objects)
-    return js_element_get_children(ctx, this_val);
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewArray(ctx);
+
+    // childNodes returns ALL child nodes (elements, text, comments).
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t idx = 0;
+    for (auto* child : el->childNodes()) {
+        JS_SetPropertyUint32(ctx, arr, idx++, wrapAnyNode(ctx, child));
+    }
+
+    // Add a length property for NodeList compatibility
+    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, static_cast<int32_t>(idx)));
+
+    return arr;
 }
 
 static JSValue js_element_get_classList(JSContext* ctx, JSValueConst this_val)
@@ -1249,24 +1261,13 @@ static int findChildIndex(bro::dom::Node* node) {
 // Get next sibling as a wrapped JS value with its own nextSibling set
 // to enable jQuery's firstChild→nextSibling chain traversal.
 // Only creates 1 wrapper per call (the immediate sibling).
-// Wrap child at index, setting nextSibling on text nodes so jQuery can
-// traverse firstChild→nextSibling chains. Only recurses forward, and
-// Element nodes already have nextSibling via their prototype getter.
+// Wrap child at index. wrapAnyNode already defines lazy nextSibling/
+// previousSibling getters for non-Element nodes, so no eager recursion needed.
 static JSValue wrapChildAtIndex(JSContext* ctx, bro::dom::Node* parent, size_t idx) {
     if (!parent) return JS_NULL;
     auto& kids = parent->childNodes();
     if (idx >= kids.size()) return JS_NULL;
-
-    auto* child = kids[idx];
-    JSValue obj = wrapAnyNode(ctx, child);
-
-    // For non-Element nodes, set nextSibling chain for traversal
-    if (child->nodeType() != bro::dom::NodeType::Element) {
-        JS_SetPropertyStr(ctx, obj, "nextSibling",
-            (idx + 1 < kids.size()) ? wrapChildAtIndex(ctx, parent, idx + 1) : JS_NULL);
-        JS_SetPropertyStr(ctx, obj, "previousSibling", JS_NULL);
-    }
-    return obj;
+    return wrapAnyNode(ctx, kids[idx]);
 }
 
 static JSValue js_element_get_firstChild(JSContext* ctx, JSValueConst this_val)
@@ -1534,18 +1535,10 @@ static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
     auto* clone = doc->createElement(el->tagName());
     if (!clone) return JS_NULL;
 
-    // Copy attributes (skip "id" — cloned nodes must not duplicate IDs)
-    std::string cls = el->className();
-    if (!cls.empty()) clone->setClassName(cls);
-
-    static const char* attrs[] = {
-        "style", "href", "src", "alt", "title", "name", "value", "type",
-        "placeholder", "data-action", "data-setting", "data-control",
-        "width", "height", "disabled", "checked", "selected", nullptr
-    };
-    for (int i = 0; attrs[i]; ++i) {
-        std::string val = el->getAttribute(attrs[i]);
-        if (!val.empty()) clone->setAttribute(attrs[i], val);
+    // Copy all attributes (skip "id" — cloned nodes must not duplicate IDs)
+    for (auto& [name, val] : el->attributes()) {
+        if (name == "id") continue;
+        clone->setAttribute(name, val);
     }
 
     if (deep) {
@@ -1620,8 +1613,8 @@ static JSValue js_element_addEventListener(JSContext* ctx,
     JSValue arr = JS_GetProperty(ctx, this_val, key);
     if (JS_IsUndefined(arr) || JS_IsException(arr)) {
         arr = JS_NewArray(ctx);
-        JSValue mutable_this = this_val;
-        JS_SetProperty(ctx, mutable_this, JS_NewAtom(ctx, kListenersKey), JS_DupValue(ctx, arr));
+        // Reuse the already-allocated atom (JS_SetProperty consumes a ref).
+        JS_SetProperty(ctx, this_val, JS_DupAtom(ctx, key), JS_DupValue(ctx, arr));
     }
 
     // Push {type, callback} as a small object
@@ -1676,14 +1669,16 @@ static JSValue js_element_removeEventListener(JSContext* ctx,
 
             if (t == type) {
                 JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
-                // Crude identity check – works for the same function reference.
-                // A more robust approach would compare via an opaque id.
-                // For now just remove the first matching type entry.
+                // Compare callback identity — matches if it's the same JS function ref.
+                // JS_VALUE_GET_PTR compares the underlying object pointer.
+                bool same = JS_IsFunction(ctx, cb) &&
+                            JS_VALUE_GET_PTR(cb) == JS_VALUE_GET_PTR(argv[1]);
                 JS_FreeValue(ctx, cb);
-                // Remove by setting to undefined (sparse); good enough for now.
-                JS_SetPropertyInt64(ctx, arr, i, JS_UNDEFINED);
-                JS_FreeValue(ctx, entry);
-                break;
+                if (same) {
+                    JS_SetPropertyInt64(ctx, arr, i, JS_UNDEFINED);
+                    JS_FreeValue(ctx, entry);
+                    break;
+                }
             }
         }
         JS_FreeValue(ctx, entry);
@@ -1832,8 +1827,9 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     std::string type = typeStr ? typeStr : "";
     if (typeStr) JS_FreeCString(ctx, typeStr);
     if (type != "2d" && type != "webgl" && type != "webgl2") return JS_NULL;
-    if (s_getContextFactory) {
-        return s_getContextFactory(ctx, el, type);
+    auto factoryIt = s_ctx_factories.find(ctx);
+    if (factoryIt != s_ctx_factories.end() && factoryIt->second) {
+        return factoryIt->second(ctx, el, type);
     }
     return JS_NULL;
 }
@@ -2395,6 +2391,7 @@ void DomBindings::cleanup(JSContext* ctx) {
     // Per-context prototypes are owned by JS_SetClassProto and freed
     // when the context is destroyed — no manual free needed.
     s_ctx_documents.erase(ctx);
+    s_ctx_factories.erase(ctx);
 }
 
 void DomBindings::cleanupRuntime(JSRuntime* rt) {

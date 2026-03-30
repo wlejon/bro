@@ -60,6 +60,26 @@ void Timers::clearAll(JSContext* ctx)
     rafPending_.clear();
 }
 
+void Timers::clearForContext(JSContext* ctx)
+{
+    for (auto it = timers_.begin(); it != timers_.end(); ) {
+        if (it->second.ctx == ctx) {
+            JS_FreeValue(ctx, it->second.callback);
+            it = timers_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = rafPending_.begin(); it != rafPending_.end(); ) {
+        if (it->ctx == ctx) {
+            JS_FreeValue(ctx, it->callback);
+            it = rafPending_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Timer core logic
 // ---------------------------------------------------------------------------

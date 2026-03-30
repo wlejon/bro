@@ -12,6 +12,29 @@ extern "C" {
 
 namespace bro::js {
 
+// C-function methods for plain JS event objects.  They set flag properties
+// on the JS object which are read back after each listener call and
+// propagated to the C++ Event.
+static JSValue js_ev_stopPropagation(JSContext* ctx, JSValueConst this_val,
+                                     int /*argc*/, JSValueConst* /*argv*/) {
+    JS_SetPropertyStr(ctx, this_val, "_stopped", JS_TRUE);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ev_preventDefault(JSContext* ctx, JSValueConst this_val,
+                                    int /*argc*/, JSValueConst* /*argv*/) {
+    JS_SetPropertyStr(ctx, this_val, "_prevented", JS_TRUE);
+    JS_SetPropertyStr(ctx, this_val, "defaultPrevented", JS_TRUE);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ev_stopImmediatePropagation(JSContext* ctx, JSValueConst this_val,
+                                              int /*argc*/, JSValueConst* /*argv*/) {
+    JS_SetPropertyStr(ctx, this_val, "_stopped", JS_TRUE);
+    JS_SetPropertyStr(ctx, this_val, "_immediateStopped", JS_TRUE);
+    return JS_UNDEFINED;
+}
+
 static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
     JS_SetPropertyStr(ctx, jsEvent, "type",
                       JS_NewString(ctx, event.type().c_str()));
@@ -108,9 +131,15 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
         JS_ToInt64(ctx, &len, lenVal);
         JS_FreeValue(ctx, lenVal);
 
-        // Build the JS event object with all properties
+        // Build the JS event object with all properties + methods
         JSValue jsEvent = JS_NewObject(ctx);
         populateJsEvent(ctx, jsEvent, event);
+        JS_SetPropertyStr(ctx, jsEvent, "stopPropagation",
+            JS_NewCFunction(ctx, js_ev_stopPropagation, "stopPropagation", 0));
+        JS_SetPropertyStr(ctx, jsEvent, "preventDefault",
+            JS_NewCFunction(ctx, js_ev_preventDefault, "preventDefault", 0));
+        JS_SetPropertyStr(ctx, jsEvent, "stopImmediatePropagation",
+            JS_NewCFunction(ctx, js_ev_stopImmediatePropagation, "stopImmediatePropagation", 0));
 
         for (int64_t i = 0; i < len; i++) {
             JSValue entry = JS_GetPropertyInt64(ctx, listenersArr, i);
@@ -131,6 +160,17 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
                         JS_FreeValue(ctx, result);
                     }
                     JS_FreeValue(ctx, cb);
+
+                    // Read back propagation flags set by JS callbacks
+                    JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
+                    if (JS_ToBool(ctx, stoppedVal))
+                        event.stopPropagation();
+                    JS_FreeValue(ctx, stoppedVal);
+
+                    JSValue immVal = JS_GetPropertyStr(ctx, jsEvent, "_immediateStopped");
+                    bool immStopped = JS_ToBool(ctx, immVal);
+                    JS_FreeValue(ctx, immVal);
+                    if (immStopped) { JS_FreeValue(ctx, entry); break; }
                 }
             }
             JS_FreeValue(ctx, entry);

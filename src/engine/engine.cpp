@@ -327,7 +327,7 @@ Engine::Engine(const std::string& appDir, int width, int height)
     js::WebGL2Bindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::FetchBindings::install(jsRuntime_->getContext(), manifest_.basePath);
-    js::DomBindings::setGetContextFactory(
+    js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
         [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
             if (type == "2d") {
                 auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());

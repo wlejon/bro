@@ -435,7 +435,7 @@ Headless::Headless(const std::string& appDir, int width, int height)
 
     // 7b. Install Canvas 2D bindings with headless factory
     js::CanvasBindings::install(jsRuntime_->getContext());
-    js::DomBindings::setGetContextFactory(
+    js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
         [this](JSContext* ctx, dom::Element*, const std::string&) -> JSValue {
             canvasScene_ = std::make_unique<canvas::CanvasScene>(renderer_.get());
             canvasScenePtr_ = canvasScene_.get();
