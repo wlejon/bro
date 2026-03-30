@@ -459,10 +459,8 @@ void Engine::run() {
         bool uiFrameDue = (now - lastUIRenderMs_ >= kUIFrameIntervalMs)
                           || !hasRenderedOnce_;
 
-        // System overlay dirty state feeds into UI dirty
-        if (systemOverlay_ && systemOverlay_->isVisible() && uiFrameDue) {
-            uiDirty_ = true;
-        }
+        // System overlay composites its own cached texture — no need to
+        // force app UI re-rasterization every frame just because it's visible.
 
         double tLayout = tJs;
         if (document_ && document_->isDirty() && litehtmlDoc_ && uiFrameDue) {

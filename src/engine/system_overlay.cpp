@@ -175,7 +175,7 @@ void SystemRenderer::resetClip() {
 
 void SystemRenderer::beginFrame(int width, int height) {
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
-        surface_.reset();
+        surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
         if (gl_) {
             if (texture_) gl_->deleteTexture(texture_);
             texture_ = gl_->createTexture2D(width, height, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
@@ -183,9 +183,8 @@ void SystemRenderer::beginFrame(int width, int height) {
         texWidth_ = width;
         texHeight_ = height;
     }
-    // Always create a fresh surface to guarantee clean canvas state
-    surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
     canvas_ = surface_->getCanvas();
+    canvas_->restoreToCount(0);
     canvas_->clear(SK_ColorTRANSPARENT);
     canvas_->save();
 }
@@ -394,6 +393,7 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
 
 void SystemOverlay::toggle() {
     visible_ = !visible_;
+    renderDirty_ = true;
     LOG_INFO("SystemOverlay: %s", visible_ ? "visible" : "hidden");
 }
 
@@ -433,12 +433,21 @@ void SystemOverlay::tick(double nowMs) {
         panel.timers->fireAnimationFrames(nowMs);
     }
 
-    // Drain pending jobs on the shared runtime
-    jsRuntime_->executePendingJobs();
+    // Note: pending jobs are drained by the engine's main loop
+    // (jsRuntime_->executePendingJobs()) — not here, to avoid
+    // draining app jobs before the WebGL FBO is bound.
+
+    // Check if any panel became dirty from timer callbacks
+    for (auto& panel : panels_) {
+        if (panel.document && panel.document->isDirty()) {
+            renderDirty_ = true;
+            break;
+        }
+    }
 }
 
 void SystemOverlay::render(int vpW, int vpH) {
-    if (!visible_ || !renderer_) return;
+    if (!visible_ || !renderer_ || !renderDirty_) return;
 
     // Re-layout dirty panels
     for (auto& panel : panels_) {
@@ -467,6 +476,7 @@ void SystemOverlay::render(int vpW, int vpH) {
 
     renderer_->endFrame();
     renderer_->uploadToGPU();
+    renderDirty_ = false;
 }
 
 GLuint SystemOverlay::getTexture() const {
@@ -477,6 +487,7 @@ GLuint SystemOverlay::getTexture() const {
 void SystemOverlay::onResize(int w, int h) {
     viewportWidth_ = w;
     viewportHeight_ = h;
+    renderDirty_ = true;
     for (auto& panel : panels_) {
         if (panel.container) {
             panel.container->setViewport(w, h);

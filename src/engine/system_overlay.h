@@ -125,6 +125,7 @@ private:
     int viewportWidth_;
     int viewportHeight_;
     bool visible_ = false;
+    bool renderDirty_ = true;  // true when panels need re-rasterize + upload
 
     std::vector<Panel> panels_;
 };
