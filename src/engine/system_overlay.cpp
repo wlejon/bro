@@ -1,6 +1,7 @@
 #include "engine/system_overlay.h"
 #include "engine/app_loader.h"
 #include "render/renderer.h"
+#include "render/gl_context.h"
 #include "layout/container.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -8,14 +9,201 @@
 #include "js/timers.h"
 #include "util/log.h"
 
+#include <include/core/SkPaint.h>
+#include <include/core/SkRect.h>
+#include <include/core/SkRRect.h>
+#include <include/core/SkData.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkImageInfo.h>
+#include <include/core/SkFontMgr.h>
+#include <include/codec/SkCodec.h>
+#include <include/ports/SkTypeface_win.h>
+
 #include <filesystem>
 #include <regex>
+#include <sstream>
 
 extern "C" {
 #include "quickjs.h"
 }
 
 namespace fs = std::filesystem;
+
+// ---------------------------------------------------------------------------
+// SystemRenderer — CPU raster Skia renderer for overlay compositing
+// ---------------------------------------------------------------------------
+
+namespace bro::engine {
+
+SystemRenderer::SystemRenderer(render::GLContext* gl) : gl_(gl) {}
+
+SystemRenderer::~SystemRenderer() {
+    fonts_.clear();
+    surface_.reset();
+    if (texture_) gl_->deleteTexture(texture_);
+}
+
+SkColor SystemRenderer::toSkColor(render::Color c) const {
+    return SkColorSetARGB(c.a, c.r, c.g, c.b);
+}
+
+void SystemRenderer::clear(render::Color color) {
+    if (canvas_) canvas_->clear(toSkColor(color));
+}
+
+void SystemRenderer::drawRect(float x, float y, float w, float h, render::Color color) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStyle(SkPaint::kStroke_Style);
+    canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+}
+
+void SystemRenderer::drawRoundRect(float x, float y, float w, float h, float rx, float ry, render::Color color) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStyle(SkPaint::kStroke_Style);
+    canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(x, y, w, h), rx, ry), paint);
+}
+
+void SystemRenderer::fillRect(float x, float y, float w, float h, render::Color color) {
+    if (!canvas_) return;
+
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStyle(SkPaint::kFill_Style);
+    canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+}
+
+void SystemRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, render::Color color) {
+    if (!canvas_ || text.empty()) return;
+    auto it = fonts_.find(font_handle);
+    if (it == fonts_.end()) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    canvas_->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
+                            x, y, *it->second.font, paint);
+}
+
+render::TextMetrics SystemRenderer::measureText(std::string_view text, uint64_t font_handle) {
+    auto it = fonts_.find(font_handle);
+    if (it == fonts_.end()) return {};
+    const SkFont& font = *it->second.font;
+    SkRect bounds;
+    float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
+    return { width, bounds.height() };
+}
+
+uint64_t SystemRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
+    SkFontStyle style(weight,
+                      SkFontStyle::kNormal_Width,
+                      italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
+    sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_DirectWrite();
+
+    auto resolveGeneric = [](const std::string& name) -> const char* {
+        if (name == "sans-serif")  return "Arial";
+        if (name == "serif")       return "Times New Roman";
+        if (name == "monospace")   return "Consolas";
+        if (name == "cursive")     return "Comic Sans MS";
+        if (name == "fantasy")     return "Impact";
+        if (name == "system-ui")   return "Segoe UI";
+        return nullptr;
+    };
+
+    sk_sp<SkTypeface> typeface;
+    std::string families(family);
+    std::istringstream stream(families);
+    std::string name;
+    while (std::getline(stream, name, ',')) {
+        while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
+        while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
+        if (name.empty()) continue;
+        const char* resolved = resolveGeneric(name);
+        if (resolved) {
+            typeface = font_mgr->matchFamilyStyle(resolved, style);
+            if (typeface) break;
+        }
+        typeface = font_mgr->matchFamilyStyle(name.c_str(), style);
+        if (typeface) break;
+    }
+    if (!typeface) {
+        typeface = font_mgr->matchFamilyStyle(nullptr, SkFontStyle());
+    }
+
+    auto sk_font = std::make_unique<SkFont>(typeface, size);
+    sk_font->setEdging(SkFont::Edging::kAntiAlias);
+
+    uint64_t handle = nextFontHandle_++;
+    fonts_[handle] = FontEntry{std::move(typeface), std::move(sk_font)};
+    return handle;
+}
+
+void SystemRenderer::deleteFont(uint64_t font_handle) {
+    fonts_.erase(font_handle);
+}
+
+void SystemRenderer::drawLine(float x1, float y1, float x2, float y2, render::Color color, float thickness) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStrokeWidth(thickness);
+    paint.setStyle(SkPaint::kStroke_Style);
+    canvas_->drawLine(x1, y1, x2, y2, paint);
+}
+
+void SystemRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h) {
+    if (!canvas_) return;
+    sk_sp<SkData> sk_data = SkData::MakeWithoutCopy(data, len);
+    auto codec = SkCodec::MakeFromData(sk_data);
+    if (!codec) return;
+    auto [image, result] = codec->getImage();
+    if (!image) return;
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+}
+
+void SystemRenderer::setClip(float x, float y, float w, float h) {
+    if (canvas_) canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
+}
+
+void SystemRenderer::resetClip() {
+    if (!canvas_) return;
+    canvas_->restore();
+    canvas_->save();
+}
+
+void SystemRenderer::beginFrame(int width, int height) {
+    if (!surface_ || surface_->width() != width || surface_->height() != height) {
+        surface_.reset();
+        if (texture_) gl_->deleteTexture(texture_);
+        texture_ = gl_->createTexture2D(width, height, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
+        texWidth_ = width;
+        texHeight_ = height;
+    }
+    // Always create a fresh surface to guarantee clean canvas state
+    surface_ = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(width, height));
+    canvas_ = surface_->getCanvas();
+    canvas_->clear(SK_ColorTRANSPARENT);
+    canvas_->save();
+}
+
+void SystemRenderer::endFrame() {
+    if (canvas_) canvas_->restore();
+    canvas_ = nullptr;
+}
+
+void SystemRenderer::uploadToGPU() {
+    if (!surface_ || !texture_) return;
+    SkPixmap pixmap;
+    if (!surface_->peekPixels(&pixmap)) return;
+
+    gl_->uploadTexture2D(texture_, pixmap.addr(),
+                         static_cast<uint32_t>(pixmap.width()),
+                         static_cast<uint32_t>(pixmap.height()),
+                         GL_BGRA, GL_UNSIGNED_BYTE);
+}
+
+} // namespace bro::engine
 
 namespace bro::engine {
 
@@ -216,10 +404,13 @@ static JSValue sys_getElementById(JSContext* ctx, JSValueConst this_val,
 // SystemOverlay implementation
 // ---------------------------------------------------------------------------
 
-SystemOverlay::SystemOverlay(render::Renderer* renderer, int vpW, int vpH)
-    : renderer_(renderer)
+SystemOverlay::SystemOverlay(render::GLContext* gl, int vpW, int vpH)
+    : gl_(gl)
     , viewportWidth_(vpW)
     , viewportHeight_(vpH) {
+
+    // Create CPU-raster renderer (no Ganesh — avoids dual-GPU-context conflicts)
+    renderer_ = std::make_unique<SystemRenderer>(gl_);
 
     // Create isolated JS environment
     jsRt_ = JS_NewRuntime();
@@ -364,7 +555,7 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
 
         // Create container for this panel
         panel.container = std::make_unique<layout::BroContainer>(
-            renderer_, viewportWidth_, viewportHeight_);
+            renderer_.get(), viewportWidth_, viewportHeight_);
         panel.container->set_base_url(panelDir.c_str());
 
         // Extract inline CSS from the HTML
@@ -471,13 +662,12 @@ void SystemOverlay::tick(double nowMs) {
 }
 
 void SystemOverlay::render(int vpW, int vpH) {
-    if (!visible_) return;
+    if (!visible_ || !renderer_) return;
 
+    // Re-layout dirty panels
     for (auto& panel : panels_) {
-        if (!panel.litehtmlDoc) continue;
-
-        // Re-layout if dirty
-        if (panel.document && panel.document->isDirty()) {
+        if (!panel.litehtmlDoc || !panel.document) continue;
+        if (panel.document->isDirty()) {
             if (panel.document->isStructureDirty()) {
                 panel.litehtmlDoc->rebuild_render_tree();
                 panel.document->clearStructureDirty();
@@ -485,14 +675,27 @@ void SystemOverlay::render(int vpW, int vpH) {
             panel.litehtmlDoc->render(static_cast<litehtml::pixel_t>(vpW));
             panel.document->clearDirty();
         }
+    }
 
-        // Draw to the same renderer surface
+    // Rasterize all panels to own Skia surface
+    renderer_->beginFrame(vpW, vpH);
+
+    for (auto& panel : panels_) {
+        if (!panel.litehtmlDoc) continue;
         litehtml::position clip(0, 0,
                                 static_cast<litehtml::pixel_t>(vpW),
                                 static_cast<litehtml::pixel_t>(vpH));
         panel.litehtmlDoc->draw(
-            reinterpret_cast<litehtml::uint_ptr>(renderer_), 0, 0, &clip);
+            reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
     }
+
+    renderer_->endFrame();
+    renderer_->uploadToGPU();
+}
+
+GLuint SystemOverlay::getTexture() const {
+    if (!renderer_) return 0;
+    return renderer_->getTexture();
 }
 
 void SystemOverlay::onResize(int w, int h) {

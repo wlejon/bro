@@ -331,7 +331,7 @@ Engine::Engine(const std::string& appDir, int width, int height)
     eventLoop_ = std::make_unique<platform::EventLoop>();
 
     // 12. System overlay (loads panels from system/ sibling directory)
-    systemOverlay_ = std::make_unique<SystemOverlay>(renderer_.get(),
+    systemOverlay_ = std::make_unique<SystemOverlay>(gl_.get(),
                                                       viewportWidth_, viewportHeight_);
     systemOverlay_->loadPanels("system");
 
@@ -458,6 +458,11 @@ void Engine::run() {
         bool uiFrameDue = (now - lastUIRenderMs_ >= kUIFrameIntervalMs)
                           || !hasRenderedOnce_;
 
+        // System overlay dirty state feeds into UI dirty
+        if (systemOverlay_ && systemOverlay_->isVisible() && uiFrameDue) {
+            uiDirty_ = true;
+        }
+
         double tLayout = tJs;
         if (document_ && document_->isDirty() && litehtmlDoc_ && uiFrameDue) {
             if (document_->isStructureDirty()) {
@@ -489,11 +494,6 @@ void Engine::run() {
                     reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
             }
             accumDrawMs_ += util::currentTimeMs() - tDraw0;
-
-            // Render system overlay panels on top
-            if (systemOverlay_) {
-                systemOverlay_->render(viewportWidth_, viewportHeight_);
-            }
 
             renderer_->endFrame();
             hasRenderedOnce_ = true;
@@ -560,6 +560,52 @@ void Engine::run() {
             glBindTexture(GL_TEXTURE_2D, uiTex);
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        // 5g. Render pass 3: composite system overlay (premultiplied alpha)
+        if (systemOverlay_ && systemOverlay_->isVisible()) {
+            systemOverlay_->render(viewportWidth_, viewportHeight_);
+
+            // Ganesh may have changed GL state — restore what we need
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, viewportWidth_, viewportHeight_);
+
+            GLuint sysTex = systemOverlay_->getTexture();
+            if (sysTex) {
+                float w = (float)viewportWidth_, h = (float)viewportHeight_;
+                render::TextureVertex quad[6] = {
+                    {0, 0, 0, 0}, {w, 0, 1, 0}, {w, h, 1, 1},
+                    {0, 0, 0, 0}, {w, h, 1, 1}, {0, h, 0, 1},
+                };
+
+                glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
+                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+
+                glBindVertexArray(uiQuadVAO_);
+                glEnableVertexAttribArray(0);
+                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE,
+                                      sizeof(render::TextureVertex), (void*)0);
+                glEnableVertexAttribArray(1);
+                glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
+                                      sizeof(render::TextureVertex),
+                                      (void*)offsetof(render::TextureVertex, u));
+
+                glUseProgram(gl_->textureProgram());
+                float viewport[2] = {w, h};
+                glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+                glUniform1i(gl_->textureSamplerLoc(), 0);
+
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_CULL_FACE);
+                glDisable(GL_SCISSOR_TEST);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, sysTex);
+
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
         }
 
         // Reset GL to clean defaults so Three.js/WebGL re-binds everything

@@ -9,7 +9,6 @@ html, body {
     font-family: Consolas, monospace;
     font-size: 12px;
     color: #e0e0e0;
-    overflow: hidden;
 }
 
 #panel {
@@ -17,23 +16,27 @@ html, body {
     top: 8px;
     right: 8px;
     width: 300px;
-    background: rgba(0, 0, 0, 0.88);
+    background: rgba(0, 0, 0, 224);
     border: 1px solid #333;
-    border-radius: 4px;
     padding: 10px;
 }
 
-.stats-row {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 4px;
+table {
+    width: 100%;
+    border-collapse: collapse;
 }
 
-.stat-label {
+td {
+    padding: 1px 0;
+}
+
+td.label {
     color: #888;
+    width: 70px;
 }
 
-.stat-value {
+td.value {
+    text-align: right;
     font-weight: bold;
 }
 
@@ -43,105 +46,90 @@ html, body {
 
 .divider {
     border-top: 1px solid #333;
-    margin: 8px 0;
+    margin: 6px 0;
 }
 
 .chart-title {
     color: #888;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
 }
 
 .bar-row {
-    display: flex;
-    align-items: center;
-    margin-bottom: 3px;
+    margin-bottom: 2px;
     height: 14px;
 }
 
 .bar-label {
-    width: 52px;
+    display: inline-block;
+    width: 50px;
     font-size: 11px;
     color: #999;
-    flex-shrink: 0;
 }
 
 .bar-track {
-    flex: 1;
+    display: inline-block;
+    width: 180px;
     height: 10px;
     background: #1a1a1a;
-    border-radius: 2px;
-    overflow: hidden;
-    position: relative;
+    vertical-align: middle;
 }
 
 .bar-fill {
-    height: 100%;
-    border-radius: 2px;
+    display: inline-block;
+    height: 10px;
     min-width: 1px;
-    transition: width 0.15s ease;
 }
 
 .bar-ms {
-    width: 44px;
+    display: inline-block;
+    width: 50px;
     text-align: right;
     font-size: 10px;
     color: #777;
-    flex-shrink: 0;
-    margin-left: 4px;
 }
 
-.bar-js     .bar-fill { background: #f0c040; }
-.bar-layout .bar-fill { background: #40a0f0; }
-.bar-raster .bar-fill { background: #f06040; }
-.bar-gpu    .bar-fill { background: #40e080; }
-.bar-draw   .bar-fill { background: #c060f0; }
+.c-js     { background: #f0c040; }
+.c-layout { background: #40a0f0; }
+.c-raster { background: #f06040; }
+.c-gpu    { background: #40e080; }
+.c-draw   { background: #c060f0; }
 </style>
 </head>
 <body>
 <div id="panel">
-    <div class="stats-row">
-        <span class="stat-label">FPS</span>
-        <span id="fps-value" class="stat-value">0</span>
-    </div>
-    <div class="stats-row">
-        <span class="stat-label">Frame</span>
-        <span id="frame-value" class="stat-value">0.0ms</span>
-    </div>
-    <div class="stats-row">
-        <span class="stat-label">Viewport</span>
-        <span id="viewport-value" class="stat-value">0x0</span>
-    </div>
+    <table>
+        <tr><td class="label">FPS</td><td id="fps-value" class="value">0</td></tr>
+        <tr><td class="label">Frame</td><td id="frame-value" class="value">0.0ms</td></tr>
+        <tr><td class="label">Viewport</td><td id="viewport-value" class="value">0x0</td></tr>
+    </table>
 
     <div class="divider"></div>
-
     <div class="chart-title">Phase Timing</div>
 
-    <div class="bar-row bar-js">
+    <div class="bar-row">
         <span class="bar-label">JS</span>
-        <div class="bar-track"><div id="bar-js" class="bar-fill"></div></div>
+        <span class="bar-track"><span id="bar-js" class="bar-fill c-js" style="width: 1px;"></span></span>
         <span id="ms-js" class="bar-ms">0ms</span>
     </div>
-    <div class="bar-row bar-layout">
+    <div class="bar-row">
         <span class="bar-label">Layout</span>
-        <div class="bar-track"><div id="bar-layout" class="bar-fill"></div></div>
+        <span class="bar-track"><span id="bar-layout" class="bar-fill c-layout" style="width: 1px;"></span></span>
         <span id="ms-layout" class="bar-ms">0ms</span>
     </div>
-    <div class="bar-row bar-raster">
+    <div class="bar-row">
         <span class="bar-label">Raster</span>
-        <div class="bar-track"><div id="bar-raster" class="bar-fill"></div></div>
+        <span class="bar-track"><span id="bar-raster" class="bar-fill c-raster" style="width: 1px;"></span></span>
         <span id="ms-raster" class="bar-ms">0ms</span>
     </div>
-    <div class="bar-row bar-gpu">
+    <div class="bar-row">
         <span class="bar-label">GPU</span>
-        <div class="bar-track"><div id="bar-gpu" class="bar-fill"></div></div>
+        <span class="bar-track"><span id="bar-gpu" class="bar-fill c-gpu" style="width: 1px;"></span></span>
         <span id="ms-gpu" class="bar-ms">0ms</span>
     </div>
-    <div class="bar-row bar-draw">
+    <div class="bar-row">
         <span class="bar-label">Draw</span>
-        <div class="bar-track"><div id="bar-draw" class="bar-fill"></div></div>
+        <span class="bar-track"><span id="bar-draw" class="bar-fill c-draw" style="width: 1px;"></span></span>
         <span id="ms-draw" class="bar-ms">0ms</span>
     </div>
 </div>
@@ -172,7 +160,6 @@ html, body {
         if (frameEl) frameEl.textContent = p.frameTime.toFixed(1) + 'ms';
         if (vpEl) vpEl.textContent = v.width + 'x' + v.height;
 
-        // Scale bars: max 8ms = 100% width
         var maxMs = 8.0;
         var phases = [
             [barJs, msJs, p.js],
@@ -187,7 +174,8 @@ html, body {
             var label = phases[i][1];
             var ms = phases[i][2];
             var pct = Math.min(100, (ms / maxMs) * 100);
-            if (bar) bar.style.setProperty('width', pct.toFixed(1) + '%');
+            var px = Math.max(1, Math.round(pct * 1.8));
+            if (bar) bar.style.setProperty('width', px + 'px');
             if (label) label.textContent = ms.toFixed(2) + 'ms';
         }
     }
