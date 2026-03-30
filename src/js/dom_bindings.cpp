@@ -1111,10 +1111,10 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
         auto* doc = getDocumentForCtx(ctx);
         if (doc && !child->id().empty())
             doc->unregisterElementId(child->id());
-        // Remove from litehtml tree before removing from bro::dom tree
         if (doc) doc->syncRemoveFromLitehtml(child, el);
-        // Save shared_ptr to orphans so the element survives removal
-        // (caller may re-append it elsewhere — spec returns the removed node).
+        // Invalidate JS wrappers for the removed subtree so __bro_elem_map
+        // releases them, allowing GC to collect and free the orphan.
+        invalidateWrapper(ctx, child);
         auto saved = findSharedPtr(ctx, child);
         el->removeChild(static_cast<bro::dom::Node*>(child));
         if (doc && saved) {
@@ -1174,6 +1174,7 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         if (doc && !oldChild->id().empty())
             doc->unregisterElementId(oldChild->id());
         if (doc) doc->syncRemoveFromLitehtml(oldChild, el);
+        invalidateWrapper(ctx, oldChild);
         el->removeChild(static_cast<bro::dom::Node*>(oldChild));
         if (doc) {
             doc->adoptOrphan(newChild);
@@ -1251,11 +1252,11 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
         auto* doc = getDocumentForCtx(ctx);
         if (doc && !el->id().empty())
             doc->unregisterElementId(el->id());
-        // Remove from litehtml tree before removing from bro::dom tree
         if (doc && parent->nodeType() == bro::dom::NodeType::Element) {
             doc->syncRemoveFromLitehtml(
                 el, static_cast<bro::dom::Element*>(parent));
         }
+        invalidateWrapper(ctx, el);
         auto saved = findSharedPtr(ctx, el);
         parent->removeChild(static_cast<bro::dom::Node*>(el));
         if (doc && saved) {
