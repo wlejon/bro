@@ -173,7 +173,9 @@ void Element::setTextContent(const std::string& text) {
         }
     }
 
-    markDirty();
+    // append_children_from_string modifies the litehtml element tree
+    // structure, so the render tree must be rebuilt before the next draw.
+    markStructureDirty();
 }
 
 std::string Element::innerHTML() const {
