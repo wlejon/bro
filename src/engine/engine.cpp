@@ -510,11 +510,13 @@ void Engine::run() {
 
         double tLayout = tJs;
         if (document_ && document_->isDirty() && litehtmlDoc_ && uiFrameDue) {
-            if (document_->isStructureDirty()) {
-                purgeExpiredRenders(litehtmlDoc_->root());
-                litehtmlDoc_->rebuild_render_tree();
-                document_->clearStructureDirty();
-            }
+            // Always rebuild the render tree when dirty.
+            // DOM mutations (text changes, style updates) may alter the
+            // litehtml element tree in ways that the render tree cache
+            // doesn't detect.  Rebuilding is cheap relative to layout.
+            purgeExpiredRenders(litehtmlDoc_->root());
+            litehtmlDoc_->rebuild_render_tree();
+            document_->clearStructureDirty();
             litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
             document_->clearDirty();
             uiDirty_ = true;
