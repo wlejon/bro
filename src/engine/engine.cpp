@@ -207,6 +207,14 @@ static std::string sdlScancodeToWebCode(int32_t scancode)
 }
 
 // ---------------------------------------------------------------------------
+// Form control helpers (used by both draw loop and event handlers)
+// ---------------------------------------------------------------------------
+
+static layout::ElInput* getElInput(dom::Element* el);
+static layout::ElTextarea* getElTextarea(dom::Element* el);
+static layout::ElSelect* getElSelect(dom::Element* el);
+
+// ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
 
@@ -542,6 +550,14 @@ void Engine::run() {
                                         static_cast<litehtml::pixel_t>(viewportHeight_));
                 litehtmlDoc_->draw(
                     reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
+            }
+            // Draw select dropdown overlay after all elements (z-order on top)
+            if (document_) {
+                auto* activeEl = document_->activeElement();
+                auto* sel = getElSelect(activeEl);
+                if (sel && sel->isOpen()) {
+                    sel->drawDropdown();
+                }
             }
             accumDrawMs_ += util::currentTimeMs() - tDraw0;
 
@@ -942,6 +958,28 @@ void Engine::handleMouseMove(float x, float y) {
                                      static_cast<int>(x), static_cast<int>(y), redraw);
         if (!redraw.empty()) {
             uiDirty_ = true;
+        }
+    }
+
+    // Update dropdown highlight on hover
+    if (document_) {
+        auto* activeEl = document_->activeElement();
+        auto* select = getElSelect(activeEl);
+        if (select && select->isOpen()) {
+            auto dp = select->lastDrawPos();
+            auto opts = select->getOptions();
+            auto font = select->css().get_font();
+            float lineH = font ? static_cast<float>(select->css().get_font_metrics().height) : 20.0f;
+            float dropY = dp.y + dp.h;
+            float dropH = lineH * static_cast<float>(opts.size()) + 4.0f;
+            if (x >= dp.x && x < dp.x + dp.w && y >= dropY && y < dropY + dropH) {
+                int idx = static_cast<int>((y - dropY - 2.0f) / lineH);
+                idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
+                if (idx != select->highlightedIndex()) {
+                    select->setHighlightedIndex(idx);
+                    uiDirty_ = true;
+                }
+            }
         }
     }
 }

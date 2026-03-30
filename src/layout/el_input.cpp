@@ -63,7 +63,8 @@ void ElInput::draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pixel_
         } else {
             text = val;
         }
-    } else if (placeholder && *placeholder) {
+    } else if (!focused_ && placeholder && *placeholder) {
+        // Only show placeholder when not focused
         text = placeholder;
         isPlaceholder = true;
     }

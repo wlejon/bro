@@ -50,6 +50,9 @@ public:
     int highlightedIndex() const { return highlightedIndex_; }
     void setHighlightedIndex(int idx) { highlightedIndex_ = idx; }
 
+    // Draw the dropdown overlay (called after main draw pass for z-order)
+    void drawDropdown();
+
     // Store last drawn position for dropdown hit testing
     struct DrawPos { float x, y, w, h; };
     DrawPos lastDrawPos() const { return lastDrawPos_; }

@@ -147,7 +147,8 @@ void ElTextarea::draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pix
 
     if (val && *val) {
         text = val;
-    } else if (placeholder && *placeholder) {
+    } else if (!focused_ && placeholder && *placeholder) {
+        // Only show placeholder when not focused
         text = placeholder;
         isPlaceholder = true;
     }
@@ -213,9 +214,9 @@ void ElTextarea::draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pix
         }
     }
 
-    // Draw cursor when focused
-    if (focused_ && !isPlaceholder) {
-        std::string valStr = text;
+    // Draw cursor when focused (even with empty value)
+    if (focused_) {
+        std::string valStr = (val && *val) ? val : "";
         int cpos = std::clamp(cursorPos_, 0, static_cast<int>(valStr.size()));
         auto [cursorLine, cursorCol] = posToLineCol(valStr, cpos);
 

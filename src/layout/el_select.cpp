@@ -167,34 +167,55 @@ void ElSelect::draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pixel
                           color, {0, 0, 0, 0}, 0.0f);
 
     renderer_->restore();
+}
 
-    // Draw dropdown list when open
-    if (open_ && !opts.empty()) {
-        float dropX = static_cast<float>(pos.x);
-        float dropY = static_cast<float>(pos.y + pos.height);
-        float dropW = static_cast<float>(pos.width);
-        float dropH = lineHeight * static_cast<float>(opts.size()) + 4.0f;
+void ElSelect::drawDropdown() {
+    if (!open_ || !renderer_) return;
 
-        // Background
-        renderer_->fillRect(dropX, dropY, dropW, dropH, {255, 255, 255, 255});
-        // Border
-        renderer_->drawRect(dropX, dropY, dropW, dropH, {118, 118, 118, 255});
+    auto opts = getOptions();
+    if (opts.empty()) return;
 
-        for (int i = 0; i < static_cast<int>(opts.size()); ++i) {
-            float itemY = dropY + 2.0f + i * lineHeight;
+    auto font = css().get_font();
+    if (!font) return;
+    uint64_t fontHandle = static_cast<uint64_t>(font);
 
-            // Highlight
-            if (i == highlightedIndex_) {
-                renderer_->fillRect(dropX + 1, itemY, dropW - 2, lineHeight,
-                                   {0, 120, 215, 255});
-                renderer_->drawText(opts[i].text, dropX + padX, itemY + ascent,
-                                   fontHandle, {255, 255, 255, 255});
-            } else {
-                renderer_->drawText(opts[i].text, dropX + padX, itemY + ascent,
-                                   fontHandle, color);
-            }
+    auto fm = css().get_font_metrics();
+    float lineHeight = static_cast<float>(fm.height);
+    float ascent = static_cast<float>(fm.ascent);
+    float padX = 4.0f;
+
+    auto textColor = css().get_color();
+    render::Color color = {textColor.red, textColor.green, textColor.blue, textColor.alpha};
+
+    float dropX = lastDrawPos_.x;
+    float dropY = lastDrawPos_.y + lastDrawPos_.h;
+    float dropW = lastDrawPos_.w;
+    float dropH = lineHeight * static_cast<float>(opts.size()) + 4.0f;
+
+    // Draw with no clip — dropdown overlays everything
+    renderer_->save();
+    renderer_->resetClip();
+
+    // Background
+    renderer_->fillRect(dropX, dropY, dropW, dropH, {255, 255, 255, 255});
+    // Border
+    renderer_->drawRect(dropX, dropY, dropW, dropH, {118, 118, 118, 255});
+
+    for (int i = 0; i < static_cast<int>(opts.size()); ++i) {
+        float itemY = dropY + 2.0f + i * lineHeight;
+
+        if (i == highlightedIndex_) {
+            renderer_->fillRect(dropX + 1, itemY, dropW - 2, lineHeight,
+                               {0, 120, 215, 255});
+            renderer_->drawText(opts[i].text, dropX + padX, itemY + ascent,
+                               fontHandle, {255, 255, 255, 255});
+        } else {
+            renderer_->drawText(opts[i].text, dropX + padX, itemY + ascent,
+                               fontHandle, color);
         }
     }
+
+    renderer_->restore();
 }
 
 std::shared_ptr<litehtml::render_item> ElSelect::create_render_item(
