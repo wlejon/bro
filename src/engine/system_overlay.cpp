@@ -16,8 +16,11 @@
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
+#include <include/core/SkPath.h>
+#include <include/core/SkPathBuilder.h>
 #include <include/core/SkFontMgr.h>
 #include <include/codec/SkCodec.h>
+#include <include/utils/SkParsePath.h>
 #include <include/ports/SkTypeface_win.h>
 
 #include <filesystem>
@@ -162,6 +165,98 @@ void SystemRenderer::drawImage(const void* data, size_t len, float x, float y, f
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
 }
+
+void SystemRenderer::fillRoundRect(float x, float y, float w, float h, float rx, float ry, render::Color color) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStyle(SkPaint::kFill_Style);
+    canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(x, y, w, h), rx, ry), paint);
+}
+
+void SystemRenderer::drawCircle(float cx, float cy, float r,
+                                 render::Color fill, render::Color stroke, float strokeWidth) {
+    if (!canvas_) return;
+    if (fill.a > 0) {
+        SkPaint p; p.setColor(toSkColor(fill)); p.setStyle(SkPaint::kFill_Style); p.setAntiAlias(true);
+        canvas_->drawCircle(cx, cy, r, p);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint p; p.setColor(toSkColor(stroke)); p.setStyle(SkPaint::kStroke_Style);
+        p.setStrokeWidth(strokeWidth); p.setAntiAlias(true);
+        canvas_->drawCircle(cx, cy, r, p);
+    }
+}
+
+void SystemRenderer::drawEllipse(float cx, float cy, float rx, float ry,
+                                  render::Color fill, render::Color stroke, float strokeWidth) {
+    if (!canvas_) return;
+    SkRect oval = SkRect::MakeXYWH(cx - rx, cy - ry, rx * 2, ry * 2);
+    if (fill.a > 0) {
+        SkPaint p; p.setColor(toSkColor(fill)); p.setStyle(SkPaint::kFill_Style); p.setAntiAlias(true);
+        canvas_->drawOval(oval, p);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint p; p.setColor(toSkColor(stroke)); p.setStyle(SkPaint::kStroke_Style);
+        p.setStrokeWidth(strokeWidth); p.setAntiAlias(true);
+        canvas_->drawOval(oval, p);
+    }
+}
+
+void SystemRenderer::drawPath(std::string_view svgPathData,
+                               render::Color fill, render::Color stroke, float strokeWidth) {
+    if (!canvas_ || svgPathData.empty()) return;
+    auto pathOpt = SkParsePath::FromSVGString(std::string(svgPathData).c_str());
+    if (!pathOpt) return;
+    const SkPath& path = *pathOpt;
+    if (fill.a > 0) {
+        SkPaint p; p.setColor(toSkColor(fill)); p.setStyle(SkPaint::kFill_Style); p.setAntiAlias(true);
+        canvas_->drawPath(path, p);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint p; p.setColor(toSkColor(stroke)); p.setStyle(SkPaint::kStroke_Style);
+        p.setStrokeWidth(strokeWidth); p.setAntiAlias(true);
+        canvas_->drawPath(path, p);
+    }
+}
+
+void SystemRenderer::drawPolygon(std::span<const render::PointF> points,
+                                  render::Color fill, render::Color stroke, float strokeWidth) {
+    if (!canvas_ || points.size() < 2) return;
+    SkPathBuilder builder;
+    builder.moveTo(points[0].x, points[0].y);
+    for (size_t i = 1; i < points.size(); i++) builder.lineTo(points[i].x, points[i].y);
+    builder.close();
+    SkPath path = builder.detach();
+    if (fill.a > 0) {
+        SkPaint p; p.setColor(toSkColor(fill)); p.setStyle(SkPaint::kFill_Style); p.setAntiAlias(true);
+        canvas_->drawPath(path, p);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint p; p.setColor(toSkColor(stroke)); p.setStyle(SkPaint::kStroke_Style);
+        p.setStrokeWidth(strokeWidth); p.setAntiAlias(true);
+        canvas_->drawPath(path, p);
+    }
+}
+
+void SystemRenderer::drawPolyline(std::span<const render::PointF> points,
+                                   render::Color stroke, float strokeWidth) {
+    if (!canvas_ || points.size() < 2) return;
+    SkPathBuilder builder;
+    builder.moveTo(points[0].x, points[0].y);
+    for (size_t i = 1; i < points.size(); i++) builder.lineTo(points[i].x, points[i].y);
+    SkPath path = builder.detach();
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint p; p.setColor(toSkColor(stroke)); p.setStyle(SkPaint::kStroke_Style);
+        p.setStrokeWidth(strokeWidth); p.setAntiAlias(true);
+        canvas_->drawPath(path, p);
+    }
+}
+
+void SystemRenderer::save() { if (canvas_) canvas_->save(); }
+void SystemRenderer::restore() { if (canvas_) canvas_->restore(); }
+void SystemRenderer::translate(float dx, float dy) { if (canvas_) canvas_->translate(dx, dy); }
+void SystemRenderer::scale(float sx, float sy) { if (canvas_) canvas_->scale(sx, sy); }
 
 void SystemRenderer::setClip(float x, float y, float w, float h) {
     if (canvas_) canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));

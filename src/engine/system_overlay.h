@@ -41,6 +41,21 @@ public:
     void deleteFont(uint64_t font_handle) override;
     void drawLine(float x1, float y1, float x2, float y2, render::Color color, float thickness) override;
     void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
+    void fillRoundRect(float x, float y, float w, float h, float rx, float ry, render::Color color) override;
+    void drawCircle(float cx, float cy, float r,
+                    render::Color fill, render::Color stroke, float strokeWidth) override;
+    void drawEllipse(float cx, float cy, float rx, float ry,
+                     render::Color fill, render::Color stroke, float strokeWidth) override;
+    void drawPath(std::string_view svgPathData,
+                  render::Color fill, render::Color stroke, float strokeWidth) override;
+    void drawPolygon(std::span<const render::PointF> points,
+                     render::Color fill, render::Color stroke, float strokeWidth) override;
+    void drawPolyline(std::span<const render::PointF> points,
+                      render::Color stroke, float strokeWidth) override;
+    void save() override;
+    void restore() override;
+    void translate(float dx, float dy) override;
+    void scale(float sx, float sy) override;
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;
     void beginFrame(int width, int height) override;

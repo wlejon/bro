@@ -1,5 +1,6 @@
 #include "layout/container.h"
 #include "layout/bro_element.h"
+#include "layout/el_svg.h"
 #include "render/renderer.h"
 #include "util/log.h"
 #include <algorithm>
@@ -360,6 +361,11 @@ litehtml::element::ptr BroContainer::create_element(
     //   table/td/th/tr: table layout model (render_item_table)
     //   br: line break semantics
     //   base: sets document base URL
+    // SVG elements get our custom replaced element
+    if (strcmp(tag_name, "svg") == 0) {
+        return std::make_shared<ElSvg>(doc, renderer_);
+    }
+
     static const char* specialized_tags[] = {
         "style", "script", "link", "img", "table", "td", "th", "tr",
         "br", "base",

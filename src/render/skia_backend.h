@@ -38,6 +38,7 @@ public:
     void drawRect(float x, float y, float w, float h, Color color) override;
     void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) override;
     void fillRect(float x, float y, float w, float h, Color color) override;
+    void fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) override;
 
     void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) override;
     TextMetrics measureText(std::string_view text, uint64_t font_handle) override;
@@ -47,6 +48,22 @@ public:
 
     void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) override;
     void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
+
+    void drawCircle(float cx, float cy, float r,
+                    Color fill, Color stroke, float strokeWidth) override;
+    void drawEllipse(float cx, float cy, float rx, float ry,
+                     Color fill, Color stroke, float strokeWidth) override;
+    void drawPath(std::string_view svgPathData,
+                  Color fill, Color stroke, float strokeWidth) override;
+    void drawPolygon(std::span<const PointF> points,
+                     Color fill, Color stroke, float strokeWidth) override;
+    void drawPolyline(std::span<const PointF> points,
+                      Color stroke, float strokeWidth) override;
+
+    void save() override;
+    void restore() override;
+    void translate(float dx, float dy) override;
+    void scale(float sx, float sy) override;
 
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;

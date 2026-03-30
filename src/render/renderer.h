@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <string_view>
+#include <span>
 
 namespace bro::render {
 
@@ -18,6 +19,11 @@ struct TextMetrics {
     float height = 0.0f;
 };
 
+struct PointF {
+    float x = 0;
+    float y = 0;
+};
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -27,6 +33,7 @@ public:
     virtual void drawRect(float x, float y, float w, float h, Color color) = 0;
     virtual void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) = 0;
     virtual void fillRect(float x, float y, float w, float h, Color color) = 0;
+    virtual void fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) = 0;
 
     virtual void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) = 0;
     virtual TextMetrics measureText(std::string_view text, uint64_t font_handle) = 0;
@@ -36,6 +43,24 @@ public:
 
     virtual void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) = 0;
     virtual void drawImage(const void* data, size_t len, float x, float y, float w, float h) = 0;
+
+    // SVG drawing primitives
+    virtual void drawCircle(float cx, float cy, float r,
+                            Color fill, Color stroke, float strokeWidth) = 0;
+    virtual void drawEllipse(float cx, float cy, float rx, float ry,
+                             Color fill, Color stroke, float strokeWidth) = 0;
+    virtual void drawPath(std::string_view svgPathData,
+                          Color fill, Color stroke, float strokeWidth) = 0;
+    virtual void drawPolygon(std::span<const PointF> points,
+                             Color fill, Color stroke, float strokeWidth) = 0;
+    virtual void drawPolyline(std::span<const PointF> points,
+                              Color stroke, float strokeWidth) = 0;
+
+    // Canvas state (for SVG coordinate transforms)
+    virtual void save() = 0;
+    virtual void restore() = 0;
+    virtual void translate(float dx, float dy) = 0;
+    virtual void scale(float sx, float sy) = 0;
 
     virtual void setClip(float x, float y, float w, float h) = 0;
     virtual void resetClip() = 0;

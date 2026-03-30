@@ -15,6 +15,9 @@
 #include <include/core/SkFontMgr.h>
 #include <include/core/SkColorSpace.h>
 #include <include/codec/SkCodec.h>
+#include <include/core/SkPath.h>
+#include <include/core/SkPathBuilder.h>
+#include <include/utils/SkParsePath.h>
 #include <include/ports/SkTypeface_win.h>
 #include <include/gpu/ganesh/GrBackendSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
@@ -163,6 +166,138 @@ void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, Color color,
     paint.setStrokeWidth(thickness);
     paint.setStyle(SkPaint::kStroke_Style);
     canvas_->drawLine(x1, y1, x2, y2, paint);
+}
+
+void SkiaRenderer::fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStyle(SkPaint::kFill_Style);
+    canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(x, y, w, h), rx, ry), paint);
+}
+
+void SkiaRenderer::drawCircle(float cx, float cy, float r,
+                               Color fill, Color stroke, float strokeWidth) {
+    if (!canvas_) return;
+    if (fill.a > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(fill));
+        paint.setStyle(SkPaint::kFill_Style);
+        paint.setAntiAlias(true);
+        canvas_->drawCircle(cx, cy, r, paint);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(stroke));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(strokeWidth);
+        paint.setAntiAlias(true);
+        canvas_->drawCircle(cx, cy, r, paint);
+    }
+}
+
+void SkiaRenderer::drawEllipse(float cx, float cy, float rx, float ry,
+                                Color fill, Color stroke, float strokeWidth) {
+    if (!canvas_) return;
+    SkRect oval = SkRect::MakeXYWH(cx - rx, cy - ry, rx * 2, ry * 2);
+    if (fill.a > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(fill));
+        paint.setStyle(SkPaint::kFill_Style);
+        paint.setAntiAlias(true);
+        canvas_->drawOval(oval, paint);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(stroke));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(strokeWidth);
+        paint.setAntiAlias(true);
+        canvas_->drawOval(oval, paint);
+    }
+}
+
+void SkiaRenderer::drawPath(std::string_view svgPathData,
+                             Color fill, Color stroke, float strokeWidth) {
+    if (!canvas_ || svgPathData.empty()) return;
+    auto pathOpt = SkParsePath::FromSVGString(std::string(svgPathData).c_str());
+    if (!pathOpt) return;
+    const SkPath& path = *pathOpt;
+    if (fill.a > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(fill));
+        paint.setStyle(SkPaint::kFill_Style);
+        paint.setAntiAlias(true);
+        canvas_->drawPath(path, paint);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(stroke));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(strokeWidth);
+        paint.setAntiAlias(true);
+        canvas_->drawPath(path, paint);
+    }
+}
+
+void SkiaRenderer::drawPolygon(std::span<const PointF> points,
+                                Color fill, Color stroke, float strokeWidth) {
+    if (!canvas_ || points.size() < 2) return;
+    SkPathBuilder builder;
+    builder.moveTo(points[0].x, points[0].y);
+    for (size_t i = 1; i < points.size(); i++)
+        builder.lineTo(points[i].x, points[i].y);
+    builder.close();
+    SkPath path = builder.detach();
+    if (fill.a > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(fill));
+        paint.setStyle(SkPaint::kFill_Style);
+        paint.setAntiAlias(true);
+        canvas_->drawPath(path, paint);
+    }
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(stroke));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(strokeWidth);
+        paint.setAntiAlias(true);
+        canvas_->drawPath(path, paint);
+    }
+}
+
+void SkiaRenderer::drawPolyline(std::span<const PointF> points,
+                                 Color stroke, float strokeWidth) {
+    if (!canvas_ || points.size() < 2) return;
+    SkPathBuilder builder;
+    builder.moveTo(points[0].x, points[0].y);
+    for (size_t i = 1; i < points.size(); i++)
+        builder.lineTo(points[i].x, points[i].y);
+    SkPath path = builder.detach();
+    if (stroke.a > 0 && strokeWidth > 0) {
+        SkPaint paint;
+        paint.setColor(toSkColor(stroke));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(strokeWidth);
+        paint.setAntiAlias(true);
+        canvas_->drawPath(path, paint);
+    }
+}
+
+void SkiaRenderer::save() {
+    if (canvas_) canvas_->save();
+}
+
+void SkiaRenderer::restore() {
+    if (canvas_) canvas_->restore();
+}
+
+void SkiaRenderer::translate(float dx, float dy) {
+    if (canvas_) canvas_->translate(dx, dy);
+}
+
+void SkiaRenderer::scale(float sx, float sy) {
+    if (canvas_) canvas_->scale(sx, sy);
 }
 
 void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h) {

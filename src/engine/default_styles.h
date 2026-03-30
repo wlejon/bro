@@ -68,6 +68,13 @@ pre {
     overflow: auto;
 }
 
+/* ---------- SVG ---------- */
+
+svg {
+    display: inline-block;
+    overflow: hidden;
+}
+
 )CSS";
 
 } // namespace bro::engine
