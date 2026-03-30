@@ -23,10 +23,13 @@ public:
     void buildFrom(litehtml::document::ptr doc);
     void reparse(litehtml::document_container* container);
 
-    // Node creation
-    std::shared_ptr<Element> createElement(const std::string& tag);
-    std::shared_ptr<TextNode> createTextNode(const std::string& text);
-    std::shared_ptr<DocumentFragment> createDocumentFragment();
+    // Node creation — Document owns all nodes via ownedNodes_.
+    Element* createElement(const std::string& tag);
+    TextNode* createTextNode(const std::string& text);
+    DocumentFragment* createDocumentFragment();
+
+    // Free a node from ownedNodes_ (called after removal from tree + JS wrapper invalidation)
+    void freeNode(Node* node);
 
     // Queries
     Element* getElementById(const std::string& id);
@@ -58,13 +61,6 @@ public:
     void registerElementId(const std::string& id, Element* elem);
     void unregisterElementId(const std::string& id);
 
-
-    // Keep a newly-created element alive until it's appended to a parent.
-    // Without this, the shared_ptr from createElement goes out of scope
-    // and the element is freed before appendChild can use it.
-    void holdNewElement(std::shared_ptr<Element> elem);
-    void releaseNewElement(Element* elem);
-
     // Find our Element wrapper for a litehtml element pointer
     Element* findElementByLitehtml(const litehtml::element::ptr& lhElem);
 
@@ -79,13 +75,25 @@ private:
     void linkElementToLitehtml(litehtml::element::ptr lh, Element* elem);
     void unlinkLitehtmlRecursive(Element* elem);
 
-    std::shared_ptr<Node> root_;
+    // Helper: allocate a node owned by this document, returns raw pointer.
+    template<typename T, typename... Args>
+    T* allocateNode(Args&&... args) {
+        auto ptr = std::make_unique<T>(std::forward<Args>(args)...);
+        T* raw = ptr.get();
+        ownedNodes_.push_back(std::move(ptr));
+        return raw;
+    }
+
+    Node* root_ = nullptr;
     Element* documentElement_ = nullptr;
     Element* body_ = nullptr;
     bool dirty_ = false;
     bool structureDirty_ = false;
     litehtml::document::ptr litehtml_doc_;
     std::unordered_map<std::string, Element*> idMap_;
+
+    // Document owns ALL nodes. This is the sole owner of every Node in the tree.
+    std::vector<std::unique_ptr<Node>> ownedNodes_;
 
     // Fast lookup: litehtml element raw pointer -> our Element wrapper.
     struct LitehtmlPtrHash {
@@ -99,10 +107,6 @@ private:
         }
     };
     std::unordered_map<litehtml::element::ptr, Element*, LitehtmlPtrHash, LitehtmlPtrEqual> litehtmlMap_;
-
-    // Elements created via createElement that haven't been appended yet.
-    // Prevents the shared_ptr from going out of scope before appendChild.
-    std::unordered_map<Element*, std::shared_ptr<Element>> newElements_;
 };
 
 } // namespace bro::dom

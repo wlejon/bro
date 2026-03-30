@@ -20,27 +20,28 @@ void Document::parse(const std::string& html, litehtml::document_container* cont
     if (!litehtml_doc_) return;
 
     // Clear any existing tree
-    root_.reset();
+    root_ = nullptr;
     documentElement_ = nullptr;
     body_ = nullptr;
     idMap_.clear();
     litehtmlMap_.clear();
+    ownedNodes_.clear();
 
     // Build our Element tree from the litehtml tree
     auto lh_root = litehtml_doc_->root();
     if (!lh_root) return;
 
     const char* rootTag = lh_root->get_tagName();
-    auto rootElem = std::make_shared<Element>(rootTag ? rootTag : "html");
+    auto* rootElem = allocateNode<Element>(rootTag ? rootTag : "html");
     rootElem->setLitehtmlElement(lh_root);
     rootElem->setDocument(this);
-    litehtmlMap_[lh_root] = rootElem.get();
+    litehtmlMap_[lh_root] = rootElem;
     root_ = rootElem;
-    documentElement_ = rootElem.get();
+    documentElement_ = rootElem;
 
     // Copy attributes from litehtml root
     // Build children recursively
-    buildTreeFromLitehtml(lh_root, rootElem.get());
+    buildTreeFromLitehtml(lh_root, rootElem);
 
     // Find <body> element
     for (auto* child : rootElem->children()) {
@@ -52,7 +53,7 @@ void Document::parse(const std::string& html, litehtml::document_container* cont
 
     // Register IDs
     std::vector<Element*> allElems;
-    collectElements(root_.get(), allElems);
+    collectElements(root_, allElems);
     for (auto* elem : allElems) {
         std::string elemId = elem->id();
         if (!elemId.empty()) {
@@ -67,24 +68,25 @@ void Document::buildFrom(litehtml::document::ptr doc) {
     litehtml_doc_ = doc;
     if (!litehtml_doc_) return;
 
-    root_.reset();
+    root_ = nullptr;
     documentElement_ = nullptr;
     body_ = nullptr;
     idMap_.clear();
     litehtmlMap_.clear();
+    ownedNodes_.clear();
 
     auto lh_root = litehtml_doc_->root();
     if (!lh_root) return;
 
     const char* rootTag = lh_root->get_tagName();
-    auto rootElem = std::make_shared<Element>(rootTag ? rootTag : "html");
+    auto* rootElem = allocateNode<Element>(rootTag ? rootTag : "html");
     rootElem->setLitehtmlElement(lh_root);
     rootElem->setDocument(this);
-    litehtmlMap_[lh_root] = rootElem.get();
+    litehtmlMap_[lh_root] = rootElem;
     root_ = rootElem;
-    documentElement_ = rootElem.get();
+    documentElement_ = rootElem;
 
-    buildTreeFromLitehtml(lh_root, rootElem.get());
+    buildTreeFromLitehtml(lh_root, rootElem);
 
     for (auto* child : rootElem->children()) {
         if (child->tagName() == "BODY") {
@@ -94,7 +96,7 @@ void Document::buildFrom(litehtml::document::ptr doc) {
     }
 
     std::vector<Element*> allElems;
-    collectElements(root_.get(), allElems);
+    collectElements(root_, allElems);
     for (auto* elem : allElems) {
         std::string elemId = elem->id();
         if (!elemId.empty()) {
@@ -115,27 +117,27 @@ void Document::reparse(litehtml::document_container* container) {
     parse(html, container);
 }
 
-std::shared_ptr<Element> Document::createElement(const std::string& tag) {
-    auto elem = std::make_shared<Element>(tag);
+Element* Document::createElement(const std::string& tag) {
+    auto* elem = allocateNode<Element>(tag);
     elem->setDocument(this);
-    holdNewElement(elem);
     return elem;
 }
 
-void Document::holdNewElement(std::shared_ptr<Element> elem) {
-    newElements_[elem.get()] = std::move(elem);
+TextNode* Document::createTextNode(const std::string& text) {
+    return allocateNode<TextNode>(text);
 }
 
-void Document::releaseNewElement(Element* elem) {
-    newElements_.erase(elem);
+DocumentFragment* Document::createDocumentFragment() {
+    return allocateNode<DocumentFragment>();
 }
 
-std::shared_ptr<TextNode> Document::createTextNode(const std::string& text) {
-    return std::make_shared<TextNode>(text);
-}
-
-std::shared_ptr<DocumentFragment> Document::createDocumentFragment() {
-    return std::make_shared<DocumentFragment>();
+void Document::freeNode(Node* node) {
+    if (!node) return;
+    auto it = std::find_if(ownedNodes_.begin(), ownedNodes_.end(),
+        [node](const std::unique_ptr<Node>& p) { return p.get() == node; });
+    if (it != ownedNodes_.end()) {
+        ownedNodes_.erase(it);
+    }
 }
 
 Element* Document::getElementById(const std::string& id) {
@@ -157,7 +159,7 @@ Element* Document::querySelector(const std::string& selector) {
     }
     // Fallback: simple selector matching on bro::dom tree (for dynamic elements)
     if (root_ && root_->nodeType() == NodeType::Element) {
-        return static_cast<Element*>(root_.get())->querySelectorSimple(selector);
+        return static_cast<Element*>(root_)->querySelectorSimple(selector);
     }
     return nullptr;
 }
@@ -180,7 +182,7 @@ std::vector<Element*> Document::querySelectorAll(const std::string& selector) {
     // that may not be in litehtml's selector index.
     if (root_ && root_->nodeType() == NodeType::Element) {
         size_t before = result.size();
-        static_cast<Element*>(root_.get())->querySelectorAllSimple(selector, result);
+        static_cast<Element*>(root_)->querySelectorAllSimple(selector, result);
         // Deduplicate only if we added new results
         if (result.size() > before) {
             std::sort(result.begin(), result.end());
@@ -196,7 +198,7 @@ std::string Document::title() const {
 
     // Walk the tree looking for a <TITLE> element
     std::vector<Element*> allElems;
-    const_cast<Document*>(this)->collectElements(root_.get(), allElems);
+    const_cast<Document*>(this)->collectElements(root_, allElems);
     for (auto* elem : allElems) {
         if (elem->tagName() == "TITLE") {
             return elem->textContent();
@@ -209,7 +211,7 @@ void Document::setTitle(const std::string& title) {
     if (!documentElement_) return;
 
     std::vector<Element*> allElems;
-    collectElements(root_.get(), allElems);
+    collectElements(root_, allElems);
     for (auto* elem : allElems) {
         if (elem->tagName() == "TITLE") {
             elem->setTextContent(title);
@@ -220,9 +222,9 @@ void Document::setTitle(const std::string& title) {
     // If no <title> found, try to find <head> and add one
     for (auto* elem : allElems) {
         if (elem->tagName() == "HEAD") {
-            auto titleElem = createElement("title");
+            auto* titleElem = createElement("title");
             titleElem->setTextContent(title);
-            elem->appendChild(std::move(titleElem));
+            elem->appendChild(titleElem);
             return;
         }
     }
@@ -248,13 +250,13 @@ void Document::buildTreeFromLitehtml(litehtml::element::ptr root, Element* paren
             // Text node - litehtml represents text as elements with empty tag
             litehtml::string text;
             lh_child->get_text(text);
-            auto textNode = std::make_shared<TextNode>(text);
-            parentElem->appendChild(std::move(textNode));
+            auto* textNode = allocateNode<TextNode>(text);
+            parentElem->appendChild(textNode);
         } else {
-            auto childElem = std::make_shared<Element>(tag);
+            auto* childElem = allocateNode<Element>(tag);
             childElem->setLitehtmlElement(lh_child);
             childElem->setDocument(this);
-            litehtmlMap_[lh_child] = childElem.get();
+            litehtmlMap_[lh_child] = childElem;
 
             // Copy known attributes
             static const char* commonAttrs[] = {
@@ -271,11 +273,10 @@ void Document::buildTreeFromLitehtml(litehtml::element::ptr root, Element* paren
                 }
             }
 
-            Element* rawPtr = childElem.get();
-            parentElem->appendChild(std::move(childElem));
+            parentElem->appendChild(childElem);
 
             // Recurse
-            buildTreeFromLitehtml(lh_child, rawPtr);
+            buildTreeFromLitehtml(lh_child, childElem);
         }
     }
 }
@@ -286,7 +287,7 @@ void Document::collectElements(Node* node, std::vector<Element*>& out) {
         out.push_back(static_cast<Element*>(node));
     }
     for (auto& child : node->childNodes()) {
-        collectElements(child.get(), out);
+        collectElements(child, out);
     }
 }
 

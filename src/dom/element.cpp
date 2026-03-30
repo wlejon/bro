@@ -29,23 +29,22 @@ namespace bro::dom {
 // Node implementations
 // ---------------------------------------------------------------------------
 
-void Node::appendChild(std::shared_ptr<Node> child) {
+void Node::appendChild(Node* child) {
     if (!child) return;
 
     // Remove from previous parent if any
     if (child->parent_) {
-        child->parent_->removeChild(child.get());
+        child->parent_->removeChild(child);
     }
 
     child->parent_ = this;
-    children_.push_back(std::move(child));
+    children_.push_back(child);
 }
 
 void Node::removeChild(Node* child) {
     if (!child) return;
 
-    auto it = std::find_if(children_.begin(), children_.end(),
-        [child](const std::shared_ptr<Node>& n) { return n.get() == child; });
+    auto it = std::find(children_.begin(), children_.end(), child);
 
     if (it != children_.end()) {
         (*it)->parent_ = nullptr;
@@ -53,25 +52,24 @@ void Node::removeChild(Node* child) {
     }
 }
 
-void Node::insertBefore(std::shared_ptr<Node> newChild, Node* refChild) {
+void Node::insertBefore(Node* newChild, Node* refChild) {
     if (!newChild) return;
 
     if (!refChild) {
-        appendChild(std::move(newChild));
+        appendChild(newChild);
         return;
     }
 
     // Remove from previous parent if any
     if (newChild->parent_) {
-        newChild->parent_->removeChild(newChild.get());
+        newChild->parent_->removeChild(newChild);
     }
 
-    auto it = std::find_if(children_.begin(), children_.end(),
-        [refChild](const std::shared_ptr<Node>& n) { return n.get() == refChild; });
+    auto it = std::find(children_.begin(), children_.end(), refChild);
 
     if (it != children_.end()) {
         newChild->parent_ = this;
-        children_.insert(it, std::move(newChild));
+        children_.insert(it, newChild);
     }
 }
 
@@ -149,10 +147,10 @@ std::string Element::textContent() const {
     std::string result;
     for (const auto& child : children_) {
         if (child->nodeType() == NodeType::Text) {
-            auto* text = static_cast<const TextNode*>(child.get());
+            auto* text = static_cast<const TextNode*>(child);
             result += text->data();
         } else if (child->nodeType() == NodeType::Element) {
-            auto* elem = static_cast<const Element*>(child.get());
+            auto* elem = static_cast<const Element*>(child);
             result += elem->textContent();
         }
     }
@@ -162,7 +160,7 @@ std::string Element::textContent() const {
 void Element::setTextContent(const std::string& text) {
     // Skip if text unchanged — avoids expensive litehtml rebuild + layout
     if (children_.size() == 1 && children_[0]->nodeType() == NodeType::Text) {
-        auto* existing = static_cast<TextNode*>(children_[0].get());
+        auto* existing = static_cast<TextNode*>(children_[0]);
         if (existing->data() == text) return;
     }
     for (auto& child : children_) {
@@ -170,10 +168,18 @@ void Element::setTextContent(const std::string& text) {
     }
     children_.clear();
 
-    // Add a single text node
+    // Add a single text node. If we have an owner document, allocate via it.
+    // Otherwise create an unowned TextNode (for elements not yet in a document).
     if (!text.empty()) {
-        auto textNode = std::make_shared<TextNode>(text);
-        appendChild(std::move(textNode));
+        if (document_) {
+            auto* textNode = document_->createTextNode(text);
+            appendChild(textNode);
+        } else {
+            // Fallback: create text node that will be owned when added to a document.
+            // This path is used during initial tree building before document is set.
+            auto* textNode = new TextNode(text);
+            appendChild(textNode);
+        }
     }
 
     // Sync to litehtml so the rendered output updates.
@@ -226,10 +232,10 @@ std::string Element::innerHTML() const {
     std::ostringstream oss;
     for (const auto& child : children_) {
         if (child->nodeType() == NodeType::Text) {
-            auto* text = static_cast<const TextNode*>(child.get());
+            auto* text = static_cast<const TextNode*>(child);
             oss << text->data();
         } else if (child->nodeType() == NodeType::Element) {
-            auto* elem = static_cast<const Element*>(child.get());
+            auto* elem = static_cast<const Element*>(child);
             oss << elem->outerHTML();
         }
     }
@@ -268,8 +274,13 @@ void Element::setInnerHTML(const std::string& html) {
     // For now, store as a single text node with raw HTML.
     // Full parsing is handled at the Document level via reparse().
     if (!html.empty()) {
-        auto textNode = std::make_shared<TextNode>(html);
-        appendChild(std::move(textNode));
+        if (document_) {
+            auto* textNode = document_->createTextNode(html);
+            appendChild(textNode);
+        } else {
+            auto* textNode = new TextNode(html);
+            appendChild(textNode);
+        }
     }
     markDirty();
 }
@@ -293,7 +304,7 @@ std::vector<Element*> Element::children() const {
     std::vector<Element*> result;
     for (const auto& child : children_) {
         if (child->nodeType() == NodeType::Element) {
-            result.push_back(static_cast<Element*>(child.get()));
+            result.push_back(static_cast<Element*>(child));
         }
     }
     return result;
@@ -441,7 +452,7 @@ void Element::querySelectorAllSimple(const std::string& selector, std::vector<El
 
     for (auto& child : children_) {
         if (child->nodeType() == NodeType::Element) {
-            auto* elem = static_cast<Element*>(child.get());
+            auto* elem = static_cast<Element*>(child);
             // Only match dynamic elements (no litehtml counterpart) — litehtml
             // already searched its own elements via select_all above.
             if (!elem->litehtmlElement() && elem->matchesSimple(simpleSelector)) {

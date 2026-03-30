@@ -1,7 +1,6 @@
 #pragma once
 #include <string>
 #include <vector>
-#include <memory>
 #include <cstdint>
 
 namespace bro::dom {
@@ -24,18 +23,18 @@ public:
     Node* parentNode() const { return parent_; }
     void setParent(Node* p) { parent_ = p; }
 
-    std::vector<std::shared_ptr<Node>>& childNodes() { return children_; }
-    const std::vector<std::shared_ptr<Node>>& childNodes() const { return children_; }
+    std::vector<Node*>& childNodes() { return children_; }
+    const std::vector<Node*>& childNodes() const { return children_; }
 
-    void appendChild(std::shared_ptr<Node> child);
+    void appendChild(Node* child);
     void removeChild(Node* child);
-    void insertBefore(std::shared_ptr<Node> newChild, Node* refChild);
+    void insertBefore(Node* newChild, Node* refChild);
 
     uint32_t nodeId() const { return id_; }
 
 protected:
     Node* parent_ = nullptr;
-    std::vector<std::shared_ptr<Node>> children_;
+    std::vector<Node*> children_;
     uint32_t id_ = nextId();
     static uint32_t nextId() { static uint32_t counter = 0; return ++counter; }
 };
