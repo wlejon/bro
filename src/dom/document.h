@@ -33,9 +33,6 @@ public:
     // Free a node from ownedNodes_ (called after removal from tree + JS wrapper invalidation)
     void freeNode(Node* node);
 
-    // Diagnostics
-    size_t ownedNodeCount() const { return ownedNodes_.size(); }
-
     // Queries
     Element* getElementById(const std::string& id);
     Element* querySelector(const std::string& selector);
