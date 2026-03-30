@@ -40,7 +40,7 @@ SystemRenderer::SystemRenderer(render::GLContext* gl) : gl_(gl) {}
 SystemRenderer::~SystemRenderer() {
     fonts_.clear();
     surface_.reset();
-    if (texture_) gl_->deleteTexture(texture_);
+    if (texture_ && gl_) gl_->deleteTexture(texture_);
 }
 
 SkColor SystemRenderer::toSkColor(render::Color c) const {
@@ -175,8 +175,10 @@ void SystemRenderer::resetClip() {
 void SystemRenderer::beginFrame(int width, int height) {
     if (!surface_ || surface_->width() != width || surface_->height() != height) {
         surface_.reset();
-        if (texture_) gl_->deleteTexture(texture_);
-        texture_ = gl_->createTexture2D(width, height, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
+        if (gl_) {
+            if (texture_) gl_->deleteTexture(texture_);
+            texture_ = gl_->createTexture2D(width, height, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
+        }
         texWidth_ = width;
         texHeight_ = height;
     }
@@ -193,7 +195,7 @@ void SystemRenderer::endFrame() {
 }
 
 void SystemRenderer::uploadToGPU() {
-    if (!surface_ || !texture_) return;
+    if (!gl_ || !surface_ || !texture_) return;
     SkPixmap pixmap;
     if (!surface_->peekPixels(&pixmap)) return;
 
@@ -376,9 +378,12 @@ static JSValue sys_getElementById(JSContext* ctx, JSValueConst this_val,
     const char* id = JS_ToCString(ctx, argv[0]);
     if (!id) return JS_NULL;
 
-    // The document pointer is stored as opaque data on the document object
-    auto* panels = static_cast<std::vector<SystemOverlay::Panel>*>(
-        JS_GetOpaque(this_val, 0));
+    // The panels pointer is stored as an int64 property on the document object
+    JSValue ptrVal = JS_GetPropertyStr(ctx, this_val, "__panels_ptr");
+    int64_t ptrInt = 0;
+    JS_ToInt64(ctx, &ptrInt, ptrVal);
+    JS_FreeValue(ctx, ptrVal);
+    auto* panels = reinterpret_cast<std::vector<SystemOverlay::Panel>*>(ptrInt);
 
     // Search all panels for the element
     dom::Element* found = nullptr;
@@ -517,9 +522,9 @@ void SystemOverlay::installMinimalBindings() {
     // Create document object
     JSValue doc = JS_NewObject(jsCtx_);
 
-    // Store panels pointer as opaque data on the document object for getElementById
-    // We use class 0 (no class) and set opaque directly
-    JS_SetOpaque(doc, &panels_);
+    // Store panels pointer as int64 property for getElementById lookup
+    JS_SetPropertyStr(jsCtx_, doc, "__panels_ptr",
+                      JS_NewInt64(jsCtx_, reinterpret_cast<int64_t>(&panels_)));
 
     JS_SetPropertyStr(jsCtx_, doc, "getElementById",
                       JS_NewCFunction(jsCtx_, sys_getElementById, "getElementById", 1));

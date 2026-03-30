@@ -1,6 +1,7 @@
 #include "headless/headless.h"
 
 #include "engine/app_loader.h"
+#include "engine/system_overlay.h"
 #include "render/renderer.h"
 #include "render/skia_backend.h"
 #include "js/runtime.h"
@@ -166,6 +167,8 @@ public:
         if (canvas_) canvas_->restore();
         canvas_ = nullptr;
     }
+
+    SkCanvas* getCanvas() const { return canvas_; }
 
     bool saveScreenshot(const std::string& path) {
         if (!surface_) return false;
@@ -357,6 +360,11 @@ Headless::Headless(const std::string& appDir, int width, int height)
         litehtmlDoc_->render(viewportWidth_);
     }
 
+    // 10. System overlay (no GL in headless — pass nullptr)
+    systemOverlay_ = std::make_unique<engine::SystemOverlay>(
+        nullptr, viewportWidth_, viewportHeight_);
+    systemOverlay_->loadPanels("system");
+
     flush();
 }
 
@@ -380,6 +388,7 @@ Headless::~Headless() {
         jsRuntime_->executePendingJobs();
         JS_RunGC(jsRuntime_->getRuntime());
     }
+    systemOverlay_.reset();
     canvasScene_.reset();
     // 3. Release litehtml doc before document (it holds element refs)
     litehtmlDoc_.reset();
@@ -521,6 +530,26 @@ bool Headless::screenshot(const std::string& path) {
     litehtmlDoc_->draw(
         reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
 
+    // Render system overlay on top of everything
+    if (systemOverlay_ && systemOverlay_->isVisible()) {
+        systemOverlay_->tick(virtualTime_);
+        systemOverlay_->render(viewportWidth_, viewportHeight_);
+
+        // Composite system overlay surface onto app surface
+        auto* sysRenderer = systemOverlay_->getRenderer();
+        if (sysRenderer && sysRenderer->surface()) {
+            auto* appCanvas = static_cast<RasterRenderer*>(renderer_.get())->getCanvas();
+            if (appCanvas) {
+                sk_sp<SkImage> sysImage = sysRenderer->surface()->makeImageSnapshot();
+                if (sysImage) {
+                    SkPaint paint;
+                    paint.setBlendMode(SkBlendMode::kSrcOver);
+                    appCanvas->drawImage(sysImage, 0, 0, SkSamplingOptions(), &paint);
+                }
+            }
+        }
+    }
+
     renderer_->endFrame();
 
     // Save the surface as BMP
@@ -643,6 +672,29 @@ bool Headless::processCommand(const std::string& line) {
             std::cout << "[headless] saved screenshot to " << path << "\n";
         } else {
             std::cout << "[headless] screenshot failed\n";
+        }
+        return true;
+    }
+
+    if (cmd == "system" || cmd == "system toggle") {
+        if (systemOverlay_) {
+            systemOverlay_->toggle();
+            std::cout << "[headless] system overlay "
+                      << (systemOverlay_->isVisible() ? "visible" : "hidden") << "\n";
+        }
+        return true;
+    }
+
+    if (cmd.substr(0, 12) == "system perf ") {
+        // Push perf data: system perf <fps> <frameTime> <js> <layout> <raster> <gpu> <draw>
+        if (systemOverlay_) {
+            std::istringstream iss(cmd.substr(12));
+            double fps, ft, js, layout, raster, gpu, draw;
+            if (iss >> fps >> ft >> js >> layout >> raster >> gpu >> draw) {
+                systemOverlay_->updatePerf(fps, ft, js, layout, raster, gpu, draw,
+                                           viewportWidth_, viewportHeight_);
+                systemOverlay_->tick(virtualTime_);
+            }
         }
         return true;
     }

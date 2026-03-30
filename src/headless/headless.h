@@ -10,6 +10,7 @@ namespace bro::dom { class Document; class Element; class Event; }
 namespace bro::layout { class BroContainer; }
 namespace bro::render { class Renderer; }
 namespace bro::canvas { class CanvasScene; }
+namespace bro::engine { class SystemOverlay; }
 
 namespace bro::headless {
 
@@ -74,6 +75,7 @@ private:
     std::string lastDump_; // for diff
     std::unique_ptr<canvas::CanvasScene> canvasScene_;
     canvas::CanvasScene* canvasScenePtr_ = nullptr; // raw ptr for JS
+    std::unique_ptr<engine::SystemOverlay> systemOverlay_;
 };
 
 } // namespace bro::headless

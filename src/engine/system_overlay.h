@@ -46,14 +46,14 @@ public:
     void beginFrame(int width, int height) override;
     void endFrame() override;
 
-    /// Upload rasterized pixels to GL texture.
+    /// Upload rasterized pixels to GL texture (no-op if no GLContext).
     void uploadToGPU();
 
     /// Get the overlay GL texture.
     GLuint getTexture() const { return texture_; }
 
-    /// Debug: get canvas pointer.
-    SkCanvas* canvas() const { return canvas_; }
+    /// Get the Skia surface (for headless screenshots).
+    SkSurface* surface() const { return surface_.get(); }
 
 private:
     SkColor toSkColor(render::Color c) const;
@@ -98,6 +98,9 @@ public:
 
     /// Get the GL texture containing the rendered overlay (premultiplied alpha).
     GLuint getTexture() const;
+
+    /// Get the renderer (for headless screenshot compositing).
+    SystemRenderer* getRenderer() const { return renderer_.get(); }
 
     /// Handle viewport resize.
     void onResize(int w, int h);
