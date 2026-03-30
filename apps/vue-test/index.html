@@ -1,13 +1,114 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Vue Test</title>
+    <title>Vue Feature Test</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0f172a;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            font-size: 14px;
+            padding: 16px;
+        }
+        h1 { font-size: 22px; color: #38bdf8; margin-bottom: 12px; }
+        h2 { font-size: 16px; color: #818cf8; margin-bottom: 8px; margin-top: 16px; }
+        h3 { font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+
+        .grid { display: flex; flex-wrap: wrap; }
+        .card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 6px;
+            width: 300px;
+        }
+        .card h3 { color: #38bdf8; margin-bottom: 8px; }
+
+        button {
+            background: #334155;
+            color: #e2e8f0;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            padding: 4px 12px;
+            margin: 2px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        button:hover { background: #475569; }
+        button.primary { background: #2563eb; border-color: #3b82f6; }
+        button.danger { background: #dc2626; border-color: #ef4444; }
+        button.success { background: #16a34a; border-color: #22c55e; }
+
+        input, select {
+            background: #0f172a;
+            color: #e2e8f0;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 13px;
+            width: 100%;
+            margin-bottom: 4px;
+        }
+
+        .tag {
+            display: inline-block;
+            background: #334155;
+            border-radius: 12px;
+            padding: 2px 10px;
+            margin: 2px;
+            font-size: 12px;
+        }
+        .badge {
+            display: inline-block;
+            background: #dc2626;
+            color: white;
+            border-radius: 10px;
+            padding: 0 6px;
+            font-size: 11px;
+            margin-left: 4px;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        /* Transition classes */
+        .fade-enter-active, .fade-leave-active {
+            transition: opacity 0.3s ease;
+        }
+        .fade-enter-from, .fade-leave-to {
+            opacity: 0;
+        }
+
+        .slide-enter-active, .slide-leave-active {
+            transition: opacity 0.3s ease;
+        }
+        .slide-enter-from, .slide-leave-to {
+            opacity: 0;
+        }
+
+        .list-enter-active, .list-leave-active {
+            transition: opacity 0.3s ease;
+        }
+        .list-enter-from, .list-leave-to {
+            opacity: 0;
+        }
+
+        .result { color: #22c55e; font-size: 12px; margin-top: 4px; }
+        .error { color: #ef4444; }
+        .muted { color: #64748b; font-size: 12px; }
+        .highlight { background: #fbbf24; color: #0f172a; padding: 0 4px; border-radius: 2px; }
+        .mono { font-family: monospace; font-size: 12px; }
+    </style>
 </head>
 <body>
-    <div id="app">
-        <h1>{{ message }}</h1>
-        <button id="btn">Count: {{ count }}</button>
-    </div>
+    <div id="app"></div>
     <script src="vue.global.prod.js"></script>
     <script src="app.js"></script>
 </body>

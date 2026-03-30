@@ -739,14 +739,30 @@ static int js_computed_get_own_property(JSContext* ctx,
         JS_GetOpaque(obj, js_computed_class_id));
     if (!el) return 0;
 
+    // JS_AtomToCString returns NULL for Symbol atoms, handled below
     const char* name = JS_AtomToCString(ctx, prop);
     if (!name) return 0;
     std::string nameStr(name);
     JS_FreeCString(ctx, name);
 
-    // Skip prototype methods
-    if (nameStr == "getPropertyValue" || nameStr == "setProperty" ||
-        nameStr == "length" || nameStr == "cssText") return 0;
+    if (nameStr.empty()) return 0;
+
+    // Skip JS builtins and prototype methods that could cause recursion
+    static const char* skip[] = {
+        "getPropertyValue", "setProperty", "length", "cssText",
+        "toString", "valueOf", "constructor", "toJSON", "then",
+        "toLocaleString", "hasOwnProperty", "isPrototypeOf",
+        "propertyIsEnumerable", "__proto__", "__defineGetter__",
+        "__defineSetter__", "__lookupGetter__", "__lookupSetter__",
+        nullptr
+    };
+    for (const char** s = skip; *s; ++s) {
+        if (nameStr == *s) return 0;
+    }
+
+    // Skip numeric, underscore/dollar prefixed, and non-alpha-start names
+    char first = nameStr[0];
+    if (!(first >= 'a' && first <= 'z')) return 0;
 
     std::string cssName = camelToKebab(nameStr);
     std::string val = getComputedProperty(el, cssName);
