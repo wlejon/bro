@@ -320,8 +320,11 @@ static int js_cssstyle_get_own_property(JSContext* ctx,
     std::string nameStr(name);
     JS_FreeCString(ctx, name);
 
-    // "cssText" is handled by the function list, skip exotic for it.
-    if (nameStr == "cssText") return 0;
+    // Skip exotic lookup for properties handled by the prototype function list.
+    // Without this, the exotic getter shadows prototype methods like setProperty().
+    if (nameStr == "cssText" || nameStr == "setProperty" ||
+        nameStr == "getPropertyValue" || nameStr == "removeProperty" ||
+        nameStr == "length") return 0;
 
     // Convert camelCase JS property to kebab-case CSS property.
     std::string cssName = camelToKebab(nameStr);
