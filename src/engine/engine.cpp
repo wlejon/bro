@@ -35,7 +35,6 @@
 #include <SDL3/SDL_keycode.h>
 #include <glad/gl.h>
 #include <cstdio>
-#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -334,14 +333,7 @@ Engine::Engine(const std::string& appDir, int width, int height)
     // 12. System overlay (loads panels from system/ sibling directory)
     systemOverlay_ = std::make_unique<SystemOverlay>(renderer_.get(),
                                                       viewportWidth_, viewportHeight_);
-    {
-        // Resolve system dir as sibling of the app's parent directory
-        // e.g., appDir = "apps/hello" -> parent_path = "apps" -> parent = "." -> system = "./system"
-        namespace fs = std::filesystem;
-        fs::path appPath(appDir);
-        fs::path systemDir = appPath.parent_path().parent_path() / "system";
-        systemOverlay_->loadPanels(systemDir.string());
-    }
+    systemOverlay_->loadPanels("system");
 
     // 13. Create UI overlay quad VAO/VBO
     glGenVertexArrays(1, &uiQuadVAO_);
