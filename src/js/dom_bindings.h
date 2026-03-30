@@ -39,6 +39,10 @@ public:
 
     /// Free per-runtime state. Call before destroying the JSRuntime.
     static void cleanupRuntime(JSRuntime* rt);
+
+    /// Sweep __bro_elem_map: remove entries for orphaned elements (no parent,
+    /// not document root) so their JS wrappers can be GC'd.
+    static void sweepOrphanedWrappers(JSContext* ctx);
 };
 
 } // namespace bro::js

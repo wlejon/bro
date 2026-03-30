@@ -474,15 +474,34 @@ std::string Headless::eval(const std::string& code) {
 }
 
 void Headless::advanceTime(double ms) {
-    virtualTime_ += ms;
-    timers_->tick(virtualTime_);
-    timers_->fireAnimationFrames(virtualTime_);
-    flush();
+    // Advance in 16ms steps to mirror real-time frame cadence
+    double remaining = ms;
+    static constexpr double kGCIntervalMs = 1000.0;
+    while (remaining > 0) {
+        double step = std::min(remaining, 16.0);
+        virtualTime_ += step;
+        remaining -= step;
+        timers_->tick(virtualTime_);
+        timers_->fireAnimationFrames(virtualTime_);
+        flush();
+
+        // Periodic GC + orphan sweep (every ~1s of virtual time)
+        static double lastGCTime = 0;
+        if (virtualTime_ - lastGCTime >= kGCIntervalMs) {
+            bro::js::DomBindings::sweepOrphanedWrappers(jsRuntime_->getContext());
+            JS_RunGC(jsRuntime_->getRuntime());
+            lastGCTime = virtualTime_;
+        }
+    }
 }
 
 void Headless::flush() {
     jsRuntime_->executePendingJobs();
     if (document_ && document_->isDirty() && litehtmlDoc_) {
+        if (document_->isStructureDirty()) {
+            litehtmlDoc_->rebuild_render_tree();
+            document_->clearStructureDirty();
+        }
         litehtmlDoc_->render(viewportWidth_);
         document_->clearDirty();
     }

@@ -481,8 +481,9 @@ void Engine::run() {
         accumJsMs_ += tJs - t0;
         accumGlStateMs_ += tJs - tGlSave;  // GL save is inside JS phase
 
-        // 3d. Periodic QuickJS cycle-collector GC
+        // 3d. Periodic QuickJS cycle-collector GC + orphan sweep
         if (now - lastGCMs_ >= kGCIntervalMs) {
+            js::DomBindings::sweepOrphanedWrappers(jsRuntime_->getContext());
             JS_RunGC(jsRuntime_->getRuntime());
             lastGCMs_ = now;
         }

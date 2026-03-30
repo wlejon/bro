@@ -762,10 +762,26 @@ static JSValue wrapTokenList(JSContext* ctx, bro::dom::Element* elem) {
 // ===========================================================================
 
 // Release orphaned elements when the JS wrapper is garbage-collected.
-// Elements that are in the live DOM tree have their lifetime managed by the
+// Elements that are in the live DOM tree have their lifetime managed by
+// the Document.  But elements that were never inserted (e.g. temporary
+// DocumentFragments created by jQuery) need to be freed here.
+static void js_element_finalizer(JSRuntime* /*rt*/, JSValue val)
+{
+    auto* el = static_cast<bro::dom::Element*>(
+        JS_GetOpaque(val, js_element_class_id));
+    if (!el || !el->isAlive()) return;
+
+    // Only free if the element is NOT in the DOM tree (no parent).
+    // Elements in the tree are freed by removeChild → freeNode.
+    if (!el->parentNode()) {
+        auto* doc = el->document();
+        if (doc) doc->freeNode(el);
+    }
+}
+
 static JSClassDef js_element_class = {
     "Element",
-    nullptr, nullptr, nullptr, nullptr
+    js_element_finalizer, nullptr, nullptr, nullptr
 };
 
 static inline bro::dom::Element* getElement(JSValueConst val)
@@ -2114,6 +2130,43 @@ void DomBindings::cleanup(JSContext* ctx) {
 
 void DomBindings::cleanupRuntime(JSRuntime* rt) {
     s_classes_registered.erase(rt);
+}
+
+void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+    if (JS_IsUndefined(elemMap) || JS_IsNull(elemMap)) {
+        JS_FreeValue(ctx, elemMap);
+        JS_FreeValue(ctx, global);
+        return;
+    }
+
+    // Collect keys of orphaned entries
+    JSPropertyEnum* props = nullptr;
+    uint32_t len = 0;
+    JS_GetOwnPropertyNames(ctx, &props, &len, elemMap,
+                           JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY);
+
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue val = JS_GetProperty(ctx, elemMap, props[i].atom);
+        auto* el = static_cast<bro::dom::Element*>(
+            JS_GetOpaque(val, js_element_class_id));
+        if (el && el->isAlive() && !el->parentNode() &&
+            el->childNodes().empty() &&
+            el->tagName() == "#DOCUMENT-FRAGMENT") {
+            // Empty DocumentFragment with no parent — temporary container
+            // created by jQuery's buildFragment, safe to free.
+            auto* doc = el->document();
+            JS_SetOpaque(val, nullptr);
+            JS_DeleteProperty(ctx, elemMap, props[i].atom, 0);
+            if (doc) doc->freeNode(el);
+        }
+        JS_FreeValue(ctx, val);
+    }
+
+    JS_FreePropertyEnum(ctx, props, len);
+    JS_FreeValue(ctx, elemMap);
+    JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js
