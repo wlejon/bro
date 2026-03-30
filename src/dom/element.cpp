@@ -4,6 +4,22 @@
 #include <litehtml.h>
 #include <litehtml/el_text.h>
 #include <litehtml/render_item.h>
+
+namespace {
+
+/// el_text subclass with a public text setter.
+/// Allows updating text content without destroying the render item.
+class bro_el_text : public litehtml::el_text {
+public:
+    using el_text::el_text;  // inherit constructor
+
+    void set_text(const char* text) {
+        m_text = text ? text : "";
+        m_use_transformed = false;
+    }
+};
+
+} // anonymous namespace
 #include <algorithm>
 #include <sstream>
 
@@ -161,21 +177,24 @@ void Element::setTextContent(const std::string& text) {
     }
 
     // Sync to litehtml so the rendered output updates.
-    // Instead of append_children_from_string (which destroys render items
-    // on dynamically-created elements), find the existing el_text child
-    // and replace it, or clear children and add a new text element.
+    // We use bro_el_text (subclass of el_text with public setter) to update
+    // text in-place without destroying render items.  This avoids flicker
+    // from the destroy/recreate cycle of append_children_from_string.
     if (litehtml_element_) {
         auto& lhChildren = litehtml_element_->children();
 
-        // Try to find an existing text child and update it in-place
-        bool updated = false;
+        // Fast path: single text child — update its text in-place
         if (lhChildren.size() == 1 && lhChildren.front()->is_text()) {
-            // Single text child — replace the element with a new el_text
-            // that has the updated text.  We can't modify el_text::m_text
-            // directly (it's protected), so we clear + re-add.
+            auto* broText = dynamic_cast<bro_el_text*>(lhChildren.front().get());
+            if (broText) {
+                broText->set_text(text.c_str());
+                broText->compute_styles(false);
+                markDirty();
+                return;
+            }
         }
 
-        // Clear existing children and add fresh text via litehtml's own API
+        // Slow path: clear children and create a new bro_el_text
         litehtml_element_->clearRecursive();
         auto ri = litehtml_element_->get_render_item();
         if (ri) {
@@ -185,13 +204,10 @@ void Element::setTextContent(const std::string& text) {
         if (!text.empty()) {
             auto doc = litehtml_element_->get_document();
             if (doc) {
-                // Create a new el_text element
-                auto textEl = std::make_shared<litehtml::el_text>(
-                    text.c_str(), doc);
+                auto textEl = std::make_shared<bro_el_text>(text.c_str(), doc);
                 litehtml_element_->appendChild(textEl);
                 textEl->compute_styles(false);
 
-                // Create render item for the text and attach to parent
                 if (ri) {
                     auto textRender = textEl->create_render_item(ri);
                     if (textRender) {
