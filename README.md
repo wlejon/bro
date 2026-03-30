@@ -1,64 +1,46 @@
 # Bro
 
-A lightweight desktop application framework that runs HTML/CSS/JS apps as native windows. Bro combines a JavaScript engine, an HTML/CSS layout engine, and a GPU (or software) renderer into a single executable -- no browser required.
+A lightweight desktop application runtime that runs HTML/CSS/JS apps as native windows. Bro combines a JavaScript engine, an HTML/CSS layout engine, and GPU-accelerated rendering into a single executable — no browser required.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────┐
-│                 bro <app-dir>               │
-├─────────┬──────────┬──────────┬─────────────┤
-│  QuickJS │ LiteHTML │  Skia*   │    SDL3     │
-│  (JS)    │ (Layout) │ (Render) │  (Window)   │
-└─────────┴──────────┴──────────┴─────────────┘
+│                bro <app-dir>                │
+├──────────┬──────────┬──────────┬────────────┤
+│  QuickJS │ LiteHTML │   Skia   │    SDL3    │
+│   (JS)   │ (Layout) │ (Render) │  (Window)  │
+└──────────┴──────────┴──────────┴────────────┘
 ```
 
-- **QuickJS** -- ES2023 JavaScript engine. Runs app scripts with a DOM API (`document.getElementById`, `addEventListener`, `textContent`, `style`, etc.).
-- **LiteHTML** -- HTML/CSS parser and layout engine. Handles box model, selectors, text flow, and CSS styling.
-- **Skia** (optional) -- High-quality 2D rasterization (text, paths, images). When not available, falls back to an SDL3 2D renderer with Win32 GDI text.
-- **SDL3** -- Cross-platform windowing, input events, and GPU-accelerated display.
+- **QuickJS** — ES2023 JavaScript engine with DOM API bindings.
+- **LiteHTML** — HTML/CSS parser and layout engine. Handles box model, selectors, text flow, flexbox, and CSS styling.
+- **Skia** — High-quality 2D rasterization (text, paths, images, gradients). Renders to a CPU surface, uploaded to GPU each frame.
+- **SDL3** — Windowing, input events, and OpenGL-based display compositing.
 
-## Status
+~6K lines of C++20 glue code. Two executables: `bro` (windowed) and `bro-headless` (automated testing).
 
-Early prototype. The framework can load an HTML/CSS/JS app, render it in a window, and handle basic mouse/keyboard interaction with JS event handlers. Many features are stubs or incomplete (see below).
+## Features
 
-### What works
-
-- Loading an app from a directory (`index.html` + CSS + JS)
-- HTML/CSS parsing and layout via LiteHTML
-- Rendering text, backgrounds, borders, solid fills
-- JS `document.getElementById`, `querySelector`, `querySelectorAll`
-- JS `element.textContent`, `innerHTML` (get), `style.*`, attributes
-- JS `addEventListener` / `removeEventListener` with event bubbling
-- JS `console.log/warn/error`, `setTimeout`, `setInterval`
-- Mouse click events with hit testing
-- Keyboard events (raw keycodes)
-- Window resizing with re-layout
-- Headless mode for automated testing (`bro-headless`)
-
-### What doesn't work yet
-
-- Image loading and rendering
-- CSS gradients (filled with first color stop only)
-- Border radius (drawn as straight lines)
-- `innerHTML` setter (stores raw HTML as text, doesn't re-parse)
-- `document.createElement` + `appendChild` (memory management issues)
-- ES modules (`import`/`export`)
-- Element-level `querySelector`/`querySelectorAll`
-- Mouse coordinates and modifier keys in JS events
-- Keyboard key names (sends raw keycodes, not `"Enter"`, `"KeyA"`, etc.)
-- Cursor changes
-- Anchor (`<a>`) navigation
-- Frame rate limiting / vsync
-- Non-Windows platforms (text rendering is Win32 GDI only in SDL mode)
+- HTML/CSS parsing, layout, and GPU-accelerated rendering
+- JavaScript DOM API: `querySelector`, `createElement`, `appendChild`, `addEventListener`, `textContent`, `innerHTML`, `style`, attributes, classList
+- Event system with bubbling: mouse (click, mousedown, mouseup), keyboard (keydown, keyup, text input)
+- CSS gradients (linear, radial, conic), background images, border radius
+- SVG rendering (basic shapes, paths, transforms)
+- Canvas 2D API
+- WebGL 2.0
+- Audio playback
+- Form controls (`<input>` with text editing, cursor, focus management)
+- Vue 3 and jQuery compatibility
+- Headless mode for deterministic testing with virtual time
 
 ## Building
 
 ### Prerequisites
 
-- **MSVC** (Visual Studio 2022+) -- MinGW is not supported
+- **MSVC** (Visual Studio 2022+) — MinGW is not supported
 - **CMake** 3.28+
-- **Ninja** (recommended)
+- **Skia** pre-built libraries in `third_party/skia/`
 - Git submodules: QuickJS, LiteHTML, SDL3
 
 ### Setup
@@ -68,41 +50,40 @@ git clone --recursive <repo-url>
 cd bro
 ```
 
-### Build (Debug)
+### Build
 
 ```bash
-cmake --preset debug
-cmake --build build-debug
+# Configure (uses Visual Studio generator)
+cmake -B build
+
+# Debug build
+cmake --build build --config Debug
+
+# Release build
+cmake --build build --config Release
 ```
 
-### Build (Release)
-
-```bash
-cmake --preset default
-cmake --build build
-```
-
-Skia is required. Place pre-built Skia libraries in `third_party/skia/lib/` and headers in `third_party/skia/include/`. The build auto-detects `skia.lib`/`libskia.a` and enables Skia automatically.
+Vcpkg at `D:/vcpkg` is auto-detected if present. Skia is required — place pre-built libraries in `third_party/skia/lib/` and headers in `third_party/skia/include/`.
 
 ## Usage
 
 ### Windowed mode
 
 ```bash
-bro apps/hello
+./build/src/Debug/bro.exe apps/hello
 ```
 
-Loads `apps/hello/index.html`, applies linked stylesheets, executes `<script>` tags, and opens a window.
+Loads `apps/hello/index.html`, applies stylesheets, executes scripts, and opens a window.
 
 ### Headless mode
 
 ```bash
-bro-headless apps/hello              # interactive
-bro-headless apps/hello test.txt     # run script
-echo "dump #btn" | bro-headless apps/hello  # piped
+./build/src/headless/Debug/bro-headless.exe apps/hello              # interactive
+./build/src/headless/Debug/bro-headless.exe apps/hello test.txt     # run script file
+echo -e "click #btn\ndump\nquit" | ./build/src/headless/Debug/bro-headless.exe apps/hello 2>/dev/null
 ```
 
-Commands: `dump`, `dump <selector>`, `diff`, `click <selector>`, `eval <js>`, `wait <ms>`, `quit`.
+Commands: `dump [selector]`, `click <selector>`, `eval <js>`, `wait <ms>`, `diff`, `quit`.
 
 See [docs/headless.md](docs/headless.md) for full documentation.
 
@@ -117,32 +98,40 @@ apps/myapp/
   app.js          # loaded via <script src="...">
 ```
 
-Bro extracts `<link>` and `<script>` references from `index.html` and loads them in order.
-
 ## Project layout
 
 ```
 src/
-  main.cpp              # Entry point (windowed)
-  engine/               # App loading, main loop, event dispatch
-  dom/                  # DOM tree: Document, Element, TextNode, Event, StyleProxy
-  js/                   # QuickJS bindings: Runtime, Console, Timers, DomBindings
-  layout/               # LiteHTML container implementation, font management
-  render/               # Renderer interface + Skia/SDL backends
-  platform/             # SDL window, event loop
-  headless/             # Headless testing tool
-  util/                 # Logging, string utilities
+  engine/             # App loading, main loop, event dispatch
+  dom/                # DOM tree: Document, Element, TextNode, Event, StyleProxy
+  js/                 # QuickJS bindings: DOM, Console, Timers, Canvas, WebGL, Audio
+  layout/             # LiteHTML container, font management, replaced elements (input, SVG)
+  render/             # Skia renderer, OpenGL context, GPU compositing
+  canvas/             # Canvas 2D implementation
+  svg/                # SVG parser and renderer
+  webgl/              # WebGL 2.0 implementation
+  audio/              # Audio engine
+  platform/           # SDL3 window and event loop
+  headless/           # Headless testing tool
+  util/               # Logging, string utilities
 third_party/
-  quickjs/              # JS engine (git submodule)
-  litehtml/             # HTML/CSS layout (git submodule)
-  SDL/                  # Windowing + input (git submodule)
-  skia/                 # Pre-built Skia (not included, optional)
+  quickjs/            # JS engine (git submodule, MIT)
+  litehtml/           # HTML/CSS layout (git submodule, BSD-3-Clause)
+  SDL/                # Windowing + input (git submodule, zlib)
+  skia/               # 2D rendering (pre-built, BSD-3-Clause)
+  glad/               # OpenGL loader (WTFPL/CC0 + Apache-2.0)
+  stb/                # Image loading (MIT/Public Domain)
 apps/
-  hello/                # Example app
+  hello/              # Minimal example
+  vue-test/           # Vue 3 feature test
+  jquery-test/        # jQuery compatibility test
+  ...                 # Additional example apps
 docs/
-  headless.md           # Headless mode documentation
+  headless.md         # Headless mode documentation
 ```
 
 ## License
 
-TBD
+[MIT](LICENSE)
+
+Third-party dependencies are under their own permissive licenses (MIT, BSD-3-Clause, zlib, Apache-2.0). See each library's LICENSE file in `third_party/`.
