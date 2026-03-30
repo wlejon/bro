@@ -1385,6 +1385,98 @@ static JSValue js_element_get_style(JSContext* ctx, JSValueConst this_val)
     return wrapStyleProxy(ctx, &el->style());
 }
 
+// ---- Form control properties (value, checked, type, disabled, placeholder) ----
+
+static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewString(ctx, el->getAttribute("value").c_str());
+}
+
+static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
+                                    JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("value", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_checked(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    std::string v = el->getAttribute("checked");
+    // "checked" attribute present (any value) means true
+    return JS_NewBool(ctx, !v.empty());
+}
+
+static JSValue js_element_set_checked(JSContext* ctx, JSValueConst this_val,
+                                      JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val))
+        el->setAttribute("checked", "checked");
+    else
+        el->removeAttribute("checked");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_type(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    std::string t = el->getAttribute("type");
+    if (t.empty()) t = "text"; // default input type
+    return JS_NewString(ctx, t.c_str());
+}
+
+static JSValue js_element_set_type(JSContext* ctx, JSValueConst this_val,
+                                   JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("type", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_disabled(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    return JS_NewBool(ctx, !el->getAttribute("disabled").empty());
+}
+
+static JSValue js_element_set_disabled(JSContext* ctx, JSValueConst this_val,
+                                       JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val))
+        el->setAttribute("disabled", "disabled");
+    else
+        el->removeAttribute("disabled");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_placeholder(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewString(ctx, el->getAttribute("placeholder").c_str());
+}
+
+static JSValue js_element_set_placeholder(JSContext* ctx, JSValueConst this_val,
+                                          JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("placeholder", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
 // ---- Methods --------------------------------------------------------------
 
 static JSValue js_element_getAttribute(JSContext* ctx, JSValueConst this_val,
@@ -1905,6 +1997,12 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("clientWidth",   js_element_get_clientWidth, nullptr),
     JS_CGETSET_DEF("clientHeight",  js_element_get_clientHeight, nullptr),
     JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),
+    // Form control properties
+    JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
+    JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),
+    JS_CGETSET_DEF("type",        js_element_get_type,        js_element_set_type),
+    JS_CGETSET_DEF("disabled",    js_element_get_disabled,    js_element_set_disabled),
+    JS_CGETSET_DEF("placeholder", js_element_get_placeholder, js_element_set_placeholder),
     // Methods
     JS_CFUNC_DEF("getAttribute",        1, js_element_getAttribute),
     JS_CFUNC_DEF("hasAttribute",        1, js_element_hasAttribute),
@@ -2115,18 +2213,29 @@ static JSValue js_document_getElementsByClassName(JSContext* ctx,
 }
 
 static JSValue js_document_getElementsByName(JSContext* ctx,
-                                             JSValueConst /*this_val*/,
-                                             int /*argc*/, JSValueConst* /*argv*/)
+                                             JSValueConst this_val,
+                                             int argc, JSValueConst* argv)
 {
-    // Stub — returns empty NodeList
-    std::vector<bro::dom::Element*> empty;
-    return wrapNodeList(ctx, empty);
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 1) return wrapNodeList(ctx, {});
+    std::string name = jsToStdString(ctx, argv[0]);
+    auto results = doc->querySelectorAll("[name=\"" + name + "\"]");
+    return wrapNodeList(ctx, results);
 }
 
 static JSValue js_document_get_defaultView(JSContext* ctx, JSValueConst /*this_val*/)
 {
     // Return window (globalThis)
     return JS_GetGlobalObject(ctx);
+}
+
+static JSValue js_document_get_activeElement(JSContext* ctx, JSValueConst this_val)
+{
+    auto* doc = getDocument(this_val);
+    if (!doc) return JS_NULL;
+    auto* el = doc->activeElement();
+    if (!el) return JS_NULL;
+    return DomBindings::wrapElement(ctx, el);
 }
 
 static const JSCFunctionListEntry js_document_proto_funcs[] = {
@@ -2137,6 +2246,7 @@ static const JSCFunctionListEntry js_document_proto_funcs[] = {
     JS_CGETSET_DEF("nodeType",        js_document_get_nodeType,        nullptr),
     JS_CGETSET_DEF("nodeName",        js_document_get_nodeName,        nullptr),
     JS_CGETSET_DEF("defaultView",     js_document_get_defaultView,     nullptr),
+    JS_CGETSET_DEF("activeElement",  js_document_get_activeElement,   nullptr),
     // Methods
     JS_CFUNC_DEF("getElementById",          1, js_document_getElementById),
     JS_CFUNC_DEF("createElement",           1, js_document_createElement),
@@ -2365,13 +2475,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
         };
     }
 
-    // document.activeElement stub
-    if (!document.activeElement) {
-        Object.defineProperty(document, 'activeElement', {
-            get: function() { return document.body; },
-            configurable: true
-        });
-    }
+    // document.activeElement is now a native C++ getter (see js_document_proto_funcs)
 })();
 )JS";
     JSValue r = JS_Eval(ctx, polyfills, strlen(polyfills),

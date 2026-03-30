@@ -792,6 +792,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         evt.setButton(button);
         dom::Element* target = hitTest(x, y);
         if (target) {
+            document_->setActiveElement(target);
             dispatchEvent(target, evt);
         }
     }

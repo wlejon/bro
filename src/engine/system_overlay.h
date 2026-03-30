@@ -58,6 +58,15 @@ public:
     void scale(float sx, float sy) override;
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;
+    void fillLinearGradient(float x, float y, float w, float h,
+                            float startX, float startY, float endX, float endY,
+                            std::span<const render::ColorStop> stops) override;
+    void fillRadialGradient(float x, float y, float w, float h,
+                            float cx, float cy, float rx, float ry,
+                            std::span<const render::ColorStop> stops) override;
+    void fillConicGradient(float x, float y, float w, float h,
+                           float cx, float cy, float angleDeg,
+                           std::span<const render::ColorStop> stops) override;
     void beginFrame(int width, int height) override;
     void endFrame() override;
 

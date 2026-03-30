@@ -1,5 +1,6 @@
 #include "layout/container.h"
 #include "layout/bro_element.h"
+#include "layout/el_input.h"
 #include "layout/el_svg.h"
 #include "render/renderer.h"
 #include "util/log.h"
@@ -7,6 +8,7 @@
 #include <cctype>
 #include <fstream>
 #include <sstream>
+#include <stb_image.h>
 
 namespace bro::layout {
 
@@ -99,23 +101,73 @@ void BroContainer::draw_list_marker(litehtml::uint_ptr /*hdc*/,
 }
 
 // ---------------------------------------------------------------------------
-// Images (stubs)
+// Images
 // ---------------------------------------------------------------------------
 
-void BroContainer::load_image(const char* src, const char* /*baseurl*/, bool /*redraw_on_ready*/) {
-    LOG_WARN("load_image: image loading not yet implemented (src=%s)", src);
+void BroContainer::load_image(const char* src, const char* baseurl, bool /*redraw_on_ready*/) {
+    if (!src || !*src) return;
+    std::string url = src;
+    if (imageCache_.count(url)) return; // already loaded
+
+    // Resolve path relative to base URL or app base
+    std::string base = (baseurl && *baseurl) ? baseurl : baseUrl_;
+    std::string path;
+    // Check if already absolute
+    if (url.size() >= 2 && url[1] == ':') {
+        path = url;
+    } else if (!url.empty() && (url[0] == '/' || url[0] == '\\')) {
+        path = url;
+    } else if (!base.empty()) {
+        path = base;
+        if (path.back() != '/' && path.back() != '\\') path += '/';
+        path += url;
+    } else {
+        path = url;
+    }
+
+    // Read entire file into memory
+    std::ifstream ifs(path, std::ios::binary | std::ios::ate);
+    if (!ifs.is_open()) {
+        LOG_WARN("load_image: failed to open '%s'", path.c_str());
+        return;
+    }
+    auto fileSize = ifs.tellg();
+    ifs.seekg(0);
+    CachedImage img;
+    img.data.resize(static_cast<size_t>(fileSize));
+    ifs.read(reinterpret_cast<char*>(img.data.data()), fileSize);
+
+    // Query dimensions via stb_image without full decode
+    int w = 0, h = 0, comp = 0;
+    if (stbi_info_from_memory(img.data.data(), static_cast<int>(img.data.size()), &w, &h, &comp)) {
+        img.width = w;
+        img.height = h;
+    }
+    imageCache_[url] = std::move(img);
 }
 
-void BroContainer::get_image_size(const char* /*src*/, const char* /*baseurl*/, litehtml::size& sz) {
+void BroContainer::get_image_size(const char* src, const char* /*baseurl*/, litehtml::size& sz) {
     sz.width = 0;
     sz.height = 0;
+    if (!src) return;
+    auto it = imageCache_.find(src);
+    if (it != imageCache_.end()) {
+        sz.width = it->second.width;
+        sz.height = it->second.height;
+    }
 }
 
 void BroContainer::draw_image(litehtml::uint_ptr /*hdc*/,
-                               const litehtml::background_layer& /*layer*/,
-                               const std::string& /*url*/,
+                               const litehtml::background_layer& layer,
+                               const std::string& url,
                                const std::string& /*base_url*/) {
-    // Stub: image drawing not yet implemented.
+    auto it = imageCache_.find(url);
+    if (it == imageCache_.end() || it->second.data.empty()) return;
+    renderer_->drawImage(it->second.data.data(), it->second.data.size(),
+                         static_cast<float>(layer.border_box.x),
+                         static_cast<float>(layer.border_box.y),
+                         static_cast<float>(layer.border_box.width),
+                         static_cast<float>(layer.border_box.height));
 }
 
 // ---------------------------------------------------------------------------
@@ -139,41 +191,64 @@ void BroContainer::draw_solid_fill(litehtml::uint_ptr /*hdc*/,
 void BroContainer::draw_linear_gradient(litehtml::uint_ptr /*hdc*/,
                                          const litehtml::background_layer& layer,
                                          const litehtml::background_layer::linear_gradient& gradient) {
-    // Stub: fill with first color stop if available.
-    if (!gradient.color_points.empty()) {
-        auto& cp = gradient.color_points.front();
-        render::Color c{cp.color.red, cp.color.green, cp.color.blue, cp.color.alpha};
-        renderer_->fillRect(static_cast<float>(layer.border_box.x),
-                            static_cast<float>(layer.border_box.y),
-                            static_cast<float>(layer.border_box.width),
-                            static_cast<float>(layer.border_box.height), c);
+    if (gradient.color_points.empty()) return;
+    float bx = static_cast<float>(layer.border_box.x);
+    float by = static_cast<float>(layer.border_box.y);
+    float bw = static_cast<float>(layer.border_box.width);
+    float bh = static_cast<float>(layer.border_box.height);
+
+    std::vector<render::ColorStop> stops;
+    stops.reserve(gradient.color_points.size());
+    for (auto& cp : gradient.color_points) {
+        stops.push_back({cp.offset,
+            {cp.color.red, cp.color.green, cp.color.blue, cp.color.alpha}});
     }
+    renderer_->fillLinearGradient(bx, by, bw, bh,
+                                  gradient.start.x, gradient.start.y,
+                                  gradient.end.x, gradient.end.y,
+                                  stops);
 }
 
 void BroContainer::draw_radial_gradient(litehtml::uint_ptr /*hdc*/,
                                          const litehtml::background_layer& layer,
                                          const litehtml::background_layer::radial_gradient& gradient) {
-    if (!gradient.color_points.empty()) {
-        auto& cp = gradient.color_points.front();
-        render::Color c{cp.color.red, cp.color.green, cp.color.blue, cp.color.alpha};
-        renderer_->fillRect(static_cast<float>(layer.border_box.x),
-                            static_cast<float>(layer.border_box.y),
-                            static_cast<float>(layer.border_box.width),
-                            static_cast<float>(layer.border_box.height), c);
+    if (gradient.color_points.empty()) return;
+    float bx = static_cast<float>(layer.border_box.x);
+    float by = static_cast<float>(layer.border_box.y);
+    float bw = static_cast<float>(layer.border_box.width);
+    float bh = static_cast<float>(layer.border_box.height);
+
+    std::vector<render::ColorStop> stops;
+    stops.reserve(gradient.color_points.size());
+    for (auto& cp : gradient.color_points) {
+        stops.push_back({cp.offset,
+            {cp.color.red, cp.color.green, cp.color.blue, cp.color.alpha}});
     }
+    renderer_->fillRadialGradient(bx, by, bw, bh,
+                                  gradient.position.x, gradient.position.y,
+                                  gradient.radius.x, gradient.radius.y,
+                                  stops);
 }
 
 void BroContainer::draw_conic_gradient(litehtml::uint_ptr /*hdc*/,
                                         const litehtml::background_layer& layer,
                                         const litehtml::background_layer::conic_gradient& gradient) {
-    if (!gradient.color_points.empty()) {
-        auto& cp = gradient.color_points.front();
-        render::Color c{cp.color.red, cp.color.green, cp.color.blue, cp.color.alpha};
-        renderer_->fillRect(static_cast<float>(layer.border_box.x),
-                            static_cast<float>(layer.border_box.y),
-                            static_cast<float>(layer.border_box.width),
-                            static_cast<float>(layer.border_box.height), c);
+    if (gradient.color_points.empty()) return;
+    float bx = static_cast<float>(layer.border_box.x);
+    float by = static_cast<float>(layer.border_box.y);
+    float bw = static_cast<float>(layer.border_box.width);
+    float bh = static_cast<float>(layer.border_box.height);
+
+    std::vector<render::ColorStop> stops;
+    stops.reserve(gradient.color_points.size());
+    for (auto& cp : gradient.color_points) {
+        stops.push_back({cp.offset,
+            {cp.color.red, cp.color.green, cp.color.blue, cp.color.alpha}});
     }
+    renderer_->fillConicGradient(bx, by, bw, bh,
+                                 gradient.position.x, gradient.position.y,
+                                 gradient.angle,
+                                 stops);
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +439,9 @@ litehtml::element::ptr BroContainer::create_element(
     // SVG elements get our custom replaced element
     if (strcmp(tag_name, "svg") == 0) {
         return std::make_shared<ElSvg>(doc, renderer_);
+    }
+    if (strcmp(tag_name, "input") == 0) {
+        return std::make_shared<ElInput>(doc, renderer_);
     }
 
     static const char* specialized_tags[] = {

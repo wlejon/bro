@@ -44,10 +44,25 @@
 #include <include/core/SkPathBuilder.h>
 #include <include/utils/SkParsePath.h>
 #include <include/codec/SkCodec.h>
+#include <include/effects/SkGradient.h>
 #include <include/ports/SkTypeface_win.h>
 
 // Skia raster renderer for headless mode — renders to a CPU surface with
 // accurate text measurement and PNG screenshot support.
+
+static SkGradient::Colors buildGradColors(std::span<const bro::render::ColorStop> stops) {
+    thread_local std::vector<SkColor4f> colors;
+    thread_local std::vector<float> pos;
+    colors.resize(stops.size());
+    pos.resize(stops.size());
+    for (size_t i = 0; i < stops.size(); i++) {
+        colors[i] = SkColor4f{stops[i].color.r / 255.0f, stops[i].color.g / 255.0f,
+                              stops[i].color.b / 255.0f, stops[i].color.a / 255.0f};
+        pos[i] = stops[i].offset;
+    }
+    return SkGradient::Colors(SkSpan(colors), SkSpan(pos), SkTileMode::kClamp);
+}
+
 namespace {
 
 class RasterRenderer final : public bro::render::Renderer {
@@ -256,6 +271,62 @@ public:
         if (!canvas_) return;
         canvas_->restore();
         canvas_->save();
+    }
+
+    void fillLinearGradient(float x, float y, float w, float h,
+                            float startX, float startY, float endX, float endY,
+                            std::span<const bro::render::ColorStop> stops) override {
+        if (!canvas_ || stops.empty()) return;
+        SkPoint pts[2] = { {startX, startY}, {endX, endY} };
+        auto shader = SkShaders::LinearGradient(pts,
+            SkGradient(buildGradColors(stops), {}));
+        SkPaint paint;
+        paint.setShader(shader);
+        paint.setStyle(SkPaint::kFill_Style);
+        canvas_->save();
+        canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
+        canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+        canvas_->restore();
+    }
+
+    void fillRadialGradient(float x, float y, float w, float h,
+                            float cx, float cy, float rx, float ry,
+                            std::span<const bro::render::ColorStop> stops) override {
+        if (!canvas_ || stops.empty()) return;
+        float r = std::max(rx, ry);
+        if (r < 0.001f) r = 0.001f;
+        SkPaint paint;
+        paint.setStyle(SkPaint::kFill_Style);
+        canvas_->save();
+        canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
+        if (std::abs(rx - ry) > 0.001f && rx > 0 && ry > 0) {
+            canvas_->translate(cx, cy);
+            canvas_->scale(1.0f, ry / rx);
+            canvas_->translate(-cx, -cy);
+            paint.setShader(SkShaders::RadialGradient({cx, cy}, rx,
+                SkGradient(buildGradColors(stops), {})));
+        } else {
+            paint.setShader(SkShaders::RadialGradient({cx, cy}, r,
+                SkGradient(buildGradColors(stops), {})));
+        }
+        canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+        canvas_->restore();
+    }
+
+    void fillConicGradient(float x, float y, float w, float h,
+                           float cx, float cy, float angleDeg,
+                           std::span<const bro::render::ColorStop> stops) override {
+        if (!canvas_ || stops.empty()) return;
+        float startAngle = angleDeg - 90.0f;
+        auto shader = SkShaders::SweepGradient({cx, cy}, startAngle, startAngle + 360.0f,
+            SkGradient(buildGradColors(stops), {}));
+        SkPaint paint;
+        paint.setShader(shader);
+        paint.setStyle(SkPaint::kFill_Style);
+        canvas_->save();
+        canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
+        canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
+        canvas_->restore();
     }
 
     void beginFrame(int width, int height) override {
@@ -704,6 +775,7 @@ dom::Element* Headless::querySelector(const std::string& selector) const {
 
 void Headless::dispatchClickOn(dom::Element* target) {
     if (!target || !jsRuntime_) return;
+    if (document_) document_->setActiveElement(target);
     dom::MouseEvent event("click");
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }

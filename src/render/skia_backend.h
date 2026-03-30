@@ -68,6 +68,16 @@ public:
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;
 
+    void fillLinearGradient(float x, float y, float w, float h,
+                            float startX, float startY, float endX, float endY,
+                            std::span<const ColorStop> stops) override;
+    void fillRadialGradient(float x, float y, float w, float h,
+                            float cx, float cy, float rx, float ry,
+                            std::span<const ColorStop> stops) override;
+    void fillConicGradient(float x, float y, float w, float h,
+                           float cx, float cy, float angleDeg,
+                           std::span<const ColorStop> stops) override;
+
     // beginFrame/endFrame manage the Skia raster surface for UI rendering.
     void beginFrame(int width, int height) override;
     void endFrame() override;

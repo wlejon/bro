@@ -3,6 +3,7 @@
 #include "layout/font_manager.h"
 #include <litehtml.h>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bro::render { class Renderer; }
@@ -89,6 +90,14 @@ private:
         litehtml::border_radiuses radius;
     };
     std::vector<ClipEntry> clipStack_;
+
+    // Image cache: URL -> raw file bytes (PNG/JPEG encoded)
+    struct CachedImage {
+        std::vector<uint8_t> data;
+        int width = 0;
+        int height = 0;
+    };
+    std::unordered_map<std::string, CachedImage> imageCache_;
 };
 
 } // namespace bro::layout

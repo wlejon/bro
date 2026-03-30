@@ -24,6 +24,11 @@ struct PointF {
     float y = 0;
 };
 
+struct ColorStop {
+    float offset;   // 0.0–1.0
+    Color color;
+};
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -64,6 +69,17 @@ public:
 
     virtual void setClip(float x, float y, float w, float h) = 0;
     virtual void resetClip() = 0;
+
+    // Gradient fills (color stops must be sorted by offset 0..1)
+    virtual void fillLinearGradient(float x, float y, float w, float h,
+                                    float startX, float startY, float endX, float endY,
+                                    std::span<const ColorStop> stops) = 0;
+    virtual void fillRadialGradient(float x, float y, float w, float h,
+                                    float cx, float cy, float rx, float ry,
+                                    std::span<const ColorStop> stops) = 0;
+    virtual void fillConicGradient(float x, float y, float w, float h,
+                                   float cx, float cy, float angleDeg,
+                                   std::span<const ColorStop> stops) = 0;
 
     virtual void beginFrame(int width, int height) = 0;
     virtual void endFrame() = 0;

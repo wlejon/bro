@@ -42,6 +42,10 @@ public:
     Element* body() const { return body_; }
     Element* documentElement() const { return documentElement_; }
 
+    // Focus tracking
+    Element* activeElement() const { return focusedElement_ ? focusedElement_ : body_; }
+    void setActiveElement(Element* el) { focusedElement_ = el; }
+
     // Title
     std::string title() const;
     void setTitle(const std::string& title);
@@ -92,6 +96,7 @@ private:
     Node* root_ = nullptr;
     Element* documentElement_ = nullptr;
     Element* body_ = nullptr;
+    Element* focusedElement_ = nullptr;
     bool dirty_ = false;
     bool structureDirty_ = false;
     litehtml::document::ptr litehtml_doc_;
