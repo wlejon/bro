@@ -395,9 +395,10 @@ Headless::~Headless() {
     document_.reset();
     container_.reset();
     timers_.reset();
-    // Note: jsRuntime_ destruction may trigger QuickJS GC assertion if
-    // class prototypes are still alive. This is a known embedding issue.
-    // For headless debugging, a clean exit isn't critical.
+    // Clean up per-runtime DomBindings state before the runtime is freed.
+    if (jsRuntime_) {
+        js::DomBindings::cleanupRuntime(jsRuntime_->getRuntime());
+    }
     jsRuntime_.reset();
     renderer_.reset();
 }
