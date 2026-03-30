@@ -2,6 +2,8 @@
 #include "dom/document.h"
 #include "dom/text_node.h"
 #include <litehtml.h>
+#include <litehtml/el_text.h>
+#include <litehtml/render_item.h>
 #include <algorithm>
 #include <sstream>
 
@@ -159,19 +161,44 @@ void Element::setTextContent(const std::string& text) {
     }
 
     // Sync to litehtml so the rendered output updates.
-    // append_children_from_string destroys the element's render items,
-    // so subsequent calls find get_render_item() == null.  We must
-    // rebuild the render tree after each call to restore them.
+    // Instead of append_children_from_string (which destroys render items
+    // on dynamically-created elements), find the existing el_text child
+    // and replace it, or clear children and add a new text element.
     if (litehtml_element_) {
-        auto doc = litehtml_element_->get_document();
-        if (doc) {
-            // Ensure render items exist (rebuild if a previous call invalidated them)
-            if (!litehtml_element_->get_render_item()) {
-                doc->rebuild_render_tree();
-            }
-            auto renderItem = litehtml_element_->get_render_item();
-            if (renderItem) {
-                doc->append_children_from_string(*litehtml_element_, text.c_str(), true);
+        auto& lhChildren = litehtml_element_->children();
+
+        // Try to find an existing text child and update it in-place
+        bool updated = false;
+        if (lhChildren.size() == 1 && lhChildren.front()->is_text()) {
+            // Single text child — replace the element with a new el_text
+            // that has the updated text.  We can't modify el_text::m_text
+            // directly (it's protected), so we clear + re-add.
+        }
+
+        // Clear existing children and add fresh text via litehtml's own API
+        litehtml_element_->clearRecursive();
+        auto ri = litehtml_element_->get_render_item();
+        if (ri) {
+            ri->children().clear();
+        }
+
+        if (!text.empty()) {
+            auto doc = litehtml_element_->get_document();
+            if (doc) {
+                // Create a new el_text element
+                auto textEl = std::make_shared<litehtml::el_text>(
+                    text.c_str(), doc);
+                litehtml_element_->appendChild(textEl);
+                textEl->compute_styles(false);
+
+                // Create render item for the text and attach to parent
+                if (ri) {
+                    auto textRender = textEl->create_render_item(ri);
+                    if (textRender) {
+                        textRender = textRender->init();
+                        ri->add_child(textRender);
+                    }
+                }
             }
         }
     }
