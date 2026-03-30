@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head><title>Update Test</title>
+<style>
+  body { background: #1a1a2e; color: #eee; font-family: Arial; padding: 20px; }
+  button { padding: 8px 16px; margin: 4px; font-size: 14px; }
+  .box { padding: 10px; margin: 10px 0; border: 1px solid #555; }
+  input { padding: 4px 8px; font-size: 14px; }
+</style>
+</head>
+<body>
+  <h2>Dynamic Update Test</h2>
+
+  <div class="box">
+    <div>Counter: <span id="count">0</span></div>
+    <button id="btn-inc">+1</button>
+    <button id="btn-dec">-1</button>
+  </div>
+
+  <div class="box">
+    <div>Style test: <span id="styled">Hello</span></div>
+    <button id="btn-red">Red</button>
+    <button id="btn-blue">Blue</button>
+  </div>
+
+  <div class="box">
+    <div>Text update: <span id="text-target">original text</span></div>
+    <button id="btn-text">Change Text</button>
+  </div>
+
+  <div class="box">
+    <div>Input: <input id="test-input" value="type here" /></div>
+  </div>
+
+  <script>
+    var count = 0;
+    document.getElementById('btn-inc').addEventListener('click', function() {
+      count++;
+      document.getElementById('count').textContent = count;
+      console.log('count=' + count);
+    });
+    document.getElementById('btn-dec').addEventListener('click', function() {
+      count--;
+      document.getElementById('count').textContent = count;
+    });
+    document.getElementById('btn-red').addEventListener('click', function() {
+      document.getElementById('styled').style.color = 'red';
+      console.log('set red');
+    });
+    document.getElementById('btn-blue').addEventListener('click', function() {
+      document.getElementById('styled').style.color = '#38bdf8';
+      console.log('set blue');
+    });
+    document.getElementById('btn-text').addEventListener('click', function() {
+      var el = document.getElementById('text-target');
+      el.textContent = 'updated at ' + Date.now();
+      console.log('text updated');
+    });
+    console.log('test-update app loaded');
+  </script>
+</body>
+</html>

@@ -816,6 +816,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
             }
 
             document_->setActiveElement(target);
+            jsRuntime_->executePendingJobs();
 
             // Focus new input if clicking on one
             auto* newInput = getElInput(target);
@@ -851,6 +852,9 @@ void Engine::handleMouseUp(float x, float y, int button) {
         dom::Element* target = hitTest(x, y);
         if (target) {
             dispatchEvent(target, clickEvt);
+            // Flush microtasks immediately so Vue/framework reactive updates
+            // (queued via Promise.then) run before the dirty check.
+            jsRuntime_->executePendingJobs();
         }
     }
 }
@@ -875,6 +879,7 @@ void Engine::dispatchInputEvent(dom::Element* el) {
     if (!el) return;
     dom::Event evt("input");
     dispatchEvent(el, evt);
+    jsRuntime_->executePendingJobs();
     uiDirty_ = true;
 }
 

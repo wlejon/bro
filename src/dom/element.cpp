@@ -2,25 +2,12 @@
 #include "dom/document.h"
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
+#include "layout/bro_el_text.h"
 #include <litehtml.h>
 #include <litehtml/el_text.h>
 #include <litehtml/render_item.h>
 
-namespace {
-
-/// el_text subclass with a public text setter.
-/// Allows updating text content without destroying the render item.
-class bro_el_text : public litehtml::el_text {
-public:
-    using el_text::el_text;  // inherit constructor
-
-    void set_text(const char* text) {
-        m_text = text ? text : "";
-        m_use_transformed = false;
-    }
-};
-
-} // anonymous namespace
+using bro_el_text = bro::layout::BroElText;
 #include <algorithm>
 #include <sstream>
 
@@ -494,10 +481,9 @@ void Element::syncStylesToLitehtml(bool displayChanged) {
     } else {
         litehtml_element_->set_attr("style", css.c_str());
     }
-    // Always refresh_styles so litehtml re-evaluates from a clean state.
-    // Without this, repeated compute_styles calls accumulate stale inline
-    // style declarations in m_style (litehtml adds but never clears).
-    litehtml_element_->refresh_styles();
+    if (displayChanged) {
+        litehtml_element_->refresh_styles();
+    }
     // Use recursive=true so child text nodes inherit updated properties
     // (e.g. color changes on a span must propagate to its text children).
     litehtml_element_->compute_styles(true);

@@ -11,6 +11,7 @@
 #include <litehtml/html.h>
 #include <litehtml/el_text.h>
 #include <litehtml/render_item.h>
+#include "layout/bro_el_text.h"
 
 #include <string>
 #include <vector>
@@ -274,25 +275,22 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 
             tn->setData(newText);
 
-            // Propagate to litehtml: replace the text element in the
-            // parent's children list with a new el_text containing the
-            // updated text.  el_text::m_text is protected so we can't
-            // update in-place; instead we swap the element.
+            // Propagate to litehtml: find the matching text element and
+            // update it in-place via BroElText::set_text().  If the text
+            // element is a plain el_text (from initial parse), replace it
+            // with a BroElText so future updates can use the fast path.
             auto* parent = n->parentNode();
             if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                 auto* parentEl = static_cast<bro::dom::Element*>(parent);
                 auto lhParent = parentEl->litehtmlElement();
                 if (lhParent) {
-                    // Find the litehtml text child corresponding to this node.
-                    // Match by position: count text nodes before this one in
-                    // the bro DOM, find the same-indexed text in litehtml.
+                    // Find the litehtml text child by index
                     auto& siblings = parent->childNodes();
                     int textIdx = 0;
                     for (auto* sib : siblings) {
                         if (sib == n) break;
                         if (sib->nodeType() == bro::dom::NodeType::Text) textIdx++;
                     }
-                    // Access mutable children via html_tag cast
                     auto* htParent = dynamic_cast<litehtml::html_tag*>(lhParent.get());
                     if (htParent) {
                         auto& lhChildren = htParent->children();
@@ -300,25 +298,33 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                         for (auto it = lhChildren.begin(); it != lhChildren.end(); ++it) {
                             if ((*it)->is_text()) {
                                 if (lhTextIdx == textIdx) {
-                                    auto doc = lhParent->get_document();
-                                    if (doc) {
-                                        auto oldEl = *it;
-                                        auto newEl = std::make_shared<litehtml::el_text>(
-                                            newText.c_str(), doc);
-                                        newEl->compute_styles(false);
-                                        *it = newEl;  // replace in children list
-                                        // Update render item tree
-                                        auto ri = htParent->get_render_item();
-                                        if (ri) {
-                                            auto& riChildren = ri->children();
-                                            for (auto rit = riChildren.begin(); rit != riChildren.end(); ++rit) {
-                                                if (*rit && (*rit)->src_el() == oldEl) {
-                                                    auto newRI = newEl->create_render_item(ri);
-                                                    if (newRI) {
-                                                        newRI = newRI->init();
-                                                        *rit = newRI;
+                                    // Try fast path: BroElText with set_text
+                                    auto* bt = dynamic_cast<bro::layout::BroElText*>(it->get());
+                                    if (bt) {
+                                        bt->set_text(newText.c_str());
+                                        bt->compute_styles(false);
+                                    } else {
+                                        // Slow path: replace el_text with BroElText
+                                        auto doc = lhParent->get_document();
+                                        if (doc) {
+                                            auto oldEl = *it;
+                                            auto newEl = std::make_shared<bro::layout::BroElText>(
+                                                newText.c_str(), doc);
+                                            *it = newEl;
+                                            newEl->compute_styles(false);
+                                            // Replace render item too
+                                            auto ri = htParent->get_render_item();
+                                            if (ri) {
+                                                for (auto rit = ri->children().begin();
+                                                     rit != ri->children().end(); ++rit) {
+                                                    if (*rit && (*rit)->src_el() == oldEl) {
+                                                        auto newRI = newEl->create_render_item(ri);
+                                                        if (newRI) {
+                                                            newRI = newRI->init();
+                                                            *rit = newRI;
+                                                        }
+                                                        break;
                                                     }
-                                                    break;
                                                 }
                                             }
                                         }
