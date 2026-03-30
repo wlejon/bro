@@ -630,27 +630,9 @@ static JSValue wrapTokenList(JSContext* ctx, bro::dom::Element* elem) {
 
 // Release orphaned elements when the JS wrapper is garbage-collected.
 // Elements that are in the live DOM tree have their lifetime managed by the
-// tree.  But elements removed via .remove() / removeChild() are kept alive
-// in Document::orphans_ so dangling JS references don't crash.  When JS
-// drops the last reference (GC finalizer fires), we release the orphan.
-static void js_element_finalizer(JSRuntime* /*rt*/, JSValue val)
-{
-    auto* elem = static_cast<bro::dom::Element*>(
-        JS_GetOpaque(val, js_element_class_id));
-    if (!elem) return;
-
-    // Only release if the element is orphaned (not in the live tree)
-    if (elem->parentNode()) return;
-
-    auto* doc = elem->document();
-    if (doc) {
-        doc->releaseOrphan(elem);
-    }
-}
-
 static JSClassDef js_element_class = {
     "Element",
-    js_element_finalizer, nullptr, nullptr, nullptr
+    nullptr, nullptr, nullptr, nullptr
 };
 
 static inline bro::dom::Element* getElement(JSValueConst val)
@@ -1047,21 +1029,15 @@ static JSValue js_element_removeAttribute(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static std::shared_ptr<bro::dom::Node> findSharedPtr(JSContext* ctx, bro::dom::Element* child) {
+static std::shared_ptr<bro::dom::Node> findSharedPtr(JSContext* /*ctx*/, bro::dom::Element* child) {
     // If the child has a parent, it's in that parent's children_ vector.
     if (child->parentNode()) {
         for (auto& c : child->parentNode()->childNodes()) {
             if (c.get() == child) return c;
         }
     }
-    // Otherwise check orphans in the document.
-    auto* doc = getDocumentForCtx(ctx);
-    if (doc) {
-        for (auto& orphan : doc->orphans()) {
-            if (orphan.get() == child) return orphan;
-        }
-    }
-    // Fallback: no-op deleter (shouldn't happen if createElement is used properly)
+    // Fallback: no-op deleter (element may be a new createElement result
+    // not yet in any tree — the tree will take shared ownership on appendChild).
     return std::shared_ptr<bro::dom::Node>(child, [](bro::dom::Node*){});
 }
 
@@ -1087,12 +1063,10 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                     el->appendChild(kid);
                 }
             }
-            if (doc) doc->adoptOrphan(child);
         } else {
             auto childPtr = findSharedPtr(ctx, child);
             el->appendChild(childPtr);
             if (doc) {
-                doc->adoptOrphan(child);
                 doc->syncAppendToLitehtml(child, el);
             }
         }
@@ -1112,15 +1086,8 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
         if (doc && !child->id().empty())
             doc->unregisterElementId(child->id());
         if (doc) doc->syncRemoveFromLitehtml(child, el);
-        // Invalidate JS wrappers for the removed subtree so __bro_elem_map
-        // releases them, allowing GC to collect and free the orphan.
         invalidateWrapper(ctx, child);
-        auto saved = findSharedPtr(ctx, child);
         el->removeChild(static_cast<bro::dom::Node*>(child));
-        if (doc && saved) {
-            auto elemSaved = std::static_pointer_cast<bro::dom::Element>(saved);
-            doc->retainOrphan(std::move(elemSaved));
-        }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
@@ -1142,7 +1109,6 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
         el->insertBefore(childPtr, static_cast<bro::dom::Node*>(refChild));
         auto* doc = getDocumentForCtx(ctx);
         if (doc) {
-            doc->adoptOrphan(newChild);
             if (refChild) {
                 doc->syncInsertBeforeLitehtml(newChild, refChild, el);
             } else {
@@ -1176,13 +1142,6 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         if (doc) doc->syncRemoveFromLitehtml(oldChild, el);
         invalidateWrapper(ctx, oldChild);
         el->removeChild(static_cast<bro::dom::Node*>(oldChild));
-        if (doc) {
-            doc->adoptOrphan(newChild);
-            if (oldSaved) {
-                doc->retainOrphan(
-                    std::static_pointer_cast<bro::dom::Element>(oldSaved));
-            }
-        }
     }
     return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
 }
@@ -1227,7 +1186,6 @@ static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
                 if (clonedElem) {
                     auto clonedPtr = findSharedPtr(ctx, clonedElem);
                     clone->appendChild(clonedPtr);
-                    if (doc) doc->adoptOrphan(clonedElem);
                 }
                 JS_FreeValue(ctx, clonedJs);
                 JS_FreeValue(ctx, childJs);
@@ -1257,12 +1215,7 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
                 el, static_cast<bro::dom::Element*>(parent));
         }
         invalidateWrapper(ctx, el);
-        auto saved = findSharedPtr(ctx, el);
         parent->removeChild(static_cast<bro::dom::Node*>(el));
-        if (doc && saved) {
-            auto elemSaved = std::static_pointer_cast<bro::dom::Element>(saved);
-            doc->retainOrphan(std::move(elemSaved));
-        }
     }
     return JS_UNDEFINED;
 }

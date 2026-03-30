@@ -118,7 +118,6 @@ void Document::reparse(litehtml::document_container* container) {
 std::shared_ptr<Element> Document::createElement(const std::string& tag) {
     auto elem = std::make_shared<Element>(tag);
     elem->setDocument(this);
-    orphans_.push_back(elem);
     return elem;
 }
 
@@ -128,25 +127,6 @@ std::shared_ptr<TextNode> Document::createTextNode(const std::string& text) {
 
 std::shared_ptr<DocumentFragment> Document::createDocumentFragment() {
     return std::make_shared<DocumentFragment>();
-}
-
-void Document::retainOrphan(std::shared_ptr<Element> elem) {
-    if (!elem || orphanSet_.count(elem.get())) return;
-    orphanSet_.insert(elem.get());
-    orphans_.push_back(std::move(elem));
-}
-
-void Document::adoptOrphan(Element* elem) {
-    if (!orphanSet_.count(elem)) return;
-    orphanSet_.erase(elem);
-    orphans_.erase(
-        std::remove_if(orphans_.begin(), orphans_.end(),
-            [elem](const std::shared_ptr<Element>& e) { return e.get() == elem; }),
-        orphans_.end());
-}
-
-void Document::releaseOrphan(Element* elem) {
-    adoptOrphan(elem);  // same mechanics: remove from orphans_ and orphanSet_
 }
 
 Element* Document::getElementById(const std::string& id) {
@@ -187,9 +167,9 @@ std::vector<Element*> Document::querySelectorAll(const std::string& selector) {
         }
     }
 
-    // Only search dynamic elements if there are orphans (dynamically created elements).
-    // This avoids an expensive full-tree walk when all elements came from the parser.
-    if (!orphans_.empty() && root_ && root_->nodeType() == NodeType::Element) {
+    // Also search the bro::dom tree for dynamically-created elements
+    // that may not be in litehtml's selector index.
+    if (root_ && root_->nodeType() == NodeType::Element) {
         size_t before = result.size();
         static_cast<Element*>(root_.get())->querySelectorAllSimple(selector, result);
         // Deduplicate only if we added new results
