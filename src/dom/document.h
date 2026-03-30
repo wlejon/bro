@@ -59,6 +59,12 @@ public:
     void unregisterElementId(const std::string& id);
 
 
+    // Keep a newly-created element alive until it's appended to a parent.
+    // Without this, the shared_ptr from createElement goes out of scope
+    // and the element is freed before appendChild can use it.
+    void holdNewElement(std::shared_ptr<Element> elem);
+    void releaseNewElement(Element* elem);
+
     // Find our Element wrapper for a litehtml element pointer
     Element* findElementByLitehtml(const litehtml::element::ptr& lhElem);
 
@@ -94,6 +100,9 @@ private:
     };
     std::unordered_map<litehtml::element::ptr, Element*, LitehtmlPtrHash, LitehtmlPtrEqual> litehtmlMap_;
 
+    // Elements created via createElement that haven't been appended yet.
+    // Prevents the shared_ptr from going out of scope before appendChild.
+    std::unordered_map<Element*, std::shared_ptr<Element>> newElements_;
 };
 
 } // namespace bro::dom

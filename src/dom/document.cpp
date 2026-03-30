@@ -118,7 +118,16 @@ void Document::reparse(litehtml::document_container* container) {
 std::shared_ptr<Element> Document::createElement(const std::string& tag) {
     auto elem = std::make_shared<Element>(tag);
     elem->setDocument(this);
+    holdNewElement(elem);
     return elem;
+}
+
+void Document::holdNewElement(std::shared_ptr<Element> elem) {
+    newElements_[elem.get()] = std::move(elem);
+}
+
+void Document::releaseNewElement(Element* elem) {
+    newElements_.erase(elem);
 }
 
 std::shared_ptr<TextNode> Document::createTextNode(const std::string& text) {

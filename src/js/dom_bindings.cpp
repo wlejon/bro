@@ -708,8 +708,11 @@ static void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem) {
     }
 
     auto* ctxDoc = getDocumentForCtx(ctx);
-    if (ctxDoc && !elem->id().empty())
-        ctxDoc->unregisterElementId(elem->id());
+    if (ctxDoc) {
+        if (!elem->id().empty())
+            ctxDoc->unregisterElementId(elem->id());
+        ctxDoc->releaseNewElement(elem);
+    }
 
     // Find and null-out the JS wrapper
     JSValue global = JS_GetGlobalObject(ctx);
@@ -1036,8 +1039,8 @@ static std::shared_ptr<bro::dom::Node> findSharedPtr(JSContext* /*ctx*/, bro::do
             if (c.get() == child) return c;
         }
     }
-    // Fallback: no-op deleter (element may be a new createElement result
-    // not yet in any tree — the tree will take shared ownership on appendChild).
+    // Fallback: no-op deleter — the element is kept alive by the JS wrapper's
+    // prevent pointer (see js_document_createElement).
     return std::shared_ptr<bro::dom::Node>(child, [](bro::dom::Node*){});
 }
 
@@ -1067,6 +1070,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             auto childPtr = findSharedPtr(ctx, child);
             el->appendChild(childPtr);
             if (doc) {
+                doc->releaseNewElement(child);
                 doc->syncAppendToLitehtml(child, el);
             }
         }
@@ -1109,6 +1113,7 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
         el->insertBefore(childPtr, static_cast<bro::dom::Node*>(refChild));
         auto* doc = getDocumentForCtx(ctx);
         if (doc) {
+            doc->releaseNewElement(newChild);
             if (refChild) {
                 doc->syncInsertBeforeLitehtml(newChild, refChild, el);
             } else {
@@ -1633,8 +1638,6 @@ static JSValue js_document_createElement(JSContext* ctx,
         return ImageBindings::createImage(ctx);
     auto el = doc->createElement(tag);
     if (!el) return JS_NULL;
-    // Document::createElement stores the element in orphans_, keeping it alive
-    // until it is appended to a parent.
     return DomBindings::wrapElement(ctx, el.get());
 }
 
