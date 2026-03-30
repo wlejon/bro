@@ -21,6 +21,7 @@
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "util/log.h"
+#include "util/time.h"
 
 #include <iostream>
 #include <fstream>
@@ -242,6 +243,7 @@ using namespace bro::engine;
 
 Headless::Headless(const std::string& appDir, int width, int height)
     : viewportWidth_(width), viewportHeight_(height)
+    , virtualTime_(bro::util::currentTimeMs())  // start from wall-clock so timers created during init work
 {
     renderer_ = std::make_unique<RasterRenderer>();
 

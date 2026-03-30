@@ -192,7 +192,8 @@ JSValue Timers::js_setTimeout(JSContext* ctx, JSValueConst /*this_val*/,
     Timers* t = getTimers(ctx);
     if (!t) return JS_UNDEFINED;
 
-    double now = bro::util::currentTimeMs();
+    // Use lastTickMs_ so timers work correctly with both real and virtual time.
+    double now = (t->lastTickMs_ > 0.0) ? t->lastTickMs_ : bro::util::currentTimeMs();
     int32_t id = t->addTimer(ctx, argv[0], delay, false, now);
     return JS_NewInt32(ctx, id);
 }
@@ -211,7 +212,7 @@ JSValue Timers::js_setInterval(JSContext* ctx, JSValueConst /*this_val*/,
     Timers* t = getTimers(ctx);
     if (!t) return JS_UNDEFINED;
 
-    double now = bro::util::currentTimeMs();
+    double now = (t->lastTickMs_ > 0.0) ? t->lastTickMs_ : bro::util::currentTimeMs();
     int32_t id = t->addTimer(ctx, argv[0], delay, true, now);
     return JS_NewInt32(ctx, id);
 }
