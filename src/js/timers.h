@@ -48,6 +48,8 @@ private:
         JSContext* ctx;
     };
 
+    double lastTickMs_ = 0.0;  // last time passed to tick() — used by performance.now()
+
     int32_t nextId_ = 1;
     std::map<int32_t, TimerEntry> timers_;
 

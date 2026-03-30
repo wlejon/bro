@@ -109,10 +109,12 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
     if (litehtml_element_) {
         litehtml_element_->set_attr(name.c_str(), val.c_str());
         // Class/id changes require CSS re-evaluation so selectors like
-        // .active { ... } take effect immediately.
+        // .active { ... } take effect immediately.  Use recursive
+        // compute_styles so inherited properties (color, font, etc.)
+        // propagate to child text nodes.
         if (name == "class" || name == "id") {
             litehtml_element_->refresh_styles();
-            litehtml_element_->compute_styles(false);
+            litehtml_element_->compute_styles(true);
         }
     }
     markDirty();

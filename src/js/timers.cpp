@@ -91,6 +91,7 @@ void Timers::removeTimer(int32_t id)
 
 void Timers::tick(double currentTimeMs)
 {
+    lastTickMs_ = currentTimeMs;
     std::vector<int32_t> expired;
     for (auto& [id, entry] : timers_) {
         if (currentTimeMs >= entry.nextFireTime) {
@@ -264,6 +265,12 @@ JSValue Timers::js_cancelAnimationFrame(JSContext* ctx, JSValueConst /*this_val*
 JSValue Timers::js_performanceNow(JSContext* ctx, JSValueConst /*this_val*/,
                                   int /*argc*/, JSValueConst* /*argv*/)
 {
+    // Return the last tick time so headless virtual time works correctly.
+    // In windowed mode, tick() is called with currentTimeMs() so this
+    // returns real wall-clock time. In headless, it returns virtual time.
+    Timers* t = getTimers(ctx);
+    if (t && t->lastTickMs_ > 0.0)
+        return JS_NewFloat64(ctx, t->lastTickMs_);
     return JS_NewFloat64(ctx, bro::util::currentTimeMs());
 }
 

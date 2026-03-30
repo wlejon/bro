@@ -474,6 +474,7 @@ std::string Headless::eval(const std::string& code) {
 void Headless::advanceTime(double ms) {
     virtualTime_ += ms;
     timers_->tick(virtualTime_);
+    timers_->fireAnimationFrames(virtualTime_);
     flush();
 }
 
