@@ -79,6 +79,10 @@ private:
     static constexpr double kUIFrameIntervalMs = 8.0;
     double lastUIRenderMs_ = 0.0;
 
+    // QuickJS cycle-collector GC — run periodically to free cyclic garbage
+    static constexpr double kGCIntervalMs = 1000.0;
+    double lastGCMs_ = 0.0;
+
     // Per-phase timing (smoothed over stats window)
     double phaseJsMs_ = 0.0;       // JS execution (rAF + pending jobs)
     double phaseLayoutMs_ = 0.0;   // litehtml layout

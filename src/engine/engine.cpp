@@ -39,6 +39,30 @@
 #include <string>
 #include <unordered_map>
 
+namespace {
+
+// Access litehtml::element::m_renders (protected) via pointer-to-member.
+// This is needed to purge expired weak_ptr<render_item> entries that
+// otherwise retain deallocated render-item memory (make_shared + weak_ptr
+// prevents the combined allocation from being freed).
+struct LitehtmlElementAccess : litehtml::element {
+    static auto rendersPtr() { return &LitehtmlElementAccess::m_renders; }
+};
+static const auto kRendersPtr = LitehtmlElementAccess::rendersPtr();
+
+void purgeExpiredRenders(const litehtml::element::ptr& el) {
+    if (!el) return;
+    auto& renders = el.get()->*kRendersPtr;
+    renders.remove_if([](const std::weak_ptr<litehtml::render_item>& w) {
+        return w.expired();
+    });
+    for (auto& child : el->children()) {
+        purgeExpiredRenders(child);
+    }
+}
+
+} // anonymous namespace
+
 namespace bro::engine {
 
 // ---------------------------------------------------------------------------
@@ -457,6 +481,12 @@ void Engine::run() {
         accumJsMs_ += tJs - t0;
         accumGlStateMs_ += tJs - tGlSave;  // GL save is inside JS phase
 
+        // 3d. Periodic QuickJS cycle-collector GC
+        if (now - lastGCMs_ >= kGCIntervalMs) {
+            JS_RunGC(jsRuntime_->getRuntime());
+            lastGCMs_ = now;
+        }
+
         // 4. Re-layout + rasterize UI at most ~60fps.
         //    DOM mutations accumulate between UI frames; the cached Skia
         //    texture is composited every frame regardless (cheap).
@@ -469,6 +499,7 @@ void Engine::run() {
         double tLayout = tJs;
         if (document_ && document_->isDirty() && litehtmlDoc_ && uiFrameDue) {
             if (document_->isStructureDirty()) {
+                purgeExpiredRenders(litehtmlDoc_->root());
                 litehtmlDoc_->rebuild_render_tree();
                 document_->clearStructureDirty();
             }
