@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Form Controls Test</title>
+    <style>
+        body { padding: 20px; font-family: Arial, sans-serif; }
+        h2 { margin-top: 20px; }
+        label { display: block; margin-top: 10px; margin-bottom: 4px; }
+        textarea { width: 300px; }
+        select { width: 200px; }
+        #output { margin-top: 20px; padding: 10px; background-color: #f0f0f0; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>Form Controls Test</h1>
+
+    <h2>Input</h2>
+    <label>Name:</label>
+    <input id="name" type="text" placeholder="Enter your name">
+
+    <h2>Textarea</h2>
+    <label>Bio:</label>
+    <textarea id="bio" rows="4" cols="40" placeholder="Tell us about yourself"></textarea>
+
+    <h2>Select</h2>
+    <label>Favorite color:</label>
+    <select id="color">
+        <option value="red">Red</option>
+        <option value="green">Green</option>
+        <option value="blue">Blue</option>
+        <option value="yellow">Yellow</option>
+    </select>
+
+    <div id="output">Fill out the form above...</div>
+
+    <script src="app.js"></script>
+</body>
+</html>

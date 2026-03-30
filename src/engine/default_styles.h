@@ -38,6 +38,10 @@ input, textarea, select {
     font-size: 14px;
 }
 
+option {
+    display: none;
+}
+
 /* ---------- Links ---------- */
 
 a {

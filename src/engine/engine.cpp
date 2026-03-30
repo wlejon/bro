@@ -29,6 +29,8 @@
 #include <litehtml/render_item.h>
 #include "layout/container.h"
 #include "layout/el_input.h"
+#include "layout/el_textarea.h"
+#include "layout/el_select.h"
 #include "engine/default_styles.h"
 #include "util/log.h"
 #include "util/time.h"
@@ -790,6 +792,25 @@ static layout::ElInput* getElInput(dom::Element* el) {
     return dynamic_cast<layout::ElInput*>(lh.get());
 }
 
+static layout::ElTextarea* getElTextarea(dom::Element* el) {
+    if (!el) return nullptr;
+    auto lh = el->litehtmlElement();
+    if (!lh) return nullptr;
+    return dynamic_cast<layout::ElTextarea*>(lh.get());
+}
+
+static layout::ElSelect* getElSelect(dom::Element* el) {
+    if (!el) return nullptr;
+    auto lh = el->litehtmlElement();
+    if (!lh) return nullptr;
+    return dynamic_cast<layout::ElSelect*>(lh.get());
+}
+
+// Returns true if the element is a focusable text-editing control (input or textarea)
+static bool isTextEditable(dom::Element* el) {
+    return getElInput(el) || getElTextarea(el);
+}
+
 // ---------------------------------------------------------------------------
 // Mouse events
 // ---------------------------------------------------------------------------
@@ -809,11 +830,48 @@ void Engine::handleMouseDown(float x, float y, int button) {
         evt.setButton(button);
         dom::Element* target = hitTest(x, y);
         if (target) {
-            // Unfocus previous input
+            // Unfocus previous controls
             auto* prevActive = document_->activeElement();
             auto* prevInput = getElInput(prevActive);
             if (prevInput) {
                 prevInput->setFocused(false);
+                uiDirty_ = true;
+            }
+            auto* prevTextarea = getElTextarea(prevActive);
+            if (prevTextarea) {
+                prevTextarea->setFocused(false);
+                uiDirty_ = true;
+            }
+            auto* prevSelect = getElSelect(prevActive);
+            if (prevSelect && prevSelect->isOpen()) {
+                // Check if click is inside the dropdown
+                auto dp = prevSelect->lastDrawPos();
+                auto opts = prevSelect->getOptions();
+                auto font = prevSelect->css().get_font();
+                float lineH = font ? static_cast<float>(prevSelect->css().get_font_metrics().height) : 20.0f;
+                float dropY = dp.y + dp.h;
+                float dropH = lineH * static_cast<float>(opts.size()) + 4.0f;
+                bool inDropdown = (x >= dp.x && x < dp.x + dp.w &&
+                                   y >= dropY && y < dropY + dropH);
+                if (inDropdown) {
+                    // Select the clicked option
+                    int idx = static_cast<int>((y - dropY - 2.0f) / lineH);
+                    idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
+                    prevSelect->setSelectedIndex(idx);
+                    prevSelect->setOpen(false);
+                    // Update value attribute
+                    if (prevActive) {
+                        prevActive->setAttribute("value", opts[idx].value);
+                        dom::Event changeEvt("change");
+                        dispatchEvent(prevActive, changeEvt);
+                        dispatchInputEvent(prevActive);
+                    }
+                    uiDirty_ = true;
+                    // Don't process further — we handled the dropdown click
+                    dispatchEvent(target, evt);
+                    return;
+                }
+                prevSelect->setOpen(false);
                 uiDirty_ = true;
             }
 
@@ -822,12 +880,28 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
             // Focus new input if clicking on one
             auto* newInput = getElInput(target);
+            auto* newTextarea = getElTextarea(target);
+            auto* newSelect = getElSelect(target);
+
             if (newInput) {
                 newInput->setFocused(true);
-                // Place cursor at end of value
                 const char* val = newInput->get_attr("value");
                 newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
                 SDL_StartTextInput(window_->getSDLWindow());
+                uiDirty_ = true;
+            } else if (newTextarea) {
+                newTextarea->setFocused(true);
+                const char* val = newTextarea->get_attr("value");
+                newTextarea->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+                SDL_StartTextInput(window_->getSDLWindow());
+                uiDirty_ = true;
+            } else if (newSelect) {
+                // Toggle dropdown open/close
+                newSelect->setOpen(!newSelect->isOpen());
+                if (newSelect->isOpen()) {
+                    newSelect->setHighlightedIndex(newSelect->selectedIndex());
+                }
+                SDL_StopTextInput(window_->getSDLWindow());
                 uiDirty_ = true;
             } else {
                 SDL_StopTextInput(window_->getSDLWindow());
@@ -975,6 +1049,181 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         }
     }
 
+    // Check if a textarea is focused — handle multi-line editing keys
+    auto* textarea = getElTextarea(activeEl);
+    if (textarea && textarea->isFocused()) {
+        std::string val = activeEl->getAttribute("value");
+        int pos = textarea->cursorPos();
+        pos = std::clamp(pos, 0, static_cast<int>(val.size()));
+        bool handled = false;
+
+        if (keycode == SDLK_BACKSPACE) {
+            if (pos > 0) {
+                val.erase(pos - 1, 1);
+                textarea->setCursorPos(pos - 1);
+                activeEl->setAttribute("value", val);
+                dispatchInputEvent(activeEl);
+            }
+            handled = true;
+        } else if (keycode == SDLK_DELETE) {
+            if (pos < static_cast<int>(val.size())) {
+                val.erase(pos, 1);
+                activeEl->setAttribute("value", val);
+                dispatchInputEvent(activeEl);
+            }
+            handled = true;
+        } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+            // Insert newline in textarea
+            val.insert(pos, 1, '\n');
+            textarea->setCursorPos(pos + 1);
+            activeEl->setAttribute("value", val);
+            dispatchInputEvent(activeEl);
+            handled = true;
+        } else if (keycode == SDLK_LEFT) {
+            if (pos > 0) {
+                textarea->setCursorPos(pos - 1);
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_RIGHT) {
+            if (pos < static_cast<int>(val.size())) {
+                textarea->setCursorPos(pos + 1);
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_UP) {
+            // Move cursor up one line
+            int line = 0, col = 0;
+            for (int i = 0; i < pos; ++i) {
+                if (val[i] == '\n') { ++line; col = 0; } else { ++col; }
+            }
+            if (line > 0) {
+                // Find start of previous line
+                int prevLineStart = 0, prevLineLen = 0;
+                int curLine = 0;
+                for (int i = 0; i <= static_cast<int>(val.size()); ++i) {
+                    if (curLine == line - 1) { prevLineStart = i; break; }
+                    if (i < static_cast<int>(val.size()) && val[i] == '\n') ++curLine;
+                }
+                // Find length of previous line
+                for (int i = prevLineStart; i < static_cast<int>(val.size()) && val[i] != '\n'; ++i)
+                    ++prevLineLen;
+                textarea->setCursorPos(prevLineStart + std::min(col, prevLineLen));
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_DOWN) {
+            // Move cursor down one line
+            int line = 0, col = 0;
+            for (int i = 0; i < pos; ++i) {
+                if (val[i] == '\n') { ++line; col = 0; } else { ++col; }
+            }
+            // Find start of next line
+            int nextLineStart = -1;
+            int curLine = 0;
+            for (int i = 0; i < static_cast<int>(val.size()); ++i) {
+                if (val[i] == '\n') {
+                    if (curLine == line) { nextLineStart = i + 1; break; }
+                    ++curLine;
+                }
+            }
+            if (nextLineStart >= 0) {
+                int nextLineLen = 0;
+                for (int i = nextLineStart; i < static_cast<int>(val.size()) && val[i] != '\n'; ++i)
+                    ++nextLineLen;
+                textarea->setCursorPos(nextLineStart + std::min(col, nextLineLen));
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_HOME) {
+            // Move to start of current line
+            int lineStart = pos;
+            while (lineStart > 0 && val[lineStart - 1] != '\n') --lineStart;
+            textarea->setCursorPos(lineStart);
+            uiDirty_ = true;
+            handled = true;
+        } else if (keycode == SDLK_END) {
+            // Move to end of current line
+            int lineEnd = pos;
+            while (lineEnd < static_cast<int>(val.size()) && val[lineEnd] != '\n') ++lineEnd;
+            textarea->setCursorPos(lineEnd);
+            uiDirty_ = true;
+            handled = true;
+        } else if (keycode == SDLK_ESCAPE) {
+            textarea->setFocused(false);
+            SDL_StopTextInput(window_->getSDLWindow());
+            uiDirty_ = true;
+            handled = true;
+        } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
+            textarea->setCursorPos(static_cast<int>(val.size()));
+            uiDirty_ = true;
+            handled = true;
+        }
+
+        if (handled) {
+            dom::KeyboardEvent evt("keydown");
+            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+            evt.setCode(sdlScancodeToWebCode(scancode));
+            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+            evt.setRepeat(repeat);
+            dispatchEvent(activeEl, evt);
+            return;
+        }
+    }
+
+    // Check if a select is open — handle arrow keys and enter
+    auto* select = getElSelect(activeEl);
+    if (select && select->isOpen()) {
+        auto opts = select->getOptions();
+        int hi = select->highlightedIndex();
+        bool handled = false;
+
+        if (keycode == SDLK_DOWN) {
+            if (hi < static_cast<int>(opts.size()) - 1) {
+                select->setHighlightedIndex(hi + 1);
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_UP) {
+            if (hi > 0) {
+                select->setHighlightedIndex(hi - 1);
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+            if (hi >= 0 && hi < static_cast<int>(opts.size())) {
+                select->setSelectedIndex(hi);
+                activeEl->setAttribute("value", opts[hi].value);
+                dom::Event changeEvt("change");
+                dispatchEvent(activeEl, changeEvt);
+                dispatchInputEvent(activeEl);
+            }
+            select->setOpen(false);
+            uiDirty_ = true;
+            handled = true;
+        } else if (keycode == SDLK_ESCAPE) {
+            select->setOpen(false);
+            uiDirty_ = true;
+            handled = true;
+        }
+
+        if (handled) {
+            dom::KeyboardEvent evt("keydown");
+            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+            evt.setCode(sdlScancodeToWebCode(scancode));
+            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+            evt.setRepeat(repeat);
+            dispatchEvent(activeEl, evt);
+            return;
+        }
+    }
+
     // Default: dispatch keydown to body
     dom::KeyboardEvent evt("keydown");
     evt.setKey(sdlKeycodeToWebKey(keycode, mod));
@@ -1004,8 +1253,11 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     evt.setRepeat(repeat);
 
     auto* activeEl = document_->activeElement();
-    auto* input = getElInput(activeEl);
-    dom::Element* target = (input && input->isFocused()) ? activeEl : document_->body();
+    bool focusedControl = false;
+    if (auto* input = getElInput(activeEl)) focusedControl = input->isFocused();
+    if (auto* ta = getElTextarea(activeEl)) focusedControl = focusedControl || ta->isFocused();
+    if (auto* sel = getElSelect(activeEl)) focusedControl = focusedControl || sel->isOpen();
+    dom::Element* target = focusedControl ? activeEl : document_->body();
     if (target) {
         dispatchEvent(target, evt);
     }
@@ -1015,6 +1267,19 @@ void Engine::handleTextInput(const std::string& text) {
     if (!document_) return;
 
     auto* activeEl = document_->activeElement();
+
+    // Try textarea first (also text-editable)
+    auto* textarea = getElTextarea(activeEl);
+    if (textarea && textarea->isFocused()) {
+        std::string val = activeEl->getAttribute("value");
+        int pos = std::clamp(textarea->cursorPos(), 0, static_cast<int>(val.size()));
+        val.insert(pos, text);
+        textarea->setCursorPos(pos + static_cast<int>(text.size()));
+        activeEl->setAttribute("value", val);
+        dispatchInputEvent(activeEl);
+        return;
+    }
+
     auto* input = getElInput(activeEl);
     if (!input || !input->isFocused()) return;
 

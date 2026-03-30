@@ -1,6 +1,8 @@
 #include "layout/container.h"
 #include "layout/bro_element.h"
 #include "layout/el_input.h"
+#include "layout/el_textarea.h"
+#include "layout/el_select.h"
 #include "layout/el_svg.h"
 #include "render/renderer.h"
 #include "util/log.h"
@@ -442,6 +444,12 @@ litehtml::element::ptr BroContainer::create_element(
     }
     if (strcmp(tag_name, "input") == 0) {
         return std::make_shared<ElInput>(doc, renderer_);
+    }
+    if (strcmp(tag_name, "textarea") == 0) {
+        return std::make_shared<ElTextarea>(doc, renderer_);
+    }
+    if (strcmp(tag_name, "select") == 0) {
+        return std::make_shared<ElSelect>(doc, renderer_);
     }
 
     static const char* specialized_tags[] = {
