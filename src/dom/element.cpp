@@ -158,14 +158,19 @@ void Element::setTextContent(const std::string& text) {
         appendChild(std::move(textNode));
     }
 
-    // Sync to litehtml so the rendered output updates
+    // Sync to litehtml so the rendered output updates.
+    // append_children_from_string destroys the element's render items,
+    // so subsequent calls find get_render_item() == null.  We must
+    // rebuild the render tree after each call to restore them.
     if (litehtml_element_) {
-        // Only call append_children_from_string if the element has a render item,
-        // otherwise litehtml will crash dereferencing a null render_item pointer.
-        auto renderItem = litehtml_element_->get_render_item();
-        if (renderItem) {
-            auto doc = litehtml_element_->get_document();
-            if (doc) {
+        auto doc = litehtml_element_->get_document();
+        if (doc) {
+            // Ensure render items exist (rebuild if a previous call invalidated them)
+            if (!litehtml_element_->get_render_item()) {
+                doc->rebuild_render_tree();
+            }
+            auto renderItem = litehtml_element_->get_render_item();
+            if (renderItem) {
                 doc->append_children_from_string(*litehtml_element_, text.c_str(), true);
             }
         }
