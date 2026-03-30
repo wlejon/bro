@@ -40,10 +40,12 @@ public:
     void handleMouseMove(float x, float y);
     void handleKeyDown(int keycode, int scancode, int mod, bool repeat);
     void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
+    void handleTextInput(const std::string& text);
 
 private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
+    void dispatchInputEvent(dom::Element* el);
     void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
 
     std::unique_ptr<platform::Window> window_;

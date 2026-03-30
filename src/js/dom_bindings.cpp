@@ -9,6 +9,8 @@
 
 #include <litehtml.h>
 #include <litehtml/html.h>
+#include <litehtml/el_text.h>
+#include <litehtml/render_item.h>
 
 #include <string>
 #include <vector>
@@ -246,11 +248,119 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_SetPropertyStr(ctx, obj, "textContent",
             JS_NewString(ctx, comment->data().c_str()));
     } else if (node->nodeType() == bro::dom::NodeType::Text) {
-        auto* text = static_cast<bro::dom::TextNode*>(node);
-        JS_SetPropertyStr(ctx, obj, "nodeValue",
-            JS_NewString(ctx, text->data().c_str()));
-        JS_SetPropertyStr(ctx, obj, "textContent",
-            JS_NewString(ctx, text->data().c_str()));
+        // Define nodeValue and textContent as live getter/setter pairs
+        // so that Vue's `textNode.nodeValue = "..."` actually updates
+        // the C++ TextNode and litehtml rendering.
+        JSValue getNodeValue = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!n || n->nodeType() != bro::dom::NodeType::Text) return JS_NULL;
+            auto* tn = static_cast<bro::dom::TextNode*>(n);
+            return JS_NewString(cx, tn->data().c_str());
+        }, "get nodeValue", 0, JS_CFUNC_generic, 0);
+
+        JSValue setNodeValue = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+            if (argc < 1) return JS_UNDEFINED;
+            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!n || n->nodeType() != bro::dom::NodeType::Text) return JS_UNDEFINED;
+            auto* tn = static_cast<bro::dom::TextNode*>(n);
+            const char* str = JS_ToCString(cx, argv[0]);
+            if (!str) return JS_UNDEFINED;
+            std::string newText(str);
+            JS_FreeCString(cx, str);
+
+            if (tn->data() == newText) return JS_UNDEFINED; // no change
+
+            tn->setData(newText);
+
+            // Propagate to litehtml: replace the text element in the
+            // parent's children list with a new el_text containing the
+            // updated text.  el_text::m_text is protected so we can't
+            // update in-place; instead we swap the element.
+            auto* parent = n->parentNode();
+            if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
+                auto* parentEl = static_cast<bro::dom::Element*>(parent);
+                auto lhParent = parentEl->litehtmlElement();
+                if (lhParent) {
+                    // Find the litehtml text child corresponding to this node.
+                    // Match by position: count text nodes before this one in
+                    // the bro DOM, find the same-indexed text in litehtml.
+                    auto& siblings = parent->childNodes();
+                    int textIdx = 0;
+                    for (auto* sib : siblings) {
+                        if (sib == n) break;
+                        if (sib->nodeType() == bro::dom::NodeType::Text) textIdx++;
+                    }
+                    // Access mutable children via html_tag cast
+                    auto* htParent = dynamic_cast<litehtml::html_tag*>(lhParent.get());
+                    if (htParent) {
+                        auto& lhChildren = htParent->children();
+                        int lhTextIdx = 0;
+                        for (auto it = lhChildren.begin(); it != lhChildren.end(); ++it) {
+                            if ((*it)->is_text()) {
+                                if (lhTextIdx == textIdx) {
+                                    auto doc = lhParent->get_document();
+                                    if (doc) {
+                                        auto oldEl = *it;
+                                        auto newEl = std::make_shared<litehtml::el_text>(
+                                            newText.c_str(), doc);
+                                        newEl->compute_styles(false);
+                                        *it = newEl;  // replace in children list
+                                        // Update render item tree
+                                        auto ri = htParent->get_render_item();
+                                        if (ri) {
+                                            auto& riChildren = ri->children();
+                                            for (auto rit = riChildren.begin(); rit != riChildren.end(); ++rit) {
+                                                if (*rit && (*rit)->src_el() == oldEl) {
+                                                    auto newRI = newEl->create_render_item(ri);
+                                                    if (newRI) {
+                                                        newRI = newRI->init();
+                                                        *rit = newRI;
+                                                    }
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                                lhTextIdx++;
+                            }
+                        }
+                    }
+                }
+                parentEl->markDirty();
+            }
+            return JS_UNDEFINED;
+        }, "set nodeValue", 1, JS_CFUNC_generic, 0);
+
+        JSAtom nvAtom = JS_NewAtom(ctx, "nodeValue");
+        JS_DefinePropertyGetSet(ctx, obj, nvAtom, getNodeValue, setNodeValue, 0);
+        JS_FreeAtom(ctx, nvAtom);
+
+        // textContent aliases nodeValue for text nodes — needs its own
+        // getter/setter functions (DefinePropertyGetSet takes ownership)
+        JSValue getTC = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!n || n->nodeType() != bro::dom::NodeType::Text) return JS_NULL;
+            auto* tn = static_cast<bro::dom::TextNode*>(n);
+            return JS_NewString(cx, tn->data().c_str());
+        }, "get textContent", 0, JS_CFUNC_generic, 0);
+        // textContent setter — delegate to nodeValue setter logic
+        // by looking up nodeValue descriptor and calling its setter
+        JSValue setTC = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+            // Get the nodeValue setter and call it (same logic)
+            JSAtom nvAtom2 = JS_NewAtom(cx, "nodeValue");
+            JS_SetProperty(cx, this_val, nvAtom2, JS_DupValue(cx, argv[0]));
+            JS_FreeAtom(cx, nvAtom2);
+            return JS_UNDEFINED;
+        }, "set textContent", 1, JS_CFUNC_generic, 0);
+        JSAtom tcAtom = JS_NewAtom(ctx, "textContent");
+        JS_DefinePropertyGetSet(ctx, obj, tcAtom, getTC, setTC, 0);
+        JS_FreeAtom(ctx, tcAtom);
     }
 
     // Define parentNode/nextSibling/previousSibling as live getters

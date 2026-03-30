@@ -28,6 +28,7 @@
 #include "dom/event.h"
 #include <litehtml/render_item.h>
 #include "layout/container.h"
+#include "layout/el_input.h"
 #include "engine/default_styles.h"
 #include "util/log.h"
 #include "util/time.h"
@@ -434,6 +435,9 @@ void Engine::run() {
     eventLoop_->onKeyUp = [this](int32_t keycode, int32_t scancode, uint16_t mod, bool repeat) {
         handleKeyUp(keycode, scancode, static_cast<int>(mod), repeat);
     };
+    eventLoop_->onTextInput = [this](const std::string& text) {
+        handleTextInput(text);
+    };
 
     // Tell the layout container to skip full-viewport backgrounds when a scene
     // layer is active, so the scene shows through behind the HTML UI.
@@ -774,6 +778,17 @@ void Engine::handleResize(int w, int h) {
 }
 
 // ---------------------------------------------------------------------------
+// Input focus helpers
+// ---------------------------------------------------------------------------
+
+static layout::ElInput* getElInput(dom::Element* el) {
+    if (!el) return nullptr;
+    auto lh = el->litehtmlElement();
+    if (!lh) return nullptr;
+    return dynamic_cast<layout::ElInput*>(lh.get());
+}
+
+// ---------------------------------------------------------------------------
 // Mouse events
 // ---------------------------------------------------------------------------
 
@@ -792,7 +807,29 @@ void Engine::handleMouseDown(float x, float y, int button) {
         evt.setButton(button);
         dom::Element* target = hitTest(x, y);
         if (target) {
+            // Unfocus previous input
+            auto* prevActive = document_->activeElement();
+            auto* prevInput = getElInput(prevActive);
+            if (prevInput) {
+                prevInput->setFocused(false);
+                uiDirty_ = true;
+            }
+
             document_->setActiveElement(target);
+
+            // Focus new input if clicking on one
+            auto* newInput = getElInput(target);
+            if (newInput) {
+                newInput->setFocused(true);
+                // Place cursor at end of value
+                const char* val = newInput->get_attr("value");
+                newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+                SDL_StartTextInput(window_->getSDLWindow());
+                uiDirty_ = true;
+            } else {
+                SDL_StopTextInput(window_->getSDLWindow());
+            }
+
             dispatchEvent(target, evt);
         }
     }
@@ -833,6 +870,14 @@ void Engine::handleMouseMove(float x, float y) {
 // Keyboard events
 // ---------------------------------------------------------------------------
 
+// Helper: update input value and dispatch "input" event for v-model
+void Engine::dispatchInputEvent(dom::Element* el) {
+    if (!el) return;
+    dom::Event evt("input");
+    dispatchEvent(el, evt);
+    uiDirty_ = true;
+}
+
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // F8 toggles system overlay
     if (keycode == SDLK_F8 && !repeat) {
@@ -843,37 +888,136 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
-    if (document_) {
-        dom::KeyboardEvent evt("keydown");
-        evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-        evt.setCode(sdlScancodeToWebCode(scancode));
-        evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-        evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-        evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-        evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-        evt.setRepeat(repeat);
-        dom::Element* target = document_->body();
-        if (target) {
-            dispatchEvent(target, evt);
+    if (!document_) return;
+
+    // Check if a text input is focused — handle editing keys
+    auto* activeEl = document_->activeElement();
+    auto* input = getElInput(activeEl);
+    if (input && input->isFocused()) {
+        std::string val = activeEl->getAttribute("value");
+        int pos = input->cursorPos();
+        pos = std::clamp(pos, 0, static_cast<int>(val.size()));
+        bool handled = false;
+
+        if (keycode == SDLK_BACKSPACE) {
+            if (pos > 0) {
+                val.erase(pos - 1, 1);
+                input->setCursorPos(pos - 1);
+                activeEl->setAttribute("value", val);
+                dispatchInputEvent(activeEl);
+            }
+            handled = true;
+        } else if (keycode == SDLK_DELETE) {
+            if (pos < static_cast<int>(val.size())) {
+                val.erase(pos, 1);
+                activeEl->setAttribute("value", val);
+                dispatchInputEvent(activeEl);
+            }
+            handled = true;
+        } else if (keycode == SDLK_LEFT) {
+            if (pos > 0) {
+                input->setCursorPos(pos - 1);
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_RIGHT) {
+            if (pos < static_cast<int>(val.size())) {
+                input->setCursorPos(pos + 1);
+                uiDirty_ = true;
+            }
+            handled = true;
+        } else if (keycode == SDLK_HOME) {
+            input->setCursorPos(0);
+            uiDirty_ = true;
+            handled = true;
+        } else if (keycode == SDLK_END) {
+            input->setCursorPos(static_cast<int>(val.size()));
+            uiDirty_ = true;
+            handled = true;
+        } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+            // Unfocus the input on Enter
+            input->setFocused(false);
+            SDL_StopTextInput(window_->getSDLWindow());
+            uiDirty_ = true;
+            handled = true;
+        } else if (keycode == SDLK_ESCAPE) {
+            // Unfocus on Escape
+            input->setFocused(false);
+            SDL_StopTextInput(window_->getSDLWindow());
+            uiDirty_ = true;
+            handled = true;
+        } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
+            // Ctrl+A: select all (move cursor to end for now)
+            input->setCursorPos(static_cast<int>(val.size()));
+            uiDirty_ = true;
+            handled = true;
         }
+
+        if (handled) {
+            // Still dispatch keydown event for JS listeners
+            dom::KeyboardEvent evt("keydown");
+            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+            evt.setCode(sdlScancodeToWebCode(scancode));
+            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+            evt.setRepeat(repeat);
+            dispatchEvent(activeEl, evt);
+            return;
+        }
+    }
+
+    // Default: dispatch keydown to body
+    dom::KeyboardEvent evt("keydown");
+    evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+    evt.setCode(sdlScancodeToWebCode(scancode));
+    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+    evt.setRepeat(repeat);
+    dom::Element* target = document_->body();
+    if (target) {
+        dispatchEvent(target, evt);
     }
 }
 
 void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
-    if (document_) {
-        dom::KeyboardEvent evt("keyup");
-        evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-        evt.setCode(sdlScancodeToWebCode(scancode));
-        evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-        evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-        evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-        evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-        evt.setRepeat(repeat);
-        dom::Element* target = document_->body();
-        if (target) {
-            dispatchEvent(target, evt);
-        }
+    if (!document_) return;
+
+    // Dispatch keyup to the focused input if any, otherwise body
+    dom::KeyboardEvent evt("keyup");
+    evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+    evt.setCode(sdlScancodeToWebCode(scancode));
+    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+    evt.setRepeat(repeat);
+
+    auto* activeEl = document_->activeElement();
+    auto* input = getElInput(activeEl);
+    dom::Element* target = (input && input->isFocused()) ? activeEl : document_->body();
+    if (target) {
+        dispatchEvent(target, evt);
     }
+}
+
+void Engine::handleTextInput(const std::string& text) {
+    if (!document_) return;
+
+    auto* activeEl = document_->activeElement();
+    auto* input = getElInput(activeEl);
+    if (!input || !input->isFocused()) return;
+
+    // Insert text at cursor position
+    std::string val = activeEl->getAttribute("value");
+    int pos = std::clamp(input->cursorPos(), 0, static_cast<int>(val.size()));
+    val.insert(pos, text);
+    input->setCursorPos(pos + static_cast<int>(text.size()));
+    activeEl->setAttribute("value", val);
+    dispatchInputEvent(activeEl);
 }
 
 // ---------------------------------------------------------------------------

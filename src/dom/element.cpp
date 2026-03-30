@@ -494,13 +494,13 @@ void Element::syncStylesToLitehtml(bool displayChanged) {
     } else {
         litehtml_element_->set_attr("style", css.c_str());
     }
-    if (displayChanged) {
-        // display changes need refresh_styles() to re-evaluate stylesheet
-        // rules (e.g. removing inline display:none must restore the
-        // stylesheet display value).  This also triggers render tree rebuild.
-        litehtml_element_->refresh_styles();
-    }
-    litehtml_element_->compute_styles(false);
+    // Always refresh_styles so litehtml re-evaluates from a clean state.
+    // Without this, repeated compute_styles calls accumulate stale inline
+    // style declarations in m_style (litehtml adds but never clears).
+    litehtml_element_->refresh_styles();
+    // Use recursive=true so child text nodes inherit updated properties
+    // (e.g. color changes on a span must propagate to its text children).
+    litehtml_element_->compute_styles(true);
 }
 
 void Element::markDirty() {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <litehtml.h>
+#include <string>
 
 namespace bro::render { class Renderer; }
 
@@ -23,8 +24,16 @@ public:
     std::shared_ptr<litehtml::render_item> create_render_item(
         const std::shared_ptr<litehtml::render_item>& parent_ri) override;
 
+    // Focus/cursor state (managed by engine)
+    int cursorPos() const { return cursorPos_; }
+    void setCursorPos(int pos) { cursorPos_ = pos; }
+    bool isFocused() const { return focused_; }
+    void setFocused(bool f) { focused_ = f; }
+
 private:
     render::Renderer* renderer_;
+    int cursorPos_ = 0;
+    bool focused_ = false;
 };
 
 } // namespace bro::layout

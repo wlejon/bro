@@ -134,6 +134,24 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
         // Build the JS event object with all properties + methods
         JSValue jsEvent = JS_NewObject(ctx);
         populateJsEvent(ctx, jsEvent, event);
+
+        // Set target and currentTarget as wrapped element references
+        JS_SetPropertyStr(ctx, jsEvent, "currentTarget", JS_DupValue(ctx, jsElem));
+        {
+            // Find the original target element wrapper
+            JSValue tgtGlobal = JS_GetGlobalObject(ctx);
+            JSValue tgtMap = JS_GetPropertyStr(ctx, tgtGlobal, "__bro_elem_map");
+            if (!JS_IsUndefined(tgtMap) && event.target()) {
+                std::string tgtKey = std::to_string(event.target()->nodeId());
+                JSValue tgtElem = JS_GetPropertyStr(ctx, tgtMap, tgtKey.c_str());
+                JS_SetPropertyStr(ctx, jsEvent, "target", tgtElem);
+            } else {
+                JS_SetPropertyStr(ctx, jsEvent, "target", JS_DupValue(ctx, jsElem));
+            }
+            JS_FreeValue(ctx, tgtMap);
+            JS_FreeValue(ctx, tgtGlobal);
+        }
+
         JS_SetPropertyStr(ctx, jsEvent, "stopPropagation",
             JS_NewCFunction(ctx, js_ev_stopPropagation, "stopPropagation", 0));
         JS_SetPropertyStr(ctx, jsEvent, "preventDefault",
