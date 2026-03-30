@@ -11,6 +11,12 @@ using bro_el_text = bro::layout::BroElText;
 #include <algorithm>
 #include <sstream>
 
+// Access litehtml::html_tag::m_attrs for attribute removal
+struct LitehtmlTagAttrsAccess : litehtml::html_tag {
+    static auto attrsPtr() { return &LitehtmlTagAttrsAccess::m_attrs; }
+};
+static const auto kLHAttrsPtr = LitehtmlTagAttrsAccess::attrsPtr();
+
 namespace bro::dom {
 
 // ---------------------------------------------------------------------------
@@ -128,6 +134,14 @@ void Element::removeAttribute(const std::string& name) {
         if (!oldId.empty()) document_->unregisterElementId(oldId);
     }
     attributes_.erase(name);
+    // Also remove from litehtml's attribute map so replaced elements see the change
+    if (litehtml_element_) {
+        auto* htmlTag = dynamic_cast<litehtml::html_tag*>(litehtml_element_.get());
+        if (htmlTag) {
+            auto& attrs = htmlTag->*kLHAttrsPtr;
+            attrs.erase(name);
+        }
+    }
     markDirty();
 }
 

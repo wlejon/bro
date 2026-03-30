@@ -551,12 +551,16 @@ void Engine::run() {
                 litehtmlDoc_->draw(
                     reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
             }
-            // Draw select dropdown overlay after all elements (z-order on top)
+            // Draw overlays after all elements (z-order on top)
             if (document_) {
                 auto* activeEl = document_->activeElement();
                 auto* sel = getElSelect(activeEl);
                 if (sel && sel->isOpen()) {
                     sel->drawDropdown();
+                }
+                auto* inp = getElInput(activeEl);
+                if (inp && inp->isPickerOpen()) {
+                    inp->drawColorPicker();
                 }
             }
             accumDrawMs_ += util::currentTimeMs() - tDraw0;
@@ -850,6 +854,17 @@ void Engine::handleMouseDown(float x, float y, int button) {
             auto* prevActive = document_->activeElement();
             auto* prevInput = getElInput(prevActive);
             if (prevInput) {
+                // Close color picker if clicking outside it
+                if (prevInput->isPickerOpen()) {
+                    auto dp = prevInput->lastDrawPos();
+                    float px = dp.x, py = dp.y + dp.h + 2;
+                    float pw = 200.0f, ph = 160.0f;
+                    bool inPicker = (x >= px && x < px + pw && y >= py && y < py + ph);
+                    bool inSwatch = (x >= dp.x && x < dp.x + dp.w && y >= dp.y && y < dp.y + dp.h);
+                    if (!inPicker && !inSwatch) {
+                        prevInput->setPickerOpen(false);
+                    }
+                }
                 prevInput->setFocused(false);
                 uiDirty_ = true;
             }
@@ -901,10 +916,131 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
             if (newInput) {
                 newInput->setFocused(true);
-                const char* val = newInput->get_attr("value");
-                newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
-                SDL_StartTextInput(window_->getSDLWindow());
-                uiDirty_ = true;
+                auto itype = newInput->inputType();
+
+                if (itype == layout::ElInput::InputType::Checkbox) {
+                    // Toggle checked state
+                    const char* checked = newInput->get_attr("checked");
+                    if (checked) {
+                        target->removeAttribute("checked");
+                    } else {
+                        target->setAttribute("checked", "");
+                    }
+                    dom::Event changeEvt("change");
+                    dispatchEvent(target, changeEvt);
+                    dispatchInputEvent(target);
+                    uiDirty_ = true;
+                } else if (itype == layout::ElInput::InputType::Radio) {
+                    // Uncheck other radios with same name
+                    const char* name = newInput->get_attr("name");
+                    if (name && *name && document_) {
+                        auto* body = document_->body();
+                        if (body) {
+                            auto radios = body->querySelectorAll("input[type=\"radio\"]");
+                            for (auto* el : radios) {
+                                if (el == target) continue;
+                                auto* otherInput = getElInput(el);
+                                if (otherInput) {
+                                    const char* otherName = otherInput->get_attr("name");
+                                    if (otherName && strcmp(otherName, name) == 0) {
+                                        el->removeAttribute("checked");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    target->setAttribute("checked", "");
+                    dom::Event changeEvt("change");
+                    dispatchEvent(target, changeEvt);
+                    dispatchInputEvent(target);
+                    uiDirty_ = true;
+                } else if (itype == layout::ElInput::InputType::Range) {
+                    // Click to set value at position
+                    auto dp = newInput->lastDrawPos();
+                    float thumbR = 7.0f;
+                    float trackStart = dp.x + thumbR;
+                    float trackEnd = dp.x + dp.w - thumbR;
+                    float pct = (trackEnd > trackStart) ?
+                        std::clamp((x - trackStart) / (trackEnd - trackStart), 0.0f, 1.0f) : 0.0f;
+                    float mn = newInput->rangeMin(), mx = newInput->rangeMax();
+                    float val = mn + pct * (mx - mn);
+                    // Snap to step
+                    float step = newInput->rangeStep();
+                    if (step > 0) {
+                        val = mn + std::round((val - mn) / step) * step;
+                        val = std::clamp(val, mn, mx);
+                    }
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%g", static_cast<double>(val));
+                    target->setAttribute("value", buf);
+                    newInput->setDragging(true);
+                    dispatchInputEvent(target);
+                    uiDirty_ = true;
+                } else if (itype == layout::ElInput::InputType::Color) {
+                    if (newInput->isPickerOpen()) {
+                        // Click inside picker to select color
+                        auto dp = newInput->lastDrawPos();
+                        float px = dp.x, py = dp.y + dp.h + 2;
+                        float pw = 200.0f, ph = 160.0f;
+                        if (x >= px && x < px + pw && y >= py && y < py + ph) {
+                            float cellW = (pw - 4) / 10.0f;
+                            float cellH = (ph - 4) / 8.0f;
+                            int col = static_cast<int>((x - px - 2) / cellW);
+                            int row = static_cast<int>((y - py - 2) / cellH);
+                            col = std::clamp(col, 0, 9);
+                            row = std::clamp(row, 0, 7);
+
+                            // Reproduce the same HSL->RGB conversion
+                            float hue = col * 36.0f;
+                            float sat, lit;
+                            if (row == 0) {
+                                sat = 0.0f; lit = col / 9.0f;
+                            } else {
+                                sat = 1.0f; lit = 0.15f + (row - 1) * 0.1f;
+                            }
+
+                            auto hue2rgb = [](float p, float q, float t) -> float {
+                                if (t < 0) t += 1; if (t > 1) t -= 1;
+                                if (t < 1.0f/6) return p + (q-p)*6*t;
+                                if (t < 1.0f/2) return q;
+                                if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
+                                return p;
+                            };
+                            uint8_t cr, cg, cb;
+                            if (sat == 0) {
+                                cr = cg = cb = static_cast<uint8_t>(lit * 255);
+                            } else {
+                                float q = lit < 0.5f ? lit*(1+sat) : lit+sat-lit*sat;
+                                float p = 2*lit-q;
+                                float hn = hue/360.0f;
+                                cr = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
+                                cg = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
+                                cb = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
+                            }
+
+                            char hex[8];
+                            snprintf(hex, sizeof(hex), "#%02x%02x%02x", cr, cg, cb);
+                            target->setAttribute("value", hex);
+                            dom::Event changeEvt("change");
+                            dispatchEvent(target, changeEvt);
+                            dispatchInputEvent(target);
+                        }
+                        newInput->setPickerOpen(false);
+                    } else {
+                        newInput->setPickerOpen(true);
+                    }
+                    SDL_StopTextInput(window_->getSDLWindow());
+                    uiDirty_ = true;
+                } else if (newInput->isTextType()) {
+                    const char* val = newInput->get_attr("value");
+                    newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+                    SDL_StartTextInput(window_->getSDLWindow());
+                    uiDirty_ = true;
+                } else {
+                    // Button types — no text input
+                    SDL_StopTextInput(window_->getSDLWindow());
+                    uiDirty_ = true;
+                }
             } else if (newTextarea) {
                 newTextarea->setFocused(true);
                 const char* val = newTextarea->get_attr("value");
@@ -936,6 +1072,18 @@ void Engine::handleMouseUp(float x, float y, int button) {
         if (!redraw.empty()) uiDirty_ = true;
     }
 
+    // Stop range slider dragging
+    if (document_) {
+        auto* activeEl = document_->activeElement();
+        auto* input = getElInput(activeEl);
+        if (input && input->isDragging()) {
+            input->setDragging(false);
+            dom::Event changeEvt("change");
+            dispatchEvent(activeEl, changeEvt);
+            uiDirty_ = true;
+        }
+    }
+
     if (document_) {
         dom::MouseEvent clickEvt("click");
         clickEvt.setClientX(static_cast<double>(x));
@@ -944,8 +1092,6 @@ void Engine::handleMouseUp(float x, float y, int button) {
         dom::Element* target = hitTest(x, y);
         if (target) {
             dispatchEvent(target, clickEvt);
-            // Flush microtasks immediately so Vue/framework reactive updates
-            // (queued via Promise.then) run before the dirty check.
             jsRuntime_->executePendingJobs();
         }
     }
@@ -957,6 +1103,32 @@ void Engine::handleMouseMove(float x, float y) {
         litehtmlDoc_->on_mouse_over(static_cast<int>(x), static_cast<int>(y),
                                      static_cast<int>(x), static_cast<int>(y), redraw);
         if (!redraw.empty()) {
+            uiDirty_ = true;
+        }
+    }
+
+    // Range slider dragging
+    if (document_) {
+        auto* activeEl = document_->activeElement();
+        auto* rangeInput = getElInput(activeEl);
+        if (rangeInput && rangeInput->isDragging()) {
+            auto dp = rangeInput->lastDrawPos();
+            float thumbR = 7.0f;
+            float trackStart = dp.x + thumbR;
+            float trackEnd = dp.x + dp.w - thumbR;
+            float pct = (trackEnd > trackStart) ?
+                std::clamp((x - trackStart) / (trackEnd - trackStart), 0.0f, 1.0f) : 0.0f;
+            float mn = rangeInput->rangeMin(), mx = rangeInput->rangeMax();
+            float val = mn + pct * (mx - mn);
+            float step = rangeInput->rangeStep();
+            if (step > 0) {
+                val = mn + std::round((val - mn) / step) * step;
+                val = std::clamp(val, mn, mx);
+            }
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", static_cast<double>(val));
+            activeEl->setAttribute("value", buf);
+            dispatchInputEvent(activeEl);
             uiDirty_ = true;
         }
     }
@@ -1012,7 +1184,85 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // Check if a text input is focused — handle editing keys
     auto* activeEl = document_->activeElement();
     auto* input = getElInput(activeEl);
+
+    // Handle checkbox/radio space toggle
     if (input && input->isFocused()) {
+        auto itype = input->inputType();
+        if ((itype == layout::ElInput::InputType::Checkbox || itype == layout::ElInput::InputType::Radio)
+            && keycode == SDLK_SPACE) {
+            if (itype == layout::ElInput::InputType::Checkbox) {
+                const char* checked = input->get_attr("checked");
+                if (checked)
+                    activeEl->removeAttribute("checked");
+                else
+                    activeEl->setAttribute("checked", "");
+            } else {
+                activeEl->setAttribute("checked", "");
+            }
+            dom::Event changeEvt("change");
+            dispatchEvent(activeEl, changeEvt);
+            dispatchInputEvent(activeEl);
+
+            dom::KeyboardEvent evt("keydown");
+            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+            evt.setCode(sdlScancodeToWebCode(scancode));
+            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+            evt.setRepeat(repeat);
+            dispatchEvent(activeEl, evt);
+            return;
+        }
+
+        // Handle range arrow keys
+        if (itype == layout::ElInput::InputType::Range) {
+            bool handled = false;
+            if (keycode == SDLK_LEFT || keycode == SDLK_DOWN) {
+                float v = input->rangeValue() - input->rangeStep();
+                v = std::clamp(v, input->rangeMin(), input->rangeMax());
+                char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+                activeEl->setAttribute("value", buf);
+                dispatchInputEvent(activeEl);
+                handled = true;
+            } else if (keycode == SDLK_RIGHT || keycode == SDLK_UP) {
+                float v = input->rangeValue() + input->rangeStep();
+                v = std::clamp(v, input->rangeMin(), input->rangeMax());
+                char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+                activeEl->setAttribute("value", buf);
+                dispatchInputEvent(activeEl);
+                handled = true;
+            }
+            if (handled) {
+                dom::KeyboardEvent evt("keydown");
+                evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+                evt.setCode(sdlScancodeToWebCode(scancode));
+                evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+                evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+                evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+                evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+                evt.setRepeat(repeat);
+                dispatchEvent(activeEl, evt);
+                return;
+            }
+        }
+
+        // Skip text editing for non-text types
+        if (!input->isTextType()) {
+            dom::KeyboardEvent nontextEvt("keydown");
+            nontextEvt.setKey(sdlKeycodeToWebKey(keycode, mod));
+            nontextEvt.setCode(sdlScancodeToWebCode(scancode));
+            nontextEvt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+            nontextEvt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+            nontextEvt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+            nontextEvt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+            nontextEvt.setRepeat(repeat);
+            dispatchEvent(activeEl, nontextEvt);
+            return;
+        }
+    }
+
+    if (input && input->isFocused() && input->isTextType()) {
         std::string val = activeEl->getAttribute("value");
         int pos = input->cursorPos();
         pos = std::clamp(pos, 0, static_cast<int>(val.size()));
@@ -1052,6 +1302,24 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         } else if (keycode == SDLK_END) {
             input->setCursorPos(static_cast<int>(val.size()));
             uiDirty_ = true;
+            handled = true;
+        } else if (input->inputType() == layout::ElInput::InputType::Number &&
+                   (keycode == SDLK_UP || keycode == SDLK_DOWN)) {
+            // Increment/decrement number value
+            float v = 0;
+            if (!val.empty()) v = static_cast<float>(atof(val.c_str()));
+            float step = input->rangeStep();
+            v += (keycode == SDLK_UP) ? step : -step;
+            // Clamp to min/max if specified
+            float mn = input->rangeMin(), mx = input->rangeMax();
+            const char* minAttr = input->get_attr("min");
+            const char* maxAttr = input->get_attr("max");
+            if (minAttr) v = std::max(v, mn);
+            if (maxAttr) v = std::min(v, mx);
+            char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+            activeEl->setAttribute("value", buf);
+            input->setCursorPos(static_cast<int>(strlen(buf)));
+            dispatchInputEvent(activeEl);
             handled = true;
         } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
             // Unfocus the input on Enter
@@ -1319,7 +1587,7 @@ void Engine::handleTextInput(const std::string& text) {
     }
 
     auto* input = getElInput(activeEl);
-    if (!input || !input->isFocused()) return;
+    if (!input || !input->isFocused() || !input->isTextType()) return;
 
     // Insert text at cursor position
     std::string val = activeEl->getAttribute("value");

@@ -38,6 +38,29 @@ input, textarea, select {
     font-size: 14px;
 }
 
+input[type="checkbox"], input[type="radio"] {
+    padding: 0;
+    border: none;
+    background-color: transparent;
+    vertical-align: middle;
+}
+
+input[type="range"] {
+    padding: 0;
+    border: none;
+    background-color: transparent;
+}
+
+input[type="color"] {
+    padding: 0;
+    border: none;
+    background-color: transparent;
+}
+
+input[type="hidden"] {
+    display: none;
+}
+
 option {
     display: none;
 }

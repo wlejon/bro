@@ -1523,9 +1523,9 @@ static JSValue js_element_get_checked(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_FALSE;
-    std::string v = el->getAttribute("checked");
-    // "checked" attribute present (any value) means true
-    return JS_NewBool(ctx, !v.empty());
+    // "checked" is a boolean attribute — presence in map means true
+    // (value can be "" for <input checked> or "checked" for setAttribute)
+    return JS_NewBool(ctx, el->attributes().count("checked") > 0);
 }
 
 static JSValue js_element_set_checked(JSContext* ctx, JSValueConst this_val,
@@ -1534,7 +1534,7 @@ static JSValue js_element_set_checked(JSContext* ctx, JSValueConst this_val,
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
     if (JS_ToBool(ctx, val))
-        el->setAttribute("checked", "checked");
+        el->setAttribute("checked", "");
     else
         el->removeAttribute("checked");
     return JS_UNDEFINED;
