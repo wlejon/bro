@@ -5,6 +5,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
+#include "dom/comment_node.h"
 
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ namespace bro::js {
 
 static JSClassID js_document_class_id = 0;
 static JSClassID js_element_class_id  = 0;
+static JSClassID js_node_class_id    = 0;  // generic Node wrapper (comments, text)
 static JSClassID js_event_class_id    = 0;
 static JSClassID js_nodelist_class_id = 0;
 static JSClassID js_cssstyle_class_id = 0;
@@ -172,6 +174,138 @@ static JSValue wrapNodeList(JSContext* ctx,
                              DomBindings::wrapElement(ctx, elems[i]));
     }
 
+    return obj;
+}
+
+// ===========================================================================
+// Generic Node wrapper (comment nodes, text nodes in tree ops)
+// ===========================================================================
+
+static JSClassDef js_node_class = {
+    "Node",
+    nullptr,  // finalizer — Node lifetime managed by Document
+    nullptr, nullptr, nullptr
+};
+
+// Unwrap a Node* from either js_element_class_id or js_node_class_id.
+static bro::dom::Node* unwrapNode(JSContext* ctx, JSValueConst val)
+{
+    void* ptr = JS_GetOpaque(val, js_element_class_id);
+    if (ptr) return static_cast<bro::dom::Node*>(static_cast<bro::dom::Element*>(ptr));
+    ptr = JS_GetOpaque(val, js_node_class_id);
+    if (ptr) return static_cast<bro::dom::Node*>(ptr);
+    return nullptr;
+}
+
+// Wrap any Node as a JS value. Elements get the full Element wrapper.
+// Comment and text nodes get a generic Node wrapper with basic properties.
+static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
+{
+    if (!node) return JS_NULL;
+    if (node->nodeType() == bro::dom::NodeType::Element)
+        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(node));
+
+    // Check existing wrapper in __bro_node_map
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue nodeMap = JS_GetPropertyStr(ctx, global, "__bro_node_map");
+    if (JS_IsUndefined(nodeMap)) {
+        nodeMap = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "__bro_node_map", JS_DupValue(ctx, nodeMap));
+    }
+    std::string key = std::to_string(node->nodeId());
+    JSValue existing = JS_GetPropertyStr(ctx, nodeMap, key.c_str());
+    if (!JS_IsUndefined(existing) && !JS_IsNull(existing)) {
+        JS_FreeValue(ctx, nodeMap);
+        JS_FreeValue(ctx, global);
+        return existing;
+    }
+    JS_FreeValue(ctx, existing);
+
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_node_class_id));
+    if (JS_IsException(obj)) {
+        JS_FreeValue(ctx, nodeMap);
+        JS_FreeValue(ctx, global);
+        return obj;
+    }
+    JS_SetOpaque(obj, node);
+
+    // Set basic DOM properties
+    JS_SetPropertyStr(ctx, obj, "nodeType",
+        JS_NewInt32(ctx, static_cast<int32_t>(node->nodeType())));
+    JS_SetPropertyStr(ctx, obj, "nodeName",
+        JS_NewString(ctx, node->nodeName().c_str()));
+
+    if (node->nodeType() == bro::dom::NodeType::Comment) {
+        auto* comment = static_cast<bro::dom::CommentNode*>(node);
+        JS_SetPropertyStr(ctx, obj, "nodeValue",
+            JS_NewString(ctx, comment->data().c_str()));
+        JS_SetPropertyStr(ctx, obj, "textContent",
+            JS_NewString(ctx, comment->data().c_str()));
+    } else if (node->nodeType() == bro::dom::NodeType::Text) {
+        auto* text = static_cast<bro::dom::TextNode*>(node);
+        JS_SetPropertyStr(ctx, obj, "nodeValue",
+            JS_NewString(ctx, text->data().c_str()));
+        JS_SetPropertyStr(ctx, obj, "textContent",
+            JS_NewString(ctx, text->data().c_str()));
+    }
+
+    // Define parentNode/nextSibling/previousSibling as live getters
+    // so they reflect the current tree state (not stale creation-time values).
+    // We capture the Node* via closure using a CFunction with opaque magic.
+    // Simplest approach: use defineProperty with a getter function.
+    {
+        // parentNode getter
+        JSValue getParent = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!n || !n->parentNode()) return JS_NULL;
+            if (n->parentNode()->nodeType() == bro::dom::NodeType::Element)
+                return DomBindings::wrapElement(cx, static_cast<bro::dom::Element*>(n->parentNode()));
+            return wrapAnyNode(cx, n->parentNode());
+        }, "get parentNode", 0, JS_CFUNC_generic, 0);
+
+        JSValue getNextSibling = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!n || !n->parentNode()) return JS_NULL;
+            auto& kids = n->parentNode()->childNodes();
+            for (size_t i = 0; i < kids.size(); ++i) {
+                if (kids[i] == n && i + 1 < kids.size())
+                    return wrapAnyNode(cx, kids[i + 1]);
+            }
+            return JS_NULL;
+        }, "get nextSibling", 0, JS_CFUNC_generic, 0);
+
+        JSValue getPrevSibling = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!n || !n->parentNode()) return JS_NULL;
+            auto& kids = n->parentNode()->childNodes();
+            for (size_t i = 0; i < kids.size(); ++i) {
+                if (kids[i] == n) {
+                    if (i > 0) return wrapAnyNode(cx, kids[i - 1]);
+                    return JS_NULL;
+                }
+            }
+            return JS_NULL;
+        }, "get previousSibling", 0, JS_CFUNC_generic, 0);
+
+        JSAtom parentAtom = JS_NewAtom(ctx, "parentNode");
+        JSAtom nextAtom = JS_NewAtom(ctx, "nextSibling");
+        JSAtom prevAtom = JS_NewAtom(ctx, "previousSibling");
+        JS_DefinePropertyGetSet(ctx, obj, parentAtom, getParent, JS_UNDEFINED, 0);
+        JS_DefinePropertyGetSet(ctx, obj, nextAtom, getNextSibling, JS_UNDEFINED, 0);
+        JS_DefinePropertyGetSet(ctx, obj, prevAtom, getPrevSibling, JS_UNDEFINED, 0);
+        JS_FreeAtom(ctx, parentAtom);
+        JS_FreeAtom(ctx, nextAtom);
+        JS_FreeAtom(ctx, prevAtom);
+    }
+
+    // Cache the wrapper
+    JS_SetPropertyStr(ctx, nodeMap, key.c_str(), JS_DupValue(ctx, obj));
+
+    JS_FreeValue(ctx, nodeMap);
+    JS_FreeValue(ctx, global);
     return obj;
 }
 
@@ -820,22 +954,8 @@ static JSValue js_element_get_parentNode(JSContext* ctx, JSValueConst this_val)
 // For text nodes, creates a minimal object with nodeType + nodeValue.
 // Does NOT set nextSibling/previousSibling (caller sets if needed).
 static JSValue wrapSingleChild(JSContext* ctx, bro::dom::Node* node,
-                                bro::dom::Node* parentNode = nullptr) {
-    if (!node) return JS_NULL;
-    if (node->nodeType() == bro::dom::NodeType::Element)
-        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(node));
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "nodeType", JS_NewInt32(ctx, 3));
-    JS_SetPropertyStr(ctx, obj, "nodeName", JS_NewString(ctx, "#text"));
-    if (node->nodeType() == bro::dom::NodeType::Text) {
-        auto* t = static_cast<bro::dom::TextNode*>(node);
-        JS_SetPropertyStr(ctx, obj, "textContent", JS_NewString(ctx, t->data().c_str()));
-        JS_SetPropertyStr(ctx, obj, "nodeValue", JS_NewString(ctx, t->data().c_str()));
-    }
-    if (parentNode && parentNode->nodeType() == bro::dom::NodeType::Element)
-        JS_SetPropertyStr(ctx, obj, "parentNode",
-            DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(parentNode)));
-    return obj;
+                                bro::dom::Node* /*parentNode*/ = nullptr) {
+    return wrapAnyNode(ctx, node);
 }
 
 // Find node's index in parent's childNodes
@@ -860,26 +980,14 @@ static JSValue wrapChildAtIndex(JSContext* ctx, bro::dom::Node* parent, size_t i
     if (idx >= kids.size()) return JS_NULL;
 
     auto* child = kids[idx];
-    if (child->nodeType() == bro::dom::NodeType::Element)
-        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child));
+    JSValue obj = wrapAnyNode(ctx, child);
 
-    // Text node: build a wrapper with nextSibling chain
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "nodeType", JS_NewInt32(ctx, 3));
-    JS_SetPropertyStr(ctx, obj, "nodeName", JS_NewString(ctx, "#text"));
-    if (child->nodeType() == bro::dom::NodeType::Text) {
-        auto* t = static_cast<bro::dom::TextNode*>(child);
-        JS_SetPropertyStr(ctx, obj, "textContent", JS_NewString(ctx, t->data().c_str()));
-        JS_SetPropertyStr(ctx, obj, "nodeValue", JS_NewString(ctx, t->data().c_str()));
+    // For non-Element nodes, set nextSibling chain for traversal
+    if (child->nodeType() != bro::dom::NodeType::Element) {
+        JS_SetPropertyStr(ctx, obj, "nextSibling",
+            (idx + 1 < kids.size()) ? wrapChildAtIndex(ctx, parent, idx + 1) : JS_NULL);
+        JS_SetPropertyStr(ctx, obj, "previousSibling", JS_NULL);
     }
-    if (parent->nodeType() == bro::dom::NodeType::Element)
-        JS_SetPropertyStr(ctx, obj, "parentNode",
-            DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(parent)));
-
-    // Set nextSibling (forward chain only — this is what jQuery walks)
-    JS_SetPropertyStr(ctx, obj, "nextSibling",
-        (idx + 1 < kids.size()) ? wrapChildAtIndex(ctx, parent, idx + 1) : JS_NULL);
-    JS_SetPropertyStr(ctx, obj, "previousSibling", JS_NULL);
     return obj;
 }
 
@@ -1035,27 +1143,22 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_UNDEFINED;
-    auto* child = static_cast<bro::dom::Element*>(
-        DomBindings::unwrapElement(ctx, argv[0]));
+    auto* child = unwrapNode(ctx, argv[0]);
     if (child) {
         auto* doc = getDocumentForCtx(ctx);
         // DocumentFragment: move all children to parent instead
-        if (child->tagName() == "#DOCUMENT-FRAGMENT") {
-            // Copy children vector since we're modifying it during iteration
+        if (child->nodeName() == "#DOCUMENT-FRAGMENT" ||
+            child->nodeType() == bro::dom::NodeType::DocumentFragment) {
             auto kids = child->childNodes();
             for (auto* kid : kids) {
-                if (kid->nodeType() == bro::dom::NodeType::Element) {
-                    auto* kidElem = static_cast<bro::dom::Element*>(kid);
-                    el->appendChild(kid);
-                    if (doc) doc->syncAppendToLitehtml(kidElem, el);
-                } else {
-                    el->appendChild(kid);
-                }
+                el->appendChild(kid);
+                if (doc && kid->nodeType() == bro::dom::NodeType::Element)
+                    doc->syncAppendToLitehtml(static_cast<bro::dom::Element*>(kid), el);
             }
         } else {
             el->appendChild(child);
-            if (doc) {
-                doc->syncAppendToLitehtml(child, el);
+            if (doc && child->nodeType() == bro::dom::NodeType::Element) {
+                doc->syncAppendToLitehtml(static_cast<bro::dom::Element*>(child), el);
             }
         }
     }
@@ -1067,14 +1170,16 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_UNDEFINED;
-    auto* child = static_cast<bro::dom::Element*>(
-        DomBindings::unwrapElement(ctx, argv[0]));
+    auto* child = unwrapNode(ctx, argv[0]);
     if (child) {
         auto* doc = getDocumentForCtx(ctx);
-        if (doc && !child->id().empty())
-            doc->unregisterElementId(child->id());
-        if (doc) doc->syncRemoveFromLitehtml(child, el);
-        invalidateWrapper(ctx, child);
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            auto* childElem = static_cast<bro::dom::Element*>(child);
+            if (doc && !childElem->id().empty())
+                doc->unregisterElementId(childElem->id());
+            if (doc) doc->syncRemoveFromLitehtml(childElem, el);
+            invalidateWrapper(ctx, childElem);
+        }
         el->removeChild(child);
         if (doc) doc->freeNode(child);
     }
@@ -1086,21 +1191,21 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 2) return JS_UNDEFINED;
-    auto* newChild = static_cast<bro::dom::Element*>(
-        DomBindings::unwrapElement(ctx, argv[0]));
-    bro::dom::Element* refChild = nullptr;
+    auto* newChild = unwrapNode(ctx, argv[0]);
+    bro::dom::Node* refChild = nullptr;
     if (!JS_IsNull(argv[1])) {
-        refChild = static_cast<bro::dom::Element*>(
-            DomBindings::unwrapElement(ctx, argv[1]));
+        refChild = unwrapNode(ctx, argv[1]);
     }
     if (newChild) {
         el->insertBefore(newChild, refChild);
         auto* doc = getDocumentForCtx(ctx);
-        if (doc) {
-            if (refChild) {
-                doc->syncInsertBeforeLitehtml(newChild, refChild, el);
+        if (doc && newChild->nodeType() == bro::dom::NodeType::Element) {
+            auto* newElem = static_cast<bro::dom::Element*>(newChild);
+            if (refChild && refChild->nodeType() == bro::dom::NodeType::Element) {
+                doc->syncInsertBeforeLitehtml(newElem,
+                    static_cast<bro::dom::Element*>(refChild), el);
             } else {
-                doc->syncAppendToLitehtml(newChild, el);
+                doc->syncAppendToLitehtml(newElem, el);
             }
         }
     }
@@ -1112,21 +1217,25 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 2) return JS_UNDEFINED;
-    auto* newChild = static_cast<bro::dom::Element*>(
-        DomBindings::unwrapElement(ctx, argv[0]));
-    auto* oldChild = static_cast<bro::dom::Element*>(
-        DomBindings::unwrapElement(ctx, argv[1]));
+    auto* newChild = unwrapNode(ctx, argv[0]);
+    auto* oldChild = unwrapNode(ctx, argv[1]);
     if (newChild && oldChild) {
         auto* doc = getDocumentForCtx(ctx);
         // Sync: insert new before old, then remove old
         el->insertBefore(newChild, oldChild);
-        if (doc) {
-            doc->syncInsertBeforeLitehtml(newChild, oldChild, el);
+        if (doc && newChild->nodeType() == bro::dom::NodeType::Element &&
+            oldChild->nodeType() == bro::dom::NodeType::Element) {
+            doc->syncInsertBeforeLitehtml(
+                static_cast<bro::dom::Element*>(newChild),
+                static_cast<bro::dom::Element*>(oldChild), el);
         }
-        if (doc && !oldChild->id().empty())
-            doc->unregisterElementId(oldChild->id());
-        if (doc) doc->syncRemoveFromLitehtml(oldChild, el);
-        invalidateWrapper(ctx, oldChild);
+        if (oldChild->nodeType() == bro::dom::NodeType::Element) {
+            auto* oldElem = static_cast<bro::dom::Element*>(oldChild);
+            if (doc && !oldElem->id().empty())
+                doc->unregisterElementId(oldElem->id());
+            if (doc) doc->syncRemoveFromLitehtml(oldElem, el);
+            invalidateWrapper(ctx, oldElem);
+        }
         el->removeChild(oldChild);
         if (doc) doc->freeNode(oldChild);
     }
@@ -1642,25 +1751,23 @@ static JSValue js_document_createTextNode(JSContext* ctx,
                                           JSValueConst this_val,
                                           int argc, JSValueConst* argv)
 {
-    // We model text nodes as elements with tag "#text" and textContent set.
     auto* doc = getDocument(this_val);
     if (!doc || argc < 1) return JS_NULL;
     std::string text = jsToStdString(ctx, argv[0]);
-    auto* el = doc->createElement("#text");
-    if (!el) return JS_NULL;
-    el->setTextContent(text);
-    return DomBindings::wrapElement(ctx, el);
+    auto* textNode = doc->createTextNode(text);
+    if (!textNode) return JS_NULL;
+    return wrapAnyNode(ctx, textNode);
 }
 
 static JSValue js_document_createDocumentFragment(JSContext* ctx,
                                                   JSValueConst this_val,
                                                   int /*argc*/, JSValueConst* /*argv*/)
 {
-    // Model fragment as an element with tag "#document-fragment".
-    // When appendChild receives a fragment, it should move all children.
+    // Model fragment as an element with tag "#DOCUMENT-FRAGMENT".
+    // When appendChild receives a fragment, it moves all children.
     auto* doc = getDocument(this_val);
     if (!doc) return JS_NULL;
-    auto* el = doc->createElement("#document-fragment");
+    auto* el = doc->createElement("#DOCUMENT-FRAGMENT");
     if (!el) return JS_NULL;
     return DomBindings::wrapElement(ctx, el);
 }
@@ -1702,14 +1809,12 @@ static JSValue js_document_createComment(JSContext* ctx,
                                          JSValueConst this_val,
                                          int argc, JSValueConst* argv)
 {
-    // Model comments as elements with tag "#comment"
     auto* doc = getDocument(this_val);
     if (!doc) return JS_NULL;
     std::string text = (argc >= 1) ? jsToStdString(ctx, argv[0]) : "";
-    auto* el = doc->createElement("#comment");
-    if (!el) return JS_NULL;
-    el->setTextContent(text);
-    return DomBindings::wrapElement(ctx, el);
+    auto* comment = doc->createComment(text);
+    if (!comment) return JS_NULL;
+    return wrapAnyNode(ctx, comment);
 }
 
 static JSValue js_document_getElementsByTagName(JSContext* ctx,
@@ -1842,6 +1947,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     // ----- Allocate class IDs (idempotent — no-op if already non-zero) -----
     JS_NewClassID(rt, &js_document_class_id);
     JS_NewClassID(rt, &js_element_class_id);
+    JS_NewClassID(rt, &js_node_class_id);
     JS_NewClassID(rt, &js_event_class_id);
     JS_NewClassID(rt, &js_nodelist_class_id);
     JS_NewClassID(rt, &js_cssstyle_class_id);
@@ -1851,6 +1957,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     if (!s_classes_registered[rt]) {
         JS_NewClass(rt, js_document_class_id, &js_document_class);
         JS_NewClass(rt, js_element_class_id,  &js_element_class);
+        JS_NewClass(rt, js_node_class_id,     &js_node_class);
         JS_NewClass(rt, js_event_class_id,    &js_event_class);
         JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class);
         JS_NewClass(rt, js_cssstyle_class_id, &js_cssstyle_class);
@@ -1951,6 +2058,47 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
             length: 0
         };
     };
+
+    // Stub DOM type constructors needed by Vue and other frameworks
+    if (typeof Element === 'undefined')
+        globalThis.Element = class Element {};
+    if (typeof SVGElement === 'undefined')
+        globalThis.SVGElement = class SVGElement {};
+    if (typeof MathMLElement === 'undefined')
+        globalThis.MathMLElement = class MathMLElement {};
+    if (typeof HTMLElement === 'undefined')
+        globalThis.HTMLElement = class HTMLElement {};
+
+    // CustomEvent constructor
+    if (typeof Event === 'undefined') {
+        globalThis.Event = class Event {
+            constructor(type, opts) {
+                this.type = type;
+                this.bubbles = !!(opts && opts.bubbles);
+                this.cancelable = !!(opts && opts.cancelable);
+                this.defaultPrevented = false;
+            }
+            preventDefault() { this.defaultPrevented = true; }
+            stopPropagation() {}
+            stopImmediatePropagation() {}
+        };
+    }
+    if (typeof CustomEvent === 'undefined') {
+        globalThis.CustomEvent = class CustomEvent extends Event {
+            constructor(type, opts) {
+                super(type, opts);
+                this.detail = (opts && opts.detail) || null;
+            }
+        };
+    }
+
+    // document.activeElement stub
+    if (!document.activeElement) {
+        Object.defineProperty(document, 'activeElement', {
+            get: function() { return document.body; },
+            configurable: true
+        });
+    }
 })();
 )JS";
     JSValue r = JS_Eval(ctx, polyfills, strlen(polyfills),

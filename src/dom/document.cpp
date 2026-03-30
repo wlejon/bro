@@ -127,12 +127,24 @@ TextNode* Document::createTextNode(const std::string& text) {
     return allocateNode<TextNode>(text);
 }
 
+CommentNode* Document::createComment(const std::string& data) {
+    return allocateNode<CommentNode>(data);
+}
+
 DocumentFragment* Document::createDocumentFragment() {
     return allocateNode<DocumentFragment>();
 }
 
 void Document::freeNode(Node* node) {
     if (!node) return;
+
+    // Recursively free all children first (they are also in ownedNodes_).
+    // Copy the children vector since freeNode modifies ownedNodes_.
+    auto kids = node->childNodes();
+    for (auto* child : kids) {
+        freeNode(child);
+    }
+
     auto it = std::find_if(ownedNodes_.begin(), ownedNodes_.end(),
         [node](const std::unique_ptr<Node>& p) { return p.get() == node; });
     if (it != ownedNodes_.end()) {

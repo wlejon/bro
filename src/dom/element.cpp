@@ -1,6 +1,7 @@
 #include "dom/element.h"
 #include "dom/document.h"
 #include "dom/text_node.h"
+#include "dom/comment_node.h"
 #include <litehtml.h>
 #include <litehtml/el_text.h>
 #include <litehtml/render_item.h>
@@ -163,10 +164,17 @@ void Element::setTextContent(const std::string& text) {
         auto* existing = static_cast<TextNode*>(children_[0]);
         if (existing->data() == text) return;
     }
-    for (auto& child : children_) {
+    // Free old children from the document's ownership list before clearing.
+    auto oldKids = children_;
+    for (auto& child : oldKids) {
         child->setParent(nullptr);
     }
     children_.clear();
+    if (document_) {
+        for (auto* child : oldKids) {
+            document_->freeNode(child);
+        }
+    }
 
     // Add a single text node. If we have an owner document, allocate via it.
     // Otherwise create an unowned TextNode (for elements not yet in a document).
@@ -234,6 +242,9 @@ std::string Element::innerHTML() const {
         if (child->nodeType() == NodeType::Text) {
             auto* text = static_cast<const TextNode*>(child);
             oss << text->data();
+        } else if (child->nodeType() == NodeType::Comment) {
+            auto* comment = static_cast<const CommentNode*>(child);
+            oss << "<!--" << comment->data() << "-->";
         } else if (child->nodeType() == NodeType::Element) {
             auto* elem = static_cast<const Element*>(child);
             oss << elem->outerHTML();
@@ -266,10 +277,16 @@ std::string Element::outerHTML() const {
 }
 
 void Element::setInnerHTML(const std::string& html) {
-    for (auto& child : children_) {
+    auto oldKids = children_;
+    for (auto& child : oldKids) {
         child->setParent(nullptr);
     }
     children_.clear();
+    if (document_) {
+        for (auto* child : oldKids) {
+            document_->freeNode(child);
+        }
+    }
 
     // For now, store as a single text node with raw HTML.
     // Full parsing is handled at the Document level via reparse().

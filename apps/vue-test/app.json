@@ -1,5 +1,0 @@
-{
-    "name": "Vue Test",
-    "entry": "index.html",
-    "scripts": ["vue.global.prod.js", "app.js"]
-}

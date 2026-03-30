@@ -2,6 +2,7 @@
 #include "dom/node.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
+#include "dom/comment_node.h"
 #include "dom/document_fragment.h"
 #include <litehtml.h>
 #include <string>
@@ -26,6 +27,7 @@ public:
     // Node creation — Document owns all nodes via ownedNodes_.
     Element* createElement(const std::string& tag);
     TextNode* createTextNode(const std::string& text);
+    CommentNode* createComment(const std::string& data);
     DocumentFragment* createDocumentFragment();
 
     // Free a node from ownedNodes_ (called after removal from tree + JS wrapper invalidation)
