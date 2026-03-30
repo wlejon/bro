@@ -67,6 +67,9 @@ public:
     // Fast check if an element is already an orphan
     bool isOrphan(Element* elem) const { return orphanSet_.count(elem) > 0; }
 
+    // Release an orphan (called when JS drops its last reference).
+    void releaseOrphan(Element* elem);
+
     // Access orphan list (for shared_ptr lookup during appendChild).
     const std::vector<std::shared_ptr<Element>>& orphans() const { return orphans_; }
 

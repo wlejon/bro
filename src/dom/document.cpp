@@ -145,6 +145,10 @@ void Document::adoptOrphan(Element* elem) {
         orphans_.end());
 }
 
+void Document::releaseOrphan(Element* elem) {
+    adoptOrphan(elem);  // same mechanics: remove from orphans_ and orphanSet_
+}
+
 Element* Document::getElementById(const std::string& id) {
     auto it = idMap_.find(id);
     if (it != idMap_.end()) {

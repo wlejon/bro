@@ -628,10 +628,29 @@ static JSValue wrapTokenList(JSContext* ctx, bro::dom::Element* elem) {
 // Element wrapper
 // ===========================================================================
 
-// We do NOT add a destructor – the C++ DOM owns the Element objects.
+// Release orphaned elements when the JS wrapper is garbage-collected.
+// Elements that are in the live DOM tree have their lifetime managed by the
+// tree.  But elements removed via .remove() / removeChild() are kept alive
+// in Document::orphans_ so dangling JS references don't crash.  When JS
+// drops the last reference (GC finalizer fires), we release the orphan.
+static void js_element_finalizer(JSRuntime* /*rt*/, JSValue val)
+{
+    auto* elem = static_cast<bro::dom::Element*>(
+        JS_GetOpaque(val, js_element_class_id));
+    if (!elem) return;
+
+    // Only release if the element is orphaned (not in the live tree)
+    if (elem->parentNode()) return;
+
+    auto* doc = elem->document();
+    if (doc) {
+        doc->releaseOrphan(elem);
+    }
+}
+
 static JSClassDef js_element_class = {
     "Element",
-    nullptr, nullptr, nullptr, nullptr
+    js_element_finalizer, nullptr, nullptr, nullptr
 };
 
 static inline bro::dom::Element* getElement(JSValueConst val)
