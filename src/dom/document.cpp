@@ -1,5 +1,6 @@
 #include "dom/document.h"
 #include <litehtml/html_tag.h>
+#include <litehtml/render_item.h>
 #include <algorithm>
 #include <sstream>
 
@@ -365,6 +366,7 @@ void Document::syncInsertBeforeLitehtml(Element* newChild, Element* refChild,
         if (refIt != mutChildren.end() && newIt != refIt) {
             mutChildren.splice(refIt, mutChildren, newIt);
         }
+
     }
 
     markStructureDirty();
@@ -381,6 +383,89 @@ void Document::syncRemoveFromLitehtml(Element* child, Element* parent) {
 
     // Clean up litehtmlMap entries for the whole subtree
     unlinkLitehtmlRecursive(child);
+
+    markStructureDirty();
+}
+
+void Document::parseInnerHTML(Element* parent, const std::string& html) {
+    if (!parent) return;
+
+    // 1. Clear existing children from litehtml tree
+    auto parentLh = parent->litehtmlElement();
+    if (parentLh) {
+        // Unlink bro::dom wrappers for all litehtml children
+        for (auto* child : parent->children()) {
+            unlinkLitehtmlRecursive(child);
+        }
+        // Clear litehtml children (element tree and render tree)
+        parentLh->clearRecursive();
+        auto ri = parentLh->get_render_item();
+        if (ri) ri->children().clear();
+    }
+
+    // 2. Clear existing bro::dom children
+    auto oldKids = parent->childNodes();
+    for (auto* child : oldKids) {
+        child->setParent(nullptr);
+    }
+    parent->childNodes().clear();
+    for (auto* child : oldKids) {
+        freeNode(child);
+    }
+
+    if (html.empty()) {
+        markStructureDirty();
+        return;
+    }
+
+    // 3. Parse into litehtml and mirror to bro::dom
+    if (parentLh && litehtml_doc_) {
+        // Use litehtml to parse the HTML fragment
+        litehtml_doc_->append_children_from_string(*parentLh, html.c_str(), false);
+
+        // Mirror the parsed litehtml children into bro::dom
+        buildTreeFromLitehtml(parentLh, parent);
+    } else {
+        // Element not yet in litehtml tree — parse via a temporary wrapper.
+        // When this element is later appended, outerHTML() will serialize
+        // the children correctly for sync.
+        // Use a minimal litehtml parse to extract the DOM structure.
+        std::string wrapper = "<div>" + html + "</div>";
+        litehtml::document_container* container = nullptr;
+        // We need a container for parsing — get it from the litehtml doc
+        if (litehtml_doc_) {
+            container = litehtml_doc_->container();
+        }
+        if (container) {
+            auto tempDoc = litehtml::document::createFromString(wrapper, container);
+            if (tempDoc) {
+                auto tempRoot = tempDoc->root();
+                if (tempRoot) {
+                    // Find the <div> wrapper — it's usually inside <html><body><div>
+                    // Walk to find our wrapper div
+                    std::function<litehtml::element::ptr(litehtml::element::ptr)> findDiv;
+                    findDiv = [&](litehtml::element::ptr el) -> litehtml::element::ptr {
+                        if (!el) return nullptr;
+                        const char* tag = el->get_tagName();
+                        if (tag && std::string(tag) == "div" && el == tempRoot->children().back()) {
+                            // This might be our div, but let's look deeper for body>div
+                        }
+                        for (auto& child : el->children()) {
+                            const char* ctag = child->get_tagName();
+                            if (ctag && std::string(ctag) == "div") return child;
+                            auto found = findDiv(child);
+                            if (found) return found;
+                        }
+                        return nullptr;
+                    };
+                    auto wrapperDiv = findDiv(tempRoot);
+                    if (wrapperDiv) {
+                        buildTreeFromLitehtml(wrapperDiv, parent);
+                    }
+                }
+            }
+        }
+    }
 
     markStructureDirty();
 }

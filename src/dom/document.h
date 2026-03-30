@@ -71,6 +71,9 @@ public:
     void syncInsertBeforeLitehtml(Element* newChild, Element* refChild, Element* parent);
     void syncRemoveFromLitehtml(Element* child, Element* parent);
 
+    // Parse an HTML string and replace an element's children (innerHTML setter)
+    void parseInnerHTML(Element* parent, const std::string& html);
+
 private:
     void buildTreeFromLitehtml(litehtml::element::ptr root, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);

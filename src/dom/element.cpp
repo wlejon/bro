@@ -277,27 +277,22 @@ std::string Element::outerHTML() const {
 }
 
 void Element::setInnerHTML(const std::string& html) {
+    if (document_) {
+        // Delegate to Document which can parse HTML via litehtml
+        document_->parseInnerHTML(this, html);
+        return;
+    }
+
+    // No document — fallback to storing as text (pre-insertion elements)
     auto oldKids = children_;
     for (auto& child : oldKids) {
         child->setParent(nullptr);
     }
     children_.clear();
-    if (document_) {
-        for (auto* child : oldKids) {
-            document_->freeNode(child);
-        }
-    }
 
-    // For now, store as a single text node with raw HTML.
-    // Full parsing is handled at the Document level via reparse().
     if (!html.empty()) {
-        if (document_) {
-            auto* textNode = document_->createTextNode(html);
-            appendChild(textNode);
-        } else {
-            auto* textNode = new TextNode(html);
-            appendChild(textNode);
-        }
+        auto* textNode = new TextNode(html);
+        appendChild(textNode);
     }
     markDirty();
 }

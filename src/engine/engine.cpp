@@ -28,6 +28,7 @@
 #include "dom/event.h"
 #include <litehtml/render_item.h>
 #include "layout/container.h"
+#include "engine/default_styles.h"
 #include "util/log.h"
 #include "util/time.h"
 
@@ -252,8 +253,11 @@ Engine::Engine(const std::string& appDir, int width, int height)
     // Set the base URL so CSS @import / relative paths work.
     container_->set_base_url(manifest_.basePath.c_str());
 
-    // Load user stylesheets into a single string that we prepend.
-    std::string userStyles;
+    // Load user stylesheets, prepended with browser-like defaults so apps
+    // are visible and have sensible form control styling without an
+    // explicit stylesheet.
+    std::string userStyles = kDefaultStyles;
+    userStyles += "\n";
     for (auto& cssPath : manifest_.stylePaths) {
         std::string css = AppLoader::loadFile(cssPath);
         if (!css.empty()) {

@@ -18,6 +18,8 @@
 #include "dom/node.h"
 #include "dom/event.h"
 #include "layout/container.h"
+#include "engine/default_styles.h"
+#include <litehtml/render_item.h>
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "util/log.h"
@@ -266,7 +268,8 @@ Headless::Headless(const std::string& appDir, int width, int height)
 
     container_->set_base_url(manifest.basePath.c_str());
 
-    std::string userStyles;
+    std::string userStyles = bro::engine::kDefaultStyles;
+    userStyles += "\n";
     for (auto& cssPath : manifest.stylePaths) {
         std::string css = AppLoader::loadFile(cssPath);
         if (!css.empty()) userStyles += css + "\n";
@@ -696,6 +699,42 @@ bool Headless::processCommand(const std::string& line) {
         } else {
             std::cout << "[headless] screenshot failed\n";
         }
+        return true;
+    }
+
+    if (cmd.substr(0, 5) == "rect ") {
+        std::string selector = cmd.substr(5);
+        auto* el = querySelector(selector);
+        if (!el) {
+            std::cout << "(not found: " << selector << ")\n";
+            return true;
+        }
+        auto lhEl = el->litehtmlElement();
+        if (!lhEl) {
+            std::cout << "(no litehtml element)\n";
+            return true;
+        }
+        // Walk the document's render tree to find the render item for this element
+        std::function<std::shared_ptr<litehtml::render_item>(
+            const std::shared_ptr<litehtml::render_item>&)> findRi;
+        findRi = [&](const std::shared_ptr<litehtml::render_item>& ri)
+            -> std::shared_ptr<litehtml::render_item> {
+            if (!ri) return nullptr;
+            if (ri->src_el() == lhEl) return ri;
+            for (auto& child : ri->children()) {
+                auto found = findRi(child);
+                if (found) return found;
+            }
+            return nullptr;
+        };
+        auto ri = findRi(litehtmlDoc_->root_render());
+        if (!ri) {
+            std::cout << "(no render item)\n";
+            return true;
+        }
+        auto pos = ri->pos();
+        std::cout << "x=" << pos.x << " y=" << pos.y
+                  << " w=" << pos.width << " h=" << pos.height << "\n";
         return true;
     }
 
