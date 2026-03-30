@@ -7,6 +7,9 @@
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
 
+#include <litehtml.h>
+#include <litehtml/html.h>
+
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -31,6 +34,7 @@ static JSClassID js_node_class_id    = 0;  // generic Node wrapper (comments, te
 static JSClassID js_event_class_id    = 0;
 static JSClassID js_nodelist_class_id = 0;
 static JSClassID js_cssstyle_class_id = 0;
+static JSClassID js_computed_class_id = 0;
 
 // ===========================================================================
 // Per-context state (supports multiple JSContexts on the same runtime)
@@ -573,6 +577,248 @@ static JSValue wrapStyleProxy(JSContext* ctx, bro::dom::StyleProxy* style)
     JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_cssstyle_class_id));
     if (JS_IsException(obj)) return obj;
     JS_SetOpaque(obj, style);
+    return obj;
+}
+
+// ===========================================================================
+// ComputedStyleDeclaration (read-only, backed by litehtml css_properties)
+// ===========================================================================
+
+// Helper: convert a litehtml css_length to a CSS string
+static std::string cssLengthToString(const litehtml::css_length& len) {
+    if (len.is_predefined()) return "auto";
+    if (len.units() == litehtml::css_units_percentage) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.4g%%", len.val());
+        return buf;
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.4gpx", len.val());
+    return buf;
+}
+
+// Helper: convert a litehtml web_color to a CSS rgb/rgba string
+static std::string webColorToString(const litehtml::web_color& c) {
+    if (c.alpha == 255) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "rgb(%d, %d, %d)", c.red, c.green, c.blue);
+        return buf;
+    }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "rgba(%d, %d, %d, %.4g)",
+                  c.red, c.green, c.blue, c.alpha / 255.0);
+    return buf;
+}
+
+// Helper: convert a litehtml border_style enum to CSS string
+static std::string borderStyleToString(litehtml::border_style bs) {
+    return litehtml::index_value(bs, border_style_strings);
+}
+
+// Get a computed CSS property value from a litehtml element
+static std::string getComputedProperty(bro::dom::Element* el, const std::string& prop) {
+    auto lhEl = el->litehtmlElement();
+    if (!lhEl) return "";
+
+    const auto& css = lhEl->css();
+
+    // Display & layout
+    if (prop == "display")    return litehtml::index_value(css.get_display(), style_display_strings);
+    if (prop == "position")   return litehtml::index_value(css.get_position(), element_position_strings);
+    if (prop == "visibility") return litehtml::index_value(css.get_visibility(), visibility_strings);
+    if (prop == "overflow")   return litehtml::index_value(css.get_overflow(), overflow_strings);
+    if (prop == "float")      return litehtml::index_value(css.get_float(), element_float_strings);
+    if (prop == "clear")      return litehtml::index_value(css.get_clear(), element_clear_strings);
+    if (prop == "box-sizing") return litehtml::index_value(css.get_box_sizing(), box_sizing_strings);
+    if (prop == "text-align") return litehtml::index_value(css.get_text_align(), text_align_strings);
+    if (prop == "white-space") return litehtml::index_value(css.get_white_space(), white_space_strings);
+    if (prop == "vertical-align") return litehtml::index_value(css.get_vertical_align(), vertical_align_strings);
+    if (prop == "text-transform") return litehtml::index_value(css.get_text_transform(), text_transform_strings);
+
+    // Dimensions
+    if (prop == "width")      return cssLengthToString(css.get_width());
+    if (prop == "height")     return cssLengthToString(css.get_height());
+    if (prop == "min-width")  return cssLengthToString(css.get_min_width());
+    if (prop == "min-height") return cssLengthToString(css.get_min_height());
+    if (prop == "max-width")  return cssLengthToString(css.get_max_width());
+    if (prop == "max-height") return cssLengthToString(css.get_max_height());
+
+    // Margins
+    if (prop == "margin-top")    return cssLengthToString(css.get_margins().top);
+    if (prop == "margin-right")  return cssLengthToString(css.get_margins().right);
+    if (prop == "margin-bottom") return cssLengthToString(css.get_margins().bottom);
+    if (prop == "margin-left")   return cssLengthToString(css.get_margins().left);
+
+    // Padding
+    if (prop == "padding-top")    return cssLengthToString(css.get_padding().top);
+    if (prop == "padding-right")  return cssLengthToString(css.get_padding().right);
+    if (prop == "padding-bottom") return cssLengthToString(css.get_padding().bottom);
+    if (prop == "padding-left")   return cssLengthToString(css.get_padding().left);
+
+    // Borders (width)
+    if (prop == "border-top-width")    return cssLengthToString(css.get_borders().top.width);
+    if (prop == "border-right-width")  return cssLengthToString(css.get_borders().right.width);
+    if (prop == "border-bottom-width") return cssLengthToString(css.get_borders().bottom.width);
+    if (prop == "border-left-width")   return cssLengthToString(css.get_borders().left.width);
+
+    // Borders (style)
+    if (prop == "border-top-style")    return borderStyleToString(css.get_borders().top.style);
+    if (prop == "border-right-style")  return borderStyleToString(css.get_borders().right.style);
+    if (prop == "border-bottom-style") return borderStyleToString(css.get_borders().bottom.style);
+    if (prop == "border-left-style")   return borderStyleToString(css.get_borders().left.style);
+
+    // Borders (color)
+    if (prop == "border-top-color")    return webColorToString(css.get_borders().top.color);
+    if (prop == "border-right-color")  return webColorToString(css.get_borders().right.color);
+    if (prop == "border-bottom-color") return webColorToString(css.get_borders().bottom.color);
+    if (prop == "border-left-color")   return webColorToString(css.get_borders().left.color);
+
+    // Colors
+    if (prop == "color")            return webColorToString(css.get_color());
+    if (prop == "background-color") {
+        const auto& bg = css.get_bg();
+        return webColorToString(bg.m_color);
+    }
+
+    // Font
+    if (prop == "font-size") {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.4gpx", static_cast<double>(css.get_font_size()));
+        return buf;
+    }
+    if (prop == "line-height") {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.4gpx", static_cast<double>(css.line_height().computed_value));
+        return buf;
+    }
+
+    // Positioning offsets
+    if (prop == "top")    return cssLengthToString(css.get_offsets().top);
+    if (prop == "right")  return cssLengthToString(css.get_offsets().right);
+    if (prop == "bottom") return cssLengthToString(css.get_offsets().bottom);
+    if (prop == "left")   return cssLengthToString(css.get_offsets().left);
+
+    // z-index
+    if (prop == "z-index") {
+        int z = css.get_z_index();
+        return std::to_string(z);
+    }
+
+    // Flex
+    if (prop == "flex-grow") {
+        char buf[32]; std::snprintf(buf, sizeof(buf), "%.4g", css.get_flex_grow()); return buf;
+    }
+    if (prop == "flex-shrink") {
+        char buf[32]; std::snprintf(buf, sizeof(buf), "%.4g", css.get_flex_shrink()); return buf;
+    }
+    if (prop == "flex-basis") return cssLengthToString(css.get_flex_basis());
+    if (prop == "order") return std::to_string(css.get_order());
+
+    // Cursor
+    if (prop == "cursor") return css.get_cursor();
+
+    // Transition properties — return empty for now (litehtml doesn't compute these)
+    // but returning "" lets Vue know there's no transition rather than erroring
+    if (prop == "transition-duration" || prop == "transition-delay" ||
+        prop == "transition-property" || prop == "transition-timing-function" ||
+        prop == "animation-duration" || prop == "animation-delay" ||
+        prop == "animation-name") {
+        return "0s";
+    }
+
+    // Fall through to inline styles for properties we don't handle
+    return el->style().getProperty(prop);
+}
+
+// Exotic methods for ComputedStyleDeclaration — read-only property access
+static int js_computed_get_own_property(JSContext* ctx,
+                                        JSPropertyDescriptor* desc,
+                                        JSValueConst obj, JSAtom prop)
+{
+    auto* el = static_cast<bro::dom::Element*>(
+        JS_GetOpaque(obj, js_computed_class_id));
+    if (!el) return 0;
+
+    const char* name = JS_AtomToCString(ctx, prop);
+    if (!name) return 0;
+    std::string nameStr(name);
+    JS_FreeCString(ctx, name);
+
+    // Skip prototype methods
+    if (nameStr == "getPropertyValue" || nameStr == "setProperty" ||
+        nameStr == "length" || nameStr == "cssText") return 0;
+
+    std::string cssName = camelToKebab(nameStr);
+    std::string val = getComputedProperty(el, cssName);
+
+    if (desc) {
+        desc->flags = JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE;
+        desc->value = JS_NewString(ctx, val.c_str());
+        desc->getter = JS_UNDEFINED;
+        desc->setter = JS_UNDEFINED;
+    }
+    return 1;
+}
+
+static JSClassExoticMethods js_computed_exotic = {
+    js_computed_get_own_property,
+    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+};
+
+static JSClassDef js_computed_class = {
+    "CSSStyleDeclaration",  // same name as browser uses for computed styles
+    nullptr, nullptr, nullptr,
+    &js_computed_exotic,
+};
+
+static JSValue js_computed_getPropertyValue(JSContext* ctx,
+                                            JSValueConst this_val,
+                                            int argc, JSValueConst* argv)
+{
+    auto* el = static_cast<bro::dom::Element*>(
+        JS_GetOpaque(this_val, js_computed_class_id));
+    if (!el || argc < 1) return JS_NewString(ctx, "");
+    std::string name = jsToStdString(ctx, argv[0]);
+    return JS_NewString(ctx, getComputedProperty(el, name).c_str());
+}
+
+static JSValue js_computed_setProperty(JSContext* ctx,
+                                       JSValueConst /*this_val*/,
+                                       int /*argc*/, JSValueConst* /*argv*/)
+{
+    // Computed styles are read-only — silently ignore
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_computed_proto_funcs[] = {
+    JS_CFUNC_DEF("getPropertyValue", 1, js_computed_getPropertyValue),
+    JS_CFUNC_DEF("setProperty",      2, js_computed_setProperty),
+};
+
+// window.getComputedStyle(element) — returns a ComputedStyleDeclaration
+static JSValue js_window_getComputedStyle(JSContext* ctx,
+                                          JSValueConst /*this_val*/,
+                                          int argc, JSValueConst* argv)
+{
+    if (argc < 1) return JS_NULL;
+
+    // Try to get Element from the JS value
+    auto* el = static_cast<bro::dom::Element*>(
+        JS_GetOpaque(argv[0], js_element_class_id));
+
+    if (!el) {
+        // Return minimal stub for non-element values
+        JSValue obj = JS_NewObject(ctx);
+        JSValue fn = JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+            return JS_NewString(c, "");
+        }, "getPropertyValue", 1);
+        JS_SetPropertyStr(ctx, obj, "getPropertyValue", fn);
+        return obj;
+    }
+
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_computed_class_id));
+    if (JS_IsException(obj)) return obj;
+    JS_SetOpaque(obj, el);
     return obj;
 }
 
@@ -1967,6 +2213,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JS_NewClassID(rt, &js_event_class_id);
     JS_NewClassID(rt, &js_nodelist_class_id);
     JS_NewClassID(rt, &js_cssstyle_class_id);
+    JS_NewClassID(rt, &js_computed_class_id);
     JS_NewClassID(rt, &js_tokenlist_class_id);
 
     // ----- Register classes on the runtime (once per runtime) -----
@@ -1977,6 +2224,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
         JS_NewClass(rt, js_event_class_id,    &js_event_class);
         JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class);
         JS_NewClass(rt, js_cssstyle_class_id, &js_cssstyle_class);
+        JS_NewClass(rt, js_computed_class_id, &js_computed_class);
         JS_NewClass(rt, js_tokenlist_class_id, &js_tokenlist_class);
         s_classes_registered[rt] = true;
     }
@@ -2012,6 +2260,12 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JS_SetPropertyFunctionList(ctx, css_proto, js_cssstyle_proto_funcs,
                                sizeof(js_cssstyle_proto_funcs) / sizeof(js_cssstyle_proto_funcs[0]));
     JS_SetClassProto(ctx, js_cssstyle_class_id, css_proto);
+
+    // ComputedStyleDeclaration prototype
+    JSValue comp_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, comp_proto, js_computed_proto_funcs,
+                               sizeof(js_computed_proto_funcs) / sizeof(js_computed_proto_funcs[0]));
+    JS_SetClassProto(ctx, js_computed_class_id, comp_proto);
 
     // DOMTokenList prototype
     JSValue tl_proto = JS_NewObject(ctx);
@@ -2064,16 +2318,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
         NodeList.prototype.forEach = Array.prototype.forEach;
     }
 
-    // window.getComputedStyle stub
-    window.getComputedStyle = function(el) {
-        if (el && el.style) return el.style;
-        // Return a minimal object with getPropertyValue for elements without style
-        return {
-            getPropertyValue: function() { return ''; },
-            setProperty: function() {},
-            length: 0
-        };
-    };
+    // window.getComputedStyle is registered as a native C++ function (see below)
 
     // Stub DOM type constructors needed by Vue and other frameworks
     if (typeof Element === 'undefined')
@@ -2120,6 +2365,14 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JSValue r = JS_Eval(ctx, polyfills, strlen(polyfills),
                         "<dom-polyfills>", JS_EVAL_TYPE_GLOBAL);
     JS_FreeValue(ctx, r);
+
+    // Register native getComputedStyle on window (globalThis)
+    {
+        JSValue g = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, g, "getComputedStyle",
+            JS_NewCFunction(ctx, js_window_getComputedStyle, "getComputedStyle", 1));
+        JS_FreeValue(ctx, g);
+    }
 }
 
 void DomBindings::cleanup(JSContext* ctx) {
