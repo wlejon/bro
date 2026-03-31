@@ -79,6 +79,13 @@ private:
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
 
+    // Viewport scrolling
+    float scrollY_ = 0.0f;
+    float documentHeight_ = 0.0f;
+    static constexpr float kScrollSpeed = 48.0f; // pixels per wheel tick
+    static constexpr int kScrollbarWidth = 8;
+    static constexpr int kScrollbarMargin = 2;
+
     // UI render throttle — layout+rasterize at most every ~60fps
     static constexpr double kUIFrameIntervalMs = 8.0;
     double lastUIRenderMs_ = 0.0;

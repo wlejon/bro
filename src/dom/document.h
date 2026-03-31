@@ -64,6 +64,21 @@ public:
     litehtml::document::ptr litehtmlDocument() const { return litehtml_doc_; }
 
     // ID map management (called by elements when id attribute changes)
+    /// Pre-process HTML: extract <template> blocks that litehtml/gumbo would
+    /// discard, replacing them with hidden placeholder divs. After buildFrom(),
+    /// call injectTemplates() to restore them in the bro::dom tree.
+    struct TemplateBlock {
+        std::string id;         // original id attribute (or generated)
+        std::string attrs;      // other attributes on the <template> tag
+        std::string innerHTML;  // raw inner HTML content
+    };
+    static std::string extractTemplates(const std::string& html,
+                                        std::vector<TemplateBlock>& out);
+
+    /// After buildFrom(), call this to populate placeholder elements with
+    /// their template content (stored as children, hidden from rendering).
+    void injectTemplates(const std::vector<TemplateBlock>& templates);
+
     void registerElementId(const std::string& id, Element* elem);
     void unregisterElementId(const std::string& id);
 

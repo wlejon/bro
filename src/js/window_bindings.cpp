@@ -1,0 +1,165 @@
+#include "js/window_bindings.h"
+
+#include <cstring>
+
+extern "C" {
+#include "quickjs.h"
+}
+
+namespace bro::js {
+
+void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+
+    // window = globalThis
+    JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth));
+    JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight));
+
+    // navigator
+    JSValue nav = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
+    JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
+    JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
+    JS_SetPropertyStr(ctx, global, "navigator", nav);
+
+    // location (initial values — polyfill adds methods)
+    JSValue loc = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, loc, "href",     JS_NewString(ctx, "bro://app/"));
+    JS_SetPropertyStr(ctx, loc, "origin",   JS_NewString(ctx, "bro://app"));
+    JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, "bro:"));
+    JS_SetPropertyStr(ctx, loc, "host",     JS_NewString(ctx, "app"));
+    JS_SetPropertyStr(ctx, loc, "hostname", JS_NewString(ctx, "app"));
+    JS_SetPropertyStr(ctx, loc, "port",     JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, "/"));
+    JS_SetPropertyStr(ctx, loc, "search",   JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, loc, "hash",     JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, global, "location", loc);
+
+    // history (initial values — polyfill adds methods)
+    JSValue history = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, history, "state", JS_NULL);
+    JS_SetPropertyStr(ctx, history, "length", JS_NewInt32(ctx, 1));
+    JS_SetPropertyStr(ctx, global, "history", history);
+
+    // Window events + SPA history/location polyfill
+    const char* polyfill = R"JS(
+(function() {
+    var listeners = {};
+    globalThis.__bro_win_listeners = listeners;
+    globalThis.addEventListener = function(type, fn) {
+        if (!listeners[type]) listeners[type] = [];
+        listeners[type].push(fn);
+    };
+    globalThis.removeEventListener = function(type, fn) {
+        var arr = listeners[type];
+        if (!arr) return;
+        var idx = arr.indexOf(fn);
+        if (idx >= 0) arr.splice(idx, 1);
+    };
+    globalThis.__bro_dispatch_window_event = function(type, event) {
+        var arr = listeners[type];
+        if (!arr) return;
+        for (var i = 0; i < arr.length; i++) {
+            try { arr[i](event); } catch(e) { console.error('Event handler error:', e); }
+        }
+    };
+
+    // --- SPA history + location compat ---
+    var _stack = [{ state: null, url: location.href }];
+    var _index = 0;
+
+    function _parseUrl(url) {
+        var resolved = url;
+        if (url === undefined || url === null) {
+            resolved = location.href;
+        } else if (url.indexOf('://') === -1) {
+            if (url.charAt(0) === '/') {
+                resolved = location.origin + url;
+            } else if (url.charAt(0) === '?' || url.charAt(0) === '#') {
+                resolved = location.origin + location.pathname + url;
+            } else {
+                var path = location.pathname;
+                var lastSlash = path.lastIndexOf('/');
+                resolved = location.origin + path.substring(0, lastSlash + 1) + url;
+            }
+        }
+        var obj = { href: resolved, origin: location.origin, protocol: location.protocol,
+                    host: location.host, hostname: location.hostname, port: location.port,
+                    pathname: '/', search: '', hash: '' };
+        var rest = resolved;
+        var originIdx = resolved.indexOf(obj.origin);
+        if (originIdx >= 0) rest = resolved.substring(originIdx + obj.origin.length);
+        var hashIdx = rest.indexOf('#');
+        if (hashIdx >= 0) { obj.hash = rest.substring(hashIdx); rest = rest.substring(0, hashIdx); }
+        var searchIdx = rest.indexOf('?');
+        if (searchIdx >= 0) { obj.search = rest.substring(searchIdx); rest = rest.substring(0, searchIdx); }
+        obj.pathname = rest || '/';
+        obj.href = obj.origin + obj.pathname + obj.search + obj.hash;
+        return obj;
+    }
+
+    function _applyUrl(parts) {
+        location.href = parts.href;
+        location.pathname = parts.pathname;
+        location.search = parts.search;
+        location.hash = parts.hash;
+    }
+
+    function _firePopstate(state) {
+        globalThis.__bro_dispatch_window_event('popstate', { type: 'popstate', state: state });
+    }
+
+    history.pushState = function(state, title, url) {
+        var parts = _parseUrl(url);
+        var oldHash = location.hash;
+        _stack.splice(_index + 1);
+        _stack.push({ state: state, url: parts.href });
+        _index = _stack.length - 1;
+        history.state = state;
+        history.length = _stack.length;
+        _applyUrl(parts);
+        if (parts.hash !== oldHash) {
+            globalThis.__bro_dispatch_window_event('hashchange',
+                { type: 'hashchange', oldURL: location.origin + location.pathname + oldHash, newURL: parts.href });
+        }
+    };
+
+    history.replaceState = function(state, title, url) {
+        var parts = _parseUrl(url);
+        _stack[_index] = { state: state, url: parts.href };
+        history.state = state;
+        _applyUrl(parts);
+    };
+
+    history.go = function(delta) {
+        delta = delta || 0;
+        var target = _index + delta;
+        if (target < 0 || target >= _stack.length) return;
+        _index = target;
+        var entry = _stack[_index];
+        history.state = entry.state;
+        _applyUrl(_parseUrl(entry.url));
+        _firePopstate(entry.state);
+    };
+
+    history.back = function() { history.go(-1); };
+    history.forward = function() { history.go(1); };
+
+    // location methods — no-ops (no real navigation)
+    location.replace = function() {};
+    location.reload = function() {};
+    location.assign = function() {};
+    location.toString = function() { return location.href; };
+})();
+)JS";
+    JSValue r = JS_Eval(ctx, polyfill, strlen(polyfill),
+                        "<window-bindings>", JS_EVAL_TYPE_GLOBAL);
+    JS_FreeValue(ctx, r);
+
+    JS_FreeValue(ctx, global);
+}
+
+} // namespace bro::js

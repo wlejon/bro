@@ -1,5 +1,6 @@
 #include "dom/element.h"
 #include "dom/document.h"
+#include "util/log.h"
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
 #include "layout/bro_el_text.h"
@@ -184,42 +185,59 @@ void Element::setTextContent(const std::string& text) {
     }
 
     // Sync to litehtml so the rendered output updates.
-    // We use bro_el_text (subclass of el_text with public setter) to update
-    // text in-place without destroying render items.  This avoids flicker
-    // from the destroy/recreate cycle of append_children_from_string.
     if (litehtml_element_) {
-        auto& lhChildren = litehtml_element_->children();
-
-        // Fast path: single text child — update its text in-place
-        if (lhChildren.size() == 1 && lhChildren.front()->is_text()) {
-            auto* broText = dynamic_cast<bro_el_text*>(lhChildren.front().get());
-            if (broText) {
-                broText->set_text(text.c_str());
-                broText->compute_styles(false);
-                markDirty();
-                return;
+        bool hasNewlines = text.find('\n') != std::string::npos;
+        // Fast path: single text child, no newlines — update in-place
+        if (!hasNewlines) {
+            auto& lhChildren = litehtml_element_->children();
+            if (lhChildren.size() == 1 && lhChildren.front()->is_text()) {
+                auto* broText = dynamic_cast<bro_el_text*>(lhChildren.front().get());
+                if (broText) {
+                    broText->set_text(text.c_str());
+                    broText->compute_styles(false);
+                    markDirty();
+                    return;
+                }
             }
         }
 
-        // Slow path: clear children and create a new bro_el_text
+        // Slow path: clear litehtml children and rebuild.
         litehtml_element_->clearRecursive();
         auto ri = litehtml_element_->get_render_item();
-        if (ri) {
-            ri->children().clear();
-        }
+        if (ri) ri->children().clear();
 
         if (!text.empty()) {
             auto doc = litehtml_element_->get_document();
             if (doc) {
-                auto textEl = std::make_shared<bro_el_text>(text.c_str(), doc);
-                litehtml_element_->appendChild(textEl);
-                textEl->compute_styles(false);
-
-                if (ri) {
-                    auto textRender = textEl->create_render_item(ri);
-                    if (textRender) {
-                        textRender = textRender->init();
-                        ri->add_child(textRender);
+                if (!hasNewlines) {
+                    // No newlines — single text element
+                    auto textEl = std::make_shared<bro_el_text>(text.c_str(), doc);
+                    litehtml_element_->appendChild(textEl);
+                    textEl->compute_styles(false);
+                    if (ri) {
+                        auto textRender = textEl->create_render_item(ri);
+                        if (textRender) {
+                            textRender = textRender->init();
+                            ri->add_child(textRender);
+                        }
+                    }
+                } else {
+                    // Has newlines — convert to HTML with <br> and use
+                    // litehtml's parser to build proper element tree.
+                    // Only update litehtml tree, NOT bro::dom tree
+                    // (bro::dom keeps the TextNode with \n intact so
+                    // textContent getter preserves newlines for JS).
+                    std::string html;
+                    for (char c : text) {
+                        if (c == '\n')      html += "<br>";
+                        else if (c == '<')  html += "&lt;";
+                        else if (c == '&')  html += "&amp;";
+                        else                html += c;
+                    }
+                    auto lhDoc = litehtml_element_->get_document();
+                    if (lhDoc) {
+                        lhDoc->append_children_from_string(
+                            *litehtml_element_, html.c_str(), false);
                     }
                 }
             }
@@ -227,6 +245,7 @@ void Element::setTextContent(const std::string& text) {
     }
 
     markDirty();
+    markStructureDirty();
 }
 
 std::string Element::innerHTML() const {

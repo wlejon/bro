@@ -13,6 +13,7 @@ public:
     /// Register `localStorage` on the global object.
     /// storagePath is the file path for persisting data (e.g. appDir/.storage.json).
     static void install(JSContext* ctx, const std::string& storagePath);
+    static void installSessionStorage(JSContext* ctx);
     static void cleanup(JSContext* ctx);
 };
 

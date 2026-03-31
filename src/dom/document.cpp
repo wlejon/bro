@@ -306,6 +306,113 @@ void Document::collectElements(Node* node, std::vector<Element*>& out) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Template extraction — pre-process HTML before litehtml parsing
+// ---------------------------------------------------------------------------
+
+std::string Document::extractTemplates(const std::string& html,
+                                       std::vector<TemplateBlock>& out)
+{
+    std::string result;
+    result.reserve(html.size());
+    size_t pos = 0;
+    int genId = 0;
+
+    while (pos < html.size()) {
+        // Find next <template
+        size_t start = html.find("<template", pos);
+        if (start == std::string::npos) {
+            result.append(html, pos, html.size() - pos);
+            break;
+        }
+
+        // Append everything before the <template
+        result.append(html, pos, start - pos);
+
+        // Find end of opening tag
+        size_t tagEnd = html.find('>', start);
+        if (tagEnd == std::string::npos) {
+            result.append(html, start, html.size() - start);
+            break;
+        }
+
+        // Extract attributes from the opening tag
+        std::string openTag = html.substr(start, tagEnd - start + 1);
+
+        // Parse id from attributes
+        std::string id;
+        size_t idPos = openTag.find("id=\"");
+        if (idPos == std::string::npos) idPos = openTag.find("id='");
+        if (idPos != std::string::npos) {
+            char quote = openTag[idPos + 3];
+            size_t idStart = idPos + 4;
+            size_t idEnd = openTag.find(quote, idStart);
+            if (idEnd != std::string::npos)
+                id = openTag.substr(idStart, idEnd - idStart);
+        }
+        if (id.empty()) {
+            id = "__bro_tmpl_" + std::to_string(genId++);
+        }
+
+        // Find matching </template>
+        size_t contentStart = tagEnd + 1;
+        size_t closeTag = html.find("</template>", contentStart);
+        if (closeTag == std::string::npos) {
+            // Malformed — just pass through
+            result.append(html, start, html.size() - start);
+            break;
+        }
+
+        std::string innerHTML = html.substr(contentStart, closeTag - contentStart);
+
+        TemplateBlock block;
+        block.id = id;
+        block.innerHTML = innerHTML;
+        out.push_back(std::move(block));
+
+        // Replace with a hidden div placeholder that litehtml will keep
+        result += "<div data-bro-template=\"" + id + "\" id=\"" + id + "\" style=\"display:none\"></div>";
+
+        pos = closeTag + 11; // skip past </template>
+    }
+
+    return result;
+}
+
+void Document::injectTemplates(const std::vector<TemplateBlock>& templates)
+{
+    for (auto& tmpl : templates) {
+        Element* placeholder = getElementById(tmpl.id);
+        if (!placeholder) continue;
+
+        // Create a TEMPLATE element, copy the placeholder's children/id,
+        // then replace the placeholder's tag/nature
+        // Simplest: just change the placeholder's tag to TEMPLATE and
+        // parse the innerHTML as children. But we can't change tag_ easily.
+        //
+        // Instead: create a new TEMPLATE element, parse content into it,
+        // and swap it into the tree where the placeholder is.
+
+        auto* tmplElem = createElement("TEMPLATE");
+        tmplElem->setAttribute("id", tmpl.id);
+
+        // Parse the template innerHTML as child elements
+        // We need a temporary litehtml parse to get the element tree.
+        // Use a simpler approach: store the raw HTML and parse on .content access.
+        // For now, store as a data attribute and parse in the JS .content getter.
+        tmplElem->setAttribute("data-bro-template-html", tmpl.innerHTML);
+
+        // Replace placeholder with template element in the tree
+        auto* parent = placeholder->parentElement();
+        if (parent) {
+            parent->insertBefore(tmplElem, placeholder);
+            parent->removeChild(placeholder);
+            // Register in id map
+            registerElementId(tmpl.id, tmplElem);
+        }
+    }
+}
+
 Element* Document::findElementByLitehtml(const litehtml::element::ptr& lhElem) {
     if (!lhElem) return nullptr;
     auto it = litehtmlMap_.find(lhElem);

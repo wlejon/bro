@@ -82,6 +82,14 @@ public:
     void setLitehtmlElement(litehtml::element::ptr elem) { litehtml_element_ = std::move(elem); }
     litehtml::element::ptr litehtmlElement() const { return litehtml_element_; }
 
+    // Element-level scroll offset (for overflow:auto/scroll elements)
+    float scrollTopValue() const { return scrollTop_; }
+    void setScrollTopValue(float v) { scrollTop_ = v; }
+
+    // Auto-scroll flag: scroll to bottom after next layout
+    bool needsScrollToBottom() const { return scrollToBottom_; }
+    void setScrollToBottom(bool v) { scrollToBottom_ = v; }
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -93,6 +101,8 @@ private:
     litehtml::element::ptr litehtml_element_;
     Document* document_ = nullptr;
     bool dirty_ = false;
+    bool scrollToBottom_ = false;
+    float scrollTop_ = 0.0f;
     uint32_t magic_ = 0xB00E;
 };
 

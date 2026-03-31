@@ -1,4 +1,5 @@
 #include "js/dom_bindings.h"
+#include "js/custom_elements.h"
 #include "js/runtime.h"
 #include "js/event_dispatch.h"
 #include "js/image_bindings.h"
@@ -1273,6 +1274,11 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
             invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
     }
     el->setTextContent(jsToStdString(ctx, val));
+    // Auto-scroll overflow elements to bottom when content changes
+    auto lh = el->litehtmlElement();
+    if (lh && lh->css().get_overflow() > litehtml::overflow_visible) {
+        el->setScrollToBottom(true);
+    }
     return JS_UNDEFINED;
 }
 
@@ -1613,8 +1619,14 @@ static JSValue js_element_setAttribute(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 2) return JS_UNDEFINED;
-    el->setAttribute(jsToStdString(ctx, argv[0]),
-                     jsToStdString(ctx, argv[1]));
+    std::string name = jsToStdString(ctx, argv[0]);
+    std::string newVal = jsToStdString(ctx, argv[1]);
+    std::string oldVal = el->getAttribute(name);
+    el->setAttribute(name, newVal);
+    // Fire attributeChangedCallback for custom elements
+    if (oldVal != newVal) {
+        fireAttributeChangedCallback(ctx, this_val, name, oldVal, newVal);
+    }
     return JS_UNDEFINED;
 }
 
@@ -1644,10 +1656,24 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 if (doc && kid->nodeType() == bro::dom::NodeType::Element)
                     doc->syncAppendToLitehtml(static_cast<bro::dom::Element*>(kid), el);
             }
+            // Fire connectedCallback for each moved child
+            for (auto* kid : kids) {
+                if (kid->nodeType() == bro::dom::NodeType::Element) {
+                    JSValue w = DomBindings::wrapElement(ctx, kid);
+                    fireConnectedCallback(ctx, w);
+                    JS_FreeValue(ctx, w);
+                }
+            }
         } else {
             el->appendChild(child);
             if (doc && child->nodeType() == bro::dom::NodeType::Element) {
                 doc->syncAppendToLitehtml(static_cast<bro::dom::Element*>(child), el);
+            }
+            // Fire connectedCallback
+            if (child->nodeType() == bro::dom::NodeType::Element) {
+                JSValue w = DomBindings::wrapElement(ctx, child);
+                fireConnectedCallback(ctx, w);
+                JS_FreeValue(ctx, w);
             }
         }
     }
@@ -1664,6 +1690,10 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
         auto* doc = getDocumentForCtx(ctx);
         if (child->nodeType() == bro::dom::NodeType::Element) {
             auto* childElem = static_cast<bro::dom::Element*>(child);
+            // Fire disconnectedCallback before removal
+            JSValue w = DomBindings::wrapElement(ctx, childElem);
+            fireDisconnectedCallback(ctx, w);
+            JS_FreeValue(ctx, w);
             if (doc && !childElem->id().empty())
                 doc->unregisterElementId(childElem->id());
             if (doc) doc->syncRemoveFromLitehtml(childElem, el);
@@ -1696,6 +1726,10 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
             } else {
                 doc->syncAppendToLitehtml(newElem, el);
             }
+            // Fire connectedCallback
+            JSValue w = DomBindings::wrapElement(ctx, newElem);
+            fireConnectedCallback(ctx, w);
+            JS_FreeValue(ctx, w);
         }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
@@ -1710,6 +1744,12 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
     auto* oldChild = unwrapNode(ctx, argv[1]);
     if (newChild && oldChild) {
         auto* doc = getDocumentForCtx(ctx);
+        // Fire disconnectedCallback on old child before removal
+        if (oldChild->nodeType() == bro::dom::NodeType::Element) {
+            JSValue w = DomBindings::wrapElement(ctx, oldChild);
+            fireDisconnectedCallback(ctx, w);
+            JS_FreeValue(ctx, w);
+        }
         // Sync: insert new before old, then remove old
         el->insertBefore(newChild, oldChild);
         if (doc && newChild->nodeType() == bro::dom::NodeType::Element &&
@@ -1727,6 +1767,12 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         }
         el->removeChild(oldChild);
         if (doc) doc->freeNode(oldChild);
+        // Fire connectedCallback on new child
+        if (newChild->nodeType() == bro::dom::NodeType::Element) {
+            JSValue w = DomBindings::wrapElement(ctx, newChild);
+            fireConnectedCallback(ctx, w);
+            JS_FreeValue(ctx, w);
+        }
     }
     return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
 }
@@ -2133,6 +2179,20 @@ static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val)
 }
 
 static JSValue js_element_get_scrollHeight(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    auto lh = el->litehtmlElement();
+    if (lh) {
+        auto ri = lh->get_render_item();
+        if (ri) {
+            // Content height = max bottom of all children
+            float contentH = 0;
+            for (auto& child : ri->children())
+                contentH = std::max(contentH, static_cast<float>(child->bottom()));
+            if (contentH > 0)
+                return JS_NewInt32(ctx, static_cast<int>(contentH));
+        }
+    }
     return js_element_get_offsetHeight(ctx, this_val);
 }
 
@@ -2141,17 +2201,86 @@ static JSValue js_element_get_scrollLeft(JSContext* ctx, JSValueConst /*this_val
     return JS_NewInt32(ctx, 0);
 }
 
-static JSValue js_element_get_scrollTop(JSContext* ctx, JSValueConst /*this_val*/) {
-    (void)ctx;
-    return JS_NewInt32(ctx, 0);
+static JSValue js_element_get_scrollTop(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    auto lh = el->litehtmlElement();
+    if (lh) {
+        auto ri = lh->get_render_item();
+        if (ri) return JS_NewFloat64(ctx, static_cast<double>(ri->get_scroll_top()));
+    }
+    return JS_NewFloat64(ctx, 0);
 }
 
 static JSValue js_element_set_scrollLeft(JSContext* /*ctx*/, JSValueConst /*this_val*/, JSValueConst /*val*/) {
     return JS_UNDEFINED; // stub
 }
 
-static JSValue js_element_set_scrollTop(JSContext* /*ctx*/, JSValueConst /*this_val*/, JSValueConst /*val*/) {
-    return JS_UNDEFINED; // stub
+static JSValue js_element_set_scrollTop(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    double v = 0;
+    JS_ToFloat64(ctx, &v, val);
+    auto lh = el->litehtmlElement();
+    if (lh) {
+        auto ri = lh->get_render_item();
+        if (ri) {
+            float current = static_cast<float>(ri->get_scroll_top());
+            float delta = static_cast<float>(v) - current;
+            ri->v_scroll(static_cast<litehtml::pixel_t>(delta));
+        }
+    }
+    if (el->document()) el->document()->markDirty();
+    return JS_UNDEFINED;
+}
+
+// innerText: like textContent but skips hidden elements and adds newlines for blocks
+static void collectInnerText(const bro::dom::Element* el, std::string& out) {
+    for (const auto& child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Text) {
+            auto* text = static_cast<const bro::dom::TextNode*>(child);
+            out += text->data();
+        } else if (child->nodeType() == bro::dom::NodeType::Element) {
+            auto* childEl = static_cast<const bro::dom::Element*>(child);
+            // Skip script/style elements
+            const auto& tag = childEl->tagName();
+            if (tag == "SCRIPT" || tag == "STYLE" || tag == "script" || tag == "style")
+                continue;
+            // Skip display:none elements
+            auto lh = childEl->litehtmlElement();
+            if (lh && lh->css().get_display() == litehtml::display_none)
+                continue;
+            // Block-level elements get newlines
+            bool isBlock = false;
+            if (lh) {
+                auto d = lh->css().get_display();
+                isBlock = (d == litehtml::display_block || d == litehtml::display_list_item ||
+                           d == litehtml::display_table);
+            }
+            if (isBlock && !out.empty() && out.back() != '\n')
+                out += '\n';
+            collectInnerText(childEl, out);
+            if (isBlock && !out.empty() && out.back() != '\n')
+                out += '\n';
+        }
+    }
+}
+
+static JSValue js_element_get_innerText(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    std::string result;
+    collectInnerText(el, result);
+    // Trim trailing newline
+    while (!result.empty() && result.back() == '\n')
+        result.pop_back();
+    return JS_NewString(ctx, result.c_str());
+}
+
+// scrollIntoView — no-op stub (no viewport scrolling yet)
+static JSValue js_element_scrollIntoView(JSContext* /*ctx*/, JSValueConst /*this_val*/,
+                                         int /*argc*/, JSValueConst* /*argv*/) {
+    return JS_UNDEFINED;
 }
 
 static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
@@ -2342,6 +2471,59 @@ static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
     return obj;
 }
 
+// <template>.content — returns a DocumentFragment with cloned children.
+// For HTML-parsed templates, content is stored in data-bro-template-html
+// and parsed on first access. For JS-created templates, children are cloned.
+static JSValue js_element_get_content(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (el->tagName() != "TEMPLATE" && el->tagName() != "template")
+        return JS_UNDEFINED;
+
+    auto* doc = getDocumentForCtx(ctx);
+    if (!doc) return JS_UNDEFINED;
+
+    // Check for stored HTML from template extraction (HTML-parsed templates)
+    std::string storedHtml = el->getAttribute("data-bro-template-html");
+    if (!storedHtml.empty()) {
+        // Parse the HTML into a temporary element, then move children to fragment
+        auto* temp = doc->createElement("div");
+        doc->parseInnerHTML(temp, storedHtml);
+
+        auto* frag = doc->createElement("#DOCUMENT-FRAGMENT");
+        auto kids = temp->childNodes();
+        for (auto* kid : kids) {
+            frag->appendChild(kid);
+        }
+        doc->freeNode(temp);
+        return DomBindings::wrapElement(ctx, frag);
+    }
+
+    // JS-created templates: deep-clone children into a fragment
+    auto* frag = doc->createElement("#DOCUMENT-FRAGMENT");
+    if (!frag) return JS_NULL;
+
+    for (auto* child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            JSValue childJs = DomBindings::wrapElement(ctx, child);
+            JSValue trueVal = JS_TRUE;
+            JSValue clonedJs = js_element_cloneNode(ctx, childJs, 1, &trueVal);
+            auto* clonedElem = static_cast<bro::dom::Element*>(
+                DomBindings::unwrapElement(ctx, clonedJs));
+            if (clonedElem) frag->appendChild(clonedElem);
+            JS_FreeValue(ctx, clonedJs);
+            JS_FreeValue(ctx, childJs);
+        } else if (child->nodeType() == bro::dom::NodeType::Text) {
+            auto* text = static_cast<bro::dom::TextNode*>(child);
+            auto* cloned = doc->createTextNode(text->data());
+            frag->appendChild(cloned);
+        }
+    }
+
+    return DomBindings::wrapElement(ctx, frag);
+}
+
 static const JSCFunctionListEntry js_element_proto_funcs[] = {
     // Properties
     JS_CGETSET_DEF("id",            js_element_get_id,          js_element_set_id),
@@ -2379,8 +2561,10 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("scrollLeft",    js_element_get_scrollLeft, js_element_set_scrollLeft),
     JS_CGETSET_DEF("scrollTop",     js_element_get_scrollTop, js_element_set_scrollTop),
     JS_CGETSET_DEF("outerHTML",     js_element_get_outerHTML, nullptr),
+    JS_CGETSET_DEF("innerText",     js_element_get_innerText, nullptr),
     JS_CGETSET_DEF("dataset",       js_element_get_dataset, nullptr),
     JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),
+    JS_CGETSET_DEF("content",      js_element_get_content, nullptr),
     // Form control properties
     JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
     JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),
@@ -2414,6 +2598,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("blur",                      0, js_element_blur),
     JS_CFUNC_DEF("insertAdjacentHTML",        2, js_element_insertAdjacentHTML),
     JS_CFUNC_DEF("getContext",                1, js_element_getContext),
+    JS_CFUNC_DEF("scrollIntoView",            0, js_element_scrollIntoView),
 };
 
 // ===========================================================================
@@ -2490,6 +2675,9 @@ static JSValue js_document_createElement(JSContext* ctx,
         return ImageBindings::createImage(ctx);
     auto* el = doc->createElement(tag);
     if (!el) return JS_NULL;
+    // Custom element: construct via user's class
+    JSValue ce = createCustomElement(ctx, el, tag);
+    if (!JS_IsUndefined(ce)) return ce;
     return DomBindings::wrapElement(ctx, el);
 }
 
@@ -2505,6 +2693,8 @@ static JSValue js_document_createElementNS(JSContext* ctx,
         return ImageBindings::createImage(ctx);
     auto* el = doc->createElement(tag);
     if (!el) return JS_NULL;
+    JSValue ce = createCustomElement(ctx, el, tag);
+    if (!JS_IsUndefined(ce)) return ce;
     return DomBindings::wrapElement(ctx, el);
 }
 
@@ -2686,6 +2876,9 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
     }
     JS_SetOpaque(obj, element_ptr);
 
+    // Upgrade prototype for custom elements (e.g. from innerHTML parsing)
+    upgradeCustomElementPrototype(ctx, obj, elem->tagName());
+
     // Register in the element map for event dispatch lookup
     JS_SetPropertyStr(ctx, elemMap, key.c_str(), JS_DupValue(ctx, obj));
 
@@ -2697,6 +2890,11 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
 void* DomBindings::unwrapElement(JSContext* /*ctx*/, JSValueConst val)
 {
     return JS_GetOpaque(val, js_element_class_id);
+}
+
+JSClassID DomBindings::elementClassId()
+{
+    return js_element_class_id;
 }
 
 JSValue DomBindings::wrapDocument(JSContext* ctx, void* document_ptr)
@@ -2838,8 +3036,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
         globalThis.SVGElement = class SVGElement {};
     if (typeof MathMLElement === 'undefined')
         globalThis.MathMLElement = class MathMLElement {};
-    if (typeof HTMLElement === 'undefined')
-        globalThis.HTMLElement = class HTMLElement {};
+    // HTMLElement is registered natively by installCustomElements
 
     // Event constructor (used by el.dispatchEvent(new Event('input')))
     globalThis.Event = class Event {

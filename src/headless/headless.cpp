@@ -11,6 +11,8 @@
 #include "js/canvas_bindings.h"
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
+#include "js/window_bindings.h"
+#include "js/custom_elements.h"
 #include "canvas/canvas_scene.h"
 #include "canvas/canvas2d.h"
 #include "dom/document.h"
@@ -446,63 +448,31 @@ Headless::Headless(const std::string& appDir, int width, int height)
         if (!css.empty()) userStyles += css + "\n";
     }
 
-    // 5. Parse HTML (single document shared by layout + DOM)
+    // 5. Extract <template> blocks before litehtml parsing (gumbo discards them)
+    std::vector<dom::Document::TemplateBlock> templateBlocks;
+    html = dom::Document::extractTemplates(html, templateBlocks);
+
+    // 6. Parse HTML (single document shared by layout + DOM)
     litehtmlDoc_ = litehtml::document::createFromString(
         html, container_.get(), litehtml::master_css, userStyles);
 
-    // 6. Build DOM tree
+    // 6a. Build DOM tree
     document_ = std::make_unique<dom::Document>();
     document_->buildFrom(litehtmlDoc_);
 
-    // 7. Set up window/navigator globals BEFORE DOM bindings
-    //    (DOM bindings install polyfills that reference window)
-    {
-        JSContext* ctx = jsRuntime_->getContext();
-        JSValue global = JS_GetGlobalObject(ctx);
+    // 6b. Inject extracted templates back into the DOM tree
+    if (!templateBlocks.empty())
+        document_->injectTemplates(templateBlocks);
 
-        JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
-        JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
-        JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth_));
-        JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight_));
-
-        JSValue nav = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
-        JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
-        JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
-        JS_SetPropertyStr(ctx, global, "navigator", nav);
-
-        const char* windowEventPolyfill = R"JS(
-(function() {
-    var listeners = {};
-    globalThis.__bro_win_listeners = listeners;
-    globalThis.addEventListener = function(type, fn) {
-        if (!listeners[type]) listeners[type] = [];
-        listeners[type].push(fn);
-    };
-    globalThis.removeEventListener = function(type, fn) {
-        var arr = listeners[type];
-        if (!arr) return;
-        var idx = arr.indexOf(fn);
-        if (idx >= 0) arr.splice(idx, 1);
-    };
-    globalThis.__bro_dispatch_window_event = function(type, event) {
-        var arr = listeners[type];
-        if (!arr) return;
-        for (var i = 0; i < arr.length; i++) {
-            try { arr[i](event); } catch(e) { console.error('Event handler error:', e); }
-        }
-    };
-})();
-)JS";
-        JSValue r = JS_Eval(ctx, windowEventPolyfill, strlen(windowEventPolyfill),
-                            "<window-events>", JS_EVAL_TYPE_GLOBAL);
-        JS_FreeValue(ctx, r);
-
-        JS_FreeValue(ctx, global);
-    }
+    // 7. Set up window/navigator/location/history BEFORE DOM bindings
+    js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
 
     // 7a. Install JS DOM bindings (after window setup so polyfills work)
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
+
+    // 7a2. Install custom elements (after DOM bindings)
+    js::installCustomElements(jsRuntime_->getContext(),
+                              js::DomBindings::elementClassId(), document_.get());
 
     // 7b. Install Canvas 2D bindings with headless factory
     js::CanvasBindings::install(jsRuntime_->getContext());
@@ -518,8 +488,9 @@ Headless::Headless(const std::string& appDir, int width, int height)
     //     JS code catches and falls back gracefully)
     js::AudioBindings::install(jsRuntime_->getContext(), nullptr);
 
-    // 7d. localStorage
+    // 7d. localStorage + sessionStorage
     js::StorageBindings::install(jsRuntime_->getContext(), manifest.basePath + "/.storage.json");
+    js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
 
     // 8. Execute scripts
     for (auto& scriptPath : manifest.scriptPaths) {
@@ -555,6 +526,7 @@ Headless::~Headless() {
         JSContext* ctx = jsRuntime_->getContext();
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
+        js::cleanupCustomElements(ctx);
         JSValue global = JS_GetGlobalObject(ctx);
         JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "__bro_elem_map"), 0);
         JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "document"), 0);

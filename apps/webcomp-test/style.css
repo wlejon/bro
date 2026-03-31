@@ -1,0 +1,207 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #1a1a2e;
+    color: #e0e0e0;
+}
+
+#app {
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+h1 {
+    color: #e94560;
+    margin-bottom: 4px;
+    font-size: 28px;
+}
+
+.subtitle {
+    color: #888;
+    margin-top: 0;
+    margin-bottom: 30px;
+}
+
+h2 {
+    color: #0f3460;
+    background: #16213e;
+    padding: 10px 16px;
+    margin: 30px 0 12px 0;
+    font-size: 18px;
+    color: #e94560;
+}
+
+section {
+    background: #16213e;
+    padding: 16px 20px;
+    margin-bottom: 8px;
+}
+
+section > p {
+    color: #8888aa;
+    margin-top: 4px;
+    font-size: 14px;
+}
+
+/* ---- Buttons ---- */
+
+button {
+    background-color: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #e94560;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+    margin: 4px 4px 4px 0;
+}
+
+.button-row {
+    margin: 12px 0;
+}
+
+/* ---- Log boxes ---- */
+
+.log-box {
+    background: #0a0a1a;
+    border: 1px solid #333;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 13px;
+    color: #aaddaa;
+    min-height: 30px;
+    max-height: 150px;
+    overflow: auto;
+    margin: 8px 0;
+    white-space: pre-wrap;
+}
+
+/* ---- Click Counter component ---- */
+
+click-counter {
+    display: inline-block;
+    background: #0f3460;
+    border: 2px solid #e94560;
+    padding: 16px 24px;
+    margin: 8px 8px 8px 0;
+    text-align: center;
+    min-width: 140px;
+}
+
+click-counter .count {
+    font-size: 36px;
+    font-weight: bold;
+    color: #e94560;
+    margin-bottom: 8px;
+}
+
+click-counter .label {
+    font-size: 12px;
+    color: #888;
+    margin-bottom: 10px;
+}
+
+click-counter button {
+    background: #e94560;
+    color: white;
+    border: none;
+    padding: 6px 20px;
+    font-size: 14px;
+}
+
+/* ---- Lifecycle log element ---- */
+
+lifecycle-el {
+    display: inline-block;
+    padding: 10px 20px;
+    margin: 4px;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+/* ---- Stamp cards ---- */
+
+.stamp-card {
+    display: inline-block;
+    background: #0f3460;
+    border: 1px solid #444;
+    padding: 14px 18px;
+    margin: 6px;
+    min-width: 160px;
+    vertical-align: top;
+}
+
+.stamp-card .card-title {
+    color: #e94560;
+    margin: 0 0 6px 0;
+    font-size: 16px;
+}
+
+.stamp-card .card-body {
+    color: #aaa;
+    margin: 0 0 8px 0;
+    font-size: 13px;
+}
+
+.stamp-card .card-badge {
+    background: #e94560;
+    color: white;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+/* ---- History display ---- */
+
+.history-display {
+    background: #0a0a1a;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 13px;
+    margin: 8px 0;
+    border: 1px solid #333;
+}
+
+.history-display div {
+    margin: 4px 0;
+}
+
+.history-display strong {
+    color: #e94560;
+}
+
+.history-display span {
+    color: #aaddaa;
+}
+
+/* ---- Storage ---- */
+
+.storage-row {
+    display: block;
+    margin: 8px 0;
+}
+
+.storage-row input {
+    padding: 6px 10px;
+    font-size: 14px;
+    margin-right: 6px;
+    width: 100px;
+}
+
+/* ---- innerText source ---- */
+
+#innertext-source {
+    background: #0a0a1a;
+    padding: 10px;
+    border: 1px solid #333;
+    margin: 8px 0;
+    font-size: 14px;
+}
+
+#innertext-output {
+    color: #ddaa55;
+}
+
+pre {
+    margin: 8px 0;
+}

@@ -15,6 +15,8 @@
 #include "js/event_dispatch.h"
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
+#include "js/window_bindings.h"
+#include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
 #include "js/fetch_bindings.h"
@@ -23,6 +25,7 @@
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_scene.h"
 #include "dom/document.h"
+#include <litehtml/render_item.h>
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/event.h"
@@ -248,9 +251,10 @@ Engine::Engine(const std::string& appDir, int width, int height)
     audioEngine_->init();
     js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
 
-    // 4c. localStorage (persisted in app directory)
+    // 4c. localStorage (persisted) + sessionStorage (in-memory)
     std::string storagePath = manifest_.basePath + "/.storage.json";
     js::StorageBindings::install(jsRuntime_->getContext(), storagePath);
+    js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
 
     // 5. Layout container
     container_ = std::make_unique<layout::BroContainer>(renderer_.get(), viewportWidth_, viewportHeight_);
@@ -277,64 +281,34 @@ Engine::Engine(const std::string& appDir, int width, int height)
         }
     }
 
-    // 7. Parse HTML with litehtml (single parse, shared by layout + DOM)
+    // 7. Extract <template> blocks before litehtml parsing (gumbo discards them)
+    std::vector<dom::Document::TemplateBlock> templateBlocks;
+    html = dom::Document::extractTemplates(html, templateBlocks);
+
+    // 8. Parse HTML with litehtml (single parse, shared by layout + DOM)
     litehtmlDoc_ = litehtml::document::createFromString(html, container_.get(),
                                                          litehtml::master_css, userStyles);
 
-    // 8. Build bro::dom tree from the same litehtml document
+    // 9. Build bro::dom tree from the same litehtml document
     document_ = std::make_unique<dom::Document>();
     document_->buildFrom(litehtmlDoc_);
 
-    // 9. Set up window/navigator BEFORE DOM bindings (polyfills reference window)
-    {
-        JSContext* ctx = jsRuntime_->getContext();
-        JSValue global = JS_GetGlobalObject(ctx);
+    // 9a. Inject extracted templates back into the DOM tree
+    if (!templateBlocks.empty())
+        document_->injectTemplates(templateBlocks);
 
-        JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
-        JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
-        JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth_));
-        JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight_));
 
-        JSValue nav = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
-        JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
-        JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
-        JS_SetPropertyStr(ctx, global, "navigator", nav);
-
-        const char* windowEventPolyfill = R"JS(
-(function() {
-    var listeners = {};
-    globalThis.__bro_win_listeners = listeners;
-    globalThis.addEventListener = function(type, fn) {
-        if (!listeners[type]) listeners[type] = [];
-        listeners[type].push(fn);
-    };
-    globalThis.removeEventListener = function(type, fn) {
-        var arr = listeners[type];
-        if (!arr) return;
-        var idx = arr.indexOf(fn);
-        if (idx >= 0) arr.splice(idx, 1);
-    };
-    globalThis.__bro_dispatch_window_event = function(type, event) {
-        var arr = listeners[type];
-        if (!arr) return;
-        for (var i = 0; i < arr.length; i++) {
-            try { arr[i](event); } catch(e) { console.error('Event handler error:', e); }
-        }
-    };
-})();
-)JS";
-        JSValue r = JS_Eval(ctx, windowEventPolyfill, strlen(windowEventPolyfill),
-                            "<window-events>", JS_EVAL_TYPE_GLOBAL);
-        JS_FreeValue(ctx, r);
-
-        JS_FreeValue(ctx, global);
-    }
+    // 9. Set up window/navigator/location/history BEFORE DOM bindings
+    js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
 
     // 9a. Install DOM JS bindings (after window so polyfills work)
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
 
-    // 9b. Install Canvas 2D and WebGL2 bindings + getContext factory
+    // 9b. Install custom elements (after DOM bindings — needs element class ID)
+    js::installCustomElements(jsRuntime_->getContext(),
+                              js::DomBindings::elementClassId(), document_.get());
+
+    // 9c. Install Canvas 2D and WebGL2 bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::WebGL2Bindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
@@ -401,6 +375,7 @@ Engine::~Engine() {
         js::AudioBindings::cleanup(jsRuntime_->getContext());
         js::StorageBindings::cleanup(jsRuntime_->getContext());
         js::WebGL2Bindings::cleanup(jsRuntime_->getContext());
+        js::cleanupCustomElements(jsRuntime_->getContext());
         js::DomBindings::cleanup(jsRuntime_->getContext());
     }
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
@@ -459,6 +434,9 @@ void Engine::run() {
     // Initial layout
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
+        purgeExpiredRenders(litehtmlDoc_->root());
+        if (auto rr = litehtmlDoc_->root_render())
+            documentHeight_ = static_cast<float>(rr->height());
     }
 
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
@@ -528,11 +506,38 @@ void Engine::run() {
             // DOM mutations (text changes, style updates) may alter the
             // litehtml element tree in ways that the render tree cache
             // doesn't detect.  Rebuilding is cheap relative to layout.
-            purgeExpiredRenders(litehtmlDoc_->root());
             litehtmlDoc_->rebuild_render_tree();
+            purgeExpiredRenders(litehtmlDoc_->root());
             document_->clearStructureDirty();
             litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
             document_->clearDirty();
+            // Update document height for scroll clamping
+            if (auto rr = litehtmlDoc_->root_render())
+                documentHeight_ = static_cast<float>(rr->height());
+
+            // Process auto-scroll-to-bottom for overflow elements.
+            if (document_) {
+                std::function<void(dom::Node*)> processScrollToBottom;
+                processScrollToBottom = [&](dom::Node* node) {
+                    if (!node || node->nodeType() != dom::NodeType::Element) return;
+                    auto* elem = static_cast<dom::Element*>(node);
+                    if (elem->needsScrollToBottom()) {
+                        elem->setScrollToBottom(false);
+                        auto lh = elem->litehtmlElement();
+                        if (lh) {
+                            auto ri = lh->get_render_item();
+                            if (ri) {
+                                // Scroll to bottom by scrolling a large amount
+                                ri->v_scroll(100000);
+                            }
+                        }
+                    }
+                    for (auto* child : elem->childNodes())
+                        processScrollToBottom(child);
+                };
+                processScrollToBottom(document_->documentElement());
+            }
+
             uiDirty_ = true;
             lastUIRenderMs_ = now;
             tLayout = util::currentTimeMs();
@@ -549,11 +554,13 @@ void Engine::run() {
             container_->drawStats.reset();
             double tDraw0 = util::currentTimeMs();
             if (litehtmlDoc_) {
+                int scrollYi = static_cast<int>(scrollY_);
                 litehtml::position clip(0, 0,
                                         static_cast<litehtml::pixel_t>(viewportWidth_),
                                         static_cast<litehtml::pixel_t>(viewportHeight_));
                 litehtmlDoc_->draw(
-                    reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
+                    reinterpret_cast<litehtml::uint_ptr>(renderer_.get()),
+                    0, -scrollYi, &clip);
             }
             // Draw overlays after all elements (z-order on top)
             if (document_) {
@@ -568,6 +575,73 @@ void Engine::run() {
                 }
             }
             accumDrawMs_ += util::currentTimeMs() - tDraw0;
+
+            // Draw scrollbar if content overflows viewport
+            if (documentHeight_ > static_cast<float>(viewportHeight_)) {
+                float vh = static_cast<float>(viewportHeight_);
+                float trackX = static_cast<float>(viewportWidth_ - kScrollbarWidth - kScrollbarMargin);
+                float trackH = vh;
+                float thumbRatio = vh / documentHeight_;
+                float thumbH = std::max(thumbRatio * trackH, 24.0f);
+                float scrollRange = documentHeight_ - vh;
+                float thumbY = (scrollRange > 0.0f) ? (scrollY_ / scrollRange) * (trackH - thumbH) : 0.0f;
+
+                // Track background
+                render::Color trackColor{255, 255, 255, 32};
+                renderer_->fillRect(trackX, 0.0f,
+                                    static_cast<float>(kScrollbarWidth), trackH,
+                                    trackColor);
+                // Thumb
+                render::Color thumbColor{255, 255, 255, 128};
+                renderer_->fillRect(trackX, thumbY,
+                                    static_cast<float>(kScrollbarWidth), thumbH,
+                                    thumbColor);
+            }
+
+            // Draw scrollbars for overflow elements
+            if (document_) {
+                int scrollYi = static_cast<int>(scrollY_);
+                std::function<void(dom::Node*)> drawElemScrollbars;
+                drawElemScrollbars = [&](dom::Node* node) {
+                    if (!node || node->nodeType() != dom::NodeType::Element) return;
+                    auto* elem = static_cast<dom::Element*>(node);
+                    auto lh = elem->litehtmlElement();
+                    if (lh && lh->css().get_overflow() > litehtml::overflow_visible) {
+                        auto ri = lh->get_render_item();
+                        if (ri && ri->get_scroll_top() != 0) {
+                            // Use litehtml's scroll_view data
+                            float contentH = 0;
+                            for (auto& child : ri->children())
+                                contentH = std::max(contentH, static_cast<float>(child->bottom()));
+                            float viewH = static_cast<float>(ri->pos().height);
+                            if (contentH > viewH) {
+                                auto placement = ri->get_placement();
+                                float ex = static_cast<float>(placement.x);
+                                float ey = static_cast<float>(placement.y) - scrollYi;
+                                float ew = static_cast<float>(placement.width);
+                                float eh = static_cast<float>(placement.height);
+                                float scrollTop = static_cast<float>(ri->get_scroll_top());
+
+                                float sbW = 5.0f;
+                                float trackX = ex + ew - sbW - 1.0f;
+                                float scrollRange = contentH - viewH;
+                                float thumbRatio = viewH / contentH;
+                                float thumbH = std::max(thumbRatio * eh, 16.0f);
+                                float thumbY = ey + (scrollRange > 0 ?
+                                    (scrollTop / scrollRange) * (eh - thumbH) : 0);
+
+                                render::Color tc{255, 255, 255, 20};
+                                renderer_->fillRect(trackX, ey, sbW, eh, tc);
+                                render::Color th{255, 255, 255, 100};
+                                renderer_->fillRect(trackX, thumbY, sbW, thumbH, th);
+                            }
+                        }
+                    }
+                    for (auto* child : elem->childNodes())
+                        drawElemScrollbars(child);
+                };
+                drawElemScrollbars(document_->documentElement());
+            }
 
             renderer_->endFrame();
             hasRenderedOnce_ = true;
@@ -756,6 +830,11 @@ void Engine::handleResize(int w, int h) {
     }
     if (litehtmlDoc_) {
         litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
+        if (auto rr = litehtmlDoc_->root_render())
+            documentHeight_ = static_cast<float>(rr->height());
+        // Clamp scroll after resize
+        float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(h));
+        scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
     }
 
     // Update JS globals and dispatch resize event to window listeners
@@ -840,10 +919,12 @@ static bool isTextEditable(dom::Element* el) {
 // ---------------------------------------------------------------------------
 
 void Engine::handleMouseDown(float x, float y, int button) {
+    // Offset by scroll position for document-space coordinates
+    float docX = x, docY = y + scrollY_;
     if (litehtmlDoc_) {
         litehtml::position::vector redraw;
-        litehtmlDoc_->on_lbutton_down(static_cast<int>(x), static_cast<int>(y),
-                                       static_cast<int>(x), static_cast<int>(y), redraw);
+        litehtmlDoc_->on_lbutton_down(static_cast<int>(docX), static_cast<int>(docY),
+                                       static_cast<int>(docX), static_cast<int>(docY), redraw);
         if (!redraw.empty()) uiDirty_ = true;
     }
 
@@ -852,7 +933,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         evt.setClientX(static_cast<double>(x));
         evt.setClientY(static_cast<double>(y));
         evt.setButton(button);
-        dom::Element* target = hitTest(x, y);
+        dom::Element* target = hitTest(docX, docY);
         if (target) {
             // Unfocus previous controls
             auto* prevActive = document_->activeElement();
@@ -863,8 +944,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     auto dp = prevInput->lastDrawPos();
                     float px = dp.x, py = dp.y + dp.h + 2;
                     float pw = 200.0f, ph = 160.0f;
-                    bool inPicker = (x >= px && x < px + pw && y >= py && y < py + ph);
-                    bool inSwatch = (x >= dp.x && x < dp.x + dp.w && y >= dp.y && y < dp.y + dp.h);
+                    bool inPicker = (docX >= px && docX < px + pw && docY >= py && docY < py + ph);
+                    bool inSwatch = (docX >= dp.x && docX < dp.x + dp.w && docY >= dp.y && docY < dp.y + dp.h);
                     if (!inPicker && !inSwatch) {
                         prevInput->setPickerOpen(false);
                     }
@@ -1091,10 +1172,11 @@ void Engine::handleMouseDown(float x, float y, int button) {
 }
 
 void Engine::handleMouseUp(float x, float y, int button) {
+    float docX = x, docY = y + scrollY_;
     if (litehtmlDoc_) {
         litehtml::position::vector redraw;
-        litehtmlDoc_->on_lbutton_up(static_cast<int>(x), static_cast<int>(y),
-                                     static_cast<int>(x), static_cast<int>(y), redraw);
+        litehtmlDoc_->on_lbutton_up(static_cast<int>(docX), static_cast<int>(docY),
+                                     static_cast<int>(docX), static_cast<int>(docY), redraw);
         if (!redraw.empty()) uiDirty_ = true;
     }
 
@@ -1115,7 +1197,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         clickEvt.setClientX(static_cast<double>(x));
         clickEvt.setClientY(static_cast<double>(y));
         clickEvt.setButton(button);
-        dom::Element* target = hitTest(x, y);
+        dom::Element* target = hitTest(docX, docY);
         if (target) {
             dispatchEvent(target, clickEvt);
             jsRuntime_->executePendingJobs();
@@ -1124,10 +1206,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
 }
 
 void Engine::handleMouseMove(float x, float y) {
+    float docX = x, docY = y + scrollY_;
     if (litehtmlDoc_) {
         litehtml::position::vector redraw;
-        litehtmlDoc_->on_mouse_over(static_cast<int>(x), static_cast<int>(y),
-                                     static_cast<int>(x), static_cast<int>(y), redraw);
+        litehtmlDoc_->on_mouse_over(static_cast<int>(docX), static_cast<int>(docY),
+                                     static_cast<int>(docX), static_cast<int>(docY), redraw);
         if (!redraw.empty()) {
             uiDirty_ = true;
         }
@@ -1170,8 +1253,8 @@ void Engine::handleMouseMove(float x, float y) {
             float lineH = font ? static_cast<float>(select->css().get_font_metrics().height) : 20.0f;
             float dropY = dp.y + dp.h;
             float dropH = lineH * static_cast<float>(opts.size()) + 4.0f;
-            if (x >= dp.x && x < dp.x + dp.w && y >= dropY && y < dropY + dropH) {
-                int idx = static_cast<int>((y - dropY - 2.0f) / lineH);
+            if (docX >= dp.x && docX < dp.x + dp.w && docY >= dropY && docY < dropY + dropH) {
+                int idx = static_cast<int>((docY - dropY - 2.0f) / lineH);
                 idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
                 if (idx != select->highlightedIndex()) {
                     select->setHighlightedIndex(idx);
@@ -1766,7 +1849,6 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
     auto* activeEl = document_->activeElement();
     auto* textarea = getElTextarea(activeEl);
     if (textarea && textarea->isFocused()) {
-        // Scroll by 3 lines per wheel tick
         auto fm = textarea->css().get_font_metrics();
         float lineH = (fm.height > 0) ? static_cast<float>(fm.height) : 16.0f;
         float scroll = textarea->scrollY() - dy * lineH * 3.0f;
@@ -1777,7 +1859,8 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
     }
 
     // Also allow scrolling textarea under mouse cursor (not just active one)
-    dom::Element* target = hitTest(x, y);
+    float docX = x, docY = y + scrollY_;
+    dom::Element* target = hitTest(docX, docY);
     auto* hoverTa = getElTextarea(target);
     if (hoverTa) {
         auto fm = hoverTa->css().get_font_metrics();
@@ -1786,7 +1869,34 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
         scroll = std::max(scroll, 0.0f);
         hoverTa->setScrollY(scroll);
         uiDirty_ = true;
+        return;
     }
+
+    // Check if target or an ancestor is a scrollable overflow element
+    {
+        auto* el = target;
+        while (el) {
+            auto lh = el->litehtmlElement();
+            if (lh && lh->css().get_overflow() > litehtml::overflow_visible) {
+                auto ri = lh->get_render_item();
+                if (ri) {
+                    float scrollPx = -dy * kScrollSpeed;
+                    auto lpx = static_cast<litehtml::pixel_t>(scrollPx);
+                    if (ri->is_v_scrollable(lpx)) {
+                        ri->v_scroll(lpx);
+                        uiDirty_ = true;
+                        return;
+                    }
+                }
+            }
+            el = el->parentElement();
+        }
+    }
+
+    // Viewport scrolling
+    float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(viewportHeight_));
+    scrollY_ = std::clamp(scrollY_ - dy * kScrollSpeed, 0.0f, maxScroll);
+    uiDirty_ = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1794,6 +1904,7 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
 // ---------------------------------------------------------------------------
 
 dom::Element* Engine::hitTest(float x, float y) {
+    // x, y are already in document space (scroll-adjusted by callers)
     if (!litehtmlDoc_ || !document_) return document_ ? document_->body() : nullptr;
 
     auto rootRender = litehtmlDoc_->root_render();

@@ -1,5 +1,5 @@
 add_library(bro_js STATIC
-    runtime.cpp console.cpp timers.cpp dom_bindings.cpp event_dispatch.cpp
+    runtime.cpp console.cpp timers.cpp window_bindings.cpp dom_bindings.cpp custom_elements.cpp event_dispatch.cpp
     canvas_bindings.cpp audio_bindings.cpp storage_bindings.cpp
     webgl2_bindings.cpp
     webgl2_bindings_state.cpp

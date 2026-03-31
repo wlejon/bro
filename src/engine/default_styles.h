@@ -65,6 +65,10 @@ option {
     display: none;
 }
 
+template {
+    display: none;
+}
+
 /* ---------- Links ---------- */
 
 a {

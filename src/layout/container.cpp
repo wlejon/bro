@@ -66,14 +66,28 @@ void BroContainer::draw_text(litehtml::uint_ptr /*hdc*/, const char* text,
 
     drawStats.texts++;
     render::Color c{color.red, color.green, color.blue, color.alpha};
-    // litehtml gives pos.y as the top of the text box, but Skia's
-    // drawSimpleText expects the baseline y. Offset by the font ascent.
     uint64_t handle = static_cast<uint64_t>(hFont);
     auto metrics = fontManager_.getMetrics(handle);
-    renderer_->drawText(text,
-                        static_cast<float>(pos.x),
-                        static_cast<float>(pos.y) + metrics.ascent,
-                        handle, c);
+    float baseY = static_cast<float>(pos.y) + metrics.ascent;
+    float lineH = metrics.ascent + metrics.descent;
+    if (lineH <= 0.0f) lineH = static_cast<float>(pos.height);
+
+    // Split on newlines and draw each line separately.
+    // This handles \n in textContent when white-space: pre-wrap is set.
+    const char* start = text;
+    float curY = baseY;
+    for (const char* s = text; ; ++s) {
+        if (*s == '\n' || *s == '\0') {
+            if (s > start) {
+                renderer_->drawText(std::string_view(start, s - start),
+                                    static_cast<float>(pos.x), curY,
+                                    handle, c);
+            }
+            if (*s == '\0') break;
+            curY += lineH;
+            start = s + 1;
+        }
+    }
 }
 
 litehtml::pixel_t BroContainer::pt_to_px(float pt) const {
@@ -390,6 +404,7 @@ void BroContainer::import_css(litehtml::string& text, const litehtml::string& ur
 void BroContainer::set_clip(const litehtml::position& pos,
                              const litehtml::border_radiuses& bdr_radius) {
     clipStack_.push_back({pos, bdr_radius});
+    renderer_->save();
     renderer_->setClip(static_cast<float>(pos.x),
                        static_cast<float>(pos.y),
                        static_cast<float>(pos.width),
@@ -400,16 +415,7 @@ void BroContainer::del_clip() {
     if (!clipStack_.empty()) {
         clipStack_.pop_back();
     }
-    renderer_->resetClip();
-
-    // Restore previous clip if any.
-    if (!clipStack_.empty()) {
-        auto& top = clipStack_.back();
-        renderer_->setClip(static_cast<float>(top.pos.x),
-                           static_cast<float>(top.pos.y),
-                           static_cast<float>(top.pos.width),
-                           static_cast<float>(top.pos.height));
-    }
+    renderer_->restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -480,5 +486,6 @@ void BroContainer::get_language(litehtml::string& language, litehtml::string& cu
     language = "en";
     culture = "";
 }
+
 
 } // namespace bro::layout
