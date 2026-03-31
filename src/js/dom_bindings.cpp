@@ -278,16 +278,40 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 
             tn->setData(newText);
 
-            // Propagate to litehtml: find the matching text element and
-            // update it in-place via BroElText::set_text().  If the text
-            // element is a plain el_text (from initial parse), replace it
-            // with a BroElText so future updates can use the fast path.
+            // Propagate to litehtml
             auto* parent = n->parentNode();
             if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                 auto* parentEl = static_cast<bro::dom::Element*>(parent);
                 auto lhParent = parentEl->litehtmlElement();
                 if (lhParent) {
-                    // Find the litehtml text child by index
+                    // If white-space preserves newlines and text has \n,
+                    // rebuild the parent's litehtml children with <br> elements
+                    bool needsBr = newText.find('\n') != std::string::npos &&
+                                   bro::dom::Document::preservesNewlines(lhParent);
+                    if (needsBr) {
+                        // Full rebuild of parent's litehtml content
+                        lhParent->clearRecursive();
+                        auto ri = lhParent->get_render_item();
+                        if (ri) ri->children().clear();
+                        auto doc = lhParent->get_document();
+                        if (doc) {
+                            // Rebuild from all bro::dom children
+                            for (auto* sib : parent->childNodes()) {
+                                if (sib->nodeType() == bro::dom::NodeType::Text) {
+                                    auto* tn = static_cast<bro::dom::TextNode*>(sib);
+                                    std::string html = bro::dom::Document::textToLitehtmlHtml(
+                                        tn->data(), lhParent);
+                                    doc->append_children_from_string(
+                                        *lhParent, html.c_str(), false);
+                                }
+                            }
+                        }
+                        parentEl->markDirty();
+                        parentEl->markStructureDirty();
+                        return JS_UNDEFINED;
+                    }
+
+                    // Normal path: update litehtml text in-place
                     auto& siblings = parent->childNodes();
                     int textIdx = 0;
                     for (auto* sib : siblings) {
@@ -301,13 +325,11 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                         for (auto it = lhChildren.begin(); it != lhChildren.end(); ++it) {
                             if ((*it)->is_text()) {
                                 if (lhTextIdx == textIdx) {
-                                    // Try fast path: BroElText with set_text
                                     auto* bt = dynamic_cast<bro::layout::BroElText*>(it->get());
                                     if (bt) {
                                         bt->set_text(newText.c_str());
                                         bt->compute_styles(false);
                                     } else {
-                                        // Slow path: replace el_text with BroElText
                                         auto doc = lhParent->get_document();
                                         if (doc) {
                                             auto oldEl = *it;
@@ -315,7 +337,6 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                                                 newText.c_str(), doc);
                                             *it = newEl;
                                             newEl->compute_styles(false);
-                                            // Replace render item too
                                             auto ri = htParent->get_render_item();
                                             if (ri) {
                                                 for (auto rit = ri->children().begin();

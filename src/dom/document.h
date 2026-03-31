@@ -79,6 +79,17 @@ public:
     /// their template content (stored as children, hidden from rendering).
     void injectTemplates(const std::vector<TemplateBlock>& templates);
 
+    /// Check if a litehtml element's white-space CSS preserves newlines
+    /// (pre, pre-wrap, pre-line). If so, text with \n should be converted
+    /// to HTML with <br> when syncing to litehtml.
+    static bool preservesNewlines(const litehtml::element::ptr& lhElem);
+
+    /// Convert a text string to HTML suitable for litehtml, replacing \n
+    /// with <br> if the parent element preserves newlines. Escapes HTML entities.
+    /// Returns empty string if text is empty.
+    static std::string textToLitehtmlHtml(const std::string& text,
+                                          const litehtml::element::ptr& parentLh);
+
     void registerElementId(const std::string& id, Element* elem);
     void unregisterElementId(const std::string& id);
 

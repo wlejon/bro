@@ -186,9 +186,11 @@ void Element::setTextContent(const std::string& text) {
 
     // Sync to litehtml so the rendered output updates.
     if (litehtml_element_) {
-        bool hasNewlines = text.find('\n') != std::string::npos;
-        // Fast path: single text child, no newlines — update in-place
-        if (!hasNewlines) {
+        bool needsBr = text.find('\n') != std::string::npos &&
+                       Document::preservesNewlines(litehtml_element_);
+
+        // Fast path: single text child, no <br> needed — update in-place
+        if (!needsBr) {
             auto& lhChildren = litehtml_element_->children();
             if (lhChildren.size() == 1 && lhChildren.front()->is_text()) {
                 auto* broText = dynamic_cast<bro_el_text*>(lhChildren.front().get());
@@ -209,8 +211,8 @@ void Element::setTextContent(const std::string& text) {
         if (!text.empty()) {
             auto doc = litehtml_element_->get_document();
             if (doc) {
-                if (!hasNewlines) {
-                    // No newlines — single text element
+                if (!needsBr) {
+                    // Plain text — single text element
                     auto textEl = std::make_shared<bro_el_text>(text.c_str(), doc);
                     litehtml_element_->appendChild(textEl);
                     textEl->compute_styles(false);
@@ -222,23 +224,10 @@ void Element::setTextContent(const std::string& text) {
                         }
                     }
                 } else {
-                    // Has newlines — convert to HTML with <br> and use
-                    // litehtml's parser to build proper element tree.
-                    // Only update litehtml tree, NOT bro::dom tree
-                    // (bro::dom keeps the TextNode with \n intact so
-                    // textContent getter preserves newlines for JS).
-                    std::string html;
-                    for (char c : text) {
-                        if (c == '\n')      html += "<br>";
-                        else if (c == '<')  html += "&lt;";
-                        else if (c == '&')  html += "&amp;";
-                        else                html += c;
-                    }
-                    auto lhDoc = litehtml_element_->get_document();
-                    if (lhDoc) {
-                        lhDoc->append_children_from_string(
-                            *litehtml_element_, html.c_str(), false);
-                    }
+                    // white-space preserves newlines — use HTML with <br>
+                    std::string html = Document::textToLitehtmlHtml(text, litehtml_element_);
+                    doc->append_children_from_string(
+                        *litehtml_element_, html.c_str(), false);
                 }
             }
         }

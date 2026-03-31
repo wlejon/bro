@@ -307,6 +307,36 @@ void Document::collectElements(Node* node, std::vector<Element*>& out) {
 }
 
 // ---------------------------------------------------------------------------
+// White-space / newline helpers for litehtml text sync
+// ---------------------------------------------------------------------------
+
+bool Document::preservesNewlines(const litehtml::element::ptr& lhElem) {
+    if (!lhElem) return false;
+    auto ws = lhElem->css().get_white_space();
+    return ws == litehtml::white_space_pre ||
+           ws == litehtml::white_space_pre_wrap ||
+           ws == litehtml::white_space_pre_line;
+}
+
+std::string Document::textToLitehtmlHtml(const std::string& text,
+                                         const litehtml::element::ptr& parentLh) {
+    if (text.empty()) return {};
+
+    bool hasNewlines = text.find('\n') != std::string::npos;
+    bool shouldConvert = hasNewlines && preservesNewlines(parentLh);
+
+    std::string html;
+    html.reserve(text.size() + (shouldConvert ? text.size() / 4 : 0));
+    for (char c : text) {
+        if (c == '\n' && shouldConvert) html += "<br>";
+        else if (c == '<')              html += "&lt;";
+        else if (c == '&')              html += "&amp;";
+        else                            html += c;
+    }
+    return html;
+}
+
+// ---------------------------------------------------------------------------
 // Template extraction — pre-process HTML before litehtml parsing
 // ---------------------------------------------------------------------------
 
