@@ -1,11 +1,13 @@
 #include "js/dom_bindings.h"
 #include "js/runtime.h"
+#include "js/event_dispatch.h"
 #include "js/image_bindings.h"
 #include "util/log.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
+#include "dom/event.h"
 
 #include <litehtml.h>
 #include <litehtml/html.h>
@@ -2074,14 +2076,270 @@ static JSValue js_element_set_height(JSContext* ctx, JSValueConst this_val, JSVa
     return JS_UNDEFINED;
 }
 
-// --- clientWidth / clientHeight (read-only, same as width/height for now) ---
+// --- Layout measurement (reads from litehtml render items) ---
+
+static litehtml::position getLayoutPos(bro::dom::Element* el) {
+    litehtml::position pos = {0, 0, 0, 0};
+    if (!el) return pos;
+    auto lh = el->litehtmlElement();
+    if (!lh) return pos;
+    auto ri = lh->get_render_item();
+    if (!ri) return pos;
+    pos = ri->pos();
+    return pos;
+}
 
 static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    auto pos = getLayoutPos(el);
+    if (pos.width > 0) return JS_NewInt32(ctx, pos.width);
+    // Fallback to attribute-based width for canvas etc
     return js_element_get_width(ctx, this_val);
 }
 
 static JSValue js_element_get_clientHeight(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    auto pos = getLayoutPos(el);
+    if (pos.height > 0) return JS_NewInt32(ctx, pos.height);
     return js_element_get_height(ctx, this_val);
+}
+
+static JSValue js_element_get_offsetWidth(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    auto pos = getLayoutPos(el);
+    return JS_NewInt32(ctx, pos.width);
+}
+
+static JSValue js_element_get_offsetHeight(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    auto pos = getLayoutPos(el);
+    return JS_NewInt32(ctx, pos.height);
+}
+
+static JSValue js_element_get_offsetLeft(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    auto pos = getLayoutPos(el);
+    return JS_NewInt32(ctx, pos.x);
+}
+
+static JSValue js_element_get_offsetTop(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    auto pos = getLayoutPos(el);
+    return JS_NewInt32(ctx, pos.y);
+}
+
+static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val) {
+    return js_element_get_offsetWidth(ctx, this_val); // no scroll support yet
+}
+
+static JSValue js_element_get_scrollHeight(JSContext* ctx, JSValueConst this_val) {
+    return js_element_get_offsetHeight(ctx, this_val);
+}
+
+static JSValue js_element_get_scrollLeft(JSContext* ctx, JSValueConst /*this_val*/) {
+    (void)ctx;
+    return JS_NewInt32(ctx, 0);
+}
+
+static JSValue js_element_get_scrollTop(JSContext* ctx, JSValueConst /*this_val*/) {
+    (void)ctx;
+    return JS_NewInt32(ctx, 0);
+}
+
+static JSValue js_element_set_scrollLeft(JSContext* /*ctx*/, JSValueConst /*this_val*/, JSValueConst /*val*/) {
+    return JS_UNDEFINED; // stub
+}
+
+static JSValue js_element_set_scrollTop(JSContext* /*ctx*/, JSValueConst /*this_val*/, JSValueConst /*val*/) {
+    return JS_UNDEFINED; // stub
+}
+
+static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
+                                                 int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    auto pos = getLayoutPos(el);
+
+    JSValue rect = JS_NewObject(ctx);
+    float x = static_cast<float>(pos.x);
+    float y = static_cast<float>(pos.y);
+    float w = static_cast<float>(pos.width);
+    float h = static_cast<float>(pos.height);
+    JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, x));
+    JS_SetPropertyStr(ctx, rect, "y",      JS_NewFloat64(ctx, y));
+    JS_SetPropertyStr(ctx, rect, "width",  JS_NewFloat64(ctx, w));
+    JS_SetPropertyStr(ctx, rect, "height", JS_NewFloat64(ctx, h));
+    JS_SetPropertyStr(ctx, rect, "top",    JS_NewFloat64(ctx, y));
+    JS_SetPropertyStr(ctx, rect, "left",   JS_NewFloat64(ctx, x));
+    JS_SetPropertyStr(ctx, rect, "bottom", JS_NewFloat64(ctx, y + h));
+    JS_SetPropertyStr(ctx, rect, "right",  JS_NewFloat64(ctx, x + w));
+    return rect;
+}
+
+// --- dispatchEvent ---
+
+static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_FALSE;
+
+    // Read event type from JS event object
+    JSValue typeVal = JS_GetPropertyStr(ctx, argv[0], "type");
+    const char* typeStr = JS_ToCString(ctx, typeVal);
+    JS_FreeValue(ctx, typeVal);
+    if (!typeStr) return JS_FALSE;
+
+    std::string type = typeStr;
+    JS_FreeCString(ctx, typeStr);
+
+    // Read bubbles/cancelable
+    JSValue bubblesVal = JS_GetPropertyStr(ctx, argv[0], "bubbles");
+    bool bubbles = JS_ToBool(ctx, bubblesVal);
+    JS_FreeValue(ctx, bubblesVal);
+
+    JSValue cancelableVal = JS_GetPropertyStr(ctx, argv[0], "cancelable");
+    bool cancelable = JS_ToBool(ctx, cancelableVal);
+    JS_FreeValue(ctx, cancelableVal);
+
+    // Create C++ event and dispatch through the DOM
+    bro::dom::Event evt(type, bubbles, cancelable);
+
+    // Copy any detail property from CustomEvent
+    // (the JS event object is passed through to listeners by event_dispatch)
+
+    // Use the existing dispatch mechanism
+    bro::js::dispatchDomEvent(ctx, el, evt);
+
+    return JS_NewBool(ctx, !evt.defaultPrevented());
+}
+
+// --- focus / blur ---
+
+static JSValue js_element_focus(JSContext* ctx, JSValueConst this_val,
+                                int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    if (doc) doc->setActiveElement(el);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_blur(JSContext* ctx, JSValueConst this_val,
+                               int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    if (doc && doc->activeElement() == el) {
+        doc->setActiveElement(nullptr);
+    }
+    return JS_UNDEFINED;
+}
+
+// --- outerHTML ---
+
+static JSValue js_element_get_outerHTML(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    // Build outerHTML: opening tag + innerHTML + closing tag
+    std::string tag = el->tagName();
+    // Lowercase the tag
+    for (auto& c : tag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    std::string result = "<" + tag;
+    for (auto& [name, val] : el->attributes()) {
+        result += " " + name + "=\"" + val + "\"";
+    }
+    result += ">";
+    result += el->innerHTML();
+    result += "</" + tag + ">";
+    return JS_NewString(ctx, result.c_str());
+}
+
+// --- insertAdjacentHTML ---
+
+static JSValue js_element_insertAdjacentHTML(JSContext* ctx, JSValueConst this_val,
+                                              int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 2) return JS_UNDEFINED;
+
+    const char* position = JS_ToCString(ctx, argv[0]);
+    const char* html = JS_ToCString(ctx, argv[1]);
+    if (!position || !html) {
+        JS_FreeCString(ctx, position);
+        JS_FreeCString(ctx, html);
+        return JS_UNDEFINED;
+    }
+
+    std::string pos(position);
+    JS_FreeCString(ctx, position);
+
+    // Use a temporary element to parse the HTML
+    auto* doc = el->document();
+    if (!doc) { JS_FreeCString(ctx, html); return JS_UNDEFINED; }
+
+    // Create a wrapper element, set innerHTML, then move children
+    auto* temp = doc->createElement("div");
+    if (temp) {
+        temp->setInnerHTML(html);
+        auto children = temp->childNodes();
+        std::vector<bro::dom::Node*> toMove(children.begin(), children.end());
+
+        if (pos == "beforebegin") {
+            auto* parent = el->parentElement();
+            if (parent) {
+                for (auto* child : toMove) parent->insertBefore(child, el);
+            }
+        } else if (pos == "afterbegin") {
+            auto* first = el->childNodes().empty() ? nullptr : el->childNodes().front();
+            for (auto* child : toMove) el->insertBefore(child, first);
+        } else if (pos == "beforeend") {
+            for (auto* child : toMove) el->appendChild(child);
+        } else if (pos == "afterend") {
+            auto* parent = el->parentElement();
+            if (parent) {
+                // Find the next sibling
+                bro::dom::Node* ref = nullptr;
+                auto& siblings = parent->childNodes();
+                for (size_t i = 0; i < siblings.size(); ++i) {
+                    if (siblings[i] == el && i + 1 < siblings.size()) {
+                        ref = siblings[i + 1];
+                        break;
+                    }
+                }
+                for (auto* child : toMove) parent->insertBefore(child, ref);
+            }
+        }
+        // temp is now empty, will be cleaned up by document
+    }
+
+    JS_FreeCString(ctx, html);
+    return JS_UNDEFINED;
+}
+
+// --- dataset proxy (data-* attributes) ---
+
+static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewObject(ctx);
+
+    JSValue obj = JS_NewObject(ctx);
+    for (auto& [name, val] : el->attributes()) {
+        if (name.size() > 5 && name.substr(0, 5) == "data-") {
+            // Convert data-foo-bar to fooBar (camelCase)
+            std::string key;
+            bool capitalize = false;
+            for (size_t i = 5; i < name.size(); ++i) {
+                if (name[i] == '-') {
+                    capitalize = true;
+                } else {
+                    key += capitalize
+                        ? static_cast<char>(std::toupper(static_cast<unsigned char>(name[i])))
+                        : name[i];
+                    capitalize = false;
+                }
+            }
+            JS_SetPropertyStr(ctx, obj, key.c_str(), JS_NewString(ctx, val.c_str()));
+        }
+    }
+    return obj;
 }
 
 static const JSCFunctionListEntry js_element_proto_funcs[] = {
@@ -2112,6 +2370,16 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("height",        js_element_get_height,      js_element_set_height),
     JS_CGETSET_DEF("clientWidth",   js_element_get_clientWidth, nullptr),
     JS_CGETSET_DEF("clientHeight",  js_element_get_clientHeight, nullptr),
+    JS_CGETSET_DEF("offsetWidth",   js_element_get_offsetWidth, nullptr),
+    JS_CGETSET_DEF("offsetHeight",  js_element_get_offsetHeight, nullptr),
+    JS_CGETSET_DEF("offsetLeft",    js_element_get_offsetLeft, nullptr),
+    JS_CGETSET_DEF("offsetTop",     js_element_get_offsetTop, nullptr),
+    JS_CGETSET_DEF("scrollWidth",   js_element_get_scrollWidth, nullptr),
+    JS_CGETSET_DEF("scrollHeight",  js_element_get_scrollHeight, nullptr),
+    JS_CGETSET_DEF("scrollLeft",    js_element_get_scrollLeft, js_element_set_scrollLeft),
+    JS_CGETSET_DEF("scrollTop",     js_element_get_scrollTop, js_element_set_scrollTop),
+    JS_CGETSET_DEF("outerHTML",     js_element_get_outerHTML, nullptr),
+    JS_CGETSET_DEF("dataset",       js_element_get_dataset, nullptr),
     JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),
     // Form control properties
     JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
@@ -2140,6 +2408,11 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("getElementsByTagName",      1, js_element_getElementsByTagName),
     JS_CFUNC_DEF("getElementsByClassName",    1, js_element_getElementsByClassName),
     JS_CFUNC_DEF("remove",                    0, js_element_remove),
+    JS_CFUNC_DEF("dispatchEvent",             1, js_element_dispatchEvent),
+    JS_CFUNC_DEF("getBoundingClientRect",     0, js_element_getBoundingClientRect),
+    JS_CFUNC_DEF("focus",                     0, js_element_focus),
+    JS_CFUNC_DEF("blur",                      0, js_element_blur),
+    JS_CFUNC_DEF("insertAdjacentHTML",        2, js_element_insertAdjacentHTML),
     JS_CFUNC_DEF("getContext",                1, js_element_getContext),
 };
 
@@ -2568,28 +2841,114 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     if (typeof HTMLElement === 'undefined')
         globalThis.HTMLElement = class HTMLElement {};
 
-    // CustomEvent constructor
-    if (typeof Event === 'undefined') {
-        globalThis.Event = class Event {
-            constructor(type, opts) {
-                this.type = type;
-                this.bubbles = !!(opts && opts.bubbles);
-                this.cancelable = !!(opts && opts.cancelable);
-                this.defaultPrevented = false;
-            }
-            preventDefault() { this.defaultPrevented = true; }
-            stopPropagation() {}
-            stopImmediatePropagation() {}
+    // Event constructor (used by el.dispatchEvent(new Event('input')))
+    globalThis.Event = class Event {
+        constructor(type, opts) {
+            this.type = type;
+            this.bubbles = !!(opts && opts.bubbles);
+            this.cancelable = !!(opts && opts.cancelable);
+            this.composed = !!(opts && opts.composed);
+            this.defaultPrevented = false;
+            this.target = null;
+            this.currentTarget = null;
+            this.timeStamp = performance.now();
+            this._stopped = false;
+            this._immediateStopped = false;
+        }
+        preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
+        stopPropagation() { this._stopped = true; }
+        stopImmediatePropagation() { this._stopped = true; this._immediateStopped = true; }
+    };
+    globalThis.CustomEvent = class CustomEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.detail = (opts && opts.detail !== undefined) ? opts.detail : null;
+        }
+    };
+    globalThis.MouseEvent = class MouseEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.clientX = (opts && opts.clientX) || 0;
+            this.clientY = (opts && opts.clientY) || 0;
+            this.button = (opts && opts.button) || 0;
+        }
+    };
+    globalThis.KeyboardEvent = class KeyboardEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.key = (opts && opts.key) || '';
+            this.code = (opts && opts.code) || '';
+            this.ctrlKey = !!(opts && opts.ctrlKey);
+            this.shiftKey = !!(opts && opts.shiftKey);
+            this.altKey = !!(opts && opts.altKey);
+            this.metaKey = !!(opts && opts.metaKey);
+        }
+    };
+    globalThis.InputEvent = class InputEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.data = (opts && opts.data) || null;
+            this.inputType = (opts && opts.inputType) || '';
+        }
+    };
+    globalThis.FocusEvent = class FocusEvent extends Event {
+        constructor(type, opts) {
+            super(type, opts);
+            this.relatedTarget = (opts && opts.relatedTarget) || null;
+        }
+    };
+
+    // queueMicrotask — schedules a microtask via Promise
+    if (typeof queueMicrotask === 'undefined') {
+        globalThis.queueMicrotask = function(cb) {
+            Promise.resolve().then(cb);
         };
     }
-    if (typeof CustomEvent === 'undefined') {
-        globalThis.CustomEvent = class CustomEvent extends Event {
-            constructor(type, opts) {
-                super(type, opts);
-                this.detail = (opts && opts.detail) || null;
+
+    // MutationObserver — simplified implementation
+    // Fires callbacks asynchronously after DOM mutations via microtask
+    globalThis.MutationObserver = class MutationObserver {
+        constructor(callback) {
+            this._callback = callback;
+            this._targets = [];
+            this._records = [];
+            this._scheduled = false;
+        }
+        observe(target, options) {
+            this._targets.push({ target, options });
+            // Hook into the global mutation observer registry
+            if (!globalThis.__bro_mutation_observers)
+                globalThis.__bro_mutation_observers = [];
+            if (!globalThis.__bro_mutation_observers.includes(this))
+                globalThis.__bro_mutation_observers.push(this);
+        }
+        disconnect() {
+            this._targets = [];
+            if (globalThis.__bro_mutation_observers) {
+                var idx = globalThis.__bro_mutation_observers.indexOf(this);
+                if (idx >= 0) globalThis.__bro_mutation_observers.splice(idx, 1);
             }
-        };
-    }
+        }
+        takeRecords() {
+            var r = this._records;
+            this._records = [];
+            return r;
+        }
+        // Called internally when mutations happen
+        _notify(records) {
+            this._records = this._records.concat(records);
+            if (!this._scheduled) {
+                this._scheduled = true;
+                var self = this;
+                queueMicrotask(function() {
+                    self._scheduled = false;
+                    var r = self._records;
+                    self._records = [];
+                    if (r.length > 0) self._callback(r, self);
+                });
+            }
+        }
+    };
 
     // document.activeElement is now a native C++ getter (see js_document_proto_funcs)
 })();
