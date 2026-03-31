@@ -63,6 +63,13 @@ void EventLoop::pollEvents() {
                 }
                 break;
 
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (onWheel) {
+                    onWheel(event.wheel.mouse_x, event.wheel.mouse_y,
+                            event.wheel.x, event.wheel.y);
+                }
+                break;
+
             default:
                 break;
         }

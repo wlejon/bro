@@ -41,11 +41,13 @@ public:
     void handleKeyDown(int keycode, int scancode, int mod, bool repeat);
     void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
     void handleTextInput(const std::string& text);
+    void handleWheel(float x, float y, float dx, float dy);
 
 private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
     void dispatchInputEvent(dom::Element* el);
+    void advanceFocus(bool reverse);
     void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
 
     std::unique_ptr<platform::Window> window_;

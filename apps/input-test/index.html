@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Input Validation &amp; Navigation Test</title>
+    <style>
+        body { padding: 20px; font-family: Arial, sans-serif; font-size: 14px; }
+        h2 { margin-top: 20px; margin-bottom: 8px; color: #333; }
+        .section { margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; background: #fafafa; }
+        .row { margin: 6px 0; }
+        label { display: inline-block; width: 140px; }
+        input[type="text"], input[type="number"], input[type="password"], input[type="email"] {
+            width: 200px;
+        }
+        textarea { width: 300px; }
+        #log { margin-top: 15px; padding: 10px; background: #f0f0f0; border: 1px solid #ccc;
+               font-family: monospace; font-size: 12px; min-height: 60px; }
+        .hint { color: #888; font-size: 12px; margin-left: 8px; }
+    </style>
+</head>
+<body>
+    <h1>Input Validation &amp; Navigation</h1>
+
+    <div class="section">
+        <h2>1. Number Input Validation</h2>
+        <div class="row">
+            <label>Number (0-100):</label>
+            <input id="num" type="number" value="50" min="0" max="100" step="5">
+            <span class="hint">Only digits/minus/dot allowed. Up/Down arrows and spin buttons change value.</span>
+        </div>
+        <div class="row">
+            <label>Unrestricted:</label>
+            <input id="num2" type="number" value="0">
+            <span class="hint">No min/max — arrows step by 1</span>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>2. Tab Navigation</h2>
+        <p>Press Tab to move between fields. Shift+Tab goes backwards.</p>
+        <div class="row">
+            <label>Field 1:</label>
+            <input id="f1" type="text" placeholder="Tab from here...">
+        </div>
+        <div class="row">
+            <label>Field 2:</label>
+            <input id="f2" type="password" placeholder="...to here...">
+        </div>
+        <div class="row">
+            <label>Field 3:</label>
+            <input id="f3" type="email" placeholder="...to here...">
+        </div>
+        <div class="row">
+            <label>Field 4 (textarea):</label>
+            <textarea id="f4" rows="2" cols="30" placeholder="...and here"></textarea>
+        </div>
+        <div class="row">
+            <label>Field 5 (select):</label>
+            <select id="f5">
+                <option value="a">Option A</option>
+                <option value="b">Option B</option>
+                <option value="c">Option C</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>3. Control Char Filtering</h2>
+        <p>Tab should NOT insert a tab character. Other control chars are also filtered.</p>
+        <div class="row">
+            <label>Text input:</label>
+            <input id="ctrl" type="text" placeholder="Type here — no control chars">
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>4. Textarea Scrolling</h2>
+        <p>Mouse wheel scrolls the textarea content.</p>
+        <div class="row">
+            <textarea id="scroll-ta" rows="4" cols="50">Line 1: The quick brown fox jumps over the lazy dog.
+Line 2: Pack my box with five dozen liquor jugs.
+Line 3: How vexingly quick daft zebras jump.
+Line 4: The five boxing wizards jump quickly.
+Line 5: Sphinx of black quartz, judge my vow.
+Line 6: Two driven jocks help fax my big quiz.
+Line 7: The quick brown fox jumps over the lazy dog.
+Line 8: Pack my box with five dozen liquor jugs.
+Line 9: How vexingly quick daft zebras jump.
+Line 10: The five boxing wizards jump quickly.
+Line 11: Sphinx of black quartz, judge my vow.
+Line 12: Two driven jocks help fax my big quiz.</textarea>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>5. Checkbox &amp; Radio</h2>
+        <div class="row">
+            <label><input id="chk" type="checkbox"> Check me (click or Space)</label>
+        </div>
+        <div class="row">
+            <label><input type="radio" name="opt" value="1" checked> Option 1</label>
+            <label><input type="radio" name="opt" value="2"> Option 2</label>
+            <label><input type="radio" name="opt" value="3"> Option 3</label>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>6. Range Slider</h2>
+        <div class="row">
+            <input id="range" type="range" min="0" max="100" value="25" step="5">
+            <span id="range-val">25</span>
+            <span class="hint">Click, drag, or use arrow keys</span>
+        </div>
+    </div>
+
+    <div id="log">Event log...</div>
+
+    <script src="app.js"></script>
+</body>
+</html>

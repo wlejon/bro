@@ -40,6 +40,7 @@
 #include <glad/gl.h>
 #include <cstdio>
 #include <stdexcept>
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -447,6 +448,9 @@ void Engine::run() {
     };
     eventLoop_->onTextInput = [this](const std::string& text) {
         handleTextInput(text);
+    };
+    eventLoop_->onWheel = [this](float x, float y, float dx, float dy) {
+        handleWheel(x, y, dx, dy);
     };
 
     // Tell the layout container to skip full-viewport backgrounds when a scene
@@ -1032,6 +1036,28 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     SDL_StopTextInput(window_->getSDLWindow());
                     uiDirty_ = true;
                 } else if (newInput->isTextType()) {
+                    // Check for number spin button click
+                    if (newInput->inputType() == layout::ElInput::InputType::Number) {
+                        auto dp = newInput->lastDrawPos();
+                        float btnW = 16.0f;
+                        float bx = dp.x + dp.w - btnW;
+                        if (x >= bx && x <= dp.x + dp.w) {
+                            // Click on spin buttons
+                            std::string val = target->getAttribute("value");
+                            float v = val.empty() ? 0 : static_cast<float>(atof(val.c_str()));
+                            float step = newInput->rangeStep();
+                            float midY = dp.y + dp.h / 2;
+                            v += (y < midY) ? step : -step;
+                            const char* minAttr = newInput->get_attr("min");
+                            const char* maxAttr = newInput->get_attr("max");
+                            if (minAttr) v = std::max(v, newInput->rangeMin());
+                            if (maxAttr) v = std::min(v, newInput->rangeMax());
+                            char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+                            target->setAttribute("value", buf);
+                            newInput->setCursorPos(static_cast<int>(strlen(buf)));
+                            dispatchInputEvent(target);
+                        }
+                    }
                     const char* val = newInput->get_attr("value");
                     newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
                     SDL_StartTextInput(window_->getSDLWindow());
@@ -1180,6 +1206,13 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     }
 
     if (!document_) return;
+
+    // Tab key: advance focus to next/previous focusable element
+    if (keycode == SDLK_TAB) {
+        advanceFocus((mod & SDL_KMOD_SHIFT) != 0);
+        uiDirty_ = true;
+        return;
+    }
 
     // Check if a text input is focused — handle editing keys
     auto* activeEl = document_->activeElement();
@@ -1569,8 +1602,30 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     }
 }
 
+// Filter out control characters (tab, etc.) that shouldn't be inserted as text
+static bool isControlChar(const std::string& text) {
+    if (text.empty()) return true;
+    unsigned char c = static_cast<unsigned char>(text[0]);
+    // Allow printable ASCII and multi-byte UTF-8 sequences
+    if (text.size() == 1 && c < 0x20 && c != '\n') return true; // control chars except newline
+    if (text.size() == 1 && c == 0x7f) return true; // DEL
+    return false;
+}
+
+// Validate text for number input (digits, minus, decimal point, 'e'/'E')
+static bool isValidNumberChar(const std::string& text) {
+    for (char c : text) {
+        if (!((c >= '0' && c <= '9') || c == '-' || c == '.' || c == 'e' || c == 'E' || c == '+'))
+            return false;
+    }
+    return !text.empty();
+}
+
 void Engine::handleTextInput(const std::string& text) {
     if (!document_) return;
+
+    // Filter control characters for all inputs
+    if (isControlChar(text)) return;
 
     auto* activeEl = document_->activeElement();
 
@@ -1589,6 +1644,11 @@ void Engine::handleTextInput(const std::string& text) {
     auto* input = getElInput(activeEl);
     if (!input || !input->isFocused() || !input->isTextType()) return;
 
+    // Number type: only allow numeric characters
+    if (input->inputType() == layout::ElInput::InputType::Number) {
+        if (!isValidNumberChar(text)) return;
+    }
+
     // Insert text at cursor position
     std::string val = activeEl->getAttribute("value");
     int pos = std::clamp(input->cursorPos(), 0, static_cast<int>(val.size()));
@@ -1596,6 +1656,137 @@ void Engine::handleTextInput(const std::string& text) {
     input->setCursorPos(pos + static_cast<int>(text.size()));
     activeEl->setAttribute("value", val);
     dispatchInputEvent(activeEl);
+}
+
+// ---------------------------------------------------------------------------
+// Tab focus navigation
+// ---------------------------------------------------------------------------
+
+void Engine::advanceFocus(bool reverse) {
+    if (!document_) return;
+
+    // Build list of focusable elements in DOM order
+    std::vector<dom::Element*> focusable;
+    auto* body = document_->body();
+    if (!body) return;
+
+    // Collect all elements via querySelectorAll for common focusable tags
+    auto inputs = body->querySelectorAll("input");
+    auto textareas = body->querySelectorAll("textarea");
+    auto selects = body->querySelectorAll("select");
+    auto buttons = body->querySelectorAll("button");
+
+    // Merge into a single list — we need DOM order, so collect all elements
+    // and filter. Use a simple recursive walk.
+    std::function<void(dom::Node*)> walk = [&](dom::Node* node) {
+        if (!node) return;
+        if (node->nodeType() == dom::NodeType::Element) {
+            auto* el = static_cast<dom::Element*>(node);
+            std::string tag = el->tagName();
+            for (auto& c : tag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            bool isFocusable = (tag == "input" || tag == "textarea" || tag == "select" || tag == "button");
+            if (isFocusable) {
+                // Skip hidden inputs
+                auto* inp = getElInput(el);
+                if (inp && inp->inputType() == layout::ElInput::InputType::Hidden)
+                    isFocusable = false;
+                // Skip disabled
+                if (el->getAttribute("disabled") == "true" || el->attributes().count("disabled"))
+                    isFocusable = false;
+            }
+            if (isFocusable) focusable.push_back(el);
+        }
+        for (auto* child : node->childNodes()) walk(child);
+    };
+    walk(body);
+
+    if (focusable.empty()) return;
+
+    // Find current active element
+    auto* activeEl = document_->activeElement();
+    int currentIdx = -1;
+    for (int i = 0; i < static_cast<int>(focusable.size()); ++i) {
+        if (focusable[i] == activeEl) { currentIdx = i; break; }
+    }
+
+    // Compute next index
+    int nextIdx;
+    if (reverse) {
+        nextIdx = (currentIdx <= 0) ? static_cast<int>(focusable.size()) - 1 : currentIdx - 1;
+    } else {
+        nextIdx = (currentIdx < 0 || currentIdx >= static_cast<int>(focusable.size()) - 1) ? 0 : currentIdx + 1;
+    }
+
+    auto* nextEl = focusable[nextIdx];
+
+    // Unfocus current
+    if (activeEl) {
+        auto* prevInput = getElInput(activeEl);
+        if (prevInput) prevInput->setFocused(false);
+        auto* prevTa = getElTextarea(activeEl);
+        if (prevTa) prevTa->setFocused(false);
+        auto* prevSel = getElSelect(activeEl);
+        if (prevSel) prevSel->setOpen(false);
+    }
+
+    // Focus next
+    document_->setActiveElement(nextEl);
+    auto* newInput = getElInput(nextEl);
+    auto* newTa = getElTextarea(nextEl);
+
+    if (newInput) {
+        newInput->setFocused(true);
+        if (newInput->isTextType()) {
+            const char* val = newInput->get_attr("value");
+            newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+            SDL_StartTextInput(window_->getSDLWindow());
+        } else {
+            SDL_StopTextInput(window_->getSDLWindow());
+        }
+    } else if (newTa) {
+        newTa->setFocused(true);
+        const char* val = newTa->get_attr("value");
+        newTa->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+        SDL_StartTextInput(window_->getSDLWindow());
+    } else {
+        SDL_StopTextInput(window_->getSDLWindow());
+    }
+
+    uiDirty_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// Mouse wheel
+// ---------------------------------------------------------------------------
+
+void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
+    if (!document_) return;
+
+    // Check if mouse is over a focused textarea
+    auto* activeEl = document_->activeElement();
+    auto* textarea = getElTextarea(activeEl);
+    if (textarea && textarea->isFocused()) {
+        // Scroll by 3 lines per wheel tick
+        auto fm = textarea->css().get_font_metrics();
+        float lineH = (fm.height > 0) ? static_cast<float>(fm.height) : 16.0f;
+        float scroll = textarea->scrollY() - dy * lineH * 3.0f;
+        scroll = std::max(scroll, 0.0f);
+        textarea->setScrollY(scroll);
+        uiDirty_ = true;
+        return;
+    }
+
+    // Also allow scrolling textarea under mouse cursor (not just active one)
+    dom::Element* target = hitTest(x, y);
+    auto* hoverTa = getElTextarea(target);
+    if (hoverTa) {
+        auto fm = hoverTa->css().get_font_metrics();
+        float lineH = (fm.height > 0) ? static_cast<float>(fm.height) : 16.0f;
+        float scroll = hoverTa->scrollY() - dy * lineH * 3.0f;
+        scroll = std::max(scroll, 0.0f);
+        hoverTa->setScrollY(scroll);
+        uiDirty_ = true;
+    }
 }
 
 // ---------------------------------------------------------------------------
