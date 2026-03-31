@@ -71,4 +71,10 @@ void Window::swapWindow() {
     SDL_GL_SwapWindow(m_window);
 }
 
+void Window::setTitle(const std::string& title) {
+    if (m_window) {
+        SDL_SetWindowTitle(m_window, title.c_str());
+    }
+}
+
 } // namespace bro::platform

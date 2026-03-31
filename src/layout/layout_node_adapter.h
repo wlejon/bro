@@ -21,7 +21,10 @@ class LayoutNodeAdapter : public htmlayout::layout::LayoutNode {
 public:
     // Construct for an element node
     explicit LayoutNodeAdapter(dom::Element* elem)
-        : elem_(elem), textNode_(nullptr) {}
+        : elem_(elem), textNode_(nullptr) {
+        // Copy the element's stored layout box so hit testing works
+        box = elem->layoutBox();
+    }
 
     // Construct for a text node
     explicit LayoutNodeAdapter(dom::TextNode* text, dom::Element* parentElem)

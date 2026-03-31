@@ -9,12 +9,60 @@ namespace bro::engine {
 inline constexpr const char* kDefaultStyles = R"CSS(
 
 html {
+    display: block;
     background-color: #fff;
     color: #000;
     font-family: Arial, Helvetica, sans-serif;
     font-size: 16px;
     line-height: 1.2;
 }
+
+/* ---------- Hidden elements ---------- */
+
+head, title, meta, link, style, script, noscript {
+    display: none;
+}
+
+/* ---------- Block-level elements ---------- */
+
+body, div, p, section, article, nav, aside, header, footer, main,
+figure, figcaption, blockquote, fieldset, form, details, summary,
+address, hgroup, search, dl, dt, dd, dialog {
+    display: block;
+}
+
+body {
+    margin: 8px;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    display: block;
+    font-weight: bold;
+}
+
+h1 { font-size: 2em; margin-top: 0.67em; margin-bottom: 0.67em; }
+h2 { font-size: 1.5em; margin-top: 0.83em; margin-bottom: 0.83em; }
+h3 { font-size: 1.17em; margin-top: 1em; margin-bottom: 1em; }
+h4 { font-size: 1em; margin-top: 1.33em; margin-bottom: 1.33em; }
+h5 { font-size: 0.83em; margin-top: 1.67em; margin-bottom: 1.67em; }
+h6 { font-size: 0.67em; margin-top: 2.33em; margin-bottom: 2.33em; }
+
+p { margin-top: 1em; margin-bottom: 1em; }
+
+ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; }
+li { display: list-item; }
+
+b, strong { font-weight: bold; }
+i, em { font-style: italic; }
+u { text-decoration: underline; }
+s, strike, del { text-decoration: line-through; }
+small { font-size: 0.83em; }
+sub { font-size: 0.83em; vertical-align: sub; }
+sup { font-size: 0.83em; vertical-align: super; }
+mark { background-color: yellow; }
+
+span, a, abbr, cite, q { display: inline; }
+br { display: block; }
 
 /* ---------- Form controls ---------- */
 

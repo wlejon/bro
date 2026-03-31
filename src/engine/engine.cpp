@@ -273,6 +273,14 @@ Engine::Engine(const std::string& appDir, int width, int height)
     if (!templateBlocks.empty())
         document_->injectTemplates(templateBlocks);
 
+    // 8b. Set window title from <title> element
+    {
+        std::string docTitle = document_->title();
+        if (!docTitle.empty() && window_) {
+            window_->setTitle(docTitle);
+        }
+    }
+
 
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);

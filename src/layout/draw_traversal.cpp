@@ -75,8 +75,15 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     float bh = box.fullHeight();
 
     if (visible) {
-        // Draw background
-        drawBackground(elem, bx, by, bw, bh);
+        // For html/body elements, background covers the entire viewport (CSS2.1 spec)
+        std::string tag = elem->tagName();
+        if ((tag == "html" || tag == "HTML" || tag == "body" || tag == "BODY") &&
+            viewportW_ > 0 && viewportH_ > 0) {
+            drawBackground(elem, 0, 0,
+                           static_cast<float>(viewportW_), static_cast<float>(viewportH_));
+        } else {
+            drawBackground(elem, bx, by, bw, bh);
+        }
 
         // Draw borders
         drawBorders(elem, bx, by, bw, bh);
@@ -92,9 +99,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         renderer_->setClip(bx, by, bw, bh);
     }
 
-    // Apply element scroll offset
-    float childOffsetX = offsetX;
-    float childOffsetY = offsetY - elem->scrollTopValue();
+    // Children's offset is the parent's absolute content position
+    // (so child positions, which are relative to parent content area, become absolute)
+    float childOffsetX = x;
+    float childOffsetY = y - elem->scrollTopValue();
 
     // Draw children (handles shadow DOM composed children)
     std::vector<dom::Node*> childNodes;
@@ -255,10 +263,9 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     auto cIt = style.find("color");
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
-    // Position: text nodes use parent's layout box
-    auto& box = parent->layoutBox();
-    float x = box.contentRect.x + offsetX;
-    float y = box.contentRect.y + offsetY + ascent;
+    // Position: offset already represents parent's absolute content position
+    float x = offsetX;
+    float y = offsetY + ascent;
 
     // Handle multi-line text (newlines in pre/pre-wrap)
     auto wsIt = style.find("white-space");

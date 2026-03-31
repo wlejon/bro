@@ -167,6 +167,54 @@ void Document::resolveStylesRecursive(Element* elem,
     }
 
     auto computed = cascade_.resolve(*adapter, inlineStyle, parentStyle);
+
+    // Resolve font-size to absolute px so all consumers get a usable value.
+    // em/% are relative to the parent's (already-resolved) font-size.
+    auto fsIt = computed.find("font-size");
+    if (fsIt != computed.end() && !fsIt->second.empty()) {
+        const auto& val = fsIt->second;
+        char* end = nullptr;
+        float num = std::strtof(val.c_str(), &end);
+        if (end != val.c_str() && num > 0) {
+            std::string unit(end);
+            float resolved = num; // default: px or unitless
+            if (unit == "em") {
+                float parentFs = 16.0f;
+                if (parentStyle) {
+                    auto pit = parentStyle->find("font-size");
+                    if (pit != parentStyle->end()) {
+                        char* pe = nullptr;
+                        float pv = std::strtof(pit->second.c_str(), &pe);
+                        if (pe != pit->second.c_str() && pv > 0) parentFs = pv;
+                    }
+                }
+                resolved = num * parentFs;
+            } else if (unit == "%") {
+                float parentFs = 16.0f;
+                if (parentStyle) {
+                    auto pit = parentStyle->find("font-size");
+                    if (pit != parentStyle->end()) {
+                        char* pe = nullptr;
+                        float pv = std::strtof(pit->second.c_str(), &pe);
+                        if (pe != pit->second.c_str() && pv > 0) parentFs = pv;
+                    }
+                }
+                resolved = num * parentFs / 100.0f;
+            } else if (unit == "rem") {
+                resolved = num * 16.0f;
+            } else if (unit == "pt") {
+                resolved = num * 96.0f / 72.0f;
+            }
+            fsIt->second = std::to_string(resolved);
+            // Clean up trailing zeros for readability (e.g. "32.000000" -> "32")
+            auto& s = fsIt->second;
+            if (s.find('.') != std::string::npos) {
+                s.erase(s.find_last_not_of('0') + 1, std::string::npos);
+                if (s.back() == '.') s.pop_back();
+            }
+        }
+    }
+
     elem->setComputedStyle(std::move(computed));
 
     // Recurse into children
