@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Shadow DOM Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <h1>Shadow DOM Demo</h1>
+        <p class="subtitle">Full Web Components with encapsulated styles, slots, and event retargeting</p>
+
+        <!-- Section 1: Basic Shadow DOM -->
+        <section id="section-basic">
+            <h2>1. Basic Shadow DOM</h2>
+            <p>Custom element with encapsulated styles that don't leak out.</p>
+            <fancy-card></fancy-card>
+            <fancy-card theme="blue"></fancy-card>
+            <p class="note">Notice: the shadow DOM styles (bold red text, borders) don't affect this paragraph.</p>
+        </section>
+
+        <!-- Section 2: Slot Projection -->
+        <section id="section-slots">
+            <h2>2. Slot Projection</h2>
+            <p>Light DOM children projected into shadow DOM slots.</p>
+            <info-panel>
+                <span slot="title">Server Status</span>
+                <span slot="icon">&#9679;</span>
+                <div>CPU: 42% | Memory: 6.2 GB / 16 GB</div>
+                <div>Uptime: 14d 7h 23m | Load: 2.1</div>
+            </info-panel>
+            <info-panel>
+                <span slot="title">Network Monitor</span>
+                <span slot="icon">&#9670;</span>
+                <div>Latency: 12ms | Bandwidth: 850 Mbps</div>
+                <div>Connections: 1,247 active</div>
+            </info-panel>
+        </section>
+
+        <!-- Section 3: Style Encapsulation Proof -->
+        <section id="section-encapsulation">
+            <h2>3. Style Encapsulation</h2>
+            <p>The outer document has <code>.title { color: red }</code> but shadow DOM has its own <code>.title</code> style.</p>
+            <div class="title" id="outer-title">I am styled by the OUTER stylesheet (red)</div>
+            <encap-demo></encap-demo>
+        </section>
+
+        <!-- Section 4: Event Retargeting -->
+        <section id="section-events">
+            <h2>4. Event Retargeting</h2>
+            <p>Click inside the shadow DOM. The outer listener sees the host element as target.</p>
+            <div id="event-host-wrapper">
+                <event-demo id="event-comp"></event-demo>
+            </div>
+            <div id="event-log" class="log-box"></div>
+        </section>
+
+        <!-- Section 5: Dynamic Shadow DOM -->
+        <section id="section-dynamic">
+            <h2>5. Dynamic Shadow DOM</h2>
+            <p>Create and modify shadow DOM at runtime.</p>
+            <div class="button-row">
+                <button id="btn-create">Create Component</button>
+                <button id="btn-update">Update Content</button>
+                <button id="btn-reslot">Change Slot Content</button>
+            </div>
+            <div id="dynamic-container"></div>
+        </section>
+
+        <!-- Section 6: Nested Components -->
+        <section id="section-nested">
+            <h2>6. Nested Components</h2>
+            <p>A component that contains another component inside its shadow DOM.</p>
+            <outer-comp></outer-comp>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

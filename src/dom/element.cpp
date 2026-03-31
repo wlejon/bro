@@ -1,5 +1,6 @@
 #include "dom/element.h"
 #include "dom/document.h"
+#include "dom/shadow_root.h"
 #include "util/log.h"
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
@@ -523,6 +524,25 @@ void Element::markStructureDirty() {
     if (document_) {
         document_->markStructureDirty();
     }
+}
+
+ShadowRoot* Element::containingShadowRoot() const {
+    // Walk up the parent chain looking for a ShadowRoot
+    for (auto* p = parent_; p; p = p->parentNode()) {
+        if (p->nodeType() == NodeType::DocumentFragment) {
+            auto* sr = dynamic_cast<ShadowRoot*>(p);
+            if (sr) return sr;
+        }
+    }
+    return nullptr;
+}
+
+ShadowRoot* Element::attachShadow(ShadowRoot::Mode mode) {
+    if (shadowRoot_) return nullptr; // already has shadow root
+    if (!document_) return nullptr;
+
+    shadowRoot_ = document_->allocateShadowRoot(this, mode);
+    return shadowRoot_;
 }
 
 } // namespace bro::dom

@@ -4,6 +4,7 @@
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
 #include "dom/document_fragment.h"
+#include "dom/shadow_root.h"
 #include <litehtml.h>
 #include <string>
 #include <memory>
@@ -29,6 +30,9 @@ public:
     TextNode* createTextNode(const std::string& text);
     CommentNode* createComment(const std::string& data);
     DocumentFragment* createDocumentFragment();
+
+    // Allocate a ShadowRoot owned by this document
+    ShadowRoot* allocateShadowRoot(Element* host, ShadowRoot::Mode mode);
 
     // Free a node from ownedNodes_ (called after removal from tree + JS wrapper invalidation)
     void freeNode(Node* node);
@@ -100,6 +104,9 @@ public:
     void syncAppendToLitehtml(Element* child, Element* parent);
     void syncInsertBeforeLitehtml(Element* newChild, Element* refChild, Element* parent);
     void syncRemoveFromLitehtml(Element* child, Element* parent);
+
+    // Shadow DOM: sync shadow tree content to litehtml under the host element
+    void syncShadowToLitehtml(Element* host);
 
     // Parse an HTML string and replace an element's children (innerHTML setter)
     void parseInnerHTML(Element* parent, const std::string& html);

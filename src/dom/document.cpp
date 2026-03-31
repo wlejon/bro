@@ -16,6 +16,7 @@ struct LitehtmlTagAccess : litehtml::html_tag {
 };
 static const auto kAttrsPtr = LitehtmlTagAccess::attrsPtr();
 
+
 namespace bro::dom {
 
 Document::Document() = default;
@@ -140,6 +141,10 @@ CommentNode* Document::createComment(const std::string& data) {
 
 DocumentFragment* Document::createDocumentFragment() {
     return allocateNode<DocumentFragment>();
+}
+
+ShadowRoot* Document::allocateShadowRoot(Element* host, ShadowRoot::Mode mode) {
+    return allocateNode<ShadowRoot>(host, mode);
 }
 
 void Document::freeNode(Node* node) {
@@ -603,6 +608,198 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
                     }
                 }
             }
+        }
+    }
+
+    markStructureDirty();
+}
+
+// ---------------------------------------------------------------------------
+// Shadow DOM → litehtml sync
+// ---------------------------------------------------------------------------
+
+void Document::syncShadowToLitehtml(Element* host) {
+    if (!host || !host->hasShadow() || !litehtml_doc_) return;
+    auto hostLh = host->litehtmlElement();
+    if (!hostLh) return;
+
+    auto* shadow = host->shadowRoot();
+    std::string scopeAttr = shadow->scopeId();
+
+    // 1. Unlink shadow children from litehtml (but keep in bro::dom)
+    // Walk all bro::dom elements that might have litehtml links from a previous sync.
+    std::function<void(Node*)> unlinkShadowTree = [&](Node* node) {
+        if (!node) return;
+        if (node->nodeType() == NodeType::Element) {
+            auto* elem = static_cast<Element*>(node);
+            auto lh = elem->litehtmlElement();
+            if (lh) {
+                litehtmlMap_.erase(lh);
+                elem->setLitehtmlElement(nullptr);
+            }
+            // Also unlink children, but don't cross into nested shadow roots
+            if (!elem->hasShadow() || elem == host) {
+                for (auto* child : elem->childNodes()) {
+                    unlinkShadowTree(child);
+                }
+            }
+        }
+    };
+    for (auto* child : shadow->childNodes()) {
+        unlinkShadowTree(child);
+    }
+    // Also unlink host's light DOM children (they may have been linked from slot projection)
+    for (auto* child : host->children()) {
+        unlinkLitehtmlRecursive(child);
+    }
+
+    // Clear litehtml children under host
+    hostLh->clearRecursive();
+    auto ri = hostLh->get_render_item();
+    if (ri) ri->children().clear();
+
+    // 2. Add scope attribute to the host element itself so `:host` and
+    //    descendant selectors like `[data-bro-shadow="sN"] .foo` work.
+    hostLh->set_attr("data-bro-shadow", scopeAttr.c_str());
+
+    // 3. Apply :host styles as inline styles on the host element
+    std::string hostCSS = shadow->hostStyles();
+    if (!hostCSS.empty()) {
+        // Merge with existing inline styles
+        std::string existing;
+        const char* cur = hostLh->get_attr("style");
+        if (cur) existing = cur;
+        if (!existing.empty() && existing.back() != ';') existing += "; ";
+        existing += hostCSS;
+        hostLh->set_attr("style", existing.c_str());
+        hostLh->compute_styles(false);
+    }
+
+    // 4. Sync shadow tree children to litehtml under the host.
+    //    Shadow CSS rules are resolved to inline styles on each element.
+    shadow->distributeSlots();
+
+    // Collect elements that need custom element upgrade after sync
+    std::vector<Element*> elementsToUpgrade;
+
+    std::function<void(Node*, litehtml::element::ptr)> syncNode;
+    syncNode = [&](Node* node, litehtml::element::ptr parentLh) {
+        if (!node) return;
+
+        if (node->nodeType() == NodeType::Element) {
+            auto* elem = static_cast<Element*>(node);
+
+            // Skip <style> elements (CSS already injected above)
+            if (elem->tagName() == "STYLE") return;
+
+            // <slot> element: substitute with assigned light DOM nodes
+            if (elem->tagName() == "SLOT") {
+                auto assigned = shadow->assignedNodes(elem);
+                if (assigned.empty()) {
+                    // Fallback: render slot's own children
+                    for (auto* child : elem->childNodes()) {
+                        syncNode(child, parentLh);
+                    }
+                } else {
+                    for (auto* assignedNode : assigned) {
+                        if (assignedNode->nodeType() == NodeType::Element) {
+                            auto* assignedElem = static_cast<Element*>(assignedNode);
+                            std::string html = assignedElem->outerHTML();
+                            size_t before = parentLh->children().size();
+                            litehtml_doc_->append_children_from_string(
+                                *parentLh, html.c_str(), false);
+                            auto& lhChildren = parentLh->children();
+                            if (lhChildren.size() > before) {
+                                auto it = lhChildren.begin();
+                                std::advance(it, before);
+                                linkElementToLitehtml(*it, assignedElem);
+                            }
+                        } else if (assignedNode->nodeType() == NodeType::Text) {
+                            auto* textNode = static_cast<TextNode*>(assignedNode);
+                            std::string html = textToLitehtmlHtml(textNode->data(), parentLh);
+                            if (!html.empty()) {
+                                litehtml_doc_->append_children_from_string(
+                                    *parentLh, html.c_str(), false);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Regular shadow element: serialize to HTML and add to litehtml.
+            // Resolve shadow CSS rules to inline styles on this element.
+            std::string lower = elem->tagName();
+            for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            std::string html = "<" + lower;
+            // Add other attributes
+            for (auto& [key, val] : elem->attributes()) {
+                if (key == "style") continue; // handled below
+                html += " " + key + "=\"" + val + "\"";
+            }
+            // Build inline style: existing styles + resolved shadow CSS
+            std::string css = elem->style().cssText();
+            auto attrIt = elem->attributes().find("style");
+            if (attrIt != elem->attributes().end()) {
+                if (!css.empty()) css += "; ";
+                css += attrIt->second;
+            }
+            std::string shadowCSS = shadow->resolveInlineStyles(elem);
+            if (!shadowCSS.empty()) {
+                if (!css.empty()) css += "; ";
+                css += shadowCSS;
+            }
+            if (!css.empty()) {
+                html += " style=\"" + css + "\"";
+            }
+            html += "></" + lower + ">";
+
+            size_t before = parentLh->children().size();
+            litehtml_doc_->append_children_from_string(
+                *parentLh, html.c_str(), false);
+
+            auto& lhChildren = parentLh->children();
+            if (lhChildren.size() > before) {
+                auto it = lhChildren.begin();
+                std::advance(it, before);
+                // Link and recurse
+                elem->setLitehtmlElement(*it);
+                litehtmlMap_[*it] = elem;
+
+                // Track for custom element upgrade
+                if (lower.find('-') != std::string::npos) {
+                    elementsToUpgrade.push_back(elem);
+                }
+
+                // Recurse into children (but not into elements with shadow roots -
+                // those will get their own syncShadowToLitehtml call)
+                if (!elem->hasShadow()) {
+                    for (auto* child : elem->childNodes()) {
+                        syncNode(child, *it);
+                    }
+                }
+            }
+        } else if (node->nodeType() == NodeType::Text) {
+            auto* textNode = static_cast<TextNode*>(node);
+            std::string html = textToLitehtmlHtml(textNode->data(), parentLh);
+            if (!html.empty()) {
+                litehtml_doc_->append_children_from_string(
+                    *parentLh, html.c_str(), false);
+            }
+        }
+    };
+
+    for (auto* child : shadow->childNodes()) {
+        syncNode(child, hostLh);
+    }
+
+    // 5. Upgrade any custom elements found in the shadow tree.
+    //    Their constructors may call attachShadow + set innerHTML,
+    //    which will recursively call syncShadowToLitehtml for nested shadows.
+    for (auto* elem : elementsToUpgrade) {
+        if (elem->hasShadow()) {
+            syncShadowToLitehtml(elem);
         }
     }
 

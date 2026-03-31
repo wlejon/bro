@@ -277,4 +277,35 @@ document.getElementById('btn-scroll').addEventListener('click', function() {
     output.textContent = 'scrollIntoView() called on #section-counter (no-op stub)';
 });
 
+// =========================================================================
+// 7. Shadow DOM: <shadow-box>
+// =========================================================================
+
+class ShadowBox extends HTMLElement {
+    constructor() {
+        super();
+        var shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML =
+            '<style>' +
+            ':host { display: block; border: 2px solid #44dd88; padding: 16px; margin: 8px 0; background: #0a1a10; }' +
+            '.shadow-title { color: #44dd88; font-size: 18px; font-weight: bold; margin-bottom: 8px; }' +
+            '.shadow-content { color: #aaa; font-size: 14px; }' +
+            '</style>' +
+            '<div class="shadow-title"><slot name="title">Default Title</slot></div>' +
+            '<div class="shadow-content"><slot></slot></div>';
+    }
+
+    connectedCallback() {
+        logShadow('shadow-box connected, shadowRoot mode: ' + this.shadowRoot.mode);
+    }
+}
+customElements.define('shadow-box', ShadowBox);
+
+var shadowLogBox = null;
+function logShadow(msg) {
+    if (!shadowLogBox) shadowLogBox = document.getElementById('shadow-log');
+    if (!shadowLogBox) return;
+    shadowLogBox.textContent += msg + '\n';
+}
+
 console.log('Web Components test app loaded!');

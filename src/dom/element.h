@@ -1,5 +1,6 @@
 #pragma once
 #include "dom/node.h"
+#include "dom/shadow_root.h"
 #include "dom/style_proxy.h"
 #include <litehtml.h>
 #include <string>
@@ -82,6 +83,14 @@ public:
     void setLitehtmlElement(litehtml::element::ptr elem) { litehtml_element_ = std::move(elem); }
     litehtml::element::ptr litehtmlElement() const { return litehtml_element_; }
 
+    // Shadow DOM
+    ShadowRoot* attachShadow(ShadowRoot::Mode mode);
+    ShadowRoot* shadowRoot() const { return shadowRoot_; }
+    bool hasShadow() const { return shadowRoot_ != nullptr; }
+
+    // Returns the ShadowRoot this element is inside, or nullptr if not in shadow DOM
+    ShadowRoot* containingShadowRoot() const;
+
     // Element-level scroll offset (for overflow:auto/scroll elements)
     float scrollTopValue() const { return scrollTop_; }
     void setScrollTopValue(float v) { scrollTop_ = v; }
@@ -100,6 +109,7 @@ private:
     std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
     litehtml::element::ptr litehtml_element_;
     Document* document_ = nullptr;
+    ShadowRoot* shadowRoot_ = nullptr;
     bool dirty_ = false;
     bool scrollToBottom_ = false;
     float scrollTop_ = 0.0f;

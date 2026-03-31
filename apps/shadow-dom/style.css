@@ -1,0 +1,101 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #1a1a2e;
+    color: #e0e0e0;
+}
+
+#app {
+    max-width: 720px;
+    margin: 0 auto;
+}
+
+h1 {
+    color: #e94560;
+    margin-bottom: 4px;
+    font-size: 28px;
+}
+
+.subtitle {
+    color: #888;
+    margin-top: 0;
+    margin-bottom: 30px;
+}
+
+h2 {
+    color: #e94560;
+    background: #16213e;
+    padding: 10px 16px;
+    margin: 30px 0 12px 0;
+    font-size: 18px;
+}
+
+section {
+    background: #16213e;
+    padding: 16px 20px;
+    margin-bottom: 8px;
+}
+
+section > p {
+    color: #8888aa;
+    margin-top: 4px;
+    font-size: 14px;
+}
+
+code {
+    background: #0a0a1a;
+    padding: 2px 6px;
+    color: #aaddaa;
+    font-family: monospace;
+}
+
+.note {
+    color: #aaddaa;
+    font-style: italic;
+    font-size: 13px;
+}
+
+/* This .title style should NOT leak into shadow DOM */
+.title {
+    color: #e94560;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 8px;
+    background: #0a0a1a;
+    margin: 8px 0;
+}
+
+button {
+    background-color: #0f3460;
+    color: #e0e0e0;
+    border: 1px solid #e94560;
+    padding: 8px 16px;
+    font-size: 14px;
+    cursor: pointer;
+    margin: 4px 4px 4px 0;
+}
+
+.button-row {
+    margin: 12px 0;
+}
+
+.log-box {
+    background: #0a0a1a;
+    border: 1px solid #333;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 13px;
+    color: #aaddaa;
+    min-height: 30px;
+    max-height: 150px;
+    overflow: auto;
+    margin: 8px 0;
+    white-space: pre-wrap;
+}
+
+/* Custom element display */
+fancy-card, info-panel, encap-demo, event-demo, outer-comp, inner-badge {
+    display: block;
+    margin: 8px 0;
+}
