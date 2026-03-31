@@ -1,4 +1,7 @@
 #include "svg/svg_parser.h"
+#include "dom/element.h"
+#include "dom/text_node.h"
+#include "dom/node.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -62,19 +65,16 @@ bool parseColor(const std::string& str, render::Color& out) {
     if (str.empty() || str == "none") return false;
     if (str == "currentColor") { out = {0, 0, 0, 255}; return true; }
 
-    // Named colors
     std::string lower = str;
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     auto it = kNamedColors.find(lower);
     if (it != kNamedColors.end()) { out = it->second; return true; }
 
-    // Hex
     if (str[0] == '#') {
         unsigned long val = 0;
         std::string hex = str.substr(1);
         if (hex.size() == 3) {
-            // #RGB -> #RRGGBB
             hex = {hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]};
         }
         if (hex.size() == 6 || hex.size() == 8) {
@@ -94,18 +94,16 @@ bool parseColor(const std::string& str, render::Color& out) {
         }
     }
 
-    // rgb(r, g, b) / rgba(r, g, b, a)
     if (str.substr(0, 4) == "rgb(" || str.substr(0, 5) == "rgba(") {
         auto start = str.find('(');
         auto end = str.rfind(')');
         if (start != std::string::npos && end != std::string::npos) {
             std::string inner = str.substr(start + 1, end - start - 1);
-            // Replace commas and slashes with spaces
             for (char& c : inner) { if (c == ',' || c == '/') c = ' '; }
             std::istringstream iss(inner);
             float r, g, b, a = 1.0f;
             if (iss >> r >> g >> b) {
-                iss >> a; // optional alpha
+                iss >> a;
                 out.r = static_cast<uint8_t>(std::clamp(r, 0.0f, 255.0f));
                 out.g = static_cast<uint8_t>(std::clamp(g, 0.0f, 255.0f));
                 out.b = static_cast<uint8_t>(std::clamp(b, 0.0f, 255.0f));
@@ -119,34 +117,31 @@ bool parseColor(const std::string& str, render::Color& out) {
 }
 
 // ---------------------------------------------------------------------------
-// Attribute helpers
+// Attribute helpers using bro::dom::Element
 // ---------------------------------------------------------------------------
 
-std::string getAttr(const litehtml::element::ptr& el, const char* name) {
-    const char* val = el->get_attr(name);
-    return val ? val : "";
+std::string getAttr(bro::dom::Element* el, const char* name) {
+    return el ? el->getAttribute(name) : "";
 }
 
-float getAttrFloat(const litehtml::element::ptr& el, const char* name, float def = 0.0f) {
-    const char* val = el->get_attr(name);
-    if (!val || !*val) return def;
+float getAttrFloat(bro::dom::Element* el, const char* name, float def = 0.0f) {
+    std::string val = getAttr(el, name);
+    if (val.empty()) return def;
     char* end = nullptr;
-    float f = std::strtof(val, &end);
-    return (end != val) ? f : def;
+    float f = std::strtof(val.c_str(), &end);
+    return (end != val.c_str()) ? f : def;
 }
 
-std::string getTagName(const litehtml::element::ptr& el) {
-    const char* tag = el->get_tagName();
-    if (!tag) return "";
-    std::string result(tag);
+std::string getTagName(bro::dom::Element* el) {
+    if (!el) return "";
+    std::string result = el->tagName();
     std::transform(result.begin(), result.end(), result.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     return result;
 }
 
-// Parse style attributes (fill, stroke, stroke-width, opacity) with inheritance
-SvgStyle parseStyle(const litehtml::element::ptr& el, const SvgStyle& parentStyle) {
-    SvgStyle style = parentStyle; // inherit from parent
+SvgStyle parseStyle(bro::dom::Element* el, const SvgStyle& parentStyle) {
+    SvgStyle style = parentStyle;
 
     std::string fillStr = getAttr(el, "fill");
     if (!fillStr.empty()) {
@@ -176,21 +171,20 @@ SvgStyle parseStyle(const litehtml::element::ptr& el, const SvgStyle& parentStyl
         }
     }
 
-    const char* sw = el->get_attr("stroke-width");
-    if (sw && *sw) {
+    std::string sw = getAttr(el, "stroke-width");
+    if (!sw.empty()) {
         char* end = nullptr;
-        float f = std::strtof(sw, &end);
-        if (end != sw) style.strokeWidth = f;
+        float f = std::strtof(sw.c_str(), &end);
+        if (end != sw.c_str()) style.strokeWidth = f;
     }
 
-    const char* op = el->get_attr("opacity");
-    if (op && *op) {
+    std::string op = getAttr(el, "opacity");
+    if (!op.empty()) {
         char* end = nullptr;
-        float f = std::strtof(op, &end);
-        if (end != op) style.opacity = std::clamp(f, 0.0f, 1.0f);
+        float f = std::strtof(op.c_str(), &end);
+        if (end != op.c_str()) style.opacity = std::clamp(f, 0.0f, 1.0f);
     }
 
-    // Apply opacity to fill and stroke alpha
     if (style.opacity < 1.0f) {
         style.fill.a = static_cast<uint8_t>(style.fill.a * style.opacity);
         style.stroke.a = static_cast<uint8_t>(style.stroke.a * style.opacity);
@@ -199,7 +193,6 @@ SvgStyle parseStyle(const litehtml::element::ptr& el, const SvgStyle& parentStyl
     return style;
 }
 
-// Parse a points attribute "x1,y1 x2,y2 ..." or "x1 y1 x2 y2 ..."
 std::vector<render::PointF> parsePoints(const std::string& str) {
     std::vector<render::PointF> pts;
     std::string s = str;
@@ -212,27 +205,15 @@ std::vector<render::PointF> parsePoints(const std::string& str) {
     return pts;
 }
 
-// Get text content from a litehtml element's children
-std::string getTextContent(const litehtml::element::ptr& el) {
-    std::string text;
-    for (auto& child : el->children()) {
-        if (child && child->is_text()) {
-            litehtml::string t;
-            child->get_text(t);
-            text += t;
-        }
-    }
-    return text;
+std::string getTextContent(bro::dom::Element* el) {
+    return el ? el->textContent() : "";
 }
 
-// Recursively parse SVG children
-void parseChildren(const litehtml::element::ptr& el, const SvgStyle& parentStyle,
+void parseChildren(bro::dom::Element* el, const SvgStyle& parentStyle,
                    std::vector<SvgNode>& out) {
-    for (auto& child : el->children()) {
-        if (!child) continue;
-
+    for (auto* child : el->children()) {
         std::string tag = getTagName(child);
-        if (tag.empty()) continue; // text node
+        if (tag.empty()) continue;
 
         SvgStyle style = parseStyle(child, parentStyle);
         SvgNode node{};
@@ -246,7 +227,6 @@ void parseChildren(const litehtml::element::ptr& el, const SvgStyle& parentStyle
             node.height = getAttrFloat(child, "height");
             node.rx = getAttrFloat(child, "rx");
             node.ry = getAttrFloat(child, "ry");
-            // SVG spec: if only one of rx/ry is set, the other defaults to it
             if (node.rx > 0 && node.ry == 0) node.ry = node.rx;
             if (node.ry > 0 && node.rx == 0) node.rx = node.ry;
             out.push_back(std::move(node));
@@ -269,9 +249,8 @@ void parseChildren(const litehtml::element::ptr& el, const SvgStyle& parentStyle
             node.y1 = getAttrFloat(child, "y1");
             node.x2 = getAttrFloat(child, "x2");
             node.y2 = getAttrFloat(child, "y2");
-            // Lines default to stroke visible
             if (!style.hasStroke && getAttr(child, "stroke").empty()) {
-                node.style.stroke = parentStyle.fill; // use parent fill as stroke
+                node.style.stroke = parentStyle.fill;
                 node.style.hasStroke = true;
             }
             out.push_back(std::move(node));
@@ -292,11 +271,11 @@ void parseChildren(const litehtml::element::ptr& el, const SvgStyle& parentStyle
             node.x = getAttrFloat(child, "x");
             node.y = getAttrFloat(child, "y");
             node.textContent = getTextContent(child);
-            const char* fs = child->get_attr("font-size");
-            if (fs && *fs) {
+            std::string fs = getAttr(child, "font-size");
+            if (!fs.empty()) {
                 char* end = nullptr;
-                float f = std::strtof(fs, &end);
-                if (end != fs) node.fontSize = f;
+                float f = std::strtof(fs.c_str(), &end);
+                if (end != fs.c_str()) node.fontSize = f;
             }
             std::string ff = getAttr(child, "font-family");
             if (!ff.empty()) node.fontFamily = ff;
@@ -306,19 +285,18 @@ void parseChildren(const litehtml::element::ptr& el, const SvgStyle& parentStyle
             parseChildren(child, style, node.children);
             out.push_back(std::move(node));
         }
-        // Skip unknown tags (defs, clipPath, etc.)
     }
 }
 
 } // anonymous namespace
 
-SvgRoot parseSvgTree(const litehtml::element::ptr& svgElement) {
+SvgRoot parseSvgTree(bro::dom::Element* svgElement) {
     SvgRoot root;
+    if (!svgElement) return root;
 
     root.width = getAttrFloat(svgElement, "width", 300.0f);
     root.height = getAttrFloat(svgElement, "height", 150.0f);
 
-    // Parse viewBox — try both cases since HTML parsers may lowercase it
     std::string viewBox = getAttr(svgElement, "viewBox");
     if (viewBox.empty()) viewBox = getAttr(svgElement, "viewbox");
     if (!viewBox.empty()) {

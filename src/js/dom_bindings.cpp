@@ -11,12 +11,6 @@
 #include "dom/event.h"
 #include "dom/shadow_root.h"
 
-#include <litehtml.h>
-#include <litehtml/html.h>
-#include <litehtml/el_text.h>
-#include <litehtml/render_item.h>
-#include "layout/bro_el_text.h"
-
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -256,7 +250,7 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
     } else if (node->nodeType() == bro::dom::NodeType::Text) {
         // Define nodeValue and textContent as live getter/setter pairs
         // so that Vue's `textNode.nodeValue = "..."` actually updates
-        // the C++ TextNode and litehtml rendering.
+        // the C++ TextNode and triggers re-layout.
         JSValue getNodeValue = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
             auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
@@ -280,89 +274,12 @@ static JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 
             tn->setData(newText);
 
-            // Propagate to litehtml
+            // Mark parent dirty for re-layout
             auto* parent = n->parentNode();
             if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                 auto* parentEl = static_cast<bro::dom::Element*>(parent);
-                auto lhParent = parentEl->litehtmlElement();
-                if (lhParent) {
-                    // If white-space preserves newlines and text has \n,
-                    // rebuild the parent's litehtml children with <br> elements
-                    bool needsBr = newText.find('\n') != std::string::npos &&
-                                   bro::dom::Document::preservesNewlines(lhParent);
-                    if (needsBr) {
-                        // Full rebuild of parent's litehtml content
-                        lhParent->clearRecursive();
-                        auto ri = lhParent->get_render_item();
-                        if (ri) ri->children().clear();
-                        auto doc = lhParent->get_document();
-                        if (doc) {
-                            // Rebuild from all bro::dom children
-                            for (auto* sib : parent->childNodes()) {
-                                if (sib->nodeType() == bro::dom::NodeType::Text) {
-                                    auto* tn = static_cast<bro::dom::TextNode*>(sib);
-                                    std::string html = bro::dom::Document::textToLitehtmlHtml(
-                                        tn->data(), lhParent);
-                                    doc->append_children_from_string(
-                                        *lhParent, html.c_str(), false);
-                                }
-                            }
-                        }
-                        parentEl->markDirty();
-                        parentEl->markStructureDirty();
-                        return JS_UNDEFINED;
-                    }
-
-                    // Normal path: update litehtml text in-place
-                    auto& siblings = parent->childNodes();
-                    int textIdx = 0;
-                    for (auto* sib : siblings) {
-                        if (sib == n) break;
-                        if (sib->nodeType() == bro::dom::NodeType::Text) textIdx++;
-                    }
-                    auto* htParent = dynamic_cast<litehtml::html_tag*>(lhParent.get());
-                    if (htParent) {
-                        auto& lhChildren = htParent->children();
-                        int lhTextIdx = 0;
-                        for (auto it = lhChildren.begin(); it != lhChildren.end(); ++it) {
-                            if ((*it)->is_text()) {
-                                if (lhTextIdx == textIdx) {
-                                    auto* bt = dynamic_cast<bro::layout::BroElText*>(it->get());
-                                    if (bt) {
-                                        bt->set_text(newText.c_str());
-                                        bt->compute_styles(false);
-                                    } else {
-                                        auto doc = lhParent->get_document();
-                                        if (doc) {
-                                            auto oldEl = *it;
-                                            auto newEl = std::make_shared<bro::layout::BroElText>(
-                                                newText.c_str(), doc);
-                                            *it = newEl;
-                                            newEl->compute_styles(false);
-                                            auto ri = htParent->get_render_item();
-                                            if (ri) {
-                                                for (auto rit = ri->children().begin();
-                                                     rit != ri->children().end(); ++rit) {
-                                                    if (*rit && (*rit)->src_el() == oldEl) {
-                                                        auto newRI = newEl->create_render_item(ri);
-                                                        if (newRI) {
-                                                            newRI = newRI->init();
-                                                            *rit = newRI;
-                                                        }
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                                lhTextIdx++;
-                            }
-                        }
-                    }
-                }
                 parentEl->markDirty();
+                parentEl->markStructureDirty();
             }
             return JS_UNDEFINED;
         }, "set nodeValue", 1, JS_CFUNC_generic, 0);
@@ -723,153 +640,15 @@ static JSValue wrapStyleProxy(JSContext* ctx, bro::dom::StyleProxy* style)
 }
 
 // ===========================================================================
-// ComputedStyleDeclaration (read-only, backed by litehtml css_properties)
+// ComputedStyleDeclaration (read-only, backed by element's computedStyle map)
 // ===========================================================================
 
-// Helper: convert a litehtml css_length to a CSS string
-static std::string cssLengthToString(const litehtml::css_length& len) {
-    if (len.is_predefined()) return "auto";
-    if (len.units() == litehtml::css_units_percentage) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.4g%%", len.val());
-        return buf;
-    }
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.4gpx", len.val());
-    return buf;
-}
-
-// Helper: convert a litehtml web_color to a CSS rgb/rgba string
-static std::string webColorToString(const litehtml::web_color& c) {
-    if (c.alpha == 255) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "rgb(%d, %d, %d)", c.red, c.green, c.blue);
-        return buf;
-    }
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "rgba(%d, %d, %d, %.4g)",
-                  c.red, c.green, c.blue, c.alpha / 255.0);
-    return buf;
-}
-
-// Helper: convert a litehtml border_style enum to CSS string
-static std::string borderStyleToString(litehtml::border_style bs) {
-    return litehtml::index_value(bs, border_style_strings);
-}
-
-// Get a computed CSS property value from a litehtml element
 static std::string getComputedProperty(bro::dom::Element* el, const std::string& prop) {
-    auto lhEl = el->litehtmlElement();
-    if (!lhEl) return "";
-
-    const auto& css = lhEl->css();
-
-    // Display & layout
-    if (prop == "display")    return litehtml::index_value(css.get_display(), style_display_strings);
-    if (prop == "position")   return litehtml::index_value(css.get_position(), element_position_strings);
-    if (prop == "visibility") return litehtml::index_value(css.get_visibility(), visibility_strings);
-    if (prop == "overflow")   return litehtml::index_value(css.get_overflow(), overflow_strings);
-    if (prop == "float")      return litehtml::index_value(css.get_float(), element_float_strings);
-    if (prop == "clear")      return litehtml::index_value(css.get_clear(), element_clear_strings);
-    if (prop == "box-sizing") return litehtml::index_value(css.get_box_sizing(), box_sizing_strings);
-    if (prop == "text-align") return litehtml::index_value(css.get_text_align(), text_align_strings);
-    if (prop == "white-space") return litehtml::index_value(css.get_white_space(), white_space_strings);
-    if (prop == "vertical-align") return litehtml::index_value(css.get_vertical_align(), vertical_align_strings);
-    if (prop == "text-transform") return litehtml::index_value(css.get_text_transform(), text_transform_strings);
-
-    // Dimensions
-    if (prop == "width")      return cssLengthToString(css.get_width());
-    if (prop == "height")     return cssLengthToString(css.get_height());
-    if (prop == "min-width")  return cssLengthToString(css.get_min_width());
-    if (prop == "min-height") return cssLengthToString(css.get_min_height());
-    if (prop == "max-width")  return cssLengthToString(css.get_max_width());
-    if (prop == "max-height") return cssLengthToString(css.get_max_height());
-
-    // Margins
-    if (prop == "margin-top")    return cssLengthToString(css.get_margins().top);
-    if (prop == "margin-right")  return cssLengthToString(css.get_margins().right);
-    if (prop == "margin-bottom") return cssLengthToString(css.get_margins().bottom);
-    if (prop == "margin-left")   return cssLengthToString(css.get_margins().left);
-
-    // Padding
-    if (prop == "padding-top")    return cssLengthToString(css.get_padding().top);
-    if (prop == "padding-right")  return cssLengthToString(css.get_padding().right);
-    if (prop == "padding-bottom") return cssLengthToString(css.get_padding().bottom);
-    if (prop == "padding-left")   return cssLengthToString(css.get_padding().left);
-
-    // Borders (width)
-    if (prop == "border-top-width")    return cssLengthToString(css.get_borders().top.width);
-    if (prop == "border-right-width")  return cssLengthToString(css.get_borders().right.width);
-    if (prop == "border-bottom-width") return cssLengthToString(css.get_borders().bottom.width);
-    if (prop == "border-left-width")   return cssLengthToString(css.get_borders().left.width);
-
-    // Borders (style)
-    if (prop == "border-top-style")    return borderStyleToString(css.get_borders().top.style);
-    if (prop == "border-right-style")  return borderStyleToString(css.get_borders().right.style);
-    if (prop == "border-bottom-style") return borderStyleToString(css.get_borders().bottom.style);
-    if (prop == "border-left-style")   return borderStyleToString(css.get_borders().left.style);
-
-    // Borders (color)
-    if (prop == "border-top-color")    return webColorToString(css.get_borders().top.color);
-    if (prop == "border-right-color")  return webColorToString(css.get_borders().right.color);
-    if (prop == "border-bottom-color") return webColorToString(css.get_borders().bottom.color);
-    if (prop == "border-left-color")   return webColorToString(css.get_borders().left.color);
-
-    // Colors
-    if (prop == "color")            return webColorToString(css.get_color());
-    if (prop == "background-color") {
-        const auto& bg = css.get_bg();
-        return webColorToString(bg.m_color);
-    }
-
-    // Font
-    if (prop == "font-size") {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.4gpx", static_cast<double>(css.get_font_size()));
-        return buf;
-    }
-    if (prop == "line-height") {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%.4gpx", static_cast<double>(css.line_height().computed_value));
-        return buf;
-    }
-
-    // Positioning offsets
-    if (prop == "top")    return cssLengthToString(css.get_offsets().top);
-    if (prop == "right")  return cssLengthToString(css.get_offsets().right);
-    if (prop == "bottom") return cssLengthToString(css.get_offsets().bottom);
-    if (prop == "left")   return cssLengthToString(css.get_offsets().left);
-
-    // z-index
-    if (prop == "z-index") {
-        int z = css.get_z_index();
-        return std::to_string(z);
-    }
-
-    // Flex
-    if (prop == "flex-grow") {
-        char buf[32]; std::snprintf(buf, sizeof(buf), "%.4g", css.get_flex_grow()); return buf;
-    }
-    if (prop == "flex-shrink") {
-        char buf[32]; std::snprintf(buf, sizeof(buf), "%.4g", css.get_flex_shrink()); return buf;
-    }
-    if (prop == "flex-basis") return cssLengthToString(css.get_flex_basis());
-    if (prop == "order") return std::to_string(css.get_order());
-
-    // Cursor
-    if (prop == "cursor") return css.get_cursor();
-
-    // Transition properties — return empty for now (litehtml doesn't compute these)
-    // but returning "" lets Vue know there's no transition rather than erroring
-    if (prop == "transition-duration" || prop == "transition-delay" ||
-        prop == "transition-property" || prop == "transition-timing-function" ||
-        prop == "animation-duration" || prop == "animation-delay" ||
-        prop == "animation-name") {
-        return "0s";
-    }
-
-    // Fall through to inline styles for properties we don't handle
-    return el->style().getProperty(prop);
+    if (!el) return "";
+    auto& style = el->computedStyle();
+    auto it = style.find(prop);
+    if (it != style.end()) return it->second;
+    return "";
 }
 
 // Exotic methods for ComputedStyleDeclaration — read-only property access
@@ -1298,8 +1077,9 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
     }
     el->setTextContent(jsToStdString(ctx, val));
     // Auto-scroll overflow elements to bottom when content changes
-    auto lh = el->litehtmlElement();
-    if (lh && lh->css().get_overflow() > litehtml::overflow_visible) {
+    auto& style = el->computedStyle();
+    auto ovIt = style.find("overflow");
+    if (ovIt != style.end() && ovIt->second != "visible" && ovIt->second != "initial") {
         el->setScrollToBottom(true);
     }
     return JS_UNDEFINED;
@@ -1677,7 +1457,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             for (auto* kid : kids) {
                 el->appendChild(kid);
                 if (doc && kid->nodeType() == bro::dom::NodeType::Element)
-                    doc->syncAppendToLitehtml(static_cast<bro::dom::Element*>(kid), el);
+                    doc->markStructureDirty();
             }
             // Fire connectedCallback for each moved child
             for (auto* kid : kids) {
@@ -1690,7 +1470,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
         } else {
             el->appendChild(child);
             if (doc && child->nodeType() == bro::dom::NodeType::Element) {
-                doc->syncAppendToLitehtml(static_cast<bro::dom::Element*>(child), el);
+                doc->markStructureDirty();
             }
             // Fire connectedCallback
             if (child->nodeType() == bro::dom::NodeType::Element) {
@@ -1719,7 +1499,7 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
             JS_FreeValue(ctx, w);
             if (doc && !childElem->id().empty())
                 doc->unregisterElementId(childElem->id());
-            if (doc) doc->syncRemoveFromLitehtml(childElem, el);
+            if (doc) doc->markStructureDirty();
             invalidateWrapper(ctx, childElem);
         }
         el->removeChild(child);
@@ -1743,12 +1523,7 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
         auto* doc = getDocumentForCtx(ctx);
         if (doc && newChild->nodeType() == bro::dom::NodeType::Element) {
             auto* newElem = static_cast<bro::dom::Element*>(newChild);
-            if (refChild && refChild->nodeType() == bro::dom::NodeType::Element) {
-                doc->syncInsertBeforeLitehtml(newElem,
-                    static_cast<bro::dom::Element*>(refChild), el);
-            } else {
-                doc->syncAppendToLitehtml(newElem, el);
-            }
+            doc->markStructureDirty();
             // Fire connectedCallback
             JSValue w = DomBindings::wrapElement(ctx, newElem);
             fireConnectedCallback(ctx, w);
@@ -1775,17 +1550,11 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         }
         // Sync: insert new before old, then remove old
         el->insertBefore(newChild, oldChild);
-        if (doc && newChild->nodeType() == bro::dom::NodeType::Element &&
-            oldChild->nodeType() == bro::dom::NodeType::Element) {
-            doc->syncInsertBeforeLitehtml(
-                static_cast<bro::dom::Element*>(newChild),
-                static_cast<bro::dom::Element*>(oldChild), el);
-        }
+        if (doc) doc->markStructureDirty();
         if (oldChild->nodeType() == bro::dom::NodeType::Element) {
             auto* oldElem = static_cast<bro::dom::Element*>(oldChild);
             if (doc && !oldElem->id().empty())
                 doc->unregisterElementId(oldElem->id());
-            if (doc) doc->syncRemoveFromLitehtml(oldElem, el);
             invalidateWrapper(ctx, oldElem);
         }
         el->removeChild(oldChild);
@@ -1855,10 +1624,7 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
         auto* doc = getDocumentForCtx(ctx);
         if (doc && !el->id().empty())
             doc->unregisterElementId(el->id());
-        if (doc && parent->nodeType() == bro::dom::NodeType::Element) {
-            doc->syncRemoveFromLitehtml(
-                el, static_cast<bro::dom::Element*>(parent));
-        }
+        if (doc) doc->markStructureDirty();
         invalidateWrapper(ctx, el);
         parent->removeChild(el);
         if (doc) doc->freeNode(el);
@@ -2145,56 +1911,53 @@ static JSValue js_element_set_height(JSContext* ctx, JSValueConst this_val, JSVa
     return JS_UNDEFINED;
 }
 
-// --- Layout measurement (reads from litehtml render items) ---
+// --- Layout measurement (reads from element's layoutBox) ---
 
-static litehtml::position getLayoutPos(bro::dom::Element* el) {
-    litehtml::position pos = {0, 0, 0, 0};
-    if (!el) return pos;
-    auto lh = el->litehtmlElement();
-    if (!lh) return pos;
-    auto ri = lh->get_render_item();
-    if (!ri) return pos;
-    pos = ri->pos();
-    return pos;
+static const htmlayout::layout::LayoutBox& getLayoutBox(bro::dom::Element* el) {
+    static const htmlayout::layout::LayoutBox empty{};
+    if (!el) return empty;
+    return el->layoutBox();
 }
 
 static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto pos = getLayoutPos(el);
-    if (pos.width > 0) return JS_NewInt32(ctx, pos.width);
+    auto& box = getLayoutBox(el);
+    float cw = box.contentRect.width + box.padding.left + box.padding.right;
+    if (cw > 0) return JS_NewInt32(ctx, static_cast<int>(cw));
     // Fallback to attribute-based width for canvas etc
     return js_element_get_width(ctx, this_val);
 }
 
 static JSValue js_element_get_clientHeight(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto pos = getLayoutPos(el);
-    if (pos.height > 0) return JS_NewInt32(ctx, pos.height);
+    auto& box = getLayoutBox(el);
+    float ch = box.contentRect.height + box.padding.top + box.padding.bottom;
+    if (ch > 0) return JS_NewInt32(ctx, static_cast<int>(ch));
     return js_element_get_height(ctx, this_val);
 }
 
 static JSValue js_element_get_offsetWidth(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto pos = getLayoutPos(el);
-    return JS_NewInt32(ctx, pos.width);
+    auto& box = getLayoutBox(el);
+    return JS_NewInt32(ctx, static_cast<int>(box.fullWidth()));
 }
 
 static JSValue js_element_get_offsetHeight(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto pos = getLayoutPos(el);
-    return JS_NewInt32(ctx, pos.height);
+    auto& box = getLayoutBox(el);
+    return JS_NewInt32(ctx, static_cast<int>(box.fullHeight()));
 }
 
 static JSValue js_element_get_offsetLeft(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto pos = getLayoutPos(el);
-    return JS_NewInt32(ctx, pos.x);
+    auto& box = getLayoutBox(el);
+    return JS_NewInt32(ctx, static_cast<int>(box.contentRect.x - box.padding.left - box.border.left));
 }
 
 static JSValue js_element_get_offsetTop(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto pos = getLayoutPos(el);
-    return JS_NewInt32(ctx, pos.y);
+    auto& box = getLayoutBox(el);
+    return JS_NewInt32(ctx, static_cast<int>(box.contentRect.y - box.padding.top - box.border.top));
 }
 
 static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val) {
@@ -2204,18 +1967,10 @@ static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val)
 static JSValue js_element_get_scrollHeight(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NewInt32(ctx, 0);
-    auto lh = el->litehtmlElement();
-    if (lh) {
-        auto ri = lh->get_render_item();
-        if (ri) {
-            // Content height = max bottom of all children
-            float contentH = 0;
-            for (auto& child : ri->children())
-                contentH = std::max(contentH, static_cast<float>(child->bottom()));
-            if (contentH > 0)
-                return JS_NewInt32(ctx, static_cast<int>(contentH));
-        }
-    }
+    auto& box = el->layoutBox();
+    float contentH = box.contentRect.height;
+    if (contentH > 0)
+        return JS_NewInt32(ctx, static_cast<int>(contentH));
     return js_element_get_offsetHeight(ctx, this_val);
 }
 
@@ -2227,12 +1982,7 @@ static JSValue js_element_get_scrollLeft(JSContext* ctx, JSValueConst /*this_val
 static JSValue js_element_get_scrollTop(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NewInt32(ctx, 0);
-    auto lh = el->litehtmlElement();
-    if (lh) {
-        auto ri = lh->get_render_item();
-        if (ri) return JS_NewFloat64(ctx, static_cast<double>(ri->get_scroll_top()));
-    }
-    return JS_NewFloat64(ctx, 0);
+    return JS_NewFloat64(ctx, static_cast<double>(el->scrollTopValue()));
 }
 
 static JSValue js_element_set_scrollLeft(JSContext* /*ctx*/, JSValueConst /*this_val*/, JSValueConst /*val*/) {
@@ -2244,15 +1994,7 @@ static JSValue js_element_set_scrollTop(JSContext* ctx, JSValueConst this_val, J
     if (!el) return JS_UNDEFINED;
     double v = 0;
     JS_ToFloat64(ctx, &v, val);
-    auto lh = el->litehtmlElement();
-    if (lh) {
-        auto ri = lh->get_render_item();
-        if (ri) {
-            float current = static_cast<float>(ri->get_scroll_top());
-            float delta = static_cast<float>(v) - current;
-            ri->v_scroll(static_cast<litehtml::pixel_t>(delta));
-        }
-    }
+    el->setScrollTopValue(static_cast<float>(v));
     if (el->document()) el->document()->markDirty();
     return JS_UNDEFINED;
 }
@@ -2270,16 +2012,12 @@ static void collectInnerText(const bro::dom::Element* el, std::string& out) {
             if (tag == "SCRIPT" || tag == "STYLE" || tag == "script" || tag == "style")
                 continue;
             // Skip display:none elements
-            auto lh = childEl->litehtmlElement();
-            if (lh && lh->css().get_display() == litehtml::display_none)
-                continue;
+            auto& style = childEl->computedStyle();
+            auto dIt = style.find("display");
+            std::string display = (dIt != style.end()) ? dIt->second : "inline";
+            if (display == "none") continue;
             // Block-level elements get newlines
-            bool isBlock = false;
-            if (lh) {
-                auto d = lh->css().get_display();
-                isBlock = (d == litehtml::display_block || d == litehtml::display_list_item ||
-                           d == litehtml::display_table);
-            }
+            bool isBlock = (display == "block" || display == "list-item" || display == "table");
             if (isBlock && !out.empty() && out.back() != '\n')
                 out += '\n';
             collectInnerText(childEl, out);
@@ -2309,13 +2047,13 @@ static JSValue js_element_scrollIntoView(JSContext* /*ctx*/, JSValueConst /*this
 static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
                                                  int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
-    auto pos = getLayoutPos(el);
+    auto& box = getLayoutBox(el);
 
     JSValue rect = JS_NewObject(ctx);
-    float x = static_cast<float>(pos.x);
-    float y = static_cast<float>(pos.y);
-    float w = static_cast<float>(pos.width);
-    float h = static_cast<float>(pos.height);
+    float x = box.contentRect.x - box.padding.left - box.border.left;
+    float y = box.contentRect.y - box.padding.top - box.border.top;
+    float w = box.fullWidth();
+    float h = box.fullHeight();
     JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, x));
     JS_SetPropertyStr(ctx, rect, "y",      JS_NewFloat64(ctx, y));
     JS_SetPropertyStr(ctx, rect, "width",  JS_NewFloat64(ctx, w));
@@ -2651,9 +2389,12 @@ static JSValue js_shadowroot_set_innerHTML(JSContext* ctx, JSValueConst this_val
     // Their constructors may call attachShadow + set innerHTML.
     upgradeShadowChildren(ctx, sr);
 
-    // Sync shadow tree to litehtml for rendering
+    // Add shadow stylesheets to cascade and mark structure dirty
     if (doc && sr->host()) {
-        doc->syncShadowToLitehtml(sr->host());
+        for (auto& css : sr->styleSheets()) {
+            doc->addShadowStylesheet(sr, css);
+        }
+        doc->markStructureDirty();
     }
     return JS_UNDEFINED;
 }
@@ -2784,10 +2525,13 @@ static JSValue js_shadowroot_appendChild(JSContext* ctx, JSValueConst this_val,
         }
     }
 
-    // Re-sync shadow tree to litehtml
+    // Add shadow stylesheets to cascade and mark structure dirty
     auto* doc = getDocumentForCtx(ctx);
     if (doc && sr->host()) {
-        doc->syncShadowToLitehtml(sr->host());
+        for (auto& css : sr->styleSheets()) {
+            doc->addShadowStylesheet(sr, css);
+        }
+        doc->markStructureDirty();
     }
 
     return JS_DupValue(ctx, argv[0]);
@@ -2803,7 +2547,10 @@ static JSValue js_shadowroot_removeChild(JSContext* ctx, JSValueConst this_val,
         sr->invalidateSlots();
         auto* doc = getDocumentForCtx(ctx);
         if (doc && sr->host()) {
-            doc->syncShadowToLitehtml(sr->host());
+            for (auto& css : sr->styleSheets()) {
+                doc->addShadowStylesheet(sr, css);
+            }
+            doc->markStructureDirty();
         }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
@@ -2828,7 +2575,10 @@ static JSValue js_shadowroot_insertBefore(JSContext* ctx, JSValueConst this_val,
         sr->invalidateSlots();
         auto* doc = getDocumentForCtx(ctx);
         if (doc && sr->host()) {
-            doc->syncShadowToLitehtml(sr->host());
+            for (auto& css : sr->styleSheets()) {
+                doc->addShadowStylesheet(sr, css);
+            }
+            doc->markStructureDirty();
         }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;

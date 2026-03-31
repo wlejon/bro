@@ -1,7 +1,9 @@
 #pragma once
 
 #include "engine/app_loader.h"
-#include <litehtml.h>
+#include "layout/draw_traversal.h"
+#include "layout/skia_text_metrics.h"
+#include "layout/font_manager.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -19,7 +21,7 @@ namespace bro::platform {
 namespace bro::render { class Renderer; }
 namespace bro::js { class Runtime; class Timers; }
 namespace bro::dom { class Document; class Element; class Event; }
-namespace bro::layout { class BroContainer; }
+namespace bro::layout { class DrawTraversal; }
 
 namespace bro::engine {
 
@@ -56,9 +58,10 @@ private:
     std::unique_ptr<js::Runtime> jsRuntime_;
     std::unique_ptr<js::Timers> timers_;
     std::unique_ptr<dom::Document> document_;
-    std::unique_ptr<layout::BroContainer> container_;
+    std::unique_ptr<layout::DrawTraversal> drawTraversal_;
+    std::unique_ptr<layout::SkiaTextMetrics> textMetrics_;
+    layout::FontManager fontManager_;
     std::unique_ptr<platform::EventLoop> eventLoop_;
-    litehtml::document::ptr litehtmlDoc_;
 
     bool running_ = false;
     int viewportWidth_;
@@ -96,12 +99,12 @@ private:
 
     // Per-phase timing (smoothed over stats window)
     double phaseJsMs_ = 0.0;       // JS execution (rAF + pending jobs)
-    double phaseLayoutMs_ = 0.0;   // litehtml layout
+    double phaseLayoutMs_ = 0.0;   // layout
     double phaseRasterMs_ = 0.0;   // Skia rasterization + upload
     double phaseGpuMs_ = 0.0;      // GL composite + swap
     double phaseGlStateMs_ = 0.0;  // GL state save/restore
     // Raster sub-phase timing
-    double phaseDrawMs_ = 0.0;     // litehtml draw (Skia commands)
+    double phaseDrawMs_ = 0.0;     // draw (Skia commands)
     double phaseUploadMs_ = 0.0;   // texture upload to GPU
     // Accumulators for averaging
     double accumJsMs_ = 0.0;

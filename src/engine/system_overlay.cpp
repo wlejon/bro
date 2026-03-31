@@ -2,7 +2,8 @@
 #include "engine/app_loader.h"
 #include "render/renderer.h"
 #include "render/gl_context.h"
-#include "layout/container.h"
+#include "layout/draw_traversal.h"
+#include "layout/skia_text_metrics.h"
 #include "dom/document.h"
 #include "js/runtime.h"
 #include "js/console.h"
@@ -405,10 +406,8 @@ SystemOverlay::~SystemOverlay() {
             js::DomBindings::cleanup(panel.jsCtx);
         }
 
-        // Must release litehtml doc before container (it calls deleteFont)
-        panel.litehtmlDoc.reset();
         panel.document.reset();
-        panel.container.reset();
+        panel.drawTraversal.reset();
 
         if (panel.jsCtx) {
             JS_FreeContext(panel.jsCtx);
@@ -468,10 +467,11 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
         Panel panel;
         panel.name = entry.path().filename().string();
 
-        // Create container for this panel
-        panel.container = std::make_unique<layout::BroContainer>(
-            renderer_.get(), viewportWidth_, viewportHeight_);
-        panel.container->set_base_url(panelDir.c_str());
+        // Create draw traversal for this panel
+        panel.drawTraversal = std::make_unique<layout::DrawTraversal>(
+            renderer_.get(), &panel.fontManager);
+        panel.drawTraversal->setBasePath(panelDir);
+        panel.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
 
         // Extract inline CSS from the HTML
         std::string userStyles;
@@ -485,18 +485,9 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
             }
         }
 
-        // Parse HTML with litehtml
-        panel.litehtmlDoc = litehtml::document::createFromString(
-            html, panel.container.get(), litehtml::master_css, userStyles);
-
-        if (!panel.litehtmlDoc) {
-            LOG_ERROR("SystemOverlay: failed to parse '%s'", htmlPath.c_str());
-            continue;
-        }
-
-        // Build DOM tree
+        // Parse HTML with htmlayout
         panel.document = std::make_unique<dom::Document>();
-        panel.document->buildFrom(panel.litehtmlDoc);
+        panel.document->parse(html, userStyles);
 
         // Create a dedicated JSContext for this panel on the shared runtime
         panel.jsCtx = jsRuntime_->createContext();
@@ -518,7 +509,11 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
         installBroObject(panel);
 
         // Initial layout
-        panel.litehtmlDoc->render(static_cast<litehtml::pixel_t>(viewportWidth_));
+        {
+            layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
+            panel.document->resolveStyles();
+            panel.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
+        }
 
         LOG_INFO("SystemOverlay: loaded panel '%s'", panel.name.c_str());
 
@@ -615,13 +610,12 @@ void SystemOverlay::render(int vpW, int vpH) {
 
     // Re-layout dirty panels
     for (auto& panel : panels_) {
-        if (!panel.litehtmlDoc || !panel.document) continue;
+        if (!panel.document) continue;
         if (panel.document->isDirty()) {
-            if (panel.document->isStructureDirty()) {
-                panel.litehtmlDoc->rebuild_render_tree();
-                panel.document->clearStructureDirty();
-            }
-            panel.litehtmlDoc->render(static_cast<litehtml::pixel_t>(vpW));
+            panel.document->clearStructureDirty();
+            layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
+            panel.document->resolveStyles();
+            panel.document->performLayout(static_cast<float>(vpW), textMetrics);
             panel.document->clearDirty();
         }
     }
@@ -630,12 +624,8 @@ void SystemOverlay::render(int vpW, int vpH) {
     renderer_->beginFrame(vpW, vpH);
 
     for (auto& panel : panels_) {
-        if (!panel.litehtmlDoc) continue;
-        litehtml::position clip(0, 0,
-                                static_cast<litehtml::pixel_t>(vpW),
-                                static_cast<litehtml::pixel_t>(vpH));
-        panel.litehtmlDoc->draw(
-            reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
+        if (!panel.document || !panel.drawTraversal) continue;
+        panel.drawTraversal->draw(panel.document->documentElement(), 0, 0, vpW, vpH);
     }
 
     renderer_->endFrame();
@@ -653,11 +643,13 @@ void SystemOverlay::onResize(int w, int h) {
     viewportHeight_ = h;
     renderDirty_ = true;
     for (auto& panel : panels_) {
-        if (panel.container) {
-            panel.container->setViewport(w, h);
+        if (panel.drawTraversal) {
+            panel.drawTraversal->setViewport(w, h);
         }
-        if (panel.litehtmlDoc) {
-            panel.litehtmlDoc->render(static_cast<litehtml::pixel_t>(w));
+        if (panel.document) {
+            layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
+            panel.document->resolveStyles();
+            panel.document->performLayout(static_cast<float>(w), textMetrics);
         }
     }
 }

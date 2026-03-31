@@ -25,13 +25,10 @@ void StyleProxy::setProperty(const std::string& name, const std::string& value) 
     bool displayChanged = (name == "display");
     properties_[name] = value;
     if (owner_) {
-        owner_->syncStylesToLitehtml(displayChanged);
-        if (owner_->litehtmlElement()) {
-            if (displayChanged) {
-                owner_->markStructureDirty();
-            } else {
-                owner_->markDirty();
-            }
+        if (displayChanged) {
+            owner_->markStructureDirty();
+        } else {
+            owner_->markDirty();
         }
     }
 }
@@ -40,13 +37,10 @@ void StyleProxy::removeProperty(const std::string& name) {
     if (properties_.erase(name) > 0) {
         bool displayChanged = (name == "display");
         if (owner_) {
-            owner_->syncStylesToLitehtml(displayChanged);
-            if (owner_->litehtmlElement()) {
-                if (displayChanged) {
-                    owner_->markStructureDirty();
-                } else {
-                    owner_->markDirty();
-                }
+            if (displayChanged) {
+                owner_->markStructureDirty();
+            } else {
+                owner_->markDirty();
             }
         }
     }
@@ -99,7 +93,6 @@ void StyleProxy::setCssText(const std::string& text) {
     }
 
     if (owner_) {
-        owner_->syncStylesToLitehtml();
         owner_->markDirty();
     }
 }

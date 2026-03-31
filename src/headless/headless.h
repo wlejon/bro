@@ -1,13 +1,14 @@
 #pragma once
 
-#include <litehtml.h>
+#include "layout/draw_traversal.h"
+#include "layout/skia_text_metrics.h"
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace bro::js { class Runtime; class Timers; }
 namespace bro::dom { class Document; class Element; class Event; }
-namespace bro::layout { class BroContainer; }
+namespace bro::layout { class DrawTraversal; }
 namespace bro::render { class Renderer; }
 namespace bro::canvas { class CanvasScene; }
 namespace bro::engine { class SystemOverlay; }
@@ -66,8 +67,9 @@ private:
     std::unique_ptr<bro::js::Runtime> jsRuntime_;
     std::unique_ptr<bro::js::Timers> timers_;
     std::unique_ptr<bro::dom::Document> document_;
-    std::unique_ptr<bro::layout::BroContainer> container_;
-    litehtml::document::ptr litehtmlDoc_;
+    std::unique_ptr<layout::DrawTraversal> drawTraversal_;
+    std::unique_ptr<layout::HeadlessTextMetrics> textMetrics_;
+    layout::FontManager fontManager_;
 
     int viewportWidth_;
     int viewportHeight_;

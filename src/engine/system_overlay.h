@@ -1,8 +1,8 @@
 #pragma once
 
-#include <litehtml.h>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <glad/gl.h>
@@ -16,9 +16,10 @@ extern "C" {
 }
 
 #include "render/renderer.h"
+#include "layout/font_manager.h"
 
 namespace bro::render { class GLContext; }
-namespace bro::layout { class BroContainer; }
+namespace bro::layout { class DrawTraversal; }
 namespace bro::dom { class Document; }
 namespace bro::js { class Runtime; class Timers; }
 
@@ -134,8 +135,8 @@ public:
         std::string name;
         JSContext* jsCtx = nullptr;
         std::unique_ptr<js::Timers> timers;
-        litehtml::document::ptr litehtmlDoc;
-        std::unique_ptr<layout::BroContainer> container;
+        std::unique_ptr<layout::DrawTraversal> drawTraversal;
+        layout::FontManager fontManager;
         std::unique_ptr<dom::Document> document;
         JSValue broPerfObj = JS_UNDEFINED;  // cached ref for fast updates
     };

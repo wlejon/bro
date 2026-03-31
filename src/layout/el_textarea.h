@@ -1,45 +1,46 @@
 #pragma once
 
-#include <litehtml.h>
+#include "layout/box.h"
+#include "css/cascade.h"
+#include "render/renderer.h"
 #include <string>
 
-namespace bro::render { class Renderer; }
+namespace bro::dom { class Element; }
 
 namespace bro::layout {
 
-/// Custom litehtml element for <textarea> — multi-line text editing.
-/// Acts as a replaced element that renders text content with line wrapping,
-/// cursor navigation, and vertical scrolling.
-class ElTextarea : public litehtml::html_tag {
+// Standalone textarea control renderer.
+class ElTextarea {
 public:
-    ElTextarea(const std::shared_ptr<litehtml::document>& doc,
-               render::Renderer* renderer);
+    explicit ElTextarea(render::Renderer* renderer);
 
-    bool is_replaced() const override { return true; }
-    void compute_styles(bool recursive) override;
-    void get_content_size(litehtml::size& sz, litehtml::pixel_t max_width) override;
-    void draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pixel_t y,
-              const litehtml::position* clip,
-              const std::shared_ptr<litehtml::render_item>& ri) override;
-    std::shared_ptr<litehtml::render_item> create_render_item(
-        const std::shared_ptr<litehtml::render_item>& parent_ri) override;
+    void draw(render::Renderer* renderer,
+              const htmlayout::layout::LayoutBox& box,
+              const htmlayout::css::ComputedStyle& style,
+              float offsetX, float offsetY);
 
-    // Focus/cursor state (managed by engine)
     int cursorPos() const { return cursorPos_; }
     void setCursorPos(int pos) { cursorPos_ = pos; }
     bool isFocused() const { return focused_; }
     void setFocused(bool f) { focused_ = f; }
 
-    // Scroll offset (in pixels, managed by engine or draw)
     float scrollY() const { return scrollY_; }
     void setScrollY(float y) { scrollY_ = y; }
 
-    // Get rows/cols from attributes (with defaults)
+    void setElement(dom::Element* el) { elem_ = el; }
+    dom::Element* element() const { return elem_; }
+
     int rows() const;
     int cols() const;
 
+    void getContentSize(float& w, float& h);
+
 private:
+    uint64_t getFontHandle() const;
+    std::string getAttr(const std::string& name) const;
+
     render::Renderer* renderer_;
+    dom::Element* elem_ = nullptr;
     int cursorPos_ = 0;
     bool focused_ = false;
     float scrollY_ = 0.0f;

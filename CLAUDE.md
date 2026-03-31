@@ -35,7 +35,7 @@ Submodules must be initialized: `git submodule update --init`
 
 Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~6K LOC of C++20.
 
-**Stack:** QuickJS (JS engine) + LiteHTML (HTML/CSS layout) + Skia (raster rendering) + SDL3 (windowing + GPU display)
+**Stack:** QuickJS (JS engine) + htmlayout (CSS parsing + layout, sibling project at ../htmlayout) + gumbo (HTML parsing) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 
 **Two executables:**
 - `bro` — windowed app runner
@@ -50,7 +50,7 @@ platform  (SDL3 window, event loop)
   ↑
 render  (abstract Renderer interface, SkiaRenderer)
   ↑
-layout  (LiteHTML document_container bridge → Renderer)
+layout  (htmlayout adapters, draw traversal, replaced elements)
   ↑
 dom  (Document/Element/TextNode tree, events, style proxy)
   ↑
@@ -61,10 +61,10 @@ engine  (orchestrates all subsystems, main loop)
 
 ### Key design patterns
 
-- **Dual DOM:** LiteHTML parses HTML and owns layout. A parallel `bro::dom` tree is built from it for JS interaction. Both are kept in sync via dirty tracking.
+- **Single DOM:** HTML is parsed with gumbo into a `bro::dom` tree. CSS is resolved by `htmlayout::css::Cascade`, layout by `htmlayout::layout::layoutTree()`, and rendering by `DrawTraversal` which walks the tree and issues Skia draw calls.
 - **GPU rendering:** `GPUContext` owns the `SDL_GPUDevice`, shader pipelines (color + texture), and manages the D3D12 render passes. `SkiaRenderer` rasterizes HTML/CSS to a Skia surface, uploads to a `SDL_GPUTexture` via transfer buffers, and composites as a fullscreen textured quad. Canvas 2D commands are batched into vertex buffers and drawn via the color pipeline.
 - **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization (used by both `SkiaRenderer` for windowed mode and `RasterRenderer` for headless).
-- **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via LiteHTML → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners.
+- **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via `htmlayout::layout::hitTest()` → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners.
 - **Dirty tracking:** DOM mutations call `document_->markDirty()`. Main loop only re-layouts when `isDirty()` is true.
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.
 - **JS lifetime:** QuickJS context must outlive all DOM elements (they hold JS function references).
@@ -78,7 +78,8 @@ engine  (orchestrates all subsystems, main loop)
 | Library | Target | Notes |
 |---------|--------|-------|
 | QuickJS | `qjs` | JS engine, built as library |
-| LiteHTML | `litehtml` | HTML/CSS layout |
+| htmlayout | `htmlayout` | CSS parsing + layout (sibling project ../htmlayout) |
+| gumbo | `gumbo` | HTML5 parser (bundled with htmlayout) |
 | SDL3 | `SDL3::SDL3` | From vcpkg (shared) or submodule (static) |
 | Skia | `skia` (imported) | Pre-built binaries, auto-detected |
 

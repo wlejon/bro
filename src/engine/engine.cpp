@@ -25,12 +25,13 @@
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_scene.h"
 #include "dom/document.h"
-#include <litehtml/render_item.h>
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/event.h"
-#include <litehtml/render_item.h>
-#include "layout/container.h"
+#include "layout/draw_traversal.h"
+#include "layout/skia_text_metrics.h"
+#include "layout/element_ref_adapter.h"
+#include "layout/layout_node_adapter.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
@@ -46,30 +47,6 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
-
-namespace {
-
-// Access litehtml::element::m_renders (protected) via pointer-to-member.
-// This is needed to purge expired weak_ptr<render_item> entries that
-// otherwise retain deallocated render-item memory (make_shared + weak_ptr
-// prevents the combined allocation from being freed).
-struct LitehtmlElementAccess : litehtml::element {
-    static auto rendersPtr() { return &LitehtmlElementAccess::m_renders; }
-};
-static const auto kRendersPtr = LitehtmlElementAccess::rendersPtr();
-
-void purgeExpiredRenders(const litehtml::element::ptr& el) {
-    if (!el) return;
-    auto& renders = el.get()->*kRendersPtr;
-    renders.remove_if([](const std::weak_ptr<litehtml::render_item>& w) {
-        return w.expired();
-    });
-    for (auto& child : el->children()) {
-        purgeExpiredRenders(child);
-    }
-}
-
-} // anonymous namespace
 
 namespace bro::engine {
 
@@ -256,8 +233,9 @@ Engine::Engine(const std::string& appDir, int width, int height)
     js::StorageBindings::install(jsRuntime_->getContext(), storagePath);
     js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
 
-    // 5. Layout container
-    container_ = std::make_unique<layout::BroContainer>(renderer_.get(), viewportWidth_, viewportHeight_);
+    // 5. Layout helpers
+    drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
+    textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get(), &fontManager_);
 
     // 6. Load the application
     manifest_ = AppLoader::loadApp(appDir);
@@ -266,8 +244,9 @@ Engine::Engine(const std::string& appDir, int width, int height)
         throw std::runtime_error("Failed to load index.html from " + appDir);
     }
 
-    // Set the base URL so CSS @import / relative paths work.
-    container_->set_base_url(manifest_.basePath.c_str());
+    // Set the base path so relative paths work.
+    drawTraversal_->setBasePath(manifest_.basePath);
+    drawTraversal_->setViewport(viewportWidth_, viewportHeight_);
 
     // Load user stylesheets, prepended with browser-like defaults so apps
     // are visible and have sensible form control styling without an
@@ -281,19 +260,16 @@ Engine::Engine(const std::string& appDir, int width, int height)
         }
     }
 
-    // 7. Extract <template> blocks before litehtml parsing (gumbo discards them)
+    // 7. Extract <template> blocks before parsing (gumbo discards them)
     std::vector<dom::Document::TemplateBlock> templateBlocks;
     html = dom::Document::extractTemplates(html, templateBlocks);
 
-    // 8. Parse HTML with litehtml (single parse, shared by layout + DOM)
-    litehtmlDoc_ = litehtml::document::createFromString(html, container_.get(),
-                                                         litehtml::master_css, userStyles);
-
-    // 9. Build bro::dom tree from the same litehtml document
+    // 8. Parse HTML and build bro::dom tree
     document_ = std::make_unique<dom::Document>();
-    document_->buildFrom(litehtmlDoc_);
+    document_->setBasePath(manifest_.basePath);
+    document_->parse(html, userStyles);
 
-    // 9a. Inject extracted templates back into the DOM tree
+    // 8a. Inject extracted templates back into the DOM tree
     if (!templateBlocks.empty())
         document_->injectTemplates(templateBlocks);
 
@@ -381,9 +357,6 @@ Engine::~Engine() {
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
     if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
     audioEngine_.reset();
-    // Destroy litehtml doc before container_ — litehtml::document::~document()
-    // calls deleteFont which needs the FontManager inside container_ to be alive.
-    litehtmlDoc_.reset();
     // Clean up per-runtime DomBindings state before the runtime is freed.
     if (jsRuntime_) {
         js::DomBindings::cleanupRuntime(jsRuntime_->getRuntime());
@@ -428,15 +401,14 @@ void Engine::run() {
         handleWheel(x, y, dx, dy);
     };
 
-    // Tell the layout container to skip full-viewport backgrounds when a scene
-    // layer is active, so the scene shows through behind the HTML UI.
-
     // Initial layout
-    if (litehtmlDoc_) {
-        litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
-        purgeExpiredRenders(litehtmlDoc_->root());
-        if (auto rr = litehtmlDoc_->root_render())
-            documentHeight_ = static_cast<float>(rr->height());
+    if (document_) {
+        document_->resolveStyles();
+        document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
+        if (document_->documentElement()) {
+            auto& box = document_->documentElement()->layoutBox();
+            documentHeight_ = box.marginBox().height;
+        }
     }
 
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
@@ -501,19 +473,16 @@ void Engine::run() {
         // force app UI re-rasterization every frame just because it's visible.
 
         double tLayout = tJs;
-        if (document_ && document_->isDirty() && litehtmlDoc_ && uiFrameDue) {
-            // Always rebuild the render tree when dirty.
-            // DOM mutations (text changes, style updates) may alter the
-            // litehtml element tree in ways that the render tree cache
-            // doesn't detect.  Rebuilding is cheap relative to layout.
-            litehtmlDoc_->rebuild_render_tree();
-            purgeExpiredRenders(litehtmlDoc_->root());
+        if (document_ && document_->isDirty() && uiFrameDue) {
+            document_->resolveStyles();
             document_->clearStructureDirty();
-            litehtmlDoc_->render(static_cast<litehtml::pixel_t>(viewportWidth_));
+            document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
             document_->clearDirty();
             // Update document height for scroll clamping
-            if (auto rr = litehtmlDoc_->root_render())
-                documentHeight_ = static_cast<float>(rr->height());
+            if (document_->documentElement()) {
+                auto& box = document_->documentElement()->layoutBox();
+                documentHeight_ = box.marginBox().height;
+            }
 
             // Process auto-scroll-to-bottom for overflow elements.
             if (document_) {
@@ -523,13 +492,12 @@ void Engine::run() {
                     auto* elem = static_cast<dom::Element*>(node);
                     if (elem->needsScrollToBottom()) {
                         elem->setScrollToBottom(false);
-                        auto lh = elem->litehtmlElement();
-                        if (lh) {
-                            auto ri = lh->get_render_item();
-                            if (ri) {
-                                // Scroll to bottom by scrolling a large amount
-                                ri->v_scroll(100000);
-                            }
+                        auto& style = elem->computedStyle();
+                        auto ovIt = style.find("overflow");
+                        if (ovIt != style.end() && ovIt->second != "visible") {
+                            // Scroll to bottom by setting a large scroll offset
+                            float currentScroll = elem->scrollTopValue();
+                            elem->setScrollTopValue(currentScroll + 100000.0f);
                         }
                     }
                     for (auto* child : elem->childNodes())
@@ -551,16 +519,10 @@ void Engine::run() {
         if (uiDirty_ || !hasRenderedOnce_) {
             renderer_->beginFrame(viewportWidth_, viewportHeight_);
 
-            container_->drawStats.reset();
             double tDraw0 = util::currentTimeMs();
-            if (litehtmlDoc_) {
-                int scrollYi = static_cast<int>(scrollY_);
-                litehtml::position clip(0, 0,
-                                        static_cast<litehtml::pixel_t>(viewportWidth_),
-                                        static_cast<litehtml::pixel_t>(viewportHeight_));
-                litehtmlDoc_->draw(
-                    reinterpret_cast<litehtml::uint_ptr>(renderer_.get()),
-                    0, -scrollYi, &clip);
+            if (document_ && document_->documentElement()) {
+                drawTraversal_->draw(document_->documentElement(), 0, -scrollY_,
+                                     viewportWidth_, viewportHeight_);
             }
             // Draw overlays after all elements (z-order on top)
             if (document_) {
@@ -605,23 +567,20 @@ void Engine::run() {
                 drawElemScrollbars = [&](dom::Node* node) {
                     if (!node || node->nodeType() != dom::NodeType::Element) return;
                     auto* elem = static_cast<dom::Element*>(node);
-                    auto lh = elem->litehtmlElement();
-                    if (lh && lh->css().get_overflow() > litehtml::overflow_visible) {
-                        auto ri = lh->get_render_item();
-                        if (ri && ri->get_scroll_top() != 0) {
-                            // Use litehtml's scroll_view data
-                            float contentH = 0;
-                            for (auto& child : ri->children())
-                                contentH = std::max(contentH, static_cast<float>(child->bottom()));
-                            float viewH = static_cast<float>(ri->pos().height);
+                    auto& style = elem->computedStyle();
+                    auto ovIt = style.find("overflow");
+                    if (ovIt != style.end() && ovIt->second != "visible") {
+                        float scrollTop = elem->scrollTopValue();
+                        if (scrollTop != 0) {
+                            auto& lbox = elem->layoutBox();
+                            auto mb = lbox.marginBox();
+                            float ex = mb.x;
+                            float ey = mb.y - scrollYi;
+                            float ew = mb.width;
+                            float eh = mb.height;
+                            float contentH = lbox.contentRect.height;
+                            float viewH = eh;
                             if (contentH > viewH) {
-                                auto placement = ri->get_placement();
-                                float ex = static_cast<float>(placement.x);
-                                float ey = static_cast<float>(placement.y) - scrollYi;
-                                float ew = static_cast<float>(placement.width);
-                                float eh = static_cast<float>(placement.height);
-                                float scrollTop = static_cast<float>(ri->get_scroll_top());
-
                                 float sbW = 5.0f;
                                 float trackX = ex + ew - sbW - 1.0f;
                                 float scrollRange = contentH - viewH;
@@ -821,17 +780,20 @@ void Engine::handleResize(int w, int h) {
     viewportHeight_ = h;
     uiDirty_ = true;
     hasRenderedOnce_ = false;
-    container_->setViewport(w, h);
+    drawTraversal_->setViewport(w, h);
     if (sceneLayer_) {
         sceneLayer_->onResize(w, h);
     }
     if (systemOverlay_) {
         systemOverlay_->onResize(w, h);
     }
-    if (litehtmlDoc_) {
-        litehtmlDoc_->render(static_cast<litehtml::pixel_t>(w));
-        if (auto rr = litehtmlDoc_->root_render())
-            documentHeight_ = static_cast<float>(rr->height());
+    if (document_) {
+        document_->resolveStyles();
+        document_->performLayout(static_cast<float>(w), *textMetrics_);
+        if (document_->documentElement()) {
+            auto& box = document_->documentElement()->layoutBox();
+            documentHeight_ = box.marginBox().height;
+        }
         // Clamp scroll after resize
         float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(h));
         scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
@@ -889,24 +851,13 @@ void Engine::handleResize(int w, int h) {
 // ---------------------------------------------------------------------------
 
 static layout::ElInput* getElInput(dom::Element* el) {
-    if (!el) return nullptr;
-    auto lh = el->litehtmlElement();
-    if (!lh) return nullptr;
-    return dynamic_cast<layout::ElInput*>(lh.get());
+    return el ? el->inputControl() : nullptr;
 }
-
 static layout::ElTextarea* getElTextarea(dom::Element* el) {
-    if (!el) return nullptr;
-    auto lh = el->litehtmlElement();
-    if (!lh) return nullptr;
-    return dynamic_cast<layout::ElTextarea*>(lh.get());
+    return el ? el->textareaControl() : nullptr;
 }
-
 static layout::ElSelect* getElSelect(dom::Element* el) {
-    if (!el) return nullptr;
-    auto lh = el->litehtmlElement();
-    if (!lh) return nullptr;
-    return dynamic_cast<layout::ElSelect*>(lh.get());
+    return el ? el->selectControl() : nullptr;
 }
 
 // Returns true if the element is a focusable text-editing control (input or textarea)
@@ -921,12 +872,7 @@ static bool isTextEditable(dom::Element* el) {
 void Engine::handleMouseDown(float x, float y, int button) {
     // Offset by scroll position for document-space coordinates
     float docX = x, docY = y + scrollY_;
-    if (litehtmlDoc_) {
-        litehtml::position::vector redraw;
-        litehtmlDoc_->on_lbutton_down(static_cast<int>(docX), static_cast<int>(docY),
-                                       static_cast<int>(docX), static_cast<int>(docY), redraw);
-        if (!redraw.empty()) uiDirty_ = true;
-    }
+    uiDirty_ = true;
 
     if (document_) {
         dom::MouseEvent evt("mousedown");
@@ -963,8 +909,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 // Check if click is inside the dropdown
                 auto dp = prevSelect->lastDrawPos();
                 auto opts = prevSelect->getOptions();
-                auto font = prevSelect->css().get_font();
-                float lineH = font ? static_cast<float>(prevSelect->css().get_font_metrics().height) : 20.0f;
+                float lineH = 20.0f;
                 float dropY = dp.y + dp.h;
                 float dropH = lineH * static_cast<float>(opts.size()) + 4.0f;
                 bool inDropdown = (x >= dp.x && x < dp.x + dp.w &&
@@ -1001,11 +946,12 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
             if (newInput) {
                 newInput->setFocused(true);
-                auto itype = newInput->inputType();
+                auto itype = newInput->inputType(target);
 
                 if (itype == layout::ElInput::InputType::Checkbox) {
                     // Toggle checked state
-                    const char* checked = newInput->get_attr("checked");
+                    std::string checkedStr = target->getAttribute("checked");
+                    const char* checked = checkedStr.empty() ? nullptr : checkedStr.c_str();
                     if (checked) {
                         target->removeAttribute("checked");
                     } else {
@@ -1017,7 +963,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     uiDirty_ = true;
                 } else if (itype == layout::ElInput::InputType::Radio) {
                     // Uncheck other radios with same name
-                    const char* name = newInput->get_attr("name");
+                    std::string nameStr = target->getAttribute("name");
+                    const char* name = nameStr.empty() ? nullptr : nameStr.c_str();
                     if (name && *name && document_) {
                         auto* body = document_->body();
                         if (body) {
@@ -1026,8 +973,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                                 if (el == target) continue;
                                 auto* otherInput = getElInput(el);
                                 if (otherInput) {
-                                    const char* otherName = otherInput->get_attr("name");
-                                    if (otherName && strcmp(otherName, name) == 0) {
+                                    std::string otherNameStr = el->getAttribute("name");
+                                    if (!otherNameStr.empty() && otherNameStr == nameStr) {
                                         el->removeAttribute("checked");
                                     }
                                 }
@@ -1116,9 +1063,9 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     }
                     SDL_StopTextInput(window_->getSDLWindow());
                     uiDirty_ = true;
-                } else if (newInput->isTextType()) {
+                } else if (newInput->isTextType(target)) {
                     // Check for number spin button click
-                    if (newInput->inputType() == layout::ElInput::InputType::Number) {
+                    if (newInput->inputType(target) == layout::ElInput::InputType::Number) {
                         auto dp = newInput->lastDrawPos();
                         float btnW = 16.0f;
                         float bx = dp.x + dp.w - btnW;
@@ -1129,18 +1076,18 @@ void Engine::handleMouseDown(float x, float y, int button) {
                             float step = newInput->rangeStep();
                             float midY = dp.y + dp.h / 2;
                             v += (y < midY) ? step : -step;
-                            const char* minAttr = newInput->get_attr("min");
-                            const char* maxAttr = newInput->get_attr("max");
-                            if (minAttr) v = std::max(v, newInput->rangeMin());
-                            if (maxAttr) v = std::min(v, newInput->rangeMax());
+                            std::string minAttr = target->getAttribute("min");
+                            std::string maxAttr = target->getAttribute("max");
+                            if (!minAttr.empty()) v = std::max(v, newInput->rangeMin());
+                            if (!maxAttr.empty()) v = std::min(v, newInput->rangeMax());
                             char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
                             target->setAttribute("value", buf);
                             newInput->setCursorPos(static_cast<int>(strlen(buf)));
                             dispatchInputEvent(target);
                         }
                     }
-                    const char* val = newInput->get_attr("value");
-                    newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+                    std::string valStr = target->getAttribute("value");
+                    newInput->setCursorPos(static_cast<int>(valStr.size()));
                     SDL_StartTextInput(window_->getSDLWindow());
                     uiDirty_ = true;
                 } else {
@@ -1150,8 +1097,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 }
             } else if (newTextarea) {
                 newTextarea->setFocused(true);
-                const char* val = newTextarea->get_attr("value");
-                newTextarea->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+                std::string taValStr = target->getAttribute("value");
+                newTextarea->setCursorPos(static_cast<int>(taValStr.size()));
                 SDL_StartTextInput(window_->getSDLWindow());
                 uiDirty_ = true;
             } else if (newSelect) {
@@ -1173,12 +1120,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
 void Engine::handleMouseUp(float x, float y, int button) {
     float docX = x, docY = y + scrollY_;
-    if (litehtmlDoc_) {
-        litehtml::position::vector redraw;
-        litehtmlDoc_->on_lbutton_up(static_cast<int>(docX), static_cast<int>(docY),
-                                     static_cast<int>(docX), static_cast<int>(docY), redraw);
-        if (!redraw.empty()) uiDirty_ = true;
-    }
+    uiDirty_ = true;
 
     // Stop range slider dragging
     if (document_) {
@@ -1207,14 +1149,6 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
 void Engine::handleMouseMove(float x, float y) {
     float docX = x, docY = y + scrollY_;
-    if (litehtmlDoc_) {
-        litehtml::position::vector redraw;
-        litehtmlDoc_->on_mouse_over(static_cast<int>(docX), static_cast<int>(docY),
-                                     static_cast<int>(docX), static_cast<int>(docY), redraw);
-        if (!redraw.empty()) {
-            uiDirty_ = true;
-        }
-    }
 
     // Range slider dragging
     if (document_) {
@@ -1249,8 +1183,7 @@ void Engine::handleMouseMove(float x, float y) {
         if (select && select->isOpen()) {
             auto dp = select->lastDrawPos();
             auto opts = select->getOptions();
-            auto font = select->css().get_font();
-            float lineH = font ? static_cast<float>(select->css().get_font_metrics().height) : 20.0f;
+            float lineH = 20.0f;
             float dropY = dp.y + dp.h;
             float dropH = lineH * static_cast<float>(opts.size()) + 4.0f;
             if (docX >= dp.x && docX < dp.x + dp.w && docY >= dropY && docY < dropY + dropH) {
@@ -1303,12 +1236,12 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
     // Handle checkbox/radio space toggle
     if (input && input->isFocused()) {
-        auto itype = input->inputType();
+        auto itype = input->inputType(activeEl);
         if ((itype == layout::ElInput::InputType::Checkbox || itype == layout::ElInput::InputType::Radio)
             && keycode == SDLK_SPACE) {
             if (itype == layout::ElInput::InputType::Checkbox) {
-                const char* checked = input->get_attr("checked");
-                if (checked)
+                std::string checkedVal = activeEl->getAttribute("checked");
+                if (!checkedVal.empty() || activeEl->attributes().count("checked"))
                     activeEl->removeAttribute("checked");
                 else
                     activeEl->setAttribute("checked", "");
@@ -1364,7 +1297,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         }
 
         // Skip text editing for non-text types
-        if (!input->isTextType()) {
+        if (!input->isTextType(activeEl)) {
             dom::KeyboardEvent nontextEvt("keydown");
             nontextEvt.setKey(sdlKeycodeToWebKey(keycode, mod));
             nontextEvt.setCode(sdlScancodeToWebCode(scancode));
@@ -1378,7 +1311,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         }
     }
 
-    if (input && input->isFocused() && input->isTextType()) {
+    if (input && input->isFocused() && input->isTextType(activeEl)) {
         std::string val = activeEl->getAttribute("value");
         int pos = input->cursorPos();
         pos = std::clamp(pos, 0, static_cast<int>(val.size()));
@@ -1419,7 +1352,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             input->setCursorPos(static_cast<int>(val.size()));
             uiDirty_ = true;
             handled = true;
-        } else if (input->inputType() == layout::ElInput::InputType::Number &&
+        } else if (input->inputType(activeEl) == layout::ElInput::InputType::Number &&
                    (keycode == SDLK_UP || keycode == SDLK_DOWN)) {
             // Increment/decrement number value
             float v = 0;
@@ -1428,10 +1361,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             v += (keycode == SDLK_UP) ? step : -step;
             // Clamp to min/max if specified
             float mn = input->rangeMin(), mx = input->rangeMax();
-            const char* minAttr = input->get_attr("min");
-            const char* maxAttr = input->get_attr("max");
-            if (minAttr) v = std::max(v, mn);
-            if (maxAttr) v = std::min(v, mx);
+            std::string minAttrStr = activeEl->getAttribute("min");
+            std::string maxAttrStr = activeEl->getAttribute("max");
+            if (!minAttrStr.empty()) v = std::max(v, mn);
+            if (!maxAttrStr.empty()) v = std::min(v, mx);
             char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
             activeEl->setAttribute("value", buf);
             input->setCursorPos(static_cast<int>(strlen(buf)));
@@ -1725,10 +1658,10 @@ void Engine::handleTextInput(const std::string& text) {
     }
 
     auto* input = getElInput(activeEl);
-    if (!input || !input->isFocused() || !input->isTextType()) return;
+    if (!input || !input->isFocused() || !input->isTextType(activeEl)) return;
 
     // Number type: only allow numeric characters
-    if (input->inputType() == layout::ElInput::InputType::Number) {
+    if (input->inputType(activeEl) == layout::ElInput::InputType::Number) {
         if (!isValidNumberChar(text)) return;
     }
 
@@ -1771,7 +1704,7 @@ void Engine::advanceFocus(bool reverse) {
             if (isFocusable) {
                 // Skip hidden inputs
                 auto* inp = getElInput(el);
-                if (inp && inp->inputType() == layout::ElInput::InputType::Hidden)
+                if (inp && inp->inputType(el) == layout::ElInput::InputType::Hidden)
                     isFocusable = false;
                 // Skip disabled
                 if (el->getAttribute("disabled") == "true" || el->attributes().count("disabled"))
@@ -1819,17 +1752,17 @@ void Engine::advanceFocus(bool reverse) {
 
     if (newInput) {
         newInput->setFocused(true);
-        if (newInput->isTextType()) {
-            const char* val = newInput->get_attr("value");
-            newInput->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+        if (newInput->isTextType(nextEl)) {
+            std::string v = nextEl->getAttribute("value");
+            newInput->setCursorPos(static_cast<int>(v.size()));
             SDL_StartTextInput(window_->getSDLWindow());
         } else {
             SDL_StopTextInput(window_->getSDLWindow());
         }
     } else if (newTa) {
         newTa->setFocused(true);
-        const char* val = newTa->get_attr("value");
-        newTa->setCursorPos(val ? static_cast<int>(strlen(val)) : 0);
+        std::string v = nextEl->getAttribute("value");
+        newTa->setCursorPos(static_cast<int>(v.size()));
         SDL_StartTextInput(window_->getSDLWindow());
     } else {
         SDL_StopTextInput(window_->getSDLWindow());
@@ -1849,8 +1782,7 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
     auto* activeEl = document_->activeElement();
     auto* textarea = getElTextarea(activeEl);
     if (textarea && textarea->isFocused()) {
-        auto fm = textarea->css().get_font_metrics();
-        float lineH = (fm.height > 0) ? static_cast<float>(fm.height) : 16.0f;
+        float lineH = 16.0f;
         float scroll = textarea->scrollY() - dy * lineH * 3.0f;
         scroll = std::max(scroll, 0.0f);
         textarea->setScrollY(scroll);
@@ -1863,8 +1795,7 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
     dom::Element* target = hitTest(docX, docY);
     auto* hoverTa = getElTextarea(target);
     if (hoverTa) {
-        auto fm = hoverTa->css().get_font_metrics();
-        float lineH = (fm.height > 0) ? static_cast<float>(fm.height) : 16.0f;
+        float lineH = 16.0f;
         float scroll = hoverTa->scrollY() - dy * lineH * 3.0f;
         scroll = std::max(scroll, 0.0f);
         hoverTa->setScrollY(scroll);
@@ -1876,18 +1807,15 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
     {
         auto* el = target;
         while (el) {
-            auto lh = el->litehtmlElement();
-            if (lh && lh->css().get_overflow() > litehtml::overflow_visible) {
-                auto ri = lh->get_render_item();
-                if (ri) {
-                    float scrollPx = -dy * kScrollSpeed;
-                    auto lpx = static_cast<litehtml::pixel_t>(scrollPx);
-                    if (ri->is_v_scrollable(lpx)) {
-                        ri->v_scroll(lpx);
-                        uiDirty_ = true;
-                        return;
-                    }
-                }
+            auto& style = el->computedStyle();
+            auto ovIt = style.find("overflow");
+            if (ovIt != style.end() && ovIt->second != "visible") {
+                float scrollPx = -dy * kScrollSpeed;
+                float currentScroll = el->scrollTopValue();
+                el->setScrollTopValue(currentScroll + scrollPx);
+                uiDirty_ = true;
+                document_->markDirty();
+                return;
             }
             el = el->parentElement();
         }
@@ -1905,30 +1833,16 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
 
 dom::Element* Engine::hitTest(float x, float y) {
     // x, y are already in document space (scroll-adjusted by callers)
-    if (!litehtmlDoc_ || !document_) return document_ ? document_->body() : nullptr;
+    if (!document_ || !document_->documentElement())
+        return document_ ? document_->body() : nullptr;
 
-    auto rootRender = litehtmlDoc_->root_render();
-    if (!rootRender) return document_->body();
+    auto layoutTree = layout::LayoutNodeAdapter::buildTree(document_->documentElement());
+    auto* hit = htmlayout::layout::hitTest(layoutTree.get(), x, y);
+    if (!hit) return document_->body();
 
-    auto lhElem = rootRender->get_element_by_point(
-        static_cast<int>(x), static_cast<int>(y),
-        static_cast<int>(x), static_cast<int>(y),
-        [](const std::shared_ptr<litehtml::render_item>&) { return true; });
-
-    if (!lhElem) return document_->body();
-
-    dom::Element* found = document_->findElementByLitehtml(lhElem);
-    if (!found) {
-        // The hit element might be a text node or anonymous element.
-        // Walk up litehtml's parent chain to find a mapped element.
-        auto parent = lhElem->parent();
-        while (parent && !found) {
-            found = document_->findElementByLitehtml(parent);
-            if (!found) parent = parent->parent();
-        }
-    }
-
-    return found ? found : document_->body();
+    auto* adapter = static_cast<layout::LayoutNodeAdapter*>(hit);
+    if (adapter->element()) return adapter->element();
+    return document_->body();
 }
 
 // ---------------------------------------------------------------------------

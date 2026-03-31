@@ -2,12 +2,20 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include "dom/style_proxy.h"
-#include <litehtml.h>
+#include "css/cascade.h"
+#include "layout/box.h"
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <memory>
 #include <cstdint>
+
+namespace bro::layout {
+    class ElInput;
+    class ElTextarea;
+    class ElSelect;
+    class ElSvg;
+}
 
 namespace bro::dom {
 
@@ -17,7 +25,7 @@ class TextNode;
 class Element : public Node {
 public:
     explicit Element(const std::string& tag);
-    ~Element() override { magic_ = 0xDEAD; }
+    ~Element() override;
 
     NodeType nodeType() const override { return NodeType::Element; }
     std::string nodeName() const override { return tag_; }
@@ -55,19 +63,16 @@ public:
     std::vector<Element*> children() const;
     Element* parentElement() const;
 
-    // Selectors
+    // Selectors (powered by htmlayout)
     std::vector<Element*> querySelectorAll(const std::string& selector);
     Element* querySelector(const std::string& selector);
     bool matches(const std::string& selector) const;
     Element* closest(const std::string& selector);
 
-    // Simple selector matching (works without litehtml for dynamic elements)
+    // Simple selector matching (works for dynamic elements)
     bool matchesSimple(const std::string& selector) const;
     void querySelectorAllSimple(const std::string& selector, std::vector<Element*>& out);
     Element* querySelectorSimple(const std::string& selector);
-
-    // Sync inline styles to litehtml element
-    void syncStylesToLitehtml(bool displayChanged = false);
 
     // Dirty tracking
     void markDirty();
@@ -79,9 +84,14 @@ public:
     void setDocument(Document* doc) { document_ = doc; }
     Document* document() const { return document_; }
 
-    // Litehtml integration
-    void setLitehtmlElement(litehtml::element::ptr elem) { litehtml_element_ = std::move(elem); }
-    litehtml::element::ptr litehtmlElement() const { return litehtml_element_; }
+    // Computed style (set by Cascade::resolve during style resolution)
+    const htmlayout::css::ComputedStyle& computedStyle() const { return computedStyle_; }
+    htmlayout::css::ComputedStyle& computedStyleMut() { return computedStyle_; }
+    void setComputedStyle(htmlayout::css::ComputedStyle style) { computedStyle_ = std::move(style); }
+
+    // Layout box (set by htmlayout::layout::layoutTree)
+    const htmlayout::layout::LayoutBox& layoutBox() const { return layoutBox_; }
+    void setLayoutBox(const htmlayout::layout::LayoutBox& box) { layoutBox_ = box; }
 
     // Shadow DOM
     ShadowRoot* attachShadow(ShadowRoot::Mode mode);
@@ -99,6 +109,17 @@ public:
     bool needsScrollToBottom() const { return scrollToBottom_; }
     void setScrollToBottom(bool v) { scrollToBottom_ = v; }
 
+    // Replaced element controls (owned by Element, not by litehtml)
+    layout::ElInput* inputControl() const { return inputControl_.get(); }
+    layout::ElTextarea* textareaControl() const { return textareaControl_.get(); }
+    layout::ElSelect* selectControl() const { return selectControl_.get(); }
+    layout::ElSvg* svgControl() const { return svgControl_.get(); }
+
+    void setInputControl(std::unique_ptr<layout::ElInput> ctrl);
+    void setTextareaControl(std::unique_ptr<layout::ElTextarea> ctrl);
+    void setSelectControl(std::unique_ptr<layout::ElSelect> ctrl);
+    void setSvgControl(std::unique_ptr<layout::ElSvg> ctrl);
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -107,13 +128,22 @@ private:
     std::unordered_map<std::string, std::string> attributes_;
     StyleProxy style_;
     std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
-    litehtml::element::ptr litehtml_element_;
     Document* document_ = nullptr;
     ShadowRoot* shadowRoot_ = nullptr;
     bool dirty_ = false;
     bool scrollToBottom_ = false;
     float scrollTop_ = 0.0f;
     uint32_t magic_ = 0xB00E;
+
+    // htmlayout integration
+    htmlayout::css::ComputedStyle computedStyle_;
+    htmlayout::layout::LayoutBox layoutBox_;
+
+    // Replaced element controllers
+    std::unique_ptr<layout::ElInput> inputControl_;
+    std::unique_ptr<layout::ElTextarea> textareaControl_;
+    std::unique_ptr<layout::ElSelect> selectControl_;
+    std::unique_ptr<layout::ElSvg> svgControl_;
 };
 
 } // namespace bro::dom

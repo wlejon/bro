@@ -4,9 +4,8 @@ set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
 add_subdirectory(quickjs EXCLUDE_FROM_ALL)
 
-# --- LiteHTML ---
-set(LITEHTML_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-add_subdirectory(litehtml EXCLUDE_FROM_ALL)
+# --- htmlayout (CSS + layout library, sibling project) ---
+add_subdirectory(${CMAKE_SOURCE_DIR}/../htmlayout htmlayout_build EXCLUDE_FROM_ALL)
 
 # --- SDL3 (fall back to submodule if not found via vcpkg/system) ---
 if(NOT SDL3_FOUND)

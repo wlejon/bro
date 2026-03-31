@@ -19,9 +19,10 @@
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/event.h"
-#include "layout/container.h"
+#include "layout/draw_traversal.h"
+#include "layout/skia_text_metrics.h"
+#include "layout/layout_node_adapter.h"
 #include "engine/default_styles.h"
-#include <litehtml/render_item.h>
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "util/log.h"
@@ -428,9 +429,9 @@ Headless::Headless(const std::string& appDir, int width, int height)
     timers_ = std::make_unique<js::Timers>();
     js::Timers::install(jsRuntime_->getContext(), timers_.get());
 
-    // 3. Layout container
-    container_ = std::make_unique<layout::BroContainer>(
-        renderer_.get(), viewportWidth_, viewportHeight_);
+    // 3. Layout (draw traversal + text metrics)
+    drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
+    textMetrics_ = std::make_unique<layout::HeadlessTextMetrics>();
 
     // 4. Load app
     auto manifest = AppLoader::loadApp(appDir);
@@ -439,7 +440,8 @@ Headless::Headless(const std::string& appDir, int width, int height)
         throw std::runtime_error("Failed to load index.html from " + appDir);
     }
 
-    container_->set_base_url(manifest.basePath.c_str());
+    drawTraversal_->setBasePath(manifest.basePath);
+    drawTraversal_->setViewport(viewportWidth_, viewportHeight_);
 
     std::string userStyles = bro::engine::kDefaultStyles;
     userStyles += "\n";
@@ -448,21 +450,10 @@ Headless::Headless(const std::string& appDir, int width, int height)
         if (!css.empty()) userStyles += css + "\n";
     }
 
-    // 5. Extract <template> blocks before litehtml parsing (gumbo discards them)
-    std::vector<dom::Document::TemplateBlock> templateBlocks;
-    html = dom::Document::extractTemplates(html, templateBlocks);
-
-    // 6. Parse HTML (single document shared by layout + DOM)
-    litehtmlDoc_ = litehtml::document::createFromString(
-        html, container_.get(), litehtml::master_css, userStyles);
-
-    // 6a. Build DOM tree
+    // 5. Parse HTML via htmlayout
     document_ = std::make_unique<dom::Document>();
-    document_->buildFrom(litehtmlDoc_);
-
-    // 6b. Inject extracted templates back into the DOM tree
-    if (!templateBlocks.empty())
-        document_->injectTemplates(templateBlocks);
+    document_->setBasePath(manifest.basePath);
+    document_->parse(html, userStyles);
 
     // 7. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
@@ -503,9 +494,8 @@ Headless::Headless(const std::string& appDir, int width, int height)
     }
 
     // 9. Initial layout
-    if (litehtmlDoc_) {
-        litehtmlDoc_->render(viewportWidth_);
-    }
+    document_->resolveStyles();
+    document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
 
     // 10. System overlay (shares JS runtime, no GL in headless)
     systemOverlay_ = std::make_unique<engine::SystemOverlay>(
@@ -538,10 +528,9 @@ Headless::~Headless() {
     }
     systemOverlay_.reset();
     canvasScene_.reset();
-    // 3. Release litehtml doc before document (it holds element refs)
-    litehtmlDoc_.reset();
+    // 3. Release layout resources before document
+    drawTraversal_.reset();
     document_.reset();
-    container_.reset();
     timers_.reset();
     // Clean up per-runtime DomBindings state before the runtime is freed.
     if (jsRuntime_) {
@@ -643,18 +632,16 @@ void Headless::advanceTime(double ms) {
 
 void Headless::flush() {
     jsRuntime_->executePendingJobs();
-    if (document_ && document_->isDirty() && litehtmlDoc_) {
-        if (document_->isStructureDirty()) {
-            litehtmlDoc_->rebuild_render_tree();
-            document_->clearStructureDirty();
-        }
-        litehtmlDoc_->render(viewportWidth_);
+    if (document_ && document_->isDirty()) {
+        document_->resolveStyles();
+        document_->clearStructureDirty();
+        document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
         document_->clearDirty();
     }
 }
 
 bool Headless::screenshot(const std::string& path) {
-    if (!litehtmlDoc_) return false;
+    if (!document_) return false;
 
     // Fire any pending rAF callbacks so canvas commands are up to date
     timers_->fireAnimationFrames(virtualTime_);
@@ -695,9 +682,7 @@ bool Headless::screenshot(const std::string& path) {
     }
 
     // Render HTML/CSS overlay on top
-    litehtml::position clip(0, 0, viewportWidth_, viewportHeight_);
-    litehtmlDoc_->draw(
-        reinterpret_cast<litehtml::uint_ptr>(renderer_.get()), 0, 0, &clip);
+    drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
 
     // Render system overlay on top of everything
     if (systemOverlay_ && systemOverlay_->isVisible()) {
@@ -853,32 +838,9 @@ bool Headless::processCommand(const std::string& line) {
             std::cout << "(not found: " << selector << ")\n";
             return true;
         }
-        auto lhEl = el->litehtmlElement();
-        if (!lhEl) {
-            std::cout << "(no litehtml element)\n";
-            return true;
-        }
-        // Walk the document's render tree to find the render item for this element
-        std::function<std::shared_ptr<litehtml::render_item>(
-            const std::shared_ptr<litehtml::render_item>&)> findRi;
-        findRi = [&](const std::shared_ptr<litehtml::render_item>& ri)
-            -> std::shared_ptr<litehtml::render_item> {
-            if (!ri) return nullptr;
-            if (ri->src_el() == lhEl) return ri;
-            for (auto& child : ri->children()) {
-                auto found = findRi(child);
-                if (found) return found;
-            }
-            return nullptr;
-        };
-        auto ri = findRi(litehtmlDoc_->root_render());
-        if (!ri) {
-            std::cout << "(no render item)\n";
-            return true;
-        }
-        auto pos = ri->pos();
-        std::cout << "x=" << pos.x << " y=" << pos.y
-                  << " w=" << pos.width << " h=" << pos.height << "\n";
+        auto& box = el->layoutBox();
+        std::cout << "x=" << box.contentRect.x << " y=" << box.contentRect.y
+                  << " w=" << box.contentRect.width << " h=" << box.contentRect.height << "\n";
         return true;
     }
 

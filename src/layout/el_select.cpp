@@ -1,67 +1,49 @@
 #include "layout/el_select.h"
+#include "dom/element.h"
+#include "dom/text_node.h"
+#include "dom/node.h"
 #include "render/renderer.h"
 
-#include <litehtml/render_image.h>
 #include <algorithm>
 #include <cstring>
 
 namespace bro::layout {
 
-ElSelect::ElSelect(const std::shared_ptr<litehtml::document>& doc,
-                   render::Renderer* renderer)
-    : html_tag(doc), renderer_(renderer)
-{
-    m_css.set_display(litehtml::display_inline_block);
-}
+ElSelect::ElSelect(render::Renderer* renderer)
+    : renderer_(renderer) {}
 
 std::vector<ElSelect::Option> ElSelect::getOptions() const {
     std::vector<Option> opts;
-    // Walk litehtml children looking for <option> elements
-    for (auto& child : m_children) {
-        if (!child) continue;
+    if (!elem_) return opts;
 
-        // Check if this is an <option> tag
-        const char* tag = child->get_tagName();
-        if (!tag || strcmp(tag, "option") != 0) continue;
+    // Walk DOM children looking for <option> elements
+    for (auto* child : elem_->children()) {
+        if (child->tagName() != "OPTION") continue;
 
         Option opt;
-        const char* val = child->get_attr("value");
-        opt.value = val ? val : "";
+        opt.value = child->getAttribute("value");
 
-        // Get text content via litehtml's get_text (recurses into text nodes)
-        litehtml::string textContent;
-        child->get_text(textContent);
-
+        // Get text content
+        std::string text = child->textContent();
         // Trim whitespace
-        while (!textContent.empty() && (textContent.front() == ' ' || textContent.front() == '\n' || textContent.front() == '\t'))
-            textContent.erase(textContent.begin());
-        while (!textContent.empty() && (textContent.back() == ' ' || textContent.back() == '\n' || textContent.back() == '\t'))
-            textContent.pop_back();
+        while (!text.empty() && (text.front() == ' ' || text.front() == '\n' || text.front() == '\t'))
+            text.erase(text.begin());
+        while (!text.empty() && (text.back() == ' ' || text.back() == '\n' || text.back() == '\t'))
+            text.pop_back();
+        opt.text = text;
 
-        opt.text = textContent;
-
-        // If value attribute not set, use text content
-        if (opt.value.empty()) {
-            opt.value = opt.text;
-        }
-
+        if (opt.value.empty()) opt.value = opt.text;
         opts.push_back(std::move(opt));
     }
     return opts;
 }
 
-void ElSelect::parse_attributes() {
-    html_tag::parse_attributes();
-    initSelectedIndex();
-}
-
 void ElSelect::initSelectedIndex() {
+    if (!elem_) return;
     int idx = 0;
-    for (auto& child : m_children) {
-        if (!child) continue;
-        const char* tag = child->get_tagName();
-        if (!tag || strcmp(tag, "option") != 0) continue;
-        if (child->get_attr("selected")) {
+    for (auto* child : elem_->children()) {
+        if (child->tagName() != "OPTION") continue;
+        if (!child->getAttribute("selected").empty()) {
             selectedIndex_ = idx;
             return;
         }
@@ -69,95 +51,82 @@ void ElSelect::initSelectedIndex() {
     }
 }
 
-void ElSelect::compute_styles(bool recursive) {
-    html_tag::compute_styles(recursive);
-
-    // Set explicit CSS height so render_item_image doesn't compute from aspect ratio.
-    if (m_css.get_height().is_predefined()) {
-        auto fm = css().get_font_metrics();
-        if (fm.height > 0) {
-            int h = fm.height + 4;
-            litehtml::css_length height;
-            height.set_value(static_cast<float>(h), litehtml::css_units_px);
-            m_css.set_height(height);
-        }
+uint64_t ElSelect::getFontHandle() const {
+    if (!elem_ || !renderer_) return 0;
+    auto& style = elem_->computedStyle();
+    std::string family = "Arial";
+    auto it = style.find("font-family");
+    if (it != style.end() && !it->second.empty()) family = it->second;
+    float size = 16.0f;
+    auto sit = style.find("font-size");
+    if (sit != style.end()) {
+        char* end = nullptr;
+        float v = std::strtof(sit->second.c_str(), &end);
+        if (end != sit->second.c_str() && v > 0) size = v;
     }
+    return renderer_->createFont(family, size, 400, false);
 }
 
-void ElSelect::get_content_size(litehtml::size& sz, litehtml::pixel_t /*max_width*/) {
-    auto font = css().get_font();
-    if (font && renderer_) {
-        uint64_t fontHandle = static_cast<uint64_t>(font);
-        auto fm = css().get_font_metrics();
+void ElSelect::getContentSize(float& w, float& h) {
+    uint64_t fontHandle = getFontHandle();
+    if (fontHandle && renderer_) {
+        auto fm = renderer_->measureText("M", fontHandle);
+        float lineH = fm.height;
 
-        // Measure widest option to size the select
         auto opts = getOptions();
-        float maxW = 50.0f; // minimum width
+        float maxW = 50.0f;
         for (auto& opt : opts) {
             if (!opt.text.empty()) {
                 auto tm = renderer_->measureText(opt.text, fontHandle);
                 maxW = std::max(maxW, tm.width);
             }
         }
-
-        sz.width = static_cast<litehtml::pixel_t>(maxW) + 28; // padding + arrow space
-        sz.height = static_cast<litehtml::pixel_t>(fm.height) + 4;
+        w = maxW + 28;
+        h = lineH + 4;
     } else {
-        sz.width = 120;
-        sz.height = 20;
+        w = 120;
+        h = 20;
     }
 }
 
-void ElSelect::draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pixel_t y,
-                    const litehtml::position* clip,
-                    const std::shared_ptr<litehtml::render_item>& ri) {
-    html_tag::draw(hdc, x, y, clip, ri);
+void ElSelect::draw(render::Renderer* renderer,
+                    const htmlayout::layout::LayoutBox& box,
+                    const htmlayout::css::ComputedStyle& /*style*/,
+                    float offsetX, float offsetY) {
+    if (!renderer_ || !elem_) return;
 
-    if (!renderer_) return;
+    float x = box.contentRect.x + offsetX;
+    float y = box.contentRect.y + offsetY;
+    float w = box.contentRect.width;
+    float h = box.contentRect.height;
 
-    auto pos = ri->pos();
-    pos.x += x;
-    pos.y += y;
+    if (w <= 0 || h <= 0) return;
 
-    if (clip && !pos.does_intersect(clip)) return;
-    if (pos.width <= 0 || pos.height <= 0) return;
+    lastDrawPos_ = {x, y, w, h};
 
-    // Store position for hit testing
-    lastDrawPos_ = {static_cast<float>(pos.x), static_cast<float>(pos.y),
-                    static_cast<float>(pos.width), static_cast<float>(pos.height)};
+    uint64_t fontHandle = getFontHandle();
+    if (!fontHandle) return;
 
-    auto font = css().get_font();
-    if (!font) return;
-    uint64_t fontHandle = static_cast<uint64_t>(font);
+    auto fm = renderer_->measureText("M", fontHandle);
+    float lineHeight = fm.height;
+    float ascent = lineHeight * 0.8f;
 
-    auto fm = css().get_font_metrics();
-    float lineHeight = static_cast<float>(fm.height);
-    float ascent = static_cast<float>(fm.ascent);
-    float height = static_cast<float>(pos.height);
-
-    auto textColor = css().get_color();
-    render::Color color = {textColor.red, textColor.green, textColor.blue, textColor.alpha};
-
+    render::Color color = {0, 0, 0, 255};
     float padX = 4.0f;
-    float textY = static_cast<float>(pos.y) + (height - lineHeight) / 2.0f + ascent;
+    float textY = y + (h - lineHeight) / 2.0f + ascent;
 
-    // Clip to select bounds
     renderer_->save();
-    renderer_->setClip(static_cast<float>(pos.x), static_cast<float>(pos.y),
-                       static_cast<float>(pos.width), static_cast<float>(pos.height));
+    renderer_->setClip(x, y, w, h);
 
-    // Draw selected option text
     auto opts = getOptions();
     int idx = std::clamp(selectedIndex_, 0, std::max(0, static_cast<int>(opts.size()) - 1));
     if (!opts.empty() && idx < static_cast<int>(opts.size())) {
-        renderer_->drawText(opts[idx].text,
-                           static_cast<float>(pos.x) + padX, textY,
-                           fontHandle, color);
+        renderer_->drawText(opts[idx].text, x + padX, textY, fontHandle, color);
     }
 
-    // Draw dropdown arrow (small triangle on the right)
-    float arrowX = static_cast<float>(pos.x + pos.width) - 16.0f;
-    float arrowY = static_cast<float>(pos.y) + height / 2.0f;
+    // Dropdown arrow
+    float arrowX = x + w - 16.0f;
+    float arrowY = y + h / 2.0f;
     render::PointF arrowPts[3] = {
         {arrowX, arrowY - 3.0f},
         {arrowX + 8.0f, arrowY - 3.0f},
@@ -170,43 +139,36 @@ void ElSelect::draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pixel
 }
 
 void ElSelect::drawDropdown() {
-    if (!open_ || !renderer_) return;
+    if (!open_ || !renderer_ || !elem_) return;
 
     auto opts = getOptions();
     if (opts.empty()) return;
 
-    auto font = css().get_font();
-    if (!font) return;
-    uint64_t fontHandle = static_cast<uint64_t>(font);
+    uint64_t fontHandle = getFontHandle();
+    if (!fontHandle) return;
 
-    auto fm = css().get_font_metrics();
-    float lineHeight = static_cast<float>(fm.height);
-    float ascent = static_cast<float>(fm.ascent);
+    auto fm = renderer_->measureText("M", fontHandle);
+    float lineHeight = fm.height;
+    float ascent = lineHeight * 0.8f;
     float padX = 4.0f;
 
-    auto textColor = css().get_color();
-    render::Color color = {textColor.red, textColor.green, textColor.blue, textColor.alpha};
+    render::Color color = {0, 0, 0, 255};
 
     float dropX = lastDrawPos_.x;
     float dropY = lastDrawPos_.y + lastDrawPos_.h;
     float dropW = lastDrawPos_.w;
     float dropH = lineHeight * static_cast<float>(opts.size()) + 4.0f;
 
-    // Draw with no clip — dropdown overlays everything
     renderer_->save();
     renderer_->resetClip();
 
-    // Background
     renderer_->fillRect(dropX, dropY, dropW, dropH, {255, 255, 255, 255});
-    // Border
     renderer_->drawRect(dropX, dropY, dropW, dropH, {118, 118, 118, 255});
 
     for (int i = 0; i < static_cast<int>(opts.size()); ++i) {
         float itemY = dropY + 2.0f + i * lineHeight;
-
         if (i == highlightedIndex_) {
-            renderer_->fillRect(dropX + 1, itemY, dropW - 2, lineHeight,
-                               {0, 120, 215, 255});
+            renderer_->fillRect(dropX + 1, itemY, dropW - 2, lineHeight, {0, 120, 215, 255});
             renderer_->drawText(opts[i].text, dropX + padX, itemY + ascent,
                                fontHandle, {255, 255, 255, 255});
         } else {
@@ -216,13 +178,6 @@ void ElSelect::drawDropdown() {
     }
 
     renderer_->restore();
-}
-
-std::shared_ptr<litehtml::render_item> ElSelect::create_render_item(
-    const std::shared_ptr<litehtml::render_item>& parent_ri) {
-    auto ret = std::make_shared<litehtml::render_item_image>(shared_from_this());
-    ret->parent(parent_ri);
-    return ret;
 }
 
 } // namespace bro::layout

@@ -1,31 +1,35 @@
 #pragma once
 
-#include <litehtml.h>
+#include "layout/box.h"
+#include "css/cascade.h"
+#include "render/renderer.h"
 
-namespace bro::render { class Renderer; }
+namespace bro::dom { class Element; }
 
 namespace bro::layout {
 
-/// Custom litehtml element for <svg> — acts as a replaced element.
-/// litehtml handles the box model (width/height/display) while we
-/// render the SVG content ourselves using the SVG parser + renderer.
-class ElSvg : public litehtml::html_tag {
+// Standalone SVG element renderer.
+class ElSvg {
 public:
-    ElSvg(const std::shared_ptr<litehtml::document>& doc,
-           render::Renderer* renderer);
+    explicit ElSvg(render::Renderer* renderer);
 
-    bool is_replaced() const override { return true; }
-    void get_content_size(litehtml::size& sz, litehtml::pixel_t max_width) override;
-    void parse_attributes() override;
-    void compute_styles(bool recursive) override;
-    void draw(litehtml::uint_ptr hdc, litehtml::pixel_t x, litehtml::pixel_t y,
-              const litehtml::position* clip,
-              const std::shared_ptr<litehtml::render_item>& ri) override;
-    std::shared_ptr<litehtml::render_item> create_render_item(
-        const std::shared_ptr<litehtml::render_item>& parent_ri) override;
+    void draw(render::Renderer* renderer,
+              dom::Element* elem,
+              const htmlayout::layout::LayoutBox& box,
+              float offsetX, float offsetY);
+
+    void setElement(dom::Element* el) { elem_ = el; }
+    dom::Element* element() const { return elem_; }
+
+    float intrinsicWidth() const { return intrinsicWidth_; }
+    float intrinsicHeight() const { return intrinsicHeight_; }
+    void parseAttributes();
+
+    void getContentSize(float& w, float& h);
 
 private:
     render::Renderer* renderer_;
+    dom::Element* elem_ = nullptr;
     float intrinsicWidth_ = 300;
     float intrinsicHeight_ = 150;
 };
