@@ -52,6 +52,17 @@ p { margin-top: 1em; margin-bottom: 1em; }
 ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; }
 li { display: list-item; }
 
+table { display: table; border-collapse: separate; border-spacing: 2px; }
+thead { display: table-header-group; }
+tbody { display: table-row-group; }
+tfoot { display: table-footer-group; }
+tr { display: table-row; }
+td, th { display: table-cell; padding: 1px; }
+th { font-weight: bold; text-align: center; }
+caption { display: table-caption; text-align: center; }
+colgroup { display: table-column-group; }
+col { display: table-column; }
+
 b, strong { font-weight: bold; }
 i, em { font-style: italic; }
 u { text-decoration: underline; }

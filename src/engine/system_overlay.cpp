@@ -1,4 +1,5 @@
 #include "engine/system_overlay.h"
+#include "engine/default_styles.h"
 #include "engine/app_loader.h"
 #include "render/renderer.h"
 #include "render/gl_context.h"
@@ -466,15 +467,11 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
 
         Panel panel;
         panel.name = entry.path().filename().string();
+        std::string savedBasePath = panelDir;
 
-        // Create draw traversal for this panel
-        panel.drawTraversal = std::make_unique<layout::DrawTraversal>(
-            renderer_.get(), &panel.fontManager);
-        panel.drawTraversal->setBasePath(panelDir);
-        panel.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
-
-        // Extract inline CSS from the HTML
-        std::string userStyles;
+        // Extract inline CSS from the HTML, prepended with UA defaults
+        std::string userStyles = kDefaultStyles;
+        userStyles += "\n";
         {
             std::regex styleRe(R"(<style[^>]*>([\s\S]*?)</style>)",
                                std::regex_constants::icase);
@@ -508,7 +505,7 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
         // Install __bro perf object
         installBroObject(panel);
 
-        // Initial layout
+        // Initial layout (uses local fontManager — data moves with panel)
         {
             layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
             panel.document->resolveStyles();
@@ -544,7 +541,15 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
             }
         }
 
+        // Move panel into vector FIRST, then create DrawTraversal with
+        // the stable fontManager address. DrawTraversal stores a raw pointer
+        // to fontManager, so it must point to the final location.
         panels_.push_back(std::move(panel));
+        auto& finalPanel = panels_.back();
+        finalPanel.drawTraversal = std::make_unique<layout::DrawTraversal>(
+            renderer_.get(), &finalPanel.fontManager);
+        finalPanel.drawTraversal->setBasePath(savedBasePath);
+        finalPanel.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
     }
 
     LOG_INFO("SystemOverlay: loaded %zu panel(s)", panels_.size());
