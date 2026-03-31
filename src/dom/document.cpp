@@ -158,12 +158,18 @@ void Document::resolveStylesRecursive(Element* elem,
                                        const htmlayout::css::ComputedStyle* parentStyle) {
     auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
 
-    // Build inline style string from StyleProxy + style attribute
-    std::string inlineStyle = elem->style().cssText();
+    // Build inline style string from style attribute + StyleProxy.
+    // StyleProxy (JS-set values) comes LAST so it overrides the HTML attribute
+    // (later declarations of equal specificity win in CSS).
+    std::string inlineStyle;
     auto attrIt = elem->attributes().find("style");
     if (attrIt != elem->attributes().end()) {
+        inlineStyle = attrIt->second;
+    }
+    std::string proxyStyle = elem->style().cssText();
+    if (!proxyStyle.empty()) {
         if (!inlineStyle.empty()) inlineStyle += "; ";
-        inlineStyle += attrIt->second;
+        inlineStyle += proxyStyle;
     }
 
     auto computed = cascade_.resolve(*adapter, inlineStyle, parentStyle);
