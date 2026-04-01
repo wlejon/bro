@@ -2562,12 +2562,21 @@ static JSValue js_shadowroot_appendChild(JSContext* ctx, JSValueConst this_val,
         sr->host()->markStructureDirty();
     }
 
-    // Check for <style> elements
-    if (child->nodeType() == bro::dom::NodeType::Element) {
-        auto* elem = static_cast<bro::dom::Element*>(child);
-        if (elem->tagName() == "STYLE") {
-            sr->addStyleSheet(elem->textContent());
+    // Check for <style> elements (including inside DocumentFragments)
+    auto checkStyles = [&](bro::dom::Node* node) {
+        if (node->nodeType() == bro::dom::NodeType::Element) {
+            auto* elem = static_cast<bro::dom::Element*>(node);
+            if (elem->tagName() == "STYLE") {
+                sr->addStyleSheet(elem->textContent());
+            }
         }
+    };
+    if (child->nodeName() == "#DOCUMENT-FRAGMENT" ||
+        child->nodeType() == bro::dom::NodeType::DocumentFragment) {
+        // Fragment was already unpacked — scan shadow root children for styles
+        for (auto* c : sr->childNodes()) checkStyles(c);
+    } else {
+        checkStyles(child);
     }
 
     // Add shadow stylesheets to cascade and mark structure dirty
