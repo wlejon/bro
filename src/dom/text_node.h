@@ -1,5 +1,6 @@
 #pragma once
 #include "dom/node.h"
+#include "layout/box.h"
 #include <string>
 
 namespace bro::dom {
@@ -15,8 +16,13 @@ public:
     const std::string& data() const { return data_; }
     void setData(const std::string& text);
 
+    // Layout box for text positioning (set during layout)
+    const htmlayout::layout::LayoutBox& layoutBox() const { return layoutBox_; }
+    void setLayoutBox(const htmlayout::layout::LayoutBox& box) { layoutBox_ = box; }
+
 private:
     std::string data_;
+    htmlayout::layout::LayoutBox layoutBox_;
 };
 
 } // namespace bro::dom

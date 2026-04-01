@@ -281,9 +281,16 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     auto cIt = style.find("color");
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
-    // Position: offset already represents parent's absolute content position
+    // Use layout-computed position if available (from IFC text positioning),
+    // otherwise fall back to parent's content origin
     float x = offsetX;
     float y = offsetY + ascent;
+
+    auto& tbox = tn->layoutBox();
+    if (tbox.contentRect.width > 0) {
+        x = offsetX + tbox.contentRect.x;
+        y = offsetY + tbox.contentRect.y + ascent;
+    }
 
     // Handle multi-line text (newlines in pre/pre-wrap)
     auto wsIt = style.find("white-space");

@@ -64,10 +64,12 @@ public:
         return empty;
     }
 
-    // Write layout results back to the DOM element
+    // Write layout results back to the DOM element/text node
     void syncBoxToElement() {
         if (elem_) {
             elem_->setLayoutBox(box);
+        } else if (textNode_) {
+            textNode_->setLayoutBox(box);
         }
         for (auto& child : children_) {
             child->syncBoxToElement();
