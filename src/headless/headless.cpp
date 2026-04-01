@@ -453,10 +453,18 @@ Headless::Headless(const std::string& appDir, int width, int height)
         if (!css.empty()) userStyles += css + "\n";
     }
 
+    // 5a. Extract <template> blocks before parsing (gumbo discards them)
+    std::vector<dom::Document::TemplateBlock> templateBlocks;
+    html = dom::Document::extractTemplates(html, templateBlocks);
+
     // 5. Parse HTML via htmlayout
     document_ = std::make_unique<dom::Document>();
     document_->setBasePath(manifest.basePath);
     document_->parse(html, userStyles);
+
+    // 5b. Inject extracted templates back into the DOM tree
+    if (!templateBlocks.empty())
+        document_->injectTemplates(templateBlocks);
 
     // 7. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
