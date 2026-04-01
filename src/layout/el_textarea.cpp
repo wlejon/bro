@@ -118,7 +118,7 @@ void ElTextarea::draw(render::Renderer* renderer,
 
     auto tm = renderer_->measureText("M", fontHandle);
     float lineHeight = tm.height;
-    float ascent = lineHeight * 0.8f;
+    float ascent = tm.ascent > 0 ? tm.ascent : lineHeight * 0.8f;
 
     float padX = 4.0f, padY = 2.0f;
     float contentH = h - padY * 2;

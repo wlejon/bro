@@ -109,7 +109,7 @@ void ElSelect::draw(render::Renderer* renderer,
 
     auto fm = renderer_->measureText("M", fontHandle);
     float lineHeight = fm.height;
-    float ascent = lineHeight * 0.8f;
+    float ascent = fm.ascent > 0 ? fm.ascent : lineHeight * 0.8f;
 
     render::Color color = {0, 0, 0, 255};
     float padX = 4.0f;
@@ -156,7 +156,7 @@ void ElSelect::drawDropdown() {
 
     auto fm = renderer_->measureText("M", fontHandle);
     float lineHeight = fm.height + 4.0f; // add vertical padding per item
-    float ascent = fm.height * 0.8f;
+    float ascent = fm.ascent > 0 ? fm.ascent : fm.height * 0.8f;
     float padX = 6.0f;
     float padY = 2.0f; // vertical padding within each item
 

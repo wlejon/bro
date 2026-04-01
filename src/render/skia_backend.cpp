@@ -13,6 +13,7 @@
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkFontMgr.h>
+#include <include/core/SkFontMetrics.h>
 #include <include/core/SkColorSpace.h>
 #include <include/codec/SkCodec.h>
 #include <include/core/SkPath.h>
@@ -106,7 +107,9 @@ TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handl
     const SkFont& font = *it->second.font;
     SkRect bounds;
     float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
-    return { width, bounds.height() };
+    SkFontMetrics fm;
+    font.getMetrics(&fm);
+    return { width, bounds.height(), -fm.fAscent };
 }
 
 uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weight, bool italic) {

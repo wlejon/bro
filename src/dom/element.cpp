@@ -93,6 +93,10 @@ std::string Element::getAttribute(const std::string& name) const {
     return {};
 }
 
+bool Element::hasAttribute(const std::string& name) const {
+    return attributes_.find(name) != attributes_.end();
+}
+
 void Element::setAttribute(const std::string& name, const std::string& val) {
     auto existing = attributes_.find(name);
     if (existing != attributes_.end() && existing->second == val) return;

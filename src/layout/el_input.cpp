@@ -163,7 +163,7 @@ void ElInput::drawText_(float x, float y, float w, float h) {
 
     auto tm = renderer_->measureText("M", fontHandle);
     float fontHeight = tm.height;
-    float ascent = fontHeight * 0.8f; // approximate
+    float ascent = tm.ascent > 0 ? tm.ascent : fontHeight * 0.8f;
     float textY = y + (h - fontHeight) / 2.0f + ascent;
     float padX = 4.0f;
     float drawX = x + padX;
@@ -249,7 +249,7 @@ void ElInput::drawCheckbox_(float x, float y, float w, float h) {
         renderer_->drawRect(bx - 1, by - 1, sz + 2, sz + 2, {0, 120, 215, 255});
     }
 
-    if (!getAttr("checked").empty()) {
+    if (elem_ && elem_->hasAttribute("checked")) {
         float pad = sz * 0.2f;
         float x1 = bx + pad, y1 = by + sz * 0.5f;
         float x2 = bx + sz * 0.4f, y2 = by + sz - pad;
@@ -268,7 +268,7 @@ void ElInput::drawRadio_(float x, float y, float w, float h) {
     if (focused_) {
         renderer_->drawCircle(cx, cy, r + 1, {0, 0, 0, 0}, {0, 120, 215, 255}, 1.0f);
     }
-    if (!getAttr("checked").empty()) {
+    if (elem_ && elem_->hasAttribute("checked")) {
         renderer_->drawCircle(cx, cy, r * 0.45f, {0, 0, 0, 255}, {0, 0, 0, 0}, 0.0f);
     }
 }

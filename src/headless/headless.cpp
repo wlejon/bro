@@ -38,6 +38,7 @@
 #include <include/core/SkSurface.h>
 #include <include/core/SkFont.h>
 #include <include/core/SkFontMgr.h>
+#include <include/core/SkFontMetrics.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkRRect.h>
@@ -119,7 +120,9 @@ public:
         const SkFont& font = *it->second.font;
         SkRect bounds;
         float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
-        return { width, bounds.height() };
+        SkFontMetrics fm;
+        font.getMetrics(&fm);
+        return { width, bounds.height(), -fm.fAscent };
     }
 
     uint64_t createFont(std::string_view family, float size, int weight, bool italic) override {

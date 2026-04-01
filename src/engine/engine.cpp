@@ -902,7 +902,52 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     float pw = 200.0f, ph = 160.0f;
                     bool inPicker = (docX >= px && docX < px + pw && docY >= py && docY < py + ph);
                     bool inSwatch = (docX >= dp.x && docX < dp.x + dp.w && docY >= dp.y && docY < dp.y + dp.h);
-                    if (!inPicker && !inSwatch) {
+                    if (inPicker) {
+                        // Click inside picker — select the color
+                        float cellW = (pw - 4) / 10.0f;
+                        float cellH = (ph - 4) / 8.0f;
+                        int col = static_cast<int>((docX - px - 2) / cellW);
+                        int row = static_cast<int>((docY - py - 2) / cellH);
+                        col = std::clamp(col, 0, 9);
+                        row = std::clamp(row, 0, 7);
+
+                        float hue = col * 36.0f;
+                        float sat, lit;
+                        if (row == 0) {
+                            sat = 0.0f; lit = col / 9.0f;
+                        } else {
+                            sat = 1.0f; lit = 0.15f + (row - 1) * 0.1f;
+                        }
+
+                        auto hue2rgb = [](float p, float q, float t) -> float {
+                            if (t < 0) t += 1; if (t > 1) t -= 1;
+                            if (t < 1.0f/6) return p + (q-p)*6*t;
+                            if (t < 1.0f/2) return q;
+                            if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
+                            return p;
+                        };
+                        uint8_t cr, cg, cb;
+                        if (sat == 0) {
+                            cr = cg = cb = static_cast<uint8_t>(lit * 255);
+                        } else {
+                            float q = lit < 0.5f ? lit*(1+sat) : lit+sat-lit*sat;
+                            float p = 2*lit-q;
+                            float hn = hue/360.0f;
+                            cr = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
+                            cg = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
+                            cb = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
+                        }
+
+                        char hex[8];
+                        snprintf(hex, sizeof(hex), "#%02x%02x%02x", cr, cg, cb);
+                        prevActive->setAttribute("value", hex);
+                        dom::Event changeEvt("change");
+                        dispatchEvent(prevActive, changeEvt);
+                        dispatchInputEvent(prevActive);
+                        prevInput->setPickerOpen(false);
+                        uiDirty_ = true;
+                        return; // consumed the click
+                    } else if (!inSwatch) {
                         prevInput->setPickerOpen(false);
                     }
                 }
@@ -960,9 +1005,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
                 if (itype == layout::ElInput::InputType::Checkbox) {
                     // Toggle checked state
-                    std::string checkedStr = target->getAttribute("checked");
-                    const char* checked = checkedStr.empty() ? nullptr : checkedStr.c_str();
-                    if (checked) {
+                    if (target->hasAttribute("checked")) {
                         target->removeAttribute("checked");
                     } else {
                         target->setAttribute("checked", "");
@@ -1250,8 +1293,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         if ((itype == layout::ElInput::InputType::Checkbox || itype == layout::ElInput::InputType::Radio)
             && keycode == SDLK_SPACE) {
             if (itype == layout::ElInput::InputType::Checkbox) {
-                std::string checkedVal = activeEl->getAttribute("checked");
-                if (!checkedVal.empty() || activeEl->attributes().count("checked"))
+                if (activeEl->hasAttribute("checked"))
                     activeEl->removeAttribute("checked");
                 else
                     activeEl->setAttribute("checked", "");
