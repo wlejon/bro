@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Game UI Demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ================================================================== -->
+<!-- Component Templates                                                -->
+<!-- Each <template> defines the shadow DOM markup + styles for one     -->
+<!-- component. JS files clone these — no HTML-as-strings.              -->
+<!-- ================================================================== -->
+
+<!-- ui-root -->
+<template id="tmpl-ui-root">
+    <style>
+        :host {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: var(--ui-bg, #0a0a1a);
+            color: var(--ui-text, #d0d0e0);
+            font-family: var(--ui-font, Segoe UI, system-ui, sans-serif);
+            font-size: 14px;
+            overflow: hidden;
+            position: relative;
+        }
+    </style>
+    <slot></slot>
+</template>
+
+<!-- ui-screen -->
+<template id="tmpl-ui-screen">
+    <style>
+        :host {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            padding: 24px;
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+        }
+        :host([active]) {
+            display: flex;
+        }
+        .screen-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            max-width: 800px;
+            width: 100%;
+            max-height: 100%;
+            overflow-y: auto;
+        }
+    </style>
+    <div class="screen-content">
+        <slot></slot>
+    </div>
+</template>
+
+<!-- ui-panel -->
+<template id="tmpl-ui-panel">
+    <style>
+        :host {
+            display: block;
+            background: var(--ui-surface, #141428);
+            border: 1px solid var(--ui-border, #2a2a4a);
+            border-radius: var(--ui-radius, 4px);
+            overflow: hidden;
+            margin: 4px 0;
+        }
+        .header {
+            display: none;
+            padding: 10px 16px;
+            background: var(--ui-surface-alt, #1c1c38);
+            border-bottom: 1px solid var(--ui-border, #2a2a4a);
+            font-size: 13px;
+            font-weight: bold;
+            color: var(--ui-text-dim, #7878a0);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        :host([header]) .header {
+            display: block;
+        }
+        .body {
+            padding: 12px 16px;
+        }
+    </style>
+    <div class="header"></div>
+    <div class="body">
+        <slot></slot>
+    </div>
+</template>
+
+<!-- ui-tabs -->
+<template id="tmpl-ui-tabs">
+    <style>
+        :host {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+        .tab-bar {
+            display: flex;
+            border-bottom: 2px solid var(--ui-border, #2a2a4a);
+            margin-bottom: 8px;
+        }
+        .tab-btn {
+            padding: 8px 20px;
+            font-size: 14px;
+            color: var(--ui-text-dim, #7878a0);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        .tab-btn.active {
+            color: var(--ui-text-bright, #ffffff);
+            border-bottom-color: var(--ui-accent, #4a6aff);
+        }
+    </style>
+    <div class="tab-bar"></div>
+    <div class="tab-content">
+        <slot></slot>
+    </div>
+</template>
+
+<!-- ui-tab -->
+<template id="tmpl-ui-tab">
+    <style>
+        :host { display: block; }
+    </style>
+    <slot></slot>
+</template>
+
+<!-- ui-menu -->
+<template id="tmpl-ui-menu">
+    <style>
+        :host {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            width: 100%;
+            min-width: 200px;
+        }
+    </style>
+    <slot></slot>
+</template>
+
+<!-- ui-menu-item -->
+<template id="tmpl-ui-menu-item">
+    <style>
+        :host { display: block; }
+        .item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            background: var(--ui-surface, #141428);
+            color: var(--ui-text, #d0d0e0);
+            font-size: 15px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            border-radius: var(--ui-radius, 4px);
+        }
+        .item.focused {
+            background: var(--ui-surface-hover, #222250);
+            border-color: var(--ui-border-focus, #4a6aff);
+            color: var(--ui-text-bright, #ffffff);
+        }
+        :host([disabled]) .item {
+            opacity: 0.4;
+            cursor: default;
+        }
+        .label { flex: 1; }
+        .value {
+            color: var(--ui-text-dim, #7878a0);
+            font-size: 13px;
+            font-family: var(--ui-font-mono, Consolas, monospace);
+            margin-left: 16px;
+        }
+        .item.focused .value { color: var(--ui-accent, #4a6aff); }
+        .arrow {
+            color: var(--ui-text-dim, #7878a0);
+            margin-left: 8px;
+            font-size: 12px;
+        }
+        .item.focused .arrow { color: var(--ui-text-bright, #ffffff); }
+    </style>
+    <div class="item">
+        <span class="label"><slot></slot></span>
+        <span class="value"></span>
+        <span class="arrow"></span>
+    </div>
+</template>
+
+<!-- ui-button -->
+<template id="tmpl-ui-button">
+    <style>
+        :host { display: inline-block; }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 20px;
+            min-width: 80px;
+            background: var(--ui-surface-alt, #1c1c38);
+            color: var(--ui-text, #d0d0e0);
+            border: 2px solid var(--ui-border, #2a2a4a);
+            border-radius: var(--ui-radius, 4px);
+            font-size: 14px;
+            cursor: pointer;
+            text-align: center;
+        }
+        .btn.focused {
+            background: var(--ui-surface-hover, #222250);
+            border-color: var(--ui-border-focus, #4a6aff);
+            color: var(--ui-text-bright, #ffffff);
+        }
+        :host([variant="primary"]) .btn {
+            background: var(--ui-accent-dim, #3a4a99);
+            border-color: var(--ui-accent, #4a6aff);
+        }
+        :host([variant="primary"]) .btn.focused {
+            background: var(--ui-accent, #4a6aff);
+        }
+        :host([variant="danger"]) .btn {
+            border-color: var(--ui-danger, #ff4466);
+        }
+        :host([variant="danger"]) .btn.focused {
+            background: var(--ui-danger, #ff4466);
+            color: var(--ui-text-bright, #ffffff);
+        }
+        :host([disabled]) .btn { opacity: 0.4; cursor: default; }
+        :host([wide]) .btn { width: 100%; }
+    </style>
+    <div class="btn"><slot></slot></div>
+</template>
+
+<!-- ui-slider -->
+<template id="tmpl-ui-slider">
+    <style>
+        :host { display: block; }
+        .row {
+            display: flex;
+            align-items: center;
+            padding: 8px 16px;
+            background: var(--ui-surface, #141428);
+            border: 2px solid transparent;
+            border-radius: var(--ui-radius, 4px);
+        }
+        .row.focused {
+            background: var(--ui-surface-hover, #222250);
+            border-color: var(--ui-border-focus, #4a6aff);
+        }
+        .label {
+            flex: 0 0 160px;
+            color: var(--ui-text, #d0d0e0);
+            font-size: 14px;
+        }
+        .track-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .track {
+            flex: 1;
+            height: 6px;
+            background: var(--ui-border, #2a2a4a);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .fill {
+            height: 100%;
+            background: var(--ui-accent, #4a6aff);
+            border-radius: 3px;
+        }
+        .row.focused .fill { background: var(--ui-border-focus, #4a6aff); }
+        .val {
+            flex: 0 0 55px;
+            text-align: right;
+            font-family: var(--ui-font-mono, Consolas, monospace);
+            font-size: 13px;
+            color: var(--ui-text-dim, #7878a0);
+        }
+        .row.focused .val { color: var(--ui-accent, #4a6aff); }
+    </style>
+    <div class="row">
+        <span class="label"></span>
+        <div class="track-wrap">
+            <div class="track"><div class="fill"></div></div>
+            <span class="val"></span>
+        </div>
+    </div>
+</template>
+
+<!-- ui-toggle -->
+<template id="tmpl-ui-toggle">
+    <style>
+        :host { display: block; }
+        .row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: var(--ui-surface, #141428);
+            border: 2px solid transparent;
+            border-radius: var(--ui-radius, 4px);
+            cursor: pointer;
+        }
+        .row.focused {
+            background: var(--ui-surface-hover, #222250);
+            border-color: var(--ui-border-focus, #4a6aff);
+        }
+        .label { color: var(--ui-text, #d0d0e0); font-size: 14px; }
+        .switch-area { display: flex; align-items: center; }
+        .state {
+            font-family: var(--ui-font-mono, Consolas, monospace);
+            font-size: 12px;
+            color: var(--ui-text-dim, #7878a0);
+            margin-right: 12px;
+            min-width: 30px;
+            text-align: right;
+        }
+        .switch {
+            width: 44px;
+            height: 22px;
+            background: var(--ui-disabled, #3a3a50);
+            border-radius: 11px;
+            display: flex;
+            align-items: center;
+        }
+        .switch.on { background: var(--ui-accent-dim, #3a4a99); }
+        .knob {
+            width: 16px;
+            height: 16px;
+            background: var(--ui-text-dim, #7878a0);
+            border-radius: 8px;
+            margin-left: 3px;
+        }
+        .switch.on .knob {
+            margin-left: 25px;
+            background: var(--ui-accent, #4a6aff);
+        }
+    </style>
+    <div class="row">
+        <span class="label"></span>
+        <div class="switch-area">
+            <span class="state"></span>
+            <div class="switch"><div class="knob"></div></div>
+        </div>
+    </div>
+</template>
+
+<!-- ui-select -->
+<template id="tmpl-ui-select">
+    <style>
+        :host { display: block; }
+        .row {
+            display: flex;
+            align-items: center;
+            padding: 8px 16px;
+            background: var(--ui-surface, #141428);
+            border: 2px solid transparent;
+            border-radius: var(--ui-radius, 4px);
+        }
+        .row.focused {
+            background: var(--ui-surface-hover, #222250);
+            border-color: var(--ui-border-focus, #4a6aff);
+        }
+        .label { flex: 1; color: var(--ui-text, #d0d0e0); font-size: 14px; }
+        .selector { display: flex; align-items: center; gap: 8px; }
+        .arrow {
+            color: var(--ui-text-dim, #7878a0);
+            font-size: 14px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+        .row.focused .arrow { color: var(--ui-text-bright, #ffffff); }
+        .val {
+            min-width: 120px;
+            text-align: center;
+            font-family: var(--ui-font-mono, Consolas, monospace);
+            font-size: 13px;
+            color: var(--ui-text-dim, #7878a0);
+        }
+        .row.focused .val { color: var(--ui-accent, #4a6aff); }
+    </style>
+    <div class="row">
+        <span class="label"></span>
+        <div class="selector">
+            <span class="arrow">&lt;</span>
+            <span class="val"></span>
+            <span class="arrow">&gt;</span>
+        </div>
+    </div>
+</template>
+
+<!-- ui-keybind -->
+<template id="tmpl-ui-keybind">
+    <style>
+        :host { display: block; }
+        .row {
+            display: flex;
+            align-items: center;
+            padding: 8px 16px;
+            background: var(--ui-surface, #141428);
+            border: 2px solid transparent;
+            border-radius: var(--ui-radius, 4px);
+        }
+        .row.focused {
+            background: var(--ui-surface-hover, #222250);
+            border-color: var(--ui-border-focus, #4a6aff);
+        }
+        .label { flex: 1; color: var(--ui-text, #d0d0e0); font-size: 14px; }
+        .key {
+            min-width: 120px;
+            text-align: center;
+            padding: 4px 12px;
+            background: var(--ui-surface-alt, #1c1c38);
+            border: 1px solid var(--ui-border, #2a2a4a);
+            border-radius: var(--ui-radius, 4px);
+            font-family: var(--ui-font-mono, Consolas, monospace);
+            font-size: 13px;
+            color: var(--ui-text, #d0d0e0);
+        }
+        .row.focused .key { border-color: var(--ui-accent, #4a6aff); }
+        .key.listening {
+            background: var(--ui-accent-dim, #3a4a99);
+            border-color: var(--ui-accent, #4a6aff);
+            color: var(--ui-text-bright, #ffffff);
+        }
+    </style>
+    <div class="row">
+        <span class="label"></span>
+        <span class="key"></span>
+    </div>
+</template>
+
+<!-- ui-text-entry -->
+<template id="tmpl-ui-text-entry">
+    <style>
+        :host { display: block; }
+        .row {
+            display: flex;
+            align-items: center;
+            padding: 8px 16px;
+            background: var(--ui-surface, #141428);
+            border: 2px solid transparent;
+            border-radius: var(--ui-radius, 4px);
+        }
+        .row.focused {
+            background: var(--ui-surface-hover, #222250);
+            border-color: var(--ui-border-focus, #4a6aff);
+        }
+        .label {
+            flex: 0 0 160px;
+            color: var(--ui-text, #d0d0e0);
+            font-size: 14px;
+        }
+        .input-wrap { flex: 1; display: flex; }
+        input {
+            width: 100%;
+            padding: 6px 10px;
+            background: var(--ui-surface-alt, #1c1c38);
+            border: 1px solid var(--ui-border, #2a2a4a);
+            border-radius: var(--ui-radius, 4px);
+            color: var(--ui-text, #d0d0e0);
+            font-family: var(--ui-font-mono, Consolas, monospace);
+            font-size: 14px;
+        }
+        .row.focused input { border-color: var(--ui-accent, #4a6aff); }
+    </style>
+    <div class="row">
+        <span class="label"></span>
+        <div class="input-wrap">
+            <input type="text">
+        </div>
+    </div>
+</template>
+
+<!-- ui-dialog -->
+<template id="tmpl-ui-dialog">
+    <style>
+        :host {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        :host([open]) { display: flex; }
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+        }
+        .dialog {
+            position: relative;
+            background: var(--ui-surface, #141428);
+            border: 2px solid var(--ui-border, #2a2a4a);
+            border-radius: var(--ui-radius, 4px);
+            padding: 24px;
+            min-width: 300px;
+            max-width: 500px;
+        }
+        .title {
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--ui-text-bright, #ffffff);
+            margin-bottom: 8px;
+        }
+        .message {
+            font-size: 14px;
+            color: var(--ui-text, #d0d0e0);
+            margin-bottom: 20px;
+            line-height: 1.4;
+        }
+        .actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+    </style>
+    <div class="overlay"></div>
+    <div class="dialog">
+        <div class="title"></div>
+        <div class="message"></div>
+        <div class="actions"><slot></slot></div>
+    </div>
+</template>
+
+<!-- ui-toast -->
+<template id="tmpl-ui-toast">
+    <style>
+        :host {
+            display: block;
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 2000;
+            opacity: 0;
+        }
+        :host([visible]) { opacity: 1; }
+        .toast {
+            padding: 10px 20px;
+            background: var(--ui-surface-alt, #1c1c38);
+            border: 1px solid var(--ui-border, #2a2a4a);
+            border-radius: var(--ui-radius, 4px);
+            color: var(--ui-text, #d0d0e0);
+            font-size: 13px;
+            max-width: 350px;
+        }
+        :host([type="success"]) .toast { border-color: var(--ui-success, #44dd88); color: var(--ui-success, #44dd88); }
+        :host([type="warning"]) .toast { border-color: var(--ui-warning, #ffaa33); color: var(--ui-warning, #ffaa33); }
+        :host([type="error"])   .toast { border-color: var(--ui-danger, #ff4466);  color: var(--ui-danger, #ff4466); }
+    </style>
+    <div class="toast"></div>
+</template>
+
+<!-- ui-separator -->
+<template id="tmpl-ui-separator">
+    <style>
+        :host { display: block; padding: 6px 0; }
+        .line { height: 1px; background: var(--ui-border, #2a2a4a); }
+        :host([label]) .line { display: none; }
+        .labeled { display: none; align-items: center; gap: 12px; }
+        :host([label]) .labeled { display: flex; }
+        .dash { flex: 1; height: 1px; background: var(--ui-border, #2a2a4a); }
+        .text {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--ui-text-dim, #7878a0);
+        }
+    </style>
+    <div class="line"></div>
+    <div class="labeled">
+        <div class="dash"></div>
+        <span class="text"></span>
+        <div class="dash"></div>
+    </div>
+</template>
+
+<!-- ui-progress -->
+<template id="tmpl-ui-progress">
+    <style>
+        :host { display: block; }
+        .wrap { display: flex; align-items: center; gap: 12px; }
+        .label {
+            font-size: 13px;
+            color: var(--ui-text-dim, #7878a0);
+            min-width: 60px;
+        }
+        .track {
+            flex: 1;
+            height: 8px;
+            background: var(--ui-border, #2a2a4a);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .fill {
+            height: 100%;
+            background: var(--ui-accent, #4a6aff);
+            border-radius: 4px;
+        }
+        :host([type="success"]) .fill { background: var(--ui-success, #44dd88); }
+        :host([type="warning"]) .fill { background: var(--ui-warning, #ffaa33); }
+        :host([type="danger"])  .fill { background: var(--ui-danger, #ff4466); }
+        .pct {
+            font-family: var(--ui-font-mono, Consolas, monospace);
+            font-size: 12px;
+            color: var(--ui-text-dim, #7878a0);
+            min-width: 35px;
+            text-align: right;
+        }
+    </style>
+    <div class="wrap">
+        <span class="label"></span>
+        <div class="track"><div class="fill"></div></div>
+        <span class="pct"></span>
+    </div>
+</template>
+
+<!-- ui-badge -->
+<template id="tmpl-ui-badge">
+    <style>
+        :host { display: inline-block; }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-radius: var(--ui-radius, 4px);
+            background: var(--ui-surface-alt, #1c1c38);
+            color: var(--ui-text-dim, #7878a0);
+            border: 1px solid var(--ui-border, #2a2a4a);
+        }
+        :host([type="success"]) .badge { border-color: var(--ui-success); color: var(--ui-success); }
+        :host([type="warning"]) .badge { border-color: var(--ui-warning); color: var(--ui-warning); }
+        :host([type="danger"])  .badge { border-color: var(--ui-danger);  color: var(--ui-danger); }
+        :host([type="accent"])  .badge { border-color: var(--ui-accent);  color: var(--ui-accent); }
+    </style>
+    <span class="badge"><slot></slot></span>
+</template>
+
+
+<!-- ================================================================== -->
+<!-- Scripts — core first, then components, then app                    -->
+<!-- ================================================================== -->
+<script src="lib/game-ui.js"></script>
+<script src="lib/ui-root.js"></script>
+<script src="lib/ui-layout.js"></script>
+<script src="lib/ui-menu.js"></script>
+<script src="lib/ui-controls.js"></script>
+<script src="lib/ui-overlay.js"></script>
+<script src="lib/ui-display.js"></script>
+
+
+<!-- ================================================================== -->
+<!-- App UI                                                             -->
+<!-- ================================================================== -->
+
+<ui-root id="root" theme="dark">
+
+    <!-- Main Menu -->
+    <ui-screen id="main-menu" active>
+        <div class="title-block">
+            <div class="game-title">STARFIELD</div>
+            <div class="game-subtitle">Galactic Command</div>
+        </div>
+        <ui-menu>
+            <ui-menu-item action="new-game" nav>New Game</ui-menu-item>
+            <ui-menu-item action="continue" nav disabled>Continue</ui-menu-item>
+            <ui-menu-item action="settings" nav>Settings</ui-menu-item>
+            <ui-menu-item action="credits" nav>Credits</ui-menu-item>
+            <ui-separator></ui-separator>
+            <ui-menu-item action="quit">Quit to Desktop</ui-menu-item>
+        </ui-menu>
+        <div class="version-info">v0.1.0 &middot; game-ui demo</div>
+    </ui-screen>
+
+    <!-- New Game -->
+    <ui-screen id="new-game">
+        <ui-panel header="New Game" style="width: 500px;">
+            <ui-menu>
+                <ui-text-entry label="Commander Name" name="player-name"
+                               placeholder="Enter name..." maxlength="20"></ui-text-entry>
+                <ui-select label="Difficulty" name="difficulty"
+                           options="Easy,Normal,Hard,Nightmare" value="Normal"></ui-select>
+                <ui-select label="Starting Sector" name="sector"
+                           options="Alpha Centauri,Kepler-442,Trappist-1,Random" value="Alpha Centauri"></ui-select>
+                <ui-toggle label="Tutorial" name="tutorial" checked></ui-toggle>
+                <ui-text-entry label="World Seed" name="seed"
+                               placeholder="(optional)"></ui-text-entry>
+                <ui-separator></ui-separator>
+                <ui-menu-item action="start-game">Launch Mission</ui-menu-item>
+            </ui-menu>
+        </ui-panel>
+    </ui-screen>
+
+    <!-- Settings -->
+    <ui-screen id="settings">
+        <ui-panel header="Settings" style="width: 600px;">
+            <ui-tabs id="settings-tabs">
+                <ui-tab label="Audio">
+                    <ui-menu>
+                        <ui-slider label="Master Volume" name="master-vol"
+                                   min="0" max="100" value="80" suffix="%"></ui-slider>
+                        <ui-slider label="Music" name="music-vol"
+                                   min="0" max="100" value="70" suffix="%"></ui-slider>
+                        <ui-slider label="Sound Effects" name="sfx-vol"
+                                   min="0" max="100" value="100" suffix="%"></ui-slider>
+                        <ui-slider label="Voice" name="voice-vol"
+                                   min="0" max="100" value="90" suffix="%"></ui-slider>
+                        <ui-slider label="Ambient" name="ambient-vol"
+                                   min="0" max="100" value="60" suffix="%"></ui-slider>
+                        <ui-separator></ui-separator>
+                        <ui-toggle label="Subtitles" name="subtitles" checked></ui-toggle>
+                        <ui-select label="Subtitle Size" name="sub-size"
+                                   options="Small,Medium,Large" value="Medium"></ui-select>
+                    </ui-menu>
+                </ui-tab>
+
+                <ui-tab label="Video">
+                    <ui-menu>
+                        <ui-select label="Resolution" name="resolution"
+                                   options="1280x720,1920x1080,2560x1440,3840x2160" value="1920x1080"></ui-select>
+                        <ui-select label="Display Mode" name="display-mode"
+                                   options="Windowed,Borderless,Fullscreen" value="Borderless"></ui-select>
+                        <ui-toggle label="VSync" name="vsync" checked></ui-toggle>
+                        <ui-select label="Frame Limit" name="fps-limit"
+                                   options="30,60,120,144,Unlimited" value="60"></ui-select>
+                        <ui-separator label="Quality"></ui-separator>
+                        <ui-select label="Preset" name="quality-preset"
+                                   options="Low,Medium,High,Ultra,Custom" value="High"></ui-select>
+                        <ui-select label="Texture Quality" name="texture-quality"
+                                   options="Low,Medium,High,Ultra" value="High"></ui-select>
+                        <ui-select label="Shadow Quality" name="shadow-quality"
+                                   options="Off,Low,Medium,High" value="Medium"></ui-select>
+                        <ui-select label="Anti-Aliasing" name="aa"
+                                   options="Off,FXAA,TAA,MSAA 4x" value="TAA"></ui-select>
+                        <ui-slider label="Render Scale" name="render-scale"
+                                   min="50" max="200" value="100" step="10" suffix="%"></ui-slider>
+                    </ui-menu>
+                </ui-tab>
+
+                <ui-tab label="Controls">
+                    <ui-menu>
+                        <ui-separator label="Movement"></ui-separator>
+                        <ui-keybind label="Move Forward" name="move-fwd" key="w"></ui-keybind>
+                        <ui-keybind label="Move Back" name="move-back" key="s"></ui-keybind>
+                        <ui-keybind label="Strafe Left" name="strafe-left" key="a"></ui-keybind>
+                        <ui-keybind label="Strafe Right" name="strafe-right" key="d"></ui-keybind>
+                        <ui-keybind label="Jump" name="jump" key=" "></ui-keybind>
+                        <ui-keybind label="Crouch" name="crouch" key="Control"></ui-keybind>
+                        <ui-keybind label="Sprint" name="sprint" key="Shift"></ui-keybind>
+                        <ui-separator label="Combat"></ui-separator>
+                        <ui-keybind label="Fire" name="fire" key="Mouse1"></ui-keybind>
+                        <ui-keybind label="Aim" name="aim" key="Mouse2"></ui-keybind>
+                        <ui-keybind label="Reload" name="reload" key="r"></ui-keybind>
+                        <ui-keybind label="Melee" name="melee" key="v"></ui-keybind>
+                        <ui-keybind label="Grenade" name="grenade" key="g"></ui-keybind>
+                        <ui-separator label="Interaction"></ui-separator>
+                        <ui-keybind label="Interact" name="interact" key="e"></ui-keybind>
+                        <ui-keybind label="Inventory" name="inventory" key="i"></ui-keybind>
+                        <ui-keybind label="Map" name="map" key="m"></ui-keybind>
+                    </ui-menu>
+                </ui-tab>
+
+                <ui-tab label="Gameplay">
+                    <ui-menu>
+                        <ui-slider label="Camera Sensitivity" name="sensitivity"
+                                   min="1" max="100" value="50" step="1"></ui-slider>
+                        <ui-toggle label="Invert Y Axis" name="invert-y"></ui-toggle>
+                        <ui-toggle label="Aim Assist" name="aim-assist" checked></ui-toggle>
+                        <ui-slider label="Field of View" name="fov"
+                                   min="60" max="120" value="90" step="5" suffix="deg"></ui-slider>
+                        <ui-separator label="HUD"></ui-separator>
+                        <ui-toggle label="Show Crosshair" name="crosshair" checked></ui-toggle>
+                        <ui-toggle label="Show Minimap" name="minimap" checked></ui-toggle>
+                        <ui-toggle label="Damage Numbers" name="damage-numbers" checked></ui-toggle>
+                        <ui-slider label="HUD Opacity" name="hud-opacity"
+                                   min="20" max="100" value="80" suffix="%"></ui-slider>
+                        <ui-separator label="Accessibility"></ui-separator>
+                        <ui-select label="Colorblind Mode" name="colorblind"
+                                   options="Off,Deuteranopia,Protanopia,Tritanopia" value="Off"></ui-select>
+                        <ui-toggle label="Screen Shake" name="screen-shake" checked></ui-toggle>
+                        <ui-select label="Language" name="language"
+                                   options="English,Spanish,French,German,Japanese,Korean" value="English"></ui-select>
+                    </ui-menu>
+                </ui-tab>
+            </ui-tabs>
+        </ui-panel>
+        <div class="settings-hint">Tab / Shift+Tab to switch categories &middot; Arrows to navigate &middot; Esc to go back</div>
+    </ui-screen>
+
+    <!-- Credits -->
+    <ui-screen id="credits">
+        <ui-panel style="width: 500px; text-align: center;">
+            <div class="credits-content">
+                <div class="credits-heading">STARFIELD: Galactic Command</div>
+                <ui-separator></ui-separator>
+                <div class="credits-section">
+                    <div class="credits-role">Game Design &amp; Programming</div>
+                    <div class="credits-name">You</div>
+                </div>
+                <div class="credits-section">
+                    <div class="credits-role">UI Framework</div>
+                    <div class="credits-name">game-ui.js</div>
+                </div>
+                <div class="credits-section">
+                    <div class="credits-role">Runtime Engine</div>
+                    <div class="credits-name">Bro</div>
+                </div>
+                <div class="credits-section">
+                    <div class="credits-role">Built With</div>
+                    <div class="credits-name">QuickJS + htmlayout + Skia + SDL3</div>
+                </div>
+                <ui-separator></ui-separator>
+                <div class="credits-thanks">Thank you for playing!</div>
+            </div>
+        </ui-panel>
+    </ui-screen>
+
+    <!-- Pause Menu -->
+    <ui-screen id="pause-menu">
+        <ui-panel style="width: 300px;">
+            <div class="pause-title">PAUSED</div>
+            <ui-menu>
+                <ui-menu-item action="resume">Resume</ui-menu-item>
+                <ui-menu-item action="settings" nav>Settings</ui-menu-item>
+                <ui-menu-item action="main-menu">Main Menu</ui-menu-item>
+                <ui-menu-item action="quit">Quit to Desktop</ui-menu-item>
+            </ui-menu>
+        </ui-panel>
+    </ui-screen>
+
+    <!-- Loading Screen -->
+    <ui-screen id="loading">
+        <ui-panel style="width: 500px;">
+            <div class="loading-title">Initializing Sector...</div>
+            <ui-progress id="load-progress" label="Loading" value="0" max="100"></ui-progress>
+            <div class="loading-detail" id="loading-detail">Generating star map...</div>
+        </ui-panel>
+    </ui-screen>
+
+    <!-- Theme Selector -->
+    <ui-screen id="theme-demo">
+        <ui-panel header="Theme Selector" style="width: 500px;">
+            <ui-menu>
+                <ui-menu-item action="theme-dark">Dark <ui-badge>default</ui-badge></ui-menu-item>
+                <ui-menu-item action="theme-midnight">Midnight</ui-menu-item>
+                <ui-menu-item action="theme-ember">Ember</ui-menu-item>
+                <ui-menu-item action="theme-forest">Forest</ui-menu-item>
+                <ui-menu-item action="theme-ice">Ice</ui-menu-item>
+                <ui-separator></ui-separator>
+                <ui-menu-item action="back">Back</ui-menu-item>
+            </ui-menu>
+        </ui-panel>
+    </ui-screen>
+
+    <!-- Dialogs -->
+    <ui-dialog id="quit-dialog" title="Quit Game" message="Are you sure you want to quit to desktop?">
+        <ui-button action="cancel">Cancel</ui-button>
+        <ui-button action="confirm-quit" variant="danger">Quit</ui-button>
+    </ui-dialog>
+
+    <ui-dialog id="main-menu-dialog" title="Return to Menu" message="All unsaved progress will be lost. Continue?">
+        <ui-button action="cancel">Cancel</ui-button>
+        <ui-button action="confirm-main-menu" variant="danger">Main Menu</ui-button>
+    </ui-dialog>
+
+</ui-root>
+
+<script src="app.js"></script>
+
+</body>
+</html>
