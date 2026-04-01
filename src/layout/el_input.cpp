@@ -1,4 +1,5 @@
 #include "layout/el_input.h"
+#include "layout/draw_traversal.h"
 #include "dom/element.h"
 #include "render/renderer.h"
 
@@ -171,12 +172,36 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     renderer_->setClip(x, y, w, h);
 
     if (!text.empty()) {
+        // Use the element's computed color for text (respects app themes)
+        render::Color textColor = {0, 0, 0, 255};
+        if (elem_) {
+            auto& style = elem_->computedStyle();
+            auto cIt = style.find("color");
+            if (cIt != style.end() && !cIt->second.empty()) {
+                render::Color parsed;
+                if (DrawTraversal::tryParseColor(cIt->second, parsed)) {
+                    textColor = parsed;
+                }
+            }
+        }
         render::Color color = isPlaceholder ? render::Color{128, 128, 128, 180}
-                                            : render::Color{0, 0, 0, 255};
+                                            : textColor;
         renderer_->drawText(text, drawX, textY, fontHandle, color);
     }
 
     if (focused_ && isTextType(nullptr)) {
+        // Use computed color for cursor too
+        render::Color cursorColor = {0, 0, 0, 255};
+        if (elem_) {
+            auto& style = elem_->computedStyle();
+            auto cIt = style.find("color");
+            if (cIt != style.end() && !cIt->second.empty()) {
+                render::Color parsed;
+                if (DrawTraversal::tryParseColor(cIt->second, parsed)) {
+                    cursorColor = parsed;
+                }
+            }
+        }
         int cpos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
         std::string beforeCursor = val.substr(0, cpos);
         float cursorX = drawX;
@@ -186,7 +211,7 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         }
         float cursorTop = y + (h - fontHeight) / 2.0f;
         float cursorBottom = cursorTop + fontHeight;
-        renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, {0, 0, 0, 255}, 1.0f);
+        renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, cursorColor, 1.0f);
     }
 
     if (inputType(nullptr) == InputType::Number) {

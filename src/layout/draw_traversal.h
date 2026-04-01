@@ -50,9 +50,12 @@ private:
     void drawBorders(dom::Element* elem, float x, float y, float w, float h);
     void drawText(dom::Node* textNode, dom::Element* parent, float offsetX, float offsetY);
 
-    // Color parsing helper
+public:
+    // Color parsing helper (public for shared use by element controls)
     static render::Color parseColor(const std::string& color);
     static bool tryParseColor(const std::string& color, render::Color& out);
+
+private:
 
     // Font handle for an element's computed style
     uint64_t getFontHandle(dom::Element* elem);
