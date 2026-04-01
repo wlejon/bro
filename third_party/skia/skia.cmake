@@ -30,6 +30,8 @@ if(EXISTS "${_skia_release}" AND EXISTS "${_skia_debug}")
     set_target_properties(skia PROPERTIES
         IMPORTED_LOCATION_RELEASE "${_skia_release}"
         IMPORTED_LOCATION_DEBUG   "${_skia_debug}"
+        MAP_IMPORTED_CONFIG_MINSIZEREL Release
+        MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release
     )
 elseif(EXISTS "${_skia_release}")
     set_target_properties(skia PROPERTIES IMPORTED_LOCATION "${_skia_release}")
