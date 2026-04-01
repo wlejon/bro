@@ -98,14 +98,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (overflow == "hidden" || overflow == "scroll" || overflow == "auto") {
         needsClip = true;
         renderer_->save();
-        // For html/body, clip to viewport (abs-positioned children extend beyond content box)
-        std::string tag = elem->tagName();
-        if ((tag == "html" || tag == "HTML" || tag == "body" || tag == "BODY") &&
-            viewportW_ > 0 && viewportH_ > 0) {
-            renderer_->setClip(0, 0, static_cast<float>(viewportW_), static_cast<float>(viewportH_));
-        } else {
-            renderer_->setClip(bx, by, bw, bh);
-        }
+        renderer_->setClip(bx, by, bw, bh);
     }
 
     // SVG elements render their own children via the SVG pipeline — skip DOM traversal
