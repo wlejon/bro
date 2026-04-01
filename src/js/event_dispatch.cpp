@@ -126,7 +126,8 @@ static std::vector<EventPathEntry> buildEventPath(bro::dom::Element* target) {
 
 static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
                             bro::dom::Element* retargetedTarget,
-                            bro::dom::Event& event) {
+                            bro::dom::Event& event,
+                            JSValue originalJsEvent = JS_UNDEFINED) {
     auto& listeners = current->listeners();
     auto it = listeners.find(event.type());
     if (it == listeners.end() || it->second.empty()) return;
@@ -161,9 +162,15 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     JS_ToInt64(ctx, &len, lenVal);
     JS_FreeValue(ctx, lenVal);
 
-    // Build the JS event object
-    JSValue jsEvent = JS_NewObject(ctx);
-    populateJsEvent(ctx, jsEvent, event);
+    // Build the JS event object — reuse original if provided (preserves detail, etc.)
+    bool ownsEvent = JS_IsUndefined(originalJsEvent);
+    JSValue jsEvent;
+    if (ownsEvent) {
+        jsEvent = JS_NewObject(ctx);
+        populateJsEvent(ctx, jsEvent, event);
+    } else {
+        jsEvent = JS_DupValue(ctx, originalJsEvent);
+    }
 
     // Set currentTarget to the current element
     JS_SetPropertyStr(ctx, jsEvent, "currentTarget", JS_DupValue(ctx, jsElem));
@@ -232,7 +239,8 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     JS_FreeValue(ctx, global);
 }
 
-void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event& event) {
+void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event& event,
+                      JSValue originalJsEvent) {
     if (!target || !ctx) return;
 
     event.setTarget(target);
@@ -244,7 +252,7 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
         if (event.propagationStopped()) break;
 
         event.setCurrentTarget(entry.element);
-        invokeListeners(ctx, entry.element, entry.retargetedTarget, event);
+        invokeListeners(ctx, entry.element, entry.retargetedTarget, event, originalJsEvent);
 
         if (!event.bubbles()) break;
     }

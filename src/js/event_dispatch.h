@@ -12,6 +12,10 @@ namespace bro::js {
 /// Shared by both the windowed Engine and the Headless tool.
 /// Supports shadow DOM event retargeting: when an event crosses a shadow
 /// boundary during bubbling, the target is retargeted to the host element.
-void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event& event);
+/// If originalJsEvent is provided (not JS_UNDEFINED), it is used as the event
+/// object passed to listeners (with target/currentTarget updated), preserving
+/// custom properties like CustomEvent.detail.
+void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event& event,
+                      JSValue originalJsEvent = JS_UNDEFINED);
 
 } // namespace bro::js

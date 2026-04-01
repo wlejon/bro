@@ -1116,7 +1116,7 @@ static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
     JS_FreeValue(ctx, cancelableVal);
 
     bro::dom::Event evt(type, bubbles, cancelable);
-    bro::js::dispatchDomEvent(ctx, el, evt);
+    bro::js::dispatchDomEvent(ctx, el, evt, argv[0]);
 
     return JS_NewBool(ctx, !evt.defaultPrevented());
 }
