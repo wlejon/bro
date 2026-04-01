@@ -86,7 +86,7 @@ void ElInput::setRangeValue(float v) {
 void ElInput::getContentSize(float& w, float& h, float maxWidth) {
     auto t = inputType(nullptr);
     if (t == InputType::Hidden) { w = 0; h = 0; return; }
-    if (t == InputType::Checkbox || t == InputType::Radio) { w = 16; h = 16; return; }
+    if (t == InputType::Checkbox || t == InputType::Radio) { w = 13; h = 13; return; }
     if (t == InputType::Range) { w = 160; h = 20; return; }
     if (t == InputType::Color) { w = 44; h = 24; return; }
     if (isButtonType(nullptr)) { w = 80; h = 20; return; }

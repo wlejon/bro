@@ -897,17 +897,19 @@ void Engine::handleMouseDown(float x, float y, int button) {
             if (prevInput) {
                 // Close color picker if clicking outside it
                 if (prevInput->isPickerOpen()) {
+                    // lastDrawPos_ is in screen space (includes scroll offset from rendering),
+                    // so use raw screen coordinates (x, y) not document-space (docX, docY)
                     auto dp = prevInput->lastDrawPos();
                     float px = dp.x, py = dp.y + dp.h + 2;
                     float pw = 200.0f, ph = 160.0f;
-                    bool inPicker = (docX >= px && docX < px + pw && docY >= py && docY < py + ph);
-                    bool inSwatch = (docX >= dp.x && docX < dp.x + dp.w && docY >= dp.y && docY < dp.y + dp.h);
+                    bool inPicker = (x >= px && x < px + pw && y >= py && y < py + ph);
+                    bool inSwatch = (x >= dp.x && x < dp.x + dp.w && y >= dp.y && y < dp.y + dp.h);
                     if (inPicker) {
                         // Click inside picker — select the color
                         float cellW = (pw - 4) / 10.0f;
                         float cellH = (ph - 4) / 8.0f;
-                        int col = static_cast<int>((docX - px - 2) / cellW);
-                        int row = static_cast<int>((docY - py - 2) / cellH);
+                        int col = static_cast<int>((x - px - 2) / cellW);
+                        int row = static_cast<int>((y - py - 2) / cellH);
                         col = std::clamp(col, 0, 9);
                         row = std::clamp(row, 0, 7);
 
@@ -947,7 +949,11 @@ void Engine::handleMouseDown(float x, float y, int button) {
                         prevInput->setPickerOpen(false);
                         uiDirty_ = true;
                         return; // consumed the click
-                    } else if (!inSwatch) {
+                    } else if (inSwatch) {
+                        prevInput->setPickerOpen(false);
+                        uiDirty_ = true;
+                        return; // consumed — don't fall through
+                    } else {
                         prevInput->setPickerOpen(false);
                     }
                 }
