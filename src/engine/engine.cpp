@@ -483,7 +483,7 @@ void Engine::run() {
         // force app UI re-rasterization every frame just because it's visible.
 
         double tLayout = tJs;
-        if (document_ && document_->isDirty() && uiFrameDue) {
+        if (document_ && (document_->isDirty() || !hasRenderedOnce_) && uiFrameDue) {
             ensureReplacedElements(document_->documentElement());
             document_->resolveStyles();
             document_->clearStructureDirty();
