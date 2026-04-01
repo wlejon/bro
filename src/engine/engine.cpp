@@ -880,7 +880,10 @@ static bool isTextEditable(dom::Element* el) {
 // ---------------------------------------------------------------------------
 
 void Engine::handleMouseDown(float x, float y, int button) {
-    // Offset by scroll position for document-space coordinates
+    // x, y = raw mouse position (screen space).
+    // docX, docY = document space (for hit testing into the scrolled document).
+    // IMPORTANT: overlay positions (lastDrawPos, color picker, select dropdown)
+    // are in screen space — always use x/y when comparing, never docX/docY.
     float docX = x, docY = y + scrollY_;
     uiDirty_ = true;
 
@@ -897,8 +900,6 @@ void Engine::handleMouseDown(float x, float y, int button) {
             if (prevInput) {
                 // Close color picker if clicking outside it
                 if (prevInput->isPickerOpen()) {
-                    // lastDrawPos_ is in screen space (includes scroll offset from rendering),
-                    // so use raw screen coordinates (x, y) not document-space (docX, docY)
                     auto dp = prevInput->lastDrawPos();
                     float px = dp.x, py = dp.y + dp.h + 2;
                     float pw = 200.0f, ph = 160.0f;
@@ -1178,6 +1179,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
 }
 
 void Engine::handleMouseUp(float x, float y, int button) {
+    // x, y = screen space. docX, docY = document space (see handleMouseDown).
     float docX = x, docY = y + scrollY_;
     uiDirty_ = true;
 
@@ -1207,6 +1209,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
 }
 
 void Engine::handleMouseMove(float x, float y) {
+    // x, y = screen space. docX, docY = document space (see handleMouseDown).
     float docX = x, docY = y + scrollY_;
 
     // Range slider dragging
