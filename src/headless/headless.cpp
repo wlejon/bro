@@ -122,7 +122,7 @@ public:
         float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
         SkFontMetrics fm;
         font.getMetrics(&fm);
-        return { width, bounds.height(), -fm.fAscent };
+        return { width, bounds.height(), -fm.fAscent, fm.fDescent };
     }
 
     uint64_t createFont(std::string_view family, float size, int weight, bool italic) override {

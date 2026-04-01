@@ -115,7 +115,7 @@ render::TextMetrics SystemRenderer::measureText(std::string_view text, uint64_t 
     float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
     SkFontMetrics fm;
     font.getMetrics(&fm);
-    return { width, bounds.height(), -fm.fAscent };
+    return { width, bounds.height(), -fm.fAscent, fm.fDescent };
 }
 
 uint64_t SystemRenderer::createFont(std::string_view family, float size, int weight, bool italic) {

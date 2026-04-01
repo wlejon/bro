@@ -17,7 +17,8 @@ struct Color {
 struct TextMetrics {
     float width = 0.0f;
     float height = 0.0f;
-    float ascent = 0.0f;  // distance from baseline to top (positive value)
+    float ascent = 0.0f;   // distance from baseline to top (positive value)
+    float descent = 0.0f;  // distance from baseline to bottom (positive value)
 };
 
 struct PointF {

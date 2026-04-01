@@ -17,9 +17,9 @@ uint64_t FontManager::createFont(render::Renderer* renderer,
     // Measure a representative string to approximate metrics.
     auto tm = renderer->measureText("Xg", handle);
     FontMetrics fm;
-    fm.height = tm.height;
     fm.ascent = tm.ascent > 0 ? tm.ascent : tm.height * 0.8f;
-    fm.descent = tm.height - fm.ascent;
+    fm.descent = tm.descent > 0 ? tm.descent : tm.height * 0.2f;
+    fm.height = fm.ascent + fm.descent;
     // x_height: measure 'x' specifically
     auto xm = renderer->measureText("x", handle);
     fm.x_height = xm.height * 0.7f;
