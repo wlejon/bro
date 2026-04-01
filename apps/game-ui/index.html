@@ -488,17 +488,24 @@
     <style>
         :host {
             display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%;
+            height: 100%;
             align-items: center;
             justify-content: center;
+            box-sizing: border-box;
+            z-index: 1000;
         }
         :host([open]) { display: flex; }
         .overlay {
-            position: absolute;
+            position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(0, 0, 0, 0.7);
         }
         .dialog {
             position: relative;
+            z-index: 1;
             background: var(--ui-surface, #141428);
             border: 2px solid var(--ui-border, #2a2a4a);
             border-radius: var(--ui-radius, 4px);
