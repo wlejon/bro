@@ -102,6 +102,7 @@ input[type="checkbox"], input[type="radio"] {
     border: none;
     background-color: transparent;
     vertical-align: middle;
+    margin-right: 3px;
 }
 
 input[type="range"] {
