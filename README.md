@@ -1,4 +1,4 @@
-# Bro
+# Bro(wser)
 
 A lightweight desktop application runtime that runs HTML/CSS/JS apps as native windows. Bro combines a JavaScript engine, an HTML/CSS layout engine, and GPU-accelerated rendering into a single executable — no browser required.
 
