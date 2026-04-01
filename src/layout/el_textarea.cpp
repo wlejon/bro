@@ -116,9 +116,8 @@ void ElTextarea::draw(render::Renderer* renderer,
     uint64_t fontHandle = getFontHandle();
     if (!fontHandle) return;
 
-    auto tm = renderer_->measureText("M", fontHandle);
-    float lineHeight = tm.height;
-    float ascent = tm.ascent > 0 ? tm.ascent : lineHeight * 0.8f;
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
+    float lineHeight = lm.lineHeight();
 
     float contentH = h;
 
@@ -148,7 +147,7 @@ void ElTextarea::draw(render::Renderer* renderer,
         if (lineY + lineHeight < y) continue;
         if (lineY > y + h) break;
         if (!lines[i].empty()) {
-            renderer_->drawText(lines[i], baseX, lineY + ascent, fontHandle, color);
+            renderer_->drawText(lines[i], baseX, lineY + lm.ascent, fontHandle, color);
         }
     }
 

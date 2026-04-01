@@ -70,8 +70,7 @@ uint64_t ElSelect::getFontHandle() const {
 void ElSelect::getContentSize(float& w, float& h) {
     uint64_t fontHandle = getFontHandle();
     if (fontHandle && renderer_) {
-        auto fm = renderer_->measureText("M", fontHandle);
-        float lineH = fm.height;
+        auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
 
         auto opts = getOptions();
         float maxW = 50.0f;
@@ -82,7 +81,7 @@ void ElSelect::getContentSize(float& w, float& h) {
             }
         }
         w = maxW + 20; // extra space for dropdown arrow
-        h = lineH;
+        h = lm.lineHeight();
     } else {
         w = 120;
         h = 20;
@@ -107,12 +106,10 @@ void ElSelect::draw(render::Renderer* renderer,
     uint64_t fontHandle = getFontHandle();
     if (!fontHandle) return;
 
-    auto fm = renderer_->measureText("M", fontHandle);
-    float lineHeight = fm.height;
-    float ascent = fm.ascent > 0 ? fm.ascent : lineHeight * 0.8f;
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
 
     render::Color color = {0, 0, 0, 255};
-    float textY = y + (h - lineHeight) / 2.0f + ascent;
+    float textY = lm.baselineY(y, h);
 
     renderer_->save();
     renderer_->setClip(x, y, w, h);
@@ -140,8 +137,8 @@ void ElSelect::draw(render::Renderer* renderer,
 float ElSelect::dropdownLineHeight() const {
     uint64_t fontHandle = getFontHandle();
     if (!fontHandle || !renderer_) return 20.0f;
-    auto fm = renderer_->measureText("M", fontHandle);
-    return fm.height + 8.0f; // font height + vertical padding
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
+    return lm.lineHeight() + 8.0f; // line height + vertical padding
 }
 
 void ElSelect::drawDropdown() {
@@ -153,9 +150,8 @@ void ElSelect::drawDropdown() {
     uint64_t fontHandle = getFontHandle();
     if (!fontHandle) return;
 
-    auto fm = renderer_->measureText("M", fontHandle);
-    float lineHeight = fm.height + 8.0f; // add vertical padding per item
-    float ascent = fm.ascent > 0 ? fm.ascent : fm.height * 0.8f;
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
+    float lineHeight = lm.lineHeight() + 8.0f; // add vertical padding per item
     float padX = 6.0f;
     float padY = 4.0f; // vertical padding within each item
 
@@ -176,10 +172,10 @@ void ElSelect::drawDropdown() {
         float itemY = dropY + 1.0f + i * lineHeight;
         if (i == highlightedIndex_) {
             renderer_->fillRect(dropX + 1, itemY, dropW - 2, lineHeight, {0, 120, 215, 255});
-            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + ascent,
+            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + lm.ascent,
                                fontHandle, {255, 255, 255, 255});
         } else {
-            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + ascent,
+            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + lm.ascent,
                                fontHandle, color);
         }
     }

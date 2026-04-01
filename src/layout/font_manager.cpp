@@ -14,12 +14,12 @@ uint64_t FontManager::createFont(render::Renderer* renderer,
 
     uint64_t handle = renderer->createFont(family, size, weight, italic);
 
-    // Measure a representative string to approximate metrics.
-    auto tm = renderer->measureText("Xg", handle);
+    // Measure a representative string to get font metrics.
+    auto lm = render::LineMetrics::from(renderer->measureText("Xg", handle));
     FontMetrics fm;
-    fm.ascent = tm.ascent > 0 ? tm.ascent : tm.height * 0.8f;
-    fm.descent = tm.descent > 0 ? tm.descent : tm.height * 0.2f;
-    fm.height = fm.ascent + fm.descent;
+    fm.ascent = lm.ascent;
+    fm.descent = lm.descent;
+    fm.height = lm.lineHeight();
     // x_height: measure 'x' specifically
     auto xm = renderer->measureText("x", handle);
     fm.x_height = xm.height * 0.7f;

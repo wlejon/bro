@@ -181,11 +181,8 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     uint64_t fontHandle = getFontHandle();
     if (!fontHandle) return;
 
-    auto tm = renderer_->measureText("M", fontHandle);
-    float ascent = tm.ascent > 0 ? tm.ascent : tm.height * 0.8f;
-    float descent = tm.descent > 0 ? tm.descent : tm.height * 0.2f;
-    float lineHeight = ascent + descent;
-    float textY = y + (h - lineHeight) / 2.0f + ascent;
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
+    float textY = lm.baselineY(y, h);
     float drawX = x;
 
     renderer_->save();
@@ -229,8 +226,8 @@ void ElInput::drawText_(float x, float y, float w, float h) {
             auto ctm = renderer_->measureText(beforeCursor, fontHandle);
             cursorX += ctm.width;
         }
-        float cursorTop = textY - ascent;
-        float cursorBottom = cursorTop + lineHeight;
+        float cursorTop = textY - lm.ascent;
+        float cursorBottom = cursorTop + lm.lineHeight();
         renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, cursorColor, 1.0f);
     }
 

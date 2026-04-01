@@ -21,6 +21,28 @@ struct TextMetrics {
     float descent = 0.0f;  // distance from baseline to bottom (positive value)
 };
 
+// Derived font line metrics for text layout and vertical centering.
+// Use lineHeight() (ascent + descent) for centering, not TextMetrics::height
+// which is the tight bounding box of a specific glyph.
+struct LineMetrics {
+    float ascent;
+    float descent;
+
+    float lineHeight() const { return ascent + descent; }
+
+    // Compute baseline Y for text vertically centered in a box of height h at position y
+    float baselineY(float y, float h) const {
+        return y + (h - lineHeight()) / 2.0f + ascent;
+    }
+
+    static LineMetrics from(const TextMetrics& tm) {
+        return {
+            tm.ascent > 0 ? tm.ascent : tm.height * 0.8f,
+            tm.descent > 0 ? tm.descent : tm.height * 0.2f
+        };
+    }
+};
+
 struct PointF {
     float x = 0;
     float y = 0;
