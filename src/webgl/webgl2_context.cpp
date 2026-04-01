@@ -613,22 +613,6 @@ void WebGL2RenderingContext::renderbufferStorageMultisample(GLenum target, GLsiz
 // ===========================================================================
 
 void WebGL2RenderingContext::drawArrays(GLenum mode, GLint first, GLsizei count) {
-    // One-time diagnostic for debugging WebGL draw issues
-    static bool once = true;
-    if (once) {
-        once = false;
-        GLint curProg = 0, curVAO = 0, curFBO = 0;
-        glGetIntegerv(GL_CURRENT_PROGRAM, &curProg);
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &curVAO);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &curFBO);
-        GLenum err = glGetError();
-        GLint linkOk = 0;
-        if (curProg) glGetProgramiv(curProg, GL_LINK_STATUS, &linkOk);
-        GLint vp[4] = {};
-        glGetIntegerv(GL_VIEWPORT, vp);
-        LOG_INFO("WebGL drawArrays: mode=%u first=%d count=%d prog=%d(link=%d) vao=%d fbo=%d viewport=[%d,%d,%d,%d] err=0x%x",
-                 mode, first, count, curProg, linkOk, curVAO, curFBO, vp[0], vp[1], vp[2], vp[3], err);
-    }
     glDrawArrays(mode, first, count);
 }
 
