@@ -81,8 +81,8 @@ void ElSelect::getContentSize(float& w, float& h) {
                 maxW = std::max(maxW, tm.width);
             }
         }
-        w = maxW + 28;
-        h = lineH + 8;
+        w = maxW + 20; // extra space for dropdown arrow
+        h = lineH;
     } else {
         w = 120;
         h = 20;
@@ -112,7 +112,6 @@ void ElSelect::draw(render::Renderer* renderer,
     float ascent = fm.ascent > 0 ? fm.ascent : lineHeight * 0.8f;
 
     render::Color color = {0, 0, 0, 255};
-    float padX = 4.0f;
     float textY = y + (h - lineHeight) / 2.0f + ascent;
 
     renderer_->save();
@@ -121,7 +120,7 @@ void ElSelect::draw(render::Renderer* renderer,
     auto opts = getOptions();
     int idx = std::clamp(selectedIndex_, 0, std::max(0, static_cast<int>(opts.size()) - 1));
     if (!opts.empty() && idx < static_cast<int>(opts.size())) {
-        renderer_->drawText(opts[idx].text, x + padX, textY, fontHandle, color);
+        renderer_->drawText(opts[idx].text, x, textY, fontHandle, color);
     }
 
     // Dropdown arrow

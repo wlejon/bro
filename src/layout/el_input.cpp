@@ -86,6 +86,26 @@ void ElInput::setRangeValue(float v) {
 void ElInput::getContentSize(float& w, float& h, float maxWidth) {
     auto t = inputType(nullptr);
     if (t == InputType::Hidden) { w = 0; h = 0; return; }
+
+    // Read dimensions from computed style (set by UA stylesheet)
+    if (elem_) {
+        auto& style = elem_->computedStyle();
+        auto wIt = style.find("width");
+        auto hIt = style.find("height");
+        if (wIt != style.end() && !wIt->second.empty() && wIt->second != "auto") {
+            char* end = nullptr;
+            float v = std::strtof(wIt->second.c_str(), &end);
+            if (end != wIt->second.c_str() && v > 0) w = v;
+        }
+        if (hIt != style.end() && !hIt->second.empty() && hIt->second != "auto") {
+            char* end = nullptr;
+            float v = std::strtof(hIt->second.c_str(), &end);
+            if (end != hIt->second.c_str() && v > 0) h = v;
+        }
+        if (w > 0 && h > 0) return;
+    }
+
+    // Fallback defaults if style didn't provide dimensions
     if (t == InputType::Checkbox || t == InputType::Radio) { w = 13; h = 13; return; }
     if (t == InputType::Range) { w = 160; h = 20; return; }
     if (t == InputType::Color) { w = 44; h = 24; return; }
@@ -165,8 +185,7 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     float fontHeight = tm.height;
     float ascent = tm.ascent > 0 ? tm.ascent : fontHeight * 0.8f;
     float textY = y + (h - fontHeight) / 2.0f + ascent;
-    float padX = 4.0f;
-    float drawX = x + padX;
+    float drawX = x;
 
     renderer_->save();
     renderer_->setClip(x, y, w, h);
@@ -209,8 +228,8 @@ void ElInput::drawText_(float x, float y, float w, float h) {
             auto ctm = renderer_->measureText(beforeCursor, fontHandle);
             cursorX += ctm.width;
         }
-        float cursorTop = y + (h - fontHeight) / 2.0f;
-        float cursorBottom = cursorTop + fontHeight;
+        float cursorTop = y + std::max(0.0f, (h - fontHeight) / 2.0f);
+        float cursorBottom = y + h - std::max(0.0f, (h - fontHeight) / 2.0f);
         renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, cursorColor, 1.0f);
     }
 

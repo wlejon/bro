@@ -54,8 +54,8 @@ void ElTextarea::getContentSize(float& w, float& h) {
         auto tm = renderer_->measureText("M", fontHandle);
         float charW = tm.width;
         float lineH = tm.height;
-        w = charW * cols() + 8;
-        h = lineH * rows() + 4;
+        w = charW * cols();
+        h = lineH * rows();
     } else {
         w = 173;
         h = 40;
@@ -120,8 +120,7 @@ void ElTextarea::draw(render::Renderer* renderer,
     float lineHeight = tm.height;
     float ascent = tm.ascent > 0 ? tm.ascent : lineHeight * 0.8f;
 
-    float padX = 4.0f, padY = 2.0f;
-    float contentH = h - padY * 2;
+    float contentH = h;
 
     auto lines = splitLines(text);
 
@@ -141,8 +140,8 @@ void ElTextarea::draw(render::Renderer* renderer,
     render::Color color = isPlaceholder ? render::Color{128, 128, 128, 180}
                                         : render::Color{0, 0, 0, 255};
 
-    float baseX = x + padX;
-    float baseY = y + padY - scrollY_;
+    float baseX = x;
+    float baseY = y - scrollY_;
 
     for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
         float lineY = baseY + i * lineHeight;
