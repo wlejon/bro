@@ -27,7 +27,7 @@ echo -e "click #btn\ndump #counter\nquit" | ./build/src/headless/Debug/bro-headl
 ./build/src/headless/Debug/bro-headless.exe apps/hello test.txt
 ```
 
-Uses the Visual Studio generator (multi-config). Vcpkg at D:/vcpkg is auto-detected. Do not use MinGW.
+Uses the Visual Studio generator (multi-config). Do not use MinGW.
 
 Submodules must be initialized: `git submodule update --init`
 
@@ -80,7 +80,7 @@ engine  (orchestrates all subsystems, main loop)
 | QuickJS | `qjs` | JS engine, built as library |
 | htmlayout | `htmlayout` | CSS parsing + layout (git submodule) |
 | gumbo | `gumbo` | HTML5 parser (bundled with htmlayout) |
-| SDL3 | `SDL3::SDL3` | From vcpkg (shared) or submodule (static) |
+| SDL3 | `SDL3::SDL3` | Built from submodule (static) |
 | Skia | `skia` (imported) | Pre-built binaries, auto-detected |
 
 ## Namespace

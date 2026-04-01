@@ -14,24 +14,26 @@ A lightweight desktop application runtime that runs HTML/CSS/JS apps as native w
 ```
 
 - **QuickJS** — ES2023 JavaScript engine with DOM API bindings.
-- **htmlayout** — CSS parsing, selector matching, style cascade, and block/inline/flex layout engine.
-- **Skia** — High-quality 2D rasterization (text, paths, images, gradients). Renders to a CPU surface, uploaded to GPU each frame.
-- **SDL3** — Windowing, input events, and OpenGL-based display compositing.
+- **htmlayout** — CSS parsing, selector matching, style cascade, and block/inline/flex layout.
+- **Skia** — 2D rasterization (text, paths, images, gradients). Renders to a CPU surface, uploaded to GPU each frame.
+- **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU.
 
-~6K lines of C++20 glue code. Two executables: `bro` (windowed) and `bro-headless` (automated testing).
+C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing).
 
 ## Features
 
 - HTML/CSS parsing, layout, and GPU-accelerated rendering
-- JavaScript DOM API: `querySelector`, `createElement`, `appendChild`, `addEventListener`, `textContent`, `innerHTML`, `style`, attributes, classList
-- Event system with bubbling: mouse (click, mousedown, mouseup), keyboard (keydown, keyup, text input)
-- CSS gradients (linear, radial, conic), background images, border radius
+- JavaScript DOM API (`querySelector`, `createElement`, `appendChild`, `addEventListener`, `textContent`, `innerHTML`, `style`, attributes, `classList`)
+- Event system with bubbling (click, mousedown/up, keydown/up, text input)
+- CSS features: gradients (linear, radial, conic), background images, border radius, flexbox, overflow/scroll
 - SVG rendering (basic shapes, paths, transforms)
 - Canvas 2D API
 - WebGL 2.0
-- Audio playback
-- Form controls (`<input>` with text editing, cursor, focus management)
-- Vue 3 and jQuery compatibility
+- Audio playback (SDL3)
+- Form controls (`<input>`, `<textarea>`, `<select>` with text editing, cursor, focus, tab navigation)
+- Web Components with Shadow DOM (custom elements, slots, style encapsulation)
+- Fetch API, localStorage/sessionStorage
+- jQuery and Vue 3 compatibility
 - Headless mode for deterministic testing with virtual time
 
 ## Building
@@ -41,7 +43,6 @@ A lightweight desktop application runtime that runs HTML/CSS/JS apps as native w
 - **MSVC** (Visual Studio 2022+) — MinGW is not supported
 - **CMake** 3.28+
 - **Skia** pre-built libraries in `third_party/skia/`
-- Git submodules: QuickJS, SDL3
 
 ### Setup
 
@@ -63,7 +64,6 @@ cmake --build build --config Debug
 cmake --build build --config Release
 ```
 
-Vcpkg at `D:/vcpkg` is auto-detected if present. Skia is required — place pre-built libraries in `third_party/skia/lib/` and headers in `third_party/skia/include/`.
 
 ## Usage
 
@@ -96,37 +96,6 @@ apps/myapp/
   index.html      # required
   style.css       # linked via <link rel="stylesheet">
   app.js          # loaded via <script src="...">
-```
-
-## Project layout
-
-```
-src/
-  engine/             # App loading, main loop, event dispatch
-  dom/                # DOM tree: Document, Element, TextNode, Event, StyleProxy
-  js/                 # QuickJS bindings: DOM, Console, Timers, Canvas, WebGL, Audio
-  layout/             # htmlayout adapters, font management, replaced elements (input, SVG)
-  render/             # Skia renderer, OpenGL context, GPU compositing
-  canvas/             # Canvas 2D implementation
-  svg/                # SVG parser and renderer
-  webgl/              # WebGL 2.0 implementation
-  audio/              # Audio engine
-  platform/           # SDL3 window and event loop
-  headless/           # Headless testing tool
-  util/               # Logging, string utilities
-third_party/
-  quickjs/            # JS engine (git submodule, MIT)
-  SDL/                # Windowing + input (git submodule, zlib)
-  skia/               # 2D rendering (pre-built, BSD-3-Clause)
-  glad/               # OpenGL loader (WTFPL/CC0 + Apache-2.0)
-  stb/                # Image loading (MIT/Public Domain)
-apps/
-  hello/              # Minimal example
-  vue-test/           # Vue 3 feature test
-  jquery-test/        # jQuery compatibility test
-  ...                 # Additional example apps
-docs/
-  headless.md         # Headless mode documentation
 ```
 
 ## License

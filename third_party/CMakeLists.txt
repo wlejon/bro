@@ -7,16 +7,11 @@ add_subdirectory(quickjs EXCLUDE_FROM_ALL)
 # --- htmlayout (CSS + layout library) ---
 add_subdirectory(htmlayout EXCLUDE_FROM_ALL)
 
-# --- SDL3 (fall back to submodule if not found via vcpkg/system) ---
-if(NOT SDL3_FOUND)
-    message(STATUS "SDL3 not found -- building from submodule")
-    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-    set(SDL_STATIC ON CACHE BOOL "" FORCE)
-    set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
-    add_subdirectory(SDL EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "SDL3 found via find_package")
-endif()
+# --- SDL3 (built from submodule) ---
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+add_subdirectory(SDL EXCLUDE_FROM_ALL)
 
 # --- glad2 (OpenGL 3.3 Core loader) ---
 add_subdirectory(glad EXCLUDE_FROM_ALL)
