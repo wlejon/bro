@@ -766,7 +766,12 @@ void WebGL2RenderingContext::restoreState() {
     glUseProgram(sProgram_);
     glBindVertexArray(sVAO_);
     glBindBuffer(GL_ARRAY_BUFFER, sArrayBuf_);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sElementBuf_);
+    // GL_ELEMENT_ARRAY_BUFFER is part of VAO state — binding it here would
+    // overwrite the VAO's captured element buffer. Only restore when the
+    // default VAO (0) is active, where EAB is context-level state.
+    if (sVAO_ == 0) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sElementBuf_);
+    }
 
     // Restore texture bindings — unit 0 is the most commonly modified
     glActiveTexture(GL_TEXTURE0);
