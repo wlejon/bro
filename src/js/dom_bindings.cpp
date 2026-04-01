@@ -2660,6 +2660,65 @@ static JSValue js_element_attachShadow(JSContext* ctx, JSValueConst this_val,
     return wrapShadowRoot(ctx, sr);
 }
 
+// ---------------------------------------------------------------------------
+// Slot APIs: element.assignedSlot, slot.assignedNodes()
+// ---------------------------------------------------------------------------
+
+static JSValue js_element_get_assignedSlot(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    // An element is slotted if its parent is a shadow host
+    auto* parent = el->parentElement();
+    if (!parent || !parent->hasShadow()) return JS_NULL;
+    auto* sr = parent->shadowRoot();
+    if (!sr) return JS_NULL;
+    auto* slot = sr->assignedSlot(el);
+    if (!slot) return JS_NULL;
+    return DomBindings::wrapElement(ctx, slot);
+}
+
+static JSValue js_element_assignedNodes(JSContext* ctx, JSValueConst this_val,
+                                        int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewArray(ctx);
+    // Only <slot> elements have assigned nodes
+    if (el->tagName() != "SLOT") return JS_NewArray(ctx);
+    // The slot must be inside a shadow root
+    auto* sr = el->containingShadowRoot();
+    if (!sr) return JS_NewArray(ctx);
+    auto nodes = sr->assignedNodes(el);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t idx = 0;
+    for (auto* node : nodes) {
+        JSValue w;
+        if (node->nodeType() == bro::dom::NodeType::Element)
+            w = DomBindings::wrapElement(ctx, node);
+        else
+            w = wrapAnyNode(ctx, node);
+        JS_SetPropertyUint32(ctx, arr, idx++, w);
+    }
+    return arr;
+}
+
+static JSValue js_element_assignedElements(JSContext* ctx, JSValueConst this_val,
+                                           int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewArray(ctx);
+    if (el->tagName() != "SLOT") return JS_NewArray(ctx);
+    auto* sr = el->containingShadowRoot();
+    if (!sr) return JS_NewArray(ctx);
+    auto nodes = sr->assignedNodes(el);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t idx = 0;
+    for (auto* node : nodes) {
+        if (node->nodeType() == bro::dom::NodeType::Element) {
+            JS_SetPropertyUint32(ctx, arr, idx++,
+                                 DomBindings::wrapElement(ctx, node));
+        }
+    }
+    return arr;
+}
+
 static JSValue js_element_get_shadowRoot(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NULL;
@@ -2747,6 +2806,10 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("scrollIntoView",            0, js_element_scrollIntoView),
     JS_CFUNC_DEF("attachShadow",              1, js_element_attachShadow),
     JS_CGETSET_DEF("shadowRoot",   js_element_get_shadowRoot, nullptr),
+    // Slot APIs
+    JS_CGETSET_DEF("assignedSlot", js_element_get_assignedSlot, nullptr),
+    JS_CFUNC_DEF("assignedNodes",             0, js_element_assignedNodes),
+    JS_CFUNC_DEF("assignedElements",          0, js_element_assignedElements),
 };
 
 // ===========================================================================

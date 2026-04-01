@@ -115,6 +115,22 @@ public:
         return static_cast<void*>(elem_->shadowRoot());
     }
 
+    ElementRef* assignedSlot() const override {
+        if (!elem_) return nullptr;
+        // An element is slotted if its parent is a shadow host
+        auto* parent = elem_->parentElement();
+        if (!parent || !parent->hasShadow()) return nullptr;
+        auto* sr = parent->shadowRoot();
+        if (!sr) return nullptr;
+        auto* slot = sr->assignedSlot(elem_);
+        if (!slot) return nullptr;
+        return getOrCreate(slot);
+    }
+
+    std::string partName() const override {
+        return elem_ ? elem_->getAttribute("part") : "";
+    }
+
     // Global state setters (called by Engine before style resolution)
     static void setHoveredElement(dom::Element* el) { hoveredElement_ = el; }
     static void setActiveElement(dom::Element* el) { activeElement_ = el; }
