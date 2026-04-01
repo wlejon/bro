@@ -84,32 +84,72 @@ void WebGL2RenderingContext::unbindCanvasFBO() {
 // State
 // ===========================================================================
 
-void WebGL2RenderingContext::viewport(GLint x, GLint y, GLsizei w, GLsizei h) { glViewport(x, y, w, h); }
+void WebGL2RenderingContext::viewport(GLint x, GLint y, GLsizei w, GLsizei h) {
+    sViewport_[0] = x; sViewport_[1] = y; sViewport_[2] = w; sViewport_[3] = h;
+    glViewport(x, y, w, h);
+}
 void WebGL2RenderingContext::scissor(GLint x, GLint y, GLsizei w, GLsizei h) { glScissor(x, y, w, h); }
-void WebGL2RenderingContext::clearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { glClearColor(r, g, b, a); }
+void WebGL2RenderingContext::clearColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
+    sClearR_ = r; sClearG_ = g; sClearB_ = b; sClearA_ = a;
+    glClearColor(r, g, b, a);
+}
 void WebGL2RenderingContext::clearDepth(GLfloat depth) { glClearDepth(depth); }
 void WebGL2RenderingContext::clearStencil(GLint s) { glClearStencil(s); }
 void WebGL2RenderingContext::clear(GLbitfield mask) { glClear(mask); }
-void WebGL2RenderingContext::enable(GLenum cap) { glEnable(cap); }
-void WebGL2RenderingContext::disable(GLenum cap) { glDisable(cap); }
+
+void WebGL2RenderingContext::enable(GLenum cap) {
+    switch (cap) {
+        case GL_BLEND: sBlend_ = true; break;
+        case GL_DEPTH_TEST: sDepthTest_ = true; break;
+        case GL_CULL_FACE: sCullFace_ = true; break;
+        case GL_SCISSOR_TEST: sScissorTest_ = true; break;
+        case GL_STENCIL_TEST: sStencilTest_ = true; break;
+    }
+    glEnable(cap);
+}
+void WebGL2RenderingContext::disable(GLenum cap) {
+    switch (cap) {
+        case GL_BLEND: sBlend_ = false; break;
+        case GL_DEPTH_TEST: sDepthTest_ = false; break;
+        case GL_CULL_FACE: sCullFace_ = false; break;
+        case GL_SCISSOR_TEST: sScissorTest_ = false; break;
+        case GL_STENCIL_TEST: sStencilTest_ = false; break;
+    }
+    glDisable(cap);
+}
 GLboolean WebGL2RenderingContext::isEnabled(GLenum cap) { return glIsEnabled(cap); }
-void WebGL2RenderingContext::depthFunc(GLenum func) { glDepthFunc(func); }
-void WebGL2RenderingContext::depthMask(GLboolean flag) { glDepthMask(flag); }
+void WebGL2RenderingContext::depthFunc(GLenum func) { sDepthFunc_ = func; glDepthFunc(func); }
+void WebGL2RenderingContext::depthMask(GLboolean flag) { sDepthMask_ = flag; glDepthMask(flag); }
 void WebGL2RenderingContext::depthRange(GLfloat zNear, GLfloat zFar) { glDepthRange(zNear, zFar); }
-void WebGL2RenderingContext::blendFunc(GLenum s, GLenum d) { glBlendFunc(s, d); }
-void WebGL2RenderingContext::blendFuncSeparate(GLenum sr, GLenum dr, GLenum sa, GLenum da) { glBlendFuncSeparate(sr, dr, sa, da); }
-void WebGL2RenderingContext::blendEquation(GLenum mode) { glBlendEquation(mode); }
-void WebGL2RenderingContext::blendEquationSeparate(GLenum modeRGB, GLenum modeA) { glBlendEquationSeparate(modeRGB, modeA); }
+void WebGL2RenderingContext::blendFunc(GLenum s, GLenum d) {
+    sBlendSrcRGB_ = s; sBlendDstRGB_ = d; sBlendSrcA_ = s; sBlendDstA_ = d;
+    glBlendFunc(s, d);
+}
+void WebGL2RenderingContext::blendFuncSeparate(GLenum sr, GLenum dr, GLenum sa, GLenum da) {
+    sBlendSrcRGB_ = sr; sBlendDstRGB_ = dr; sBlendSrcA_ = sa; sBlendDstA_ = da;
+    glBlendFuncSeparate(sr, dr, sa, da);
+}
+void WebGL2RenderingContext::blendEquation(GLenum mode) {
+    sBlendEqRGB_ = mode; sBlendEqA_ = mode;
+    glBlendEquation(mode);
+}
+void WebGL2RenderingContext::blendEquationSeparate(GLenum modeRGB, GLenum modeA) {
+    sBlendEqRGB_ = modeRGB; sBlendEqA_ = modeA;
+    glBlendEquationSeparate(modeRGB, modeA);
+}
 void WebGL2RenderingContext::blendColor(GLfloat r, GLfloat g, GLfloat b, GLfloat a) { glBlendColor(r, g, b, a); }
-void WebGL2RenderingContext::colorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) { glColorMask(r, g, b, a); }
+void WebGL2RenderingContext::colorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
+    sColorMask_[0] = r; sColorMask_[1] = g; sColorMask_[2] = b; sColorMask_[3] = a;
+    glColorMask(r, g, b, a);
+}
 void WebGL2RenderingContext::stencilFunc(GLenum f, GLint r, GLuint m) { glStencilFunc(f, r, m); }
 void WebGL2RenderingContext::stencilFuncSeparate(GLenum face, GLenum f, GLint r, GLuint m) { glStencilFuncSeparate(face, f, r, m); }
 void WebGL2RenderingContext::stencilOp(GLenum f, GLenum zf, GLenum zp) { glStencilOp(f, zf, zp); }
 void WebGL2RenderingContext::stencilOpSeparate(GLenum face, GLenum f, GLenum zf, GLenum zp) { glStencilOpSeparate(face, f, zf, zp); }
 void WebGL2RenderingContext::stencilMask(GLuint m) { glStencilMask(m); }
 void WebGL2RenderingContext::stencilMaskSeparate(GLenum face, GLuint m) { glStencilMaskSeparate(face, m); }
-void WebGL2RenderingContext::cullFace(GLenum mode) { glCullFace(mode); }
-void WebGL2RenderingContext::frontFace(GLenum mode) { glFrontFace(mode); }
+void WebGL2RenderingContext::cullFace(GLenum mode) { sCullMode_ = mode; glCullFace(mode); }
+void WebGL2RenderingContext::frontFace(GLenum mode) { sFrontFace_ = mode; glFrontFace(mode); }
 void WebGL2RenderingContext::polygonOffset(GLfloat factor, GLfloat units) { glPolygonOffset(factor, units); }
 void WebGL2RenderingContext::lineWidth(GLfloat width) { glLineWidth(width); }
 
@@ -144,6 +184,8 @@ void WebGL2RenderingContext::deleteBuffer(WebGLBuffer buf) {
 }
 
 void WebGL2RenderingContext::bindBuffer(GLenum target, WebGLBuffer buf) {
+    if (target == GL_ARRAY_BUFFER) sArrayBuf_ = buf.id;
+    else if (target == GL_ELEMENT_ARRAY_BUFFER) sElementBuf_ = buf.id;
     glBindBuffer(target, buf.id);
 }
 
@@ -191,6 +233,7 @@ void WebGL2RenderingContext::deleteVertexArray(WebGLVertexArrayObject vao) {
 }
 
 void WebGL2RenderingContext::bindVertexArray(WebGLVertexArrayObject vao) {
+    sVAO_ = vao.id;
     glBindVertexArray(vao.id);
 }
 
@@ -285,6 +328,7 @@ void WebGL2RenderingContext::linkProgram(WebGLProgram program) {
 }
 
 void WebGL2RenderingContext::useProgram(WebGLProgram program) {
+    sProgram_ = program.id;
     glUseProgram(program.id);
 }
 
@@ -399,10 +443,15 @@ void WebGL2RenderingContext::deleteTexture(WebGLTexture tex) {
 }
 
 void WebGL2RenderingContext::bindTexture(GLenum target, WebGLTexture tex) {
+    if (target == GL_TEXTURE_2D) {
+        unsigned unit = sActiveTex_ - GL_TEXTURE0;
+        if (unit < 32) sTex2D_[unit] = tex.id;
+    }
     glBindTexture(target, tex.id);
 }
 
 void WebGL2RenderingContext::activeTexture(GLenum texture) {
+    sActiveTex_ = texture;
     glActiveTexture(texture);
 }
 
@@ -543,6 +592,7 @@ void WebGL2RenderingContext::deleteFramebuffer(WebGLFramebuffer fbo) {
 void WebGL2RenderingContext::bindFramebuffer(GLenum target, WebGLFramebuffer fbo) {
     // WebGL: null framebuffer = our canvas FBO (not the real default 0)
     GLuint id = fbo.id ? fbo.id : canvasFBO_;
+    sFBO_ = id;
     glBindFramebuffer(target, id);
 }
 
@@ -706,5 +756,44 @@ bool WebGL2RenderingContext::getExtension(const std::string& name) {
 void WebGL2RenderingContext::flush() { glFlush(); }
 void WebGL2RenderingContext::finish() { glFinish(); }
 void WebGL2RenderingContext::hint(GLenum target, GLenum mode) { glHint(target, mode); }
+
+// ===========================================================================
+// Shadow state restore — called after engine compositing to undo all GL
+// state changes without any glGet* queries.
+// ===========================================================================
+
+void WebGL2RenderingContext::restoreState() {
+    glUseProgram(sProgram_);
+    glBindVertexArray(sVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, sArrayBuf_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sElementBuf_);
+
+    // Restore texture bindings — unit 0 is the most commonly modified
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, sTex2D_[0]);
+    if (sActiveTex_ != GL_TEXTURE0) {
+        glActiveTexture(sActiveTex_);
+        unsigned unit = sActiveTex_ - GL_TEXTURE0;
+        if (unit < 32) glBindTexture(GL_TEXTURE_2D, sTex2D_[unit]);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, sFBO_);
+    glClearColor(sClearR_, sClearG_, sClearB_, sClearA_);
+    glViewport(sViewport_[0], sViewport_[1], sViewport_[2], sViewport_[3]);
+
+    if (sBlend_) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (sDepthTest_) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (sCullFace_) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    if (sScissorTest_) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (sStencilTest_) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+
+    glBlendFuncSeparate(sBlendSrcRGB_, sBlendDstRGB_, sBlendSrcA_, sBlendDstA_);
+    glBlendEquationSeparate(sBlendEqRGB_, sBlendEqA_);
+    glDepthFunc(sDepthFunc_);
+    glDepthMask(sDepthMask_);
+    glColorMask(sColorMask_[0], sColorMask_[1], sColorMask_[2], sColorMask_[3]);
+    glCullFace(sCullMode_);
+    glFrontFace(sFrontFace_);
+}
 
 } // namespace bro::webgl

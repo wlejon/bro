@@ -261,6 +261,37 @@ private:
     GLint packAlignment_ = 4;
     GLboolean unpackFlipY_ = GL_FALSE;
     GLboolean unpackPremultiplyAlpha_ = GL_FALSE;
+
+    // --- Shadow state for cheap save/restore around compositing ---
+public:
+    /// Re-apply all shadow-tracked GL state (call after compositing).
+    void restoreState();
+
+private:
+    // Tracked by our wrapper methods — no glGet* queries needed
+    GLfloat sClearR_ = 0, sClearG_ = 0, sClearB_ = 0, sClearA_ = 0;
+    GLint sViewport_[4] = {0, 0, 0, 0};
+    GLuint sProgram_ = 0;
+    GLuint sVAO_ = 0;
+    GLuint sArrayBuf_ = 0;
+    GLuint sElementBuf_ = 0;
+    GLenum sActiveTex_ = GL_TEXTURE0;
+    GLuint sTex2D_[32] = {};      // per texture unit
+    GLuint sFBO_ = 0;             // stores the raw GL id (canvasFBO_ for null)
+    GLint sBlendSrcRGB_ = GL_ONE, sBlendDstRGB_ = GL_ZERO;
+    GLint sBlendSrcA_ = GL_ONE, sBlendDstA_ = GL_ZERO;
+    GLenum sBlendEqRGB_ = GL_FUNC_ADD, sBlendEqA_ = GL_FUNC_ADD;
+    GLboolean sDepthMask_ = GL_TRUE;
+    GLboolean sColorMask_[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLenum sDepthFunc_ = GL_LESS;
+    GLenum sCullMode_ = GL_BACK;
+    GLenum sFrontFace_ = GL_CCW;
+    // Capability flags
+    bool sBlend_ = false;
+    bool sDepthTest_ = false;
+    bool sCullFace_ = false;
+    bool sScissorTest_ = false;
+    bool sStencilTest_ = false;
 };
 
 } // namespace bro::webgl

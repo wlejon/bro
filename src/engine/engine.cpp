@@ -726,19 +726,15 @@ void Engine::run() {
             }
         }
 
-        // Reset GL to clean defaults so Three.js/WebGL re-binds everything
-        // it needs on the next frame. This avoids expensive glGetIntegerv
-        // queries which force GPU pipeline flushes.
-        glUseProgram(0);
-        glBindVertexArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glDisable(GL_BLEND);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_SCISSOR_TEST);
+        // Restore WebGL shadow state so apps with internal caches (three.js)
+        // see the same GL state they left on the previous frame.
+        // Uses shadow-tracked values — no expensive glGet* queries.
+        {
+            auto* wgl = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+            if (wgl && wgl->webglContext()) {
+                wgl->webglContext()->restoreState();
+            }
+        }
 
         // 5g. Swap buffers
         gl_->swapBuffers();
