@@ -1070,10 +1070,25 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    // Invalidate JS wrappers for children that will be freed
-    for (auto& child : el->childNodes()) {
-        if (child->nodeType() == bro::dom::NodeType::Element)
-            invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+    auto* doc = getDocumentForCtx(ctx);
+    // Only pre-detach if there are element children (which may have live JS
+    // references).  For text-only children, let setTextContent() handle them
+    // normally — it has an optimization for unchanged text.
+    bool hasElementChild = false;
+    for (auto* child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) { hasElementChild = true; break; }
+    }
+    if (hasElementChild) {
+        auto oldKids = el->childNodes();   // copy the vector
+        for (auto* child : oldKids) {
+            child->setParent(nullptr);
+        }
+        el->childNodes().clear();
+        for (auto* child : oldKids) {
+            if (child->nodeType() != bro::dom::NodeType::Element) {
+                if (doc) doc->freeNode(child);
+            }
+        }
     }
     el->setTextContent(jsToStdString(ctx, val));
     // Auto-scroll overflow elements to bottom when content changes
@@ -1097,9 +1112,24 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    for (auto& child : el->childNodes()) {
-        if (child->nodeType() == bro::dom::NodeType::Element)
-            invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+    auto* doc = getDocumentForCtx(ctx);
+    // Pre-detach element children so parseInnerHTML doesn't freeNode them.
+    // Elements with live JS wrappers survive; text nodes are freed explicitly.
+    bool hasElementChild = false;
+    for (auto* child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) { hasElementChild = true; break; }
+    }
+    if (hasElementChild) {
+        auto oldKids = el->childNodes();   // copy the vector
+        for (auto* child : oldKids) {
+            child->setParent(nullptr);
+        }
+        el->childNodes().clear();
+        for (auto* child : oldKids) {
+            if (child->nodeType() != bro::dom::NodeType::Element) {
+                if (doc) doc->freeNode(child);
+            }
+        }
     }
     el->setInnerHTML(jsToStdString(ctx, val));
     return JS_UNDEFINED;
@@ -1500,10 +1530,11 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
             if (doc && !childElem->id().empty())
                 doc->unregisterElementId(childElem->id());
             if (doc) doc->markStructureDirty();
-            invalidateWrapper(ctx, childElem);
+            // Don't invalidate wrapper or free node — the JS caller may
+            // still hold a reference (e.g. jQuery detach/sort/shuffle).
+            // js_element_finalizer frees orphaned elements when GC runs.
         }
         el->removeChild(child);
-        if (doc) doc->freeNode(child);
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
