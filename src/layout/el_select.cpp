@@ -138,6 +138,13 @@ void ElSelect::draw(render::Renderer* renderer,
     renderer_->restore();
 }
 
+float ElSelect::dropdownLineHeight() const {
+    uint64_t fontHandle = getFontHandle();
+    if (!fontHandle || !renderer_) return 20.0f;
+    auto fm = renderer_->measureText("M", fontHandle);
+    return fm.height + 4.0f; // font height + vertical padding
+}
+
 void ElSelect::drawDropdown() {
     if (!open_ || !renderer_ || !elem_) return;
 
@@ -148,16 +155,17 @@ void ElSelect::drawDropdown() {
     if (!fontHandle) return;
 
     auto fm = renderer_->measureText("M", fontHandle);
-    float lineHeight = fm.height;
-    float ascent = lineHeight * 0.8f;
-    float padX = 4.0f;
+    float lineHeight = fm.height + 4.0f; // add vertical padding per item
+    float ascent = fm.height * 0.8f;
+    float padX = 6.0f;
+    float padY = 2.0f; // vertical padding within each item
 
     render::Color color = {0, 0, 0, 255};
 
     float dropX = lastDrawPos_.x;
     float dropY = lastDrawPos_.y + lastDrawPos_.h;
     float dropW = lastDrawPos_.w;
-    float dropH = lineHeight * static_cast<float>(opts.size()) + 4.0f;
+    float dropH = lineHeight * static_cast<float>(opts.size()) + 2.0f;
 
     renderer_->save();
     renderer_->resetClip();
@@ -166,13 +174,13 @@ void ElSelect::drawDropdown() {
     renderer_->drawRect(dropX, dropY, dropW, dropH, {118, 118, 118, 255});
 
     for (int i = 0; i < static_cast<int>(opts.size()); ++i) {
-        float itemY = dropY + 2.0f + i * lineHeight;
+        float itemY = dropY + 1.0f + i * lineHeight;
         if (i == highlightedIndex_) {
             renderer_->fillRect(dropX + 1, itemY, dropW - 2, lineHeight, {0, 120, 215, 255});
-            renderer_->drawText(opts[i].text, dropX + padX, itemY + ascent,
+            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + ascent,
                                fontHandle, {255, 255, 255, 255});
         } else {
-            renderer_->drawText(opts[i].text, dropX + padX, itemY + ascent,
+            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + ascent,
                                fontHandle, color);
         }
     }

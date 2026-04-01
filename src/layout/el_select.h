@@ -49,6 +49,9 @@ public:
 
     void getContentSize(float& w, float& h);
 
+    // Returns the line height used for dropdown items (for hover hit testing)
+    float dropdownLineHeight() const;
+
 private:
     uint64_t getFontHandle() const;
 

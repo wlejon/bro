@@ -919,14 +919,14 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 // Check if click is inside the dropdown
                 auto dp = prevSelect->lastDrawPos();
                 auto opts = prevSelect->getOptions();
-                float lineH = 20.0f;
+                float lineH = prevSelect->dropdownLineHeight();
                 float dropY = dp.y + dp.h;
-                float dropH = lineH * static_cast<float>(opts.size()) + 4.0f;
+                float dropH = lineH * static_cast<float>(opts.size()) + 2.0f;
                 bool inDropdown = (x >= dp.x && x < dp.x + dp.w &&
                                    y >= dropY && y < dropY + dropH);
                 if (inDropdown) {
                     // Select the clicked option
-                    int idx = static_cast<int>((y - dropY - 2.0f) / lineH);
+                    int idx = static_cast<int>((y - dropY - 1.0f) / lineH);
                     idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
                     prevSelect->setSelectedIndex(idx);
                     prevSelect->setOpen(false);
@@ -1193,11 +1193,11 @@ void Engine::handleMouseMove(float x, float y) {
         if (select && select->isOpen()) {
             auto dp = select->lastDrawPos();
             auto opts = select->getOptions();
-            float lineH = 20.0f;
+            float lineH = select->dropdownLineHeight();
             float dropY = dp.y + dp.h;
-            float dropH = lineH * static_cast<float>(opts.size()) + 4.0f;
+            float dropH = lineH * static_cast<float>(opts.size()) + 2.0f;
             if (docX >= dp.x && docX < dp.x + dp.w && docY >= dropY && docY < dropY + dropH) {
-                int idx = static_cast<int>((docY - dropY - 2.0f) / lineH);
+                int idx = static_cast<int>((docY - dropY - 1.0f) / lineH);
                 idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
                 if (idx != select->highlightedIndex()) {
                     select->setHighlightedIndex(idx);
