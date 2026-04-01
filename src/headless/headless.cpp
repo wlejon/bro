@@ -495,7 +495,7 @@ Headless::Headless(const std::string& appDir, int width, int height)
 
     // 9. Initial layout
     document_->resolveStyles();
-    document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
+    document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
 
     // 10. System overlay (shares JS runtime, no GL in headless)
     systemOverlay_ = std::make_unique<engine::SystemOverlay>(
@@ -635,7 +635,7 @@ void Headless::flush() {
     if (document_ && document_->isDirty()) {
         document_->resolveStyles();
         document_->clearStructureDirty();
-        document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
+        document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
         document_->clearDirty();
     }
 }

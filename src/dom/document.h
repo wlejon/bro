@@ -75,6 +75,7 @@ public:
 
     // Perform layout on the tree using htmlayout
     void performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics);
+    void performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics);
 
     // ID map management (called by elements when id attribute changes)
     void registerElementId(const std::string& id, Element* elem);

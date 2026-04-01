@@ -413,7 +413,7 @@ void Engine::run() {
     if (document_) {
         ensureReplacedElements(document_->documentElement());
         document_->resolveStyles();
-        document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
+        document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
         if (document_->documentElement()) {
             auto& box = document_->documentElement()->layoutBox();
             documentHeight_ = box.marginBox().height;
@@ -486,7 +486,7 @@ void Engine::run() {
             ensureReplacedElements(document_->documentElement());
             document_->resolveStyles();
             document_->clearStructureDirty();
-            document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
+            document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
             document_->clearDirty();
             // Update document height for scroll clamping
             if (document_->documentElement()) {
@@ -799,7 +799,7 @@ void Engine::handleResize(int w, int h) {
     }
     if (document_) {
         document_->resolveStyles();
-        document_->performLayout(static_cast<float>(w), *textMetrics_);
+        document_->performLayout(static_cast<float>(w), static_cast<float>(h), *textMetrics_);
         if (document_->documentElement()) {
             auto& box = document_->documentElement()->layoutBox();
             documentHeight_ = box.marginBox().height;

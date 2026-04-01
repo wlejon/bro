@@ -250,6 +250,14 @@ void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics
     layoutTree->syncBoxToElement();
 }
 
+void Document::performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics) {
+    if (!documentElement_) return;
+    auto layoutTree = layout::LayoutNodeAdapter::buildTree(documentElement_);
+    htmlayout::layout::Viewport vp{viewportWidth, viewportHeight};
+    htmlayout::layout::layoutTree(layoutTree.get(), vp, metrics);
+    layoutTree->syncBoxToElement();
+}
+
 // ---------------------------------------------------------------------------
 // Node creation
 // ---------------------------------------------------------------------------
