@@ -4,6 +4,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
+#include "layout/el_svg.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -78,6 +79,10 @@ public:
             return true;
         }
         if (auto* ctrl = elem_->selectControl()) {
+            ctrl->getContentSize(w, h);
+            return true;
+        }
+        if (auto* ctrl = elem_->svgControl()) {
             ctrl->getContentSize(w, h);
             return true;
         }

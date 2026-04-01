@@ -35,6 +35,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
+#include "layout/el_svg.h"
 #include "engine/default_styles.h"
 #include "util/log.h"
 #include "util/time.h"
@@ -1937,6 +1938,11 @@ void Engine::ensureReplacedElements(dom::Element* elem) {
         auto ctrl = std::make_unique<layout::ElSelect>(renderer_.get());
         ctrl->setElement(elem);
         elem->setSelectControl(std::move(ctrl));
+    } else if ((tag == "SVG" || tag == "svg") && !elem->svgControl()) {
+        auto ctrl = std::make_unique<layout::ElSvg>(renderer_.get());
+        ctrl->setElement(elem);
+        ctrl->parseAttributes();
+        elem->setSvgControl(std::move(ctrl));
     }
 
     // Recurse into children

@@ -99,6 +99,18 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         renderer_->setClip(bx, by, bw, bh);
     }
 
+    // SVG elements render their own children via the SVG pipeline — skip DOM traversal
+    if (elem->svgControl()) {
+        // Draw the SVG control, then return (no child traversal)
+        if (visible) {
+            elem->svgControl()->draw(renderer_, elem, box, offsetX, offsetY);
+        }
+        if (needsClip) {
+            renderer_->restore();
+        }
+        return;
+    }
+
     // Children's offset is the parent's absolute content position
     // (so child positions, which are relative to parent content area, become absolute)
     float childOffsetX = x;
@@ -150,10 +162,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         if (selectCtrl) {
             selectCtrl->draw(renderer_, box, style, offsetX, offsetY);
         }
-        auto* svgCtrl = elem->svgControl();
-        if (svgCtrl) {
-            svgCtrl->draw(renderer_, elem, box, offsetX, offsetY);
-        }
+        // SVG is handled above with early return (skips child traversal)
     }
 
     if (needsClip) {
