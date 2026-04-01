@@ -988,6 +988,20 @@ static JSValue js_element_get_id(JSContext* ctx, JSValueConst this_val)
     return JS_NewString(ctx, el->id().c_str());
 }
 
+static JSValue js_element_get_slot(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewString(ctx, "");
+    return JS_NewString(ctx, el->getAttribute("slot").c_str());
+}
+
+static JSValue js_element_set_slot(JSContext* ctx, JSValueConst this_val,
+                                   JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("slot", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
 static JSValue js_element_set_id(JSContext* ctx, JSValueConst this_val,
                                  JSValueConst val)
 {
@@ -2732,6 +2746,7 @@ static JSValue js_element_get_shadowRoot(JSContext* ctx, JSValueConst this_val) 
 static const JSCFunctionListEntry js_element_proto_funcs[] = {
     // Properties
     JS_CGETSET_DEF("id",            js_element_get_id,          js_element_set_id),
+    JS_CGETSET_DEF("slot",          js_element_get_slot,        js_element_set_slot),
     JS_CGETSET_DEF("tagName",       js_element_get_tagName,     nullptr),
     JS_CGETSET_DEF("className",     js_element_get_className,   js_element_set_className),
     JS_CGETSET_DEF("textContent",   js_element_get_textContent, js_element_set_textContent),
