@@ -3,7 +3,6 @@
 #include "layout/layout_node_adapter.h"
 #include "css/parser.h"
 #include "css/cascade.h"
-
 #include <gumbo.h>
 #include <algorithm>
 #include <sstream>
@@ -390,7 +389,29 @@ std::string Document::extractTemplates(const std::string& html,
     int genId = 0;
 
     while (pos < html.size()) {
+        // Skip HTML comments that might contain "<template" as text
+        size_t commentStart = html.find("<!--", pos);
         size_t start = html.find("<template", pos);
+        if (start == std::string::npos) {
+            result.append(html, pos, html.size() - pos);
+            break;
+        }
+        // If a comment starts before this match, skip past it first
+        while (commentStart != std::string::npos && commentStart < start) {
+            size_t commentEnd = html.find("-->", commentStart + 4);
+            if (commentEnd == std::string::npos) break;
+            commentEnd += 3; // past "-->"
+            if (start < commentEnd) {
+                // The "<template" was inside a comment — skip and re-search
+                result.append(html, pos, commentEnd - pos);
+                pos = commentEnd;
+                start = html.find("<template", pos);
+                if (start == std::string::npos) break;
+                commentStart = html.find("<!--", pos);
+                continue;
+            }
+            break;
+        }
         if (start == std::string::npos) {
             result.append(html, pos, html.size() - pos);
             break;

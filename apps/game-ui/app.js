@@ -135,7 +135,7 @@ function startGame() {
 // =========================================================================
 
 var lastT = 0;
-document.addEventListener('keydown', function(e) {
+root.addEventListener('keydown', function(e) {
     if (e.key === 't' || e.key === 'T') {
         var now = Date.now();
         if (now - lastT < 400) {
