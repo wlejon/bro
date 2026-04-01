@@ -18,7 +18,6 @@ struct CachedImage {
 };
 
 // Walks the DOM tree with layout boxes and issues Renderer draw calls.
-// Replaces litehtml's document_container draw callbacks.
 class DrawTraversal {
 public:
     DrawTraversal(render::Renderer* renderer, FontManager* fontManager);

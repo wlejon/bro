@@ -26,7 +26,7 @@ bro-headless <app-directory> [script.txt]
 | `quit` / `exit` | Exit |
 | `# comment` | Ignored (for script files) |
 
-Selectors: `#id` for getElementById, or any CSS selector supported by litehtml.
+Selectors: `#id` for getElementById, or any CSS selector supported by htmlayout.
 
 ## Examples
 
@@ -104,7 +104,7 @@ bro headless> diff
 
 ## How it works
 
-- Uses a `NullRenderer` that does no drawing but provides text measurement (approximate, character-width based) so litehtml can compute layout
+- Uses a `NullRenderer` that does no drawing but provides text measurement (approximate, character-width based) so htmlayout can compute layout
 - JS runs via QuickJS exactly as in the windowed engine
 - Event dispatch mirrors the windowed engine: finds the element by selector, dispatches the event with bubbling, calls JS listeners
 - DOM mutations from JS (e.g. `element.textContent = "..."`) are reflected immediately in subsequent `dump` output

@@ -8,13 +8,13 @@ A lightweight desktop application runtime that runs HTML/CSS/JS apps as native w
 ┌─────────────────────────────────────────────┐
 │                bro <app-dir>                │
 ├──────────┬──────────┬──────────┬────────────┤
-│  QuickJS │ LiteHTML │   Skia   │    SDL3    │
+│  QuickJS │ htmlayout│   Skia   │    SDL3    │
 │   (JS)   │ (Layout) │ (Render) │  (Window)  │
 └──────────┴──────────┴──────────┴────────────┘
 ```
 
 - **QuickJS** — ES2023 JavaScript engine with DOM API bindings.
-- **LiteHTML** — HTML/CSS parser and layout engine. Handles box model, selectors, text flow, flexbox, and CSS styling.
+- **htmlayout** — CSS parsing, selector matching, style cascade, and block/inline/flex layout engine.
 - **Skia** — High-quality 2D rasterization (text, paths, images, gradients). Renders to a CPU surface, uploaded to GPU each frame.
 - **SDL3** — Windowing, input events, and OpenGL-based display compositing.
 
@@ -41,7 +41,7 @@ A lightweight desktop application runtime that runs HTML/CSS/JS apps as native w
 - **MSVC** (Visual Studio 2022+) — MinGW is not supported
 - **CMake** 3.28+
 - **Skia** pre-built libraries in `third_party/skia/`
-- Git submodules: QuickJS, LiteHTML, SDL3
+- Git submodules: QuickJS, SDL3
 
 ### Setup
 
@@ -105,7 +105,7 @@ src/
   engine/             # App loading, main loop, event dispatch
   dom/                # DOM tree: Document, Element, TextNode, Event, StyleProxy
   js/                 # QuickJS bindings: DOM, Console, Timers, Canvas, WebGL, Audio
-  layout/             # LiteHTML container, font management, replaced elements (input, SVG)
+  layout/             # htmlayout adapters, font management, replaced elements (input, SVG)
   render/             # Skia renderer, OpenGL context, GPU compositing
   canvas/             # Canvas 2D implementation
   svg/                # SVG parser and renderer
@@ -116,7 +116,6 @@ src/
   util/               # Logging, string utilities
 third_party/
   quickjs/            # JS engine (git submodule, MIT)
-  litehtml/           # HTML/CSS layout (git submodule, BSD-3-Clause)
   SDL/                # Windowing + input (git submodule, zlib)
   skia/               # 2D rendering (pre-built, BSD-3-Clause)
   glad/               # OpenGL loader (WTFPL/CC0 + Apache-2.0)

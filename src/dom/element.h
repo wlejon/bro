@@ -110,7 +110,7 @@ public:
     bool needsScrollToBottom() const { return scrollToBottom_; }
     void setScrollToBottom(bool v) { scrollToBottom_ = v; }
 
-    // Replaced element controls (owned by Element, not by litehtml)
+    // Replaced element controls
     layout::ElInput* inputControl() const { return inputControl_.get(); }
     layout::ElTextarea* textareaControl() const { return textareaControl_.get(); }
     layout::ElSelect* selectControl() const { return selectControl_.get(); }

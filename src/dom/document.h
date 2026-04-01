@@ -128,7 +128,7 @@ private:
     std::unordered_map<std::string, Element*> idMap_;
     std::vector<std::unique_ptr<Node>> ownedNodes_;
 
-    // CSS cascade (replaces litehtml's style system)
+    // CSS cascade
     htmlayout::css::Cascade cascade_;
 };
 

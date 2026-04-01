@@ -35,7 +35,7 @@ Submodules must be initialized: `git submodule update --init`
 
 Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~6K LOC of C++20.
 
-**Stack:** QuickJS (JS engine) + htmlayout (CSS parsing + layout, sibling project at ../htmlayout) + gumbo (HTML parsing) + Skia (raster rendering) + SDL3 (windowing + GPU display)
+**Stack:** QuickJS (JS engine) + htmlayout (CSS parsing + layout) + gumbo (HTML parsing) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 
 **Two executables:**
 - `bro` — windowed app runner
@@ -78,7 +78,7 @@ engine  (orchestrates all subsystems, main loop)
 | Library | Target | Notes |
 |---------|--------|-------|
 | QuickJS | `qjs` | JS engine, built as library |
-| htmlayout | `htmlayout` | CSS parsing + layout (sibling project ../htmlayout) |
+| htmlayout | `htmlayout` | CSS parsing + layout (git submodule) |
 | gumbo | `gumbo` | HTML5 parser (bundled with htmlayout) |
 | SDL3 | `SDL3::SDL3` | From vcpkg (shared) or submodule (static) |
 | Skia | `skia` (imported) | Pre-built binaries, auto-detected |

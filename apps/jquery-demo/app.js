@@ -358,7 +358,7 @@
     // -- Main tick -----------------------------------------------------------
     // Track update cadence separately from frame rate.
     // DOM mutations are throttled to ~30fps to avoid triggering expensive
-    // litehtml layout + Skia rasterization on every frame.
+    // layout + Skia rasterization on every frame.
     var updateTick = 0;
 
     function tick() {

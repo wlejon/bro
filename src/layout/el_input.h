@@ -9,7 +9,7 @@ namespace bro::dom { class Element; }
 
 namespace bro::layout {
 
-// Standalone input control renderer (no litehtml inheritance).
+// Standalone input control renderer.
 // Reads attributes from bro::dom::Element, draws using Renderer.
 class ElInput {
 public:
