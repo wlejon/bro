@@ -5,7 +5,16 @@ set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
 add_subdirectory(quickjs EXCLUDE_FROM_ALL)
 
 # --- htmlayout (CSS + layout library) ---
-add_subdirectory(htmlayout EXCLUDE_FROM_ALL)
+# Prefer the standalone repo at ../htmlayout for local development (edit once, no sync dance).
+# Falls back to the git submodule at third_party/htmlayout.
+set(HTMLAYOUT_DIR "${CMAKE_SOURCE_DIR}/../htmlayout" CACHE PATH "Path to standalone htmlayout repo")
+if(EXISTS "${HTMLAYOUT_DIR}/CMakeLists.txt")
+    message(STATUS "htmlayout: using standalone repo at ${HTMLAYOUT_DIR}")
+    add_subdirectory("${HTMLAYOUT_DIR}" "${CMAKE_BINARY_DIR}/htmlayout" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "htmlayout: using submodule at third_party/htmlayout")
+    add_subdirectory(htmlayout EXCLUDE_FROM_ALL)
+endif()
 
 # --- SDL3 (built from submodule) ---
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
