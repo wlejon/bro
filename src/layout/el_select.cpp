@@ -82,7 +82,7 @@ void ElSelect::getContentSize(float& w, float& h) {
             }
         }
         w = maxW + 28;
-        h = lineH + 4;
+        h = lineH + 8;
     } else {
         w = 120;
         h = 20;
@@ -142,7 +142,7 @@ float ElSelect::dropdownLineHeight() const {
     uint64_t fontHandle = getFontHandle();
     if (!fontHandle || !renderer_) return 20.0f;
     auto fm = renderer_->measureText("M", fontHandle);
-    return fm.height + 4.0f; // font height + vertical padding
+    return fm.height + 8.0f; // font height + vertical padding
 }
 
 void ElSelect::drawDropdown() {
@@ -155,10 +155,10 @@ void ElSelect::drawDropdown() {
     if (!fontHandle) return;
 
     auto fm = renderer_->measureText("M", fontHandle);
-    float lineHeight = fm.height + 4.0f; // add vertical padding per item
+    float lineHeight = fm.height + 8.0f; // add vertical padding per item
     float ascent = fm.ascent > 0 ? fm.ascent : fm.height * 0.8f;
     float padX = 6.0f;
-    float padY = 2.0f; // vertical padding within each item
+    float padY = 4.0f; // vertical padding within each item
 
     render::Color color = {0, 0, 0, 255};
 
