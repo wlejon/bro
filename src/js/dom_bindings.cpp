@@ -1456,8 +1456,8 @@ static JSValue js_element_getAttribute(JSContext* ctx, JSValueConst this_val,
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_UNDEFINED;
     std::string name = jsToStdString(ctx, argv[0]);
-    std::string val  = el->getAttribute(name);
-    if (val.empty()) return JS_NULL; // spec returns null if not present
+    if (!el->hasAttribute(name)) return JS_NULL;
+    std::string val = el->getAttribute(name);
     return JS_NewString(ctx, val.c_str());
 }
 
@@ -1826,7 +1826,7 @@ static JSValue js_element_hasAttribute(JSContext* ctx, JSValueConst this_val,
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_FALSE;
     std::string name = jsToStdString(ctx, argv[0]);
-    return JS_NewBool(ctx, !el->getAttribute(name).empty());
+    return JS_NewBool(ctx, el->hasAttribute(name));
 }
 
 static JSValue js_element_contains(JSContext* ctx, JSValueConst this_val,
