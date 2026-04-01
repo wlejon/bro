@@ -1245,8 +1245,8 @@ void Engine::handleMouseMove(float x, float y) {
             float lineH = select->dropdownLineHeight();
             float dropY = dp.y + dp.h;
             float dropH = lineH * static_cast<float>(opts.size()) + 2.0f;
-            if (docX >= dp.x && docX < dp.x + dp.w && docY >= dropY && docY < dropY + dropH) {
-                int idx = static_cast<int>((docY - dropY - 1.0f) / lineH);
+            if (x >= dp.x && x < dp.x + dp.w && y >= dropY && y < dropY + dropH) {
+                int idx = static_cast<int>((y - dropY - 1.0f) / lineH);
                 idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
                 if (idx != select->highlightedIndex()) {
                     select->setHighlightedIndex(idx);
