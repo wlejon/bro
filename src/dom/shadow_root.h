@@ -87,6 +87,7 @@ private:
     void collectSlots(Node* node, std::vector<Element*>& slots) const;
     void collectElements(Node* node, const std::string& selector,
                          std::vector<Element*>& out) const;
+    std::vector<Node*> composeNodes(const std::vector<Node*>& nodes) const;
 
     Element* host_;
     Mode mode_;

@@ -110,6 +110,11 @@ public:
         return static_cast<void*>(elem_->containingShadowRoot());
     }
 
+    void* shadowRoot() const override {
+        if (!elem_) return nullptr;
+        return static_cast<void*>(elem_->shadowRoot());
+    }
+
     // Global state setters (called by Engine before style resolution)
     static void setHoveredElement(dom::Element* el) { hoveredElement_ = el; }
     static void setActiveElement(dom::Element* el) { activeElement_ = el; }

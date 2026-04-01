@@ -408,9 +408,31 @@ std::vector<Node*> ShadowRoot::composedChildren() const {
     // The composed tree is the shadow tree, but with <slot> elements
     // replaced by their assigned nodes (or fallback content if no assignments)
     const_cast<ShadowRoot*>(this)->distributeSlots();
-    // Return shadow root's direct children — slot replacement happens
-    // during rendering traversal, not here.
-    return children_;
+    return composeNodes(children_);
+}
+
+std::vector<Node*> ShadowRoot::composeNodes(const std::vector<Node*>& nodes) const {
+    std::vector<Node*> result;
+    for (auto* node : nodes) {
+        if (node->nodeType() == NodeType::Element) {
+            auto* elem = static_cast<Element*>(node);
+            if (elem->tagName() == "SLOT") {
+                // Replace <slot> with assigned nodes, or fallback to slot's children
+                auto assigned = assignedNodes(elem);
+                if (!assigned.empty()) {
+                    for (auto* n : assigned)
+                        result.push_back(n);
+                } else {
+                    // Fallback: use slot's own children
+                    for (auto* child : elem->childNodes())
+                        result.push_back(child);
+                }
+                continue;
+            }
+        }
+        result.push_back(node);
+    }
+    return result;
 }
 
 } // namespace bro::dom

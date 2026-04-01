@@ -114,7 +114,25 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         childNodes = elem->childNodes();
     }
 
+    // Get enclosing shadow root for slot replacement on non-host elements
+    auto* enclosingSR = elem->containingShadowRoot();
+
     for (auto* child : childNodes) {
+        // Replace <slot> elements with assigned/fallback content
+        if (enclosingSR && child->nodeType() == dom::NodeType::Element) {
+            auto* childElem = static_cast<dom::Element*>(child);
+            if (childElem->tagName() == "SLOT") {
+                auto assigned = enclosingSR->assignedNodes(childElem);
+                if (!assigned.empty()) {
+                    for (auto* n : assigned)
+                        drawNode(n, childOffsetX, childOffsetY);
+                } else {
+                    for (auto* n : childElem->childNodes())
+                        drawNode(n, childOffsetX, childOffsetY);
+                }
+                continue;
+            }
+        }
         drawNode(child, childOffsetX, childOffsetY);
     }
 

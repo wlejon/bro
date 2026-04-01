@@ -83,20 +83,46 @@ public:
     }
 
 private:
+    // Get the containing shadow root for an element (walk up parents)
+    static dom::ShadowRoot* containingShadow(dom::Element* elem) {
+        return elem ? elem->containingShadowRoot() : nullptr;
+    }
+
     static void buildChildren(LayoutNodeAdapter* parent, dom::Element* elem) {
-        // If element has shadow DOM, use composed children
+        // If element has shadow DOM, use composed children (top-level slot replacement)
         std::vector<dom::Node*> childNodes;
+        dom::ShadowRoot* sr = nullptr;
         if (elem->hasShadow()) {
-            auto* sr = elem->shadowRoot();
+            sr = elem->shadowRoot();
             if (!sr->slotsValid()) sr->distributeSlots();
             childNodes = sr->composedChildren();
         } else {
             childNodes = elem->childNodes();
         }
 
+        // Check if we're inside a shadow tree — needed for nested slot replacement
+        dom::ShadowRoot* enclosingSR = containingShadow(elem);
+
         for (auto* childNode : childNodes) {
             if (childNode->nodeType() == dom::NodeType::Element) {
                 auto* childElem = static_cast<dom::Element*>(childNode);
+
+                // Replace <slot> elements with their assigned nodes or fallback
+                if (childElem->tagName() == "SLOT" && enclosingSR) {
+                    auto assigned = enclosingSR->assignedNodes(childElem);
+                    if (!assigned.empty()) {
+                        for (auto* n : assigned) {
+                            addNodeToParent(parent, n, childElem);
+                        }
+                    } else {
+                        // Fallback: use slot's own children
+                        for (auto* n : childElem->childNodes()) {
+                            addNodeToParent(parent, n, childElem);
+                        }
+                    }
+                    continue;
+                }
+
                 // Skip display:none elements
                 auto& style = childElem->computedStyle();
                 auto it = style.find("display");
@@ -113,6 +139,27 @@ private:
                 child->parent_ = parent;
                 parent->children_.push_back(std::move(child));
             }
+        }
+    }
+
+    static void addNodeToParent(LayoutNodeAdapter* parent, dom::Node* node,
+                                 dom::Element* contextElem) {
+        if (node->nodeType() == dom::NodeType::Element) {
+            auto* elem = static_cast<dom::Element*>(node);
+            auto& style = elem->computedStyle();
+            auto it = style.find("display");
+            if (it != style.end() && it->second == "none") return;
+
+            auto child = std::make_unique<LayoutNodeAdapter>(elem);
+            child->parent_ = parent;
+            buildChildren(child.get(), elem);
+            parent->children_.push_back(std::move(child));
+        } else if (node->nodeType() == dom::NodeType::Text) {
+            auto* textNode = static_cast<dom::TextNode*>(node);
+            if (textNode->data().empty()) return;
+            auto child = std::make_unique<LayoutNodeAdapter>(textNode, contextElem);
+            child->parent_ = parent;
+            parent->children_.push_back(std::move(child));
         }
     }
 
