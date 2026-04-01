@@ -51,6 +51,7 @@ private:
     void dispatchInputEvent(dom::Element* el);
     void advanceFocus(bool reverse);
     void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
+    void ensureReplacedElements(dom::Element* elem);
 
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<render::GLContext> gl_;

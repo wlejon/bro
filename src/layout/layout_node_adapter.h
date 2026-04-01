@@ -1,6 +1,9 @@
 #pragma once
 
 #include "layout/box.h"
+#include "layout/el_input.h"
+#include "layout/el_textarea.h"
+#include "layout/el_select.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -62,6 +65,23 @@ public:
         if (parentElem_) return parentElem_->computedStyle();
         static const htmlayout::css::ComputedStyle empty;
         return empty;
+    }
+
+    bool intrinsicSize(float& w, float& h, float maxWidth) const override {
+        if (!elem_) return false;
+        if (auto* ctrl = elem_->inputControl()) {
+            ctrl->getContentSize(w, h, maxWidth);
+            return true;
+        }
+        if (auto* ctrl = elem_->textareaControl()) {
+            ctrl->getContentSize(w, h);
+            return true;
+        }
+        if (auto* ctrl = elem_->selectControl()) {
+            ctrl->getContentSize(w, h);
+            return true;
+        }
+        return false;
     }
 
     // Write layout results back to the DOM element/text node

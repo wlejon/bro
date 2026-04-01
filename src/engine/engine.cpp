@@ -411,6 +411,7 @@ void Engine::run() {
 
     // Initial layout
     if (document_) {
+        ensureReplacedElements(document_->documentElement());
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
         if (document_->documentElement()) {
@@ -482,6 +483,7 @@ void Engine::run() {
 
         double tLayout = tJs;
         if (document_ && document_->isDirty() && uiFrameDue) {
+            ensureReplacedElements(document_->documentElement());
             document_->resolveStyles();
             document_->clearStructureDirty();
             document_->performLayout(static_cast<float>(viewportWidth_), *textMetrics_);
@@ -1862,5 +1864,46 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
+
+// ---------------------------------------------------------------------------
+// Replaced element control initialization
+// ---------------------------------------------------------------------------
+
+void Engine::ensureReplacedElements(dom::Element* elem) {
+    if (!elem) return;
+
+    const auto& tag = elem->tagName();
+
+    if (tag == "INPUT" && !elem->inputControl()) {
+        auto ctrl = std::make_unique<layout::ElInput>(renderer_.get());
+        ctrl->setElement(elem);
+        elem->setInputControl(std::move(ctrl));
+    } else if (tag == "TEXTAREA" && !elem->textareaControl()) {
+        auto ctrl = std::make_unique<layout::ElTextarea>(renderer_.get());
+        ctrl->setElement(elem);
+        elem->setTextareaControl(std::move(ctrl));
+    } else if (tag == "SELECT" && !elem->selectControl()) {
+        auto ctrl = std::make_unique<layout::ElSelect>(renderer_.get());
+        ctrl->setElement(elem);
+        elem->setSelectControl(std::move(ctrl));
+    }
+
+    // Recurse into children
+    for (auto* child : elem->childNodes()) {
+        if (child->nodeType() == dom::NodeType::Element) {
+            ensureReplacedElements(static_cast<dom::Element*>(child));
+        }
+    }
+
+    // Recurse into shadow DOM
+    if (elem->hasShadow()) {
+        auto* sr = elem->shadowRoot();
+        for (auto* child : sr->childNodes()) {
+            if (child->nodeType() == dom::NodeType::Element) {
+                ensureReplacedElements(static_cast<dom::Element*>(child));
+            }
+        }
+    }
+}
 
 } // namespace bro::engine
