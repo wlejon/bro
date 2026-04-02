@@ -55,7 +55,44 @@ class UITabs extends HTMLElement {
     }
 
     connectedCallback() {
+        var self = this;
+        // In standard browsers, children may not be parsed yet when
+        // connectedCallback fires. Listen for slotchange to detect when
+        // light DOM children are distributed, then rebuild the tab bar.
+        var slot = this.shadowRoot.querySelector('slot');
+        if (slot) {
+            slot.addEventListener('slotchange', function() {
+                self._buildTabBar();
+                self._updateContentHeight();
+            });
+        }
+        // Also build immediately for engines (like bro) that parse the full
+        // DOM before firing connectedCallback.
         this._buildTabBar();
+        this._updateContentHeight();
+    }
+
+    _updateContentHeight() {
+        var self = this;
+        // Defer to allow layout to complete
+        setTimeout(function() {
+            // Set overflow on the ui-menu inside the active tab.
+            // This must be a light DOM element so the engine's scroll handler
+            // finds it when walking up parentElement() from the target.
+            var tab = self._activeTab();
+            if (!tab) return;
+            var menu = tab.querySelector('ui-menu');
+            if (!menu) return;
+            var hostRect = self.getBoundingClientRect();
+            var bar = self.shadowRoot.querySelector('.tab-bar');
+            var barH = bar ? bar.getBoundingClientRect().height : 40;
+            var vh = window.innerHeight || 768;
+            var available = vh - hostRect.y - barH - 8 - 50;
+            if (available > 100) {
+                menu.style.maxHeight = Math.floor(available) + 'px';
+                menu.style.overflowY = 'auto';
+            }
+        }, 0);
     }
 
     _buildTabBar() {
@@ -95,7 +132,12 @@ class UITabs extends HTMLElement {
         var current = tabs[this._tabIndex];
         if (current) {
             var menu = current.querySelector('ui-menu');
-            if (menu && menu.deactivate) menu.deactivate();
+            if (menu) {
+                if (menu.deactivate) menu.deactivate();
+                // Clear overflow from previous tab's menu
+                menu.style.maxHeight = '';
+                menu.style.overflowY = '';
+            }
         }
 
         this._tabIndex = idx;
@@ -108,6 +150,7 @@ class UITabs extends HTMLElement {
             if (menu && menu.activate) menu.activate();
         }
         GameUI.emit(this, 'ui-change', { name: 'tab', value: idx });
+        this._updateContentHeight();
     }
 
     nextTab() { this.switchTab((this._tabIndex + 1) % this._getTabs().length); }

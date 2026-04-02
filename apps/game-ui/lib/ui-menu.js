@@ -28,7 +28,7 @@ class UIMenu extends HTMLElement {
         this.addEventListener('click', function(e) {
             var target = e.target;
             while (target && target !== self) {
-                if (target.tagName === 'UI-MENU-ITEM') {
+                if (target._uiFocus) {
                     var items = self._fm.getItems();
                     for (var i = 0; i < items.length; i++) {
                         if (items[i] === target) {
@@ -42,6 +42,22 @@ class UIMenu extends HTMLElement {
                 target = target.parentElement;
             }
         });
+        this.addEventListener('mouseenter', function(e) {
+            var target = e.target;
+            while (target && target !== self) {
+                if (target._uiFocus) {
+                    var items = self._fm.getItems();
+                    for (var i = 0; i < items.length; i++) {
+                        if (items[i] === target) {
+                            self._fm.focusIndex(i);
+                            break;
+                        }
+                    }
+                    return;
+                }
+                target = target.parentElement;
+            }
+        }, true);
     }
 
     activate() { this._fm.focusFirst(); }

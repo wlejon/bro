@@ -180,8 +180,17 @@ std::string ShadowRoot::scopedCSS() const {
                         result += scope;
                     } else if (part.substr(0, 6) == ":host(") {
                         // :host(.foo) -> [data-bro-shadow="sN"].foo
-                        std::string inner = part.substr(6, part.size() - 7);
-                        result += scope + inner;
+                        // :host([attr]) .desc -> [data-bro-shadow="sN"][attr] .desc
+                        // Find matching closing paren for the :host(...)
+                        size_t depth = 1, closePos = 6;
+                        while (closePos < part.size() && depth > 0) {
+                            if (part[closePos] == '(') depth++;
+                            else if (part[closePos] == ')') depth--;
+                            if (depth > 0) closePos++;
+                        }
+                        std::string inner = part.substr(6, closePos - 6);
+                        std::string suffix = (closePos + 1 < part.size()) ? part.substr(closePos + 1) : "";
+                        result += scope + inner + suffix;
                     } else {
                         // Normal selector: scope all parts
                         result += scope + " " + part;

@@ -40,7 +40,7 @@
             width: 100%;
             padding: 24px;
             box-sizing: border-box;
-            overflow-y: auto;
+            overflow: hidden;
         }
         :host([active]) {
             display: flex;
@@ -51,8 +51,6 @@
             align-items: center;
             max-width: 800px;
             width: 100%;
-            max-height: 100%;
-            overflow-y: auto;
         }
     </style>
     <div class="screen-content">
@@ -119,6 +117,8 @@
         .tab-btn.active {
             color: var(--ui-text-bright, #ffffff);
             border-bottom-color: var(--ui-accent, #4a6aff);
+        }
+        .tab-content {
         }
     </style>
     <div class="tab-bar"></div>

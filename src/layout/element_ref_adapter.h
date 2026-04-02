@@ -42,7 +42,16 @@ public:
     ElementRef* parent() const override {
         if (!elem_) return nullptr;
         auto* p = elem_->parentElement();
-        if (!p) return nullptr;
+        if (!p) {
+            // If the parent is a ShadowRoot (not an Element), cross to the shadow host.
+            // This allows :host(...) descendant selectors to walk up to the host.
+            auto* parentNode = elem_->parentNode();
+            if (parentNode && parentNode->nodeType() == dom::NodeType::DocumentFragment) {
+                auto* sr = static_cast<dom::ShadowRoot*>(parentNode);
+                if (sr->host()) return getOrCreate(sr->host());
+            }
+            return nullptr;
+        }
         return getOrCreate(p);
     }
 
