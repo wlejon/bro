@@ -261,6 +261,33 @@ Element* Element::parentElement() const {
     return nullptr;
 }
 
+std::vector<Node*> Element::composedChildNodes() const {
+    std::vector<Node*> result;
+    std::vector<Node*> childList;
+    if (hasShadow()) {
+        auto* sr = shadowRoot();
+        if (!sr->slotsValid()) sr->distributeSlots();
+        childList = sr->composedChildren();
+    } else {
+        childList = childNodes();
+    }
+    auto* enclosingSR = containingShadowRoot();
+    for (auto* child : childList) {
+        if (enclosingSR && child->nodeType() == NodeType::Element) {
+            auto* ce = static_cast<Element*>(child);
+            if (ce->tagName() == "SLOT") {
+                auto assigned = enclosingSR->assignedNodes(ce);
+                auto& nodes = assigned.empty() ? ce->childNodes() : assigned;
+                for (auto* n : nodes)
+                    result.push_back(n);
+                continue;
+            }
+        }
+        result.push_back(child);
+    }
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // Selector matching (powered by htmlayout)
 // ---------------------------------------------------------------------------

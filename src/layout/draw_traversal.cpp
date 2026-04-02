@@ -6,7 +6,6 @@
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
-#include "dom/shadow_root.h"
 #include "util/log.h"
 
 #include <algorithm>
@@ -126,37 +125,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     float childOffsetX = x;
     float childOffsetY = y - elem->scrollTopValue();
 
-    // Draw children (handles shadow DOM composed children)
-    std::vector<dom::Node*> childNodes;
-    if (elem->hasShadow()) {
-        auto* sr = elem->shadowRoot();
-        if (!sr->slotsValid()) sr->distributeSlots();
-        childNodes = sr->composedChildren();
-    } else {
-        childNodes = elem->childNodes();
-    }
-
-    // Get enclosing shadow root for slot replacement on non-host elements
-    auto* enclosingSR = elem->containingShadowRoot();
-
-    for (auto* child : childNodes) {
-        // Replace <slot> elements with assigned/fallback content
-        if (enclosingSR && child->nodeType() == dom::NodeType::Element) {
-            auto* childElem = static_cast<dom::Element*>(child);
-            if (childElem->tagName() == "SLOT") {
-                auto assigned = enclosingSR->assignedNodes(childElem);
-                if (!assigned.empty()) {
-                    for (auto* n : assigned)
-                        drawNode(n, childOffsetX, childOffsetY);
-                } else {
-                    for (auto* n : childElem->childNodes())
-                        drawNode(n, childOffsetX, childOffsetY);
-                }
-                continue;
-            }
-        }
+    // Draw composed children (shadow DOM + slot replacement)
+    for (auto* child : elem->composedChildNodes())
         drawNode(child, childOffsetX, childOffsetY);
-    }
 
     // Draw replaced element content (input, textarea, select, svg)
     if (visible) {

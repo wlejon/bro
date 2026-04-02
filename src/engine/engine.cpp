@@ -85,6 +85,13 @@ static bool overflowScrollable(const std::string& ov) {
     return ov == "scroll" || ov == "auto";
 }
 
+/// Compute the maximum scroll offset for an overflow element.
+/// Returns 0 if content fits within the element's visible area.
+static float maxScrollTop(dom::Element* el) {
+    auto& box = el->layoutBox();
+    return std::max(0.0f, box.naturalHeight - box.contentRect.height);
+}
+
 /// Walk up the composed tree (crosses shadow boundaries via host element).
 static dom::Element* composedParent(dom::Element* el) {
     if (!el) return nullptr;
@@ -632,9 +639,7 @@ void Engine::run() {
                         elem->setScrollToBottom(false);
                         std::string ov = getOverflowY(elem->computedStyle());
                         if (overflowClips(ov)) {
-                            // Scroll to bottom by setting a large scroll offset
-                            float currentScroll = elem->scrollTopValue();
-                            elem->setScrollTopValue(currentScroll + 100000.0f);
+                            elem->setScrollTopValue(maxScrollTop(elem));
                         }
                     }
                     for (auto* child : elem->childNodes())
@@ -699,43 +704,54 @@ void Engine::run() {
 
             // Draw scrollbars for overflow elements
             if (document_) {
-                int scrollYi = static_cast<int>(scrollY_);
-                std::function<void(dom::Node*)> drawElemScrollbars;
-                drawElemScrollbars = [&](dom::Node* node) {
-                    if (!node || node->nodeType() != dom::NodeType::Element) return;
-                    auto* elem = static_cast<dom::Element*>(node);
-                    std::string ov = getOverflowY(elem->computedStyle());
+                std::function<void(dom::Element*, float, float)> drawElemScrollbars;
+                drawElemScrollbars = [&](dom::Element* elem, float offsetX, float offsetY) {
+                    if (!elem) return;
+                    auto& style = elem->computedStyle();
+                    {
+                        auto it = style.find("display");
+                        if (it != style.end() && it->second == "none") return;
+                    }
+
+                    auto& lbox = elem->layoutBox();
+                    float absX = lbox.contentRect.x + offsetX;
+                    float absY = lbox.contentRect.y + offsetY;
+
+                    std::string ov = getOverflowY(style);
                     if (overflowClips(ov)) {
                         float scrollTop = elem->scrollTopValue();
-                        if (scrollTop != 0) {
-                            auto& lbox = elem->layoutBox();
-                            auto mb = lbox.marginBox();
-                            float ex = mb.x;
-                            float ey = mb.y - scrollYi;
-                            float ew = mb.width;
-                            float eh = mb.height;
-                            float contentH = lbox.contentRect.height;
-                            float viewH = eh;
-                            if (contentH > viewH) {
-                                float sbW = 5.0f;
-                                float trackX = ex + ew - sbW - 1.0f;
-                                float scrollRange = contentH - viewH;
-                                float thumbRatio = viewH / contentH;
-                                float thumbH = std::max(thumbRatio * eh, 16.0f);
-                                float thumbY = ey + (scrollRange > 0 ?
-                                    (scrollTop / scrollRange) * (eh - thumbH) : 0);
+                        float maxST = maxScrollTop(elem);
+                        if (scrollTop > 0 && maxST > 0) {
+                            float viewH = lbox.contentRect.height;
+                            float contentH = viewH + maxST;
+                            // Border box in absolute screen coords
+                            float bx = absX - lbox.padding.left - lbox.border.left;
+                            float by = absY - lbox.padding.top - lbox.border.top;
+                            float bw = lbox.fullWidth();
+                            float bh = lbox.fullHeight();
 
-                                render::Color tc{255, 255, 255, 20};
-                                renderer_->fillRect(trackX, ey, sbW, eh, tc);
-                                render::Color th{255, 255, 255, 100};
-                                renderer_->fillRect(trackX, thumbY, sbW, thumbH, th);
-                            }
+                            float sbW = 5.0f;
+                            float trackX = bx + bw - sbW - 1.0f;
+                            float thumbRatio = viewH / contentH;
+                            float thumbH = std::max(thumbRatio * bh, 16.0f);
+                            float thumbY = by + (scrollTop / maxST) * (bh - thumbH);
+
+                            render::Color tc{255, 255, 255, 20};
+                            renderer_->fillRect(trackX, by, sbW, bh, tc);
+                            render::Color th{255, 255, 255, 100};
+                            renderer_->fillRect(trackX, thumbY, sbW, thumbH, th);
                         }
                     }
-                    for (auto* child : elem->childNodes())
-                        drawElemScrollbars(child);
+
+                    // Recurse into composed children (shadow DOM aware)
+                    float childOffsetX = absX;
+                    float childOffsetY = absY - elem->scrollTopValue();
+                    elem->forEachComposedChild([&](dom::Element* child) {
+                        drawElemScrollbars(child, childOffsetX, childOffsetY);
+                    });
                 };
-                drawElemScrollbars(document_->documentElement());
+                drawElemScrollbars(document_->documentElement(),
+                                   0.0f, -scrollY_);
             }
 
             renderer_->endFrame();
@@ -2015,9 +2031,12 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
         while (el) {
             std::string ov = getOverflowY(el->computedStyle());
             if (overflowScrollable(ov)) {
+                float maxST = maxScrollTop(el);
+                if (maxST <= 0) break; // content fits, no scrolling needed
                 float scrollPx = -dy * kScrollSpeed;
-                float currentScroll = el->scrollTopValue();
-                el->setScrollTopValue(currentScroll + scrollPx);
+                float newScroll = std::clamp(el->scrollTopValue() + scrollPx,
+                                             0.0f, maxST);
+                el->setScrollTopValue(newScroll);
                 uiDirty_ = true;
                 document_->markDirty();
                 return;
@@ -2117,39 +2136,12 @@ static dom::Element* hitTestElement(dom::Element* elem, float x, float y,
     float childOffsetX = absX;
     float childOffsetY = absY - elem->scrollTopValue();
 
-    // Gather composed children (shadow DOM aware) — mirrors DrawTraversal
-    std::vector<dom::Node*> childNodes;
-    if (elem->hasShadow()) {
-        auto* sr = elem->shadowRoot();
-        if (!sr->slotsValid()) sr->distributeSlots();
-        childNodes = sr->composedChildren();
-    } else {
-        childNodes = elem->childNodes();
-    }
-
-    // Get enclosing shadow root for slot replacement
-    auto* enclosingSR = elem->containingShadowRoot();
-
-    // Check children in reverse order (last-painted = topmost)
-    for (int i = static_cast<int>(childNodes.size()) - 1; i >= 0; --i) {
-        auto* child = childNodes[i];
-
-        // Replace <slot> elements with assigned/fallback content
-        if (enclosingSR && child->nodeType() == dom::NodeType::Element) {
-            auto* childElem = static_cast<dom::Element*>(child);
-            if (childElem->tagName() == "SLOT") {
-                auto assigned = enclosingSR->assignedNodes(childElem);
-                auto& nodes = assigned.empty() ? childElem->childNodes() : assigned;
-                for (int j = static_cast<int>(nodes.size()) - 1; j >= 0; --j) {
-                    auto* hit = hitTestNode(nodes[j], testX, testY,
-                                            childOffsetX, childOffsetY);
-                    if (hit) return hit;
-                }
-                continue;
-            }
-        }
-
-        auto* hit = hitTestNode(child, testX, testY, childOffsetX, childOffsetY);
+    // Composed children (shadow DOM + slot replacement), checked in reverse
+    // order for correct z-ordering (last-painted = topmost)
+    auto composedChildren = elem->composedChildNodes();
+    for (int i = static_cast<int>(composedChildren.size()) - 1; i >= 0; --i) {
+        auto* hit = hitTestNode(composedChildren[i], testX, testY,
+                                childOffsetX, childOffsetY);
         if (hit) return hit;
     }
 

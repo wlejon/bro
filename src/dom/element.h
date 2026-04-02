@@ -64,6 +64,15 @@ public:
     std::vector<Element*> children() const;
     Element* parentElement() const;
 
+    // Composed tree traversal (shadow DOM + slot replacement).
+    // Calls fn(Element*) for each composed child element, resolving shadow roots and slots.
+    template<typename Fn>
+    void forEachComposedChild(Fn&& fn) const;
+
+    // Collect all composed child nodes into a flat vector (shadow DOM + slot replacement).
+    // Includes both Element and non-Element nodes. Callers can iterate forward or reverse.
+    std::vector<Node*> composedChildNodes() const;
+
     // Selectors (powered by htmlayout)
     std::vector<Element*> querySelectorAll(const std::string& selector);
     Element* querySelector(const std::string& selector);
@@ -146,5 +155,14 @@ private:
     std::unique_ptr<layout::ElSelect> selectControl_;
     std::unique_ptr<layout::ElSvg> svgControl_;
 };
+
+// Template implementation — must be in header
+template<typename Fn>
+void Element::forEachComposedChild(Fn&& fn) const {
+    for (auto* node : composedChildNodes()) {
+        if (node->nodeType() == NodeType::Element)
+            fn(static_cast<Element*>(node));
+    }
+}
 
 } // namespace bro::dom
