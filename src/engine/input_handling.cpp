@@ -49,6 +49,64 @@ static bool isTextEditable(dom::Element* el) {
     return getElInput(el) || getElTextarea(el);
 }
 
+// Pick a color from the color picker grid at pixel position (x, y).
+// The grid is a 10x8 HSL palette anchored at (gridX, gridY) with size (gridW, gridH).
+// Returns a hex color string like "#ff8800".
+static std::string pickColorFromGrid(float x, float y,
+                                     float gridX, float gridY,
+                                     float gridW, float gridH) {
+    float cellW = (gridW - 4) / 10.0f;
+    float cellH = (gridH - 4) / 8.0f;
+    int col = std::clamp(static_cast<int>((x - gridX - 2) / cellW), 0, 9);
+    int row = std::clamp(static_cast<int>((y - gridY - 2) / cellH), 0, 7);
+
+    float hue = col * 36.0f;
+    float sat, lit;
+    if (row == 0) {
+        sat = 0.0f; lit = col / 9.0f;
+    } else {
+        sat = 1.0f; lit = 0.15f + (row - 1) * 0.1f;
+    }
+
+    auto hue2rgb = [](float p, float q, float t) -> float {
+        if (t < 0) t += 1; if (t > 1) t -= 1;
+        if (t < 1.0f/6) return p + (q-p)*6*t;
+        if (t < 1.0f/2) return q;
+        if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
+        return p;
+    };
+    uint8_t cr, cg, cb;
+    if (sat == 0) {
+        cr = cg = cb = static_cast<uint8_t>(lit * 255);
+    } else {
+        float q = lit < 0.5f ? lit*(1+sat) : lit+sat-lit*sat;
+        float p = 2*lit-q;
+        float hn = hue/360.0f;
+        cr = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
+        cg = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
+        cb = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
+    }
+
+    char hex[8];
+    snprintf(hex, sizeof(hex), "#%02x%02x%02x", cr, cg, cb);
+    return hex;
+}
+
+// Build a KeyboardEvent with all modifier fields set.
+static dom::KeyboardEvent makeKeyboardEvent(const char* type,
+                                            int keycode, int scancode,
+                                            int mod, bool repeat) {
+    dom::KeyboardEvent evt(type);
+    evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+    evt.setCode(sdlScancodeToWebCode(scancode));
+    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+    evt.setRepeat(repeat);
+    return evt;
+}
+
 // ---------------------------------------------------------------------------
 // Scrollbar hit testing helper
 // ---------------------------------------------------------------------------
@@ -188,43 +246,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     bool inSwatch = (x >= dp.x && x < dp.x + dp.w && y >= dp.y && y < dp.y + dp.h);
                     if (inPicker) {
                         // Click inside picker — select the color
-                        float cellW = (pw - 4) / 10.0f;
-                        float cellH = (ph - 4) / 8.0f;
-                        int col = static_cast<int>((x - px - 2) / cellW);
-                        int row = static_cast<int>((y - py - 2) / cellH);
-                        col = std::clamp(col, 0, 9);
-                        row = std::clamp(row, 0, 7);
-
-                        float hue = col * 36.0f;
-                        float sat, lit;
-                        if (row == 0) {
-                            sat = 0.0f; lit = col / 9.0f;
-                        } else {
-                            sat = 1.0f; lit = 0.15f + (row - 1) * 0.1f;
-                        }
-
-                        auto hue2rgb = [](float p, float q, float t) -> float {
-                            if (t < 0) t += 1; if (t > 1) t -= 1;
-                            if (t < 1.0f/6) return p + (q-p)*6*t;
-                            if (t < 1.0f/2) return q;
-                            if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
-                            return p;
-                        };
-                        uint8_t cr, cg, cb;
-                        if (sat == 0) {
-                            cr = cg = cb = static_cast<uint8_t>(lit * 255);
-                        } else {
-                            float q = lit < 0.5f ? lit*(1+sat) : lit+sat-lit*sat;
-                            float p = 2*lit-q;
-                            float hn = hue/360.0f;
-                            cr = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
-                            cg = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
-                            cb = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
-                        }
-
-                        char hex[8];
-                        snprintf(hex, sizeof(hex), "#%02x%02x%02x", cr, cg, cb);
-                        prevActive->setAttribute("value", hex);
+                        std::string hex = pickColorFromGrid(x, y, px, py, pw, ph);
+                        prevActive->setAttribute("value", hex.c_str());
                         dom::Event changeEvt("change");
                         dispatchEvent(prevActive, changeEvt);
                         dispatchInputEvent(prevActive);
@@ -356,44 +379,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                         float px = dp.x, py = dp.y + dp.h + 2;
                         float pw = 200.0f, ph = 160.0f;
                         if (x >= px && x < px + pw && y >= py && y < py + ph) {
-                            float cellW = (pw - 4) / 10.0f;
-                            float cellH = (ph - 4) / 8.0f;
-                            int col = static_cast<int>((x - px - 2) / cellW);
-                            int row = static_cast<int>((y - py - 2) / cellH);
-                            col = std::clamp(col, 0, 9);
-                            row = std::clamp(row, 0, 7);
-
-                            // Reproduce the same HSL->RGB conversion
-                            float hue = col * 36.0f;
-                            float sat, lit;
-                            if (row == 0) {
-                                sat = 0.0f; lit = col / 9.0f;
-                            } else {
-                                sat = 1.0f; lit = 0.15f + (row - 1) * 0.1f;
-                            }
-
-                            auto hue2rgb = [](float p, float q, float t) -> float {
-                                if (t < 0) t += 1; if (t > 1) t -= 1;
-                                if (t < 1.0f/6) return p + (q-p)*6*t;
-                                if (t < 1.0f/2) return q;
-                                if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
-                                return p;
-                            };
-                            uint8_t cr, cg, cb;
-                            if (sat == 0) {
-                                cr = cg = cb = static_cast<uint8_t>(lit * 255);
-                            } else {
-                                float q = lit < 0.5f ? lit*(1+sat) : lit+sat-lit*sat;
-                                float p = 2*lit-q;
-                                float hn = hue/360.0f;
-                                cr = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
-                                cg = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
-                                cb = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
-                            }
-
-                            char hex[8];
-                            snprintf(hex, sizeof(hex), "#%02x%02x%02x", cr, cg, cb);
-                            target->setAttribute("value", hex);
+                            std::string hex = pickColorFromGrid(x, y, px, py, pw, ph);
+                            target->setAttribute("value", hex.c_str());
                             dom::Event changeEvt("change");
                             dispatchEvent(target, changeEvt);
                             dispatchInputEvent(target);
@@ -679,14 +666,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             dispatchEvent(activeEl, changeEvt);
             dispatchInputEvent(activeEl);
 
-            dom::KeyboardEvent evt("keydown");
-            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-            evt.setCode(sdlScancodeToWebCode(scancode));
-            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-            evt.setRepeat(repeat);
+            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
             dispatchEvent(activeEl, evt);
             return;
         }
@@ -710,14 +690,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                 handled = true;
             }
             if (handled) {
-                dom::KeyboardEvent evt("keydown");
-                evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-                evt.setCode(sdlScancodeToWebCode(scancode));
-                evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-                evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-                evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-                evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-                evt.setRepeat(repeat);
+                auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
                 dispatchEvent(activeEl, evt);
                 return;
             }
@@ -725,14 +698,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
         // Skip text editing for non-text types
         if (!input->isTextType(activeEl)) {
-            dom::KeyboardEvent nontextEvt("keydown");
-            nontextEvt.setKey(sdlKeycodeToWebKey(keycode, mod));
-            nontextEvt.setCode(sdlScancodeToWebCode(scancode));
-            nontextEvt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-            nontextEvt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-            nontextEvt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-            nontextEvt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-            nontextEvt.setRepeat(repeat);
+            auto nontextEvt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
             dispatchEvent(activeEl, nontextEvt);
             return;
         }
@@ -818,14 +784,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
         if (handled) {
             // Still dispatch keydown event for JS listeners
-            dom::KeyboardEvent evt("keydown");
-            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-            evt.setCode(sdlScancodeToWebCode(scancode));
-            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-            evt.setRepeat(repeat);
+            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
             dispatchEvent(activeEl, evt);
             return;
         }
@@ -943,14 +902,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         }
 
         if (handled) {
-            dom::KeyboardEvent evt("keydown");
-            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-            evt.setCode(sdlScancodeToWebCode(scancode));
-            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-            evt.setRepeat(repeat);
+            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
             dispatchEvent(activeEl, evt);
             return;
         }
@@ -993,28 +945,14 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         }
 
         if (handled) {
-            dom::KeyboardEvent evt("keydown");
-            evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-            evt.setCode(sdlScancodeToWebCode(scancode));
-            evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-            evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-            evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-            evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-            evt.setRepeat(repeat);
+            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
             dispatchEvent(activeEl, evt);
             return;
         }
     }
 
     // Default: dispatch keydown to body
-    dom::KeyboardEvent evt("keydown");
-    evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-    evt.setCode(sdlScancodeToWebCode(scancode));
-    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-    evt.setRepeat(repeat);
+    auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
     dom::Element* target = document_->body();
     if (target) {
         dispatchEvent(target, evt);
@@ -1025,14 +963,7 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     if (!document_) return;
 
     // Dispatch keyup to the focused input if any, otherwise body
-    dom::KeyboardEvent evt("keyup");
-    evt.setKey(sdlKeycodeToWebKey(keycode, mod));
-    evt.setCode(sdlScancodeToWebCode(scancode));
-    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
-    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
-    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
-    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
-    evt.setRepeat(repeat);
+    auto evt = makeKeyboardEvent("keyup", keycode, scancode, mod, repeat);
 
     auto* activeEl = document_->activeElement();
     bool focusedControl = false;
