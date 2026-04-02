@@ -707,14 +707,18 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     }
 
     // Use layout-computed position if available (from IFC text positioning),
-    // otherwise fall back to parent's content origin
-    float x = offsetX + textAlignOffset;
-    float y = offsetY + ascent;
+    // otherwise fall back to parent's content origin.
+    // When the IFC provides positions, text-align is already applied in contentRect.x,
+    // so only add textAlignOffset in the fallback path to avoid double-centering.
+    float x, y;
 
     auto& tbox = tn->layoutBox();
     if (tbox.contentRect.width > 0) {
-        x = offsetX + tbox.contentRect.x + textAlignOffset;
+        x = offsetX + tbox.contentRect.x;
         y = offsetY + tbox.contentRect.y + ascent;
+    } else {
+        x = offsetX + textAlignOffset;
+        y = offsetY + ascent;
     }
 
     // Helper to draw a single line of text with shadow and decoration
