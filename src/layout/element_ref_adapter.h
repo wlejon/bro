@@ -114,6 +114,70 @@ public:
     }
     bool isActive() const override { return elem_ && elem_ == activeElement_; }
 
+    bool isLink() const override {
+        if (!elem_) return false;
+        std::string tag = elem_->tagName();
+        return (tag == "A" || tag == "a" || tag == "AREA" || tag == "area") &&
+               elem_->hasAttribute("href");
+    }
+    bool isVisited() const override { return false; } // no visit tracking
+
+    bool isFocusWithin() const override {
+        if (!elem_ || !elem_->document()) return false;
+        auto* active = elem_->document()->activeElement();
+        if (!active) return false;
+        // Walk up from active element to see if it's a descendant of this element
+        auto* node = static_cast<dom::Node*>(active);
+        while (node) {
+            if (node == elem_) return true;
+            node = node->parentNode();
+        }
+        return false;
+    }
+    bool isFocusVisible() const override { return isFocused(); }
+
+    bool isChecked() const override {
+        if (!elem_) return false;
+        return elem_->hasAttribute("checked");
+    }
+    bool isDisabled() const override {
+        if (!elem_) return false;
+        return elem_->hasAttribute("disabled");
+    }
+    bool isEnabled() const override { return !isDisabled(); }
+
+    bool isRequired() const override {
+        if (!elem_) return false;
+        return elem_->hasAttribute("required");
+    }
+    bool isOptional() const override { return !isRequired(); }
+
+    bool isReadOnly() const override {
+        if (!elem_) return false;
+        return elem_->hasAttribute("readonly");
+    }
+    bool isReadWrite() const override {
+        if (!elem_) return false;
+        std::string tag = elem_->tagName();
+        if (tag == "INPUT" || tag == "input" || tag == "TEXTAREA" || tag == "textarea")
+            return !isReadOnly() && !isDisabled();
+        return elem_->hasAttribute("contenteditable");
+    }
+
+    bool isPlaceholderShown() const override {
+        if (!elem_) return false;
+        if (!elem_->hasAttribute("placeholder")) return false;
+        std::string val = elem_->getAttribute("value");
+        return val.empty();
+    }
+
+    bool isIndeterminate() const override {
+        if (!elem_) return false;
+        return elem_->hasAttribute("indeterminate");
+    }
+
+    bool isTarget() const override { return false; } // no URL fragment tracking
+
     void* scope() const override {
         if (!elem_) return nullptr;
         return static_cast<void*>(elem_->containingShadowRoot());
