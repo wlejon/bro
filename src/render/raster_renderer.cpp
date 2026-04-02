@@ -14,6 +14,8 @@
 #include <include/core/SkSurface.h>
 #include <include/codec/SkCodec.h>
 #include <include/effects/SkGradient.h>
+#include <include/core/SkMaskFilter.h>
+#include <include/core/SkBlurTypes.h>
 #include <stb_image_write.h>
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
@@ -238,8 +240,36 @@ void RasterRenderer::drawPolyline(std::span<const PointF> points,
     }
 }
 
+void RasterRenderer::drawBoxShadow(float x, float y, float w, float h,
+                                   float rx, float ry,
+                                   float offsetX, float offsetY,
+                                   float blur, float spread,
+                                   Color color, bool inset) {
+    if (!canvas_) return;
+    (void)inset;
+    float sx2 = x + offsetX - spread;
+    float sy2 = y + offsetY - spread;
+    float sw = w + spread * 2;
+    float sh = h + spread * 2;
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+    if (blur > 0)
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    if (rx > 0 || ry > 0)
+        canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(sx2, sy2, sw, sh), rx, ry), paint);
+    else
+        canvas_->drawRect(SkRect::MakeXYWH(sx2, sy2, sw, sh), paint);
+}
+
 void RasterRenderer::save() { if (canvas_) canvas_->save(); }
 void RasterRenderer::restore() { if (canvas_) canvas_->restore(); }
+void RasterRenderer::saveLayerAlpha(uint8_t alpha) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setAlphaf(alpha / 255.0f);
+    canvas_->saveLayer(nullptr, &paint);
+}
 void RasterRenderer::translate(float dx, float dy) { if (canvas_) canvas_->translate(dx, dy); }
 void RasterRenderer::scale(float sx, float sy) { if (canvas_) canvas_->scale(sx, sy); }
 

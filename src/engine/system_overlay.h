@@ -53,8 +53,14 @@ public:
                      render::Color fill, render::Color stroke, float strokeWidth) override;
     void drawPolyline(std::span<const render::PointF> points,
                       render::Color stroke, float strokeWidth) override;
+    void drawBoxShadow(float x, float y, float w, float h,
+                       float rx, float ry,
+                       float offsetX, float offsetY,
+                       float blur, float spread,
+                       render::Color color, bool inset) override;
     void save() override;
     void restore() override;
+    void saveLayerAlpha(uint8_t alpha) override;
     void translate(float dx, float dy) override;
     void scale(float sx, float sy) override;
     void setClip(float x, float y, float w, float h) override;

@@ -15,6 +15,8 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkRRect.h>
+#include <include/core/SkMaskFilter.h>
+#include <include/core/SkBlurTypes.h>
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
@@ -290,8 +292,36 @@ void SystemRenderer::drawPolyline(std::span<const render::PointF> points,
     }
 }
 
+void SystemRenderer::drawBoxShadow(float x, float y, float w, float h,
+                                   float rx, float ry,
+                                   float offsetX, float offsetY,
+                                   float blur, float spread,
+                                   render::Color color, bool inset) {
+    if (!canvas_) return;
+    (void)inset;
+    float sx2 = x + offsetX - spread;
+    float sy2 = y + offsetY - spread;
+    float sw = w + spread * 2;
+    float sh = h + spread * 2;
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(toSkColor(color));
+    if (blur > 0)
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    if (rx > 0 || ry > 0)
+        canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(sx2, sy2, sw, sh), rx, ry), paint);
+    else
+        canvas_->drawRect(SkRect::MakeXYWH(sx2, sy2, sw, sh), paint);
+}
+
 void SystemRenderer::save() { if (canvas_) canvas_->save(); }
 void SystemRenderer::restore() { if (canvas_) canvas_->restore(); }
+void SystemRenderer::saveLayerAlpha(uint8_t alpha) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setAlphaf(alpha / 255.0f);
+    canvas_->saveLayer(nullptr, &paint);
+}
 void SystemRenderer::translate(float dx, float dy) { if (canvas_) canvas_->translate(dx, dy); }
 void SystemRenderer::scale(float sx, float sy) { if (canvas_) canvas_->scale(sx, sy); }
 

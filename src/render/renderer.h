@@ -90,9 +90,20 @@ public:
     virtual void drawPolyline(std::span<const PointF> points,
                               Color stroke, float strokeWidth) = 0;
 
+    // Box shadow: draw a shadow behind a rect (or rounded rect if rx > 0)
+    virtual void drawBoxShadow(float x, float y, float w, float h,
+                               float rx, float ry,
+                               float offsetX, float offsetY,
+                               float blur, float spread,
+                               Color color, bool inset) = 0;
+
     // Canvas state (for SVG coordinate transforms)
     virtual void save() = 0;
     virtual void restore() = 0;
+
+    // Save a layer with the given opacity (0-255). Everything drawn until
+    // the matching restore() is composited at this opacity.
+    virtual void saveLayerAlpha(uint8_t alpha) = 0;
     virtual void translate(float dx, float dy) = 0;
     virtual void scale(float sx, float sy) = 0;
 

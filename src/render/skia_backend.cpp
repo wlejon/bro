@@ -23,6 +23,8 @@
 #include <include/core/SkPathBuilder.h>
 #include <include/utils/SkParsePath.h>
 #include <include/effects/SkGradient.h>
+#include <include/core/SkMaskFilter.h>
+#include <include/core/SkBlurTypes.h>
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
 #else
@@ -309,12 +311,45 @@ void SkiaRenderer::drawPolyline(std::span<const PointF> points,
     }
 }
 
+void SkiaRenderer::drawBoxShadow(float x, float y, float w, float h,
+                                 float rx, float ry,
+                                 float offsetX, float offsetY,
+                                 float blur, float spread,
+                                 Color color, bool inset) {
+    if (!canvas_) return;
+    (void)inset; // TODO: inset shadows
+
+    float sx = x + offsetX - spread;
+    float sy = y + offsetY - spread;
+    float sw = w + spread * 2;
+    float sh = h + spread * 2;
+
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+    if (blur > 0) {
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    }
+
+    if (rx > 0 || ry > 0)
+        canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(sx, sy, sw, sh), rx, ry), paint);
+    else
+        canvas_->drawRect(SkRect::MakeXYWH(sx, sy, sw, sh), paint);
+}
+
 void SkiaRenderer::save() {
     if (canvas_) canvas_->save();
 }
 
 void SkiaRenderer::restore() {
     if (canvas_) canvas_->restore();
+}
+
+void SkiaRenderer::saveLayerAlpha(uint8_t alpha) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setAlphaf(alpha / 255.0f);
+    canvas_->saveLayer(nullptr, &paint);
 }
 
 void SkiaRenderer::translate(float dx, float dy) {
