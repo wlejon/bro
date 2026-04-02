@@ -32,3 +32,7 @@ third_party/vulkan-1.def
 *.log
 build_log.txt
 build.bat
+
+
+# app runtime
+.storage.json
