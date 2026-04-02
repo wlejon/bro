@@ -1,4 +1,5 @@
-#include "headless/headless.h"
+#include "engine/engine.h"
+#include "headless/headless_controller.h"
 #include "util/log.h"
 #include <string>
 #include <cstdlib>
@@ -16,12 +17,16 @@ int main(int argc, char* argv[]) {
     int exitCode = 0;
 
     try {
-        auto* headless = new bro::headless::Headless(appDir);
+        auto* engine = new bro::engine::Engine(
+            bro::engine::EngineConfig{appDir, 1024, 768, bro::engine::DisplayMode::Headless});
+        engine->run();  // initial layout, returns immediately in headless mode
+
+        bro::headless::HeadlessController controller(*engine);
 
         if (argc >= 3) {
-            headless->runScript(argv[2]);
+            controller.runScript(argv[2]);
         } else {
-            headless->runInteractive();
+            controller.runInteractive();
         }
         // Intentionally leak to avoid QuickJS GC assertion on shutdown.
         // The OS reclaims all memory on process exit.

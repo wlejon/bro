@@ -8,11 +8,11 @@
 #include <memory>
 #include <string>
 
-#include <glad/gl.h>
 
-namespace bro::render { class SceneLayer; class GLContext; }
+namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
 namespace bro::audio { class AudioEngine; }
 namespace bro::engine { class SystemOverlay; }
+namespace bro::canvas { class CanvasScene; }
 
 namespace bro::platform {
     class Window;
@@ -25,12 +25,22 @@ namespace bro::layout { class DrawTraversal; }
 
 namespace bro::engine {
 
+enum class DisplayMode { Windowed, Headless };
+
+struct EngineConfig {
+    std::string appDir;
+    int width = 1024;
+    int height = 768;
+    DisplayMode displayMode = DisplayMode::Windowed;
+};
+
 class Engine {
 public:
-    explicit Engine(const std::string& appDir, int width = 1024, int height = 768);
+    explicit Engine(const EngineConfig& config);
     ~Engine();
 
     /// Run the main event / render loop. Returns when the window is closed.
+    /// In headless mode, performs initial layout and returns immediately.
     void run();
 
     /// Handle a window resize.
@@ -45,6 +55,52 @@ public:
     void handleTextInput(const std::string& text);
     void handleWheel(float x, float y, float dx, float dy);
 
+    // --- Headless API (also usable in windowed mode) ---
+
+    /// Access the document.
+    dom::Document* document() const { return document_.get(); }
+
+    /// Access the renderer.
+    render::Renderer* renderer() const { return renderer_.get(); }
+
+    /// Access the JS runtime.
+    js::Runtime* jsRuntime() const { return jsRuntime_.get(); }
+
+    /// Access the timers.
+    js::Timers* timers() const { return timers_.get(); }
+
+    /// Access the system overlay.
+    SystemOverlay* systemOverlay() const { return systemOverlay_.get(); }
+
+    /// Run pending JS jobs and re-layout if dirty.
+    void flush();
+
+    /// Advance virtual time by the given milliseconds (headless mode).
+    /// In windowed mode this is a no-op.
+    void advanceTime(double ms);
+
+    /// Evaluate JS code and return the string result.
+    std::string eval(const std::string& code);
+
+    /// Render the current page to a BMP file.
+    bool screenshot(const std::string& path);
+
+    /// Find an element by selector (#id shorthand or CSS selector).
+    dom::Element* querySelector(const std::string& selector) const;
+
+    /// Simulate a click on the given element.
+    void dispatchClickOn(dom::Element* target);
+
+    /// Get display mode.
+    DisplayMode displayMode() const { return displayMode_; }
+
+    /// Get viewport dimensions.
+    int viewportWidth() const { return viewportWidth_; }
+    int viewportHeight() const { return viewportHeight_; }
+
+    /// Get virtual time (headless mode).
+    double virtualTime() const { return virtualTime_; }
+
 private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
@@ -52,6 +108,8 @@ private:
     void advanceFocus(bool reverse);
     void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
     void ensureReplacedElements(dom::Element* elem);
+
+    DisplayMode displayMode_;
 
     std::unique_ptr<platform::Window> window_;
     std::unique_ptr<render::GLContext> gl_;
@@ -71,6 +129,11 @@ private:
     std::unique_ptr<render::SceneLayer> sceneLayer_;
     std::unique_ptr<audio::AudioEngine> audioEngine_;
     std::unique_ptr<SystemOverlay> systemOverlay_;
+
+    // Headless-specific
+    double virtualTime_ = 0.0;
+    std::unique_ptr<canvas::CanvasScene> headlessCanvasScene_;
+    canvas::CanvasScene* headlessCanvasScenePtr_ = nullptr;
 
     // Stats tracking
     double statsAccumMs_ = 0.0;
@@ -116,9 +179,9 @@ private:
     double accumDrawMs_ = 0.0;
     double accumUploadMs_ = 0.0;
 
-    // UI overlay quad (OpenGL)
-    GLuint uiQuadVAO_ = 0;
-    GLuint uiQuadVBO_ = 0;
+    // UI overlay quad (OpenGL) — unsigned int to avoid including glad/gl.h
+    unsigned int uiQuadVAO_ = 0;
+    unsigned int uiQuadVBO_ = 0;
 };
 
 } // namespace bro::engine

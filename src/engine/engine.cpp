@@ -4,6 +4,7 @@
 #include "platform/sdl_window.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
+#include "render/raster_renderer.h"
 #include "render/scene_layer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
@@ -22,6 +23,7 @@
 #include "js/fetch_bindings.h"
 #include "audio/audio_engine.h"
 #include "canvas/canvas_scene.h"
+#include "canvas/canvas2d.h"
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_scene.h"
 #include "dom/document.h"
@@ -39,6 +41,11 @@
 #include "engine/default_styles.h"
 #include "util/log.h"
 #include "util/time.h"
+
+#include <include/core/SkCanvas.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkPaint.h>
+#include <include/core/SkSurface.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
@@ -200,22 +207,33 @@ static layout::ElSelect* getElSelect(dom::Element* el);
 // Construction
 // ---------------------------------------------------------------------------
 
-Engine::Engine(const std::string& appDir, int width, int height)
-    : viewportWidth_(width)
-    , viewportHeight_(height) {
+Engine::Engine(const EngineConfig& config)
+    : displayMode_(config.displayMode)
+    , viewportWidth_(config.width)
+    , viewportHeight_(config.height) {
 
-    // 1. Window (now creates OpenGL context)
-    window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(width),
-                                                  static_cast<uint32_t>(height));
+    // === Mode-specific initialization ===
 
-    // 2. GL context (shader programs + helpers)
-    gl_ = std::make_unique<render::GLContext>(*window_);
+    if (displayMode_ == DisplayMode::Windowed) {
+        // 1. Window (creates OpenGL context)
+        window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(config.width),
+                                                      static_cast<uint32_t>(config.height));
 
-    // 3. Renderer (Skia raster + OpenGL display)
-    renderer_ = render::createRenderer(gl_.get());
-    if (!renderer_) {
-        throw std::runtime_error("Failed to create renderer");
+        // 2. GL context (shader programs + helpers)
+        gl_ = std::make_unique<render::GLContext>(*window_);
+
+        // 3. Renderer (Skia raster + OpenGL display)
+        renderer_ = render::createRenderer(gl_.get());
+        if (!renderer_) {
+            throw std::runtime_error("Failed to create renderer");
+        }
+    } else {
+        // Headless: CPU-only Skia renderer, no window/GL
+        renderer_ = std::make_unique<render::RasterRenderer>();
+        virtualTime_ = util::currentTimeMs();
     }
+
+    // === Common initialization ===
 
     // 4. JS runtime + bindings
     jsRuntime_ = std::make_unique<js::Runtime>();
@@ -225,25 +243,29 @@ Engine::Engine(const std::string& appDir, int width, int height)
     js::Timers::install(jsRuntime_->getContext(), timers_.get());
 
     // 4b. Audio engine + bindings
-    audioEngine_ = std::make_unique<audio::AudioEngine>();
-    audioEngine_->init();
-    js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
-
-    // 4c. localStorage (persisted) + sessionStorage (in-memory)
-    std::string storagePath = manifest_.basePath + "/.storage.json";
-    js::StorageBindings::install(jsRuntime_->getContext(), storagePath);
-    js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
+    if (displayMode_ == DisplayMode::Windowed) {
+        audioEngine_ = std::make_unique<audio::AudioEngine>();
+        audioEngine_->init();
+        js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
+    } else {
+        js::AudioBindings::install(jsRuntime_->getContext(), nullptr);
+    }
 
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
     textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get(), &fontManager_);
 
     // 6. Load the application
-    manifest_ = AppLoader::loadApp(appDir);
+    manifest_ = AppLoader::loadApp(config.appDir);
     std::string html = AppLoader::loadFile(manifest_.htmlPath);
     if (html.empty()) {
-        throw std::runtime_error("Failed to load index.html from " + appDir);
+        throw std::runtime_error("Failed to load index.html from " + config.appDir);
     }
+
+    // 4c. localStorage (persisted) + sessionStorage (in-memory)
+    std::string storagePath = manifest_.basePath + "/.storage.json";
+    js::StorageBindings::install(jsRuntime_->getContext(), storagePath);
+    js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
 
     // Set the base path so relative paths work.
     drawTraversal_->setBasePath(manifest_.basePath);
@@ -274,14 +296,13 @@ Engine::Engine(const std::string& appDir, int width, int height)
     if (!templateBlocks.empty())
         document_->injectTemplates(templateBlocks);
 
-    // 8b. Set window title from <title> element
-    {
+    // 8b. Set window title from <title> element (windowed only)
+    if (window_) {
         std::string docTitle = document_->title();
-        if (!docTitle.empty() && window_) {
+        if (!docTitle.empty()) {
             window_->setTitle(docTitle);
         }
     }
-
 
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
@@ -293,28 +314,41 @@ Engine::Engine(const std::string& appDir, int width, int height)
     js::installCustomElements(jsRuntime_->getContext(),
                               js::DomBindings::elementClassId(), document_.get());
 
-    // 9c. Install Canvas 2D and WebGL2 bindings + getContext factory
+    // 9c. Install Canvas 2D bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());
-    js::WebGL2Bindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::FetchBindings::install(jsRuntime_->getContext(), manifest_.basePath);
-    js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
-        [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
-            if (type == "2d") {
-                auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
-                auto* ptr = scene.get();
-                setSceneLayer(std::move(scene));
-                return js::CanvasBindings::wrapContext2D(ctx, ptr);
-            }
-            if (type == "webgl2" || type == "webgl") {
-                auto* webglCtx = new webgl::WebGL2RenderingContext(
-                    viewportWidth_, viewportHeight_);
-                auto scene = std::make_unique<webgl::WebGLScene>(webglCtx);
-                setSceneLayer(std::move(scene));
-                return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
-            }
-            return JS_NULL;
-        });
+
+    if (displayMode_ == DisplayMode::Windowed) {
+        // Windowed: WebGL2 + full canvas factory
+        js::WebGL2Bindings::install(jsRuntime_->getContext());
+        js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
+            [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
+                if (type == "2d") {
+                    auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                    auto* ptr = scene.get();
+                    setSceneLayer(std::move(scene));
+                    return js::CanvasBindings::wrapContext2D(ctx, ptr);
+                }
+                if (type == "webgl2" || type == "webgl") {
+                    auto* webglCtx = new webgl::WebGL2RenderingContext(
+                        viewportWidth_, viewportHeight_);
+                    auto scene = std::make_unique<webgl::WebGLScene>(webglCtx);
+                    setSceneLayer(std::move(scene));
+                    return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
+                }
+                return JS_NULL;
+            });
+    } else {
+        // Headless: 2D canvas only, no WebGL
+        js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
+            [this](JSContext* ctx, dom::Element*, const std::string&) -> JSValue {
+                headlessCanvasScene_ = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                headlessCanvasScenePtr_ = headlessCanvasScene_.get();
+                headlessCanvasScene_->onInit(nullptr, viewportWidth_, viewportHeight_);
+                return js::CanvasBindings::wrapContext2D(ctx, headlessCanvasScenePtr_);
+            });
+    }
 
     // 10. Load and execute scripts
     for (auto& scriptPath : manifest_.scriptPaths) {
@@ -326,8 +360,16 @@ Engine::Engine(const std::string& appDir, int width, int height)
         }
     }
 
-    // 11. Event loop
-    eventLoop_ = std::make_unique<platform::EventLoop>();
+    // === Mode-specific post-init ===
+
+    if (displayMode_ == DisplayMode::Windowed) {
+        // 11. Event loop
+        eventLoop_ = std::make_unique<platform::EventLoop>();
+
+        // 13. Create UI overlay quad VAO/VBO
+        glGenVertexArrays(1, &uiQuadVAO_);
+        glGenBuffers(1, &uiQuadVBO_);
+    }
 
     // 12. System overlay (loads panels from system/ sibling directory)
     //     Shares the JS runtime — each panel gets its own JSContext.
@@ -335,9 +377,12 @@ Engine::Engine(const std::string& appDir, int width, int height)
                                                       viewportWidth_, viewportHeight_);
     systemOverlay_->loadPanels("system");
 
-    // 13. Create UI overlay quad VAO/VBO
-    glGenVertexArrays(1, &uiQuadVAO_);
-    glGenBuffers(1, &uiQuadVBO_);
+    // Headless: do initial layout + flush
+    if (displayMode_ == DisplayMode::Headless) {
+        document_->resolveStyles();
+        document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
+        flush();
+    }
 }
 
 void Engine::setSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
@@ -353,19 +398,43 @@ Engine::~Engine() {
     }
     sceneLayer_.reset();
     systemOverlay_.reset();
+    headlessCanvasScene_.reset();
+
+    // 1. Clear timers (they hold JS callbacks)
     if (timers_ && jsRuntime_) {
         timers_->clearAll(jsRuntime_->getContext());
     }
+
+    // 2. Clear JS bindings
     if (jsRuntime_) {
-        js::AudioBindings::cleanup(jsRuntime_->getContext());
-        js::StorageBindings::cleanup(jsRuntime_->getContext());
-        js::WebGL2Bindings::cleanup(jsRuntime_->getContext());
-        js::cleanupCustomElements(jsRuntime_->getContext());
-        js::DomBindings::cleanup(jsRuntime_->getContext());
+        JSContext* ctx = jsRuntime_->getContext();
+        js::AudioBindings::cleanup(ctx);
+        js::StorageBindings::cleanup(ctx);
+        if (displayMode_ == DisplayMode::Windowed) {
+            js::WebGL2Bindings::cleanup(ctx);
+        }
+        js::cleanupCustomElements(ctx);
+
+        // Clean up global properties (prevents leaked references)
+        JSValue global = JS_GetGlobalObject(ctx);
+        JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "__bro_elem_map"), 0);
+        JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "document"), 0);
+        JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "console"), 0);
+        JS_FreeValue(ctx, global);
+
+        js::DomBindings::cleanup(ctx);
+        jsRuntime_->executePendingJobs();
+        JS_RunGC(jsRuntime_->getRuntime());
     }
+
+    // 3. GL cleanup (windowed only)
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
     if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
     audioEngine_.reset();
+
+    // 4. Release layout resources before document
+    drawTraversal_.reset();
+
     // Clean up per-runtime DomBindings state before the runtime is freed.
     if (jsRuntime_) {
         js::DomBindings::cleanupRuntime(jsRuntime_->getRuntime());
@@ -374,6 +443,8 @@ Engine::~Engine() {
     // that dereference Element pointers, so elements must still be alive.
     jsRuntime_.reset();
     document_.reset();
+    timers_.reset();
+    renderer_.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +452,12 @@ Engine::~Engine() {
 // ---------------------------------------------------------------------------
 
 void Engine::run() {
+    // Headless mode: initial layout is done in constructor, return immediately.
+    // The HeadlessController drives subsequent frames via advanceTime/flush.
+    if (displayMode_ == DisplayMode::Headless) {
+        return;
+    }
+
     running_ = true;
 
     // Wire up event-loop callbacks.
@@ -1957,6 +2034,155 @@ void Engine::ensureReplacedElements(dom::Element* elem) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Headless API
+// ---------------------------------------------------------------------------
+
+void Engine::flush() {
+    jsRuntime_->executePendingJobs();
+    if (document_ && document_->isDirty()) {
+        document_->resolveStyles();
+        document_->clearStructureDirty();
+        document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
+        document_->clearDirty();
+    }
+}
+
+void Engine::advanceTime(double ms) {
+    if (displayMode_ != DisplayMode::Headless) return;
+
+    double remaining = ms;
+    while (remaining > 0) {
+        double step = std::min(remaining, 16.0);
+        virtualTime_ += step;
+        remaining -= step;
+        timers_->tick(virtualTime_);
+        timers_->fireAnimationFrames(virtualTime_);
+        flush();
+
+        // Periodic GC + orphan sweep (every ~1s of virtual time)
+        if (virtualTime_ - lastGCMs_ >= kGCIntervalMs) {
+            js::DomBindings::sweepOrphanedWrappers(jsRuntime_->getContext());
+            JS_RunGC(jsRuntime_->getRuntime());
+            lastGCMs_ = virtualTime_;
+        }
+    }
+}
+
+std::string Engine::eval(const std::string& code) {
+    JSContext* ctx = jsRuntime_->getContext();
+    JSValue result = JS_Eval(ctx, code.c_str(), code.size(), "<eval>",
+                              JS_EVAL_TYPE_GLOBAL);
+    std::string output;
+    if (JS_IsException(result)) {
+        js::Runtime::checkException(ctx, result);
+        output = "[exception]";
+    } else {
+        const char* str = JS_ToCString(ctx, result);
+        if (str) {
+            output = str;
+            JS_FreeCString(ctx, str);
+        } else {
+            output = "[null]";
+        }
+    }
+    JS_FreeValue(ctx, result);
+    flush();
+    return output;
+}
+
+bool Engine::screenshot(const std::string& path) {
+    if (!document_) return false;
+
+    // Fire any pending rAF callbacks so canvas commands are up to date
+    timers_->fireAnimationFrames(virtualTime_);
+    jsRuntime_->executePendingJobs();
+
+    // Render a frame to the raster surface
+    renderer_->beginFrame(viewportWidth_, viewportHeight_);
+    renderer_->clear({0, 0, 0, 255});
+
+    // Render canvas scene first (behind HTML)
+    if (headlessCanvasScenePtr_) {
+        auto& cmds = headlessCanvasScenePtr_->canvas().commands();
+        uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
+        float globalAlpha = 1.0f;
+
+        for (auto& cmd : cmds) {
+            using CT = canvas::CmdType;
+            switch (cmd.type) {
+            case CT::SetFillStyle:
+                fillR = cmd.r; fillG = cmd.g; fillB = cmd.b; fillA = cmd.a;
+                break;
+            case CT::SetGlobalAlpha:
+                globalAlpha = cmd.f;
+                break;
+            case CT::FillRect: {
+                uint8_t a = static_cast<uint8_t>(fillA * globalAlpha);
+                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h,
+                                    {fillR, fillG, fillB, a});
+                break;
+            }
+            case CT::ClearRect:
+                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h, {0, 0, 0, 255});
+                break;
+            default: break;
+            }
+        }
+    }
+
+    // Render HTML/CSS overlay on top
+    drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
+
+    // Render system overlay on top of everything
+    if (systemOverlay_ && systemOverlay_->isVisible()) {
+        systemOverlay_->tick(virtualTime_);
+        systemOverlay_->render(viewportWidth_, viewportHeight_);
+
+        // Composite system overlay surface onto app surface
+        auto* sysRenderer = systemOverlay_->getRenderer();
+        if (sysRenderer && sysRenderer->surface()) {
+            auto* raster = dynamic_cast<render::RasterRenderer*>(renderer_.get());
+            if (raster) {
+                auto* appCanvas = raster->getCanvas();
+                if (appCanvas) {
+                    sk_sp<SkImage> sysImage = sysRenderer->surface()->makeImageSnapshot();
+                    if (sysImage) {
+                        SkPaint paint;
+                        paint.setBlendMode(SkBlendMode::kSrcOver);
+                        appCanvas->drawImage(sysImage, 0, 0, SkSamplingOptions(), &paint);
+                    }
+                }
+            }
+        }
+    }
+
+    renderer_->endFrame();
+
+    // Save the surface as BMP
+    auto* raster = dynamic_cast<render::RasterRenderer*>(renderer_.get());
+    if (!raster) return false;
+    return raster->saveScreenshot(path);
+}
+
+dom::Element* Engine::querySelector(const std::string& selector) const {
+    if (!document_) return nullptr;
+
+    // Handle #id shorthand
+    if (!selector.empty() && selector[0] == '#') {
+        return document_->getElementById(selector.substr(1));
+    }
+
+    return document_->querySelector(selector);
+}
+
+void Engine::dispatchClickOn(dom::Element* target) {
+    if (!target || !jsRuntime_) return;
+    if (document_) document_->setActiveElement(target);
+    dom::MouseEvent event("click");
+    js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
 } // namespace bro::engine

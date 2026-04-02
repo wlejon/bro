@@ -37,9 +37,11 @@ Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleratio
 
 **Stack:** QuickJS (JS engine) + htmlayout (CSS parsing + layout) + gumbo (HTML parsing) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 
-**Two executables:**
-- `bro` — windowed app runner
-- `bro-headless` — headless testing tool (no GPU/window, text commands via stdin)
+**Two executables, one Engine:**
+- `bro` — windowed app runner (DisplayMode::Windowed)
+- `bro-headless` — headless tool with text commands (DisplayMode::Headless)
+
+Both share the same `Engine` class configured via `EngineConfig`. Headless uses `RasterRenderer` (CPU Skia with real fonts) instead of `SkiaRenderer` (GPU), and `HeadlessController` drives the engine via commands.
 
 ### Module dependency graph
 
@@ -48,7 +50,7 @@ util  (logging, string helpers — standalone)
   ↑
 platform  (SDL3 window, event loop)
   ↑
-render  (abstract Renderer interface, SkiaRenderer)
+render  (abstract Renderer interface, SkiaRenderer, RasterRenderer)
   ↑
 layout  (htmlayout adapters, draw traversal, replaced elements)
   ↑
@@ -63,7 +65,7 @@ engine  (orchestrates all subsystems, main loop)
 
 - **Single DOM:** HTML is parsed with gumbo into a `bro::dom` tree. CSS is resolved by `htmlayout::css::Cascade`, layout by `htmlayout::layout::layoutTree()`, and rendering by `DrawTraversal` which walks the tree and issues Skia draw calls.
 - **GPU rendering:** `GPUContext` owns the `SDL_GPUDevice`, shader pipelines (color + texture), and manages the D3D12 render passes. `SkiaRenderer` rasterizes HTML/CSS to a Skia surface, uploads to a `SDL_GPUTexture` via transfer buffers, and composites as a fullscreen textured quad. Canvas 2D commands are batched into vertex buffers and drawn via the color pipeline.
-- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization (used by both `SkiaRenderer` for windowed mode and `RasterRenderer` for headless).
+- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization. `SkiaRenderer` (GPU-accelerated, windowed) and `RasterRenderer` (CPU Skia with real fonts, headless) both implement it. Both use Skia DirectWrite for accurate text metrics.
 - **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via `htmlayout::layout::hitTest()` → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners.
 - **Dirty tracking:** DOM mutations call `document_->markDirty()`. Main loop only re-layouts when `isDirty()` is true.
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.
@@ -71,7 +73,7 @@ engine  (orchestrates all subsystems, main loop)
 
 ### Headless testing commands
 
-`dump [selector]`, `click <selector>`, `eval <js>`, `wait <ms>`, `diff`, `quit`. See `docs/headless.md` for full reference. Headless uses approximate text measurement (no real fonts).
+`dump [selector]`, `click <selector>`, `eval <js>`, `wait <ms>`, `screenshot <path>`, `rect <selector>`, `diff`, `system`, `quit`. See `docs/headless.md` for full reference. Headless uses real Skia/DirectWrite font metrics, identical to windowed mode.
 
 ## Third-party dependencies (all in third_party/ as git submodules)
 

@@ -1,6 +1,6 @@
-add_library(bro_headless STATIC headless.cpp)
+add_library(bro_headless STATIC headless_controller.cpp)
 target_include_directories(bro_headless PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bro_headless PUBLIC bro_js bro_dom bro_layout bro_render bro_canvas bro_audio bro_util)
+target_link_libraries(bro_headless PUBLIC bro_engine)
 
 add_executable(bro-headless main.cpp)
 target_link_libraries(bro-headless PRIVATE bro_headless bro_engine)

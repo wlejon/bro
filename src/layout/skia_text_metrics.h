@@ -54,21 +54,4 @@ private:
     FontManager* fontManager_;
 };
 
-// Approximate text metrics for headless mode (no real fonts).
-class HeadlessTextMetrics : public htmlayout::layout::TextMetrics {
-public:
-    float measureWidth(const std::string& text,
-                       const std::string& /*fontFamily*/,
-                       float fontSize,
-                       const std::string& /*fontWeight*/) override {
-        return static_cast<float>(text.size()) * fontSize * 0.6f;
-    }
-
-    float lineHeight(const std::string& /*fontFamily*/,
-                     float fontSize,
-                     const std::string& /*fontWeight*/) override {
-        return fontSize * 1.2f;
-    }
-};
-
 } // namespace bro::layout

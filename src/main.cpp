@@ -12,7 +12,7 @@ int main(int argc, char* argv[]) {
     std::string appDir = argv[1];
 
     try {
-        bro::engine::Engine engine(appDir);
+        bro::engine::Engine engine(bro::engine::EngineConfig{appDir});
         engine.run();
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
