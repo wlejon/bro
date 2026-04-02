@@ -54,7 +54,7 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing).
 ### Setup
 
 ```bash
-git clone --recursive <repo-url>
+git clone --recursive https://github.com/wlejon/bro
 cd bro
 ```
 
