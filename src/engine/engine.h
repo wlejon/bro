@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/app_loader.h"
+#include "engine/scrollbar.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "layout/font_manager.h"
@@ -160,9 +161,13 @@ private:
     // Viewport scrolling
     float scrollY_ = 0.0f;
     float documentHeight_ = 0.0f;
-    static constexpr float kScrollSpeed = 48.0f; // pixels per wheel tick
-    static constexpr int kScrollbarWidth = 8;
-    static constexpr int kScrollbarMargin = 2;
+
+    // Scrollbar components
+    Scrollbar viewportScrollbar_;
+    Scrollbar elementScrollbar_{Scrollbar::Style{5.0f, 1.0f, 16.0f,
+        {255,255,255,20}, {255,255,255,100}, {255,255,255,150}, {255,255,255,180}}};
+    bool draggingViewportScrollbar_ = false;
+    dom::Element* scrollbarDragTarget_ = nullptr;
 
     // UI render throttle — layout+rasterize at most every ~60fps
     static constexpr double kUIFrameIntervalMs = 8.0;
