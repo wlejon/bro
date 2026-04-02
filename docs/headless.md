@@ -128,12 +128,12 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 - Full WebGL2 support — Three.js, raw WebGL, and other GL frameworks work
 - Canvas 2D uses GL scene layers, composited in the screenshot pipeline
 - Screenshots replicate the windowed compositing pass: scene layer rendered to an offscreen FBO, UI overlay composited on top with premultiplied alpha, then read back via `glReadPixels`
-- Text metrics use Skia with DirectWrite — pixel-identical to windowed rendering
+- Text metrics use Skia with platform-native fonts (DirectWrite on Windows, FreeType/fontconfig on Linux) — pixel-identical to windowed rendering
 
 ### CPU mode (`--no-gpu`)
 
 - No window, no OpenGL context
-- Uses `RasterRenderer` — CPU-only Skia with real DirectWrite fonts
+- Uses `RasterRenderer` — CPU-only Skia with real platform-native fonts
 - Canvas 2D rendered via software command replay
 - No WebGL support (apps fall back gracefully)
 - Screenshots captured directly from the Skia raster surface

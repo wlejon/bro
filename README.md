@@ -40,9 +40,16 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing).
 
 ### Prerequisites
 
+**Windows:**
 - **MSVC** (Visual Studio 2022+) — MinGW is not supported
-- **CMake** 3.28+
+- **CMake** 3.24+
 - **Skia** pre-built libraries in `third_party/skia/`
+
+**Linux (Debian/Ubuntu):**
+- **GCC 12+** or **Clang 15+**
+- **CMake** 3.24+
+- System packages: `build-essential cmake libfreetype-dev libfontconfig-dev libgl-dev libjpeg-dev libpng-dev libwebp-dev`
+- **Skia** pre-built library (see below)
 
 ### Setup
 
@@ -51,10 +58,31 @@ git clone --recursive <repo-url>
 cd bro
 ```
 
+### Building Skia
+
+Skia is a pre-built dependency — it is not built automatically by CMake. Place the built library in `third_party/skia/lib/{Debug,Release}/`.
+
+On Linux, a build script is provided:
+
+```bash
+# Install prerequisites (Debian/Ubuntu)
+sudo apt install build-essential clang python3 ninja-build \
+                 libfreetype-dev libfontconfig-dev libgl-dev \
+                 libjpeg-dev libpng-dev libwebp-dev
+
+# Build Skia (clones source, syncs deps, builds, and installs libskia.a)
+cd third_party/skia
+./build_skia_linux.sh           # Release only
+./build_skia_linux.sh Debug     # Debug only
+./build_skia_linux.sh all       # Both
+```
+
+On Windows, build Skia separately with `gn`/`ninja` and place `skia.lib` in the same location.
+
 ### Build
 
 ```bash
-# Configure (uses Visual Studio generator)
+# Configure
 cmake -B build
 
 # Debug build
@@ -64,13 +92,18 @@ cmake --build build --config Debug
 cmake --build build --config Release
 ```
 
+On Windows this uses the Visual Studio multi-config generator. On Linux it defaults to Unix Makefiles (single-config; set `CMAKE_BUILD_TYPE` at configure time or use `-G Ninja`).
 
 ## Usage
 
 ### Windowed mode
 
 ```bash
+# Windows
 ./build/src/Debug/bro.exe apps/hello
+
+# Linux
+./build/src/bro apps/hello
 ```
 
 Loads `apps/hello/index.html`, applies stylesheets, executes scripts, and opens a window.
@@ -81,17 +114,19 @@ Headless mode runs the full engine pipeline (GPU rendering, real fonts, WebGL) w
 
 ```bash
 # Interactive JS REPL
-./build/src/headless/Debug/bro-headless.exe apps/hello
+bro-headless apps/hello
 
 # Run a JS script file
-./build/src/headless/Debug/bro-headless.exe apps/hello test.js
+bro-headless apps/hello test.js
 
 # Inline JS expressions
-./build/src/headless/Debug/bro-headless.exe apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+bro-headless apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
 
 # CPU-only mode (no GPU/WebGL — for CI without a GPU)
-./build/src/headless/Debug/bro-headless.exe --no-gpu apps/hello
+bro-headless --no-gpu apps/hello
 ```
+
+On Linux without a display server, use `--no-gpu` or set `SDL_VIDEODRIVER=dummy`.
 
 Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`. All standard DOM APIs work.
 

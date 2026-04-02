@@ -13,26 +13,38 @@ cmake --build build --config Debug
 
 # Build (release)
 cmake --build build --config Release
-
-# Run windowed app
-./build/src/Debug/bro.exe apps/hello
-
-# Run headless (interactive JS REPL, GPU — default)
-./build/src/headless/Debug/bro-headless.exe apps/hello
-
-# Run headless (JS script file)
-./build/src/headless/Debug/bro-headless.exe apps/hello test.js
-
-# Run headless (inline JS expression)
-./build/src/headless/Debug/bro-headless.exe apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
-
-# Run headless (CPU-only, no GPU/WebGL — for CI without GPU)
-./build/src/headless/Debug/bro-headless.exe --no-gpu apps/hello
 ```
 
-Uses the Visual Studio generator (multi-config). Do not use MinGW.
+**Windows** (Visual Studio multi-config generator, do not use MinGW):
+```bash
+./build/src/Debug/bro.exe apps/hello
+./build/src/headless/Debug/bro-headless.exe apps/hello
+```
+
+**Linux** (single-config, executables have no .exe suffix or config subdirectory):
+```bash
+./build/src/bro apps/hello
+./build/src/headless/bro-headless apps/hello
+```
+
+**Common headless invocations** (paths differ per platform as above):
+```bash
+# Interactive JS REPL (GPU — default)
+bro-headless apps/hello
+
+# JS script file
+bro-headless apps/hello test.js
+
+# Inline JS expression
+bro-headless apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+
+# CPU-only, no GPU/WebGL — for CI without GPU (or use SDL_VIDEODRIVER=dummy on Linux)
+bro-headless --no-gpu apps/hello
+```
 
 Submodules must be initialized: `git submodule update --init`
+
+Skia is a pre-built dependency. On Linux, run `third_party/skia/build_skia_linux.sh` to build and install it. On Windows, build Skia separately and place `skia.lib` in `third_party/skia/lib/{Debug,Release}/`.
 
 ## Architecture
 
@@ -68,7 +80,7 @@ engine  (orchestrates all subsystems, main loop)
 
 - **Single DOM:** HTML is parsed with gumbo into a `bro::dom` tree. CSS is resolved by `htmlayout::css::Cascade`, layout by `htmlayout::layout::layoutTree()`, and rendering by `DrawTraversal` which walks the tree and issues Skia draw calls.
 - **GPU rendering:** `GPUContext` owns the `SDL_GPUDevice`, shader pipelines (color + texture), and manages the D3D12 render passes. `SkiaRenderer` rasterizes HTML/CSS to a Skia surface, uploads to a `SDL_GPUTexture` via transfer buffers, and composites as a fullscreen textured quad. Canvas 2D commands are batched into vertex buffers and drawn via the color pipeline.
-- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization. `SkiaRenderer` (GPU-accelerated, windowed) and `RasterRenderer` (CPU Skia with real fonts, headless) both implement it. Both use Skia DirectWrite for accurate text metrics.
+- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization. `SkiaRenderer` (GPU-accelerated, windowed) and `RasterRenderer` (CPU Skia with real fonts, headless) both implement it. Both use Skia with platform-native font backends (DirectWrite on Windows, FreeType/fontconfig on Linux) for accurate text metrics.
 - **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via `htmlayout::layout::hitTest()` → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners.
 - **Dirty tracking:** DOM mutations call `document_->markDirty()`. Main loop only re-layouts when `isDirty()` is true.
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.
