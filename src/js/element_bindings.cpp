@@ -1078,9 +1078,18 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     auto* el = getElement(this_val);
     auto& box = getLayoutBox(el);
 
-    JSValue rect = JS_NewObject(ctx);
+    // Accumulate absolute position by walking up parents.
+    // Layout positions are parent-relative (content area origin).
     float x = box.contentRect.x - box.padding.left - box.border.left;
     float y = box.contentRect.y - box.padding.top - box.border.top;
+    for (auto* p = el->parentNode(); p; p = p->parentNode()) {
+        if (p->nodeType() != bro::dom::NodeType::Element) continue;
+        auto& pb = static_cast<bro::dom::Element*>(p)->layoutBox();
+        x += pb.contentRect.x;
+        y += pb.contentRect.y;
+    }
+
+    JSValue rect = JS_NewObject(ctx);
     float w = box.fullWidth();
     float h = box.fullHeight();
     JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, x));

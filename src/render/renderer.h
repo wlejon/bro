@@ -5,6 +5,7 @@
 #include <string_view>
 #include <string>
 #include <span>
+#include <vector>
 
 class SkCanvas;
 class SkSurface;
@@ -116,6 +117,9 @@ public:
     virtual SkCanvas* getCanvas() const { return nullptr; }
     virtual SkSurface* surface() const { return nullptr; }
     virtual bool saveScreenshot(const std::string& path) { return false; }
+
+    /// Capture the surface as RGBA pixels (w x h x 4). Returns empty on failure.
+    virtual std::vector<uint8_t> capturePixels() { return {}; }
 
 };
 

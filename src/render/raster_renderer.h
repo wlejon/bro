@@ -70,6 +70,7 @@ public:
     SkCanvas* getCanvas() const override { return canvas_; }
     SkSurface* surface() const override { return surface_.get(); }
     bool saveScreenshot(const std::string& path) override;
+    std::vector<uint8_t> capturePixels() override;
 
 private:
     static SkColor toSkColor(Color c);

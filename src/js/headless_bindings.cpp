@@ -1,5 +1,7 @@
 #include "js/headless_bindings.h"
 #include "engine/engine.h"
+#include "dom/element.h"
+#include "dom/node.h"
 #include "util/log.h"
 
 #include <string>
@@ -42,9 +44,38 @@ static JSValue js_screenshot(JSContext* ctx, JSValueConst, int argc, JSValueCons
     const char* path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
 
-    bool ok = engine->screenshot(path);
-    JS_FreeCString(ctx, path);
+    bool ok;
+    if (argc >= 2 && JS_IsString(argv[1])) {
+        // screenshot(path, selector) — crop to element's bounding rect
+        const char* selector = JS_ToCString(ctx, argv[1]);
+        if (!selector) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
 
+        auto* el = engine->querySelector(selector);
+        if (!el) {
+            JS_FreeCString(ctx, path);
+            return JS_ThrowTypeError(ctx, "screenshot: element not found: %s", selector);
+        }
+        JS_FreeCString(ctx, selector);
+
+        // Compute absolute position by walking up the parent chain.
+        // Layout positions are parent-relative; drawTraversal accumulates offsets.
+        auto& box = el->layoutBox();
+        float ax = box.contentRect.x - box.padding.left - box.border.left;
+        float ay = box.contentRect.y - box.padding.top - box.border.top;
+        for (auto* p = el->parentNode(); p; p = p->parentNode()) {
+            if (p->nodeType() != bro::dom::NodeType::Element) continue;
+            auto& pb = static_cast<bro::dom::Element*>(p)->layoutBox();
+            ax += pb.contentRect.x;
+            ay += pb.contentRect.y;
+        }
+        int w = static_cast<int>(box.fullWidth());
+        int h = static_cast<int>(box.fullHeight());
+        ok = engine->screenshot(path, static_cast<int>(ax), static_cast<int>(ay), w, h);
+    } else {
+        ok = engine->screenshot(path);
+    }
+
+    JS_FreeCString(ctx, path);
     if (ok) return JS_TRUE;
     return JS_ThrowInternalError(ctx, "screenshot failed");
 }

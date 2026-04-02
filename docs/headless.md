@@ -29,6 +29,7 @@ These functions are available in addition to all standard DOM APIs:
 | `advanceTime(ms)` | Advance virtual time by N milliseconds (fires timers, rAF callbacks, and pending JS jobs) |
 | `sleep(ms)` | Alias for `advanceTime` |
 | `screenshot(path)` | Render the current frame to a PNG file. Composites scene layers (WebGL, Canvas 2D) with the HTML/CSS UI overlay. Throws on failure. |
+| `screenshot(path, selector)` | Render the current frame and crop to the element's bounding box before saving. |
 | `flush()` | Force layout recalculation (called automatically after `advanceTime`) |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
 

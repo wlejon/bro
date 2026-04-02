@@ -2239,7 +2239,7 @@ bool Engine::screenshot(const std::string& path) {
         return stbi_write_png(path.c_str(), w, h, 4, pixels.data(), rowBytes) != 0;
     }
 
-    // CPU path: render everything to Skia raster surface
+    // CPU path: render to Skia raster surface and save
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
@@ -2297,6 +2297,187 @@ bool Engine::screenshot(const std::string& path) {
     renderer_->endFrame();
 
     return renderer_->saveScreenshot(path);
+}
+
+std::vector<uint8_t> Engine::capturePixels() {
+    if (!document_) return {};
+
+    // Bind WebGL canvas FBO before firing rAF
+    auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+    if (webglScene && webglScene->webglContext())
+        webglScene->webglContext()->bindCanvasFBO();
+
+    timers_->fireAnimationFrames(virtualTime_);
+    jsRuntime_->executePendingJobs();
+
+    if (webglScene && webglScene->webglContext())
+        webglScene->webglContext()->unbindCanvasFBO();
+
+    // GPU compositing path
+    if (gl_ && sceneLayer_) {
+        auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
+        int w = viewportWidth_, h = viewportHeight_;
+
+        renderer_->beginFrame(w, h);
+        if (document_->documentElement())
+            drawTraversal_->draw(document_->documentElement(), 0, 0, w, h);
+        renderer_->endFrame();
+        skia->uploadToGPU();
+
+        auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sceneLayer_.get());
+        if (canvasScene) canvasScene->prepareFrame(gl_.get(), w, h);
+
+        // Create temporary compositing FBO
+        GLuint compositeFBO = 0, compositeTex = 0;
+        glGenFramebuffers(1, &compositeFBO);
+        compositeTex = gl_->createTexture2D(w, h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
+        glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, compositeTex, 0);
+
+        glViewport(0, 0, w, h);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        sceneLayer_->onRender(gl_.get(), w, h, 0.0);
+
+        // Composite UI overlay
+        GLuint uiTex = skia->getUITexture();
+        if (uiTex) {
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {0, 0, 0, 0}, {fw, 0, 1, 0}, {fw, fh, 1, 1},
+                {0, 0, 0, 0}, {fw, fh, 1, 1}, {0, fh, 0, 1},
+            };
+
+            GLuint quadVBO = 0;
+            glGenBuffers(1, &quadVBO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+
+            GLuint quadVAO = 0;
+            glGenVertexArrays(1, &quadVAO);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_SCISSOR_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, uiTex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
+
+        // Read back pixels
+        std::vector<uint8_t> pixels(w * h * 4);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &compositeFBO);
+        gl_->deleteTexture(compositeTex);
+
+        if (webglScene && webglScene->webglContext())
+            webglScene->webglContext()->restoreState();
+
+        // Flip vertically (OpenGL reads bottom-to-top)
+        int rowBytes = w * 4;
+        std::vector<uint8_t> row(rowBytes);
+        for (int y = 0; y < h / 2; ++y) {
+            uint8_t* top = pixels.data() + y * rowBytes;
+            uint8_t* bot = pixels.data() + (h - 1 - y) * rowBytes;
+            memcpy(row.data(), top, rowBytes);
+            memcpy(top, bot, rowBytes);
+            memcpy(bot, row.data(), rowBytes);
+        }
+
+        return pixels;
+    }
+
+    // CPU path
+    renderer_->beginFrame(viewportWidth_, viewportHeight_);
+    renderer_->clear({0, 0, 0, 255});
+
+    if (headlessCanvasScenePtr_) {
+        auto& cmds = headlessCanvasScenePtr_->canvas().commands();
+        uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
+        float globalAlpha = 1.0f;
+        for (auto& cmd : cmds) {
+            using CT = canvas::CmdType;
+            switch (cmd.type) {
+            case CT::SetFillStyle:
+                fillR = cmd.r; fillG = cmd.g; fillB = cmd.b; fillA = cmd.a; break;
+            case CT::SetGlobalAlpha:
+                globalAlpha = cmd.f; break;
+            case CT::FillRect: {
+                uint8_t a = static_cast<uint8_t>(fillA * globalAlpha);
+                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h, {fillR, fillG, fillB, a});
+                break;
+            }
+            case CT::ClearRect:
+                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h, {0, 0, 0, 255}); break;
+            default: break;
+            }
+        }
+    }
+
+    drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
+
+    if (systemOverlay_ && systemOverlay_->isVisible()) {
+        systemOverlay_->tick(virtualTime_);
+        systemOverlay_->render(viewportWidth_, viewportHeight_);
+        auto* sysRenderer = systemOverlay_->getRenderer();
+        if (sysRenderer && sysRenderer->surface()) {
+            auto* appCanvas = renderer_->getCanvas();
+            if (appCanvas) {
+                sk_sp<SkImage> sysImage = sysRenderer->surface()->makeImageSnapshot();
+                if (sysImage) {
+                    SkPaint paint;
+                    paint.setBlendMode(SkBlendMode::kSrcOver);
+                    appCanvas->drawImage(sysImage, 0, 0, SkSamplingOptions(), &paint);
+                }
+            }
+        }
+    }
+
+    renderer_->endFrame();
+    return renderer_->capturePixels();
+}
+
+bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch) {
+    auto pixels = capturePixels();
+    if (pixels.empty()) return false;
+
+    int fw = viewportWidth_, fh = viewportHeight_;
+
+    // Clamp crop rect to viewport bounds
+    if (cx < 0) cx = 0;
+    if (cy < 0) cy = 0;
+    if (cx + cw > fw) cw = fw - cx;
+    if (cy + ch > fh) ch = fh - cy;
+    if (cw <= 0 || ch <= 0) return false;
+
+    // Extract cropped region
+    std::vector<uint8_t> cropped(cw * ch * 4);
+    for (int y = 0; y < ch; ++y) {
+        const uint8_t* src = pixels.data() + ((cy + y) * fw + cx) * 4;
+        uint8_t* dst = cropped.data() + y * cw * 4;
+        memcpy(dst, src, cw * 4);
+    }
+
+    return stbi_write_png(path.c_str(), cw, ch, 4, cropped.data(), cw * 4) != 0;
 }
 
 dom::Element* Engine::querySelector(const std::string& selector) const {

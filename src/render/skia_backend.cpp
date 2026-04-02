@@ -570,6 +570,39 @@ bool SkiaRenderer::saveScreenshot(const std::string& path) {
     return stbi_write_png(path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
 }
 
+std::vector<uint8_t> SkiaRenderer::capturePixels() {
+    if (!surface_) return {};
+
+    SkPixmap pixmap;
+    sk_sp<SkImage> image;
+    SkBitmap bitmap;
+
+    if (gpuMode_) {
+        image = surface_->makeImageSnapshot();
+        if (!image) return {};
+        auto info = SkImageInfo::MakeN32Premul(image->width(), image->height());
+        bitmap.allocPixels(info);
+        if (!image->readPixels(bitmap.pixmap(), 0, 0)) return {};
+        pixmap = bitmap.pixmap();
+    } else {
+        if (!surface_->peekPixels(&pixmap)) return {};
+    }
+
+    int w = pixmap.width(), h = pixmap.height();
+    std::vector<uint8_t> rgba(w * h * 4);
+    for (int y = 0; y < h; ++y) {
+        const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr32(0, y));
+        uint8_t* dst = rgba.data() + y * w * 4;
+        for (int x = 0; x < w; ++x) {
+            dst[x * 4 + 0] = src[x * 4 + 2]; // R <- B
+            dst[x * 4 + 1] = src[x * 4 + 1]; // G
+            dst[x * 4 + 2] = src[x * 4 + 0]; // B <- R
+            dst[x * 4 + 3] = src[x * 4 + 3]; // A
+        }
+    }
+    return rgba;
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------

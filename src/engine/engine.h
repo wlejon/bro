@@ -86,6 +86,13 @@ public:
     /// Render the current page to a PNG file.
     bool screenshot(const std::string& path);
 
+    /// Render the current page and crop to the given rect before saving.
+    bool screenshot(const std::string& path, int x, int y, int w, int h);
+
+    /// Capture the current page as an RGBA pixel buffer (width x height x 4).
+    /// Returns empty vector on failure.
+    std::vector<uint8_t> capturePixels();
+
     /// Find an element by selector (#id shorthand or CSS selector).
     dom::Element* querySelector(const std::string& selector) const;
 
