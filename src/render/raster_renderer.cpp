@@ -14,6 +14,7 @@
 #include <include/core/SkSurface.h>
 #include <include/codec/SkCodec.h>
 #include <include/effects/SkGradient.h>
+#include <stb_image_write.h>
 #include <include/ports/SkTypeface_win.h>
 #include <include/utils/SkParsePath.h>
 
@@ -319,40 +320,21 @@ bool RasterRenderer::saveScreenshot(const std::string& path) {
     if (!image->peekPixels(&pixmap)) return false;
 
     int w = pixmap.width(), h = pixmap.height();
-    int rowBytes = ((w * 3 + 3) / 4) * 4; // BMP rows are 4-byte aligned
-    int dataSize = rowBytes * h;
 
-    // BMP file header (14 bytes) + BITMAPINFOHEADER (40 bytes)
-    uint8_t header[54] = {};
-    auto put16 = [&](int off, uint16_t v) { memcpy(header + off, &v, 2); };
-    auto put32 = [&](int off, uint32_t v) { memcpy(header + off, &v, 4); };
-    header[0] = 'B'; header[1] = 'M';
-    put32(2, 54 + dataSize);   // file size
-    put32(10, 54);             // pixel data offset
-    put32(14, 40);             // info header size
-    put32(18, w);
-    put32(22, h);
-    put16(26, 1);              // planes
-    put16(28, 24);             // bits per pixel
-    put32(34, dataSize);
-
-    std::ofstream out(path, std::ios::binary);
-    if (!out) return false;
-    out.write(reinterpret_cast<char*>(header), 54);
-
-    // BMP is bottom-to-top, BGR
-    std::vector<uint8_t> row(rowBytes, 0);
-    for (int y = h - 1; y >= 0; --y) {
+    // Convert from N32 (BGRA premultiplied on Windows) to RGBA for PNG
+    std::vector<uint8_t> rgba(w * h * 4);
+    for (int y = 0; y < h; ++y) {
         const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr32(0, y));
+        uint8_t* dst = rgba.data() + y * w * 4;
         for (int x = 0; x < w; ++x) {
-            // N32 on Windows = BGRA premultiplied
-            row[x * 3 + 0] = src[x * 4 + 0]; // B
-            row[x * 3 + 1] = src[x * 4 + 1]; // G
-            row[x * 3 + 2] = src[x * 4 + 2]; // R
+            dst[x * 4 + 0] = src[x * 4 + 2]; // R <- B
+            dst[x * 4 + 1] = src[x * 4 + 1]; // G
+            dst[x * 4 + 2] = src[x * 4 + 0]; // B <- R
+            dst[x * 4 + 3] = src[x * 4 + 3]; // A
         }
-        out.write(reinterpret_cast<char*>(row.data()), rowBytes);
     }
-    return out.good();
+
+    return stbi_write_png(path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
 }
 
 } // namespace bro::render

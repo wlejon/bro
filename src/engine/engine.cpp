@@ -2161,7 +2161,7 @@ bool Engine::screenshot(const std::string& path) {
 
     renderer_->endFrame();
 
-    // Save the surface as BMP
+    // Save the surface as PNG
     auto* raster = dynamic_cast<render::RasterRenderer*>(renderer_.get());
     if (!raster) return false;
     return raster->saveScreenshot(path);

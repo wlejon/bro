@@ -82,7 +82,7 @@ public:
     /// Evaluate JS code and return the string result.
     std::string eval(const std::string& code);
 
-    /// Render the current page to a BMP file.
+    /// Render the current page to a PNG file.
     bool screenshot(const std::string& path);
 
     /// Find an element by selector (#id shorthand or CSS selector).

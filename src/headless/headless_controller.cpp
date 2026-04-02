@@ -172,7 +172,7 @@ bool HeadlessController::processCommand(const std::string& line) {
                   << "  click <selector>  Simulate a click (e.g. click #btn)\n"
                   << "  eval <js>         Evaluate JavaScript, print result\n"
                   << "  wait <ms>         Advance virtual time by N ms\n"
-                  << "  screenshot <path> Render to BMP file\n"
+                  << "  screenshot <path> Render to PNG file\n"
                   << "  rect <selector>   Print element's layout box\n"
                   << "  system            Toggle system overlay\n"
                   << "  quit              Exit\n"

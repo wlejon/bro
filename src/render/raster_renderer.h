@@ -73,7 +73,7 @@ public:
     /// Access the raster surface (valid after beginFrame).
     SkSurface* surface() const { return surface_.get(); }
 
-    /// Save the current surface to a BMP file.
+    /// Save the current surface to a PNG file.
     bool saveScreenshot(const std::string& path);
 
 private:
