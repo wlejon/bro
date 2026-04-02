@@ -1,5 +1,6 @@
 #include "dom/style_proxy.h"
 #include "dom/element.h"
+#include <algorithm>
 #include <sstream>
 #include <cctype>
 

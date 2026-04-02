@@ -25,7 +25,12 @@
 #include <include/codec/SkCodec.h>
 #include <include/effects/SkGradient.h>
 #include <include/utils/SkParsePath.h>
+#ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
+#else
+#include <include/ports/SkFontMgr_fontconfig.h>
+#include <include/ports/SkFontScanner_FreeType.h>
+#endif
 
 #include <filesystem>
 #include <regex>
@@ -122,15 +127,28 @@ uint64_t SystemRenderer::createFont(std::string_view family, float size, int wei
     SkFontStyle style(weight,
                       SkFontStyle::kNormal_Width,
                       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
+#ifdef _WIN32
     sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_DirectWrite();
+#else
+    sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
 
     auto resolveGeneric = [](const std::string& name) -> const char* {
+#ifdef _WIN32
         if (name == "sans-serif")  return "Arial";
         if (name == "serif")       return "Times New Roman";
         if (name == "monospace")   return "Consolas";
         if (name == "cursive")     return "Comic Sans MS";
         if (name == "fantasy")     return "Impact";
         if (name == "system-ui")   return "Segoe UI";
+#else
+        if (name == "sans-serif")  return "Liberation Sans";
+        if (name == "serif")       return "Liberation Serif";
+        if (name == "monospace")   return "Liberation Mono";
+        if (name == "cursive")     return "DejaVu Sans";
+        if (name == "fantasy")     return "DejaVu Sans";
+        if (name == "system-ui")   return "Liberation Sans";
+#endif
         return nullptr;
     };
 

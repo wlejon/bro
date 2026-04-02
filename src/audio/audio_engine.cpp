@@ -3,6 +3,7 @@
 
 #include <SDL3/SDL.h>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 
 #ifndef M_PI

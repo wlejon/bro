@@ -41,3 +41,24 @@ endif()
 
 # Skia headers use #include <include/core/...> so the include root is the parent
 target_include_directories(skia INTERFACE "${CMAKE_CURRENT_LIST_DIR}/src")
+
+# On Linux, Skia is built with FreeType + fontconfig — propagate those deps
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(FREETYPE2 REQUIRED freetype2)
+    pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+    pkg_check_modules(LIBPNG REQUIRED libpng)
+    pkg_check_modules(LIBJPEG REQUIRED libjpeg)
+    pkg_check_modules(LIBWEBP REQUIRED libwebp libwebpdemux)
+    target_link_libraries(skia INTERFACE
+        ${FREETYPE2_LIBRARIES}
+        ${FONTCONFIG_LIBRARIES}
+        ${LIBPNG_LIBRARIES}
+        ${LIBJPEG_LIBRARIES}
+        ${LIBWEBP_LIBRARIES}
+    )
+    target_include_directories(skia INTERFACE
+        ${FREETYPE2_INCLUDE_DIRS}
+        ${FONTCONFIG_INCLUDE_DIRS}
+    )
+endif()

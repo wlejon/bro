@@ -1,5 +1,6 @@
 #include "webgl/glsl_translator.h"
 
+#include <cstring>
 #include <sstream>
 #include <regex>
 

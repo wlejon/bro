@@ -15,7 +15,12 @@
 #include <include/codec/SkCodec.h>
 #include <include/effects/SkGradient.h>
 #include <stb_image_write.h>
+#ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
+#else
+#include <include/ports/SkFontMgr_fontconfig.h>
+#include <include/ports/SkFontScanner_FreeType.h>
+#endif
 #include <include/utils/SkParsePath.h>
 
 #include <algorithm>
@@ -103,7 +108,11 @@ TextMetrics RasterRenderer::measureText(std::string_view text, uint64_t font_han
 uint64_t RasterRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
     SkFontStyle style(weight, SkFontStyle::kNormal_Width,
                       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
+#ifdef _WIN32
     sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
+#else
+    sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
     // CSS font-family is comma-separated — try each name in order.
     sk_sp<SkTypeface> typeface;
     std::string families(family);

@@ -1,5 +1,6 @@
 #include "js/dom_bindings_internal.h"
 
+#include <algorithm>
 #include <sstream>
 
 namespace bro::js {
