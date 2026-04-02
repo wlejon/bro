@@ -123,8 +123,16 @@ static void runRepl(JSContext* ctx, bro::js::Runtime* rt,
 // ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) {
+    bool showHelp = false;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
+            showHelp = true;
+    }
+
+    if (argc < 2 || showHelp) {
         fprintf(stderr,
+            "bro-headless — headless mode for bro\n"
+            "\n"
             "Usage: bro-headless [--no-gpu] <app-directory> [script.js | -e \"expr\" ...]\n"
             "\n"
             "Modes:\n"
@@ -133,8 +141,14 @@ int main(int argc, char* argv[]) {
             "  bro-headless app/ -e \"expr\"     Evaluate inline expression(s)\n"
             "\n"
             "Options:\n"
-            "  --no-gpu  Disable GPU rendering (CPU-only, no WebGL)\n");
-        return 1;
+            "  --no-gpu  Disable GPU rendering (CPU-only, no WebGL)\n"
+            "\n"
+            "Headless globals:\n"
+            "  screenshot(path [, selector])  Render to PNG (optionally cropped to element)\n"
+            "  advanceTime(ms) / sleep(ms)    Advance virtual time\n"
+            "  flush()                        Force layout recalculation\n"
+            "  assert(cond [, msg])           Throw on failure (exit code 1)\n");
+        return showHelp ? 0 : 1;
     }
 
     // Parse args
