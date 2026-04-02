@@ -77,13 +77,23 @@ Loads `apps/hello/index.html`, applies stylesheets, executes scripts, and opens 
 
 ### Headless mode
 
+Headless mode runs the full engine pipeline (GPU rendering, real fonts, WebGL) without a visible window, driven entirely by JavaScript.
+
 ```bash
-./build/src/headless/Debug/bro-headless.exe apps/hello              # interactive
-./build/src/headless/Debug/bro-headless.exe apps/hello test.txt     # run script file
-echo -e "click #btn\ndump\nquit" | ./build/src/headless/Debug/bro-headless.exe apps/hello 2>/dev/null
+# Interactive JS REPL
+./build/src/headless/Debug/bro-headless.exe apps/hello
+
+# Run a JS script file
+./build/src/headless/Debug/bro-headless.exe apps/hello test.js
+
+# Inline JS expressions
+./build/src/headless/Debug/bro-headless.exe apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+
+# CPU-only mode (no GPU/WebGL — for CI without a GPU)
+./build/src/headless/Debug/bro-headless.exe --no-gpu apps/hello
 ```
 
-Commands: `dump [selector]`, `click <selector>`, `eval <js>`, `wait <ms>`, `diff`, `quit`.
+Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`. All standard DOM APIs work.
 
 See [docs/headless.md](docs/headless.md) for full documentation.
 
