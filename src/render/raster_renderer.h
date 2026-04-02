@@ -67,14 +67,9 @@ public:
     void beginFrame(int width, int height) override;
     void endFrame() override;
 
-    /// Access the underlying Skia canvas (valid between beginFrame/endFrame).
-    SkCanvas* getCanvas() const { return canvas_; }
-
-    /// Access the raster surface (valid after beginFrame).
-    SkSurface* surface() const { return surface_.get(); }
-
-    /// Save the current surface to a PNG file.
-    bool saveScreenshot(const std::string& path);
+    SkCanvas* getCanvas() const override { return canvas_; }
+    SkSurface* surface() const override { return surface_.get(); }
+    bool saveScreenshot(const std::string& path) override;
 
 private:
     static SkColor toSkColor(Color c);

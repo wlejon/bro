@@ -7,7 +7,7 @@
 
 namespace bro::platform {
 
-Window::Window(const std::string& title, uint32_t width, uint32_t height)
+Window::Window(const std::string& title, uint32_t width, uint32_t height, bool hidden)
     : m_width(width), m_height(height)
 {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -23,7 +23,12 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height)
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
 
-    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL;
+    SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
+    if (hidden) {
+        flags |= SDL_WINDOW_HIDDEN;
+    } else {
+        flags |= SDL_WINDOW_RESIZABLE;
+    }
     m_window = SDL_CreateWindow(title.c_str(),
                                 static_cast<int>(width),
                                 static_cast<int>(height),
@@ -51,8 +56,10 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height)
              title.c_str(), width, height,
              GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
 
-    // Enable vsync (0 = off, 1 = on, -1 = adaptive)
-    SDL_GL_SetSwapInterval(1);
+    // Enable vsync for visible windows (0 = off, 1 = on, -1 = adaptive)
+    if (!hidden) {
+        SDL_GL_SetSwapInterval(1);
+    }
 }
 
 Window::~Window() {

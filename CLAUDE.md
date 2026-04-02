@@ -17,7 +17,7 @@ cmake --build build --config Release
 # Run windowed app
 ./build/src/Debug/bro.exe apps/hello
 
-# Run headless (interactive)
+# Run headless (interactive, GPU — default)
 ./build/src/headless/Debug/bro-headless.exe apps/hello
 
 # Run headless (piped)
@@ -25,6 +25,9 @@ echo -e "click #btn\ndump #counter\nquit" | ./build/src/headless/Debug/bro-headl
 
 # Run headless (script file)
 ./build/src/headless/Debug/bro-headless.exe apps/hello test.txt
+
+# Run headless (CPU-only, no GPU/WebGL — for CI without GPU)
+./build/src/headless/Debug/bro-headless.exe --no-gpu apps/hello
 ```
 
 Uses the Visual Studio generator (multi-config). Do not use MinGW.
@@ -41,7 +44,7 @@ Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleratio
 - `bro` — windowed app runner (DisplayMode::Windowed)
 - `bro-headless` — headless tool with text commands (DisplayMode::Headless)
 
-Both share the same `Engine` class configured via `EngineConfig`. Headless uses `RasterRenderer` (CPU Skia with real fonts) instead of `SkiaRenderer` (GPU), and `HeadlessController` drives the engine via commands.
+Both share the same `Engine` class configured via `EngineConfig`. Headless defaults to GPU rendering via a hidden SDL window (same pipeline as windowed, including WebGL). Use `--no-gpu` to fall back to `RasterRenderer` (CPU Skia) for environments without a GPU. `HeadlessController` drives the engine via commands.
 
 ### Module dependency graph
 

@@ -32,6 +32,7 @@ struct EngineConfig {
     int width = 1024;
     int height = 768;
     DisplayMode displayMode = DisplayMode::Windowed;
+    bool useGPU = true;  // headless uses GPU by default; --no-gpu disables
 };
 
 class Engine {

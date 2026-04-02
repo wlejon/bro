@@ -42,6 +42,8 @@
 #include "util/log.h"
 #include "util/time.h"
 
+#include <stb_image_write.h>
+
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkPaint.h>
@@ -214,22 +216,29 @@ Engine::Engine(const EngineConfig& config)
 
     // === Mode-specific initialization ===
 
-    if (displayMode_ == DisplayMode::Windowed) {
-        // 1. Window (creates OpenGL context)
-        window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(config.width),
-                                                      static_cast<uint32_t>(config.height));
+    // hasGL: true when we have a GPU context (windowed, or headless with GPU)
+    const bool hasGL = (displayMode_ == DisplayMode::Windowed) || config.useGPU;
 
-        // 2. GL context (shader programs + helpers)
+    if (hasGL) {
+        // Create window (hidden for headless, visible for windowed)
+        bool hidden = (displayMode_ == DisplayMode::Headless);
+        window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(config.width),
+                                                      static_cast<uint32_t>(config.height), hidden);
+
+        // GL context (shader programs + helpers)
         gl_ = std::make_unique<render::GLContext>(*window_);
 
-        // 3. Renderer (Skia raster + OpenGL display)
+        // Renderer (Skia raster + OpenGL display)
         renderer_ = render::createRenderer(gl_.get());
         if (!renderer_) {
             throw std::runtime_error("Failed to create renderer");
         }
     } else {
-        // Headless: CPU-only Skia renderer, no window/GL
+        // No GPU: CPU-only Skia renderer, no window/GL
         renderer_ = std::make_unique<render::RasterRenderer>();
+    }
+
+    if (displayMode_ == DisplayMode::Headless) {
         virtualTime_ = util::currentTimeMs();
     }
 
@@ -319,8 +328,8 @@ Engine::Engine(const EngineConfig& config)
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::FetchBindings::install(jsRuntime_->getContext(), manifest_.basePath);
 
-    if (displayMode_ == DisplayMode::Windowed) {
-        // Windowed: WebGL2 + full canvas factory
+    if (gl_) {
+        // GPU path: WebGL2 + full canvas factory (windowed or GPU headless)
         js::WebGL2Bindings::install(jsRuntime_->getContext());
         js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
             [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
@@ -340,7 +349,7 @@ Engine::Engine(const EngineConfig& config)
                 return JS_NULL;
             });
     } else {
-        // Headless: 2D canvas only, no WebGL
+        // CPU path: 2D canvas only, no WebGL
         js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
             [this](JSContext* ctx, dom::Element*, const std::string&) -> JSValue {
                 headlessCanvasScene_ = std::make_unique<canvas::CanvasScene>(renderer_.get());
@@ -410,7 +419,7 @@ Engine::~Engine() {
         JSContext* ctx = jsRuntime_->getContext();
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
-        if (displayMode_ == DisplayMode::Windowed) {
+        if (gl_) {
             js::WebGL2Bindings::cleanup(ctx);
         }
         js::cleanupCustomElements(ctx);
@@ -2096,15 +2105,131 @@ std::string Engine::eval(const std::string& code) {
 bool Engine::screenshot(const std::string& path) {
     if (!document_) return false;
 
+    // Bind WebGL canvas FBO before firing rAF (so GL draw commands target the canvas)
+    auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+    if (webglScene && webglScene->webglContext()) {
+        webglScene->webglContext()->bindCanvasFBO();
+    }
+
     // Fire any pending rAF callbacks so canvas commands are up to date
     timers_->fireAnimationFrames(virtualTime_);
     jsRuntime_->executePendingJobs();
 
-    // Render a frame to the raster surface
+    // Unbind WebGL canvas FBO
+    if (webglScene && webglScene->webglContext()) {
+        webglScene->webglContext()->unbindCanvasFBO();
+    }
+
+    // GPU compositing path: replicate the windowed render pass to an offscreen FBO,
+    // then read back pixels. This captures scene layers (WebGL, Canvas2D) + UI overlay.
+    if (gl_ && sceneLayer_) {
+        auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
+        int w = viewportWidth_, h = viewportHeight_;
+
+        // 1. Rasterize HTML/CSS UI to Skia surface
+        renderer_->beginFrame(w, h);
+        if (document_->documentElement()) {
+            drawTraversal_->draw(document_->documentElement(), 0, 0, w, h);
+        }
+        renderer_->endFrame();
+        skia->uploadToGPU();
+
+        // 2. Prepare Canvas2D scene if applicable
+        auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sceneLayer_.get());
+        if (canvasScene) {
+            canvasScene->prepareFrame(gl_.get(), w, h);
+        }
+
+        // 3. Bind WebGL canvas FBO before rAF (same as windowed loop)
+        auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+        if (webglScene && webglScene->webglContext()) {
+            // WebGL content was already rendered during rAF above — no need to re-render
+        }
+
+        // 4. Create temporary compositing FBO
+        GLuint compositeFBO = 0, compositeTex = 0;
+        glGenFramebuffers(1, &compositeFBO);
+        compositeTex = gl_->createTexture2D(w, h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
+        glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, compositeTex, 0);
+
+        // 5. Clear and render scene layer
+        glViewport(0, 0, w, h);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        sceneLayer_->onRender(gl_.get(), w, h, 0.0);
+
+        // 6. Composite UI overlay (premultiplied alpha)
+        GLuint uiTex = skia->getUITexture();
+        if (uiTex) {
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {0, 0, 0, 0}, {fw, 0, 1, 0}, {fw, fh, 1, 1},
+                {0, 0, 0, 0}, {fw, fh, 1, 1}, {0, fh, 0, 1},
+            };
+
+            GLuint quadVBO = 0;
+            glGenBuffers(1, &quadVBO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+
+            GLuint quadVAO = 0;
+            glGenVertexArrays(1, &quadVAO);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_SCISSOR_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, uiTex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
+
+        // 7. Read back pixels
+        std::vector<uint8_t> pixels(w * h * 4);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+        // 8. Cleanup compositing FBO
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &compositeFBO);
+        gl_->deleteTexture(compositeTex);
+
+        // 9. Flip vertically (OpenGL reads bottom-to-top, PNG is top-to-bottom)
+        int rowBytes = w * 4;
+        std::vector<uint8_t> row(rowBytes);
+        for (int y = 0; y < h / 2; ++y) {
+            uint8_t* top = pixels.data() + y * rowBytes;
+            uint8_t* bot = pixels.data() + (h - 1 - y) * rowBytes;
+            memcpy(row.data(), top, rowBytes);
+            memcpy(top, bot, rowBytes);
+            memcpy(bot, row.data(), rowBytes);
+        }
+
+        // 10. Save as PNG
+        return stbi_write_png(path.c_str(), w, h, 4, pixels.data(), rowBytes) != 0;
+    }
+
+    // CPU path: render everything to Skia raster surface
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
-    // Render canvas scene first (behind HTML)
+    // Render canvas scene first (behind HTML) — CPU software replay
     if (headlessCanvasScenePtr_) {
         auto& cmds = headlessCanvasScenePtr_->canvas().commands();
         uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
@@ -2141,19 +2266,15 @@ bool Engine::screenshot(const std::string& path) {
         systemOverlay_->tick(virtualTime_);
         systemOverlay_->render(viewportWidth_, viewportHeight_);
 
-        // Composite system overlay surface onto app surface
         auto* sysRenderer = systemOverlay_->getRenderer();
         if (sysRenderer && sysRenderer->surface()) {
-            auto* raster = dynamic_cast<render::RasterRenderer*>(renderer_.get());
-            if (raster) {
-                auto* appCanvas = raster->getCanvas();
-                if (appCanvas) {
-                    sk_sp<SkImage> sysImage = sysRenderer->surface()->makeImageSnapshot();
-                    if (sysImage) {
-                        SkPaint paint;
-                        paint.setBlendMode(SkBlendMode::kSrcOver);
-                        appCanvas->drawImage(sysImage, 0, 0, SkSamplingOptions(), &paint);
-                    }
+            auto* appCanvas = renderer_->getCanvas();
+            if (appCanvas) {
+                sk_sp<SkImage> sysImage = sysRenderer->surface()->makeImageSnapshot();
+                if (sysImage) {
+                    SkPaint paint;
+                    paint.setBlendMode(SkBlendMode::kSrcOver);
+                    appCanvas->drawImage(sysImage, 0, 0, SkSamplingOptions(), &paint);
                 }
             }
         }
@@ -2161,10 +2282,7 @@ bool Engine::screenshot(const std::string& path) {
 
     renderer_->endFrame();
 
-    // Save the surface as PNG
-    auto* raster = dynamic_cast<render::RasterRenderer*>(renderer_.get());
-    if (!raster) return false;
-    return raster->saveScreenshot(path);
+    return renderer_->saveScreenshot(path);
 }
 
 dom::Element* Engine::querySelector(const std::string& selector) const {

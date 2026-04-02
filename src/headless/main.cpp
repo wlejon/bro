@@ -3,28 +3,50 @@
 #include "util/log.h"
 #include <string>
 #include <cstdlib>
+#include <cstring>
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: bro-headless <app-directory> [script.txt]\n");
+        fprintf(stderr, "Usage: bro-headless [--no-gpu] <app-directory> [script.txt]\n");
+        fprintf(stderr, "  --no-gpu  Disable GPU rendering (CPU-only, no WebGL)\n");
         fprintf(stderr, "  No script = interactive mode (read commands from stdin)\n");
         fprintf(stderr, "  With script = run commands from file then exit\n");
         fprintf(stderr, "\nPipe commands:  echo \"dump\" | bro-headless apps/hello\n");
         return 1;
     }
 
-    std::string appDir = argv[1];
+    // Parse flags and positional args
+    bool useGPU = true;
+    std::string appDir;
+    std::string scriptPath;
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--no-gpu") == 0) {
+            useGPU = false;
+        } else if (appDir.empty()) {
+            appDir = argv[i];
+        } else if (scriptPath.empty()) {
+            scriptPath = argv[i];
+        }
+    }
+
+    if (appDir.empty()) {
+        fprintf(stderr, "Error: no app directory specified\n");
+        return 1;
+    }
+
     int exitCode = 0;
 
     try {
         auto* engine = new bro::engine::Engine(
-            bro::engine::EngineConfig{appDir, 1024, 768, bro::engine::DisplayMode::Headless});
+            bro::engine::EngineConfig{appDir, 1024, 768,
+                bro::engine::DisplayMode::Headless, useGPU});
         engine->run();  // initial layout, returns immediately in headless mode
 
         bro::headless::HeadlessController controller(*engine);
 
-        if (argc >= 3) {
-            controller.runScript(argv[2]);
+        if (!scriptPath.empty()) {
+            controller.runScript(scriptPath);
         } else {
             controller.runInteractive();
         }

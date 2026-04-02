@@ -2,10 +2,13 @@
 #include "render/gl_context.h"
 #include "util/log.h"
 
+#include <stb_image_write.h>
+
 #include <cstring>
 #include <sstream>
 #include <cmath>
 
+#include <include/core/SkBitmap.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkRRect.h>
@@ -528,6 +531,43 @@ GLuint SkiaRenderer::renderTextToTexture(std::string_view text,
     outW = tw;
     outH = th;
     return tex;
+}
+
+bool SkiaRenderer::saveScreenshot(const std::string& path) {
+    if (!surface_) return false;
+
+    // For GPU mode, read pixels back from the GPU surface
+    SkPixmap pixmap;
+    sk_sp<SkImage> image;
+    SkBitmap bitmap;
+
+    if (gpuMode_) {
+        image = surface_->makeImageSnapshot();
+        if (!image) return false;
+        auto info = SkImageInfo::MakeN32Premul(image->width(), image->height());
+        bitmap.allocPixels(info);
+        if (!image->readPixels(bitmap.pixmap(), 0, 0)) return false;
+        pixmap = bitmap.pixmap();
+    } else {
+        if (!surface_->peekPixels(&pixmap)) return false;
+    }
+
+    int w = pixmap.width(), h = pixmap.height();
+
+    // Convert from N32 (BGRA premultiplied on Windows) to RGBA for PNG
+    std::vector<uint8_t> rgba(w * h * 4);
+    for (int y = 0; y < h; ++y) {
+        const uint8_t* src = reinterpret_cast<const uint8_t*>(pixmap.addr32(0, y));
+        uint8_t* dst = rgba.data() + y * w * 4;
+        for (int x = 0; x < w; ++x) {
+            dst[x * 4 + 0] = src[x * 4 + 2]; // R <- B
+            dst[x * 4 + 1] = src[x * 4 + 1]; // G
+            dst[x * 4 + 2] = src[x * 4 + 0]; // B <- R
+            dst[x * 4 + 3] = src[x * 4 + 3]; // A
+        }
+    }
+
+    return stbi_write_png(path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
 }
 
 // ---------------------------------------------------------------------------

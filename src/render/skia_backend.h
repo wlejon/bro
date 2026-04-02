@@ -95,6 +95,10 @@ public:
 
     GLContext* gl() const { return gl_; }
 
+    SkCanvas* getCanvas() const override { return canvas_; }
+    SkSurface* surface() const override { return surface_.get(); }
+    bool saveScreenshot(const std::string& path) override;
+
 private:
     SkColor toSkColor(Color c) const;
 

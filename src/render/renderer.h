@@ -3,7 +3,11 @@
 #include <cstdint>
 #include <cstddef>
 #include <string_view>
+#include <string>
 #include <span>
+
+class SkCanvas;
+class SkSurface;
 
 namespace bro::render {
 
@@ -107,6 +111,11 @@ public:
 
     virtual void beginFrame(int width, int height) = 0;
     virtual void endFrame() = 0;
+
+    // Screenshot support — access the underlying Skia surface/canvas.
+    virtual SkCanvas* getCanvas() const { return nullptr; }
+    virtual SkSurface* surface() const { return nullptr; }
+    virtual bool saveScreenshot(const std::string& path) { return false; }
 
 };
 
