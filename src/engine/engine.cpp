@@ -2062,13 +2062,23 @@ void Engine::flush() {
 void Engine::advanceTime(double ms) {
     if (displayMode_ != DisplayMode::Headless) return;
 
+    // Bind WebGL canvas FBO so rAF draw commands target it correctly
+    auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+
     double remaining = ms;
     while (remaining > 0) {
         double step = std::min(remaining, 16.0);
         virtualTime_ += step;
         remaining -= step;
         timers_->tick(virtualTime_);
+
+        if (webglScene && webglScene->webglContext())
+            webglScene->webglContext()->bindCanvasFBO();
         timers_->fireAnimationFrames(virtualTime_);
+        jsRuntime_->executePendingJobs();
+        if (webglScene && webglScene->webglContext())
+            webglScene->webglContext()->unbindCanvasFBO();
+
         flush();
 
         // Periodic GC + orphan sweep (every ~1s of virtual time)
@@ -2205,10 +2215,14 @@ bool Engine::screenshot(const std::string& path) {
         std::vector<uint8_t> pixels(w * h * 4);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 
-        // 8. Cleanup compositing FBO
+        // 8. Cleanup compositing FBO + restore WebGL state
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &compositeFBO);
         gl_->deleteTexture(compositeTex);
+
+        if (webglScene && webglScene->webglContext()) {
+            webglScene->webglContext()->restoreState();
+        }
 
         // 9. Flip vertically (OpenGL reads bottom-to-top, PNG is top-to-bottom)
         int rowBytes = w * 4;
