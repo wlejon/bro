@@ -1,28 +1,153 @@
 #include "engine/engine.h"
-#include "headless/headless_controller.h"
+#include "js/headless_bindings.h"
+#include "js/runtime.h"
 #include "util/log.h"
-#include <string>
+
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
+
+extern "C" {
+#include "quickjs.h"
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Evaluate JS code. Uses async mode only when code contains 'await'.
+/// Returns true on success. If printResult is true, prints the final value
+/// to stdout (for -e mode).
+static bool evalCode(JSContext* ctx, bro::js::Runtime* rt,
+                     const std::string& code, const char* filename,
+                     bool printResult = false) {
+    bool useAsync = code.find("await") != std::string::npos;
+    int flags = JS_EVAL_TYPE_GLOBAL | (useAsync ? JS_EVAL_FLAG_ASYNC : 0);
+
+    JSValue result = JS_Eval(ctx, code.c_str(), code.size(), filename, flags);
+
+    if (JS_IsException(result)) {
+        bro::js::Runtime::checkException(ctx, result);
+        JS_FreeValue(ctx, result);
+        return false;
+    }
+
+    if (useAsync && JS_IsPromise(result)) {
+        // Drain microtasks until promise settles
+        while (JS_PromiseState(ctx, result) == JS_PROMISE_PENDING)
+            rt->executePendingJobs();
+
+        if (JS_PromiseState(ctx, result) == JS_PROMISE_REJECTED) {
+            JSValue reason = JS_PromiseResult(ctx, result);
+            const char* str = JS_ToCString(ctx, reason);
+            if (str) {
+                LOG_ERROR("Unhandled rejection: %s", str);
+                JS_FreeCString(ctx, str);
+            }
+            JS_FreeValue(ctx, reason);
+            JS_FreeValue(ctx, result);
+            return false;
+        }
+
+        if (printResult) {
+            JSValue resolved = JS_PromiseResult(ctx, result);
+            if (!JS_IsUndefined(resolved)) {
+                const char* str = JS_ToCString(ctx, resolved);
+                if (str) { printf("%s\n", str); JS_FreeCString(ctx, str); }
+            }
+            JS_FreeValue(ctx, resolved);
+        }
+    } else {
+        rt->executePendingJobs();
+        if (printResult && !JS_IsUndefined(result)) {
+            const char* str = JS_ToCString(ctx, result);
+            if (str) { printf("%s\n", str); JS_FreeCString(ctx, str); }
+        }
+    }
+
+    JS_FreeValue(ctx, result);
+    return true;
+}
+
+/// Run a JS REPL on stdin.
+static void runRepl(JSContext* ctx, bro::js::Runtime* rt,
+                    bro::engine::Engine* engine) {
+    bool tty = isatty(fileno(stdin));
+
+    if (tty)
+        fprintf(stderr, "bro> ");
+
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        // Trim
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+            line.pop_back();
+        if (line.empty()) {
+            if (tty) fprintf(stderr, "bro> ");
+            continue;
+        }
+        if (line == "quit" || line == "exit") break;
+
+        JSValue result = JS_Eval(ctx, line.c_str(), line.size(), "<repl>",
+                                 JS_EVAL_TYPE_GLOBAL);
+        if (JS_IsException(result)) {
+            bro::js::Runtime::checkException(ctx, result);
+        } else if (!JS_IsUndefined(result)) {
+            const char* str = JS_ToCString(ctx, result);
+            if (str) {
+                printf("%s\n", str);
+                JS_FreeCString(ctx, str);
+            }
+        }
+        JS_FreeValue(ctx, result);
+        engine->flush();
+
+        if (tty) fprintf(stderr, "bro> ");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: bro-headless [--no-gpu] <app-directory> [script.txt]\n");
-        fprintf(stderr, "  --no-gpu  Disable GPU rendering (CPU-only, no WebGL)\n");
-        fprintf(stderr, "  No script = interactive mode (read commands from stdin)\n");
-        fprintf(stderr, "  With script = run commands from file then exit\n");
-        fprintf(stderr, "\nPipe commands:  echo \"dump\" | bro-headless apps/hello\n");
+        fprintf(stderr,
+            "Usage: bro-headless [--no-gpu] <app-directory> [script.js | -e \"expr\" ...]\n"
+            "\n"
+            "Modes:\n"
+            "  bro-headless app/              Interactive JS REPL\n"
+            "  bro-headless app/ test.js      Run script file\n"
+            "  bro-headless app/ -e \"expr\"     Evaluate inline expression(s)\n"
+            "\n"
+            "Options:\n"
+            "  --no-gpu  Disable GPU rendering (CPU-only, no WebGL)\n");
         return 1;
     }
 
-    // Parse flags and positional args
+    // Parse args
     bool useGPU = true;
     std::string appDir;
     std::string scriptPath;
+    std::vector<std::string> inlineExprs;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-gpu") == 0) {
             useGPU = false;
+        } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
+            inlineExprs.push_back(argv[++i]);
         } else if (appDir.empty()) {
             appDir = argv[i];
         } else if (scriptPath.empty()) {
@@ -41,15 +166,38 @@ int main(int argc, char* argv[]) {
         auto* engine = new bro::engine::Engine(
             bro::engine::EngineConfig{appDir, 1024, 768,
                 bro::engine::DisplayMode::Headless, useGPU});
-        engine->run();  // initial layout, returns immediately in headless mode
+        engine->run();  // initial layout, returns immediately in headless
 
-        bro::headless::HeadlessController controller(*engine);
+        auto* rt = engine->jsRuntime();
+        auto* ctx = rt->getContext();
+        bro::js::installHeadlessBindings(ctx, engine);
 
-        if (!scriptPath.empty()) {
-            controller.runScript(scriptPath);
+        if (!inlineExprs.empty()) {
+            // -e mode: concatenate and eval
+            std::ostringstream oss;
+            for (size_t i = 0; i < inlineExprs.size(); ++i) {
+                if (i > 0) oss << ";\n";
+                oss << inlineExprs[i];
+            }
+            if (!evalCode(ctx, rt, oss.str(), "<inline>", true))
+                exitCode = 1;
+        } else if (!scriptPath.empty()) {
+            // Script file mode
+            std::ifstream ifs(scriptPath);
+            if (!ifs.is_open()) {
+                fprintf(stderr, "Error: cannot open script: %s\n", scriptPath.c_str());
+                exitCode = 1;
+            } else {
+                std::ostringstream oss;
+                oss << ifs.rdbuf();
+                if (!evalCode(ctx, rt, oss.str(), scriptPath.c_str()))
+                    exitCode = 1;
+            }
         } else {
-            controller.runInteractive();
+            // Interactive REPL
+            runRepl(ctx, rt, engine);
         }
+
         // Intentionally leak to avoid QuickJS GC assertion on shutdown.
         // The OS reclaims all memory on process exit.
     } catch (const std::exception& e) {

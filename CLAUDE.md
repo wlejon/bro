@@ -17,14 +17,14 @@ cmake --build build --config Release
 # Run windowed app
 ./build/src/Debug/bro.exe apps/hello
 
-# Run headless (interactive, GPU — default)
+# Run headless (interactive JS REPL, GPU — default)
 ./build/src/headless/Debug/bro-headless.exe apps/hello
 
-# Run headless (piped)
-echo -e "click #btn\ndump #counter\nquit" | ./build/src/headless/Debug/bro-headless.exe apps/hello 2>/dev/null
+# Run headless (JS script file)
+./build/src/headless/Debug/bro-headless.exe apps/hello test.js
 
-# Run headless (script file)
-./build/src/headless/Debug/bro-headless.exe apps/hello test.txt
+# Run headless (inline JS expression)
+./build/src/headless/Debug/bro-headless.exe apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
 
 # Run headless (CPU-only, no GPU/WebGL — for CI without GPU)
 ./build/src/headless/Debug/bro-headless.exe --no-gpu apps/hello
@@ -42,9 +42,9 @@ Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleratio
 
 **Two executables, one Engine:**
 - `bro` — windowed app runner (DisplayMode::Windowed)
-- `bro-headless` — headless tool with text commands (DisplayMode::Headless)
+- `bro-headless` — headless tool with JS scripting (DisplayMode::Headless)
 
-Both share the same `Engine` class configured via `EngineConfig`. Headless defaults to GPU rendering via a hidden SDL window (same pipeline as windowed, including WebGL). Use `--no-gpu` to fall back to `RasterRenderer` (CPU Skia) for environments without a GPU. `HeadlessController` drives the engine via commands.
+Both share the same `Engine` class configured via `EngineConfig`. Headless defaults to GPU rendering via a hidden SDL window (same pipeline as windowed, including WebGL). Use `--no-gpu` to fall back to `RasterRenderer` (CPU Skia) for environments without a GPU. Headless exposes JS globals (`screenshot()`, `advanceTime()`, `flush()`, `sleep()`, `assert()`) for scripted testing.
 
 ### Module dependency graph
 
@@ -74,9 +74,9 @@ engine  (orchestrates all subsystems, main loop)
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.
 - **JS lifetime:** QuickJS context must outlive all DOM elements (they hold JS function references).
 
-### Headless testing commands
+### Headless JS interface
 
-`dump [selector]`, `click <selector>`, `eval <js>`, `wait <ms>`, `screenshot <path>`, `rect <selector>`, `diff`, `system`, `quit`. See `docs/headless.md` for full reference. Headless uses real Skia/DirectWrite font metrics, identical to windowed mode.
+Headless mode is driven by JavaScript — the same language apps are written in. Three invocation modes: JS REPL (interactive), script file (`test.js`), or inline expressions (`-e "expr"`). Headless-specific globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`. All standard DOM APIs work (`querySelector`, `.click()`, `.textContent`, `getBoundingClientRect()`, etc.). See `docs/headless.md` for full reference.
 
 ## Third-party dependencies (all in third_party/ as git submodules)
 

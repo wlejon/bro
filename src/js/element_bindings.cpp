@@ -1121,6 +1121,17 @@ static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
     return JS_NewBool(ctx, !evt.defaultPrevented());
 }
 
+static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
+                                int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    if (doc) doc->setActiveElement(el);
+    dom::MouseEvent event("click");
+    dispatchDomEvent(ctx, el, event);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_element_focus(JSContext* ctx, JSValueConst this_val,
                                 int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
@@ -1451,6 +1462,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("remove",                    0, js_element_remove),
     JS_CFUNC_DEF("dispatchEvent",             1, js_element_dispatchEvent),
     JS_CFUNC_DEF("getBoundingClientRect",     0, js_element_getBoundingClientRect),
+    JS_CFUNC_DEF("click",                     0, js_element_click),
     JS_CFUNC_DEF("focus",                     0, js_element_focus),
     JS_CFUNC_DEF("blur",                      0, js_element_blur),
     JS_CFUNC_DEF("insertAdjacentHTML",        2, js_element_insertAdjacentHTML),
