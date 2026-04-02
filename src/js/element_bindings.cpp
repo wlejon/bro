@@ -159,8 +159,14 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
     }
     el->setTextContent(jsToStdString(ctx, val));
     auto& style = el->computedStyle();
-    auto ovIt = style.find("overflow");
-    if (ovIt != style.end() && ovIt->second != "visible" && ovIt->second != "initial") {
+    // Check overflow-y first, then overflow shorthand
+    auto oyIt = style.find("overflow-y");
+    std::string ov = (oyIt != style.end()) ? oyIt->second : "";
+    if (ov.empty()) {
+        auto oIt = style.find("overflow");
+        ov = (oIt != style.end()) ? oIt->second : "visible";
+    }
+    if (ov != "visible" && ov != "initial") {
         el->setScrollToBottom(true);
     }
     return JS_UNDEFINED;

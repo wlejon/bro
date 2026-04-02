@@ -19,6 +19,15 @@
 
 namespace bro::layout {
 
+/// Get the effective vertical overflow value, checking overflow-y then overflow.
+static std::string getOverflowY(const htmlayout::css::ComputedStyle& style) {
+    auto oyIt = style.find("overflow-y");
+    if (oyIt != style.end()) return oyIt->second;
+    auto oIt = style.find("overflow");
+    if (oIt != style.end()) return oIt->second;
+    return "visible";
+}
+
 DrawTraversal::DrawTraversal(render::Renderer* renderer, FontManager* fontManager)
     : renderer_(renderer), fontManager_(fontManager) {}
 
@@ -93,8 +102,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
 
     // Check for overflow clipping
     bool needsClip = false;
-    auto ovIt = style.find("overflow");
-    std::string overflow = (ovIt != style.end()) ? ovIt->second : "visible";
+    std::string overflow = getOverflowY(style);
     if (overflow == "hidden" || overflow == "scroll" || overflow == "auto") {
         needsClip = true;
         renderer_->save();

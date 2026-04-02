@@ -154,6 +154,9 @@ private:
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
 
+    // Hover tracking for mouseenter/mouseleave
+    dom::Element* hoveredElement_ = nullptr;
+
     // Viewport scrolling
     float scrollY_ = 0.0f;
     float documentHeight_ = 0.0f;

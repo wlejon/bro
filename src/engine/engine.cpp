@@ -30,6 +30,7 @@
 #include "dom/element.h"
 #include "dom/node.h"
 #include "dom/event.h"
+#include "dom/shadow_root.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "layout/element_ref_adapter.h"
@@ -59,6 +60,45 @@
 #include <unordered_map>
 
 namespace bro::engine {
+
+// ---------------------------------------------------------------------------
+// Overflow helpers
+// ---------------------------------------------------------------------------
+
+/// Get the effective vertical overflow value for an element.
+/// Checks overflow-y first (more specific), then falls back to overflow.
+static std::string getOverflowY(const htmlayout::css::ComputedStyle& style) {
+    auto oyIt = style.find("overflow-y");
+    if (oyIt != style.end()) return oyIt->second;
+    auto oIt = style.find("overflow");
+    if (oIt != style.end()) return oIt->second;
+    return "visible";
+}
+
+/// Whether an element clips overflowing content (hidden, scroll, or auto).
+static bool overflowClips(const std::string& ov) {
+    return ov == "hidden" || ov == "scroll" || ov == "auto";
+}
+
+/// Whether an element is user-scrollable (scroll or auto only, not hidden).
+static bool overflowScrollable(const std::string& ov) {
+    return ov == "scroll" || ov == "auto";
+}
+
+/// Walk up the composed tree (crosses shadow boundaries via host element).
+static dom::Element* composedParent(dom::Element* el) {
+    if (!el) return nullptr;
+    auto* p = el->parentNode();
+    if (!p) return nullptr;
+    if (p->nodeType() == dom::NodeType::Element)
+        return static_cast<dom::Element*>(p);
+    // Parent is a ShadowRoot — cross to the host element
+    if (p->nodeType() == dom::NodeType::DocumentFragment) {
+        auto* sr = dynamic_cast<dom::ShadowRoot*>(p);
+        if (sr) return sr->host();
+    }
+    return nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // SDL keycode → standard web KeyboardEvent.key mapping
@@ -590,9 +630,8 @@ void Engine::run() {
                     auto* elem = static_cast<dom::Element*>(node);
                     if (elem->needsScrollToBottom()) {
                         elem->setScrollToBottom(false);
-                        auto& style = elem->computedStyle();
-                        auto ovIt = style.find("overflow");
-                        if (ovIt != style.end() && ovIt->second != "visible") {
+                        std::string ov = getOverflowY(elem->computedStyle());
+                        if (overflowClips(ov)) {
                             // Scroll to bottom by setting a large scroll offset
                             float currentScroll = elem->scrollTopValue();
                             elem->setScrollTopValue(currentScroll + 100000.0f);
@@ -665,9 +704,8 @@ void Engine::run() {
                 drawElemScrollbars = [&](dom::Node* node) {
                     if (!node || node->nodeType() != dom::NodeType::Element) return;
                     auto* elem = static_cast<dom::Element*>(node);
-                    auto& style = elem->computedStyle();
-                    auto ovIt = style.find("overflow");
-                    if (ovIt != style.end() && ovIt->second != "visible") {
+                    std::string ov = getOverflowY(elem->computedStyle());
+                    if (overflowClips(ov)) {
                         float scrollTop = elem->scrollTopValue();
                         if (scrollTop != 0) {
                             auto& lbox = elem->layoutBox();
@@ -1342,6 +1380,28 @@ void Engine::handleMouseMove(float x, float y) {
             }
         }
     }
+
+    // Dispatch mouseenter / mouseleave when the element under the cursor changes
+    if (document_) {
+        dom::Element* target = hitTest(docX, docY);
+        if (target != hoveredElement_) {
+            if (hoveredElement_) {
+                dom::MouseEvent leaveEvt("mouseleave");
+                leaveEvt.setClientX(static_cast<double>(x));
+                leaveEvt.setClientY(static_cast<double>(y));
+                dispatchEvent(hoveredElement_, leaveEvt);
+            }
+            hoveredElement_ = target;
+            if (hoveredElement_) {
+                dom::MouseEvent enterEvt("mouseenter");
+                enterEvt.setClientX(static_cast<double>(x));
+                enterEvt.setClientY(static_cast<double>(y));
+                dispatchEvent(hoveredElement_, enterEvt);
+            }
+            if (jsRuntime_) jsRuntime_->executePendingJobs();
+            uiDirty_ = true;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1951,10 +2011,10 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
     // Check if target or an ancestor is a scrollable overflow element
     {
         auto* el = target;
+        bool blockedByHidden = false;
         while (el) {
-            auto& style = el->computedStyle();
-            auto ovIt = style.find("overflow");
-            if (ovIt != style.end() && ovIt->second != "visible") {
+            std::string ov = getOverflowY(el->computedStyle());
+            if (overflowScrollable(ov)) {
                 float scrollPx = -dy * kScrollSpeed;
                 float currentScroll = el->scrollTopValue();
                 el->setScrollTopValue(currentScroll + scrollPx);
@@ -1962,8 +2022,15 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
                 document_->markDirty();
                 return;
             }
-            el = el->parentElement();
+            if (ov == "hidden") {
+                blockedByHidden = true;
+                break;
+            }
+            el = composedParent(el);
         }
+
+        // overflow:hidden ancestor blocks viewport scroll too
+        if (blockedByHidden) return;
     }
 
     // Viewport scrolling
@@ -1973,21 +2040,136 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
 }
 
 // ---------------------------------------------------------------------------
-// Hit testing
+// Hit testing (scroll-offset–aware)
 // ---------------------------------------------------------------------------
+
+// Forward declaration for mutual recursion
+static dom::Element* hitTestNode(dom::Node* node, float x, float y,
+                                 float offsetX, float offsetY);
+
+// Recursive helper: offsetX/offsetY accumulate from ancestors.
+// Returns the deepest Element whose border box contains the point.
+static dom::Element* hitTestElement(dom::Element* elem, float x, float y,
+                                     float offsetX, float offsetY) {
+    if (!elem) return nullptr;
+
+    auto& style = elem->computedStyle();
+
+    // Skip invisible / non-interactive elements
+    {
+        auto it = style.find("display");
+        if (it != style.end() && it->second == "none") return nullptr;
+    }
+    {
+        auto it = style.find("pointer-events");
+        if (it != style.end() && it->second == "none") return nullptr;
+    }
+    {
+        auto it = style.find("visibility");
+        if (it != style.end() && it->second == "hidden") return nullptr;
+    }
+
+    auto& box = elem->layoutBox();
+
+    // Absolute content position
+    float absX = box.contentRect.x + offsetX;
+    float absY = box.contentRect.y + offsetY;
+
+    // Apply transform (translate only)
+    float testX = x, testY = y;
+    {
+        auto it = style.find("transform");
+        if (it != style.end() && !it->second.empty() && it->second != "none") {
+            float tx = 0, ty = 0;
+            const auto& v = it->second;
+            auto pos = v.find("translate(");
+            if (pos != std::string::npos) {
+                auto inner = v.substr(pos + 10);
+                char* end = nullptr;
+                tx = std::strtof(inner.c_str(), &end);
+                if (end && (*end == ',' || *end == ' ')) {
+                    ty = std::strtof(end + 1, nullptr);
+                }
+            } else {
+                pos = v.find("translateY(");
+                if (pos != std::string::npos) {
+                    ty = std::strtof(v.c_str() + pos + 11, nullptr);
+                }
+                pos = v.find("translateX(");
+                if (pos != std::string::npos) {
+                    tx = std::strtof(v.c_str() + pos + 11, nullptr);
+                }
+            }
+            testX -= tx;
+            testY -= ty;
+        }
+    }
+
+    // Border box bounds
+    float bx = absX - box.padding.left - box.border.left;
+    float by = absY - box.padding.top  - box.border.top;
+    float bw = box.fullWidth();
+    float bh = box.fullHeight();
+    if (testX < bx || testX >= bx + bw || testY < by || testY >= by + bh)
+        return nullptr;
+
+    // Adjust child offset for element-level scroll
+    float childOffsetX = absX;
+    float childOffsetY = absY - elem->scrollTopValue();
+
+    // Gather composed children (shadow DOM aware) — mirrors DrawTraversal
+    std::vector<dom::Node*> childNodes;
+    if (elem->hasShadow()) {
+        auto* sr = elem->shadowRoot();
+        if (!sr->slotsValid()) sr->distributeSlots();
+        childNodes = sr->composedChildren();
+    } else {
+        childNodes = elem->childNodes();
+    }
+
+    // Get enclosing shadow root for slot replacement
+    auto* enclosingSR = elem->containingShadowRoot();
+
+    // Check children in reverse order (last-painted = topmost)
+    for (int i = static_cast<int>(childNodes.size()) - 1; i >= 0; --i) {
+        auto* child = childNodes[i];
+
+        // Replace <slot> elements with assigned/fallback content
+        if (enclosingSR && child->nodeType() == dom::NodeType::Element) {
+            auto* childElem = static_cast<dom::Element*>(child);
+            if (childElem->tagName() == "SLOT") {
+                auto assigned = enclosingSR->assignedNodes(childElem);
+                auto& nodes = assigned.empty() ? childElem->childNodes() : assigned;
+                for (int j = static_cast<int>(nodes.size()) - 1; j >= 0; --j) {
+                    auto* hit = hitTestNode(nodes[j], testX, testY,
+                                            childOffsetX, childOffsetY);
+                    if (hit) return hit;
+                }
+                continue;
+            }
+        }
+
+        auto* hit = hitTestNode(child, testX, testY, childOffsetX, childOffsetY);
+        if (hit) return hit;
+    }
+
+    // No child hit — this element is the target
+    return elem;
+}
+
+static dom::Element* hitTestNode(dom::Node* node, float x, float y,
+                                 float offsetX, float offsetY) {
+    if (!node || node->nodeType() != dom::NodeType::Element) return nullptr;
+    return hitTestElement(static_cast<dom::Element*>(node), x, y, offsetX, offsetY);
+}
 
 dom::Element* Engine::hitTest(float x, float y) {
     // x, y are already in document space (scroll-adjusted by callers)
     if (!document_ || !document_->documentElement())
         return document_ ? document_->body() : nullptr;
 
-    auto layoutTree = layout::LayoutNodeAdapter::buildTree(document_->documentElement());
-    auto* hit = htmlayout::layout::hitTest(layoutTree.get(), x, y);
-    if (!hit) return document_->body();
-
-    auto* adapter = static_cast<layout::LayoutNodeAdapter*>(hit);
-    if (adapter->element()) return adapter->element();
-    return document_->body();
+    auto* hit = hitTestElement(document_->documentElement(), x, y, 0.0f, 0.0f);
+    return hit ? hit : document_->body();
 }
 
 // ---------------------------------------------------------------------------
