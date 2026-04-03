@@ -122,6 +122,14 @@ public:
     void stopMicCapture();
     bool isMicCapturing() const { return micCapturing_; }
 
+    /// Mic mute: when muted, mic is excluded from output mix and blended analyser.
+    void setMicMuted(bool muted) { micMuted_.store(muted, std::memory_order_relaxed); }
+    bool isMicMuted() const { return micMuted_.load(std::memory_order_relaxed); }
+
+    /// Mic monitor gain: volume of mic playback through speakers (0..1).
+    void setMicMonitorGain(float g) { micMonitorGain_.store(g, std::memory_order_relaxed); }
+    float micMonitorGain() const { return micMonitorGain_.load(std::memory_order_relaxed); }
+
 private:
     static void audioCallback(void* userdata, SDL_AudioStream* stream,
                               int additional_amount, int total_amount);
@@ -145,6 +153,14 @@ private:
     RingBuffer outputBuffer_{16384};
     RingBuffer micBuffer_{16384};
     std::mutex micMutex_;
+
+    // Mic playback FIFO: mic callback writes, output callback reads
+    std::vector<float> micPlayback_ = std::vector<float>(32768, 0.0f);
+    std::atomic<uint64_t> micPlaybackWritePos_{0};
+    uint64_t micPlaybackReadPos_ = 0; // only accessed from output callback thread
+
+    std::atomic<bool> micMuted_{true};
+    std::atomic<float> micMonitorGain_{0.5f};
 };
 
 } // namespace bro::audio

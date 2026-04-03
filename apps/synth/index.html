@@ -10,13 +10,6 @@
             <h1>SYNTH</h1>
             <div id="controls">
                 <div class="control-group">
-                    <label>Source</label>
-                    <div id="source-btns" class="btn-group">
-                        <button class="btn active" data-source="synth">Synth</button>
-                        <button class="btn" data-source="mic">Mic</button>
-                    </div>
-                </div>
-                <div class="control-group">
                     <label>Waveform</label>
                     <div id="wave-btns" class="btn-group">
                         <button class="btn active" data-wave="sine">Sin</button>
@@ -34,8 +27,16 @@
                     </div>
                 </div>
                 <div class="control-group">
-                    <label>Volume</label>
+                    <label>Synth Vol</label>
                     <input type="range" id="volume" min="0" max="100" value="30">
+                </div>
+                <div class="control-group mic-group">
+                    <button id="mic-toggle" class="btn mic-btn mic-off">MIC</button>
+                    <div id="mic-level-wrap">
+                        <div id="mic-level-bar"></div>
+                    </div>
+                    <label>Mon</label>
+                    <input type="range" id="mic-volume" min="0" max="100" value="50">
                 </div>
             </div>
         </div>
@@ -47,6 +48,8 @@
         <div id="status-bar">
             <span id="note-display">--</span>
             <span id="freq-display">-- Hz</span>
+            <span id="mic-note">Mic: --</span>
+            <span id="mic-freq">-- Hz</span>
             <span id="fps-display">-- fps</span>
         </div>
     </div>

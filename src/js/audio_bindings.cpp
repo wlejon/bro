@@ -94,7 +94,7 @@ struct AnalyserNodeData {
     float minDecibels = -100.0f;
     float maxDecibels = -30.0f;
     float smoothingTimeConstant = 0.8f;
-    // Which source to analyse: 0 = output mix, 1 = mic input
+    // Which source to analyse: 0 = output mix, 1 = mic input, 2 = blend both
     int source = 0;
     // Smoothed magnitude data (previous frame)
     std::vector<float> smoothedMagnitudes;
@@ -178,8 +178,18 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
     std::vector<float> real(n), imag(n, 0.0f);
 
     // Read samples from the appropriate ring buffer
-    auto& buf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
-    buf.readLatest(real.data(), n);
+    if (d->source == 2) {
+        // Blend: sum output + mic (respects mic mute)
+        d->engine->outputBuffer().readLatest(real.data(), n);
+        if (!d->engine->isMicMuted()) {
+            std::vector<float> mic(n);
+            d->engine->micBuffer().readLatest(mic.data(), n);
+            for (int i = 0; i < n; i++) real[i] += mic[i];
+        }
+    } else {
+        auto& buf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
+        buf.readLatest(real.data(), n);
+    }
 
     // Apply Blackman window
     for (int i = 0; i < n; i++) {
@@ -269,8 +279,17 @@ static JSValue js_analyser_getFloatTimeDomainData(JSContext* ctx, JSValueConst t
     if (raw) {
         float* dst = reinterpret_cast<float*>(raw);
         int count = std::min(static_cast<int>(len / sizeof(float)), d->fftSize);
-        auto& ringBuf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
-        ringBuf.readLatest(dst, count);
+        if (d->source == 2) {
+            d->engine->outputBuffer().readLatest(dst, count);
+            if (!d->engine->isMicMuted()) {
+                std::vector<float> mic(count);
+                d->engine->micBuffer().readLatest(mic.data(), count);
+                for (int i = 0; i < count; i++) dst[i] += mic[i];
+            }
+        } else {
+            auto& ringBuf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
+            ringBuf.readLatest(dst, count);
+        }
     }
     return JS_UNDEFINED;
 }
@@ -281,8 +300,17 @@ static JSValue js_analyser_getByteTimeDomainData(JSContext* ctx, JSValueConst th
     if (!d || argc < 1) return JS_UNDEFINED;
 
     std::vector<float> samples(d->fftSize);
-    auto& ringBuf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
-    ringBuf.readLatest(samples.data(), d->fftSize);
+    if (d->source == 2) {
+        d->engine->outputBuffer().readLatest(samples.data(), d->fftSize);
+        if (!d->engine->isMicMuted()) {
+            std::vector<float> mic(d->fftSize);
+            d->engine->micBuffer().readLatest(mic.data(), d->fftSize);
+            for (int i = 0; i < d->fftSize; i++) samples[i] += mic[i];
+        }
+    } else {
+        auto& ringBuf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
+        ringBuf.readLatest(samples.data(), d->fftSize);
+    }
 
     size_t len = 0;
     uint8_t* dst = getTypedArrayPtr(ctx, argv[0], len);
@@ -305,7 +333,7 @@ static JSValue js_analyser_set_source(JSContext* ctx, JSValueConst this_val, JSV
     auto* d = static_cast<AnalyserNodeData*>(JS_GetOpaque(this_val, js_analysernode_class_id));
     if (!d) return JS_UNDEFINED;
     int v; JS_ToInt32(ctx, &v, val);
-    d->source = (v == 1) ? 1 : 0;
+    d->source = (v == 2) ? 2 : (v == 1) ? 1 : 0;
     return JS_UNDEFINED;
 }
 
@@ -598,9 +626,37 @@ static JSValue js_audioctx_createMediaStreamSource(JSContext* ctx, JSValueConst 
     return obj;
 }
 
+// Mic mute/gain properties on AudioContext (bro extension)
+static JSValue js_audioctx_get_micMuted(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    return d ? JS_NewBool(ctx, d->engine->isMicMuted()) : JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_set_micMuted(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (d) d->engine->setMicMuted(JS_ToBool(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_get_micMonitorGain(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    return d ? JS_NewFloat64(ctx, d->engine->micMonitorGain()) : JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_set_micMonitorGain(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (d) {
+        double v; JS_ToFloat64(ctx, &v, val);
+        d->engine->setMicMonitorGain(static_cast<float>(std::clamp(v, 0.0, 1.0)));
+    }
+    return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CGETSET_DEF("currentTime", js_audioctx_get_currentTime, nullptr),
     JS_CGETSET_DEF("sampleRate", js_audioctx_get_sampleRate, nullptr),
+    JS_CGETSET_DEF("micMuted", js_audioctx_get_micMuted, js_audioctx_set_micMuted),
+    JS_CGETSET_DEF("micMonitorGain", js_audioctx_get_micMonitorGain, js_audioctx_set_micMonitorGain),
     JS_CFUNC_DEF("createOscillator", 0, js_audioctx_createOscillator),
     JS_CFUNC_DEF("createGain", 0, js_audioctx_createGain),
     JS_CFUNC_DEF("createAnalyser", 0, js_audioctx_createAnalyser),

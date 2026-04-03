@@ -311,8 +311,17 @@ void AudioEngine::micCallback(void* userdata, SDL_AudioStream* stream,
     int got = SDL_GetAudioStreamData(stream, buffer, avail);
     if (got > 0) {
         int samplesGot = got / static_cast<int>(sizeof(float));
-        std::lock_guard<std::mutex> lock(engine->micMutex_);
-        engine->micBuffer_.write(buffer, samplesGot);
+        {
+            std::lock_guard<std::mutex> lock(engine->micMutex_);
+            engine->micBuffer_.write(buffer, samplesGot);
+        }
+        // Write to playback FIFO (lock-free single-producer)
+        int cap = static_cast<int>(engine->micPlayback_.size());
+        uint64_t wp = engine->micPlaybackWritePos_.load(std::memory_order_relaxed);
+        for (int i = 0; i < samplesGot; i++) {
+            engine->micPlayback_[static_cast<int>((wp + i) % cap)] = buffer[i];
+        }
+        engine->micPlaybackWritePos_.store(wp + samplesGot, std::memory_order_release);
     }
 
     if (buffer != stackBuf) delete[] buffer;
@@ -335,7 +344,29 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
     std::memset(buffer, 0, numSamples * sizeof(float));
     engine->generateSamples(buffer, numSamples);
 
-    // Write to output ring buffer for analysis
+    // Mix in mic playback if not muted
+    if (!engine->micMuted_.load(std::memory_order_relaxed)) {
+        float micGain = engine->micMonitorGain_.load(std::memory_order_relaxed);
+        uint64_t wp = engine->micPlaybackWritePos_.load(std::memory_order_acquire);
+        int cap = static_cast<int>(engine->micPlayback_.size());
+        uint64_t available = wp - engine->micPlaybackReadPos_;
+
+        // If too far behind (> half buffer), snap to latest to avoid stale audio
+        if (available > static_cast<uint64_t>(cap / 2)) {
+            engine->micPlaybackReadPos_ = wp - numSamples;
+            available = numSamples;
+        }
+
+        // Consume continuously from read position — no skipping
+        int toRead = static_cast<int>(std::min(available, static_cast<uint64_t>(numSamples)));
+        for (int i = 0; i < toRead; i++) {
+            int idx = static_cast<int>((engine->micPlaybackReadPos_ + i) % cap);
+            buffer[i] += engine->micPlayback_[idx] * micGain;
+        }
+        engine->micPlaybackReadPos_ += toRead;
+    }
+
+    // Write to output ring buffer for analysis (includes mic if unmuted)
     engine->outputBuffer_.write(buffer, numSamples);
 
     SDL_PutAudioStreamData(stream, buffer, numSamples * sizeof(float));

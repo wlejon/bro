@@ -5,23 +5,31 @@
 // Helper: querySelectorAll returns a NodeList which may lack .forEach
 function $$(sel) { return Array.from(document.querySelectorAll(sel)); }
 
-let audioCtx, analyser;
+let audioCtx, analyser, masterGain;
 try {
     audioCtx = new AudioContext();
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.85;
+    // Master gain merges synth + mic before analyser
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 1.0;
+    masterGain.connect(analyser);
+    analyser.source = 2; // blend output mix + mic
+    analyser.connect(audioCtx.destination);
 } catch (e) {
     console.warn('AudioContext unavailable:', e.message);
 }
 
 // State
 let waveform = 'sine';
-let volume = 0.3;
+let synthVolume = 0.3;
+let micVolume = 0.5;
 let vizMode = 'spectrum';
-let source = 'synth'; // 'synth' or 'mic'
+let micEnabled = false;
 let micStream = null;
-let micSource = null;
+let micSourceNode = null;
+let micAnalyser = null; // separate analyser for mic level + pitch
 let activeNotes = new Map(); // note -> { osc, gain }
 
 // Note definitions — 3 octaves starting at C3
@@ -112,9 +120,9 @@ function noteOn(noteIdx) {
 
     osc.type = waveform;
     osc.frequency.value = note.freq;
-    gain.gain.value = volume;
+    gain.gain.value = synthVolume;
 
-    osc.connect(gain).connect(audioCtx.destination);
+    osc.connect(gain).connect(masterGain);
     osc.start();
 
     activeNotes.set(noteIdx, { osc, gain });
@@ -141,6 +149,99 @@ function noteOff(noteIdx) {
 }
 
 // ---------------------------------------------------------------------------
+// Mic setup
+// ---------------------------------------------------------------------------
+
+async function initMic() {
+    if (!audioCtx || micSourceNode) return;
+    try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micSourceNode = audioCtx.createMediaStreamSource(micStream);
+
+        // Mic analyser for level metering and pitch detection (reads raw mic buffer)
+        micAnalyser = audioCtx.createAnalyser();
+        micAnalyser.fftSize = 2048;
+        micAnalyser.smoothingTimeConstant = 0.8;
+        micAnalyser.source = 1; // mic-only for level/pitch detection
+        // Pre-allocate buffers for mic metering/pitch (avoid per-frame alloc)
+        micLevelBuf = new Uint8Array(micAnalyser.frequencyBinCount);
+        micFreqBuf = new Uint8Array(micAnalyser.frequencyBinCount);
+
+        // Set initial mic state via engine-level controls
+        audioCtx.micMuted = true; // start muted
+        audioCtx.micMonitorGain = micVolume;
+    } catch (err) {
+        console.error('Mic access failed:', err);
+    }
+}
+
+function setMicEnabled(enabled) {
+    micEnabled = enabled;
+    const btn = document.getElementById('mic-toggle');
+    if (enabled) {
+        btn.classList.remove('mic-off');
+        btn.classList.add('mic-on');
+    } else {
+        btn.classList.remove('mic-on');
+        btn.classList.add('mic-off');
+    }
+    // Control mute at the engine level (affects both playback and viz blend)
+    if (audioCtx) audioCtx.micMuted = !enabled;
+}
+
+// ---------------------------------------------------------------------------
+// Pitch detection (FFT peak — O(n), uses already-computed frequency data)
+// ---------------------------------------------------------------------------
+
+let micLevelBuf = null;
+let micFreqBuf = null;
+
+function detectPitch(analyserNode) {
+    if (!analyserNode || !micFreqBuf) return null;
+
+    analyserNode.getByteFrequencyData(micFreqBuf);
+
+    // Find the bin with highest magnitude (skip bin 0 = DC)
+    const sampleRate = audioCtx.sampleRate;
+    const binCount = analyserNode.frequencyBinCount;
+    const binWidth = sampleRate / analyserNode.fftSize;
+
+    // Only search bins corresponding to 60–1500 Hz
+    const minBin = Math.max(1, Math.floor(60 / binWidth));
+    const maxBin = Math.min(binCount - 1, Math.ceil(1500 / binWidth));
+
+    let bestBin = minBin;
+    let bestVal = 0;
+    for (let i = minBin; i <= maxBin; i++) {
+        if (micFreqBuf[i] > bestVal) {
+            bestVal = micFreqBuf[i];
+            bestBin = i;
+        }
+    }
+
+    if (bestVal < 20) return null; // too quiet
+
+    // Parabolic interpolation for sub-bin accuracy
+    const prev = bestBin > 0 ? micFreqBuf[bestBin - 1] : 0;
+    const next = bestBin < binCount - 1 ? micFreqBuf[bestBin + 1] : 0;
+    const denom = prev - 2 * bestVal + next;
+    const offset = denom !== 0 ? 0.5 * (prev - next) / denom : 0;
+
+    return (bestBin + offset) * binWidth;
+}
+
+function freqToNoteName(freq) {
+    const midi = 12 * Math.log2(freq / 440) + 69;
+    const noteIdx = Math.round(midi) % 12;
+    const octave = Math.floor(Math.round(midi) / 12) - 1;
+    const cents = Math.round((midi - Math.round(midi)) * 100);
+    return {
+        name: NOTE_NAMES[noteIdx < 0 ? noteIdx + 12 : noteIdx] + octave,
+        cents: cents
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Keyboard input
 // ---------------------------------------------------------------------------
 
@@ -163,7 +264,7 @@ document.documentElement.addEventListener('keyup', (e) => {
     }
 });
 
-// Mouse input on keyboard — use individual key handlers
+// Mouse input on keyboard
 let mouseDown = false;
 let mouseNoteIdx = -1;
 
@@ -188,7 +289,6 @@ function handleKeyMouseEnter(el) {
     }
 }
 
-// Attach handlers to each key element
 function attachKeyHandlers(el) {
     el.addEventListener('mousedown', () => {
         mouseDown = true;
@@ -212,7 +312,7 @@ document.documentElement.addEventListener('mouseup', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Controls — attach handlers to individual buttons to avoid e.target issues
+// Controls
 // ---------------------------------------------------------------------------
 
 // Waveform buttons
@@ -234,41 +334,27 @@ $$('#viz-btns .btn').forEach(btn => {
     });
 });
 
-// Source buttons
-$$('#source-btns .btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-        const newSource = btn.getAttribute('data-source');
-        $$('#source-btns .btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        source = newSource;
+// Mic toggle
+document.getElementById('mic-toggle').addEventListener('click', async () => {
+    if (!micSourceNode) {
+        await initMic();
+        if (!micSourceNode) return; // failed
+    }
+    setMicEnabled(!micEnabled);
+});
 
-        if (source === 'mic' && audioCtx && analyser) {
-            if (!micStream) {
-                try {
-                    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    micSource = audioCtx.createMediaStreamSource(micStream);
-                    micSource.connect(analyser);
-                } catch (err) {
-                    console.error('Mic access failed:', err);
-                    source = 'synth';
-                    document.querySelector('[data-source="synth"]').classList.add('active');
-                    btn.classList.remove('active');
-                    return;
-                }
-            }
-            analyser.source = 1; // mic input
-        } else if (source === 'synth' && analyser) {
-            analyser.source = 0; // output mix
-        }
+// Synth volume slider
+document.getElementById('volume').addEventListener('input', (e) => {
+    synthVolume = parseInt(e.target.value) / 100;
+    activeNotes.forEach(entry => {
+        entry.gain.gain.value = synthVolume;
     });
 });
 
-// Volume slider
-document.getElementById('volume').addEventListener('input', (e) => {
-    volume = parseInt(e.target.value) / 100;
-    activeNotes.forEach(entry => {
-        entry.gain.gain.value = volume;
-    });
+// Mic monitor volume slider
+document.getElementById('mic-volume').addEventListener('input', (e) => {
+    micVolume = parseInt(e.target.value) / 100;
+    if (audioCtx) audioCtx.micMonitorGain = micVolume;
 });
 
 // ---------------------------------------------------------------------------
@@ -311,14 +397,15 @@ function draw() {
         document.getElementById('fps-display').textContent = fps + ' fps';
     }
 
-    // Use the actual canvas scene dimensions (always correct, even before first layout)
     const W = ctx.canvasWidth;
     const H = ctx.canvasHeight;
 
-    // clearRect resets the canvas command buffer — critical for performance
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, W, H);
+
+    // Update mic level indicator and pitch detection
+    updateMicInfo();
 
     if (!analyser) return;
 
@@ -330,6 +417,58 @@ function draw() {
         drawSpectrogram(W, H);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Mic info (level meter + pitch detection)
+// ---------------------------------------------------------------------------
+
+let micPitchCounter = 0;
+const micLevelEl = document.getElementById('mic-level-bar');
+const micNoteEl = document.getElementById('mic-note');
+const micFreqEl = document.getElementById('mic-freq');
+
+function updateMicInfo() {
+    if (!micAnalyser || !micLevelBuf) return;
+
+    // Throttle everything to every 6 frames
+    micPitchCounter++;
+    if (micPitchCounter % 6 !== 0) return;
+
+    // Level meter — reuse pre-allocated buffer
+    micAnalyser.getByteFrequencyData(micLevelBuf);
+    let sum = 0;
+    const len = micLevelBuf.length;
+    // Sample every 4th bin for speed
+    for (let i = 0; i < len; i += 4) sum += micLevelBuf[i];
+    const avgLevel = sum / (len / 4) / 255;
+    micLevelEl.style.height = Math.min(100, avgLevel * 300) + '%';
+
+    if (avgLevel > 0.6) micLevelEl.style.background = '#cc3333';
+    else if (avgLevel > 0.3) micLevelEl.style.background = '#cccc33';
+    else micLevelEl.style.background = '#33cc33';
+
+    if (!micEnabled) {
+        micNoteEl.textContent = 'Mic: --';
+        micFreqEl.textContent = '-- Hz';
+        return;
+    }
+
+    // Pitch detection reuses the same FFT data (detectPitch calls getByteFrequencyData)
+    const freq = detectPitch(micAnalyser);
+    if (freq && freq > 50 && freq < 2000) {
+        const noteInfo = freqToNoteName(freq);
+        const centsStr = noteInfo.cents >= 0 ? '+' + noteInfo.cents : '' + noteInfo.cents;
+        micNoteEl.textContent = 'Mic: ' + noteInfo.name + ' (' + centsStr + 'c)';
+        micFreqEl.textContent = freq.toFixed(1) + ' Hz';
+    } else {
+        micNoteEl.textContent = 'Mic: --';
+        micFreqEl.textContent = '-- Hz';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Draw functions
+// ---------------------------------------------------------------------------
 
 function drawSpectrum(W, H) {
     const bufLen = analyser.frequencyBinCount;
@@ -361,7 +500,6 @@ function drawSpectrum(W, H) {
         ctx.fillStyle = getGradientColor(value);
         ctx.fillRect(x, H - barH, w, barH);
 
-        // Glow on top
         if (value > 0.3) {
             ctx.fillStyle = 'rgba(0, 229, 255, ' + (value * 0.3) + ')';
             ctx.fillRect(x, H - barH - 2, w, 4);
@@ -394,7 +532,7 @@ function drawWaveform(W, H) {
     ctx.lineTo(W, midY);
     ctx.stroke();
 
-    // Glow effect — draw twice with different widths
+    // Glow effect
     for (let pass = 0; pass < 2; pass++) {
         ctx.strokeStyle = pass === 0 ? 'rgba(0, 229, 255, 0.3)' : '#00e5ff';
         ctx.lineWidth = pass === 0 ? 6 : 2;
@@ -415,7 +553,6 @@ function drawSpectrogram(W, H) {
     const data = new Uint8Array(bufLen);
     analyser.getByteFrequencyData(data);
 
-    // Downsample frequency data to keep draw calls manageable
     const numFreqBins = 64;
     const reduced = new Uint8Array(numFreqBins);
     for (let f = 0; f < numFreqBins; f++) {
@@ -433,7 +570,6 @@ function drawSpectrogram(W, H) {
         spectrogramData.shift();
     }
 
-    // Draw all columns — 200 cols * 64 bins = 12,800 rects max
     const colW = W / SPECTROGRAM_HISTORY;
     const binH = H / numFreqBins;
 
