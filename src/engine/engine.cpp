@@ -15,7 +15,6 @@
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "js/runtime.h"
-#include "js/console.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
 #include "js/canvas_bindings.h"
@@ -26,7 +25,9 @@
 #include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
-#include "js/fetch_bindings.h"
+
+#include "api/api.h"
+#include "runtime/runtime.h"
 #include "audio/audio_engine.h"
 #include "canvas/canvas_scene.h"
 #include "canvas/canvas2d.h"
@@ -119,7 +120,19 @@ Engine::Engine(const EngineConfig& config)
     // 4. JS runtime + bindings
     jsRuntime_ = std::make_unique<js::Runtime>();
     jsRuntime_->setModuleLoader();
-    js::Console::install(jsRuntime_->getContext());
+
+    // Wire brokit logging through bro's LOG_* macros
+    brokit::Runtime::setLogCallback([](brokit::Runtime::LogLevel level, const std::string& msg) {
+        switch (level) {
+            case brokit::Runtime::LogLevel::Warn:  LOG_WARN("[console] %s", msg.c_str()); break;
+            case brokit::Runtime::LogLevel::Error: LOG_ERROR("[console] %s", msg.c_str()); break;
+            default: LOG_INFO("[console] %s", msg.c_str()); break;
+        }
+    });
+
+    // Install all brokit APIs (console, timers, URL, crypto, encoding, fetch, etc.)
+    brokit::api::installAll(jsRuntime_->getContext());
+
     timers_ = std::make_unique<js::Timers>();
     js::Timers::install(jsRuntime_->getContext(), timers_.get());
 
@@ -198,7 +211,9 @@ Engine::Engine(const EngineConfig& config)
     // 9c. Install Canvas 2D bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
-    js::FetchBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+
+    // Register app directory as fetch base path (overlay: last added = checked first)
+    brokit::api::addFetchBasePath(jsRuntime_->getContext(), manifest_.basePath);
 
     if (gl_) {
         // GPU path: WebGL2 + full canvas factory (windowed or GPU headless)
@@ -435,6 +450,18 @@ void Engine::run() {
         double now = util::currentTimeMs();
         double t0 = now;
         timers_->tick(now);
+
+        // 2a. Tick brokit fetch (pump pending HTTP requests)
+        {
+            JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
+            JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_fetch_tick");
+            if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
+                JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
+                JS_FreeValue(jsRuntime_->getContext(), ret);
+            }
+            JS_FreeValue(jsRuntime_->getContext(), tickFn);
+            JS_FreeValue(jsRuntime_->getContext(), global);
+        }
 
         // 2b. Tick system overlay timers
         if (systemOverlay_) {

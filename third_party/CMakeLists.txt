@@ -4,6 +4,18 @@ set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
 add_subdirectory(quickjs EXCLUDE_FROM_ALL)
 
+# --- brokit (JS runtime APIs) ---
+# Prefer the standalone repo at ../brokit for local development.
+# Falls back to the git submodule at third_party/brokit.
+set(BROKIT_DIR "${CMAKE_SOURCE_DIR}/../brokit" CACHE PATH "Path to standalone brokit repo")
+if(EXISTS "${BROKIT_DIR}/CMakeLists.txt")
+    message(STATUS "brokit: using standalone repo at ${BROKIT_DIR}")
+    add_subdirectory("${BROKIT_DIR}" "${CMAKE_BINARY_DIR}/brokit" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "brokit: using submodule at third_party/brokit")
+    add_subdirectory(brokit EXCLUDE_FROM_ALL)
+endif()
+
 # --- htmlayout (CSS + layout library) ---
 # Prefer the standalone repo at ../htmlayout for local development (edit once, no sync dance).
 # Falls back to the git submodule at third_party/htmlayout.

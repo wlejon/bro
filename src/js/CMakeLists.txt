@@ -23,13 +23,12 @@ endfunction()
 embed_js(dom_polyfills.js      js_dom_polyfills)
 embed_js(observer_polyfills.js js_observer_polyfills)
 embed_js(window_polyfill.js    js_window_polyfill)
-embed_js(fetch_polyfill.js     js_fetch_polyfill)
 embed_js(dataset_proxy.js      js_dataset_proxy)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 
 add_library(bro_js STATIC
-    runtime.cpp console.cpp timers.cpp window_bindings.cpp
+    runtime.cpp timers.cpp window_bindings.cpp
     dom_bindings.cpp node_bindings.cpp event_bindings.cpp style_bindings.cpp
     element_bindings.cpp shadowroot_bindings.cpp document_bindings.cpp
     custom_elements.cpp event_dispatch.cpp mutation_observer.cpp
@@ -42,12 +41,11 @@ add_library(bro_js STATIC
     webgl2_bindings_framebuffers.cpp
     webgl2_bindings_queries.cpp
     image_bindings.cpp
-    fetch_bindings.cpp
     headless_bindings.cpp
     ${GENERATED_HEADERS}
 )
 target_include_directories(bro_js PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(bro_js PRIVATE ${GEN_DIR})
-target_link_libraries(bro_js PUBLIC qjs bro_dom bro_util bro_canvas bro_audio bro_webgl stb_image)
+target_link_libraries(bro_js PUBLIC qjs brokit bro_dom bro_util bro_canvas bro_audio bro_webgl stb_image)
 # QuickJS headers
 target_include_directories(bro_js PRIVATE ${CMAKE_SOURCE_DIR}/third_party/quickjs)

@@ -75,6 +75,18 @@ void Engine::advanceTime(double ms) {
         remaining -= step;
         timers_->tick(virtualTime_);
 
+        // Tick brokit fetch (pump pending HTTP requests)
+        {
+            JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
+            JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_fetch_tick");
+            if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
+                JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
+                JS_FreeValue(jsRuntime_->getContext(), ret);
+            }
+            JS_FreeValue(jsRuntime_->getContext(), tickFn);
+            JS_FreeValue(jsRuntime_->getContext(), global);
+        }
+
         if (webglScene && webglScene->webglContext())
             webglScene->webglContext()->bindCanvasFBO();
         timers_->fireAnimationFrames(virtualTime_);

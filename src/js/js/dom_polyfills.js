@@ -341,13 +341,6 @@
         }
     };
 
-    // queueMicrotask — schedules a microtask via Promise
-    if (typeof queueMicrotask === 'undefined') {
-        globalThis.queueMicrotask = function(cb) {
-            Promise.resolve().then(cb);
-        };
-    }
-
     // MutationObserver — simplified implementation
     globalThis.MutationObserver = class MutationObserver {
         constructor(callback) {

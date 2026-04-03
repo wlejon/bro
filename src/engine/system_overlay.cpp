@@ -7,9 +7,10 @@
 #include "layout/skia_text_metrics.h"
 #include "dom/document.h"
 #include "js/runtime.h"
-#include "js/console.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
+
+#include "api/api.h"
 #include "util/log.h"
 
 #include <include/core/SkPaint.h>
@@ -541,7 +542,7 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
         panel.jsCtx = jsRuntime_->createContext();
 
         // Install standard bindings on the panel's context
-        js::Console::install(panel.jsCtx);
+        brokit::api::installConsole(panel.jsCtx);
         panel.timers = std::make_unique<js::Timers>();
         js::Timers::install(panel.jsCtx, panel.timers.get());
 
