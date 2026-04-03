@@ -5,20 +5,21 @@ A lightweight desktop application runtime that runs HTML/CSS/JS apps as native w
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│                bro <app-dir>                │
-├──────────┬──────────┬──────────┬────────────┤
-│  QuickJS │ htmlayout│   Skia   │    SDL3    │
-│   (JS)   │ (Layout) │ (Render) │  (Window)  │
-└──────────┴──────────┴──────────┴────────────┘
+┌───────────────────────────────────────────────────────┐
+│                    bro <app-dir>                      │
+├──────────┬──────────┬──────────┬──────────┬───────────┤
+│  QuickJS │  brokit  │htmlayout │   Skia   │   SDL3    │
+│   (JS)   │ (APIs)   │ (Layout) │ (Render) │ (Window)  │
+└──────────┴──────────┴──────────┴──────────┴───────────┘
 ```
 
 - **QuickJS** — ES2023 JavaScript engine with DOM API bindings.
-- **htmlayout** — CSS parsing, selector matching, style cascade, and block/inline/flex layout.
+- **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
+- **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
 - **Skia** — 2D rasterization (text, paths, images, gradients). Renders to a CPU surface, uploaded to GPU each frame.
 - **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU.
 
-C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing).
+C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the three repos.
 
 ## Features
 
