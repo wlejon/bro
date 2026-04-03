@@ -32,8 +32,17 @@ These functions are available in addition to all standard DOM APIs:
 | `screenshot(path, selector)` | Render the current frame and crop to the element's bounding box before saving. |
 | `flush()` | Force layout recalculation (called automatically after `advanceTime`) |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
+| `click(x, y [, button])` | Simulate a mouse click at screen coordinates (mousedown + mouseup through full engine pipeline with hit testing) |
+| `mouseDown(x, y [, button])` | Simulate a mouse button press at screen coordinates |
+| `mouseUp(x, y [, button])` | Simulate a mouse button release at screen coordinates |
+| `mouseMove(x, y)` | Simulate mouse movement to screen coordinates (triggers hover, mousemove events) |
+| `wheel(x, y, deltaY [, deltaX])` | Simulate a mouse wheel event at screen coordinates (deltaY in scroll lines) |
+| `keyDown(keycode [, scancode, mod, repeat])` | Simulate a key press (SDL keycodes) |
+| `keyUp(keycode [, scancode, mod])` | Simulate a key release (SDL keycodes) |
+| `textInput(text)` | Simulate text input (for typing into focused input/textarea) |
+| `resize(w, h)` | Resize the virtual viewport |
 
-All standard DOM APIs work as expected: `document.querySelector()`, `el.click()`, `el.textContent`, `el.innerHTML`, `el.outerHTML`, `el.getBoundingClientRect()`, `el.style`, event dispatch, etc.
+All standard DOM APIs work as expected: `document.querySelector()`, `el.click()`, `el.textContent`, `el.innerHTML`, `el.outerHTML`, `el.getBoundingClientRect()`, `el.style`, event dispatch, etc. Note that `el.click()` dispatches a click event directly on the element (no hit testing), while `click(x, y)` goes through the full engine input pipeline with hit testing, focus management, and event bubbling.
 
 ## Examples
 
