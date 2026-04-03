@@ -2,10 +2,15 @@
 // Audio Synth + Visualizer
 // ---------------------------------------------------------------------------
 
-const audioCtx = new AudioContext();
-const analyser = audioCtx.createAnalyser();
-analyser.fftSize = 2048;
-analyser.smoothingTimeConstant = 0.85;
+let audioCtx, analyser;
+try {
+    audioCtx = new AudioContext();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.85;
+} catch (e) {
+    console.warn('AudioContext unavailable:', e.message);
+}
 
 // State
 let waveform = 'sine';
@@ -95,6 +100,7 @@ blackKeys.forEach(note => {
 // ---------------------------------------------------------------------------
 
 function noteOn(noteIdx) {
+    if (!audioCtx) return;
     if (noteIdx < 0 || noteIdx >= notes.length) return;
     if (activeNotes.has(noteIdx)) return;
 
@@ -138,7 +144,7 @@ function noteOff(noteIdx) {
 
 const keysDown = new Set();
 
-document.addEventListener('keydown', (e) => {
+document.documentElement.addEventListener('keydown', (e) => {
     if (e.repeat) return;
     const key = e.key.toLowerCase();
     if (key in KEY_MAP && !keysDown.has(key)) {
@@ -147,7 +153,7 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-document.addEventListener('keyup', (e) => {
+document.documentElement.addEventListener('keyup', (e) => {
     const key = e.key.toLowerCase();
     if (key in KEY_MAP) {
         keysDown.delete(key);
@@ -164,7 +170,7 @@ keyboard.addEventListener('mousedown', (e) => {
     if (idx !== null) noteOn(parseInt(idx));
 });
 
-document.addEventListener('mouseup', () => {
+document.documentElement.addEventListener('mouseup', () => {
     if (mouseDown) {
         mouseDown = false;
         activeNotes.forEach((_, idx) => noteOff(idx));
@@ -288,6 +294,8 @@ function draw() {
 
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, W, H);
+
+    if (!analyser) return;
 
     if (vizMode === 'spectrum') {
         drawSpectrum(W, H);
