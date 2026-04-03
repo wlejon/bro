@@ -207,6 +207,55 @@ static JSValue js_scale(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+// --- Path API ---
+
+static JSValue js_beginPath(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* sc = getScene(this_val); if (sc) sc->canvas().beginPath(); return JS_UNDEFINED;
+}
+
+static JSValue js_moveTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* sc = getScene(this_val);
+    if (!sc || argc < 2) return JS_UNDEFINED;
+    double x, y;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    sc->canvas().moveTo((float)x, (float)y);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_lineTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* sc = getScene(this_val);
+    if (!sc || argc < 2) return JS_UNDEFINED;
+    double x, y;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]);
+    sc->canvas().lineTo((float)x, (float)y);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_closePath(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* sc = getScene(this_val); if (sc) sc->canvas().closePath(); return JS_UNDEFINED;
+}
+
+static JSValue js_stroke(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* sc = getScene(this_val); if (sc) sc->canvas().stroke(); return JS_UNDEFINED;
+}
+
+static JSValue js_fill(JSContext*, JSValueConst this_val, int, JSValueConst*) {
+    auto* sc = getScene(this_val); if (sc) sc->canvas().fill(); return JS_UNDEFINED;
+}
+
+static JSValue js_arc(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* sc = getScene(this_val);
+    if (!sc || argc < 5) return JS_UNDEFINED;
+    double cx, cy, radius, startAngle, endAngle;
+    JS_ToFloat64(ctx, &cx, argv[0]); JS_ToFloat64(ctx, &cy, argv[1]);
+    JS_ToFloat64(ctx, &radius, argv[2]);
+    JS_ToFloat64(ctx, &startAngle, argv[3]); JS_ToFloat64(ctx, &endAngle, argv[4]);
+    bool acw = false;
+    if (argc >= 6) acw = JS_ToBool(ctx, argv[5]) != 0;
+    sc->canvas().arc((float)cx, (float)cy, (float)radius, (float)startAngle, (float)endAngle, acw);
+    return JS_UNDEFINED;
+}
+
 // --- Prototype ---
 
 static const JSCFunctionListEntry js_ctx2d_proto_funcs[] = {
@@ -227,6 +276,13 @@ static const JSCFunctionListEntry js_ctx2d_proto_funcs[] = {
     JS_CFUNC_DEF("translate",   2, js_translate),
     JS_CFUNC_DEF("rotate",      1, js_rotate),
     JS_CFUNC_DEF("scale",       2, js_scale),
+    JS_CFUNC_DEF("beginPath",   0, js_beginPath),
+    JS_CFUNC_DEF("moveTo",      2, js_moveTo),
+    JS_CFUNC_DEF("lineTo",      2, js_lineTo),
+    JS_CFUNC_DEF("closePath",   0, js_closePath),
+    JS_CFUNC_DEF("stroke",      0, js_stroke),
+    JS_CFUNC_DEF("fill",        0, js_fill),
+    JS_CFUNC_DEF("arc",         6, js_arc),
 };
 
 static JSValue js_ctx2d_proto = JS_UNDEFINED;

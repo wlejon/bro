@@ -10,6 +10,8 @@ enum class CmdType : uint8_t {
     SetFillStyle, SetStrokeStyle, SetLineWidth, SetGlobalAlpha, SetFont,
     FillRect, StrokeRect, ClearRect, FillText,
     Save, Restore, Translate, Rotate, Scale,
+    BeginPath, MoveTo, LineTo, ClosePath, Stroke, Fill,
+    Arc, // x, y, radius(w), startAngle(h), endAngle(f); uses extra bool for anticlockwise
 };
 
 struct DrawCmd {
@@ -85,6 +87,20 @@ public:
     void translate(float tx, float ty) { DrawCmd c; c.type = CmdType::Translate; c.x = tx; c.y = ty; cmds_.push_back(c); }
     void rotate(float angle) { DrawCmd c; c.type = CmdType::Rotate; c.f = angle; cmds_.push_back(c); }
     void scale(float sx, float sy) { DrawCmd c; c.type = CmdType::Scale; c.x = sx; c.y = sy; cmds_.push_back(c); }
+
+    // Path API
+    void beginPath() { DrawCmd c; c.type = CmdType::BeginPath; cmds_.push_back(c); }
+    void moveTo(float x, float y) { DrawCmd c; c.type = CmdType::MoveTo; c.x = x; c.y = y; cmds_.push_back(c); }
+    void lineTo(float x, float y) { DrawCmd c; c.type = CmdType::LineTo; c.x = x; c.y = y; cmds_.push_back(c); }
+    void closePath() { DrawCmd c; c.type = CmdType::ClosePath; cmds_.push_back(c); }
+    void stroke() { DrawCmd c; c.type = CmdType::Stroke; cmds_.push_back(c); }
+    void fill() { DrawCmd c; c.type = CmdType::Fill; cmds_.push_back(c); }
+    void arc(float cx, float cy, float radius, float startAngle, float endAngle, bool anticlockwise = false) {
+        DrawCmd c; c.type = CmdType::Arc; c.x = cx; c.y = cy; c.w = radius;
+        c.h = startAngle; c.f = endAngle;
+        c.r = anticlockwise ? 1 : 0; // reuse r field for bool
+        cmds_.push_back(c);
+    }
 
     const std::vector<DrawCmd>& commands() const { return cmds_; }
     const Canvas2DState& state() const { return state_; }

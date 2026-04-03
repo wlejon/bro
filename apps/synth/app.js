@@ -2,6 +2,9 @@
 // Audio Synth + Visualizer
 // ---------------------------------------------------------------------------
 
+// Helper: querySelectorAll returns a NodeList which may lack .forEach
+function $$(sel) { return Array.from(document.querySelectorAll(sel)); }
+
 let audioCtx, analyser;
 try {
     audioCtx = new AudioContext();
@@ -30,7 +33,7 @@ const notes = [];
 for (let oct = BASE_OCTAVE; oct < BASE_OCTAVE + NUM_OCTAVES; oct++) {
     for (let i = 0; i < 12; i++) {
         const name = NOTE_NAMES[i] + oct;
-        const midi = (oct + 1) * 12 + i; // MIDI note number
+        const midi = (oct + 1) * 12 + i;
         const freq = 440 * Math.pow(2, (midi - 69) / 12);
         const isBlack = [1,3,6,8,10].includes(i);
         notes.push({ name, freq, midi, isBlack, octave: oct, noteIndex: i });
@@ -54,14 +57,14 @@ const keyboard = document.getElementById('keyboard');
 const whiteKeys = notes.filter(n => !n.isBlack);
 const blackKeys = notes.filter(n => n.isBlack);
 
-// Create white keys first
+// Create white keys
 whiteKeys.forEach((note, i) => {
     const el = document.createElement('div');
     el.className = 'white-key';
-    el.setAttribute('data-note-idx', notes.indexOf(note).toString());
+    const noteIdx = notes.indexOf(note);
+    el.setAttribute('data-note-idx', noteIdx.toString());
 
-    // Key binding label
-    const binding = Object.entries(KEY_MAP).find(([,v]) => v === notes.indexOf(note));
+    const binding = Object.entries(KEY_MAP).find(([,v]) => v === noteIdx);
     const label = document.createElement('div');
     label.className = 'key-label';
     label.textContent = binding ? binding[0].toUpperCase() : '';
@@ -74,7 +77,6 @@ whiteKeys.forEach((note, i) => {
 // Create black keys positioned over white keys
 blackKeys.forEach(note => {
     const noteIdx = notes.indexOf(note);
-    // Find which white key this black key sits between
     const whiteIdx = whiteKeys.filter(w => notes.indexOf(w) < noteIdx).length;
     const whiteKeyWidth = 100 / whiteKeys.length;
     const leftPos = whiteIdx * whiteKeyWidth - whiteKeyWidth * 0.3;
@@ -130,7 +132,7 @@ function noteOff(noteIdx) {
     activeNotes.delete(noteIdx);
 
     const note = notes[noteIdx];
-    if (note.element) note.element.classList.remove('pressed');
+    if (note && note.element) note.element.classList.remove('pressed');
 
     if (activeNotes.size === 0) {
         document.getElementById('note-display').textContent = '--';
@@ -161,85 +163,103 @@ document.documentElement.addEventListener('keyup', (e) => {
     }
 });
 
-// Mouse input on keyboard
+// Mouse input on keyboard — use individual key handlers
 let mouseDown = false;
+let mouseNoteIdx = -1;
 
-keyboard.addEventListener('mousedown', (e) => {
-    mouseDown = true;
-    const idx = e.target.getAttribute('data-note-idx');
-    if (idx !== null) noteOn(parseInt(idx));
-});
+function handleKeyMouseDown(el) {
+    const idx = el.getAttribute('data-note-idx');
+    if (idx !== null) {
+        mouseNoteIdx = parseInt(idx);
+        noteOn(mouseNoteIdx);
+    }
+}
+
+function handleKeyMouseEnter(el) {
+    if (!mouseDown) return;
+    const idx = el.getAttribute('data-note-idx');
+    if (idx !== null) {
+        const newIdx = parseInt(idx);
+        if (newIdx !== mouseNoteIdx) {
+            if (mouseNoteIdx >= 0) noteOff(mouseNoteIdx);
+            mouseNoteIdx = newIdx;
+            noteOn(mouseNoteIdx);
+        }
+    }
+}
+
+// Attach handlers to each key element
+function attachKeyHandlers(el) {
+    el.addEventListener('mousedown', () => {
+        mouseDown = true;
+        handleKeyMouseDown(el);
+    });
+    el.addEventListener('mousemove', () => {
+        handleKeyMouseEnter(el);
+    });
+}
+$$('.white-key').forEach(attachKeyHandlers);
+$$('.black-key').forEach(attachKeyHandlers);
 
 document.documentElement.addEventListener('mouseup', () => {
     if (mouseDown) {
         mouseDown = false;
-        activeNotes.forEach((_, idx) => noteOff(idx));
-    }
-});
-
-keyboard.addEventListener('mousemove', (e) => {
-    if (!mouseDown) return;
-    const idx = e.target.getAttribute('data-note-idx');
-    if (idx !== null) {
-        const noteIdx = parseInt(idx);
-        if (!activeNotes.has(noteIdx)) {
-            activeNotes.forEach((_, i) => noteOff(i));
-            noteOn(noteIdx);
+        if (mouseNoteIdx >= 0) {
+            noteOff(mouseNoteIdx);
+            mouseNoteIdx = -1;
         }
     }
 });
 
 // ---------------------------------------------------------------------------
-// Controls
+// Controls — attach handlers to individual buttons to avoid e.target issues
 // ---------------------------------------------------------------------------
 
 // Waveform buttons
-document.getElementById('wave-btns').addEventListener('click', (e) => {
-    if (!e.target.getAttribute('data-wave')) return;
-    document.querySelectorAll('#wave-btns .btn').forEach(b => b.classList.remove('active'));
-    e.target.classList.add('active');
-    waveform = e.target.getAttribute('data-wave');
+$$('#wave-btns .btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        $$('#wave-btns .btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        waveform = btn.getAttribute('data-wave');
+    });
 });
 
 // Viz mode buttons
-document.getElementById('viz-btns').addEventListener('click', (e) => {
-    if (!e.target.getAttribute('data-viz')) return;
-    document.querySelectorAll('#viz-btns .btn').forEach(b => b.classList.remove('active'));
-    e.target.classList.add('active');
-    vizMode = e.target.getAttribute('data-viz');
-    // Clear spectrogram when switching
-    if (vizMode === 'spectrogram') spectrogramData = [];
+$$('#viz-btns .btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        $$('#viz-btns .btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        vizMode = btn.getAttribute('data-viz');
+        if (vizMode === 'spectrogram') spectrogramData = [];
+    });
 });
 
 // Source buttons
-document.getElementById('source-btns').addEventListener('click', async (e) => {
-    if (!e.target.getAttribute('data-source')) return;
-    document.querySelectorAll('#source-btns .btn').forEach(b => b.classList.remove('active'));
-    e.target.classList.add('active');
-    source = e.target.getAttribute('data-source');
+$$('#source-btns .btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+        const newSource = btn.getAttribute('data-source');
+        $$('#source-btns .btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        source = newSource;
 
-    if (source === 'mic' && !micStream) {
-        try {
-            micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            micSource = audioCtx.createMediaStreamSource(micStream);
-            // Connect mic to analyser (switches analyser to mic input)
-            micSource.connect(analyser);
-        } catch (err) {
-            console.error('Mic access failed:', err);
-            source = 'synth';
-            document.querySelector('[data-source="synth"]').classList.add('active');
-            e.target.classList.remove('active');
+        if (source === 'mic' && !micStream && audioCtx) {
+            try {
+                micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                micSource = audioCtx.createMediaStreamSource(micStream);
+                micSource.connect(analyser);
+            } catch (err) {
+                console.error('Mic access failed:', err);
+                source = 'synth';
+                document.querySelector('[data-source="synth"]').classList.add('active');
+                btn.classList.remove('active');
+            }
         }
-    } else if (source === 'synth') {
-        // Switch analyser back to output
-        analyser.fftSize = analyser.fftSize; // Trigger re-creation — source is set via connect()
-    }
+    });
 });
 
 // Volume slider
 document.getElementById('volume').addEventListener('input', (e) => {
     volume = parseInt(e.target.value) / 100;
-    // Update active notes
     activeNotes.forEach(entry => {
         entry.gain.gain.value = volume;
     });
@@ -255,21 +275,18 @@ const ctx = canvas.getContext('2d');
 let spectrogramData = [];
 const SPECTROGRAM_HISTORY = 200;
 
-// Color palette for spectrum
 function hslColor(value) {
-    // Map 0-1 to hue range (270 blue -> 0 red)
     const hue = (1 - value) * 270;
     const sat = 80 + value * 20;
     const light = 15 + value * 55;
-    return `hsl(${hue}, ${sat}%, ${light}%)`;
+    return 'hsl(' + hue + ', ' + sat + '%, ' + light + '%)';
 }
 
 function getGradientColor(value) {
-    // Cyan to magenta gradient
     const r = Math.floor(value * 255);
     const g = Math.floor((1 - value * 0.7) * 230);
     const b = Math.floor(200 + value * 55);
-    return `rgb(${r}, ${g}, ${b})`;
+    return 'rgb(' + r + ', ' + g + ', ' + b + ')';
 }
 
 let frameCount = 0;
@@ -279,7 +296,6 @@ let fps = 0;
 function draw() {
     requestAnimationFrame(draw);
 
-    // FPS counter
     frameCount++;
     const now = performance.now();
     if (now - lastFpsTime >= 1000) {
@@ -311,13 +327,11 @@ function drawSpectrum(W, H) {
     const data = new Uint8Array(bufLen);
     analyser.getByteFrequencyData(data);
 
-    // Use logarithmic frequency scale — group bins into visual bars
     const numBars = Math.min(128, bufLen);
     const barWidth = W / numBars;
     const padding = 1;
 
     for (let i = 0; i < numBars; i++) {
-        // Logarithmic bin mapping
         const logMin = Math.log(1);
         const logMax = Math.log(bufLen);
         const startBin = Math.floor(Math.exp(logMin + (logMax - logMin) * i / numBars));
@@ -335,13 +349,12 @@ function drawSpectrum(W, H) {
         const x = i * barWidth + padding;
         const w = barWidth - padding * 2;
 
-        // Gradient fill
         ctx.fillStyle = getGradientColor(value);
         ctx.fillRect(x, H - barH, w, barH);
 
         // Glow on top
         if (value > 0.3) {
-            ctx.fillStyle = `rgba(0, 229, 255, ${value * 0.3})`;
+            ctx.fillStyle = 'rgba(0, 229, 255, ' + (value * 0.3) + ')';
             ctx.fillRect(x, H - barH - 2, w, 4);
         }
     }
@@ -364,7 +377,7 @@ function drawWaveform(W, H) {
 
     const midY = H / 2;
 
-    // Background grid
+    // Center line
     ctx.strokeStyle = '#1a1a2a';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -393,13 +406,11 @@ function drawSpectrogram(W, H) {
     const data = new Uint8Array(bufLen);
     analyser.getByteFrequencyData(data);
 
-    // Add current frame
     spectrogramData.push(new Uint8Array(data));
     if (spectrogramData.length > SPECTROGRAM_HISTORY) {
         spectrogramData.shift();
     }
 
-    // Draw spectrogram — time flows left to right, frequency bottom to top
     const colW = W / SPECTROGRAM_HISTORY;
     const numFreqBins = Math.min(256, bufLen);
 
@@ -408,10 +419,9 @@ function drawSpectrogram(W, H) {
         const x = t * colW;
 
         for (let f = 0; f < numFreqBins; f++) {
-            // Log frequency mapping
             const logIdx = Math.floor(Math.exp(Math.log(1) + (Math.log(bufLen) - Math.log(1)) * f / numFreqBins));
             const value = col[Math.min(logIdx, bufLen - 1)] / 255;
-            if (value < 0.02) continue; // Skip near-silence for perf
+            if (value < 0.02) continue;
 
             const binH = H / numFreqBins;
             const y = H - (f + 1) * binH;

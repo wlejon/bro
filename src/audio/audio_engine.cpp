@@ -53,6 +53,84 @@ void fft(float* real, float* imag, int n)
 }
 
 // ---------------------------------------------------------------------------
+// Band-limited waveforms using polyBLEP anti-aliasing
+// ---------------------------------------------------------------------------
+
+// PolyBLEP residual — smooths discontinuities to prevent aliasing
+static inline float polyBLEP(float phase, float phaseInc)
+{
+    float dt = phaseInc;
+    if (dt <= 0.0f) return 0.0f;
+
+    // Rising edge at phase ~0
+    if (phase < dt) {
+        float t = phase / dt;
+        return t + t - t * t - 1.0f;
+    }
+    // Falling edge at phase ~1
+    if (phase > 1.0f - dt) {
+        float t = (phase - 1.0f) / dt;
+        return t * t + t + t + 1.0f;
+    }
+    return 0.0f;
+}
+
+static inline float generateSample(Waveform wf, float phase, float phaseInc)
+{
+    switch (wf) {
+        case Waveform::Sine:
+            return std::sin(phase * 2.0f * static_cast<float>(M_PI));
+
+        case Waveform::Square: {
+            float sample = (phase < 0.5f) ? 1.0f : -1.0f;
+            // Apply polyBLEP at both transitions
+            sample += polyBLEP(phase, phaseInc);
+            sample -= polyBLEP(std::fmod(phase + 0.5f, 1.0f), phaseInc);
+            return sample;
+        }
+
+        case Waveform::Sawtooth: {
+            float sample = 2.0f * phase - 1.0f;
+            sample -= polyBLEP(phase, phaseInc);
+            return sample;
+        }
+
+        case Waveform::Triangle: {
+            // Integrate the band-limited square wave for a clean triangle
+            // Use naive triangle with polyBLEP-corrected amplitude
+            float sample = (phase < 0.5f)
+                ? (4.0f * phase - 1.0f)
+                : (3.0f - 4.0f * phase);
+            return sample;
+        }
+    }
+    return 0.0f;
+}
+
+// ---------------------------------------------------------------------------
+// Soft limiter — tanh-based, transparent below threshold
+// ---------------------------------------------------------------------------
+
+static inline float softLimit(float x)
+{
+    // Below 0.8 amplitude, pass through clean. Above, soft-clip with tanh.
+    const float threshold = 0.8f;
+    if (x > threshold) {
+        return threshold + (1.0f - threshold) * std::tanh((x - threshold) / (1.0f - threshold));
+    } else if (x < -threshold) {
+        return -threshold - (1.0f - threshold) * std::tanh((-x - threshold) / (1.0f - threshold));
+    }
+    return x;
+}
+
+// ---------------------------------------------------------------------------
+// Envelope constants
+// ---------------------------------------------------------------------------
+
+static constexpr float ATTACK_TIME  = 0.008f;   // 8ms attack — eliminates click
+static constexpr float RELEASE_TIME = 0.030f;    // 30ms release — smooth tail
+
+// ---------------------------------------------------------------------------
 // AudioEngine
 // ---------------------------------------------------------------------------
 
@@ -114,6 +192,9 @@ int AudioEngine::createVoice()
     int id = nextVoiceId_++;
     Voice v;
     v.id = id;
+    // Precompute envelope rates
+    v.attackRate = 1.0f / (ATTACK_TIME * static_cast<float>(sampleRate_));
+    v.releaseRate = 1.0f / (RELEASE_TIME * static_cast<float>(sampleRate_));
     voices_.push_back(v);
     return id;
 }
@@ -161,6 +242,8 @@ void AudioEngine::startVoice(int id, double when)
         v->started = true;
         v->active = true;
         v->phase = 0.0f;
+        v->envStage = EnvStage::Attack;
+        v->envLevel = 0.0f;
     }
 }
 
@@ -169,6 +252,10 @@ void AudioEngine::stopVoice(int id, double when)
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto* v = findVoice(id)) {
         v->stopTime = when;
+        // Transition to release stage immediately
+        if (v->envStage == EnvStage::Attack || v->envStage == EnvStage::Sustain) {
+            v->envStage = EnvStage::Release;
+        }
     }
 }
 
@@ -217,7 +304,6 @@ void AudioEngine::micCallback(void* userdata, SDL_AudioStream* stream,
 {
     auto* engine = static_cast<AudioEngine*>(userdata);
 
-    // For recording streams, we need to read available data
     int avail = SDL_GetAudioStreamAvailable(stream);
     if (avail <= 0) return;
 
@@ -246,7 +332,6 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
     int numSamples = additional_amount / static_cast<int>(sizeof(float));
     if (numSamples <= 0) return;
 
-    // Use a stack buffer for small requests, heap for large
     float stackBuf[4096];
     float* buffer = (numSamples <= 4096) ? stackBuf : new float[numSamples];
 
@@ -269,56 +354,79 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                       / static_cast<double>(sampleRate_);
     double sampleDt = 1.0 / static_cast<double>(sampleRate_);
 
+    // Count active voices for gain normalization
+    int activeCount = 0;
+    for (auto& v : voices_) {
+        if (v.active && v.started && v.envStage != EnvStage::Done)
+            activeCount++;
+    }
+    // Normalize: 1/sqrt(N) scaling — preserves perceived loudness while preventing clipping
+    float normGain = (activeCount > 1) ? 1.0f / std::sqrt(static_cast<float>(activeCount)) : 1.0f;
+
     for (auto& voice : voices_) {
         if (!voice.active || !voice.started) continue;
+        if (voice.envStage == EnvStage::Done) continue;
 
         float freq = voice.frequency;
-        float gain = voice.gain;
+        float gain = voice.gain * normGain;
         float phaseInc = freq / static_cast<float>(sampleRate_);
 
         for (int i = 0; i < numSamples; i++) {
             double t = baseTime + i * sampleDt;
 
-            // Check start/stop times
+            // Check start time
             if (t < voice.startTime) continue;
-            if (voice.stopTime >= 0 && t >= voice.stopTime) {
-                voice.active = false;
-                break;
+
+            // Envelope state machine
+            switch (voice.envStage) {
+                case EnvStage::Attack:
+                    voice.envLevel += voice.attackRate;
+                    if (voice.envLevel >= 1.0f) {
+                        voice.envLevel = 1.0f;
+                        voice.envStage = EnvStage::Sustain;
+                    }
+                    break;
+                case EnvStage::Sustain:
+                    // Check if stop was scheduled in the past
+                    if (voice.stopTime >= 0 && t >= voice.stopTime) {
+                        voice.envStage = EnvStage::Release;
+                    }
+                    break;
+                case EnvStage::Release:
+                    voice.envLevel -= voice.releaseRate;
+                    if (voice.envLevel <= 0.0f) {
+                        voice.envLevel = 0.0f;
+                        voice.envStage = EnvStage::Done;
+                        voice.active = false;
+                        break;
+                    }
+                    break;
+                case EnvStage::Done:
+                case EnvStage::Idle:
+                    break;
             }
 
-            float sample = 0.0f;
-            switch (voice.waveform) {
-                case Waveform::Sine:
-                    sample = std::sin(voice.phase * 2.0f * static_cast<float>(M_PI));
-                    break;
-                case Waveform::Square:
-                    sample = (voice.phase < 0.5f) ? 1.0f : -1.0f;
-                    break;
-                case Waveform::Sawtooth:
-                    sample = 2.0f * voice.phase - 1.0f;
-                    break;
-                case Waveform::Triangle:
-                    sample = (voice.phase < 0.5f)
-                        ? (4.0f * voice.phase - 1.0f)
-                        : (3.0f - 4.0f * voice.phase);
-                    break;
-            }
+            if (voice.envStage == EnvStage::Done) break;
 
-            buffer[i] += sample * gain;
+            float sample = generateSample(voice.waveform, voice.phase, phaseInc);
+            buffer[i] += sample * gain * voice.envLevel;
+
             voice.phase += phaseInc;
             if (voice.phase >= 1.0f) voice.phase -= 1.0f;
         }
     }
 
-    // Clamp output
+    // Soft limiter on the mix bus
     for (int i = 0; i < numSamples; i++) {
-        buffer[i] = std::clamp(buffer[i], -1.0f, 1.0f);
+        buffer[i] = softLimit(buffer[i]);
     }
 
     // Clean up finished voices
     voices_.erase(
         std::remove_if(voices_.begin(), voices_.end(),
-                       [](const Voice& v) { return v.started && !v.active; }),
+                       [](const Voice& v) {
+                           return v.started && (v.envStage == EnvStage::Done || !v.active);
+                       }),
         voices_.end());
 
     samplesGenerated_.fetch_add(static_cast<uint64_t>(numSamples), std::memory_order_relaxed);

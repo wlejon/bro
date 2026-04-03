@@ -5,6 +5,10 @@
 #include <cmath>
 #include <cstring>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 namespace bro::canvas {
 
 uint64_t CanvasScene::getOrCreateFont(const std::string& fontStr) {
@@ -87,6 +91,12 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
         colorVerts.push_back({x2 - nx, y2 - ny, r, g, b, a});
         colorVerts.push_back({x2 + nx, y2 + ny, r, g, b, a});
     };
+
+    // Path state for beginPath/moveTo/lineTo/stroke/fill
+    struct PathPoint { float x, y; };
+    std::vector<PathPoint> pathPoints;
+    float pathStartX = 0, pathStartY = 0;
+    bool hasMoveTo = false;
 
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_);
 
@@ -172,6 +182,83 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
         case CmdType::Rotate:
         case CmdType::Scale:
             break;
+
+        case CmdType::BeginPath:
+            pathPoints.clear();
+            hasMoveTo = false;
+            break;
+        case CmdType::MoveTo:
+            pathPoints.push_back({c.x + tx, c.y + ty});
+            pathStartX = c.x + tx;
+            pathStartY = c.y + ty;
+            hasMoveTo = true;
+            break;
+        case CmdType::LineTo:
+            if (!hasMoveTo) {
+                pathPoints.push_back({c.x + tx, c.y + ty});
+                pathStartX = c.x + tx;
+                pathStartY = c.y + ty;
+                hasMoveTo = true;
+            } else {
+                pathPoints.push_back({c.x + tx, c.y + ty});
+            }
+            break;
+        case CmdType::ClosePath:
+            if (hasMoveTo && pathPoints.size() >= 2) {
+                pathPoints.push_back({pathStartX, pathStartY});
+            }
+            break;
+        case CmdType::Arc: {
+            // Approximate arc with line segments
+            float cx_ = c.x + tx, cy_ = c.y + ty;
+            float radius = c.w;
+            float startAngle = c.h, endAngle = c.f;
+            bool acw = (c.r != 0);
+
+            float sweep = endAngle - startAngle;
+            if (acw && sweep > 0) sweep -= 2.0f * static_cast<float>(M_PI);
+            else if (!acw && sweep < 0) sweep += 2.0f * static_cast<float>(M_PI);
+
+            int segments = std::max(16, static_cast<int>(std::abs(sweep * radius) * 0.5f));
+            if (segments > 256) segments = 256;
+
+            for (int s = 0; s <= segments; s++) {
+                float t_ = startAngle + sweep * static_cast<float>(s) / static_cast<float>(segments);
+                float px = cx_ + radius * std::cos(t_);
+                float py = cy_ + radius * std::sin(t_);
+                if (s == 0 && !hasMoveTo) {
+                    pathStartX = px;
+                    pathStartY = py;
+                    hasMoveTo = true;
+                }
+                pathPoints.push_back({px, py});
+            }
+            break;
+        }
+        case CmdType::Stroke: {
+            float a = (strokeA / 255.0f) * globalAlpha;
+            float r = strokeR / 255.0f, g = strokeG / 255.0f, b = strokeB / 255.0f;
+            float lw = std::max(lineWidth, 1.0f);
+            for (size_t p = 1; p < pathPoints.size(); p++) {
+                pushLine(pathPoints[p-1].x, pathPoints[p-1].y,
+                         pathPoints[p].x, pathPoints[p].y,
+                         r, g, b, a, lw);
+            }
+            break;
+        }
+        case CmdType::Fill: {
+            // Simple triangle-fan fill from first point
+            if (pathPoints.size() >= 3) {
+                float a = (fillA / 255.0f) * globalAlpha;
+                float r = fillR / 255.0f, g = fillG / 255.0f, b = fillB / 255.0f;
+                for (size_t p = 2; p < pathPoints.size(); p++) {
+                    colorVerts.push_back({pathPoints[0].x, pathPoints[0].y, r, g, b, a});
+                    colorVerts.push_back({pathPoints[p-1].x, pathPoints[p-1].y, r, g, b, a});
+                    colorVerts.push_back({pathPoints[p].x, pathPoints[p].y, r, g, b, a});
+                }
+            }
+            break;
+        }
         }
     }
 

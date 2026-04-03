@@ -12,16 +12,25 @@ namespace bro::audio {
 
 enum class Waveform : uint8_t { Sine, Square, Sawtooth, Triangle };
 
+// Envelope state machine
+enum class EnvStage : uint8_t { Idle, Attack, Sustain, Release, Done };
+
 struct Voice {
     int id = 0;
     Waveform waveform = Waveform::Sine;
     float frequency = 440.0f;
-    float gain = 1.0f;           // from connected GainNode
+    float gain = 1.0f;           // target amplitude from GainNode
     double startTime = -1.0;     // seconds, -1 = not started
     double stopTime = -1.0;      // seconds, -1 = not scheduled
     float phase = 0.0f;
     bool active = false;
     bool started = false;        // start() was called
+
+    // ADSR envelope
+    EnvStage envStage = EnvStage::Idle;
+    float envLevel = 0.0f;       // current envelope amplitude (0..1)
+    float attackRate = 0.0f;     // per-sample increment during attack
+    float releaseRate = 0.0f;    // per-sample decrement during release
 };
 
 // ---------------------------------------------------------------------------
