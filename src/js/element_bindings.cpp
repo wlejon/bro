@@ -3,6 +3,7 @@
 #include "js/event_dispatch.h"
 #include "util/log.h"
 #include "dom/event.h"
+#include "dom/shadow_root.h"
 
 #include "dataset_proxy.js.h"
 
@@ -1294,13 +1295,16 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     auto* el = getElement(this_val);
     auto& box = getLayoutBox(el);
 
-    // Accumulate absolute position by walking up parents.
-    // Layout positions are parent-relative (content area origin).
+    // Accumulate absolute position by walking up the layout parent chain.
+    // Layout positions are parent-relative (content area origin), where the
+    // parent is determined by the composed tree (including shadow DOM wrappers
+    // that contain <slot> elements). We must walk this composed/layout parent
+    // chain rather than the DOM parent chain to correctly account for shadow
+    // DOM wrapper elements like .screen-content, .body, .tab-content.
     float x = box.contentRect.x - box.padding.left - box.border.left;
     float y = box.contentRect.y - box.padding.top - box.border.top;
-    for (auto* p = el->parentNode(); p; p = p->parentNode()) {
-        if (p->nodeType() != bro::dom::NodeType::Element) continue;
-        auto& pb = static_cast<bro::dom::Element*>(p)->layoutBox();
+    for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
+        auto& pb = lp->layoutBox();
         x += pb.contentRect.x;
         y += pb.contentRect.y;
     }

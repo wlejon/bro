@@ -57,14 +57,14 @@ static JSValue js_screenshot(JSContext* ctx, JSValueConst, int argc, JSValueCons
         }
         JS_FreeCString(ctx, selector);
 
-        // Compute absolute position by walking up the parent chain.
-        // Layout positions are parent-relative; drawTraversal accumulates offsets.
+        // Compute absolute position by walking up the layout parent chain.
+        // Uses layoutParent() to correctly traverse shadow DOM boundaries
+        // (slotted elements have a layout parent that differs from DOM parent).
         auto& box = el->layoutBox();
         float ax = box.contentRect.x - box.padding.left - box.border.left;
         float ay = box.contentRect.y - box.padding.top - box.border.top;
-        for (auto* p = el->parentNode(); p; p = p->parentNode()) {
-            if (p->nodeType() != bro::dom::NodeType::Element) continue;
-            auto& pb = static_cast<bro::dom::Element*>(p)->layoutBox();
+        for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
+            auto& pb = lp->layoutBox();
             ax += pb.contentRect.x;
             ay += pb.contentRect.y;
         }

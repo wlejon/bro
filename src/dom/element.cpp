@@ -497,6 +497,41 @@ ShadowRoot* Element::containingShadowRoot() const {
     return nullptr;
 }
 
+Element* Element::layoutParent() const {
+    if (!parent_) return nullptr;
+
+    // If parent is a ShadowRoot, layout parent is the host element
+    if (parent_->nodeType() == NodeType::DocumentFragment) {
+        auto* sr = dynamic_cast<ShadowRoot*>(parent_);
+        return sr ? sr->host() : nullptr;
+    }
+
+    if (parent_->nodeType() != NodeType::Element) return nullptr;
+    auto* parentElem = static_cast<Element*>(parent_);
+
+    // If the parent element has a shadow DOM, this element was distributed
+    // to a <slot> in that shadow tree. The layout parent is the element
+    // containing the <slot>, not the host element itself. This matches the
+    // composed tree that the layout engine and draw traversal walk.
+    if (parentElem->hasShadow()) {
+        auto* sr = parentElem->shadowRoot();
+        if (sr) {
+            auto* slot = sr->assignedSlot(const_cast<Element*>(this));
+            if (slot) {
+                auto* slotParent = slot->parentNode();
+                if (slotParent && slotParent->nodeType() == NodeType::Element) {
+                    return static_cast<Element*>(slotParent);
+                }
+                // Slot is a direct child of the shadow root — layout parent
+                // is the host element
+                return parentElem;
+            }
+        }
+    }
+
+    return parentElem;
+}
+
 ShadowRoot* Element::attachShadow(ShadowRoot::Mode mode) {
     if (shadowRoot_) return nullptr;
     if (!document_) return nullptr;

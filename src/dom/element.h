@@ -112,6 +112,12 @@ public:
     // Returns the ShadowRoot this element is inside, or nullptr if not in shadow DOM
     ShadowRoot* containingShadowRoot() const;
 
+    // Returns the layout parent of this element in the composed tree.
+    // For slotted elements (light DOM children distributed through a <slot>),
+    // this returns the element containing the slot, not the DOM parent.
+    // For shadow DOM children, crosses the shadow boundary to the host.
+    Element* layoutParent() const;
+
     // Element-level scroll offset (for overflow:auto/scroll elements)
     float scrollTopValue() const { return scrollTop_; }
     void setScrollTopValue(float v) { scrollTop_ = v; }
