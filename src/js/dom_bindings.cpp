@@ -247,6 +247,15 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
             this.relatedTarget = (opts && opts.relatedTarget) || null;
         }
     };
+    globalThis.WheelEvent = class WheelEvent extends MouseEvent {
+        constructor(type, opts) {
+            super(type, opts);
+            this.deltaX = (opts && opts.deltaX) || 0;
+            this.deltaY = (opts && opts.deltaY) || 0;
+            this.deltaZ = (opts && opts.deltaZ) || 0;
+            this.deltaMode = (opts && opts.deltaMode) || 0;
+        }
+    };
 
     // queueMicrotask — schedules a microtask via Promise
     if (typeof queueMicrotask === 'undefined') {

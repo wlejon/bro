@@ -199,6 +199,87 @@ static JSValue js_document_getElementsByName(JSContext* ctx,
     return wrapNodeList(ctx, results);
 }
 
+static JSValue js_document_importNode(JSContext* ctx,
+                                      JSValueConst this_val,
+                                      int argc, JSValueConst* argv)
+{
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 1) return JS_NULL;
+
+    // importNode clones the node into this document
+    // We delegate to cloneNode since we have a single document model
+    auto* node = unwrapNode(ctx, argv[0]);
+    if (!node) return JS_NULL;
+
+    bool deep = (argc >= 2) ? JS_ToBool(ctx, argv[1]) : false;
+
+    if (node->nodeType() == bro::dom::NodeType::Element) {
+        auto* srcEl = static_cast<bro::dom::Element*>(node);
+        auto* clone = doc->createElement(srcEl->tagName());
+        if (!clone) return JS_NULL;
+
+        for (auto& [name, val] : srcEl->attributes()) {
+            clone->setAttribute(name, val);
+        }
+
+        if (deep) {
+            // Recursively clone children via JS cloneNode
+            JSValue srcWrapper = DomBindings::wrapElement(ctx, srcEl);
+            JSValue trueVal = JS_TRUE;
+            // We need a deep clone - build it manually
+            for (auto* child : srcEl->childNodes()) {
+                if (child->nodeType() == bro::dom::NodeType::Element) {
+                    // Recursive import
+                    JSValue childWrapper = DomBindings::wrapElement(ctx, child);
+                    JSValue deepArgs[2] = { childWrapper, JS_TRUE };
+                    JSValue imported = js_document_importNode(ctx, this_val, 2, deepArgs);
+                    auto* importedNode = unwrapNode(ctx, imported);
+                    if (importedNode) clone->appendChild(importedNode);
+                    JS_FreeValue(ctx, imported);
+                    JS_FreeValue(ctx, childWrapper);
+                } else if (child->nodeType() == bro::dom::NodeType::Text) {
+                    auto* textNode = static_cast<bro::dom::TextNode*>(child);
+                    auto* clonedText = doc->createTextNode(textNode->data());
+                    if (clonedText) clone->appendChild(clonedText);
+                } else if (child->nodeType() == bro::dom::NodeType::Comment) {
+                    auto* commentNode = static_cast<bro::dom::CommentNode*>(child);
+                    auto* clonedComment = doc->createComment(commentNode->data());
+                    if (clonedComment) clone->appendChild(clonedComment);
+                }
+            }
+            JS_FreeValue(ctx, srcWrapper);
+        }
+
+        return DomBindings::wrapElement(ctx, clone);
+    } else if (node->nodeType() == bro::dom::NodeType::Text) {
+        auto* textNode = static_cast<bro::dom::TextNode*>(node);
+        auto* clone = doc->createTextNode(textNode->data());
+        if (!clone) return JS_NULL;
+        return wrapAnyNode(ctx, clone);
+    } else if (node->nodeType() == bro::dom::NodeType::Comment) {
+        auto* commentNode = static_cast<bro::dom::CommentNode*>(node);
+        auto* clone = doc->createComment(commentNode->data());
+        if (!clone) return JS_NULL;
+        return wrapAnyNode(ctx, clone);
+    }
+
+    return JS_NULL;
+}
+
+static JSValue js_document_adoptNode(JSContext* ctx,
+                                     JSValueConst /*this_val*/,
+                                     int argc, JSValueConst* argv)
+{
+    // adoptNode removes the node from its parent and returns it
+    // In our single-document model, this is equivalent to removing from parent
+    if (argc < 1) return JS_NULL;
+    auto* node = unwrapNode(ctx, argv[0]);
+    if (!node) return JS_NULL;
+    auto* parent = node->parentNode();
+    if (parent) parent->removeChild(node);
+    return JS_DupValue(ctx, argv[0]);
+}
+
 static JSValue js_document_get_defaultView(JSContext* ctx, JSValueConst /*this_val*/)
 {
     return JS_GetGlobalObject(ctx);
@@ -234,6 +315,8 @@ static const JSCFunctionListEntry js_document_proto_funcs[] = {
     JS_CFUNC_DEF("getElementsByTagName",    1, js_document_getElementsByTagName),
     JS_CFUNC_DEF("getElementsByClassName",  1, js_document_getElementsByClassName),
     JS_CFUNC_DEF("getElementsByName",       1, js_document_getElementsByName),
+    JS_CFUNC_DEF("importNode",              2, js_document_importNode),
+    JS_CFUNC_DEF("adoptNode",               1, js_document_adoptNode),
 };
 
 // ===========================================================================

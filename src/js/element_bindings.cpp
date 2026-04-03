@@ -1241,13 +1241,272 @@ static JSValue js_element_insertAdjacentHTML(JSContext* ctx, JSValueConst this_v
     return JS_UNDEFINED;
 }
 
+// ---- Convenience mutation methods -----------------------------------------
+
+// Helper: convert a JS argument to a Node. If it's a string, create a TextNode.
+static bro::dom::Node* nodeOrTextFromArg(JSContext* ctx, JSValueConst val) {
+    auto* node = unwrapNode(ctx, val);
+    if (node) return node;
+    // If it's a string, create a text node
+    if (JS_IsString(val)) {
+        auto* doc = getDocumentForCtx(ctx);
+        if (doc) return doc->createTextNode(jsToStdString(ctx, val));
+    }
+    return nullptr;
+}
+
+// Helper: after appending/inserting a node, fire connected callback if element
+static void fireConnectedIfElement(JSContext* ctx, bro::dom::Node* node) {
+    if (node->nodeType() == bro::dom::NodeType::Element) {
+        JSValue w = DomBindings::wrapElement(ctx, node);
+        fireConnectedCallback(ctx, w);
+        JS_FreeValue(ctx, w);
+    }
+}
+
+static JSValue js_element_append(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    for (int i = 0; i < argc; ++i) {
+        auto* node = nodeOrTextFromArg(ctx, argv[i]);
+        if (!node) continue;
+        el->appendChild(node);
+        if (doc && node->nodeType() == bro::dom::NodeType::Element)
+            doc->markStructureDirty();
+        fireConnectedIfElement(ctx, node);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_prepend(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    auto* ref = el->childNodes().empty() ? nullptr : el->childNodes().front();
+    for (int i = 0; i < argc; ++i) {
+        auto* node = nodeOrTextFromArg(ctx, argv[i]);
+        if (!node) continue;
+        el->insertBefore(node, ref);
+        if (doc && node->nodeType() == bro::dom::NodeType::Element)
+            doc->markStructureDirty();
+        fireConnectedIfElement(ctx, node);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_before(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* parent = el->parentNode();
+    if (!parent) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    for (int i = 0; i < argc; ++i) {
+        auto* node = nodeOrTextFromArg(ctx, argv[i]);
+        if (!node) continue;
+        parent->insertBefore(node, el);
+        if (doc && node->nodeType() == bro::dom::NodeType::Element)
+            doc->markStructureDirty();
+        fireConnectedIfElement(ctx, node);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_after(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* parent = el->parentNode();
+    if (!parent) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    // Find the node after 'el' to use as reference
+    bro::dom::Node* ref = nullptr;
+    auto& siblings = parent->childNodes();
+    for (size_t i = 0; i < siblings.size(); ++i) {
+        if (siblings[i] == el && i + 1 < siblings.size()) {
+            ref = siblings[i + 1];
+            break;
+        }
+    }
+    for (int i = 0; i < argc; ++i) {
+        auto* node = nodeOrTextFromArg(ctx, argv[i]);
+        if (!node) continue;
+        parent->insertBefore(node, ref);
+        if (doc && node->nodeType() == bro::dom::NodeType::Element)
+            doc->markStructureDirty();
+        fireConnectedIfElement(ctx, node);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_replaceChildren(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+    // Remove all existing children
+    auto oldKids = el->childNodes();
+    for (auto* child : oldKids) {
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            JSValue w = DomBindings::wrapElement(ctx, child);
+            fireDisconnectedCallback(ctx, w);
+            JS_FreeValue(ctx, w);
+        }
+        child->setParent(nullptr);
+    }
+    el->childNodes().clear();
+    for (auto* child : oldKids) {
+        if (child->nodeType() != bro::dom::NodeType::Element) {
+            if (doc) doc->freeNode(child);
+        }
+    }
+    // Append new children
+    for (int i = 0; i < argc; ++i) {
+        auto* node = nodeOrTextFromArg(ctx, argv[i]);
+        if (!node) continue;
+        el->appendChild(node);
+        if (doc && node->nodeType() == bro::dom::NodeType::Element)
+            doc->markStructureDirty();
+        fireConnectedIfElement(ctx, node);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_insertAdjacentElement(JSContext* ctx, JSValueConst this_val,
+                                                int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 2) return JS_NULL;
+    std::string pos = jsToStdString(ctx, argv[0]);
+    auto* newEl = unwrapNode(ctx, argv[1]);
+    if (!newEl) return JS_NULL;
+    auto* doc = getDocumentForCtx(ctx);
+
+    if (pos == "beforebegin") {
+        auto* parent = el->parentNode();
+        if (parent) parent->insertBefore(newEl, el);
+    } else if (pos == "afterbegin") {
+        auto* first = el->childNodes().empty() ? nullptr : el->childNodes().front();
+        el->insertBefore(newEl, first);
+    } else if (pos == "beforeend") {
+        el->appendChild(newEl);
+    } else if (pos == "afterend") {
+        auto* parent = el->parentNode();
+        if (parent) {
+            bro::dom::Node* ref = nullptr;
+            auto& siblings = parent->childNodes();
+            for (size_t i = 0; i < siblings.size(); ++i) {
+                if (siblings[i] == el && i + 1 < siblings.size()) {
+                    ref = siblings[i + 1];
+                    break;
+                }
+            }
+            parent->insertBefore(newEl, ref);
+        }
+    }
+    if (doc && newEl->nodeType() == bro::dom::NodeType::Element)
+        doc->markStructureDirty();
+    fireConnectedIfElement(ctx, newEl);
+    return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_NULL;
+}
+
+static JSValue js_element_insertAdjacentText(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 2) return JS_UNDEFINED;
+    std::string pos = jsToStdString(ctx, argv[0]);
+    std::string text = jsToStdString(ctx, argv[1]);
+    auto* doc = getDocumentForCtx(ctx);
+    if (!doc) return JS_UNDEFINED;
+    auto* textNode = doc->createTextNode(text);
+    if (!textNode) return JS_UNDEFINED;
+
+    if (pos == "beforebegin") {
+        auto* parent = el->parentNode();
+        if (parent) parent->insertBefore(textNode, el);
+    } else if (pos == "afterbegin") {
+        auto* first = el->childNodes().empty() ? nullptr : el->childNodes().front();
+        el->insertBefore(textNode, first);
+    } else if (pos == "beforeend") {
+        el->appendChild(textNode);
+    } else if (pos == "afterend") {
+        auto* parent = el->parentNode();
+        if (parent) {
+            bro::dom::Node* ref = nullptr;
+            auto& siblings = parent->childNodes();
+            for (size_t i = 0; i < siblings.size(); ++i) {
+                if (siblings[i] == el && i + 1 < siblings.size()) {
+                    ref = siblings[i + 1];
+                    break;
+                }
+            }
+            parent->insertBefore(textNode, ref);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
+// ---- Attribute methods (additional) ---------------------------------------
+
+static JSValue js_element_toggleAttribute(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_FALSE;
+    std::string name = jsToStdString(ctx, argv[0]);
+    if (argc >= 2) {
+        bool force = JS_ToBool(ctx, argv[1]);
+        if (force) {
+            el->setAttribute(name, "");
+            return JS_TRUE;
+        } else {
+            el->removeAttribute(name);
+            return JS_FALSE;
+        }
+    }
+    if (el->hasAttribute(name)) {
+        el->removeAttribute(name);
+        return JS_FALSE;
+    } else {
+        el->setAttribute(name, "");
+        return JS_TRUE;
+    }
+}
+
+static JSValue js_element_getAttributeNames(JSContext* ctx, JSValueConst this_val,
+                                            int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewArray(ctx);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t idx = 0;
+    for (auto& [name, val] : el->attributes()) {
+        JS_SetPropertyUint32(ctx, arr, idx++, JS_NewString(ctx, name.c_str()));
+    }
+    return arr;
+}
+
 // ---- dataset proxy --------------------------------------------------------
+
+static std::string camelToDataAttr(const std::string& camel) {
+    std::string attr = "data-";
+    for (char c : camel) {
+        if (std::isupper(static_cast<unsigned char>(c))) {
+            attr += '-';
+            attr += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        } else {
+            attr += c;
+        }
+    }
+    return attr;
+}
 
 static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NewObject(ctx);
 
-    JSValue obj = JS_NewObject(ctx);
+    // Build the target object with current data-* attributes
+    JSValue target = JS_NewObject(ctx);
     for (auto& [name, val] : el->attributes()) {
         if (name.size() > 5 && name.substr(0, 5) == "data-") {
             std::string key;
@@ -1262,10 +1521,54 @@ static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
                     capitalize = false;
                 }
             }
-            JS_SetPropertyStr(ctx, obj, key.c_str(), JS_NewString(ctx, val.c_str()));
+            JS_SetPropertyStr(ctx, target, key.c_str(), JS_NewString(ctx, val.c_str()));
         }
     }
-    return obj;
+
+    // Store element reference on the target for the Proxy handler to use
+    JS_SetPropertyStr(ctx, target, "__bro_el_id",
+                      JS_NewInt32(ctx, static_cast<int32_t>(el->nodeId())));
+
+    // Create a Proxy that intercepts set/deleteProperty to update data-* attrs
+    const char* proxyCode = R"JS((function(target) {
+        return new Proxy(target, {
+            set: function(t, prop, value) {
+                if (typeof prop !== 'string') return false;
+                var attr = 'data-' + prop.replace(/[A-Z]/g, function(c) {
+                    return '-' + c.toLowerCase();
+                });
+                var elId = t.__bro_el_id;
+                var elMap = globalThis.__bro_elem_map;
+                if (elMap) {
+                    var wrapper = elMap[String(elId)];
+                    if (wrapper) wrapper.setAttribute(attr, String(value));
+                }
+                t[prop] = String(value);
+                return true;
+            },
+            deleteProperty: function(t, prop) {
+                if (typeof prop !== 'string') return false;
+                var attr = 'data-' + prop.replace(/[A-Z]/g, function(c) {
+                    return '-' + c.toLowerCase();
+                });
+                var elId = t.__bro_el_id;
+                var elMap = globalThis.__bro_elem_map;
+                if (elMap) {
+                    var wrapper = elMap[String(elId)];
+                    if (wrapper) wrapper.removeAttribute(attr);
+                }
+                delete t[prop];
+                return true;
+            }
+        });
+    }))JS";
+
+    JSValue proxyFactory = JS_Eval(ctx, proxyCode, strlen(proxyCode),
+                                   "<dataset-proxy>", JS_EVAL_TYPE_GLOBAL);
+    JSValue proxy = JS_Call(ctx, proxyFactory, JS_UNDEFINED, 1, &target);
+    JS_FreeValue(ctx, proxyFactory);
+    JS_FreeValue(ctx, target);
+    return proxy;
 }
 
 // ---- <template>.content ---------------------------------------------------
@@ -1481,6 +1784,15 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("focus",                     0, js_element_focus),
     JS_CFUNC_DEF("blur",                      0, js_element_blur),
     JS_CFUNC_DEF("insertAdjacentHTML",        2, js_element_insertAdjacentHTML),
+    JS_CFUNC_DEF("insertAdjacentElement",    2, js_element_insertAdjacentElement),
+    JS_CFUNC_DEF("insertAdjacentText",       2, js_element_insertAdjacentText),
+    JS_CFUNC_DEF("append",                   0, js_element_append),
+    JS_CFUNC_DEF("prepend",                  0, js_element_prepend),
+    JS_CFUNC_DEF("before",                   0, js_element_before),
+    JS_CFUNC_DEF("after",                    0, js_element_after),
+    JS_CFUNC_DEF("replaceChildren",          0, js_element_replaceChildren),
+    JS_CFUNC_DEF("toggleAttribute",          1, js_element_toggleAttribute),
+    JS_CFUNC_DEF("getAttributeNames",        0, js_element_getAttributeNames),
     JS_CFUNC_DEF("getContext",                1, js_element_getContext),
     JS_CFUNC_DEF("scrollIntoView",            0, js_element_scrollIntoView),
     JS_CFUNC_DEF("attachShadow",              1, js_element_attachShadow),
