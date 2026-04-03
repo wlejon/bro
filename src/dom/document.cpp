@@ -154,8 +154,9 @@ void Document::resolveStyles() {
 }
 
 void Document::resolveStylesRecursive(Element* elem,
-                                       const htmlayout::css::ComputedStyle* parentStyle) {
-    bool needsResolve = elem->isDirty() || elem->computedStyle().empty();
+                                       const htmlayout::css::ComputedStyle* parentStyle,
+                                       bool force) {
+    bool needsResolve = force || elem->isDirty() || elem->computedStyle().empty();
 
     if (needsResolve) {
         auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
@@ -227,10 +228,11 @@ void Document::resolveStylesRecursive(Element* elem,
         elem->clearDirty();
     }
 
-    // Always recurse into children — a descendant may be dirty even if this element isn't.
+    // Recurse into children. If this element was re-resolved, force children
+    // to re-resolve too (inherited styles or selector context may have changed).
     for (auto* child : elem->childNodes()) {
         if (child->nodeType() == NodeType::Element) {
-            resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle());
+            resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(), needsResolve);
         }
     }
 
@@ -239,7 +241,7 @@ void Document::resolveStylesRecursive(Element* elem,
         auto* sr = elem->shadowRoot();
         for (auto* child : sr->childNodes()) {
             if (child->nodeType() == NodeType::Element) {
-                resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle());
+                resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(), needsResolve);
             }
         }
     }

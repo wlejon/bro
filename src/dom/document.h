@@ -113,7 +113,7 @@ public:
 private:
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
-    void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle);
+    void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle, bool force = false);
 
     template<typename T, typename... Args>
     T* allocateNode(Args&&... args) {
