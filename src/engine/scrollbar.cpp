@@ -35,6 +35,11 @@ ScrollbarMetrics Scrollbar::layout(float trackX, float trackY, float trackH,
 }
 
 void Scrollbar::draw(render::Renderer* renderer, const ScrollbarMetrics& m) const {
+    drawWithState(renderer, m, hovered_, dragging_);
+}
+
+void Scrollbar::drawWithState(render::Renderer* renderer, const ScrollbarMetrics& m,
+                              bool hovered, bool dragging) const {
     if (!m.visible || !renderer) return;
 
     // Track background
@@ -42,9 +47,9 @@ void Scrollbar::draw(render::Renderer* renderer, const ScrollbarMetrics& m) cons
 
     // Thumb — color depends on interaction state
     render::Color thumbColor = style_.thumbColor;
-    if (dragging_) {
+    if (dragging) {
         thumbColor = style_.thumbDragColor;
-    } else if (hovered_) {
+    } else if (hovered) {
         thumbColor = style_.thumbHoverColor;
     }
     renderer->fillRect(m.trackX, m.thumbY, m.trackW, m.thumbH, thumbColor);

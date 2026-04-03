@@ -186,6 +186,7 @@ private:
         {255,255,255,20}, {255,255,255,100}, {255,255,255,150}, {255,255,255,180}}};
     bool draggingViewportScrollbar_ = false;
     dom::Element* scrollbarDragTarget_ = nullptr;
+    dom::Element* scrollbarHoveredElement_ = nullptr;
 
     // UI render throttle — layout+rasterize at most every ~60fps
     static constexpr double kUIFrameIntervalMs = 8.0;

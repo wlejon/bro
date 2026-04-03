@@ -165,8 +165,21 @@ static dom::Element* findElementScrollbarHit(
     float absX = lbox.contentRect.x + offsetX;
     float absY = lbox.contentRect.y + offsetY;
 
+    // Recurse into composed children FIRST to find the deepest match
+    float childOffsetX = absX;
+    float childOffsetY = absY - elem->scrollTopValue();
+    dom::Element* hit = nullptr;
+    elem->forEachComposedChild([&](dom::Element* child) {
+        if (!hit) {
+            hit = findElementScrollbarHit(child, x, y,
+                childOffsetX, childOffsetY, scrollbar, outMetrics);
+        }
+    });
+    if (hit) return hit;
+
+    // Only show scrollbars for scroll/auto, not hidden
     std::string ov = getOverflowY(style);
-    if (overflowClips(ov)) {
+    if (overflowScrollable(ov)) {
         float maxST = maxScrollTop(elem);
         if (maxST > 0) {
             float viewH = lbox.contentRect.height;
@@ -188,17 +201,7 @@ static dom::Element* findElementScrollbarHit(
         }
     }
 
-    // Recurse into composed children
-    float childOffsetX = absX;
-    float childOffsetY = absY - elem->scrollTopValue();
-    dom::Element* hit = nullptr;
-    elem->forEachComposedChild([&](dom::Element* child) {
-        if (!hit) {
-            hit = findElementScrollbarHit(child, x, y,
-                childOffsetX, childOffsetY, scrollbar, outMetrics);
-        }
-    });
-    return hit;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -692,6 +695,21 @@ void Engine::handleMouseMove(float x, float y) {
         bool wasHovered = viewportScrollbar_.isHovered();
         viewportScrollbar_.setHovered(viewportScrollbar_.thumbHitTest(x, y, m));
         if (wasHovered != viewportScrollbar_.isHovered()) uiDirty_ = true;
+    }
+
+    // Element scrollbar hover (per-element tracking)
+    if (document_ && document_->documentElement()) {
+        ScrollbarMetrics em;
+        dom::Element* hitElem = findElementScrollbarHit(
+            document_->documentElement(), x, y,
+            0.0f, -scrollY_, elementScrollbar_, em);
+        dom::Element* prevHovered = scrollbarHoveredElement_;
+        if (hitElem && elementScrollbar_.thumbHitTest(x, y, em)) {
+            scrollbarHoveredElement_ = hitElem;
+        } else {
+            scrollbarHoveredElement_ = nullptr;
+        }
+        if (prevHovered != scrollbarHoveredElement_) uiDirty_ = true;
     }
 
     // Range slider dragging

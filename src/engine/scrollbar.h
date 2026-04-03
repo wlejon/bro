@@ -40,6 +40,10 @@ public:
     /// Draw the scrollbar (track + thumb) using the given metrics.
     void draw(render::Renderer* renderer, const ScrollbarMetrics& m) const;
 
+    /// Draw the scrollbar with explicit hover/drag state (for per-element tracking).
+    void drawWithState(render::Renderer* renderer, const ScrollbarMetrics& m,
+                       bool hovered, bool dragging) const;
+
     /// Returns true if (x, y) is within the scrollbar track.
     bool hitTest(float x, float y, const ScrollbarMetrics& m) const;
 

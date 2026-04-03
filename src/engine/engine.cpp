@@ -604,7 +604,7 @@ void Engine::run() {
                     float absY = lbox.contentRect.y + offsetY;
 
                     std::string ov = getOverflowY(style);
-                    if (overflowClips(ov)) {
+                    if (overflowScrollable(ov)) {
                         float maxST = maxScrollTop(elem);
                         if (maxST > 0) {
                             float viewH = lbox.contentRect.height;
@@ -619,7 +619,11 @@ void Engine::run() {
                                 bx + bw - es.width - es.margin,
                                 by, bh, contentH, viewH,
                                 elem->scrollTopValue());
-                            elementScrollbar_.draw(renderer_.get(), m);
+                            // Use per-element hover/drag state for visual feedback
+                            bool isHovered = (scrollbarHoveredElement_ == elem);
+                            bool isDragging = (scrollbarDragTarget_ == elem);
+                            elementScrollbar_.drawWithState(renderer_.get(), m,
+                                                            isHovered, isDragging);
                         }
                     }
 
