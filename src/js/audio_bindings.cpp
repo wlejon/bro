@@ -295,6 +295,20 @@ static JSValue js_analyser_getByteTimeDomainData(JSContext* ctx, JSValueConst th
     return JS_UNDEFINED;
 }
 
+// source property: 0 = output mix, 1 = mic input
+static JSValue js_analyser_get_source(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<AnalyserNodeData*>(JS_GetOpaque(this_val, js_analysernode_class_id));
+    return d ? JS_NewInt32(ctx, d->source) : JS_UNDEFINED;
+}
+
+static JSValue js_analyser_set_source(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* d = static_cast<AnalyserNodeData*>(JS_GetOpaque(this_val, js_analysernode_class_id));
+    if (!d) return JS_UNDEFINED;
+    int v; JS_ToInt32(ctx, &v, val);
+    d->source = (v == 1) ? 1 : 0;
+    return JS_UNDEFINED;
+}
+
 static JSValue js_analyser_connect(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
@@ -311,6 +325,7 @@ static const JSCFunctionListEntry js_analysernode_proto_funcs[] = {
     JS_CGETSET_DEF("minDecibels", js_analyser_get_minDecibels, js_analyser_set_minDecibels),
     JS_CGETSET_DEF("maxDecibels", js_analyser_get_maxDecibels, js_analyser_set_maxDecibels),
     JS_CGETSET_DEF("smoothingTimeConstant", js_analyser_get_smoothing, js_analyser_set_smoothing),
+    JS_CGETSET_DEF("source", js_analyser_get_source, js_analyser_set_source),
     JS_CFUNC_DEF("getFloatFrequencyData", 1, js_analyser_getFloatFrequencyData),
     JS_CFUNC_DEF("getByteFrequencyData", 1, js_analyser_getByteFrequencyData),
     JS_CFUNC_DEF("getFloatTimeDomainData", 1, js_analyser_getFloatTimeDomainData),

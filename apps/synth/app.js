@@ -242,17 +242,23 @@ $$('#source-btns .btn').forEach(btn => {
         btn.classList.add('active');
         source = newSource;
 
-        if (source === 'mic' && !micStream && audioCtx) {
-            try {
-                micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                micSource = audioCtx.createMediaStreamSource(micStream);
-                micSource.connect(analyser);
-            } catch (err) {
-                console.error('Mic access failed:', err);
-                source = 'synth';
-                document.querySelector('[data-source="synth"]').classList.add('active');
-                btn.classList.remove('active');
+        if (source === 'mic' && audioCtx && analyser) {
+            if (!micStream) {
+                try {
+                    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    micSource = audioCtx.createMediaStreamSource(micStream);
+                    micSource.connect(analyser);
+                } catch (err) {
+                    console.error('Mic access failed:', err);
+                    source = 'synth';
+                    document.querySelector('[data-source="synth"]').classList.add('active');
+                    btn.classList.remove('active');
+                    return;
+                }
             }
+            analyser.source = 1; // mic input
+        } else if (source === 'synth' && analyser) {
+            analyser.source = 0; // output mix
         }
     });
 });
@@ -273,7 +279,7 @@ const canvas = document.getElementById('viz');
 const ctx = canvas.getContext('2d');
 
 let spectrogramData = [];
-const SPECTROGRAM_HISTORY = 200;
+const SPECTROGRAM_HISTORY = 100;
 
 function hslColor(value) {
     const hue = (1 - value) * 270;
@@ -409,26 +415,37 @@ function drawSpectrogram(W, H) {
     const data = new Uint8Array(bufLen);
     analyser.getByteFrequencyData(data);
 
-    spectrogramData.push(new Uint8Array(data));
+    // Downsample frequency data to keep draw calls manageable
+    const numFreqBins = 64;
+    const reduced = new Uint8Array(numFreqBins);
+    for (let f = 0; f < numFreqBins; f++) {
+        const logMin = Math.log(1);
+        const logMax = Math.log(bufLen);
+        const startBin = Math.floor(Math.exp(logMin + (logMax - logMin) * f / numFreqBins));
+        const endBin = Math.floor(Math.exp(logMin + (logMax - logMin) * (f + 1) / numFreqBins));
+        let sum = 0, count = 0;
+        for (let j = startBin; j < endBin && j < bufLen; j++) { sum += data[j]; count++; }
+        reduced[f] = count > 0 ? Math.floor(sum / count) : 0;
+    }
+
+    spectrogramData.push(reduced);
     if (spectrogramData.length > SPECTROGRAM_HISTORY) {
         spectrogramData.shift();
     }
 
+    // Draw all columns — 200 cols * 64 bins = 12,800 rects max
     const colW = W / SPECTROGRAM_HISTORY;
-    const numFreqBins = Math.min(256, bufLen);
+    const binH = H / numFreqBins;
 
     for (let t = 0; t < spectrogramData.length; t++) {
         const col = spectrogramData[t];
         const x = t * colW;
 
         for (let f = 0; f < numFreqBins; f++) {
-            const logIdx = Math.floor(Math.exp(Math.log(1) + (Math.log(bufLen) - Math.log(1)) * f / numFreqBins));
-            const value = col[Math.min(logIdx, bufLen - 1)] / 255;
+            const value = col[f] / 255;
             if (value < 0.02) continue;
 
-            const binH = H / numFreqBins;
             const y = H - (f + 1) * binH;
-
             ctx.fillStyle = hslColor(value);
             ctx.fillRect(x, y, colW + 1, binH + 1);
         }

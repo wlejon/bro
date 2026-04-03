@@ -3,9 +3,11 @@
     padding: 0;
     box-sizing: border-box;
 }
-
+html {
+    background-color: transparent;
+}
 body {
-    background: #0a0a0f;
+    background: transparent;
     color: #e0e0e0;
     font-family: system-ui, sans-serif;
     overflow: hidden;
