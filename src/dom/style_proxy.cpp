@@ -25,6 +25,7 @@ void StyleProxy::setProperty(const std::string& name, const std::string& value) 
     if (it != properties_.end() && it->second == value) return;
     bool displayChanged = (name == "display");
     properties_[name] = value;
+    invalidateCssText();
     if (owner_) {
         if (displayChanged) {
             owner_->markStructureDirty();
@@ -36,6 +37,7 @@ void StyleProxy::setProperty(const std::string& name, const std::string& value) 
 
 void StyleProxy::removeProperty(const std::string& name) {
     if (properties_.erase(name) > 0) {
+        invalidateCssText();
         bool displayChanged = (name == "display");
         if (owner_) {
             if (displayChanged) {
@@ -47,21 +49,26 @@ void StyleProxy::removeProperty(const std::string& name) {
     }
 }
 
-std::string StyleProxy::cssText() const {
-    std::ostringstream oss;
+const std::string& StyleProxy::cssText() const {
+    if (!cssTextDirty_) return cssTextCache_;
+    cssTextCache_.clear();
     for (const auto& [key, val] : properties_) {
-        oss << key << ": " << val << "; ";
+        cssTextCache_ += key;
+        cssTextCache_ += ": ";
+        cssTextCache_ += val;
+        cssTextCache_ += "; ";
     }
-    std::string result = oss.str();
     // Remove trailing space if present
-    if (!result.empty() && result.back() == ' ') {
-        result.pop_back();
+    if (!cssTextCache_.empty() && cssTextCache_.back() == ' ') {
+        cssTextCache_.pop_back();
     }
-    return result;
+    cssTextDirty_ = false;
+    return cssTextCache_;
 }
 
 void StyleProxy::setCssText(const std::string& text) {
     properties_.clear();
+    invalidateCssText();
 
     // Parse "key: value; key: value; ..." format
     std::istringstream iss(text);
