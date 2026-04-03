@@ -113,22 +113,18 @@ static inline float generateSample(Waveform wf, float phase, float phaseInc)
 
 static inline float softLimit(float x)
 {
-    // Below 0.8 amplitude, pass through clean. Above, soft-clip with tanh.
-    const float threshold = 0.8f;
-    if (x > threshold) {
-        return threshold + (1.0f - threshold) * std::tanh((x - threshold) / (1.0f - threshold));
-    } else if (x < -threshold) {
-        return -threshold - (1.0f - threshold) * std::tanh((-x - threshold) / (1.0f - threshold));
-    }
-    return x;
+    // Smooth tanh saturation — transparent below 0.5, warm compression above.
+    // tanh(x) ≈ x for small x, curves to ±1 for large x.
+    // Scale so single voices at normal gain pass through nearly linear.
+    return std::tanh(x);
 }
 
 // ---------------------------------------------------------------------------
 // Envelope constants
 // ---------------------------------------------------------------------------
 
-static constexpr float ATTACK_TIME  = 0.008f;   // 8ms attack — eliminates click
-static constexpr float RELEASE_TIME = 0.030f;    // 30ms release — smooth tail
+static constexpr float ATTACK_TIME  = 0.015f;   // 15ms attack — eliminates click
+static constexpr float RELEASE_TIME = 0.040f;    // 40ms release — smooth tail
 
 // ---------------------------------------------------------------------------
 // AudioEngine
@@ -354,21 +350,12 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                       / static_cast<double>(sampleRate_);
     double sampleDt = 1.0 / static_cast<double>(sampleRate_);
 
-    // Count active voices for gain normalization
-    int activeCount = 0;
-    for (auto& v : voices_) {
-        if (v.active && v.started && v.envStage != EnvStage::Done)
-            activeCount++;
-    }
-    // Normalize: 1/sqrt(N) scaling — preserves perceived loudness while preventing clipping
-    float normGain = (activeCount > 1) ? 1.0f / std::sqrt(static_cast<float>(activeCount)) : 1.0f;
-
     for (auto& voice : voices_) {
         if (!voice.active || !voice.started) continue;
         if (voice.envStage == EnvStage::Done) continue;
 
         float freq = voice.frequency;
-        float gain = voice.gain * normGain;
+        float gain = voice.gain;
         float phaseInc = freq / static_cast<float>(sampleRate_);
 
         for (int i = 0; i < numSamples; i++) {

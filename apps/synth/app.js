@@ -308,6 +308,8 @@ function draw() {
     const W = canvas.width;
     const H = canvas.height;
 
+    // clearRect resets the canvas command buffer — critical for performance
+    ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, W, H);
 

@@ -731,25 +731,19 @@ void AudioBindings::install(JSContext* ctx, audio::AudioEngine* engine)
                                      JS_CFUNC_constructor, 0);
     JS_SetPropertyStr(ctx, global, "AudioContext", ctor);
 
-    // Install navigator.mediaDevices.getUserMedia
-    JSValue navigator = JS_GetPropertyStr(ctx, global, "navigator");
-    if (JS_IsUndefined(navigator)) {
-        navigator = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "navigator", JS_DupValue(ctx, navigator));
-    }
-
-    JSValue mediaDevices = JS_GetPropertyStr(ctx, navigator, "mediaDevices");
-    if (JS_IsUndefined(mediaDevices)) {
-        mediaDevices = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, navigator, "mediaDevices", JS_DupValue(ctx, mediaDevices));
-    }
-
-    JS_SetPropertyStr(ctx, mediaDevices, "getUserMedia",
-                      JS_NewCFunction(ctx, js_getUserMedia, "getUserMedia", 1));
-
-    JS_FreeValue(ctx, mediaDevices);
-    JS_FreeValue(ctx, navigator);
+    // Install native getUserMedia as a global, then wire into navigator via JS
+    JS_SetPropertyStr(ctx, global, "__nativeGetUserMedia",
+                      JS_NewCFunction(ctx, js_getUserMedia, "__nativeGetUserMedia", 1));
     JS_FreeValue(ctx, global);
+
+    // Use JS eval to set up navigator.mediaDevices.getUserMedia
+    // This works regardless of how brokit configured the navigator object
+    const char* shim =
+        "if (typeof navigator !== 'undefined') {"
+        "  if (!navigator.mediaDevices) navigator.mediaDevices = {};"
+        "  navigator.mediaDevices.getUserMedia = __nativeGetUserMedia;"
+        "}";
+    JS_Eval(ctx, shim, strlen(shim), "<audio-shim>", JS_EVAL_TYPE_GLOBAL);
 }
 
 void AudioBindings::cleanup(JSContext*)
