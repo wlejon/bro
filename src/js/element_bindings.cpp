@@ -4,6 +4,8 @@
 #include "util/log.h"
 #include "dom/event.h"
 
+#include "dataset_proxy.js.h"
+
 #include <algorithm>
 
 namespace bro::js {
@@ -1851,40 +1853,7 @@ static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
                       JS_NewInt32(ctx, static_cast<int32_t>(el->nodeId())));
 
     // Create a Proxy that intercepts set/deleteProperty to update data-* attrs
-    const char* proxyCode = R"JS((function(target) {
-        return new Proxy(target, {
-            set: function(t, prop, value) {
-                if (typeof prop !== 'string') return false;
-                var attr = 'data-' + prop.replace(/[A-Z]/g, function(c) {
-                    return '-' + c.toLowerCase();
-                });
-                var elId = t.__bro_el_id;
-                var elMap = globalThis.__bro_elem_map;
-                if (elMap) {
-                    var wrapper = elMap[String(elId)];
-                    if (wrapper) wrapper.setAttribute(attr, String(value));
-                }
-                t[prop] = String(value);
-                return true;
-            },
-            deleteProperty: function(t, prop) {
-                if (typeof prop !== 'string') return false;
-                var attr = 'data-' + prop.replace(/[A-Z]/g, function(c) {
-                    return '-' + c.toLowerCase();
-                });
-                var elId = t.__bro_el_id;
-                var elMap = globalThis.__bro_elem_map;
-                if (elMap) {
-                    var wrapper = elMap[String(elId)];
-                    if (wrapper) wrapper.removeAttribute(attr);
-                }
-                delete t[prop];
-                return true;
-            }
-        });
-    }))JS";
-
-    JSValue proxyFactory = JS_Eval(ctx, proxyCode, strlen(proxyCode),
+    JSValue proxyFactory = JS_Eval(ctx, js_dataset_proxy, strlen(js_dataset_proxy),
                                    "<dataset-proxy>", JS_EVAL_TYPE_GLOBAL);
     JSValue proxy = JS_Call(ctx, proxyFactory, JS_UNDEFINED, 1, &target);
     JS_FreeValue(ctx, proxyFactory);

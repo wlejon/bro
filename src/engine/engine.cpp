@@ -4,6 +4,9 @@
 #include "engine/overflow.h"
 #include "engine/system_overlay.h"
 
+#include "observer_check.js.h"
+#include "canvas_resize.js.h"
+
 #include "platform/sdl_window.h"
 #include "platform/event_loop.h"
 #include "render/renderer.h"
@@ -511,20 +514,8 @@ void Engine::run() {
 
             // Notify ResizeObserver / IntersectionObserver after layout
             if (jsRuntime_) {
-                static const char* observerCheck = R"JS(
-                    (function() {
-                        if (globalThis.__bro_resize_observers) {
-                            for (var i = 0; i < globalThis.__bro_resize_observers.length; i++)
-                                globalThis.__bro_resize_observers[i]._check();
-                        }
-                        if (globalThis.__bro_intersection_observers) {
-                            for (var i = 0; i < globalThis.__bro_intersection_observers.length; i++)
-                                globalThis.__bro_intersection_observers[i]._check();
-                        }
-                    })();
-                )JS";
-                JSValue r = JS_Eval(jsRuntime_->getContext(), observerCheck,
-                                    strlen(observerCheck), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
+                    JSValue r = JS_Eval(jsRuntime_->getContext(), js_observer_check,
+                                    strlen(js_observer_check), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
                 JS_FreeValue(jsRuntime_->getContext(), r);
             }
 
@@ -819,13 +810,7 @@ void Engine::handleResize(int w, int h) {
         JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, h));
 
         // Update canvas element width/height attributes via JS
-        const char* updateScript = R"JS(
-            (function(w, h) {
-                var c = document.querySelector('canvas');
-                if (c) { c.width = w; c.height = h; }
-            })
-        )JS";
-        JSValue fn = JS_Eval(ctx, updateScript, strlen(updateScript),
+        JSValue fn = JS_Eval(ctx, js_canvas_resize, strlen(js_canvas_resize),
                              "<resize>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsFunction(ctx, fn)) {
             JSValue args[2] = { JS_NewInt32(ctx, w), JS_NewInt32(ctx, h) };

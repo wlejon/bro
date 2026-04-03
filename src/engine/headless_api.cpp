@@ -4,6 +4,8 @@
 #include "engine/engine.h"
 #include "engine/system_overlay.h"
 
+#include "observer_check.js.h"
+
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
 #include "render/scene_layer.h"
@@ -53,20 +55,8 @@ void Engine::flush() {
 
         // Notify ResizeObserver / IntersectionObserver after layout
         if (jsRuntime_) {
-            static const char* observerCheck = R"JS(
-                (function() {
-                    if (globalThis.__bro_resize_observers) {
-                        for (var i = 0; i < globalThis.__bro_resize_observers.length; i++)
-                            globalThis.__bro_resize_observers[i]._check();
-                    }
-                    if (globalThis.__bro_intersection_observers) {
-                        for (var i = 0; i < globalThis.__bro_intersection_observers.length; i++)
-                            globalThis.__bro_intersection_observers[i]._check();
-                    }
-                })();
-            )JS";
-            JSValue r = JS_Eval(jsRuntime_->getContext(), observerCheck,
-                                strlen(observerCheck), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
+            JSValue r = JS_Eval(jsRuntime_->getContext(), js_observer_check,
+                                strlen(js_observer_check), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
             JS_FreeValue(jsRuntime_->getContext(), r);
         }
     }
