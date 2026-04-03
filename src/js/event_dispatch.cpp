@@ -37,6 +37,12 @@ static JSValue js_ev_stopImmediatePropagation(JSContext* ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
+// Event phases per DOM spec
+static constexpr int NONE = 0;
+static constexpr int CAPTURING_PHASE = 1;
+static constexpr int AT_TARGET = 2;
+static constexpr int BUBBLING_PHASE = 3;
+
 static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
     JS_SetPropertyStr(ctx, jsEvent, "type",
                       JS_NewString(ctx, event.type().c_str()));
@@ -46,6 +52,8 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
                       JS_NewBool(ctx, event.bubbles()));
     JS_SetPropertyStr(ctx, jsEvent, "cancelable",
                       JS_NewBool(ctx, event.cancelable()));
+    JS_SetPropertyStr(ctx, jsEvent, "eventPhase",
+                      JS_NewInt32(ctx, NONE));
 
     // MouseEvent properties
     auto* mouseEvt = dynamic_cast<bro::dom::MouseEvent*>(&event);
@@ -124,9 +132,11 @@ static std::vector<EventPathEntry> buildEventPath(bro::dom::Element* target) {
     return path;
 }
 
+// phase: CAPTURING_PHASE, AT_TARGET, or BUBBLING_PHASE
 static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
                             bro::dom::Element* retargetedTarget,
                             bro::dom::Event& event,
+                            int phase,
                             JSValue originalJsEvent = JS_UNDEFINED) {
     auto& listeners = current->listeners();
     auto it = listeners.find(event.type());
@@ -172,6 +182,9 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         jsEvent = JS_DupValue(ctx, originalJsEvent);
     }
 
+    // Set eventPhase
+    JS_SetPropertyStr(ctx, jsEvent, "eventPhase", JS_NewInt32(ctx, phase));
+
     // Set currentTarget to the current element
     JS_SetPropertyStr(ctx, jsEvent, "currentTarget", JS_DupValue(ctx, jsElem));
 
@@ -197,6 +210,9 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     JS_SetPropertyStr(ctx, jsEvent, "stopImmediatePropagation",
         JS_NewCFunction(ctx, js_ev_stopImmediatePropagation, "stopImmediatePropagation", 0));
 
+    // Collect indices of "once" listeners to remove after dispatch
+    std::vector<int64_t> onceIndices;
+
     for (int64_t i = 0; i < len; i++) {
         JSValue entry = JS_GetPropertyInt64(ctx, listenersArr, i);
         if (JS_IsObject(entry)) {
@@ -207,30 +223,56 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
             JS_FreeValue(ctx, typeVal);
 
             if (match) {
-                JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
-                if (JS_IsFunction(ctx, cb)) {
-                    JSValue result = JS_Call(ctx, cb, jsElem, 1, &jsEvent);
-                    if (JS_IsException(result)) {
-                        Runtime::checkException(ctx, result);
+                // Check capture flag on listener
+                JSValue captureVal = JS_GetPropertyStr(ctx, entry, "capture");
+                bool isCapture = JS_ToBool(ctx, captureVal);
+                JS_FreeValue(ctx, captureVal);
+
+                // During capture phase, only invoke capture listeners.
+                // During bubble phase, only invoke non-capture listeners.
+                // At target, invoke all listeners regardless of capture flag.
+                bool shouldInvoke = (phase == AT_TARGET) ||
+                                    (phase == CAPTURING_PHASE && isCapture) ||
+                                    (phase == BUBBLING_PHASE && !isCapture);
+
+                if (shouldInvoke) {
+                    JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
+                    if (JS_IsFunction(ctx, cb)) {
+                        JSValue result = JS_Call(ctx, cb, jsElem, 1, &jsEvent);
+                        if (JS_IsException(result)) {
+                            Runtime::checkException(ctx, result);
+                        }
+                        JS_FreeValue(ctx, result);
                     }
-                    JS_FreeValue(ctx, result);
+                    JS_FreeValue(ctx, cb);
+
+                    // Check if this is a "once" listener
+                    JSValue onceVal = JS_GetPropertyStr(ctx, entry, "once");
+                    if (JS_ToBool(ctx, onceVal)) {
+                        onceIndices.push_back(i);
+                    }
+                    JS_FreeValue(ctx, onceVal);
+
+                    JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
+                    if (JS_ToBool(ctx, stoppedVal))
+                        event.stopPropagation();
+                    JS_FreeValue(ctx, stoppedVal);
+
+                    JSValue immVal = JS_GetPropertyStr(ctx, jsEvent, "_immediateStopped");
+                    bool immStopped = JS_ToBool(ctx, immVal);
+                    JS_FreeValue(ctx, immVal);
+                    if (immStopped) { JS_FreeValue(ctx, entry); break; }
                 }
-                JS_FreeValue(ctx, cb);
-
-                JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
-                if (JS_ToBool(ctx, stoppedVal))
-                    event.stopPropagation();
-                JS_FreeValue(ctx, stoppedVal);
-
-                JSValue immVal = JS_GetPropertyStr(ctx, jsEvent, "_immediateStopped");
-                bool immStopped = JS_ToBool(ctx, immVal);
-                JS_FreeValue(ctx, immVal);
-                if (immStopped) { JS_FreeValue(ctx, entry); break; }
             }
         }
         JS_FreeValue(ctx, entry);
 
         if (event.propagationStopped()) break;
+    }
+
+    // Remove "once" listeners (iterate in reverse to preserve indices)
+    for (auto it2 = onceIndices.rbegin(); it2 != onceIndices.rend(); ++it2) {
+        JS_SetPropertyInt64(ctx, listenersArr, *it2, JS_UNDEFINED);
     }
 
     JS_FreeValue(ctx, jsEvent);
@@ -245,16 +287,34 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
 
     event.setTarget(target);
 
-    // Build the full event path including shadow DOM retargeting
+    // Build the full event path including shadow DOM retargeting.
+    // path[0] = target, path[N-1] = root ancestor
     auto path = buildEventPath(target);
+    if (path.empty()) return;
 
-    for (auto& entry : path) {
+    // --- Capture phase: root → target (exclusive) ---
+    for (int i = static_cast<int>(path.size()) - 1; i > 0; --i) {
         if (event.propagationStopped()) break;
+        event.setCurrentTarget(path[i].element);
+        invokeListeners(ctx, path[i].element, path[i].retargetedTarget,
+                        event, CAPTURING_PHASE, originalJsEvent);
+    }
 
-        event.setCurrentTarget(entry.element);
-        invokeListeners(ctx, entry.element, entry.retargetedTarget, event, originalJsEvent);
+    // --- At-target phase ---
+    if (!event.propagationStopped()) {
+        event.setCurrentTarget(path[0].element);
+        invokeListeners(ctx, path[0].element, path[0].retargetedTarget,
+                        event, AT_TARGET, originalJsEvent);
+    }
 
-        if (!event.bubbles()) break;
+    // --- Bubble phase: target parent → root ---
+    if (event.bubbles()) {
+        for (size_t i = 1; i < path.size(); ++i) {
+            if (event.propagationStopped()) break;
+            event.setCurrentTarget(path[i].element);
+            invokeListeners(ctx, path[i].element, path[i].retargetedTarget,
+                            event, BUBBLING_PHASE, originalJsEvent);
+        }
     }
 }
 

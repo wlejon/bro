@@ -193,6 +193,10 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
 
     // Event constructor (used by el.dispatchEvent(new Event('input')))
     globalThis.Event = class Event {
+        static get NONE() { return 0; }
+        static get CAPTURING_PHASE() { return 1; }
+        static get AT_TARGET() { return 2; }
+        static get BUBBLING_PHASE() { return 3; }
         constructor(type, opts) {
             this.type = type;
             this.bubbles = !!(opts && opts.bubbles);
@@ -201,10 +205,15 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
             this.defaultPrevented = false;
             this.target = null;
             this.currentTarget = null;
+            this.eventPhase = 0;
             this.timeStamp = performance.now();
             this._stopped = false;
             this._immediateStopped = false;
         }
+        get NONE() { return 0; }
+        get CAPTURING_PHASE() { return 1; }
+        get AT_TARGET() { return 2; }
+        get BUBBLING_PHASE() { return 3; }
         preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
         stopPropagation() { this._stopped = true; }
         stopImmediatePropagation() { this._stopped = true; this._immediateStopped = true; }

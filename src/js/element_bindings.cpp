@@ -242,7 +242,14 @@ static JSValue js_element_get_classList(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    return wrapTokenList(ctx, el);
+    // Return cached DOMTokenList if available
+    JSValue cached = JS_GetPropertyStr(ctx, this_val, "__bro_classList");
+    if (!JS_IsUndefined(cached) && !JS_IsNull(cached))
+        return cached;
+    JS_FreeValue(ctx, cached);
+    JSValue tl = wrapTokenList(ctx, el);
+    JS_SetPropertyStr(ctx, this_val, "__bro_classList", JS_DupValue(ctx, tl));
+    return tl;
 }
 
 static JSValue js_element_get_parentNode(JSContext* ctx, JSValueConst this_val)
@@ -384,7 +391,95 @@ static JSValue js_element_get_style(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    return wrapStyleProxy(ctx, &el->style());
+    // Return cached CSSStyleDeclaration if available
+    JSValue cached = JS_GetPropertyStr(ctx, this_val, "__bro_style");
+    if (!JS_IsUndefined(cached) && !JS_IsNull(cached))
+        return cached;
+    JS_FreeValue(ctx, cached);
+    JSValue s = wrapStyleProxy(ctx, &el->style());
+    JS_SetPropertyStr(ctx, this_val, "__bro_style", JS_DupValue(ctx, s));
+    return s;
+}
+
+// ---- Node standard properties ---------------------------------------------
+
+static JSValue js_element_get_isConnected(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    // Walk up the tree; connected if we reach the document's root element.
+    // Document is not a Node in our tree, so check against documentElement.
+    auto* doc = el->document();
+    if (!doc) return JS_FALSE;
+    auto* docEl = doc->documentElement();
+    if (!docEl) return JS_FALSE;
+
+    auto* node = static_cast<bro::dom::Node*>(el);
+    while (node) {
+        if (node == docEl)
+            return JS_TRUE;
+        // Cross shadow boundary
+        auto* parent = node->parentNode();
+        if (parent && parent->nodeType() == bro::dom::NodeType::DocumentFragment) {
+            auto* sr = dynamic_cast<bro::dom::ShadowRoot*>(parent);
+            if (sr && sr->host()) {
+                node = sr->host();
+                continue;
+            }
+        }
+        node = parent;
+    }
+    return JS_FALSE;
+}
+
+static JSValue js_element_getRootNode(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+
+    // Check options.composed
+    bool composed = false;
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        JSValue compVal = JS_GetPropertyStr(ctx, argv[0], "composed");
+        composed = JS_ToBool(ctx, compVal);
+        JS_FreeValue(ctx, compVal);
+    }
+
+    auto* node = static_cast<bro::dom::Node*>(el);
+    while (node->parentNode()) {
+        auto* parent = node->parentNode();
+        // Cross shadow boundary if composed
+        if (composed && parent->nodeType() == bro::dom::NodeType::DocumentFragment) {
+            auto* sr = dynamic_cast<bro::dom::ShadowRoot*>(parent);
+            if (sr && sr->host()) {
+                node = sr->host();
+                continue;
+            }
+        }
+        node = parent;
+    }
+
+    // If the root is the documentElement, return the document object
+    auto* doc = el->document();
+    if (doc && node == doc->documentElement()) {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue docObj = JS_GetPropertyStr(ctx, global, "document");
+        JS_FreeValue(ctx, global);
+        return docObj;
+    }
+
+    if (node->nodeType() == bro::dom::NodeType::Element)
+        return DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(node));
+    return JS_NULL;
+}
+
+static JSValue js_element_hasChildNodes(JSContext* ctx, JSValueConst this_val,
+                                        int /*argc*/, JSValueConst* /*argv*/)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    return JS_NewBool(ctx, !el->childNodes().empty());
 }
 
 // ---- Form control properties ----------------------------------------------
@@ -714,6 +809,26 @@ static JSValue js_element_addEventListener(JSContext* ctx,
 
     std::string type = jsToStdString(ctx, argv[0]);
 
+    // Parse options (3rd arg): boolean useCapture or options object
+    bool capture = false;
+    bool once = false;
+    bool passive = false;
+    if (argc >= 3) {
+        if (JS_IsBool(argv[2])) {
+            capture = JS_ToBool(ctx, argv[2]);
+        } else if (JS_IsObject(argv[2])) {
+            JSValue capVal = JS_GetPropertyStr(ctx, argv[2], "capture");
+            capture = JS_ToBool(ctx, capVal);
+            JS_FreeValue(ctx, capVal);
+            JSValue onceVal = JS_GetPropertyStr(ctx, argv[2], "once");
+            once = JS_ToBool(ctx, onceVal);
+            JS_FreeValue(ctx, onceVal);
+            JSValue passiveVal = JS_GetPropertyStr(ctx, argv[2], "passive");
+            passive = JS_ToBool(ctx, passiveVal);
+            JS_FreeValue(ctx, passiveVal);
+        }
+    }
+
     JSAtom key = JS_NewAtom(ctx, kListenersKey);
     JSValue arr = JS_GetProperty(ctx, this_val, key);
     if (JS_IsUndefined(arr) || JS_IsException(arr)) {
@@ -724,6 +839,9 @@ static JSValue js_element_addEventListener(JSContext* ctx,
     JSValue entry = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, entry, "type", JS_NewString(ctx, type.c_str()));
     JS_SetPropertyStr(ctx, entry, "cb", JS_DupValue(ctx, argv[1]));
+    JS_SetPropertyStr(ctx, entry, "capture", JS_NewBool(ctx, capture));
+    JS_SetPropertyStr(ctx, entry, "once", JS_NewBool(ctx, once));
+    JS_SetPropertyStr(ctx, entry, "passive", JS_NewBool(ctx, passive));
 
     int64_t len = 0;
     JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
@@ -747,6 +865,18 @@ static JSValue js_element_removeEventListener(JSContext* ctx,
 
     std::string type = jsToStdString(ctx, argv[0]);
 
+    // Parse options (3rd arg): boolean useCapture or options object with capture
+    bool capture = false;
+    if (argc >= 3) {
+        if (JS_IsBool(argv[2])) {
+            capture = JS_ToBool(ctx, argv[2]);
+        } else if (JS_IsObject(argv[2])) {
+            JSValue capVal = JS_GetPropertyStr(ctx, argv[2], "capture");
+            capture = JS_ToBool(ctx, capVal);
+            JS_FreeValue(ctx, capVal);
+        }
+    }
+
     JSAtom key = JS_NewAtom(ctx, kListenersKey);
     JSValue arr = JS_GetProperty(ctx, this_val, key);
     JS_FreeAtom(ctx, key);
@@ -769,9 +899,15 @@ static JSValue js_element_removeEventListener(JSContext* ctx,
             JS_FreeValue(ctx, tval);
 
             if (t == type) {
+                // Per spec, capture flag must match for removal
+                JSValue capVal = JS_GetPropertyStr(ctx, entry, "capture");
+                bool entryCapture = JS_ToBool(ctx, capVal);
+                JS_FreeValue(ctx, capVal);
+
                 JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
                 bool same = JS_IsFunction(ctx, cb) &&
-                            JS_VALUE_GET_PTR(cb) == JS_VALUE_GET_PTR(argv[1]);
+                            JS_VALUE_GET_PTR(cb) == JS_VALUE_GET_PTR(argv[1]) &&
+                            entryCapture == capture;
                 JS_FreeValue(ctx, cb);
                 if (same) {
                     JS_SetPropertyInt64(ctx, arr, i, JS_UNDEFINED);
@@ -1342,6 +1478,38 @@ static JSValue js_element_after(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+static JSValue js_element_replaceWith(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* parent = el->parentNode();
+    if (!parent) return JS_UNDEFINED;
+    auto* doc = getDocumentForCtx(ctx);
+
+    // Insert all new nodes before this element
+    for (int i = 0; i < argc; ++i) {
+        auto* node = nodeOrTextFromArg(ctx, argv[i]);
+        if (!node) continue;
+        parent->insertBefore(node, el);
+        if (doc && node->nodeType() == bro::dom::NodeType::Element)
+            doc->markStructureDirty();
+        fireConnectedIfElement(ctx, node);
+    }
+
+    // Remove the old element
+    if (doc && !el->id().empty())
+        doc->unregisterElementId(el->id());
+    if (doc) doc->markStructureDirty();
+    JSValue w = DomBindings::wrapElement(ctx, el);
+    fireDisconnectedCallback(ctx, w);
+    JS_FreeValue(ctx, w);
+    invalidateWrapper(ctx, el);
+    parent->removeChild(el);
+    if (doc) doc->freeNode(el);
+
+    return JS_UNDEFINED;
+}
+
 static JSValue js_element_replaceChildren(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
     auto* el = getElement(this_val);
@@ -1505,6 +1673,12 @@ static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NewObject(ctx);
 
+    // Return cached dataset Proxy if available
+    JSValue cached = JS_GetPropertyStr(ctx, this_val, "__bro_dataset");
+    if (!JS_IsUndefined(cached) && !JS_IsNull(cached))
+        return cached;
+    JS_FreeValue(ctx, cached);
+
     // Build the target object with current data-* attributes
     JSValue target = JS_NewObject(ctx);
     for (auto& [name, val] : el->attributes()) {
@@ -1568,6 +1742,8 @@ static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
     JSValue proxy = JS_Call(ctx, proxyFactory, JS_UNDEFINED, 1, &target);
     JS_FreeValue(ctx, proxyFactory);
     JS_FreeValue(ctx, target);
+    // Cache the proxy on the element wrapper
+    JS_SetPropertyStr(ctx, this_val, "__bro_dataset", JS_DupValue(ctx, proxy));
     return proxy;
 }
 
@@ -1732,6 +1908,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("childElementCount",      js_element_get_childElementCount,      nullptr),
     JS_CGETSET_DEF("nodeType",               js_element_get_nodeType,               nullptr),
     JS_CGETSET_DEF("nodeName",               js_element_get_nodeName,               nullptr),
+    JS_CGETSET_DEF("isConnected",            js_element_get_isConnected,            nullptr),
     JS_CGETSET_DEF("classList",              js_element_get_classList,              nullptr),
     JS_CGETSET_DEF("style",                  js_element_get_style,                  nullptr),
     JS_CGETSET_DEF("width",         js_element_get_width,       js_element_set_width),
@@ -1790,11 +1967,14 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("prepend",                  0, js_element_prepend),
     JS_CFUNC_DEF("before",                   0, js_element_before),
     JS_CFUNC_DEF("after",                    0, js_element_after),
+    JS_CFUNC_DEF("replaceWith",              0, js_element_replaceWith),
     JS_CFUNC_DEF("replaceChildren",          0, js_element_replaceChildren),
     JS_CFUNC_DEF("toggleAttribute",          1, js_element_toggleAttribute),
     JS_CFUNC_DEF("getAttributeNames",        0, js_element_getAttributeNames),
     JS_CFUNC_DEF("getContext",                1, js_element_getContext),
     JS_CFUNC_DEF("scrollIntoView",            0, js_element_scrollIntoView),
+    JS_CFUNC_DEF("getRootNode",              0, js_element_getRootNode),
+    JS_CFUNC_DEF("hasChildNodes",            0, js_element_hasChildNodes),
     JS_CFUNC_DEF("attachShadow",              1, js_element_attachShadow),
     JS_CGETSET_DEF("shadowRoot",   js_element_get_shadowRoot, nullptr),
     // Slot APIs
