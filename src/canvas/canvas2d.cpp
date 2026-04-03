@@ -1,6 +1,7 @@
 #include "canvas/canvas2d.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -62,6 +63,40 @@ bool parseCSSColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& b, u
             return true;
         }
         return false;
+    }
+
+    // hsl(h, s%, l%) / hsla(h, s%, l%, a)
+    if (str.substr(0, 3) == "hsl") {
+        auto p = str.find('(');
+        auto e = str.find(')');
+        if (p == std::string::npos || e == std::string::npos) return false;
+        std::string inner = str.substr(p + 1, e - p - 1);
+        float vals[4] = {0, 0, 0, 1.0f};
+        std::istringstream iss(inner);
+        std::string tok;
+        for (int i = 0; i < 4 && std::getline(iss, tok, ','); i++) {
+            vals[i] = std::strtof(tok.c_str(), nullptr);
+        }
+        float h = std::fmod(vals[0], 360.0f);
+        if (h < 0) h += 360.0f;
+        float s = std::min(100.0f, std::max(0.0f, vals[1])) / 100.0f;
+        float l = std::min(100.0f, std::max(0.0f, vals[2])) / 100.0f;
+        // HSL to RGB conversion
+        float c = (1.0f - std::abs(2.0f * l - 1.0f)) * s;
+        float x = c * (1.0f - std::abs(std::fmod(h / 60.0f, 2.0f) - 1.0f));
+        float m = l - c / 2.0f;
+        float rf, gf, bf;
+        if      (h < 60)  { rf = c; gf = x; bf = 0; }
+        else if (h < 120) { rf = x; gf = c; bf = 0; }
+        else if (h < 180) { rf = 0; gf = c; bf = x; }
+        else if (h < 240) { rf = 0; gf = x; bf = c; }
+        else if (h < 300) { rf = x; gf = 0; bf = c; }
+        else              { rf = c; gf = 0; bf = x; }
+        r = (uint8_t)((rf + m) * 255.0f);
+        g = (uint8_t)((gf + m) * 255.0f);
+        b = (uint8_t)((bf + m) * 255.0f);
+        a = (uint8_t)(std::min(1.0f, std::max(0.0f, vals[3])) * 255.0f);
+        return true;
     }
 
     // rgb(r,g,b) / rgba(r,g,b,a)
