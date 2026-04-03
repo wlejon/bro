@@ -305,8 +305,9 @@ function draw() {
         document.getElementById('fps-display').textContent = fps + ' fps';
     }
 
-    const W = canvas.width;
-    const H = canvas.height;
+    // Use the actual canvas scene dimensions (always correct, even before first layout)
+    const W = ctx.canvasWidth;
+    const H = ctx.canvasHeight;
 
     // clearRect resets the canvas command buffer — critical for performance
     ctx.clearRect(0, 0, W, H);
@@ -324,16 +325,10 @@ function draw() {
     }
 }
 
-let _debugCount = 0;
 function drawSpectrum(W, H) {
     const bufLen = analyser.frequencyBinCount;
     const data = new Uint8Array(bufLen);
     analyser.getByteFrequencyData(data);
-    if (_debugCount++ % 360 === 0) {
-        let max = 0;
-        for (let i = 0; i < bufLen; i++) if (data[i] > max) max = data[i];
-        console.log('viz debug: bufLen=' + bufLen + ' max=' + max + ' first5=' + data[0] + ',' + data[1] + ',' + data[2] + ',' + data[3] + ',' + data[4]);
-    }
 
     const numBars = Math.min(128, bufLen);
     const barWidth = W / numBars;
@@ -440,16 +435,5 @@ function drawSpectrogram(W, H) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Canvas resize
-// ---------------------------------------------------------------------------
-
-function resizeCanvas() {
-    const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width;
-    canvas.height = rect.height;
-}
-
-// Initial size and start
-resizeCanvas();
+// Start render loop
 draw();
