@@ -7,3 +7,6 @@
 [submodule "third_party/htmlayout"]
 	path = third_party/htmlayout
 	url = https://github.com/wlejon/htmlayout.git
+[submodule "third_party/brokit"]
+	path = third_party/brokit
+	url = https://github.com/wlejon/brokit.git
