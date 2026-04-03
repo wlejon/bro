@@ -1,0 +1,71 @@
+html, body {
+    margin: 0;
+    padding: 8px;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: sans-serif;
+    font-size: 14px;
+}
+
+.box {
+    border: 1px solid #444;
+    margin: 8px 0;
+    background: #252540;
+}
+
+.hidden-overflow {
+    overflow: hidden;
+    max-height: 80px;
+    width: 300px;
+}
+
+.auto-overflow {
+    overflow: auto;
+    max-height: 120px;
+    width: 300px;
+}
+
+.scroll-overflow {
+    overflow: scroll;
+    max-height: 120px;
+    width: 300px;
+}
+
+/* Content taller than the boxes to force overflow */
+.tall-content {
+    height: 300px;
+    padding: 8px;
+}
+
+.tall-content-small {
+    height: 200px;
+    padding: 8px;
+}
+
+/* Nested scrollable layout */
+.nested-outer {
+    max-height: 200px;
+    width: 350px;
+}
+
+.nested-inner {
+    max-height: 100px;
+    width: 280px;
+    margin: 4px 8px;
+}
+
+.filler {
+    padding: 8px;
+    border-bottom: 1px solid #333;
+}
+
+/* Shadow host mimics game-ui pattern: overflow hidden on the host */
+shadow-container {
+    display: block;
+    overflow: hidden;
+    max-height: 200px;
+    width: 350px;
+    border: 1px solid #444;
+    margin: 8px 0;
+    background: #252540;
+}
