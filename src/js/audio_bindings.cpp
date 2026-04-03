@@ -1,6 +1,7 @@
 #include "js/audio_bindings.h"
 #include "js/runtime.h"
 #include "audio/audio_engine.h"
+#include "util/log.h"
 
 #include <algorithm>
 #include <string>
@@ -203,6 +204,19 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
     }
 }
 
+// Helper: get raw pointer + usable byte length from a TypedArray argument
+static uint8_t* getTypedArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outLen) {
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (JS_IsException(abuf)) return nullptr;
+    size_t abufLen = 0;
+    uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!ptr) return nullptr;
+    outLen = viewLen;
+    return ptr + byteOff;
+}
+
 static JSValue js_analyser_getFloatFrequencyData(JSContext* ctx, JSValueConst this_val,
                                                    int argc, JSValueConst* argv) {
     auto* d = static_cast<AnalyserNodeData*>(JS_GetOpaque(this_val, js_analysernode_class_id));
@@ -211,14 +225,11 @@ static JSValue js_analyser_getFloatFrequencyData(JSContext* ctx, JSValueConst th
     std::vector<float> magnitudes;
     analyserComputeFFT(d, magnitudes);
 
-    // Write into Float32Array argument
-    size_t byteLen = 0;
-    size_t byteOff = 0;
-    uint8_t* buf = JS_GetArrayBuffer(ctx, &byteLen,
-        JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &byteLen, nullptr));
-    if (buf) {
-        float* dst = reinterpret_cast<float*>(buf + byteOff);
-        int count = std::min(static_cast<int>(byteLen / sizeof(float)),
+    size_t len = 0;
+    uint8_t* raw = getTypedArrayPtr(ctx, argv[0], len);
+    if (raw) {
+        float* dst = reinterpret_cast<float*>(raw);
+        int count = std::min(static_cast<int>(len / sizeof(float)),
                              static_cast<int>(magnitudes.size()));
         for (int i = 0; i < count; i++) dst[i] = magnitudes[i];
     }
@@ -233,13 +244,10 @@ static JSValue js_analyser_getByteFrequencyData(JSContext* ctx, JSValueConst thi
     std::vector<float> magnitudes;
     analyserComputeFFT(d, magnitudes);
 
-    size_t byteLen = 0;
-    size_t byteOff = 0;
-    uint8_t* buf = JS_GetArrayBuffer(ctx, &byteLen,
-        JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &byteLen, nullptr));
-    if (buf) {
-        uint8_t* dst = buf + byteOff;
-        int count = std::min(static_cast<int>(byteLen),
+    size_t len = 0;
+    uint8_t* dst = getTypedArrayPtr(ctx, argv[0], len);
+    if (dst) {
+        int count = std::min(static_cast<int>(len),
                              static_cast<int>(magnitudes.size()));
         float range = d->maxDecibels - d->minDecibels;
         for (int i = 0; i < count; i++) {
@@ -256,13 +264,11 @@ static JSValue js_analyser_getFloatTimeDomainData(JSContext* ctx, JSValueConst t
     auto* d = static_cast<AnalyserNodeData*>(JS_GetOpaque(this_val, js_analysernode_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
 
-    size_t byteLen = 0;
-    size_t byteOff = 0;
-    uint8_t* buf = JS_GetArrayBuffer(ctx, &byteLen,
-        JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &byteLen, nullptr));
-    if (buf) {
-        float* dst = reinterpret_cast<float*>(buf + byteOff);
-        int count = std::min(static_cast<int>(byteLen / sizeof(float)), d->fftSize);
+    size_t len = 0;
+    uint8_t* raw = getTypedArrayPtr(ctx, argv[0], len);
+    if (raw) {
+        float* dst = reinterpret_cast<float*>(raw);
+        int count = std::min(static_cast<int>(len / sizeof(float)), d->fftSize);
         auto& ringBuf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
         ringBuf.readLatest(dst, count);
     }
@@ -278,13 +284,10 @@ static JSValue js_analyser_getByteTimeDomainData(JSContext* ctx, JSValueConst th
     auto& ringBuf = (d->source == 1) ? d->engine->micBuffer() : d->engine->outputBuffer();
     ringBuf.readLatest(samples.data(), d->fftSize);
 
-    size_t byteLen = 0;
-    size_t byteOff = 0;
-    uint8_t* buf = JS_GetArrayBuffer(ctx, &byteLen,
-        JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &byteLen, nullptr));
-    if (buf) {
-        uint8_t* dst = buf + byteOff;
-        int count = std::min(static_cast<int>(byteLen), d->fftSize);
+    size_t len = 0;
+    uint8_t* dst = getTypedArrayPtr(ctx, argv[0], len);
+    if (dst) {
+        int count = std::min(static_cast<int>(len), d->fftSize);
         for (int i = 0; i < count; i++) {
             dst[i] = static_cast<uint8_t>(std::clamp((samples[i] + 1.0f) * 128.0f, 0.0f, 255.0f));
         }
@@ -736,14 +739,25 @@ void AudioBindings::install(JSContext* ctx, audio::AudioEngine* engine)
                       JS_NewCFunction(ctx, js_getUserMedia, "__nativeGetUserMedia", 1));
     JS_FreeValue(ctx, global);
 
-    // Use JS eval to set up navigator.mediaDevices.getUserMedia
-    // This works regardless of how brokit configured the navigator object
+    // Wire native getUserMedia into navigator.mediaDevices via JS eval.
+    // Must run after brokit::api::installAll() which creates the navigator object.
     const char* shim =
-        "if (typeof navigator !== 'undefined') {"
+        "(function() {"
+        "  if (typeof navigator === 'undefined') return;"
         "  if (!navigator.mediaDevices) navigator.mediaDevices = {};"
-        "  navigator.mediaDevices.getUserMedia = __nativeGetUserMedia;"
-        "}";
-    JS_Eval(ctx, shim, strlen(shim), "<audio-shim>", JS_EVAL_TYPE_GLOBAL);
+        "  navigator.mediaDevices.getUserMedia = globalThis.__nativeGetUserMedia;"
+        "})();";
+    JSValue shimResult = JS_Eval(ctx, shim, strlen(shim), "<audio-shim>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(shimResult)) {
+        JSValue exc = JS_GetException(ctx);
+        const char* msg = JS_ToCString(ctx, exc);
+        if (msg) {
+            LOG_ERROR("Audio shim failed: %s", msg);
+            JS_FreeCString(ctx, msg);
+        }
+        JS_FreeValue(ctx, exc);
+    }
+    JS_FreeValue(ctx, shimResult);
 }
 
 void AudioBindings::cleanup(JSContext*)

@@ -56,9 +56,12 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height, bool h
              title.c_str(), width, height,
              GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
 
-    // Enable vsync for visible windows (0 = off, 1 = on, -1 = adaptive)
+    // Enable vsync — matches monitor refresh rate (e.g. 360 Hz).
+    // Use adaptive vsync (-1) when available, fall back to standard (1).
     if (!hidden) {
-        SDL_GL_SetSwapInterval(1);
+        if (!SDL_GL_SetSwapInterval(-1)) {
+            SDL_GL_SetSwapInterval(1);
+        }
     }
 }
 

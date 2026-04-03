@@ -125,6 +125,7 @@ static inline float softLimit(float x)
 
 static constexpr float ATTACK_TIME  = 0.015f;   // 15ms attack — eliminates click
 static constexpr float RELEASE_TIME = 0.040f;    // 40ms release — smooth tail
+static constexpr float MASTER_GAIN  = 0.25f;     // keep output comparable to other system audio
 
 // ---------------------------------------------------------------------------
 // AudioEngine
@@ -403,9 +404,9 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
         }
     }
 
-    // Soft limiter on the mix bus
+    // Soft limiter on the mix bus, then master gain
     for (int i = 0; i < numSamples; i++) {
-        buffer[i] = softLimit(buffer[i]);
+        buffer[i] = softLimit(buffer[i]) * MASTER_GAIN;
     }
 
     // Clean up finished voices
