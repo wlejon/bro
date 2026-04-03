@@ -68,7 +68,8 @@ void Engine::advanceTime(double ms) {
     if (displayMode_ != DisplayMode::Headless) return;
 
     // Bind WebGL canvas FBO so rAF draw commands target it correctly
-    auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+    webgl::WebGLScene* webglScene = nullptr;
+    for (auto& sl : sceneLayers_) { webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get()); if (webglScene) break; }
 
     double remaining = ms;
     while (remaining > 0) {
@@ -133,7 +134,8 @@ bool Engine::screenshot(const std::string& path) {
     if (!document_) return false;
 
     // Bind WebGL canvas FBO before firing rAF (so GL draw commands target the canvas)
-    auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+    webgl::WebGLScene* webglScene = nullptr;
+    for (auto& sl : sceneLayers_) { webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get()); if (webglScene) break; }
     if (webglScene && webglScene->webglContext()) {
         webglScene->webglContext()->bindCanvasFBO();
     }
@@ -149,7 +151,7 @@ bool Engine::screenshot(const std::string& path) {
 
     // GPU compositing path: replicate the windowed render pass to an offscreen FBO,
     // then read back pixels. This captures scene layers (WebGL, Canvas2D) + UI overlay.
-    if (gl_ && sceneLayer_) {
+    if (gl_ && !sceneLayers_.empty()) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -162,16 +164,13 @@ bool Engine::screenshot(const std::string& path) {
         skia->uploadToGPU();
 
         // 2. Prepare Canvas2D scene if applicable
-        auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sceneLayer_.get());
-        if (canvasScene) {
-            canvasScene->prepareFrame(gl_.get(), w, h);
+        for (auto& sl : sceneLayers_) {
+            auto* cs = dynamic_cast<canvas::CanvasScene*>(sl.get());
+            if (cs) cs->prepareFrame(gl_.get(), w, h);
         }
 
         // 3. Bind WebGL canvas FBO before rAF (same as windowed loop)
-        auto* webglScene2 = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
-        if (webglScene2 && webglScene2->webglContext()) {
-            // WebGL content was already rendered during rAF above — no need to re-render
-        }
+                // WebGL content was already rendered during rAF above
 
         // 4. Create temporary compositing FBO
         GLuint compositeFBO = 0, compositeTex = 0;
@@ -184,7 +183,7 @@ bool Engine::screenshot(const std::string& path) {
         glViewport(0, 0, w, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        sceneLayer_->onRender(gl_.get(), w, h, 0.0);
+        for (auto& sl : sceneLayers_) { if (sl) sl->onRender(gl_.get(), w, h, 0.0); }
 
         // 6. Composite UI overlay (premultiplied alpha)
         GLuint uiTex = skia->getUITexture();
@@ -320,7 +319,8 @@ std::vector<uint8_t> Engine::capturePixels() {
     if (!document_) return {};
 
     // Bind WebGL canvas FBO before firing rAF
-    auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+    webgl::WebGLScene* webglScene = nullptr;
+    for (auto& sl : sceneLayers_) { webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get()); if (webglScene) break; }
     if (webglScene && webglScene->webglContext())
         webglScene->webglContext()->bindCanvasFBO();
 
@@ -331,7 +331,7 @@ std::vector<uint8_t> Engine::capturePixels() {
         webglScene->webglContext()->unbindCanvasFBO();
 
     // GPU compositing path
-    if (gl_ && sceneLayer_) {
+    if (gl_ && !sceneLayers_.empty()) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -341,8 +341,10 @@ std::vector<uint8_t> Engine::capturePixels() {
         renderer_->endFrame();
         skia->uploadToGPU();
 
-        auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sceneLayer_.get());
-        if (canvasScene) canvasScene->prepareFrame(gl_.get(), w, h);
+        for (auto& sl : sceneLayers_) {
+            auto* cs = dynamic_cast<canvas::CanvasScene*>(sl.get());
+            if (cs) cs->prepareFrame(gl_.get(), w, h);
+        }
 
         // Create temporary compositing FBO
         GLuint compositeFBO = 0, compositeTex = 0;
@@ -354,7 +356,7 @@ std::vector<uint8_t> Engine::capturePixels() {
         glViewport(0, 0, w, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        sceneLayer_->onRender(gl_.get(), w, h, 0.0);
+        for (auto& sl : sceneLayers_) { if (sl) sl->onRender(gl_.get(), w, h, 0.0); }
 
         // Composite UI overlay
         GLuint uiTex = skia->getUITexture();

@@ -652,15 +652,209 @@ static JSValue js_audioctx_set_micMonitorGain(JSContext* ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
+// ---------------------------------------------------------------------------
+// Recording + Loop Station bindings
+// ---------------------------------------------------------------------------
+
+static JSValue js_audioctx_get_recording(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    return d ? JS_NewBool(ctx, d->engine->isRecording()) : JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_startRecording(JSContext* ctx, JSValueConst this_val,
+                                           int, JSValueConst*) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (d) d->engine->startRecording();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_stopRecording(JSContext* ctx, JSValueConst this_val,
+                                          int, JSValueConst*) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d) return JS_UNDEFINED;
+
+    d->engine->stopRecording();
+    const auto& buf = d->engine->getRecordBuffer();
+    if (buf.empty()) return JS_NULL;
+
+    // Create Float32Array with copy of recorded data
+    int count = static_cast<int>(buf.size());
+    JSValue lenVal = JS_NewInt32(ctx, count);
+    JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue(ctx, lenVal);
+
+    if (JS_IsException(arr)) return arr;
+
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (!JS_IsException(abuf)) {
+        size_t abufLen = 0;
+        uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+        if (ptr) {
+            std::memcpy(ptr + byteOff, buf.data(), count * sizeof(float));
+        }
+        JS_FreeValue(ctx, abuf);
+    }
+    return arr;
+}
+
+// --- Audio Clip management ---
+
+static JSValue js_audioctx_createClip(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+
+    size_t len = 0;
+    uint8_t* raw = getTypedArrayPtr(ctx, argv[0], len);
+    if (!raw) return JS_ThrowTypeError(ctx, "Expected Float32Array argument");
+
+    int numSamples = static_cast<int>(len / sizeof(float));
+    int id = d->engine->createClip(reinterpret_cast<float*>(raw), numSamples);
+    return JS_NewInt32(ctx, id);
+}
+
+static JSValue js_audioctx_deleteClip(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->deleteClip(id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_getClipSampleCount(JSContext* ctx, JSValueConst this_val,
+                                               int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    return JS_NewInt32(ctx, d->engine->getClipSampleCount(id));
+}
+
+static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+
+    int clipId, numBins;
+    JS_ToInt32(ctx, &clipId, argv[0]);
+    JS_ToInt32(ctx, &numBins, argv[1]);
+    if (numBins <= 0 || numBins > 1024) return JS_UNDEFINED;
+
+    int floatCount = numBins * 2;
+    JSValue lenVal = JS_NewInt32(ctx, floatCount);
+    JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue(ctx, lenVal);
+
+    if (JS_IsException(arr)) return arr;
+
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (!JS_IsException(abuf)) {
+        size_t abufLen = 0;
+        uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+        if (ptr) {
+            d->engine->getClipWaveform(clipId, reinterpret_cast<float*>(ptr + byteOff), numBins);
+        }
+        JS_FreeValue(ctx, abuf);
+    }
+    return arr;
+}
+
+// --- Clip Playback instances ---
+
+static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int clipId; JS_ToInt32(ctx, &clipId, argv[0]);
+    float gain = 1.0f;
+    bool loop = false;
+    if (argc >= 2) { double v; JS_ToFloat64(ctx, &v, argv[1]); gain = static_cast<float>(v); }
+    if (argc >= 3) { loop = JS_ToBool(ctx, argv[2]); }
+    return JS_NewInt32(ctx, d->engine->playClip(clipId, gain, loop));
+}
+
+static JSValue js_audioctx_stopPlayback(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->stopPlayback(id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackGain(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setPlaybackGain(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackLoop(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->setPlaybackLoop(id, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackPlaying(JSContext* ctx, JSValueConst this_val,
+                                               int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->setPlaybackPlaying(id, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackRegion(JSContext* ctx, JSValueConst this_val,
+                                              int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int id, start, end;
+    JS_ToInt32(ctx, &id, argv[0]);
+    JS_ToInt32(ctx, &start, argv[1]);
+    JS_ToInt32(ctx, &end, argv[2]);
+    d->engine->setPlaybackRegion(id, start, end);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_getPlaybackPosition(JSContext* ctx, JSValueConst this_val,
+                                                int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    return JS_NewFloat64(ctx, d->engine->getPlaybackPosition(id));
+}
+
 static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CGETSET_DEF("currentTime", js_audioctx_get_currentTime, nullptr),
     JS_CGETSET_DEF("sampleRate", js_audioctx_get_sampleRate, nullptr),
     JS_CGETSET_DEF("micMuted", js_audioctx_get_micMuted, js_audioctx_set_micMuted),
     JS_CGETSET_DEF("micMonitorGain", js_audioctx_get_micMonitorGain, js_audioctx_set_micMonitorGain),
+    JS_CGETSET_DEF("recording", js_audioctx_get_recording, nullptr),
     JS_CFUNC_DEF("createOscillator", 0, js_audioctx_createOscillator),
     JS_CFUNC_DEF("createGain", 0, js_audioctx_createGain),
     JS_CFUNC_DEF("createAnalyser", 0, js_audioctx_createAnalyser),
     JS_CFUNC_DEF("createMediaStreamSource", 1, js_audioctx_createMediaStreamSource),
+    JS_CFUNC_DEF("startRecording", 0, js_audioctx_startRecording),
+    JS_CFUNC_DEF("stopRecording", 0, js_audioctx_stopRecording),
+    JS_CFUNC_DEF("createClip", 1, js_audioctx_createClip),
+    JS_CFUNC_DEF("deleteClip", 1, js_audioctx_deleteClip),
+    JS_CFUNC_DEF("getClipSampleCount", 1, js_audioctx_getClipSampleCount),
+    JS_CFUNC_DEF("getClipWaveform", 2, js_audioctx_getClipWaveform),
+    JS_CFUNC_DEF("playClip", 3, js_audioctx_playClip),
+    JS_CFUNC_DEF("stopPlayback", 1, js_audioctx_stopPlayback),
+    JS_CFUNC_DEF("setPlaybackGain", 2, js_audioctx_setPlaybackGain),
+    JS_CFUNC_DEF("setPlaybackLoop", 2, js_audioctx_setPlaybackLoop),
+    JS_CFUNC_DEF("setPlaybackPlaying", 2, js_audioctx_setPlaybackPlaying),
+    JS_CFUNC_DEF("setPlaybackRegion", 3, js_audioctx_setPlaybackRegion),
+    JS_CFUNC_DEF("getPlaybackPosition", 1, js_audioctx_getPlaybackPosition),
 };
 
 // ---------------------------------------------------------------------------

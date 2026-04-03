@@ -96,8 +96,6 @@ static inline float generateSample(Waveform wf, float phase, float phaseInc)
         }
 
         case Waveform::Triangle: {
-            // Integrate the band-limited square wave for a clean triangle
-            // Use naive triangle with polyBLEP-corrected amplitude
             float sample = (phase < 0.5f)
                 ? (4.0f * phase - 1.0f)
                 : (3.0f - 4.0f * phase);
@@ -113,9 +111,6 @@ static inline float generateSample(Waveform wf, float phase, float phaseInc)
 
 static inline float softLimit(float x)
 {
-    // Smooth tanh saturation — transparent below 0.5, warm compression above.
-    // tanh(x) ≈ x for small x, curves to ±1 for large x.
-    // Scale so single voices at normal gain pass through nearly linear.
     return std::tanh(x);
 }
 
@@ -147,7 +142,7 @@ bool AudioEngine::init()
         return false;
     }
 
-    // Request small buffer for low latency (~5.8ms at 44100 Hz)
+    // Request small buffer for low latency (~2.9ms at 44100 Hz)
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "128");
 
     SDL_AudioSpec spec;
@@ -252,7 +247,6 @@ void AudioEngine::stopVoice(int id, double when)
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto* v = findVoice(id)) {
         v->stopTime = when;
-        // Transition to release stage immediately
         if (v->envStage == EnvStage::Attack || v->envStage == EnvStage::Sustain) {
             v->envStage = EnvStage::Release;
         }
@@ -334,6 +328,230 @@ void AudioEngine::micCallback(void* userdata, SDL_AudioStream* stream,
 }
 
 // ---------------------------------------------------------------------------
+// Recording
+// ---------------------------------------------------------------------------
+
+void AudioEngine::startRecording()
+{
+    recordStartPos_ = recordWritePos_.load(std::memory_order_relaxed);
+    recording_.store(true, std::memory_order_release);
+    LOG_INFO("Recording started");
+}
+
+void AudioEngine::stopRecording()
+{
+    recording_.store(false, std::memory_order_release);
+
+    uint64_t endPos = recordWritePos_.load(std::memory_order_acquire);
+    uint64_t startPos = recordStartPos_;
+    int count = static_cast<int>(endPos - startPos);
+    if (count <= 0) {
+        recordOutput_.clear();
+        return;
+    }
+    // Cap at ring size
+    if (count > RECORD_RING_SIZE) {
+        startPos = endPos - RECORD_RING_SIZE;
+        count = RECORD_RING_SIZE;
+    }
+    recordOutput_.resize(count);
+    for (int i = 0; i < count; i++) {
+        recordOutput_[i] = recordRing_[static_cast<int>((startPos + i) % RECORD_RING_SIZE)];
+    }
+    LOG_INFO("Recording stopped: %d samples (%.1f sec)", count,
+             static_cast<float>(count) / static_cast<float>(sampleRate_));
+}
+
+// ---------------------------------------------------------------------------
+// Audio Clips
+// ---------------------------------------------------------------------------
+
+AudioClip* AudioEngine::findClip(int clipId) const
+{
+    for (auto& c : clips_) {
+        if (c->id == clipId) return c.get();
+    }
+    return nullptr;
+}
+
+ClipPlayback* AudioEngine::findPlayback(int instanceId) const
+{
+    for (auto& pb : playbacks_) {
+        if (pb->id == instanceId && pb->active.load(std::memory_order_relaxed)) return pb.get();
+    }
+    return nullptr;
+}
+
+int AudioEngine::createClip(const float* samples, int numSamples)
+{
+    if (numSamples <= 0 || !samples) return -1;
+
+    auto clip = std::make_unique<AudioClip>();
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    clip->id = nextClipId_++;
+    clip->samples.assign(samples, samples + numSamples);
+
+    int id = clip->id;
+    clips_.push_back(std::move(clip));
+    LOG_INFO("AudioClip %d created: %d samples (%.1f sec)", id, numSamples,
+             static_cast<float>(numSamples) / static_cast<float>(sampleRate_));
+    return id;
+}
+
+void AudioEngine::deleteClip(int clipId)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    // Stop and remove all playback instances referencing this clip
+    for (auto& pb : playbacks_) {
+        if (pb->clipId == clipId) {
+            pb->playing.store(false, std::memory_order_relaxed);
+            pb->active.store(false, std::memory_order_relaxed);
+        }
+    }
+    playbacks_.erase(
+        std::remove_if(playbacks_.begin(), playbacks_.end(),
+                       [](const std::unique_ptr<ClipPlayback>& pb) {
+                           return !pb->active.load(std::memory_order_relaxed);
+                       }),
+        playbacks_.end());
+    clips_.erase(
+        std::remove_if(clips_.begin(), clips_.end(),
+                       [clipId](const std::unique_ptr<AudioClip>& c) { return c->id == clipId; }),
+        clips_.end());
+}
+
+int AudioEngine::getClipSampleCount(int clipId) const
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* c = findClip(clipId)) return static_cast<int>(c->samples.size());
+    return 0;
+}
+
+void AudioEngine::getClipWaveform(int clipId, float* outMinMax, int numBins) const
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    auto* clip = findClip(clipId);
+    if (!clip || clip->samples.empty()) {
+        for (int i = 0; i < numBins * 2; i++) outMinMax[i] = 0.0f;
+        return;
+    }
+
+    int totalSamples = static_cast<int>(clip->samples.size());
+    float samplesPerBin = static_cast<float>(totalSamples) / static_cast<float>(numBins);
+
+    for (int b = 0; b < numBins; b++) {
+        int startIdx = static_cast<int>(b * samplesPerBin);
+        int endIdx = static_cast<int>((b + 1) * samplesPerBin);
+        endIdx = std::min(endIdx, totalSamples);
+
+        float minVal = 1.0f, maxVal = -1.0f;
+        for (int i = startIdx; i < endIdx; i++) {
+            float s = clip->samples[i];
+            if (s < minVal) minVal = s;
+            if (s > maxVal) maxVal = s;
+        }
+        outMinMax[b * 2] = minVal;
+        outMinMax[b * 2 + 1] = maxVal;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Clip Playback
+// ---------------------------------------------------------------------------
+
+int AudioEngine::playClip(int clipId, float gain, bool loop)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (!findClip(clipId)) return -1;
+
+    auto pb = std::make_unique<ClipPlayback>();
+    pb->id = nextPlaybackId_++;
+    pb->clipId = clipId;
+    pb->gain.store(gain, std::memory_order_relaxed);
+    pb->looping.store(loop, std::memory_order_relaxed);
+    pb->playing.store(true, std::memory_order_relaxed);
+    pb->active.store(true, std::memory_order_relaxed);
+    pb->playPos.store(0, std::memory_order_relaxed);
+    pb->regionStart = 0;
+    pb->regionEnd = 0; // 0 = full clip
+
+    int id = pb->id;
+    playbacks_.push_back(std::move(pb));
+    return id;
+}
+
+void AudioEngine::stopPlayback(int instanceId)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* pb = findPlayback(instanceId)) {
+        pb->playing.store(false, std::memory_order_relaxed);
+        pb->active.store(false, std::memory_order_relaxed);
+    }
+    // Clean up inactive
+    playbacks_.erase(
+        std::remove_if(playbacks_.begin(), playbacks_.end(),
+                       [](const std::unique_ptr<ClipPlayback>& pb) {
+                           return !pb->active.load(std::memory_order_relaxed);
+                       }),
+        playbacks_.end());
+}
+
+void AudioEngine::setPlaybackGain(int instanceId, float gain)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* pb = findPlayback(instanceId)) {
+        pb->gain.store(gain, std::memory_order_relaxed);
+    }
+}
+
+void AudioEngine::setPlaybackLoop(int instanceId, bool loop)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* pb = findPlayback(instanceId)) {
+        pb->looping.store(loop, std::memory_order_relaxed);
+    }
+}
+
+void AudioEngine::setPlaybackPlaying(int instanceId, bool playing)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* pb = findPlayback(instanceId)) {
+        if (playing && !pb->playing.load(std::memory_order_relaxed)) {
+            pb->playPos.store(0, std::memory_order_relaxed);
+        }
+        pb->playing.store(playing, std::memory_order_relaxed);
+    }
+}
+
+void AudioEngine::setPlaybackRegion(int instanceId, int start, int end)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* pb = findPlayback(instanceId)) {
+        auto* clip = findClip(pb->clipId);
+        if (!clip) return;
+        int maxLen = static_cast<int>(clip->samples.size());
+        pb->regionStart = std::clamp(start, 0, maxLen);
+        pb->regionEnd = std::clamp(end, pb->regionStart, maxLen);
+        pb->playPos.store(0, std::memory_order_relaxed);
+    }
+}
+
+float AudioEngine::getPlaybackPosition(int instanceId) const
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    auto* pb = findPlayback(instanceId);
+    if (!pb) return 0.0f;
+    auto* clip = findClip(pb->clipId);
+    if (!clip) return 0.0f;
+
+    int end = pb->regionEnd > 0 ? pb->regionEnd : static_cast<int>(clip->samples.size());
+    int len = end - pb->regionStart;
+    if (len <= 0) return 0.0f;
+    uint64_t pos = pb->playPos.load(std::memory_order_relaxed);
+    return static_cast<float>(pos % len) / static_cast<float>(len);
+}
+
+// ---------------------------------------------------------------------------
 // Output audio callback + synthesis
 // ---------------------------------------------------------------------------
 
@@ -357,13 +575,11 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
         int cap = static_cast<int>(engine->micPlayback_.size());
         uint64_t available = wp - engine->micPlaybackReadPos_;
 
-        // If too far behind (> ~15ms at 44100 Hz), snap to latest
         if (available > 660) {
             engine->micPlaybackReadPos_ = wp - numSamples;
             available = numSamples;
         }
 
-        // Consume continuously from read position — no skipping
         int toRead = static_cast<int>(std::min(available, static_cast<uint64_t>(numSamples)));
         for (int i = 0; i < toRead; i++) {
             int idx = static_cast<int>((engine->micPlaybackReadPos_ + i) % cap);
@@ -372,7 +588,54 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
         engine->micPlaybackReadPos_ += toRead;
     }
 
-    // Write to output ring buffer for analysis (includes mic if unmuted)
+    // Record tap: capture synth+mic BEFORE adding loops (avoids feedback)
+    if (engine->recording_.load(std::memory_order_relaxed)) {
+        uint64_t wp = engine->recordWritePos_.load(std::memory_order_relaxed);
+        for (int i = 0; i < numSamples; i++) {
+            engine->recordRing_[static_cast<int>((wp + i) % RECORD_RING_SIZE)] = buffer[i];
+        }
+        engine->recordWritePos_.store(wp + numSamples, std::memory_order_release);
+    }
+
+    // Mix active clip playback instances into output
+    {
+        std::lock_guard<std::mutex> lock(engine->clipMutex_);
+        for (auto& pb : engine->playbacks_) {
+            if (!pb->active.load(std::memory_order_relaxed)) continue;
+            if (!pb->playing.load(std::memory_order_relaxed)) continue;
+
+            auto* clip = engine->findClip(pb->clipId);
+            if (!clip) continue;
+
+            int start = pb->regionStart;
+            int end = pb->regionEnd > 0 ? pb->regionEnd : static_cast<int>(clip->samples.size());
+            int len = end - start;
+            if (len <= 0) continue;
+
+            uint64_t pos = pb->playPos.load(std::memory_order_relaxed);
+            float g = pb->gain.load(std::memory_order_relaxed);
+            bool looping = pb->looping.load(std::memory_order_relaxed);
+
+            for (int i = 0; i < numSamples; i++) {
+                int sampleIdx = static_cast<int>(pos % len);
+                buffer[i] += clip->samples[start + sampleIdx] * g;
+                pos++;
+                if (!looping && static_cast<int>(pos) >= len) {
+                    pb->playing.store(false, std::memory_order_relaxed);
+                    pb->active.store(false, std::memory_order_relaxed);
+                    break;
+                }
+            }
+            pb->playPos.store(pos, std::memory_order_relaxed);
+        }
+    }
+
+    // Soft limiter on full mix (synth + mic + loops), then master gain
+    for (int i = 0; i < numSamples; i++) {
+        buffer[i] = softLimit(buffer[i]) * MASTER_GAIN;
+    }
+
+    // Write to output ring buffer for analysis
     engine->outputBuffer_.write(buffer, numSamples);
 
     SDL_PutAudioStreamData(stream, buffer, numSamples * sizeof(float));
@@ -399,10 +662,8 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
         for (int i = 0; i < numSamples; i++) {
             double t = baseTime + i * sampleDt;
 
-            // Check start time
             if (t < voice.startTime) continue;
 
-            // Envelope state machine
             switch (voice.envStage) {
                 case EnvStage::Attack:
                     voice.envLevel += voice.attackRate;
@@ -412,7 +673,6 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                     }
                     break;
                 case EnvStage::Sustain:
-                    // Check if stop was scheduled in the past
                     if (voice.stopTime >= 0 && t >= voice.stopTime) {
                         voice.envStage = EnvStage::Release;
                     }
@@ -441,10 +701,7 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
         }
     }
 
-    // Soft limiter on the mix bus, then master gain
-    for (int i = 0; i < numSamples; i++) {
-        buffer[i] = softLimit(buffer[i]) * MASTER_GAIN;
-    }
+    // NOTE: soft limiter moved to audioCallback to apply once after all mixing
 
     // Clean up finished voices
     voices_.erase(

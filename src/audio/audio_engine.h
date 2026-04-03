@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -67,6 +68,30 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Audio clip (immutable sample data) + playback instance
+// ---------------------------------------------------------------------------
+
+/// Immutable audio sample data. Created once, referenced by playback instances.
+struct AudioClip {
+    int id = 0;
+    std::vector<float> samples;
+};
+
+/// A playing instance of an AudioClip. Supports looping, gain, and region control.
+/// Suitable for game sounds (one-shot), music loops, audio clips, etc.
+struct ClipPlayback {
+    int id = 0;
+    int clipId = 0;                     // references AudioClip::id
+    int regionStart = 0;                // first sample (inclusive)
+    int regionEnd = 0;                  // last sample (exclusive), 0 = full clip
+    std::atomic<uint64_t> playPos{0};   // current position within region
+    std::atomic<float> gain{1.0f};
+    std::atomic<bool> playing{false};
+    std::atomic<bool> looping{false};
+    std::atomic<bool> active{true};     // false = finished/deleted
+};
+
+// ---------------------------------------------------------------------------
 // FFT utility (radix-2 Cooley-Tukey)
 // ---------------------------------------------------------------------------
 
@@ -122,13 +147,39 @@ public:
     void stopMicCapture();
     bool isMicCapturing() const { return micCapturing_; }
 
-    /// Mic mute: when muted, mic is excluded from output mix and blended analyser.
     void setMicMuted(bool muted) { micMuted_.store(muted, std::memory_order_relaxed); }
     bool isMicMuted() const { return micMuted_.load(std::memory_order_relaxed); }
 
-    /// Mic monitor gain: volume of mic playback through speakers (0..1).
     void setMicMonitorGain(float g) { micMonitorGain_.store(g, std::memory_order_relaxed); }
     float micMonitorGain() const { return micMonitorGain_.load(std::memory_order_relaxed); }
+
+    // --- Recording ---
+
+    void startRecording();
+    void stopRecording();
+    bool isRecording() const { return recording_.load(std::memory_order_relaxed); }
+    const std::vector<float>& getRecordBuffer() const { return recordOutput_; }
+
+    // --- Audio Clips ---
+
+    /// Create a clip from raw sample data. Returns clip ID.
+    int createClip(const float* samples, int numSamples);
+    void deleteClip(int clipId);
+    int getClipSampleCount(int clipId) const;
+    /// Downsample clip to numBins min/max pairs for waveform display.
+    void getClipWaveform(int clipId, float* outMinMax, int numBins) const;
+
+    // --- Clip Playback ---
+
+    /// Start playing a clip. Returns playback instance ID.
+    int playClip(int clipId, float gain = 1.0f, bool loop = false);
+    void stopPlayback(int instanceId);
+    void setPlaybackGain(int instanceId, float gain);
+    void setPlaybackLoop(int instanceId, bool loop);
+    void setPlaybackRegion(int instanceId, int start, int end);
+    void setPlaybackPlaying(int instanceId, bool playing);
+    /// Returns normalized position (0..1) within the active region.
+    float getPlaybackPosition(int instanceId) const;
 
 private:
     static void audioCallback(void* userdata, SDL_AudioStream* stream,
@@ -139,6 +190,8 @@ private:
                             int additional_amount, int total_amount);
 
     Voice* findVoice(int id);
+    AudioClip* findClip(int clipId) const;
+    ClipPlayback* findPlayback(int instanceId) const;
 
     SDL_AudioStream* stream_ = nullptr;
     SDL_AudioStream* micStream_ = nullptr;
@@ -154,13 +207,28 @@ private:
     RingBuffer micBuffer_{16384};
     std::mutex micMutex_;
 
-    // Mic playback FIFO: mic callback writes, output callback reads
+    // Mic playback FIFO
     std::vector<float> micPlayback_ = std::vector<float>(4096, 0.0f);
     std::atomic<uint64_t> micPlaybackWritePos_{0};
-    uint64_t micPlaybackReadPos_ = 0; // only accessed from output callback thread
+    uint64_t micPlaybackReadPos_ = 0;
 
     std::atomic<bool> micMuted_{true};
     std::atomic<float> micMonitorGain_{0.5f};
+
+    // Recording ring buffer
+    static constexpr int RECORD_RING_SIZE = 44100 * 60; // 60 seconds
+    std::vector<float> recordRing_ = std::vector<float>(RECORD_RING_SIZE, 0.0f);
+    std::atomic<uint64_t> recordWritePos_{0};
+    uint64_t recordStartPos_ = 0;
+    std::atomic<bool> recording_{false};
+    std::vector<float> recordOutput_;
+
+    // Audio clips and playback instances
+    std::vector<std::unique_ptr<AudioClip>> clips_;
+    std::vector<std::unique_ptr<ClipPlayback>> playbacks_;
+    mutable std::mutex clipMutex_;
+    int nextClipId_ = 1;
+    int nextPlaybackId_ = 1;
 };
 
 } // namespace bro::audio

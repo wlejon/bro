@@ -223,14 +223,14 @@ Engine::Engine(const EngineConfig& config)
                 if (type == "2d") {
                     auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
                     auto* ptr = scene.get();
-                    setSceneLayer(std::move(scene));
+                    addSceneLayer(std::move(scene));
                     return js::CanvasBindings::wrapContext2D(ctx, ptr);
                 }
                 if (type == "webgl2" || type == "webgl") {
                     auto* webglCtx = new webgl::WebGL2RenderingContext(
                         viewportWidth_, viewportHeight_);
                     auto scene = std::make_unique<webgl::WebGLScene>(webglCtx);
-                    setSceneLayer(std::move(scene));
+                    addSceneLayer(std::move(scene));
                     return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
                 }
                 return JS_NULL;
@@ -321,18 +321,18 @@ Engine::Engine(const EngineConfig& config)
     }
 }
 
-void Engine::setSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
-    sceneLayer_ = std::move(layer);
-    if (sceneLayer_) {
-        sceneLayer_->onInit(gl_.get(), viewportWidth_, viewportHeight_);
+void Engine::addSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
+    if (layer) {
+        layer->onInit(gl_.get(), viewportWidth_, viewportHeight_);
     }
+    sceneLayers_.push_back(std::move(layer));
 }
 
 Engine::~Engine() {
-    if (sceneLayer_) {
-        sceneLayer_->onCleanup();
+    for (auto& sl : sceneLayers_) {
+        if (sl) sl->onCleanup();
     }
-    sceneLayer_.reset();
+    sceneLayers_.clear();
     systemOverlay_.reset();
     headlessCanvasScene_.reset();
 
@@ -469,7 +469,11 @@ void Engine::run() {
         }
 
         // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)
-        auto* webglScene = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+        webgl::WebGLScene* webglScene = nullptr;
+        for (auto& sl : sceneLayers_) {
+            webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get());
+            if (webglScene) break;
+        }
         if (webglScene && webglScene->webglContext()) {
             webglScene->webglContext()->bindCanvasFBO();
         }
@@ -649,9 +653,11 @@ void Engine::run() {
         double tGpu = util::currentTimeMs();
 
         // 5c. Scene layer prepares vertex data
-        auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sceneLayer_.get());
-        if (canvasScene) {
-            canvasScene->prepareFrame(gl_.get(), viewportWidth_, viewportHeight_);
+        for (auto& sl : sceneLayers_) {
+            auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sl.get());
+            if (canvasScene) {
+                canvasScene->prepareFrame(gl_.get(), viewportWidth_, viewportHeight_);
+            }
         }
 
         // 5d. Set viewport and clear
@@ -661,8 +667,8 @@ void Engine::run() {
         glClear(GL_COLOR_BUFFER_BIT);
 
         // 5e. Render pass 1: scene draws (directly to default framebuffer)
-        if (sceneLayer_) {
-            sceneLayer_->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
+        for (auto& sl : sceneLayers_) {
+            if (sl) sl->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
         }
 
         // 5f. Render pass 2: composite UI overlay (premultiplied alpha)
@@ -751,7 +757,11 @@ void Engine::run() {
         // see the same GL state they left on the previous frame.
         // Uses shadow-tracked values — no expensive glGet* queries.
         {
-            auto* wgl = dynamic_cast<webgl::WebGLScene*>(sceneLayer_.get());
+            webgl::WebGLScene* wgl = nullptr;
+            for (auto& sl : sceneLayers_) {
+                wgl = dynamic_cast<webgl::WebGLScene*>(sl.get());
+                if (wgl) break;
+            }
             if (wgl && wgl->webglContext()) {
                 wgl->webglContext()->restoreState();
             }
@@ -809,8 +819,8 @@ void Engine::handleResize(int w, int h) {
     uiDirty_ = true;
     hasRenderedOnce_ = false;
     drawTraversal_->setViewport(w, h);
-    if (sceneLayer_) {
-        sceneLayer_->onResize(w, h);
+    for (auto& sl : sceneLayers_) {
+        if (sl) sl->onResize(w, h);
     }
     if (systemOverlay_) {
         systemOverlay_->onResize(w, h);

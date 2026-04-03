@@ -118,7 +118,7 @@ private:
     void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);
     void dispatchScrollEvent(dom::Element* el);
     void advanceFocus(bool reverse);
-    void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
+    void addSceneLayer(std::unique_ptr<render::SceneLayer> layer);
     void ensureReplacedElements(dom::Element* elem);
 
     DisplayMode displayMode_;
@@ -138,7 +138,7 @@ private:
     int viewportWidth_;
     int viewportHeight_;
     AppManifest manifest_;
-    std::unique_ptr<render::SceneLayer> sceneLayer_;
+    std::vector<std::unique_ptr<render::SceneLayer>> sceneLayers_;
     std::unique_ptr<audio::AudioEngine> audioEngine_;
     std::unique_ptr<SystemOverlay> systemOverlay_;
 
