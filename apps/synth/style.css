@@ -5,6 +5,7 @@
 }
 html {
     background-color: transparent;
+    height: 90%;
 }
 body {
     background: transparent;
@@ -16,7 +17,7 @@ body {
 #app {
     display: flex;
     flex-direction: column;
-    height: 98vh;
+    height: 96vh;
     width: 100vw;
 }
 
