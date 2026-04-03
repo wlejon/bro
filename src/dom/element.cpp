@@ -473,6 +473,14 @@ Element* Element::querySelectorSimple(const std::string& selector) {
     return results.empty() ? nullptr : results[0];
 }
 
+void Element::setScrollToBottom(bool v) {
+    scrollToBottom_ = v;
+    if (document_) {
+        if (v) document_->addScrollToBottomElement(this);
+        else   document_->removeScrollToBottomElement(this);
+    }
+}
+
 void Element::markDirty() {
     dirty_ = true;
     if (document_) {

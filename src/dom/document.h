@@ -101,6 +101,11 @@ public:
     // Add a shadow-scoped stylesheet to the cascade
     void addShadowStylesheet(ShadowRoot* sr, const std::string& css);
 
+    // Scroll-to-bottom tracking — elements register here instead of walking DOM
+    void addScrollToBottomElement(Element* el) { scrollToBottomElements_.insert(el); }
+    void removeScrollToBottomElement(Element* el) { scrollToBottomElements_.erase(el); }
+    const std::unordered_set<Element*>& scrollToBottomElements() const { return scrollToBottomElements_; }
+
     // Base path for resolving relative URLs
     void setBasePath(const std::string& path) { basePath_ = path; }
     const std::string& basePath() const { return basePath_; }
@@ -130,6 +135,9 @@ private:
 
     // CSS cascade
     htmlayout::css::Cascade cascade_;
+
+    // Elements that need scroll-to-bottom after next layout
+    std::unordered_set<Element*> scrollToBottomElements_;
 };
 
 } // namespace bro::dom

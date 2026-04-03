@@ -124,7 +124,7 @@ public:
 
     // Auto-scroll flag: scroll to bottom after next layout
     bool needsScrollToBottom() const { return scrollToBottom_; }
-    void setScrollToBottom(bool v) { scrollToBottom_ = v; }
+    void setScrollToBottom(bool v);
 
     // Replaced element controls
     layout::ElInput* inputControl() const { return inputControl_.get(); }

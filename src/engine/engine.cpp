@@ -522,23 +522,17 @@ void Engine::run() {
                 documentHeight_ = box.marginBox().height;
             }
 
-            // Process auto-scroll-to-bottom for overflow elements.
-            if (document_) {
-                std::function<void(dom::Node*)> processScrollToBottom;
-                processScrollToBottom = [&](dom::Node* node) {
-                    if (!node || node->nodeType() != dom::NodeType::Element) return;
-                    auto* elem = static_cast<dom::Element*>(node);
-                    if (elem->needsScrollToBottom()) {
-                        elem->setScrollToBottom(false);
-                        std::string ov = getOverflowY(elem->computedStyle());
-                        if (overflowClips(ov)) {
-                            elem->setScrollTopValue(maxScrollTop(elem));
-                        }
+            // Process auto-scroll-to-bottom for tracked overflow elements.
+            if (document_ && !document_->scrollToBottomElements().empty()) {
+                // Copy the set since setScrollToBottom(false) mutates it.
+                auto pending = document_->scrollToBottomElements();
+                for (auto* elem : pending) {
+                    std::string ov = getOverflowY(elem->computedStyle());
+                    if (overflowClips(ov)) {
+                        elem->setScrollTopValue(maxScrollTop(elem));
                     }
-                    for (auto* child : elem->childNodes())
-                        processScrollToBottom(child);
-                };
-                processScrollToBottom(document_->documentElement());
+                    elem->setScrollToBottom(false);
+                }
             }
 
             // Notify ResizeObserver / IntersectionObserver after layout
