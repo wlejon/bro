@@ -2,6 +2,7 @@
 #include "js/runtime.h"
 #include "audio/audio_engine.h"
 
+#include <algorithm>
 #include <string>
 #include <cstring>
 #include <cmath>
@@ -365,6 +366,9 @@ static const JSCFunctionListEntry js_micsource_proto_funcs[] = {
     JS_CFUNC_DEF("connect", 1, js_micsource_connect),
     JS_CFUNC_DEF("disconnect", 0, js_micsource_disconnect),
 };
+
+// Forward declaration (defined below, needed by osc_connect)
+struct GainNodeData;
 
 // ---------------------------------------------------------------------------
 // OscillatorNode — wraps a voice in the AudioEngine
