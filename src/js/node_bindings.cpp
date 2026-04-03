@@ -268,10 +268,16 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
             const char* s = JS_ToCString(cx, argv[0]);
             std::string v(s ? s : "");
             if (s) JS_FreeCString(cx, s);
-            if (nd->nodeType() == bro::dom::NodeType::Text)
+            std::string oldData;
+            if (nd->nodeType() == bro::dom::NodeType::Text) {
+                oldData = static_cast<bro::dom::TextNode*>(nd)->data();
                 static_cast<bro::dom::TextNode*>(nd)->setData(v);
-            else if (nd->nodeType() == bro::dom::NodeType::Comment)
+            } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
                 static_cast<bro::dom::CommentNode*>(nd)->setData(v);
+            }
+            notifyMutationObservers(cx, this_val, "characterData",
+                nullptr, oldData.c_str(), JS_NULL, JS_NULL);
             auto* parent = nd->parentNode();
             if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                 auto* parentEl = static_cast<bro::dom::Element*>(parent);
@@ -310,10 +316,16 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 const char* s = JS_ToCString(cx, argv[0]);
                 std::string v(s ? s : "");
                 if (s) JS_FreeCString(cx, s);
-                if (nd->nodeType() == bro::dom::NodeType::Text)
+                std::string oldData;
+                if (nd->nodeType() == bro::dom::NodeType::Text) {
+                    oldData = static_cast<bro::dom::TextNode*>(nd)->data();
                     static_cast<bro::dom::TextNode*>(nd)->appendData(v);
-                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                    oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
                     static_cast<bro::dom::CommentNode*>(nd)->appendData(v);
+                }
+                notifyMutationObservers(cx, this_val, "characterData",
+                    nullptr, oldData.c_str(), JS_NULL, JS_NULL);
                 auto* parent = nd->parentNode();
                 if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                     static_cast<bro::dom::Element*>(parent)->markDirty();
@@ -333,10 +345,16 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 const char* s = JS_ToCString(cx, argv[1]);
                 std::string v(s ? s : "");
                 if (s) JS_FreeCString(cx, s);
-                if (nd->nodeType() == bro::dom::NodeType::Text)
+                std::string oldData;
+                if (nd->nodeType() == bro::dom::NodeType::Text) {
+                    oldData = static_cast<bro::dom::TextNode*>(nd)->data();
                     static_cast<bro::dom::TextNode*>(nd)->insertData(off, v);
-                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                    oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
                     static_cast<bro::dom::CommentNode*>(nd)->insertData(off, v);
+                }
+                notifyMutationObservers(cx, this_val, "characterData",
+                    nullptr, oldData.c_str(), JS_NULL, JS_NULL);
                 auto* parent = nd->parentNode();
                 if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                     static_cast<bro::dom::Element*>(parent)->markDirty();
@@ -354,10 +372,16 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 int32_t off = 0, cnt = 0;
                 JS_ToInt32(cx, &off, argv[0]);
                 JS_ToInt32(cx, &cnt, argv[1]);
-                if (nd->nodeType() == bro::dom::NodeType::Text)
+                std::string oldData;
+                if (nd->nodeType() == bro::dom::NodeType::Text) {
+                    oldData = static_cast<bro::dom::TextNode*>(nd)->data();
                     static_cast<bro::dom::TextNode*>(nd)->deleteData(off, cnt);
-                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                    oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
                     static_cast<bro::dom::CommentNode*>(nd)->deleteData(off, cnt);
+                }
+                notifyMutationObservers(cx, this_val, "characterData",
+                    nullptr, oldData.c_str(), JS_NULL, JS_NULL);
                 auto* parent = nd->parentNode();
                 if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                     static_cast<bro::dom::Element*>(parent)->markDirty();
@@ -378,10 +402,16 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 const char* s = JS_ToCString(cx, argv[2]);
                 std::string v(s ? s : "");
                 if (s) JS_FreeCString(cx, s);
-                if (nd->nodeType() == bro::dom::NodeType::Text)
+                std::string oldData;
+                if (nd->nodeType() == bro::dom::NodeType::Text) {
+                    oldData = static_cast<bro::dom::TextNode*>(nd)->data();
                     static_cast<bro::dom::TextNode*>(nd)->replaceData(off, cnt, v);
-                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                    oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
                     static_cast<bro::dom::CommentNode*>(nd)->replaceData(off, cnt, v);
+                }
+                notifyMutationObservers(cx, this_val, "characterData",
+                    nullptr, oldData.c_str(), JS_NULL, JS_NULL);
                 auto* parent = nd->parentNode();
                 if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
                     static_cast<bro::dom::Element*>(parent)->markDirty();

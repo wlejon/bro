@@ -95,11 +95,30 @@ static JSValue js_shadowroot_set_innerHTML(JSContext* ctx, JSValueConst this_val
                                            JSValueConst val) {
     auto* sr = getShadowRoot(this_val);
     if (!sr) return JS_UNDEFINED;
+
+    // Capture old children for MutationObserver
+    JSValue removedArr = JS_NewArray(ctx);
+    uint32_t rmIdx = 0;
+    for (auto* child : sr->childNodes()) {
+        JS_SetPropertyUint32(ctx, removedArr, rmIdx++, wrapAnyNode(ctx, child));
+    }
+
     std::string html = jsToStdString(ctx, val);
     auto* doc = getDocumentForCtx(ctx);
     sr->setInnerHTML(html, doc);
 
     upgradeShadowChildren(ctx, sr);
+
+    // Capture new children
+    JSValue addedArr = JS_NewArray(ctx);
+    uint32_t addIdx = 0;
+    for (auto* child : sr->childNodes()) {
+        JS_SetPropertyUint32(ctx, addedArr, addIdx++, wrapAnyNode(ctx, child));
+    }
+    notifyMutationObservers(ctx, this_val, "childList",
+        nullptr, nullptr, addedArr, removedArr);
+    JS_FreeValue(ctx, addedArr);
+    JS_FreeValue(ctx, removedArr);
 
     if (doc && sr->host()) {
         for (auto& css : sr->styleSheets()) {
@@ -206,6 +225,8 @@ static JSValue js_shadowroot_appendChild(JSContext* ctx, JSValueConst this_val,
     auto* child = unwrapNode(ctx, argv[0]);
     if (!child) return JS_UNDEFINED;
 
+    JSValue addedArr = JS_NewArray(ctx);
+    uint32_t addedIdx = 0;
     if (child->nodeName() == "#DOCUMENT-FRAGMENT" ||
         child->nodeType() == bro::dom::NodeType::DocumentFragment) {
         auto kids = child->childNodes();
@@ -216,6 +237,7 @@ static JSValue js_shadowroot_appendChild(JSContext* ctx, JSValueConst this_val,
                 if (sr->host() && sr->host()->document())
                     elem->setDocument(sr->host()->document());
             }
+            JS_SetPropertyUint32(ctx, addedArr, addedIdx++, wrapAnyNode(ctx, kid));
         }
     } else {
         sr->appendChild(child);
@@ -224,7 +246,11 @@ static JSValue js_shadowroot_appendChild(JSContext* ctx, JSValueConst this_val,
             if (sr->host() && sr->host()->document())
                 elem->setDocument(sr->host()->document());
         }
+        JS_SetPropertyUint32(ctx, addedArr, addedIdx++, wrapAnyNode(ctx, child));
     }
+    notifyMutationObservers(ctx, this_val, "childList",
+        nullptr, nullptr, addedArr, JS_NULL);
+    JS_FreeValue(ctx, addedArr);
 
     sr->invalidateSlots();
     if (sr->host()) {
@@ -264,7 +290,12 @@ static JSValue js_shadowroot_removeChild(JSContext* ctx, JSValueConst this_val,
     if (!sr || argc < 1) return JS_UNDEFINED;
     auto* child = unwrapNode(ctx, argv[0]);
     if (child) {
+        JSValue removedArr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, removedArr, 0, wrapAnyNode(ctx, child));
         sr->removeChild(child);
+        notifyMutationObservers(ctx, this_val, "childList",
+            nullptr, nullptr, JS_NULL, removedArr);
+        JS_FreeValue(ctx, removedArr);
         sr->invalidateSlots();
         auto* doc = getDocumentForCtx(ctx);
         if (doc && sr->host()) {
@@ -293,6 +324,11 @@ static JSValue js_shadowroot_insertBefore(JSContext* ctx, JSValueConst this_val,
             if (sr->host() && sr->host()->document())
                 elem->setDocument(sr->host()->document());
         }
+        JSValue addedArr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, addedArr, 0, wrapAnyNode(ctx, newChild));
+        notifyMutationObservers(ctx, this_val, "childList",
+            nullptr, nullptr, addedArr, JS_NULL);
+        JS_FreeValue(ctx, addedArr);
         sr->invalidateSlots();
         auto* doc = getDocumentForCtx(ctx);
         if (doc && sr->host()) {

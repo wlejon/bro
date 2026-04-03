@@ -341,20 +341,40 @@
         }
     };
 
-    // MutationObserver — simplified implementation
+    // MutationObserver — full implementation
     globalThis.MutationObserver = class MutationObserver {
         constructor(callback) {
+            if (typeof callback !== 'function')
+                throw new TypeError('MutationObserver requires a callback function');
             this._callback = callback;
             this._targets = [];
             this._records = [];
             this._scheduled = false;
         }
         observe(target, options) {
-            this._targets.push({ target, options });
+            if (!options) options = {};
+            // Per spec: if none of the three are set, and attributeFilter is present,
+            // default attributes to true
+            if (!options.childList && !options.attributes && !options.characterData) {
+                if (options.attributeFilter) {
+                    options.attributes = true;
+                } else if (!options.attributeOldValue && !options.characterDataOldValue) {
+                    throw new TypeError('MutationObserver.observe: at least one of childList, attributes, or characterData must be true');
+                }
+            }
+            if (options.attributeOldValue) options.attributes = true;
+            if (options.characterDataOldValue) options.characterData = true;
+            // Remove any existing observation of this target
+            this._targets = this._targets.filter(function(e) { return e.target !== target; });
+            this._targets.push({ target: target, options: options });
             if (!globalThis.__bro_mutation_observers)
                 globalThis.__bro_mutation_observers = [];
             if (!globalThis.__bro_mutation_observers.includes(this))
                 globalThis.__bro_mutation_observers.push(this);
+        }
+        unobserve(target) {
+            this._targets = this._targets.filter(function(e) { return e.target !== target; });
+            if (this._targets.length === 0) this.disconnect();
         }
         disconnect() {
             this._targets = [];
