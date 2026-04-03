@@ -49,22 +49,56 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
 (function() {
     var listeners = {};
     globalThis.__bro_win_listeners = listeners;
-    globalThis.addEventListener = function(type, fn) {
+    globalThis.addEventListener = function(type, fn, opts) {
         if (!listeners[type]) listeners[type] = [];
-        listeners[type].push(fn);
+        var entry = { fn: fn, capture: false, once: false, passive: false };
+        if (typeof opts === 'boolean') {
+            entry.capture = opts;
+        } else if (opts && typeof opts === 'object') {
+            entry.capture = !!opts.capture;
+            entry.once = !!opts.once;
+            entry.passive = !!opts.passive;
+        }
+        listeners[type].push(entry);
     };
-    globalThis.removeEventListener = function(type, fn) {
+    globalThis.removeEventListener = function(type, fn, opts) {
         var arr = listeners[type];
         if (!arr) return;
-        var idx = arr.indexOf(fn);
-        if (idx >= 0) arr.splice(idx, 1);
+        var capture = false;
+        if (typeof opts === 'boolean') capture = opts;
+        else if (opts && typeof opts === 'object') capture = !!opts.capture;
+        for (var i = 0; i < arr.length; i++) {
+            if (arr[i].fn === fn && arr[i].capture === capture) {
+                arr.splice(i, 1);
+                return;
+            }
+        }
+    };
+    globalThis.dispatchEvent = function(event) {
+        var type = event.type || (typeof event === 'string' ? event : '');
+        var arr = listeners[type];
+        if (!arr) return true;
+        var toRemove = [];
+        for (var i = 0; i < arr.length; i++) {
+            try {
+                arr[i].fn(event);
+                if (arr[i].once) toRemove.push(i);
+            } catch(e) { console.error('Event handler error:', e); }
+        }
+        for (var j = toRemove.length - 1; j >= 0; j--) arr.splice(toRemove[j], 1);
+        return !(event && event.defaultPrevented);
     };
     globalThis.__bro_dispatch_window_event = function(type, event) {
         var arr = listeners[type];
         if (!arr) return;
+        var toRemove = [];
         for (var i = 0; i < arr.length; i++) {
-            try { arr[i](event); } catch(e) { console.error('Event handler error:', e); }
+            try {
+                arr[i].fn(event);
+                if (arr[i].once) toRemove.push(i);
+            } catch(e) { console.error('Event handler error:', e); }
         }
+        for (var j = toRemove.length - 1; j >= 0; j--) arr.splice(toRemove[j], 1);
     };
 
     // --- SPA history + location compat ---
@@ -109,7 +143,11 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     }
 
     function _firePopstate(state) {
-        globalThis.__bro_dispatch_window_event('popstate', { type: 'popstate', state: state });
+        var evt = (typeof PopStateEvent !== 'undefined')
+            ? new PopStateEvent('popstate', { state: state })
+            : { type: 'popstate', state: state };
+        evt.isTrusted = true;
+        globalThis.__bro_dispatch_window_event('popstate', evt);
     }
 
     history.pushState = function(state, title, url) {
@@ -122,8 +160,14 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
         history.length = _stack.length;
         _applyUrl(parts);
         if (parts.hash !== oldHash) {
-            globalThis.__bro_dispatch_window_event('hashchange',
-                { type: 'hashchange', oldURL: location.origin + location.pathname + oldHash, newURL: parts.href });
+            var hEvt = (typeof HashChangeEvent !== 'undefined')
+                ? new HashChangeEvent('hashchange', {
+                    oldURL: location.origin + location.pathname + oldHash,
+                    newURL: parts.href
+                  })
+                : { type: 'hashchange', oldURL: location.origin + location.pathname + oldHash, newURL: parts.href };
+            hEvt.isTrusted = true;
+            globalThis.__bro_dispatch_window_event('hashchange', hEvt);
         }
     };
 

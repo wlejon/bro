@@ -43,57 +43,6 @@ static constexpr int CAPTURING_PHASE = 1;
 static constexpr int AT_TARGET = 2;
 static constexpr int BUBBLING_PHASE = 3;
 
-static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
-    JS_SetPropertyStr(ctx, jsEvent, "type",
-                      JS_NewString(ctx, event.type().c_str()));
-    JS_SetPropertyStr(ctx, jsEvent, "timeStamp",
-                      JS_NewFloat64(ctx, event.timeStamp()));
-    JS_SetPropertyStr(ctx, jsEvent, "bubbles",
-                      JS_NewBool(ctx, event.bubbles()));
-    JS_SetPropertyStr(ctx, jsEvent, "cancelable",
-                      JS_NewBool(ctx, event.cancelable()));
-    JS_SetPropertyStr(ctx, jsEvent, "eventPhase",
-                      JS_NewInt32(ctx, NONE));
-
-    // MouseEvent properties
-    auto* mouseEvt = dynamic_cast<bro::dom::MouseEvent*>(&event);
-    if (mouseEvt) {
-        JS_SetPropertyStr(ctx, jsEvent, "clientX",
-                          JS_NewFloat64(ctx, mouseEvt->clientX()));
-        JS_SetPropertyStr(ctx, jsEvent, "clientY",
-                          JS_NewFloat64(ctx, mouseEvt->clientY()));
-        JS_SetPropertyStr(ctx, jsEvent, "button",
-                          JS_NewInt32(ctx, mouseEvt->button()));
-        JS_SetPropertyStr(ctx, jsEvent, "buttons",
-                          JS_NewInt32(ctx, mouseEvt->buttons()));
-        JS_SetPropertyStr(ctx, jsEvent, "ctrlKey",
-                          JS_NewBool(ctx, mouseEvt->ctrlKey()));
-        JS_SetPropertyStr(ctx, jsEvent, "shiftKey",
-                          JS_NewBool(ctx, mouseEvt->shiftKey()));
-        JS_SetPropertyStr(ctx, jsEvent, "altKey",
-                          JS_NewBool(ctx, mouseEvt->altKey()));
-    }
-
-    // KeyboardEvent properties
-    auto* keyEvt = dynamic_cast<bro::dom::KeyboardEvent*>(&event);
-    if (keyEvt) {
-        JS_SetPropertyStr(ctx, jsEvent, "key",
-                          JS_NewString(ctx, keyEvt->key().c_str()));
-        JS_SetPropertyStr(ctx, jsEvent, "code",
-                          JS_NewString(ctx, keyEvt->code().c_str()));
-        JS_SetPropertyStr(ctx, jsEvent, "ctrlKey",
-                          JS_NewBool(ctx, keyEvt->ctrlKey()));
-        JS_SetPropertyStr(ctx, jsEvent, "shiftKey",
-                          JS_NewBool(ctx, keyEvt->shiftKey()));
-        JS_SetPropertyStr(ctx, jsEvent, "altKey",
-                          JS_NewBool(ctx, keyEvt->altKey()));
-        JS_SetPropertyStr(ctx, jsEvent, "metaKey",
-                          JS_NewBool(ctx, keyEvt->metaKey()));
-        JS_SetPropertyStr(ctx, jsEvent, "repeat",
-                          JS_NewBool(ctx, keyEvt->repeat()));
-    }
-}
-
 // Build the event path from target up to the document root.
 // Handles shadow DOM: when an element is inside a shadow root, the path
 // crosses from shadow tree → host element → host's parent, etc.
@@ -130,6 +79,193 @@ static std::vector<EventPathEntry> buildEventPath(bro::dom::Element* target) {
     }
 
     return path;
+}
+
+// composedPath() implementation — returns JS array of elements in the event path
+static JSValue js_ev_composedPath(JSContext* ctx, JSValueConst this_val,
+                                  int /*argc*/, JSValueConst* /*argv*/) {
+    // Retrieve the stashed path array
+    JSValue pathArr = JS_GetPropertyStr(ctx, this_val, "_composedPath");
+    if (!JS_IsUndefined(pathArr) && !JS_IsNull(pathArr)) {
+        return pathArr; // already owns a ref from GetProperty
+    }
+    JS_FreeValue(ctx, pathArr);
+    return JS_NewArray(ctx); // empty array fallback
+}
+
+static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
+    JS_SetPropertyStr(ctx, jsEvent, "type",
+                      JS_NewString(ctx, event.type().c_str()));
+    JS_SetPropertyStr(ctx, jsEvent, "timeStamp",
+                      JS_NewFloat64(ctx, event.timeStamp()));
+    JS_SetPropertyStr(ctx, jsEvent, "bubbles",
+                      JS_NewBool(ctx, event.bubbles()));
+    JS_SetPropertyStr(ctx, jsEvent, "cancelable",
+                      JS_NewBool(ctx, event.cancelable()));
+    JS_SetPropertyStr(ctx, jsEvent, "composed",
+                      JS_NewBool(ctx, event.composed()));
+    JS_SetPropertyStr(ctx, jsEvent, "isTrusted",
+                      JS_NewBool(ctx, event.isTrusted()));
+    JS_SetPropertyStr(ctx, jsEvent, "eventPhase",
+                      JS_NewInt32(ctx, NONE));
+    JS_SetPropertyStr(ctx, jsEvent, "defaultPrevented",
+                      JS_NewBool(ctx, false));
+
+    // MouseEvent properties
+    auto* mouseEvt = dynamic_cast<bro::dom::MouseEvent*>(&event);
+    if (mouseEvt) {
+        JS_SetPropertyStr(ctx, jsEvent, "clientX",
+                          JS_NewFloat64(ctx, mouseEvt->clientX()));
+        JS_SetPropertyStr(ctx, jsEvent, "clientY",
+                          JS_NewFloat64(ctx, mouseEvt->clientY()));
+        JS_SetPropertyStr(ctx, jsEvent, "pageX",
+                          JS_NewFloat64(ctx, mouseEvt->pageX()));
+        JS_SetPropertyStr(ctx, jsEvent, "pageY",
+                          JS_NewFloat64(ctx, mouseEvt->pageY()));
+        JS_SetPropertyStr(ctx, jsEvent, "screenX",
+                          JS_NewFloat64(ctx, mouseEvt->screenX()));
+        JS_SetPropertyStr(ctx, jsEvent, "screenY",
+                          JS_NewFloat64(ctx, mouseEvt->screenY()));
+        JS_SetPropertyStr(ctx, jsEvent, "offsetX",
+                          JS_NewFloat64(ctx, mouseEvt->offsetX()));
+        JS_SetPropertyStr(ctx, jsEvent, "offsetY",
+                          JS_NewFloat64(ctx, mouseEvt->offsetY()));
+        JS_SetPropertyStr(ctx, jsEvent, "movementX",
+                          JS_NewFloat64(ctx, mouseEvt->movementX()));
+        JS_SetPropertyStr(ctx, jsEvent, "movementY",
+                          JS_NewFloat64(ctx, mouseEvt->movementY()));
+        JS_SetPropertyStr(ctx, jsEvent, "button",
+                          JS_NewInt32(ctx, mouseEvt->button()));
+        JS_SetPropertyStr(ctx, jsEvent, "buttons",
+                          JS_NewInt32(ctx, mouseEvt->buttons()));
+        JS_SetPropertyStr(ctx, jsEvent, "detail",
+                          JS_NewInt32(ctx, mouseEvt->detail()));
+        JS_SetPropertyStr(ctx, jsEvent, "ctrlKey",
+                          JS_NewBool(ctx, mouseEvt->ctrlKey()));
+        JS_SetPropertyStr(ctx, jsEvent, "shiftKey",
+                          JS_NewBool(ctx, mouseEvt->shiftKey()));
+        JS_SetPropertyStr(ctx, jsEvent, "altKey",
+                          JS_NewBool(ctx, mouseEvt->altKey()));
+        JS_SetPropertyStr(ctx, jsEvent, "metaKey",
+                          JS_NewBool(ctx, mouseEvt->metaKey()));
+        if (mouseEvt->relatedTarget()) {
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+            if (!JS_IsUndefined(elemMap)) {
+                std::string key = std::to_string(mouseEvt->relatedTarget()->nodeId());
+                JSValue rtElem = JS_GetPropertyStr(ctx, elemMap, key.c_str());
+                JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", rtElem);
+            } else {
+                JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", JS_NULL);
+            }
+            JS_FreeValue(ctx, elemMap);
+            JS_FreeValue(ctx, global);
+        } else {
+            JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", JS_NULL);
+        }
+
+        // WheelEvent properties
+        auto* wheelEvt = dynamic_cast<bro::dom::WheelEvent*>(&event);
+        if (wheelEvt) {
+            JS_SetPropertyStr(ctx, jsEvent, "deltaX",
+                              JS_NewFloat64(ctx, wheelEvt->deltaX()));
+            JS_SetPropertyStr(ctx, jsEvent, "deltaY",
+                              JS_NewFloat64(ctx, wheelEvt->deltaY()));
+            JS_SetPropertyStr(ctx, jsEvent, "deltaZ",
+                              JS_NewFloat64(ctx, wheelEvt->deltaZ()));
+            JS_SetPropertyStr(ctx, jsEvent, "deltaMode",
+                              JS_NewInt32(ctx, wheelEvt->deltaMode()));
+        }
+    }
+
+    // KeyboardEvent properties
+    auto* keyEvt = dynamic_cast<bro::dom::KeyboardEvent*>(&event);
+    if (keyEvt) {
+        JS_SetPropertyStr(ctx, jsEvent, "key",
+                          JS_NewString(ctx, keyEvt->key().c_str()));
+        JS_SetPropertyStr(ctx, jsEvent, "code",
+                          JS_NewString(ctx, keyEvt->code().c_str()));
+        JS_SetPropertyStr(ctx, jsEvent, "ctrlKey",
+                          JS_NewBool(ctx, keyEvt->ctrlKey()));
+        JS_SetPropertyStr(ctx, jsEvent, "shiftKey",
+                          JS_NewBool(ctx, keyEvt->shiftKey()));
+        JS_SetPropertyStr(ctx, jsEvent, "altKey",
+                          JS_NewBool(ctx, keyEvt->altKey()));
+        JS_SetPropertyStr(ctx, jsEvent, "metaKey",
+                          JS_NewBool(ctx, keyEvt->metaKey()));
+        JS_SetPropertyStr(ctx, jsEvent, "repeat",
+                          JS_NewBool(ctx, keyEvt->repeat()));
+        JS_SetPropertyStr(ctx, jsEvent, "isComposing",
+                          JS_NewBool(ctx, keyEvt->isComposing()));
+        JS_SetPropertyStr(ctx, jsEvent, "location",
+                          JS_NewInt32(ctx, keyEvt->location()));
+        // Legacy properties (deprecated but widely used)
+        JS_SetPropertyStr(ctx, jsEvent, "keyCode",
+                          JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, jsEvent, "charCode",
+                          JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, jsEvent, "which",
+                          JS_NewInt32(ctx, 0));
+    }
+
+    // FocusEvent properties
+    auto* focusEvt = dynamic_cast<bro::dom::FocusEvent*>(&event);
+    if (focusEvt) {
+        if (focusEvt->relatedTarget()) {
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+            if (!JS_IsUndefined(elemMap)) {
+                std::string key = std::to_string(focusEvt->relatedTarget()->nodeId());
+                JSValue rtElem = JS_GetPropertyStr(ctx, elemMap, key.c_str());
+                JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", rtElem);
+            } else {
+                JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", JS_NULL);
+            }
+            JS_FreeValue(ctx, elemMap);
+            JS_FreeValue(ctx, global);
+        } else {
+            JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", JS_NULL);
+        }
+    }
+
+    // InputEvent properties
+    auto* inputEvt = dynamic_cast<bro::dom::InputEvent*>(&event);
+    if (inputEvt) {
+        if (inputEvt->data().empty()) {
+            JS_SetPropertyStr(ctx, jsEvent, "data", JS_NULL);
+        } else {
+            JS_SetPropertyStr(ctx, jsEvent, "data",
+                              JS_NewString(ctx, inputEvt->data().c_str()));
+        }
+        JS_SetPropertyStr(ctx, jsEvent, "inputType",
+                          JS_NewString(ctx, inputEvt->inputType().c_str()));
+        JS_SetPropertyStr(ctx, jsEvent, "isComposing",
+                          JS_NewBool(ctx, inputEvt->isComposing()));
+    }
+}
+
+// Stash the composedPath as a JS array on the event object
+static void stashComposedPath(JSContext* ctx, JSValue jsEvent,
+                              const std::vector<EventPathEntry>& path) {
+    JSValue arr = JS_NewArray(ctx);
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+
+    if (!JS_IsUndefined(elemMap)) {
+        for (size_t i = 0; i < path.size(); ++i) {
+            std::string key = std::to_string(path[i].element->nodeId());
+            JSValue elem = JS_GetPropertyStr(ctx, elemMap, key.c_str());
+            if (!JS_IsUndefined(elem) && !JS_IsNull(elem)) {
+                JS_SetPropertyInt64(ctx, arr, static_cast<int64_t>(i), elem);
+            } else {
+                JS_FreeValue(ctx, elem);
+            }
+        }
+    }
+
+    JS_FreeValue(ctx, elemMap);
+    JS_FreeValue(ctx, global);
+    JS_SetPropertyStr(ctx, jsEvent, "_composedPath", arr);
 }
 
 // phase: CAPTURING_PHASE, AT_TARGET, or BUBBLING_PHASE
@@ -209,6 +345,8 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         JS_NewCFunction(ctx, js_ev_preventDefault, "preventDefault", 0));
     JS_SetPropertyStr(ctx, jsEvent, "stopImmediatePropagation",
         JS_NewCFunction(ctx, js_ev_stopImmediatePropagation, "stopImmediatePropagation", 0));
+    JS_SetPropertyStr(ctx, jsEvent, "composedPath",
+        JS_NewCFunction(ctx, js_ev_composedPath, "composedPath", 0));
 
     // Collect indices of "once" listeners to remove after dispatch
     std::vector<int64_t> onceIndices;
@@ -253,15 +391,26 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
                     }
                     JS_FreeValue(ctx, onceVal);
 
+                    // Check propagation flags
                     JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
                     if (JS_ToBool(ctx, stoppedVal))
                         event.stopPropagation();
                     JS_FreeValue(ctx, stoppedVal);
 
+                    // Check preventDefault from JS side
+                    JSValue preventedVal = JS_GetPropertyStr(ctx, jsEvent, "_prevented");
+                    if (JS_ToBool(ctx, preventedVal))
+                        event.preventDefault();
+                    JS_FreeValue(ctx, preventedVal);
+
                     JSValue immVal = JS_GetPropertyStr(ctx, jsEvent, "_immediateStopped");
                     bool immStopped = JS_ToBool(ctx, immVal);
                     JS_FreeValue(ctx, immVal);
-                    if (immStopped) { JS_FreeValue(ctx, entry); break; }
+                    if (immStopped) {
+                        event.stopImmediatePropagation();
+                        JS_FreeValue(ctx, entry);
+                        break;
+                    }
                 }
             }
         }
@@ -292,10 +441,16 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
     auto path = buildEventPath(target);
     if (path.empty()) return;
 
+    // Stash composed path on the original JS event if provided
+    if (!JS_IsUndefined(originalJsEvent)) {
+        stashComposedPath(ctx, originalJsEvent, path);
+    }
+
     // --- Capture phase: root → target (exclusive) ---
     for (int i = static_cast<int>(path.size()) - 1; i > 0; --i) {
         if (event.propagationStopped()) break;
         event.setCurrentTarget(path[i].element);
+        event.setEventPhase(CAPTURING_PHASE);
         invokeListeners(ctx, path[i].element, path[i].retargetedTarget,
                         event, CAPTURING_PHASE, originalJsEvent);
     }
@@ -303,6 +458,7 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
     // --- At-target phase ---
     if (!event.propagationStopped()) {
         event.setCurrentTarget(path[0].element);
+        event.setEventPhase(AT_TARGET);
         invokeListeners(ctx, path[0].element, path[0].retargetedTarget,
                         event, AT_TARGET, originalJsEvent);
     }
@@ -312,10 +468,15 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
         for (size_t i = 1; i < path.size(); ++i) {
             if (event.propagationStopped()) break;
             event.setCurrentTarget(path[i].element);
+            event.setEventPhase(BUBBLING_PHASE);
             invokeListeners(ctx, path[i].element, path[i].retargetedTarget,
                             event, BUBBLING_PHASE, originalJsEvent);
         }
     }
+
+    // Reset phase after dispatch
+    event.setEventPhase(NONE);
+    event.setCurrentTarget(nullptr);
 }
 
 } // namespace bro::js

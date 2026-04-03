@@ -113,7 +113,10 @@ public:
 private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
-    void dispatchInputEvent(dom::Element* el);
+    void dispatchInputEvent(dom::Element* el, const std::string& data = "",
+                            const std::string& inputType = "");
+    void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);
+    void dispatchScrollEvent(dom::Element* el);
     void advanceFocus(bool reverse);
     void setSceneLayer(std::unique_ptr<render::SceneLayer> layer);
     void ensureReplacedElements(dom::Element* elem);
@@ -155,8 +158,23 @@ private:
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
 
-    // Hover tracking for mouseenter/mouseleave
+    // Hover tracking for mouseenter/mouseleave/mouseover/mouseout
     dom::Element* hoveredElement_ = nullptr;
+
+    // Mouse tracking for mousemove movement deltas
+    float lastMouseX_ = 0.0f;
+    float lastMouseY_ = 0.0f;
+
+    // Double-click detection
+    double lastClickTimeMs_ = 0.0;
+    float lastClickX_ = 0.0f;
+    float lastClickY_ = 0.0f;
+    int clickCount_ = 0;
+    dom::Element* lastClickTarget_ = nullptr;
+
+    // Mouse button state for buttons bitmask
+    int pressedButtons_ = 0;
+    dom::Element* mouseDownTarget_ = nullptr;
 
     // Viewport scrolling
     float scrollY_ = 0.0f;

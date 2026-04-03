@@ -1288,7 +1288,33 @@ static JSValue js_element_focus(JSContext* ctx, JSValueConst this_val,
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
     auto* doc = getDocumentForCtx(ctx);
-    if (doc) doc->setActiveElement(el);
+    if (!doc) return JS_UNDEFINED;
+    auto* prev = doc->activeElement();
+    if (prev == el) return JS_UNDEFINED; // already focused
+    doc->setActiveElement(el);
+
+    // Dispatch blur on previous, then focus on new element
+    if (prev) {
+        dom::FocusEvent blurEvt("blur", false, false);
+        blurEvt.setRelatedTarget(el);
+        dispatchDomEvent(ctx, prev, blurEvt);
+    }
+    {
+        dom::FocusEvent focusEvt("focus", false, false);
+        focusEvt.setRelatedTarget(prev);
+        dispatchDomEvent(ctx, el, focusEvt);
+    }
+    // Bubbling variants
+    if (prev) {
+        dom::FocusEvent focusoutEvt("focusout", true, false);
+        focusoutEvt.setRelatedTarget(el);
+        dispatchDomEvent(ctx, prev, focusoutEvt);
+    }
+    {
+        dom::FocusEvent focusinEvt("focusin", true, false);
+        focusinEvt.setRelatedTarget(prev);
+        dispatchDomEvent(ctx, el, focusinEvt);
+    }
     return JS_UNDEFINED;
 }
 
@@ -1297,8 +1323,22 @@ static JSValue js_element_blur(JSContext* ctx, JSValueConst this_val,
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
     auto* doc = getDocumentForCtx(ctx);
-    if (doc && doc->activeElement() == el) {
-        doc->setActiveElement(nullptr);
+    if (!doc) return JS_UNDEFINED;
+    // activeElement() returns body when focusedElement_ is null, so check
+    // the actual focused element to know if el is really focused
+    if (doc->activeElement() != el) return JS_UNDEFINED;
+    doc->setActiveElement(nullptr);
+
+    // Dispatch blur/focusout on the element
+    {
+        dom::FocusEvent blurEvt("blur", false, false);
+        blurEvt.setRelatedTarget(nullptr);
+        dispatchDomEvent(ctx, el, blurEvt);
+    }
+    {
+        dom::FocusEvent focusoutEvt("focusout", true, false);
+        focusoutEvt.setRelatedTarget(nullptr);
+        dispatchDomEvent(ctx, el, focusoutEvt);
     }
     return JS_UNDEFINED;
 }

@@ -25,6 +25,11 @@ void Event::stopPropagation() {
     propagationStopped_ = true;
 }
 
+void Event::stopImmediatePropagation() {
+    propagationStopped_ = true;
+    immediatePropagationStopped_ = true;
+}
+
 // ---------------------------------------------------------------------------
 // MouseEvent
 // ---------------------------------------------------------------------------
@@ -39,6 +44,33 @@ MouseEvent::MouseEvent(const std::string& type, bool bubbles, bool cancelable)
 // ---------------------------------------------------------------------------
 
 KeyboardEvent::KeyboardEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
+// ---------------------------------------------------------------------------
+// FocusEvent
+// ---------------------------------------------------------------------------
+
+FocusEvent::FocusEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
+// ---------------------------------------------------------------------------
+// WheelEvent
+// ---------------------------------------------------------------------------
+
+WheelEvent::WheelEvent(const std::string& type, bool bubbles, bool cancelable)
+    : MouseEvent(type, bubbles, cancelable)
+{
+}
+
+// ---------------------------------------------------------------------------
+// InputEvent
+// ---------------------------------------------------------------------------
+
+InputEvent::InputEvent(const std::string& type, bool bubbles, bool cancelable)
     : Event(type, bubbles, cancelable)
 {
 }

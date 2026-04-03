@@ -17,6 +17,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
+#include "util/time.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
@@ -104,7 +105,41 @@ static dom::KeyboardEvent makeKeyboardEvent(const char* type,
     evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
     evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
     evt.setRepeat(repeat);
+    evt.setIsTrusted(true);
+
+    // Set location for left/right modifier keys
+    if (scancode == SDL_SCANCODE_LSHIFT || scancode == SDL_SCANCODE_LCTRL ||
+        scancode == SDL_SCANCODE_LALT || scancode == SDL_SCANCODE_LGUI)
+        evt.setLocation(1); // DOM_KEY_LOCATION_LEFT
+    else if (scancode == SDL_SCANCODE_RSHIFT || scancode == SDL_SCANCODE_RCTRL ||
+             scancode == SDL_SCANCODE_RALT || scancode == SDL_SCANCODE_RGUI)
+        evt.setLocation(2); // DOM_KEY_LOCATION_RIGHT
+    else if (keycode >= SDLK_KP_DIVIDE && keycode <= SDLK_KP_EQUALS)
+        evt.setLocation(3); // DOM_KEY_LOCATION_NUMPAD
+
     return evt;
+}
+
+// Build a MouseEvent with standard fields populated
+static void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
+                               int button, int buttons,
+                               float lastX, float lastY,
+                               float scrollY, int mod) {
+    evt.setClientX(static_cast<double>(x));
+    evt.setClientY(static_cast<double>(y));
+    evt.setScreenX(static_cast<double>(x));
+    evt.setScreenY(static_cast<double>(y));
+    evt.setPageX(static_cast<double>(x));
+    evt.setPageY(static_cast<double>(y + scrollY));
+    evt.setMovementX(static_cast<double>(x - lastX));
+    evt.setMovementY(static_cast<double>(y - lastY));
+    evt.setButton(button);
+    evt.setButtons(buttons);
+    evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+    evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+    evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+    evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+    evt.setIsTrusted(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +202,59 @@ static dom::Element* findElementScrollbarHit(
 }
 
 // ---------------------------------------------------------------------------
+// Focus event dispatching
+// ---------------------------------------------------------------------------
+
+void Engine::dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget) {
+    if (oldTarget == newTarget) return;
+
+    (void)jsRuntime_; // focus events are dispatched via dispatchEvent
+
+    // blur (non-bubbling) on old target
+    if (oldTarget) {
+        dom::FocusEvent blurEvt("blur", false, false);
+        blurEvt.setRelatedTarget(newTarget);
+        blurEvt.setIsTrusted(true);
+        dispatchEvent(oldTarget, blurEvt);
+    }
+
+    // focus (non-bubbling) on new target
+    if (newTarget) {
+        dom::FocusEvent focusEvt("focus", false, false);
+        focusEvt.setRelatedTarget(oldTarget);
+        focusEvt.setIsTrusted(true);
+        dispatchEvent(newTarget, focusEvt);
+    }
+
+    // focusout (bubbling) on old target
+    if (oldTarget) {
+        dom::FocusEvent focusoutEvt("focusout", true, false);
+        focusoutEvt.setRelatedTarget(newTarget);
+        focusoutEvt.setIsTrusted(true);
+        dispatchEvent(oldTarget, focusoutEvt);
+    }
+
+    // focusin (bubbling) on new target
+    if (newTarget) {
+        dom::FocusEvent focusinEvt("focusin", true, false);
+        focusinEvt.setRelatedTarget(oldTarget);
+        focusinEvt.setIsTrusted(true);
+        dispatchEvent(newTarget, focusinEvt);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scroll event dispatching
+// ---------------------------------------------------------------------------
+
+void Engine::dispatchScrollEvent(dom::Element* el) {
+    if (!el) return;
+    dom::Event evt("scroll", false, false); // scroll doesn't bubble
+    evt.setIsTrusted(true);
+    dispatchEvent(el, evt);
+}
+
+// ---------------------------------------------------------------------------
 // Mouse events
 // ---------------------------------------------------------------------------
 
@@ -177,6 +265,9 @@ void Engine::handleMouseDown(float x, float y, int button) {
     // are in screen space — always use x/y when comparing, never docX/docY.
     float docX = x, docY = y + scrollY_;
     uiDirty_ = true;
+
+    // Update button bitmask
+    pressedButtons_ |= (1 << button);
 
     // --- Scrollbar interaction (before DOM hit testing) ---
 
@@ -228,13 +319,17 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
     if (document_) {
         dom::MouseEvent evt("mousedown");
-        evt.setClientX(static_cast<double>(x));
-        evt.setClientY(static_cast<double>(y));
-        evt.setButton(button);
+        int mod = SDL_GetModState();
+        populateMouseEvent(evt, x, y, button, pressedButtons_,
+                          lastMouseX_, lastMouseY_, scrollY_, mod);
+
         dom::Element* target = hitTest(docX, docY);
+        mouseDownTarget_ = target;
         if (target) {
-            // Unfocus previous controls
+            // Track focus change
             auto* prevActive = document_->activeElement();
+
+            // Unfocus previous controls
             auto* prevInput = getElInput(prevActive);
             if (prevInput) {
                 // Close color picker if clicking outside it
@@ -302,7 +397,11 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 uiDirty_ = true;
             }
 
+            // Set new active element and dispatch focus events
             document_->setActiveElement(target);
+            if (target != prevActive) {
+                dispatchFocusEvents(prevActive, target);
+            }
             jsRuntime_->executePendingJobs();
 
             // Focus new input if clicking on one
@@ -451,6 +550,9 @@ void Engine::handleMouseUp(float x, float y, int button) {
     float docX = x, docY = y + scrollY_;
     uiDirty_ = true;
 
+    // Update button bitmask
+    pressedButtons_ &= ~(1 << button);
+
     // End scrollbar drags
     if (viewportScrollbar_.isDragging()) {
         viewportScrollbar_.endDrag();
@@ -476,15 +578,65 @@ void Engine::handleMouseUp(float x, float y, int button) {
     }
 
     if (document_) {
-        dom::MouseEvent clickEvt("click");
-        clickEvt.setClientX(static_cast<double>(x));
-        clickEvt.setClientY(static_cast<double>(y));
-        clickEvt.setButton(button);
         dom::Element* target = hitTest(docX, docY);
-        if (target) {
-            dispatchEvent(target, clickEvt);
-            jsRuntime_->executePendingJobs();
+        int mod = SDL_GetModState();
+
+        // Dispatch mouseup event
+        {
+            dom::MouseEvent upEvt("mouseup");
+            populateMouseEvent(upEvt, x, y, button, pressedButtons_,
+                              lastMouseX_, lastMouseY_, scrollY_, mod);
+            if (target) {
+                dispatchEvent(target, upEvt);
+            }
         }
+
+        // Dispatch click event (only if mouseup is on the same element as mousedown)
+        if (target && target == mouseDownTarget_) {
+            // Double-click detection
+            double now = util::currentTimeMs();
+            static constexpr double kDblClickThresholdMs = 500.0;
+            static constexpr float kDblClickDistancePx = 5.0f;
+
+            if (lastClickTarget_ == target &&
+                (now - lastClickTimeMs_) < kDblClickThresholdMs &&
+                std::abs(x - lastClickX_) < kDblClickDistancePx &&
+                std::abs(y - lastClickY_) < kDblClickDistancePx) {
+                clickCount_++;
+            } else {
+                clickCount_ = 1;
+            }
+            lastClickTimeMs_ = now;
+            lastClickX_ = x;
+            lastClickY_ = y;
+            lastClickTarget_ = target;
+
+            dom::MouseEvent clickEvt("click");
+            populateMouseEvent(clickEvt, x, y, button, pressedButtons_,
+                              lastMouseX_, lastMouseY_, scrollY_, mod);
+            clickEvt.setDetail(clickCount_);
+            dispatchEvent(target, clickEvt);
+
+            // Dispatch dblclick on second click
+            if (clickCount_ == 2) {
+                dom::MouseEvent dblEvt("dblclick", true, true);
+                populateMouseEvent(dblEvt, x, y, button, pressedButtons_,
+                                  lastMouseX_, lastMouseY_, scrollY_, mod);
+                dblEvt.setDetail(2);
+                dispatchEvent(target, dblEvt);
+            }
+
+            // Dispatch contextmenu on right-click
+            if (button == 2) {
+                dom::MouseEvent ctxEvt("contextmenu", true, true);
+                populateMouseEvent(ctxEvt, x, y, button, pressedButtons_,
+                                  lastMouseX_, lastMouseY_, scrollY_, mod);
+                dispatchEvent(target, ctxEvt);
+            }
+        }
+
+        mouseDownTarget_ = nullptr;
+        if (jsRuntime_) jsRuntime_->executePendingJobs();
     }
 }
 
@@ -504,6 +656,8 @@ void Engine::handleMouseMove(float x, float y) {
             viewportScrollbar_.updateDrag(y, documentHeight_, vh, m),
             0.0f, maxScroll);
         uiDirty_ = true;
+        lastMouseX_ = x;
+        lastMouseY_ = y;
         return;
     }
 
@@ -515,19 +669,16 @@ void Engine::handleMouseMove(float x, float y) {
         float contentH = viewH + maxST;
 
         auto& lbox = elem->layoutBox();
-        // We need the element's screen-space position for metrics,
-        // but during drag we can recompute from stored metrics
         auto& es = elementScrollbar_.style();
-        // Recompute metrics with current scroll to get correct track position
-        // (The track position doesn't change during drag, only thumb moves)
         float bh = lbox.fullHeight();
-        // Use a simplified layout call — the track position was captured at drag start
         auto m = elementScrollbar_.layout(0, 0, bh, contentH, viewH,
             elem->scrollTopValue());
         float newScroll = elementScrollbar_.updateDrag(y, contentH, viewH, m);
         elem->setScrollTopValue(std::clamp(newScroll, 0.0f, maxST));
         if (document_) document_->markDirty();
         uiDirty_ = true;
+        lastMouseX_ = x;
+        lastMouseY_ = y;
         return;
     }
 
@@ -590,27 +741,68 @@ void Engine::handleMouseMove(float x, float y) {
         }
     }
 
-    // Dispatch mouseenter / mouseleave when the element under the cursor changes
+    // Dispatch mousemove event
     if (document_) {
         dom::Element* target = hitTest(docX, docY);
+
+        // Dispatch mouseover/mouseout when element changes (bubbling versions)
         if (target != hoveredElement_) {
+            int mod = SDL_GetModState();
+
+            // mouseout on previous element (bubbles)
             if (hoveredElement_) {
-                dom::MouseEvent leaveEvt("mouseleave");
-                leaveEvt.setClientX(static_cast<double>(x));
-                leaveEvt.setClientY(static_cast<double>(y));
+                dom::MouseEvent outEvt("mouseout", true, true);
+                populateMouseEvent(outEvt, x, y, -1, pressedButtons_,
+                                  lastMouseX_, lastMouseY_, scrollY_, mod);
+                outEvt.setRelatedTarget(target);
+                dispatchEvent(hoveredElement_, outEvt);
+            }
+
+            // mouseleave on previous element (doesn't bubble)
+            if (hoveredElement_) {
+                dom::MouseEvent leaveEvt("mouseleave", false, false);
+                populateMouseEvent(leaveEvt, x, y, -1, pressedButtons_,
+                                  lastMouseX_, lastMouseY_, scrollY_, mod);
+                leaveEvt.setRelatedTarget(target);
                 dispatchEvent(hoveredElement_, leaveEvt);
             }
-            hoveredElement_ = target;
-            if (hoveredElement_) {
-                dom::MouseEvent enterEvt("mouseenter");
-                enterEvt.setClientX(static_cast<double>(x));
-                enterEvt.setClientY(static_cast<double>(y));
-                dispatchEvent(hoveredElement_, enterEvt);
+
+            // mouseover on new element (bubbles)
+            if (target) {
+                dom::MouseEvent overEvt("mouseover", true, true);
+                populateMouseEvent(overEvt, x, y, -1, pressedButtons_,
+                                  lastMouseX_, lastMouseY_, scrollY_, mod);
+                overEvt.setRelatedTarget(hoveredElement_);
+                dispatchEvent(target, overEvt);
             }
-            if (jsRuntime_) jsRuntime_->executePendingJobs();
+
+            // mouseenter on new element (doesn't bubble)
+            if (target) {
+                dom::MouseEvent enterEvt("mouseenter", false, false);
+                populateMouseEvent(enterEvt, x, y, -1, pressedButtons_,
+                                  lastMouseX_, lastMouseY_, scrollY_, mod);
+                enterEvt.setRelatedTarget(hoveredElement_);
+                dispatchEvent(target, enterEvt);
+            }
+
+            hoveredElement_ = target;
             uiDirty_ = true;
         }
+
+        // Always dispatch mousemove
+        if (target) {
+            int mod = SDL_GetModState();
+            dom::MouseEvent moveEvt("mousemove", true, true);
+            populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
+                              lastMouseX_, lastMouseY_, scrollY_, mod);
+            dispatchEvent(target, moveEvt);
+        }
+
+        if (jsRuntime_) jsRuntime_->executePendingJobs();
     }
+
+    lastMouseX_ = x;
+    lastMouseY_ = y;
 }
 
 // ---------------------------------------------------------------------------
@@ -618,9 +810,13 @@ void Engine::handleMouseMove(float x, float y) {
 // ---------------------------------------------------------------------------
 
 // Helper: update input value and dispatch "input" event for v-model
-void Engine::dispatchInputEvent(dom::Element* el) {
+void Engine::dispatchInputEvent(dom::Element* el, const std::string& data,
+                                const std::string& inputType) {
     if (!el) return;
-    dom::Event evt("input");
+    dom::InputEvent evt("input");
+    evt.setData(data);
+    evt.setInputType(inputType);
+    evt.setIsTrusted(true);
     dispatchEvent(el, evt);
     jsRuntime_->executePendingJobs();
     uiDirty_ = true;
@@ -712,17 +908,19 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
         if (keycode == SDLK_BACKSPACE) {
             if (pos > 0) {
+                std::string deleted = val.substr(pos - 1, 1);
                 val.erase(pos - 1, 1);
                 input->setCursorPos(pos - 1);
                 activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl);
+                dispatchInputEvent(activeEl, deleted, "deleteContentBackward");
             }
             handled = true;
         } else if (keycode == SDLK_DELETE) {
             if (pos < static_cast<int>(val.size())) {
+                std::string deleted = val.substr(pos, 1);
                 val.erase(pos, 1);
                 activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl);
+                dispatchInputEvent(activeEl, deleted, "deleteContentForward");
             }
             handled = true;
         } else if (keycode == SDLK_LEFT) {
@@ -766,12 +964,14 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
             // Unfocus the input on Enter
             input->setFocused(false);
+            dispatchFocusEvents(activeEl, nullptr);
             SDL_StopTextInput(window_->getSDLWindow());
             uiDirty_ = true;
             handled = true;
         } else if (keycode == SDLK_ESCAPE) {
             // Unfocus on Escape
             input->setFocused(false);
+            dispatchFocusEvents(activeEl, nullptr);
             SDL_StopTextInput(window_->getSDLWindow());
             uiDirty_ = true;
             handled = true;
@@ -800,17 +1000,19 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
         if (keycode == SDLK_BACKSPACE) {
             if (pos > 0) {
+                std::string deleted = val.substr(pos - 1, 1);
                 val.erase(pos - 1, 1);
                 textarea->setCursorPos(pos - 1);
                 activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl);
+                dispatchInputEvent(activeEl, deleted, "deleteContentBackward");
             }
             handled = true;
         } else if (keycode == SDLK_DELETE) {
             if (pos < static_cast<int>(val.size())) {
+                std::string deleted = val.substr(pos, 1);
                 val.erase(pos, 1);
                 activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl);
+                dispatchInputEvent(activeEl, deleted, "deleteContentForward");
             }
             handled = true;
         } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
@@ -818,7 +1020,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             val.insert(pos, 1, '\n');
             textarea->setCursorPos(pos + 1);
             activeEl->setAttribute("value", val);
-            dispatchInputEvent(activeEl);
+            dispatchInputEvent(activeEl, "\n", "insertLineBreak");
             handled = true;
         } else if (keycode == SDLK_LEFT) {
             if (pos > 0) {
@@ -892,6 +1094,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             handled = true;
         } else if (keycode == SDLK_ESCAPE) {
             textarea->setFocused(false);
+            dispatchFocusEvents(activeEl, nullptr);
             SDL_StopTextInput(window_->getSDLWindow());
             uiDirty_ = true;
             handled = true;
@@ -1011,7 +1214,7 @@ void Engine::handleTextInput(const std::string& text) {
         val.insert(pos, text);
         textarea->setCursorPos(pos + static_cast<int>(text.size()));
         activeEl->setAttribute("value", val);
-        dispatchInputEvent(activeEl);
+        dispatchInputEvent(activeEl, text, "insertText");
         return;
     }
 
@@ -1029,7 +1232,7 @@ void Engine::handleTextInput(const std::string& text) {
     val.insert(pos, text);
     input->setCursorPos(pos + static_cast<int>(text.size()));
     activeEl->setAttribute("value", val);
-    dispatchInputEvent(activeEl);
+    dispatchInputEvent(activeEl, text, "insertText");
 }
 
 // ---------------------------------------------------------------------------
@@ -1105,6 +1308,8 @@ void Engine::advanceFocus(bool reverse) {
 
     // Focus next
     document_->setActiveElement(nextEl);
+    dispatchFocusEvents(activeEl, nextEl);
+
     auto* newInput = getElInput(nextEl);
     auto* newTa = getElTextarea(nextEl);
 
@@ -1133,8 +1338,32 @@ void Engine::advanceFocus(bool reverse) {
 // Mouse wheel
 // ---------------------------------------------------------------------------
 
-void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
+void Engine::handleWheel(float x, float y, float dx, float dy) {
     if (!document_) return;
+
+    float docX = x, docY = y + scrollY_;
+    dom::Element* target = hitTest(docX, docY);
+
+    // Dispatch wheel event to JS
+    if (target) {
+        dom::WheelEvent wheelEvt("wheel", true, true);
+        int mod = SDL_GetModState();
+        populateMouseEvent(wheelEvt, x, y, -1, pressedButtons_,
+                          lastMouseX_, lastMouseY_, scrollY_, mod);
+        // SDL gives scroll amounts in lines; convert to pixels for DOM_DELTA_PIXEL
+        static constexpr float kPixelsPerLine = 48.0f;
+        wheelEvt.setDeltaX(static_cast<double>(-dx * kPixelsPerLine));
+        wheelEvt.setDeltaY(static_cast<double>(-dy * kPixelsPerLine));
+        wheelEvt.setDeltaZ(0.0);
+        wheelEvt.setDeltaMode(dom::WheelEvent::DOM_DELTA_PIXEL);
+        dispatchEvent(target, wheelEvt);
+
+        // If JS called preventDefault(), don't do default scrolling
+        if (wheelEvt.defaultPrevented()) {
+            if (jsRuntime_) jsRuntime_->executePendingJobs();
+            return;
+        }
+    }
 
     // Check if mouse is over a focused textarea
     auto* activeEl = document_->activeElement();
@@ -1149,8 +1378,6 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
     }
 
     // Also allow scrolling textarea under mouse cursor (not just active one)
-    float docX = x, docY = y + scrollY_;
-    dom::Element* target = hitTest(docX, docY);
     auto* hoverTa = getElTextarea(target);
     if (hoverTa) {
         float lineH = 16.0f;
@@ -1171,9 +1398,12 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
                 float maxST = maxScrollTop(el);
                 if (maxST <= 0) break; // content fits, no scrolling needed
                 float scrollPx = -dy * kScrollSpeed;
-                float newScroll = std::clamp(el->scrollTopValue() + scrollPx,
-                                             0.0f, maxST);
+                float prevScroll = el->scrollTopValue();
+                float newScroll = std::clamp(prevScroll + scrollPx, 0.0f, maxST);
                 el->setScrollTopValue(newScroll);
+                if (newScroll != prevScroll) {
+                    dispatchScrollEvent(el);
+                }
                 uiDirty_ = true;
                 document_->markDirty();
                 return;
@@ -1191,7 +1421,14 @@ void Engine::handleWheel(float x, float y, float /*dx*/, float dy) {
 
     // Viewport scrolling
     float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(viewportHeight_));
+    float prevScroll = scrollY_;
     scrollY_ = std::clamp(scrollY_ - dy * kScrollSpeed, 0.0f, maxScroll);
+    if (scrollY_ != prevScroll) {
+        // Dispatch scroll event on document element
+        if (document_->documentElement()) {
+            dispatchScrollEvent(document_->documentElement());
+        }
+    }
     uiDirty_ = true;
 }
 

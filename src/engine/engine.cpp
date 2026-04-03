@@ -236,6 +236,45 @@ Engine::Engine(const EngineConfig& config)
         }
     }
 
+    // 10a. Dispatch DOMContentLoaded on document
+    {
+        JSContext* ctx = jsRuntime_->getContext();
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
+        if (JS_IsFunction(ctx, dispatch)) {
+            // DOMContentLoaded
+            JSValue dclType = JS_NewString(ctx, "DOMContentLoaded");
+            JSValue dclEvt = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, dclEvt, "type", JS_NewString(ctx, "DOMContentLoaded"));
+            JS_SetPropertyStr(ctx, dclEvt, "bubbles", JS_TRUE);
+            JS_SetPropertyStr(ctx, dclEvt, "cancelable", JS_FALSE);
+            JS_SetPropertyStr(ctx, dclEvt, "isTrusted", JS_TRUE);
+            JS_SetPropertyStr(ctx, dclEvt, "target", JS_DupValue(ctx, global));
+            JSValue dclArgs[2] = { dclType, dclEvt };
+            JSValue dclRet = JS_Call(ctx, dispatch, global, 2, dclArgs);
+            JS_FreeValue(ctx, dclRet);
+            JS_FreeValue(ctx, dclType);
+            JS_FreeValue(ctx, dclEvt);
+
+            // load
+            JSValue loadType = JS_NewString(ctx, "load");
+            JSValue loadEvt = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, loadEvt, "type", JS_NewString(ctx, "load"));
+            JS_SetPropertyStr(ctx, loadEvt, "bubbles", JS_FALSE);
+            JS_SetPropertyStr(ctx, loadEvt, "cancelable", JS_FALSE);
+            JS_SetPropertyStr(ctx, loadEvt, "isTrusted", JS_TRUE);
+            JS_SetPropertyStr(ctx, loadEvt, "target", JS_DupValue(ctx, global));
+            JSValue loadArgs[2] = { loadType, loadEvt };
+            JSValue loadRet = JS_Call(ctx, dispatch, global, 2, loadArgs);
+            JS_FreeValue(ctx, loadRet);
+            JS_FreeValue(ctx, loadType);
+            JS_FreeValue(ctx, loadEvt);
+        }
+        JS_FreeValue(ctx, dispatch);
+        JS_FreeValue(ctx, global);
+        jsRuntime_->executePendingJobs();
+    }
+
     // === Mode-specific post-init ===
 
     if (displayMode_ == DisplayMode::Windowed) {
