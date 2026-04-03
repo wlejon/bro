@@ -155,7 +155,7 @@ private:
     std::mutex micMutex_;
 
     // Mic playback FIFO: mic callback writes, output callback reads
-    std::vector<float> micPlayback_ = std::vector<float>(32768, 0.0f);
+    std::vector<float> micPlayback_ = std::vector<float>(4096, 0.0f);
     std::atomic<uint64_t> micPlaybackWritePos_{0};
     uint64_t micPlaybackReadPos_ = 0; // only accessed from output callback thread
 

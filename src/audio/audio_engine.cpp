@@ -147,6 +147,9 @@ bool AudioEngine::init()
         return false;
     }
 
+    // Request small buffer for low latency (~5.8ms at 44100 Hz)
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "128");
+
     SDL_AudioSpec spec;
     spec.format = SDL_AUDIO_F32;
     spec.channels = 1;
@@ -265,6 +268,9 @@ bool AudioEngine::startMicCapture()
     if (micCapturing_) return true;
     if (!initialized_) return false;
 
+    // Request small buffer for low-latency mic capture
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "128");
+
     SDL_AudioSpec spec;
     spec.format = SDL_AUDIO_F32;
     spec.channels = 1;
@@ -351,8 +357,8 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
         int cap = static_cast<int>(engine->micPlayback_.size());
         uint64_t available = wp - engine->micPlaybackReadPos_;
 
-        // If too far behind (> half buffer), snap to latest to avoid stale audio
-        if (available > static_cast<uint64_t>(cap / 2)) {
+        // If too far behind (> ~15ms at 44100 Hz), snap to latest
+        if (available > 660) {
             engine->micPlaybackReadPos_ = wp - numSamples;
             available = numSamples;
         }
