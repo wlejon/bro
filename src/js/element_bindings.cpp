@@ -1213,9 +1213,11 @@ static JSValue js_element_get_scrollHeight(JSContext* ctx, JSValueConst this_val
     auto* el = getElement(this_val);
     if (!el) return JS_NewInt32(ctx, 0);
     auto& box = el->layoutBox();
-    float contentH = box.contentRect.height;
-    if (contentH > 0)
-        return JS_NewInt32(ctx, static_cast<int>(contentH));
+    // scrollHeight should return the full content height, not the clamped visible height.
+    // For overflow elements, naturalHeight holds the unclamped content extent.
+    float h = box.naturalHeight > box.contentRect.height ? box.naturalHeight : box.contentRect.height;
+    if (h > 0)
+        return JS_NewInt32(ctx, static_cast<int>(h));
     return js_element_get_offsetHeight(ctx, this_val);
 }
 
