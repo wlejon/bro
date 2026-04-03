@@ -20,12 +20,17 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth));
     JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight));
 
-    // navigator
-    JSValue nav = JS_NewObject(ctx);
+    // navigator — extend existing (brokit may have created it) rather than replace
+    JSValue nav = JS_GetPropertyStr(ctx, global, "navigator");
+    if (JS_IsUndefined(nav) || JS_IsNull(nav)) {
+        JS_FreeValue(ctx, nav);
+        nav = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "navigator", JS_DupValue(ctx, nav));
+    }
     JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
     JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
     JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
-    JS_SetPropertyStr(ctx, global, "navigator", nav);
+    JS_FreeValue(ctx, nav);
 
     // location (initial values — polyfill adds methods)
     JSValue loc = JS_NewObject(ctx);

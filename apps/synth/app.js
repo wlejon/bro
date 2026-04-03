@@ -324,10 +324,16 @@ function draw() {
     }
 }
 
+let _debugCount = 0;
 function drawSpectrum(W, H) {
     const bufLen = analyser.frequencyBinCount;
     const data = new Uint8Array(bufLen);
     analyser.getByteFrequencyData(data);
+    if (_debugCount++ % 360 === 0) {
+        let max = 0;
+        for (let i = 0; i < bufLen; i++) if (data[i] > max) max = data[i];
+        console.log('viz debug: bufLen=' + bufLen + ' max=' + max + ' first5=' + data[0] + ',' + data[1] + ',' + data[2] + ',' + data[3] + ',' + data[4]);
+    }
 
     const numBars = Math.min(128, bufLen);
     const barWidth = W / numBars;
