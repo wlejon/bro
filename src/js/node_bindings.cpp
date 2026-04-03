@@ -71,6 +71,113 @@ JSValue wrapNodeList(JSContext* ctx,
 }
 
 // ===========================================================================
+// Live HTMLCollection — re-queries DOM on every access
+// ===========================================================================
+
+// Stored as opaque data: the root element and CSS selector for re-querying.
+struct HTMLCollectionData {
+    bro::dom::Element* root;     // element to search from (or nullptr for document)
+    bro::dom::Document* doc;     // document to search from (when root is nullptr)
+    std::string selector;
+};
+
+static void js_htmlcollection_finalizer(JSRuntime* /*rt*/, JSValue val)
+{
+    auto* data = static_cast<HTMLCollectionData*>(
+        JS_GetOpaque(val, js_htmlcollection_class_id));
+    delete data;
+}
+
+static JSClassDef js_htmlcollection_class = {
+    "HTMLCollection",
+    js_htmlcollection_finalizer,
+    nullptr, nullptr, nullptr
+};
+
+static std::vector<bro::dom::Element*> htmlcollection_query(HTMLCollectionData* data)
+{
+    if (!data) return {};
+    if (data->root)
+        return data->root->querySelectorAll(data->selector);
+    if (data->doc)
+        return data->doc->querySelectorAll(data->selector);
+    return {};
+}
+
+static JSValue js_htmlcollection_length(JSContext* ctx, JSValueConst this_val)
+{
+    auto* data = static_cast<HTMLCollectionData*>(
+        JS_GetOpaque(this_val, js_htmlcollection_class_id));
+    if (!data) return JS_NewInt32(ctx, 0);
+    auto results = htmlcollection_query(data);
+    return JS_NewInt32(ctx, static_cast<int32_t>(results.size()));
+}
+
+static JSValue js_htmlcollection_item(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv)
+{
+    auto* data = static_cast<HTMLCollectionData*>(
+        JS_GetOpaque(this_val, js_htmlcollection_class_id));
+    if (!data || argc < 1) return JS_NULL;
+    int32_t idx = 0;
+    JS_ToInt32(ctx, &idx, argv[0]);
+    auto results = htmlcollection_query(data);
+    if (idx < 0 || static_cast<size_t>(idx) >= results.size())
+        return JS_NULL;
+    return DomBindings::wrapElement(ctx, results[static_cast<size_t>(idx)]);
+}
+
+// namedItem(name) — search by id or name attribute
+static JSValue js_htmlcollection_namedItem(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv)
+{
+    auto* data = static_cast<HTMLCollectionData*>(
+        JS_GetOpaque(this_val, js_htmlcollection_class_id));
+    if (!data || argc < 1) return JS_NULL;
+    std::string name = jsToStdString(ctx, argv[0]);
+    auto results = htmlcollection_query(data);
+    for (auto* el : results) {
+        if (el->id() == name || el->getAttribute("name") == name)
+            return DomBindings::wrapElement(ctx, el);
+    }
+    return JS_NULL;
+}
+
+JSValue wrapLiveHTMLCollection(JSContext* ctx, bro::dom::Element* root,
+                               bro::dom::Document* doc,
+                               const std::string& selector)
+{
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_htmlcollection_class_id));
+    if (JS_IsException(obj)) return obj;
+
+    auto* data = new HTMLCollectionData{root, doc, selector};
+    JS_SetOpaque(obj, data);
+
+    // Override length as a live getter
+    JSValue getLen = JS_NewCFunction2(ctx, [](JSContext* cx,
+        JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        return js_htmlcollection_length(cx, this_val);
+    }, "get length", 0, JS_CFUNC_generic, 0);
+    JSAtom lenAtom = JS_NewAtom(ctx, "length");
+    JS_DefinePropertyGetSet(ctx, obj, lenAtom, getLen, JS_UNDEFINED, 0);
+    JS_FreeAtom(ctx, lenAtom);
+
+    JS_SetPropertyStr(ctx, obj, "item",
+        JS_NewCFunction(ctx, js_htmlcollection_item, "item", 1));
+    JS_SetPropertyStr(ctx, obj, "namedItem",
+        JS_NewCFunction(ctx, js_htmlcollection_namedItem, "namedItem", 1));
+
+    // Set current indexed properties (will become stale, but length getter is live)
+    auto results = htmlcollection_query(data);
+    for (size_t i = 0; i < results.size(); ++i) {
+        JS_SetPropertyUint32(ctx, obj, static_cast<uint32_t>(i),
+                             DomBindings::wrapElement(ctx, results[i]));
+    }
+
+    return obj;
+}
+
+// ===========================================================================
 // Generic Node wrapper (comment nodes, text nodes in tree ops)
 // ===========================================================================
 
@@ -125,12 +232,172 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
     JS_SetPropertyStr(ctx, obj, "nodeName",
         JS_NewString(ctx, node->nodeName().c_str()));
 
+    // -- CharacterData methods shared by Text and Comment nodes --
+    auto installCharacterDataMethods = [&](JSValue obj, bro::dom::Node* n) {
+        // length getter
+        JSValue getLen = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!nd) return JS_NewInt32(cx, 0);
+            if (nd->nodeType() == bro::dom::NodeType::Text)
+                return JS_NewInt32(cx, (int32_t)static_cast<bro::dom::TextNode*>(nd)->length());
+            if (nd->nodeType() == bro::dom::NodeType::Comment)
+                return JS_NewInt32(cx, (int32_t)static_cast<bro::dom::CommentNode*>(nd)->length());
+            return JS_NewInt32(cx, 0);
+        }, "get length", 0, JS_CFUNC_generic, 0);
+        JSAtom lenAtom = JS_NewAtom(ctx, "length");
+        JS_DefinePropertyGetSet(ctx, obj, lenAtom, getLen, JS_UNDEFINED, 0);
+        JS_FreeAtom(ctx, lenAtom);
+
+        // data getter/setter
+        JSValue getData = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!nd) return JS_NULL;
+            if (nd->nodeType() == bro::dom::NodeType::Text)
+                return JS_NewString(cx, static_cast<bro::dom::TextNode*>(nd)->data().c_str());
+            if (nd->nodeType() == bro::dom::NodeType::Comment)
+                return JS_NewString(cx, static_cast<bro::dom::CommentNode*>(nd)->data().c_str());
+            return JS_NULL;
+        }, "get data", 0, JS_CFUNC_generic, 0);
+        JSValue setData = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+            if (argc < 1) return JS_UNDEFINED;
+            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!nd) return JS_UNDEFINED;
+            const char* s = JS_ToCString(cx, argv[0]);
+            std::string v(s ? s : "");
+            if (s) JS_FreeCString(cx, s);
+            if (nd->nodeType() == bro::dom::NodeType::Text)
+                static_cast<bro::dom::TextNode*>(nd)->setData(v);
+            else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                static_cast<bro::dom::CommentNode*>(nd)->setData(v);
+            auto* parent = nd->parentNode();
+            if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
+                auto* parentEl = static_cast<bro::dom::Element*>(parent);
+                parentEl->markDirty();
+                parentEl->markStructureDirty();
+            }
+            return JS_UNDEFINED;
+        }, "set data", 1, JS_CFUNC_generic, 0);
+        JSAtom dataAtom = JS_NewAtom(ctx, "data");
+        JS_DefinePropertyGetSet(ctx, obj, dataAtom, getData, setData, 0);
+        JS_FreeAtom(ctx, dataAtom);
+
+        // substringData(offset, count)
+        JS_SetPropertyStr(ctx, obj, "substringData",
+            JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
+                int argc, JSValueConst* argv) -> JSValue {
+                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                if (!nd || argc < 2) return JS_NewString(cx, "");
+                int32_t off = 0, cnt = 0;
+                JS_ToInt32(cx, &off, argv[0]);
+                JS_ToInt32(cx, &cnt, argv[1]);
+                std::string result;
+                if (nd->nodeType() == bro::dom::NodeType::Text)
+                    result = static_cast<bro::dom::TextNode*>(nd)->substringData(off, cnt);
+                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                    result = static_cast<bro::dom::CommentNode*>(nd)->substringData(off, cnt);
+                return JS_NewString(cx, result.c_str());
+            }, "substringData", 2));
+
+        // appendData(data)
+        JS_SetPropertyStr(ctx, obj, "appendData",
+            JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
+                int argc, JSValueConst* argv) -> JSValue {
+                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                if (!nd || argc < 1) return JS_UNDEFINED;
+                const char* s = JS_ToCString(cx, argv[0]);
+                std::string v(s ? s : "");
+                if (s) JS_FreeCString(cx, s);
+                if (nd->nodeType() == bro::dom::NodeType::Text)
+                    static_cast<bro::dom::TextNode*>(nd)->appendData(v);
+                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                    static_cast<bro::dom::CommentNode*>(nd)->appendData(v);
+                auto* parent = nd->parentNode();
+                if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
+                    static_cast<bro::dom::Element*>(parent)->markDirty();
+                    static_cast<bro::dom::Element*>(parent)->markStructureDirty();
+                }
+                return JS_UNDEFINED;
+            }, "appendData", 1));
+
+        // insertData(offset, data)
+        JS_SetPropertyStr(ctx, obj, "insertData",
+            JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
+                int argc, JSValueConst* argv) -> JSValue {
+                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                if (!nd || argc < 2) return JS_UNDEFINED;
+                int32_t off = 0;
+                JS_ToInt32(cx, &off, argv[0]);
+                const char* s = JS_ToCString(cx, argv[1]);
+                std::string v(s ? s : "");
+                if (s) JS_FreeCString(cx, s);
+                if (nd->nodeType() == bro::dom::NodeType::Text)
+                    static_cast<bro::dom::TextNode*>(nd)->insertData(off, v);
+                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                    static_cast<bro::dom::CommentNode*>(nd)->insertData(off, v);
+                auto* parent = nd->parentNode();
+                if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
+                    static_cast<bro::dom::Element*>(parent)->markDirty();
+                    static_cast<bro::dom::Element*>(parent)->markStructureDirty();
+                }
+                return JS_UNDEFINED;
+            }, "insertData", 2));
+
+        // deleteData(offset, count)
+        JS_SetPropertyStr(ctx, obj, "deleteData",
+            JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
+                int argc, JSValueConst* argv) -> JSValue {
+                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                if (!nd || argc < 2) return JS_UNDEFINED;
+                int32_t off = 0, cnt = 0;
+                JS_ToInt32(cx, &off, argv[0]);
+                JS_ToInt32(cx, &cnt, argv[1]);
+                if (nd->nodeType() == bro::dom::NodeType::Text)
+                    static_cast<bro::dom::TextNode*>(nd)->deleteData(off, cnt);
+                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                    static_cast<bro::dom::CommentNode*>(nd)->deleteData(off, cnt);
+                auto* parent = nd->parentNode();
+                if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
+                    static_cast<bro::dom::Element*>(parent)->markDirty();
+                    static_cast<bro::dom::Element*>(parent)->markStructureDirty();
+                }
+                return JS_UNDEFINED;
+            }, "deleteData", 2));
+
+        // replaceData(offset, count, data)
+        JS_SetPropertyStr(ctx, obj, "replaceData",
+            JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
+                int argc, JSValueConst* argv) -> JSValue {
+                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                if (!nd || argc < 3) return JS_UNDEFINED;
+                int32_t off = 0, cnt = 0;
+                JS_ToInt32(cx, &off, argv[0]);
+                JS_ToInt32(cx, &cnt, argv[1]);
+                const char* s = JS_ToCString(cx, argv[2]);
+                std::string v(s ? s : "");
+                if (s) JS_FreeCString(cx, s);
+                if (nd->nodeType() == bro::dom::NodeType::Text)
+                    static_cast<bro::dom::TextNode*>(nd)->replaceData(off, cnt, v);
+                else if (nd->nodeType() == bro::dom::NodeType::Comment)
+                    static_cast<bro::dom::CommentNode*>(nd)->replaceData(off, cnt, v);
+                auto* parent = nd->parentNode();
+                if (parent && parent->nodeType() == bro::dom::NodeType::Element) {
+                    static_cast<bro::dom::Element*>(parent)->markDirty();
+                    static_cast<bro::dom::Element*>(parent)->markStructureDirty();
+                }
+                return JS_UNDEFINED;
+            }, "replaceData", 3));
+    };
+
     if (node->nodeType() == bro::dom::NodeType::Comment) {
         auto* comment = static_cast<bro::dom::CommentNode*>(node);
         JS_SetPropertyStr(ctx, obj, "nodeValue",
             JS_NewString(ctx, comment->data().c_str()));
         JS_SetPropertyStr(ctx, obj, "textContent",
             JS_NewString(ctx, comment->data().c_str()));
+        installCharacterDataMethods(obj, node);
     } else if (node->nodeType() == bro::dom::NodeType::Text) {
         // Define nodeValue and textContent as live getter/setter pairs
         // so that Vue's `textNode.nodeValue = "..."` actually updates
@@ -156,7 +423,12 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 
             if (tn->data() == newText) return JS_UNDEFINED; // no change
 
+            std::string oldData = tn->data();
             tn->setData(newText);
+
+            // Notify MutationObservers of characterData change
+            notifyMutationObservers(cx, this_val, "characterData",
+                nullptr, oldData.c_str(), JS_NULL, JS_NULL);
 
             // Mark parent dirty for re-layout
             auto* parent = n->parentNode();
@@ -191,6 +463,80 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JSAtom tcAtom = JS_NewAtom(ctx, "textContent");
         JS_DefinePropertyGetSet(ctx, obj, tcAtom, getTC, setTC, 0);
         JS_FreeAtom(ctx, tcAtom);
+
+        // CharacterData methods for text nodes
+        installCharacterDataMethods(obj, node);
+
+        // splitText(offset) — Text-specific
+        JS_SetPropertyStr(ctx, obj, "splitText",
+            JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
+                int argc, JSValueConst* argv) -> JSValue {
+                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                if (!nd || nd->nodeType() != bro::dom::NodeType::Text || argc < 1)
+                    return JS_NULL;
+                auto* tn = static_cast<bro::dom::TextNode*>(nd);
+                int32_t off = 0;
+                JS_ToInt32(cx, &off, argv[0]);
+                size_t splitOff = static_cast<size_t>(off < 0 ? 0 : off);
+                if (splitOff > tn->data().size()) splitOff = tn->data().size();
+                std::string tail = tn->data().substr(splitOff);
+                tn->setData(tn->data().substr(0, splitOff));
+
+                // Create new text node via document (for proper ownership)
+                auto* doc = getDocumentForCtx(cx);
+                bro::dom::TextNode* newNode = nullptr;
+                if (doc) {
+                    newNode = doc->createTextNode(tail);
+                } else {
+                    // Fallback: allocate without document (will leak)
+                    newNode = new bro::dom::TextNode(tail);
+                }
+
+                // Insert new node after this one in the parent
+                auto* parent = nd->parentNode();
+                if (parent) {
+                    auto& kids = parent->childNodes();
+                    for (size_t i = 0; i < kids.size(); ++i) {
+                        if (kids[i] == nd) {
+                            newNode->setParent(parent);
+                            kids.insert(kids.begin() + static_cast<ptrdiff_t>(i) + 1, newNode);
+                            break;
+                        }
+                    }
+                    if (parent->nodeType() == bro::dom::NodeType::Element) {
+                        static_cast<bro::dom::Element*>(parent)->markDirty();
+                        static_cast<bro::dom::Element*>(parent)->markStructureDirty();
+                    }
+                }
+                return wrapAnyNode(cx, newNode);
+            }, "splitText", 1));
+
+        // wholeText getter
+        JSValue getWholeText = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            if (!nd || nd->nodeType() != bro::dom::NodeType::Text) return JS_NewString(cx, "");
+            std::string result;
+            // Collect contiguous text nodes
+            auto* parent = nd->parentNode();
+            if (!parent) return JS_NewString(cx, static_cast<bro::dom::TextNode*>(nd)->data().c_str());
+            auto& kids = parent->childNodes();
+            // Find start of contiguous text run
+            size_t myIdx = 0;
+            for (size_t i = 0; i < kids.size(); ++i) {
+                if (kids[i] == nd) { myIdx = i; break; }
+            }
+            size_t start = myIdx;
+            while (start > 0 && kids[start - 1]->nodeType() == bro::dom::NodeType::Text) --start;
+            for (size_t i = start; i < kids.size(); ++i) {
+                if (kids[i]->nodeType() != bro::dom::NodeType::Text) break;
+                result += static_cast<bro::dom::TextNode*>(kids[i])->data();
+            }
+            return JS_NewString(cx, result.c_str());
+        }, "get wholeText", 0, JS_CFUNC_generic, 0);
+        JSAtom wtAtom = JS_NewAtom(ctx, "wholeText");
+        JS_DefinePropertyGetSet(ctx, obj, wtAtom, getWholeText, JS_UNDEFINED, 0);
+        JS_FreeAtom(ctx, wtAtom);
     }
 
     // Define parentNode/nextSibling/previousSibling as live getters
@@ -256,6 +602,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 void registerNodeClasses(JSRuntime* rt) {
     JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class);
     JS_NewClass(rt, js_node_class_id, &js_node_class);
+    JS_NewClass(rt, js_htmlcollection_class_id, &js_htmlcollection_class);
 }
 
 void installNodePrototypes(JSContext* ctx) {
@@ -263,6 +610,9 @@ void installNodePrototypes(JSContext* ctx) {
     JS_SetPropertyFunctionList(ctx, nl_proto, js_nodelist_proto_funcs,
                                sizeof(js_nodelist_proto_funcs) / sizeof(js_nodelist_proto_funcs[0]));
     JS_SetClassProto(ctx, js_nodelist_class_id, nl_proto);
+    // HTMLCollection gets an empty prototype — methods set per-instance
+    JSValue hc_proto = JS_NewObject(ctx);
+    JS_SetClassProto(ctx, js_htmlcollection_class_id, hc_proto);
     // Node class has no prototype functions — properties are set per-instance
 }
 

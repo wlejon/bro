@@ -50,6 +50,7 @@ public:
     std::string innerHTML() const;
     std::string outerHTML() const;
     void setInnerHTML(const std::string& html);
+    void setOuterHTML(const std::string& html);
 
     // Style
     StyleProxy& style() { return style_; }

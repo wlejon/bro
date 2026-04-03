@@ -229,6 +229,41 @@ void Element::setInnerHTML(const std::string& html) {
     markDirty();
 }
 
+void Element::setOuterHTML(const std::string& html) {
+    if (!parent_ || !document_) return;
+
+    // Parse the new HTML into a temporary container
+    auto* tempContainer = document_->createElement("DIV");
+    document_->parseInnerHTML(tempContainer, html);
+
+    // Insert all parsed children before this element in the parent
+    auto newChildren = tempContainer->childNodes();
+    for (auto* child : newChildren) {
+        child->setParent(nullptr);
+    }
+    tempContainer->childNodes().clear();
+
+    for (auto* child : newChildren) {
+        parent_->insertBefore(child, this);
+        if (child->nodeType() == NodeType::Element) {
+            auto* childElem = static_cast<Element*>(child);
+            childElem->setDocument(document_);
+        }
+    }
+
+    // Unregister this element's ID before removal
+    if (!id().empty()) {
+        document_->unregisterElementId(id());
+    }
+
+    // Remove this element from parent
+    parent_->removeChild(this);
+    markStructureDirty();
+
+    // Free the temporary container
+    document_->freeNode(tempContainer);
+}
+
 void Element::addEventListener(const std::string& type, uint64_t listenerId) {
     listeners_[type].push_back(listenerId);
 }

@@ -173,8 +173,7 @@ static JSValue js_document_getElementsByTagName(JSContext* ctx,
     auto* doc = getDocument(this_val);
     if (!doc || argc < 1) return JS_NewArray(ctx);
     std::string tag = jsToStdString(ctx, argv[0]);
-    auto results = doc->querySelectorAll(tag);
-    return wrapNodeList(ctx, results);
+    return wrapLiveHTMLCollection(ctx, nullptr, doc, tag);
 }
 
 static JSValue js_document_getElementsByClassName(JSContext* ctx,
@@ -184,8 +183,7 @@ static JSValue js_document_getElementsByClassName(JSContext* ctx,
     auto* doc = getDocument(this_val);
     if (!doc || argc < 1) return JS_NewArray(ctx);
     std::string cls = jsToStdString(ctx, argv[0]);
-    auto results = doc->querySelectorAll("." + cls);
-    return wrapNodeList(ctx, results);
+    return wrapLiveHTMLCollection(ctx, nullptr, doc, "." + cls);
 }
 
 static JSValue js_document_getElementsByName(JSContext* ctx,
@@ -195,8 +193,7 @@ static JSValue js_document_getElementsByName(JSContext* ctx,
     auto* doc = getDocument(this_val);
     if (!doc || argc < 1) return wrapNodeList(ctx, {});
     std::string name = jsToStdString(ctx, argv[0]);
-    auto results = doc->querySelectorAll("[name=\"" + name + "\"]");
-    return wrapNodeList(ctx, results);
+    return wrapLiveHTMLCollection(ctx, nullptr, doc, "[name=\"" + name + "\"]");
 }
 
 static JSValue js_document_importNode(JSContext* ctx,

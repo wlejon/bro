@@ -157,7 +157,23 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
             }
         }
     }
+    // Capture removed children for MutationObserver before clearing
+    JSValue removedArr = JS_NewArray(ctx);
+    uint32_t rmIdx = 0;
+    for (auto* child : el->childNodes()) {
+        JS_SetPropertyUint32(ctx, removedArr, rmIdx++, wrapAnyNode(ctx, child));
+    }
     el->setTextContent(jsToStdString(ctx, val));
+    // Notify with added (new text node) and removed (old children)
+    JSValue addedArr = JS_NewArray(ctx);
+    uint32_t addIdx = 0;
+    for (auto* child : el->childNodes()) {
+        JS_SetPropertyUint32(ctx, addedArr, addIdx++, wrapAnyNode(ctx, child));
+    }
+    notifyMutationObservers(ctx, this_val, "childList",
+        nullptr, nullptr, addedArr, removedArr);
+    JS_FreeValue(ctx, addedArr);
+    JS_FreeValue(ctx, removedArr);
     auto& style = el->computedStyle();
     // Check overflow-y first, then overflow shorthand
     auto oyIt = style.find("overflow-y");
@@ -201,7 +217,22 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
             }
         }
     }
+    // Capture removed children for MutationObserver
+    JSValue ihRemovedArr = JS_NewArray(ctx);
+    uint32_t ihRmIdx = 0;
+    for (auto* child : el->childNodes()) {
+        JS_SetPropertyUint32(ctx, ihRemovedArr, ihRmIdx++, wrapAnyNode(ctx, child));
+    }
     el->setInnerHTML(jsToStdString(ctx, val));
+    JSValue ihAddedArr = JS_NewArray(ctx);
+    uint32_t ihAddIdx = 0;
+    for (auto* child : el->childNodes()) {
+        JS_SetPropertyUint32(ctx, ihAddedArr, ihAddIdx++, wrapAnyNode(ctx, child));
+    }
+    notifyMutationObservers(ctx, this_val, "childList",
+        nullptr, nullptr, ihAddedArr, ihRemovedArr);
+    JS_FreeValue(ctx, ihAddedArr);
+    JS_FreeValue(ctx, ihRemovedArr);
     return JS_UNDEFINED;
 }
 
@@ -596,6 +627,9 @@ static JSValue js_element_setAttribute(JSContext* ctx, JSValueConst this_val,
     el->setAttribute(name, newVal);
     if (oldVal != newVal) {
         fireAttributeChangedCallback(ctx, this_val, name, oldVal, newVal);
+        notifyMutationObservers(ctx, this_val, "attributes",
+            name.c_str(), oldVal.empty() ? nullptr : oldVal.c_str(),
+            JS_NULL, JS_NULL);
     }
     return JS_UNDEFINED;
 }
@@ -605,7 +639,13 @@ static JSValue js_element_removeAttribute(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_UNDEFINED;
-    el->removeAttribute(jsToStdString(ctx, argv[0]));
+    std::string name = jsToStdString(ctx, argv[0]);
+    std::string oldVal = el->getAttribute(name);
+    el->removeAttribute(name);
+    if (!oldVal.empty()) {
+        notifyMutationObservers(ctx, this_val, "attributes",
+            name.c_str(), oldVal.c_str(), JS_NULL, JS_NULL);
+    }
     return JS_UNDEFINED;
 }
 
@@ -631,10 +671,14 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
         if (child->nodeName() == "#DOCUMENT-FRAGMENT" ||
             child->nodeType() == bro::dom::NodeType::DocumentFragment) {
             auto kids = child->childNodes();
+            // Build addedNodes array for MutationObserver
+            JSValue addedArr = JS_NewArray(ctx);
+            uint32_t addedIdx = 0;
             for (auto* kid : kids) {
                 el->appendChild(kid);
                 if (doc && kid->nodeType() == bro::dom::NodeType::Element)
                     doc->markStructureDirty();
+                JS_SetPropertyUint32(ctx, addedArr, addedIdx++, wrapAnyNode(ctx, kid));
             }
             for (auto* kid : kids) {
                 if (kid->nodeType() == bro::dom::NodeType::Element) {
@@ -643,6 +687,9 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                     JS_FreeValue(ctx, w);
                 }
             }
+            notifyMutationObservers(ctx, this_val, "childList",
+                nullptr, nullptr, addedArr, JS_NULL);
+            JS_FreeValue(ctx, addedArr);
         } else {
             el->appendChild(child);
             if (doc && child->nodeType() == bro::dom::NodeType::Element) {
@@ -653,6 +700,11 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 fireConnectedCallback(ctx, w);
                 JS_FreeValue(ctx, w);
             }
+            JSValue addedArr = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, addedArr, 0, wrapAnyNode(ctx, child));
+            notifyMutationObservers(ctx, this_val, "childList",
+                nullptr, nullptr, addedArr, JS_NULL);
+            JS_FreeValue(ctx, addedArr);
         }
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
@@ -666,6 +718,9 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
     auto* child = unwrapNode(ctx, argv[0]);
     if (child) {
         auto* doc = getDocumentForCtx(ctx);
+        // Build removedNodes before removal
+        JSValue removedArr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, removedArr, 0, wrapAnyNode(ctx, child));
         if (child->nodeType() == bro::dom::NodeType::Element) {
             auto* childElem = static_cast<bro::dom::Element*>(child);
             JSValue w = DomBindings::wrapElement(ctx, childElem);
@@ -676,6 +731,9 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
             if (doc) doc->markStructureDirty();
         }
         el->removeChild(child);
+        notifyMutationObservers(ctx, this_val, "childList",
+            nullptr, nullptr, JS_NULL, removedArr);
+        JS_FreeValue(ctx, removedArr);
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
@@ -700,6 +758,11 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
             fireConnectedCallback(ctx, w);
             JS_FreeValue(ctx, w);
         }
+        JSValue addedArr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, addedArr, 0, wrapAnyNode(ctx, newChild));
+        notifyMutationObservers(ctx, this_val, "childList",
+            nullptr, nullptr, addedArr, JS_NULL);
+        JS_FreeValue(ctx, addedArr);
     }
     return argc >= 1 ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
 }
@@ -713,6 +776,9 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
     auto* oldChild = unwrapNode(ctx, argv[1]);
     if (newChild && oldChild) {
         auto* doc = getDocumentForCtx(ctx);
+        // Capture removed node wrapper before invalidation
+        JSValue removedArr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, removedArr, 0, wrapAnyNode(ctx, oldChild));
         if (oldChild->nodeType() == bro::dom::NodeType::Element) {
             JSValue w = DomBindings::wrapElement(ctx, oldChild);
             fireDisconnectedCallback(ctx, w);
@@ -733,6 +799,12 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
             fireConnectedCallback(ctx, w);
             JS_FreeValue(ctx, w);
         }
+        JSValue addedArr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, addedArr, 0, wrapAnyNode(ctx, newChild));
+        notifyMutationObservers(ctx, this_val, "childList",
+            nullptr, nullptr, addedArr, removedArr);
+        JS_FreeValue(ctx, addedArr);
+        JS_FreeValue(ctx, removedArr);
     }
     return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
 }
@@ -1024,8 +1096,7 @@ static JSValue js_element_getElementsByTagName(JSContext* ctx,
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_NewArray(ctx);
     std::string tag = jsToStdString(ctx, argv[0]);
-    auto results = el->querySelectorAll(tag);
-    return wrapNodeList(ctx, results);
+    return wrapLiveHTMLCollection(ctx, el, nullptr, tag);
 }
 
 static JSValue js_element_getElementsByClassName(JSContext* ctx,
@@ -1035,8 +1106,7 @@ static JSValue js_element_getElementsByClassName(JSContext* ctx,
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_NewArray(ctx);
     std::string cls = jsToStdString(ctx, argv[0]);
-    auto results = el->querySelectorAll("." + cls);
-    return wrapNodeList(ctx, results);
+    return wrapLiveHTMLCollection(ctx, el, nullptr, "." + cls);
 }
 
 static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
@@ -1358,6 +1428,43 @@ static JSValue js_element_get_outerHTML(JSContext* ctx, JSValueConst this_val) {
     result += el->innerHTML();
     result += "</" + tag + ">";
     return JS_NewString(ctx, result.c_str());
+}
+
+static JSValue js_element_set_outerHTML(JSContext* ctx, JSValueConst this_val,
+                                        JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* parent = el->parentElement();
+    if (!parent) return JS_UNDEFINED;
+
+    // Capture removed node for MutationObserver
+    JSValue removedArr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, removedArr, 0, JS_DupValue(ctx, this_val));
+
+    std::string html = jsToStdString(ctx, val);
+    el->setOuterHTML(html);
+
+    // Notify MutationObserver on the parent
+    JSValue parentJs = DomBindings::wrapElement(ctx, parent);
+    JSValue addedArr = JS_NewArray(ctx);
+    uint32_t addIdx = 0;
+    for (auto* child : parent->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            JS_SetPropertyUint32(ctx, addedArr, addIdx++,
+                DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child)));
+        }
+    }
+    notifyMutationObservers(ctx, parentJs, "childList",
+        nullptr, nullptr, addedArr, removedArr);
+    JS_FreeValue(ctx, addedArr);
+    JS_FreeValue(ctx, removedArr);
+    JS_FreeValue(ctx, parentJs);
+
+    // Invalidate the old element wrapper
+    JS_SetOpaque(this_val, nullptr);
+
+    return JS_UNDEFINED;
 }
 
 // ---- insertAdjacentHTML ---------------------------------------------------
@@ -1963,7 +2070,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("scrollHeight",  js_element_get_scrollHeight, nullptr),
     JS_CGETSET_DEF("scrollLeft",    js_element_get_scrollLeft, js_element_set_scrollLeft),
     JS_CGETSET_DEF("scrollTop",     js_element_get_scrollTop, js_element_set_scrollTop),
-    JS_CGETSET_DEF("outerHTML",     js_element_get_outerHTML, nullptr),
+    JS_CGETSET_DEF("outerHTML",     js_element_get_outerHTML, js_element_set_outerHTML),
     JS_CGETSET_DEF("innerText",     js_element_get_innerText, nullptr),
     JS_CGETSET_DEF("dataset",       js_element_get_dataset, nullptr),
     JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),

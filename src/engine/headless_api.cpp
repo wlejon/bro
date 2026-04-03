@@ -50,6 +50,25 @@ void Engine::flush() {
         document_->clearStructureDirty();
         document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
         document_->clearDirty();
+
+        // Notify ResizeObserver / IntersectionObserver after layout
+        if (jsRuntime_) {
+            static const char* observerCheck = R"JS(
+                (function() {
+                    if (globalThis.__bro_resize_observers) {
+                        for (var i = 0; i < globalThis.__bro_resize_observers.length; i++)
+                            globalThis.__bro_resize_observers[i]._check();
+                    }
+                    if (globalThis.__bro_intersection_observers) {
+                        for (var i = 0; i < globalThis.__bro_intersection_observers.length; i++)
+                            globalThis.__bro_intersection_observers[i]._check();
+                    }
+                })();
+            )JS";
+            JSValue r = JS_Eval(jsRuntime_->getContext(), observerCheck,
+                                strlen(observerCheck), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
+            JS_FreeValue(jsRuntime_->getContext(), r);
+        }
     }
 }
 

@@ -34,6 +34,8 @@
 #include "dom/node.h"
 #include "dom/event.h"
 #include "dom/shadow_root.h"
+
+#include <cstring>
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "layout/element_ref_adapter.h"
@@ -505,6 +507,25 @@ void Engine::run() {
                         processScrollToBottom(child);
                 };
                 processScrollToBottom(document_->documentElement());
+            }
+
+            // Notify ResizeObserver / IntersectionObserver after layout
+            if (jsRuntime_) {
+                static const char* observerCheck = R"JS(
+                    (function() {
+                        if (globalThis.__bro_resize_observers) {
+                            for (var i = 0; i < globalThis.__bro_resize_observers.length; i++)
+                                globalThis.__bro_resize_observers[i]._check();
+                        }
+                        if (globalThis.__bro_intersection_observers) {
+                            for (var i = 0; i < globalThis.__bro_intersection_observers.length; i++)
+                                globalThis.__bro_intersection_observers[i]._check();
+                        }
+                    })();
+                )JS";
+                JSValue r = JS_Eval(jsRuntime_->getContext(), observerCheck,
+                                    strlen(observerCheck), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
+                JS_FreeValue(jsRuntime_->getContext(), r);
             }
 
             uiDirty_ = true;

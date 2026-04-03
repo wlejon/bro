@@ -32,6 +32,7 @@ extern JSClassID js_cssstyle_class_id;
 extern JSClassID js_computed_class_id;
 extern JSClassID js_tokenlist_class_id;
 extern JSClassID js_shadowroot_class_id;
+extern JSClassID js_htmlcollection_class_id;
 
 // ===========================================================================
 // Per-context / per-runtime state (defined in dom_bindings.cpp)
@@ -101,6 +102,9 @@ inline std::string jsToStdString(JSContext* ctx, JSValueConst val)
 
 // node_bindings.cpp
 JSValue wrapNodeList(JSContext* ctx, const std::vector<bro::dom::Element*>& elems);
+JSValue wrapLiveHTMLCollection(JSContext* ctx, bro::dom::Element* root,
+                               bro::dom::Document* doc,
+                               const std::string& selector);
 JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node);
 bro::dom::Node* unwrapNode(JSContext* ctx, JSValueConst val);
 
@@ -122,6 +126,14 @@ bro::dom::Element* getElement(JSValueConst val);
 
 // document_bindings.cpp
 bro::dom::Document* getDocument(JSValueConst val);
+
+// mutation_observer.cpp — notify MutationObservers of DOM changes
+void notifyMutationObservers(JSContext* ctx, JSValueConst target,
+                             const char* type,         // "childList", "attributes", "characterData"
+                             const char* attributeName, // for "attributes" type, else nullptr
+                             const char* oldValue,      // previous value or nullptr
+                             JSValueConst addedNodes,   // JS array or JS_NULL
+                             JSValueConst removedNodes); // JS array or JS_NULL
 
 // ===========================================================================
 // Per-module class registration & prototype installation
