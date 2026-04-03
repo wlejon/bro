@@ -509,7 +509,9 @@ void Engine::run() {
 
         double tLayout = tJs;
         if (document_ && (document_->isDirty() || !hasRenderedOnce_) && uiFrameDue) {
-            ensureReplacedElements(document_->documentElement());
+            if (document_->isStructureDirty()) {
+                ensureReplacedElements(document_->documentElement());
+            }
             document_->resolveStyles();
             document_->clearStructureDirty();
             document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);

@@ -47,7 +47,9 @@ namespace bro::engine {
 void Engine::flush() {
     jsRuntime_->executePendingJobs();
     if (document_ && document_->isDirty()) {
-        ensureReplacedElements(document_->documentElement());
+        if (document_->isStructureDirty()) {
+            ensureReplacedElements(document_->documentElement());
+        }
         document_->resolveStyles();
         document_->clearStructureDirty();
         document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);

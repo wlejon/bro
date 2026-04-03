@@ -1,0 +1,175 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: system-ui, sans-serif;
+    overflow: hidden;
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* Header / Controls */
+#header {
+    display: flex;
+    align-items: center;
+    padding: 8px 16px;
+    background: #12121a;
+    border-bottom: 1px solid #2a2a3a;
+    gap: 24px;
+}
+
+#header h1 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #00e5ff;
+    letter-spacing: 4px;
+    min-width: 80px;
+}
+
+#controls {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    flex: 1;
+}
+
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.control-group label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #666;
+    letter-spacing: 1px;
+}
+
+.btn-group {
+    display: flex;
+    gap: 2px;
+}
+
+.btn {
+    background: #1a1a2a;
+    border: 1px solid #2a2a3a;
+    color: #888;
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.btn:hover {
+    background: #222238;
+    color: #bbb;
+}
+
+.btn.active {
+    background: #00e5ff20;
+    border-color: #00e5ff;
+    color: #00e5ff;
+}
+
+input[type="range"] {
+    width: 80px;
+    accent-color: #00e5ff;
+}
+
+/* Visualization canvas */
+#viz {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+}
+
+/* Piano keyboard */
+#keyboard {
+    height: 120px;
+    display: flex;
+    position: relative;
+    background: #0d0d14;
+    border-top: 1px solid #2a2a3a;
+    padding: 0 4px;
+}
+
+.white-key {
+    flex: 1;
+    background: linear-gradient(180deg, #e8e8e8, #d0d0d0);
+    border: 1px solid #999;
+    border-top: none;
+    cursor: pointer;
+    position: relative;
+    z-index: 1;
+    transition: background 0.05s;
+}
+
+.white-key:hover {
+    background: linear-gradient(180deg, #f0f0f0, #e0e0e0);
+}
+
+.white-key.pressed {
+    background: linear-gradient(180deg, #00e5ff60, #00e5ff30);
+    border-color: #00e5ff;
+}
+
+.black-key {
+    width: 60%;
+    height: 65%;
+    background: linear-gradient(180deg, #2a2a2a, #1a1a1a);
+    border: 1px solid #111;
+    position: absolute;
+    z-index: 2;
+    cursor: pointer;
+    transition: background 0.05s;
+}
+
+.black-key:hover {
+    background: linear-gradient(180deg, #333, #222);
+}
+
+.black-key.pressed {
+    background: linear-gradient(180deg, #00e5ff80, #00e5ff40);
+    border-color: #00e5ff;
+}
+
+.key-label {
+    position: absolute;
+    bottom: 6px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 9px;
+    color: #666;
+    pointer-events: none;
+}
+
+.white-key .key-label { color: #999; }
+.black-key .key-label { color: #555; bottom: 4px; font-size: 8px; }
+
+/* Status bar */
+#status-bar {
+    display: flex;
+    padding: 4px 16px;
+    gap: 24px;
+    background: #12121a;
+    border-top: 1px solid #2a2a3a;
+    font-size: 12px;
+    font-family: monospace;
+    color: #666;
+}
+
+#note-display { color: #00e5ff; min-width: 40px; }
+#freq-display { min-width: 80px; }
+#fps-display { margin-left: auto; }

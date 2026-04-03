@@ -12,6 +12,50 @@
 
 namespace bro::audio {
 
+// ---------------------------------------------------------------------------
+// FFT — in-place radix-2 Cooley-Tukey
+// ---------------------------------------------------------------------------
+
+void fft(float* real, float* imag, int n)
+{
+    // Bit-reversal permutation
+    for (int i = 1, j = 0; i < n; i++) {
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1)
+            j ^= bit;
+        j ^= bit;
+        if (i < j) {
+            std::swap(real[i], real[j]);
+            std::swap(imag[i], imag[j]);
+        }
+    }
+
+    // Cooley-Tukey butterfly
+    for (int len = 2; len <= n; len <<= 1) {
+        float angle = -2.0f * static_cast<float>(M_PI) / static_cast<float>(len);
+        float wReal = std::cos(angle);
+        float wImag = std::sin(angle);
+        for (int i = 0; i < n; i += len) {
+            float curReal = 1.0f, curImag = 0.0f;
+            for (int j = 0; j < len / 2; j++) {
+                float tReal = curReal * real[i + j + len/2] - curImag * imag[i + j + len/2];
+                float tImag = curReal * imag[i + j + len/2] + curImag * real[i + j + len/2];
+                real[i + j + len/2] = real[i + j] - tReal;
+                imag[i + j + len/2] = imag[i + j] - tImag;
+                real[i + j] += tReal;
+                imag[i + j] += tImag;
+                float newCurReal = curReal * wReal - curImag * wImag;
+                curImag = curReal * wImag + curImag * wReal;
+                curReal = newCurReal;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AudioEngine
+// ---------------------------------------------------------------------------
+
 AudioEngine::AudioEngine() = default;
 
 AudioEngine::~AudioEngine()
@@ -50,6 +94,7 @@ bool AudioEngine::init()
 
 void AudioEngine::shutdown()
 {
+    stopMicCapture();
     if (stream_) {
         SDL_DestroyAudioStream(stream_);
         stream_ = nullptr;
@@ -127,6 +172,73 @@ void AudioEngine::stopVoice(int id, double when)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Microphone capture
+// ---------------------------------------------------------------------------
+
+bool AudioEngine::startMicCapture()
+{
+    if (micCapturing_) return true;
+    if (!initialized_) return false;
+
+    SDL_AudioSpec spec;
+    spec.format = SDL_AUDIO_F32;
+    spec.channels = 1;
+    spec.freq = sampleRate_;
+
+    micStream_ = SDL_OpenAudioDeviceStream(
+        SDL_AUDIO_DEVICE_DEFAULT_RECORDING,
+        &spec, micCallback, this);
+
+    if (!micStream_) {
+        LOG_ERROR("Failed to open mic device: %s", SDL_GetError());
+        return false;
+    }
+
+    SDL_ResumeAudioStreamDevice(micStream_);
+    micCapturing_ = true;
+    LOG_INFO("Microphone capture started");
+    return true;
+}
+
+void AudioEngine::stopMicCapture()
+{
+    if (!micCapturing_) return;
+    if (micStream_) {
+        SDL_DestroyAudioStream(micStream_);
+        micStream_ = nullptr;
+    }
+    micCapturing_ = false;
+    LOG_INFO("Microphone capture stopped");
+}
+
+void AudioEngine::micCallback(void* userdata, SDL_AudioStream* stream,
+                               int additional_amount, int /*total_amount*/)
+{
+    auto* engine = static_cast<AudioEngine*>(userdata);
+
+    // For recording streams, we need to read available data
+    int avail = SDL_GetAudioStreamAvailable(stream);
+    if (avail <= 0) return;
+
+    int numSamples = avail / static_cast<int>(sizeof(float));
+    float stackBuf[4096];
+    float* buffer = (numSamples <= 4096) ? stackBuf : new float[numSamples];
+
+    int got = SDL_GetAudioStreamData(stream, buffer, avail);
+    if (got > 0) {
+        int samplesGot = got / static_cast<int>(sizeof(float));
+        std::lock_guard<std::mutex> lock(engine->micMutex_);
+        engine->micBuffer_.write(buffer, samplesGot);
+    }
+
+    if (buffer != stackBuf) delete[] buffer;
+}
+
+// ---------------------------------------------------------------------------
+// Output audio callback + synthesis
+// ---------------------------------------------------------------------------
+
 void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
                                 int additional_amount, int /*total_amount*/)
 {
@@ -140,6 +252,9 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
 
     std::memset(buffer, 0, numSamples * sizeof(float));
     engine->generateSamples(buffer, numSamples);
+
+    // Write to output ring buffer for analysis
+    engine->outputBuffer_.write(buffer, numSamples);
 
     SDL_PutAudioStreamData(stream, buffer, numSamples * sizeof(float));
 

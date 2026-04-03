@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Synth</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <div id="header">
+            <h1>SYNTH</h1>
+            <div id="controls">
+                <div class="control-group">
+                    <label>Source</label>
+                    <div id="source-btns" class="btn-group">
+                        <button class="btn active" data-source="synth">Synth</button>
+                        <button class="btn" data-source="mic">Mic</button>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Waveform</label>
+                    <div id="wave-btns" class="btn-group">
+                        <button class="btn active" data-wave="sine">Sin</button>
+                        <button class="btn" data-wave="square">Sqr</button>
+                        <button class="btn" data-wave="sawtooth">Saw</button>
+                        <button class="btn" data-wave="triangle">Tri</button>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Viz</label>
+                    <div id="viz-btns" class="btn-group">
+                        <button class="btn active" data-viz="spectrum">Bars</button>
+                        <button class="btn" data-viz="wave">Wave</button>
+                        <button class="btn" data-viz="spectrogram">Gram</button>
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Volume</label>
+                    <input type="range" id="volume" min="0" max="100" value="30">
+                </div>
+            </div>
+        </div>
+
+        <canvas id="viz"></canvas>
+
+        <div id="keyboard"></div>
+
+        <div id="status-bar">
+            <span id="note-display">--</span>
+            <span id="freq-display">-- Hz</span>
+            <span id="fps-display">-- fps</span>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

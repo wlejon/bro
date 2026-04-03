@@ -313,7 +313,6 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 float newScroll = elementScrollbar_.scrollToPosition(y,
                     contentH, viewH, em);
                 hitElem->setScrollTopValue(std::clamp(newScroll, 0.0f, maxST));
-                document_->markDirty();
             }
             uiDirty_ = true;
             return; // consumed
@@ -678,7 +677,6 @@ void Engine::handleMouseMove(float x, float y) {
             elem->scrollTopValue());
         float newScroll = elementScrollbar_.updateDrag(y, contentH, viewH, m);
         elem->setScrollTopValue(std::clamp(newScroll, 0.0f, maxST));
-        if (document_) document_->markDirty();
         uiDirty_ = true;
         lastMouseX_ = x;
         lastMouseY_ = y;
@@ -1423,7 +1421,6 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
                     dispatchScrollEvent(el);
                 }
                 uiDirty_ = true;
-                document_->markDirty();
                 return;
             }
             if (ov == "hidden") {
