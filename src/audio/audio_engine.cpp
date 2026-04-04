@@ -109,9 +109,20 @@ static inline float generateSample(Waveform wf, float phase, float phaseInc)
 // Soft limiter — tanh-based, transparent below threshold
 // ---------------------------------------------------------------------------
 
+// Soft clipper: linear below threshold, smooth saturation above.
+// No harmonic distortion in the linear region (unlike tanh which always distorts).
 static inline float softLimit(float x)
 {
-    return std::tanh(x);
+    constexpr float thresh = 0.8f;
+    if (x > thresh) {
+        float over = x - thresh;
+        return thresh + (1.0f - thresh) * (1.0f - std::exp(-over / (1.0f - thresh)));
+    }
+    if (x < -thresh) {
+        float over = -x - thresh;
+        return -(thresh + (1.0f - thresh) * (1.0f - std::exp(-over / (1.0f - thresh))));
+    }
+    return x;
 }
 
 // ---------------------------------------------------------------------------
