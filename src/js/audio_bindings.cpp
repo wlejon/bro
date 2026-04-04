@@ -27,6 +27,7 @@ static JSClassID js_audioparam_class_id = 0;
 static JSClassID js_analysernode_class_id = 0;
 static JSClassID js_micstream_class_id = 0;
 static JSClassID js_micsource_class_id = 0;
+static JSClassID js_biquadfilter_class_id = 0;
 
 // ---------------------------------------------------------------------------
 // AudioParam — wraps a float value that updates the engine
@@ -34,8 +35,11 @@ static JSClassID js_micsource_class_id = 0;
 
 struct AudioParamData {
     audio::AudioEngine* engine;
-    int voiceId;
-    enum class Target { Frequency, Gain } target;
+    int voiceId;         // voice ID for voice params, or filter slot for filter params
+    enum class Target {
+        Frequency, Gain, Attack, Decay, SustainLevel, Release,
+        FilterFrequency, FilterQ, FilterGain
+    } target;
     float value;
 };
 
@@ -57,10 +61,26 @@ static JSValue js_audioparam_set_value(JSContext* ctx, JSValueConst this_val, JS
     if (!p) return JS_UNDEFINED;
     double v; JS_ToFloat64(ctx, &v, val);
     p->value = static_cast<float>(v);
-    if (p->target == AudioParamData::Target::Frequency)
-        p->engine->setFrequency(p->voiceId, p->value);
-    else
-        p->engine->setGain(p->voiceId, p->value);
+    switch (p->target) {
+        case AudioParamData::Target::Frequency:
+            p->engine->setFrequency(p->voiceId, p->value); break;
+        case AudioParamData::Target::Gain:
+            p->engine->setGain(p->voiceId, p->value); break;
+        case AudioParamData::Target::Attack:
+            p->engine->setAttackTime(p->voiceId, p->value); break;
+        case AudioParamData::Target::Decay:
+            p->engine->setDecayTime(p->voiceId, p->value); break;
+        case AudioParamData::Target::SustainLevel:
+            p->engine->setSustainLevel(p->voiceId, p->value); break;
+        case AudioParamData::Target::Release:
+            p->engine->setReleaseTime(p->voiceId, p->value); break;
+        case AudioParamData::Target::FilterFrequency:
+            p->engine->setFilterFrequency(p->voiceId, p->value); break;
+        case AudioParamData::Target::FilterQ:
+            p->engine->setFilterQ(p->voiceId, p->value); break;
+        case AudioParamData::Target::FilterGain:
+            p->engine->setFilterGain(p->voiceId, p->value); break;
+    }
     return JS_UNDEFINED;
 }
 
@@ -540,6 +560,79 @@ static const JSCFunctionListEntry js_gainnode_proto_funcs[] = {
 };
 
 // ---------------------------------------------------------------------------
+// BiquadFilterNode
+// ---------------------------------------------------------------------------
+
+struct BiquadFilterNodeData {
+    audio::AudioEngine* engine;
+    int slot;
+};
+
+static void js_biquadfilter_finalizer(JSRuntime*, JSValue val) {
+    auto* d = static_cast<BiquadFilterNodeData*>(JS_GetOpaque(val, js_biquadfilter_class_id));
+    if (d) {
+        d->engine->releaseFilterSlot(d->slot);
+        delete d;
+    }
+}
+
+static JSClassDef js_biquadfilter_class = {
+    "BiquadFilterNode", js_biquadfilter_finalizer, nullptr, nullptr, nullptr
+};
+
+static JSValue js_biquadfilter_get_type(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<BiquadFilterNodeData*>(JS_GetOpaque(this_val, js_biquadfilter_class_id));
+    if (!d) return JS_UNDEFINED;
+    JSValue v = JS_GetPropertyStr(ctx, this_val, "__type");
+    return v;
+}
+
+static JSValue js_biquadfilter_set_type(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* d = static_cast<BiquadFilterNodeData*>(JS_GetOpaque(this_val, js_biquadfilter_class_id));
+    if (!d) return JS_UNDEFINED;
+
+    const char* str = JS_ToCString(ctx, val);
+    if (!str) return JS_UNDEFINED;
+
+    audio::BiquadFilter::Type type = audio::BiquadFilter::Type::Lowpass;
+    if (strcmp(str, "lowpass") == 0) type = audio::BiquadFilter::Type::Lowpass;
+    else if (strcmp(str, "highpass") == 0) type = audio::BiquadFilter::Type::Highpass;
+    else if (strcmp(str, "bandpass") == 0) type = audio::BiquadFilter::Type::Bandpass;
+    else if (strcmp(str, "notch") == 0) type = audio::BiquadFilter::Type::Notch;
+    else if (strcmp(str, "allpass") == 0) type = audio::BiquadFilter::Type::Allpass;
+    else if (strcmp(str, "peaking") == 0) type = audio::BiquadFilter::Type::Peaking;
+    else if (strcmp(str, "lowshelf") == 0) type = audio::BiquadFilter::Type::Lowshelf;
+    else if (strcmp(str, "highshelf") == 0) type = audio::BiquadFilter::Type::Highshelf;
+
+    JS_FreeCString(ctx, str);
+
+    d->engine->setFilterType(d->slot, type);
+    JS_SetPropertyStr(ctx, this_val, "__type", JS_DupValue(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_biquadfilter_connect(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* d = static_cast<BiquadFilterNodeData*>(JS_GetOpaque(this_val, js_biquadfilter_class_id));
+    if (d) d->engine->setFilterEnabled(d->slot, true);
+    if (argc < 1) return JS_UNDEFINED;
+    return JS_DupValue(ctx, argv[0]);
+}
+
+static JSValue js_biquadfilter_disconnect(JSContext*, JSValueConst this_val,
+                                           int, JSValueConst*) {
+    auto* d = static_cast<BiquadFilterNodeData*>(JS_GetOpaque(this_val, js_biquadfilter_class_id));
+    if (d) d->engine->setFilterEnabled(d->slot, false);
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_biquadfilter_proto_funcs[] = {
+    JS_CGETSET_DEF("type", js_biquadfilter_get_type, js_biquadfilter_set_type),
+    JS_CFUNC_DEF("connect", 1, js_biquadfilter_connect),
+    JS_CFUNC_DEF("disconnect", 0, js_biquadfilter_disconnect),
+};
+
+// ---------------------------------------------------------------------------
 // AudioContext
 // ---------------------------------------------------------------------------
 
@@ -576,10 +669,17 @@ static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_va
     auto* oscData = new OscNodeData{d->engine, voiceId, "sine"};
     JS_SetOpaque(obj, oscData);
 
-    // Create the frequency AudioParam
-    JSValue freqParam = createAudioParam(ctx, d->engine, voiceId,
-                                         AudioParamData::Target::Frequency, 440.0f);
-    JS_SetPropertyStr(ctx, obj, "frequency", freqParam);
+    // Create AudioParams for oscillator properties
+    JS_SetPropertyStr(ctx, obj, "frequency",
+        createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Frequency, 440.0f));
+    JS_SetPropertyStr(ctx, obj, "attack",
+        createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Attack, 0.01f));
+    JS_SetPropertyStr(ctx, obj, "decay",
+        createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Decay, 0.1f));
+    JS_SetPropertyStr(ctx, obj, "sustain",
+        createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::SustainLevel, 1.0f));
+    JS_SetPropertyStr(ctx, obj, "release",
+        createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Release, 0.04f));
 
     return obj;
 }
@@ -609,6 +709,68 @@ static JSValue js_audioctx_createAnalyser(JSContext* ctx, JSValueConst this_val,
     auto* data = new AnalyserNodeData{d->engine};
     JS_SetOpaque(obj, data);
     return obj;
+}
+
+static JSValue js_audioctx_createBiquadFilter(JSContext* ctx, JSValueConst this_val,
+                                               int, JSValueConst*) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d) return JS_UNDEFINED;
+
+    int slot = d->engine->allocateFilterSlot();
+    if (slot < 0) return JS_ThrowInternalError(ctx, "No filter slots available");
+
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_biquadfilter_class_id));
+    auto* filterData = new BiquadFilterNodeData{d->engine, slot};
+    JS_SetOpaque(obj, filterData);
+
+    // Set default type property
+    JS_SetPropertyStr(ctx, obj, "__type", JS_NewString(ctx, "lowpass"));
+
+    // Create AudioParams for filter properties (voiceId field holds the slot index)
+    JS_SetPropertyStr(ctx, obj, "frequency",
+        createAudioParam(ctx, d->engine, slot, AudioParamData::Target::FilterFrequency, 1000.0f));
+    JS_SetPropertyStr(ctx, obj, "Q",
+        createAudioParam(ctx, d->engine, slot, AudioParamData::Target::FilterQ, 1.0f));
+    JS_SetPropertyStr(ctx, obj, "gain",
+        createAudioParam(ctx, d->engine, slot, AudioParamData::Target::FilterGain, 0.0f));
+
+    return obj;
+}
+
+// Delay control methods on AudioContext
+static JSValue js_audioctx_setDelayEnabled(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->engine->setDelayEnabled(JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setDelayTime(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setDelayTime(static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setDelayFeedback(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setDelayFeedback(static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setDelayMix(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setDelayMix(static_cast<float>(v));
+    return JS_UNDEFINED;
 }
 
 static JSValue js_audioctx_createMediaStreamSource(JSContext* ctx, JSValueConst this_val,
@@ -841,7 +1003,12 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("createOscillator", 0, js_audioctx_createOscillator),
     JS_CFUNC_DEF("createGain", 0, js_audioctx_createGain),
     JS_CFUNC_DEF("createAnalyser", 0, js_audioctx_createAnalyser),
+    JS_CFUNC_DEF("createBiquadFilter", 0, js_audioctx_createBiquadFilter),
     JS_CFUNC_DEF("createMediaStreamSource", 1, js_audioctx_createMediaStreamSource),
+    JS_CFUNC_DEF("setDelayEnabled", 1, js_audioctx_setDelayEnabled),
+    JS_CFUNC_DEF("setDelayTime", 1, js_audioctx_setDelayTime),
+    JS_CFUNC_DEF("setDelayFeedback", 1, js_audioctx_setDelayFeedback),
+    JS_CFUNC_DEF("setDelayMix", 1, js_audioctx_setDelayMix),
     JS_CFUNC_DEF("startRecording", 0, js_audioctx_startRecording),
     JS_CFUNC_DEF("stopRecording", 0, js_audioctx_stopRecording),
     JS_CFUNC_DEF("createClip", 1, js_audioctx_createClip),
@@ -959,6 +1126,16 @@ void AudioBindings::install(JSContext* ctx, audio::AudioEngine* engine)
     JS_SetPropertyFunctionList(ctx, msProto, js_micsource_proto_funcs,
                                sizeof(js_micsource_proto_funcs)/sizeof(js_micsource_proto_funcs[0]));
     JS_SetClassProto(ctx, js_micsource_class_id, msProto);
+
+    // BiquadFilterNode
+    JS_NewClassID(rt, &js_biquadfilter_class_id);
+    JS_NewClass(rt, js_biquadfilter_class_id, &js_biquadfilter_class);
+    {
+        JSValue bfProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, bfProto, js_biquadfilter_proto_funcs,
+                                   sizeof(js_biquadfilter_proto_funcs)/sizeof(js_biquadfilter_proto_funcs[0]));
+        JS_SetClassProto(ctx, js_biquadfilter_class_id, bfProto);
+    }
 
     // OscillatorNode
     JS_NewClassID(rt, &js_oscnode_class_id);

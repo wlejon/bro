@@ -21,28 +21,28 @@ body {
     width: 100vw;
 }
 
-/* Header / Controls */
+/* Header / Core Controls */
 #header {
     display: flex;
     align-items: center;
-    padding: 6px 12px;
+    padding: 4px 10px;
     background: #12121a;
     border-bottom: 1px solid #2a2a3a;
-    gap: 16px;
+    gap: 12px;
 }
 
 #header h1 {
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 700;
     color: #00e5ff;
     letter-spacing: 4px;
-    min-width: 70px;
+    min-width: 60px;
 }
 
 #controls {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 12px;
     flex: 1;
     flex-wrap: wrap;
 }
@@ -50,27 +50,27 @@ body {
 .control-group {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
 }
 
-.control-group label {
-    font-size: 10px;
+.control-group label, .param label, .section-label {
+    font-size: 9px;
     text-transform: uppercase;
-    color: #666;
-    letter-spacing: 1px;
+    color: #555;
+    letter-spacing: 0.5px;
 }
 
 .btn-group {
     display: flex;
-    gap: 2px;
+    gap: 1px;
 }
 
 .btn {
     background: #1a1a2a;
     border: 1px solid #2a2a3a;
     color: #888;
-    padding: 3px 8px;
-    font-size: 10px;
+    padding: 2px 6px;
+    font-size: 9px;
     cursor: pointer;
     transition: all 0.15s;
 }
@@ -86,11 +86,16 @@ body {
     color: #00e5ff;
 }
 
+.btn-sm {
+    padding: 1px 5px;
+    font-size: 8px;
+}
+
 /* Mic toggle button */
 .mic-btn {
     font-weight: 700;
-    padding: 3px 10px;
-    font-size: 10px;
+    padding: 2px 8px;
+    font-size: 9px;
     letter-spacing: 1px;
 }
 
@@ -109,7 +114,7 @@ body {
 /* Mic level indicator */
 #mic-level-wrap {
     width: 4px;
-    height: 20px;
+    height: 18px;
     background: #1a1a2a;
     border: 1px solid #2a2a3a;
     position: relative;
@@ -127,7 +132,7 @@ body {
 }
 
 input[type="range"] {
-    width: 70px;
+    width: 50px;
     accent-color: #00e5ff;
 }
 
@@ -135,11 +140,132 @@ input[type="range"] {
     accent-color: #33cc33;
 }
 
+/* Select (preset dropdown) */
+select {
+    background: #1a1a2a;
+    border: 1px solid #2a2a3a;
+    color: #ccc;
+    padding: 2px 4px;
+    font-size: 9px;
+    cursor: pointer;
+}
+
+/* Parameter Row */
+#param-row {
+    display: flex;
+    padding: 3px 10px;
+    gap: 12px;
+    background: #0e0e16;
+    border-bottom: 1px solid #2a2a3a;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.param-section {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.section-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: #00e5ff80;
+    letter-spacing: 1px;
+    min-width: 28px;
+}
+
+.param-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.param {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.param input[type="range"] {
+    width: 42px;
+}
+
 /* Visualization canvas */
 #viz {
     flex: 1;
     width: 100%;
     min-height: 0;
+}
+
+/* Sequencer bar */
+#seq-bar {
+    display: flex;
+    align-items: center;
+    padding: 3px 10px;
+    gap: 8px;
+    background: #0e0e16;
+    border-top: 1px solid #2a2a3a;
+}
+
+#seq-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+#seq-controls .param input[type="range"] {
+    width: 50px;
+}
+
+#seq-bpm-display {
+    font-size: 9px;
+    color: #888;
+    font-family: monospace;
+    min-width: 20px;
+}
+
+#seq-grid {
+    display: flex;
+    gap: 2px;
+    flex: 1;
+}
+
+.seq-step {
+    flex: 1;
+    height: 22px;
+    background: #1a1a2a;
+    border: 1px solid #2a2a3a;
+    cursor: pointer;
+    transition: all 0.1s;
+    font-size: 7px;
+    color: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.seq-step:hover {
+    background: #222238;
+}
+
+.seq-step.active {
+    background: #00e5ff20;
+    border-color: #00e5ff60;
+    color: #00e5ff;
+}
+
+.seq-step.playing {
+    border-color: #00e5ff;
+    box-shadow: 0 0 4px #00e5ff40;
 }
 
 /* Piano keyboard */
@@ -151,11 +277,11 @@ input[type="range"] {
 }
 
 #keyboard {
-    height: 120px;
+    height: 100px;
     display: flex;
     position: relative;
     flex: 1;
-    padding: 0 4px;
+    padding: 0 2px;
 }
 
 #octave-indicator {
@@ -163,21 +289,21 @@ input[type="range"] {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 0 8px;
-    gap: 4px;
+    padding: 0 6px;
+    gap: 3px;
     border-left: 1px solid #2a2a3a;
-    min-width: 54px;
+    min-width: 48px;
 }
 
 #octave-display {
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 700;
     color: #00e5ff;
     font-family: monospace;
 }
 
 .octave-hint {
-    font-size: 8px;
+    font-size: 7px;
     color: #444;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -205,7 +331,7 @@ input[type="range"] {
 
 .black-key {
     width: 60%;
-    height: 65%;
+    height: 60%;
     background: linear-gradient(180deg, #2a2a2a, #1a1a1a);
     border: 1px solid #111;
     position: absolute;
@@ -225,25 +351,25 @@ input[type="range"] {
 
 .key-label {
     position: absolute;
-    bottom: 4px;
+    bottom: 3px;
     left: 0;
     right: 0;
     text-align: center;
-    font-size: 8px;
+    font-size: 7px;
     color: #666;
     pointer-events: none;
 }
 
 .white-key .key-label { color: #999; }
-.black-key .key-label { color: #555; bottom: 3px; font-size: 7px; }
+.black-key .key-label { color: #555; bottom: 2px; font-size: 6px; }
 
 .key-note-label {
     position: absolute;
-    bottom: 16px;
+    bottom: 14px;
     left: 0;
     right: 0;
     text-align: center;
-    font-size: 9px;
+    font-size: 8px;
     color: #aaa;
     pointer-events: none;
 }
@@ -252,11 +378,11 @@ input[type="range"] {
 /* Status bar */
 #status-bar {
     display: flex;
-    padding: 3px 12px;
-    gap: 16px;
+    padding: 2px 10px;
+    gap: 12px;
     background: #12121a;
     border-top: 1px solid #2a2a3a;
-    font-size: 11px;
+    font-size: 10px;
     font-family: monospace;
     color: #666;
 }

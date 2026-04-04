@@ -14,7 +14,7 @@ namespace bro::audio {
 enum class Waveform : uint8_t { Sine, Square, Sawtooth, Triangle };
 
 // Envelope state machine
-enum class EnvStage : uint8_t { Idle, Attack, Sustain, Release, Done };
+enum class EnvStage : uint8_t { Idle, Attack, Decay, Sustain, Release, Done };
 
 struct Voice {
     int id = 0;
@@ -31,6 +31,8 @@ struct Voice {
     EnvStage envStage = EnvStage::Idle;
     float envLevel = 0.0f;       // current envelope amplitude (0..1)
     float attackRate = 0.0f;     // per-sample increment during attack
+    float decayRate = 0.0f;      // per-sample decrement during decay
+    float sustainLevel = 1.0f;   // amplitude held during sustain (0..1)
     float releaseRate = 0.0f;    // per-sample decrement during release
 };
 
@@ -92,6 +94,57 @@ struct ClipPlayback {
 };
 
 // ---------------------------------------------------------------------------
+// Biquad filter (Direct Form II Transposed)
+// ---------------------------------------------------------------------------
+
+struct BiquadFilter {
+    enum class Type : uint8_t {
+        Lowpass, Highpass, Bandpass, Notch,
+        Allpass, Peaking, Lowshelf, Highshelf
+    };
+
+    Type type = Type::Lowpass;
+    float frequency = 1000.0f;
+    float Q = 1.0f;
+    float gainDB = 0.0f;
+
+    // Coefficients
+    float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f;
+    float a1 = 0.0f, a2 = 0.0f;
+    // State
+    float z1 = 0.0f, z2 = 0.0f;
+
+    bool enabled = false;
+
+    void computeCoefficients(int sampleRate);
+
+    inline float process(float input) {
+        float output = b0 * input + z1;
+        z1 = b1 * input - a1 * output + z2;
+        z2 = b2 * input - a2 * output;
+        return output;
+    }
+
+    void reset() { z1 = z2 = 0.0f; }
+};
+
+// ---------------------------------------------------------------------------
+// Delay effect (circular buffer with feedback)
+// ---------------------------------------------------------------------------
+
+struct DelayEffect {
+    std::vector<float> buffer;
+    int writePos = 0;
+    int delaySamples = 0;
+    float feedback = 0.3f;
+    float mix = 0.5f;       // 0 = dry, 1 = fully wet
+    bool enabled = false;
+
+    void init(int maxDelaySamples);
+    void process(float* buf, int numSamples);
+};
+
+// ---------------------------------------------------------------------------
 // FFT utility (radix-2 Cooley-Tukey)
 // ---------------------------------------------------------------------------
 
@@ -128,8 +181,32 @@ public:
     void setWaveform(int id, Waveform wf);
     void setFrequency(int id, float freq);
     void setGain(int id, float gain);
+    void setAttackTime(int id, float seconds);
+    void setDecayTime(int id, float seconds);
+    void setSustainLevel(int id, float level);
+    void setReleaseTime(int id, float seconds);
     void startVoice(int id, double when);
     void stopVoice(int id, double when);
+
+    // --- Filter (global post-mix) ---
+
+    static constexpr int MAX_FILTERS = 4;
+
+    void setFilterEnabled(int slot, bool enabled);
+    void setFilterType(int slot, BiquadFilter::Type type);
+    void setFilterFrequency(int slot, float freq);
+    void setFilterQ(int slot, float q);
+    void setFilterGain(int slot, float gainDB);
+    /// Claim the next available filter slot. Returns -1 if full.
+    int allocateFilterSlot();
+    void releaseFilterSlot(int slot);
+
+    // --- Delay (global post-mix) ---
+
+    void setDelayEnabled(bool enabled);
+    void setDelayTime(float seconds);
+    void setDelayFeedback(float fb);
+    void setDelayMix(float mix);
 
     // --- Analysis ---
 
@@ -229,6 +306,10 @@ private:
     mutable std::mutex clipMutex_;
     int nextClipId_ = 1;
     int nextPlaybackId_ = 1;
+
+    // Global filter chain and delay
+    BiquadFilter filters_[MAX_FILTERS];
+    DelayEffect delay_;
 };
 
 } // namespace bro::audio

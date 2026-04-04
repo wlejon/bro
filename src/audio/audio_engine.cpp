@@ -118,9 +118,136 @@ static inline float softLimit(float x)
 // Envelope constants
 // ---------------------------------------------------------------------------
 
-static constexpr float ATTACK_TIME  = 0.015f;   // 15ms attack — eliminates click
-static constexpr float RELEASE_TIME = 0.040f;    // 40ms release — smooth tail
-static constexpr float MASTER_GAIN  = 0.25f;     // keep output comparable to other system audio
+// ---------------------------------------------------------------------------
+// BiquadFilter — Audio EQ Cookbook (Robert Bristow-Johnson)
+// ---------------------------------------------------------------------------
+
+void BiquadFilter::computeCoefficients(int sampleRate)
+{
+    float w0 = 2.0f * static_cast<float>(M_PI) * frequency / static_cast<float>(sampleRate);
+    float sinW0 = std::sin(w0);
+    float cosW0 = std::cos(w0);
+    float alpha = sinW0 / (2.0f * Q);
+
+    float a0 = 1.0f;
+
+    switch (type) {
+        case Type::Lowpass:
+            b0 = (1.0f - cosW0) / 2.0f;
+            b1 = 1.0f - cosW0;
+            b2 = (1.0f - cosW0) / 2.0f;
+            a0 = 1.0f + alpha;
+            a1 = -2.0f * cosW0;
+            a2 = 1.0f - alpha;
+            break;
+        case Type::Highpass:
+            b0 = (1.0f + cosW0) / 2.0f;
+            b1 = -(1.0f + cosW0);
+            b2 = (1.0f + cosW0) / 2.0f;
+            a0 = 1.0f + alpha;
+            a1 = -2.0f * cosW0;
+            a2 = 1.0f - alpha;
+            break;
+        case Type::Bandpass:
+            b0 = alpha;
+            b1 = 0.0f;
+            b2 = -alpha;
+            a0 = 1.0f + alpha;
+            a1 = -2.0f * cosW0;
+            a2 = 1.0f - alpha;
+            break;
+        case Type::Notch:
+            b0 = 1.0f;
+            b1 = -2.0f * cosW0;
+            b2 = 1.0f;
+            a0 = 1.0f + alpha;
+            a1 = -2.0f * cosW0;
+            a2 = 1.0f - alpha;
+            break;
+        case Type::Allpass:
+            b0 = 1.0f - alpha;
+            b1 = -2.0f * cosW0;
+            b2 = 1.0f + alpha;
+            a0 = 1.0f + alpha;
+            a1 = -2.0f * cosW0;
+            a2 = 1.0f - alpha;
+            break;
+        case Type::Peaking: {
+            float A = std::pow(10.0f, gainDB / 40.0f);
+            b0 = 1.0f + alpha * A;
+            b1 = -2.0f * cosW0;
+            b2 = 1.0f - alpha * A;
+            a0 = 1.0f + alpha / A;
+            a1 = -2.0f * cosW0;
+            a2 = 1.0f - alpha / A;
+            break;
+        }
+        case Type::Lowshelf: {
+            float A = std::pow(10.0f, gainDB / 40.0f);
+            float twoSqrtAAlpha = 2.0f * std::sqrt(A) * alpha;
+            b0 = A * ((A + 1.0f) - (A - 1.0f) * cosW0 + twoSqrtAAlpha);
+            b1 = 2.0f * A * ((A - 1.0f) - (A + 1.0f) * cosW0);
+            b2 = A * ((A + 1.0f) - (A - 1.0f) * cosW0 - twoSqrtAAlpha);
+            a0 = (A + 1.0f) + (A - 1.0f) * cosW0 + twoSqrtAAlpha;
+            a1 = -2.0f * ((A - 1.0f) + (A + 1.0f) * cosW0);
+            a2 = (A + 1.0f) + (A - 1.0f) * cosW0 - twoSqrtAAlpha;
+            break;
+        }
+        case Type::Highshelf: {
+            float A = std::pow(10.0f, gainDB / 40.0f);
+            float twoSqrtAAlpha = 2.0f * std::sqrt(A) * alpha;
+            b0 = A * ((A + 1.0f) + (A - 1.0f) * cosW0 + twoSqrtAAlpha);
+            b1 = -2.0f * A * ((A - 1.0f) + (A + 1.0f) * cosW0);
+            b2 = A * ((A + 1.0f) + (A - 1.0f) * cosW0 - twoSqrtAAlpha);
+            a0 = (A + 1.0f) - (A - 1.0f) * cosW0 + twoSqrtAAlpha;
+            a1 = 2.0f * ((A - 1.0f) - (A + 1.0f) * cosW0);
+            a2 = (A + 1.0f) - (A - 1.0f) * cosW0 - twoSqrtAAlpha;
+            break;
+        }
+    }
+
+    // Normalize by a0
+    b0 /= a0;
+    b1 /= a0;
+    b2 /= a0;
+    a1 /= a0;
+    a2 /= a0;
+}
+
+// ---------------------------------------------------------------------------
+// DelayEffect
+// ---------------------------------------------------------------------------
+
+void DelayEffect::init(int maxDelaySamples)
+{
+    buffer.assign(maxDelaySamples, 0.0f);
+    writePos = 0;
+}
+
+void DelayEffect::process(float* buf, int numSamples)
+{
+    int bufSize = static_cast<int>(buffer.size());
+    if (bufSize == 0 || delaySamples <= 0) return;
+
+    for (int i = 0; i < numSamples; i++) {
+        int readPos = (writePos - delaySamples + bufSize) % bufSize;
+        float delayed = buffer[readPos];
+        float dry = buf[i];
+        buf[i] = dry * (1.0f - mix) + delayed * mix;
+        buffer[writePos] = dry + delayed * feedback;
+        writePos = (writePos + 1) % bufSize;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Envelope constants
+// ---------------------------------------------------------------------------
+
+static constexpr float DEFAULT_ATTACK  = 0.01f;
+static constexpr float DEFAULT_DECAY   = 0.1f;
+static constexpr float DEFAULT_SUSTAIN = 1.0f;
+static constexpr float DEFAULT_RELEASE = 0.04f;
+static constexpr float MASTER_GAIN     = 0.25f;
 
 // ---------------------------------------------------------------------------
 // AudioEngine
@@ -160,6 +287,10 @@ bool AudioEngine::init()
     }
 
     SDL_ResumeAudioStreamDevice(stream_);
+
+    // Initialize delay buffer: 2 seconds max
+    delay_.init(sampleRate_ * 2);
+
     initialized_ = true;
     LOG_INFO("Audio engine initialized: %d Hz mono", sampleRate_);
     return true;
@@ -187,9 +318,11 @@ int AudioEngine::createVoice()
     int id = nextVoiceId_++;
     Voice v;
     v.id = id;
-    // Precompute envelope rates
-    v.attackRate = 1.0f / (ATTACK_TIME * static_cast<float>(sampleRate_));
-    v.releaseRate = 1.0f / (RELEASE_TIME * static_cast<float>(sampleRate_));
+    float sr = static_cast<float>(sampleRate_);
+    v.attackRate = 1.0f / (DEFAULT_ATTACK * sr);
+    v.decayRate = 1.0f / (DEFAULT_DECAY * sr);
+    v.sustainLevel = DEFAULT_SUSTAIN;
+    v.releaseRate = 1.0f / (DEFAULT_RELEASE * sr);
     voices_.push_back(v);
     return id;
 }
@@ -229,6 +362,132 @@ void AudioEngine::setGain(int id, float gain)
     if (auto* v = findVoice(id)) v->gain = gain;
 }
 
+void AudioEngine::setAttackTime(int id, float seconds)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (auto* v = findVoice(id))
+        v->attackRate = seconds > 0.0001f ? 1.0f / (seconds * static_cast<float>(sampleRate_)) : 1.0f;
+}
+
+void AudioEngine::setDecayTime(int id, float seconds)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (auto* v = findVoice(id))
+        v->decayRate = seconds > 0.0001f ? 1.0f / (seconds * static_cast<float>(sampleRate_)) : 1.0f;
+}
+
+void AudioEngine::setSustainLevel(int id, float level)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (auto* v = findVoice(id))
+        v->sustainLevel = std::clamp(level, 0.0f, 1.0f);
+}
+
+void AudioEngine::setReleaseTime(int id, float seconds)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (auto* v = findVoice(id))
+        v->releaseRate = seconds > 0.0001f ? 1.0f / (seconds * static_cast<float>(sampleRate_)) : 1.0f;
+}
+
+// ---------------------------------------------------------------------------
+// Filter control
+// ---------------------------------------------------------------------------
+
+int AudioEngine::allocateFilterSlot()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (int i = 0; i < MAX_FILTERS; i++) {
+        if (!filters_[i].enabled) {
+            filters_[i] = BiquadFilter{};
+            return i;
+        }
+    }
+    return -1;
+}
+
+void AudioEngine::releaseFilterSlot(int slot)
+{
+    if (slot < 0 || slot >= MAX_FILTERS) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    filters_[slot].enabled = false;
+    filters_[slot].reset();
+}
+
+void AudioEngine::setFilterEnabled(int slot, bool enabled)
+{
+    if (slot < 0 || slot >= MAX_FILTERS) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    filters_[slot].enabled = enabled;
+    if (enabled) filters_[slot].computeCoefficients(sampleRate_);
+}
+
+void AudioEngine::setFilterType(int slot, BiquadFilter::Type type)
+{
+    if (slot < 0 || slot >= MAX_FILTERS) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    filters_[slot].type = type;
+    filters_[slot].reset();
+    if (filters_[slot].enabled) filters_[slot].computeCoefficients(sampleRate_);
+}
+
+void AudioEngine::setFilterFrequency(int slot, float freq)
+{
+    if (slot < 0 || slot >= MAX_FILTERS) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    filters_[slot].frequency = std::clamp(freq, 20.0f, 20000.0f);
+    if (filters_[slot].enabled) filters_[slot].computeCoefficients(sampleRate_);
+}
+
+void AudioEngine::setFilterQ(int slot, float q)
+{
+    if (slot < 0 || slot >= MAX_FILTERS) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    filters_[slot].Q = std::clamp(q, 0.1f, 30.0f);
+    if (filters_[slot].enabled) filters_[slot].computeCoefficients(sampleRate_);
+}
+
+void AudioEngine::setFilterGain(int slot, float gainDB)
+{
+    if (slot < 0 || slot >= MAX_FILTERS) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    filters_[slot].gainDB = std::clamp(gainDB, -40.0f, 40.0f);
+    if (filters_[slot].enabled) filters_[slot].computeCoefficients(sampleRate_);
+}
+
+// ---------------------------------------------------------------------------
+// Delay control
+// ---------------------------------------------------------------------------
+
+void AudioEngine::setDelayEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    delay_.enabled = enabled;
+}
+
+void AudioEngine::setDelayTime(float seconds)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    int maxSamples = static_cast<int>(delay_.buffer.size());
+    delay_.delaySamples = std::clamp(static_cast<int>(seconds * sampleRate_), 1, maxSamples - 1);
+}
+
+void AudioEngine::setDelayFeedback(float fb)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    delay_.feedback = std::clamp(fb, 0.0f, 0.95f);
+}
+
+void AudioEngine::setDelayMix(float mix)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    delay_.mix = std::clamp(mix, 0.0f, 1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Voice start/stop
+// ---------------------------------------------------------------------------
+
 void AudioEngine::startVoice(int id, double when)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -247,7 +506,8 @@ void AudioEngine::stopVoice(int id, double when)
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto* v = findVoice(id)) {
         v->stopTime = when;
-        if (v->envStage == EnvStage::Attack || v->envStage == EnvStage::Sustain) {
+        if (v->envStage == EnvStage::Attack || v->envStage == EnvStage::Decay
+            || v->envStage == EnvStage::Sustain) {
             v->envStage = EnvStage::Release;
         }
     }
@@ -630,7 +890,23 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
         }
     }
 
-    // Soft limiter on full mix (synth + mic + loops), then master gain
+    // Apply filter chain (post-mix, pre-limiter)
+    {
+        std::lock_guard<std::mutex> lock(engine->mutex_);
+        for (int f = 0; f < AudioEngine::MAX_FILTERS; f++) {
+            if (!engine->filters_[f].enabled) continue;
+            for (int i = 0; i < numSamples; i++) {
+                buffer[i] = engine->filters_[f].process(buffer[i]);
+            }
+        }
+
+        // Apply delay effect
+        if (engine->delay_.enabled) {
+            engine->delay_.process(buffer, numSamples);
+        }
+    }
+
+    // Soft limiter on full mix, then master gain
     for (int i = 0; i < numSamples; i++) {
         buffer[i] = softLimit(buffer[i]) * MASTER_GAIN;
     }
@@ -669,10 +945,18 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                     voice.envLevel += voice.attackRate;
                     if (voice.envLevel >= 1.0f) {
                         voice.envLevel = 1.0f;
+                        voice.envStage = EnvStage::Decay;
+                    }
+                    break;
+                case EnvStage::Decay:
+                    voice.envLevel -= voice.decayRate;
+                    if (voice.envLevel <= voice.sustainLevel) {
+                        voice.envLevel = voice.sustainLevel;
                         voice.envStage = EnvStage::Sustain;
                     }
                     break;
                 case EnvStage::Sustain:
+                    voice.envLevel = voice.sustainLevel;
                     if (voice.stopTime >= 0 && t >= voice.stopTime) {
                         voice.envStage = EnvStage::Release;
                     }

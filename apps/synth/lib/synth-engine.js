@@ -1,0 +1,202 @@
+(function() {
+    'use strict';
+    var Synth = window.Synth || (window.Synth = {});
+
+    var audioCtx = null;
+    var analyser = null;
+    var masterGain = null;
+    var activeNotes = new Map(); // noteIdx -> { osc, gain }
+
+    var waveform = 'sine';
+    var synthVolume = 0.3;
+    var octaveShift = 0;
+    var adsrParams = { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.04 };
+
+    Synth.init = function() {
+        try {
+            audioCtx = new AudioContext();
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 2048;
+            analyser.smoothingTimeConstant = 0.85;
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 1.0;
+            masterGain.connect(analyser);
+            analyser.source = 2;
+            analyser.connect(audioCtx.destination);
+        } catch (e) {
+            console.warn('AudioContext unavailable:', e.message);
+        }
+        return audioCtx;
+    };
+
+    Synth.noteOn = function(noteIdx) {
+        if (!audioCtx) return;
+        var notes = Synth.notes;
+        if (noteIdx < 0 || noteIdx >= notes.length) return;
+        if (activeNotes.has(noteIdx)) return;
+
+        var note = notes[noteIdx];
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+
+        osc.type = waveform;
+        osc.frequency.value = note.freq;
+        osc.attack.value = adsrParams.attack;
+        osc.decay.value = adsrParams.decay;
+        osc.sustain.value = adsrParams.sustain;
+        osc.release.value = adsrParams.release;
+        gain.gain.value = synthVolume;
+
+        osc.connect(gain).connect(masterGain);
+        osc.start();
+
+        activeNotes.set(noteIdx, { osc: osc, gain: gain, baseFreq: note.freq });
+        if (note.element) note.element.classList.add('pressed');
+
+        document.getElementById('note-display').textContent = note.name;
+        document.getElementById('freq-display').textContent = note.freq.toFixed(1) + ' Hz';
+    };
+
+    Synth.noteOff = function(noteIdx) {
+        var entry = activeNotes.get(noteIdx);
+        if (!entry) return;
+
+        entry.osc.stop();
+        activeNotes.delete(noteIdx);
+
+        var note = Synth.notes[noteIdx];
+        if (note && note.element) note.element.classList.remove('pressed');
+
+        if (activeNotes.size === 0) {
+            document.getElementById('note-display').textContent = '--';
+            document.getElementById('freq-display').textContent = '-- Hz';
+        }
+    };
+
+    Synth.setWaveform = function(wf) { waveform = wf; };
+    Synth.getWaveform = function() { return waveform; };
+
+    Synth.setVolume = function(v) {
+        synthVolume = v;
+        activeNotes.forEach(function(entry) {
+            entry.gain.gain.value = synthVolume;
+        });
+    };
+    Synth.getVolume = function() { return synthVolume; };
+
+    Synth.setADSR = function(a, d, s, r) {
+        adsrParams.attack = a;
+        adsrParams.decay = d;
+        adsrParams.sustain = s;
+        adsrParams.release = r;
+    };
+    Synth.getADSR = function() {
+        return { attack: adsrParams.attack, decay: adsrParams.decay,
+                 sustain: adsrParams.sustain, release: adsrParams.release };
+    };
+
+    Synth.getAudioContext = function() { return audioCtx; };
+    Synth.getAnalyser = function() { return analyser; };
+    Synth.getMasterGain = function() { return masterGain; };
+    Synth.getActiveNotes = function() { return activeNotes; };
+
+    // Note definitions -- 7 octaves (C1-B7)
+    var NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+    var BASE_OCTAVE = 1;
+    var NUM_OCTAVES = 7;
+    var notes = [];
+
+    for (var oct = BASE_OCTAVE; oct < BASE_OCTAVE + NUM_OCTAVES; oct++) {
+        for (var i = 0; i < 12; i++) {
+            var name = NOTE_NAMES[i] + oct;
+            var midi = (oct + 1) * 12 + i;
+            var freq = 440 * Math.pow(2, (midi - 69) / 12);
+            var isBlack = [1,3,6,8,10].indexOf(i) >= 0;
+            notes.push({ name: name, freq: freq, midi: midi, isBlack: isBlack,
+                         octave: oct, noteIndex: i, element: null });
+        }
+    }
+
+    Synth.notes = notes;
+    Synth.NOTE_NAMES = NOTE_NAMES;
+
+    // Mic
+    var micEnabled = false;
+    var micSourceNode = null;
+    var micAnalyser = null;
+    var micVolume = 0.5;
+    var micLevelBuf = null;
+    var micFreqBuf = null;
+
+    Synth.initMic = async function() {
+        if (!audioCtx || micSourceNode) return;
+        try {
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+            micSourceNode = audioCtx.createMediaStreamSource(
+                await navigator.mediaDevices.getUserMedia({ audio: true }));
+
+            micAnalyser = audioCtx.createAnalyser();
+            micAnalyser.fftSize = 2048;
+            micAnalyser.smoothingTimeConstant = 0.8;
+            micAnalyser.source = 1;
+            micLevelBuf = new Uint8Array(micAnalyser.frequencyBinCount);
+            micFreqBuf = new Uint8Array(micAnalyser.frequencyBinCount);
+
+            audioCtx.micMuted = true;
+            audioCtx.micMonitorGain = micVolume;
+        } catch (err) {
+            console.error('Mic access failed:', err);
+        }
+    };
+
+    Synth.setMicEnabled = function(enabled) {
+        micEnabled = enabled;
+        if (audioCtx) audioCtx.micMuted = !enabled;
+    };
+    Synth.isMicEnabled = function() { return micEnabled; };
+    Synth.hasMic = function() { return !!micSourceNode; };
+
+    Synth.setMicVolume = function(v) {
+        micVolume = v;
+        if (audioCtx) audioCtx.micMonitorGain = v;
+    };
+
+    Synth.getMicAnalyser = function() { return micAnalyser; };
+    Synth.getMicLevelBuf = function() { return micLevelBuf; };
+    Synth.getMicFreqBuf = function() { return micFreqBuf; };
+
+    Synth.detectPitch = function() {
+        if (!micAnalyser || !micFreqBuf) return null;
+        micAnalyser.getByteFrequencyData(micFreqBuf);
+
+        var sampleRate = audioCtx.sampleRate;
+        var binCount = micAnalyser.frequencyBinCount;
+        var binWidth = sampleRate / micAnalyser.fftSize;
+
+        var minBin = Math.max(1, Math.floor(60 / binWidth));
+        var maxBin = Math.min(binCount - 1, Math.ceil(1500 / binWidth));
+
+        var bestBin = minBin, bestVal = 0;
+        for (var i = minBin; i <= maxBin; i++) {
+            if (micFreqBuf[i] > bestVal) { bestVal = micFreqBuf[i]; bestBin = i; }
+        }
+        if (bestVal < 20) return null;
+
+        var prev = bestBin > 0 ? micFreqBuf[bestBin - 1] : 0;
+        var next = bestBin < binCount - 1 ? micFreqBuf[bestBin + 1] : 0;
+        var denom = prev - 2 * bestVal + next;
+        var offset = denom !== 0 ? 0.5 * (prev - next) / denom : 0;
+        return (bestBin + offset) * binWidth;
+    };
+
+    Synth.freqToNoteName = function(freq) {
+        var midi = 12 * Math.log2(freq / 440) + 69;
+        var noteIdx = Math.round(midi) % 12;
+        var octave = Math.floor(Math.round(midi) / 12) - 1;
+        var cents = Math.round((midi - Math.round(midi)) * 100);
+        return {
+            name: NOTE_NAMES[noteIdx < 0 ? noteIdx + 12 : noteIdx] + octave,
+            cents: cents
+        };
+    };
+})();
