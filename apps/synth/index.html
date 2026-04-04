@@ -15,14 +15,6 @@
             </div>
             <div id="controls">
                 <div class="control-group">
-                    <div id="wave-btns" class="btn-group">
-                        <button class="btn active" data-wave="sine">Sin</button>
-                        <button class="btn" data-wave="square">Sqr</button>
-                        <button class="btn" data-wave="sawtooth">Saw</button>
-                        <button class="btn" data-wave="triangle">Tri</button>
-                    </div>
-                </div>
-                <div class="control-group">
                     <label>Preset</label>
                     <select id="preset-select"></select>
                     <button id="preset-save" class="btn">Save</button>
@@ -46,13 +38,30 @@
             <!-- Main area: sidebar + viz -->
             <div id="main">
                 <div id="sidebar">
+                    <!-- Layer indicator -->
+                    <div id="layer-indicator">
+                        <span id="layer-indicator-color"></span>
+                        <span id="layer-indicator-name">Layer 1</span>
+                    </div>
+
+                    <!-- Waveform -->
+                    <div class="panel">
+                        <div class="panel-title">Waveform</div>
+                        <div id="wave-btns" class="btn-group full-width">
+                            <button class="btn active" data-wave="sine">Sin</button>
+                            <button class="btn" data-wave="square">Sqr</button>
+                            <button class="btn" data-wave="sawtooth">Saw</button>
+                            <button class="btn" data-wave="triangle">Tri</button>
+                        </div>
+                    </div>
+
                     <!-- ADSR -->
                     <div class="panel">
                         <div class="panel-title">ADSR</div>
-                        <div class="slider-row"><label>Attack</label><input type="range" id="adsr-a" min="1" max="2000" value="10"><span class="slider-val" id="adsr-a-val">10ms</span></div>
-                        <div class="slider-row"><label>Decay</label><input type="range" id="adsr-d" min="1" max="2000" value="100"><span class="slider-val" id="adsr-d-val">100ms</span></div>
-                        <div class="slider-row"><label>Sustain</label><input type="range" id="adsr-s" min="0" max="100" value="100"><span class="slider-val" id="adsr-s-val">100%</span></div>
-                        <div class="slider-row"><label>Release</label><input type="range" id="adsr-r" min="1" max="3000" value="80"><span class="slider-val" id="adsr-r-val">80ms</span></div>
+                        <div class="slider-row"><label>Attack</label><div class="fancy-slider" id="adsr-a-slider"></div></div>
+                        <div class="slider-row"><label>Decay</label><div class="fancy-slider" id="adsr-d-slider"></div></div>
+                        <div class="slider-row"><label>Sustain</label><div class="fancy-slider" id="adsr-s-slider"></div></div>
+                        <div class="slider-row"><label>Release</label><div class="fancy-slider" id="adsr-r-slider"></div></div>
                     </div>
 
                     <!-- Filter -->
@@ -67,8 +76,8 @@
                             <button class="btn" data-type="bandpass">BP</button>
                             <button class="btn" data-type="notch">Notch</button>
                         </div>
-                        <div class="slider-row"><label>Cutoff</label><input type="range" id="filter-cutoff" min="0" max="100" value="50"><span class="slider-val" id="filter-cutoff-val">1kHz</span></div>
-                        <div class="slider-row"><label>Resonance</label><input type="range" id="filter-q" min="1" max="200" value="10"><span class="slider-val" id="filter-q-val">1.0</span></div>
+                        <div class="slider-row"><label>Cutoff</label><div class="fancy-slider" id="filter-cutoff-slider"></div></div>
+                        <div class="slider-row"><label>Resonance</label><div class="fancy-slider" id="filter-q-slider"></div></div>
                     </div>
 
                     <!-- Delay -->
@@ -77,9 +86,9 @@
                             <div class="panel-title">Delay</div>
                             <button id="delay-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div class="slider-row"><label>Time</label><input type="range" id="delay-time" min="10" max="1500" value="300"><span class="slider-val" id="delay-time-val">300ms</span></div>
-                        <div class="slider-row"><label>Feedback</label><input type="range" id="delay-feedback" min="0" max="90" value="30"><span class="slider-val" id="delay-fb-val">30%</span></div>
-                        <div class="slider-row"><label>Mix</label><input type="range" id="delay-mix" min="0" max="100" value="30"><span class="slider-val" id="delay-mix-val">30%</span></div>
+                        <div class="slider-row"><label>Time</label><div class="fancy-slider" id="delay-time-slider"></div></div>
+                        <div class="slider-row"><label>Feedback</label><div class="fancy-slider" id="delay-fb-slider"></div></div>
+                        <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="delay-mix-slider"></div></div>
                     </div>
 
                     <!-- LFO -->
@@ -88,8 +97,8 @@
                             <div class="panel-title">LFO</div>
                             <button id="lfo-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div class="slider-row"><label>Rate</label><input type="range" id="lfo-rate" min="0" max="100" value="30"><span class="slider-val" id="lfo-rate-val">2.0Hz</span></div>
-                        <div class="slider-row"><label>Depth</label><input type="range" id="lfo-depth" min="0" max="100" value="30"><span class="slider-val" id="lfo-depth-val">30%</span></div>
+                        <div class="slider-row"><label>Rate</label><div class="fancy-slider" id="lfo-rate-slider"></div></div>
+                        <div class="slider-row"><label>Depth</label><div class="fancy-slider" id="lfo-depth-slider"></div></div>
                         <div id="lfo-target-btns" class="btn-group full-width">
                             <button class="btn active" data-target="pitch">Pitch</button>
                             <button class="btn" data-target="filter">Filter</button>
@@ -103,8 +112,8 @@
                 </div>
             </div>
 
-            <!-- Sequencer -->
-            <div id="seq-bar">
+            <!-- Sequencer area -->
+            <div id="seq-area">
                 <div id="seq-controls">
                     <button id="seq-play" class="btn">Play</button>
                     <div class="seq-param"><label>BPM</label><input type="range" id="seq-bpm" min="30" max="300" value="120"><span id="seq-bpm-display">120</span></div>
@@ -118,8 +127,11 @@
                         <button class="btn" data-pattern="updown">U/D</button>
                         <button class="btn" data-pattern="random">Rnd</button>
                     </div>
+                    <div id="layer-controls">
+                        <button id="layer-add" class="btn btn-accent">+ Layer</button>
+                    </div>
                 </div>
-                <div id="seq-grid"></div>
+                <div id="seq-layers"></div>
             </div>
         </div>
 
@@ -277,6 +289,8 @@
     <script src="lib/filter.js"></script>
     <script src="lib/effects.js"></script>
     <script src="lib/lfo.js"></script>
+    <script src="lib/slider.js"></script>
+    <script src="lib/layers.js"></script>
     <script src="lib/presets.js"></script>
     <script src="lib/sequencer.js"></script>
     <script src="lib/wav.js"></script>

@@ -3,52 +3,82 @@
     var Synth = window.Synth || (window.Synth = {});
 
     var NUM_STEPS = 16;
-    var steps = new Array(NUM_STEPS);  // each: noteIdx or null
     var bpm = 120;
     var currentStep = -1;
     var playing = false;
     var timerId = null;
     var mode = 'sequencer'; // 'sequencer' or 'arpeggiator'
     var arpPattern = 'up';  // up, down, updown, random
-    var arpDirection = 1;
     var arpIndex = 0;
-    var lastNoteIdx = -1;
     var onStepCallback = null;
 
-    for (var i = 0; i < NUM_STEPS; i++) steps[i] = null;
+    // Per-layer tracking of last played note for noteOff
+    var lastNotes = []; // array of { layerIdx, noteIdx }
 
     function getStepDuration() {
         return 60000 / bpm / 4; // 16th notes
+    }
+
+    function noteOffAll() {
+        for (var i = 0; i < lastNotes.length; i++) {
+            Synth.noteOff(lastNotes[i].noteIdx);
+        }
+        lastNotes = [];
     }
 
     function tick() {
         if (!playing) return;
 
         // Note off previous
-        if (lastNoteIdx >= 0) {
-            Synth.noteOff(lastNoteIdx);
-            lastNoteIdx = -1;
-        }
+        noteOffAll();
 
         currentStep = (currentStep + 1) % NUM_STEPS;
 
         if (mode === 'sequencer') {
-            var noteIdx = steps[currentStep];
-            if (noteIdx !== null && noteIdx >= 0) {
+            var Layers = Synth.Layers;
+            var count = Layers.count();
+            var effectsApplied = false;
+
+            for (var li = 0; li < count; li++) {
+                var layer = Layers.get(li);
+                if (!layer || layer.muted) continue;
+
+                var noteIdx = layer.steps[currentStep];
+                if (noteIdx === null || noteIdx === undefined || noteIdx < 0) continue;
+
+                // Apply this layer's oscillator params before noteOn
+                Layers.applyForPlayback(layer);
+
+                // Apply filter/delay from first active layer this step
+                if (!effectsApplied) {
+                    Layers.applyEffects(layer);
+                    effectsApplied = true;
+                }
+
                 Synth.noteOn(noteIdx);
-                lastNoteIdx = noteIdx;
+                lastNotes.push({ layerIdx: li, noteIdx: noteIdx });
+            }
+
+            // If no layer played, restore active layer's effects
+            if (!effectsApplied) {
+                var active = Layers.getActive();
+                if (active) Layers.applyEffects(active);
             }
         } else {
-            // Arpeggiator: cycle through held notes
+            // Arpeggiator: use active layer's steps as source notes
+            var Layers2 = Synth.Layers;
+            var activeLayer = Layers2.getActive();
             var held = [];
+
             Synth.getActiveNotes().forEach(function(entry, idx) {
                 held.push(idx);
             });
-            // Also check sequencer steps as source notes
-            if (held.length === 0) {
+
+            // Fallback to active layer's steps
+            if (held.length === 0 && activeLayer) {
                 for (var i = 0; i < NUM_STEPS; i++) {
-                    if (steps[i] !== null && held.indexOf(steps[i]) < 0) {
-                        held.push(steps[i]);
+                    if (activeLayer.steps[i] !== null && held.indexOf(activeLayer.steps[i]) < 0) {
+                        held.push(activeLayer.steps[i]);
                     }
                 }
             }
@@ -86,8 +116,15 @@
                     default:
                         idx = held[0];
                 }
+
+                // Apply active layer's params for arp
+                if (activeLayer) {
+                    Layers2.applyForPlayback(activeLayer);
+                    Layers2.applyEffects(activeLayer);
+                }
+
                 Synth.noteOn(idx);
-                lastNoteIdx = idx;
+                lastNotes.push({ layerIdx: Layers2.getActiveIndex(), noteIdx: idx });
             }
         }
 
@@ -110,24 +147,35 @@
         stop: function() {
             playing = false;
             if (timerId) { clearTimeout(timerId); timerId = null; }
-            if (lastNoteIdx >= 0) { Synth.noteOff(lastNoteIdx); lastNoteIdx = -1; }
+            noteOffAll();
             currentStep = -1;
             if (onStepCallback) onStepCallback(-1);
+
+            // Restore active layer's params
+            var active = Synth.Layers ? Synth.Layers.getActive() : null;
+            if (active) Synth.Layers.applyToEngine(active);
         },
 
         isPlaying: function() { return playing; },
         getCurrentStep: function() { return currentStep; },
 
+        // Convenience: operate on active layer
         setStep: function(step, noteIdx) {
-            if (step >= 0 && step < NUM_STEPS) steps[step] = noteIdx;
+            if (Synth.Layers) {
+                Synth.Layers.setStep(Synth.Layers.getActiveIndex(), step, noteIdx);
+            }
         },
         getStep: function(step) {
-            return (step >= 0 && step < NUM_STEPS) ? steps[step] : null;
+            if (Synth.Layers) {
+                return Synth.Layers.getStep(Synth.Layers.getActiveIndex(), step);
+            }
+            return null;
         },
         clearStep: function(step) {
-            if (step >= 0 && step < NUM_STEPS) steps[step] = null;
+            if (Synth.Layers) {
+                Synth.Layers.clearStep(Synth.Layers.getActiveIndex(), step);
+            }
         },
-        getSteps: function() { return steps.slice(); },
 
         setBPM: function(b) { bpm = Math.max(30, Math.min(300, b)); },
         getBPM: function() { return bpm; },

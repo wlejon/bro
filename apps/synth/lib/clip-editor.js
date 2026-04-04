@@ -595,17 +595,13 @@
     Editor.draw = function() {
         if (!canvas) return;
         var ctx = canvas.getContext('2d');
-        // Use element layout dimensions, not viewport-derived canvasWidth/Height
-        var rect = canvas.getBoundingClientRect();
-        var w = Math.floor(rect.width);
-        var h = Math.floor(rect.height);
+        var w = ctx.canvasWidth;
+        var h = ctx.canvasHeight;
         if (w <= 0 || h <= 0) return; // not laid out yet
         cachedW = w;
         cachedH = h;
 
-        // --- Clear previous frame's command buffer ---
-        // Use canvasWidth/Height (viewport-sized) to ensure the internal cmds_.clear() triggers
-        ctx.clearRect(0, 0, ctx.canvasWidth, ctx.canvasHeight);
+        ctx.clearRect(0, 0, w, h);
 
         // --- Background ---
         ctx.fillStyle = '#121218';
@@ -856,8 +852,7 @@
     }
 
     function canvasXY(e) {
-        var rect = canvas.getBoundingClientRect();
-        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        return { x: e.offsetX, y: e.offsetY };
     }
 
     function onMouseDown(e) {

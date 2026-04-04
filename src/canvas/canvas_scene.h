@@ -32,8 +32,8 @@ public:
 
     Canvas2D& canvas() { return canvas_; }
     render::Renderer* renderer() const { return renderer_; }
-    int width() const { return width_; }
-    int height() const { return height_; }
+    int width() const { return queryLayoutWidth(); }
+    int height() const { return queryLayoutHeight(); }
 
     /// Build per-frame vertex data and upload to GPU. Call before onRender.
     void prepareFrame(render::GLContext* gl, int w, int h);
@@ -41,6 +41,24 @@ public:
     void onRender(render::GLContext* gl, int w, int h, double deltaTimeMs) override;
 
 private:
+    // Query layout callback for element dimensions (falls back to viewport size)
+    int queryLayoutWidth() const {
+        if (layoutCb_) {
+            float ox, oy, ow = 0, oh = 0;
+            layoutCb_(layoutUd_, ox, oy, ow, oh);
+            if (ow > 0) return static_cast<int>(ow);
+        }
+        return width_;
+    }
+    int queryLayoutHeight() const {
+        if (layoutCb_) {
+            float ox, oy, ow = 0, oh = 0;
+            layoutCb_(layoutUd_, ox, oy, ow, oh);
+            if (oh > 0) return static_cast<int>(oh);
+        }
+        return height_;
+    }
+
     uint64_t getOrCreateFont(const std::string& fontStr);
 
     Canvas2D canvas_;
