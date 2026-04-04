@@ -24,6 +24,8 @@
             masterGain.connect(analyser);
             analyser.source = 2;
             analyser.connect(audioCtx.destination);
+            // Set initial volume via engine master gain
+            audioCtx.masterGain = synthVolume;
         } catch (e) {
             console.warn('AudioContext unavailable:', e.message);
         }
@@ -46,7 +48,7 @@
         osc.decay.value = adsrParams.decay;
         osc.sustain.value = adsrParams.sustain;
         osc.release.value = adsrParams.release;
-        gain.gain.value = synthVolume;
+        gain.gain.value = 1.0; // fixed per-voice; volume is engine masterGain
 
         osc.connect(gain).connect(masterGain);
         osc.start();
@@ -80,9 +82,8 @@
 
     Synth.setVolume = function(v) {
         synthVolume = v;
-        activeNotes.forEach(function(entry) {
-            entry.gain.gain.value = synthVolume;
-        });
+        // Volume is post-mix master gain, not per-voice
+        if (audioCtx) audioCtx.masterGain = v;
     };
     Synth.getVolume = function() { return synthVolume; };
 

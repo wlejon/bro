@@ -789,6 +789,21 @@ static JSValue js_audioctx_createMediaStreamSource(JSContext* ctx, JSValueConst 
 }
 
 // Mic mute/gain properties on AudioContext (bro extension)
+// Master gain (user volume control — post-mix, pre-output)
+static JSValue js_audioctx_get_masterGain(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    return d ? JS_NewFloat64(ctx, d->engine->masterGain()) : JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_set_masterGain(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (d) {
+        double v; JS_ToFloat64(ctx, &v, val);
+        d->engine->setMasterGain(static_cast<float>(v));
+    }
+    return JS_UNDEFINED;
+}
+
 static JSValue js_audioctx_get_micMuted(JSContext* ctx, JSValueConst this_val) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     return d ? JS_NewBool(ctx, d->engine->isMicMuted()) : JS_UNDEFINED;
@@ -997,6 +1012,7 @@ static JSValue js_audioctx_getPlaybackPosition(JSContext* ctx, JSValueConst this
 static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CGETSET_DEF("currentTime", js_audioctx_get_currentTime, nullptr),
     JS_CGETSET_DEF("sampleRate", js_audioctx_get_sampleRate, nullptr),
+    JS_CGETSET_DEF("masterGain", js_audioctx_get_masterGain, js_audioctx_set_masterGain),
     JS_CGETSET_DEF("micMuted", js_audioctx_get_micMuted, js_audioctx_set_micMuted),
     JS_CGETSET_DEF("micMonitorGain", js_audioctx_get_micMonitorGain, js_audioctx_set_micMonitorGain),
     JS_CGETSET_DEF("recording", js_audioctx_get_recording, nullptr),

@@ -192,6 +192,10 @@ public:
     /// Remove a voice.
     void removeVoice(int id);
 
+    /// Master output gain (volume control — post-mix, pre-output).
+    void setMasterGain(float gain);
+    float masterGain() const { return masterGain_.load(std::memory_order_relaxed); }
+
     /// Set voice parameters (thread-safe).
     void setWaveform(int id, Waveform wf);
     void setFrequency(int id, float freq);
@@ -304,6 +308,7 @@ private:
     std::atomic<uint64_t> micPlaybackWritePos_{0};
     uint64_t micPlaybackReadPos_ = 0;
 
+    std::atomic<float> masterGain_{0.5f};
     std::atomic<bool> micMuted_{true};
     std::atomic<float> micMonitorGain_{0.5f};
 

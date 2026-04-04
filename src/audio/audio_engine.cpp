@@ -291,7 +291,10 @@ static constexpr float DEFAULT_ATTACK  = 0.01f;
 static constexpr float DEFAULT_DECAY   = 0.1f;
 static constexpr float DEFAULT_SUSTAIN = 1.0f;
 static constexpr float DEFAULT_RELEASE = 0.04f;
-static constexpr float MASTER_GAIN     = 0.5f;
+
+// Fixed per-voice amplitude. 10 simultaneous voices sum to ~1.0.
+// Volume control is post-mix via masterGain_, never per-voice.
+static constexpr float VOICE_AMPLITUDE = 0.1f;
 
 // ---------------------------------------------------------------------------
 // AudioEngine
@@ -406,6 +409,11 @@ void AudioEngine::setGain(int id, float gain)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto* v = findVoice(id)) v->gain = gain;
+}
+
+void AudioEngine::setMasterGain(float gain)
+{
+    masterGain_.store(std::clamp(gain, 0.0f, 2.0f), std::memory_order_relaxed);
 }
 
 void AudioEngine::setAttackTime(int id, float seconds)
@@ -959,9 +967,10 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
     // Compressor — keeps polyphony clean without per-voice gain hacking
     engine->compressor_.process(buffer, numSamples);
 
-    // Soft limiter (safety net), then master gain
+    // Soft limiter (safety net), then user-controlled master gain
+    float mg = engine->masterGain_.load(std::memory_order_relaxed);
     for (int i = 0; i < numSamples; i++) {
-        buffer[i] = softLimit(buffer[i]) * MASTER_GAIN;
+        buffer[i] = softLimit(buffer[i]) * mg;
     }
 
     // Write to output ring buffer for analysis
@@ -985,7 +994,7 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
         if (voice.envStage == EnvStage::Done) continue;
 
         float freq = voice.frequency;
-        float gain = voice.gain;
+        float gain = VOICE_AMPLITUDE * voice.gain; // voice.gain is per-voice (velocity etc)
         float phaseInc = freq / static_cast<float>(sampleRate_);
 
         for (int i = 0; i < numSamples; i++) {
