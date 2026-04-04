@@ -127,7 +127,7 @@ body {
 }
 
 input[type="range"] {
-    width: 60px;
+    width: 70px;
     accent-color: #00e5ff;
 }
 
@@ -143,13 +143,44 @@ input[type="range"] {
 }
 
 /* Piano keyboard */
-#keyboard {
-    height: 100px;
+#keyboard-wrap {
     display: flex;
-    position: relative;
+    align-items: stretch;
     background: #0d0d14;
     border-top: 1px solid #2a2a3a;
+}
+
+#keyboard {
+    height: 120px;
+    display: flex;
+    position: relative;
+    flex: 1;
     padding: 0 4px;
+}
+
+#octave-indicator {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    gap: 4px;
+    border-left: 1px solid #2a2a3a;
+    min-width: 54px;
+}
+
+#octave-display {
+    font-size: 14px;
+    font-weight: 700;
+    color: #00e5ff;
+    font-family: monospace;
+}
+
+.octave-hint {
+    font-size: 8px;
+    color: #444;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .white-key {
@@ -205,6 +236,18 @@ input[type="range"] {
 
 .white-key .key-label { color: #999; }
 .black-key .key-label { color: #555; bottom: 3px; font-size: 7px; }
+
+.key-note-label {
+    position: absolute;
+    bottom: 16px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 9px;
+    color: #aaa;
+    pointer-events: none;
+}
+.white-key .key-note-label { color: #777; }
 
 /* Status bar */
 #status-bar {

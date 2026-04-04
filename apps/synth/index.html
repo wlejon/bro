@@ -19,14 +19,6 @@
                     </div>
                 </div>
                 <div class="control-group">
-                    <label>Viz</label>
-                    <div id="viz-btns" class="btn-group">
-                        <button class="btn active" data-viz="spectrum">Bars</button>
-                        <button class="btn" data-viz="wave">Wave</button>
-                        <button class="btn" data-viz="spectrogram">Gram</button>
-                    </div>
-                </div>
-                <div class="control-group">
                     <label>Synth Vol</label>
                     <input type="range" id="volume" min="0" max="100" value="30">
                 </div>
@@ -43,7 +35,14 @@
 
         <canvas id="viz"></canvas>
 
-        <div id="keyboard"></div>
+        <div id="keyboard-wrap">
+            <div id="keyboard"></div>
+            <div id="octave-indicator">
+                <span class="octave-hint">Shift+Tab</span>
+                <span id="octave-display">C3</span>
+                <span class="octave-hint">Tab</span>
+            </div>
+        </div>
 
         <div id="status-bar">
             <span id="note-display">--</span>
