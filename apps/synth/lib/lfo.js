@@ -31,8 +31,10 @@
                 // Modulate pitch of active notes: +/- semitones based on depth
                 var notes = Synth.getActiveNotes();
                 notes.forEach(function(entry) {
-                    var mod = entry.baseFreq * Math.pow(2, value / 12);
-                    entry.osc.frequency.value = mod;
+                    if (entry.osc) {
+                        var mod = entry.baseFreq * Math.pow(2, value / 12);
+                        entry.osc.frequency.value = mod;
+                    }
                 });
             } else if (target === 'filter') {
                 if (Synth.Filter && Synth.Filter.isEnabled()) {
@@ -42,6 +44,14 @@
                 // Tremolo: modulate master gain 0.5..1.5 range
                 var mg = Synth.getMasterGain();
                 if (mg) mg.gain.value = 1.0 + value * 0.5;
+            } else if (target === 'pan') {
+                // Auto-pan: sweep stereo position left-right
+                var notes = Synth.getActiveNotes();
+                notes.forEach(function(entry) {
+                    if (entry.osc) {
+                        entry.osc.pan.value = value;
+                    }
+                });
             }
         },
 
@@ -78,7 +88,10 @@
         // Reset modulated values to base
         var notes = Synth.getActiveNotes();
         notes.forEach(function(entry) {
-            entry.osc.frequency.value = entry.baseFreq;
+            if (entry.osc) {
+                entry.osc.frequency.value = entry.baseFreq;
+                entry.osc.pan.value = Synth.voicePan || 0;
+            }
         });
         var mg = Synth.getMasterGain();
         if (mg) mg.gain.value = 1.0;

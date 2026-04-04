@@ -37,7 +37,7 @@ struct AudioParamData {
     audio::AudioEngine* engine;
     int voiceId;         // voice ID for voice params, or filter slot for filter params
     enum class Target {
-        Frequency, Gain, Attack, Decay, SustainLevel, Release,
+        Frequency, Gain, Pan, Attack, Decay, SustainLevel, Release,
         FilterFrequency, FilterQ, FilterGain
     } target;
     float value;
@@ -66,6 +66,8 @@ static JSValue js_audioparam_set_value(JSContext* ctx, JSValueConst this_val, JS
             p->engine->setFrequency(p->voiceId, p->value); break;
         case AudioParamData::Target::Gain:
             p->engine->setGain(p->voiceId, p->value); break;
+        case AudioParamData::Target::Pan:
+            p->engine->setVoicePan(p->voiceId, p->value); break;
         case AudioParamData::Target::Attack:
             p->engine->setAttackTime(p->voiceId, p->value); break;
         case AudioParamData::Target::Decay:
@@ -676,6 +678,8 @@ static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_va
     // Create AudioParams for oscillator properties
     JS_SetPropertyStr(ctx, obj, "frequency",
         createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Frequency, 440.0f));
+    JS_SetPropertyStr(ctx, obj, "pan",
+        createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Pan, 0.0f));
     JS_SetPropertyStr(ctx, obj, "attack",
         createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Attack, 0.01f));
     JS_SetPropertyStr(ctx, obj, "decay",
@@ -1015,6 +1019,16 @@ static JSValue js_audioctx_setPlaybackRate(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
+static JSValue js_audioctx_setPlaybackPan(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setPlaybackPan(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
 static JSValue js_audioctx_getPlaybackPosition(JSContext* ctx, JSValueConst this_val,
                                                 int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
@@ -1052,6 +1066,7 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("setPlaybackPlaying", 2, js_audioctx_setPlaybackPlaying),
     JS_CFUNC_DEF("setPlaybackRegion", 3, js_audioctx_setPlaybackRegion),
     JS_CFUNC_DEF("setPlaybackRate", 2, js_audioctx_setPlaybackRate),
+    JS_CFUNC_DEF("setPlaybackPan", 2, js_audioctx_setPlaybackPan),
     JS_CFUNC_DEF("getPlaybackPosition", 1, js_audioctx_getPlaybackPosition),
 };
 

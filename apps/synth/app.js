@@ -194,6 +194,22 @@
     });
 
     // -----------------------------------------------------------------------
+    // Pan slider (per-layer)
+    // -----------------------------------------------------------------------
+    sliders.pan = Synth.Slider(document.getElementById('pan-slider'), {
+        min: -100, max: 100, value: 0, step: 1, defaultValue: 0,
+        format: function(v) {
+            if (v === 0) return 'C';
+            return v < 0 ? 'L' + Math.abs(v) : 'R' + v;
+        },
+        onChange: function(v) {
+            var pan = v / 100;
+            layerParam('pan', pan);
+            Synth.setPan(pan);
+        }
+    });
+
+    // -----------------------------------------------------------------------
     // Volume (global, not per-layer)
     // -----------------------------------------------------------------------
     document.getElementById('volume').addEventListener('input', function(e) {
@@ -322,6 +338,9 @@
 
         // Volume (global)
         document.getElementById('volume').value = Math.round(Synth.getVolume() * 100);
+
+        // Pan
+        sliders.pan.setValue(Math.round(layer.pan * 100), true);
 
         // ADSR
         sliders.adsrA.setValue(Math.round(layer.adsr.attack * 1000), true);

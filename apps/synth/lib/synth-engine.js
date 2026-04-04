@@ -50,6 +50,7 @@
             var pbId = audioCtx.playClip(Synth.customClipId, 1.0, false);
             if (pbId >= 0) {
                 audioCtx.setPlaybackRate(pbId, rate);
+                if (Synth.voicePan) audioCtx.setPlaybackPan(pbId, Synth.voicePan);
                 activeNotes.set(noteIdx, { clipPlaybackId: pbId, baseFreq: note.freq });
             }
         } else {
@@ -59,6 +60,7 @@
 
             osc.type = waveform;
             osc.frequency.value = note.freq;
+            osc.pan.value = Synth.voicePan || 0;
             osc.attack.value = adsrParams.attack;
             osc.decay.value = adsrParams.decay;
             osc.sustain.value = adsrParams.sustain;
@@ -120,6 +122,10 @@
         return { attack: adsrParams.attack, decay: adsrParams.decay,
                  sustain: adsrParams.sustain, release: adsrParams.release };
     };
+
+    Synth.voicePan = 0; // current pan for new voices: -1 (left) to 1 (right)
+    Synth.setPan = function(p) { Synth.voicePan = Math.max(-1, Math.min(1, p)); };
+    Synth.getPan = function() { return Synth.voicePan; };
 
     Synth.getLastPlayedNote = function() { return lastPlayedNote; };
     Synth.getAudioContext = function() { return audioCtx; };

@@ -2,7 +2,7 @@
 echo [sandbox] Launching bro...
 echo ============================================
 cd /d C:\bro\build\src\Release
-bro.exe C:\bro\apps\hello 2>&1
+bro.exe C:\bro\apps\synth
 echo.
 echo ============================================
 echo [sandbox] bro exited with code %ERRORLEVEL%

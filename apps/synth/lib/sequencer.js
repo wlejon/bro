@@ -59,11 +59,10 @@
                 lastNotes.push({ layerIdx: li, noteIdx: noteIdx });
             }
 
-            // If no layer played, restore active layer's effects
-            if (!effectsApplied) {
-                var active = Layers.getActive();
-                if (active) Layers.applyEffects(active);
-            }
+            // Restore selected layer's params so keyboard play and LFO
+            // use the correct layer's settings between ticks
+            var active = Layers.getActive();
+            if (active) Layers.applyToEngine(active);
         } else {
             // Arpeggiator: use active layer's steps as source notes
             var Layers2 = Synth.Layers;

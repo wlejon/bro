@@ -22,6 +22,7 @@
         return {
             waveform: 'sine',
             volume: 1.0,
+            pan: 0,
             adsr: { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.08 },
             filter: { enabled: false, type: 'lowpass', frequency: 2000, Q: 1.0, gain: 0 },
             delay: { enabled: false, time: 0.3, feedback: 0.3, mix: 0.3 },
@@ -42,6 +43,7 @@
             color: COLORS[idx % COLORS.length],
             waveform: p.waveform || 'sine',
             volume: p.volume !== undefined ? p.volume : 1.0,
+            pan: p.pan !== undefined ? p.pan : 0,
             clipId: -1,
             adsr: {
                 attack: p.adsr ? p.adsr.attack : 0.01,
@@ -78,6 +80,7 @@
     function applyToEngine(layer) {
         if (!layer) return;
         Synth.setWaveform(layer.waveform);
+        Synth.setPan(layer.pan);
         Synth.setADSR(layer.adsr.attack, layer.adsr.decay,
                       layer.adsr.sustain, layer.adsr.release);
 
@@ -105,6 +108,7 @@
     function captureFromEngine(layer) {
         if (!layer) return;
         layer.waveform = Synth.getWaveform();
+        layer.pan = Synth.getPan();
         var adsr = Synth.getADSR();
         layer.adsr.attack = adsr.attack;
         layer.adsr.decay = adsr.decay;
@@ -233,6 +237,7 @@
         // Apply layer's synth params temporarily (for sequencer playback)
         applyForPlayback: function(layer) {
             Synth.setWaveform(layer.waveform);
+            Synth.setPan(layer.pan);
             Synth.setADSR(layer.adsr.attack, layer.adsr.decay,
                           layer.adsr.sustain, layer.adsr.release);
         },
@@ -262,7 +267,7 @@
                 var l = layers[i];
                 out.push({
                     name: l.name, muted: l.muted, color: l.color,
-                    waveform: l.waveform, volume: l.volume, clipId: l.clipId,
+                    waveform: l.waveform, volume: l.volume, pan: l.pan, clipId: l.clipId,
                     adsr: { attack: l.adsr.attack, decay: l.adsr.decay,
                             sustain: l.adsr.sustain, release: l.adsr.release },
                     filter: { enabled: l.filter.enabled, type: l.filter.type,

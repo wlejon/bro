@@ -21,6 +21,7 @@ struct Voice {
     Waveform waveform = Waveform::Sine;
     float frequency = 440.0f;
     float gain = 1.0f;           // target amplitude from GainNode
+    float pan = 0.0f;            // stereo pan: -1.0 = left, 0 = center, 1.0 = right
     double startTime = -1.0;     // seconds, -1 = not started
     double stopTime = -1.0;      // seconds, -1 = not scheduled
     float phase = 0.0f;
@@ -88,6 +89,7 @@ struct ClipPlayback {
     int regionEnd = 0;                  // last sample (exclusive), 0 = full clip
     std::atomic<uint64_t> playPos{0};   // current position within region (fixed-point: upper bits = integer sample, lower 16 = fraction)
     std::atomic<float> gain{1.0f};
+    std::atomic<float> pan{0.0f};       // stereo pan: -1.0 = left, 0 = center, 1.0 = right
     std::atomic<float> rate{1.0f};      // playback rate (1.0 = normal, 2.0 = octave up, 0.5 = octave down)
     std::atomic<bool> playing{false};
     std::atomic<bool> looping{false};
@@ -127,21 +129,22 @@ struct BiquadFilter {
     // Coefficients
     float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f;
     float a1 = 0.0f, a2 = 0.0f;
-    // State
-    float z1 = 0.0f, z2 = 0.0f;
+    // State (per-channel for stereo)
+    float z1[2] = {0.0f, 0.0f};
+    float z2[2] = {0.0f, 0.0f};
 
     bool enabled = false;
 
     void computeCoefficients(int sampleRate);
 
-    inline float process(float input) {
-        float output = b0 * input + z1;
-        z1 = b1 * input - a1 * output + z2;
-        z2 = b2 * input - a2 * output;
+    inline float process(float input, int ch = 0) {
+        float output = b0 * input + z1[ch];
+        z1[ch] = b1 * input - a1 * output + z2[ch];
+        z2[ch] = b2 * input - a2 * output;
         return output;
     }
 
-    void reset() { z1 = z2 = 0.0f; }
+    void reset() { z1[0] = z1[1] = z2[0] = z2[1] = 0.0f; }
 };
 
 // ---------------------------------------------------------------------------
@@ -149,7 +152,7 @@ struct BiquadFilter {
 // ---------------------------------------------------------------------------
 
 struct DelayEffect {
-    std::vector<float> buffer;
+    std::vector<float> buffer;   // interleaved stereo: [L0, R0, L1, R1, ...]
     int writePos = 0;
     int delaySamples = 0;
     float feedback = 0.3f;
@@ -157,7 +160,8 @@ struct DelayEffect {
     bool enabled = false;
 
     void init(int maxDelaySamples);
-    void process(float* buf, int numSamples);
+    /// Process interleaved stereo buffer (numFrames = number of stereo frames).
+    void processStereo(float* buf, int numFrames);
 };
 
 // ---------------------------------------------------------------------------
@@ -201,6 +205,7 @@ public:
     void setWaveform(int id, Waveform wf);
     void setFrequency(int id, float freq);
     void setGain(int id, float gain);
+    void setVoicePan(int id, float pan);
     void setAttackTime(int id, float seconds);
     void setDecayTime(int id, float seconds);
     void setSustainLevel(int id, float level);
@@ -276,13 +281,15 @@ public:
     void setPlaybackRegion(int instanceId, int start, int end);
     void setPlaybackPlaying(int instanceId, bool playing);
     void setPlaybackRate(int instanceId, float rate);
+    void setPlaybackPan(int instanceId, float pan);
     /// Returns normalized position (0..1) within the active region.
     float getPlaybackPosition(int instanceId) const;
 
 private:
     static void audioCallback(void* userdata, SDL_AudioStream* stream,
                               int additional_amount, int total_amount);
-    void generateSamples(float* buffer, int numSamples);
+    /// Generate stereo interleaved samples into buffer (numFrames stereo frames = numFrames*2 floats).
+    void generateSamples(float* buffer, int numFrames);
 
     static void micCallback(void* userdata, SDL_AudioStream* stream,
                             int additional_amount, int total_amount);

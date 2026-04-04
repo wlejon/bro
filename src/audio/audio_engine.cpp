@@ -264,22 +264,25 @@ void BiquadFilter::computeCoefficients(int sampleRate)
 
 void DelayEffect::init(int maxDelaySamples)
 {
-    buffer.assign(maxDelaySamples, 0.0f);
+    // Stereo interleaved: 2 floats per frame
+    buffer.assign(maxDelaySamples * 2, 0.0f);
     writePos = 0;
 }
 
-void DelayEffect::process(float* buf, int numSamples)
+void DelayEffect::processStereo(float* buf, int numFrames)
 {
-    int bufSize = static_cast<int>(buffer.size());
-    if (bufSize == 0 || delaySamples <= 0) return;
+    int bufFrames = static_cast<int>(buffer.size()) / 2;
+    if (bufFrames == 0 || delaySamples <= 0) return;
 
-    for (int i = 0; i < numSamples; i++) {
-        int readPos = (writePos - delaySamples + bufSize) % bufSize;
-        float delayed = buffer[readPos];
-        float dry = buf[i];
-        buf[i] = dry * (1.0f - mix) + delayed * mix;
-        buffer[writePos] = dry + delayed * feedback;
-        writePos = (writePos + 1) % bufSize;
+    for (int i = 0; i < numFrames; i++) {
+        int readPos = (writePos - delaySamples + bufFrames) % bufFrames;
+        for (int ch = 0; ch < 2; ch++) {
+            float delayed = buffer[readPos * 2 + ch];
+            float dry = buf[i * 2 + ch];
+            buf[i * 2 + ch] = dry * (1.0f - mix) + delayed * mix;
+            buffer[writePos * 2 + ch] = dry + delayed * feedback;
+        }
+        writePos = (writePos + 1) % bufFrames;
     }
 }
 
@@ -321,7 +324,7 @@ bool AudioEngine::init()
 
     SDL_AudioSpec spec;
     spec.format = SDL_AUDIO_F32;
-    spec.channels = 1;
+    spec.channels = 2;
     spec.freq = sampleRate_;
 
     stream_ = SDL_OpenAudioDeviceStream(
@@ -409,6 +412,12 @@ void AudioEngine::setGain(int id, float gain)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto* v = findVoice(id)) v->gain = gain;
+}
+
+void AudioEngine::setVoicePan(int id, float pan)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (auto* v = findVoice(id)) v->pan = std::clamp(pan, -1.0f, 1.0f);
 }
 
 void AudioEngine::setMasterGain(float gain)
@@ -849,6 +858,14 @@ void AudioEngine::setPlaybackRate(int instanceId, float rate)
     }
 }
 
+void AudioEngine::setPlaybackPan(int instanceId, float pan)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* pb = findPlayback(instanceId)) {
+        pb->pan.store(std::clamp(pan, -1.0f, 1.0f), std::memory_order_relaxed);
+    }
+}
+
 void AudioEngine::setPlaybackRegion(int instanceId, int start, int end)
 {
     std::lock_guard<std::mutex> lock(clipMutex_);
@@ -882,29 +899,40 @@ float AudioEngine::getPlaybackPosition(int instanceId) const
 // Output audio callback + synthesis
 // ---------------------------------------------------------------------------
 
+// Constant-power pan: compute L/R gains from pan value (-1..1)
+static inline void panGains(float pan, float& gainL, float& gainR) {
+    // Equal-power panning using sin/cos quarter-wave
+    float p = (pan + 1.0f) * 0.5f; // 0..1
+    gainL = std::cos(p * 1.5707963f);  // pi/2
+    gainR = std::sin(p * 1.5707963f);
+}
+
 void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
                                 int additional_amount, int /*total_amount*/)
 {
     auto* engine = static_cast<AudioEngine*>(userdata);
-    int numSamples = additional_amount / static_cast<int>(sizeof(float));
-    if (numSamples <= 0) return;
+    // Stereo interleaved: additional_amount is in bytes, each frame = 2 floats
+    int numFloats = additional_amount / static_cast<int>(sizeof(float));
+    int numFrames = numFloats / 2;
+    if (numFrames <= 0) return;
 
-    float stackBuf[4096];
-    float* buffer = (numSamples <= 4096) ? stackBuf : new float[numSamples];
+    float stackBuf[8192];
+    float* buffer = (numFloats <= 8192) ? stackBuf : new float[numFloats];
 
-    std::memset(buffer, 0, numSamples * sizeof(float));
-    engine->generateSamples(buffer, numSamples);
+    std::memset(buffer, 0, numFloats * sizeof(float));
+    engine->generateSamples(buffer, numFrames);
 
-    // Record tap (synth only, before effects — avoids feedback)
+    // Record tap (mono mixdown of synth output, before effects — avoids feedback)
     if (engine->recording_.load(std::memory_order_relaxed)) {
         uint64_t wp = engine->recordWritePos_.load(std::memory_order_relaxed);
-        for (int i = 0; i < numSamples; i++) {
-            engine->recordRing_[static_cast<int>((wp + i) % RECORD_RING_SIZE)] = buffer[i];
+        for (int i = 0; i < numFrames; i++) {
+            float mono = (buffer[i * 2] + buffer[i * 2 + 1]) * 0.5f;
+            engine->recordRing_[static_cast<int>((wp + i) % RECORD_RING_SIZE)] = mono;
         }
-        engine->recordWritePos_.store(wp + numSamples, std::memory_order_release);
+        engine->recordWritePos_.store(wp + numFrames, std::memory_order_release);
     }
 
-    // Mix active clip playback instances into output
+    // Mix active clip playback instances into stereo output
     {
         std::lock_guard<std::mutex> lock(engine->clipMutex_);
         for (auto& pb : engine->playbacks_) {
@@ -923,15 +951,15 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
             float g = pb->gain.load(std::memory_order_relaxed);
             float rate = pb->rate.load(std::memory_order_relaxed);
             bool looping = pb->looping.load(std::memory_order_relaxed);
+            float panL, panR;
+            panGains(pb->pan.load(std::memory_order_relaxed), panL, panR);
 
-            // Fixed-point playback: 16-bit fractional part for sub-sample interpolation
             constexpr int FRAC_BITS = 16;
             constexpr uint64_t FRAC_MASK = (1ULL << FRAC_BITS) - 1;
             uint64_t increment = static_cast<uint64_t>(rate * (1 << FRAC_BITS) + 0.5f);
 
-            for (int i = 0; i < numSamples; i++) {
+            for (int i = 0; i < numFrames; i++) {
                 int intPos = static_cast<int>(pos >> FRAC_BITS);
-                // Wrap/clamp position within region
                 if (looping) {
                     intPos = intPos % len;
                 } else if (intPos >= len) {
@@ -939,46 +967,47 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
                     pb->active.store(false, std::memory_order_relaxed);
                     break;
                 }
-                // Linear interpolation between adjacent samples
                 float frac = static_cast<float>(pos & FRAC_MASK) / (1 << FRAC_BITS);
                 float s0 = clip->samples[start + intPos];
                 int nextIdx = intPos + 1;
                 if (nextIdx >= len) nextIdx = looping ? 0 : intPos;
                 float s1 = clip->samples[start + nextIdx];
-                buffer[i] += (s0 + frac * (s1 - s0)) * g;
+                float sample = (s0 + frac * (s1 - s0)) * g;
+                buffer[i * 2]     += sample * panL;
+                buffer[i * 2 + 1] += sample * panR;
                 pos += increment;
             }
             pb->playPos.store(pos, std::memory_order_relaxed);
         }
     }
 
-    // Apply filter chain (post-mix, pre-limiter)
+    // Apply filter chain to both channels (post-mix, pre-limiter)
     {
         std::lock_guard<std::mutex> lock(engine->mutex_);
         for (int f = 0; f < AudioEngine::MAX_FILTERS; f++) {
             if (!engine->filters_[f].enabled) continue;
-            for (int i = 0; i < numSamples; i++) {
-                buffer[i] = engine->filters_[f].process(buffer[i]);
+            for (int i = 0; i < numFrames; i++) {
+                buffer[i * 2]     = engine->filters_[f].process(buffer[i * 2], 0);
+                buffer[i * 2 + 1] = engine->filters_[f].process(buffer[i * 2 + 1], 1);
             }
         }
 
-        // Apply delay effect
+        // Apply delay effect (stereo)
         if (engine->delay_.enabled) {
-            engine->delay_.process(buffer, numSamples);
+            engine->delay_.processStereo(buffer, numFrames);
         }
     }
 
-    // Compressor — keeps polyphony clean without per-voice gain hacking
-    engine->compressor_.process(buffer, numSamples);
+    // Compressor (process L and R summed to mono for detection, apply to both)
+    engine->compressor_.process(buffer, numFloats);
 
     // Soft limiter (safety net), then user-controlled master gain
     float mg = engine->masterGain_.load(std::memory_order_relaxed);
-    for (int i = 0; i < numSamples; i++) {
+    for (int i = 0; i < numFloats; i++) {
         buffer[i] = softLimit(buffer[i]) * mg;
     }
 
-    // Mix mic monitor AFTER all synth processing — separate direct path.
-    // Mic audio bypasses filters/delay/compressor/limiter entirely.
+    // Mix mic monitor AFTER all synth processing — separate direct path (center-panned).
     if (!engine->micMuted_.load(std::memory_order_relaxed)) {
         float micGain = engine->micMonitorGain_.load(std::memory_order_relaxed);
         uint64_t wp = engine->micPlaybackWritePos_.load(std::memory_order_acquire);
@@ -986,36 +1015,37 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
         int cap = AudioEngine::MIC_FIFO_SIZE;
         uint64_t available = wp - rp;
 
-        // Target: ~1 buffer of latency (~3ms at 128 samples/44100Hz).
-        // Only resync if we've overflowed (fallen way behind) or underrun.
-        int targetLatency = numSamples; // minimal — just 1 buffer ahead
-        if (available > static_cast<uint64_t>(cap - numSamples)) {
-            // Overflow: writer lapped us. Snap to fresh data.
+        int targetLatency = numFrames;
+        if (available > static_cast<uint64_t>(cap - numFrames)) {
             rp = wp - targetLatency;
             available = targetLatency;
-        } else if (available < static_cast<uint64_t>(numSamples)) {
-            // Underrun: not enough data. Read what we have (toRead handles it).
         }
 
-        int toRead = static_cast<int>(std::min(available, static_cast<uint64_t>(numSamples)));
+        int toRead = static_cast<int>(std::min(available, static_cast<uint64_t>(numFrames)));
         for (int i = 0; i < toRead; i++) {
             int idx = static_cast<int>((rp + i) % cap);
-            buffer[i] += engine->micPlayback_[idx] * micGain;
+            float s = engine->micPlayback_[idx] * micGain;
+            buffer[i * 2]     += s;
+            buffer[i * 2 + 1] += s;
         }
-        // If underrun (toRead < numSamples), remaining samples get no mic — just silence.
-        // This is better than repeating old samples which causes audible artifacts.
         engine->micPlaybackReadPos_ = rp + toRead;
     }
 
-    // Write to output ring buffer for analysis (includes both synth + mic)
-    engine->outputBuffer_.write(buffer, numSamples);
+    // Write stereo data to SDL before we repurpose any buffers
+    SDL_PutAudioStreamData(stream, buffer, numFloats * sizeof(float));
 
-    SDL_PutAudioStreamData(stream, buffer, numSamples * sizeof(float));
+    // Write mono mixdown to output ring buffer for analysis (waveform display, etc.)
+    float monoBuf[4096];
+    int monoCount = std::min(numFrames, 4096);
+    for (int i = 0; i < monoCount; i++) {
+        monoBuf[i] = (buffer[i * 2] + buffer[i * 2 + 1]) * 0.5f;
+    }
+    engine->outputBuffer_.write(monoBuf, monoCount);
 
     if (buffer != stackBuf) delete[] buffer;
 }
 
-void AudioEngine::generateSamples(float* buffer, int numSamples)
+void AudioEngine::generateSamples(float* buffer, int numFrames)
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -1028,10 +1058,12 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
         if (voice.envStage == EnvStage::Done) continue;
 
         float freq = voice.frequency;
-        float gain = VOICE_AMPLITUDE * voice.gain; // voice.gain is per-voice (velocity etc)
+        float gain = VOICE_AMPLITUDE * voice.gain;
         float phaseInc = freq / static_cast<float>(sampleRate_);
+        float panL, panR;
+        panGains(voice.pan, panL, panR);
 
-        for (int i = 0; i < numSamples; i++) {
+        for (int i = 0; i < numFrames; i++) {
             double t = baseTime + i * sampleDt;
 
             if (t < voice.startTime) continue;
@@ -1045,7 +1077,6 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                     }
                     break;
                 case EnvStage::Decay:
-                    // Exponential approach toward sustainLevel
                     voice.envLevel = voice.sustainLevel
                         + (voice.envLevel - voice.sustainLevel) * voice.decayCoeff;
                     if (voice.envLevel - voice.sustainLevel < 0.001f) {
@@ -1060,7 +1091,6 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                     }
                     break;
                 case EnvStage::Release:
-                    // Exponential decay toward zero — no click
                     voice.envLevel *= voice.releaseCoeff;
                     if (voice.envLevel < 0.0001f) {
                         voice.envLevel = 0.0f;
@@ -1076,14 +1106,14 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
             if (voice.envStage == EnvStage::Done) break;
 
             float sample = generateSample(voice.waveform, voice.phase, phaseInc);
-            buffer[i] += sample * gain * voice.envLevel;
+            float s = sample * gain * voice.envLevel;
+            buffer[i * 2]     += s * panL;
+            buffer[i * 2 + 1] += s * panR;
 
             voice.phase += phaseInc;
             if (voice.phase >= 1.0f) voice.phase -= 1.0f;
         }
     }
-
-    // NOTE: soft limiter moved to audioCallback to apply once after all mixing
 
     // Clean up finished voices
     voices_.erase(
@@ -1093,7 +1123,7 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                        }),
         voices_.end());
 
-    samplesGenerated_.fetch_add(static_cast<uint64_t>(numSamples), std::memory_order_relaxed);
+    samplesGenerated_.fetch_add(static_cast<uint64_t>(numFrames), std::memory_order_relaxed);
 }
 
 } // namespace bro::audio
