@@ -634,7 +634,7 @@ void AudioEngine::micCallback(void* userdata, SDL_AudioStream* stream,
             engine->micBuffer_.write(buffer, samplesGot);
         }
         // Write to playback FIFO (lock-free single-producer)
-        int cap = static_cast<int>(engine->micPlayback_.size());
+        int cap = MIC_FIFO_SIZE;
         uint64_t wp = engine->micPlaybackWritePos_.load(std::memory_order_relaxed);
         for (int i = 0; i < samplesGot; i++) {
             engine->micPlayback_[static_cast<int>((wp + i) % cap)] = buffer[i];
@@ -886,27 +886,7 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
     std::memset(buffer, 0, numSamples * sizeof(float));
     engine->generateSamples(buffer, numSamples);
 
-    // Mix in mic playback if not muted
-    if (!engine->micMuted_.load(std::memory_order_relaxed)) {
-        float micGain = engine->micMonitorGain_.load(std::memory_order_relaxed);
-        uint64_t wp = engine->micPlaybackWritePos_.load(std::memory_order_acquire);
-        int cap = static_cast<int>(engine->micPlayback_.size());
-        uint64_t available = wp - engine->micPlaybackReadPos_;
-
-        if (available > 660) {
-            engine->micPlaybackReadPos_ = wp - numSamples;
-            available = numSamples;
-        }
-
-        int toRead = static_cast<int>(std::min(available, static_cast<uint64_t>(numSamples)));
-        for (int i = 0; i < toRead; i++) {
-            int idx = static_cast<int>((engine->micPlaybackReadPos_ + i) % cap);
-            buffer[i] += engine->micPlayback_[idx] * micGain;
-        }
-        engine->micPlaybackReadPos_ += toRead;
-    }
-
-    // Record tap: capture synth+mic BEFORE adding loops (avoids feedback)
+    // Record tap (synth only, before effects — avoids feedback)
     if (engine->recording_.load(std::memory_order_relaxed)) {
         uint64_t wp = engine->recordWritePos_.load(std::memory_order_relaxed);
         for (int i = 0; i < numSamples; i++) {
@@ -973,7 +953,37 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
         buffer[i] = softLimit(buffer[i]) * mg;
     }
 
-    // Write to output ring buffer for analysis
+    // Mix mic monitor AFTER all synth processing — separate direct path.
+    // Mic audio bypasses filters/delay/compressor/limiter entirely.
+    if (!engine->micMuted_.load(std::memory_order_relaxed)) {
+        float micGain = engine->micMonitorGain_.load(std::memory_order_relaxed);
+        uint64_t wp = engine->micPlaybackWritePos_.load(std::memory_order_acquire);
+        uint64_t rp = engine->micPlaybackReadPos_;
+        int cap = AudioEngine::MIC_FIFO_SIZE;
+        uint64_t available = wp - rp;
+
+        // Target: ~1 buffer of latency (~3ms at 128 samples/44100Hz).
+        // Only resync if we've overflowed (fallen way behind) or underrun.
+        int targetLatency = numSamples; // minimal — just 1 buffer ahead
+        if (available > static_cast<uint64_t>(cap - numSamples)) {
+            // Overflow: writer lapped us. Snap to fresh data.
+            rp = wp - targetLatency;
+            available = targetLatency;
+        } else if (available < static_cast<uint64_t>(numSamples)) {
+            // Underrun: not enough data. Read what we have (toRead handles it).
+        }
+
+        int toRead = static_cast<int>(std::min(available, static_cast<uint64_t>(numSamples)));
+        for (int i = 0; i < toRead; i++) {
+            int idx = static_cast<int>((rp + i) % cap);
+            buffer[i] += engine->micPlayback_[idx] * micGain;
+        }
+        // If underrun (toRead < numSamples), remaining samples get no mic — just silence.
+        // This is better than repeating old samples which causes audible artifacts.
+        engine->micPlaybackReadPos_ = rp + toRead;
+    }
+
+    // Write to output ring buffer for analysis (includes both synth + mic)
     engine->outputBuffer_.write(buffer, numSamples);
 
     SDL_PutAudioStreamData(stream, buffer, numSamples * sizeof(float));

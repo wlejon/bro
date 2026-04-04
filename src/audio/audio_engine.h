@@ -303,8 +303,9 @@ private:
     RingBuffer micBuffer_{16384};
     std::mutex micMutex_;
 
-    // Mic playback FIFO
-    std::vector<float> micPlayback_ = std::vector<float>(4096, 0.0f);
+    // Mic playback FIFO — large enough for ~500ms of latency tolerance
+    static constexpr int MIC_FIFO_SIZE = 22050;
+    std::vector<float> micPlayback_ = std::vector<float>(MIC_FIFO_SIZE, 0.0f);
     std::atomic<uint64_t> micPlaybackWritePos_{0};
     uint64_t micPlaybackReadPos_ = 0;
 
