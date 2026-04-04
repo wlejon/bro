@@ -6,46 +6,46 @@
 
     var FACTORY = {
         'Init': {
-            waveform: 'sine', volume: 0.3,
-            adsr: { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.04 },
-            filter: { enabled: false, type: 'lowpass', frequency: 1000, Q: 1.0, gain: 0 },
+            waveform: 'sine', volume: 0.5,
+            adsr: { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.08 },
+            filter: { enabled: false, type: 'lowpass', frequency: 2000, Q: 1.0, gain: 0 },
             effects: { delayEnabled: false, delayTime: 0.3, delayFeedback: 0.3, delayMix: 0.3 },
-            lfo: { enabled: false, rate: 5, depth: 0.5, waveform: 'sine', target: 'pitch' }
+            lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
         },
         'Warm Pad': {
-            waveform: 'sawtooth', volume: 0.25,
-            adsr: { attack: 0.5, decay: 0.3, sustain: 0.7, release: 1.0 },
-            filter: { enabled: true, type: 'lowpass', frequency: 800, Q: 2.0, gain: 0 },
-            effects: { delayEnabled: true, delayTime: 0.4, delayFeedback: 0.4, delayMix: 0.25 },
-            lfo: { enabled: true, rate: 0.5, depth: 0.3, waveform: 'sine', target: 'filter' }
+            waveform: 'sawtooth', volume: 0.4,
+            adsr: { attack: 0.5, decay: 0.4, sustain: 0.6, release: 1.2 },
+            filter: { enabled: true, type: 'lowpass', frequency: 800, Q: 1.5, gain: 0 },
+            effects: { delayEnabled: true, delayTime: 0.45, delayFeedback: 0.35, delayMix: 0.2 },
+            lfo: { enabled: true, rate: 0.3, depth: 0.25, waveform: 'sine', target: 'filter' }
         },
         'Bass': {
-            waveform: 'square', volume: 0.35,
-            adsr: { attack: 0.005, decay: 0.2, sustain: 0.4, release: 0.1 },
-            filter: { enabled: true, type: 'lowpass', frequency: 400, Q: 3.0, gain: 0 },
+            waveform: 'square', volume: 0.5,
+            adsr: { attack: 0.005, decay: 0.25, sustain: 0.35, release: 0.1 },
+            filter: { enabled: true, type: 'lowpass', frequency: 400, Q: 2.5, gain: 0 },
             effects: { delayEnabled: false, delayTime: 0.3, delayFeedback: 0.3, delayMix: 0.3 },
-            lfo: { enabled: false, rate: 5, depth: 0.5, waveform: 'sine', target: 'pitch' }
+            lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
         },
         'Lead': {
-            waveform: 'sawtooth', volume: 0.3,
-            adsr: { attack: 0.01, decay: 0.15, sustain: 0.6, release: 0.2 },
-            filter: { enabled: true, type: 'lowpass', frequency: 2000, Q: 4.0, gain: 0 },
-            effects: { delayEnabled: true, delayTime: 0.25, delayFeedback: 0.35, delayMix: 0.2 },
-            lfo: { enabled: true, rate: 5.5, depth: 0.15, waveform: 'sine', target: 'pitch' }
+            waveform: 'sawtooth', volume: 0.45,
+            adsr: { attack: 0.01, decay: 0.2, sustain: 0.5, release: 0.25 },
+            filter: { enabled: true, type: 'lowpass', frequency: 2500, Q: 3.0, gain: 0 },
+            effects: { delayEnabled: true, delayTime: 0.3, delayFeedback: 0.3, delayMix: 0.2 },
+            lfo: { enabled: true, rate: 4.5, depth: 0.1, waveform: 'sine', target: 'pitch' }
         },
         'Pluck': {
-            waveform: 'triangle', volume: 0.35,
-            adsr: { attack: 0.002, decay: 0.3, sustain: 0.0, release: 0.1 },
+            waveform: 'triangle', volume: 0.5,
+            adsr: { attack: 0.002, decay: 0.35, sustain: 0.0, release: 0.15 },
             filter: { enabled: true, type: 'lowpass', frequency: 3000, Q: 1.5, gain: 0 },
             effects: { delayEnabled: true, delayTime: 0.2, delayFeedback: 0.25, delayMix: 0.15 },
-            lfo: { enabled: false, rate: 5, depth: 0.5, waveform: 'sine', target: 'pitch' }
+            lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
         },
         'Acid': {
-            waveform: 'sawtooth', volume: 0.3,
+            waveform: 'sawtooth', volume: 0.45,
             adsr: { attack: 0.005, decay: 0.15, sustain: 0.0, release: 0.05 },
-            filter: { enabled: true, type: 'lowpass', frequency: 600, Q: 12.0, gain: 0 },
-            effects: { delayEnabled: true, delayTime: 0.15, delayFeedback: 0.5, delayMix: 0.25 },
-            lfo: { enabled: true, rate: 3, depth: 0.8, waveform: 'sawtooth', target: 'filter' }
+            filter: { enabled: true, type: 'lowpass', frequency: 600, Q: 10.0, gain: 0 },
+            effects: { delayEnabled: true, delayTime: 0.15, delayFeedback: 0.4, delayMix: 0.2 },
+            lfo: { enabled: true, rate: 2.5, depth: 0.7, waveform: 'sawtooth', target: 'filter' }
         }
     };
 

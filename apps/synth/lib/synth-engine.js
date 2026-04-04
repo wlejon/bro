@@ -8,8 +8,9 @@
     var activeNotes = new Map(); // noteIdx -> { osc, gain }
 
     var waveform = 'sine';
-    var synthVolume = 0.3;
+    var synthVolume = 0.5;
     var octaveShift = 0;
+    var lastPlayedNote = 24; // C3
     var adsrParams = { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.04 };
 
     Synth.init = function() {
@@ -52,6 +53,7 @@
 
         activeNotes.set(noteIdx, { osc: osc, gain: gain, baseFreq: note.freq });
         if (note.element) note.element.classList.add('pressed');
+        lastPlayedNote = noteIdx;
 
         document.getElementById('note-display').textContent = note.name;
         document.getElementById('freq-display').textContent = note.freq.toFixed(1) + ' Hz';
@@ -95,6 +97,7 @@
                  sustain: adsrParams.sustain, release: adsrParams.release };
     };
 
+    Synth.getLastPlayedNote = function() { return lastPlayedNote; };
     Synth.getAudioContext = function() { return audioCtx; };
     Synth.getAnalyser = function() { return analyser; };
     Synth.getMasterGain = function() { return masterGain; };

@@ -25,7 +25,7 @@
                 </div>
                 <div class="control-group">
                     <label>Vol</label>
-                    <input type="range" id="volume" min="0" max="100" value="30">
+                    <input type="range" id="volume" min="0" max="100" value="50">
                 </div>
                 <div class="control-group mic-group">
                     <button id="mic-toggle" class="btn mic-btn mic-off">MIC</button>
@@ -44,7 +44,7 @@
                     <div class="slider-row"><label>Attack</label><input type="range" id="adsr-a" min="1" max="2000" value="10"><span class="slider-val" id="adsr-a-val">10ms</span></div>
                     <div class="slider-row"><label>Decay</label><input type="range" id="adsr-d" min="1" max="2000" value="100"><span class="slider-val" id="adsr-d-val">100ms</span></div>
                     <div class="slider-row"><label>Sustain</label><input type="range" id="adsr-s" min="0" max="100" value="100"><span class="slider-val" id="adsr-s-val">100%</span></div>
-                    <div class="slider-row"><label>Release</label><input type="range" id="adsr-r" min="1" max="3000" value="40"><span class="slider-val" id="adsr-r-val">40ms</span></div>
+                    <div class="slider-row"><label>Release</label><input type="range" id="adsr-r" min="1" max="3000" value="80"><span class="slider-val" id="adsr-r-val">80ms</span></div>
                 </div>
 
                 <!-- Filter -->
@@ -80,8 +80,8 @@
                         <div class="panel-title">LFO</div>
                         <button id="lfo-toggle" class="btn btn-toggle">Off</button>
                     </div>
-                    <div class="slider-row"><label>Rate</label><input type="range" id="lfo-rate" min="1" max="200" value="50"><span class="slider-val" id="lfo-rate-val">5.0Hz</span></div>
-                    <div class="slider-row"><label>Depth</label><input type="range" id="lfo-depth" min="0" max="100" value="50"><span class="slider-val" id="lfo-depth-val">50%</span></div>
+                    <div class="slider-row"><label>Rate</label><input type="range" id="lfo-rate" min="0" max="100" value="30"><span class="slider-val" id="lfo-rate-val">2.0Hz</span></div>
+                    <div class="slider-row"><label>Depth</label><input type="range" id="lfo-depth" min="0" max="100" value="30"><span class="slider-val" id="lfo-depth-val">30%</span></div>
                     <div id="lfo-target-btns" class="btn-group full-width">
                         <button class="btn active" data-target="pitch">Pitch</button>
                         <button class="btn" data-target="filter">Filter</button>

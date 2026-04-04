@@ -178,9 +178,11 @@
     });
 
     document.getElementById('lfo-rate').addEventListener('input', function(e) {
-        var hz = parseInt(e.target.value) / 10;
+        // Exponential mapping: 0.1Hz to 10Hz over 0-100 slider range
+        var pct = parseInt(e.target.value) / 100;
+        var hz = 0.1 * Math.pow(100, pct);
         Synth.LFO.setRate(hz);
-        showVal('lfo-rate-val', hz.toFixed(1) + 'Hz');
+        showVal('lfo-rate-val', hz < 1 ? hz.toFixed(2) + 'Hz' : hz.toFixed(1) + 'Hz');
     });
 
     document.getElementById('lfo-depth').addEventListener('input', function(e) {
@@ -278,9 +280,11 @@
         // LFO
         var lState = Synth.LFO.getState();
         updateToggle(lfoToggle, lState.enabled);
-        document.getElementById('lfo-rate').value = Math.round(lState.rate * 10);
+        // Reverse exponential: pct = log(hz/0.1) / log(100)
+        var ratePct = Math.log(lState.rate / 0.1) / Math.log(100);
+        document.getElementById('lfo-rate').value = Math.round(ratePct * 100);
         document.getElementById('lfo-depth').value = Math.round(lState.depth * 100);
-        showVal('lfo-rate-val', lState.rate.toFixed(1) + 'Hz');
+        showVal('lfo-rate-val', lState.rate < 1 ? lState.rate.toFixed(2) + 'Hz' : lState.rate.toFixed(1) + 'Hz');
         showVal('lfo-depth-val', Math.round(lState.depth * 100) + '%');
         $$('#lfo-target-btns .btn').forEach(function(b) {
             b.classList.toggle('active', b.getAttribute('data-target') === lState.target);
@@ -308,7 +312,8 @@
                     this.classList.remove('active');
                     this.textContent = '';
                 } else {
-                    var noteIdx = Synth.Keyboard.getViewOffset();
+                    // Use last played note, or C of current view octave
+                    var noteIdx = Synth.getLastPlayedNote();
                     Synth.Sequencer.setStep(idx, noteIdx);
                     this.classList.add('active');
                     this.textContent = Synth.notes[noteIdx].name;

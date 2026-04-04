@@ -247,7 +247,7 @@ static constexpr float DEFAULT_ATTACK  = 0.01f;
 static constexpr float DEFAULT_DECAY   = 0.1f;
 static constexpr float DEFAULT_SUSTAIN = 1.0f;
 static constexpr float DEFAULT_RELEASE = 0.04f;
-static constexpr float MASTER_GAIN     = 0.25f;
+static constexpr float MASTER_GAIN     = 0.5f;
 
 // ---------------------------------------------------------------------------
 // AudioEngine
@@ -932,8 +932,11 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
     for (auto& v : voices_) {
         if (v.active && v.started && v.envStage != EnvStage::Done) activeCount++;
     }
-    // Scale by 1/sqrt(n) — preserves perceived loudness while keeping sum linear
-    float voiceScale = activeCount > 1 ? 1.0f / std::sqrt(static_cast<float>(activeCount)) : 1.0f;
+    // Scale by n^-0.8 — more aggressive than sqrt, keeps sum well below limiter
+    // 1 voice: 1.0, 2: 0.57, 4: 0.33, 8: 0.19 (sums: 1.0, 1.15, 1.31, 1.52)
+    float voiceScale = activeCount > 1
+        ? 1.0f / std::pow(static_cast<float>(activeCount), 0.8f)
+        : 1.0f;
 
     for (auto& voice : voices_) {
         if (!voice.active || !voice.started) continue;

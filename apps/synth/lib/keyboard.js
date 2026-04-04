@@ -130,12 +130,14 @@
             octaveDisplay = octaveEl;
             buildKeyboard();
 
-            document.documentElement.addEventListener('keydown', function(e) {
+            // Use capture phase so Tab works even when buttons/select have focus
+            document.addEventListener('keydown', function(e) {
                 if (e.repeat) return;
                 var key = e.key.toLowerCase();
 
                 if (e.key === 'Tab') {
                     e.preventDefault();
+                    e.stopPropagation();
                     shiftView(e.shiftKey ? -12 : 12);
                     return;
                 }
@@ -144,15 +146,15 @@
                     keysDown.add(key);
                     Synth.noteOn(KEY_MAP[key] + viewOffset);
                 }
-            });
+            }, true);
 
-            document.documentElement.addEventListener('keyup', function(e) {
+            document.addEventListener('keyup', function(e) {
                 var key = e.key.toLowerCase();
                 if (key in KEY_MAP) {
                     keysDown.delete(key);
                     Synth.noteOff(KEY_MAP[key] + viewOffset);
                 }
-            });
+            }, true);
 
             document.documentElement.addEventListener('mouseup', function() {
                 if (mouseDown) {
