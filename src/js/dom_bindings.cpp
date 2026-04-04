@@ -182,6 +182,7 @@ void DomBindings::cleanup(JSContext* ctx) {
 }
 
 void DomBindings::cleanupRuntime(JSRuntime* rt) {
+    cleanupCanvasContextCache(rt);
     s_classes_registered.erase(rt);
 }
 

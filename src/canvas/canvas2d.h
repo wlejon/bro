@@ -105,6 +105,9 @@ public:
     const std::vector<DrawCmd>& commands() const { return cmds_; }
     const Canvas2DState& state() const { return state_; }
 
+    // Discard all queued commands without drawing anything (used to hide the scene)
+    void reset() { cmds_.clear(); }
+
 private:
     std::vector<DrawCmd> cmds_;
     Canvas2DState state_;

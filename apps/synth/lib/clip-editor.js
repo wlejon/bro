@@ -43,7 +43,10 @@
     var dragStartX = 0;
     var dragStartSample = 0;
     var hasDragged = false;
-    var cachedW = 300, cachedH = 150; // updated each draw
+    var cachedW = 0, cachedH = 0; // updated each draw
+
+    // Shared constant
+    var RULER_H = 18;
 
     // Undo
     var undoStack = [];
@@ -181,6 +184,7 @@
             audioCtx.setPlaybackRegion(playbackId, start, end);
             playFromSample = start;
             isPlaying = true;
+            playbackStarted = false;
             animatePlayhead();
         }
     };
@@ -209,6 +213,8 @@
     Editor.isPlaying = function() { return isPlaying; };
     Editor.isLooping = function() { return looping; };
 
+    var playbackStarted = false; // tracks whether pos has moved above 0
+
     function animatePlayhead() {
         if (!isPlaying) return;
         if (playbackId >= 0 && audioCtx) {
@@ -218,13 +224,18 @@
             var regionLen = end - start;
             var currentSample = start + Math.floor(pos * regionLen);
 
+            // Track that playback has actually progressed (pos > 0 at least once)
+            if (pos > 0) playbackStarted = true;
+
             cursorPos = currentSample;
             Editor.draw();
             updateTimeDisplay(currentSample);
 
-            if (!looping && pos === 0 && isPlaying) {
+            // Detect playback finished: pos returns to 0 after having progressed
+            if (!looping && playbackStarted && pos <= 0) {
                 cursorPos = start;
                 isPlaying = false;
+                playbackStarted = false;
                 Editor.draw();
                 return;
             }
@@ -574,15 +585,27 @@
     // Canvas drawing
     // -----------------------------------------------------------------------
 
+    // Clear the canvas scene completely so nothing renders
+    Editor.clear = function() {
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        ctx.reset();
+    };
+
     Editor.draw = function() {
         if (!canvas) return;
         var ctx = canvas.getContext('2d');
-        var w = ctx.canvasWidth;
-        var h = ctx.canvasHeight;
+        // Use element layout dimensions, not viewport-derived canvasWidth/Height
+        var rect = canvas.getBoundingClientRect();
+        var w = Math.floor(rect.width);
+        var h = Math.floor(rect.height);
+        if (w <= 0 || h <= 0) return; // not laid out yet
         cachedW = w;
         cachedH = h;
 
-        var RULER_H = 18; // time ruler height at top
+        // --- Clear previous frame's command buffer ---
+        // Use canvasWidth/Height (viewport-sized) to ensure the internal cmds_.clear() triggers
+        ctx.clearRect(0, 0, ctx.canvasWidth, ctx.canvasHeight);
 
         // --- Background ---
         ctx.fillStyle = '#121218';
@@ -823,8 +846,6 @@
     //   Ruler click:   seek playhead (even during playback)
     // -----------------------------------------------------------------------
 
-    var RULER_H = 18;
-
     function sampleToX(sample, w) {
         return ((sample - viewStart) / (viewEnd - viewStart)) * w;
     }
@@ -834,11 +855,16 @@
         return Math.max(0, Math.min(samples ? samples.length : 0, s));
     }
 
+    function canvasXY(e) {
+        var rect = canvas.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    }
+
     function onMouseDown(e) {
         if (!samples) return;
         var w = cachedW;
-        var x = e.offsetX !== undefined ? e.offsetX : e.clientX;
-        var y = e.offsetY !== undefined ? e.offsetY : e.clientY;
+        var pos = canvasXY(e);
+        var x = pos.x, y = pos.y;
 
         dragging = true;
         hasDragged = false;
@@ -868,7 +894,7 @@
     function onMouseMove(e) {
         if (!samples) return;
         var w = cachedW;
-        var x = e.offsetX !== undefined ? e.offsetX : e.clientX;
+        var x = canvasXY(e).x;
 
         if (!dragging) {
             // Hover: update time display
@@ -893,7 +919,7 @@
                 selEnd = curSample;
             }
             hasSelection = (selEnd - selStart) > 10; // need at least ~10 samples
-            cursorPos = curSample;
+            // Don't move cursor during drag — keep it at the click origin
         }
         Editor.draw();
         updateStatus();
@@ -905,7 +931,7 @@
             if (!hasDragged) {
                 // Single click: place cursor, clear selection
                 var w = cachedW;
-                var x = e.offsetX !== undefined ? e.offsetX : e.clientX;
+                var x = canvasXY(e).x;
                 cursorPos = xToSample(x, w);
                 hasSelection = false;
                 selStart = selEnd = 0;
@@ -926,7 +952,7 @@
     function onWheel(e) {
         if (!samples) return;
         var w = cachedW;
-        var x = e.offsetX !== undefined ? e.offsetX : e.clientX;
+        var x = canvasXY(e).x;
         var visLen = viewEnd - viewStart;
 
         if (e.shiftKey) {

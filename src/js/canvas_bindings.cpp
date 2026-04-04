@@ -150,6 +150,12 @@ static JSValue js_clearRect(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
+static JSValue js_reset(JSContext* /*ctx*/, JSValueConst this_val, int, JSValueConst*) {
+    auto* sc = getScene(this_val);
+    if (sc) sc->canvas().reset();
+    return JS_UNDEFINED;
+}
+
 static JSValue js_fillText(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* sc = getScene(this_val);
     if (!sc || argc < 3) return JS_UNDEFINED;
@@ -269,6 +275,7 @@ static const JSCFunctionListEntry js_ctx2d_proto_funcs[] = {
     JS_CFUNC_DEF("fillRect",    4, js_fillRect),
     JS_CFUNC_DEF("strokeRect",  4, js_strokeRect),
     JS_CFUNC_DEF("clearRect",   4, js_clearRect),
+    JS_CFUNC_DEF("reset",       0, js_reset),
     JS_CFUNC_DEF("fillText",    3, js_fillText),
     JS_CFUNC_DEF("measureText", 1, js_measureText),
     JS_CFUNC_DEF("save",        0, js_save),

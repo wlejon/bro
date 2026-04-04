@@ -15,12 +15,31 @@ namespace bro::js {
 // Element wrapper
 // ===========================================================================
 
+// Cache: each canvas element gets at most one rendering context (per web spec).
+struct CachedContext { JSValue val; std::string type; };
+static std::unordered_map<bro::dom::Element*, CachedContext> s_canvas_contexts;
+
+void cleanupCanvasContextCache(JSRuntime* rt) {
+    for (auto& [el, cc] : s_canvas_contexts)
+        JS_FreeValueRT(rt, cc.val);
+    s_canvas_contexts.clear();
+}
+
 // Release orphaned elements when the JS wrapper is garbage-collected.
-static void js_element_finalizer(JSRuntime* /*rt*/, JSValue val)
+static void js_element_finalizer(JSRuntime* rt, JSValue val)
 {
     auto* el = static_cast<bro::dom::Element*>(
         JS_GetOpaque(val, js_element_class_id));
-    if (!el || !el->isAlive()) return;
+    if (!el) return;
+
+    // Free any cached canvas context for this element
+    auto ccIt = s_canvas_contexts.find(el);
+    if (ccIt != s_canvas_contexts.end()) {
+        JS_FreeValueRT(rt, ccIt->second.val);
+        s_canvas_contexts.erase(ccIt);
+    }
+
+    if (!el->isAlive()) return;
 
     if (!el->parentNode()) {
         auto* doc = el->document();
@@ -1142,9 +1161,22 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     std::string type = typeStr ? typeStr : "";
     if (typeStr) JS_FreeCString(ctx, typeStr);
     if (type != "2d" && type != "webgl" && type != "webgl2") return JS_NULL;
+
+    // Return cached context if one already exists for this element
+    auto cacheIt = s_canvas_contexts.find(el);
+    if (cacheIt != s_canvas_contexts.end()) {
+        // Per spec: different type than the original → null
+        if (cacheIt->second.type != type) return JS_NULL;
+        return JS_DupValue(ctx, cacheIt->second.val);
+    }
+
     auto factoryIt = s_ctx_factories.find(ctx);
     if (factoryIt != s_ctx_factories.end() && factoryIt->second) {
-        return factoryIt->second(ctx, el, type);
+        JSValue val = factoryIt->second(ctx, el, type);
+        if (!JS_IsNull(val) && !JS_IsUndefined(val) && !JS_IsException(val)) {
+            s_canvas_contexts[el] = { JS_DupValue(ctx, val), type };
+        }
+        return val;
     }
     return JS_NULL;
 }

@@ -383,6 +383,7 @@
                 Synth.Visualizer.pause();
                 Synth.ClipEditor.draw();
             } else {
+                Synth.ClipEditor.clear();
                 Synth.Visualizer.resume();
             }
         });

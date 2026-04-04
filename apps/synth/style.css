@@ -429,9 +429,15 @@ input[type="range"] { accent-color: #00e5ff; }
     padding: 0 4px;
 }
 
+/* Canvas + sidebar sit side-by-side in a row container */
+#editor-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
 #editor-canvas-wrap {
     flex: 1;
-    display: flex;
     min-height: 0;
     min-width: 0;
     background: transparent;
@@ -439,35 +445,21 @@ input[type="range"] { accent-color: #00e5ff; }
 }
 
 #editor-canvas {
-    flex: 1;
-    width: 100%;
-    min-height: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     cursor: crosshair;
 }
 
 #editor-sidebar {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
     width: 190px;
+    flex-shrink: 0;
     background: rgba(12, 12, 20, 0.92);
     border-left: 1px solid #2a2a3a;
     overflow-y: auto;
     padding: 4px 0;
-    z-index: 10;
-}
-
-/* Make editor view use row layout for canvas + sidebar */
-#editor-view > #editor-canvas-wrap {
-    position: relative;
-}
-
-#editor-sidebar {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
 }
 
 .ed-btn-row {

@@ -123,6 +123,7 @@ JSValue wrapShadowRoot(JSContext* ctx, bro::dom::ShadowRoot* sr);
 // element_bindings.cpp
 void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem);
 bro::dom::Element* getElement(JSValueConst val);
+void cleanupCanvasContextCache(JSRuntime* rt);
 
 // document_bindings.cpp
 bro::dom::Document* getDocument(JSValueConst val);

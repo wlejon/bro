@@ -120,6 +120,21 @@ static dom::KeyboardEvent makeKeyboardEvent(const char* type,
     return evt;
 }
 
+// Compute element-relative offset coordinates (per spec: relative to padding edge)
+static void computeOffset(dom::MouseEvent& evt, dom::Element* target) {
+    if (!target) return;
+    auto& box = target->layoutBox();
+    float absX = box.contentRect.x;
+    float absY = box.contentRect.y;
+    for (auto* lp = target->layoutParent(); lp; lp = lp->layoutParent()) {
+        auto& pb = lp->layoutBox();
+        absX += pb.contentRect.x;
+        absY += pb.contentRect.y;
+    }
+    evt.setOffsetX(evt.clientX() - static_cast<double>(absX));
+    evt.setOffsetY(evt.clientY() - static_cast<double>(absY));
+}
+
 // Build a MouseEvent with standard fields populated
 static void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
                                int button, int buttons,
@@ -392,6 +407,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     }
                     uiDirty_ = true;
                     // Don't process further — we handled the dropdown click
+                    computeOffset(evt, target);
                     dispatchEvent(target, evt);
                     return;
                 }
@@ -542,6 +558,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 SDL_StopTextInput(window_->getSDLWindow());
             }
 
+            computeOffset(evt, target);
             dispatchEvent(target, evt);
         }
     }
@@ -589,6 +606,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
             populateMouseEvent(upEvt, x, y, button, pressedButtons_,
                               lastMouseX_, lastMouseY_, scrollY_, mod);
             if (target) {
+                computeOffset(upEvt, target);
                 dispatchEvent(target, upEvt);
             }
         }
@@ -617,6 +635,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
             populateMouseEvent(clickEvt, x, y, button, pressedButtons_,
                               lastMouseX_, lastMouseY_, scrollY_, mod);
             clickEvt.setDetail(clickCount_);
+            computeOffset(clickEvt, target);
             dispatchEvent(target, clickEvt);
 
             // Dispatch dblclick on second click
@@ -625,6 +644,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
                 populateMouseEvent(dblEvt, x, y, button, pressedButtons_,
                                   lastMouseX_, lastMouseY_, scrollY_, mod);
                 dblEvt.setDetail(2);
+                computeOffset(dblEvt, target);
                 dispatchEvent(target, dblEvt);
             }
 
@@ -633,6 +653,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
                 dom::MouseEvent ctxEvt("contextmenu", true, true);
                 populateMouseEvent(ctxEvt, x, y, button, pressedButtons_,
                                   lastMouseX_, lastMouseY_, scrollY_, mod);
+                computeOffset(ctxEvt, target);
                 dispatchEvent(target, ctxEvt);
             }
         }
@@ -771,6 +792,7 @@ void Engine::handleMouseMove(float x, float y) {
                 populateMouseEvent(outEvt, x, y, -1, pressedButtons_,
                                   lastMouseX_, lastMouseY_, scrollY_, mod);
                 outEvt.setRelatedTarget(target);
+                computeOffset(outEvt, hoveredElement_);
                 dispatchEvent(hoveredElement_, outEvt);
             }
 
@@ -780,6 +802,7 @@ void Engine::handleMouseMove(float x, float y) {
                 populateMouseEvent(leaveEvt, x, y, -1, pressedButtons_,
                                   lastMouseX_, lastMouseY_, scrollY_, mod);
                 leaveEvt.setRelatedTarget(target);
+                computeOffset(leaveEvt, hoveredElement_);
                 dispatchEvent(hoveredElement_, leaveEvt);
             }
 
@@ -789,6 +812,7 @@ void Engine::handleMouseMove(float x, float y) {
                 populateMouseEvent(overEvt, x, y, -1, pressedButtons_,
                                   lastMouseX_, lastMouseY_, scrollY_, mod);
                 overEvt.setRelatedTarget(hoveredElement_);
+                computeOffset(overEvt, target);
                 dispatchEvent(target, overEvt);
             }
 
@@ -798,6 +822,7 @@ void Engine::handleMouseMove(float x, float y) {
                 populateMouseEvent(enterEvt, x, y, -1, pressedButtons_,
                                   lastMouseX_, lastMouseY_, scrollY_, mod);
                 enterEvt.setRelatedTarget(hoveredElement_);
+                computeOffset(enterEvt, target);
                 dispatchEvent(target, enterEvt);
             }
 
@@ -811,6 +836,7 @@ void Engine::handleMouseMove(float x, float y) {
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
                               lastMouseX_, lastMouseY_, scrollY_, mod);
+            computeOffset(moveEvt, target);
             dispatchEvent(target, moveEvt);
         }
 
@@ -1379,6 +1405,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         wheelEvt.setDeltaY(static_cast<double>(-dy * kPixelsPerLine));
         wheelEvt.setDeltaZ(0.0);
         wheelEvt.setDeltaMode(dom::WheelEvent::DOM_DELTA_PIXEL);
+        computeOffset(wheelEvt, target);
         dispatchEvent(target, wheelEvt);
 
         // If JS called preventDefault(), don't do default scrolling
