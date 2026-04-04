@@ -8,6 +8,7 @@
     var lastFpsTime = performance.now();
     var fps = 0;
     var micPitchCounter = 0;
+    var paused = false;
 
     Synth.Visualizer = {
         init: function(canvasEl) {
@@ -15,7 +16,21 @@
             ctx = canvas.getContext('2d');
         },
 
+        pause: function() {
+            paused = true;
+            // Clear the canvas so it doesn't ghost over the editor view
+            if (ctx) {
+                var W = ctx.canvasWidth;
+                var H = ctx.canvasHeight;
+                ctx.clearRect(0, 0, W, H);
+            }
+        },
+        resume: function() {
+            if (paused) { paused = false; Synth.Visualizer.draw(); }
+        },
+
         draw: function() {
+            if (paused) return;
             requestAnimationFrame(Synth.Visualizer.draw);
 
             frameCount++;

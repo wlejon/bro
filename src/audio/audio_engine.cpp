@@ -841,6 +841,14 @@ void AudioEngine::setPlaybackPlaying(int instanceId, bool playing)
     }
 }
 
+void AudioEngine::setPlaybackRate(int instanceId, float rate)
+{
+    std::lock_guard<std::mutex> lock(clipMutex_);
+    if (auto* pb = findPlayback(instanceId)) {
+        pb->rate.store(rate, std::memory_order_relaxed);
+    }
+}
+
 void AudioEngine::setPlaybackRegion(int instanceId, int start, int end)
 {
     std::lock_guard<std::mutex> lock(clipMutex_);
@@ -866,7 +874,8 @@ float AudioEngine::getPlaybackPosition(int instanceId) const
     int len = end - pb->regionStart;
     if (len <= 0) return 0.0f;
     uint64_t pos = pb->playPos.load(std::memory_order_relaxed);
-    return static_cast<float>(pos % len) / static_cast<float>(len);
+    int intPos = static_cast<int>(pos >> 16); // fixed-point: 16-bit fraction
+    return static_cast<float>(intPos % len) / static_cast<float>(len);
 }
 
 // ---------------------------------------------------------------------------
@@ -912,17 +921,32 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
 
             uint64_t pos = pb->playPos.load(std::memory_order_relaxed);
             float g = pb->gain.load(std::memory_order_relaxed);
+            float rate = pb->rate.load(std::memory_order_relaxed);
             bool looping = pb->looping.load(std::memory_order_relaxed);
 
+            // Fixed-point playback: 16-bit fractional part for sub-sample interpolation
+            constexpr int FRAC_BITS = 16;
+            constexpr uint64_t FRAC_MASK = (1ULL << FRAC_BITS) - 1;
+            uint64_t increment = static_cast<uint64_t>(rate * (1 << FRAC_BITS) + 0.5f);
+
             for (int i = 0; i < numSamples; i++) {
-                int sampleIdx = static_cast<int>(pos % len);
-                buffer[i] += clip->samples[start + sampleIdx] * g;
-                pos++;
-                if (!looping && static_cast<int>(pos) >= len) {
+                int intPos = static_cast<int>(pos >> FRAC_BITS);
+                // Wrap/clamp position within region
+                if (looping) {
+                    intPos = intPos % len;
+                } else if (intPos >= len) {
                     pb->playing.store(false, std::memory_order_relaxed);
                     pb->active.store(false, std::memory_order_relaxed);
                     break;
                 }
+                // Linear interpolation between adjacent samples
+                float frac = static_cast<float>(pos & FRAC_MASK) / (1 << FRAC_BITS);
+                float s0 = clip->samples[start + intPos];
+                int nextIdx = intPos + 1;
+                if (nextIdx >= len) nextIdx = looping ? 0 : intPos;
+                float s1 = clip->samples[start + nextIdx];
+                buffer[i] += (s0 + frac * (s1 - s0)) * g;
+                pos += increment;
             }
             pb->playPos.store(pos, std::memory_order_relaxed);
         }

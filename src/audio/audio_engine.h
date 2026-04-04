@@ -86,8 +86,9 @@ struct ClipPlayback {
     int clipId = 0;                     // references AudioClip::id
     int regionStart = 0;                // first sample (inclusive)
     int regionEnd = 0;                  // last sample (exclusive), 0 = full clip
-    std::atomic<uint64_t> playPos{0};   // current position within region
+    std::atomic<uint64_t> playPos{0};   // current position within region (fixed-point: upper bits = integer sample, lower 16 = fraction)
     std::atomic<float> gain{1.0f};
+    std::atomic<float> rate{1.0f};      // playback rate (1.0 = normal, 2.0 = octave up, 0.5 = octave down)
     std::atomic<bool> playing{false};
     std::atomic<bool> looping{false};
     std::atomic<bool> active{true};     // false = finished/deleted
@@ -274,6 +275,7 @@ public:
     void setPlaybackLoop(int instanceId, bool loop);
     void setPlaybackRegion(int instanceId, int start, int end);
     void setPlaybackPlaying(int instanceId, bool playing);
+    void setPlaybackRate(int instanceId, float rate);
     /// Returns normalized position (0..1) within the active region.
     float getPlaybackPosition(int instanceId) const;
 

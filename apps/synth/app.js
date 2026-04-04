@@ -362,4 +362,200 @@
     // Load default preset
     Synth.Presets.load('Init');
     syncUIToState();
+
+    // -----------------------------------------------------------------------
+    // View switching
+    // -----------------------------------------------------------------------
+    var currentView = 'synth';
+
+    $$('#view-tabs .btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var view = btn.getAttribute('data-view');
+            if (view === currentView) return;
+            currentView = view;
+            $$('#view-tabs .btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+
+            document.getElementById('synth-view').style.display = view === 'synth' ? 'flex' : 'none';
+            document.getElementById('editor-view').style.display = view === 'editor' ? 'flex' : 'none';
+
+            if (view === 'editor') {
+                Synth.Visualizer.pause();
+                Synth.ClipEditor.draw();
+            } else {
+                Synth.Visualizer.resume();
+            }
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    // Clip Editor init & wiring
+    // -----------------------------------------------------------------------
+    Synth.ClipEditor.init(document.getElementById('editor-canvas'));
+
+    var isRecording = false;
+
+    // Transport
+    document.getElementById('ed-play').addEventListener('click', function() { Synth.ClipEditor.play(); });
+    document.getElementById('ed-stop').addEventListener('click', function() { Synth.ClipEditor.stop(); });
+    document.getElementById('ed-loop').addEventListener('click', function() {
+        var on = Synth.ClipEditor.toggleLoop();
+        document.getElementById('ed-loop').classList.toggle('active', on);
+    });
+
+    // Record
+    document.getElementById('ed-record').addEventListener('click', function() {
+        var btn = document.getElementById('ed-record');
+        if (!isRecording) {
+            Synth.ClipEditor.record();
+            isRecording = true;
+            btn.classList.add('recording');
+            btn.textContent = 'Stop';
+        } else {
+            Synth.ClipEditor.stopRecording();
+            isRecording = false;
+            btn.classList.remove('recording');
+            btn.textContent = 'Rec';
+        }
+    });
+
+    // File I/O
+    document.getElementById('ed-load').addEventListener('click', function() {
+        var files = showOpenFileDialog('Audio Files|wav');
+        if (files && files.length > 0) {
+            try { Synth.ClipEditor.loadFromFile(files[0]); }
+            catch (e) { console.error('Load failed:', e.message); }
+        }
+    });
+
+    document.getElementById('ed-save').addEventListener('click', function() {
+        var path = showSaveFileDialog('WAV Files|wav', 'clip.wav');
+        if (path) {
+            // Ensure .wav extension
+            if (path.indexOf('.wav') < 0 && path.indexOf('.WAV') < 0) path += '.wav';
+            try { Synth.ClipEditor.saveToFile(path); }
+            catch (e) { console.error('Save failed:', e.message); }
+        }
+    });
+
+    // Edit operations
+    document.getElementById('ed-undo').addEventListener('click', function() { Synth.ClipEditor.undo(); });
+    document.getElementById('ed-redo').addEventListener('click', function() { Synth.ClipEditor.redo(); });
+    document.getElementById('ed-cut').addEventListener('click', function() { Synth.ClipEditor.cut(); });
+    document.getElementById('ed-copy').addEventListener('click', function() { Synth.ClipEditor.copy(); });
+    document.getElementById('ed-paste').addEventListener('click', function() { Synth.ClipEditor.paste(); });
+    document.getElementById('ed-delete').addEventListener('click', function() { Synth.ClipEditor.deleteSelection(); });
+    document.getElementById('ed-silence').addEventListener('click', function() { Synth.ClipEditor.silenceSelection(); });
+    document.getElementById('ed-trim').addEventListener('click', function() { Synth.ClipEditor.trimToSelection(); });
+    document.getElementById('ed-select-all').addEventListener('click', function() { Synth.ClipEditor.selectAll(); });
+
+    // Zoom
+    document.getElementById('ed-zoom-in').addEventListener('click', function() { Synth.ClipEditor.zoomIn(); });
+    document.getElementById('ed-zoom-out').addEventListener('click', function() { Synth.ClipEditor.zoomOut(); });
+    document.getElementById('ed-zoom-fit').addEventListener('click', function() { Synth.ClipEditor.zoomToFit(); });
+    document.getElementById('ed-zoom-sel').addEventListener('click', function() { Synth.ClipEditor.zoomToSelection(); });
+
+    // Process
+    document.getElementById('ed-normalize').addEventListener('click', function() { Synth.ClipEditor.normalize(); });
+    document.getElementById('ed-reverse').addEventListener('click', function() { Synth.ClipEditor.reverse(); });
+    document.getElementById('ed-fade-in').addEventListener('click', function() { Synth.ClipEditor.fadeIn(); });
+    document.getElementById('ed-fade-out').addEventListener('click', function() { Synth.ClipEditor.fadeOut(); });
+
+    document.getElementById('ed-gain').addEventListener('input', function(e) {
+        showVal('ed-gain-val', e.target.value + 'dB');
+    });
+    document.getElementById('ed-gain-apply').addEventListener('click', function() {
+        Synth.ClipEditor.adjustGain(parseInt(document.getElementById('ed-gain').value));
+        document.getElementById('ed-gain').value = 0;
+        showVal('ed-gain-val', '0dB');
+    });
+
+    // Pitch
+    document.getElementById('ed-pitch').addEventListener('input', function(e) {
+        var v = parseInt(e.target.value);
+        showVal('ed-pitch-val', (v >= 0 ? '+' : '') + v);
+    });
+    document.getElementById('ed-pitch-apply').addEventListener('click', function() {
+        var semi = parseInt(document.getElementById('ed-pitch').value);
+        if (semi !== 0) Synth.ClipEditor.pitchShift(semi);
+        document.getElementById('ed-pitch').value = 0;
+        showVal('ed-pitch-val', '0');
+    });
+    $$('.ed-pitch-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            Synth.ClipEditor.pitchShift(parseInt(btn.getAttribute('data-semi')));
+        });
+    });
+
+    // Speed / Time stretch
+    document.getElementById('ed-speed').addEventListener('input', function(e) {
+        showVal('ed-speed-val', e.target.value + '%');
+    });
+    document.getElementById('ed-speed-apply').addEventListener('click', function() {
+        var pct = parseInt(document.getElementById('ed-speed').value);
+        if (pct !== 100) Synth.ClipEditor.timeStretch(100 / pct); // invert: 200% speed = 0.5x stretch
+        document.getElementById('ed-speed').value = 100;
+        showVal('ed-speed-val', '100%');
+    });
+    $$('.ed-speed-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var pct = parseInt(btn.getAttribute('data-speed'));
+            Synth.ClipEditor.timeStretch(100 / pct);
+        });
+    });
+
+    // Insert silence
+    document.getElementById('ed-silence-dur').addEventListener('input', function(e) {
+        var ms = parseInt(e.target.value);
+        showVal('ed-silence-dur-val', ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms');
+    });
+    document.getElementById('ed-insert-silence').addEventListener('click', function() {
+        Synth.ClipEditor.insertSilence(parseInt(document.getElementById('ed-silence-dur').value));
+    });
+
+    // Generate
+    var genWaveform = 'sine';
+    document.getElementById('ed-gen-freq').addEventListener('input', function(e) {
+        showVal('ed-gen-freq-val', e.target.value + 'Hz');
+    });
+    document.getElementById('ed-gen-dur').addEventListener('input', function(e) {
+        var ms = parseInt(e.target.value);
+        showVal('ed-gen-dur-val', ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms');
+    });
+    $$('#ed-gen-wave-btns .btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            $$('#ed-gen-wave-btns .btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            genWaveform = btn.getAttribute('data-wave');
+        });
+    });
+    document.getElementById('ed-generate').addEventListener('click', function() {
+        Synth.ClipEditor.generateTone(
+            parseInt(document.getElementById('ed-gen-freq').value),
+            parseInt(document.getElementById('ed-gen-dur').value),
+            genWaveform
+        );
+    });
+    document.getElementById('ed-gen-noise').addEventListener('click', function() {
+        Synth.ClipEditor.generateNoise(parseInt(document.getElementById('ed-gen-dur').value));
+    });
+
+    // Synth integration
+    document.getElementById('ed-use-clip').addEventListener('click', function() {
+        Synth.ClipEditor.useAsInstrument();
+        document.getElementById('ed-use-clip').classList.add('active');
+    });
+    document.getElementById('ed-clear-clip').addEventListener('click', function() {
+        Synth.ClipEditor.clearInstrument();
+        document.getElementById('ed-use-clip').classList.remove('active');
+    });
+
+    // Keyboard shortcuts for editor view
+    document.documentElement.addEventListener('keydown', function(e) {
+        if (currentView === 'editor') {
+            if (Synth.ClipEditor.handleKey(e)) {
+                e.preventDefault();
+            }
+        }
+    });
 })();

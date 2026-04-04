@@ -32,6 +32,9 @@
         return audioCtx;
     };
 
+    // Base note for clip instrument (C4 = middle C, noteIdx 36 in our 7-octave range)
+    var CLIP_BASE_NOTE = 36;
+
     Synth.noteOn = function(noteIdx) {
         if (!audioCtx) return;
         var notes = Synth.notes;
@@ -39,21 +42,35 @@
         if (activeNotes.has(noteIdx)) return;
 
         var note = notes[noteIdx];
-        var osc = audioCtx.createOscillator();
-        var gain = audioCtx.createGain();
 
-        osc.type = waveform;
-        osc.frequency.value = note.freq;
-        osc.attack.value = adsrParams.attack;
-        osc.decay.value = adsrParams.decay;
-        osc.sustain.value = adsrParams.sustain;
-        osc.release.value = adsrParams.release;
-        gain.gain.value = 1.0; // fixed per-voice; volume is engine masterGain
+        if (Synth.useClipMode && Synth.customClipId >= 0) {
+            // Clip instrument mode: play clip at pitch-shifted rate
+            var semitoneOffset = noteIdx - CLIP_BASE_NOTE;
+            var rate = Math.pow(2, semitoneOffset / 12);
+            var pbId = audioCtx.playClip(Synth.customClipId, 1.0, false);
+            if (pbId >= 0) {
+                audioCtx.setPlaybackRate(pbId, rate);
+                activeNotes.set(noteIdx, { clipPlaybackId: pbId, baseFreq: note.freq });
+            }
+        } else {
+            // Oscillator mode
+            var osc = audioCtx.createOscillator();
+            var gain = audioCtx.createGain();
 
-        osc.connect(gain).connect(masterGain);
-        osc.start();
+            osc.type = waveform;
+            osc.frequency.value = note.freq;
+            osc.attack.value = adsrParams.attack;
+            osc.decay.value = adsrParams.decay;
+            osc.sustain.value = adsrParams.sustain;
+            osc.release.value = adsrParams.release;
+            gain.gain.value = 1.0; // fixed per-voice; volume is engine masterGain
 
-        activeNotes.set(noteIdx, { osc: osc, gain: gain, baseFreq: note.freq });
+            osc.connect(gain).connect(masterGain);
+            osc.start();
+
+            activeNotes.set(noteIdx, { osc: osc, gain: gain, baseFreq: note.freq });
+        }
+
         if (note.element) note.element.classList.add('pressed');
         lastPlayedNote = noteIdx;
 
@@ -65,7 +82,13 @@
         var entry = activeNotes.get(noteIdx);
         if (!entry) return;
 
-        entry.osc.stop();
+        if (entry.clipPlaybackId !== undefined) {
+            // Clip instrument mode
+            audioCtx.stopPlayback(entry.clipPlaybackId);
+        } else {
+            // Oscillator mode
+            entry.osc.stop();
+        }
         activeNotes.delete(noteIdx);
 
         var note = Synth.notes[noteIdx];
@@ -123,6 +146,11 @@
 
     Synth.notes = notes;
     Synth.NOTE_NAMES = NOTE_NAMES;
+
+    // Clip instrument mode state
+    Synth.useClipMode = false;
+    Synth.customClipId = -1;
+    Synth.customClipSamples = null;
 
     // Mic
     var micEnabled = false;

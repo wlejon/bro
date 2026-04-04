@@ -1005,6 +1005,16 @@ static JSValue js_audioctx_setPlaybackRegion(JSContext* ctx, JSValueConst this_v
     return JS_UNDEFINED;
 }
 
+static JSValue js_audioctx_setPlaybackRate(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setPlaybackRate(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
 static JSValue js_audioctx_getPlaybackPosition(JSContext* ctx, JSValueConst this_val,
                                                 int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
@@ -1041,6 +1051,7 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("setPlaybackLoop", 2, js_audioctx_setPlaybackLoop),
     JS_CFUNC_DEF("setPlaybackPlaying", 2, js_audioctx_setPlaybackPlaying),
     JS_CFUNC_DEF("setPlaybackRegion", 3, js_audioctx_setPlaybackRegion),
+    JS_CFUNC_DEF("setPlaybackRate", 2, js_audioctx_setPlaybackRate),
     JS_CFUNC_DEF("getPlaybackPosition", 1, js_audioctx_getPlaybackPosition),
 };
 

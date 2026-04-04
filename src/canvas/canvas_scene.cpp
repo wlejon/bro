@@ -92,6 +92,18 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
         colorVerts.push_back({x2 + nx, y2 + ny, r, g, b, a});
     };
 
+    // Apply element layout offset so canvas draws at its DOM position
+    if (layoutCb_) {
+        float lw = 0, lh = 0;
+        layoutCb_(layoutUd_, offsetX_, offsetY_, lw, lh);
+        if (lw > 0 && lh > 0) {
+            width_ = static_cast<int>(lw);
+            height_ = static_cast<int>(lh);
+        }
+    }
+    tx = offsetX_;
+    ty = offsetY_;
+
     // Path state for beginPath/moveTo/lineTo/stroke/fill
     struct PathPoint { float x, y; };
     std::vector<PathPoint> pathPoints;
@@ -330,6 +342,15 @@ void CanvasScene::onRender(render::GLContext* gl, int w, int h, double) {
     // by stale depth-buffer values from the previous frame.
     glDisable(GL_DEPTH_TEST);
 
+    // Clip to element bounds (GL scissor: origin is bottom-left)
+    bool useScissor = (width_ > 0 && height_ > 0);
+    if (useScissor) {
+        glEnable(GL_SCISSOR_TEST);
+        int sx = static_cast<int>(offsetX_);
+        int sy = h - static_cast<int>(offsetY_) - height_;
+        glScissor(sx, sy, width_, height_);
+    }
+
     // Draw colored geometry
     if (colorVertCount_ > 0) {
         glUseProgram(gl->colorProgram());
@@ -363,6 +384,10 @@ void CanvasScene::onRender(render::GLContext* gl, int w, int h, double) {
 
         glBindVertexArray(0);
         glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    if (useScissor) {
+        glDisable(GL_SCISSOR_TEST);
     }
 }
 

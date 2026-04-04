@@ -16,6 +16,10 @@ namespace bro::canvas {
 class CanvasScene final : public render::SceneLayer {
 public:
     explicit CanvasScene(render::Renderer* renderer) : renderer_(renderer) {}
+
+    /// Callback invoked each frame before rendering to update offset and size.
+    using LayoutCallback = void(*)(void* userdata, float& outX, float& outY, float& outW, float& outH);
+    void setLayoutCallback(LayoutCallback cb, void* ud) { layoutCb_ = cb; layoutUd_ = ud; }
     ~CanvasScene() override { onCleanup(); }
 
     void onInit(render::GLContext* gl, int w, int h) override {
@@ -43,6 +47,9 @@ private:
     render::Renderer* renderer_;
     render::GLContext* gl_ = nullptr;
     int width_ = 0, height_ = 0;
+    float offsetX_ = 0, offsetY_ = 0;
+    LayoutCallback layoutCb_ = nullptr;
+    void* layoutUd_ = nullptr;
 
     std::unordered_map<std::string, uint64_t> fontCache_;
 

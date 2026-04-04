@@ -373,6 +373,141 @@ input[type="range"] { accent-color: #00e5ff; }
 
 #note-display { color: #00e5ff; min-width: 36px; }
 #freq-display { min-width: 70px; }
+#clip-status { color: #888; flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #mic-note { color: #33cc33; min-width: 60px; }
 #mic-freq { min-width: 70px; }
 #fps-display { margin-left: auto; }
+
+/* -----------------------------------------------------------------------
+   View switching
+   ----------------------------------------------------------------------- */
+#synth-view, #editor-view {
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+#view-tabs { margin-right: 8px; }
+
+/* -----------------------------------------------------------------------
+   Clip Editor
+   ----------------------------------------------------------------------- */
+#editor-view {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+#editor-toolbar {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    gap: 4px;
+    background: #0e0e16;
+    border-bottom: 1px solid #2a2a3a;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.toolbar-group {
+    display: flex;
+    gap: 2px;
+}
+
+.toolbar-sep {
+    width: 1px;
+    height: 18px;
+    background: #2a2a3a;
+    margin: 0 3px;
+}
+
+.toolbar-val {
+    font-size: 9px;
+    color: #666;
+    font-family: monospace;
+    padding: 0 4px;
+}
+
+#editor-canvas-wrap {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    min-width: 0;
+    background: transparent;
+    position: relative;
+}
+
+#editor-canvas {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    cursor: crosshair;
+}
+
+#editor-sidebar {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 190px;
+    background: rgba(12, 12, 20, 0.92);
+    border-left: 1px solid #2a2a3a;
+    overflow-y: auto;
+    padding: 4px 0;
+    z-index: 10;
+}
+
+/* Make editor view use row layout for canvas + sidebar */
+#editor-view > #editor-canvas-wrap {
+    position: relative;
+}
+
+#editor-sidebar {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.ed-btn-row {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.ed-btn-row .btn { flex: 1; text-align: center; }
+
+.ed-btn-wide {
+    width: 100%;
+    text-align: center;
+    margin-bottom: 3px;
+}
+
+.btn-record {
+    background: #2a1515;
+    border-color: #993333;
+    color: #cc3333;
+    font-weight: 700;
+}
+.btn-record.recording {
+    background: #cc3333;
+    border-color: #ff5555;
+    color: #fff;
+}
+
+.btn-accent {
+    background: #00e5ff15;
+    border-color: #00e5ff60;
+    color: #00e5ff;
+    font-weight: 600;
+}
+.btn-accent:hover {
+    background: #00e5ff25;
+    border-color: #00e5ff;
+}
+
+.ed-pitch-btn, .ed-speed-btn {
+    font-size: 9px;
+    padding: 2px 4px;
+}

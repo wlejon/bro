@@ -21,6 +21,7 @@
 #include "js/event_dispatch.h"
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
+#include "js/dialog_bindings.h"
 #include "js/window_bindings.h"
 #include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
@@ -201,6 +202,10 @@ Engine::Engine(const EngineConfig& config)
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
 
+    // 9x. Native file dialogs (modal to our SDL window)
+    js::DialogBindings::install(jsRuntime_->getContext(),
+                                window_ ? window_->getSDLWindow() : nullptr);
+
     // 9a. Install DOM JS bindings (after window so polyfills work)
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
 
@@ -219,9 +224,27 @@ Engine::Engine(const EngineConfig& config)
         // GPU path: WebGL2 + full canvas factory (windowed or GPU headless)
         js::WebGL2Bindings::install(jsRuntime_->getContext());
         js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
-            [this](JSContext* ctx, dom::Element*, const std::string& type) -> JSValue {
+            [this](JSContext* ctx, dom::Element* el, const std::string& type) -> JSValue {
                 if (type == "2d") {
                     auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                    if (el) {
+                        scene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
+                            auto* elem = static_cast<dom::Element*>(ud);
+                            auto& box = elem->layoutBox();
+                            // Accumulate absolute position by walking up the
+                            // layout parent chain (same as getBoundingClientRect)
+                            ox = box.contentRect.x;
+                            oy = box.contentRect.y;
+                            for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
+                                auto& pb = lp->layoutBox();
+                                ox += pb.contentRect.x;
+                                oy += pb.contentRect.y;
+                            }
+                            // Element content dimensions
+                            ow = box.contentRect.width;
+                            oh = box.contentRect.height;
+                        }, el);
+                    }
                     auto* ptr = scene.get();
                     addSceneLayer(std::move(scene));
                     return js::CanvasBindings::wrapContext2D(ctx, ptr);

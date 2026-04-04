@@ -291,6 +291,44 @@ static JSValue js_document_get_activeElement(JSContext* ctx, JSValueConst this_v
     return DomBindings::wrapElement(ctx, el);
 }
 
+// ---------------------------------------------------------------------------
+// Event listener delegation — forward to documentElement
+// ---------------------------------------------------------------------------
+
+static JSValue js_document_addEventListener(JSContext* ctx,
+                                            JSValueConst this_val,
+                                            int argc, JSValueConst* argv)
+{
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 2) return JS_UNDEFINED;
+    auto* root = doc->documentElement();
+    if (!root) return JS_UNDEFINED;
+    JSValue rootVal = DomBindings::wrapElement(ctx, root);
+    JSAtom fn = JS_NewAtom(ctx, "addEventListener");
+    JSValue result = JS_Invoke(ctx, rootVal, fn, argc, argv);
+    JS_FreeAtom(ctx, fn);
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, rootVal);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_document_removeEventListener(JSContext* ctx,
+                                               JSValueConst this_val,
+                                               int argc, JSValueConst* argv)
+{
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 2) return JS_UNDEFINED;
+    auto* root = doc->documentElement();
+    if (!root) return JS_UNDEFINED;
+    JSValue rootVal = DomBindings::wrapElement(ctx, root);
+    JSAtom fn = JS_NewAtom(ctx, "removeEventListener");
+    JSValue result = JS_Invoke(ctx, rootVal, fn, argc, argv);
+    JS_FreeAtom(ctx, fn);
+    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, rootVal);
+    return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry js_document_proto_funcs[] = {
     // Properties
     JS_CGETSET_DEF("title",           js_document_get_title,           js_document_set_title),
@@ -314,6 +352,8 @@ static const JSCFunctionListEntry js_document_proto_funcs[] = {
     JS_CFUNC_DEF("getElementsByName",       1, js_document_getElementsByName),
     JS_CFUNC_DEF("importNode",              2, js_document_importNode),
     JS_CFUNC_DEF("adoptNode",               1, js_document_adoptNode),
+    JS_CFUNC_DEF("addEventListener",         2, js_document_addEventListener),
+    JS_CFUNC_DEF("removeEventListener",      2, js_document_removeEventListener),
 };
 
 // ===========================================================================
