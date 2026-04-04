@@ -21,28 +21,30 @@ body {
     width: 100vw;
 }
 
-/* Header / Core Controls */
+/* -----------------------------------------------------------------------
+   Header
+   ----------------------------------------------------------------------- */
 #header {
     display: flex;
     align-items: center;
-    padding: 4px 10px;
+    padding: 5px 12px;
     background: #12121a;
     border-bottom: 1px solid #2a2a3a;
-    gap: 12px;
+    gap: 14px;
+    flex-shrink: 0;
 }
 
 #header h1 {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 700;
     color: #00e5ff;
     letter-spacing: 4px;
-    min-width: 60px;
 }
 
 #controls {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     flex: 1;
     flex-wrap: wrap;
 }
@@ -50,168 +52,174 @@ body {
 .control-group {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
 }
 
-.control-group label, .param label, .section-label {
-    font-size: 9px;
+.control-group label {
+    font-size: 10px;
     text-transform: uppercase;
     color: #555;
     letter-spacing: 0.5px;
 }
 
-.btn-group {
-    display: flex;
-    gap: 1px;
+#controls input[type="range"] {
+    width: 70px;
 }
+
+/* -----------------------------------------------------------------------
+   Buttons
+   ----------------------------------------------------------------------- */
+.btn-group { display: flex; gap: 1px; }
 
 .btn {
     background: #1a1a2a;
     border: 1px solid #2a2a3a;
-    color: #888;
-    padding: 2px 6px;
-    font-size: 9px;
+    color: #777;
+    padding: 3px 8px;
+    font-size: 10px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.12s;
 }
 
-.btn:hover {
-    background: #222238;
-    color: #bbb;
+.btn:hover { background: #222238; color: #bbb; }
+.btn.active { background: #00e5ff18; border-color: #00e5ff; color: #00e5ff; }
+
+.btn-toggle {
+    font-size: 9px;
+    padding: 2px 8px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
 }
 
-.btn.active {
-    background: #00e5ff20;
+.btn-toggle.active {
+    background: #00e5ff25;
     border-color: #00e5ff;
     color: #00e5ff;
 }
 
-.btn-sm {
-    padding: 1px 5px;
-    font-size: 8px;
-}
+/* Mic toggle */
+.mic-btn { font-weight: 700; padding: 3px 10px; font-size: 10px; letter-spacing: 1px; }
+.mic-btn.mic-off { background: #2a1515; border-color: #993333; color: #cc3333; }
+.mic-btn.mic-on { background: #152a15; border-color: #339933; color: #33cc33; }
 
-/* Mic toggle button */
-.mic-btn {
-    font-weight: 700;
-    padding: 2px 8px;
-    font-size: 9px;
-    letter-spacing: 1px;
-}
-
-.mic-btn.mic-off {
-    background: #3a1a1a;
-    border-color: #cc3333;
-    color: #cc3333;
-}
-
-.mic-btn.mic-on {
-    background: #1a3a1a;
-    border-color: #33cc33;
-    color: #33cc33;
-}
-
-/* Mic level indicator */
 #mic-level-wrap {
-    width: 4px;
-    height: 18px;
-    background: #1a1a2a;
-    border: 1px solid #2a2a3a;
-    position: relative;
-    overflow: hidden;
+    width: 4px; height: 20px; background: #1a1a2a;
+    border: 1px solid #2a2a3a; position: relative; overflow: hidden;
 }
-
 #mic-level-bar {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 0%;
-    background: #33cc33;
-    transition: height 0.05s;
+    position: absolute; bottom: 0; left: 0; right: 0;
+    height: 0%; background: #33cc33; transition: height 0.05s;
 }
 
-input[type="range"] {
-    width: 50px;
-    accent-color: #00e5ff;
-}
+.mic-group input[type="range"] { accent-color: #33cc33; }
 
-.mic-group input[type="range"] {
-    accent-color: #33cc33;
-}
-
-/* Select (preset dropdown) */
 select {
-    background: #1a1a2a;
-    border: 1px solid #2a2a3a;
-    color: #ccc;
-    padding: 2px 4px;
-    font-size: 9px;
-    cursor: pointer;
+    background: #1a1a2a; border: 1px solid #2a2a3a;
+    color: #ccc; padding: 3px 6px; font-size: 10px; cursor: pointer;
 }
 
-/* Parameter Row */
-#param-row {
+input[type="range"] { accent-color: #00e5ff; }
+
+/* -----------------------------------------------------------------------
+   Main area: sidebar + visualization
+   ----------------------------------------------------------------------- */
+#main {
     display: flex;
-    padding: 3px 10px;
-    gap: 12px;
-    background: #0e0e16;
-    border-bottom: 1px solid #2a2a3a;
-    flex-wrap: wrap;
-    align-items: center;
+    flex: 1;
+    min-height: 0;
 }
 
-.param-section {
+/* Sidebar */
+#sidebar {
+    width: 200px;
+    flex-shrink: 0;
+    background: #0c0c14;
+    border-right: 1px solid #2a2a3a;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.panel {
+    padding: 6px 10px;
+    border-bottom: 1px solid #1a1a28;
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.panel-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #00e5ff80;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+}
+
+.panel-header .panel-title { margin-bottom: 0; }
+
+.slider-row {
     display: flex;
     align-items: center;
     gap: 6px;
+    margin-bottom: 3px;
 }
 
-.section-header {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-}
-
-.section-label {
+.slider-row label {
     font-size: 9px;
-    font-weight: 700;
-    color: #00e5ff80;
-    letter-spacing: 1px;
-    min-width: 28px;
+    color: #555;
+    min-width: 42px;
+    text-align: right;
 }
 
-.param-controls {
+.slider-row input[type="range"] {
+    flex: 1;
+    min-width: 0;
+}
+
+.slider-val {
+    font-size: 9px;
+    color: #666;
+    font-family: monospace;
+    min-width: 36px;
+    text-align: right;
+}
+
+.full-width {
+    width: 100%;
+    margin-bottom: 5px;
+}
+
+.full-width .btn { flex: 1; text-align: center; }
+
+/* Viz area */
+#viz-area {
+    flex: 1;
     display: flex;
-    align-items: center;
-    gap: 4px;
+    min-width: 0;
 }
 
-.param {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-}
-
-.param input[type="range"] {
-    width: 42px;
-}
-
-/* Visualization canvas */
 #viz {
     flex: 1;
     width: 100%;
     min-height: 0;
 }
 
-/* Sequencer bar */
+/* -----------------------------------------------------------------------
+   Sequencer
+   ----------------------------------------------------------------------- */
 #seq-bar {
     display: flex;
     align-items: center;
-    padding: 3px 10px;
+    padding: 4px 10px;
     gap: 8px;
     background: #0e0e16;
     border-top: 1px solid #2a2a3a;
+    flex-shrink: 0;
 }
 
 #seq-controls {
@@ -221,15 +229,24 @@ select {
     flex-shrink: 0;
 }
 
-#seq-controls .param input[type="range"] {
-    width: 50px;
+.seq-param {
+    display: flex;
+    align-items: center;
+    gap: 3px;
 }
+
+.seq-param label {
+    font-size: 9px;
+    color: #555;
+}
+
+.seq-param input[type="range"] { width: 60px; }
 
 #seq-bpm-display {
     font-size: 9px;
     color: #888;
     font-family: monospace;
-    min-width: 20px;
+    min-width: 22px;
 }
 
 #seq-grid {
@@ -240,40 +257,32 @@ select {
 
 .seq-step {
     flex: 1;
-    height: 22px;
+    height: 24px;
     background: #1a1a2a;
     border: 1px solid #2a2a3a;
     cursor: pointer;
     transition: all 0.1s;
     font-size: 7px;
-    color: #666;
+    color: #555;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
 }
 
-.seq-step:hover {
-    background: #222238;
-}
+.seq-step:hover { background: #222238; }
+.seq-step.active { background: #00e5ff18; border-color: #00e5ff50; color: #00e5ff; }
+.seq-step.playing { border-color: #00e5ff; box-shadow: 0 0 4px #00e5ff40; }
 
-.seq-step.active {
-    background: #00e5ff20;
-    border-color: #00e5ff60;
-    color: #00e5ff;
-}
-
-.seq-step.playing {
-    border-color: #00e5ff;
-    box-shadow: 0 0 4px #00e5ff40;
-}
-
-/* Piano keyboard */
+/* -----------------------------------------------------------------------
+   Piano keyboard
+   ----------------------------------------------------------------------- */
 #keyboard-wrap {
     display: flex;
     align-items: stretch;
     background: #0d0d14;
     border-top: 1px solid #2a2a3a;
+    flex-shrink: 0;
 }
 
 #keyboard {
@@ -292,11 +301,11 @@ select {
     padding: 0 6px;
     gap: 3px;
     border-left: 1px solid #2a2a3a;
-    min-width: 48px;
+    min-width: 50px;
 }
 
 #octave-display {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     color: #00e5ff;
     font-family: monospace;
@@ -306,7 +315,6 @@ select {
     font-size: 7px;
     color: #444;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
 }
 
 .white-key {
@@ -319,15 +327,8 @@ select {
     z-index: 1;
     transition: background 0.05s;
 }
-
-.white-key:hover {
-    background: linear-gradient(180deg, #f0f0f0, #e0e0e0);
-}
-
-.white-key.pressed {
-    background: linear-gradient(180deg, #00e5ff60, #00e5ff30);
-    border-color: #00e5ff;
-}
+.white-key:hover { background: linear-gradient(180deg, #f0f0f0, #e0e0e0); }
+.white-key.pressed { background: linear-gradient(180deg, #00e5ff60, #00e5ff30); border-color: #00e5ff; }
 
 .black-key {
     width: 60%;
@@ -339,52 +340,35 @@ select {
     cursor: pointer;
     transition: background 0.05s;
 }
-
-.black-key:hover {
-    background: linear-gradient(180deg, #333, #222);
-}
-
-.black-key.pressed {
-    background: linear-gradient(180deg, #00e5ff80, #00e5ff40);
-    border-color: #00e5ff;
-}
+.black-key:hover { background: linear-gradient(180deg, #333, #222); }
+.black-key.pressed { background: linear-gradient(180deg, #00e5ff80, #00e5ff40); border-color: #00e5ff; }
 
 .key-label {
-    position: absolute;
-    bottom: 3px;
-    left: 0;
-    right: 0;
-    text-align: center;
-    font-size: 7px;
-    color: #666;
-    pointer-events: none;
+    position: absolute; bottom: 3px; left: 0; right: 0;
+    text-align: center; font-size: 7px; color: #666; pointer-events: none;
 }
-
 .white-key .key-label { color: #999; }
 .black-key .key-label { color: #555; bottom: 2px; font-size: 6px; }
 
 .key-note-label {
-    position: absolute;
-    bottom: 14px;
-    left: 0;
-    right: 0;
-    text-align: center;
-    font-size: 8px;
-    color: #aaa;
-    pointer-events: none;
+    position: absolute; bottom: 14px; left: 0; right: 0;
+    text-align: center; font-size: 8px; pointer-events: none;
 }
 .white-key .key-note-label { color: #777; }
 
-/* Status bar */
+/* -----------------------------------------------------------------------
+   Status bar
+   ----------------------------------------------------------------------- */
 #status-bar {
     display: flex;
     padding: 2px 10px;
-    gap: 12px;
+    gap: 14px;
     background: #12121a;
     border-top: 1px solid #2a2a3a;
     font-size: 10px;
     font-family: monospace;
     color: #666;
+    flex-shrink: 0;
 }
 
 #note-display { color: #00e5ff; min-width: 36px; }

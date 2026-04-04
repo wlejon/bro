@@ -927,12 +927,20 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                       / static_cast<double>(sampleRate_);
     double sampleDt = 1.0 / static_cast<double>(sampleRate_);
 
+    // Count active voices for gain scaling — prevents summing into distortion
+    int activeCount = 0;
+    for (auto& v : voices_) {
+        if (v.active && v.started && v.envStage != EnvStage::Done) activeCount++;
+    }
+    // Scale by 1/sqrt(n) — preserves perceived loudness while keeping sum linear
+    float voiceScale = activeCount > 1 ? 1.0f / std::sqrt(static_cast<float>(activeCount)) : 1.0f;
+
     for (auto& voice : voices_) {
         if (!voice.active || !voice.started) continue;
         if (voice.envStage == EnvStage::Done) continue;
 
         float freq = voice.frequency;
-        float gain = voice.gain;
+        float gain = voice.gain * voiceScale;
         float phaseInc = freq / static_cast<float>(sampleRate_);
 
         for (int i = 0; i < numSamples; i++) {

@@ -6,12 +6,11 @@
 </head>
 <body>
     <div id="app">
-        <!-- Row 1: Core controls -->
+        <!-- Top bar -->
         <div id="header">
             <h1>SYNTH</h1>
             <div id="controls">
                 <div class="control-group">
-                    <label>Wave</label>
                     <div id="wave-btns" class="btn-group">
                         <button class="btn active" data-wave="sine">Sin</button>
                         <button class="btn" data-wave="square">Sqr</button>
@@ -20,86 +19,87 @@
                     </div>
                 </div>
                 <div class="control-group">
-                    <label>Vol</label>
-                    <input type="range" id="volume" min="0" max="100" value="30">
-                </div>
-                <div class="control-group">
                     <label>Preset</label>
                     <select id="preset-select"></select>
                     <button id="preset-save" class="btn">Save</button>
                 </div>
+                <div class="control-group">
+                    <label>Vol</label>
+                    <input type="range" id="volume" min="0" max="100" value="30">
+                </div>
                 <div class="control-group mic-group">
                     <button id="mic-toggle" class="btn mic-btn mic-off">MIC</button>
                     <div id="mic-level-wrap"><div id="mic-level-bar"></div></div>
-                    <label>Mon</label>
                     <input type="range" id="mic-volume" min="0" max="100" value="50">
                 </div>
             </div>
         </div>
 
-        <!-- Row 2: ADSR + Filter + Delay -->
-        <div id="param-row">
-            <div class="param-section">
-                <label class="section-label">ADSR</label>
-                <div class="param-controls">
-                    <div class="param"><label>A</label><input type="range" id="adsr-a" min="1" max="2000" value="10"></div>
-                    <div class="param"><label>D</label><input type="range" id="adsr-d" min="1" max="2000" value="100"></div>
-                    <div class="param"><label>S</label><input type="range" id="adsr-s" min="0" max="100" value="100"></div>
-                    <div class="param"><label>R</label><input type="range" id="adsr-r" min="1" max="3000" value="40"></div>
+        <!-- Main area: sidebar + viz -->
+        <div id="main">
+            <div id="sidebar">
+                <!-- ADSR -->
+                <div class="panel">
+                    <div class="panel-title">ADSR</div>
+                    <div class="slider-row"><label>Attack</label><input type="range" id="adsr-a" min="1" max="2000" value="10"><span class="slider-val" id="adsr-a-val">10ms</span></div>
+                    <div class="slider-row"><label>Decay</label><input type="range" id="adsr-d" min="1" max="2000" value="100"><span class="slider-val" id="adsr-d-val">100ms</span></div>
+                    <div class="slider-row"><label>Sustain</label><input type="range" id="adsr-s" min="0" max="100" value="100"><span class="slider-val" id="adsr-s-val">100%</span></div>
+                    <div class="slider-row"><label>Release</label><input type="range" id="adsr-r" min="1" max="3000" value="40"><span class="slider-val" id="adsr-r-val">40ms</span></div>
                 </div>
-            </div>
-            <div class="param-section">
-                <div class="section-header">
-                    <label class="section-label">Filter</label>
-                    <button id="filter-toggle" class="btn btn-sm">On</button>
-                </div>
-                <div class="param-controls">
-                    <div id="filter-type-btns" class="btn-group">
+
+                <!-- Filter -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">Filter</div>
+                        <button id="filter-toggle" class="btn btn-toggle">Off</button>
+                    </div>
+                    <div id="filter-type-btns" class="btn-group full-width">
                         <button class="btn active" data-type="lowpass">LP</button>
                         <button class="btn" data-type="highpass">HP</button>
                         <button class="btn" data-type="bandpass">BP</button>
-                        <button class="btn" data-type="notch">NT</button>
+                        <button class="btn" data-type="notch">Notch</button>
                     </div>
-                    <div class="param"><label>Cut</label><input type="range" id="filter-cutoff" min="0" max="100" value="50"></div>
-                    <div class="param"><label>Q</label><input type="range" id="filter-q" min="1" max="200" value="10"></div>
+                    <div class="slider-row"><label>Cutoff</label><input type="range" id="filter-cutoff" min="0" max="100" value="50"><span class="slider-val" id="filter-cutoff-val">1kHz</span></div>
+                    <div class="slider-row"><label>Resonance</label><input type="range" id="filter-q" min="1" max="200" value="10"><span class="slider-val" id="filter-q-val">1.0</span></div>
+                </div>
+
+                <!-- Delay -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">Delay</div>
+                        <button id="delay-toggle" class="btn btn-toggle">Off</button>
+                    </div>
+                    <div class="slider-row"><label>Time</label><input type="range" id="delay-time" min="10" max="1500" value="300"><span class="slider-val" id="delay-time-val">300ms</span></div>
+                    <div class="slider-row"><label>Feedback</label><input type="range" id="delay-feedback" min="0" max="90" value="30"><span class="slider-val" id="delay-fb-val">30%</span></div>
+                    <div class="slider-row"><label>Mix</label><input type="range" id="delay-mix" min="0" max="100" value="30"><span class="slider-val" id="delay-mix-val">30%</span></div>
+                </div>
+
+                <!-- LFO -->
+                <div class="panel">
+                    <div class="panel-header">
+                        <div class="panel-title">LFO</div>
+                        <button id="lfo-toggle" class="btn btn-toggle">Off</button>
+                    </div>
+                    <div class="slider-row"><label>Rate</label><input type="range" id="lfo-rate" min="1" max="200" value="50"><span class="slider-val" id="lfo-rate-val">5.0Hz</span></div>
+                    <div class="slider-row"><label>Depth</label><input type="range" id="lfo-depth" min="0" max="100" value="50"><span class="slider-val" id="lfo-depth-val">50%</span></div>
+                    <div id="lfo-target-btns" class="btn-group full-width">
+                        <button class="btn active" data-target="pitch">Pitch</button>
+                        <button class="btn" data-target="filter">Filter</button>
+                        <button class="btn" data-target="volume">Volume</button>
+                    </div>
                 </div>
             </div>
-            <div class="param-section">
-                <div class="section-header">
-                    <label class="section-label">Delay</label>
-                    <button id="delay-toggle" class="btn btn-sm">On</button>
-                </div>
-                <div class="param-controls">
-                    <div class="param"><label>Time</label><input type="range" id="delay-time" min="10" max="1500" value="300"></div>
-                    <div class="param"><label>Fdbk</label><input type="range" id="delay-feedback" min="0" max="90" value="30"></div>
-                    <div class="param"><label>Mix</label><input type="range" id="delay-mix" min="0" max="100" value="30"></div>
-                </div>
-            </div>
-            <div class="param-section">
-                <div class="section-header">
-                    <label class="section-label">LFO</label>
-                    <button id="lfo-toggle" class="btn btn-sm">On</button>
-                </div>
-                <div class="param-controls">
-                    <div class="param"><label>Rate</label><input type="range" id="lfo-rate" min="1" max="200" value="50"></div>
-                    <div class="param"><label>Dep</label><input type="range" id="lfo-depth" min="0" max="100" value="50"></div>
-                    <div id="lfo-target-btns" class="btn-group">
-                        <button class="btn active" data-target="pitch">Pit</button>
-                        <button class="btn" data-target="filter">Flt</button>
-                        <button class="btn" data-target="volume">Vol</button>
-                    </div>
-                </div>
+
+            <div id="viz-area">
+                <canvas id="viz"></canvas>
             </div>
         </div>
-
-        <!-- Visualization -->
-        <canvas id="viz"></canvas>
 
         <!-- Sequencer -->
         <div id="seq-bar">
             <div id="seq-controls">
                 <button id="seq-play" class="btn">Play</button>
-                <div class="param"><label>BPM</label><input type="range" id="seq-bpm" min="30" max="300" value="120"><span id="seq-bpm-display">120</span></div>
+                <div class="seq-param"><label>BPM</label><input type="range" id="seq-bpm" min="30" max="300" value="120"><span id="seq-bpm-display">120</span></div>
                 <div id="seq-mode-btns" class="btn-group">
                     <button class="btn active" data-mode="sequencer">Seq</button>
                     <button class="btn" data-mode="arpeggiator">Arp</button>
