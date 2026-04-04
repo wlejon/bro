@@ -30,10 +30,10 @@ struct Voice {
     // ADSR envelope
     EnvStage envStage = EnvStage::Idle;
     float envLevel = 0.0f;       // current envelope amplitude (0..1)
-    float attackRate = 0.0f;     // per-sample increment during attack
-    float decayRate = 0.0f;      // per-sample decrement during decay
+    float attackRate = 0.0f;     // per-sample increment during attack (linear)
+    float decayCoeff = 0.0f;     // per-sample multiplier for exponential decay
     float sustainLevel = 1.0f;   // amplitude held during sustain (0..1)
-    float releaseRate = 0.0f;    // per-sample decrement during release
+    float releaseCoeff = 0.0f;   // per-sample multiplier for exponential release
 };
 
 // ---------------------------------------------------------------------------
@@ -91,6 +91,21 @@ struct ClipPlayback {
     std::atomic<bool> playing{false};
     std::atomic<bool> looping{false};
     std::atomic<bool> active{true};     // false = finished/deleted
+};
+
+// ---------------------------------------------------------------------------
+// Output dynamics compressor
+// ---------------------------------------------------------------------------
+
+struct Compressor {
+    float envelope = 0.0f;      // tracked signal level
+    float threshold = 0.7f;     // compression starts above this
+    float ratio = 4.0f;         // compression ratio (4:1)
+    float attackCoeff = 0.0f;   // envelope follower attack (fast, ~1ms)
+    float releaseCoeff = 0.0f;  // envelope follower release (slow, ~100ms)
+
+    void init(int sampleRate);
+    void process(float* buffer, int numSamples);
 };
 
 // ---------------------------------------------------------------------------
@@ -307,9 +322,10 @@ private:
     int nextClipId_ = 1;
     int nextPlaybackId_ = 1;
 
-    // Global filter chain and delay
+    // Global processing chain
     BiquadFilter filters_[MAX_FILTERS];
     DelayEffect delay_;
+    Compressor compressor_;
 };
 
 } // namespace bro::audio

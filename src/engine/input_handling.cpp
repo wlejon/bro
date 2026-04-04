@@ -850,10 +850,17 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
     if (!document_) return;
 
-    // Tab key: advance focus to next/previous focusable element
+    // Tab key: dispatch to JS first; only advance focus if not prevented
     if (keycode == SDLK_TAB) {
-        advanceFocus((mod & SDL_KMOD_SHIFT) != 0);
-        uiDirty_ = true;
+        auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+        dom::Element* target = document_->activeElement();
+        if (!target) target = document_->body();
+        if (target) dispatchEvent(target, evt);
+
+        if (!evt.defaultPrevented()) {
+            advanceFocus((mod & SDL_KMOD_SHIFT) != 0);
+            uiDirty_ = true;
+        }
         return;
     }
 

@@ -126,8 +126,41 @@ static inline float softLimit(float x)
 }
 
 // ---------------------------------------------------------------------------
-// Envelope constants
+// Compressor — output dynamics processing
 // ---------------------------------------------------------------------------
+
+void Compressor::init(int sampleRate)
+{
+    float sr = static_cast<float>(sampleRate);
+    // Fast attack (~1ms) to catch transients
+    attackCoeff = 1.0f - std::exp(-1.0f / (0.001f * sr));
+    // Slow release (~100ms) to avoid pumping
+    releaseCoeff = 1.0f - std::exp(-1.0f / (0.100f * sr));
+    envelope = 0.0f;
+}
+
+void Compressor::process(float* buffer, int numSamples)
+{
+    for (int i = 0; i < numSamples; i++) {
+        float absLevel = std::fabs(buffer[i]);
+
+        // Envelope follower: fast attack, slow release
+        if (absLevel > envelope)
+            envelope += attackCoeff * (absLevel - envelope);
+        else
+            envelope += releaseCoeff * (absLevel - envelope);
+
+        // Compute gain reduction
+        float gain = 1.0f;
+        if (envelope > threshold) {
+            // Compress: target level = threshold + (excess / ratio)
+            float target = threshold + (envelope - threshold) / ratio;
+            gain = target / envelope;
+        }
+
+        buffer[i] *= gain;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // BiquadFilter — Audio EQ Cookbook (Robert Bristow-Johnson)
@@ -301,6 +334,7 @@ bool AudioEngine::init()
 
     // Initialize delay buffer: 2 seconds max
     delay_.init(sampleRate_ * 2);
+    compressor_.init(sampleRate_);
 
     initialized_ = true;
     LOG_INFO("Audio engine initialized: %d Hz mono", sampleRate_);
@@ -331,9 +365,10 @@ int AudioEngine::createVoice()
     v.id = id;
     float sr = static_cast<float>(sampleRate_);
     v.attackRate = 1.0f / (DEFAULT_ATTACK * sr);
-    v.decayRate = 1.0f / (DEFAULT_DECAY * sr);
+    // Exponential coefficients: 3 time constants ≈ 95% of target in `seconds`
+    v.decayCoeff = std::exp(-3.0f / (DEFAULT_DECAY * sr));
     v.sustainLevel = DEFAULT_SUSTAIN;
-    v.releaseRate = 1.0f / (DEFAULT_RELEASE * sr);
+    v.releaseCoeff = std::exp(-3.0f / (DEFAULT_RELEASE * sr));
     voices_.push_back(v);
     return id;
 }
@@ -384,7 +419,9 @@ void AudioEngine::setDecayTime(int id, float seconds)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto* v = findVoice(id))
-        v->decayRate = seconds > 0.0001f ? 1.0f / (seconds * static_cast<float>(sampleRate_)) : 1.0f;
+        v->decayCoeff = seconds > 0.0001f
+            ? std::exp(-3.0f / (seconds * static_cast<float>(sampleRate_)))
+            : 0.0f;
 }
 
 void AudioEngine::setSustainLevel(int id, float level)
@@ -398,7 +435,9 @@ void AudioEngine::setReleaseTime(int id, float seconds)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (auto* v = findVoice(id))
-        v->releaseRate = seconds > 0.0001f ? 1.0f / (seconds * static_cast<float>(sampleRate_)) : 1.0f;
+        v->releaseCoeff = seconds > 0.0001f
+            ? std::exp(-3.0f / (seconds * static_cast<float>(sampleRate_)))
+            : 0.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -917,7 +956,10 @@ void AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
         }
     }
 
-    // Soft limiter on full mix, then master gain
+    // Compressor — keeps polyphony clean without per-voice gain hacking
+    engine->compressor_.process(buffer, numSamples);
+
+    // Soft limiter (safety net), then master gain
     for (int i = 0; i < numSamples; i++) {
         buffer[i] = softLimit(buffer[i]) * MASTER_GAIN;
     }
@@ -938,23 +980,12 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                       / static_cast<double>(sampleRate_);
     double sampleDt = 1.0 / static_cast<double>(sampleRate_);
 
-    // Count active voices for gain scaling — prevents summing into distortion
-    int activeCount = 0;
-    for (auto& v : voices_) {
-        if (v.active && v.started && v.envStage != EnvStage::Done) activeCount++;
-    }
-    // Scale by n^-0.8 — more aggressive than sqrt, keeps sum well below limiter
-    // 1 voice: 1.0, 2: 0.57, 4: 0.33, 8: 0.19 (sums: 1.0, 1.15, 1.31, 1.52)
-    float voiceScale = activeCount > 1
-        ? 1.0f / std::pow(static_cast<float>(activeCount), 0.8f)
-        : 1.0f;
-
     for (auto& voice : voices_) {
         if (!voice.active || !voice.started) continue;
         if (voice.envStage == EnvStage::Done) continue;
 
         float freq = voice.frequency;
-        float gain = voice.gain * voiceScale;
+        float gain = voice.gain;
         float phaseInc = freq / static_cast<float>(sampleRate_);
 
         for (int i = 0; i < numSamples; i++) {
@@ -971,8 +1002,10 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                     }
                     break;
                 case EnvStage::Decay:
-                    voice.envLevel -= voice.decayRate;
-                    if (voice.envLevel <= voice.sustainLevel) {
+                    // Exponential approach toward sustainLevel
+                    voice.envLevel = voice.sustainLevel
+                        + (voice.envLevel - voice.sustainLevel) * voice.decayCoeff;
+                    if (voice.envLevel - voice.sustainLevel < 0.001f) {
                         voice.envLevel = voice.sustainLevel;
                         voice.envStage = EnvStage::Sustain;
                     }
@@ -984,12 +1017,12 @@ void AudioEngine::generateSamples(float* buffer, int numSamples)
                     }
                     break;
                 case EnvStage::Release:
-                    voice.envLevel -= voice.releaseRate;
-                    if (voice.envLevel <= 0.0f) {
+                    // Exponential decay toward zero — no click
+                    voice.envLevel *= voice.releaseCoeff;
+                    if (voice.envLevel < 0.0001f) {
                         voice.envLevel = 0.0f;
                         voice.envStage = EnvStage::Done;
                         voice.active = false;
-                        break;
                     }
                     break;
                 case EnvStage::Done:
