@@ -449,6 +449,10 @@ struct OscNodeData {
 static void js_oscnode_finalizer(JSRuntime*, JSValue val) {
     auto* d = static_cast<OscNodeData*>(JS_GetOpaque(val, js_oscnode_class_id));
     if (d) {
+        // Stop the voice if still playing — the engine will clean it up
+        // after the release envelope finishes (in generateSamples).
+        // Don't removeVoice() here: that would yank it mid-release → click.
+        d->engine->stopVoice(d->voiceId, d->engine->currentTime());
         delete d;
     }
 }

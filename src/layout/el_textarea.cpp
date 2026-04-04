@@ -34,6 +34,8 @@ int ElTextarea::cols() const {
 
 uint64_t ElTextarea::getFontHandle() const {
     if (!elem_ || !renderer_) return 0;
+    if (cachedFontHandle_) return cachedFontHandle_;
+
     auto& style = elem_->computedStyle();
     std::string family = "Arial";
     auto it = style.find("font-family");
@@ -45,7 +47,8 @@ uint64_t ElTextarea::getFontHandle() const {
         float v = std::strtof(sit->second.c_str(), &end);
         if (end != sit->second.c_str() && v > 0) size = v;
     }
-    return renderer_->createFont(family, size, 400, false);
+    cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
+    return cachedFontHandle_;
 }
 
 void ElTextarea::getContentSize(float& w, float& h) {

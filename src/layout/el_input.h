@@ -79,6 +79,7 @@ private:
     bool dragging_ = false;
     bool pickerOpen_ = false;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
+    mutable uint64_t cachedFontHandle_ = 0;
 };
 
 } // namespace bro::layout

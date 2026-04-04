@@ -160,23 +160,34 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
             }
         }
     }
-    // Capture removed children for MutationObserver before clearing
-    JSValue removedArr = JS_NewArray(ctx);
-    uint32_t rmIdx = 0;
-    for (auto* child : el->childNodes()) {
-        JS_SetPropertyUint32(ctx, removedArr, rmIdx++, wrapAnyNode(ctx, child));
+    // Only build MutationObserver arrays if observers are registered,
+    // because wrapAnyNode stores wrappers in __bro_node_map that leak
+    // when the underlying text nodes are replaced.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue observers = JS_GetPropertyStr(ctx, global, "__bro_mutation_observers");
+    bool hasObservers = !JS_IsUndefined(observers) && !JS_IsNull(observers);
+    JS_FreeValue(ctx, observers);
+    JS_FreeValue(ctx, global);
+
+    if (hasObservers) {
+        JSValue removedArr = JS_NewArray(ctx);
+        uint32_t rmIdx = 0;
+        for (auto* child : el->childNodes()) {
+            JS_SetPropertyUint32(ctx, removedArr, rmIdx++, wrapAnyNode(ctx, child));
+        }
+        el->setTextContent(jsToStdString(ctx, val));
+        JSValue addedArr = JS_NewArray(ctx);
+        uint32_t addIdx = 0;
+        for (auto* child : el->childNodes()) {
+            JS_SetPropertyUint32(ctx, addedArr, addIdx++, wrapAnyNode(ctx, child));
+        }
+        notifyMutationObservers(ctx, this_val, "childList",
+            nullptr, nullptr, addedArr, removedArr);
+        JS_FreeValue(ctx, addedArr);
+        JS_FreeValue(ctx, removedArr);
+    } else {
+        el->setTextContent(jsToStdString(ctx, val));
     }
-    el->setTextContent(jsToStdString(ctx, val));
-    // Notify with added (new text node) and removed (old children)
-    JSValue addedArr = JS_NewArray(ctx);
-    uint32_t addIdx = 0;
-    for (auto* child : el->childNodes()) {
-        JS_SetPropertyUint32(ctx, addedArr, addIdx++, wrapAnyNode(ctx, child));
-    }
-    notifyMutationObservers(ctx, this_val, "childList",
-        nullptr, nullptr, addedArr, removedArr);
-    JS_FreeValue(ctx, addedArr);
-    JS_FreeValue(ctx, removedArr);
     auto& style = el->computedStyle();
     // Check overflow-y first, then overflow shorthand
     auto oyIt = style.find("overflow-y");
@@ -220,22 +231,32 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
             }
         }
     }
-    // Capture removed children for MutationObserver
-    JSValue ihRemovedArr = JS_NewArray(ctx);
-    uint32_t ihRmIdx = 0;
-    for (auto* child : el->childNodes()) {
-        JS_SetPropertyUint32(ctx, ihRemovedArr, ihRmIdx++, wrapAnyNode(ctx, child));
+    // Only wrap nodes for MutationObserver if observers are registered
+    JSValue ihGlobal = JS_GetGlobalObject(ctx);
+    JSValue ihObs = JS_GetPropertyStr(ctx, ihGlobal, "__bro_mutation_observers");
+    bool ihHasObservers = !JS_IsUndefined(ihObs) && !JS_IsNull(ihObs);
+    JS_FreeValue(ctx, ihObs);
+    JS_FreeValue(ctx, ihGlobal);
+
+    if (ihHasObservers) {
+        JSValue ihRemovedArr = JS_NewArray(ctx);
+        uint32_t ihRmIdx = 0;
+        for (auto* child : el->childNodes()) {
+            JS_SetPropertyUint32(ctx, ihRemovedArr, ihRmIdx++, wrapAnyNode(ctx, child));
+        }
+        el->setInnerHTML(jsToStdString(ctx, val));
+        JSValue ihAddedArr = JS_NewArray(ctx);
+        uint32_t ihAddIdx = 0;
+        for (auto* child : el->childNodes()) {
+            JS_SetPropertyUint32(ctx, ihAddedArr, ihAddIdx++, wrapAnyNode(ctx, child));
+        }
+        notifyMutationObservers(ctx, this_val, "childList",
+            nullptr, nullptr, ihAddedArr, ihRemovedArr);
+        JS_FreeValue(ctx, ihAddedArr);
+        JS_FreeValue(ctx, ihRemovedArr);
+    } else {
+        el->setInnerHTML(jsToStdString(ctx, val));
     }
-    el->setInnerHTML(jsToStdString(ctx, val));
-    JSValue ihAddedArr = JS_NewArray(ctx);
-    uint32_t ihAddIdx = 0;
-    for (auto* child : el->childNodes()) {
-        JS_SetPropertyUint32(ctx, ihAddedArr, ihAddIdx++, wrapAnyNode(ctx, child));
-    }
-    notifyMutationObservers(ctx, this_val, "childList",
-        nullptr, nullptr, ihAddedArr, ihRemovedArr);
-    JS_FreeValue(ctx, ihAddedArr);
-    JS_FreeValue(ctx, ihRemovedArr);
     return JS_UNDEFINED;
 }
 

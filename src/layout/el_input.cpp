@@ -116,6 +116,8 @@ void ElInput::getContentSize(float& w, float& h, float maxWidth) {
 
 uint64_t ElInput::getFontHandle() const {
     if (!elem_ || !renderer_) return 0;
+    if (cachedFontHandle_) return cachedFontHandle_;
+
     auto& style = elem_->computedStyle();
 
     std::string family = "Arial";
@@ -130,7 +132,8 @@ uint64_t ElInput::getFontHandle() const {
         if (end != sit->second.c_str() && v > 0) size = v;
     }
 
-    return renderer_->createFont(family, size, 400, false);
+    cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
+    return cachedFontHandle_;
 }
 
 void ElInput::draw(render::Renderer* renderer,
