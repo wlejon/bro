@@ -11,7 +11,8 @@
 
 
 namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
-namespace bro::audio { class AudioEngine; }
+namespace broaudio { class Engine; }
+namespace bro::audio { using AudioEngine = broaudio::Engine; }
 namespace bro::engine { class SystemOverlay; }
 namespace bro::canvas { class CanvasScene; }
 

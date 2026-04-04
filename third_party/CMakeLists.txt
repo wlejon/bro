@@ -41,5 +41,17 @@ add_subdirectory(glad EXCLUDE_FROM_ALL)
 add_library(stb_image STATIC stb/stb_image.cpp stb/stb_image_write.cpp)
 target_include_directories(stb_image PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/stb)
 
+# --- broaudio (audio engine library) ---
+# Prefer the standalone repo at ../broaudio for local development.
+# Falls back to the git submodule at third_party/broaudio.
+set(BROAUDIO_DIR "${CMAKE_SOURCE_DIR}/../broaudio" CACHE PATH "Path to standalone broaudio repo")
+if(EXISTS "${BROAUDIO_DIR}/CMakeLists.txt")
+    message(STATUS "broaudio: using standalone repo at ${BROAUDIO_DIR}")
+    add_subdirectory("${BROAUDIO_DIR}" "${CMAKE_BINARY_DIR}/broaudio" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "broaudio: using submodule at third_party/broaudio")
+    add_subdirectory(broaudio EXCLUDE_FROM_ALL)
+endif()
+
 # --- Skia (pre-built, optional) ---
 include(skia/skia.cmake)

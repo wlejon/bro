@@ -4,7 +4,7 @@ extern "C" {
 #include "quickjs.h"
 }
 
-namespace bro::audio { class AudioEngine; }
+#include "audio/audio_engine.h"
 
 namespace bro::js {
 

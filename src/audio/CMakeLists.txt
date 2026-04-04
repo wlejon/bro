@@ -1,10 +1,6 @@
-add_library(bro_audio STATIC audio_engine.cpp)
-target_include_directories(bro_audio PUBLIC ${CMAKE_SOURCE_DIR}/src)
-
-if(TARGET SDL3::SDL3)
-    target_link_libraries(bro_audio PUBLIC SDL3::SDL3)
-elseif(TARGET SDL3::SDL3-static)
-    target_link_libraries(bro_audio PUBLIC SDL3::SDL3-static)
-endif()
-
-target_link_libraries(bro_audio PUBLIC bro_util)
+# bro_audio is now a thin interface library that re-exports broaudio.
+# The header at audio/audio_engine.h provides namespace aliases so existing
+# code (#include "audio/audio_engine.h", bro::audio::AudioEngine) still works.
+add_library(bro_audio INTERFACE)
+target_include_directories(bro_audio INTERFACE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(bro_audio INTERFACE broaudio)
