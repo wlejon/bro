@@ -29,7 +29,7 @@
 
 #include "api/api.h"
 #include "runtime/runtime.h"
-#include "audio/audio_engine.h"
+#include <broaudio/engine.h>
 #include "canvas/canvas_scene.h"
 #include "canvas/canvas2d.h"
 #include "webgl/webgl2_context.h"
@@ -139,7 +139,7 @@ Engine::Engine(const EngineConfig& config)
 
     // 4b. Audio engine + bindings
     if (displayMode_ == DisplayMode::Windowed) {
-        audioEngine_ = std::make_unique<audio::AudioEngine>();
+        audioEngine_ = std::make_unique<broaudio::Engine>();
         audioEngine_->init();
         js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
     } else {

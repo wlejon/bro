@@ -12,7 +12,6 @@
 
 namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
 namespace broaudio { class Engine; }
-namespace bro::audio { using AudioEngine = broaudio::Engine; }
 namespace bro::engine { class SystemOverlay; }
 namespace bro::canvas { class CanvasScene; }
 
@@ -140,7 +139,7 @@ private:
     int viewportHeight_;
     AppManifest manifest_;
     std::vector<std::unique_ptr<render::SceneLayer>> sceneLayers_;
-    std::unique_ptr<audio::AudioEngine> audioEngine_;
+    std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<SystemOverlay> systemOverlay_;
 
     // Headless-specific

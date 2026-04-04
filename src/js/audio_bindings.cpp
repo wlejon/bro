@@ -1,7 +1,7 @@
 #include "js/audio_bindings.h"
 #include "js/runtime.h"
-#include "audio/audio_engine.h"
 #include "util/log.h"
+#include <broaudio/dsp/fft.h>
 
 #include <algorithm>
 #include <string>
@@ -34,7 +34,7 @@ static JSClassID js_biquadfilter_class_id = 0;
 // ---------------------------------------------------------------------------
 
 struct AudioParamData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
     int voiceId;         // voice ID for voice params, or filter slot for filter params
     enum class Target {
         Frequency, Gain, Pan, Attack, Decay, SustainLevel, Release,
@@ -90,7 +90,7 @@ static const JSCFunctionListEntry js_audioparam_proto_funcs[] = {
     JS_CGETSET_DEF("value", js_audioparam_get_value, js_audioparam_set_value),
 };
 
-static JSValue createAudioParam(JSContext* ctx, audio::AudioEngine* engine,
+static JSValue createAudioParam(JSContext* ctx, broaudio::Engine* engine,
                                 int voiceId, AudioParamData::Target target, float initial) {
     JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_audioparam_class_id));
     auto* data = new AudioParamData{engine, voiceId, target, initial};
@@ -111,7 +111,7 @@ static JSClassDef js_destnode_class = {
 // ---------------------------------------------------------------------------
 
 struct AnalyserNodeData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
     int fftSize = 2048;
     float minDecibels = -100.0f;
     float maxDecibels = -30.0f;
@@ -220,7 +220,7 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
         real[i] *= w;
     }
 
-    audio::fft(real.data(), imag.data(), n);
+    broaudio::fft(real.data(), imag.data(), n);
 
     // Compute magnitudes in dB with smoothing
     if (d->smoothedMagnitudes.size() != static_cast<size_t>(halfN)) {
@@ -389,7 +389,7 @@ static const JSCFunctionListEntry js_analysernode_proto_funcs[] = {
 // ---------------------------------------------------------------------------
 
 struct MicStreamData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
 };
 
 static void js_micstream_finalizer(JSRuntime*, JSValue val) {
@@ -401,7 +401,7 @@ static JSClassDef js_micstream_class = {
 };
 
 struct MicSourceData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
 };
 
 static void js_micsource_finalizer(JSRuntime*, JSValue val) {
@@ -443,7 +443,7 @@ struct GainNodeData;
 // ---------------------------------------------------------------------------
 
 struct OscNodeData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
     int voiceId;
     std::string type = "sine";
 };
@@ -474,10 +474,10 @@ static JSValue js_osc_set_type(JSContext* ctx, JSValueConst this_val, JSValueCon
     const char* s = JS_ToCString(ctx, val);
     if (!s) return JS_UNDEFINED;
     d->type = s;
-    audio::Waveform wf = audio::Waveform::Sine;
-    if (d->type == "square") wf = audio::Waveform::Square;
-    else if (d->type == "sawtooth") wf = audio::Waveform::Sawtooth;
-    else if (d->type == "triangle") wf = audio::Waveform::Triangle;
+    broaudio::Waveform wf = broaudio::Waveform::Sine;
+    if (d->type == "square") wf = broaudio::Waveform::Square;
+    else if (d->type == "sawtooth") wf = broaudio::Waveform::Sawtooth;
+    else if (d->type == "triangle") wf = broaudio::Waveform::Triangle;
     d->engine->setWaveform(d->voiceId, wf);
     JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
@@ -540,7 +540,7 @@ static JSValue js_osc_disconnect(JSContext*, JSValueConst, int, JSValueConst*) {
 // ---------------------------------------------------------------------------
 
 struct GainNodeData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
 };
 
 static void js_gainnode_finalizer(JSRuntime*, JSValue val) {
@@ -570,7 +570,7 @@ static const JSCFunctionListEntry js_gainnode_proto_funcs[] = {
 // ---------------------------------------------------------------------------
 
 struct BiquadFilterNodeData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
     int slot;
 };
 
@@ -600,15 +600,15 @@ static JSValue js_biquadfilter_set_type(JSContext* ctx, JSValueConst this_val, J
     const char* str = JS_ToCString(ctx, val);
     if (!str) return JS_UNDEFINED;
 
-    audio::BiquadFilter::Type type = audio::BiquadFilter::Type::Lowpass;
-    if (strcmp(str, "lowpass") == 0) type = audio::BiquadFilter::Type::Lowpass;
-    else if (strcmp(str, "highpass") == 0) type = audio::BiquadFilter::Type::Highpass;
-    else if (strcmp(str, "bandpass") == 0) type = audio::BiquadFilter::Type::Bandpass;
-    else if (strcmp(str, "notch") == 0) type = audio::BiquadFilter::Type::Notch;
-    else if (strcmp(str, "allpass") == 0) type = audio::BiquadFilter::Type::Allpass;
-    else if (strcmp(str, "peaking") == 0) type = audio::BiquadFilter::Type::Peaking;
-    else if (strcmp(str, "lowshelf") == 0) type = audio::BiquadFilter::Type::Lowshelf;
-    else if (strcmp(str, "highshelf") == 0) type = audio::BiquadFilter::Type::Highshelf;
+    broaudio::BiquadFilter::Type type = broaudio::BiquadFilter::Type::Lowpass;
+    if (strcmp(str, "lowpass") == 0) type = broaudio::BiquadFilter::Type::Lowpass;
+    else if (strcmp(str, "highpass") == 0) type = broaudio::BiquadFilter::Type::Highpass;
+    else if (strcmp(str, "bandpass") == 0) type = broaudio::BiquadFilter::Type::Bandpass;
+    else if (strcmp(str, "notch") == 0) type = broaudio::BiquadFilter::Type::Notch;
+    else if (strcmp(str, "allpass") == 0) type = broaudio::BiquadFilter::Type::Allpass;
+    else if (strcmp(str, "peaking") == 0) type = broaudio::BiquadFilter::Type::Peaking;
+    else if (strcmp(str, "lowshelf") == 0) type = broaudio::BiquadFilter::Type::Lowshelf;
+    else if (strcmp(str, "highshelf") == 0) type = broaudio::BiquadFilter::Type::Highshelf;
 
     JS_FreeCString(ctx, str);
 
@@ -643,7 +643,7 @@ static const JSCFunctionListEntry js_biquadfilter_proto_funcs[] = {
 // ---------------------------------------------------------------------------
 
 struct AudioCtxData {
-    audio::AudioEngine* engine;
+    broaudio::Engine* engine;
 };
 
 static void js_audioctx_finalizer(JSRuntime*, JSValue val) {
@@ -1074,7 +1074,7 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
 // Constructor for `new AudioContext()`
 // ---------------------------------------------------------------------------
 
-static audio::AudioEngine* s_audioEngine = nullptr;
+static broaudio::Engine* s_audioEngine = nullptr;
 
 static JSValue js_audioctx_constructor(JSContext* ctx, JSValueConst new_target,
                                         int, JSValueConst*) {
@@ -1136,7 +1136,7 @@ static JSValue js_getUserMedia(JSContext* ctx, JSValueConst this_val,
 // Install
 // ---------------------------------------------------------------------------
 
-void AudioBindings::install(JSContext* ctx, audio::AudioEngine* engine)
+void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
 {
     s_audioEngine = engine;
     JSRuntime* rt = JS_GetRuntime(ctx);
