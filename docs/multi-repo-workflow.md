@@ -1,11 +1,12 @@
-# Multi-Repo Workflow: bro + htmlayout + brokit
+# Multi-Repo Workflow: bro + htmlayout + brokit + broaudio
 
-bro depends on two sibling libraries, each with a standalone repo and a git submodule fallback:
+bro depends on three sibling libraries, each with a standalone repo and a git submodule fallback:
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
 | **htmlayout** | `../htmlayout` | `third_party/htmlayout` |
 | **brokit** | `../brokit` | `third_party/brokit` |
+| **broaudio** | `../broaudio` | `third_party/broaudio` |
 
 ## Directory Layout
 
@@ -14,9 +15,11 @@ D:/projects/
 ├── bro/                          # main project
 │   └── third_party/
 │       ├── htmlayout/            # submodule (CI / fallback)
-│       └── brokit/               # submodule (CI / fallback)
+│       ├── brokit/               # submodule (CI / fallback)
+│       └── broaudio/             # submodule (CI / fallback)
 ├── htmlayout/                    # standalone repo (preferred for dev)
-└── brokit/                       # standalone repo (preferred for dev)
+├── brokit/                       # standalone repo (preferred for dev)
+└── broaudio/                     # standalone repo (preferred for dev)
 ```
 
 ## How It Works
@@ -37,13 +40,13 @@ else()
 endif()
 ```
 
-The same pattern is used for htmlayout.
+The same pattern is used for htmlayout and broaudio.
 
 ## Day-to-Day Development
 
 ### 1. Edit a library
 
-Edit files only in the standalone repo (e.g. `D:/projects/brokit/src/...` or `D:/projects/htmlayout/src/...`).
+Edit files only in the standalone repo (e.g. `D:/projects/brokit/src/...`, `D:/projects/htmlayout/src/...`, or `D:/projects/broaudio/src/...`).
 
 ### 2. Build and test
 
@@ -61,6 +64,11 @@ cmake --build build --config Debug
 cd D:/projects/htmlayout
 cmake --build build --config Debug
 ./build/tests/Debug/htmlayout_test.exe
+
+# Run broaudio tests
+cd D:/projects/broaudio
+cmake --build build --config Debug
+./build/tests/Debug/broaudio_test.exe
 ```
 
 ### 3. Commit the library
@@ -96,16 +104,27 @@ git add third_party/htmlayout
 git commit -m "Update htmlayout: fix description"
 ```
 
+Same for broaudio:
+```bash
+cd D:/projects/bro/third_party/broaudio
+git fetch ../../../broaudio main
+git checkout FETCH_HEAD
+
+cd D:/projects/bro
+git add third_party/broaudio
+git commit -m "Update broaudio: description"
+```
+
 ## Overriding Paths
 
 To use a different location for either library:
 
 ```bash
-cmake -B build -DBROKIT_DIR=/path/to/brokit -DHTMLAYOUT_DIR=/path/to/htmlayout
+cmake -B build -DBROKIT_DIR=/path/to/brokit -DHTMLAYOUT_DIR=/path/to/htmlayout -DBROAUDIO_DIR=/path/to/broaudio
 ```
 
 Set to a nonexistent path to force using the submodule:
 
 ```bash
-cmake -B build -DBROKIT_DIR=none
+cmake -B build -DBROKIT_DIR=none -DBROAUDIO_DIR=none
 ```

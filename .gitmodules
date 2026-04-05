@@ -10,3 +10,6 @@
 [submodule "third_party/brokit"]
 	path = third_party/brokit
 	url = https://github.com/wlejon/brokit.git
+[submodule "third_party/broaudio"]
+	path = third_party/broaudio
+	url = https://github.com/wlejon/broaudio.git
