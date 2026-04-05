@@ -639,6 +639,7 @@
             btn.classList.add('active');
             var layer = Synth.Layers.getActive();
             if (layer) layer.mode = btn.getAttribute('data-mode');
+            buildLayerRows();
         });
     });
 
