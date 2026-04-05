@@ -938,6 +938,279 @@
 
                 row.appendChild(grid);
                 seqLayersEl.appendChild(row);
+
+                // --- Automation row ---
+                var autoRow = document.createElement('div');
+                autoRow.className = 'seq-auto-row';
+
+                // Toggle button to show/hide automation
+                var autoToggle = document.createElement('div');
+                autoToggle.className = 'seq-auto-toggle' + (layer.automation.length > 0 ? ' active' : '');
+                autoToggle.textContent = 'A';
+                autoToggle.title = 'Toggle automation';
+                autoToggle.addEventListener('click', function() {
+                    var l = Synth.Layers.get(layerIdx);
+                    if (l.automation.length === 0) {
+                        // Add a default automation lane (filter freq)
+                        var tgt = 'filter-freq';
+                        var def = Synth.Layers.AUTOMATION_TARGETS[tgt];
+                        l.automation.push({
+                            target: tgt,
+                            interpMode: 'linear',
+                            points: []
+                        });
+                    } else {
+                        l.automation = [];
+                    }
+                    buildLayerRows();
+                    if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+                });
+                autoRow.appendChild(autoToggle);
+
+                if (layer.automation.length > 0) {
+                    var autoData = layer.automation[0]; // one lane per layer for now
+                    var targets = Synth.Layers.AUTOMATION_TARGETS;
+
+                    // Target selector
+                    var targetSel = document.createElement('select');
+                    targetSel.className = 'seq-auto-target';
+                    var targetKeys = Object.keys(targets);
+                    for (var ti = 0; ti < targetKeys.length; ti++) {
+                        var opt = document.createElement('option');
+                        opt.value = targetKeys[ti];
+                        opt.textContent = targets[targetKeys[ti]].label;
+                        if (targetKeys[ti] === autoData.target) opt.selected = true;
+                        targetSel.appendChild(opt);
+                    }
+                    targetSel.addEventListener('change', function() {
+                        var l = Synth.Layers.get(layerIdx);
+                        l.automation[0].target = this.value;
+                        l.automation[0].points = [];
+                        buildLayerRows();
+                        if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+                    });
+                    autoRow.appendChild(targetSel);
+
+                    // Interp mode button
+                    var interpBtn = document.createElement('div');
+                    interpBtn.className = 'seq-auto-interp';
+                    var modes = ['linear', 'smooth', 'step'];
+                    interpBtn.textContent = autoData.interpMode === 'smooth' ? 'S' : autoData.interpMode === 'step' ? 'H' : 'L';
+                    interpBtn.title = 'Interpolation: ' + autoData.interpMode;
+                    interpBtn.addEventListener('click', function() {
+                        var l = Synth.Layers.get(layerIdx);
+                        var cur = modes.indexOf(l.automation[0].interpMode);
+                        l.automation[0].interpMode = modes[(cur + 1) % modes.length];
+                        buildLayerRows();
+                        if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+                    });
+                    autoRow.appendChild(interpBtn);
+
+                    // Canvas for drawing automation
+                    var canvas = document.createElement('canvas');
+                    canvas.className = 'seq-auto-canvas';
+                    autoRow.appendChild(canvas);
+
+                    // Draw and interact with automation points
+                    (function(canvas, layerIdx) {
+                        var TARGETS = Synth.Layers.AUTOMATION_TARGETS;
+                        var POINT_RADIUS = 4;
+                        var dragging = -1;
+
+                        function getAutoData() {
+                            var l = Synth.Layers.get(layerIdx);
+                            return l && l.automation.length > 0 ? l.automation[0] : null;
+                        }
+
+                        function getTarget() {
+                            var ad = getAutoData();
+                            return ad ? TARGETS[ad.target] : null;
+                        }
+
+                        // Map value to Y position (0 = top = max, h = bottom = min)
+                        function valToY(val, h, tgt) {
+                            if (tgt.log) {
+                                var logMin = Math.log(tgt.min), logMax = Math.log(tgt.max);
+                                return h - (Math.log(Math.max(val, tgt.min)) - logMin) / (logMax - logMin) * h;
+                            }
+                            return h - (val - tgt.min) / (tgt.max - tgt.min) * h;
+                        }
+
+                        function yToVal(y, h, tgt) {
+                            var norm = 1 - y / h;
+                            norm = Math.max(0, Math.min(1, norm));
+                            if (tgt.log) {
+                                var logMin = Math.log(tgt.min), logMax = Math.log(tgt.max);
+                                return Math.exp(logMin + norm * (logMax - logMin));
+                            }
+                            return tgt.min + norm * (tgt.max - tgt.min);
+                        }
+
+                        function beatToX(beat, w) { return beat / 4 * w; }
+                        function xToBeat(x, w) { return Math.max(0, Math.min(4, x / w * 4)); }
+
+                        function draw() {
+                            var w = canvas.clientWidth;
+                            var h = canvas.clientHeight;
+                            if (w <= 0 || h <= 0) return;
+                            var ctx = canvas.getContext('2d');
+                            ctx.clearRect(0, 0, w, h);
+
+                            var ad = getAutoData();
+                            var tgt = getTarget();
+                            if (!ad || !tgt) return;
+
+                            var color = Synth.Layers.get(layerIdx).color || '#00e5ff';
+
+                            // Draw grid lines at each step
+                            ctx.strokeStyle = '#ffffff10';
+                            ctx.lineWidth = 1;
+                            for (var s = 0; s <= 16; s++) {
+                                var gx = s / 16 * w;
+                                ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke();
+                            }
+
+                            if (ad.points.length === 0) return;
+
+                            // Sort points for drawing
+                            var pts = ad.points.slice().sort(function(a, b) { return a.beat - b.beat; });
+
+                            // Draw interpolated curve
+                            ctx.strokeStyle = color;
+                            ctx.lineWidth = 1.5;
+                            ctx.beginPath();
+                            for (var px = 0; px < w; px++) {
+                                var beat = xToBeat(px, w);
+                                var val = evaluateAutomation(pts, beat, ad.interpMode, tgt);
+                                var py = valToY(val, h, tgt);
+                                if (px === 0) ctx.moveTo(px, py);
+                                else ctx.lineTo(px, py);
+                            }
+                            ctx.stroke();
+
+                            // Draw points
+                            for (var i = 0; i < pts.length; i++) {
+                                var bx = beatToX(pts[i].beat, w);
+                                var by = valToY(pts[i].value, h, tgt);
+                                ctx.beginPath();
+                                ctx.arc(bx, by, POINT_RADIUS, 0, Math.PI * 2);
+                                ctx.fillStyle = color;
+                                ctx.fill();
+                                ctx.strokeStyle = '#fff';
+                                ctx.lineWidth = 1;
+                                ctx.stroke();
+                            }
+                        }
+
+                        // Simple JS-side evaluation for drawing curves
+                        function evaluateAutomation(pts, beat, mode, tgt) {
+                            if (pts.length === 0) return tgt.default;
+                            if (pts.length === 1) return pts[0].value;
+                            if (beat <= pts[0].beat) return pts[0].value;
+                            if (beat >= pts[pts.length - 1].beat) return pts[pts.length - 1].value;
+
+                            var p1, p2;
+                            for (var i = 0; i < pts.length - 1; i++) {
+                                if (beat >= pts[i].beat && beat < pts[i + 1].beat) {
+                                    p1 = pts[i]; p2 = pts[i + 1]; break;
+                                }
+                            }
+                            if (!p1) return pts[pts.length - 1].value;
+
+                            if (mode === 'step') return p1.value;
+                            var t = (beat - p1.beat) / (p2.beat - p1.beat);
+                            if (mode === 'smooth') t = (1 - Math.cos(t * Math.PI)) * 0.5;
+                            return p1.value + t * (p2.value - p1.value);
+                        }
+
+                        function canvasSize() {
+                            return { w: canvas.clientWidth, h: canvas.clientHeight };
+                        }
+
+                        function findPoint(x, y, w, h, pts, tgt) {
+                            for (var i = 0; i < pts.length; i++) {
+                                var bx = beatToX(pts[i].beat, w);
+                                var by = valToY(pts[i].value, h, tgt);
+                                if (Math.abs(x - bx) < 8 && Math.abs(y - by) < 8) return i;
+                            }
+                            return -1;
+                        }
+
+                        canvas.addEventListener('mousedown', function(e) {
+                            var ad = getAutoData();
+                            var tgt = getTarget();
+                            if (!ad || !tgt) return;
+                            var rect = canvas.getBoundingClientRect();
+                            var x = e.clientX - rect.left;
+                            var y = e.clientY - rect.top;
+                            var sz = canvasSize();
+
+                            var idx = findPoint(x, y, sz.w, sz.h, ad.points, tgt);
+                            if (e.button === 2 || (e.button === 0 && e.ctrlKey)) {
+                                // Right-click or ctrl+click: delete point
+                                if (idx >= 0) {
+                                    ad.points.splice(idx, 1);
+                                    draw();
+                                    if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+                                }
+                                e.preventDefault();
+                                return;
+                            }
+                            if (idx >= 0) {
+                                dragging = idx;
+                            } else {
+                                // Add new point
+                                var beat = xToBeat(x, sz.w);
+                                var val = yToVal(y, sz.h, tgt);
+                                ad.points.push({ beat: beat, value: val });
+                                ad.points.sort(function(a, b) { return a.beat - b.beat; });
+                                dragging = findPoint(x, y, sz.w, sz.h, ad.points, tgt);
+                                draw();
+                                if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+                            }
+                        });
+
+                        canvas.addEventListener('mousemove', function(e) {
+                            if (dragging < 0) return;
+                            var ad = getAutoData();
+                            var tgt = getTarget();
+                            if (!ad || !tgt) return;
+                            var rect = canvas.getBoundingClientRect();
+                            var x = e.clientX - rect.left;
+                            var y = e.clientY - rect.top;
+                            var sz = canvasSize();
+
+                            ad.points[dragging].beat = xToBeat(x, sz.w);
+                            ad.points[dragging].value = yToVal(y, sz.h, tgt);
+                            draw();
+                        });
+
+                        canvas.addEventListener('mouseup', function() {
+                            if (dragging >= 0) {
+                                dragging = -1;
+                                var ad = getAutoData();
+                                if (ad) ad.points.sort(function(a, b) { return a.beat - b.beat; });
+                                if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+                            }
+                        });
+
+                        canvas.addEventListener('mouseleave', function() {
+                            if (dragging >= 0) {
+                                dragging = -1;
+                                var ad = getAutoData();
+                                if (ad) ad.points.sort(function(a, b) { return a.beat - b.beat; });
+                                if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+                            }
+                        });
+
+                        canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+                        // Initial draw after layout
+                        setTimeout(draw, 0);
+                    })(canvas, layerIdx);
+                }
+
+                seqLayersEl.appendChild(autoRow);
             })(li);
         }
     }

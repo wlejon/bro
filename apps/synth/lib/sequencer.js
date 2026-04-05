@@ -97,6 +97,41 @@
         }
     }
 
+    // Create the apply function for an automation target
+    function makeApplyFn(audioCtx, busId, target) {
+        var SC = Synth.SignalChain;
+        switch (target) {
+            case 'filter-freq':   return function(v) { SC.setFilterFrequency(busId, v); };
+            case 'filter-q':      return function(v) { SC.setFilterQ(busId, v); };
+            case 'delay-mix':     return function(v) { SC.setDelayMix(busId, v); };
+            case 'reverb-mix':    return function(v) { SC.setReverbMix(busId, v); };
+            case 'chorus-mix':    return function(v) { SC.setChorusMix(busId, v); };
+            case 'volume':        return function(v) { audioCtx.setBusGain(busId, v); };
+            case 'pan':           return function(v) { audioCtx.setBusPan(busId, v); };
+            default:              return function() {};
+        }
+    }
+
+    // Load automation lanes from a layer's automation data into a sequence
+    function loadLayerAutomation(seq, layer) {
+        seq.clearAutomationLanes();
+        var audioCtx = Synth.getAudioContext();
+        if (!audioCtx || !layer.automation) return;
+
+        for (var i = 0; i < layer.automation.length; i++) {
+            var auto = layer.automation[i];
+            if (!auto.points || auto.points.length === 0) continue;
+
+            var applyFn = makeApplyFn(audioCtx, layer.busId, auto.target);
+            var laneIdx = seq.addAutomationLane(applyFn);
+            seq.setAutomationInterpMode(laneIdx, auto.interpMode || 'linear');
+
+            for (var p = 0; p < auto.points.length; p++) {
+                seq.addAutomationPoint(laneIdx, auto.points[p].beat, auto.points[p].value);
+            }
+        }
+    }
+
     // Build a new Sequence using the layer's own allocator
     function buildLayerSequence(layer) {
         var audioCtx = Synth.getAudioContext();
@@ -108,6 +143,7 @@
         seq.setLoopRange(0, 4); // 16 steps = 4 beats
 
         loadLayerNotes(seq, layer);
+        loadLayerAutomation(seq, layer);
         return seq;
     }
 
@@ -153,9 +189,14 @@
         updateTimerId = setTimeout(updateStepFromBeat, 16);
     }
 
-    function layerHasNotes(layer) {
+    function layerHasContent(layer) {
         for (var s = 0; s < NUM_STEPS; s++) {
             if (layer.steps[s] !== null) return true;
+        }
+        if (layer.automation) {
+            for (var i = 0; i < layer.automation.length; i++) {
+                if (layer.automation[i].points && layer.automation[i].points.length > 0) return true;
+            }
         }
         return false;
     }
@@ -178,7 +219,7 @@
             var count = Layers.count();
             for (var li = 0; li < count; li++) {
                 var layer = Layers.get(li);
-                if (!layer || layer.muted || !layerHasNotes(layer)) continue;
+                if (!layer || layer.muted || !layerHasContent(layer)) continue;
 
                 var seq = buildLayerSequence(layer);
                 if (seq) layerSequences.push({ seq: seq, layerIdx: li });
@@ -244,7 +285,7 @@
             var wantedLayers = {};
             for (var li = 0; li < count; li++) {
                 var layer = Layers.get(li);
-                if (!layer || layer.muted || !layerHasNotes(layer)) continue;
+                if (!layer || layer.muted || !layerHasContent(layer)) continue;
                 wantedLayers[li] = layer;
             }
 
@@ -254,6 +295,7 @@
                 var ls = layerSequences[i];
                 if (wantedLayers[ls.layerIdx]) {
                     loadLayerNotes(ls.seq, wantedLayers[ls.layerIdx]);
+                    loadLayerAutomation(ls.seq, wantedLayers[ls.layerIdx]);
                     kept.push(ls);
                     delete wantedLayers[ls.layerIdx];
                 } else {
@@ -289,6 +331,7 @@
 
                 // Now load the actual notes — only notes after current beat will fire this loop
                 loadLayerNotes(seq, layer);
+                loadLayerAutomation(seq, layer);
                 kept.push({ seq: seq, layerIdx: idx });
             }
 

@@ -86,6 +86,14 @@ public:
             ctrl->getContentSize(w, h);
             return true;
         }
+        // <canvas> is a replaced element with default 300x150 intrinsic size
+        if (elem_->tagName() == "canvas" || elem_->tagName() == "CANVAS") {
+            std::string wa = elem_->getAttribute("width");
+            std::string ha = elem_->getAttribute("height");
+            w = wa.empty() ? 300.0f : std::strtof(wa.c_str(), nullptr);
+            h = ha.empty() ? 150.0f : std::strtof(ha.c_str(), nullptr);
+            return true;
+        }
         return false;
     }
 

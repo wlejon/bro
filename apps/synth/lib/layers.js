@@ -22,6 +22,17 @@
     var micSignal = null;
     var editingMic = false;
 
+    // Automation target definitions: parameter name -> { min, max, default, apply(busId, value) }
+    var AUTOMATION_TARGETS = {
+        'filter-freq':   { label: 'Filter Freq',  min: 20,  max: 20000, default: 2000, log: true },
+        'filter-q':      { label: 'Filter Q',     min: 0.1, max: 20,    default: 1.0 },
+        'delay-mix':     { label: 'Delay Mix',    min: 0,   max: 1,     default: 0.3 },
+        'reverb-mix':    { label: 'Reverb Mix',   min: 0,   max: 1,     default: 0.2 },
+        'chorus-mix':    { label: 'Chorus Mix',   min: 0,   max: 1,     default: 0.3 },
+        'volume':        { label: 'Volume',       min: 0,   max: 2,     default: 1.0 },
+        'pan':           { label: 'Pan',          min: -1,  max: 1,     default: 0 }
+    };
+
     function createDefaultParams() {
         return {
             waveform: 'sine',
@@ -38,7 +49,8 @@
             chorus: { enabled: false, rate: 1.0, depth: 0.003, mix: 0.3, feedback: 0, baseDelay: 0.007 },
             compressor: { enabled: false, threshold: -12, ratio: 4, attack: 10, release: 100, sidechainBusId: -1 },
             eq: { enabled: false, masterGain: 0, bands: [0, 0, 0, 0, 0, 0, 0] },
-            lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
+            lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' },
+            automation: []  // array of { target, interpMode, points: [{beat, value}] }
         };
     }
 
@@ -155,6 +167,7 @@
                 waveform: p.lfo ? (p.lfo.waveform || 'sine') : 'sine',
                 target: p.lfo ? (p.lfo.target || 'pitch') : 'pitch'
             },
+            automation: p.automation ? cloneObj(p.automation) : [],
             steps: steps
         };
 
@@ -240,7 +253,8 @@
                 effectOrder: src.effectOrder.slice(), filter: cloneObj(src.filter),
                 delay: cloneObj(src.delay), reverb: cloneObj(src.reverb),
                 chorus: cloneObj(src.chorus), compressor: cloneObj(src.compressor),
-                eq: cloneObj(src.eq), lfo: cloneObj(src.lfo)
+                eq: cloneObj(src.eq), lfo: cloneObj(src.lfo),
+                automation: cloneObj(src.automation)
             });
             dup.id = layers.length;
             dup.color = COLORS[layers.length % COLORS.length];
@@ -349,6 +363,7 @@
             }
         },
 
+        AUTOMATION_TARGETS: AUTOMATION_TARGETS,
         applyLfoParams: applyLfoParams,
 
         onSelect: function(cb) { selectCallbacks.push(cb); },
@@ -365,7 +380,8 @@
                     effectOrder: l.effectOrder.slice(), filter: cloneObj(l.filter),
                     delay: cloneObj(l.delay), reverb: cloneObj(l.reverb),
                     chorus: cloneObj(l.chorus), compressor: cloneObj(l.compressor),
-                    eq: cloneObj(l.eq), lfo: cloneObj(l.lfo), steps: l.steps.slice()
+                    eq: cloneObj(l.eq), lfo: cloneObj(l.lfo),
+                    automation: cloneObj(l.automation), steps: l.steps.slice()
                 });
             }
             return out;

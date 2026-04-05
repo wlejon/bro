@@ -1099,10 +1099,20 @@ static const JSCFunctionListEntry js_midiinput_proto_funcs[] = {
 
 struct SequenceData {
     std::unique_ptr<broaudio::Sequence> seq;
+    JSContext* ctx = nullptr;
+    // Track JS callback refs for automation lanes (prevent GC)
+    std::vector<JSValue> automationCallbacks;
 };
 
-static void js_sequence_finalizer(JSRuntime*, JSValue val) {
-    delete static_cast<SequenceData*>(JS_GetOpaque(val, js_sequence_class_id));
+static void js_sequence_finalizer(JSRuntime* rt, JSValue val) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(val, js_sequence_class_id));
+    if (d) {
+        // Clear automation lanes first so C++ callbacks don't reference freed JS values
+        d->seq->clearAutomationLanes();
+        for (auto& cb : d->automationCallbacks)
+            JS_FreeValueRT(rt, cb);
+        delete d;
+    }
 }
 
 static JSClassDef js_sequence_class = {
@@ -1253,6 +1263,97 @@ static JSValue js_seq_update(JSContext* ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
+// --- Automation lane bindings ---
+
+static JSValue js_seq_addAutomationLane(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_UNDEFINED;
+
+    JSValue cbRef = JS_DupValue(ctx, argv[0]);
+    d->automationCallbacks.push_back(cbRef);
+
+    JSContext* jsCtx = d->ctx;
+    int laneIdx = d->seq->addAutomationLane([jsCtx, cbRef](float value) {
+        JSValue arg = JS_NewFloat64(jsCtx, value);
+        JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 1, &arg);
+        JS_FreeValue(jsCtx, arg);
+        JS_FreeValue(jsCtx, ret);
+    });
+    return JS_NewInt32(ctx, laneIdx);
+}
+
+static JSValue js_seq_removeAutomationLane(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    if (idx >= 0 && idx < static_cast<int>(d->automationCallbacks.size())) {
+        JS_FreeValue(ctx, d->automationCallbacks[idx]);
+        d->automationCallbacks.erase(d->automationCallbacks.begin() + idx);
+    }
+    d->seq->removeAutomationLane(idx);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_clearAutomationLanes(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d) return JS_UNDEFINED;
+    d->seq->clearAutomationLanes();
+    for (auto& cb : d->automationCallbacks)
+        JS_FreeValue(ctx, cb);
+    d->automationCallbacks.clear();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_addAutomationPoint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int laneIdx; JS_ToInt32(ctx, &laneIdx, argv[0]);
+    double beat; JS_ToFloat64(ctx, &beat, argv[1]);
+    double value; JS_ToFloat64(ctx, &value, argv[2]);
+    if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
+        d->seq->automationLane(laneIdx).addPoint(beat, static_cast<float>(value));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_removeAutomationPoint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int laneIdx; JS_ToInt32(ctx, &laneIdx, argv[0]);
+    int ptIdx; JS_ToInt32(ctx, &ptIdx, argv[1]);
+    if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
+        d->seq->automationLane(laneIdx).removePoint(ptIdx);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_clearAutomationPoints(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int laneIdx; JS_ToInt32(ctx, &laneIdx, argv[0]);
+    if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
+        d->seq->automationLane(laneIdx).clearPoints();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_setAutomationInterpMode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int laneIdx; JS_ToInt32(ctx, &laneIdx, argv[0]);
+    const char* s = JS_ToCString(ctx, argv[1]);
+    if (!s) return JS_UNDEFINED;
+    broaudio::InterpMode mode = broaudio::InterpMode::Linear;
+    if (strcmp(s, "step") == 0) mode = broaudio::InterpMode::Step;
+    else if (strcmp(s, "smooth") == 0) mode = broaudio::InterpMode::Smooth;
+    JS_FreeCString(ctx, s);
+    if (laneIdx >= 0 && laneIdx < d->seq->automationLaneCount())
+        d->seq->automationLane(laneIdx).setInterpMode(mode);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_get_automationLaneCount(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    return d ? JS_NewInt32(ctx, d->seq->automationLaneCount()) : JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry js_sequence_proto_funcs[] = {
     JS_CFUNC_DEF("setBPM", 1, js_seq_setBPM),
     JS_CFUNC_DEF("addNote", 4, js_seq_addNote),
@@ -1272,6 +1373,15 @@ static const JSCFunctionListEntry js_sequence_proto_funcs[] = {
     JS_CGETSET_DEF("paused", js_seq_get_paused, nullptr),
     JS_CGETSET_DEF("loopEnabled", js_seq_get_loopEnabled, nullptr),
     JS_CGETSET_DEF("noteCount", js_seq_noteCount, nullptr),
+    // Automation
+    JS_CFUNC_DEF("addAutomationLane", 1, js_seq_addAutomationLane),
+    JS_CFUNC_DEF("removeAutomationLane", 1, js_seq_removeAutomationLane),
+    JS_CFUNC_DEF("clearAutomationLanes", 0, js_seq_clearAutomationLanes),
+    JS_CFUNC_DEF("addAutomationPoint", 3, js_seq_addAutomationPoint),
+    JS_CFUNC_DEF("removeAutomationPoint", 2, js_seq_removeAutomationPoint),
+    JS_CFUNC_DEF("clearAutomationPoints", 1, js_seq_clearAutomationPoints),
+    JS_CFUNC_DEF("setAutomationInterpMode", 2, js_seq_setAutomationInterpMode),
+    JS_CGETSET_DEF("automationLaneCount", js_seq_get_automationLaneCount, nullptr),
 };
 
 // ---------------------------------------------------------------------------
@@ -2117,7 +2227,9 @@ static JSValue js_audioctx_createSequence(JSContext* ctx, JSValueConst this_val,
 
     JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_sequence_class_id));
     auto* sd = new SequenceData{
-        std::make_unique<broaudio::Sequence>(*va->allocator)
+        std::make_unique<broaudio::Sequence>(*va->allocator),
+        ctx,
+        {}
     };
     JS_SetOpaque(obj, sd);
     return obj;
