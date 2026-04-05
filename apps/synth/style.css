@@ -735,3 +735,51 @@ input[type="range"] { accent-color: #00e5ff; }
     font-size: 9px;
     padding: 2px 4px;
 }
+
+/* -----------------------------------------------------------------------
+   Effect Order List
+   ----------------------------------------------------------------------- */
+.effect-order-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.effect-order-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 6px;
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: grab;
+}
+.effect-order-item:hover {
+    border-color: #555;
+}
+.effect-order-num {
+    color: #888;
+    font-size: 10px;
+    min-width: 14px;
+}
+.effect-order-arrows {
+    margin-left: auto;
+    display: flex;
+    gap: 2px;
+}
+.effect-order-btn {
+    font-size: 8px;
+    padding: 0 3px;
+    line-height: 14px;
+    min-width: 16px;
+    border: 1px solid #444;
+    background: #252540;
+    color: #aaa;
+    cursor: pointer;
+    border-radius: 2px;
+}
+.effect-order-btn:hover {
+    border-color: #00e5ff;
+    color: #00e5ff;
+}

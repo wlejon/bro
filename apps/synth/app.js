@@ -119,6 +119,36 @@
         }
     });
 
+    // -----------------------------------------------------------------------
+    // Unison sliders
+    // -----------------------------------------------------------------------
+    sliders.unisonCount = Synth.Slider(document.getElementById('unison-count-slider'), {
+        min: 1, max: 8, value: 1, step: 1, defaultValue: 1,
+        format: function(v) { return v === 1 ? 'Off' : v + 'x'; },
+        onChange: function(v) {
+            signalParam('unison.count', v);
+            Synth.setUnisonCount(v);
+        }
+    });
+
+    sliders.unisonDetune = Synth.Slider(document.getElementById('unison-detune-slider'), {
+        min: 0, max: 200, value: 15, step: 1, defaultValue: 15,
+        format: function(v) { return (v / 100).toFixed(2) + ' st'; },
+        onChange: function(v) {
+            signalParam('unison.detune', v / 100);
+            Synth.setUnisonDetune(v / 100);
+        }
+    });
+
+    sliders.unisonWidth = Synth.Slider(document.getElementById('unison-width-slider'), {
+        min: 0, max: 100, value: 70, step: 1, defaultValue: 70,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            signalParam('unison.stereoWidth', v / 100);
+            Synth.setUnisonStereoWidth(v / 100);
+        }
+    });
+
     sliders.filterCutoff = Synth.Slider(document.getElementById('filter-cutoff-slider'), {
         min: 0, max: 100, value: 50, step: 0.5, defaultValue: 50,
         format: function(v) { return formatFreq(cutoffSliderToFreq(v)); },
@@ -426,6 +456,74 @@
     });
 
     // -----------------------------------------------------------------------
+    // Effect Order — draggable reorder list
+    // -----------------------------------------------------------------------
+    var EFFECT_NAMES = ['filter', 'delay', 'compressor', 'chorus', 'reverb'];
+    var EFFECT_LABELS = { filter: 'Filter', delay: 'Delay', compressor: 'Compressor', chorus: 'Chorus', reverb: 'Reverb' };
+
+    function buildEffectOrderList() {
+        var container = document.getElementById('effect-order-list');
+        container.innerHTML = '';
+        var signal = Synth.Layers.getActiveSignal();
+        var order = (signal && signal.effectOrder) ? signal.effectOrder : EFFECT_NAMES.slice();
+
+        for (var i = 0; i < order.length; i++) {
+            (function(idx) {
+                var item = document.createElement('div');
+                item.className = 'effect-order-item';
+                item.setAttribute('draggable', 'true');
+                item.setAttribute('data-idx', idx.toString());
+
+                var num = document.createElement('span');
+                num.className = 'effect-order-num';
+                num.textContent = (idx + 1) + '.';
+                item.appendChild(num);
+
+                var label = document.createElement('span');
+                label.textContent = EFFECT_LABELS[order[idx]] || order[idx];
+                item.appendChild(label);
+
+                var arrows = document.createElement('span');
+                arrows.className = 'effect-order-arrows';
+                if (idx > 0) {
+                    var up = document.createElement('button');
+                    up.className = 'btn effect-order-btn';
+                    up.textContent = '\u25B2';
+                    up.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        swapEffectOrder(idx, idx - 1);
+                    });
+                    arrows.appendChild(up);
+                }
+                if (idx < order.length - 1) {
+                    var dn = document.createElement('button');
+                    dn.className = 'btn effect-order-btn';
+                    dn.textContent = '\u25BC';
+                    dn.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        swapEffectOrder(idx, idx + 1);
+                    });
+                    arrows.appendChild(dn);
+                }
+                item.appendChild(arrows);
+
+                container.appendChild(item);
+            })(i);
+        }
+    }
+
+    function swapEffectOrder(fromIdx, toIdx) {
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal || !signal.effectOrder) return;
+        var order = signal.effectOrder;
+        var tmp = order[fromIdx];
+        order[fromIdx] = order[toIdx];
+        order[toIdx] = tmp;
+        Synth.SignalChain.setEffectOrder(Synth.Layers.getActiveBusId(), order);
+        buildEffectOrderList();
+    }
+
+    // -----------------------------------------------------------------------
     // Presets
     // -----------------------------------------------------------------------
     var presetSelect = document.getElementById('preset-select');
@@ -492,6 +590,16 @@
             sliders.adsrS.setValue(Math.round(signal.adsr.sustain * 100), true);
             sliders.adsrR.setValue(Math.round(signal.adsr.release * 1000), true);
         }
+
+        // Unison (layers only)
+        if (!isMic && signal.unison) {
+            sliders.unisonCount.setValue(signal.unison.count, true);
+            sliders.unisonDetune.setValue(Math.round(signal.unison.detune * 100), true);
+            sliders.unisonWidth.setValue(Math.round(signal.unison.stereoWidth * 100), true);
+        }
+
+        // Effect order
+        buildEffectOrderList();
 
         // Filter
         updateToggle(filterToggle, signal.filter.enabled);

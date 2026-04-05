@@ -30,6 +30,8 @@
             mode: 'sequencer',
             arpPattern: 'up',
             adsr: { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.08 },
+            unison: { count: 1, detune: 0.15, stereoWidth: 0.7 },
+            effectOrder: ['filter', 'delay', 'compressor', 'chorus', 'reverb'],
             filter: { enabled: false, type: 'lowpass', frequency: 2000, Q: 1.0, gain: 0 },
             delay: { enabled: false, time: 0.3, feedback: 0.3, mix: 0.3 },
             reverb: { enabled: false, roomSize: 0.5, damping: 0.5, mix: 0.2 },
@@ -81,6 +83,12 @@
                 sustain: p.adsr ? val(p.adsr.sustain, 1.0) : 1.0,
                 release: p.adsr ? val(p.adsr.release, 0.08) : 0.08
             },
+            unison: {
+                count: p.unison ? val(p.unison.count, 1) : 1,
+                detune: p.unison ? val(p.unison.detune, 0.15) : 0.15,
+                stereoWidth: p.unison ? val(p.unison.stereoWidth, 0.7) : 0.7
+            },
+            effectOrder: p.effectOrder ? p.effectOrder.slice() : ['filter', 'delay', 'compressor', 'chorus', 'reverb'],
             filter: {
                 enabled: p.filter ? (p.filter.enabled || false) : false,
                 type: p.filter ? (p.filter.type || 'lowpass') : 'lowpass',
@@ -138,6 +146,7 @@
         Synth.setPan(layer.pan);
         Synth.setADSR(layer.adsr.attack, layer.adsr.decay,
                       layer.adsr.sustain, layer.adsr.release);
+        Synth.setUnison(layer.unison.count, layer.unison.detune, layer.unison.stereoWidth);
         Synth.setCurrentBus(layer.busId);
     }
 
@@ -210,7 +219,8 @@
             var dup = createLayer(src.name + ' Copy', {
                 waveform: src.waveform, volume: src.volume, pan: src.pan,
                 mode: src.mode, arpPattern: src.arpPattern,
-                adsr: cloneObj(src.adsr), filter: cloneObj(src.filter),
+                adsr: cloneObj(src.adsr), unison: cloneObj(src.unison),
+                effectOrder: src.effectOrder.slice(), filter: cloneObj(src.filter),
                 delay: cloneObj(src.delay), reverb: cloneObj(src.reverb),
                 chorus: cloneObj(src.chorus), compressor: cloneObj(src.compressor),
                 lfo: cloneObj(src.lfo)
@@ -341,7 +351,8 @@
                     name: l.name, muted: l.muted, color: l.color,
                     waveform: l.waveform, volume: l.volume, pan: l.pan,
                     mode: l.mode, arpPattern: l.arpPattern, clipId: l.clipId,
-                    adsr: cloneObj(l.adsr), filter: cloneObj(l.filter),
+                    adsr: cloneObj(l.adsr), unison: cloneObj(l.unison),
+                    effectOrder: l.effectOrder.slice(), filter: cloneObj(l.filter),
                     delay: cloneObj(l.delay), reverb: cloneObj(l.reverb),
                     chorus: cloneObj(l.chorus), compressor: cloneObj(l.compressor),
                     lfo: cloneObj(l.lfo), steps: l.steps.slice()

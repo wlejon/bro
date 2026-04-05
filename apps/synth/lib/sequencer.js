@@ -6,22 +6,15 @@
     var bpm = 120;
     var currentStep = -1;
     var playing = false;
-    var timerId = null;
+    var updateTimerId = null;
     var onStepCallback = null;
     var onLoopCompleteCallback = null;
 
-    // Per-layer tracking of last played note for noteOff
-    var lastNotes = []; // array of { layerIdx, noteIdx }
+    // Native sequences — one per layer for sample-accurate timing
+    var layerSequences = []; // array of { seq, layerIdx }
 
     function getStepDuration() {
         return 60000 / bpm / 4; // 16th notes
-    }
-
-    function noteOffAll() {
-        for (var i = 0; i < lastNotes.length; i++) {
-            Synth.noteOff(lastNotes[i].noteIdx, true);
-        }
-        lastNotes = [];
     }
 
     // Collect unique note indices from a layer's step grid (sorted ascending)
@@ -74,60 +67,98 @@
         return idx;
     }
 
-    function tick() {
+    // Build native NoteEvents from a layer's step grid and load into a Sequence
+    function buildLayerSequence(layer) {
+        var audioCtx = Synth.getAudioContext();
+        var allocator = Synth.getAllocator();
+        if (!audioCtx || !allocator) return null;
+
+        var seq = audioCtx.createSequence(allocator);
+        seq.setBPM(bpm);
+        seq.setLoopEnabled(true);
+        // 16 steps = 4 beats in 4/4 at 16th note resolution
+        seq.setLoopRange(0, 4);
+
+        var stepBeats = 0.25; // each step = 1/4 beat (16th note)
+        var noteDurBeats = stepBeats * 0.9; // slight gap between notes
+
+        // Apply this layer's voice params before building notes
+        Synth.Layers.applyForPlayback(layer);
+
+        if (layer.mode === 'arpeggiator') {
+            var held = collectUniqueNotes(layer);
+            layer.arpIndex = 0;
+            for (var s = 0; s < NUM_STEPS; s++) {
+                if (layer.steps[s] === null) continue;
+                var noteIdx = pickArpNote(layer, held);
+                if (noteIdx < 0) continue;
+                var note = Synth.notes[noteIdx];
+                if (!note) continue;
+                seq.addNote(s * stepBeats, note.midi, 1.0, noteDurBeats);
+            }
+        } else {
+            for (var s = 0; s < NUM_STEPS; s++) {
+                var sn = layer.steps[s];
+                if (sn === null || sn === undefined || sn < 0) continue;
+                var note = Synth.notes[sn];
+                if (!note) continue;
+                seq.addNote(s * stepBeats, note.midi, 1.0, noteDurBeats);
+            }
+        }
+
+        return seq;
+    }
+
+    function destroyAllSequences() {
+        for (var i = 0; i < layerSequences.length; i++) {
+            layerSequences[i].seq.stop();
+        }
+        layerSequences = [];
+    }
+
+    // Track step position from beat position for UI highlight.
+    // Each layer's sequence is updated separately so we can switch voice params
+    // (waveform, ADSR, bus routing, unison) before each layer's notes fire.
+    function updateStepFromBeat() {
         if (!playing) return;
 
-        // Note off previous
-        noteOffAll();
-
-        currentStep = (currentStep + 1) % NUM_STEPS;
-
+        var audioCtx = Synth.getAudioContext();
+        if (!audioCtx) return;
+        var t = audioCtx.currentTime;
         var Layers = Synth.Layers;
-        var count = Layers.count();
 
-        for (var li = 0; li < count; li++) {
-            var layer = Layers.get(li);
-            if (!layer || layer.muted) continue;
+        // Use first sequence to get current beat for UI
+        var newStep = -1;
+        if (layerSequences.length > 0) {
+            var beat = layerSequences[0].seq.currentBeat(t);
+            newStep = Math.floor(beat / 0.25) % NUM_STEPS;
+        }
 
-            var noteIdx = -1;
+        if (newStep !== currentStep) {
+            currentStep = newStep;
+            if (onStepCallback) onStepCallback(currentStep);
 
-            if (layer.mode === 'arpeggiator') {
-                // Arp: only play on steps that have a note
-                if (layer.steps[currentStep] !== null) {
-                    var held = collectUniqueNotes(layer);
-                    noteIdx = pickArpNote(layer, held);
-                }
-            } else {
-                // Sequencer: play the step's note directly
-                var sn = layer.steps[currentStep];
-                if (sn !== null && sn !== undefined && sn >= 0) {
-                    noteIdx = sn;
-                }
+            // Fire loop-complete when wrapping from last step
+            if (currentStep === 0 && onLoopCompleteCallback) {
+                var cb = onLoopCompleteCallback;
+                onLoopCompleteCallback = null;
+                setTimeout(function() { cb(); }, 0);
             }
+        }
 
-            if (noteIdx < 0) continue;
-
-            // Apply this layer's voice params (waveform, ADSR, pan, bus routing)
-            Layers.applyForPlayback(layer);
-
-            Synth.noteOn(noteIdx, true);
-            lastNotes.push({ layerIdx: li, noteIdx: noteIdx });
+        // Update each layer's sequence with that layer's voice params active
+        for (var i = 0; i < layerSequences.length; i++) {
+            var ls = layerSequences[i];
+            var layer = Layers.get(ls.layerIdx);
+            if (layer) Layers.applyForPlayback(layer);
+            ls.seq.update(t);
         }
 
         // Restore active layer's voice params for keyboard play between ticks
         var active = Layers.getActive();
         if (active) Layers.applyVoiceParams(active);
 
-        if (onStepCallback) onStepCallback(currentStep);
-
-        // Fire loop-complete when we finish the last step (step NUM_STEPS-1)
-        if (currentStep === NUM_STEPS - 1 && onLoopCompleteCallback) {
-            var cb = onLoopCompleteCallback;
-            onLoopCompleteCallback = null; // one-shot
-            setTimeout(function() { cb(); }, getStepDuration());
-        }
-
-        timerId = setTimeout(tick, getStepDuration());
+        updateTimerId = setTimeout(updateStepFromBeat, 16); // ~60fps UI update
     }
 
     Synth.Sequencer = {
@@ -137,19 +168,53 @@
             if (playing) return;
             playing = true;
             currentStep = -1;
+
             // Reset arp indices on all layers
             var Layers = Synth.Layers;
             for (var i = 0; i < Layers.count(); i++) {
                 var l = Layers.get(i);
                 if (l) l.arpIndex = 0;
             }
-            tick();
+
+            // Build and start a native sequence per non-muted layer
+            destroyAllSequences();
+            var count = Layers.count();
+            for (var li = 0; li < count; li++) {
+                var layer = Layers.get(li);
+                if (!layer || layer.muted) continue;
+
+                // Check if layer has any notes
+                var hasNotes = false;
+                for (var s = 0; s < NUM_STEPS; s++) {
+                    if (layer.steps[s] !== null) { hasNotes = true; break; }
+                }
+                if (!hasNotes) continue;
+
+                var seq = buildLayerSequence(layer);
+                if (seq) {
+                    layerSequences.push({ seq: seq, layerIdx: li });
+                }
+            }
+
+            // Start all sequences at the same time for sync
+            var audioCtx = Synth.getAudioContext();
+            var startTime = audioCtx ? audioCtx.currentTime : 0;
+            for (var i = 0; i < layerSequences.length; i++) {
+                layerSequences[i].seq.play(startTime);
+            }
+
+            // Start UI update loop
+            updateStepFromBeat();
+
+            // Restore active layer's voice params for keyboard play
+            var active = Layers.getActive();
+            if (active) Layers.applyVoiceParams(active);
         },
 
         stop: function() {
             playing = false;
-            if (timerId) { clearTimeout(timerId); timerId = null; }
-            noteOffAll();
+            if (updateTimerId) { clearTimeout(updateTimerId); updateTimerId = null; }
+            destroyAllSequences();
             currentStep = -1;
             if (onStepCallback) onStepCallback(-1);
 
@@ -179,7 +244,13 @@
             }
         },
 
-        setBPM: function(b) { bpm = Math.max(30, Math.min(300, b)); },
+        setBPM: function(b) {
+            bpm = Math.max(30, Math.min(300, b));
+            // Update running sequences
+            for (var i = 0; i < layerSequences.length; i++) {
+                layerSequences[i].seq.setBPM(bpm);
+            }
+        },
         getBPM: function() { return bpm; },
 
         onStep: function(cb) { onStepCallback = cb; },
@@ -188,6 +259,37 @@
         onLoopComplete: function(cb) { onLoopCompleteCallback = cb; },
 
         // Duration of one full loop in milliseconds
-        getLoopDuration: function() { return NUM_STEPS * getStepDuration(); }
+        getLoopDuration: function() { return NUM_STEPS * getStepDuration(); },
+
+        // Rebuild sequences while playing (e.g., after step grid edit)
+        rebuild: function() {
+            if (!playing) return;
+            var audioCtx = Synth.getAudioContext();
+            var Layers = Synth.Layers;
+            var wasPlaying = playing;
+
+            destroyAllSequences();
+            var count = Layers.count();
+            for (var li = 0; li < count; li++) {
+                var layer = Layers.get(li);
+                if (!layer || layer.muted) continue;
+                var hasNotes = false;
+                for (var s = 0; s < NUM_STEPS; s++) {
+                    if (layer.steps[s] !== null) { hasNotes = true; break; }
+                }
+                if (!hasNotes) continue;
+                var seq = buildLayerSequence(layer);
+                if (seq) layerSequences.push({ seq: seq, layerIdx: li });
+            }
+
+            var startTime = audioCtx ? audioCtx.currentTime : 0;
+            for (var i = 0; i < layerSequences.length; i++) {
+                layerSequences[i].seq.play(startTime);
+            }
+
+            // Restore active layer params
+            var active = Layers.getActive();
+            if (active) Layers.applyVoiceParams(active);
+        }
     };
 })();

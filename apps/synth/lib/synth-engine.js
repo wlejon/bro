@@ -14,6 +14,7 @@
     var octaveShift = 0;
     var lastPlayedNote = 24; // C3
     var adsrParams = { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.04 };
+    var unisonParams = { count: 1, detune: 0.15, stereoWidth: 0.7 };
     var currentBusId = 0; // bus to route voices/clips to (set by layer system)
 
     Synth.init = function() {
@@ -58,6 +59,9 @@
             audioCtx.setVoiceSustain(voiceId, adsrParams.sustain);
             audioCtx.setVoiceRelease(voiceId, adsrParams.release);
             audioCtx.setVoiceBus(voiceId, currentBusId);
+            audioCtx.setVoiceUnisonCount(voiceId, unisonParams.count);
+            audioCtx.setVoiceUnisonDetune(voiceId, unisonParams.detune);
+            audioCtx.setVoiceUnisonStereoWidth(voiceId, unisonParams.stereoWidth);
         });
     }
 
@@ -142,6 +146,12 @@
     Synth.voicePan = 0;
     Synth.setPan = function(p) { Synth.voicePan = Math.max(-1, Math.min(1, p)); updateVoiceSetup(); };
     Synth.getPan = function() { return Synth.voicePan; };
+
+    Synth.setUnisonCount = function(c) { unisonParams.count = Math.max(1, Math.min(8, c)); updateVoiceSetup(); };
+    Synth.setUnisonDetune = function(d) { unisonParams.detune = Math.max(0, Math.min(2, d)); updateVoiceSetup(); };
+    Synth.setUnisonStereoWidth = function(w) { unisonParams.stereoWidth = Math.max(0, Math.min(1, w)); updateVoiceSetup(); };
+    Synth.getUnison = function() { return { count: unisonParams.count, detune: unisonParams.detune, stereoWidth: unisonParams.stereoWidth }; };
+    Synth.setUnison = function(c, d, w) { unisonParams.count = c; unisonParams.detune = d; unisonParams.stereoWidth = w; updateVoiceSetup(); };
 
     Synth.setCurrentBus = function(busId) { currentBusId = busId; updateVoiceSetup(); };
     Synth.getCurrentBus = function() { return currentBusId; };

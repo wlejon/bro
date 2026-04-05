@@ -6,6 +6,7 @@
 #include <broaudio/synth/modulation.h>
 #include <broaudio/synth/wavetable.h>
 #include <broaudio/midi/midi_input.h>
+#include <broaudio/sequencer/sequence.h>
 
 #include <algorithm>
 #include <string>
@@ -37,6 +38,7 @@ static JSClassID js_biquadfilter_class_id = 0;
 static JSClassID js_voiceallocator_class_id = 0;
 static JSClassID js_modmatrix_class_id = 0;
 static JSClassID js_midiinput_class_id = 0;
+static JSClassID js_sequence_class_id = 0;
 
 // ---------------------------------------------------------------------------
 // Global engine pointer + wavetable registry
@@ -1092,6 +1094,187 @@ static const JSCFunctionListEntry js_midiinput_proto_funcs[] = {
 };
 
 // ---------------------------------------------------------------------------
+// Sequence (native sequencer/timeline)
+// ---------------------------------------------------------------------------
+
+struct SequenceData {
+    std::unique_ptr<broaudio::Sequence> seq;
+};
+
+static void js_sequence_finalizer(JSRuntime*, JSValue val) {
+    delete static_cast<SequenceData*>(JS_GetOpaque(val, js_sequence_class_id));
+}
+
+static JSClassDef js_sequence_class = {
+    "Sequence", js_sequence_finalizer, nullptr, nullptr, nullptr
+};
+
+static JSValue js_seq_setBPM(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->seq->setBPM(v);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_getBPM(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    return d ? JS_NewFloat64(ctx, d->seq->bpm()) : JS_UNDEFINED;
+}
+
+static JSValue js_seq_setTimeSignature(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int num, den;
+    JS_ToInt32(ctx, &num, argv[0]);
+    JS_ToInt32(ctx, &den, argv[1]);
+    d->seq->setTimeSignature(num, den);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_addNote(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 4) return JS_UNDEFINED;
+    double beat, dur;
+    int note;
+    double vel;
+    JS_ToFloat64(ctx, &beat, argv[0]);
+    JS_ToInt32(ctx, &note, argv[1]);
+    JS_ToFloat64(ctx, &vel, argv[2]);
+    JS_ToFloat64(ctx, &dur, argv[3]);
+    broaudio::NoteEvent ev{beat, note, static_cast<float>(vel), dur};
+    d->seq->addNote(ev);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_removeNote(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    d->seq->removeNote(idx);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_clearNotes(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (d) d->seq->clearNotes();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_noteCount(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    return d ? JS_NewInt32(ctx, d->seq->noteCount()) : JS_UNDEFINED;
+}
+
+static JSValue js_seq_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d) return JS_UNDEFINED;
+    double t = 0;
+    if (argc >= 1) JS_ToFloat64(ctx, &t, argv[0]);
+    else if (s_audioEngine) t = s_audioEngine->currentTime();
+    d->seq->play(t);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_stop(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (d) d->seq->stop();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_pause(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d) return JS_UNDEFINED;
+    double t = 0;
+    if (argc >= 1) JS_ToFloat64(ctx, &t, argv[0]);
+    else if (s_audioEngine) t = s_audioEngine->currentTime();
+    d->seq->pause(t);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_resume(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d) return JS_UNDEFINED;
+    double t = 0;
+    if (argc >= 1) JS_ToFloat64(ctx, &t, argv[0]);
+    else if (s_audioEngine) t = s_audioEngine->currentTime();
+    d->seq->resume(t);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_get_playing(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    return d ? JS_NewBool(ctx, d->seq->isPlaying()) : JS_FALSE;
+}
+
+static JSValue js_seq_get_paused(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    return d ? JS_NewBool(ctx, d->seq->isPaused()) : JS_FALSE;
+}
+
+static JSValue js_seq_setLoopEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->seq->setLoopEnabled(JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_setLoopRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    double start, end;
+    JS_ToFloat64(ctx, &start, argv[0]);
+    JS_ToFloat64(ctx, &end, argv[1]);
+    d->seq->setLoopRange(start, end);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_seq_get_loopEnabled(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    return d ? JS_NewBool(ctx, d->seq->isLoopEnabled()) : JS_FALSE;
+}
+
+static JSValue js_seq_currentBeat(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d) return JS_UNDEFINED;
+    double t = 0;
+    if (argc >= 1) JS_ToFloat64(ctx, &t, argv[0]);
+    else if (s_audioEngine) t = s_audioEngine->currentTime();
+    return JS_NewFloat64(ctx, d->seq->currentBeat(t));
+}
+
+static JSValue js_seq_update(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
+    if (!d) return JS_UNDEFINED;
+    double t = 0;
+    if (argc >= 1) JS_ToFloat64(ctx, &t, argv[0]);
+    else if (s_audioEngine) t = s_audioEngine->currentTime();
+    d->seq->update(t);
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_sequence_proto_funcs[] = {
+    JS_CFUNC_DEF("setBPM", 1, js_seq_setBPM),
+    JS_CFUNC_DEF("addNote", 4, js_seq_addNote),
+    JS_CFUNC_DEF("removeNote", 1, js_seq_removeNote),
+    JS_CFUNC_DEF("clearNotes", 0, js_seq_clearNotes),
+    JS_CFUNC_DEF("play", 0, js_seq_play),
+    JS_CFUNC_DEF("stop", 0, js_seq_stop),
+    JS_CFUNC_DEF("pause", 0, js_seq_pause),
+    JS_CFUNC_DEF("resume", 0, js_seq_resume),
+    JS_CFUNC_DEF("setLoopEnabled", 1, js_seq_setLoopEnabled),
+    JS_CFUNC_DEF("setLoopRange", 2, js_seq_setLoopRange),
+    JS_CFUNC_DEF("setTimeSignature", 2, js_seq_setTimeSignature),
+    JS_CFUNC_DEF("currentBeat", 0, js_seq_currentBeat),
+    JS_CFUNC_DEF("update", 0, js_seq_update),
+    JS_CGETSET_DEF("bpm", js_seq_getBPM, nullptr),
+    JS_CGETSET_DEF("playing", js_seq_get_playing, nullptr),
+    JS_CGETSET_DEF("paused", js_seq_get_paused, nullptr),
+    JS_CGETSET_DEF("loopEnabled", js_seq_get_loopEnabled, nullptr),
+    JS_CGETSET_DEF("noteCount", js_seq_noteCount, nullptr),
+};
+
+// ---------------------------------------------------------------------------
 // AudioContext
 // ---------------------------------------------------------------------------
 
@@ -1638,6 +1821,70 @@ static JSValue js_audioctx_setVoiceRelease(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
+// --- Unison voice parameters ---
+
+static JSValue js_audioctx_setVoiceUnisonCount(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    int count; JS_ToInt32(ctx, &count, argv[1]);
+    d->engine->setVoiceUnisonCount(voiceId, count);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceUnisonDetune(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoiceUnisonDetune(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceUnisonStereoWidth(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoiceUnisonStereoWidth(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+// --- Bus effect chain order ---
+
+static JSValue js_audioctx_setBusEffectOrder(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+
+    // argv[1] is a JS array of strings: ["filter","delay","compressor","chorus","reverb"]
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[1], "length");
+    int32_t len = 0;
+    JS_ToInt32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+
+    if (len <= 0 || len > 5) return JS_UNDEFINED;
+
+    broaudio::EffectSlot order[5];
+    for (int32_t i = 0; i < len; i++) {
+        JSValue elem = JS_GetPropertyUint32(ctx, argv[1], i);
+        const char* str = JS_ToCString(ctx, elem);
+        if (str) {
+            if (strcmp(str, "filter") == 0) order[i] = broaudio::EffectSlot::Filter;
+            else if (strcmp(str, "delay") == 0) order[i] = broaudio::EffectSlot::Delay;
+            else if (strcmp(str, "compressor") == 0) order[i] = broaudio::EffectSlot::Compressor;
+            else if (strcmp(str, "chorus") == 0) order[i] = broaudio::EffectSlot::Chorus;
+            else if (strcmp(str, "reverb") == 0) order[i] = broaudio::EffectSlot::Reverb;
+            else order[i] = static_cast<broaudio::EffectSlot>(i);
+            JS_FreeCString(ctx, str);
+        }
+        JS_FreeValue(ctx, elem);
+    }
+
+    d->engine->setBusEffectOrder(busId, order, len);
+    return JS_UNDEFINED;
+}
+
 // --- Wavetable synthesis ---
 
 static JSValue js_audioctx_createWavetable(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -1792,6 +2039,23 @@ static JSValue js_audioctx_createMidiInput(JSContext* ctx, JSValueConst this_val
     return obj;
 }
 
+// --- Sequence factory ---
+
+static JSValue js_audioctx_createSequence(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+
+    auto* va = static_cast<VoiceAllocatorData*>(JS_GetOpaque(argv[0], js_voiceallocator_class_id));
+    if (!va) return JS_ThrowTypeError(ctx, "Expected VoiceAllocator argument");
+
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_sequence_class_id));
+    auto* sd = new SequenceData{
+        std::make_unique<broaudio::Sequence>(*va->allocator)
+    };
+    JS_SetOpaque(obj, sd);
+    return obj;
+}
+
 // --- Mic ---
 
 static JSValue js_audioctx_createMediaStreamSource(JSContext* ctx, JSValueConst this_val,
@@ -1914,7 +2178,9 @@ static JSValue js_audioctx_createClip(JSContext* ctx, JSValueConst this_val, int
     if (!raw) return JS_ThrowTypeError(ctx, "Expected Float32Array argument");
 
     int numSamples = static_cast<int>(len / sizeof(float));
-    int id = d->engine->createClip(reinterpret_cast<float*>(raw), numSamples);
+    int channels = 1;
+    if (argc >= 2) JS_ToInt32(ctx, &channels, argv[1]);
+    int id = d->engine->createClip(reinterpret_cast<float*>(raw), numSamples, channels);
     return JS_NewInt32(ctx, id);
 }
 
@@ -1931,6 +2197,13 @@ static JSValue js_audioctx_getClipSampleCount(JSContext* ctx, JSValueConst this_
     if (!d || argc < 1) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
     return JS_NewInt32(ctx, d->engine->getClipSampleCount(id));
+}
+
+static JSValue js_audioctx_getClipChannels(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    return JS_NewInt32(ctx, d->engine->getClipChannels(id));
 }
 
 static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2143,6 +2416,14 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("setVoiceSustain", 2, js_audioctx_setVoiceSustain),
     JS_CFUNC_DEF("setVoiceRelease", 2, js_audioctx_setVoiceRelease),
 
+    // Unison
+    JS_CFUNC_DEF("setVoiceUnisonCount", 2, js_audioctx_setVoiceUnisonCount),
+    JS_CFUNC_DEF("setVoiceUnisonDetune", 2, js_audioctx_setVoiceUnisonDetune),
+    JS_CFUNC_DEF("setVoiceUnisonStereoWidth", 2, js_audioctx_setVoiceUnisonStereoWidth),
+
+    // Bus effect order
+    JS_CFUNC_DEF("setBusEffectOrder", 2, js_audioctx_setBusEffectOrder),
+
     // Wavetable
     JS_CFUNC_DEF("createWavetable", 1, js_audioctx_createWavetable),
     JS_CFUNC_DEF("createWavetableFromWaveform", 1, js_audioctx_createWavetableFromWaveform),
@@ -2160,6 +2441,7 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("createVoiceAllocator", 1, js_audioctx_createVoiceAllocator),
     JS_CFUNC_DEF("getModMatrix", 0, js_audioctx_getModMatrix),
     JS_CFUNC_DEF("createMidiInput", 0, js_audioctx_createMidiInput),
+    JS_CFUNC_DEF("createSequence", 1, js_audioctx_createSequence),
 
     // Recording
     JS_CFUNC_DEF("startRecording", 0, js_audioctx_startRecording),
@@ -2169,6 +2451,7 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("createClip", 1, js_audioctx_createClip),
     JS_CFUNC_DEF("deleteClip", 1, js_audioctx_deleteClip),
     JS_CFUNC_DEF("getClipSampleCount", 1, js_audioctx_getClipSampleCount),
+    JS_CFUNC_DEF("getClipChannels", 1, js_audioctx_getClipChannels),
     JS_CFUNC_DEF("getClipWaveform", 2, js_audioctx_getClipWaveform),
     JS_CFUNC_DEF("playClip", 3, js_audioctx_playClip),
     JS_CFUNC_DEF("stopPlayback", 1, js_audioctx_stopPlayback),
@@ -2340,6 +2623,16 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
         JS_SetPropertyFunctionList(ctx, miProto, js_midiinput_proto_funcs,
                                    sizeof(js_midiinput_proto_funcs)/sizeof(js_midiinput_proto_funcs[0]));
         JS_SetClassProto(ctx, js_midiinput_class_id, miProto);
+    }
+
+    // Sequence
+    JS_NewClassID(rt, &js_sequence_class_id);
+    JS_NewClass(rt, js_sequence_class_id, &js_sequence_class);
+    {
+        JSValue seqProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, seqProto, js_sequence_proto_funcs,
+                                   sizeof(js_sequence_proto_funcs)/sizeof(js_sequence_proto_funcs[0]));
+        JS_SetClassProto(ctx, js_sequence_class_id, seqProto);
     }
 
     // AudioContext

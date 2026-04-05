@@ -26,6 +26,11 @@
             if (!c) return;
             var SC = Synth.SignalChain;
 
+            // Effect chain order
+            if (params.effectOrder) {
+                SC.setEffectOrder(busId, params.effectOrder);
+            }
+
             // Filter
             if (params.filter) {
                 SC.setFilterType(busId, params.filter.type);
@@ -69,6 +74,12 @@
                 SC.setCompressorRelease(busId, params.compressor.release);
                 SC.setCompressorEnabled(busId, params.compressor.enabled);
             }
+        },
+
+        // --- Effect chain order ---
+
+        setEffectOrder: function(busId, order) {
+            var c = ctx(); if (c) c.setBusEffectOrder(busId, order);
         },
 
         // --- Filter (uses bus filter slot 0) ---
