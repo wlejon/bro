@@ -324,10 +324,29 @@ input[type="range"] { accent-color: #00e5ff; }
 #seq-controls {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 4px 6px;
     padding: 4px 10px;
     border-bottom: 1px solid #1a1a28;
     flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+#seq-controls-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+#seq-controls-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.seq-transport-btn {
+    min-width: 42px;
 }
 
 .seq-param {
@@ -348,13 +367,6 @@ input[type="range"] { accent-color: #00e5ff; }
     color: #888;
     font-family: monospace;
     min-width: 22px;
-}
-
-#layer-controls {
-    margin-left: auto;
-    display: flex;
-    gap: 4px;
-    align-items: center;
 }
 
 /* Scrollable layer rows */
