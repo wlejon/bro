@@ -119,7 +119,7 @@ private:
     T* allocateNode(Args&&... args) {
         auto ptr = std::make_unique<T>(std::forward<Args>(args)...);
         T* raw = ptr.get();
-        ownedNodes_.push_back(std::move(ptr));
+        ownedNodes_[raw] = std::move(ptr);
         return raw;
     }
 
@@ -131,7 +131,7 @@ private:
     bool structureDirty_ = false;
     std::string basePath_;
     std::unordered_map<std::string, Element*> idMap_;
-    std::vector<std::unique_ptr<Node>> ownedNodes_;
+    std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;
 
     // CSS cascade
     htmlayout::css::Cascade cascade_;

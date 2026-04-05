@@ -1025,8 +1025,13 @@ static JSValue js_element_removeEventListener(JSContext* ctx,
                             entryCapture == capture;
                 JS_FreeValue(ctx, cb);
                 if (same) {
-                    JS_SetPropertyInt64(ctx, arr, i, JS_UNDEFINED);
+                    // Splice out by shifting remaining entries down
                     JS_FreeValue(ctx, entry);
+                    for (int64_t j = i; j < len - 1; ++j) {
+                        JSValue next = JS_GetPropertyInt64(ctx, arr, j + 1);
+                        JS_SetPropertyInt64(ctx, arr, j, next);
+                    }
+                    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt64(ctx, len - 1));
                     break;
                 }
             }

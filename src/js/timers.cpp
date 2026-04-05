@@ -16,21 +16,9 @@ namespace bro::js {
 // Helpers – store / retrieve the Timers* via JS context opaque
 // ---------------------------------------------------------------------------
 
-static const char* kTimersKey = "__bro_timers_ptr";
-
 static Timers* getTimers(JSContext* ctx)
 {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue val = JS_GetPropertyStr(ctx, global, kTimersKey);
-    Timers* t = nullptr;
-    if (JS_IsNumber(val)) {
-        int64_t ptr = 0;
-        JS_ToInt64(ctx, &ptr, val);
-        t = reinterpret_cast<Timers*>(static_cast<intptr_t>(ptr));
-    }
-    JS_FreeValue(ctx, val);
-    JS_FreeValue(ctx, global);
-    return t;
+    return static_cast<Timers*>(JS_GetContextOpaque(ctx));
 }
 
 // ---------------------------------------------------------------------------
@@ -303,10 +291,8 @@ void Timers::install(JSContext* ctx, Timers* instance)
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
-    // Stash the pointer so the C callbacks can find it.
-    JS_SetPropertyStr(ctx, global, kTimersKey,
-                      JS_NewInt64(ctx, static_cast<int64_t>(
-                          reinterpret_cast<intptr_t>(instance))));
+    // Stash the pointer via context opaque (invisible to JS, no truncation risk).
+    JS_SetContextOpaque(ctx, instance);
 
     JS_SetPropertyStr(ctx, global, "setTimeout",
                       JS_NewCFunction(ctx, js_setTimeout, "setTimeout", 2));

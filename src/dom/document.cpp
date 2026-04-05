@@ -4,7 +4,6 @@
 #include "css/parser.h"
 #include "css/cascade.h"
 #include <gumbo.h>
-#include <algorithm>
 #include <sstream>
 #include <functional>
 
@@ -298,12 +297,7 @@ void Document::freeNode(Node* node) {
     for (auto* child : kids) {
         freeNode(child);
     }
-    auto it = std::find_if(ownedNodes_.begin(), ownedNodes_.end(),
-        [node](const std::unique_ptr<Node>& p) { return p.get() == node; });
-    if (it != ownedNodes_.end()) {
-        std::swap(*it, ownedNodes_.back());
-        ownedNodes_.pop_back();
-    }
+    ownedNodes_.erase(node);
 }
 
 // ---------------------------------------------------------------------------

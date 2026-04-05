@@ -419,9 +419,28 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         if (event.propagationStopped()) break;
     }
 
-    // Remove "once" listeners (iterate in reverse to preserve indices)
-    for (auto it2 = onceIndices.rbegin(); it2 != onceIndices.rend(); ++it2) {
-        JS_SetPropertyInt64(ctx, listenersArr, *it2, JS_UNDEFINED);
+    // Remove "once" listeners by compacting the array (splice out holes)
+    if (!onceIndices.empty()) {
+        // Mark slots as undefined
+        for (auto it2 = onceIndices.rbegin(); it2 != onceIndices.rend(); ++it2) {
+            JS_SetPropertyInt64(ctx, listenersArr, *it2, JS_UNDEFINED);
+        }
+        // Compact: shift valid entries down, then truncate
+        int64_t dst = 0;
+        for (int64_t src = 0; src < len; ++src) {
+            JSValue v = JS_GetPropertyInt64(ctx, listenersArr, src);
+            if (!JS_IsUndefined(v)) {
+                if (dst != src)
+                    JS_SetPropertyInt64(ctx, listenersArr, dst, v);
+                else
+                    JS_FreeValue(ctx, v);
+                ++dst;
+            } else {
+                JS_FreeValue(ctx, v);
+            }
+        }
+        // Truncate by setting length
+        JS_SetPropertyStr(ctx, listenersArr, "length", JS_NewInt64(ctx, dst));
     }
 
     JS_FreeValue(ctx, jsEvent);
