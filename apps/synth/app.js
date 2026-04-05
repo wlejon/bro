@@ -71,12 +71,14 @@
     // -----------------------------------------------------------------------
     // Collapsible panels — click header to toggle, auto-expand on enable
     // -----------------------------------------------------------------------
-    $$('.panel-collapsible > .panel-header').forEach(function(header) {
+    $$('.panel-collapsible').forEach(function(panel) {
+        var header = panel.querySelector('.panel-header');
+        if (!header) return;
         header.addEventListener('click', function(e) {
             // Don't toggle when clicking the On/Off button itself
-            if (e.target.classList.contains('btn-toggle')) return;
-            var panel = document.getElementById(header.getAttribute('data-panel'));
-            if (panel) panel.classList.toggle('collapsed');
+            var tgt = e.target;
+            if (tgt && tgt.classList && tgt.classList.contains('btn-toggle')) return;
+            panel.classList.toggle('collapsed');
         });
     });
 

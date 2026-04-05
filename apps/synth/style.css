@@ -127,6 +127,7 @@ input[type="range"] { accent-color: #00e5ff; }
     display: flex;
     flex: 1;
     min-height: 0;
+    overflow: hidden;
 }
 
 /* Sidebar */
@@ -136,6 +137,7 @@ input[type="range"] { accent-color: #00e5ff; }
     background: #0c0c14;
     border-right: 1px solid #2a2a3a;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 0;
 }
 
