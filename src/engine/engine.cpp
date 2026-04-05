@@ -191,11 +191,15 @@ Engine::Engine(const EngineConfig& config)
     if (!templateBlocks.empty())
         document_->injectTemplates(templateBlocks);
 
-    // 8b. Set window title from <title> element (windowed only)
+    // 8b. Set window title (windowed only)
     if (window_) {
-        std::string docTitle = document_->title();
-        if (!docTitle.empty()) {
-            window_->setTitle(docTitle);
+        if (!config.title.empty()) {
+            window_->setTitle(config.title);
+        } else {
+            std::string docTitle = document_->title();
+            if (!docTitle.empty()) {
+                window_->setTitle(docTitle);
+            }
         }
     }
 

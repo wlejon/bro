@@ -34,6 +34,7 @@ struct EngineConfig {
     int height = 768;
     DisplayMode displayMode = DisplayMode::Windowed;
     bool useGPU = true;  // headless uses GPU by default; --no-gpu disables
+    std::string title;   // window title override (empty = use <title> from HTML)
 };
 
 class Engine {
