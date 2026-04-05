@@ -734,23 +734,172 @@
     // Save Loop — offline-render one full sequencer/arp loop to WAV
     // -----------------------------------------------------------------------
     document.getElementById('seq-save-loop').addEventListener('click', function() {
-        var result = Synth.Sequencer.renderOffline();
-        if (!result || result.samples.length === 0) {
+        var audioCtx = Synth.getAudioContext();
+        if (!audioCtx) return;
+
+        var Layers = Synth.Layers;
+        var NUM_STEPS = Synth.Sequencer.NUM_STEPS;
+        var bpm = Synth.Sequencer.getBPM();
+        var SAMPLE_RATE = audioCtx.sampleRate || 44100;
+        var stepDur = 60 / bpm / 4;
+        var loopDur = stepDur * NUM_STEPS;
+        var layerCount = Layers.count();
+
+        // Check there are notes to play
+        var hasNotes = false;
+        for (var i = 0; i < layerCount; i++) {
+            var layer = Layers.get(i);
+            if (!layer || layer.muted) continue;
+            for (var s = 0; s < NUM_STEPS; s++) {
+                if (layer.steps[s] !== null) { hasNotes = true; break; }
+            }
+            if (hasNotes) break;
+        }
+        if (!hasNotes) {
             console.warn('Nothing to save — add notes to the sequencer');
             return;
         }
 
         var path = showSaveFileDialog('WAV Files|wav', 'loop.wav');
-        if (path) {
-            if (path.indexOf('.wav') < 0 && path.indexOf('.WAV') < 0) path += '.wav';
-            try {
-                var wav = Synth.WAV.encode(result.samples, result.sampleRate);
-                require('fs').writeFileSync(path, new Uint8Array(wav));
-                console.log('Loop saved:', path);
-            } catch (e) {
-                console.error('Save failed:', e.message);
+        if (!path) return;
+        if (path.indexOf('.wav') < 0 && path.indexOf('.WAV') < 0) path += '.wav';
+
+        var btn = document.getElementById('seq-save-loop');
+        btn.textContent = 'Saving...';
+        btn.classList.add('active');
+
+        function collectUnique(layer) {
+            var held = [];
+            for (var i = 0; i < NUM_STEPS; i++) {
+                if (layer.steps[i] !== null && held.indexOf(layer.steps[i]) < 0) held.push(layer.steps[i]);
+            }
+            held.sort(function(a, b) { return a - b; });
+            return held;
+        }
+
+        function pickArp(arpIdx, held, pattern) {
+            if (held.length === 0) return { note: -1, next: arpIdx };
+            var idx, next;
+            switch (pattern) {
+                case 'down':
+                    idx = held[held.length - 1 - (arpIdx % held.length)]; next = arpIdx + 1; break;
+                case 'updown':
+                    if (held.length === 1) { idx = held[0]; next = arpIdx; }
+                    else { var c = held.length * 2 - 2; var p = arpIdx % c;
+                           idx = p < held.length ? held[p] : held[c - p]; next = arpIdx + 1; }
+                    break;
+                case 'random':
+                    idx = held[Math.floor(Math.random() * held.length)]; next = arpIdx; break;
+                default: idx = held[arpIdx % held.length]; next = arpIdx + 1;
+            }
+            return { note: idx, next: next };
+        }
+
+        // Find max release for tail
+        var maxRelease = 0;
+        for (var li = 0; li < layerCount; li++) {
+            var l = Layers.get(li);
+            if (l && !l.muted) maxRelease = Math.max(maxRelease, l.adsr.release);
+        }
+
+        var totalSamples = Math.ceil((loopDur + maxRelease) * SAMPLE_RATE);
+        var mixedOutput = new Float32Array(totalSamples);
+
+        // Render each layer: oscillator+ADSR in JS, then effects offline in C++
+        for (var li = 0; li < layerCount; li++) {
+            var layer = Layers.get(li);
+            if (!layer || layer.muted) continue;
+
+            var layerBuf = new Float32Array(totalSamples);
+            var arpIdx = 0;
+
+            for (var step = 0; step < NUM_STEPS; step++) {
+                var noteIdx = -1;
+                if (layer.mode === 'arpeggiator') {
+                    if (layer.steps[step] !== null) {
+                        var pick = pickArp(arpIdx, collectUnique(layer), layer.arpPattern);
+                        noteIdx = pick.note; arpIdx = pick.next;
+                    }
+                } else {
+                    var sn = layer.steps[step];
+                    if (sn !== null && sn !== undefined && sn >= 0) noteIdx = sn;
+                }
+                if (noteIdx < 0) continue;
+                var note = Synth.notes[noteIdx];
+                if (!note) continue;
+
+                var startSmp = Math.floor(step * stepDur * SAMPLE_RATE);
+                var onSmp = Math.floor(stepDur * SAMPLE_RATE);
+                var relSmp = Math.ceil(layer.adsr.release * SAMPLE_RATE);
+                var noteSmp = onSmp + relSmp;
+
+                for (var s = 0; s < noteSmp; s++) {
+                    var outIdx = startSmp + s;
+                    if (outIdx >= totalSamples) break;
+                    var t = s / SAMPLE_RATE;
+                    var phase = t * note.freq;
+                    var val;
+                    switch (layer.waveform) {
+                        case 'square':     val = (phase % 1) < 0.5 ? 1 : -1; break;
+                        case 'sawtooth':   val = 2 * (phase % 1) - 1; break;
+                        case 'triangle':   var p = phase % 1; val = p < 0.5 ? 4 * p - 1 : 3 - 4 * p; break;
+                        case 'whitenoise': val = Math.random() * 2 - 1; break;
+                        case 'pinknoise':  val = (Math.random() + Math.random() + Math.random()) / 1.5 - 1; break;
+                        default:           val = Math.sin(2 * Math.PI * phase);
+                    }
+                    var env;
+                    if (t < layer.adsr.attack) {
+                        env = layer.adsr.attack > 0 ? t / layer.adsr.attack : 1;
+                    } else if (t < layer.adsr.attack + layer.adsr.decay) {
+                        var dp = (t - layer.adsr.attack) / (layer.adsr.decay || 0.001);
+                        env = 1.0 - dp * (1.0 - layer.adsr.sustain);
+                    } else if (t < stepDur) {
+                        env = layer.adsr.sustain;
+                    } else {
+                        var rt = t - stepDur;
+                        env = rt < layer.adsr.release ? layer.adsr.sustain * (1 - rt / layer.adsr.release) : 0;
+                    }
+                    layerBuf[outIdx] += val * env * 0.3;
+                }
+            }
+
+            // Process through bus effect chain (offline, non-realtime)
+            var processed = audioCtx.processEffectsOffline(layer.busId, layerBuf);
+            var src = processed || layerBuf;
+            var len = Math.min(src.length, mixedOutput.length);
+            for (var i = 0; i < len; i++) mixedOutput[i] += src[i];
+            // If processed is longer (effect tail), extend output
+            if (processed && processed.length > mixedOutput.length) {
+                var extended = new Float32Array(processed.length);
+                extended.set(mixedOutput);
+                for (var i = mixedOutput.length; i < processed.length; i++) extended[i] = processed[i];
+                mixedOutput = extended;
             }
         }
+
+        // Trim trailing silence
+        var end = mixedOutput.length - 1;
+        while (end > 0 && Math.abs(mixedOutput[end]) < 0.0001) end--;
+        var minSmp = Math.ceil(loopDur * SAMPLE_RATE);
+        end = Math.max(end, minSmp - 1);
+        var finalOutput = mixedOutput.subarray(0, end + 1);
+
+        // Clamp
+        for (var c = 0; c < finalOutput.length; c++) {
+            if (finalOutput[c] > 1) finalOutput[c] = 1;
+            else if (finalOutput[c] < -1) finalOutput[c] = -1;
+        }
+
+        try {
+            var wav = Synth.WAV.encode(finalOutput, SAMPLE_RATE);
+            require('fs').writeFileSync(path, new Uint8Array(wav));
+            console.log('Loop saved:', path, '(' + finalOutput.length + ' samples)');
+        } catch (e) {
+            console.error('Save failed:', e.message);
+        }
+
+        btn.textContent = 'Save Loop';
+        btn.classList.remove('active');
     });
 
     // -----------------------------------------------------------------------

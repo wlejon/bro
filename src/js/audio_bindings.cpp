@@ -1511,6 +1511,48 @@ static JSValue js_audioctx_setPlaybackBus(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// Offline effect processing
+static JSValue js_audioctx_processEffectsOffline(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+
+    // Get input Float32Array
+    size_t byteOffset, byteLen;
+    JSValue typedBuf = JS_GetTypedArrayBuffer(ctx, argv[1], &byteOffset, &byteLen, nullptr);
+    if (JS_IsException(typedBuf)) return JS_EXCEPTION;
+    size_t totalSize;
+    auto* rawBuf = JS_GetArrayBuffer(ctx, &totalSize, typedBuf);
+    JS_FreeValue(ctx, typedBuf);
+    if (!rawBuf) return JS_UNDEFINED;
+
+    auto* inputData = reinterpret_cast<const float*>(rawBuf + byteOffset);
+    int numSamples = static_cast<int>(byteLen / sizeof(float));
+
+    auto result = d->engine->processEffectsOffline(busId, inputData, numSamples);
+    if (result.empty()) return JS_UNDEFINED;
+
+    // Return as Float32Array (same pattern as stopRecording)
+    int count = static_cast<int>(result.size());
+    JSValue lenVal = JS_NewInt32(ctx, count);
+    JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue(ctx, lenVal);
+    if (JS_IsException(arr)) return arr;
+
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (!JS_IsException(abuf)) {
+        size_t abufLen = 0;
+        uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+        if (ptr && abufLen >= result.size() * sizeof(float)) {
+            std::memcpy(ptr + byteOff, result.data(), result.size() * sizeof(float));
+        }
+        JS_FreeValue(ctx, abuf);
+    }
+    return arr;
+}
+
 // --- Voice note context ---
 
 static JSValue js_audioctx_setVoiceNote(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2086,6 +2128,9 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     // Voice/clip bus routing
     JS_CFUNC_DEF("setVoiceBus", 2, js_audioctx_setVoiceBus),
     JS_CFUNC_DEF("setPlaybackBus", 2, js_audioctx_setPlaybackBus),
+
+    // Offline effect processing
+    JS_CFUNC_DEF("processEffectsOffline", 2, js_audioctx_processEffectsOffline),
 
     // Direct voice parameter control
     JS_CFUNC_DEF("setVoiceNote", 3, js_audioctx_setVoiceNote),
