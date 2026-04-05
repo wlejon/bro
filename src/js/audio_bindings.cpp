@@ -655,15 +655,19 @@ struct VoiceAllocatorData {
     broaudio::Engine* engine;
     std::unique_ptr<broaudio::VoiceAllocator> allocator;
     JSContext* ctx;
-    JSValue voiceSetupCallback;
+    JSValue voiceSetupCallback;  // prevents GC of the JS function
+    JSValue lambdaCbRef;         // the DupValue captured by the C++ lambda
 };
 
 static void js_voiceallocator_finalizer(JSRuntime* rt, JSValue val) {
     auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(val, js_voiceallocator_class_id));
     if (d) {
-        if (!JS_IsUndefined(d->voiceSetupCallback)) {
+        // Clear the C++ callback first so it doesn't reference freed JS values
+        d->allocator->setVoiceSetup(nullptr);
+        if (!JS_IsUndefined(d->voiceSetupCallback))
             JS_FreeValueRT(rt, d->voiceSetupCallback);
-        }
+        if (!JS_IsUndefined(d->lambdaCbRef))
+            JS_FreeValueRT(rt, d->lambdaCbRef);
         delete d;
     }
 }
@@ -728,13 +732,17 @@ static JSValue js_va_setVoiceSetup(JSContext* ctx, JSValueConst this_val, int ar
     auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
 
-    if (!JS_IsUndefined(d->voiceSetupCallback)) {
+    // Free previous references
+    if (!JS_IsUndefined(d->voiceSetupCallback))
         JS_FreeValue(ctx, d->voiceSetupCallback);
-    }
+    if (!JS_IsUndefined(d->lambdaCbRef))
+        JS_FreeValue(ctx, d->lambdaCbRef);
+
     d->voiceSetupCallback = JS_DupValue(ctx, argv[0]);
+    d->lambdaCbRef = JS_DupValue(ctx, argv[0]);
 
     // Set the C++ callback that calls into JS
-    JSValue cbRef = JS_DupValue(ctx, argv[0]);
+    JSValue cbRef = d->lambdaCbRef;
     JSContext* jsCtx = ctx;
     d->allocator->setVoiceSetup([jsCtx, cbRef](int voiceId, int note, float velocity) {
         JSValue args[3] = {
@@ -1514,6 +1522,80 @@ static JSValue js_audioctx_setVoiceNote(JSContext* ctx, JSValueConst this_val, i
     return JS_UNDEFINED;
 }
 
+// --- Direct voice parameter control (for VoiceAllocator voiceSetup callbacks) ---
+
+static JSValue js_audioctx_setVoiceWaveform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    const char* s = JS_ToCString(ctx, argv[1]);
+    if (s) { d->engine->setWaveform(voiceId, parseWaveform(s)); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceFrequency(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setFrequency(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceGain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setGain(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoicePan(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoicePan(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceAttack(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setAttackTime(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceDecay(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setDecayTime(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceSustain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setSustainLevel(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceRelease(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setReleaseTime(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
 // --- Wavetable synthesis ---
 
 static JSValue js_audioctx_createWavetable(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -1635,6 +1717,7 @@ static JSValue js_audioctx_createVoiceAllocator(JSContext* ctx, JSValueConst thi
         d->engine,
         std::make_unique<broaudio::VoiceAllocator>(*d->engine, maxVoices),
         ctx,
+        JS_UNDEFINED,
         JS_UNDEFINED
     };
     JS_SetOpaque(obj, va);
@@ -1989,8 +2072,16 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("setVoiceBus", 2, js_audioctx_setVoiceBus),
     JS_CFUNC_DEF("setPlaybackBus", 2, js_audioctx_setPlaybackBus),
 
-    // Voice note context
+    // Direct voice parameter control
     JS_CFUNC_DEF("setVoiceNote", 3, js_audioctx_setVoiceNote),
+    JS_CFUNC_DEF("setVoiceWaveform", 2, js_audioctx_setVoiceWaveform),
+    JS_CFUNC_DEF("setVoiceFrequency", 2, js_audioctx_setVoiceFrequency),
+    JS_CFUNC_DEF("setVoiceGain", 2, js_audioctx_setVoiceGain),
+    JS_CFUNC_DEF("setVoicePan", 2, js_audioctx_setVoicePan),
+    JS_CFUNC_DEF("setVoiceAttack", 2, js_audioctx_setVoiceAttack),
+    JS_CFUNC_DEF("setVoiceDecay", 2, js_audioctx_setVoiceDecay),
+    JS_CFUNC_DEF("setVoiceSustain", 2, js_audioctx_setVoiceSustain),
+    JS_CFUNC_DEF("setVoiceRelease", 2, js_audioctx_setVoiceRelease),
 
     // Wavetable
     JS_CFUNC_DEF("createWavetable", 1, js_audioctx_createWavetable),

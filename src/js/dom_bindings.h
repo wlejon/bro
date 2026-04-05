@@ -48,4 +48,8 @@ public:
     static void sweepOrphanedWrappers(JSContext* ctx);
 };
 
+/// Set shutdown flag so element finalizers skip dereferencing Element pointers
+/// that may already be freed. Call with true before teardown GC passes.
+void setElementFinalizerShutdown(bool shutting_down);
+
 } // namespace bro::js

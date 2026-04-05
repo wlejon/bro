@@ -373,6 +373,7 @@ Engine::~Engine() {
     // 2. Clear JS bindings
     if (jsRuntime_) {
         JSContext* ctx = jsRuntime_->getContext();
+        js::setElementFinalizerShutdown(true);
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
         if (gl_) {
@@ -380,11 +381,21 @@ Engine::~Engine() {
         }
         js::cleanupCustomElements(ctx);
 
-        // Clean up global properties (prevents leaked references)
+        // Clean up global properties (prevents leaked references).
+        // Delete document BEFORE elem_map — the map holds JS refs to elements
+        // whose finalizers call freeNode(); deleting the map first can free
+        // elements that are still referenced by the document tree, causing
+        // use-after-free when the document wrapper is subsequently collected.
         JSValue global = JS_GetGlobalObject(ctx);
-        JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "__bro_elem_map"), 0);
-        JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "document"), 0);
-        JS_DeleteProperty(ctx, global, JS_NewAtom(ctx, "console"), 0);
+        JSAtom a1 = JS_NewAtom(ctx, "document");
+        JSAtom a2 = JS_NewAtom(ctx, "__bro_elem_map");
+        JSAtom a3 = JS_NewAtom(ctx, "console");
+        JS_DeleteProperty(ctx, global, a1, 0);
+        JS_DeleteProperty(ctx, global, a2, 0);
+        JS_DeleteProperty(ctx, global, a3, 0);
+        JS_FreeAtom(ctx, a1);
+        JS_FreeAtom(ctx, a2);
+        JS_FreeAtom(ctx, a3);
         JS_FreeValue(ctx, global);
 
         js::DomBindings::cleanup(ctx);
@@ -395,7 +406,6 @@ Engine::~Engine() {
     // 3. GL cleanup (windowed only)
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
     if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
-    audioEngine_.reset();
 
     // 4. Release layout resources before document
     drawTraversal_.reset();
@@ -406,7 +416,10 @@ Engine::~Engine() {
     }
     // Destroy JS runtime BEFORE document — JS_FreeRuntime() runs GC finalizers
     // that dereference Element pointers, so elements must still be alive.
+    // Audio engine must also outlive JS runtime because VoiceAllocator/MidiInput
+    // destructors reference it (removeVoice, close).
     jsRuntime_.reset();
+    audioEngine_.reset();
     document_.reset();
     timers_.reset();
     renderer_.reset();

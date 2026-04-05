@@ -102,7 +102,7 @@
     }
 
     function attachMouseHandlers(el) {
-        el.addEventListener('mousedown', function() {
+        el.addEventListener('mousedown', function(e) {
             mouseDown = true;
             var idx = el.getAttribute('data-note-idx');
             if (idx !== null) {

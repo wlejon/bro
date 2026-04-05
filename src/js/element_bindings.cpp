@@ -25,12 +25,21 @@ void cleanupCanvasContextCache(JSRuntime* rt) {
     s_canvas_contexts.clear();
 }
 
+// During shutdown, element pointers may already be freed — skip cleanup.
+static bool s_shutting_down = false;
+
+void setElementFinalizerShutdown(bool shutting_down) {
+    s_shutting_down = shutting_down;
+}
+
 // Release orphaned elements when the JS wrapper is garbage-collected.
 static void js_element_finalizer(JSRuntime* rt, JSValue val)
 {
     auto* el = static_cast<bro::dom::Element*>(
         JS_GetOpaque(val, js_element_class_id));
     if (!el) return;
+
+    if (s_shutting_down) return;
 
     // Free any cached canvas context for this element
     auto ccIt = s_canvas_contexts.find(el);
