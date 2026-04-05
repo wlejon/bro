@@ -126,8 +126,7 @@
         format: formatMs,
         onChange: function(ms) {
             signalParam('adsr.attack', ms / 1000);
-            Synth.setADSR(ms / 1000, sliders.adsrD.getValue() / 1000,
-                          sliders.adsrS.getValue() / 100, sliders.adsrR.getValue() / 1000);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -136,8 +135,7 @@
         format: formatMs,
         onChange: function(ms) {
             signalParam('adsr.decay', ms / 1000);
-            Synth.setADSR(sliders.adsrA.getValue() / 1000, ms / 1000,
-                          sliders.adsrS.getValue() / 100, sliders.adsrR.getValue() / 1000);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -146,8 +144,7 @@
         format: function(v) { return v + '%'; },
         onChange: function(pct) {
             signalParam('adsr.sustain', pct / 100);
-            Synth.setADSR(sliders.adsrA.getValue() / 1000, sliders.adsrD.getValue() / 1000,
-                          pct / 100, sliders.adsrR.getValue() / 1000);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -156,8 +153,7 @@
         format: formatMs,
         onChange: function(ms) {
             signalParam('adsr.release', ms / 1000);
-            Synth.setADSR(sliders.adsrA.getValue() / 1000, sliders.adsrD.getValue() / 1000,
-                          sliders.adsrS.getValue() / 100, ms / 1000);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -169,7 +165,7 @@
         format: function(v) { return v === 1 ? 'Off' : v + 'x'; },
         onChange: function(v) {
             signalParam('unison.count', v);
-            Synth.setUnisonCount(v);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -178,7 +174,7 @@
         format: function(v) { return (v / 100).toFixed(2) + ' st'; },
         onChange: function(v) {
             signalParam('unison.detune', v / 100);
-            Synth.setUnisonDetune(v / 100);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -187,7 +183,7 @@
         format: function(v) { return v + '%'; },
         onChange: function(v) {
             signalParam('unison.stereoWidth', v / 100);
-            Synth.setUnisonStereoWidth(v / 100);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -401,8 +397,8 @@
             $$('#wave-btns .btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             var wf = btn.getAttribute('data-wave');
-            Synth.setWaveform(wf);
             signalParam('waveform', wf);
+            Synth.Layers.updateActiveAllocator();
         });
     });
 
@@ -418,7 +414,7 @@
         onChange: function(v) {
             var pan = v / 100;
             signalParam('pan', pan);
-            Synth.setPan(pan);
+            Synth.Layers.updateActiveAllocator();
         }
     });
 
@@ -658,9 +654,9 @@
     populatePresets();
 
     presetSelect.addEventListener('change', function() {
-        Synth.Presets.load(this.value);
-        // Re-capture into layer 1 after preset load
+        // Re-init layer first, then load preset into it
         Synth.Layers.init();
+        Synth.Presets.load(this.value);
         syncUIToSignal();
         buildLayerRows();
     });
@@ -845,6 +841,7 @@
                     e.stopPropagation();
                     layer.muted = !layer.muted;
                     muteBtn.classList.toggle('muted', layer.muted);
+                    if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
                 });
                 row.appendChild(muteBtn);
 
@@ -931,6 +928,8 @@
                                 stepEl.style.color = layer.color;
                                 stepEl.textContent = Synth.notes[ni] ? Synth.notes[ni].name : '';
                             }
+                            // Update running sequences with new step data
+                            if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
                         });
 
                         grid.appendChild(stepEl);

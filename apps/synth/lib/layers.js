@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Layer Management — each layer owns a broaudio bus with its own effect chain
+// Layer Management — each layer owns a broaudio bus + voice allocator
 // ---------------------------------------------------------------------------
 
 (function() {
@@ -18,9 +18,9 @@
     var activeIndex = 0;
     var selectCallbacks = [];
 
-    // Mic signal — owns a bus just like layers
-    var micSignal = null; // { busId, filter, delay, reverb, chorus, compressor, lfo }
-    var editingMic = false; // true when sidebar is editing mic instead of a layer
+    // Mic signal — owns a bus just like layers (but no allocator)
+    var micSignal = null;
+    var editingMic = false;
 
     function createDefaultParams() {
         return {
@@ -56,6 +56,22 @@
 
     function val(v, def) { return v !== undefined ? v : def; }
 
+    // Create or update a layer's voice allocator from its current params
+    function ensureAllocator(layer) {
+        var voiceParams = {
+            waveform: layer.waveform,
+            pan: layer.pan,
+            busId: layer.busId,
+            adsr: layer.adsr,
+            unison: layer.unison
+        };
+        if (layer.layerAlloc) {
+            layer.layerAlloc.update(voiceParams);
+        } else {
+            layer.layerAlloc = Synth.createLayerAllocator(voiceParams);
+        }
+    }
+
     function createLayer(name, params) {
         var idx = layers.length;
         var steps = new Array(NUM_STEPS);
@@ -72,6 +88,7 @@
             muted: false,
             color: COLORS[idx % COLORS.length],
             busId: busId,
+            layerAlloc: null, // set below by ensureAllocator
             waveform: p.waveform || 'sine',
             volume: val(p.volume, 1.0),
             pan: val(p.pan, 0),
@@ -141,24 +158,22 @@
             steps: steps
         };
 
+        // Create the layer's own voice allocator
+        ensureAllocator(layer);
+
         // Push effect params to the bus
         Synth.SignalChain.applyParams(busId, layer);
 
         return layer;
     }
 
-    // Apply voice-level params (waveform, ADSR, pan) and set voice bus routing
-    function applyVoiceParams(layer) {
-        if (!layer) return;
-        Synth.setWaveform(layer.waveform);
-        Synth.setPan(layer.pan);
-        Synth.setADSR(layer.adsr.attack, layer.adsr.decay,
-                      layer.adsr.sustain, layer.adsr.release);
-        Synth.setUnison(layer.unison.count, layer.unison.detune, layer.unison.stereoWidth);
-        Synth.setCurrentBus(layer.busId);
+    function destroyLayer(layer) {
+        if (layer.busId > 0) Synth.SignalChain.destroyBus(layer.busId);
+        // Allocator is GC'd when no longer referenced
+        layer.layerAlloc = null;
     }
 
-    // Apply LFO params to the mod matrix (global, per-voice)
+    // Apply LFO params to the mod matrix (global — LFO is shared)
     function applyLfoParams(layer) {
         if (!layer) return;
         Synth.LFO.setRate(layer.lfo.rate);
@@ -182,16 +197,13 @@
         COLORS: COLORS,
 
         init: function() {
-            // Destroy old buses
-            for (var i = 0; i < layers.length; i++) {
-                if (layers[i].busId > 0) Synth.SignalChain.destroyBus(layers[i].busId);
-            }
+            if (Synth.releaseAllNotes) Synth.releaseAllNotes();
+            for (var i = 0; i < layers.length; i++) destroyLayer(layers[i]);
             layers = [];
             editingMic = false;
             var layer = createLayer('Layer 1');
             layers.push(layer);
             activeIndex = 0;
-            applyVoiceParams(layer);
             applyLfoParams(layer);
         },
 
@@ -207,15 +219,12 @@
         remove: function(index) {
             if (layers.length <= 1) return false;
             if (index < 0 || index >= layers.length) return false;
-            var removed = layers[index];
-            if (removed.busId > 0) Synth.SignalChain.destroyBus(removed.busId);
+            destroyLayer(layers[index]);
             layers.splice(index, 1);
             for (var i = 0; i < layers.length; i++) layers[i].id = i;
             if (activeIndex >= layers.length) activeIndex = layers.length - 1;
             editingMic = false;
-            var active = layers[activeIndex];
-            applyVoiceParams(active);
-            applyLfoParams(active);
+            applyLfoParams(layers[activeIndex]);
             fireSelectCallbacks();
             return true;
         },
@@ -245,10 +254,15 @@
             if (index < 0 || index >= layers.length) return;
             activeIndex = index;
             editingMic = false;
-            var layer = layers[activeIndex];
-            applyVoiceParams(layer);
-            applyLfoParams(layer);
+            applyLfoParams(layers[activeIndex]);
             fireSelectCallbacks();
+        },
+
+        // Update the active layer's allocator after a voice param change
+        // Call this from app.js after changing waveform, ADSR, pan, or unison
+        updateActiveAllocator: function() {
+            var layer = editingMic ? null : layers[activeIndex];
+            if (layer) ensureAllocator(layer);
         },
 
         get: function(index) { return layers[index] || null; },
@@ -257,14 +271,12 @@
         count: function() { return layers.length; },
         all: function() { return layers; },
 
-        // Get the busId for the currently edited signal (layer or mic)
         getActiveBusId: function() {
             if (editingMic && micSignal) return micSignal.busId;
             var layer = layers[activeIndex];
             return layer ? layer.busId : -1;
         },
 
-        // Get the params object for the currently edited signal
         getActiveSignal: function() {
             if (editingMic && micSignal) return micSignal;
             return layers[activeIndex] || null;
@@ -300,8 +312,6 @@
         selectMic: function() {
             if (!micSignal) return;
             editingMic = true;
-            // Apply mic's LFO to modmatrix (for modulating voice params — less useful for mic,
-            // but keeps the UI consistent)
             applyLfoParams(micSignal);
             fireSelectCallbacks();
         },
@@ -339,16 +349,6 @@
             }
         },
 
-        // Apply voice-level params for sequencer playback (waveform, ADSR, pan, bus)
-        applyForPlayback: function(layer) {
-            Synth.setWaveform(layer.waveform);
-            Synth.setPan(layer.pan);
-            Synth.setADSR(layer.adsr.attack, layer.adsr.decay,
-                          layer.adsr.sustain, layer.adsr.release);
-            Synth.setCurrentBus(layer.busId);
-        },
-
-        applyVoiceParams: applyVoiceParams,
         applyLfoParams: applyLfoParams,
 
         onSelect: function(cb) { selectCallbacks.push(cb); },
@@ -373,10 +373,7 @@
 
         deserialize: function(data) {
             if (!data || !data.length) return;
-            // Destroy old buses
-            for (var i = 0; i < layers.length; i++) {
-                if (layers[i].busId > 0) Synth.SignalChain.destroyBus(layers[i].busId);
-            }
+            for (var i = 0; i < layers.length; i++) destroyLayer(layers[i]);
             layers = [];
             for (var i = 0; i < data.length && i < MAX_LAYERS; i++) {
                 var d = data[i];
@@ -400,7 +397,6 @@
             }
             activeIndex = 0;
             editingMic = false;
-            applyVoiceParams(layers[0]);
             applyLfoParams(layers[0]);
             fireSelectCallbacks();
         }

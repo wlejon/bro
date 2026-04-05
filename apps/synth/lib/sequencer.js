@@ -9,8 +9,9 @@
     var updateTimerId = null;
     var onStepCallback = null;
     var onLoopCompleteCallback = null;
+    var playbackStartTime = 0; // engine time when playback started (for syncing new sequences)
 
-    // Native sequences — one per layer for sample-accurate timing
+    // Native sequences — one per layer, each using the layer's own allocator
     var layerSequences = []; // array of { seq, layerIdx }
 
     function getStepDuration() {
@@ -67,23 +68,12 @@
         return idx;
     }
 
-    // Build native NoteEvents from a layer's step grid and load into a Sequence
-    function buildLayerSequence(layer) {
-        var audioCtx = Synth.getAudioContext();
-        var allocator = Synth.getAllocator();
-        if (!audioCtx || !allocator) return null;
-
-        var seq = audioCtx.createSequence(allocator);
-        seq.setBPM(bpm);
-        seq.setLoopEnabled(true);
-        // 16 steps = 4 beats in 4/4 at 16th note resolution
-        seq.setLoopRange(0, 4);
+    // Load notes from a layer's step grid into a sequence (no side effects)
+    function loadLayerNotes(seq, layer) {
+        seq.clearNotes();
 
         var stepBeats = 0.25; // each step = 1/4 beat (16th note)
         var noteDurBeats = stepBeats * 0.9; // slight gap between notes
-
-        // Apply this layer's voice params before building notes
-        Synth.Layers.applyForPlayback(layer);
 
         if (layer.mode === 'arpeggiator') {
             var held = collectUniqueNotes(layer);
@@ -105,7 +95,19 @@
                 seq.addNote(s * stepBeats, note.midi, 1.0, noteDurBeats);
             }
         }
+    }
 
+    // Build a new Sequence using the layer's own allocator
+    function buildLayerSequence(layer) {
+        var audioCtx = Synth.getAudioContext();
+        if (!audioCtx || !layer.layerAlloc) return null;
+
+        var seq = audioCtx.createSequence(layer.layerAlloc.allocator);
+        seq.setBPM(bpm);
+        seq.setLoopEnabled(true);
+        seq.setLoopRange(0, 4); // 16 steps = 4 beats
+
+        loadLayerNotes(seq, layer);
         return seq;
     }
 
@@ -117,15 +119,12 @@
     }
 
     // Track step position from beat position for UI highlight.
-    // Each layer's sequence is updated separately so we can switch voice params
-    // (waveform, ADSR, bus routing, unison) before each layer's notes fire.
     function updateStepFromBeat() {
         if (!playing) return;
 
         var audioCtx = Synth.getAudioContext();
         if (!audioCtx) return;
         var t = audioCtx.currentTime;
-        var Layers = Synth.Layers;
 
         // Use first sequence to get current beat for UI
         var newStep = -1;
@@ -138,7 +137,6 @@
             currentStep = newStep;
             if (onStepCallback) onStepCallback(currentStep);
 
-            // Fire loop-complete when wrapping from last step
             if (currentStep === 0 && onLoopCompleteCallback) {
                 var cb = onLoopCompleteCallback;
                 onLoopCompleteCallback = null;
@@ -146,19 +144,20 @@
             }
         }
 
-        // Update each layer's sequence with that layer's voice params active
+        // Update each sequence — no global state swapping needed,
+        // each sequence's allocator has its own voiceSetup callback
         for (var i = 0; i < layerSequences.length; i++) {
-            var ls = layerSequences[i];
-            var layer = Layers.get(ls.layerIdx);
-            if (layer) Layers.applyForPlayback(layer);
-            ls.seq.update(t);
+            layerSequences[i].seq.update(t);
         }
 
-        // Restore active layer's voice params for keyboard play between ticks
-        var active = Layers.getActive();
-        if (active) Layers.applyVoiceParams(active);
+        updateTimerId = setTimeout(updateStepFromBeat, 16);
+    }
 
-        updateTimerId = setTimeout(updateStepFromBeat, 16); // ~60fps UI update
+    function layerHasNotes(layer) {
+        for (var s = 0; s < NUM_STEPS; s++) {
+            if (layer.steps[s] !== null) return true;
+        }
+        return false;
     }
 
     Synth.Sequencer = {
@@ -169,46 +168,29 @@
             playing = true;
             currentStep = -1;
 
-            // Reset arp indices on all layers
             var Layers = Synth.Layers;
             for (var i = 0; i < Layers.count(); i++) {
                 var l = Layers.get(i);
                 if (l) l.arpIndex = 0;
             }
 
-            // Build and start a native sequence per non-muted layer
             destroyAllSequences();
             var count = Layers.count();
             for (var li = 0; li < count; li++) {
                 var layer = Layers.get(li);
-                if (!layer || layer.muted) continue;
-
-                // Check if layer has any notes
-                var hasNotes = false;
-                for (var s = 0; s < NUM_STEPS; s++) {
-                    if (layer.steps[s] !== null) { hasNotes = true; break; }
-                }
-                if (!hasNotes) continue;
+                if (!layer || layer.muted || !layerHasNotes(layer)) continue;
 
                 var seq = buildLayerSequence(layer);
-                if (seq) {
-                    layerSequences.push({ seq: seq, layerIdx: li });
-                }
+                if (seq) layerSequences.push({ seq: seq, layerIdx: li });
             }
 
-            // Start all sequences at the same time for sync
             var audioCtx = Synth.getAudioContext();
-            var startTime = audioCtx ? audioCtx.currentTime : 0;
+            playbackStartTime = audioCtx ? audioCtx.currentTime : 0;
             for (var i = 0; i < layerSequences.length; i++) {
-                layerSequences[i].seq.play(startTime);
+                layerSequences[i].seq.play(playbackStartTime);
             }
 
-            // Start UI update loop
             updateStepFromBeat();
-
-            // Restore active layer's voice params for keyboard play
-            var active = Layers.getActive();
-            if (active) Layers.applyVoiceParams(active);
         },
 
         stop: function() {
@@ -217,16 +199,11 @@
             destroyAllSequences();
             currentStep = -1;
             if (onStepCallback) onStepCallback(-1);
-
-            // Restore active layer's voice params
-            var active = Synth.Layers ? Synth.Layers.getActive() : null;
-            if (active) Synth.Layers.applyVoiceParams(active);
         },
 
         isPlaying: function() { return playing; },
         getCurrentStep: function() { return currentStep; },
 
-        // Convenience: operate on active layer
         setStep: function(step, noteIdx) {
             if (Synth.Layers) {
                 Synth.Layers.setStep(Synth.Layers.getActiveIndex(), step, noteIdx);
@@ -246,7 +223,6 @@
 
         setBPM: function(b) {
             bpm = Math.max(30, Math.min(300, b));
-            // Update running sequences
             for (var i = 0; i < layerSequences.length; i++) {
                 layerSequences[i].seq.setBPM(bpm);
             }
@@ -254,42 +230,69 @@
         getBPM: function() { return bpm; },
 
         onStep: function(cb) { onStepCallback = cb; },
-
-        // One-shot callback: fires after the next complete loop finishes
         onLoopComplete: function(cb) { onLoopCompleteCallback = cb; },
-
-        // Duration of one full loop in milliseconds
         getLoopDuration: function() { return NUM_STEPS * getStepDuration(); },
 
-        // Rebuild sequences while playing (e.g., after step grid edit)
+        // Rebuild sequences while playing — updates notes in place where possible
         rebuild: function() {
             if (!playing) return;
             var audioCtx = Synth.getAudioContext();
             var Layers = Synth.Layers;
-            var wasPlaying = playing;
-
-            destroyAllSequences();
             var count = Layers.count();
+
+            // Build set of layers that should be playing
+            var wantedLayers = {};
             for (var li = 0; li < count; li++) {
                 var layer = Layers.get(li);
-                if (!layer || layer.muted) continue;
-                var hasNotes = false;
-                for (var s = 0; s < NUM_STEPS; s++) {
-                    if (layer.steps[s] !== null) { hasNotes = true; break; }
-                }
-                if (!hasNotes) continue;
-                var seq = buildLayerSequence(layer);
-                if (seq) layerSequences.push({ seq: seq, layerIdx: li });
+                if (!layer || layer.muted || !layerHasNotes(layer)) continue;
+                wantedLayers[li] = layer;
             }
 
-            var startTime = audioCtx ? audioCtx.currentTime : 0;
+            // Update existing sequences or remove stale ones
+            var kept = [];
             for (var i = 0; i < layerSequences.length; i++) {
-                layerSequences[i].seq.play(startTime);
+                var ls = layerSequences[i];
+                if (wantedLayers[ls.layerIdx]) {
+                    loadLayerNotes(ls.seq, wantedLayers[ls.layerIdx]);
+                    kept.push(ls);
+                    delete wantedLayers[ls.layerIdx];
+                } else {
+                    ls.seq.stop();
+                }
             }
 
-            // Restore active layer params
-            var active = Layers.getActive();
-            if (active) Layers.applyVoiceParams(active);
+            // Create new sequences for layers that weren't playing yet.
+            // Sync them to existing playback position:
+            //   1. Create empty sequence and start it at the synced time
+            //   2. Run one update() so lastUpdateBeat advances to current position
+            //   3. THEN load the notes — only future notes will fire
+            var now = audioCtx ? audioCtx.currentTime : 0;
+            var syncBeat = 0;
+            if (kept.length > 0) {
+                syncBeat = kept[0].seq.currentBeat(now);
+            }
+            var syncedStart = now - syncBeat * 60 / bpm;
+
+            var remaining = Object.keys(wantedLayers);
+            for (var j = 0; j < remaining.length; j++) {
+                var idx = parseInt(remaining[j], 10);
+                var layer = wantedLayers[idx];
+                if (!layer.layerAlloc) continue;
+
+                // Create empty sequence, start synced, advance past current beat
+                var seq = audioCtx.createSequence(layer.layerAlloc.allocator);
+                seq.setBPM(bpm);
+                seq.setLoopEnabled(true);
+                seq.setLoopRange(0, 4);
+                seq.play(syncedStart);
+                seq.update(now); // advances lastUpdateBeat to current position (no notes to fire)
+
+                // Now load the actual notes — only notes after current beat will fire this loop
+                loadLayerNotes(seq, layer);
+                kept.push({ seq: seq, layerIdx: idx });
+            }
+
+            layerSequences = kept;
         }
     };
 })();

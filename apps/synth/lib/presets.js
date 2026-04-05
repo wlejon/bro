@@ -159,17 +159,13 @@
         state = normalizePreset(state);
         if (!state) return;
 
-        // Apply voice-level params
-        Synth.setWaveform(state.waveform || 'sine');
         Synth.setVolume(state.volume !== undefined ? state.volume : 0.3);
         var adsr = state.adsr || {};
-        Synth.setADSR(adsr.attack || 0.01, adsr.decay || 0.1,
-                      adsr.sustain !== undefined ? adsr.sustain : 1.0, adsr.release || 0.04);
 
         // Apply LFO to modmatrix
         Synth.LFO.loadState(state.lfo);
 
-        // Apply effect params to the active layer's bus
+        // Apply params to the active layer and update its allocator
         var layer = Synth.Layers.getActive();
         if (layer) {
             layer.waveform = state.waveform || 'sine';
@@ -228,6 +224,7 @@
             }
 
             Synth.SignalChain.applyParams(layer.busId, layer);
+            Synth.Layers.updateActiveAllocator();
         }
     }
 

@@ -5,17 +5,12 @@
     var audioCtx = null;
     var analyser = null;
     var masterGain = null;
-    var allocator = null;
     var modMatrix = null;
-    var activeNotes = new Map(); // noteIdx -> { clipPlaybackId } (clip mode only)
+    var activeNotes = new Map(); // noteIdx -> { allocator, midi, clipPlaybackId }
 
-    var waveform = 'sine';
     var synthVolume = 0.5;
     var octaveShift = 0;
     var lastPlayedNote = 24; // C3
-    var adsrParams = { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.04 };
-    var unisonParams = { count: 1, detune: 0.15, stereoWidth: 0.7 };
-    var currentBusId = 0; // bus to route voices/clips to (set by layer system)
 
     Synth.init = function() {
         try {
@@ -30,10 +25,12 @@
             analyser.connect(audioCtx.destination);
             audioCtx.masterGain = synthVolume;
 
-            // Create voice allocator for polyphonic synth
-            allocator = audioCtx.createVoiceAllocator(16);
-            allocator.setStealPolicy('oldest');
-            updateVoiceSetup();
+            // Ensure master bus (0) has all effects off by default
+            audioCtx.setBusCompressorEnabled(0, false);
+            audioCtx.setBusDelayEnabled(0, false);
+            audioCtx.setBusReverbEnabled(0, false);
+            audioCtx.setBusChorusEnabled(0, false);
+            audioCtx.setBusEqEnabled(0, false);
 
             // Init LFO with mod matrix
             Synth.LFO.init(audioCtx);
@@ -43,27 +40,83 @@
         return audioCtx;
     };
 
-    // Configure the voice allocator callback with current synth params.
-    // Called on init and whenever waveform/ADSR/pan change.
-    function updateVoiceSetup() {
-        if (!allocator || !audioCtx) return;
-        allocator.setVoiceSetup(function(voiceId, note, velocity) {
-            var freq = 440 * Math.pow(2, (note - 69) / 12);
-            audioCtx.setVoiceNote(voiceId, note, velocity);
-            audioCtx.setVoiceWaveform(voiceId, waveform);
-            audioCtx.setVoiceFrequency(voiceId, freq);
-            audioCtx.setVoiceGain(voiceId, 3.0);
-            audioCtx.setVoicePan(voiceId, Synth.voicePan || 0);
-            audioCtx.setVoiceAttack(voiceId, adsrParams.attack);
-            audioCtx.setVoiceDecay(voiceId, adsrParams.decay);
-            audioCtx.setVoiceSustain(voiceId, adsrParams.sustain);
-            audioCtx.setVoiceRelease(voiceId, adsrParams.release);
-            audioCtx.setVoiceBus(voiceId, currentBusId);
-            audioCtx.setVoiceUnisonCount(voiceId, unisonParams.count);
-            audioCtx.setVoiceUnisonDetune(voiceId, unisonParams.detune);
-            audioCtx.setVoiceUnisonStereoWidth(voiceId, unisonParams.stereoWidth);
-        });
-    }
+    // -----------------------------------------------------------------------
+    // Per-layer voice allocator factory
+    // -----------------------------------------------------------------------
+
+    // Create a voice allocator bound to a specific bus with given voice params.
+    // Returns { allocator, update(params) }
+    // params: { waveform, pan, adsr: {a,d,s,r}, unison: {count,detune,stereoWidth}, busId }
+    Synth.createLayerAllocator = function(params) {
+        if (!audioCtx) return null;
+        var alloc = audioCtx.createVoiceAllocator(16);
+        alloc.setStealPolicy('oldest');
+
+        var p = {
+            waveform: params.waveform || 'sine',
+            pan: params.pan || 0,
+            busId: params.busId || 0,
+            adsr: {
+                attack: params.adsr ? params.adsr.attack : 0.01,
+                decay: params.adsr ? params.adsr.decay : 0.1,
+                sustain: params.adsr ? (params.adsr.sustain !== undefined ? params.adsr.sustain : 1.0) : 1.0,
+                release: params.adsr ? params.adsr.release : 0.08
+            },
+            unison: {
+                count: params.unison ? params.unison.count : 1,
+                detune: params.unison ? params.unison.detune : 0.15,
+                stereoWidth: params.unison ? params.unison.stereoWidth : 0.7
+            }
+        };
+
+        function applySetup() {
+            alloc.setVoiceSetup(function(voiceId, note, velocity) {
+                var freq = 440 * Math.pow(2, (note - 69) / 12);
+                audioCtx.setVoiceNote(voiceId, note, velocity);
+                audioCtx.setVoiceWaveform(voiceId, p.waveform);
+                audioCtx.setVoiceFrequency(voiceId, freq);
+                audioCtx.setVoiceGain(voiceId, 3.0);
+                audioCtx.setVoicePan(voiceId, p.pan);
+                audioCtx.setVoiceAttack(voiceId, p.adsr.attack);
+                audioCtx.setVoiceDecay(voiceId, p.adsr.decay);
+                audioCtx.setVoiceSustain(voiceId, p.adsr.sustain);
+                audioCtx.setVoiceRelease(voiceId, p.adsr.release);
+                audioCtx.setVoiceBus(voiceId, p.busId);
+                audioCtx.setVoiceUnisonCount(voiceId, p.unison.count);
+                audioCtx.setVoiceUnisonDetune(voiceId, p.unison.detune);
+                audioCtx.setVoiceUnisonStereoWidth(voiceId, p.unison.stereoWidth);
+            });
+        }
+
+        applySetup();
+
+        return {
+            allocator: alloc,
+            // Update voice params — takes effect on next noteOn
+            update: function(newParams) {
+                if (newParams.waveform !== undefined) p.waveform = newParams.waveform;
+                if (newParams.pan !== undefined) p.pan = newParams.pan;
+                if (newParams.busId !== undefined) p.busId = newParams.busId;
+                if (newParams.adsr) {
+                    if (newParams.adsr.attack !== undefined) p.adsr.attack = newParams.adsr.attack;
+                    if (newParams.adsr.decay !== undefined) p.adsr.decay = newParams.adsr.decay;
+                    if (newParams.adsr.sustain !== undefined) p.adsr.sustain = newParams.adsr.sustain;
+                    if (newParams.adsr.release !== undefined) p.adsr.release = newParams.adsr.release;
+                }
+                if (newParams.unison) {
+                    if (newParams.unison.count !== undefined) p.unison.count = newParams.unison.count;
+                    if (newParams.unison.detune !== undefined) p.unison.detune = newParams.unison.detune;
+                    if (newParams.unison.stereoWidth !== undefined) p.unison.stereoWidth = newParams.unison.stereoWidth;
+                }
+                applySetup();
+            },
+            getParams: function() { return p; }
+        };
+    };
+
+    // -----------------------------------------------------------------------
+    // Keyboard note on/off — uses the active layer's allocator
+    // -----------------------------------------------------------------------
 
     // Base note for clip instrument (C4 = middle C, noteIdx 36 in our 7-octave range)
     var CLIP_BASE_NOTE = 36;
@@ -76,20 +129,25 @@
         if (activeNotes.has(noteIdx)) return;
 
         var note = notes[noteIdx];
+        var layer = Synth.Layers ? Synth.Layers.getActive() : null;
 
         if (Synth.useClipMode && Synth.customClipId >= 0) {
             var semitoneOffset = noteIdx - CLIP_BASE_NOTE;
             var rate = Math.pow(2, semitoneOffset / 12);
+            var busId = layer ? layer.busId : 0;
+            var pan = layer ? layer.pan : 0;
             var pbId = audioCtx.playClip(Synth.customClipId, 1.0, false);
             if (pbId >= 0) {
                 audioCtx.setPlaybackRate(pbId, rate);
-                if (Synth.voicePan) audioCtx.setPlaybackPan(pbId, Synth.voicePan);
-                audioCtx.setPlaybackBus(pbId, currentBusId);
+                if (pan) audioCtx.setPlaybackPan(pbId, pan);
+                audioCtx.setPlaybackBus(pbId, busId);
                 activeNotes.set(noteIdx, { clipPlaybackId: pbId });
             }
         } else {
-            allocator.noteOn(note.midi, 1.0, audioCtx.currentTime);
-            activeNotes.set(noteIdx, { midi: note.midi });
+            var alloc = layer && layer.layerAlloc ? layer.layerAlloc.allocator : null;
+            if (!alloc) return;
+            alloc.noteOn(note.midi, 1.0, audioCtx.currentTime);
+            activeNotes.set(noteIdx, { allocator: alloc, midi: note.midi });
         }
 
         if (!silent) {
@@ -106,8 +164,8 @@
 
         if (entry.clipPlaybackId !== undefined) {
             audioCtx.stopPlayback(entry.clipPlaybackId);
-        } else if (entry.midi !== undefined) {
-            allocator.noteOff(entry.midi, audioCtx.currentTime);
+        } else if (entry.midi !== undefined && entry.allocator) {
+            entry.allocator.noteOff(entry.midi, audioCtx.currentTime);
         }
         activeNotes.delete(noteIdx);
 
@@ -122,8 +180,19 @@
         }
     };
 
-    Synth.setWaveform = function(wf) { waveform = wf; updateVoiceSetup(); };
-    Synth.getWaveform = function() { return waveform; };
+    // Release all keyboard-held notes (e.g., when layer is destroyed)
+    Synth.releaseAllNotes = function() {
+        activeNotes.forEach(function(entry, noteIdx) {
+            if (entry.clipPlaybackId !== undefined) {
+                audioCtx.stopPlayback(entry.clipPlaybackId);
+            } else if (entry.midi !== undefined && entry.allocator) {
+                entry.allocator.noteOff(entry.midi, audioCtx.currentTime);
+            }
+            var note = Synth.notes[noteIdx];
+            if (note && note.element) note.element.classList.remove('pressed');
+        });
+        activeNotes.clear();
+    };
 
     Synth.setVolume = function(v) {
         synthVolume = v;
@@ -131,37 +200,11 @@
     };
     Synth.getVolume = function() { return synthVolume; };
 
-    Synth.setADSR = function(a, d, s, r) {
-        adsrParams.attack = a;
-        adsrParams.decay = d;
-        adsrParams.sustain = s;
-        adsrParams.release = r;
-        updateVoiceSetup();
-    };
-    Synth.getADSR = function() {
-        return { attack: adsrParams.attack, decay: adsrParams.decay,
-                 sustain: adsrParams.sustain, release: adsrParams.release };
-    };
-
-    Synth.voicePan = 0;
-    Synth.setPan = function(p) { Synth.voicePan = Math.max(-1, Math.min(1, p)); updateVoiceSetup(); };
-    Synth.getPan = function() { return Synth.voicePan; };
-
-    Synth.setUnisonCount = function(c) { unisonParams.count = Math.max(1, Math.min(8, c)); updateVoiceSetup(); };
-    Synth.setUnisonDetune = function(d) { unisonParams.detune = Math.max(0, Math.min(2, d)); updateVoiceSetup(); };
-    Synth.setUnisonStereoWidth = function(w) { unisonParams.stereoWidth = Math.max(0, Math.min(1, w)); updateVoiceSetup(); };
-    Synth.getUnison = function() { return { count: unisonParams.count, detune: unisonParams.detune, stereoWidth: unisonParams.stereoWidth }; };
-    Synth.setUnison = function(c, d, w) { unisonParams.count = c; unisonParams.detune = d; unisonParams.stereoWidth = w; updateVoiceSetup(); };
-
-    Synth.setCurrentBus = function(busId) { currentBusId = busId; updateVoiceSetup(); };
-    Synth.getCurrentBus = function() { return currentBusId; };
-
     Synth.getLastPlayedNote = function() { return lastPlayedNote; };
     Synth.getAudioContext = function() { return audioCtx; };
     Synth.getAnalyser = function() { return analyser; };
     Synth.getMasterGain = function() { return masterGain; };
     Synth.getActiveNotes = function() { return activeNotes; };
-    Synth.getAllocator = function() { return allocator; };
 
     // Note definitions -- 7 octaves (C1-B7)
     var NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
