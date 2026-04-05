@@ -1,73 +1,86 @@
+// ---------------------------------------------------------------------------
+// LFO — delegates to native ModMatrix (sample-accurate, per-voice)
+// ---------------------------------------------------------------------------
+
 (function() {
     'use strict';
     var Synth = window.Synth || (window.Synth = {});
 
+    var modMatrix = null;
     var enabled = false;
-    var rate = 5.0;    // Hz
-    var depth = 0.5;   // 0..1
+    var rate = 5.0;
+    var depth = 0.5;
     var waveform = 'sine';
-    var target = 'pitch'; // pitch, filter, volume
-    var phase = 0;
+    var target = 'pitch';
+    var routeIndex = -1;
 
-    function computeWave(p) {
-        switch (waveform) {
-            case 'sine': return Math.sin(p * 2 * Math.PI);
-            case 'triangle': return p < 0.5 ? (4 * p - 1) : (3 - 4 * p);
-            case 'square': return p < 0.5 ? 1 : -1;
-            case 'sawtooth': return 2 * p - 1;
-            default: return Math.sin(p * 2 * Math.PI);
+    var LFO_INDEX = 0; // use LFO 1 for the main synth LFO
+
+    function targetToDest(t) {
+        switch (t) {
+            case 'filter': return 'filterfreq';
+            case 'volume': return 'gain';
+            case 'pan': return 'pan';
+            default: return 'pitch';
+        }
+    }
+
+    function lfoShapeFromWaveform(wf) {
+        switch (wf) {
+            case 'triangle': return 'triangle';
+            case 'square': return 'square';
+            case 'sawtooth': return 'sawup';
+            default: return 'sine';
+        }
+    }
+
+    function applyRoute() {
+        if (!modMatrix) return;
+        // Remove old route
+        if (routeIndex >= 0) {
+            modMatrix.removeRoute(routeIndex);
+            routeIndex = -1;
+        }
+        if (enabled) {
+            routeIndex = modMatrix.addRoute('lfo1', targetToDest(target), depth);
         }
     }
 
     Synth.LFO = {
-        update: function(dt) {
-            if (!enabled) return;
-            phase += rate * dt;
-            if (phase >= 1) phase -= Math.floor(phase);
-
-            var value = computeWave(phase) * depth;
-
-            if (target === 'pitch') {
-                // Modulate pitch of active notes: +/- semitones based on depth
-                var notes = Synth.getActiveNotes();
-                notes.forEach(function(entry) {
-                    if (entry.osc) {
-                        var mod = entry.baseFreq * Math.pow(2, value / 12);
-                        entry.osc.frequency.value = mod;
-                    }
-                });
-            } else if (target === 'filter') {
-                if (Synth.Filter && Synth.Filter.isEnabled()) {
-                    Synth.Filter.modulateCutoff(value);
-                }
-            } else if (target === 'volume') {
-                // Tremolo: modulate master gain 0.5..1.5 range
-                var mg = Synth.getMasterGain();
-                if (mg) mg.gain.value = 1.0 + value * 0.5;
-            } else if (target === 'pan') {
-                // Auto-pan: sweep stereo position left-right
-                var notes = Synth.getActiveNotes();
-                notes.forEach(function(entry) {
-                    if (entry.osc) {
-                        entry.osc.pan.value = value;
-                    }
-                });
-            }
+        init: function(ctx) {
+            modMatrix = ctx.getModMatrix();
         },
 
-        setEnabled: function(e) { enabled = e; if (!e) { phase = 0; resetTargets(); } },
+        setEnabled: function(e) {
+            enabled = e;
+            applyRoute();
+        },
         isEnabled: function() { return enabled; },
 
-        setRate: function(r) { rate = r; },
+        setRate: function(r) {
+            rate = r;
+            if (modMatrix) modMatrix.setLfoRate(LFO_INDEX, r);
+        },
         getRate: function() { return rate; },
 
-        setDepth: function(d) { depth = d; },
+        setDepth: function(d) {
+            depth = d;
+            if (modMatrix && routeIndex >= 0) {
+                modMatrix.setRouteAmount(routeIndex, d);
+            }
+        },
         getDepth: function() { return depth; },
 
-        setWaveform: function(wf) { waveform = wf; },
+        setWaveform: function(wf) {
+            waveform = wf;
+            if (modMatrix) modMatrix.setLfoShape(LFO_INDEX, lfoShapeFromWaveform(wf));
+        },
         getWaveform: function() { return waveform; },
 
-        setTarget: function(t) { resetTargets(); target = t; },
+        setTarget: function(t) {
+            target = t;
+            applyRoute();
+        },
         getTarget: function() { return target; },
 
         getState: function() {
@@ -81,19 +94,12 @@
             waveform = state.waveform || 'sine';
             target = state.target || 'pitch';
             enabled = state.enabled || false;
+
+            if (modMatrix) {
+                modMatrix.setLfoRate(LFO_INDEX, rate);
+                modMatrix.setLfoShape(LFO_INDEX, lfoShapeFromWaveform(waveform));
+            }
+            applyRoute();
         }
     };
-
-    function resetTargets() {
-        // Reset modulated values to base
-        var notes = Synth.getActiveNotes();
-        notes.forEach(function(entry) {
-            if (entry.osc) {
-                entry.osc.frequency.value = entry.baseFreq;
-                entry.osc.pan.value = Synth.voicePan || 0;
-            }
-        });
-        var mg = Synth.getMasterGain();
-        if (mg) mg.gain.value = 1.0;
-    }
 })();

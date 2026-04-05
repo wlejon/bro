@@ -2,12 +2,18 @@
 #include "js/runtime.h"
 #include "util/log.h"
 #include <broaudio/dsp/fft.h>
+#include <broaudio/synth/voice_allocator.h>
+#include <broaudio/synth/modulation.h>
+#include <broaudio/synth/wavetable.h>
+#include <broaudio/midi/midi_input.h>
 
 #include <algorithm>
 #include <string>
 #include <cstring>
 #include <cmath>
 #include <vector>
+#include <unordered_map>
+#include <memory>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -28,6 +34,57 @@ static JSClassID js_analysernode_class_id = 0;
 static JSClassID js_micstream_class_id = 0;
 static JSClassID js_micsource_class_id = 0;
 static JSClassID js_biquadfilter_class_id = 0;
+static JSClassID js_voiceallocator_class_id = 0;
+static JSClassID js_modmatrix_class_id = 0;
+static JSClassID js_midiinput_class_id = 0;
+
+// ---------------------------------------------------------------------------
+// Global engine pointer + wavetable registry
+// ---------------------------------------------------------------------------
+
+static broaudio::Engine* s_audioEngine = nullptr;
+static std::unordered_map<int, std::shared_ptr<broaudio::WavetableBank>> s_wavetables;
+static int s_nextWavetableId = 1;
+
+// ---------------------------------------------------------------------------
+// Helper: parse biquad filter type string
+// ---------------------------------------------------------------------------
+
+static broaudio::BiquadFilter::Type parseFilterType(const char* str) {
+    if (strcmp(str, "highpass") == 0) return broaudio::BiquadFilter::Type::Highpass;
+    if (strcmp(str, "bandpass") == 0) return broaudio::BiquadFilter::Type::Bandpass;
+    if (strcmp(str, "notch") == 0) return broaudio::BiquadFilter::Type::Notch;
+    if (strcmp(str, "allpass") == 0) return broaudio::BiquadFilter::Type::Allpass;
+    if (strcmp(str, "peaking") == 0) return broaudio::BiquadFilter::Type::Peaking;
+    if (strcmp(str, "lowshelf") == 0) return broaudio::BiquadFilter::Type::Lowshelf;
+    if (strcmp(str, "highshelf") == 0) return broaudio::BiquadFilter::Type::Highshelf;
+    return broaudio::BiquadFilter::Type::Lowpass;
+}
+
+// Helper: parse waveform string (including noise types)
+static broaudio::Waveform parseWaveform(const char* str) {
+    if (strcmp(str, "square") == 0) return broaudio::Waveform::Square;
+    if (strcmp(str, "sawtooth") == 0) return broaudio::Waveform::Sawtooth;
+    if (strcmp(str, "triangle") == 0) return broaudio::Waveform::Triangle;
+    if (strcmp(str, "wavetable") == 0) return broaudio::Waveform::Wavetable;
+    if (strcmp(str, "whitenoise") == 0) return broaudio::Waveform::WhiteNoise;
+    if (strcmp(str, "pinknoise") == 0) return broaudio::Waveform::PinkNoise;
+    if (strcmp(str, "brownnoise") == 0) return broaudio::Waveform::BrownNoise;
+    return broaudio::Waveform::Sine;
+}
+
+// Helper: get raw pointer + usable byte length from a TypedArray argument
+static uint8_t* getTypedArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outLen) {
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (JS_IsException(abuf)) return nullptr;
+    size_t abufLen = 0;
+    uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!ptr) return nullptr;
+    outLen = viewLen;
+    return ptr + byteOff;
+}
 
 // ---------------------------------------------------------------------------
 // AudioParam — wraps a float value that updates the engine
@@ -116,9 +173,7 @@ struct AnalyserNodeData {
     float minDecibels = -100.0f;
     float maxDecibels = -30.0f;
     float smoothingTimeConstant = 0.8f;
-    // Which source to analyse: 0 = output mix, 1 = mic input, 2 = blend both
     int source = 0;
-    // Smoothed magnitude data (previous frame)
     std::vector<float> smoothedMagnitudes;
 };
 
@@ -139,7 +194,6 @@ static JSValue js_analyser_set_fftSize(JSContext* ctx, JSValueConst this_val, JS
     auto* d = static_cast<AnalyserNodeData*>(JS_GetOpaque(this_val, js_analysernode_class_id));
     if (!d) return JS_UNDEFINED;
     int v; JS_ToInt32(ctx, &v, val);
-    // Must be power of 2, between 32 and 32768
     if (v >= 32 && v <= 32768 && (v & (v - 1)) == 0) {
         d->fftSize = v;
         d->smoothedMagnitudes.clear();
@@ -199,9 +253,7 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
 
     std::vector<float> real(n), imag(n, 0.0f);
 
-    // Read samples from the appropriate ring buffer
     if (d->source == 2) {
-        // Blend: sum output + mic (respects mic mute)
         d->engine->outputBuffer().readLatest(real.data(), n);
         if (!d->engine->isMicMuted()) {
             std::vector<float> mic(n);
@@ -213,7 +265,6 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
         buf.readLatest(real.data(), n);
     }
 
-    // Apply Blackman window
     for (int i = 0; i < n; i++) {
         float w = 0.42f - 0.5f * std::cos(2.0f * static_cast<float>(M_PI) * i / (n - 1))
                         + 0.08f * std::cos(4.0f * static_cast<float>(M_PI) * i / (n - 1));
@@ -222,7 +273,6 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
 
     broaudio::fft(real.data(), imag.data(), n);
 
-    // Compute magnitudes in dB with smoothing
     if (d->smoothedMagnitudes.size() != static_cast<size_t>(halfN)) {
         d->smoothedMagnitudes.assign(halfN, -100.0f);
     }
@@ -234,19 +284,6 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
         d->smoothedMagnitudes[i] = smooth * d->smoothedMagnitudes[i] + (1.0f - smooth) * db;
         magnitudes[i] = d->smoothedMagnitudes[i];
     }
-}
-
-// Helper: get raw pointer + usable byte length from a TypedArray argument
-static uint8_t* getTypedArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outLen) {
-    size_t byteOff = 0, viewLen = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
-    if (JS_IsException(abuf)) return nullptr;
-    size_t abufLen = 0;
-    uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-    JS_FreeValue(ctx, abuf);
-    if (!ptr) return nullptr;
-    outLen = viewLen;
-    return ptr + byteOff;
 }
 
 static JSValue js_analyser_getFloatFrequencyData(JSContext* ctx, JSValueConst this_val,
@@ -345,7 +382,6 @@ static JSValue js_analyser_getByteTimeDomainData(JSContext* ctx, JSValueConst th
     return JS_UNDEFINED;
 }
 
-// source property: 0 = output mix, 1 = mic input
 static JSValue js_analyser_get_source(JSContext* ctx, JSValueConst this_val) {
     auto* d = static_cast<AnalyserNodeData*>(JS_GetOpaque(this_val, js_analysernode_class_id));
     return d ? JS_NewInt32(ctx, d->source) : JS_UNDEFINED;
@@ -412,17 +448,13 @@ static JSClassDef js_micsource_class = {
     "MediaStreamAudioSourceNode", js_micsource_finalizer, nullptr, nullptr, nullptr
 };
 
-// MediaStreamAudioSourceNode.connect(analyser) — sets analyser to mic source
 static JSValue js_micsource_connect(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     if (argc < 1) return JS_UNDEFINED;
-
-    // If connecting to an AnalyserNode, switch it to mic source
     auto* ad = static_cast<AnalyserNodeData*>(JS_GetOpaque(argv[0], js_analysernode_class_id));
     if (ad) {
-        ad->source = 1; // mic
+        ad->source = 1;
     }
-
     return JS_DupValue(ctx, argv[0]);
 }
 
@@ -451,9 +483,6 @@ struct OscNodeData {
 static void js_oscnode_finalizer(JSRuntime*, JSValue val) {
     auto* d = static_cast<OscNodeData*>(JS_GetOpaque(val, js_oscnode_class_id));
     if (d) {
-        // Stop the voice if still playing — the engine will clean it up
-        // after the release envelope finishes (in generateSamples).
-        // Don't removeVoice() here: that would yank it mid-release → click.
         d->engine->stopVoice(d->voiceId, d->engine->currentTime());
         delete d;
     }
@@ -474,11 +503,7 @@ static JSValue js_osc_set_type(JSContext* ctx, JSValueConst this_val, JSValueCon
     const char* s = JS_ToCString(ctx, val);
     if (!s) return JS_UNDEFINED;
     d->type = s;
-    broaudio::Waveform wf = broaudio::Waveform::Sine;
-    if (d->type == "square") wf = broaudio::Waveform::Square;
-    else if (d->type == "sawtooth") wf = broaudio::Waveform::Sawtooth;
-    else if (d->type == "triangle") wf = broaudio::Waveform::Triangle;
-    d->engine->setWaveform(d->voiceId, wf);
+    d->engine->setWaveform(d->voiceId, parseWaveform(s));
     JS_FreeCString(ctx, s);
     return JS_UNDEFINED;
 }
@@ -488,7 +513,6 @@ static JSValue js_osc_connect(JSContext* ctx, JSValueConst this_val, int argc, J
     auto* d = static_cast<OscNodeData*>(JS_GetOpaque(this_val, js_oscnode_class_id));
     if (!d) return JS_DupValue(ctx, argv[0]);
 
-    // If connecting to a GainNode, store reference
     auto* gd = static_cast<GainNodeData*>(JS_GetOpaque(argv[0], js_gainnode_class_id));
     if (gd) {
         JS_SetPropertyStr(ctx, this_val, "__gainNode", JS_DupValue(ctx, argv[0]));
@@ -501,7 +525,6 @@ static JSValue js_osc_start(JSContext* ctx, JSValueConst this_val, int argc, JSV
     auto* d = static_cast<OscNodeData*>(JS_GetOpaque(this_val, js_oscnode_class_id));
     if (!d) return JS_UNDEFINED;
 
-    // Read gain from connected GainNode if any
     JSValue gnVal = JS_GetPropertyStr(ctx, this_val, "__gainNode");
     if (!JS_IsUndefined(gnVal) && !JS_IsNull(gnVal)) {
         JSValue gainParam = JS_GetPropertyStr(ctx, gnVal, "gain");
@@ -589,30 +612,16 @@ static JSClassDef js_biquadfilter_class = {
 static JSValue js_biquadfilter_get_type(JSContext* ctx, JSValueConst this_val) {
     auto* d = static_cast<BiquadFilterNodeData*>(JS_GetOpaque(this_val, js_biquadfilter_class_id));
     if (!d) return JS_UNDEFINED;
-    JSValue v = JS_GetPropertyStr(ctx, this_val, "__type");
-    return v;
+    return JS_GetPropertyStr(ctx, this_val, "__type");
 }
 
 static JSValue js_biquadfilter_set_type(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* d = static_cast<BiquadFilterNodeData*>(JS_GetOpaque(this_val, js_biquadfilter_class_id));
     if (!d) return JS_UNDEFINED;
-
     const char* str = JS_ToCString(ctx, val);
     if (!str) return JS_UNDEFINED;
-
-    broaudio::BiquadFilter::Type type = broaudio::BiquadFilter::Type::Lowpass;
-    if (strcmp(str, "lowpass") == 0) type = broaudio::BiquadFilter::Type::Lowpass;
-    else if (strcmp(str, "highpass") == 0) type = broaudio::BiquadFilter::Type::Highpass;
-    else if (strcmp(str, "bandpass") == 0) type = broaudio::BiquadFilter::Type::Bandpass;
-    else if (strcmp(str, "notch") == 0) type = broaudio::BiquadFilter::Type::Notch;
-    else if (strcmp(str, "allpass") == 0) type = broaudio::BiquadFilter::Type::Allpass;
-    else if (strcmp(str, "peaking") == 0) type = broaudio::BiquadFilter::Type::Peaking;
-    else if (strcmp(str, "lowshelf") == 0) type = broaudio::BiquadFilter::Type::Lowshelf;
-    else if (strcmp(str, "highshelf") == 0) type = broaudio::BiquadFilter::Type::Highshelf;
-
+    d->engine->setFilterType(d->slot, parseFilterType(str));
     JS_FreeCString(ctx, str);
-
-    d->engine->setFilterType(d->slot, type);
     JS_SetPropertyStr(ctx, this_val, "__type", JS_DupValue(ctx, val));
     return JS_UNDEFINED;
 }
@@ -636,6 +645,442 @@ static const JSCFunctionListEntry js_biquadfilter_proto_funcs[] = {
     JS_CGETSET_DEF("type", js_biquadfilter_get_type, js_biquadfilter_set_type),
     JS_CFUNC_DEF("connect", 1, js_biquadfilter_connect),
     JS_CFUNC_DEF("disconnect", 0, js_biquadfilter_disconnect),
+};
+
+// ---------------------------------------------------------------------------
+// VoiceAllocator — polyphonic voice management
+// ---------------------------------------------------------------------------
+
+struct VoiceAllocatorData {
+    broaudio::Engine* engine;
+    std::unique_ptr<broaudio::VoiceAllocator> allocator;
+    JSContext* ctx;
+    JSValue voiceSetupCallback;
+};
+
+static void js_voiceallocator_finalizer(JSRuntime* rt, JSValue val) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(val, js_voiceallocator_class_id));
+    if (d) {
+        if (!JS_IsUndefined(d->voiceSetupCallback)) {
+            JS_FreeValueRT(rt, d->voiceSetupCallback);
+        }
+        delete d;
+    }
+}
+
+static JSClassDef js_voiceallocator_class = {
+    "VoiceAllocator", js_voiceallocator_finalizer, nullptr, nullptr, nullptr
+};
+
+static JSValue js_va_noteOn(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int note; JS_ToInt32(ctx, &note, argv[0]);
+    double velocity; JS_ToFloat64(ctx, &velocity, argv[1]);
+    double when = d->engine->currentTime();
+    if (argc >= 3) JS_ToFloat64(ctx, &when, argv[2]);
+    int voiceId = d->allocator->noteOn(note, static_cast<float>(velocity), when);
+    return JS_NewInt32(ctx, voiceId);
+}
+
+static JSValue js_va_noteOff(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int note; JS_ToInt32(ctx, &note, argv[0]);
+    double when = d->engine->currentTime();
+    if (argc >= 2) JS_ToFloat64(ctx, &when, argv[1]);
+    d->allocator->noteOff(note, when);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_va_allNotesOff(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    if (!d) return JS_UNDEFINED;
+    double when = d->engine->currentTime();
+    if (argc >= 1) JS_ToFloat64(ctx, &when, argv[0]);
+    d->allocator->allNotesOff(when);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_va_setStealPolicy(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (!s) return JS_UNDEFINED;
+    broaudio::StealPolicy policy = broaudio::StealPolicy::Oldest;
+    if (strcmp(s, "quietest") == 0) policy = broaudio::StealPolicy::Quietest;
+    else if (strcmp(s, "samenote") == 0) policy = broaudio::StealPolicy::SameNote;
+    else if (strcmp(s, "none") == 0) policy = broaudio::StealPolicy::None;
+    JS_FreeCString(ctx, s);
+    d->allocator->setStealPolicy(policy);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_va_setMaxVoices(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int count; JS_ToInt32(ctx, &count, argv[0]);
+    d->allocator->setMaxVoices(count);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_va_setVoiceSetup(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+
+    if (!JS_IsUndefined(d->voiceSetupCallback)) {
+        JS_FreeValue(ctx, d->voiceSetupCallback);
+    }
+    d->voiceSetupCallback = JS_DupValue(ctx, argv[0]);
+
+    // Set the C++ callback that calls into JS
+    JSValue cbRef = JS_DupValue(ctx, argv[0]);
+    JSContext* jsCtx = ctx;
+    d->allocator->setVoiceSetup([jsCtx, cbRef](int voiceId, int note, float velocity) {
+        JSValue args[3] = {
+            JS_NewInt32(jsCtx, voiceId),
+            JS_NewInt32(jsCtx, note),
+            JS_NewFloat64(jsCtx, velocity)
+        };
+        JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 3, args);
+        JS_FreeValue(jsCtx, args[0]);
+        JS_FreeValue(jsCtx, args[1]);
+        JS_FreeValue(jsCtx, args[2]);
+        if (JS_IsException(ret)) {
+            JSValue exc = JS_GetException(jsCtx);
+            const char* msg = JS_ToCString(jsCtx, exc);
+            if (msg) { LOG_ERROR("voiceSetup callback error: %s", msg); JS_FreeCString(jsCtx, msg); }
+            JS_FreeValue(jsCtx, exc);
+        }
+        JS_FreeValue(jsCtx, ret);
+    });
+
+    return JS_UNDEFINED;
+}
+
+static JSValue js_va_get_activeVoiceCount(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    return d ? JS_NewInt32(ctx, d->allocator->activeVoiceCount()) : JS_UNDEFINED;
+}
+
+static JSValue js_va_voiceForNote(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<VoiceAllocatorData*>(JS_GetOpaque(this_val, js_voiceallocator_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int note; JS_ToInt32(ctx, &note, argv[0]);
+    return JS_NewInt32(ctx, d->allocator->voiceForNote(note));
+}
+
+static const JSCFunctionListEntry js_voiceallocator_proto_funcs[] = {
+    JS_CFUNC_DEF("noteOn", 2, js_va_noteOn),
+    JS_CFUNC_DEF("noteOff", 1, js_va_noteOff),
+    JS_CFUNC_DEF("allNotesOff", 0, js_va_allNotesOff),
+    JS_CFUNC_DEF("setStealPolicy", 1, js_va_setStealPolicy),
+    JS_CFUNC_DEF("setMaxVoices", 1, js_va_setMaxVoices),
+    JS_CFUNC_DEF("setVoiceSetup", 1, js_va_setVoiceSetup),
+    JS_CFUNC_DEF("voiceForNote", 1, js_va_voiceForNote),
+    JS_CGETSET_DEF("activeVoiceCount", js_va_get_activeVoiceCount, nullptr),
+};
+
+// ---------------------------------------------------------------------------
+// ModMatrix — modulation routing
+// ---------------------------------------------------------------------------
+
+struct ModMatrixData {
+    broaudio::Engine* engine;
+    broaudio::ModMatrix* modMatrix;
+};
+
+static JSClassDef js_modmatrix_class = {
+    "ModMatrix", nullptr, nullptr, nullptr, nullptr
+};
+
+static broaudio::LfoShape parseLfoShape(const char* s) {
+    if (strcmp(s, "triangle") == 0) return broaudio::LfoShape::Triangle;
+    if (strcmp(s, "square") == 0) return broaudio::LfoShape::Square;
+    if (strcmp(s, "sawup") == 0) return broaudio::LfoShape::SawUp;
+    if (strcmp(s, "sawdown") == 0) return broaudio::LfoShape::SawDown;
+    if (strcmp(s, "sampleandhold") == 0) return broaudio::LfoShape::SampleAndHold;
+    return broaudio::LfoShape::Sine;
+}
+
+static broaudio::ModSource parseModSource(const char* s) {
+    if (strcmp(s, "lfo2") == 0) return broaudio::ModSource::Lfo2;
+    if (strcmp(s, "lfo3") == 0) return broaudio::ModSource::Lfo3;
+    if (strcmp(s, "lfo4") == 0) return broaudio::ModSource::Lfo4;
+    if (strcmp(s, "envelope") == 0) return broaudio::ModSource::Envelope;
+    if (strcmp(s, "velocity") == 0) return broaudio::ModSource::Velocity;
+    if (strcmp(s, "keytracking") == 0) return broaudio::ModSource::KeyTracking;
+    if (strcmp(s, "modwheel") == 0) return broaudio::ModSource::ModWheel;
+    if (strcmp(s, "aftertouch") == 0) return broaudio::ModSource::Aftertouch;
+    return broaudio::ModSource::Lfo1;
+}
+
+static broaudio::ModDest parseModDest(const char* s) {
+    if (strcmp(s, "gain") == 0) return broaudio::ModDest::Gain;
+    if (strcmp(s, "pan") == 0) return broaudio::ModDest::Pan;
+    if (strcmp(s, "filterfreq") == 0) return broaudio::ModDest::FilterFreq;
+    if (strcmp(s, "filterq") == 0) return broaudio::ModDest::FilterQ;
+    if (strcmp(s, "pulsewidth") == 0) return broaudio::ModDest::PulseWidth;
+    if (strcmp(s, "delaysend") == 0) return broaudio::ModDest::DelaySend;
+    return broaudio::ModDest::Pitch;
+}
+
+// LFO control
+static JSValue js_mod_setLfoShape(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    const char* s = JS_ToCString(ctx, argv[1]);
+    if (s) { d->modMatrix->setLfoShape(idx, parseLfoShape(s)); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setLfoRate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    double hz; JS_ToFloat64(ctx, &hz, argv[1]);
+    d->modMatrix->setLfoRate(idx, static_cast<float>(hz));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setLfoDepth(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->modMatrix->setLfoDepth(idx, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setLfoOffset(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->modMatrix->setLfoOffset(idx, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setLfoBipolar(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    d->modMatrix->setLfoBipolar(idx, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setLfoSync(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    d->modMatrix->setLfoSync(idx, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+// Route management
+static JSValue js_mod_addRoute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    const char* srcStr = JS_ToCString(ctx, argv[0]);
+    const char* dstStr = JS_ToCString(ctx, argv[1]);
+    double amount; JS_ToFloat64(ctx, &amount, argv[2]);
+    int idx = -1;
+    if (srcStr && dstStr) {
+        idx = d->modMatrix->addRoute(parseModSource(srcStr), parseModDest(dstStr), static_cast<float>(amount));
+    }
+    if (srcStr) JS_FreeCString(ctx, srcStr);
+    if (dstStr) JS_FreeCString(ctx, dstStr);
+    return JS_NewInt32(ctx, idx);
+}
+
+static JSValue js_mod_removeRoute(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    d->modMatrix->removeRoute(idx);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setRouteAmount(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->modMatrix->setRouteAmount(idx, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setRouteEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    d->modMatrix->setRouteEnabled(idx, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_clearAllRoutes(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (d) d->modMatrix->clearAllRoutes();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_get_routeCount(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    return d ? JS_NewInt32(ctx, d->modMatrix->routeCount()) : JS_UNDEFINED;
+}
+
+static JSValue js_mod_setModWheel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->modMatrix->setModWheel(static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_mod_setAftertouch(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<ModMatrixData*>(JS_GetOpaque(this_val, js_modmatrix_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->modMatrix->setAftertouch(static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_modmatrix_proto_funcs[] = {
+    JS_CFUNC_DEF("setLfoShape", 2, js_mod_setLfoShape),
+    JS_CFUNC_DEF("setLfoRate", 2, js_mod_setLfoRate),
+    JS_CFUNC_DEF("setLfoDepth", 2, js_mod_setLfoDepth),
+    JS_CFUNC_DEF("setLfoOffset", 2, js_mod_setLfoOffset),
+    JS_CFUNC_DEF("setLfoBipolar", 2, js_mod_setLfoBipolar),
+    JS_CFUNC_DEF("setLfoSync", 2, js_mod_setLfoSync),
+    JS_CFUNC_DEF("addRoute", 3, js_mod_addRoute),
+    JS_CFUNC_DEF("removeRoute", 1, js_mod_removeRoute),
+    JS_CFUNC_DEF("setRouteAmount", 2, js_mod_setRouteAmount),
+    JS_CFUNC_DEF("setRouteEnabled", 2, js_mod_setRouteEnabled),
+    JS_CFUNC_DEF("clearAllRoutes", 0, js_mod_clearAllRoutes),
+    JS_CFUNC_DEF("setModWheel", 1, js_mod_setModWheel),
+    JS_CFUNC_DEF("setAftertouch", 1, js_mod_setAftertouch),
+    JS_CGETSET_DEF("routeCount", js_mod_get_routeCount, nullptr),
+};
+
+// ---------------------------------------------------------------------------
+// MidiInput — hardware MIDI controller support
+// ---------------------------------------------------------------------------
+
+struct MidiInputData {
+    broaudio::Engine* engine;
+    std::unique_ptr<broaudio::MidiInput> midi;
+    JSContext* ctx;
+    JSValue pitchBendCallback;
+    JSValue rawCallback;
+};
+
+static void js_midiinput_finalizer(JSRuntime* rt, JSValue val) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(val, js_midiinput_class_id));
+    if (d) {
+        if (d->midi) d->midi->close();
+        if (!JS_IsUndefined(d->pitchBendCallback)) JS_FreeValueRT(rt, d->pitchBendCallback);
+        if (!JS_IsUndefined(d->rawCallback)) JS_FreeValueRT(rt, d->rawCallback);
+        delete d;
+    }
+}
+
+static JSClassDef js_midiinput_class = {
+    "MidiInput", js_midiinput_finalizer, nullptr, nullptr, nullptr
+};
+
+static JSValue js_midi_availablePorts(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    if (!d) return JS_UNDEFINED;
+    auto ports = d->midi->availablePorts();
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < ports.size(); i++) {
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "index", JS_NewInt32(ctx, ports[i].index));
+        JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, ports[i].name.c_str()));
+        JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), obj);
+    }
+    return arr;
+}
+
+static JSValue js_midi_open(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    if (!d || argc < 1) return JS_FALSE;
+    int port; JS_ToInt32(ctx, &port, argv[0]);
+    return JS_NewBool(ctx, d->midi->open(port));
+}
+
+static JSValue js_midi_close(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    if (d) d->midi->close();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_midi_get_isOpen(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    return d ? JS_NewBool(ctx, d->midi->isOpen()) : JS_FALSE;
+}
+
+static JSValue js_midi_connectToAllocator(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    auto* va = static_cast<VoiceAllocatorData*>(JS_GetOpaque(argv[0], js_voiceallocator_class_id));
+    if (va) d->midi->connectToAllocator(va->allocator.get());
+    return JS_UNDEFINED;
+}
+
+static JSValue js_midi_onControlChange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int cc; JS_ToInt32(ctx, &cc, argv[0]);
+    if (cc < 0 || cc > 127) return JS_UNDEFINED;
+    JSValue cbRef = JS_DupValue(ctx, argv[1]);
+    JSContext* jsCtx = ctx;
+    d->midi->onControlChange(static_cast<uint8_t>(cc),
+        [jsCtx, cbRef](uint8_t channel, uint8_t ccNum, uint8_t value) {
+            JSValue args[3] = {
+                JS_NewInt32(jsCtx, channel),
+                JS_NewInt32(jsCtx, ccNum),
+                JS_NewInt32(jsCtx, value)
+            };
+            JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 3, args);
+            for (int i = 0; i < 3; i++) JS_FreeValue(jsCtx, args[i]);
+            JS_FreeValue(jsCtx, ret);
+        });
+    return JS_UNDEFINED;
+}
+
+static JSValue js_midi_onPitchBend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    if (!JS_IsUndefined(d->pitchBendCallback)) JS_FreeValue(ctx, d->pitchBendCallback);
+    d->pitchBendCallback = JS_DupValue(ctx, argv[0]);
+    JSValue cbRef = JS_DupValue(ctx, argv[0]);
+    JSContext* jsCtx = ctx;
+    d->midi->onPitchBend([jsCtx, cbRef](uint8_t channel, int16_t value) {
+        JSValue args[2] = { JS_NewInt32(jsCtx, channel), JS_NewInt32(jsCtx, value) };
+        JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 2, args);
+        JS_FreeValue(jsCtx, args[0]); JS_FreeValue(jsCtx, args[1]);
+        JS_FreeValue(jsCtx, ret);
+    });
+    return JS_UNDEFINED;
+}
+
+static JSValue js_midi_processEvents(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<MidiInputData*>(JS_GetOpaque(this_val, js_midiinput_class_id));
+    if (d) d->midi->processEvents();
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_midiinput_proto_funcs[] = {
+    JS_CFUNC_DEF("availablePorts", 0, js_midi_availablePorts),
+    JS_CFUNC_DEF("open", 1, js_midi_open),
+    JS_CFUNC_DEF("close", 0, js_midi_close),
+    JS_CFUNC_DEF("connectToAllocator", 1, js_midi_connectToAllocator),
+    JS_CFUNC_DEF("onControlChange", 2, js_midi_onControlChange),
+    JS_CFUNC_DEF("onPitchBend", 1, js_midi_onPitchBend),
+    JS_CFUNC_DEF("processEvents", 0, js_midi_processEvents),
+    JS_CGETSET_DEF("isOpen", js_midi_get_isOpen, nullptr),
 };
 
 // ---------------------------------------------------------------------------
@@ -664,8 +1109,7 @@ static JSValue js_audioctx_get_sampleRate(JSContext* ctx, JSValueConst this_val)
     return d ? JS_NewInt32(ctx, d->engine->sampleRate()) : JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_val,
-                                             int, JSValueConst*) {
+static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d) return JS_UNDEFINED;
 
@@ -675,7 +1119,6 @@ static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_va
     auto* oscData = new OscNodeData{d->engine, voiceId, "sine"};
     JS_SetOpaque(obj, oscData);
 
-    // Create AudioParams for oscillator properties
     JS_SetPropertyStr(ctx, obj, "frequency",
         createAudioParam(ctx, d->engine, voiceId, AudioParamData::Target::Frequency, 440.0f));
     JS_SetPropertyStr(ctx, obj, "pan",
@@ -692,8 +1135,7 @@ static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_va
     return obj;
 }
 
-static JSValue js_audioctx_createGain(JSContext* ctx, JSValueConst this_val,
-                                       int, JSValueConst*) {
+static JSValue js_audioctx_createGain(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d) return JS_UNDEFINED;
 
@@ -708,8 +1150,7 @@ static JSValue js_audioctx_createGain(JSContext* ctx, JSValueConst this_val,
     return obj;
 }
 
-static JSValue js_audioctx_createAnalyser(JSContext* ctx, JSValueConst this_val,
-                                           int, JSValueConst*) {
+static JSValue js_audioctx_createAnalyser(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d) return JS_UNDEFINED;
 
@@ -719,8 +1160,7 @@ static JSValue js_audioctx_createAnalyser(JSContext* ctx, JSValueConst this_val,
     return obj;
 }
 
-static JSValue js_audioctx_createBiquadFilter(JSContext* ctx, JSValueConst this_val,
-                                               int, JSValueConst*) {
+static JSValue js_audioctx_createBiquadFilter(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d) return JS_UNDEFINED;
 
@@ -731,10 +1171,7 @@ static JSValue js_audioctx_createBiquadFilter(JSContext* ctx, JSValueConst this_
     auto* filterData = new BiquadFilterNodeData{d->engine, slot};
     JS_SetOpaque(obj, filterData);
 
-    // Set default type property
     JS_SetPropertyStr(ctx, obj, "__type", JS_NewString(ctx, "lowpass"));
-
-    // Create AudioParams for filter properties (voiceId field holds the slot index)
     JS_SetPropertyStr(ctx, obj, "frequency",
         createAudioParam(ctx, d->engine, slot, AudioParamData::Target::FilterFrequency, 1000.0f));
     JS_SetPropertyStr(ctx, obj, "Q",
@@ -745,17 +1182,16 @@ static JSValue js_audioctx_createBiquadFilter(JSContext* ctx, JSValueConst this_
     return obj;
 }
 
-// Delay control methods on AudioContext
-static JSValue js_audioctx_setDelayEnabled(JSContext* ctx, JSValueConst this_val,
-                                            int argc, JSValueConst* argv) {
+// --- Delay (master bus shortcuts) ---
+
+static JSValue js_audioctx_setDelayEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     d->engine->setDelayEnabled(JS_ToBool(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setDelayTime(JSContext* ctx, JSValueConst this_val,
-                                         int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setDelayTime(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     double v; JS_ToFloat64(ctx, &v, argv[0]);
@@ -763,8 +1199,7 @@ static JSValue js_audioctx_setDelayTime(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setDelayFeedback(JSContext* ctx, JSValueConst this_val,
-                                             int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setDelayFeedback(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     double v; JS_ToFloat64(ctx, &v, argv[0]);
@@ -772,8 +1207,7 @@ static JSValue js_audioctx_setDelayFeedback(JSContext* ctx, JSValueConst this_va
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setDelayMix(JSContext* ctx, JSValueConst this_val,
-                                        int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setDelayMix(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     double v; JS_ToFloat64(ctx, &v, argv[0]);
@@ -781,12 +1215,465 @@ static JSValue js_audioctx_setDelayMix(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// --- Reverb (master bus shortcuts) ---
+
+static JSValue js_audioctx_setReverbEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->engine->setBusReverbEnabled(0, JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setReverbRoomSize(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusReverbRoomSize(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setReverbDamping(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusReverbDamping(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setReverbMix(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusReverbMix(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+// --- Chorus (master bus shortcuts) ---
+
+static JSValue js_audioctx_setChorusEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->engine->setBusChorusEnabled(0, JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setChorusRate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusChorusRate(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setChorusDepth(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusChorusDepth(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setChorusMix(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusChorusMix(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setChorusFeedback(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusChorusFeedback(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setChorusBaseDelay(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusChorusBaseDelay(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+// --- Compressor (master bus shortcuts) ---
+
+static JSValue js_audioctx_setCompressorEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->engine->setBusCompressorEnabled(0, JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setCompressorThreshold(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusCompressorThreshold(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setCompressorRatio(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusCompressorRatio(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setCompressorAttack(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusCompressorAttack(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setCompressorRelease(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setBusCompressorRelease(0, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+// --- Mix bus API ---
+
+static JSValue js_audioctx_createBus(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d) return JS_UNDEFINED;
+    return JS_NewInt32(ctx, d->engine->createBus());
+}
+
+static JSValue js_audioctx_deleteBus(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->deleteBus(id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusGain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setBusGain(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusPan(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setBusPan(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusMuted(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->setBusMuted(id, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+// Per-bus filter control
+static JSValue js_audioctx_allocateBusFilterSlot(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+    return JS_NewInt32(ctx, d->engine->allocateBusFilterSlot(busId));
+}
+
+static JSValue js_audioctx_releaseBusFilterSlot(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int busId, slot; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &slot, argv[1]);
+    d->engine->releaseBusFilterSlot(busId, slot);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusFilterEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int busId, slot; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &slot, argv[1]);
+    d->engine->setBusFilterEnabled(busId, slot, JS_ToBool(ctx, argv[2]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusFilterType(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int busId, slot; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &slot, argv[1]);
+    const char* s = JS_ToCString(ctx, argv[2]);
+    if (s) { d->engine->setBusFilterType(busId, slot, parseFilterType(s)); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusFilterFrequency(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int busId, slot; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &slot, argv[1]);
+    double v; JS_ToFloat64(ctx, &v, argv[2]);
+    d->engine->setBusFilterFrequency(busId, slot, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusFilterQ(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int busId, slot; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &slot, argv[1]);
+    double v; JS_ToFloat64(ctx, &v, argv[2]);
+    d->engine->setBusFilterQ(busId, slot, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusFilterGain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int busId, slot; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &slot, argv[1]);
+    double v; JS_ToFloat64(ctx, &v, argv[2]);
+    d->engine->setBusFilterGain(busId, slot, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+// Per-bus effects (delay, compressor, reverb, chorus)
+#define BUS_EFFECT_BOOL(name, method) \
+static JSValue js_audioctx_##name(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { \
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id)); \
+    if (!d || argc < 2) return JS_UNDEFINED; \
+    int busId; JS_ToInt32(ctx, &busId, argv[0]); \
+    d->engine->method(busId, JS_ToBool(ctx, argv[1])); \
+    return JS_UNDEFINED; \
+}
+
+#define BUS_EFFECT_FLOAT(name, method) \
+static JSValue js_audioctx_##name(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { \
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id)); \
+    if (!d || argc < 2) return JS_UNDEFINED; \
+    int busId; JS_ToInt32(ctx, &busId, argv[0]); \
+    double v; JS_ToFloat64(ctx, &v, argv[1]); \
+    d->engine->method(busId, static_cast<float>(v)); \
+    return JS_UNDEFINED; \
+}
+
+BUS_EFFECT_BOOL(setBusDelayEnabled, setBusDelayEnabled)
+BUS_EFFECT_FLOAT(setBusDelayTime, setBusDelayTime)
+BUS_EFFECT_FLOAT(setBusDelayFeedback, setBusDelayFeedback)
+BUS_EFFECT_FLOAT(setBusDelayMix, setBusDelayMix)
+
+BUS_EFFECT_BOOL(setBusCompressorEnabled, setBusCompressorEnabled)
+BUS_EFFECT_FLOAT(setBusCompressorThreshold, setBusCompressorThreshold)
+BUS_EFFECT_FLOAT(setBusCompressorRatio, setBusCompressorRatio)
+BUS_EFFECT_FLOAT(setBusCompressorAttack, setBusCompressorAttack)
+BUS_EFFECT_FLOAT(setBusCompressorRelease, setBusCompressorRelease)
+
+BUS_EFFECT_BOOL(setBusReverbEnabled, setBusReverbEnabled)
+BUS_EFFECT_FLOAT(setBusReverbRoomSize, setBusReverbRoomSize)
+BUS_EFFECT_FLOAT(setBusReverbDamping, setBusReverbDamping)
+BUS_EFFECT_FLOAT(setBusReverbMix, setBusReverbMix)
+
+BUS_EFFECT_BOOL(setBusChorusEnabled, setBusChorusEnabled)
+BUS_EFFECT_FLOAT(setBusChorusRate, setBusChorusRate)
+BUS_EFFECT_FLOAT(setBusChorusDepth, setBusChorusDepth)
+BUS_EFFECT_FLOAT(setBusChorusMix, setBusChorusMix)
+BUS_EFFECT_FLOAT(setBusChorusFeedback, setBusChorusFeedback)
+BUS_EFFECT_FLOAT(setBusChorusBaseDelay, setBusChorusBaseDelay)
+
+#undef BUS_EFFECT_BOOL
+#undef BUS_EFFECT_FLOAT
+
+// Voice/clip bus routing
+static JSValue js_audioctx_setVoiceBus(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId, busId; JS_ToInt32(ctx, &voiceId, argv[0]); JS_ToInt32(ctx, &busId, argv[1]);
+    d->engine->setVoiceBus(voiceId, busId);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackBus(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id, busId; JS_ToInt32(ctx, &id, argv[0]); JS_ToInt32(ctx, &busId, argv[1]);
+    d->engine->setPlaybackBus(id, busId);
+    return JS_UNDEFINED;
+}
+
+// --- Voice note context ---
+
+static JSValue js_audioctx_setVoiceNote(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int voiceId, note; JS_ToInt32(ctx, &voiceId, argv[0]); JS_ToInt32(ctx, &note, argv[1]);
+    double vel; JS_ToFloat64(ctx, &vel, argv[2]);
+    d->engine->setVoiceNote(voiceId, note, static_cast<float>(vel));
+    return JS_UNDEFINED;
+}
+
+// --- Wavetable synthesis ---
+
+static JSValue js_audioctx_createWavetable(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    const char* type = JS_ToCString(ctx, argv[0]);
+    if (!type) return JS_UNDEFINED;
+
+    std::shared_ptr<broaudio::WavetableBank> bank;
+    int sr = d->engine->sampleRate();
+    if (strcmp(type, "saw") == 0) bank = broaudio::WavetableBank::createSaw(sr);
+    else if (strcmp(type, "square") == 0) bank = broaudio::WavetableBank::createSquare(sr);
+    else if (strcmp(type, "triangle") == 0) bank = broaudio::WavetableBank::createTriangle(sr);
+    JS_FreeCString(ctx, type);
+
+    if (!bank) return JS_UNDEFINED;
+    int id = s_nextWavetableId++;
+    s_wavetables[id] = bank;
+    return JS_NewInt32(ctx, id);
+}
+
+static JSValue js_audioctx_createWavetableFromWaveform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+
+    size_t len = 0;
+    uint8_t* raw = getTypedArrayPtr(ctx, argv[0], len);
+    if (!raw) return JS_ThrowTypeError(ctx, "Expected Float32Array");
+
+    int numSamples = static_cast<int>(len / sizeof(float));
+    auto bank = broaudio::WavetableBank::createFromWaveform(
+        reinterpret_cast<float*>(raw), numSamples, d->engine->sampleRate());
+    if (!bank) return JS_UNDEFINED;
+
+    int id = s_nextWavetableId++;
+    s_wavetables[id] = bank;
+    return JS_NewInt32(ctx, id);
+}
+
+static JSValue js_audioctx_deleteWavetable(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    s_wavetables.erase(id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceWavetable(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId, wtId; JS_ToInt32(ctx, &voiceId, argv[0]); JS_ToInt32(ctx, &wtId, argv[1]);
+    auto it = s_wavetables.find(wtId);
+    if (it != s_wavetables.end()) {
+        d->engine->setVoiceWavetable(voiceId, it->second);
+        d->engine->setWaveform(voiceId, broaudio::Waveform::Wavetable);
+    }
+    return JS_UNDEFINED;
+}
+
+// --- Spectrum API ---
+
+static JSValue js_audioctx_getSpectrum(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+
+    int numBins; JS_ToInt32(ctx, &numBins, argv[0]);
+    if (numBins <= 0 || numBins > 8192) return JS_UNDEFINED;
+
+    JSValue lenVal = JS_NewInt32(ctx, numBins);
+    JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue(ctx, lenVal);
+    if (JS_IsException(arr)) return arr;
+
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (!JS_IsException(abuf)) {
+        size_t abufLen = 0;
+        uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+        if (ptr) {
+            d->engine->getSpectrum(reinterpret_cast<float*>(ptr + byteOff), numBins);
+        }
+        JS_FreeValue(ctx, abuf);
+    }
+    return arr;
+}
+
+// --- Spatial audio ---
+
+static JSValue js_audioctx_setListenerPosition(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    double x, y, z;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]); JS_ToFloat64(ctx, &z, argv[2]);
+    d->engine->setListenerPosition(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setListenerOrientation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 6) return JS_UNDEFINED;
+    double fx, fy, fz, ux, uy, uz;
+    JS_ToFloat64(ctx, &fx, argv[0]); JS_ToFloat64(ctx, &fy, argv[1]); JS_ToFloat64(ctx, &fz, argv[2]);
+    JS_ToFloat64(ctx, &ux, argv[3]); JS_ToFloat64(ctx, &uy, argv[4]); JS_ToFloat64(ctx, &uz, argv[5]);
+    d->engine->setListenerOrientation(
+        static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(fz),
+        static_cast<float>(ux), static_cast<float>(uy), static_cast<float>(uz));
+    return JS_UNDEFINED;
+}
+
+// --- Factory methods for VoiceAllocator, ModMatrix, MidiInput ---
+
+static JSValue js_audioctx_createVoiceAllocator(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d) return JS_UNDEFINED;
+    int maxVoices = 16;
+    if (argc >= 1) JS_ToInt32(ctx, &maxVoices, argv[0]);
+
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_voiceallocator_class_id));
+    auto* va = new VoiceAllocatorData{
+        d->engine,
+        std::make_unique<broaudio::VoiceAllocator>(*d->engine, maxVoices),
+        ctx,
+        JS_UNDEFINED
+    };
+    JS_SetOpaque(obj, va);
+    return obj;
+}
+
+static JSValue js_audioctx_getModMatrix(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d) return JS_UNDEFINED;
+
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_modmatrix_class_id));
+    auto* mm = new ModMatrixData{d->engine, &d->engine->modMatrix()};
+    JS_SetOpaque(obj, mm);
+    return obj;
+}
+
+static JSValue js_audioctx_createMidiInput(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d) return JS_UNDEFINED;
+
+    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_midiinput_class_id));
+    auto* mi = new MidiInputData{
+        d->engine,
+        std::make_unique<broaudio::MidiInput>(*d->engine),
+        ctx,
+        JS_UNDEFINED,
+        JS_UNDEFINED
+    };
+    JS_SetOpaque(obj, mi);
+    return obj;
+}
+
+// --- Mic ---
+
 static JSValue js_audioctx_createMediaStreamSource(JSContext* ctx, JSValueConst this_val,
                                                     int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
 
-    // Verify it's a MediaStream
     auto* ms = static_cast<MicStreamData*>(JS_GetOpaque(argv[0], js_micstream_class_id));
     if (!ms) return JS_ThrowTypeError(ctx, "Expected MediaStream argument");
 
@@ -796,8 +1683,7 @@ static JSValue js_audioctx_createMediaStreamSource(JSContext* ctx, JSValueConst 
     return obj;
 }
 
-// Mic mute/gain properties on AudioContext (bro extension)
-// Master gain (user volume control — post-mix, pre-output)
+// Mic mute/gain properties
 static JSValue js_audioctx_get_masterGain(JSContext* ctx, JSValueConst this_val) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     return d ? JS_NewFloat64(ctx, d->engine->masterGain()) : JS_UNDEFINED;
@@ -837,24 +1723,20 @@ static JSValue js_audioctx_set_micMonitorGain(JSContext* ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
-// ---------------------------------------------------------------------------
-// Recording + Loop Station bindings
-// ---------------------------------------------------------------------------
+// --- Recording ---
 
 static JSValue js_audioctx_get_recording(JSContext* ctx, JSValueConst this_val) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     return d ? JS_NewBool(ctx, d->engine->isRecording()) : JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_startRecording(JSContext* ctx, JSValueConst this_val,
-                                           int, JSValueConst*) {
+static JSValue js_audioctx_startRecording(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (d) d->engine->startRecording();
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_stopRecording(JSContext* ctx, JSValueConst this_val,
-                                          int, JSValueConst*) {
+static JSValue js_audioctx_stopRecording(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d) return JS_UNDEFINED;
 
@@ -862,7 +1744,6 @@ static JSValue js_audioctx_stopRecording(JSContext* ctx, JSValueConst this_val,
     const auto& buf = d->engine->getRecordBuffer();
     if (buf.empty()) return JS_NULL;
 
-    // Create Float32Array with copy of recorded data
     int count = static_cast<int>(buf.size());
     JSValue lenVal = JS_NewInt32(ctx, count);
     JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
@@ -885,8 +1766,7 @@ static JSValue js_audioctx_stopRecording(JSContext* ctx, JSValueConst this_val,
 
 // --- Audio Clip management ---
 
-static JSValue js_audioctx_createClip(JSContext* ctx, JSValueConst this_val,
-                                       int argc, JSValueConst* argv) {
+static JSValue js_audioctx_createClip(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
 
@@ -899,8 +1779,7 @@ static JSValue js_audioctx_createClip(JSContext* ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, id);
 }
 
-static JSValue js_audioctx_deleteClip(JSContext* ctx, JSValueConst this_val,
-                                       int argc, JSValueConst* argv) {
+static JSValue js_audioctx_deleteClip(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
@@ -908,16 +1787,14 @@ static JSValue js_audioctx_deleteClip(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_getClipSampleCount(JSContext* ctx, JSValueConst this_val,
-                                               int argc, JSValueConst* argv) {
+static JSValue js_audioctx_getClipSampleCount(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
     return JS_NewInt32(ctx, d->engine->getClipSampleCount(id));
 }
 
-static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val,
-                                            int argc, JSValueConst* argv) {
+static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 2) return JS_UNDEFINED;
 
@@ -946,10 +1823,9 @@ static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val
     return arr;
 }
 
-// --- Clip Playback instances ---
+// --- Clip Playback ---
 
-static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val,
-                                     int argc, JSValueConst* argv) {
+static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     int clipId; JS_ToInt32(ctx, &clipId, argv[0]);
@@ -960,8 +1836,7 @@ static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, d->engine->playClip(clipId, gain, loop));
 }
 
-static JSValue js_audioctx_stopPlayback(JSContext* ctx, JSValueConst this_val,
-                                         int argc, JSValueConst* argv) {
+static JSValue js_audioctx_stopPlayback(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
@@ -969,8 +1844,7 @@ static JSValue js_audioctx_stopPlayback(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setPlaybackGain(JSContext* ctx, JSValueConst this_val,
-                                            int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setPlaybackGain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 2) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
@@ -979,8 +1853,7 @@ static JSValue js_audioctx_setPlaybackGain(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setPlaybackLoop(JSContext* ctx, JSValueConst this_val,
-                                            int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setPlaybackLoop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 2) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
@@ -988,8 +1861,7 @@ static JSValue js_audioctx_setPlaybackLoop(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setPlaybackPlaying(JSContext* ctx, JSValueConst this_val,
-                                               int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setPlaybackPlaying(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 2) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
@@ -997,8 +1869,7 @@ static JSValue js_audioctx_setPlaybackPlaying(JSContext* ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setPlaybackRegion(JSContext* ctx, JSValueConst this_val,
-                                              int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setPlaybackRegion(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 3) return JS_UNDEFINED;
     int id, start, end;
@@ -1009,8 +1880,7 @@ static JSValue js_audioctx_setPlaybackRegion(JSContext* ctx, JSValueConst this_v
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setPlaybackRate(JSContext* ctx, JSValueConst this_val,
-                                            int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setPlaybackRate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 2) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
@@ -1019,8 +1889,7 @@ static JSValue js_audioctx_setPlaybackRate(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_setPlaybackPan(JSContext* ctx, JSValueConst this_val,
-                                            int argc, JSValueConst* argv) {
+static JSValue js_audioctx_setPlaybackPan(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 2) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
@@ -1029,32 +1898,123 @@ static JSValue js_audioctx_setPlaybackPan(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static JSValue js_audioctx_getPlaybackPosition(JSContext* ctx, JSValueConst this_val,
-                                                int argc, JSValueConst* argv) {
+static JSValue js_audioctx_getPlaybackPosition(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     int id; JS_ToInt32(ctx, &id, argv[0]);
     return JS_NewFloat64(ctx, d->engine->getPlaybackPosition(id));
 }
 
+// ---------------------------------------------------------------------------
+// AudioContext prototype function list
+// ---------------------------------------------------------------------------
+
 static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
+    // Properties
     JS_CGETSET_DEF("currentTime", js_audioctx_get_currentTime, nullptr),
     JS_CGETSET_DEF("sampleRate", js_audioctx_get_sampleRate, nullptr),
     JS_CGETSET_DEF("masterGain", js_audioctx_get_masterGain, js_audioctx_set_masterGain),
     JS_CGETSET_DEF("micMuted", js_audioctx_get_micMuted, js_audioctx_set_micMuted),
     JS_CGETSET_DEF("micMonitorGain", js_audioctx_get_micMonitorGain, js_audioctx_set_micMonitorGain),
     JS_CGETSET_DEF("recording", js_audioctx_get_recording, nullptr),
+
+    // Node creation
     JS_CFUNC_DEF("createOscillator", 0, js_audioctx_createOscillator),
     JS_CFUNC_DEF("createGain", 0, js_audioctx_createGain),
     JS_CFUNC_DEF("createAnalyser", 0, js_audioctx_createAnalyser),
     JS_CFUNC_DEF("createBiquadFilter", 0, js_audioctx_createBiquadFilter),
     JS_CFUNC_DEF("createMediaStreamSource", 1, js_audioctx_createMediaStreamSource),
+
+    // Master delay
     JS_CFUNC_DEF("setDelayEnabled", 1, js_audioctx_setDelayEnabled),
     JS_CFUNC_DEF("setDelayTime", 1, js_audioctx_setDelayTime),
     JS_CFUNC_DEF("setDelayFeedback", 1, js_audioctx_setDelayFeedback),
     JS_CFUNC_DEF("setDelayMix", 1, js_audioctx_setDelayMix),
+
+    // Master reverb
+    JS_CFUNC_DEF("setReverbEnabled", 1, js_audioctx_setReverbEnabled),
+    JS_CFUNC_DEF("setReverbRoomSize", 1, js_audioctx_setReverbRoomSize),
+    JS_CFUNC_DEF("setReverbDamping", 1, js_audioctx_setReverbDamping),
+    JS_CFUNC_DEF("setReverbMix", 1, js_audioctx_setReverbMix),
+
+    // Master chorus
+    JS_CFUNC_DEF("setChorusEnabled", 1, js_audioctx_setChorusEnabled),
+    JS_CFUNC_DEF("setChorusRate", 1, js_audioctx_setChorusRate),
+    JS_CFUNC_DEF("setChorusDepth", 1, js_audioctx_setChorusDepth),
+    JS_CFUNC_DEF("setChorusMix", 1, js_audioctx_setChorusMix),
+    JS_CFUNC_DEF("setChorusFeedback", 1, js_audioctx_setChorusFeedback),
+    JS_CFUNC_DEF("setChorusBaseDelay", 1, js_audioctx_setChorusBaseDelay),
+
+    // Master compressor
+    JS_CFUNC_DEF("setCompressorEnabled", 1, js_audioctx_setCompressorEnabled),
+    JS_CFUNC_DEF("setCompressorThreshold", 1, js_audioctx_setCompressorThreshold),
+    JS_CFUNC_DEF("setCompressorRatio", 1, js_audioctx_setCompressorRatio),
+    JS_CFUNC_DEF("setCompressorAttack", 1, js_audioctx_setCompressorAttack),
+    JS_CFUNC_DEF("setCompressorRelease", 1, js_audioctx_setCompressorRelease),
+
+    // Mix bus API
+    JS_CFUNC_DEF("createBus", 0, js_audioctx_createBus),
+    JS_CFUNC_DEF("deleteBus", 1, js_audioctx_deleteBus),
+    JS_CFUNC_DEF("setBusGain", 2, js_audioctx_setBusGain),
+    JS_CFUNC_DEF("setBusPan", 2, js_audioctx_setBusPan),
+    JS_CFUNC_DEF("setBusMuted", 2, js_audioctx_setBusMuted),
+    JS_CFUNC_DEF("allocateBusFilterSlot", 1, js_audioctx_allocateBusFilterSlot),
+    JS_CFUNC_DEF("releaseBusFilterSlot", 2, js_audioctx_releaseBusFilterSlot),
+    JS_CFUNC_DEF("setBusFilterEnabled", 3, js_audioctx_setBusFilterEnabled),
+    JS_CFUNC_DEF("setBusFilterType", 3, js_audioctx_setBusFilterType),
+    JS_CFUNC_DEF("setBusFilterFrequency", 3, js_audioctx_setBusFilterFrequency),
+    JS_CFUNC_DEF("setBusFilterQ", 3, js_audioctx_setBusFilterQ),
+    JS_CFUNC_DEF("setBusFilterGain", 3, js_audioctx_setBusFilterGain),
+    JS_CFUNC_DEF("setBusDelayEnabled", 2, js_audioctx_setBusDelayEnabled),
+    JS_CFUNC_DEF("setBusDelayTime", 2, js_audioctx_setBusDelayTime),
+    JS_CFUNC_DEF("setBusDelayFeedback", 2, js_audioctx_setBusDelayFeedback),
+    JS_CFUNC_DEF("setBusDelayMix", 2, js_audioctx_setBusDelayMix),
+    JS_CFUNC_DEF("setBusCompressorEnabled", 2, js_audioctx_setBusCompressorEnabled),
+    JS_CFUNC_DEF("setBusCompressorThreshold", 2, js_audioctx_setBusCompressorThreshold),
+    JS_CFUNC_DEF("setBusCompressorRatio", 2, js_audioctx_setBusCompressorRatio),
+    JS_CFUNC_DEF("setBusCompressorAttack", 2, js_audioctx_setBusCompressorAttack),
+    JS_CFUNC_DEF("setBusCompressorRelease", 2, js_audioctx_setBusCompressorRelease),
+    JS_CFUNC_DEF("setBusReverbEnabled", 2, js_audioctx_setBusReverbEnabled),
+    JS_CFUNC_DEF("setBusReverbRoomSize", 2, js_audioctx_setBusReverbRoomSize),
+    JS_CFUNC_DEF("setBusReverbDamping", 2, js_audioctx_setBusReverbDamping),
+    JS_CFUNC_DEF("setBusReverbMix", 2, js_audioctx_setBusReverbMix),
+    JS_CFUNC_DEF("setBusChorusEnabled", 2, js_audioctx_setBusChorusEnabled),
+    JS_CFUNC_DEF("setBusChorusRate", 2, js_audioctx_setBusChorusRate),
+    JS_CFUNC_DEF("setBusChorusDepth", 2, js_audioctx_setBusChorusDepth),
+    JS_CFUNC_DEF("setBusChorusMix", 2, js_audioctx_setBusChorusMix),
+    JS_CFUNC_DEF("setBusChorusFeedback", 2, js_audioctx_setBusChorusFeedback),
+    JS_CFUNC_DEF("setBusChorusBaseDelay", 2, js_audioctx_setBusChorusBaseDelay),
+
+    // Voice/clip bus routing
+    JS_CFUNC_DEF("setVoiceBus", 2, js_audioctx_setVoiceBus),
+    JS_CFUNC_DEF("setPlaybackBus", 2, js_audioctx_setPlaybackBus),
+
+    // Voice note context
+    JS_CFUNC_DEF("setVoiceNote", 3, js_audioctx_setVoiceNote),
+
+    // Wavetable
+    JS_CFUNC_DEF("createWavetable", 1, js_audioctx_createWavetable),
+    JS_CFUNC_DEF("createWavetableFromWaveform", 1, js_audioctx_createWavetableFromWaveform),
+    JS_CFUNC_DEF("deleteWavetable", 1, js_audioctx_deleteWavetable),
+    JS_CFUNC_DEF("setVoiceWavetable", 2, js_audioctx_setVoiceWavetable),
+
+    // Spectrum
+    JS_CFUNC_DEF("getSpectrum", 1, js_audioctx_getSpectrum),
+
+    // Spatial audio
+    JS_CFUNC_DEF("setListenerPosition", 3, js_audioctx_setListenerPosition),
+    JS_CFUNC_DEF("setListenerOrientation", 6, js_audioctx_setListenerOrientation),
+
+    // Factory methods
+    JS_CFUNC_DEF("createVoiceAllocator", 1, js_audioctx_createVoiceAllocator),
+    JS_CFUNC_DEF("getModMatrix", 0, js_audioctx_getModMatrix),
+    JS_CFUNC_DEF("createMidiInput", 0, js_audioctx_createMidiInput),
+
+    // Recording
     JS_CFUNC_DEF("startRecording", 0, js_audioctx_startRecording),
     JS_CFUNC_DEF("stopRecording", 0, js_audioctx_stopRecording),
+
+    // Clips
     JS_CFUNC_DEF("createClip", 1, js_audioctx_createClip),
     JS_CFUNC_DEF("deleteClip", 1, js_audioctx_deleteClip),
     JS_CFUNC_DEF("getClipSampleCount", 1, js_audioctx_getClipSampleCount),
@@ -1074,8 +2034,6 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
 // Constructor for `new AudioContext()`
 // ---------------------------------------------------------------------------
 
-static broaudio::Engine* s_audioEngine = nullptr;
-
 static JSValue js_audioctx_constructor(JSContext* ctx, JSValueConst new_target,
                                         int, JSValueConst*) {
     if (!s_audioEngine) return JS_ThrowInternalError(ctx, "Audio not initialized");
@@ -1086,7 +2044,6 @@ static JSValue js_audioctx_constructor(JSContext* ctx, JSValueConst new_target,
     auto* data = new AudioCtxData{s_audioEngine};
     JS_SetOpaque(obj, data);
 
-    // Create destination node
     JSValue dest = JS_NewObjectClass(ctx, static_cast<int>(js_destnode_class_id));
     JS_SetPropertyStr(ctx, obj, "destination", dest);
 
@@ -1101,9 +2058,7 @@ static JSValue js_getUserMedia(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv) {
     if (!s_audioEngine) return JS_ThrowInternalError(ctx, "Audio not initialized");
 
-    // Start mic capture
     if (!s_audioEngine->startMicCapture()) {
-        // Return rejected promise
         JSValue err = JS_NewError(ctx);
         JS_SetPropertyStr(ctx, err, "message",
                           JS_NewString(ctx, "Failed to access microphone"));
@@ -1116,12 +2071,10 @@ static JSValue js_getUserMedia(JSContext* ctx, JSValueConst this_val,
         return promise;
     }
 
-    // Create MediaStream object
     JSValue stream = JS_NewObjectClass(ctx, static_cast<int>(js_micstream_class_id));
     auto* data = new MicStreamData{s_audioEngine};
     JS_SetOpaque(stream, data);
 
-    // Return resolved promise with the stream
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
     JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &stream);
@@ -1208,6 +2161,36 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                                sizeof(js_gainnode_proto_funcs)/sizeof(js_gainnode_proto_funcs[0]));
     JS_SetClassProto(ctx, js_gainnode_class_id, gainProto);
 
+    // VoiceAllocator
+    JS_NewClassID(rt, &js_voiceallocator_class_id);
+    JS_NewClass(rt, js_voiceallocator_class_id, &js_voiceallocator_class);
+    {
+        JSValue vaProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, vaProto, js_voiceallocator_proto_funcs,
+                                   sizeof(js_voiceallocator_proto_funcs)/sizeof(js_voiceallocator_proto_funcs[0]));
+        JS_SetClassProto(ctx, js_voiceallocator_class_id, vaProto);
+    }
+
+    // ModMatrix
+    JS_NewClassID(rt, &js_modmatrix_class_id);
+    JS_NewClass(rt, js_modmatrix_class_id, &js_modmatrix_class);
+    {
+        JSValue mmProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, mmProto, js_modmatrix_proto_funcs,
+                                   sizeof(js_modmatrix_proto_funcs)/sizeof(js_modmatrix_proto_funcs[0]));
+        JS_SetClassProto(ctx, js_modmatrix_class_id, mmProto);
+    }
+
+    // MidiInput
+    JS_NewClassID(rt, &js_midiinput_class_id);
+    JS_NewClass(rt, js_midiinput_class_id, &js_midiinput_class);
+    {
+        JSValue miProto = JS_NewObject(ctx);
+        JS_SetPropertyFunctionList(ctx, miProto, js_midiinput_proto_funcs,
+                                   sizeof(js_midiinput_proto_funcs)/sizeof(js_midiinput_proto_funcs[0]));
+        JS_SetClassProto(ctx, js_midiinput_class_id, miProto);
+    }
+
     // AudioContext
     JS_NewClassID(rt, &js_audioctx_class_id);
     JS_NewClass(rt, js_audioctx_class_id, &js_audioctx_class);
@@ -1228,7 +2211,6 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
     JS_FreeValue(ctx, global);
 
     // Wire native getUserMedia into navigator.mediaDevices via JS eval.
-    // Must run after brokit::api::installAll() which creates the navigator object.
     const char* shim =
         "(function() {"
         "  if (typeof navigator === 'undefined') return;"
@@ -1251,6 +2233,8 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
 void AudioBindings::cleanup(JSContext*)
 {
     s_audioEngine = nullptr;
+    s_wavetables.clear();
+    s_nextWavetableId = 1;
 }
 
 } // namespace bro::js

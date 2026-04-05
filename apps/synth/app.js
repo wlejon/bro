@@ -161,6 +161,87 @@
         }
     });
 
+    // -----------------------------------------------------------------------
+    // Reverb sliders
+    // -----------------------------------------------------------------------
+    sliders.reverbRoom = Synth.Slider(document.getElementById('reverb-room-slider'), {
+        min: 0, max: 100, value: 50, step: 1, defaultValue: 50,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            layerParam('reverb.roomSize', v / 100);
+            Synth.Effects.setReverbRoomSize(v / 100);
+        }
+    });
+
+    sliders.reverbDamp = Synth.Slider(document.getElementById('reverb-damp-slider'), {
+        min: 0, max: 100, value: 50, step: 1, defaultValue: 50,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            layerParam('reverb.damping', v / 100);
+            Synth.Effects.setReverbDamping(v / 100);
+        }
+    });
+
+    sliders.reverbMix = Synth.Slider(document.getElementById('reverb-mix-slider'), {
+        min: 0, max: 100, value: 20, step: 1, defaultValue: 20,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            layerParam('reverb.mix', v / 100);
+            Synth.Effects.setReverbMix(v / 100);
+        }
+    });
+
+    // -----------------------------------------------------------------------
+    // Chorus sliders
+    // -----------------------------------------------------------------------
+    sliders.chorusRate = Synth.Slider(document.getElementById('chorus-rate-slider'), {
+        min: 1, max: 100, value: 20, step: 1, defaultValue: 20,
+        format: function(v) { return (v / 10).toFixed(1) + 'Hz'; },
+        onChange: function(v) {
+            layerParam('chorus.rate', v / 10);
+            Synth.Effects.setChorusRate(v / 10);
+        }
+    });
+
+    sliders.chorusDepth = Synth.Slider(document.getElementById('chorus-depth-slider'), {
+        min: 0, max: 100, value: 30, step: 1, defaultValue: 30,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            layerParam('chorus.depth', v / 10000);
+            Synth.Effects.setChorusDepth(v / 10000);
+        }
+    });
+
+    sliders.chorusMix = Synth.Slider(document.getElementById('chorus-mix-slider'), {
+        min: 0, max: 100, value: 30, step: 1, defaultValue: 30,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            layerParam('chorus.mix', v / 100);
+            Synth.Effects.setChorusMix(v / 100);
+        }
+    });
+
+    // -----------------------------------------------------------------------
+    // Compressor sliders
+    // -----------------------------------------------------------------------
+    sliders.compThresh = Synth.Slider(document.getElementById('comp-thresh-slider'), {
+        min: -60, max: 0, value: -12, step: 1, defaultValue: -12,
+        format: function(v) { return v + 'dB'; },
+        onChange: function(v) {
+            layerParam('compressor.threshold', v);
+            Synth.Effects.setCompressorThreshold(v);
+        }
+    });
+
+    sliders.compRatio = Synth.Slider(document.getElementById('comp-ratio-slider'), {
+        min: 10, max: 200, value: 40, step: 1, defaultValue: 40,
+        format: function(v) { return (v / 10).toFixed(1) + ':1'; },
+        onChange: function(v) {
+            layerParam('compressor.ratio', v / 10);
+            Synth.Effects.setCompressorRatio(v / 10);
+        }
+    });
+
     sliders.lfoRate = Synth.Slider(document.getElementById('lfo-rate-slider'), {
         min: 0, max: 100, value: 30, step: 0.5, defaultValue: 30,
         format: function(v) { return formatLfoRate(lfoSliderToHz(v)); },
@@ -268,6 +349,39 @@
     });
 
     // -----------------------------------------------------------------------
+    // Reverb toggle (per-layer)
+    // -----------------------------------------------------------------------
+    var reverbToggle = document.getElementById('reverb-toggle');
+    reverbToggle.addEventListener('click', function() {
+        var enabled = !Synth.Effects.isReverbEnabled();
+        Synth.Effects.setReverbEnabled(enabled);
+        layerParam('reverb.enabled', enabled);
+        updateToggle(reverbToggle, enabled);
+    });
+
+    // -----------------------------------------------------------------------
+    // Chorus toggle (per-layer)
+    // -----------------------------------------------------------------------
+    var chorusToggle = document.getElementById('chorus-toggle');
+    chorusToggle.addEventListener('click', function() {
+        var enabled = !Synth.Effects.isChorusEnabled();
+        Synth.Effects.setChorusEnabled(enabled);
+        layerParam('chorus.enabled', enabled);
+        updateToggle(chorusToggle, enabled);
+    });
+
+    // -----------------------------------------------------------------------
+    // Compressor toggle (per-layer)
+    // -----------------------------------------------------------------------
+    var compToggle = document.getElementById('comp-toggle');
+    compToggle.addEventListener('click', function() {
+        var enabled = !Synth.Effects.isCompressorEnabled();
+        Synth.Effects.setCompressorEnabled(enabled);
+        layerParam('compressor.enabled', enabled);
+        updateToggle(compToggle, enabled);
+    });
+
+    // -----------------------------------------------------------------------
     // LFO toggle & target (per-layer)
     // -----------------------------------------------------------------------
     var lfoToggle = document.getElementById('lfo-toggle');
@@ -361,6 +475,23 @@
         sliders.delayTime.setValue(Math.round(layer.delay.time * 1000), true);
         sliders.delayFb.setValue(Math.round(layer.delay.feedback * 100), true);
         sliders.delayMix.setValue(Math.round(layer.delay.mix * 100), true);
+
+        // Reverb
+        updateToggle(reverbToggle, layer.reverb.enabled);
+        sliders.reverbRoom.setValue(Math.round(layer.reverb.roomSize * 100), true);
+        sliders.reverbDamp.setValue(Math.round(layer.reverb.damping * 100), true);
+        sliders.reverbMix.setValue(Math.round(layer.reverb.mix * 100), true);
+
+        // Chorus
+        updateToggle(chorusToggle, layer.chorus.enabled);
+        sliders.chorusRate.setValue(Math.round(layer.chorus.rate * 10), true);
+        sliders.chorusDepth.setValue(Math.round(layer.chorus.depth * 10000), true);
+        sliders.chorusMix.setValue(Math.round(layer.chorus.mix * 100), true);
+
+        // Compressor
+        updateToggle(compToggle, layer.compressor.enabled);
+        sliders.compThresh.setValue(Math.round(layer.compressor.threshold), true);
+        sliders.compRatio.setValue(Math.round(layer.compressor.ratio * 10), true);
 
         // LFO
         updateToggle(lfoToggle, layer.lfo.enabled);

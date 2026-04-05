@@ -52,6 +52,8 @@
                             <button class="btn" data-wave="square">Sqr</button>
                             <button class="btn" data-wave="sawtooth">Saw</button>
                             <button class="btn" data-wave="triangle">Tri</button>
+                            <button class="btn" data-wave="whitenoise">Wht</button>
+                            <button class="btn" data-wave="pinknoise">Pnk</button>
                         </div>
                         <div class="slider-row"><label>Pan</label><div class="fancy-slider" id="pan-slider"></div></div>
                     </div>
@@ -90,6 +92,38 @@
                         <div class="slider-row"><label>Time</label><div class="fancy-slider" id="delay-time-slider"></div></div>
                         <div class="slider-row"><label>Feedback</label><div class="fancy-slider" id="delay-fb-slider"></div></div>
                         <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="delay-mix-slider"></div></div>
+                    </div>
+
+                    <!-- Reverb -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title">Reverb</div>
+                            <button id="reverb-toggle" class="btn btn-toggle">Off</button>
+                        </div>
+                        <div class="slider-row"><label>Room</label><div class="fancy-slider" id="reverb-room-slider"></div></div>
+                        <div class="slider-row"><label>Damping</label><div class="fancy-slider" id="reverb-damp-slider"></div></div>
+                        <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="reverb-mix-slider"></div></div>
+                    </div>
+
+                    <!-- Chorus -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title">Chorus</div>
+                            <button id="chorus-toggle" class="btn btn-toggle">Off</button>
+                        </div>
+                        <div class="slider-row"><label>Rate</label><div class="fancy-slider" id="chorus-rate-slider"></div></div>
+                        <div class="slider-row"><label>Depth</label><div class="fancy-slider" id="chorus-depth-slider"></div></div>
+                        <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="chorus-mix-slider"></div></div>
+                    </div>
+
+                    <!-- Compressor -->
+                    <div class="panel">
+                        <div class="panel-header">
+                            <div class="panel-title">Compressor</div>
+                            <button id="comp-toggle" class="btn btn-toggle">Off</button>
+                        </div>
+                        <div class="slider-row"><label>Thresh</label><div class="fancy-slider" id="comp-thresh-slider"></div></div>
+                        <div class="slider-row"><label>Ratio</label><div class="fancy-slider" id="comp-ratio-slider"></div></div>
                     </div>
 
                     <!-- LFO -->

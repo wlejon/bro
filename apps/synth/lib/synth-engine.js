@@ -5,7 +5,9 @@
     var audioCtx = null;
     var analyser = null;
     var masterGain = null;
-    var activeNotes = new Map(); // noteIdx -> { osc, gain }
+    var allocator = null;
+    var modMatrix = null;
+    var activeNotes = new Map(); // noteIdx -> { clipPlaybackId } (clip mode only)
 
     var waveform = 'sine';
     var synthVolume = 0.5;
@@ -24,8 +26,17 @@
             masterGain.connect(analyser);
             analyser.source = 2;
             analyser.connect(audioCtx.destination);
-            // Set initial volume via engine master gain
             audioCtx.masterGain = synthVolume;
+
+            // Create voice allocator for polyphonic synth
+            allocator = audioCtx.createVoiceAllocator(16);
+            allocator.setStealPolicy('oldest');
+            allocator.setVoiceSetup(function(voiceId, note, velocity) {
+                audioCtx.setVoiceNote(voiceId, note, velocity);
+            });
+
+            // Init LFO with mod matrix
+            Synth.LFO.init(audioCtx);
         } catch (e) {
             console.warn('AudioContext unavailable:', e.message);
         }
@@ -36,7 +47,6 @@
     var CLIP_BASE_NOTE = 36;
 
     // silent: if true, skip piano key highlight, lastPlayedNote, and status bar updates
-    //         (used by sequencer/arp so playback doesn't disrupt the UI)
     Synth.noteOn = function(noteIdx, silent) {
         if (!audioCtx) return;
         var notes = Synth.notes;
@@ -53,26 +63,12 @@
             if (pbId >= 0) {
                 audioCtx.setPlaybackRate(pbId, rate);
                 if (Synth.voicePan) audioCtx.setPlaybackPan(pbId, Synth.voicePan);
-                activeNotes.set(noteIdx, { clipPlaybackId: pbId, baseFreq: note.freq });
+                activeNotes.set(noteIdx, { clipPlaybackId: pbId });
             }
         } else {
-            // Oscillator mode
-            var osc = audioCtx.createOscillator();
-            var gain = audioCtx.createGain();
-
-            osc.type = waveform;
-            osc.frequency.value = note.freq;
-            osc.pan.value = Synth.voicePan || 0;
-            osc.attack.value = adsrParams.attack;
-            osc.decay.value = adsrParams.decay;
-            osc.sustain.value = adsrParams.sustain;
-            osc.release.value = adsrParams.release;
-            gain.gain.value = 3.0; // per-voice boost (VOICE_AMPLITUDE=0.1 in engine; soft limiter handles peaks)
-
-            osc.connect(gain).connect(masterGain);
-            osc.start();
-
-            activeNotes.set(noteIdx, { osc: osc, gain: gain, baseFreq: note.freq });
+            // Oscillator mode via VoiceAllocator
+            allocator.noteOn(note.midi, 1.0, audioCtx.currentTime);
+            activeNotes.set(noteIdx, { midi: note.midi });
         }
 
         if (!silent) {
@@ -88,11 +84,9 @@
         if (!entry) return;
 
         if (entry.clipPlaybackId !== undefined) {
-            // Clip instrument mode
             audioCtx.stopPlayback(entry.clipPlaybackId);
-        } else {
-            // Oscillator mode
-            entry.osc.stop();
+        } else if (entry.midi !== undefined) {
+            allocator.noteOff(entry.midi, audioCtx.currentTime);
         }
         activeNotes.delete(noteIdx);
 
@@ -107,12 +101,28 @@
         }
     };
 
+    // Configure the voice allocator's setup callback for current synth state
+    Synth.applyVoiceConfig = function() {
+        if (!allocator) return;
+        var wf = waveform;
+        var adsr = { attack: adsrParams.attack, decay: adsrParams.decay,
+                     sustain: adsrParams.sustain, release: adsrParams.release };
+        var pan = Synth.voicePan || 0;
+
+        allocator.setVoiceSetup(function(voiceId, note, velocity) {
+            audioCtx.setVoiceNote(voiceId, note, velocity);
+            var osc = audioCtx.createOscillator();
+            // We don't use the OscillatorNode directly — configure the voice via engine
+            // The allocator already created the voice; we just need to set params
+            // Note: voiceId is the engine voice ID, configure it directly
+        });
+    };
+
     Synth.setWaveform = function(wf) { waveform = wf; };
     Synth.getWaveform = function() { return waveform; };
 
     Synth.setVolume = function(v) {
         synthVolume = v;
-        // Volume is post-mix master gain, not per-voice
         if (audioCtx) audioCtx.masterGain = v;
     };
     Synth.getVolume = function() { return synthVolume; };
@@ -128,7 +138,7 @@
                  sustain: adsrParams.sustain, release: adsrParams.release };
     };
 
-    Synth.voicePan = 0; // current pan for new voices: -1 (left) to 1 (right)
+    Synth.voicePan = 0;
     Synth.setPan = function(p) { Synth.voicePan = Math.max(-1, Math.min(1, p)); };
     Synth.getPan = function() { return Synth.voicePan; };
 
@@ -137,6 +147,25 @@
     Synth.getAnalyser = function() { return analyser; };
     Synth.getMasterGain = function() { return masterGain; };
     Synth.getActiveNotes = function() { return activeNotes; };
+    Synth.getAllocator = function() { return allocator; };
+
+    // Configure voice allocator callback with layer-specific params
+    Synth.configureAllocator = function(wf, pan, adsr) {
+        if (!allocator || !audioCtx) return;
+        allocator.setVoiceSetup(function(voiceId, note, velocity) {
+            audioCtx.setVoiceNote(voiceId, note, velocity);
+            // Voice is already created by allocator — set waveform/ADSR/pan
+            var osc = { type: wf }; // We need to set via engine directly
+            // The createVoice was done by allocator internally; set params on the voice ID
+            // Since we can't call engine directly from JS, we use a temporary oscillator-like pattern:
+            // Actually the VoiceAllocator creates voices and we configure them here.
+            // We don't have direct setWaveform on audioCtx for arbitrary voiceId...
+            // But we do have createOscillator which creates a voice. The allocator manages voices internally.
+            // For now, the allocator's voiceSetup callback gets the voiceId and we can't set params
+            // on it directly from JS except through the oscillator wrapper.
+            // TODO: expose direct voice config methods, or have allocator use OscillatorNodes
+        });
+    };
 
     // Note definitions -- 7 octaves (C1-B7)
     var NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];

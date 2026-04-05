@@ -18,7 +18,6 @@
 
         pause: function() {
             paused = true;
-            // Clear the canvas so it doesn't ghost over the editor view
             if (ctx) {
                 var W = ctx.canvasWidth;
                 var H = ctx.canvasHeight;
@@ -51,8 +50,7 @@
 
             updateMicInfo();
 
-            // LFO update
-            if (Synth.LFO) Synth.LFO.update(1 / 60);
+            // LFO modulation now runs natively on the audio thread (no JS tick needed)
 
             var analyser = Synth.getAnalyser();
             if (!analyser) return;
