@@ -538,6 +538,71 @@
         document.getElementById('seq-bpm-display').textContent = e.target.value;
     });
 
+    // -----------------------------------------------------------------------
+    // Save Loop — offline-render one full sequencer/arp loop to WAV
+    // -----------------------------------------------------------------------
+    document.getElementById('seq-save-loop').addEventListener('click', function() {
+        var result = Synth.Sequencer.renderOffline();
+        if (!result || result.samples.length === 0) {
+            console.warn('Nothing to save — add notes to the sequencer');
+            return;
+        }
+
+        var path = showSaveFileDialog('WAV Files|wav', 'loop.wav');
+        if (path) {
+            if (path.indexOf('.wav') < 0 && path.indexOf('.WAV') < 0) path += '.wav';
+            try {
+                var wav = Synth.WAV.encode(result.samples, result.sampleRate);
+                require('fs').writeFileSync(path, new Uint8Array(wav));
+                console.log('Loop saved:', path);
+            } catch (e) {
+                console.error('Save failed:', e.message);
+            }
+        }
+    });
+
+    // -----------------------------------------------------------------------
+    // Freeform Record — record live playing to WAV
+    // -----------------------------------------------------------------------
+    var seqRecording = false;
+
+    document.getElementById('seq-record').addEventListener('click', function() {
+        var btn = this;
+        var audioCtx = Synth.getAudioContext();
+        if (!audioCtx) return;
+
+        if (!seqRecording) {
+            // Start recording
+            audioCtx.startRecording();
+            seqRecording = true;
+            btn.classList.add('recording');
+            btn.textContent = 'Stop Rec';
+        } else {
+            // Stop recording and save
+            var samples = audioCtx.stopRecording();
+            seqRecording = false;
+            btn.classList.remove('recording');
+            btn.textContent = 'Record';
+
+            if (!samples || samples.length === 0) {
+                console.warn('No audio recorded');
+                return;
+            }
+
+            var path = showSaveFileDialog('WAV Files|wav', 'recording.wav');
+            if (path) {
+                if (path.indexOf('.wav') < 0 && path.indexOf('.WAV') < 0) path += '.wav';
+                try {
+                    var wav = Synth.WAV.encode(samples, audioCtx.sampleRate);
+                    require('fs').writeFileSync(path, new Uint8Array(wav));
+                    console.log('Recording saved:', path);
+                } catch (e) {
+                    console.error('Save failed:', e.message);
+                }
+            }
+        }
+    });
+
     $$('#seq-mode-btns .btn').forEach(function(btn) {
         btn.addEventListener('click', function() {
             $$('#seq-mode-btns .btn').forEach(function(b) { b.classList.remove('active'); });

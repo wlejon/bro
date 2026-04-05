@@ -202,9 +202,11 @@ Engine::Engine(const EngineConfig& config)
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
 
-    // 9x. Native file dialogs (modal to our SDL window)
+    // 9x. Native file dialogs (modal to our SDL window).
+    //      Pass a tick callback so JS timers keep running while dialog is open.
     js::DialogBindings::install(jsRuntime_->getContext(),
-                                window_ ? window_->getSDLWindow() : nullptr);
+                                window_ ? window_->getSDLWindow() : nullptr,
+                                [this]() { tickTimersOnly(); });
 
     // 9a. Install DOM JS bindings (after window so polyfills work)
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
@@ -407,6 +409,28 @@ Engine::~Engine() {
 }
 
 // ---------------------------------------------------------------------------
+// Lightweight tick for use during modal blocking (move/resize, dialogs)
+// ---------------------------------------------------------------------------
+
+void Engine::tickTimersOnly()
+{
+    double now = util::currentTimeMs();
+    timers_->tick(now);
+    jsRuntime_->executePendingJobs();
+}
+
+/// SDL event watcher — fires on the main thread during Windows' modal
+/// move/resize loop, keeping JS timers (audio sequencer etc.) alive.
+static bool modalEventWatcher(void* userdata, SDL_Event* event)
+{
+    if (event->type >= SDL_EVENT_WINDOW_FIRST &&
+        event->type <= SDL_EVENT_WINDOW_LAST) {
+        static_cast<Engine*>(userdata)->tickTimersOnly();
+    }
+    return true; // keep the event in the queue
+}
+
+// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
@@ -458,6 +482,9 @@ void Engine::run() {
     }
 
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
+
+    // Event watcher keeps JS timers alive during Windows' modal move/resize loop.
+    SDL_AddEventWatch(modalEventWatcher, this);
 
     while (running_) {
         double frameStart = util::currentTimeMs();
@@ -830,6 +857,8 @@ void Engine::run() {
             }
         }
     }
+
+    SDL_RemoveEventWatch(modalEventWatcher, this);
 }
 
 // ---------------------------------------------------------------------------

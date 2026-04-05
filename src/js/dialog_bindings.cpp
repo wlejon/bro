@@ -13,6 +13,7 @@ namespace bro::js {
 
 // Store the SDL window so the dialog can be modal to it
 static SDL_Window* s_window = nullptr;
+static DialogBindings::TickCallback s_tickCb;
 
 // ---------------------------------------------------------------------------
 // Dialog result — written by callback thread, read by main thread
@@ -36,13 +37,14 @@ static void dialogCallback(void* userdata, const char* const* filelist, int /*fi
     result->ready.store(true, std::memory_order_release);
 }
 
-/// Spin-wait for the dialog result while keeping SDL's event loop alive.
-/// This prevents GPU driver TDR timeouts that cause BSODs.
+/// Spin-wait for the dialog result while keeping SDL's event loop alive
+/// and ticking JS timers so audio sequencer / timers keep running.
 static void waitForDialog(DialogResult& result)
 {
     while (!result.ready.load(std::memory_order_acquire)) {
         SDL_PumpEvents();
-        SDL_Delay(16);  // ~60fps event pump
+        if (s_tickCb) s_tickCb();
+        SDL_Delay(8);
     }
 }
 
@@ -154,9 +156,11 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
 // Install
 // ---------------------------------------------------------------------------
 
-void DialogBindings::install(JSContext* ctx, SDL_Window* window)
+void DialogBindings::install(JSContext* ctx, SDL_Window* window,
+                             TickCallback tickCb)
 {
     s_window = window;
+    s_tickCb = std::move(tickCb);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "showOpenFileDialog",

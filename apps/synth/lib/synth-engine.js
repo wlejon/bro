@@ -65,7 +65,7 @@
             osc.decay.value = adsrParams.decay;
             osc.sustain.value = adsrParams.sustain;
             osc.release.value = adsrParams.release;
-            gain.gain.value = 1.0; // fixed per-voice; volume is engine masterGain
+            gain.gain.value = 3.0; // per-voice boost (VOICE_AMPLITUDE=0.1 in engine; soft limiter handles peaks)
 
             osc.connect(gain).connect(masterGain);
             osc.start();

@@ -110,6 +110,11 @@ public:
     /// Get virtual time (headless mode).
     double virtualTime() const { return virtualTime_; }
 
+    /// Lightweight tick: advance JS timers + pending jobs only.
+    /// Used during modal blocking (window move/resize, file dialogs)
+    /// to keep audio sequencer and other JS timers alive.
+    void tickTimersOnly();
+
 private:
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);

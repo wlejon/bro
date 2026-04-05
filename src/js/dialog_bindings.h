@@ -4,6 +4,8 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include <functional>
+
 struct SDL_Window;
 
 namespace bro::js {
@@ -11,7 +13,11 @@ namespace bro::js {
 class DialogBindings {
 public:
     /// Install showOpenFileDialog() and showSaveFileDialog() on the global object.
-    static void install(JSContext* ctx, SDL_Window* window);
+    /// The optional tickCb is called repeatedly while a dialog is open, so that
+    /// JS timers (e.g. sequencer) and pending jobs keep running.
+    using TickCallback = std::function<void()>;
+    static void install(JSContext* ctx, SDL_Window* window,
+                        TickCallback tickCb = nullptr);
 };
 
 } // namespace bro::js
