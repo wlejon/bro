@@ -31,12 +31,13 @@
             arpPattern: 'up',
             adsr: { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.08 },
             unison: { count: 1, detune: 0.15, stereoWidth: 0.7 },
-            effectOrder: ['filter', 'delay', 'compressor', 'chorus', 'reverb'],
+            effectOrder: ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer'],
             filter: { enabled: false, type: 'lowpass', frequency: 2000, Q: 1.0, gain: 0 },
             delay: { enabled: false, time: 0.3, feedback: 0.3, mix: 0.3 },
             reverb: { enabled: false, roomSize: 0.5, damping: 0.5, mix: 0.2 },
             chorus: { enabled: false, rate: 1.0, depth: 0.003, mix: 0.3, feedback: 0, baseDelay: 0.007 },
-            compressor: { enabled: false, threshold: -12, ratio: 4, attack: 10, release: 100 },
+            compressor: { enabled: false, threshold: -12, ratio: 4, attack: 10, release: 100, sidechainBusId: -1 },
+            eq: { enabled: false, masterGain: 0, bands: [0, 0, 0, 0, 0, 0, 0] },
             lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
         };
     }
@@ -47,7 +48,8 @@
             delay: { enabled: false, time: 0.3, feedback: 0.3, mix: 0.3 },
             reverb: { enabled: false, roomSize: 0.5, damping: 0.5, mix: 0.2 },
             chorus: { enabled: false, rate: 1.0, depth: 0.003, mix: 0.3, feedback: 0, baseDelay: 0.007 },
-            compressor: { enabled: false, threshold: -12, ratio: 4, attack: 10, release: 100 },
+            compressor: { enabled: false, threshold: -12, ratio: 4, attack: 10, release: 100, sidechainBusId: -1 },
+            eq: { enabled: false, masterGain: 0, bands: [0, 0, 0, 0, 0, 0, 0] },
             lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
         };
     }
@@ -88,7 +90,7 @@
                 detune: p.unison ? val(p.unison.detune, 0.15) : 0.15,
                 stereoWidth: p.unison ? val(p.unison.stereoWidth, 0.7) : 0.7
             },
-            effectOrder: p.effectOrder ? p.effectOrder.slice() : ['filter', 'delay', 'compressor', 'chorus', 'reverb'],
+            effectOrder: p.effectOrder ? p.effectOrder.slice() : ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer'],
             filter: {
                 enabled: p.filter ? (p.filter.enabled || false) : false,
                 type: p.filter ? (p.filter.type || 'lowpass') : 'lowpass',
@@ -121,7 +123,13 @@
                 threshold: p.compressor ? val(p.compressor.threshold, -12) : -12,
                 ratio: p.compressor ? val(p.compressor.ratio, 4) : 4,
                 attack: p.compressor ? val(p.compressor.attack, 10) : 10,
-                release: p.compressor ? val(p.compressor.release, 100) : 100
+                release: p.compressor ? val(p.compressor.release, 100) : 100,
+                sidechainBusId: p.compressor ? val(p.compressor.sidechainBusId, -1) : -1
+            },
+            eq: {
+                enabled: p.eq ? (p.eq.enabled || false) : false,
+                masterGain: p.eq ? val(p.eq.masterGain, 0) : 0,
+                bands: p.eq && p.eq.bands ? p.eq.bands.slice() : [0, 0, 0, 0, 0, 0, 0]
             },
             lfo: {
                 enabled: p.lfo ? (p.lfo.enabled || false) : false,
@@ -223,7 +231,7 @@
                 effectOrder: src.effectOrder.slice(), filter: cloneObj(src.filter),
                 delay: cloneObj(src.delay), reverb: cloneObj(src.reverb),
                 chorus: cloneObj(src.chorus), compressor: cloneObj(src.compressor),
-                lfo: cloneObj(src.lfo)
+                eq: cloneObj(src.eq), lfo: cloneObj(src.lfo)
             });
             dup.id = layers.length;
             dup.color = COLORS[layers.length % COLORS.length];
@@ -276,11 +284,13 @@
                 busId: busId,
                 name: 'Mic',
                 color: '#ff4444',
+                effectOrder: ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer'],
                 filter: defaults.filter,
                 delay: defaults.delay,
                 reverb: defaults.reverb,
                 chorus: defaults.chorus,
                 compressor: defaults.compressor,
+                eq: defaults.eq,
                 lfo: defaults.lfo
             };
             Synth.SignalChain.applyParams(busId, micSignal);
@@ -355,7 +365,7 @@
                     effectOrder: l.effectOrder.slice(), filter: cloneObj(l.filter),
                     delay: cloneObj(l.delay), reverb: cloneObj(l.reverb),
                     chorus: cloneObj(l.chorus), compressor: cloneObj(l.compressor),
-                    lfo: cloneObj(l.lfo), steps: l.steps.slice()
+                    eq: cloneObj(l.eq), lfo: cloneObj(l.lfo), steps: l.steps.slice()
                 });
             }
             return out;

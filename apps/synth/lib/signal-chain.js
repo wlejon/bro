@@ -73,6 +73,18 @@
                 SC.setCompressorAttack(busId, params.compressor.attack);
                 SC.setCompressorRelease(busId, params.compressor.release);
                 SC.setCompressorEnabled(busId, params.compressor.enabled);
+                if (params.compressor.sidechainBusId >= 0) {
+                    SC.setCompressorSidechain(busId, params.compressor.sidechainBusId);
+                }
+            }
+
+            // Equalizer
+            if (params.eq) {
+                SC.setEqMasterGain(busId, params.eq.masterGain);
+                for (var i = 0; i < params.eq.bands.length; i++) {
+                    SC.setEqBandGain(busId, i, params.eq.bands[i]);
+                }
+                SC.setEqEnabled(busId, params.eq.enabled);
             }
         },
 
@@ -167,6 +179,36 @@
         },
         setCompressorRelease: function(busId, v) {
             var c = ctx(); if (c) c.setBusCompressorRelease(busId, v);
+        },
+        setCompressorSidechain: function(busId, scBusId) {
+            var c = ctx(); if (c) c.setBusCompressorSidechain(busId, scBusId);
+        },
+
+        // --- Equalizer ---
+
+        setEqEnabled: function(busId, v) {
+            var c = ctx(); if (c) c.setBusEqEnabled(busId, v);
+        },
+        setEqBandGain: function(busId, band, gainDB) {
+            var c = ctx(); if (c) c.setBusEqBandGain(busId, band, gainDB);
+        },
+        setEqMasterGain: function(busId, gainDB) {
+            var c = ctx(); if (c) c.setBusEqMasterGain(busId, gainDB);
+        },
+
+        // --- Metering ---
+
+        getBusPeakL: function(busId) {
+            var c = ctx(); return c ? c.getBusPeakL(busId) : 0;
+        },
+        getBusPeakR: function(busId) {
+            var c = ctx(); return c ? c.getBusPeakR(busId) : 0;
+        },
+        getBusRmsL: function(busId) {
+            var c = ctx(); return c ? c.getBusRmsL(busId) : 0;
+        },
+        getBusRmsR: function(busId) {
+            var c = ctx(); return c ? c.getBusRmsR(busId) : 0;
         }
     };
 })();

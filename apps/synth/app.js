@@ -89,6 +89,7 @@
         'reverb-toggle': 'panel-reverb',
         'chorus-toggle': 'panel-chorus',
         'comp-toggle': 'panel-compressor',
+        'eq-toggle': 'panel-eq',
         'lfo-toggle': 'panel-lfo'
     };
 
@@ -100,6 +101,7 @@
             ['panel-reverb', signal.reverb && signal.reverb.enabled],
             ['panel-chorus', signal.chorus && signal.chorus.enabled],
             ['panel-compressor', signal.compressor && signal.compressor.enabled],
+            ['panel-eq', signal.eq && signal.eq.enabled],
             ['panel-lfo', signal.lfo && signal.lfo.enabled]
         ];
         for (var i = 0; i < pairs.length; i++) {
@@ -316,6 +318,62 @@
         }
     });
 
+    // -----------------------------------------------------------------------
+    // Equalizer sliders (7 bands + master)
+    // -----------------------------------------------------------------------
+    var EQ_BAND_LABELS = ['60Hz', '170Hz', '350Hz', '1kHz', '3.5kHz', '10kHz', '16kHz'];
+    sliders.eqBands = [];
+    for (var bi = 0; bi < 7; bi++) {
+        (function(band) {
+            sliders.eqBands[band] = Synth.Slider(document.getElementById('eq-band' + band + '-slider'), {
+                min: -12, max: 12, value: 0, step: 0.5, defaultValue: 0,
+                format: function(v) { return (v > 0 ? '+' : '') + v.toFixed(1) + 'dB'; },
+                onChange: function(v) {
+                    var signal = Synth.Layers.getActiveSignal();
+                    if (signal && signal.eq) signal.eq.bands[band] = v;
+                    Synth.SignalChain.setEqBandGain(activeBusId(), band, v);
+                }
+            });
+        })(bi);
+    }
+
+    sliders.eqMaster = Synth.Slider(document.getElementById('eq-master-slider'), {
+        min: -12, max: 12, value: 0, step: 0.5, defaultValue: 0,
+        format: function(v) { return (v > 0 ? '+' : '') + v.toFixed(1) + 'dB'; },
+        onChange: function(v) {
+            signalParam('eq.masterGain', v);
+            Synth.SignalChain.setEqMasterGain(activeBusId(), v);
+        }
+    });
+
+    // -----------------------------------------------------------------------
+    // Sidechain select
+    // -----------------------------------------------------------------------
+    var sidechainSelect = document.getElementById('comp-sidechain-select');
+    sidechainSelect.addEventListener('change', function() {
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var scBusId = parseInt(sidechainSelect.value, 10);
+        signal.compressor.sidechainBusId = scBusId;
+        Synth.SignalChain.setCompressorSidechain(activeBusId(), scBusId);
+    });
+
+    function rebuildSidechainOptions() {
+        var current = sidechainSelect.value;
+        sidechainSelect.innerHTML = '<option value="-1">Self</option>';
+        var count = Synth.Layers.count();
+        var activeIdx = Synth.Layers.getActiveIndex();
+        for (var i = 0; i < count; i++) {
+            if (i === activeIdx && !Synth.Layers.isEditingMic()) continue;
+            var layer = Synth.Layers.get(i);
+            var opt = document.createElement('option');
+            opt.value = layer.busId;
+            opt.textContent = layer.name;
+            sidechainSelect.appendChild(opt);
+        }
+        sidechainSelect.value = current;
+    }
+
     sliders.lfoRate = Synth.Slider(document.getElementById('lfo-rate-slider'), {
         min: 0, max: 100, value: 30, step: 0.5, defaultValue: 30,
         format: function(v) { return formatLfoRate(lfoSliderToHz(v)); },
@@ -478,6 +536,20 @@
     });
 
     // -----------------------------------------------------------------------
+    // EQ toggle
+    // -----------------------------------------------------------------------
+    var eqToggle = document.getElementById('eq-toggle');
+    eqToggle.addEventListener('click', function() {
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var enabled = !signal.eq.enabled;
+        signal.eq.enabled = enabled;
+        Synth.SignalChain.setEqEnabled(activeBusId(), enabled);
+        updateToggle(eqToggle, enabled);
+        if (enabled) document.getElementById('panel-eq').classList.remove('collapsed');
+    });
+
+    // -----------------------------------------------------------------------
     // LFO toggle & target
     // -----------------------------------------------------------------------
     var lfoToggle = document.getElementById('lfo-toggle');
@@ -504,8 +576,8 @@
     // -----------------------------------------------------------------------
     // Effect Order — draggable reorder list
     // -----------------------------------------------------------------------
-    var EFFECT_NAMES = ['filter', 'delay', 'compressor', 'chorus', 'reverb'];
-    var EFFECT_LABELS = { filter: 'Filter', delay: 'Delay', compressor: 'Compressor', chorus: 'Chorus', reverb: 'Reverb' };
+    var EFFECT_NAMES = ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer'];
+    var EFFECT_LABELS = { filter: 'Filter', delay: 'Delay', compressor: 'Compressor', chorus: 'Chorus', reverb: 'Reverb', equalizer: 'Equalizer' };
 
     function buildEffectOrderList() {
         var container = document.getElementById('effect-order-list');
@@ -680,6 +752,15 @@
         updateToggle(compToggle, signal.compressor.enabled);
         sliders.compThresh.setValue(Math.round(signal.compressor.threshold), true);
         sliders.compRatio.setValue(Math.round(signal.compressor.ratio * 10), true);
+        rebuildSidechainOptions();
+        sidechainSelect.value = signal.compressor.sidechainBusId !== undefined ? signal.compressor.sidechainBusId : -1;
+
+        // Equalizer
+        updateToggle(eqToggle, signal.eq.enabled);
+        for (var bi = 0; bi < 7; bi++) {
+            sliders.eqBands[bi].setValue(signal.eq.bands[bi], true);
+        }
+        sliders.eqMaster.setValue(signal.eq.masterGain, true);
 
         // LFO
         updateToggle(lfoToggle, signal.lfo.enabled);
@@ -793,6 +874,18 @@
                     });
                     row.appendChild(delBtn);
                 }
+
+                // Level meter
+                var meter = document.createElement('div');
+                meter.className = 'seq-layer-meter';
+                meter.setAttribute('data-bus', layer.busId.toString());
+                var meterL = document.createElement('div');
+                meterL.className = 'meter-bar meter-l';
+                var meterR = document.createElement('div');
+                meterR.className = 'meter-bar meter-r';
+                meter.appendChild(meterL);
+                meter.appendChild(meterR);
+                row.appendChild(meter);
 
                 // Step grid
                 var grid = document.createElement('div');

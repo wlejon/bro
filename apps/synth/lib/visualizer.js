@@ -60,8 +60,28 @@
             }
             analyser.getFloatTimeDomainData(waveData);
             drawWaveform(W, H, waveData);
+
+            // Update per-bus level meters (every 3rd frame)
+            if (frameCount % 3 === 0) updateBusMeters();
         }
     };
+
+    function updateBusMeters() {
+        var SC = Synth.SignalChain;
+        var meters = document.querySelectorAll('.seq-layer-meter');
+        for (var i = 0; i < meters.length; i++) {
+            var busId = parseInt(meters[i].getAttribute('data-bus'), 10);
+            if (isNaN(busId) || busId < 0) continue;
+            var peakL = SC.getBusPeakL(busId);
+            var peakR = SC.getBusPeakR(busId);
+            // Convert linear peak to percentage (0..1 → 0..100%)
+            var pctL = Math.min(100, peakL * 100);
+            var pctR = Math.min(100, peakR * 100);
+            var bars = meters[i].children;
+            if (bars[0]) bars[0].style.width = pctL + '%';
+            if (bars[1]) bars[1].style.width = pctR + '%';
+        }
+    }
 
     function drawWaveform(W, H, data) {
         var bufLen = data.length;

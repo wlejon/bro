@@ -820,3 +820,29 @@ input[type="range"] { accent-color: #00e5ff; }
     border-color: #00e5ff;
     color: #00e5ff;
 }
+
+/* Per-bus level meters in layer rows */
+.seq-layer-meter {
+    width: 18px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 3px 2px;
+}
+.meter-bar {
+    height: 3px;
+    background: #00e5ff;
+    border-radius: 1px;
+    width: 0%;
+    transition: width 60ms linear;
+}
+.meter-bar.meter-r {
+    background: #00c0dd;
+}
+
+/* Sidebar select (sidechain dropdown) */
+.sidebar-select {
+    width: 100%;
+    margin-top: 2px;
+}

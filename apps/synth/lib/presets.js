@@ -150,6 +150,7 @@
             reverb: JSON.parse(JSON.stringify(layer.reverb)),
             chorus: JSON.parse(JSON.stringify(layer.chorus)),
             compressor: JSON.parse(JSON.stringify(layer.compressor)),
+            eq: JSON.parse(JSON.stringify(layer.eq)),
             lfo: JSON.parse(JSON.stringify(layer.lfo))
         };
     }
@@ -211,6 +212,11 @@
                 layer.compressor.ratio = state.compressor.ratio !== undefined ? state.compressor.ratio : 4;
                 layer.compressor.attack = state.compressor.attack !== undefined ? state.compressor.attack : 10;
                 layer.compressor.release = state.compressor.release !== undefined ? state.compressor.release : 100;
+            }
+            if (state.eq) {
+                layer.eq.enabled = state.eq.enabled || false;
+                layer.eq.masterGain = state.eq.masterGain || 0;
+                layer.eq.bands = state.eq.bands ? state.eq.bands.slice() : [0, 0, 0, 0, 0, 0, 0];
             }
             if (state.lfo) {
                 layer.lfo.enabled = state.lfo.enabled || false;

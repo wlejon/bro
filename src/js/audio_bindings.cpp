@@ -1674,8 +1674,74 @@ BUS_EFFECT_FLOAT(setBusChorusMix, setBusChorusMix)
 BUS_EFFECT_FLOAT(setBusChorusFeedback, setBusChorusFeedback)
 BUS_EFFECT_FLOAT(setBusChorusBaseDelay, setBusChorusBaseDelay)
 
+BUS_EFFECT_BOOL(setBusEqEnabled, setBusEqEnabled)
+BUS_EFFECT_FLOAT(setBusEqMasterGain, setBusEqMasterGain)
+
 #undef BUS_EFFECT_BOOL
 #undef BUS_EFFECT_FLOAT
+
+// Per-bus EQ band gain (busId, band, gainDB)
+static JSValue js_audioctx_setBusEqBandGain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int busId, band; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &band, argv[1]);
+    double v; JS_ToFloat64(ctx, &v, argv[2]);
+    d->engine->setBusEqBandGain(busId, band, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+// Per-bus compressor sidechain (busId, sidechainBusId)
+static JSValue js_audioctx_setBusCompressorSidechain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int busId, scBusId; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &scBusId, argv[1]);
+    d->engine->setBusCompressorSidechain(busId, scBusId);
+    return JS_UNDEFINED;
+}
+
+// Bus metering — peak/RMS getters
+static JSValue js_audioctx_getBusPeakL(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+    return JS_NewFloat64(ctx, d->engine->getBusPeakL(busId));
+}
+static JSValue js_audioctx_getBusPeakR(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+    return JS_NewFloat64(ctx, d->engine->getBusPeakR(busId));
+}
+static JSValue js_audioctx_getBusRmsL(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+    return JS_NewFloat64(ctx, d->engine->getBusRmsL(busId));
+}
+static JSValue js_audioctx_getBusRmsR(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+    return JS_NewFloat64(ctx, d->engine->getBusRmsR(busId));
+}
+
+// Sample-accurate event scheduling
+static JSValue js_audioctx_scheduleNoteOn(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double when; JS_ToFloat64(ctx, &when, argv[1]);
+    d->engine->scheduleNoteOn(voiceId, when);
+    return JS_UNDEFINED;
+}
+static JSValue js_audioctx_scheduleNoteOff(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double when; JS_ToFloat64(ctx, &when, argv[1]);
+    d->engine->scheduleNoteOff(voiceId, when);
+    return JS_UNDEFINED;
+}
 
 // Voice/clip bus routing
 static JSValue js_audioctx_setVoiceBus(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -1863,9 +1929,9 @@ static JSValue js_audioctx_setBusEffectOrder(JSContext* ctx, JSValueConst this_v
     JS_ToInt32(ctx, &len, lenVal);
     JS_FreeValue(ctx, lenVal);
 
-    if (len <= 0 || len > 5) return JS_UNDEFINED;
+    if (len <= 0 || len > 6) return JS_UNDEFINED;
 
-    broaudio::EffectSlot order[5];
+    broaudio::EffectSlot order[6];
     for (int32_t i = 0; i < len; i++) {
         JSValue elem = JS_GetPropertyUint32(ctx, argv[1], i);
         const char* str = JS_ToCString(ctx, elem);
@@ -1875,6 +1941,7 @@ static JSValue js_audioctx_setBusEffectOrder(JSContext* ctx, JSValueConst this_v
             else if (strcmp(str, "compressor") == 0) order[i] = broaudio::EffectSlot::Compressor;
             else if (strcmp(str, "chorus") == 0) order[i] = broaudio::EffectSlot::Chorus;
             else if (strcmp(str, "reverb") == 0) order[i] = broaudio::EffectSlot::Reverb;
+            else if (strcmp(str, "equalizer") == 0) order[i] = broaudio::EffectSlot::Equalizer;
             else order[i] = static_cast<broaudio::EffectSlot>(i);
             JS_FreeCString(ctx, str);
         }
@@ -2397,6 +2464,20 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("setBusChorusMix", 2, js_audioctx_setBusChorusMix),
     JS_CFUNC_DEF("setBusChorusFeedback", 2, js_audioctx_setBusChorusFeedback),
     JS_CFUNC_DEF("setBusChorusBaseDelay", 2, js_audioctx_setBusChorusBaseDelay),
+    JS_CFUNC_DEF("setBusEqEnabled", 2, js_audioctx_setBusEqEnabled),
+    JS_CFUNC_DEF("setBusEqBandGain", 3, js_audioctx_setBusEqBandGain),
+    JS_CFUNC_DEF("setBusEqMasterGain", 2, js_audioctx_setBusEqMasterGain),
+    JS_CFUNC_DEF("setBusCompressorSidechain", 2, js_audioctx_setBusCompressorSidechain),
+
+    // Bus metering
+    JS_CFUNC_DEF("getBusPeakL", 1, js_audioctx_getBusPeakL),
+    JS_CFUNC_DEF("getBusPeakR", 1, js_audioctx_getBusPeakR),
+    JS_CFUNC_DEF("getBusRmsL", 1, js_audioctx_getBusRmsL),
+    JS_CFUNC_DEF("getBusRmsR", 1, js_audioctx_getBusRmsR),
+
+    // Sample-accurate scheduling
+    JS_CFUNC_DEF("scheduleNoteOn", 2, js_audioctx_scheduleNoteOn),
+    JS_CFUNC_DEF("scheduleNoteOff", 2, js_audioctx_scheduleNoteOff),
 
     // Voice/clip bus routing
     JS_CFUNC_DEF("setVoiceBus", 2, js_audioctx_setVoiceBus),
