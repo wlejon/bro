@@ -12,6 +12,7 @@
     var depth = 0.5;
     var waveform = 'sine';
     var target = 'pitch';
+    var sync = false;
     var routeIndex = -1;
 
     var LFO_INDEX = 0; // use LFO 1 for the main synth LFO
@@ -30,6 +31,7 @@
             case 'triangle': return 'triangle';
             case 'square': return 'square';
             case 'sawtooth': return 'sawup';
+            case 'samplehold': return 'samplehold';
             default: return 'sine';
         }
     }
@@ -83,8 +85,15 @@
         },
         getTarget: function() { return target; },
 
+        setSync: function(s) {
+            sync = s;
+            if (modMatrix) modMatrix.setLfoSync(LFO_INDEX, s);
+        },
+        isSync: function() { return sync; },
+
         getState: function() {
-            return { enabled: enabled, rate: rate, depth: depth, waveform: waveform, target: target };
+            return { enabled: enabled, rate: rate, depth: depth, waveform: waveform,
+                     target: target, sync: sync };
         },
 
         loadState: function(state) {
@@ -93,11 +102,13 @@
             depth = state.depth || 0.5;
             waveform = state.waveform || 'sine';
             target = state.target || 'pitch';
+            sync = state.sync || false;
             enabled = state.enabled || false;
 
             if (modMatrix) {
                 modMatrix.setLfoRate(LFO_INDEX, rate);
                 modMatrix.setLfoShape(LFO_INDEX, lfoShapeFromWaveform(waveform));
+                modMatrix.setLfoSync(LFO_INDEX, sync);
             }
             applyRoute();
         }

@@ -84,7 +84,6 @@
 
         var Layers = Synth.Layers;
         var count = Layers.count();
-        var effectsApplied = false;
 
         for (var li = 0; li < count; li++) {
             var layer = Layers.get(li);
@@ -108,23 +107,16 @@
 
             if (noteIdx < 0) continue;
 
-            // Apply this layer's oscillator params before noteOn
+            // Apply this layer's voice params (waveform, ADSR, pan, bus routing)
             Layers.applyForPlayback(layer);
-
-            // Apply filter/delay from first active layer this step
-            if (!effectsApplied) {
-                Layers.applyEffects(layer);
-                effectsApplied = true;
-            }
 
             Synth.noteOn(noteIdx, true);
             lastNotes.push({ layerIdx: li, noteIdx: noteIdx });
         }
 
-        // Restore selected layer's params so keyboard play and LFO
-        // use the correct layer's settings between ticks
+        // Restore active layer's voice params for keyboard play between ticks
         var active = Layers.getActive();
-        if (active) Layers.applyToEngine(active);
+        if (active) Layers.applyVoiceParams(active);
 
         if (onStepCallback) onStepCallback(currentStep);
 
@@ -161,9 +153,9 @@
             currentStep = -1;
             if (onStepCallback) onStepCallback(-1);
 
-            // Restore active layer's params
+            // Restore active layer's voice params
             var active = Synth.Layers ? Synth.Layers.getActive() : null;
-            if (active) Synth.Layers.applyToEngine(active);
+            if (active) Synth.Layers.applyVoiceParams(active);
         },
 
         isPlaying: function() { return playing; },

@@ -1,0 +1,161 @@
+// ---------------------------------------------------------------------------
+// SignalChain — per-bus effect management (replaces effects.js + filter.js)
+// ---------------------------------------------------------------------------
+
+(function() {
+    'use strict';
+    var Synth = window.Synth || (window.Synth = {});
+
+    function ctx() { return Synth.getAudioContext(); }
+
+    Synth.SignalChain = {
+        createBus: function() {
+            var c = ctx();
+            return c ? c.createBus() : -1;
+        },
+
+        destroyBus: function(busId) {
+            var c = ctx();
+            if (c && busId > 0) c.deleteBus(busId);
+        },
+
+        // Push all effect params from a layer/signal params object to a bus
+        applyParams: function(busId, params) {
+            if (busId < 0) return;
+            var c = ctx();
+            if (!c) return;
+            var SC = Synth.SignalChain;
+
+            // Filter
+            if (params.filter) {
+                SC.setFilterType(busId, params.filter.type);
+                SC.setFilterFrequency(busId, params.filter.frequency);
+                SC.setFilterQ(busId, params.filter.Q);
+                SC.setFilterGain(busId, params.filter.gain);
+                SC.setFilterEnabled(busId, params.filter.enabled);
+            }
+
+            // Delay
+            if (params.delay) {
+                SC.setDelayTime(busId, params.delay.time);
+                SC.setDelayFeedback(busId, params.delay.feedback);
+                SC.setDelayMix(busId, params.delay.mix);
+                SC.setDelayEnabled(busId, params.delay.enabled);
+            }
+
+            // Reverb
+            if (params.reverb) {
+                SC.setReverbRoomSize(busId, params.reverb.roomSize);
+                SC.setReverbDamping(busId, params.reverb.damping);
+                SC.setReverbMix(busId, params.reverb.mix);
+                SC.setReverbEnabled(busId, params.reverb.enabled);
+            }
+
+            // Chorus
+            if (params.chorus) {
+                SC.setChorusRate(busId, params.chorus.rate);
+                SC.setChorusDepth(busId, params.chorus.depth);
+                SC.setChorusMix(busId, params.chorus.mix);
+                SC.setChorusFeedback(busId, params.chorus.feedback);
+                SC.setChorusBaseDelay(busId, params.chorus.baseDelay);
+                SC.setChorusEnabled(busId, params.chorus.enabled);
+            }
+
+            // Compressor
+            if (params.compressor) {
+                SC.setCompressorThreshold(busId, params.compressor.threshold);
+                SC.setCompressorRatio(busId, params.compressor.ratio);
+                SC.setCompressorAttack(busId, params.compressor.attack);
+                SC.setCompressorRelease(busId, params.compressor.release);
+                SC.setCompressorEnabled(busId, params.compressor.enabled);
+            }
+        },
+
+        // --- Filter (uses bus filter slot 0) ---
+
+        setFilterEnabled: function(busId, v) {
+            var c = ctx(); if (c) c.setBusFilterEnabled(busId, 0, v);
+        },
+        setFilterType: function(busId, type) {
+            var c = ctx(); if (c) c.setBusFilterType(busId, 0, type || 'lowpass');
+        },
+        setFilterFrequency: function(busId, freq) {
+            var c = ctx(); if (c) c.setBusFilterFrequency(busId, 0, freq);
+        },
+        setFilterQ: function(busId, q) {
+            var c = ctx(); if (c) c.setBusFilterQ(busId, 0, q);
+        },
+        setFilterGain: function(busId, g) {
+            var c = ctx(); if (c) c.setBusFilterGain(busId, 0, g);
+        },
+
+        // --- Delay ---
+
+        setDelayEnabled: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDelayEnabled(busId, v);
+        },
+        setDelayTime: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDelayTime(busId, v);
+        },
+        setDelayFeedback: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDelayFeedback(busId, v);
+        },
+        setDelayMix: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDelayMix(busId, v);
+        },
+
+        // --- Reverb ---
+
+        setReverbEnabled: function(busId, v) {
+            var c = ctx(); if (c) c.setBusReverbEnabled(busId, v);
+        },
+        setReverbRoomSize: function(busId, v) {
+            var c = ctx(); if (c) c.setBusReverbRoomSize(busId, v);
+        },
+        setReverbDamping: function(busId, v) {
+            var c = ctx(); if (c) c.setBusReverbDamping(busId, v);
+        },
+        setReverbMix: function(busId, v) {
+            var c = ctx(); if (c) c.setBusReverbMix(busId, v);
+        },
+
+        // --- Chorus ---
+
+        setChorusEnabled: function(busId, v) {
+            var c = ctx(); if (c) c.setBusChorusEnabled(busId, v);
+        },
+        setChorusRate: function(busId, v) {
+            var c = ctx(); if (c) c.setBusChorusRate(busId, v);
+        },
+        setChorusDepth: function(busId, v) {
+            var c = ctx(); if (c) c.setBusChorusDepth(busId, v);
+        },
+        setChorusMix: function(busId, v) {
+            var c = ctx(); if (c) c.setBusChorusMix(busId, v);
+        },
+        setChorusFeedback: function(busId, v) {
+            var c = ctx(); if (c) c.setBusChorusFeedback(busId, v);
+        },
+        setChorusBaseDelay: function(busId, v) {
+            var c = ctx(); if (c) c.setBusChorusBaseDelay(busId, v);
+        },
+
+        // --- Compressor ---
+
+        setCompressorEnabled: function(busId, v) {
+            var c = ctx(); if (c) c.setBusCompressorEnabled(busId, v);
+        },
+        setCompressorThreshold: function(busId, v) {
+            var c = ctx(); if (c) c.setBusCompressorThreshold(busId, v);
+        },
+        setCompressorRatio: function(busId, v) {
+            var c = ctx(); if (c) c.setBusCompressorRatio(busId, v);
+        },
+        setCompressorAttack: function(busId, v) {
+            var c = ctx(); if (c) c.setBusCompressorAttack(busId, v);
+        },
+        setCompressorRelease: function(busId, v) {
+            var c = ctx(); if (c) c.setBusCompressorRelease(busId, v);
+        }
+    };
+})();

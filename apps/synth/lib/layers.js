@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Layer Management — each layer has its own synth params + step pattern
+// Layer Management — each layer owns a broaudio bus with its own effect chain
 // ---------------------------------------------------------------------------
 
 (function() {
@@ -18,6 +18,10 @@
     var activeIndex = 0;
     var selectCallbacks = [];
 
+    // Mic signal — owns a bus just like layers
+    var micSignal = null; // { busId, filter, delay, reverb, chorus, compressor, lfo }
+    var editingMic = false; // true when sidebar is editing mic instead of a layer
+
     function createDefaultParams() {
         return {
             waveform: 'sine',
@@ -35,6 +39,17 @@
         };
     }
 
+    function createDefaultEffectParams() {
+        return {
+            filter: { enabled: false, type: 'lowpass', frequency: 2000, Q: 1.0, gain: 0 },
+            delay: { enabled: false, time: 0.3, feedback: 0.3, mix: 0.3 },
+            reverb: { enabled: false, roomSize: 0.5, damping: 0.5, mix: 0.2 },
+            chorus: { enabled: false, rate: 1.0, depth: 0.003, mix: 0.3, feedback: 0, baseDelay: 0.007 },
+            compressor: { enabled: false, threshold: -12, ratio: 4, attack: 10, release: 100 },
+            lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
+        };
+    }
+
     function val(v, def) { return v !== undefined ? v : def; }
 
     function createLayer(name, params) {
@@ -43,11 +58,16 @@
         for (var i = 0; i < NUM_STEPS; i++) steps[i] = null;
 
         var p = params || createDefaultParams();
+
+        // Create a dedicated bus for this layer
+        var busId = Synth.SignalChain.createBus();
+
         var layer = {
             id: idx,
             name: name || ('Layer ' + (idx + 1)),
             muted: false,
             color: COLORS[idx % COLORS.length],
+            busId: busId,
             waveform: p.waveform || 'sine',
             volume: val(p.volume, 1.0),
             pan: val(p.pan, 0),
@@ -104,103 +124,31 @@
             },
             steps: steps
         };
+
+        // Push effect params to the bus
+        Synth.SignalChain.applyParams(busId, layer);
+
         return layer;
     }
 
-    function applyToEngine(layer) {
+    // Apply voice-level params (waveform, ADSR, pan) and set voice bus routing
+    function applyVoiceParams(layer) {
         if (!layer) return;
         Synth.setWaveform(layer.waveform);
         Synth.setPan(layer.pan);
         Synth.setADSR(layer.adsr.attack, layer.adsr.decay,
                       layer.adsr.sustain, layer.adsr.release);
+        Synth.setCurrentBus(layer.busId);
+    }
 
-        Synth.Filter.setType(layer.filter.type);
-        Synth.Filter.setCutoff(layer.filter.frequency);
-        Synth.Filter.setQ(layer.filter.Q);
-        Synth.Filter.setEnabled(layer.filter.enabled);
-
-        // Delay
-        Synth.Effects.setDelayTime(layer.delay.time);
-        Synth.Effects.setDelayFeedback(layer.delay.feedback);
-        Synth.Effects.setDelayMix(layer.delay.mix);
-        Synth.Effects.setDelayEnabled(layer.delay.enabled);
-
-        // Reverb
-        Synth.Effects.setReverbRoomSize(layer.reverb.roomSize);
-        Synth.Effects.setReverbDamping(layer.reverb.damping);
-        Synth.Effects.setReverbMix(layer.reverb.mix);
-        Synth.Effects.setReverbEnabled(layer.reverb.enabled);
-
-        // Chorus
-        Synth.Effects.setChorusRate(layer.chorus.rate);
-        Synth.Effects.setChorusDepth(layer.chorus.depth);
-        Synth.Effects.setChorusMix(layer.chorus.mix);
-        Synth.Effects.setChorusFeedback(layer.chorus.feedback);
-        Synth.Effects.setChorusBaseDelay(layer.chorus.baseDelay);
-        Synth.Effects.setChorusEnabled(layer.chorus.enabled);
-
-        // Compressor
-        Synth.Effects.setCompressorThreshold(layer.compressor.threshold);
-        Synth.Effects.setCompressorRatio(layer.compressor.ratio);
-        Synth.Effects.setCompressorAttack(layer.compressor.attack);
-        Synth.Effects.setCompressorRelease(layer.compressor.release);
-        Synth.Effects.setCompressorEnabled(layer.compressor.enabled);
-
-        // LFO
+    // Apply LFO params to the mod matrix (global, per-voice)
+    function applyLfoParams(layer) {
+        if (!layer) return;
         Synth.LFO.setRate(layer.lfo.rate);
         Synth.LFO.setDepth(layer.lfo.depth);
         Synth.LFO.setWaveform(layer.lfo.waveform);
         Synth.LFO.setTarget(layer.lfo.target);
         Synth.LFO.setEnabled(layer.lfo.enabled);
-    }
-
-    function captureFromEngine(layer) {
-        if (!layer) return;
-        layer.waveform = Synth.getWaveform();
-        layer.pan = Synth.getPan();
-        var adsr = Synth.getADSR();
-        layer.adsr.attack = adsr.attack;
-        layer.adsr.decay = adsr.decay;
-        layer.adsr.sustain = adsr.sustain;
-        layer.adsr.release = adsr.release;
-
-        var f = Synth.Filter.getState();
-        layer.filter.enabled = f.enabled;
-        layer.filter.type = f.type;
-        layer.filter.frequency = f.frequency;
-        layer.filter.Q = f.Q;
-        layer.filter.gain = f.gain;
-
-        var e = Synth.Effects.getState();
-        layer.delay.enabled = e.delayEnabled;
-        layer.delay.time = e.delayTime;
-        layer.delay.feedback = e.delayFeedback;
-        layer.delay.mix = e.delayMix;
-
-        layer.reverb.enabled = e.reverbEnabled;
-        layer.reverb.roomSize = e.reverbRoomSize;
-        layer.reverb.damping = e.reverbDamping;
-        layer.reverb.mix = e.reverbMix;
-
-        layer.chorus.enabled = e.chorusEnabled;
-        layer.chorus.rate = e.chorusRate;
-        layer.chorus.depth = e.chorusDepth;
-        layer.chorus.mix = e.chorusMix;
-        layer.chorus.feedback = e.chorusFeedback;
-        layer.chorus.baseDelay = e.chorusBaseDelay;
-
-        layer.compressor.enabled = e.compressorEnabled;
-        layer.compressor.threshold = e.compressorThreshold;
-        layer.compressor.ratio = e.compressorRatio;
-        layer.compressor.attack = e.compressorAttack;
-        layer.compressor.release = e.compressorRelease;
-
-        var l = Synth.LFO.getState();
-        layer.lfo.enabled = l.enabled;
-        layer.lfo.rate = l.rate;
-        layer.lfo.depth = l.depth;
-        layer.lfo.waveform = l.waveform;
-        layer.lfo.target = l.target;
     }
 
     function fireSelectCallbacks() {
@@ -217,11 +165,17 @@
         COLORS: COLORS,
 
         init: function() {
+            // Destroy old buses
+            for (var i = 0; i < layers.length; i++) {
+                if (layers[i].busId > 0) Synth.SignalChain.destroyBus(layers[i].busId);
+            }
             layers = [];
+            editingMic = false;
             var layer = createLayer('Layer 1');
-            captureFromEngine(layer);
             layers.push(layer);
             activeIndex = 0;
+            applyVoiceParams(layer);
+            applyLfoParams(layer);
         },
 
         add: function(name, params) {
@@ -236,10 +190,15 @@
         remove: function(index) {
             if (layers.length <= 1) return false;
             if (index < 0 || index >= layers.length) return false;
+            var removed = layers[index];
+            if (removed.busId > 0) Synth.SignalChain.destroyBus(removed.busId);
             layers.splice(index, 1);
             for (var i = 0; i < layers.length; i++) layers[i].id = i;
             if (activeIndex >= layers.length) activeIndex = layers.length - 1;
-            applyToEngine(layers[activeIndex]);
+            editingMic = false;
+            var active = layers[activeIndex];
+            applyVoiceParams(active);
+            applyLfoParams(active);
             fireSelectCallbacks();
             return true;
         },
@@ -267,7 +226,10 @@
         select: function(index) {
             if (index < 0 || index >= layers.length) return;
             activeIndex = index;
-            applyToEngine(layers[activeIndex]);
+            editingMic = false;
+            var layer = layers[activeIndex];
+            applyVoiceParams(layer);
+            applyLfoParams(layer);
             fireSelectCallbacks();
         },
 
@@ -276,6 +238,69 @@
         getActiveIndex: function() { return activeIndex; },
         count: function() { return layers.length; },
         all: function() { return layers; },
+
+        // Get the busId for the currently edited signal (layer or mic)
+        getActiveBusId: function() {
+            if (editingMic && micSignal) return micSignal.busId;
+            var layer = layers[activeIndex];
+            return layer ? layer.busId : -1;
+        },
+
+        // Get the params object for the currently edited signal
+        getActiveSignal: function() {
+            if (editingMic && micSignal) return micSignal;
+            return layers[activeIndex] || null;
+        },
+
+        isEditingMic: function() { return editingMic; },
+
+        // --- Mic signal management ---
+
+        initMicBus: function() {
+            if (micSignal) return micSignal;
+            var busId = Synth.SignalChain.createBus();
+            var ctx = Synth.getAudioContext();
+            if (ctx) ctx.micBus = busId;
+            var defaults = createDefaultEffectParams();
+            micSignal = {
+                busId: busId,
+                name: 'Mic',
+                color: '#ff4444',
+                filter: defaults.filter,
+                delay: defaults.delay,
+                reverb: defaults.reverb,
+                chorus: defaults.chorus,
+                compressor: defaults.compressor,
+                lfo: defaults.lfo
+            };
+            Synth.SignalChain.applyParams(busId, micSignal);
+            return micSignal;
+        },
+
+        selectMic: function() {
+            if (!micSignal) return;
+            editingMic = true;
+            // Apply mic's LFO to modmatrix (for modulating voice params — less useful for mic,
+            // but keeps the UI consistent)
+            applyLfoParams(micSignal);
+            fireSelectCallbacks();
+        },
+
+        getMicSignal: function() { return micSignal; },
+
+        destroyMicBus: function() {
+            if (!micSignal) return;
+            var ctx = Synth.getAudioContext();
+            if (ctx) ctx.micBus = -1;
+            Synth.SignalChain.destroyBus(micSignal.busId);
+            micSignal = null;
+            if (editingMic) {
+                editingMic = false;
+                fireSelectCallbacks();
+            }
+        },
+
+        // --- Step grid ---
 
         setStep: function(layerIdx, stepIdx, noteIdx) {
             var layer = layers[layerIdx];
@@ -294,45 +319,17 @@
             }
         },
 
+        // Apply voice-level params for sequencer playback (waveform, ADSR, pan, bus)
         applyForPlayback: function(layer) {
             Synth.setWaveform(layer.waveform);
             Synth.setPan(layer.pan);
             Synth.setADSR(layer.adsr.attack, layer.adsr.decay,
                           layer.adsr.sustain, layer.adsr.release);
+            Synth.setCurrentBus(layer.busId);
         },
 
-        applyEffects: function(layer) {
-            Synth.Filter.setType(layer.filter.type);
-            Synth.Filter.setCutoff(layer.filter.frequency);
-            Synth.Filter.setQ(layer.filter.Q);
-            Synth.Filter.setEnabled(layer.filter.enabled);
-
-            Synth.Effects.setDelayTime(layer.delay.time);
-            Synth.Effects.setDelayFeedback(layer.delay.feedback);
-            Synth.Effects.setDelayMix(layer.delay.mix);
-            Synth.Effects.setDelayEnabled(layer.delay.enabled);
-
-            Synth.Effects.setReverbRoomSize(layer.reverb.roomSize);
-            Synth.Effects.setReverbDamping(layer.reverb.damping);
-            Synth.Effects.setReverbMix(layer.reverb.mix);
-            Synth.Effects.setReverbEnabled(layer.reverb.enabled);
-
-            Synth.Effects.setChorusRate(layer.chorus.rate);
-            Synth.Effects.setChorusDepth(layer.chorus.depth);
-            Synth.Effects.setChorusMix(layer.chorus.mix);
-            Synth.Effects.setChorusFeedback(layer.chorus.feedback);
-            Synth.Effects.setChorusBaseDelay(layer.chorus.baseDelay);
-            Synth.Effects.setChorusEnabled(layer.chorus.enabled);
-
-            Synth.Effects.setCompressorThreshold(layer.compressor.threshold);
-            Synth.Effects.setCompressorRatio(layer.compressor.ratio);
-            Synth.Effects.setCompressorAttack(layer.compressor.attack);
-            Synth.Effects.setCompressorRelease(layer.compressor.release);
-            Synth.Effects.setCompressorEnabled(layer.compressor.enabled);
-        },
-
-        applyToEngine: applyToEngine,
-        captureFromEngine: captureFromEngine,
+        applyVoiceParams: applyVoiceParams,
+        applyLfoParams: applyLfoParams,
 
         onSelect: function(cb) { selectCallbacks.push(cb); },
 
@@ -355,6 +352,10 @@
 
         deserialize: function(data) {
             if (!data || !data.length) return;
+            // Destroy old buses
+            for (var i = 0; i < layers.length; i++) {
+                if (layers[i].busId > 0) Synth.SignalChain.destroyBus(layers[i].busId);
+            }
             layers = [];
             for (var i = 0; i < data.length && i < MAX_LAYERS; i++) {
                 var d = data[i];
@@ -377,7 +378,9 @@
                 layers.push(createLayer('Layer 1'));
             }
             activeIndex = 0;
-            applyToEngine(layers[0]);
+            editingMic = false;
+            applyVoiceParams(layers[0]);
+            applyLfoParams(layers[0]);
             fireSelectCallbacks();
         }
     };

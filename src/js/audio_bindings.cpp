@@ -1806,6 +1806,20 @@ static JSValue js_audioctx_set_micMonitorGain(JSContext* ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
+static JSValue js_audioctx_get_micBus(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    return d ? JS_NewInt32(ctx, d->engine->micBus()) : JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_set_micBus(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (d) {
+        int v; JS_ToInt32(ctx, &v, val);
+        d->engine->setMicBus(v);
+    }
+    return JS_UNDEFINED;
+}
+
 // --- Recording ---
 
 static JSValue js_audioctx_get_recording(JSContext* ctx, JSValueConst this_val) {
@@ -1999,6 +2013,7 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CGETSET_DEF("masterGain", js_audioctx_get_masterGain, js_audioctx_set_masterGain),
     JS_CGETSET_DEF("micMuted", js_audioctx_get_micMuted, js_audioctx_set_micMuted),
     JS_CGETSET_DEF("micMonitorGain", js_audioctx_get_micMonitorGain, js_audioctx_set_micMonitorGain),
+    JS_CGETSET_DEF("micBus", js_audioctx_get_micBus, js_audioctx_set_micBus),
     JS_CGETSET_DEF("recording", js_audioctx_get_recording, nullptr),
 
     // Node creation

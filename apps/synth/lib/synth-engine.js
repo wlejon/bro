@@ -14,6 +14,7 @@
     var octaveShift = 0;
     var lastPlayedNote = 24; // C3
     var adsrParams = { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.04 };
+    var currentBusId = 0; // bus to route voices/clips to (set by layer system)
 
     Synth.init = function() {
         try {
@@ -56,6 +57,7 @@
             audioCtx.setVoiceDecay(voiceId, adsrParams.decay);
             audioCtx.setVoiceSustain(voiceId, adsrParams.sustain);
             audioCtx.setVoiceRelease(voiceId, adsrParams.release);
+            audioCtx.setVoiceBus(voiceId, currentBusId);
         });
     }
 
@@ -78,6 +80,7 @@
             if (pbId >= 0) {
                 audioCtx.setPlaybackRate(pbId, rate);
                 if (Synth.voicePan) audioCtx.setPlaybackPan(pbId, Synth.voicePan);
+                audioCtx.setPlaybackBus(pbId, currentBusId);
                 activeNotes.set(noteIdx, { clipPlaybackId: pbId });
             }
         } else {
@@ -139,6 +142,9 @@
     Synth.voicePan = 0;
     Synth.setPan = function(p) { Synth.voicePan = Math.max(-1, Math.min(1, p)); updateVoiceSetup(); };
     Synth.getPan = function() { return Synth.voicePan; };
+
+    Synth.setCurrentBus = function(busId) { currentBusId = busId; updateVoiceSetup(); };
+    Synth.getCurrentBus = function() { return currentBusId; };
 
     Synth.getLastPlayedNote = function() { return lastPlayedNote; };
     Synth.getAudioContext = function() { return audioCtx; };

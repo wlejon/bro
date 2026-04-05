@@ -8,8 +8,6 @@
 
     // Init audio engine
     Synth.init();
-    Synth.Filter.init();
-    Synth.Effects.init();
 
     // Init keyboard
     Synth.Keyboard.init(
@@ -55,31 +53,37 @@
     function hzToLfoSlider(hz) { return Math.log(hz / 0.1) / Math.log(100) * 100; }
 
     // -----------------------------------------------------------------------
-    // Init layers
+    // Signal param helpers — write to the active signal (layer or mic)
     // -----------------------------------------------------------------------
-    Synth.Presets.load('Init');
+    function signalParam(path, value) {
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var parts = path.split('.');
+        var obj = signal;
+        for (var i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+        obj[parts[parts.length - 1]] = value;
+    }
+
+    function activeBusId() {
+        return Synth.Layers.getActiveBusId();
+    }
+
+    // -----------------------------------------------------------------------
+    // Init layers — create first layer, then apply preset to it
+    // -----------------------------------------------------------------------
     Synth.Layers.init();
+    Synth.Presets.load('Init');
 
     // -----------------------------------------------------------------------
     // Fancy Sliders — sidebar synth params
     // -----------------------------------------------------------------------
     var sliders = {};
 
-    function layerParam(path, value) {
-        // Set a nested property on the active layer and apply to engine
-        var layer = Synth.Layers.getActive();
-        if (!layer) return;
-        var parts = path.split('.');
-        var obj = layer;
-        for (var i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
-        obj[parts[parts.length - 1]] = value;
-    }
-
     sliders.adsrA = Synth.Slider(document.getElementById('adsr-a-slider'), {
         min: 1, max: 2000, value: 10, step: 1, defaultValue: 10,
         format: formatMs,
         onChange: function(ms) {
-            layerParam('adsr.attack', ms / 1000);
+            signalParam('adsr.attack', ms / 1000);
             Synth.setADSR(ms / 1000, sliders.adsrD.getValue() / 1000,
                           sliders.adsrS.getValue() / 100, sliders.adsrR.getValue() / 1000);
         }
@@ -89,7 +93,7 @@
         min: 1, max: 2000, value: 100, step: 1, defaultValue: 100,
         format: formatMs,
         onChange: function(ms) {
-            layerParam('adsr.decay', ms / 1000);
+            signalParam('adsr.decay', ms / 1000);
             Synth.setADSR(sliders.adsrA.getValue() / 1000, ms / 1000,
                           sliders.adsrS.getValue() / 100, sliders.adsrR.getValue() / 1000);
         }
@@ -99,7 +103,7 @@
         min: 0, max: 100, value: 100, step: 1, defaultValue: 100,
         format: function(v) { return v + '%'; },
         onChange: function(pct) {
-            layerParam('adsr.sustain', pct / 100);
+            signalParam('adsr.sustain', pct / 100);
             Synth.setADSR(sliders.adsrA.getValue() / 1000, sliders.adsrD.getValue() / 1000,
                           pct / 100, sliders.adsrR.getValue() / 1000);
         }
@@ -109,7 +113,7 @@
         min: 1, max: 3000, value: 80, step: 1, defaultValue: 80,
         format: formatMs,
         onChange: function(ms) {
-            layerParam('adsr.release', ms / 1000);
+            signalParam('adsr.release', ms / 1000);
             Synth.setADSR(sliders.adsrA.getValue() / 1000, sliders.adsrD.getValue() / 1000,
                           sliders.adsrS.getValue() / 100, ms / 1000);
         }
@@ -120,8 +124,8 @@
         format: function(v) { return formatFreq(cutoffSliderToFreq(v)); },
         onChange: function(v) {
             var freq = cutoffSliderToFreq(v);
-            layerParam('filter.frequency', freq);
-            Synth.Filter.setCutoff(freq);
+            signalParam('filter.frequency', freq);
+            Synth.SignalChain.setFilterFrequency(activeBusId(), freq);
         }
     });
 
@@ -129,8 +133,8 @@
         min: 1, max: 200, value: 10, step: 1, defaultValue: 10,
         format: function(v) { return (v / 10).toFixed(1); },
         onChange: function(v) {
-            layerParam('filter.Q', v / 10);
-            Synth.Filter.setQ(v / 10);
+            signalParam('filter.Q', v / 10);
+            Synth.SignalChain.setFilterQ(activeBusId(), v / 10);
         }
     });
 
@@ -138,8 +142,8 @@
         min: 10, max: 1500, value: 300, step: 1, defaultValue: 300,
         format: formatMs,
         onChange: function(ms) {
-            layerParam('delay.time', ms / 1000);
-            Synth.Effects.setDelayTime(ms / 1000);
+            signalParam('delay.time', ms / 1000);
+            Synth.SignalChain.setDelayTime(activeBusId(), ms / 1000);
         }
     });
 
@@ -147,8 +151,8 @@
         min: 0, max: 90, value: 30, step: 1, defaultValue: 30,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('delay.feedback', v / 100);
-            Synth.Effects.setDelayFeedback(v / 100);
+            signalParam('delay.feedback', v / 100);
+            Synth.SignalChain.setDelayFeedback(activeBusId(), v / 100);
         }
     });
 
@@ -156,8 +160,8 @@
         min: 0, max: 100, value: 30, step: 1, defaultValue: 30,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('delay.mix', v / 100);
-            Synth.Effects.setDelayMix(v / 100);
+            signalParam('delay.mix', v / 100);
+            Synth.SignalChain.setDelayMix(activeBusId(), v / 100);
         }
     });
 
@@ -168,8 +172,8 @@
         min: 0, max: 100, value: 50, step: 1, defaultValue: 50,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('reverb.roomSize', v / 100);
-            Synth.Effects.setReverbRoomSize(v / 100);
+            signalParam('reverb.roomSize', v / 100);
+            Synth.SignalChain.setReverbRoomSize(activeBusId(), v / 100);
         }
     });
 
@@ -177,8 +181,8 @@
         min: 0, max: 100, value: 50, step: 1, defaultValue: 50,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('reverb.damping', v / 100);
-            Synth.Effects.setReverbDamping(v / 100);
+            signalParam('reverb.damping', v / 100);
+            Synth.SignalChain.setReverbDamping(activeBusId(), v / 100);
         }
     });
 
@@ -186,8 +190,8 @@
         min: 0, max: 100, value: 20, step: 1, defaultValue: 20,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('reverb.mix', v / 100);
-            Synth.Effects.setReverbMix(v / 100);
+            signalParam('reverb.mix', v / 100);
+            Synth.SignalChain.setReverbMix(activeBusId(), v / 100);
         }
     });
 
@@ -198,8 +202,8 @@
         min: 1, max: 100, value: 20, step: 1, defaultValue: 20,
         format: function(v) { return (v / 10).toFixed(1) + 'Hz'; },
         onChange: function(v) {
-            layerParam('chorus.rate', v / 10);
-            Synth.Effects.setChorusRate(v / 10);
+            signalParam('chorus.rate', v / 10);
+            Synth.SignalChain.setChorusRate(activeBusId(), v / 10);
         }
     });
 
@@ -207,8 +211,8 @@
         min: 0, max: 100, value: 30, step: 1, defaultValue: 30,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('chorus.depth', v / 10000);
-            Synth.Effects.setChorusDepth(v / 10000);
+            signalParam('chorus.depth', v / 10000);
+            Synth.SignalChain.setChorusDepth(activeBusId(), v / 10000);
         }
     });
 
@@ -216,8 +220,8 @@
         min: 0, max: 100, value: 30, step: 1, defaultValue: 30,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('chorus.mix', v / 100);
-            Synth.Effects.setChorusMix(v / 100);
+            signalParam('chorus.mix', v / 100);
+            Synth.SignalChain.setChorusMix(activeBusId(), v / 100);
         }
     });
 
@@ -228,8 +232,8 @@
         min: -60, max: 0, value: -12, step: 1, defaultValue: -12,
         format: function(v) { return v + 'dB'; },
         onChange: function(v) {
-            layerParam('compressor.threshold', v);
-            Synth.Effects.setCompressorThreshold(v);
+            signalParam('compressor.threshold', v);
+            Synth.SignalChain.setCompressorThreshold(activeBusId(), v);
         }
     });
 
@@ -237,8 +241,8 @@
         min: 10, max: 200, value: 40, step: 1, defaultValue: 40,
         format: function(v) { return (v / 10).toFixed(1) + ':1'; },
         onChange: function(v) {
-            layerParam('compressor.ratio', v / 10);
-            Synth.Effects.setCompressorRatio(v / 10);
+            signalParam('compressor.ratio', v / 10);
+            Synth.SignalChain.setCompressorRatio(activeBusId(), v / 10);
         }
     });
 
@@ -247,7 +251,7 @@
         format: function(v) { return formatLfoRate(lfoSliderToHz(v)); },
         onChange: function(v) {
             var hz = lfoSliderToHz(v);
-            layerParam('lfo.rate', hz);
+            signalParam('lfo.rate', hz);
             Synth.LFO.setRate(hz);
         }
     });
@@ -256,7 +260,7 @@
         min: 0, max: 100, value: 30, step: 1, defaultValue: 30,
         format: function(v) { return v + '%'; },
         onChange: function(v) {
-            layerParam('lfo.depth', v / 100);
+            signalParam('lfo.depth', v / 100);
             Synth.LFO.setDepth(v / 100);
         }
     });
@@ -270,7 +274,7 @@
             btn.classList.add('active');
             var wf = btn.getAttribute('data-wave');
             Synth.setWaveform(wf);
-            layerParam('waveform', wf);
+            signalParam('waveform', wf);
         });
     });
 
@@ -285,7 +289,7 @@
         },
         onChange: function(v) {
             var pan = v / 100;
-            layerParam('pan', pan);
+            signalParam('pan', pan);
             Synth.setPan(pan);
         }
     });
@@ -298,18 +302,25 @@
     });
 
     // -----------------------------------------------------------------------
-    // Mic
+    // Mic — toggle + signal selection
     // -----------------------------------------------------------------------
     document.getElementById('mic-toggle').addEventListener('click', async function() {
         if (!Synth.hasMic()) {
             await Synth.initMic();
             if (!Synth.hasMic()) return;
+            // Create mic bus on first enable
+            Synth.Layers.initMicBus();
         }
         var enabled = !Synth.isMicEnabled();
         Synth.setMicEnabled(enabled);
         var btn = document.getElementById('mic-toggle');
         btn.classList.toggle('mic-on', enabled);
         btn.classList.toggle('mic-off', !enabled);
+
+        // Double-click on active mic button selects mic for sidebar editing
+        if (enabled && Synth.Layers.getMicSignal()) {
+            Synth.Layers.selectMic();
+        }
     });
 
     document.getElementById('mic-volume').addEventListener('input', function(e) {
@@ -317,13 +328,15 @@
     });
 
     // -----------------------------------------------------------------------
-    // Filter toggle & type (per-layer)
+    // Filter toggle & type
     // -----------------------------------------------------------------------
     var filterToggle = document.getElementById('filter-toggle');
     filterToggle.addEventListener('click', function() {
-        var enabled = !Synth.Filter.isEnabled();
-        Synth.Filter.setEnabled(enabled);
-        layerParam('filter.enabled', enabled);
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var enabled = !signal.filter.enabled;
+        signal.filter.enabled = enabled;
+        Synth.SignalChain.setFilterEnabled(activeBusId(), enabled);
         updateToggle(filterToggle, enabled);
     });
 
@@ -332,63 +345,73 @@
             $$('#filter-type-btns .btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             var type = btn.getAttribute('data-type');
-            Synth.Filter.setType(type);
-            layerParam('filter.type', type);
+            signalParam('filter.type', type);
+            Synth.SignalChain.setFilterType(activeBusId(), type);
         });
     });
 
     // -----------------------------------------------------------------------
-    // Delay toggle (per-layer)
+    // Delay toggle
     // -----------------------------------------------------------------------
     var delayToggle = document.getElementById('delay-toggle');
     delayToggle.addEventListener('click', function() {
-        var enabled = !Synth.Effects.isDelayEnabled();
-        Synth.Effects.setDelayEnabled(enabled);
-        layerParam('delay.enabled', enabled);
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var enabled = !signal.delay.enabled;
+        signal.delay.enabled = enabled;
+        Synth.SignalChain.setDelayEnabled(activeBusId(), enabled);
         updateToggle(delayToggle, enabled);
     });
 
     // -----------------------------------------------------------------------
-    // Reverb toggle (per-layer)
+    // Reverb toggle
     // -----------------------------------------------------------------------
     var reverbToggle = document.getElementById('reverb-toggle');
     reverbToggle.addEventListener('click', function() {
-        var enabled = !Synth.Effects.isReverbEnabled();
-        Synth.Effects.setReverbEnabled(enabled);
-        layerParam('reverb.enabled', enabled);
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var enabled = !signal.reverb.enabled;
+        signal.reverb.enabled = enabled;
+        Synth.SignalChain.setReverbEnabled(activeBusId(), enabled);
         updateToggle(reverbToggle, enabled);
     });
 
     // -----------------------------------------------------------------------
-    // Chorus toggle (per-layer)
+    // Chorus toggle
     // -----------------------------------------------------------------------
     var chorusToggle = document.getElementById('chorus-toggle');
     chorusToggle.addEventListener('click', function() {
-        var enabled = !Synth.Effects.isChorusEnabled();
-        Synth.Effects.setChorusEnabled(enabled);
-        layerParam('chorus.enabled', enabled);
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var enabled = !signal.chorus.enabled;
+        signal.chorus.enabled = enabled;
+        Synth.SignalChain.setChorusEnabled(activeBusId(), enabled);
         updateToggle(chorusToggle, enabled);
     });
 
     // -----------------------------------------------------------------------
-    // Compressor toggle (per-layer)
+    // Compressor toggle
     // -----------------------------------------------------------------------
     var compToggle = document.getElementById('comp-toggle');
     compToggle.addEventListener('click', function() {
-        var enabled = !Synth.Effects.isCompressorEnabled();
-        Synth.Effects.setCompressorEnabled(enabled);
-        layerParam('compressor.enabled', enabled);
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var enabled = !signal.compressor.enabled;
+        signal.compressor.enabled = enabled;
+        Synth.SignalChain.setCompressorEnabled(activeBusId(), enabled);
         updateToggle(compToggle, enabled);
     });
 
     // -----------------------------------------------------------------------
-    // LFO toggle & target (per-layer)
+    // LFO toggle & target
     // -----------------------------------------------------------------------
     var lfoToggle = document.getElementById('lfo-toggle');
     lfoToggle.addEventListener('click', function() {
-        var enabled = !Synth.LFO.isEnabled();
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+        var enabled = !signal.lfo.enabled;
+        signal.lfo.enabled = enabled;
         Synth.LFO.setEnabled(enabled);
-        layerParam('lfo.enabled', enabled);
         updateToggle(lfoToggle, enabled);
     });
 
@@ -398,7 +421,7 @@
             btn.classList.add('active');
             var t = btn.getAttribute('data-target');
             Synth.LFO.setTarget(t);
-            layerParam('lfo.target', t);
+            signalParam('lfo.target', t);
         });
     });
 
@@ -422,7 +445,7 @@
         Synth.Presets.load(this.value);
         // Re-capture into layer 1 after preset load
         Synth.Layers.init();
-        syncUIToLayer();
+        syncUIToSignal();
         buildLayerRows();
     });
 
@@ -435,90 +458,98 @@
     });
 
     // -----------------------------------------------------------------------
-    // Sync UI to active layer
+    // Sync UI to active signal (layer or mic)
     // -----------------------------------------------------------------------
-    function syncUIToLayer() {
-        var layer = Synth.Layers.getActive();
-        if (!layer) return;
+    function syncUIToSignal() {
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal) return;
+
+        var isMic = Synth.Layers.isEditingMic();
 
         // Layer indicator
-        document.getElementById('layer-indicator-color').style.background = layer.color;
-        document.getElementById('layer-indicator-name').textContent = layer.name;
+        document.getElementById('layer-indicator-color').style.background = signal.color || '#00e5ff';
+        document.getElementById('layer-indicator-name').textContent = signal.name || 'Layer 1';
 
-        // Waveform
-        $$('#wave-btns .btn').forEach(function(b) {
-            b.classList.toggle('active', b.getAttribute('data-wave') === layer.waveform);
-        });
+        // Waveform (layers only)
+        if (!isMic) {
+            $$('#wave-btns .btn').forEach(function(b) {
+                b.classList.toggle('active', b.getAttribute('data-wave') === signal.waveform);
+            });
+        }
 
         // Volume (global)
         document.getElementById('volume').value = Math.round(Synth.getVolume() * 100);
 
-        // Pan
-        sliders.pan.setValue(Math.round(layer.pan * 100), true);
+        // Pan (layers only)
+        if (!isMic && signal.pan !== undefined) {
+            sliders.pan.setValue(Math.round(signal.pan * 100), true);
+        }
 
-        // ADSR
-        sliders.adsrA.setValue(Math.round(layer.adsr.attack * 1000), true);
-        sliders.adsrD.setValue(Math.round(layer.adsr.decay * 1000), true);
-        sliders.adsrS.setValue(Math.round(layer.adsr.sustain * 100), true);
-        sliders.adsrR.setValue(Math.round(layer.adsr.release * 1000), true);
+        // ADSR (layers only)
+        if (!isMic && signal.adsr) {
+            sliders.adsrA.setValue(Math.round(signal.adsr.attack * 1000), true);
+            sliders.adsrD.setValue(Math.round(signal.adsr.decay * 1000), true);
+            sliders.adsrS.setValue(Math.round(signal.adsr.sustain * 100), true);
+            sliders.adsrR.setValue(Math.round(signal.adsr.release * 1000), true);
+        }
 
         // Filter
-        updateToggle(filterToggle, layer.filter.enabled);
+        updateToggle(filterToggle, signal.filter.enabled);
         $$('#filter-type-btns .btn').forEach(function(b) {
-            b.classList.toggle('active', b.getAttribute('data-type') === layer.filter.type);
+            b.classList.toggle('active', b.getAttribute('data-type') === signal.filter.type);
         });
-        sliders.filterCutoff.setValue(Math.round(freqToCutoffSlider(layer.filter.frequency)), true);
-        sliders.filterQ.setValue(Math.round(layer.filter.Q * 10), true);
+        sliders.filterCutoff.setValue(Math.round(freqToCutoffSlider(signal.filter.frequency)), true);
+        sliders.filterQ.setValue(Math.round(signal.filter.Q * 10), true);
 
         // Delay
-        updateToggle(delayToggle, layer.delay.enabled);
-        sliders.delayTime.setValue(Math.round(layer.delay.time * 1000), true);
-        sliders.delayFb.setValue(Math.round(layer.delay.feedback * 100), true);
-        sliders.delayMix.setValue(Math.round(layer.delay.mix * 100), true);
+        updateToggle(delayToggle, signal.delay.enabled);
+        sliders.delayTime.setValue(Math.round(signal.delay.time * 1000), true);
+        sliders.delayFb.setValue(Math.round(signal.delay.feedback * 100), true);
+        sliders.delayMix.setValue(Math.round(signal.delay.mix * 100), true);
 
         // Reverb
-        updateToggle(reverbToggle, layer.reverb.enabled);
-        sliders.reverbRoom.setValue(Math.round(layer.reverb.roomSize * 100), true);
-        sliders.reverbDamp.setValue(Math.round(layer.reverb.damping * 100), true);
-        sliders.reverbMix.setValue(Math.round(layer.reverb.mix * 100), true);
+        updateToggle(reverbToggle, signal.reverb.enabled);
+        sliders.reverbRoom.setValue(Math.round(signal.reverb.roomSize * 100), true);
+        sliders.reverbDamp.setValue(Math.round(signal.reverb.damping * 100), true);
+        sliders.reverbMix.setValue(Math.round(signal.reverb.mix * 100), true);
 
         // Chorus
-        updateToggle(chorusToggle, layer.chorus.enabled);
-        sliders.chorusRate.setValue(Math.round(layer.chorus.rate * 10), true);
-        sliders.chorusDepth.setValue(Math.round(layer.chorus.depth * 10000), true);
-        sliders.chorusMix.setValue(Math.round(layer.chorus.mix * 100), true);
+        updateToggle(chorusToggle, signal.chorus.enabled);
+        sliders.chorusRate.setValue(Math.round(signal.chorus.rate * 10), true);
+        sliders.chorusDepth.setValue(Math.round(signal.chorus.depth * 10000), true);
+        sliders.chorusMix.setValue(Math.round(signal.chorus.mix * 100), true);
 
         // Compressor
-        updateToggle(compToggle, layer.compressor.enabled);
-        sliders.compThresh.setValue(Math.round(layer.compressor.threshold), true);
-        sliders.compRatio.setValue(Math.round(layer.compressor.ratio * 10), true);
+        updateToggle(compToggle, signal.compressor.enabled);
+        sliders.compThresh.setValue(Math.round(signal.compressor.threshold), true);
+        sliders.compRatio.setValue(Math.round(signal.compressor.ratio * 10), true);
 
         // LFO
-        updateToggle(lfoToggle, layer.lfo.enabled);
-        sliders.lfoRate.setValue(Math.round(hzToLfoSlider(layer.lfo.rate)), true);
-        sliders.lfoDepth.setValue(Math.round(layer.lfo.depth * 100), true);
+        updateToggle(lfoToggle, signal.lfo.enabled);
+        sliders.lfoRate.setValue(Math.round(hzToLfoSlider(signal.lfo.rate)), true);
+        sliders.lfoDepth.setValue(Math.round(signal.lfo.depth * 100), true);
         $$('#lfo-target-btns .btn').forEach(function(b) {
-            b.classList.toggle('active', b.getAttribute('data-target') === layer.lfo.target);
+            b.classList.toggle('active', b.getAttribute('data-target') === signal.lfo.target);
         });
 
-        // Seq/Arp mode (per-layer)
-        $$('#seq-mode-btns .btn').forEach(function(b) {
-            b.classList.toggle('active', b.getAttribute('data-mode') === layer.mode);
-        });
-
-        // Arp pattern (per-layer)
-        $$('#arp-pattern-btns .btn').forEach(function(b) {
-            b.classList.toggle('active', b.getAttribute('data-pattern') === layer.arpPattern);
-        });
+        // Seq/Arp mode (per-layer, not mic)
+        if (!isMic) {
+            $$('#seq-mode-btns .btn').forEach(function(b) {
+                b.classList.toggle('active', b.getAttribute('data-mode') === signal.mode);
+            });
+            $$('#arp-pattern-btns .btn').forEach(function(b) {
+                b.classList.toggle('active', b.getAttribute('data-pattern') === signal.arpPattern);
+            });
+        }
 
         // Highlight selected layer row
         $$('.seq-layer-row').forEach(function(row, i) {
-            row.classList.toggle('selected', i === Synth.Layers.getActiveIndex());
+            row.classList.toggle('selected', !isMic && i === Synth.Layers.getActiveIndex());
         });
     }
 
     // Respond to layer selection changes
-    Synth.Layers.onSelect(function() { syncUIToLayer(); });
+    Synth.Layers.onSelect(function() { syncUIToSignal(); });
 
     // -----------------------------------------------------------------------
     // Sequencer — multi-layer grid
@@ -534,7 +565,7 @@
                 var layer = Synth.Layers.get(layerIdx);
                 var row = document.createElement('div');
                 row.className = 'seq-layer-row';
-                if (layerIdx === Synth.Layers.getActiveIndex()) row.classList.add('selected');
+                if (!Synth.Layers.isEditingMic() && layerIdx === Synth.Layers.getActiveIndex()) row.classList.add('selected');
 
                 // Label (click to select)
                 var label = document.createElement('div');
@@ -786,7 +817,7 @@
     // -----------------------------------------------------------------------
     // Sync initial UI
     // -----------------------------------------------------------------------
-    syncUIToLayer();
+    syncUIToSignal();
 
     // -----------------------------------------------------------------------
     // View switching
