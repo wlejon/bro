@@ -76,84 +76,100 @@
                     </div>
 
                     <!-- Filter -->
-                    <div class="panel">
-                        <div class="panel-header">
+                    <div class="panel panel-collapsible collapsed" id="panel-filter">
+                        <div class="panel-header" data-panel="panel-filter">
                             <div class="panel-title">Filter</div>
                             <button id="filter-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div id="filter-type-btns" class="btn-group full-width">
-                            <button class="btn active" data-type="lowpass">LP</button>
-                            <button class="btn" data-type="highpass">HP</button>
-                            <button class="btn" data-type="bandpass">BP</button>
-                            <button class="btn" data-type="notch">Notch</button>
+                        <div class="panel-body">
+                            <div id="filter-type-btns" class="btn-group full-width">
+                                <button class="btn active" data-type="lowpass">LP</button>
+                                <button class="btn" data-type="highpass">HP</button>
+                                <button class="btn" data-type="bandpass">BP</button>
+                                <button class="btn" data-type="notch">Notch</button>
+                            </div>
+                            <div class="slider-row"><label>Cutoff</label><div class="fancy-slider" id="filter-cutoff-slider"></div></div>
+                            <div class="slider-row"><label>Resonance</label><div class="fancy-slider" id="filter-q-slider"></div></div>
                         </div>
-                        <div class="slider-row"><label>Cutoff</label><div class="fancy-slider" id="filter-cutoff-slider"></div></div>
-                        <div class="slider-row"><label>Resonance</label><div class="fancy-slider" id="filter-q-slider"></div></div>
                     </div>
 
                     <!-- Delay -->
-                    <div class="panel">
-                        <div class="panel-header">
+                    <div class="panel panel-collapsible collapsed" id="panel-delay">
+                        <div class="panel-header" data-panel="panel-delay">
                             <div class="panel-title">Delay</div>
                             <button id="delay-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div class="slider-row"><label>Time</label><div class="fancy-slider" id="delay-time-slider"></div></div>
-                        <div class="slider-row"><label>Feedback</label><div class="fancy-slider" id="delay-fb-slider"></div></div>
-                        <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="delay-mix-slider"></div></div>
+                        <div class="panel-body">
+                            <div class="slider-row"><label>Time</label><div class="fancy-slider" id="delay-time-slider"></div></div>
+                            <div class="slider-row"><label>Feedback</label><div class="fancy-slider" id="delay-fb-slider"></div></div>
+                            <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="delay-mix-slider"></div></div>
+                        </div>
                     </div>
 
                     <!-- Reverb -->
-                    <div class="panel">
-                        <div class="panel-header">
+                    <div class="panel panel-collapsible collapsed" id="panel-reverb">
+                        <div class="panel-header" data-panel="panel-reverb">
                             <div class="panel-title">Reverb</div>
                             <button id="reverb-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div class="slider-row"><label>Room</label><div class="fancy-slider" id="reverb-room-slider"></div></div>
-                        <div class="slider-row"><label>Damping</label><div class="fancy-slider" id="reverb-damp-slider"></div></div>
-                        <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="reverb-mix-slider"></div></div>
+                        <div class="panel-body">
+                            <div class="slider-row"><label>Room</label><div class="fancy-slider" id="reverb-room-slider"></div></div>
+                            <div class="slider-row"><label>Damping</label><div class="fancy-slider" id="reverb-damp-slider"></div></div>
+                            <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="reverb-mix-slider"></div></div>
+                        </div>
                     </div>
 
                     <!-- Chorus -->
-                    <div class="panel">
-                        <div class="panel-header">
+                    <div class="panel panel-collapsible collapsed" id="panel-chorus">
+                        <div class="panel-header" data-panel="panel-chorus">
                             <div class="panel-title">Chorus</div>
                             <button id="chorus-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div class="slider-row"><label>Rate</label><div class="fancy-slider" id="chorus-rate-slider"></div></div>
-                        <div class="slider-row"><label>Depth</label><div class="fancy-slider" id="chorus-depth-slider"></div></div>
-                        <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="chorus-mix-slider"></div></div>
+                        <div class="panel-body">
+                            <div class="slider-row"><label>Rate</label><div class="fancy-slider" id="chorus-rate-slider"></div></div>
+                            <div class="slider-row"><label>Depth</label><div class="fancy-slider" id="chorus-depth-slider"></div></div>
+                            <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="chorus-mix-slider"></div></div>
+                        </div>
                     </div>
 
                     <!-- Compressor -->
-                    <div class="panel">
-                        <div class="panel-header">
+                    <div class="panel panel-collapsible collapsed" id="panel-compressor">
+                        <div class="panel-header" data-panel="panel-compressor">
                             <div class="panel-title">Compressor</div>
                             <button id="comp-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div class="slider-row"><label>Thresh</label><div class="fancy-slider" id="comp-thresh-slider"></div></div>
-                        <div class="slider-row"><label>Ratio</label><div class="fancy-slider" id="comp-ratio-slider"></div></div>
+                        <div class="panel-body">
+                            <div class="slider-row"><label>Thresh</label><div class="fancy-slider" id="comp-thresh-slider"></div></div>
+                            <div class="slider-row"><label>Ratio</label><div class="fancy-slider" id="comp-ratio-slider"></div></div>
+                        </div>
                     </div>
 
                     <!-- LFO -->
-                    <div class="panel">
-                        <div class="panel-header">
+                    <div class="panel panel-collapsible collapsed" id="panel-lfo">
+                        <div class="panel-header" data-panel="panel-lfo">
                             <div class="panel-title">LFO</div>
                             <button id="lfo-toggle" class="btn btn-toggle">Off</button>
                         </div>
-                        <div class="slider-row"><label>Rate</label><div class="fancy-slider" id="lfo-rate-slider"></div></div>
-                        <div class="slider-row"><label>Depth</label><div class="fancy-slider" id="lfo-depth-slider"></div></div>
-                        <div id="lfo-target-btns" class="btn-group full-width">
-                            <button class="btn active" data-target="pitch">Pitch</button>
-                            <button class="btn" data-target="filter">Filter</button>
-                            <button class="btn" data-target="volume">Volume</button>
-                            <button class="btn" data-target="pan">Pan</button>
+                        <div class="panel-body">
+                            <div class="slider-row"><label>Rate</label><div class="fancy-slider" id="lfo-rate-slider"></div></div>
+                            <div class="slider-row"><label>Depth</label><div class="fancy-slider" id="lfo-depth-slider"></div></div>
+                            <div id="lfo-target-btns" class="btn-group full-width">
+                                <button class="btn active" data-target="pitch">Pitch</button>
+                                <button class="btn" data-target="filter">Filter</button>
+                                <button class="btn" data-target="volume">Volume</button>
+                                <button class="btn" data-target="pan">Pan</button>
+                            </div>
                         </div>
                     </div>
 
                     <!-- Effect Order -->
-                    <div class="panel">
-                        <div class="panel-title">Effect Order</div>
-                        <div id="effect-order-list" class="effect-order-list"></div>
+                    <div class="panel panel-collapsible collapsed" id="panel-effect-order">
+                        <div class="panel-header" data-panel="panel-effect-order">
+                            <div class="panel-title">Effect Order</div>
+                        </div>
+                        <div class="panel-body">
+                            <div id="effect-order-list" class="effect-order-list"></div>
+                        </div>
                     </div>
                 </div>
 

@@ -69,6 +69,44 @@
     }
 
     // -----------------------------------------------------------------------
+    // Collapsible panels — click header to toggle, auto-expand on enable
+    // -----------------------------------------------------------------------
+    $$('.panel-collapsible > .panel-header').forEach(function(header) {
+        header.addEventListener('click', function(e) {
+            // Don't toggle when clicking the On/Off button itself
+            if (e.target.classList.contains('btn-toggle')) return;
+            var panel = document.getElementById(header.getAttribute('data-panel'));
+            if (panel) panel.classList.toggle('collapsed');
+        });
+    });
+
+    // Map effect toggle buttons to their panels for auto-expand
+    var togglePanelMap = {
+        'filter-toggle': 'panel-filter',
+        'delay-toggle': 'panel-delay',
+        'reverb-toggle': 'panel-reverb',
+        'chorus-toggle': 'panel-chorus',
+        'comp-toggle': 'panel-compressor',
+        'lfo-toggle': 'panel-lfo'
+    };
+
+    function syncPanelCollapse(signal) {
+        if (!signal) return;
+        var pairs = [
+            ['panel-filter', signal.filter && signal.filter.enabled],
+            ['panel-delay', signal.delay && signal.delay.enabled],
+            ['panel-reverb', signal.reverb && signal.reverb.enabled],
+            ['panel-chorus', signal.chorus && signal.chorus.enabled],
+            ['panel-compressor', signal.compressor && signal.compressor.enabled],
+            ['panel-lfo', signal.lfo && signal.lfo.enabled]
+        ];
+        for (var i = 0; i < pairs.length; i++) {
+            var panel = document.getElementById(pairs[i][0]);
+            if (panel) panel.classList.toggle('collapsed', !pairs[i][1]);
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Init layers — create first layer, then apply preset to it
     // -----------------------------------------------------------------------
     Synth.Layers.init();
@@ -368,6 +406,7 @@
         signal.filter.enabled = enabled;
         Synth.SignalChain.setFilterEnabled(activeBusId(), enabled);
         updateToggle(filterToggle, enabled);
+        if (enabled) document.getElementById('panel-filter').classList.remove('collapsed');
     });
 
     $$('#filter-type-btns .btn').forEach(function(btn) {
@@ -391,6 +430,7 @@
         signal.delay.enabled = enabled;
         Synth.SignalChain.setDelayEnabled(activeBusId(), enabled);
         updateToggle(delayToggle, enabled);
+        if (enabled) document.getElementById('panel-delay').classList.remove('collapsed');
     });
 
     // -----------------------------------------------------------------------
@@ -404,6 +444,7 @@
         signal.reverb.enabled = enabled;
         Synth.SignalChain.setReverbEnabled(activeBusId(), enabled);
         updateToggle(reverbToggle, enabled);
+        if (enabled) document.getElementById('panel-reverb').classList.remove('collapsed');
     });
 
     // -----------------------------------------------------------------------
@@ -417,6 +458,7 @@
         signal.chorus.enabled = enabled;
         Synth.SignalChain.setChorusEnabled(activeBusId(), enabled);
         updateToggle(chorusToggle, enabled);
+        if (enabled) document.getElementById('panel-chorus').classList.remove('collapsed');
     });
 
     // -----------------------------------------------------------------------
@@ -430,6 +472,7 @@
         signal.compressor.enabled = enabled;
         Synth.SignalChain.setCompressorEnabled(activeBusId(), enabled);
         updateToggle(compToggle, enabled);
+        if (enabled) document.getElementById('panel-compressor').classList.remove('collapsed');
     });
 
     // -----------------------------------------------------------------------
@@ -443,6 +486,7 @@
         signal.lfo.enabled = enabled;
         Synth.LFO.setEnabled(enabled);
         updateToggle(lfoToggle, enabled);
+        if (enabled) document.getElementById('panel-lfo').classList.remove('collapsed');
     });
 
     $$('#lfo-target-btns .btn').forEach(function(btn) {
@@ -600,6 +644,9 @@
 
         // Effect order
         buildEffectOrderList();
+
+        // Collapse/expand panels based on enabled state
+        syncPanelCollapse(signal);
 
         // Filter
         updateToggle(filterToggle, signal.filter.enabled);

@@ -186,6 +186,29 @@ input[type="range"] { accent-color: #00e5ff; }
 
 .panel-header .panel-title { margin-bottom: 0; }
 
+/* Collapsible panels */
+.panel-collapsible > .panel-header {
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 0;
+}
+.panel-collapsible > .panel-header .panel-title::before {
+    content: '\25BE ';  /* down triangle */
+    font-size: 9px;
+}
+.panel-collapsible.collapsed > .panel-header .panel-title::before {
+    content: '\25B8 ';  /* right triangle */
+}
+.panel-collapsible.collapsed > .panel-body {
+    display: none;
+}
+.panel-collapsible:not(.collapsed) > .panel-header {
+    margin-bottom: 5px;
+}
+.panel-collapsible.collapsed {
+    padding: 4px 10px;
+}
+
 .slider-row {
     display: flex;
     align-items: center;
