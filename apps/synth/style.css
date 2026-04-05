@@ -398,6 +398,28 @@ input[type="range"] { accent-color: #00e5ff; }
     background: #ffffff08;
 }
 
+.seq-layer-mode {
+    font-size: 7px;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    border: 1px solid #2a2a3a;
+    background: #1a1a2a;
+    color: #666;
+    cursor: pointer;
+    margin-right: 1px;
+    font-weight: 700;
+}
+.seq-layer-mode.arp {
+    background: #1a1a2a;
+    border-color: #00e5ff80;
+    color: #00e5ff;
+}
+
 .seq-layer-mute {
     font-size: 7px;
     width: 14px;

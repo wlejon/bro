@@ -370,6 +370,16 @@
             b.classList.toggle('active', b.getAttribute('data-target') === layer.lfo.target);
         });
 
+        // Seq/Arp mode (per-layer)
+        $$('#seq-mode-btns .btn').forEach(function(b) {
+            b.classList.toggle('active', b.getAttribute('data-mode') === layer.mode);
+        });
+
+        // Arp pattern (per-layer)
+        $$('#arp-pattern-btns .btn').forEach(function(b) {
+            b.classList.toggle('active', b.getAttribute('data-pattern') === layer.arpPattern);
+        });
+
         // Highlight selected layer row
         $$('.seq-layer-row').forEach(function(row, i) {
             row.classList.toggle('selected', i === Synth.Layers.getActiveIndex());
@@ -405,6 +415,26 @@
                     buildLayerRows();
                 });
                 row.appendChild(label);
+
+                // Mode toggle (S = sequencer, A = arpeggiator)
+                var modeBtn = document.createElement('div');
+                modeBtn.className = 'seq-layer-mode' + (layer.mode === 'arpeggiator' ? ' arp' : '');
+                modeBtn.textContent = layer.mode === 'arpeggiator' ? 'A' : 'S';
+                modeBtn.title = 'Toggle Seq/Arp';
+                modeBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    layer.mode = layer.mode === 'arpeggiator' ? 'sequencer' : 'arpeggiator';
+                    layer.arpIndex = 0;
+                    modeBtn.textContent = layer.mode === 'arpeggiator' ? 'A' : 'S';
+                    modeBtn.classList.toggle('arp', layer.mode === 'arpeggiator');
+                    // Sync sidebar buttons if this is the active layer
+                    if (layerIdx === Synth.Layers.getActiveIndex()) {
+                        $$('#seq-mode-btns .btn').forEach(function(b) {
+                            b.classList.toggle('active', b.getAttribute('data-mode') === layer.mode);
+                        });
+                    }
+                });
+                row.appendChild(modeBtn);
 
                 // Mute button
                 var muteBtn = document.createElement('div');
@@ -607,7 +637,8 @@
         btn.addEventListener('click', function() {
             $$('#seq-mode-btns .btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
-            Synth.Sequencer.setMode(btn.getAttribute('data-mode'));
+            var layer = Synth.Layers.getActive();
+            if (layer) layer.mode = btn.getAttribute('data-mode');
         });
     });
 
@@ -615,7 +646,8 @@
         btn.addEventListener('click', function() {
             $$('#arp-pattern-btns .btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
-            Synth.Sequencer.setArpPattern(btn.getAttribute('data-pattern'));
+            var layer = Synth.Layers.getActive();
+            if (layer) { layer.arpPattern = btn.getAttribute('data-pattern'); layer.arpIndex = 0; }
         });
     });
 

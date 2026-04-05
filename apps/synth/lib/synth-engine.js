@@ -35,7 +35,9 @@
     // Base note for clip instrument (C4 = middle C, noteIdx 36 in our 7-octave range)
     var CLIP_BASE_NOTE = 36;
 
-    Synth.noteOn = function(noteIdx) {
+    // silent: if true, skip piano key highlight, lastPlayedNote, and status bar updates
+    //         (used by sequencer/arp so playback doesn't disrupt the UI)
+    Synth.noteOn = function(noteIdx, silent) {
         if (!audioCtx) return;
         var notes = Synth.notes;
         if (noteIdx < 0 || noteIdx >= notes.length) return;
@@ -73,14 +75,15 @@
             activeNotes.set(noteIdx, { osc: osc, gain: gain, baseFreq: note.freq });
         }
 
-        if (note.element) note.element.classList.add('pressed');
-        lastPlayedNote = noteIdx;
-
-        document.getElementById('note-display').textContent = note.name;
-        document.getElementById('freq-display').textContent = note.freq.toFixed(1) + ' Hz';
+        if (!silent) {
+            if (note.element) note.element.classList.add('pressed');
+            lastPlayedNote = noteIdx;
+            document.getElementById('note-display').textContent = note.name;
+            document.getElementById('freq-display').textContent = note.freq.toFixed(1) + ' Hz';
+        }
     };
 
-    Synth.noteOff = function(noteIdx) {
+    Synth.noteOff = function(noteIdx, silent) {
         var entry = activeNotes.get(noteIdx);
         if (!entry) return;
 
@@ -93,10 +96,12 @@
         }
         activeNotes.delete(noteIdx);
 
-        var note = Synth.notes[noteIdx];
-        if (note && note.element) note.element.classList.remove('pressed');
+        if (!silent) {
+            var note = Synth.notes[noteIdx];
+            if (note && note.element) note.element.classList.remove('pressed');
+        }
 
-        if (activeNotes.size === 0) {
+        if (activeNotes.size === 0 && !silent) {
             document.getElementById('note-display').textContent = '--';
             document.getElementById('freq-display').textContent = '-- Hz';
         }

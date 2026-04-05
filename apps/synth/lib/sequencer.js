@@ -7,9 +7,6 @@
     var currentStep = -1;
     var playing = false;
     var timerId = null;
-    var mode = 'sequencer'; // 'sequencer' or 'arpeggiator'
-    var arpPattern = 'up';  // up, down, updown, random
-    var arpIndex = 0;
     var onStepCallback = null;
     var onLoopCompleteCallback = null;
 
@@ -22,9 +19,59 @@
 
     function noteOffAll() {
         for (var i = 0; i < lastNotes.length; i++) {
-            Synth.noteOff(lastNotes[i].noteIdx);
+            Synth.noteOff(lastNotes[i].noteIdx, true);
         }
         lastNotes = [];
+    }
+
+    // Collect unique note indices from a layer's step grid (sorted ascending)
+    function collectUniqueNotes(layer) {
+        var held = [];
+        for (var i = 0; i < NUM_STEPS; i++) {
+            if (layer.steps[i] !== null && held.indexOf(layer.steps[i]) < 0) {
+                held.push(layer.steps[i]);
+            }
+        }
+        held.sort(function(a, b) { return a - b; });
+        return held;
+    }
+
+    // Pick the next arp note from a sorted array, advancing layer.arpIndex
+    function pickArpNote(layer, held) {
+        if (held.length === 0) return -1;
+        var idx;
+        var pattern = layer.arpPattern || 'up';
+        switch (pattern) {
+            case 'up':
+                layer.arpIndex = layer.arpIndex % held.length;
+                idx = held[layer.arpIndex];
+                layer.arpIndex++;
+                break;
+            case 'down':
+                layer.arpIndex = layer.arpIndex % held.length;
+                idx = held[held.length - 1 - layer.arpIndex];
+                layer.arpIndex++;
+                break;
+            case 'updown':
+                if (held.length === 1) {
+                    idx = held[0];
+                } else {
+                    layer.arpIndex = layer.arpIndex % (held.length * 2 - 2);
+                    if (layer.arpIndex < held.length) {
+                        idx = held[layer.arpIndex];
+                    } else {
+                        idx = held[held.length * 2 - 2 - layer.arpIndex];
+                    }
+                    layer.arpIndex++;
+                }
+                break;
+            case 'random':
+                idx = held[Math.floor(Math.random() * held.length)];
+                break;
+            default:
+                idx = held[0];
+        }
+        return idx;
     }
 
     function tick() {
@@ -35,93 +82,49 @@
 
         currentStep = (currentStep + 1) % NUM_STEPS;
 
-        if (mode === 'sequencer') {
-            var Layers = Synth.Layers;
-            var count = Layers.count();
-            var effectsApplied = false;
+        var Layers = Synth.Layers;
+        var count = Layers.count();
+        var effectsApplied = false;
 
-            for (var li = 0; li < count; li++) {
-                var layer = Layers.get(li);
-                if (!layer || layer.muted) continue;
+        for (var li = 0; li < count; li++) {
+            var layer = Layers.get(li);
+            if (!layer || layer.muted) continue;
 
-                var noteIdx = layer.steps[currentStep];
-                if (noteIdx === null || noteIdx === undefined || noteIdx < 0) continue;
+            var noteIdx = -1;
 
-                // Apply this layer's oscillator params before noteOn
-                Layers.applyForPlayback(layer);
-
-                // Apply filter/delay from first active layer this step
-                if (!effectsApplied) {
-                    Layers.applyEffects(layer);
-                    effectsApplied = true;
+            if (layer.mode === 'arpeggiator') {
+                // Arp: only play on steps that have a note
+                if (layer.steps[currentStep] !== null) {
+                    var held = collectUniqueNotes(layer);
+                    noteIdx = pickArpNote(layer, held);
                 }
-
-                Synth.noteOn(noteIdx);
-                lastNotes.push({ layerIdx: li, noteIdx: noteIdx });
-            }
-
-            // Restore selected layer's params so keyboard play and LFO
-            // use the correct layer's settings between ticks
-            var active = Layers.getActive();
-            if (active) Layers.applyToEngine(active);
-        } else {
-            // Arpeggiator: collect unique notes from active layer's step grid
-            var Layers2 = Synth.Layers;
-            var activeLayer = Layers2.getActive();
-            var held = [];
-
-            if (activeLayer) {
-                for (var i = 0; i < NUM_STEPS; i++) {
-                    if (activeLayer.steps[i] !== null && held.indexOf(activeLayer.steps[i]) < 0) {
-                        held.push(activeLayer.steps[i]);
-                    }
+            } else {
+                // Sequencer: play the step's note directly
+                var sn = layer.steps[currentStep];
+                if (sn !== null && sn !== undefined && sn >= 0) {
+                    noteIdx = sn;
                 }
             }
 
-            if (held.length > 0) {
-                held.sort(function(a, b) { return a - b; });
-                var idx;
-                switch (arpPattern) {
-                    case 'up':
-                        arpIndex = arpIndex % held.length;
-                        idx = held[arpIndex];
-                        arpIndex++;
-                        break;
-                    case 'down':
-                        arpIndex = arpIndex % held.length;
-                        idx = held[held.length - 1 - arpIndex];
-                        arpIndex++;
-                        break;
-                    case 'updown':
-                        if (held.length === 1) {
-                            idx = held[0];
-                        } else {
-                            arpIndex = arpIndex % (held.length * 2 - 2);
-                            if (arpIndex < held.length) {
-                                idx = held[arpIndex];
-                            } else {
-                                idx = held[held.length * 2 - 2 - arpIndex];
-                            }
-                            arpIndex++;
-                        }
-                        break;
-                    case 'random':
-                        idx = held[Math.floor(Math.random() * held.length)];
-                        break;
-                    default:
-                        idx = held[0];
-                }
+            if (noteIdx < 0) continue;
 
-                // Apply active layer's params for arp
-                if (activeLayer) {
-                    Layers2.applyForPlayback(activeLayer);
-                    Layers2.applyEffects(activeLayer);
-                }
+            // Apply this layer's oscillator params before noteOn
+            Layers.applyForPlayback(layer);
 
-                Synth.noteOn(idx);
-                lastNotes.push({ layerIdx: Layers2.getActiveIndex(), noteIdx: idx });
+            // Apply filter/delay from first active layer this step
+            if (!effectsApplied) {
+                Layers.applyEffects(layer);
+                effectsApplied = true;
             }
+
+            Synth.noteOn(noteIdx, true);
+            lastNotes.push({ layerIdx: li, noteIdx: noteIdx });
         }
+
+        // Restore selected layer's params so keyboard play and LFO
+        // use the correct layer's settings between ticks
+        var active = Layers.getActive();
+        if (active) Layers.applyToEngine(active);
 
         if (onStepCallback) onStepCallback(currentStep);
 
@@ -129,7 +132,6 @@
         if (currentStep === NUM_STEPS - 1 && onLoopCompleteCallback) {
             var cb = onLoopCompleteCallback;
             onLoopCompleteCallback = null; // one-shot
-            // Delay callback to after the last step's note has sounded
             setTimeout(function() { cb(); }, getStepDuration());
         }
 
@@ -143,7 +145,12 @@
             if (playing) return;
             playing = true;
             currentStep = -1;
-            arpIndex = 0;
+            // Reset arp indices on all layers
+            var Layers = Synth.Layers;
+            for (var i = 0; i < Layers.count(); i++) {
+                var l = Layers.get(i);
+                if (l) l.arpIndex = 0;
+            }
             tick();
         },
 
@@ -183,12 +190,6 @@
         setBPM: function(b) { bpm = Math.max(30, Math.min(300, b)); },
         getBPM: function() { return bpm; },
 
-        setMode: function(m) { mode = m; arpIndex = 0; },
-        getMode: function() { return mode; },
-
-        setArpPattern: function(p) { arpPattern = p; arpIndex = 0; },
-        getArpPattern: function() { return arpPattern; },
-
         onStep: function(cb) { onStepCallback = cb; },
 
         // One-shot callback: fires after the next complete loop finishes
@@ -209,77 +210,47 @@
 
             // Collect which notes play at each step
             var stepNotes = []; // per step: [{freq, waveform, adsr, pan}, ...]
-            var simArpIdx = 0;
+
+            // Per-layer simulated arp index
+            var simArpIndices = [];
+            for (var la = 0; la < layerCount; la++) simArpIndices.push(0);
 
             for (var step = 0; step < NUM_STEPS; step++) {
                 var notes = [];
 
-                if (mode === 'sequencer') {
-                    for (var li = 0; li < layerCount; li++) {
-                        var layer = Layers.get(li);
-                        if (!layer || layer.muted) continue;
-                        var ni = layer.steps[step];
-                        if (ni === null || ni === undefined || ni < 0) continue;
-                        var note = Synth.notes[ni];
-                        if (!note) continue;
-                        notes.push({
-                            freq: note.freq,
-                            waveform: layer.waveform,
-                            adsr: { attack: layer.adsr.attack, decay: layer.adsr.decay,
-                                    sustain: layer.adsr.sustain, release: layer.adsr.release },
-                            pan: layer.pan
-                        });
-                    }
-                } else {
-                    // Arpeggiator — replicate the arp stepping logic
-                    var activeLayer = Layers.getActive();
-                    var held = [];
-                    if (activeLayer) {
-                        for (var i = 0; i < NUM_STEPS; i++) {
-                            if (activeLayer.steps[i] !== null &&
-                                held.indexOf(activeLayer.steps[i]) < 0) {
-                                held.push(activeLayer.steps[i]);
+                for (var li = 0; li < layerCount; li++) {
+                    var layer = Layers.get(li);
+                    if (!layer || layer.muted) continue;
+
+                    var noteIdx = -1;
+
+                    if (layer.mode === 'arpeggiator') {
+                        if (layer.steps[step] !== null) {
+                            var held = collectUniqueNotes(layer);
+                            if (held.length > 0) {
+                                // Simulate arp pick using per-layer index
+                                var simLayer = { arpPattern: layer.arpPattern, arpIndex: simArpIndices[li] };
+                                noteIdx = pickArpNote(simLayer, held);
+                                simArpIndices[li] = simLayer.arpIndex;
                             }
                         }
-                    }
-                    if (held.length > 0) {
-                        held.sort(function(a, b) { return a - b; });
-                        var idx;
-                        switch (arpPattern) {
-                            case 'up':
-                                simArpIdx = simArpIdx % held.length;
-                                idx = held[simArpIdx++];
-                                break;
-                            case 'down':
-                                simArpIdx = simArpIdx % held.length;
-                                idx = held[held.length - 1 - simArpIdx++];
-                                break;
-                            case 'updown':
-                                if (held.length === 1) { idx = held[0]; }
-                                else {
-                                    simArpIdx = simArpIdx % (held.length * 2 - 2);
-                                    idx = simArpIdx < held.length
-                                        ? held[simArpIdx]
-                                        : held[held.length * 2 - 2 - simArpIdx];
-                                    simArpIdx++;
-                                }
-                                break;
-                            case 'random':
-                                idx = held[Math.floor(Math.random() * held.length)];
-                                break;
-                            default: idx = held[0];
-                        }
-                        var note = Synth.notes[idx];
-                        if (note && activeLayer) {
-                            notes.push({
-                                freq: note.freq,
-                                waveform: activeLayer.waveform,
-                                adsr: { attack: activeLayer.adsr.attack, decay: activeLayer.adsr.decay,
-                                        sustain: activeLayer.adsr.sustain, release: activeLayer.adsr.release },
-                                pan: activeLayer.pan
-                            });
+                    } else {
+                        var sn = layer.steps[step];
+                        if (sn !== null && sn !== undefined && sn >= 0) {
+                            noteIdx = sn;
                         }
                     }
+
+                    if (noteIdx < 0) continue;
+                    var note = Synth.notes[noteIdx];
+                    if (!note) continue;
+                    notes.push({
+                        freq: note.freq,
+                        waveform: layer.waveform,
+                        adsr: { attack: layer.adsr.attack, decay: layer.adsr.decay,
+                                sustain: layer.adsr.sustain, release: layer.adsr.release },
+                        pan: layer.pan
+                    });
                 }
 
                 stepNotes.push(notes);

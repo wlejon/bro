@@ -23,6 +23,8 @@
             waveform: 'sine',
             volume: 1.0,
             pan: 0,
+            mode: 'sequencer',    // 'sequencer' or 'arpeggiator'
+            arpPattern: 'up',     // up, down, updown, random
             adsr: { attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.08 },
             filter: { enabled: false, type: 'lowpass', frequency: 2000, Q: 1.0, gain: 0 },
             delay: { enabled: false, time: 0.3, feedback: 0.3, mix: 0.3 },
@@ -44,6 +46,9 @@
             waveform: p.waveform || 'sine',
             volume: p.volume !== undefined ? p.volume : 1.0,
             pan: p.pan !== undefined ? p.pan : 0,
+            mode: p.mode || 'sequencer',
+            arpPattern: p.arpPattern || 'up',
+            arpIndex: 0,
             clipId: -1,
             adsr: {
                 attack: p.adsr ? p.adsr.attack : 0.01,
@@ -185,6 +190,8 @@
             var dup = createLayer(src.name + ' Copy', {
                 waveform: src.waveform,
                 volume: src.volume,
+                mode: src.mode,
+                arpPattern: src.arpPattern,
                 adsr: { attack: src.adsr.attack, decay: src.adsr.decay,
                         sustain: src.adsr.sustain, release: src.adsr.release },
                 filter: { enabled: src.filter.enabled, type: src.filter.type,
@@ -267,7 +274,8 @@
                 var l = layers[i];
                 out.push({
                     name: l.name, muted: l.muted, color: l.color,
-                    waveform: l.waveform, volume: l.volume, pan: l.pan, clipId: l.clipId,
+                    waveform: l.waveform, volume: l.volume, pan: l.pan,
+                    mode: l.mode, arpPattern: l.arpPattern, clipId: l.clipId,
                     adsr: { attack: l.adsr.attack, decay: l.adsr.decay,
                             sustain: l.adsr.sustain, release: l.adsr.release },
                     filter: { enabled: l.filter.enabled, type: l.filter.type,
@@ -293,6 +301,8 @@
                 layer.muted = d.muted || false;
                 layer.color = d.color || COLORS[i % COLORS.length];
                 layer.volume = d.volume !== undefined ? d.volume : 1.0;
+                layer.mode = d.mode || 'sequencer';
+                layer.arpPattern = d.arpPattern || 'up';
                 layer.clipId = d.clipId !== undefined ? d.clipId : -1;
                 if (d.steps) {
                     for (var s = 0; s < NUM_STEPS && s < d.steps.length; s++) {
