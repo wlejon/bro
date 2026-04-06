@@ -236,23 +236,28 @@ Engine::Engine(const EngineConfig& config)
                     if (el) {
                         scene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
                             auto* elem = static_cast<dom::Element*>(ud);
+                            if (!elem->parentNode()) {
+                                ox = oy = ow = oh = 0;
+                                return;
+                            }
                             auto& box = elem->layoutBox();
-                            // Accumulate absolute position by walking up the
-                            // layout parent chain (same as getBoundingClientRect)
                             ox = box.contentRect.x;
                             oy = box.contentRect.y;
                             for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
                                 auto& pb = lp->layoutBox();
                                 ox += pb.contentRect.x;
                                 oy += pb.contentRect.y;
+                                oy -= lp->scrollTopValue();
                             }
-                            // Element content dimensions
                             ow = box.contentRect.width;
                             oh = box.contentRect.height;
                         }, el);
+                        scene->setDetachedCallback([](void* ud) -> bool {
+                            return !static_cast<dom::Element*>(ud)->parentNode();
+                        }, el);
                     }
                     auto* ptr = scene.get();
-                    addSceneLayer(std::move(scene));
+                    addCanvasScene(std::move(scene));
                     return js::CanvasBindings::wrapContext2D(ctx, ptr);
                 }
                 if (type == "webgl2" || type == "webgl") {
@@ -267,11 +272,35 @@ Engine::Engine(const EngineConfig& config)
     } else {
         // CPU path: 2D canvas only, no WebGL
         js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
-            [this](JSContext* ctx, dom::Element*, const std::string&) -> JSValue {
-                headlessCanvasScene_ = std::make_unique<canvas::CanvasScene>(renderer_.get());
-                headlessCanvasScenePtr_ = headlessCanvasScene_.get();
-                headlessCanvasScene_->onInit(nullptr, viewportWidth_, viewportHeight_);
-                return js::CanvasBindings::wrapContext2D(ctx, headlessCanvasScenePtr_);
+            [this](JSContext* ctx, dom::Element* el, const std::string&) -> JSValue {
+                auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                if (el) {
+                    scene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
+                        auto* elem = static_cast<dom::Element*>(ud);
+                        if (!elem->parentNode()) {
+                            ox = oy = ow = oh = 0;
+                            return;
+                        }
+                        auto& box = elem->layoutBox();
+                        ox = box.contentRect.x;
+                        oy = box.contentRect.y;
+                        for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
+                            auto& pb = lp->layoutBox();
+                            ox += pb.contentRect.x;
+                            oy += pb.contentRect.y;
+                            oy -= lp->scrollTopValue();
+                        }
+                        ow = box.contentRect.width;
+                        oh = box.contentRect.height;
+                    }, el);
+                    scene->setDetachedCallback([](void* ud) -> bool {
+                        return !static_cast<dom::Element*>(ud)->parentNode();
+                    }, el);
+                }
+                auto* ptr = scene.get();
+                scene->init(nullptr);
+                canvasScenes_.push_back(std::move(scene));
+                return js::CanvasBindings::wrapContext2D(ctx, ptr);
             });
     }
 
@@ -357,13 +386,80 @@ void Engine::addSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
     sceneLayers_.push_back(std::move(layer));
 }
 
+void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
+    if (scene) {
+        scene->init(gl_.get());
+    }
+    canvasScenes_.push_back(std::move(scene));
+}
+
+void Engine::compositeCanvasScenes(int w, int h) {
+    compositeCanvasScenes(gl_.get(), w, h, 0);
+}
+
+void Engine::compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO) {
+    if (!gl || canvasScenes_.empty()) return;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
+    glViewport(0, 0, w, h);
+
+    glUseProgram(gl->textureProgram());
+    float viewport[2] = {(float)w, (float)h};
+    glUniform2fv(gl->textureViewportLoc(), 1, viewport);
+    glUniform1i(gl->textureSamplerLoc(), 0);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    for (auto& cs : canvasScenes_) {
+        GLuint tex = cs->texture();
+        if (!tex) continue;
+
+        float cx, cy, cw, ch;
+        cs->getScreenRect(cx, cy, cw, ch);
+
+        // FBO content is Y-flipped (vertex shader flips Y for screen-space),
+        // so V=1 at top of quad, V=0 at bottom.
+        render::TextureVertex quad[6] = {
+            {cx,      cy,      0, 1}, {cx+cw, cy,      1, 1}, {cx+cw, cy+ch, 1, 0},
+            {cx,      cy,      0, 1}, {cx+cw, cy+ch, 1, 0}, {cx,      cy+ch, 0, 0},
+        };
+
+        GLuint vbo = 0;
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
+
+        GLuint vao = 0;
+        glGenVertexArrays(1, &vao);
+        glBindVertexArray(vao);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                              (void*)offsetof(render::TextureVertex, u));
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glDeleteVertexArrays(1, &vao);
+        glDeleteBuffers(1, &vbo);
+    }
+
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
 Engine::~Engine() {
     for (auto& sl : sceneLayers_) {
         if (sl) sl->onCleanup();
     }
     sceneLayers_.clear();
+    canvasScenes_.clear();
     systemOverlay_.reset();
-    headlessCanvasScene_.reset();
 
     // 1. Clear timers (they hold JS callbacks)
     if (timers_ && jsRuntime_) {
@@ -719,13 +815,15 @@ void Engine::run() {
 
         double tGpu = util::currentTimeMs();
 
-        // 5c. Scene layer prepares vertex data
-        for (auto& sl : sceneLayers_) {
-            auto* canvasScene = dynamic_cast<canvas::CanvasScene*>(sl.get());
-            if (canvasScene) {
-                canvasScene->prepareFrame(gl_.get(), viewportWidth_, viewportHeight_);
-            }
+        // 5c. Rasterize canvas scenes into their per-canvas FBOs
+        for (auto& cs : canvasScenes_) {
+            cs->setViewportScroll(scrollY_);
+            cs->rasterize(gl_.get());
         }
+        canvasScenes_.erase(
+            std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
+                [](auto& cs) { return cs->isDetached(); }),
+            canvasScenes_.end());
 
         // 5d. Set viewport and clear
         glViewport(0, 0, viewportWidth_, viewportHeight_);
@@ -733,7 +831,7 @@ void Engine::run() {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // 5e. Render pass 1: scene draws (directly to default framebuffer)
+        // 5e. Render pass 1: scene layers (WebGL etc.) draw to default framebuffer
         for (auto& sl : sceneLayers_) {
             if (sl) sl->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
         }
@@ -773,6 +871,9 @@ void Engine::run() {
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
+
+        // 5f2. Composite canvas FBO textures ON TOP of the UI (like a browser)
+        compositeCanvasScenes(viewportWidth_, viewportHeight_);
 
         // 5g. Render pass 3: composite system overlay (premultiplied alpha)
         if (systemOverlay_ && systemOverlay_->isVisible()) {
@@ -1001,6 +1102,7 @@ void Engine::ensureReplacedElements(dom::Element* elem) {
     } else if (tag == "SELECT" && !elem->selectControl()) {
         auto ctrl = std::make_unique<layout::ElSelect>(renderer_.get());
         ctrl->setElement(elem);
+        ctrl->initSelectedIndex();
         elem->setSelectControl(std::move(ctrl));
     } else if ((tag == "SVG" || tag == "svg") && !elem->svgControl()) {
         auto ctrl = std::make_unique<layout::ElSvg>(renderer_.get());

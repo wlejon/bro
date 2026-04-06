@@ -160,7 +160,7 @@ bool Engine::screenshot(const std::string& path) {
 
     // GPU compositing path: replicate the windowed render pass to an offscreen FBO,
     // then read back pixels. This captures scene layers (WebGL, Canvas2D) + UI overlay.
-    if (gl_ && !sceneLayers_.empty()) {
+    if (gl_ && (!sceneLayers_.empty() || !canvasScenes_.empty())) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -172,29 +172,26 @@ bool Engine::screenshot(const std::string& path) {
         renderer_->endFrame();
         skia->uploadToGPU();
 
-        // 2. Prepare Canvas2D scene if applicable
-        for (auto& sl : sceneLayers_) {
-            auto* cs = dynamic_cast<canvas::CanvasScene*>(sl.get());
-            if (cs) cs->prepareFrame(gl_.get(), w, h);
+        // 2. Rasterize canvas scenes into their per-canvas FBOs
+        for (auto& cs : canvasScenes_) {
+            cs->setViewportScroll(scrollY_);
+            cs->rasterize(gl_.get());
         }
 
-        // 3. Bind WebGL canvas FBO before rAF (same as windowed loop)
-                // WebGL content was already rendered during rAF above
-
-        // 4. Create temporary compositing FBO
+        // 3. Create temporary compositing FBO
         GLuint compositeFBO = 0, compositeTex = 0;
         glGenFramebuffers(1, &compositeFBO);
         compositeTex = gl_->createTexture2D(w, h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
         glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, compositeTex, 0);
 
-        // 5. Clear and render scene layer
+        // 4. Clear and render scene layers (WebGL etc.)
         glViewport(0, 0, w, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         for (auto& sl : sceneLayers_) { if (sl) sl->onRender(gl_.get(), w, h, 0.0); }
 
-        // 6. Composite UI overlay (premultiplied alpha)
+        // 5. Composite UI overlay (premultiplied alpha)
         GLuint uiTex = skia->getUITexture();
         if (uiTex) {
             float fw = (float)w, fh = (float)h;
@@ -236,6 +233,9 @@ bool Engine::screenshot(const std::string& path) {
             glDeleteVertexArrays(1, &quadVAO);
         }
 
+        // 6. Composite canvas FBO textures ON TOP of the UI
+        compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
+
         // 7. Read back pixels
         std::vector<uint8_t> pixels(w * h * 4);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -268,9 +268,11 @@ bool Engine::screenshot(const std::string& path) {
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
-    // Render canvas scene first (behind HTML) — CPU software replay
-    if (headlessCanvasScenePtr_) {
-        auto& cmds = headlessCanvasScenePtr_->canvas().commands();
+    // Render canvas scenes first (behind HTML) — CPU software replay
+    for (auto& cs : canvasScenes_) {
+        float cx, cy, cw, ch;
+        cs->getScreenRect(cx, cy, cw, ch);
+        auto& cmds = cs->canvas().commands();
         uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
         float globalAlpha = 1.0f;
 
@@ -285,12 +287,12 @@ bool Engine::screenshot(const std::string& path) {
                 break;
             case CT::FillRect: {
                 uint8_t a = static_cast<uint8_t>(fillA * globalAlpha);
-                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h,
+                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h,
                                     {fillR, fillG, fillB, a});
                 break;
             }
             case CT::ClearRect:
-                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h, {0, 0, 0, 255});
+                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h, {0, 0, 0, 255});
                 break;
             default: break;
             }
@@ -340,7 +342,7 @@ std::vector<uint8_t> Engine::capturePixels() {
         webglScene->webglContext()->unbindCanvasFBO();
 
     // GPU compositing path
-    if (gl_ && !sceneLayers_.empty()) {
+    if (gl_ && (!sceneLayers_.empty() || !canvasScenes_.empty())) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -350,9 +352,9 @@ std::vector<uint8_t> Engine::capturePixels() {
         renderer_->endFrame();
         skia->uploadToGPU();
 
-        for (auto& sl : sceneLayers_) {
-            auto* cs = dynamic_cast<canvas::CanvasScene*>(sl.get());
-            if (cs) cs->prepareFrame(gl_.get(), w, h);
+        for (auto& cs : canvasScenes_) {
+            cs->setViewportScroll(scrollY_);
+            cs->rasterize(gl_.get());
         }
 
         // Create temporary compositing FBO
@@ -409,6 +411,9 @@ std::vector<uint8_t> Engine::capturePixels() {
             glDeleteVertexArrays(1, &quadVAO);
         }
 
+        // Composite canvas FBO textures ON TOP of the UI
+        compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
+
         // Read back pixels
         std::vector<uint8_t> pixels(w * h * 4);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -438,8 +443,10 @@ std::vector<uint8_t> Engine::capturePixels() {
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
-    if (headlessCanvasScenePtr_) {
-        auto& cmds = headlessCanvasScenePtr_->canvas().commands();
+    for (auto& cs : canvasScenes_) {
+        float cx, cy, cw, ch;
+        cs->getScreenRect(cx, cy, cw, ch);
+        auto& cmds = cs->canvas().commands();
         uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
         float globalAlpha = 1.0f;
         for (auto& cmd : cmds) {
@@ -451,11 +458,11 @@ std::vector<uint8_t> Engine::capturePixels() {
                 globalAlpha = cmd.f; break;
             case CT::FillRect: {
                 uint8_t a = static_cast<uint8_t>(fillA * globalAlpha);
-                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h, {fillR, fillG, fillB, a});
+                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h, {fillR, fillG, fillB, a});
                 break;
             }
             case CT::ClearRect:
-                renderer_->fillRect(cmd.x, cmd.y, cmd.w, cmd.h, {0, 0, 0, 255}); break;
+                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h, {0, 0, 0, 255}); break;
             default: break;
             }
         }

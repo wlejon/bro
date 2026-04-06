@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <glad/gl.h>
 
 
 namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
@@ -125,6 +126,9 @@ private:
     void dispatchScrollEvent(dom::Element* el);
     void advanceFocus(bool reverse);
     void addSceneLayer(std::unique_ptr<render::SceneLayer> layer);
+    void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
+    void compositeCanvasScenes(int w, int h);
+    void compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO);
     void ensureReplacedElements(dom::Element* elem);
 
     DisplayMode displayMode_;
@@ -145,13 +149,12 @@ private:
     int viewportHeight_;
     AppManifest manifest_;
     std::vector<std::unique_ptr<render::SceneLayer>> sceneLayers_;
+    std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<SystemOverlay> systemOverlay_;
 
     // Headless-specific
     double virtualTime_ = 0.0;
-    std::unique_ptr<canvas::CanvasScene> headlessCanvasScene_;
-    canvas::CanvasScene* headlessCanvasScenePtr_ = nullptr;
 
     // Stats tracking
     double statsAccumMs_ = 0.0;

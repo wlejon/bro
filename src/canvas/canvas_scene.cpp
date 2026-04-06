@@ -21,7 +21,7 @@ uint64_t CanvasScene::getOrCreateFont(const std::string& fontStr) {
     return handle;
 }
 
-void CanvasScene::onCleanup() {
+void CanvasScene::cleanup() {
     textCache_.clear();
     for (auto& [k, h] : fontCache_) renderer_->deleteFont(h);
     fontCache_.clear();
@@ -32,16 +32,68 @@ void CanvasScene::onCleanup() {
     }
     if (colorVAO_) { glDeleteVertexArrays(1, &colorVAO_); colorVAO_ = 0; }
     if (textureVAO_) { glDeleteVertexArrays(1, &textureVAO_); textureVAO_ = 0; }
+    if (fbo_) { glDeleteFramebuffers(1, &fbo_); fbo_ = 0; }
+    if (fboTexture_) { glDeleteTextures(1, &fboTexture_); fboTexture_ = 0; }
+    fboWidth_ = fboHeight_ = 0;
+}
+
+void CanvasScene::ensureFBO(int w, int h) {
+    if (fbo_ && fboWidth_ == w && fboHeight_ == h) return;
+
+    // Destroy old FBO if size changed
+    if (fbo_) { glDeleteFramebuffers(1, &fbo_); fbo_ = 0; }
+    if (fboTexture_) { glDeleteTextures(1, &fboTexture_); fboTexture_ = 0; }
+
+    fboWidth_ = w;
+    fboHeight_ = h;
+
+    fboTexture_ = gl_->createTexture2D(w, h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
+    glGenFramebuffers(1, &fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTexture_, 0);
+
+    // Clear to transparent black (canvas default)
+    glViewport(0, 0, w, h);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 // ---------------------------------------------------------------------------
-// prepareFrame — build vertex data and upload to GPU
+// rasterize — render Canvas2D commands into this canvas's own FBO
 // ---------------------------------------------------------------------------
 
-void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
+void CanvasScene::rasterize(render::GLContext* gl) {
     if (!gl) return;
-    width_ = w;
-    height_ = h;
+
+    // Check if element was removed from the DOM
+    if (detachedCb_ && detachedCb_(detachedUd_)) {
+        detached_ = true;
+        canvas_.reset();
+        return;
+    }
+
+    // Query element layout position and size
+    float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
+    if (layoutCb_) {
+        layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
+        if (layoutW <= 0 || layoutH <= 0) {
+            // Element is hidden (display:none, etc.) — skip but don't prune
+            return;
+        }
+    }
+
+    // Screen-space position for compositing (apply viewport scroll)
+    screenX_ = layoutX;
+    screenY_ = layoutY - viewportScrollY_;
+
+    int canvasW = static_cast<int>(layoutW);
+    int canvasH = static_cast<int>(layoutH);
+    ensureFBO(canvasW, canvasH);
+
+    // If no new commands, the FBO texture is already valid — skip
+    if (canvas_.commands().empty()) return;
 
     using CV = render::ColorVertex;
     using TV = render::TextureVertex;
@@ -56,6 +108,8 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
     float globalAlpha = 1.0f;
     std::string currentFont = "16px sans-serif";
     uint64_t fontHandle = 0;
+
+    // Canvas-local coordinates: origin is (0,0)
     float tx = 0, ty = 0;
 
     struct SavedState {
@@ -92,18 +146,6 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
         colorVerts.push_back({x2 + nx, y2 + ny, r, g, b, a});
     };
 
-    // Apply element layout offset so canvas draws at its DOM position
-    if (layoutCb_) {
-        float lw = 0, lh = 0;
-        layoutCb_(layoutUd_, offsetX_, offsetY_, lw, lh);
-        if (lw > 0 && lh > 0) {
-            width_ = static_cast<int>(lw);
-            height_ = static_cast<int>(lh);
-        }
-    }
-    tx = offsetX_;
-    ty = offsetY_;
-
     // Path state for beginPath/moveTo/lineTo/stroke/fill
     struct PathPoint { float x, y; };
     std::vector<PathPoint> pathPoints;
@@ -111,6 +153,9 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
     bool hasMoveTo = false;
 
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_);
+
+    // Track whether we need a full FBO clear (for clearRect covering entire canvas)
+    bool needFullClear = false;
 
     for (auto& c : canvas_.commands()) {
         switch (c.type) {
@@ -149,8 +194,18 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
             break;
         }
         case CmdType::ClearRect: {
-            pushQuad(c.x + tx, c.y + ty, c.w, c.h,
-                     0.0f, 0.0f, 0.0f, 1.0f);
+            // Check if this is a full-canvas clear
+            if (c.x <= 0 && c.y <= 0 && c.w >= canvasW && c.h >= canvasH) {
+                needFullClear = true;
+                // Discard all vertices built so far — they'll be covered by the clear
+                colorVerts.clear();
+                texVerts.clear();
+                textDraws_.clear();
+            } else {
+                // Sub-rect clear: draw a transparent quad
+                pushQuad(c.x + tx, c.y + ty, c.w, c.h,
+                         0.0f, 0.0f, 0.0f, 0.0f);
+            }
             break;
         }
         case CmdType::FillText: {
@@ -221,7 +276,6 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
             }
             break;
         case CmdType::Arc: {
-            // Approximate arc with line segments
             float cx_ = c.x + tx, cy_ = c.y + ty;
             float radius = c.w;
             float startAngle = c.h, endAngle = c.f;
@@ -259,7 +313,6 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
             break;
         }
         case CmdType::Fill: {
-            // Simple triangle-fan fill from first point
             if (pathPoints.size() >= 3) {
                 float a = (fillA / 255.0f) * globalAlpha;
                 float r = fillR / 255.0f, g = fillG / 255.0f, b = fillB / 255.0f;
@@ -274,82 +327,74 @@ void CanvasScene::prepareFrame(render::GLContext* gl, int w, int h) {
         }
     }
 
-    // Store counts for onRender
+    // Commands have been consumed — clear the buffer.
+    // The FBO texture persists (like a real canvas bitmap).
+    canvas_.reset();
+
+    // Store vertex counts
     colorVertCount_ = (uint32_t)colorVerts.size();
     colorBytes_ = (uint32_t)(colorVerts.size() * sizeof(CV));
     uint32_t texBytes = (uint32_t)(texVerts.size() * sizeof(TV));
     uint32_t totalBytes = colorBytes_ + texBytes;
 
-    if (totalBytes == 0) return;
+    if (totalBytes == 0 && !needFullClear) return;
 
-    // Ensure GL vertex buffer is large enough
-    if (!vertexBuf_ || vertexBufSize_ < totalBytes) {
-        if (vertexBuf_) glDeleteBuffers(1, &vertexBuf_);
-        uint32_t size = 65536;
-        while (size < totalBytes) size *= 2;
-        glGenBuffers(1, &vertexBuf_);
+    // Upload vertices if we have any
+    if (totalBytes > 0) {
+        if (!vertexBuf_ || vertexBufSize_ < totalBytes) {
+            if (vertexBuf_) glDeleteBuffers(1, &vertexBuf_);
+            uint32_t size = 65536;
+            while (size < totalBytes) size *= 2;
+            glGenBuffers(1, &vertexBuf_);
+            glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
+            glBufferData(GL_ARRAY_BUFFER, size, nullptr, GL_DYNAMIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            vertexBufSize_ = size;
+        }
+
+        std::vector<uint8_t> combined(totalBytes);
+        if (colorBytes_ > 0)
+            memcpy(combined.data(), colorVerts.data(), colorBytes_);
+        if (texBytes > 0)
+            memcpy(combined.data() + colorBytes_, texVerts.data(), texBytes);
+
         glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-        glBufferData(GL_ARRAY_BUFFER, size, nullptr, GL_DYNAMIC_DRAW);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, totalBytes, combined.data());
         glBindBuffer(GL_ARRAY_BUFFER, 0);
-        vertexBufSize_ = size;
+
+        if (!colorVAO_) glGenVertexArrays(1, &colorVAO_);
+        if (!textureVAO_) glGenVertexArrays(1, &textureVAO_);
+
+        glBindVertexArray(colorVAO_);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)offsetof(CV, r));
+        glBindVertexArray(0);
+
+        glBindVertexArray(textureVAO_);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)colorBytes_);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)(colorBytes_ + offsetof(TV, u)));
+        glBindVertexArray(0);
     }
 
-    // Combine into one upload: [color verts | texture verts]
-    std::vector<uint8_t> combined(totalBytes);
-    if (colorBytes_ > 0)
-        memcpy(combined.data(), colorVerts.data(), colorBytes_);
-    if (texBytes > 0)
-        memcpy(combined.data() + colorBytes_, texVerts.data(), texBytes);
+    // --- Render to this canvas's FBO ---
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glViewport(0, 0, fboWidth_, fboHeight_);
 
-    glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, totalBytes, combined.data());
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    if (needFullClear) {
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
 
-    // Create VAOs if needed (re-bind buffer each time since buffer may be reallocated)
-    if (!colorVAO_) glGenVertexArrays(1, &colorVAO_);
-    if (!textureVAO_) glGenVertexArrays(1, &textureVAO_);
+    float viewport[2] = {(float)fboWidth_, (float)fboHeight_};
 
-    // Setup color VAO
-    glBindVertexArray(colorVAO_);
-    glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)offsetof(CV, r));
-    glBindVertexArray(0);
-
-    // Setup texture VAO (vertices start at colorBytes_ offset)
-    glBindVertexArray(textureVAO_);
-    glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)colorBytes_);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)(colorBytes_ + offsetof(TV, u)));
-    glBindVertexArray(0);
-}
-
-// ---------------------------------------------------------------------------
-// onRender — issue draw calls
-// ---------------------------------------------------------------------------
-
-void CanvasScene::onRender(render::GLContext* gl, int w, int h, double) {
-    if (!gl || !vertexBuf_) return;
-    if (colorVertCount_ == 0 && textDraws_.empty()) return;
-
-    float viewport[2] = {(float)w, (float)h};
-
-    // Canvas 2D is flat — disable depth testing so quads aren't rejected
-    // by stale depth-buffer values from the previous frame.
     glDisable(GL_DEPTH_TEST);
-
-    // Clip to element bounds (GL scissor: origin is bottom-left)
-    bool useScissor = (width_ > 0 && height_ > 0);
-    if (useScissor) {
-        glEnable(GL_SCISSOR_TEST);
-        int sx = static_cast<int>(offsetX_);
-        int sy = h - static_cast<int>(offsetY_) - height_;
-        glScissor(sx, sy, width_, height_);
-    }
+    glDisable(GL_SCISSOR_TEST);
 
     // Draw colored geometry
     if (colorVertCount_ > 0) {
@@ -370,7 +415,6 @@ void CanvasScene::onRender(render::GLContext* gl, int w, int h, double) {
         glUniform2fv(gl->textureViewportLoc(), 1, viewport);
         glUniform1i(gl->textureSamplerLoc(), 0);
 
-        // Premultiplied alpha blend for text
         glEnable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -386,9 +430,8 @@ void CanvasScene::onRender(render::GLContext* gl, int w, int h, double) {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
-    if (useScissor) {
-        glDisable(GL_SCISSOR_TEST);
-    }
+    // Unbind FBO — return to default framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 } // namespace bro::canvas

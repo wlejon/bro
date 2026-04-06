@@ -1,0 +1,31 @@
+html {
+    background: transparent;
+}
+
+body {
+    margin: 0;
+    padding: 20px;
+    background: #1a1a2e;
+    color: #eee;
+    font-family: sans-serif;
+}
+
+h1 {
+    text-align: center;
+}
+
+.canvas-row {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    margin-top: 20px;
+}
+
+.canvas-box {
+    text-align: center;
+    width: 202px;
+}
+
+canvas {
+    border: 1px solid #444;
+}
