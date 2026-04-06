@@ -53,10 +53,44 @@ class AudioContext {
   get destination() {}
 
 
+  // --- Voice Lifecycle (raw ID) ---------------------------------------------
+
+  /**
+   * Create a voice and return its integer ID.
+   * Unlike createOscillator() which returns an OscillatorNode wrapper,
+   * this returns a raw ID for use with the direct voice parameter APIs.
+   * @returns {number} voiceId
+   */
+  createVoice() {}
+
+  /** @param {number} voiceId */ removeVoice(voiceId) {}
+
+  /**
+   * Start a voice's envelope.
+   * @param {number} voiceId
+   * @param {number} when - engine time in seconds
+   */
+  startVoice(voiceId, when) {}
+
+  /**
+   * Stop a voice (trigger release).
+   * @param {number} voiceId
+   * @param {number} when - engine time in seconds
+   */
+  stopVoice(voiceId, when) {}
+
+  /**
+   * Mark a voice as persistent (not auto-purged when envelope finishes).
+   * @param {number} voiceId
+   * @param {boolean} persistent
+   */
+  setVoicePersistent(voiceId, persistent) {}
+
+
   // --- Node Creation --------------------------------------------------------
 
   /**
-   * Create an oscillator voice.
+   * Create an oscillator voice wrapped in an OscillatorNode.
    * @returns {OscillatorNode}
    */
   createOscillator() {}
@@ -278,6 +312,16 @@ class AudioContext {
   /** @param {number} voiceId @param {number} cents */ setVoiceUnisonDetune(voiceId, cents) {}
   /** @param {number} voiceId @param {number} width - 0.0 to 1.0 */ setVoiceUnisonStereoWidth(voiceId, width) {}
 
+  // Per-voice filter
+  /** @param {number} voiceId @param {boolean} enabled */ setVoiceFilterEnabled(voiceId, enabled) {}
+  /**
+   * @param {number} voiceId
+   * @param {string} type - "lowpass"|"highpass"|"bandpass"|"notch"|"allpass"|"peaking"|"lowshelf"|"highshelf"
+   */
+  setVoiceFilterType(voiceId, type) {}
+  /** @param {number} voiceId @param {number} hz */ setVoiceFilterFrequency(voiceId, hz) {}
+  /** @param {number} voiceId @param {number} q */ setVoiceFilterQ(voiceId, q) {}
+
 
   // --- Wavetable Synthesis --------------------------------------------------
 
@@ -342,6 +386,61 @@ class AudioContext {
   /** @param {number} playbackId @param {number} distance */ setPlaybackSpatialMaxDistance(playbackId, distance) {}
   /** @param {number} playbackId @param {number} factor */ setPlaybackSpatialRolloff(playbackId, factor) {}
   /** @param {number} playbackId @param {string} model - "inverse"|"linear"|"exponential" */ setPlaybackSpatialDistanceModel(playbackId, model) {}
+
+
+  // --- Head Model (spatial filtering) --------------------------------------
+  // Configures the per-ear head-shadow model applied to all spatial sources.
+  // When enabled, the head model replaces simple stereo panning with
+  // physically-motivated ILD (level difference) and ITF (frequency filtering)
+  // per ear, producing front/back, left/right, and elevation cues.
+
+  /** Enable or disable the head shadow model. Default: true. */
+  /** @param {boolean} enabled */ setHeadModelEnabled(enabled) {}
+
+  /**
+   * Far-ear gain reduction at 90 degrees off-axis.
+   * 0.0 = no reduction (both ears equal), 1.0 = far ear silent.
+   * @param {number} strength - default 0.85
+   */
+  setHeadModelIldStrength(strength) {}
+
+  /**
+   * Both-ear gain reduction when source is directly behind the listener.
+   * 0.0 = no reduction, 1.0 = silent.
+   * @param {number} attenuation - default 0.45
+   */
+  setHeadModelBehindAttenuation(attenuation) {}
+
+  /**
+   * Near-ear lowpass cutoff range in Hz, modulated by front/back angle.
+   * Source directly in front uses frontHz, directly behind uses behindHz.
+   * @param {number} frontHz - default 18000
+   * @param {number} behindHz - default 2000
+   */
+  setHeadModelNearCutoff(frontHz, behindHz) {}
+
+  /**
+   * How aggressively the far ear's cutoff drops relative to the near ear.
+   * At 90 degrees off-axis: farCutoff = nearCutoff * (1 - ratio).
+   * 0.0 = far ear same as near, 1.0 = far ear cutoff drops to zero.
+   * @param {number} ratio - default 0.95
+   */
+  setHeadModelFarCutoffRatio(ratio) {}
+
+  /**
+   * Elevation influence on filter cutoff. Sources above shift cutoff up
+   * (brighter), below shift down (darker). Values are Hz shift per unit elevation.
+   * @param {number} nearHz - near ear shift, default 5000
+   * @param {number} farHz - far ear shift, default 2000
+   */
+  setHeadModelElevation(nearHz, farHz) {}
+
+  /**
+   * Hard clamps on computed cutoff frequencies.
+   * @param {number} minHz - default 200
+   * @param {number} maxHz - default 20000
+   */
+  setHeadModelCutoffRange(minHz, maxHz) {}
 
 
   // --- Recording ------------------------------------------------------------
