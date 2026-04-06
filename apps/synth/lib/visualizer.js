@@ -15,6 +15,18 @@
 
     var PEAK_BUF_LEN = 200;
 
+    // Cached DOM element references — avoid querySelectorAll / getElementById per frame
+    var cachedMeters = null;
+    var cachedMicLevelBar = null;
+    var cachedMicNoteEl = null;
+    var cachedMicFreqEl = null;
+
+    // Reusable buffers for polyline batching — avoids per-frame allocations
+    var polyBuf = null;
+    var envUpperPts = new Float32Array(PEAK_BUF_LEN * 2);
+    var envLowerPts = new Float32Array(PEAK_BUF_LEN * 2);
+    var envFillPts = new Float32Array((1 + PEAK_BUF_LEN * 2) * 2);
+
     Synth.Visualizer = {
         init: function(container) {
             stackEl = container;
@@ -52,6 +64,10 @@
             stackEl.innerHTML = '';
             rows = [];
             combinedRow = null;
+            cachedMeters = null;
+            cachedMicLevelBar = null;
+            cachedMicNoteEl = null;
+            cachedMicFreqEl = null;
 
             for (var i = 0; i < desired.length; i++) {
                 var d = desired[i];
@@ -208,42 +224,43 @@
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(0, midY); ctx.lineTo(W, midY); ctx.stroke();
 
-        // Fill envelope (symmetric around center)
-        ctx.fillStyle = color.slice(0, 7) + '20';
-        ctx.beginPath();
-        ctx.moveTo(0, midY);
+        // Build point arrays for upper and lower edges (reuse cached buffers)
+        var scale95 = midY * 0.95;
         for (var i = 0; i < PEAK_BUF_LEN; i++) {
             var idx = (row.peakIdx + i) % PEAK_BUF_LEN;
             var x = (i / PEAK_BUF_LEN) * W;
-            ctx.lineTo(x, midY - row.peakBuf[idx] * midY * 0.95);
+            var amp = row.peakBuf[idx] * scale95;
+            envUpperPts[i * 2]     = x;
+            envUpperPts[i * 2 + 1] = midY - amp;
+            envLowerPts[i * 2]     = x;
+            envLowerPts[i * 2 + 1] = midY + amp;
         }
-        for (var i = PEAK_BUF_LEN - 1; i >= 0; i--) {
-            var idx = (row.peakIdx + i) % PEAK_BUF_LEN;
-            var x = (i / PEAK_BUF_LEN) * W;
-            ctx.lineTo(x, midY + row.peakBuf[idx] * midY * 0.95);
+
+        // Fill envelope: [startPt, upper..., lowerReversed...]
+        envFillPts[0] = 0; envFillPts[1] = midY;
+        envFillPts.set(envUpperPts, 2);
+        var off = (1 + PEAK_BUF_LEN) * 2;
+        for (var i = 0; i < PEAK_BUF_LEN; i++) {
+            var src = PEAK_BUF_LEN - 1 - i;
+            envFillPts[off + i * 2]     = envLowerPts[src * 2];
+            envFillPts[off + i * 2 + 1] = envLowerPts[src * 2 + 1];
         }
+        ctx.fillStyle = color.slice(0, 7) + '20';
+        ctx.beginPath();
+        ctx.polyline(envFillPts);
         ctx.closePath();
         ctx.fill();
 
-        // Stroke edges
+        // Stroke upper edge
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        for (var i = 0; i < PEAK_BUF_LEN; i++) {
-            var idx = (row.peakIdx + i) % PEAK_BUF_LEN;
-            var x = (i / PEAK_BUF_LEN) * W;
-            var y = midY - row.peakBuf[idx] * midY * 0.95;
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
+        ctx.polyline(envUpperPts);
         ctx.stroke();
 
+        // Stroke lower edge
         ctx.beginPath();
-        for (var i = 0; i < PEAK_BUF_LEN; i++) {
-            var idx = (row.peakIdx + i) % PEAK_BUF_LEN;
-            var x = (i / PEAK_BUF_LEN) * W;
-            var y = midY + row.peakBuf[idx] * midY * 0.95;
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
+        ctx.polyline(envLowerPts);
         ctx.stroke();
     }
 
@@ -267,6 +284,13 @@
         }
         analyser.getFloatTimeDomainData(waveData);
         drawWaveform(ctx, W, H, waveData, '#00e5ff');
+    }
+
+    function buildWavePoints(buf, drawLen, W, midY, data, triggerOffset, scale) {
+        for (var i = 0; i < drawLen; i++) {
+            buf[i * 2]     = (i / drawLen) * W;
+            buf[i * 2 + 1] = midY + data[triggerOffset + i] * scale;
+        }
     }
 
     function drawWaveform(ctx, W, H, data, color) {
@@ -301,19 +325,22 @@
         for (var i = 1; i < searchEnd; i++) {
             if (data[i - 1] <= 0 && data[i] > 0) { triggerOffset = i; break; }
         }
-        // Zoom: show fewer samples for more detail
-        var drawLen = Math.min(bufLen - triggerOffset, Math.floor(bufLen * 0.5));
+        // Cap to canvas pixel width — more points than pixels is wasted rendering
+        var drawLen = Math.min(bufLen - triggerOffset, Math.floor(bufLen * 0.5), Math.ceil(W));
+
+        // Reuse a single Float32Array for polyline batching
+        var need = drawLen * 2;
+        if (!polyBuf || polyBuf.length < need) polyBuf = new Float32Array(need);
+        var pts = polyBuf;
+        buildWavePoints(pts, drawLen, W, midY, data, triggerOffset, scale);
+        var view = drawLen * 2 < pts.length ? pts.subarray(0, drawLen * 2) : pts;
 
         // Glow
         if (intensity > 0.01) {
             ctx.strokeStyle = color.slice(0, 7) + '26';
             ctx.lineWidth = 6;
             ctx.beginPath();
-            for (var i = 0; i < drawLen; i++) {
-                var x = (i / drawLen) * W;
-                var y = midY + data[triggerOffset + i] * scale;
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            }
+            ctx.polyline(view);
             ctx.stroke();
         }
 
@@ -321,18 +348,15 @@
         ctx.strokeStyle = color;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        for (var i = 0; i < drawLen; i++) {
-            var x = (i / drawLen) * W;
-            var y = midY + data[triggerOffset + i] * scale;
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
+        ctx.polyline(view);
         ctx.stroke();
     }
 
     function updateBusMeters() {
         var SC = Synth.SignalChain;
         if (!SC) return;
-        var meters = document.querySelectorAll('.seq-layer-meter');
+        if (!cachedMeters) cachedMeters = document.querySelectorAll('.seq-layer-meter');
+        var meters = cachedMeters;
         for (var i = 0; i < meters.length; i++) {
             var busId = parseInt(meters[i].getAttribute('data-bus'), 10);
             if (isNaN(busId) || busId < 0) continue;
@@ -350,6 +374,17 @@
         micPitchCounter++;
         if (micPitchCounter % 6 !== 0) return;
 
+        // Cache element lookups
+        if (!cachedMicNoteEl) cachedMicNoteEl = document.getElementById('mic-note');
+        if (!cachedMicFreqEl) cachedMicFreqEl = document.getElementById('mic-freq');
+
+        // Skip all analysis when mic is disabled — avoids FFT computation
+        if (!Synth.isMicEnabled || !Synth.isMicEnabled()) {
+            if (cachedMicNoteEl) cachedMicNoteEl.textContent = 'Mic: --';
+            if (cachedMicFreqEl) cachedMicFreqEl.textContent = '-- Hz';
+            return;
+        }
+
         var micAnalyser = Synth.getMicAnalyser();
         var micLevelBuf = Synth.getMicLevelBuf();
         if (!micAnalyser || !micLevelBuf) return;
@@ -359,33 +394,25 @@
         for (var i = 0; i < len; i += 4) sum += micLevelBuf[i];
         var avgLevel = sum / (len / 4) / 255;
 
-        var bar = document.getElementById('mic-level-bar');
-        if (bar) {
-            bar.style.height = Math.min(100, avgLevel * 300) + '%';
-            if (avgLevel > 0.6) bar.style.background = '#cc3333';
-            else if (avgLevel > 0.3) bar.style.background = '#cccc33';
-            else bar.style.background = '#33cc33';
+        if (!cachedMicLevelBar) cachedMicLevelBar = document.getElementById('mic-level-bar');
+        if (cachedMicLevelBar) {
+            cachedMicLevelBar.style.height = Math.min(100, avgLevel * 300) + '%';
+            if (avgLevel > 0.6) cachedMicLevelBar.style.background = '#cc3333';
+            else if (avgLevel > 0.3) cachedMicLevelBar.style.background = '#cccc33';
+            else cachedMicLevelBar.style.background = '#33cc33';
         }
 
-        var micNoteEl = document.getElementById('mic-note');
-        var micFreqEl = document.getElementById('mic-freq');
-        if (!micNoteEl || !micFreqEl) return;
-
-        if (!Synth.isMicEnabled()) {
-            micNoteEl.textContent = 'Mic: --';
-            micFreqEl.textContent = '-- Hz';
-            return;
-        }
+        if (!cachedMicNoteEl || !cachedMicFreqEl) return;
 
         var freq = Synth.detectPitch();
         if (freq && freq > 50 && freq < 2000) {
             var info = Synth.freqToNoteName(freq);
             var c = info.cents >= 0 ? '+' + info.cents : '' + info.cents;
-            micNoteEl.textContent = 'Mic: ' + info.name + ' (' + c + 'c)';
-            micFreqEl.textContent = freq.toFixed(1) + ' Hz';
+            cachedMicNoteEl.textContent = 'Mic: ' + info.name + ' (' + c + 'c)';
+            cachedMicFreqEl.textContent = freq.toFixed(1) + ' Hz';
         } else {
-            micNoteEl.textContent = 'Mic: --';
-            micFreqEl.textContent = '-- Hz';
+            cachedMicNoteEl.textContent = 'Mic: --';
+            cachedMicFreqEl.textContent = '-- Hz';
         }
     }
 })();

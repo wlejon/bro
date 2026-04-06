@@ -331,53 +331,56 @@ float CanvasScene::adjustTextY(float y) const {
 // ---------------------------------------------------------------------------
 
 void CanvasScene::fillRect(float x, float y, float w, float h) {
-    auto* c = skCanvas();
-    if (!c) return;
-    SkPaint p = makeFillPaint();
-    c->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kFillRect;
+    cmd.paint = makeFillPaint();
+    cmd.p[0] = x; cmd.p[1] = y; cmd.p[2] = w; cmd.p[3] = h;
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
 void CanvasScene::strokeRect(float x, float y, float w, float h) {
-    auto* c = skCanvas();
-    if (!c) return;
-    SkPaint p = makeStrokePaint();
-    c->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kStrokeRect;
+    cmd.paint = makeStrokePaint();
+    cmd.p[0] = x; cmd.p[1] = y; cmd.p[2] = w; cmd.p[3] = h;
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
 void CanvasScene::clearRect(float x, float y, float w, float h) {
-    auto* c = skCanvas();
-    if (!c) return;
-    SkPaint p;
-    p.setBlendMode(SkBlendMode::kClear);
-    c->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kClearRect;
+    cmd.p[0] = x; cmd.p[1] = y; cmd.p[2] = w; cmd.p[3] = h;
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
 void CanvasScene::fillText(const std::string& text, float x, float y) {
-    auto* c = skCanvas();
-    if (!c || text.empty()) return;
-
-    SkPaint p = makeFillPaint();
+    if (text.empty()) return;
     float tw = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
-    float ax = adjustTextX(x, tw);
-    float ay = adjustTextY(y);
-
-    c->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8, ax, ay, font_, p);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kFillText;
+    cmd.paint = makeFillPaint();
+    cmd.p[0] = adjustTextX(x, tw);
+    cmd.p[1] = adjustTextY(y);
+    cmd.text = text;
+    cmd.font = font_;
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
 void CanvasScene::strokeText(const std::string& text, float x, float y) {
-    auto* c = skCanvas();
-    if (!c || text.empty()) return;
-
-    SkPaint p = makeStrokePaint();
+    if (text.empty()) return;
     float tw = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
-    float ax = adjustTextX(x, tw);
-    float ay = adjustTextY(y);
-
-    c->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8, ax, ay, font_, p);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kStrokeText;
+    cmd.paint = makeStrokePaint();
+    cmd.p[0] = adjustTextX(x, tw);
+    cmd.p[1] = adjustTextY(y);
+    cmd.text = text;
+    cmd.font = font_;
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
@@ -404,30 +407,41 @@ void CanvasScene::lineTo(float x, float y) {
     pathBuilder_.lineTo(x, y);
 }
 
+void CanvasScene::polyline(const float* coords, int numPoints) {
+    if (numPoints < 1) return;
+    pathBuilder_.moveTo(coords[0], coords[1]);
+    for (int i = 1; i < numPoints; ++i) {
+        pathBuilder_.lineTo(coords[i * 2], coords[i * 2 + 1]);
+    }
+}
+
 void CanvasScene::closePath() {
     pathBuilder_.close();
 }
 
 void CanvasScene::stroke() {
-    auto* c = skCanvas();
-    if (!c) return;
-    SkPaint p = makeStrokePaint();
-    c->drawPath(pathBuilder_.snapshot(), p);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kStrokePath;
+    cmd.paint = makeStrokePaint();
+    cmd.path = pathBuilder_.snapshot();
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
 void CanvasScene::fill() {
-    auto* c = skCanvas();
-    if (!c) return;
-    SkPaint p = makeFillPaint();
-    c->drawPath(pathBuilder_.snapshot(), p);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kFillPath;
+    cmd.paint = makeFillPaint();
+    cmd.path = pathBuilder_.snapshot();
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
 void CanvasScene::clip() {
-    auto* c = skCanvas();
-    if (!c) return;
-    c->clipPath(pathBuilder_.snapshot(), true);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kClipPath;
+    cmd.path = pathBuilder_.snapshot();
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::arc(float cx, float cy, float radius, float startAngle, float endAngle, bool acw) {
@@ -510,14 +524,13 @@ bool CanvasScene::isPointInPath(float x, float y) {
 // ---------------------------------------------------------------------------
 
 void CanvasScene::save() {
-    auto* c = skCanvas();
-    if (c) c->save();
     stateStack_.push_back(state_);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kSave;
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::restore() {
-    auto* c = skCanvas();
-    if (c) c->restore();
     if (!stateStack_.empty()) {
         state_ = stateStack_.back();
         stateStack_.pop_back();
@@ -532,43 +545,52 @@ void CanvasScene::restore() {
         imageSmoothingEnabled_ = state_.imgSmooth;
         applyFont();
     }
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kRestore;
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::translate(float tx, float ty) {
-    auto* c = skCanvas();
-    if (c) c->translate(tx, ty);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kTranslate;
+    cmd.p[0] = tx; cmd.p[1] = ty;
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::rotate(float angle) {
-    auto* c = skCanvas();
-    if (c) c->rotate(angle * 180.0f / static_cast<float>(M_PI));
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kRotate;
+    cmd.p[0] = angle * 180.0f / static_cast<float>(M_PI);
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::scale(float sx, float sy) {
-    auto* c = skCanvas();
-    if (c) c->scale(sx, sy);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kScale;
+    cmd.p[0] = sx; cmd.p[1] = sy;
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::setTransform(float a, float b, float c, float d, float e, float f) {
-    auto* cv = skCanvas();
-    if (!cv) return;
-    cv->resetMatrix();
-    SkMatrix m;
-    m.setAll(a, c, e, b, d, f, 0, 0, 1);
-    cv->concat(m);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kSetTransform;
+    cmd.p[0] = a; cmd.p[1] = b; cmd.p[2] = c;
+    cmd.p[3] = d; cmd.p[4] = e; cmd.p[5] = f;
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::resetTransform() {
-    auto* c = skCanvas();
-    if (c) c->resetMatrix();
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kResetTransform;
+    commands_.push_back(std::move(cmd));
 }
 
 void CanvasScene::transform(float a, float b, float c, float d, float e, float f) {
-    auto* cv = skCanvas();
-    if (!cv) return;
-    SkMatrix m;
-    m.setAll(a, c, e, b, d, f, 0, 0, 1);
-    cv->concat(m);
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kConcatTransform;
+    cmd.p[0] = a; cmd.p[1] = b; cmd.p[2] = c;
+    cmd.p[3] = d; cmd.p[4] = e; cmd.p[5] = f;
+    commands_.push_back(std::move(cmd));
 }
 
 // ---------------------------------------------------------------------------
@@ -578,27 +600,24 @@ void CanvasScene::transform(float a, float b, float c, float d, float e, float f
 void CanvasScene::drawImage(const void* rgbaData, int imgW, int imgH,
                             float sx, float sy, float sw, float sh,
                             float dx, float dy, float dw, float dh) {
-    auto* c = skCanvas();
-    if (!c || !rgbaData || imgW <= 0 || imgH <= 0) return;
+    if (!rgbaData || imgW <= 0 || imgH <= 0) return;
 
     auto info = SkImageInfo::Make(imgW, imgH, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     sk_sp<SkData> data = SkData::MakeWithCopy(rgbaData, imgW * imgH * 4);
     auto img = SkImages::RasterFromData(info, data, imgW * 4);
     if (!img) return;
 
-    SkRect srcRect = SkRect::MakeXYWH(sx, sy, sw, sh);
-    SkRect dstRect = SkRect::MakeXYWH(dx, dy, dw, dh);
-
-    SkSamplingOptions sampling = imageSmoothingEnabled_
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kDrawImage;
+    cmd.paint.setAlphaf(state_.globalAlphaVal);
+    cmd.paint.setBlendMode(blendModeFromOp(state_.compositeOp));
+    cmd.img = std::move(img);
+    cmd.src = SkRect::MakeXYWH(sx, sy, sw, sh);
+    cmd.dst = SkRect::MakeXYWH(dx, dy, dw, dh);
+    cmd.samp = imageSmoothingEnabled_
         ? SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kLinear)
         : SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone);
-
-    SkPaint p;
-    p.setAlphaf(state_.globalAlphaVal);
-    p.setBlendMode(blendModeFromOp(state_.compositeOp));
-
-    c->drawImageRect(img, srcRect, dstRect, sampling, &p,
-                     SkCanvas::kStrict_SrcRectConstraint);
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
@@ -607,6 +626,9 @@ void CanvasScene::drawImage(const void* rgbaData, int imgW, int imgH,
 // ---------------------------------------------------------------------------
 
 std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
+    // Flush deferred commands so pixel state is current
+    flushCommands();
+
     std::vector<uint8_t> pixels(w * h * 4, 0);
     if (!surface_) return pixels;
 
@@ -616,8 +638,7 @@ std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
 }
 
 void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy) {
-    auto* c = skCanvas();
-    if (!c || !data) return;
+    if (!data) return;
 
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     sk_sp<SkData> skData = SkData::MakeWithCopy(data, w * h * 4);
@@ -625,13 +646,13 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
     if (!img) return;
 
     // putImageData ignores transforms and compositing — write directly
-    c->save();
-    c->resetMatrix();
-    SkPaint p;
-    p.setBlendMode(SkBlendMode::kSrc);
-    c->drawImage(img, static_cast<float>(dx), static_cast<float>(dy),
-                 SkSamplingOptions(), &p);
-    c->restore();
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kPutImageData;
+    cmd.paint.setBlendMode(SkBlendMode::kSrc);
+    cmd.img = std::move(img);
+    cmd.p[0] = static_cast<float>(dx);
+    cmd.p[1] = static_cast<float>(dy);
+    commands_.push_back(std::move(cmd));
     dirty_ = true;
 }
 
@@ -640,10 +661,83 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
 // ---------------------------------------------------------------------------
 
 void CanvasScene::reset() {
-    if (surface_) {
-        surface_->getCanvas()->clear(SK_ColorTRANSPARENT);
-        dirty_ = true;
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kReset;
+    commands_.push_back(std::move(cmd));
+    dirty_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// Command buffer replay
+// ---------------------------------------------------------------------------
+
+void CanvasScene::flushCommands() {
+    if (commands_.empty()) return;
+
+    auto* c = skCanvas();
+    if (!c) { commands_.clear(); return; }
+
+    for (auto& cmd : commands_) {
+        switch (cmd.type) {
+        case CanvasCmd::kFillRect:
+        case CanvasCmd::kStrokeRect:
+            c->drawRect(SkRect::MakeXYWH(cmd.p[0], cmd.p[1], cmd.p[2], cmd.p[3]), cmd.paint);
+            break;
+        case CanvasCmd::kClearRect: {
+            SkPaint clr;
+            clr.setBlendMode(SkBlendMode::kClear);
+            c->drawRect(SkRect::MakeXYWH(cmd.p[0], cmd.p[1], cmd.p[2], cmd.p[3]), clr);
+            break;
+        }
+        case CanvasCmd::kStrokePath:
+        case CanvasCmd::kFillPath:
+            c->drawPath(cmd.path, cmd.paint);
+            break;
+        case CanvasCmd::kClipPath:
+            c->clipPath(cmd.path, true);
+            break;
+        case CanvasCmd::kFillText:
+        case CanvasCmd::kStrokeText:
+            c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
+                              cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
+            break;
+        case CanvasCmd::kDrawImage:
+            c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,
+                             SkCanvas::kStrict_SrcRectConstraint);
+            break;
+        case CanvasCmd::kPutImageData:
+            c->save();
+            c->resetMatrix();
+            c->drawImage(cmd.img, cmd.p[0], cmd.p[1], cmd.samp, &cmd.paint);
+            c->restore();
+            break;
+        case CanvasCmd::kSave:    c->save(); break;
+        case CanvasCmd::kRestore: c->restore(); break;
+        case CanvasCmd::kTranslate: c->translate(cmd.p[0], cmd.p[1]); break;
+        case CanvasCmd::kRotate:    c->rotate(cmd.p[0]); break;
+        case CanvasCmd::kScale:     c->scale(cmd.p[0], cmd.p[1]); break;
+        case CanvasCmd::kSetTransform: {
+            c->resetMatrix();
+            SkMatrix m;
+            m.setAll(cmd.p[0], cmd.p[2], cmd.p[4], cmd.p[1], cmd.p[3], cmd.p[5], 0, 0, 1);
+            c->concat(m);
+            break;
+        }
+        case CanvasCmd::kResetTransform:
+            c->resetMatrix();
+            break;
+        case CanvasCmd::kConcatTransform: {
+            SkMatrix m;
+            m.setAll(cmd.p[0], cmd.p[2], cmd.p[4], cmd.p[1], cmd.p[3], cmd.p[5], 0, 0, 1);
+            c->concat(m);
+            break;
+        }
+        case CanvasCmd::kReset:
+            c->clear(SK_ColorTRANSPARENT);
+            break;
+        }
     }
+    commands_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -672,6 +766,9 @@ void CanvasScene::rasterize(render::GLContext* gl) {
     int canvasW = static_cast<int>(layoutW);
     int canvasH = static_cast<int>(layoutH);
     ensureSurface(canvasW, canvasH);
+
+    // Replay deferred canvas commands onto the Skia surface
+    flushCommands();
 
     if (!dirty_) return;
     dirty_ = false;

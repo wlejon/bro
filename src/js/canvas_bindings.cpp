@@ -441,6 +441,32 @@ static JSValue js_lineTo(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return JS_UNDEFINED;
 }
 
+static JSValue js_polyline(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* sc = getScene(this_val);
+    if (!sc || argc < 1) return JS_UNDEFINED;
+
+    // Accept Float32Array (or any TypedArray backed by float32)
+    size_t offset = 0, byteLen = 0;
+    size_t bytesPerElement = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &byteLen, &bytesPerElement);
+    if (JS_IsException(abuf)) {
+        JS_FreeValue(ctx, abuf);
+        return JS_UNDEFINED;
+    }
+    size_t abufLen = 0;
+    uint8_t* rawBuf = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!rawBuf) return JS_UNDEFINED;
+
+    const float* coords = reinterpret_cast<const float*>(rawBuf + offset);
+    int numFloats = static_cast<int>(byteLen / sizeof(float));
+    int numPoints = numFloats / 2;
+    if (numPoints < 1) return JS_UNDEFINED;
+
+    sc->polyline(coords, numPoints);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_closePath(JSContext*, JSValueConst this_val, int, JSValueConst*) {
     auto* sc = getScene(this_val); if (sc) sc->closePath(); return JS_UNDEFINED;
 }
@@ -689,6 +715,7 @@ static const JSCFunctionListEntry js_ctx2d_proto_funcs[] = {
     JS_CFUNC_DEF("beginPath",   0, js_beginPath),
     JS_CFUNC_DEF("moveTo",      2, js_moveTo),
     JS_CFUNC_DEF("lineTo",      2, js_lineTo),
+    JS_CFUNC_DEF("polyline",    1, js_polyline),
     JS_CFUNC_DEF("closePath",   0, js_closePath),
     JS_CFUNC_DEF("stroke",      0, js_stroke),
     JS_CFUNC_DEF("fill",        0, js_fill),

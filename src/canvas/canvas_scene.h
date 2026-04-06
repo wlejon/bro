@@ -21,9 +21,34 @@ namespace bro::render { class GLContext; }
 
 namespace bro::canvas {
 
-/// Per-canvas Skia-backed renderer.  Each CanvasScene owns an SkSurface and
-/// draws directly via SkCanvas — no command buffer.  The raster pixels are
-/// uploaded to a GL texture for compositing by the engine.
+/// Deferred canvas command — recorded during JS, replayed during rasterize().
+struct CanvasCmd {
+    enum Type : uint8_t {
+        kFillRect, kStrokeRect, kClearRect,
+        kStrokePath, kFillPath, kClipPath,
+        kFillText, kStrokeText,
+        kDrawImage, kPutImageData,
+        kSave, kRestore,
+        kTranslate, kRotate, kScale,
+        kSetTransform, kResetTransform, kConcatTransform,
+        kReset
+    };
+    Type type;
+    SkPaint paint;
+    SkPath path;
+    float p[6] = {};
+    std::string text;
+    SkFont font;
+    sk_sp<SkImage> img;
+    SkRect src{}, dst{};
+    SkSamplingOptions samp;
+};
+
+/// Per-canvas Skia-backed renderer.  Each CanvasScene owns an SkSurface.
+/// Draw operations are recorded into a command buffer during JS execution and
+/// replayed onto the SkCanvas during rasterize(), keeping Skia rendering cost
+/// out of the JS phase.  The raster pixels are then uploaded to a GL texture
+/// for compositing by the engine.
 class CanvasScene {
 public:
     explicit CanvasScene(render::Renderer* renderer);
@@ -109,6 +134,7 @@ public:
     void beginPath();
     void moveTo(float x, float y);
     void lineTo(float x, float y);
+    void polyline(const float* coords, int numPoints);  // batch [x0,y0,x1,y1,...]
     void closePath();
     void stroke();
     void fill();
@@ -171,6 +197,9 @@ public:
     }
 
 private:
+    /// Replay all deferred commands onto the Skia canvas.
+    void flushCommands();
+
     int queryLayoutWidth() const;
     int queryLayoutHeight() const;
     void ensureSurface(int w, int h);
@@ -224,6 +253,9 @@ private:
 
     State state_;
     std::vector<State> stateStack_;
+
+    // Deferred command buffer — recorded during JS, replayed during rasterize()
+    std::vector<CanvasCmd> commands_;
 
     // Current path (built incrementally, snapshot()'d for drawing)
     SkPathBuilder pathBuilder_;

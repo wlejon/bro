@@ -734,17 +734,13 @@ void Engine::run() {
             lastGCMs_ = now;
         }
 
-        // 4. Re-layout + rasterize UI at most ~60fps.
-        //    DOM mutations accumulate between UI frames; the cached Skia
-        //    texture is composited every frame regardless (cheap).
-        bool uiFrameDue = (now - lastUIRenderMs_ >= kUIFrameIntervalMs)
-                          || !hasRenderedOnce_;
-
-        // System overlay composites its own cached texture — no need to
-        // force app UI re-rasterization every frame just because it's visible.
+        // 4. Re-layout when DOM is dirty.
+        //    The cached Skia texture is composited every GPU frame (cheap).
+        //    Layout must always run before rasterization so computed styles
+        //    are fresh — never rasterize with stale styles.
 
         double tLayout = tJs;
-        if (document_ && (document_->isDirty() || !hasRenderedOnce_) && uiFrameDue) {
+        if (document_ && (document_->isDirty() || !hasRenderedOnce_)) {
             if (document_->isStructureDirty()) {
                 ensureReplacedElements(document_->documentElement());
             }
