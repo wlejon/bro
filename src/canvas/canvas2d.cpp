@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+#include <vector>
 
 namespace bro::canvas {
 

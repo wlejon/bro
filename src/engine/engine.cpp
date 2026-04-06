@@ -31,7 +31,6 @@
 #include "runtime/runtime.h"
 #include <broaudio/engine.h>
 #include "canvas/canvas_scene.h"
-#include "canvas/canvas2d.h"
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_scene.h"
 #include "dom/document.h"
@@ -425,11 +424,10 @@ void Engine::compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint t
         float cx, cy, cw, ch;
         cs->getScreenRect(cx, cy, cw, ch);
 
-        // FBO content is Y-flipped (vertex shader flips Y for screen-space),
-        // so V=1 at top of quad, V=0 at bottom.
+        // Raster surface is top-down: V=0 at top, V=1 at bottom.
         render::TextureVertex quad[6] = {
-            {cx,      cy,      0, 1}, {cx+cw, cy,      1, 1}, {cx+cw, cy+ch, 1, 0},
-            {cx,      cy,      0, 1}, {cx+cw, cy+ch, 1, 0}, {cx,      cy+ch, 0, 0},
+            {cx,      cy,      0, 0}, {cx+cw, cy,      1, 0}, {cx+cw, cy+ch, 1, 1},
+            {cx,      cy,      0, 0}, {cx+cw, cy+ch, 1, 1}, {cx,      cy+ch, 0, 1},
         };
 
         GLuint vbo = 0;

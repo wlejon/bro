@@ -1,9 +1,31 @@
 #include "canvas/canvas_scene.h"
-#include "render/skia_backend.h"
 #include "render/gl_context.h"
+
+#include <include/core/SkColorSpace.h>
+#include <include/core/SkData.h>
+#include <include/core/SkFontMgr.h>
+#include <include/core/SkFontMetrics.h>
+#include <include/core/SkFontStyle.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkImageInfo.h>
+#include <include/core/SkMaskFilter.h>
+#include <include/core/SkBlendMode.h>
+#include <include/core/SkBlurTypes.h>
+#include <include/core/SkPathBuilder.h>
+#include <include/core/SkPixmap.h>
+#include <include/core/SkSamplingOptions.h>
+
+#ifdef _WIN32
+#include <include/ports/SkTypeface_win.h>
+#else
+#include <include/ports/SkFontMgr_fontconfig.h>
+#endif
+
+#include <glad/gl.h>
 
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -11,57 +33,621 @@
 
 namespace bro::canvas {
 
-uint64_t CanvasScene::getOrCreateFont(const std::string& fontStr) {
-    auto it = fontCache_.find(fontStr);
-    if (it != fontCache_.end()) return it->second;
+// ---------------------------------------------------------------------------
+// Construction / destruction
+// ---------------------------------------------------------------------------
 
-    auto pf = parseCSSFont(fontStr);
-    uint64_t handle = renderer_->createFont(pf.family, pf.size, pf.weight, pf.italic);
-    fontCache_[fontStr] = handle;
-    return handle;
+CanvasScene::CanvasScene(render::Renderer* renderer)
+    : renderer_(renderer)
+{
+    // Initialize default fill (black) and stroke (black) paints
+    state_.fillPaint.setAntiAlias(true);
+    state_.fillPaint.setStyle(SkPaint::kFill_Style);
+    state_.fillPaint.setColor(SK_ColorBLACK);
+
+    state_.strokePaint.setAntiAlias(true);
+    state_.strokePaint.setStyle(SkPaint::kStroke_Style);
+    state_.strokePaint.setColor(SK_ColorBLACK);
+    state_.strokePaint.setStrokeWidth(1.0f);
+
+    // Default font
+    applyFont();
+}
+
+CanvasScene::~CanvasScene() {
+    cleanup();
 }
 
 void CanvasScene::cleanup() {
-    textCache_.clear();
-    for (auto& [k, h] : fontCache_) renderer_->deleteFont(h);
-    fontCache_.clear();
-    if (vertexBuf_) {
-        glDeleteBuffers(1, &vertexBuf_);
-        vertexBuf_ = 0;
-        vertexBufSize_ = 0;
+    surface_.reset();
+    surfWidth_ = surfHeight_ = 0;
+    if (glTexture_) {
+        glDeleteTextures(1, &glTexture_);
+        glTexture_ = 0;
     }
-    if (colorVAO_) { glDeleteVertexArrays(1, &colorVAO_); colorVAO_ = 0; }
-    if (textureVAO_) { glDeleteVertexArrays(1, &textureVAO_); textureVAO_ = 0; }
-    if (fbo_) { glDeleteFramebuffers(1, &fbo_); fbo_ = 0; }
-    if (fboTexture_) { glDeleteTextures(1, &fboTexture_); fboTexture_ = 0; }
-    fboWidth_ = fboHeight_ = 0;
-}
-
-void CanvasScene::ensureFBO(int w, int h) {
-    if (fbo_ && fboWidth_ == w && fboHeight_ == h) return;
-
-    // Destroy old FBO if size changed
-    if (fbo_) { glDeleteFramebuffers(1, &fbo_); fbo_ = 0; }
-    if (fboTexture_) { glDeleteTextures(1, &fboTexture_); fboTexture_ = 0; }
-
-    fboWidth_ = w;
-    fboHeight_ = h;
-
-    fboTexture_ = gl_->createTexture2D(w, h, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
-    glGenFramebuffers(1, &fbo_);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTexture_, 0);
-
-    // Clear to transparent black (canvas default)
-    glViewport(0, 0, w, h);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    fontCache_.clear();
 }
 
 // ---------------------------------------------------------------------------
-// rasterize — render Canvas2D commands into this canvas's own FBO
+// Surface management
+// ---------------------------------------------------------------------------
+
+int CanvasScene::queryLayoutWidth() const {
+    if (layoutCb_) {
+        float ox, oy, ow = 0, oh = 0;
+        layoutCb_(layoutUd_, ox, oy, ow, oh);
+        if (ow > 0) return static_cast<int>(ow);
+    }
+    return surfWidth_ > 0 ? surfWidth_ : 300;
+}
+
+int CanvasScene::queryLayoutHeight() const {
+    if (layoutCb_) {
+        float ox, oy, ow = 0, oh = 0;
+        layoutCb_(layoutUd_, ox, oy, ow, oh);
+        if (oh > 0) return static_cast<int>(oh);
+    }
+    return surfHeight_ > 0 ? surfHeight_ : 150;
+}
+
+void CanvasScene::ensureSurface(int w, int h) {
+    if (surface_ && surfWidth_ == w && surfHeight_ == h) return;
+
+    auto info = SkImageInfo::MakeN32Premul(w, h);
+    surface_ = SkSurfaces::Raster(info);
+    surfWidth_ = w;
+    surfHeight_ = h;
+
+    // Clear to transparent (canvas default)
+    if (surface_) {
+        surface_->getCanvas()->clear(SK_ColorTRANSPARENT);
+        dirty_ = true;
+    }
+}
+
+SkCanvas* CanvasScene::skCanvas() {
+    int w = queryLayoutWidth();
+    int h = queryLayoutHeight();
+    ensureSurface(w, h);
+    return surface_ ? surface_->getCanvas() : nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// State setters
+// ---------------------------------------------------------------------------
+
+void CanvasScene::setFillColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    state_.fillPaint.setColor(SkColorSetARGB(a, r, g, b));
+}
+
+void CanvasScene::getFillColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const {
+    SkColor c = state_.fillPaint.getColor();
+    a = SkColorGetA(c); r = SkColorGetR(c); g = SkColorGetG(c); b = SkColorGetB(c);
+}
+
+void CanvasScene::setStrokeColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    state_.strokePaint.setColor(SkColorSetARGB(a, r, g, b));
+}
+
+void CanvasScene::getStrokeColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const {
+    SkColor c = state_.strokePaint.getColor();
+    a = SkColorGetA(c); r = SkColorGetR(c); g = SkColorGetG(c); b = SkColorGetB(c);
+}
+
+void CanvasScene::setLineWidth(float w) {
+    state_.lineWidthVal = w;
+    state_.strokePaint.setStrokeWidth(w);
+}
+
+float CanvasScene::lineWidth() const { return state_.lineWidthVal; }
+
+void CanvasScene::setGlobalAlpha(float a) {
+    state_.globalAlphaVal = std::clamp(a, 0.0f, 1.0f);
+}
+
+float CanvasScene::globalAlpha() const { return state_.globalAlphaVal; }
+
+void CanvasScene::setLineCap(int cap) {
+    state_.lineCapVal = cap;
+    static const SkPaint::Cap caps[] = { SkPaint::kButt_Cap, SkPaint::kRound_Cap, SkPaint::kSquare_Cap };
+    if (cap >= 0 && cap <= 2) state_.strokePaint.setStrokeCap(caps[cap]);
+}
+
+int CanvasScene::lineCap() const { return state_.lineCapVal; }
+
+void CanvasScene::setLineJoin(int join) {
+    state_.lineJoinVal = join;
+    static const SkPaint::Join joins[] = { SkPaint::kMiter_Join, SkPaint::kRound_Join, SkPaint::kBevel_Join };
+    if (join >= 0 && join <= 2) state_.strokePaint.setStrokeJoin(joins[join]);
+}
+
+int CanvasScene::lineJoin() const { return state_.lineJoinVal; }
+
+void CanvasScene::setMiterLimit(float limit) {
+    state_.miterLimitVal = limit;
+    state_.strokePaint.setStrokeMiter(limit);
+}
+
+float CanvasScene::miterLimit() const { return state_.miterLimitVal; }
+
+static SkBlendMode blendModeFromOp(int op) {
+    switch (op) {
+    case 0:  return SkBlendMode::kSrcOver;
+    case 1:  return SkBlendMode::kSrcIn;
+    case 2:  return SkBlendMode::kSrcOut;
+    case 3:  return SkBlendMode::kSrcATop;
+    case 4:  return SkBlendMode::kDstOver;
+    case 5:  return SkBlendMode::kDstIn;
+    case 6:  return SkBlendMode::kDstOut;
+    case 7:  return SkBlendMode::kDstATop;
+    case 8:  return SkBlendMode::kLighten;
+    case 9:  return SkBlendMode::kDarken;
+    case 10: return SkBlendMode::kXor;
+    case 11: return SkBlendMode::kPlus;
+    case 12: return SkBlendMode::kMultiply;
+    case 13: return SkBlendMode::kScreen;
+    case 14: return SkBlendMode::kOverlay;
+    case 15: return SkBlendMode::kColorDodge;
+    case 16: return SkBlendMode::kColorBurn;
+    case 17: return SkBlendMode::kHardLight;
+    case 18: return SkBlendMode::kSoftLight;
+    case 19: return SkBlendMode::kDifference;
+    case 20: return SkBlendMode::kExclusion;
+    default: return SkBlendMode::kSrcOver;
+    }
+}
+
+void CanvasScene::setGlobalCompositeOperation(int op) {
+    state_.compositeOp = op;
+}
+
+int CanvasScene::globalCompositeOperation() const { return state_.compositeOp; }
+
+void CanvasScene::setFont(const std::string& fontStr) {
+    state_.fontStr = fontStr;
+    fontString_ = fontStr;
+    applyFont();
+}
+
+void CanvasScene::setTextAlign(int align) {
+    state_.textAlignVal = align;
+    textAlign_ = align;
+}
+
+void CanvasScene::setTextBaseline(int bl) {
+    state_.textBaselineVal = bl;
+    textBaseline_ = bl;
+}
+
+void CanvasScene::setShadowBlur(float blur) {
+    state_.shadowBlurVal = blur;
+    shadowBlur_ = blur;
+}
+
+void CanvasScene::setShadowColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    state_.shadowR = r; state_.shadowG = g; state_.shadowB = b; state_.shadowA = a;
+    shadowR_ = r; shadowG_ = g; shadowB_ = b; shadowA_ = a;
+}
+
+void CanvasScene::getShadowColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const {
+    r = shadowR_; g = shadowG_; b = shadowB_; a = shadowA_;
+}
+
+void CanvasScene::setShadowOffsetX(float x) { state_.shadowOX = x; shadowOffsetX_ = x; }
+void CanvasScene::setShadowOffsetY(float y) { state_.shadowOY = y; shadowOffsetY_ = y; }
+
+void CanvasScene::setImageSmoothingEnabled(bool v) {
+    state_.imgSmooth = v;
+    imageSmoothingEnabled_ = v;
+}
+
+// ---------------------------------------------------------------------------
+// Font management
+// ---------------------------------------------------------------------------
+
+void CanvasScene::applyFont() {
+    auto it = fontCache_.find(fontString_);
+    if (it != fontCache_.end()) {
+        font_ = it->second.font;
+        return;
+    }
+
+    auto pf = parseCSSFont(fontString_);
+
+#ifdef _WIN32
+    auto mgr = SkFontMgr_New_DirectWrite();
+#else
+    auto mgr = SkFontMgr_New_FontConfig(nullptr);
+#endif
+
+    SkFontStyle style(
+        pf.weight,
+        SkFontStyle::kNormal_Width,
+        pf.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
+
+    sk_sp<SkTypeface> tf = mgr->matchFamilyStyle(pf.family.c_str(), style);
+    if (!tf) tf = mgr->matchFamilyStyle("sans-serif", style);
+    if (!tf) tf = mgr->matchFamilyStyle(nullptr, style);
+
+    SkFont f(tf, pf.size);
+    f.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+    f.setSubpixel(true);
+
+    fontCache_[fontString_] = {tf, f};
+    font_ = f;
+}
+
+// ---------------------------------------------------------------------------
+// Paint helpers
+// ---------------------------------------------------------------------------
+
+SkPaint CanvasScene::makeFillPaint() const {
+    SkPaint p = state_.fillPaint;
+    p.setAlphaf(p.getAlphaf() * state_.globalAlphaVal);
+    p.setBlendMode(blendModeFromOp(state_.compositeOp));
+    return p;
+}
+
+SkPaint CanvasScene::makeStrokePaint() const {
+    SkPaint p = state_.strokePaint;
+    p.setAlphaf(p.getAlphaf() * state_.globalAlphaVal);
+    p.setBlendMode(blendModeFromOp(state_.compositeOp));
+    return p;
+}
+
+void CanvasScene::applyShadow(SkPaint& paint) const {
+    if (shadowA_ > 0 && (shadowBlur_ > 0 || shadowOffsetX_ != 0 || shadowOffsetY_ != 0)) {
+        // Skia doesn't have a direct shadow — we'd need a separate draw pass.
+        // For now, apply a blur mask filter as an approximation when blur > 0.
+        if (shadowBlur_ > 0) {
+            paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, shadowBlur_ / 2.0f));
+        }
+    }
+}
+
+float CanvasScene::adjustTextX(float x, float textWidth) const {
+    switch (textAlign_) {
+    case 1: return x - textWidth / 2.0f;  // center
+    case 2: case 3: return x - textWidth; // right / end
+    default: return x;                     // left / start
+    }
+}
+
+float CanvasScene::adjustTextY(float y) const {
+    SkFontMetrics metrics;
+    font_.getMetrics(&metrics);
+    switch (textBaseline_) {
+    case 1: return y - metrics.fAscent;           // top
+    case 2: return y - (metrics.fAscent + metrics.fDescent) / 2.0f; // middle
+    case 3: return y - metrics.fDescent;          // bottom
+    case 4: return y - metrics.fAscent * 0.8f;    // hanging (approximation)
+    case 5: return y - metrics.fDescent;          // ideographic ≈ bottom
+    default: return y;                             // alphabetic (baseline)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Drawing methods
+// ---------------------------------------------------------------------------
+
+void CanvasScene::fillRect(float x, float y, float w, float h) {
+    auto* c = skCanvas();
+    if (!c) return;
+    SkPaint p = makeFillPaint();
+    c->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
+    dirty_ = true;
+}
+
+void CanvasScene::strokeRect(float x, float y, float w, float h) {
+    auto* c = skCanvas();
+    if (!c) return;
+    SkPaint p = makeStrokePaint();
+    c->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
+    dirty_ = true;
+}
+
+void CanvasScene::clearRect(float x, float y, float w, float h) {
+    auto* c = skCanvas();
+    if (!c) return;
+    SkPaint p;
+    p.setBlendMode(SkBlendMode::kClear);
+    c->drawRect(SkRect::MakeXYWH(x, y, w, h), p);
+    dirty_ = true;
+}
+
+void CanvasScene::fillText(const std::string& text, float x, float y) {
+    auto* c = skCanvas();
+    if (!c || text.empty()) return;
+
+    SkPaint p = makeFillPaint();
+    float tw = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
+    float ax = adjustTextX(x, tw);
+    float ay = adjustTextY(y);
+
+    c->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8, ax, ay, font_, p);
+    dirty_ = true;
+}
+
+void CanvasScene::strokeText(const std::string& text, float x, float y) {
+    auto* c = skCanvas();
+    if (!c || text.empty()) return;
+
+    SkPaint p = makeStrokePaint();
+    float tw = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
+    float ax = adjustTextX(x, tw);
+    float ay = adjustTextY(y);
+
+    c->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8, ax, ay, font_, p);
+    dirty_ = true;
+}
+
+render::TextMetrics CanvasScene::measureText(const std::string& text) {
+    SkFontMetrics fm;
+    font_.getMetrics(&fm);
+    float w = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
+    return { w, -fm.fAscent + fm.fDescent, -fm.fAscent, fm.fDescent };
+}
+
+// ---------------------------------------------------------------------------
+// Path API
+// ---------------------------------------------------------------------------
+
+void CanvasScene::beginPath() {
+    pathBuilder_.reset();
+}
+
+void CanvasScene::moveTo(float x, float y) {
+    pathBuilder_.moveTo(x, y);
+}
+
+void CanvasScene::lineTo(float x, float y) {
+    pathBuilder_.lineTo(x, y);
+}
+
+void CanvasScene::closePath() {
+    pathBuilder_.close();
+}
+
+void CanvasScene::stroke() {
+    auto* c = skCanvas();
+    if (!c) return;
+    SkPaint p = makeStrokePaint();
+    c->drawPath(pathBuilder_.snapshot(), p);
+    dirty_ = true;
+}
+
+void CanvasScene::fill() {
+    auto* c = skCanvas();
+    if (!c) return;
+    SkPaint p = makeFillPaint();
+    c->drawPath(pathBuilder_.snapshot(), p);
+    dirty_ = true;
+}
+
+void CanvasScene::clip() {
+    auto* c = skCanvas();
+    if (!c) return;
+    c->clipPath(pathBuilder_.snapshot(), true);
+}
+
+void CanvasScene::arc(float cx, float cy, float radius, float startAngle, float endAngle, bool acw) {
+    float startDeg = startAngle * 180.0f / static_cast<float>(M_PI);
+    float endDeg = endAngle * 180.0f / static_cast<float>(M_PI);
+
+    float sweep = endDeg - startDeg;
+    if (acw && sweep > 0) sweep -= 360.0f;
+    else if (!acw && sweep < 0) sweep += 360.0f;
+
+    SkRect oval = SkRect::MakeXYWH(cx - radius, cy - radius, radius * 2, radius * 2);
+
+    // Line from current point to start of arc (or moveTo if no current point)
+    float sx = cx + radius * std::cos(startAngle);
+    float sy = cy + radius * std::sin(startAngle);
+
+    SkPath current = pathBuilder_.snapshot();
+    if (current.isEmpty()) {
+        pathBuilder_.moveTo(sx, sy);
+    } else {
+        pathBuilder_.lineTo(sx, sy);
+    }
+
+    // Skia treats exactly ±360° sweep as degenerate (start==end).
+    // For full circles, use addOval instead.
+    if (std::abs(sweep) >= 360.0f) {
+        pathBuilder_.addOval(oval, acw ? SkPathDirection::kCCW : SkPathDirection::kCW);
+    } else {
+        pathBuilder_.arcTo(oval, startDeg, sweep, false);
+    }
+}
+
+void CanvasScene::arcTo(float x1, float y1, float x2, float y2, float radius) {
+    pathBuilder_.arcTo(SkPoint::Make(x1, y1), SkPoint::Make(x2, y2), radius);
+}
+
+void CanvasScene::bezierCurveTo(float cp1x, float cp1y, float cp2x, float cp2y, float x, float y) {
+    pathBuilder_.cubicTo(cp1x, cp1y, cp2x, cp2y, x, y);
+}
+
+void CanvasScene::quadraticCurveTo(float cpx, float cpy, float x, float y) {
+    pathBuilder_.quadTo(cpx, cpy, x, y);
+}
+
+void CanvasScene::ellipse(float cx, float cy, float rx, float ry, float rotation,
+                          float startAngle, float endAngle, bool acw) {
+    float startDeg = startAngle * 180.0f / static_cast<float>(M_PI);
+    float endDeg = endAngle * 180.0f / static_cast<float>(M_PI);
+    float sweep = endDeg - startDeg;
+    if (acw && sweep > 0) sweep -= 360.0f;
+    else if (!acw && sweep < 0) sweep += 360.0f;
+
+    // Build a temporary path for the ellipse arc, then transform and append
+    SkPathBuilder tmp;
+    SkRect oval = SkRect::MakeXYWH(-rx, -ry, rx * 2, ry * 2);
+    float sx = rx * std::cos(startAngle);
+    float sy = ry * std::sin(startAngle);
+    tmp.moveTo(sx, sy);
+    tmp.arcTo(oval, startDeg, sweep, false);
+
+    SkPath tmpPath = tmp.detach();
+    SkMatrix mat;
+    mat.setRotate(rotation * 180.0f / static_cast<float>(M_PI));
+    mat.postTranslate(cx, cy);
+    tmpPath = tmpPath.makeTransform(mat);
+
+    pathBuilder_.addPath(tmpPath);
+}
+
+void CanvasScene::rect(float x, float y, float w, float h) {
+    pathBuilder_.addRect(SkRect::MakeXYWH(x, y, w, h));
+}
+
+bool CanvasScene::isPointInPath(float x, float y) {
+    return pathBuilder_.snapshot().contains(x, y);
+}
+
+// ---------------------------------------------------------------------------
+// Transform
+// ---------------------------------------------------------------------------
+
+void CanvasScene::save() {
+    auto* c = skCanvas();
+    if (c) c->save();
+    stateStack_.push_back(state_);
+}
+
+void CanvasScene::restore() {
+    auto* c = skCanvas();
+    if (c) c->restore();
+    if (!stateStack_.empty()) {
+        state_ = stateStack_.back();
+        stateStack_.pop_back();
+        // Sync convenience members from restored state
+        fontString_ = state_.fontStr;
+        textAlign_ = state_.textAlignVal;
+        textBaseline_ = state_.textBaselineVal;
+        shadowBlur_ = state_.shadowBlurVal;
+        shadowR_ = state_.shadowR; shadowG_ = state_.shadowG;
+        shadowB_ = state_.shadowB; shadowA_ = state_.shadowA;
+        shadowOffsetX_ = state_.shadowOX; shadowOffsetY_ = state_.shadowOY;
+        imageSmoothingEnabled_ = state_.imgSmooth;
+        applyFont();
+    }
+}
+
+void CanvasScene::translate(float tx, float ty) {
+    auto* c = skCanvas();
+    if (c) c->translate(tx, ty);
+}
+
+void CanvasScene::rotate(float angle) {
+    auto* c = skCanvas();
+    if (c) c->rotate(angle * 180.0f / static_cast<float>(M_PI));
+}
+
+void CanvasScene::scale(float sx, float sy) {
+    auto* c = skCanvas();
+    if (c) c->scale(sx, sy);
+}
+
+void CanvasScene::setTransform(float a, float b, float c, float d, float e, float f) {
+    auto* cv = skCanvas();
+    if (!cv) return;
+    cv->resetMatrix();
+    SkMatrix m;
+    m.setAll(a, c, e, b, d, f, 0, 0, 1);
+    cv->concat(m);
+}
+
+void CanvasScene::resetTransform() {
+    auto* c = skCanvas();
+    if (c) c->resetMatrix();
+}
+
+void CanvasScene::transform(float a, float b, float c, float d, float e, float f) {
+    auto* cv = skCanvas();
+    if (!cv) return;
+    SkMatrix m;
+    m.setAll(a, c, e, b, d, f, 0, 0, 1);
+    cv->concat(m);
+}
+
+// ---------------------------------------------------------------------------
+// Image drawing
+// ---------------------------------------------------------------------------
+
+void CanvasScene::drawImage(const void* rgbaData, int imgW, int imgH,
+                            float sx, float sy, float sw, float sh,
+                            float dx, float dy, float dw, float dh) {
+    auto* c = skCanvas();
+    if (!c || !rgbaData || imgW <= 0 || imgH <= 0) return;
+
+    auto info = SkImageInfo::Make(imgW, imgH, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    sk_sp<SkData> data = SkData::MakeWithCopy(rgbaData, imgW * imgH * 4);
+    auto img = SkImages::RasterFromData(info, data, imgW * 4);
+    if (!img) return;
+
+    SkRect srcRect = SkRect::MakeXYWH(sx, sy, sw, sh);
+    SkRect dstRect = SkRect::MakeXYWH(dx, dy, dw, dh);
+
+    SkSamplingOptions sampling = imageSmoothingEnabled_
+        ? SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kLinear)
+        : SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone);
+
+    SkPaint p;
+    p.setAlphaf(state_.globalAlphaVal);
+    p.setBlendMode(blendModeFromOp(state_.compositeOp));
+
+    c->drawImageRect(img, srcRect, dstRect, sampling, &p,
+                     SkCanvas::kStrict_SrcRectConstraint);
+    dirty_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// Pixel manipulation
+// ---------------------------------------------------------------------------
+
+std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
+    std::vector<uint8_t> pixels(w * h * 4, 0);
+    if (!surface_) return pixels;
+
+    auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    surface_->readPixels(info, pixels.data(), w * 4, x, y);
+    return pixels;
+}
+
+void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy) {
+    auto* c = skCanvas();
+    if (!c || !data) return;
+
+    auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    sk_sp<SkData> skData = SkData::MakeWithCopy(data, w * h * 4);
+    auto img = SkImages::RasterFromData(info, skData, w * 4);
+    if (!img) return;
+
+    // putImageData ignores transforms and compositing — write directly
+    c->save();
+    c->resetMatrix();
+    SkPaint p;
+    p.setBlendMode(SkBlendMode::kSrc);
+    c->drawImage(img, static_cast<float>(dx), static_cast<float>(dy),
+                 SkSamplingOptions(), &p);
+    c->restore();
+    dirty_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// Reset
+// ---------------------------------------------------------------------------
+
+void CanvasScene::reset() {
+    if (surface_) {
+        surface_->getCanvas()->clear(SK_ColorTRANSPARENT);
+        dirty_ = true;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compositing — upload raster pixels to GL texture
 // ---------------------------------------------------------------------------
 
 void CanvasScene::rasterize(render::GLContext* gl) {
@@ -70,7 +656,6 @@ void CanvasScene::rasterize(render::GLContext* gl) {
     // Check if element was removed from the DOM
     if (detachedCb_ && detachedCb_(detachedUd_)) {
         detached_ = true;
-        canvas_.reset();
         return;
     }
 
@@ -78,360 +663,41 @@ void CanvasScene::rasterize(render::GLContext* gl) {
     float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
     if (layoutCb_) {
         layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
-        if (layoutW <= 0 || layoutH <= 0) {
-            // Element is hidden (display:none, etc.) — skip but don't prune
-            return;
-        }
+        if (layoutW <= 0 || layoutH <= 0) return;
     }
 
-    // Screen-space position for compositing (apply viewport scroll)
     screenX_ = layoutX;
     screenY_ = layoutY - viewportScrollY_;
 
     int canvasW = static_cast<int>(layoutW);
     int canvasH = static_cast<int>(layoutH);
-    ensureFBO(canvasW, canvasH);
+    ensureSurface(canvasW, canvasH);
 
-    // If no new commands, the FBO texture is already valid — skip
-    if (canvas_.commands().empty()) return;
+    if (!dirty_) return;
+    dirty_ = false;
 
-    using CV = render::ColorVertex;
-    using TV = render::TextureVertex;
+    if (!surface_) return;
 
-    std::vector<CV> colorVerts;
-    std::vector<TV> texVerts;
-    textDraws_.clear();
+    // Read pixels from Skia surface
+    SkPixmap pixmap;
+    if (!surface_->peekPixels(&pixmap)) return;
 
-    uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
-    uint8_t strokeR = 0, strokeG = 0, strokeB = 0, strokeA = 255;
-    float lineWidth = 1.0f;
-    float globalAlpha = 1.0f;
-    std::string currentFont = "16px sans-serif";
-    uint64_t fontHandle = 0;
-
-    // Canvas-local coordinates: origin is (0,0)
-    float tx = 0, ty = 0;
-
-    struct SavedState {
-        uint8_t fR, fG, fB, fA, sR, sG, sB, sA;
-        float lw, ga, tx, ty;
-        std::string font;
-        uint64_t fontHandle;
-    };
-    std::vector<SavedState> stack;
-
-    auto pushQuad = [&](float x, float y, float qw, float qh,
-                        float r, float g, float b, float a) {
-        float x2 = x + qw, y2 = y + qh;
-        colorVerts.push_back({x,  y,  r, g, b, a});
-        colorVerts.push_back({x2, y,  r, g, b, a});
-        colorVerts.push_back({x2, y2, r, g, b, a});
-        colorVerts.push_back({x,  y,  r, g, b, a});
-        colorVerts.push_back({x2, y2, r, g, b, a});
-        colorVerts.push_back({x,  y2, r, g, b, a});
-    };
-
-    auto pushLine = [&](float x1, float y1, float x2, float y2,
-                        float r, float g, float b, float a, float thickness) {
-        float dx = x2 - x1, dy = y2 - y1;
-        float len = std::sqrt(dx * dx + dy * dy);
-        if (len < 0.001f) return;
-        float nx = -dy / len * thickness * 0.5f;
-        float ny =  dx / len * thickness * 0.5f;
-        colorVerts.push_back({x1 + nx, y1 + ny, r, g, b, a});
-        colorVerts.push_back({x1 - nx, y1 - ny, r, g, b, a});
-        colorVerts.push_back({x2 - nx, y2 - ny, r, g, b, a});
-        colorVerts.push_back({x1 + nx, y1 + ny, r, g, b, a});
-        colorVerts.push_back({x2 - nx, y2 - ny, r, g, b, a});
-        colorVerts.push_back({x2 + nx, y2 + ny, r, g, b, a});
-    };
-
-    // Path state for beginPath/moveTo/lineTo/stroke/fill
-    struct PathPoint { float x, y; };
-    std::vector<PathPoint> pathPoints;
-    float pathStartX = 0, pathStartY = 0;
-    bool hasMoveTo = false;
-
-    auto* skia = static_cast<render::SkiaRenderer*>(renderer_);
-
-    // Track whether we need a full FBO clear (for clearRect covering entire canvas)
-    bool needFullClear = false;
-
-    for (auto& c : canvas_.commands()) {
-        switch (c.type) {
-        case CmdType::SetFillStyle:
-            fillR = c.r; fillG = c.g; fillB = c.b; fillA = c.a;
-            break;
-        case CmdType::SetStrokeStyle:
-            strokeR = c.r; strokeG = c.g; strokeB = c.b; strokeA = c.a;
-            break;
-        case CmdType::SetLineWidth:
-            lineWidth = c.f;
-            break;
-        case CmdType::SetGlobalAlpha:
-            globalAlpha = c.f;
-            break;
-        case CmdType::SetFont:
-            currentFont = c.text;
-            fontHandle = getOrCreateFont(currentFont);
-            break;
-
-        case CmdType::FillRect: {
-            float a = (fillA / 255.0f) * globalAlpha;
-            pushQuad(c.x + tx, c.y + ty, c.w, c.h,
-                     fillR / 255.0f, fillG / 255.0f, fillB / 255.0f, a);
-            break;
-        }
-        case CmdType::StrokeRect: {
-            float a = (strokeA / 255.0f) * globalAlpha;
-            float r = strokeR / 255.0f, g = strokeG / 255.0f, b = strokeB / 255.0f;
-            float x = c.x + tx, y = c.y + ty;
-            float lw = std::max(lineWidth, 1.0f);
-            pushLine(x, y, x + c.w, y, r, g, b, a, lw);
-            pushLine(x + c.w, y, x + c.w, y + c.h, r, g, b, a, lw);
-            pushLine(x + c.w, y + c.h, x, y + c.h, r, g, b, a, lw);
-            pushLine(x, y + c.h, x, y, r, g, b, a, lw);
-            break;
-        }
-        case CmdType::ClearRect: {
-            // Check if this is a full-canvas clear
-            if (c.x <= 0 && c.y <= 0 && c.w >= canvasW && c.h >= canvasH) {
-                needFullClear = true;
-                // Discard all vertices built so far — they'll be covered by the clear
-                colorVerts.clear();
-                texVerts.clear();
-                textDraws_.clear();
-            } else {
-                // Sub-rect clear: draw a transparent quad
-                pushQuad(c.x + tx, c.y + ty, c.w, c.h,
-                         0.0f, 0.0f, 0.0f, 0.0f);
-            }
-            break;
-        }
-        case CmdType::FillText: {
-            if (!fontHandle) fontHandle = getOrCreateFont(currentFont);
-            render::Color col{fillR, fillG, fillB, (uint8_t)(fillA * globalAlpha)};
-            int tw = 0, th = 0;
-            GLuint tex = skia->renderTextToTexture(c.text, fontHandle, col, tw, th);
-            if (tex) {
-                float dx = c.x + tx;
-                float dy = c.y + ty - th * 0.75f;
-                uint32_t base = (uint32_t)texVerts.size();
-                float fw = (float)tw, fh = (float)th;
-                texVerts.push_back({dx,      dy,      0.0f, 0.0f});
-                texVerts.push_back({dx + fw, dy,      1.0f, 0.0f});
-                texVerts.push_back({dx + fw, dy + fh, 1.0f, 1.0f});
-                texVerts.push_back({dx,      dy,      0.0f, 0.0f});
-                texVerts.push_back({dx + fw, dy + fh, 1.0f, 1.0f});
-                texVerts.push_back({dx,      dy + fh, 0.0f, 1.0f});
-                textDraws_.push_back({tex, base, 6});
-            }
-            break;
-        }
-
-        case CmdType::Save:
-            stack.push_back({fillR, fillG, fillB, fillA, strokeR, strokeG, strokeB, strokeA,
-                            lineWidth, globalAlpha, tx, ty, currentFont, fontHandle});
-            break;
-        case CmdType::Restore:
-            if (!stack.empty()) {
-                auto& s = stack.back();
-                fillR = s.fR; fillG = s.fG; fillB = s.fB; fillA = s.fA;
-                strokeR = s.sR; strokeG = s.sG; strokeB = s.sB; strokeA = s.sA;
-                lineWidth = s.lw; globalAlpha = s.ga; tx = s.tx; ty = s.ty;
-                currentFont = s.font; fontHandle = s.fontHandle;
-                stack.pop_back();
-            }
-            break;
-        case CmdType::Translate:
-            tx += c.x; ty += c.y;
-            break;
-        case CmdType::Rotate:
-        case CmdType::Scale:
-            break;
-
-        case CmdType::BeginPath:
-            pathPoints.clear();
-            hasMoveTo = false;
-            break;
-        case CmdType::MoveTo:
-            pathPoints.push_back({c.x + tx, c.y + ty});
-            pathStartX = c.x + tx;
-            pathStartY = c.y + ty;
-            hasMoveTo = true;
-            break;
-        case CmdType::LineTo:
-            if (!hasMoveTo) {
-                pathPoints.push_back({c.x + tx, c.y + ty});
-                pathStartX = c.x + tx;
-                pathStartY = c.y + ty;
-                hasMoveTo = true;
-            } else {
-                pathPoints.push_back({c.x + tx, c.y + ty});
-            }
-            break;
-        case CmdType::ClosePath:
-            if (hasMoveTo && pathPoints.size() >= 2) {
-                pathPoints.push_back({pathStartX, pathStartY});
-            }
-            break;
-        case CmdType::Arc: {
-            float cx_ = c.x + tx, cy_ = c.y + ty;
-            float radius = c.w;
-            float startAngle = c.h, endAngle = c.f;
-            bool acw = (c.r != 0);
-
-            float sweep = endAngle - startAngle;
-            if (acw && sweep > 0) sweep -= 2.0f * static_cast<float>(M_PI);
-            else if (!acw && sweep < 0) sweep += 2.0f * static_cast<float>(M_PI);
-
-            int segments = std::max(16, static_cast<int>(std::abs(sweep * radius) * 0.5f));
-            if (segments > 256) segments = 256;
-
-            for (int s = 0; s <= segments; s++) {
-                float t_ = startAngle + sweep * static_cast<float>(s) / static_cast<float>(segments);
-                float px = cx_ + radius * std::cos(t_);
-                float py = cy_ + radius * std::sin(t_);
-                if (s == 0 && !hasMoveTo) {
-                    pathStartX = px;
-                    pathStartY = py;
-                    hasMoveTo = true;
-                }
-                pathPoints.push_back({px, py});
-            }
-            break;
-        }
-        case CmdType::Stroke: {
-            float a = (strokeA / 255.0f) * globalAlpha;
-            float r = strokeR / 255.0f, g = strokeG / 255.0f, b = strokeB / 255.0f;
-            float lw = std::max(lineWidth, 1.0f);
-            for (size_t p = 1; p < pathPoints.size(); p++) {
-                pushLine(pathPoints[p-1].x, pathPoints[p-1].y,
-                         pathPoints[p].x, pathPoints[p].y,
-                         r, g, b, a, lw);
-            }
-            break;
-        }
-        case CmdType::Fill: {
-            if (pathPoints.size() >= 3) {
-                float a = (fillA / 255.0f) * globalAlpha;
-                float r = fillR / 255.0f, g = fillG / 255.0f, b = fillB / 255.0f;
-                for (size_t p = 2; p < pathPoints.size(); p++) {
-                    colorVerts.push_back({pathPoints[0].x, pathPoints[0].y, r, g, b, a});
-                    colorVerts.push_back({pathPoints[p-1].x, pathPoints[p-1].y, r, g, b, a});
-                    colorVerts.push_back({pathPoints[p].x, pathPoints[p].y, r, g, b, a});
-                }
-            }
-            break;
-        }
-        }
+    // Create or resize GL texture
+    if (!glTexture_) {
+        glGenTextures(1, &glTexture_);
+        glBindTexture(GL_TEXTURE_2D, glTexture_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, glTexture_);
     }
 
-    // Commands have been consumed — clear the buffer.
-    // The FBO texture persists (like a real canvas bitmap).
-    canvas_.reset();
-
-    // Store vertex counts
-    colorVertCount_ = (uint32_t)colorVerts.size();
-    colorBytes_ = (uint32_t)(colorVerts.size() * sizeof(CV));
-    uint32_t texBytes = (uint32_t)(texVerts.size() * sizeof(TV));
-    uint32_t totalBytes = colorBytes_ + texBytes;
-
-    if (totalBytes == 0 && !needFullClear) return;
-
-    // Upload vertices if we have any
-    if (totalBytes > 0) {
-        if (!vertexBuf_ || vertexBufSize_ < totalBytes) {
-            if (vertexBuf_) glDeleteBuffers(1, &vertexBuf_);
-            uint32_t size = 65536;
-            while (size < totalBytes) size *= 2;
-            glGenBuffers(1, &vertexBuf_);
-            glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-            glBufferData(GL_ARRAY_BUFFER, size, nullptr, GL_DYNAMIC_DRAW);
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-            vertexBufSize_ = size;
-        }
-
-        std::vector<uint8_t> combined(totalBytes);
-        if (colorBytes_ > 0)
-            memcpy(combined.data(), colorVerts.data(), colorBytes_);
-        if (texBytes > 0)
-            memcpy(combined.data() + colorBytes_, texVerts.data(), texBytes);
-
-        glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, totalBytes, combined.data());
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-        if (!colorVAO_) glGenVertexArrays(1, &colorVAO_);
-        if (!textureVAO_) glGenVertexArrays(1, &textureVAO_);
-
-        glBindVertexArray(colorVAO_);
-        glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(CV), (void*)offsetof(CV, r));
-        glBindVertexArray(0);
-
-        glBindVertexArray(textureVAO_);
-        glBindBuffer(GL_ARRAY_BUFFER, vertexBuf_);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)colorBytes_);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(TV), (void*)(uintptr_t)(colorBytes_ + offsetof(TV, u)));
-        glBindVertexArray(0);
-    }
-
-    // --- Render to this canvas's FBO ---
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-    glViewport(0, 0, fboWidth_, fboHeight_);
-
-    if (needFullClear) {
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-    }
-
-    float viewport[2] = {(float)fboWidth_, (float)fboHeight_};
-
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_SCISSOR_TEST);
-
-    // Draw colored geometry
-    if (colorVertCount_ > 0) {
-        glUseProgram(gl->colorProgram());
-        glUniform2fv(gl->colorViewportLoc(), 1, viewport);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        glBindVertexArray(colorVAO_);
-        glDrawArrays(GL_TRIANGLES, 0, colorVertCount_);
-        glBindVertexArray(0);
-    }
-
-    // Draw textured quads (text)
-    if (!textDraws_.empty()) {
-        glUseProgram(gl->textureProgram());
-        glUniform2fv(gl->textureViewportLoc(), 1, viewport);
-        glUniform1i(gl->textureSamplerLoc(), 0);
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-        glBindVertexArray(textureVAO_);
-
-        for (auto& td : textDraws_) {
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, td.tex);
-            glDrawArrays(GL_TRIANGLES, td.firstVertex, td.vertexCount);
-        }
-
-        glBindVertexArray(0);
-        glBindTexture(GL_TEXTURE_2D, 0);
-    }
-
-    // Unbind FBO — return to default framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // Skia N32 premul = BGRA on little-endian.  Upload as BGRA.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, canvasW, canvasH, 0,
+                 GL_BGRA, GL_UNSIGNED_BYTE, pixmap.addr());
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 } // namespace bro::canvas

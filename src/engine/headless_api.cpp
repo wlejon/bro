@@ -21,7 +21,6 @@
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "canvas/canvas_scene.h"
-#include "canvas/canvas2d.h"
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_scene.h"
 
@@ -281,33 +280,19 @@ bool Engine::screenshot(const std::string& path) {
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
-    // Render canvas scenes first (behind HTML) — CPU software replay
+    // Composite canvas scenes (behind HTML) — Skia surface blit
     for (auto& cs : canvasScenes_) {
         float cx, cy, cw, ch;
         cs->getScreenRect(cx, cy, cw, ch);
-        auto& cmds = cs->canvas().commands();
-        uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
-        float globalAlpha = 1.0f;
-
-        for (auto& cmd : cmds) {
-            using CT = canvas::CmdType;
-            switch (cmd.type) {
-            case CT::SetFillStyle:
-                fillR = cmd.r; fillG = cmd.g; fillB = cmd.b; fillA = cmd.a;
-                break;
-            case CT::SetGlobalAlpha:
-                globalAlpha = cmd.f;
-                break;
-            case CT::FillRect: {
-                uint8_t a = static_cast<uint8_t>(fillA * globalAlpha);
-                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h,
-                                    {fillR, fillG, fillB, a});
-                break;
-            }
-            case CT::ClearRect:
-                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h, {0, 0, 0, 255});
-                break;
-            default: break;
+        if (cs->surface()) {
+            auto* appCanvas = renderer_->getCanvas();
+            if (appCanvas) {
+                sk_sp<SkImage> img = cs->surface()->makeImageSnapshot();
+                if (img) {
+                    SkPaint paint;
+                    paint.setBlendMode(SkBlendMode::kSrcOver);
+                    appCanvas->drawImage(img, cx, cy, SkSamplingOptions(), &paint);
+                }
             }
         }
     }
@@ -460,27 +445,19 @@ std::vector<uint8_t> Engine::capturePixels() {
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
+    // Composite canvas scenes — Skia surface blit
     for (auto& cs : canvasScenes_) {
         float cx, cy, cw, ch;
         cs->getScreenRect(cx, cy, cw, ch);
-        auto& cmds = cs->canvas().commands();
-        uint8_t fillR = 0, fillG = 0, fillB = 0, fillA = 255;
-        float globalAlpha = 1.0f;
-        for (auto& cmd : cmds) {
-            using CT = canvas::CmdType;
-            switch (cmd.type) {
-            case CT::SetFillStyle:
-                fillR = cmd.r; fillG = cmd.g; fillB = cmd.b; fillA = cmd.a; break;
-            case CT::SetGlobalAlpha:
-                globalAlpha = cmd.f; break;
-            case CT::FillRect: {
-                uint8_t a = static_cast<uint8_t>(fillA * globalAlpha);
-                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h, {fillR, fillG, fillB, a});
-                break;
-            }
-            case CT::ClearRect:
-                renderer_->fillRect(cmd.x + cx, cmd.y + cy, cmd.w, cmd.h, {0, 0, 0, 255}); break;
-            default: break;
+        if (cs->surface()) {
+            auto* appCanvas = renderer_->getCanvas();
+            if (appCanvas) {
+                sk_sp<SkImage> img = cs->surface()->makeImageSnapshot();
+                if (img) {
+                    SkPaint paint;
+                    paint.setBlendMode(SkBlendMode::kSrcOver);
+                    appCanvas->drawImage(img, cx, cy, SkSamplingOptions(), &paint);
+                }
             }
         }
     }
