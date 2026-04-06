@@ -43,7 +43,7 @@ void ElSelect::initSelectedIndex() {
     int idx = 0;
     for (auto* child : elem_->children()) {
         if (child->tagName() != "OPTION") continue;
-        if (!child->getAttribute("selected").empty()) {
+        if (child->hasAttribute("selected")) {
             selectedIndex_ = idx;
             return;
         }
@@ -104,7 +104,15 @@ void ElSelect::draw(render::Renderer* renderer,
 
     if (w <= 0 || h <= 0) return;
 
-    lastDrawPos_ = {x, y, w, h};
+    // Store the border-box position for dropdown placement and hit testing.
+    // This matches getBoundingClientRect and ensures the dropdown aligns with
+    // the visible element bounds (including padding/border).
+    lastDrawPos_ = {
+        x - box.padding.left - box.border.left,
+        y - box.padding.top - box.border.top,
+        box.fullWidth(),
+        box.fullHeight()
+    };
 
     uint64_t fontHandle = getFontHandle();
     if (!fontHandle) return;

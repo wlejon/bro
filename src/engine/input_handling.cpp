@@ -18,6 +18,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "util/time.h"
+#include "util/log.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
@@ -130,6 +131,7 @@ static void computeOffset(dom::MouseEvent& evt, dom::Element* target) {
         auto& pb = lp->layoutBox();
         absX += pb.contentRect.x;
         absY += pb.contentRect.y;
+        absY -= lp->scrollTopValue();
     }
     evt.setOffsetX(evt.clientX() - static_cast<double>(absX));
     evt.setOffsetY(evt.clientY() - static_cast<double>(absY));
