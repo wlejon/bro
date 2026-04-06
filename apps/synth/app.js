@@ -16,7 +16,8 @@
     );
 
     // Init visualizer
-    Synth.Visualizer.init(document.getElementById('viz'));
+    Synth.Visualizer.init(document.getElementById('viz-stack'));
+    Synth.Visualizer.rebuild();
     Synth.Visualizer.draw();
 
     // -----------------------------------------------------------------------
@@ -1053,8 +1054,13 @@
                             var w = canvas.clientWidth;
                             var h = canvas.clientHeight;
                             if (w <= 0 || h <= 0) return;
+                            // Sync bitmap size to display size
+                            if (canvas.width !== w) canvas.width = w;
+                            if (canvas.height !== h) canvas.height = h;
                             var ctx = canvas.getContext('2d');
-                            ctx.clearRect(0, 0, w, h);
+                            // Draw background (CSS bg is transparent for compositing)
+                            ctx.fillStyle = '#12121a';
+                            ctx.fillRect(0, 0, w, h);
 
                             var ad = getAutoData();
                             var tgt = getTarget();
@@ -1212,6 +1218,11 @@
 
                 seqLayersEl.appendChild(autoRow);
             })(li);
+        }
+
+        // Rebuild visualizer rows to match current layers
+        if (Synth.Visualizer && Synth.Visualizer.rebuild) {
+            Synth.Visualizer.rebuild();
         }
     }
 
