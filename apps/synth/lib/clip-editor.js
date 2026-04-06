@@ -7,8 +7,6 @@
 
     var Editor = Synth.ClipEditor = {};
 
-    var fs = require('fs');
-
     // State
     var audioCtx = null;
     var canvas = null;
@@ -100,19 +98,20 @@
     Editor.getSampleRate = function() { return sampleRate; };
 
     Editor.loadFromFile = function(path) {
-        var data = fs.readFileSync(path);
-        var result = Synth.WAV.decode(data.buffer);
-        // Resample to engine rate if needed
-        var s = Synth.WAV.resample(result.samples, result.sampleRate, sampleRate);
-        Editor.loadSamples(s);
+        if (!audioCtx) return;
+        var result = audioCtx.decodeAudioFile(path);
+        if (!result) {
+            setStatus('Failed to load: ' + path.split('/').pop().split('\\').pop());
+            return;
+        }
+        Editor.loadSamples(result.samples);
         setStatus('Loaded: ' + path.split('/').pop().split('\\').pop());
     };
 
     Editor.saveToFile = function(path) {
-        if (!samples) return;
+        if (!samples || !audioCtx) return;
         var src = hasSelection ? samples.slice(selStart, selEnd) : samples;
-        var wavBuf = Synth.WAV.encode(src, sampleRate);
-        fs.writeFileSync(path, new Uint8Array(wavBuf));
+        audioCtx.saveWav(path, src, 1, sampleRate);
         setStatus('Saved: ' + path.split('/').pop().split('\\').pop());
     };
 

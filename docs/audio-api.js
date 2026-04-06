@@ -454,6 +454,57 @@ class AudioContext {
    */
   stopRecording() {}
 
+  /**
+   * Export the current recording buffer directly to a WAV file (32-bit float).
+   * Call after stopRecording(). More efficient than stopRecording() + saveWav()
+   * since it avoids copying samples through JS.
+   * @param {string} path - output file path
+   * @returns {boolean} true on success
+   */
+  exportRecordingToWav(path) {}
+
+
+  // --- Audio File I/O -------------------------------------------------------
+
+  /**
+   * Create a clip by loading an audio file. Supports WAV, FLAC, MP3, and
+   * OGG/Opus. Automatically resamples to the engine sample rate using a
+   * high-quality polyphase sinc resampler.
+   * @param {string} path - file path
+   * @returns {number} clipId, or -1 on failure
+   */
+  createClipFromFile(path) {}
+
+  /**
+   * Decode an audio file from a memory buffer. Supports WAV, FLAC, MP3, and
+   * OGG/Opus (detected by header magic bytes). Automatically resamples to the
+   * engine sample rate.
+   * @param {ArrayBuffer|Uint8Array} data - raw file bytes
+   * @returns {?{samples: Float32Array, channels: number, sampleRate: number, numFrames: number}}
+   *          decoded audio data, or null on failure
+   */
+  decodeAudioData(data) {}
+
+  /**
+   * Decode an audio file from disk. Same format support and resampling as
+   * decodeAudioData, but reads from a file path. Returns the decoded samples
+   * for use in the clip editor or other processing.
+   * @param {string} path - file path
+   * @returns {?{samples: Float32Array, channels: number, sampleRate: number, numFrames: number}}
+   *          decoded audio data, or null on failure
+   */
+  decodeAudioFile(path) {}
+
+  /**
+   * Save PCM audio data to a WAV file (32-bit float format).
+   * @param {string} path - output file path
+   * @param {Float32Array} samples - interleaved sample data
+   * @param {number} channels - 1 for mono, 2 for stereo
+   * @param {number} sampleRate - e.g. 44100
+   * @returns {boolean} true on success
+   */
+  saveWav(path, samples, channels, sampleRate) {}
+
 
   // --- Audio Clips ----------------------------------------------------------
 

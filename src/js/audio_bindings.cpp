@@ -7,6 +7,8 @@
 #include <broaudio/synth/wavetable.h>
 #include <broaudio/midi/midi_input.h>
 #include <broaudio/sequencer/sequence.h>
+#include <broaudio/io/audio_file.h>
+#include <broaudio/dsp/resampler.h>
 
 #include <algorithm>
 #include <string>
@@ -2700,6 +2702,178 @@ static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val
     return arr;
 }
 
+// --- Audio File I/O ---
+
+// createClipFromFile(path) → clipId or -1
+static JSValue js_audioctx_createClipFromFile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_UNDEFINED;
+    int id = d->engine->createClipFromFile(path);
+    JS_FreeCString(ctx, path);
+    return JS_NewInt32(ctx, id);
+}
+
+// decodeAudioData(ArrayBuffer|Uint8Array) → { samples: Float32Array, channels, sampleRate, numFrames } or null
+static JSValue js_audioctx_decodeAudioData(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_NULL;
+
+    // Accept either ArrayBuffer or TypedArray (Uint8Array)
+    uint8_t* inputPtr = nullptr;
+    size_t inputLen = 0;
+
+    // Try as TypedArray first
+    inputPtr = getTypedArrayPtr(ctx, argv[0], inputLen);
+    if (!inputPtr) {
+        // Try as raw ArrayBuffer
+        inputPtr = JS_GetArrayBuffer(ctx, &inputLen, argv[0]);
+    }
+    if (!inputPtr || inputLen == 0) return JS_NULL;
+
+    broaudio::AudioFileData data = broaudio::loadAudioFileFromMemory(inputPtr, inputLen);
+    if (!data.valid()) return JS_NULL;
+
+    // Resample to engine rate if needed
+    const float* outSamples = data.samples.data();
+    int outFrames = data.numFrames;
+    int outChannels = data.channels;
+    int outRate = data.sampleRate;
+    std::vector<float> resampled;
+
+    if (data.sampleRate != d->engine->sampleRate()) {
+        resampled = broaudio::resample(data.samples.data(), data.numFrames,
+                                       data.channels, data.sampleRate, d->engine->sampleRate());
+        if (!resampled.empty()) {
+            outSamples = resampled.data();
+            outFrames = static_cast<int>(resampled.size()) / outChannels;
+            outRate = d->engine->sampleRate();
+        }
+    }
+
+    // Build result object { samples: Float32Array, channels, sampleRate, numFrames }
+    JSValue result = JS_NewObject(ctx);
+    int totalFloats = outFrames * outChannels;
+
+    JSValue lenVal = JS_NewInt32(ctx, totalFloats);
+    JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue(ctx, lenVal);
+
+    if (!JS_IsException(arr)) {
+        size_t byteOff = 0, viewLen = 0;
+        JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+        if (!JS_IsException(abuf)) {
+            size_t abufLen = 0;
+            uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+            if (ptr) {
+                std::memcpy(ptr + byteOff, outSamples, totalFloats * sizeof(float));
+            }
+            JS_FreeValue(ctx, abuf);
+        }
+    }
+
+    JS_SetPropertyStr(ctx, result, "samples", arr);
+    JS_SetPropertyStr(ctx, result, "channels", JS_NewInt32(ctx, outChannels));
+    JS_SetPropertyStr(ctx, result, "sampleRate", JS_NewInt32(ctx, outRate));
+    JS_SetPropertyStr(ctx, result, "numFrames", JS_NewInt32(ctx, outFrames));
+
+    return result;
+}
+
+// decodeAudioFile(path) → { samples: Float32Array, channels, sampleRate, numFrames } or null
+static JSValue js_audioctx_decodeAudioFile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_NULL;
+
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_NULL;
+
+    broaudio::AudioFileData data = broaudio::loadAudioFile(path);
+    JS_FreeCString(ctx, path);
+    if (!data.valid()) return JS_NULL;
+
+    // Resample to engine rate if needed
+    const float* outSamples = data.samples.data();
+    int outFrames = data.numFrames;
+    int outChannels = data.channels;
+    int outRate = data.sampleRate;
+    std::vector<float> resampled;
+
+    if (data.sampleRate != d->engine->sampleRate()) {
+        resampled = broaudio::resample(data.samples.data(), data.numFrames,
+                                       data.channels, data.sampleRate, d->engine->sampleRate());
+        if (!resampled.empty()) {
+            outSamples = resampled.data();
+            outFrames = static_cast<int>(resampled.size()) / outChannels;
+            outRate = d->engine->sampleRate();
+        }
+    }
+
+    JSValue result = JS_NewObject(ctx);
+    int totalFloats = outFrames * outChannels;
+
+    JSValue lenVal = JS_NewInt32(ctx, totalFloats);
+    JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue(ctx, lenVal);
+
+    if (!JS_IsException(arr)) {
+        size_t byteOff = 0, viewLen = 0;
+        JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+        if (!JS_IsException(abuf)) {
+            size_t abufLen = 0;
+            uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+            if (ptr) {
+                std::memcpy(ptr + byteOff, outSamples, totalFloats * sizeof(float));
+            }
+            JS_FreeValue(ctx, abuf);
+        }
+    }
+
+    JS_SetPropertyStr(ctx, result, "samples", arr);
+    JS_SetPropertyStr(ctx, result, "channels", JS_NewInt32(ctx, outChannels));
+    JS_SetPropertyStr(ctx, result, "sampleRate", JS_NewInt32(ctx, outRate));
+    JS_SetPropertyStr(ctx, result, "numFrames", JS_NewInt32(ctx, outFrames));
+
+    return result;
+}
+
+// exportRecordingToWav(path) → bool
+static JSValue js_audioctx_exportRecordingToWav(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_FALSE;
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_FALSE;
+    bool ok = d->engine->exportRecordingToWav(path);
+    JS_FreeCString(ctx, path);
+    return JS_NewBool(ctx, ok);
+}
+
+// saveWav(path, samples, channels, sampleRate) → bool
+static JSValue js_audioctx_saveWav(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 4) return JS_FALSE;
+
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_FALSE;
+
+    size_t len = 0;
+    uint8_t* raw = getTypedArrayPtr(ctx, argv[1], len);
+    if (!raw) {
+        JS_FreeCString(ctx, path);
+        return JS_ThrowTypeError(ctx, "Expected Float32Array as second argument");
+    }
+
+    int channels, sr;
+    JS_ToInt32(ctx, &channels, argv[2]);
+    JS_ToInt32(ctx, &sr, argv[3]);
+
+    int numFrames = static_cast<int>(len / sizeof(float)) / std::max(channels, 1);
+    bool ok = broaudio::saveWav(path, reinterpret_cast<float*>(raw), numFrames, channels, sr);
+    JS_FreeCString(ctx, path);
+    return JS_NewBool(ctx, ok);
+}
+
 // --- Clip Playback ---
 
 static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2968,6 +3142,13 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     // Recording
     JS_CFUNC_DEF("startRecording", 0, js_audioctx_startRecording),
     JS_CFUNC_DEF("stopRecording", 0, js_audioctx_stopRecording),
+
+    // Audio file I/O
+    JS_CFUNC_DEF("createClipFromFile", 1, js_audioctx_createClipFromFile),
+    JS_CFUNC_DEF("decodeAudioData", 1, js_audioctx_decodeAudioData),
+    JS_CFUNC_DEF("decodeAudioFile", 1, js_audioctx_decodeAudioFile),
+    JS_CFUNC_DEF("exportRecordingToWav", 1, js_audioctx_exportRecordingToWav),
+    JS_CFUNC_DEF("saveWav", 4, js_audioctx_saveWav),
 
     // Clips
     JS_CFUNC_DEF("createClip", 1, js_audioctx_createClip),

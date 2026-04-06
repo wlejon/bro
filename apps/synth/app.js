@@ -1424,8 +1424,7 @@
         }
 
         try {
-            var wav = Synth.WAV.encode(finalOutput, SAMPLE_RATE);
-            require('fs').writeFileSync(path, new Uint8Array(wav));
+            audioCtx.saveWav(path, finalOutput, 1, SAMPLE_RATE);
             console.log('Loop saved:', path, '(' + finalOutput.length + ' samples)');
         } catch (e) {
             console.error('Save failed:', e.message);
@@ -1467,8 +1466,7 @@
             if (path) {
                 if (path.indexOf('.wav') < 0 && path.indexOf('.WAV') < 0) path += '.wav';
                 try {
-                    var wav = Synth.WAV.encode(samples, audioCtx.sampleRate);
-                    require('fs').writeFileSync(path, new Uint8Array(wav));
+                    audioCtx.saveWav(path, samples, 1, audioCtx.sampleRate);
                     console.log('Recording saved:', path);
                 } catch (e) {
                     console.error('Save failed:', e.message);
@@ -1560,7 +1558,7 @@
 
     // File I/O
     document.getElementById('ed-load').addEventListener('click', function() {
-        var files = showOpenFileDialog('Audio Files|wav');
+        var files = showOpenFileDialog('Audio Files|wav;flac;mp3;ogg;opus');
         if (files && files.length > 0) {
             try { Synth.ClipEditor.loadFromFile(files[0]); }
             catch (e) { console.error('Load failed:', e.message); }
