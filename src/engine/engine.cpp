@@ -253,7 +253,10 @@ Engine::Engine(const EngineConfig& config)
                             oh = box.contentRect.height;
                         }, el);
                         scene->setDetachedCallback([](void* ud) -> bool {
-                            return !static_cast<dom::Element*>(ud)->parentNode();
+                            // Walk up to check if connected to the document
+                            auto* n = static_cast<dom::Element*>(ud);
+                            while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                            return n->tagName() != "html" && n->tagName() != "HTML";
                         }, el);
                     }
                     auto* ptr = scene.get();
@@ -294,7 +297,9 @@ Engine::Engine(const EngineConfig& config)
                         oh = box.contentRect.height;
                     }, el);
                     scene->setDetachedCallback([](void* ud) -> bool {
-                        return !static_cast<dom::Element*>(ud)->parentNode();
+                        auto* n = static_cast<dom::Element*>(ud);
+                        while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                        return n->tagName() != "html" && n->tagName() != "HTML";
                     }, el);
                 }
                 auto* ptr = scene.get();

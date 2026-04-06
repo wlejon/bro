@@ -4,6 +4,7 @@
 #include "util/log.h"
 #include "dom/event.h"
 #include "dom/shadow_root.h"
+#include "layout/el_select.h"
 
 #include "dataset_proxy.js.h"
 
@@ -571,6 +572,14 @@ static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    // For <select>, return the value of the selected <option>
+    if (auto* sel = el->selectControl()) {
+        auto opts = sel->getOptions();
+        int idx = sel->selectedIndex();
+        if (idx >= 0 && idx < static_cast<int>(opts.size()))
+            return JS_NewString(ctx, opts[idx].value.c_str());
+        return JS_NewString(ctx, "");
+    }
     return JS_NewString(ctx, el->getAttribute("value").c_str());
 }
 
@@ -599,6 +608,47 @@ static JSValue js_element_set_checked(JSContext* ctx, JSValueConst this_val,
         el->setAttribute("checked", "");
     else
         el->removeAttribute("checked");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_selected(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    return JS_NewBool(ctx, el->attributes().count("selected") > 0);
+}
+
+static JSValue js_element_set_selected(JSContext* ctx, JSValueConst this_val,
+                                       JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val))
+        el->setAttribute("selected", "");
+    else
+        el->removeAttribute("selected");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_selectedIndex(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, -1);
+    if (auto* sel = el->selectControl())
+        return JS_NewInt32(ctx, sel->selectedIndex());
+    return JS_NewInt32(ctx, -1);
+}
+
+static JSValue js_element_set_selectedIndex(JSContext* ctx, JSValueConst this_val,
+                                            JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (auto* sel = el->selectControl()) {
+        int idx;
+        JS_ToInt32(ctx, &idx, val);
+        sel->setSelectedIndex(idx);
+    }
     return JS_UNDEFINED;
 }
 
@@ -1176,12 +1226,23 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     if (typeStr) JS_FreeCString(ctx, typeStr);
     if (type != "2d" && type != "webgl" && type != "webgl2") return JS_NULL;
 
-    // Return cached context if one already exists for this element
+    // Return cached context if one already exists for this element.
+    // Verify the element is still in the DOM — if it was removed and a new
+    // element was allocated at the same address, the stale entry must be evicted.
     auto cacheIt = s_canvas_contexts.find(el);
     if (cacheIt != s_canvas_contexts.end()) {
-        // Per spec: different type than the original → null
-        if (cacheIt->second.type != type) return JS_NULL;
-        return JS_DupValue(ctx, cacheIt->second.val);
+        // Check if element is still connected to the document tree
+        auto* n = static_cast<bro::dom::Element*>(el);
+        while (n->parentNode()) n = static_cast<bro::dom::Element*>(n->parentNode());
+        bool connected = (n->tagName() == "html" || n->tagName() == "HTML");
+        if (!connected) {
+            // Stale entry — element disconnected from DOM, pointer reused
+            JS_FreeValue(ctx, cacheIt->second.val);
+            s_canvas_contexts.erase(cacheIt);
+        } else {
+            if (cacheIt->second.type != type) return JS_NULL;
+            return JS_DupValue(ctx, cacheIt->second.val);
+        }
     }
 
     auto factoryIt = s_ctx_factories.find(ctx);
@@ -1374,6 +1435,8 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
         auto& pb = lp->layoutBox();
         x += pb.contentRect.x;
         y += pb.contentRect.y;
+        // Account for element scroll (same as draw traversal)
+        y -= lp->scrollTopValue();
     }
 
     JSValue rect = JS_NewObject(ctx);
@@ -2120,6 +2183,8 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     // Form control properties
     JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
     JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),
+    JS_CGETSET_DEF("selected",      js_element_get_selected,      js_element_set_selected),
+    JS_CGETSET_DEF("selectedIndex", js_element_get_selectedIndex, js_element_set_selectedIndex),
     JS_CGETSET_DEF("type",        js_element_get_type,        js_element_set_type),
     JS_CGETSET_DEF("disabled",    js_element_get_disabled,    js_element_set_disabled),
     JS_CGETSET_DEF("placeholder", js_element_get_placeholder, js_element_set_placeholder),

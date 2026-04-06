@@ -64,6 +64,15 @@ void Engine::flush() {
             JS_FreeValue(jsRuntime_->getContext(), r);
         }
     }
+
+    // Prune detached canvas scenes (elements removed from DOM)
+    for (auto& cs : canvasScenes_) {
+        cs->rasterize(gl_.get());  // triggers detached check
+    }
+    canvasScenes_.erase(
+        std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
+            [](auto& cs) { return cs->isDetached(); }),
+        canvasScenes_.end());
 }
 
 void Engine::advanceTime(double ms) {
@@ -172,11 +181,15 @@ bool Engine::screenshot(const std::string& path) {
         renderer_->endFrame();
         skia->uploadToGPU();
 
-        // 2. Rasterize canvas scenes into their per-canvas FBOs
+        // 2. Rasterize canvas scenes into their per-canvas FBOs; prune detached
         for (auto& cs : canvasScenes_) {
             cs->setViewportScroll(scrollY_);
             cs->rasterize(gl_.get());
         }
+        canvasScenes_.erase(
+            std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
+                [](auto& cs) { return cs->isDetached(); }),
+            canvasScenes_.end());
 
         // 3. Create temporary compositing FBO
         GLuint compositeFBO = 0, compositeTex = 0;
@@ -356,6 +369,10 @@ std::vector<uint8_t> Engine::capturePixels() {
             cs->setViewportScroll(scrollY_);
             cs->rasterize(gl_.get());
         }
+        canvasScenes_.erase(
+            std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
+                [](auto& cs) { return cs->isDetached(); }),
+            canvasScenes_.end());
 
         // Create temporary compositing FBO
         GLuint compositeFBO = 0, compositeTex = 0;
