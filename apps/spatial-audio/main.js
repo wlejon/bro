@@ -775,4 +775,76 @@ function animate() {
 }
 
 animate();
-console.log('[spatial-audio] Demo running. WASD to move, mouse drag to look.');
+
+// ───────────────────────── Head Model Panel ─────────────────────────
+
+var panel = document.getElementById('panel');
+var panelToggle = document.getElementById('panel-toggle');
+var panelVisible = true;
+
+function bindSlider(id, fn) {
+    var slider = document.getElementById(id);
+    var valEl = document.getElementById(id + '-val');
+    slider.addEventListener('input', function() {
+        var v = parseFloat(slider.value);
+        valEl.textContent = v;
+        fn(v);
+    });
+}
+
+// Enabled toggle
+document.getElementById('hm-enabled').addEventListener('change', function() {
+    audioCtx.setHeadModelEnabled(this.checked);
+});
+
+// ILD
+bindSlider('hm-ild', function(v) { audioCtx.setHeadModelIldStrength(v); });
+
+// Behind
+bindSlider('hm-behind', function(v) { audioCtx.setHeadModelBehindAttenuation(v); });
+
+// Near cutoff (paired — send both values together)
+function updateNearCutoff() {
+    var front = parseFloat(document.getElementById('hm-near-front').value);
+    var behind = parseFloat(document.getElementById('hm-near-behind').value);
+    audioCtx.setHeadModelNearCutoff(front, behind);
+}
+bindSlider('hm-near-front', updateNearCutoff);
+bindSlider('hm-near-behind', updateNearCutoff);
+
+// Far ratio
+bindSlider('hm-far-ratio', function(v) { audioCtx.setHeadModelFarCutoffRatio(v); });
+
+// Elevation
+function updateElevation() {
+    var n = parseFloat(document.getElementById('hm-elev-near').value);
+    var f = parseFloat(document.getElementById('hm-elev-far').value);
+    audioCtx.setHeadModelElevation(n, f);
+}
+bindSlider('hm-elev-near', updateElevation);
+bindSlider('hm-elev-far', updateElevation);
+
+// Cutoff range
+function updateCutoffRange() {
+    var min = parseFloat(document.getElementById('hm-min-cut').value);
+    var max = parseFloat(document.getElementById('hm-max-cut').value);
+    audioCtx.setHeadModelCutoffRange(min, max);
+}
+bindSlider('hm-min-cut', updateCutoffRange);
+bindSlider('hm-max-cut', updateCutoffRange);
+
+// Toggle panel with H key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'h' || e.key === 'H') {
+        panelVisible = !panelVisible;
+        panel.style.display = panelVisible ? 'block' : 'none';
+        panelToggle.style.display = panelVisible ? 'none' : 'block';
+    }
+});
+panelToggle.addEventListener('click', function() {
+    panelVisible = true;
+    panel.style.display = 'block';
+    panelToggle.style.display = 'none';
+});
+
+console.log('[spatial-audio] Demo running. WASD to move, mouse drag to look. H to toggle panel.');

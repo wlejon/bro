@@ -2367,6 +2367,66 @@ static JSValue js_audioctx_setPlaybackSpatialDistanceModel(JSContext* ctx, JSVal
     return JS_UNDEFINED;
 }
 
+// --- Head model ---
+
+static JSValue js_audioctx_setHeadModelEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->engine->setHeadModelEnabled(JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setHeadModelIldStrength(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setHeadModelIldStrength(static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setHeadModelBehindAttenuation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setHeadModelBehindAttenuation(static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setHeadModelNearCutoff(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    double front, behind;
+    JS_ToFloat64(ctx, &front, argv[0]); JS_ToFloat64(ctx, &behind, argv[1]);
+    d->engine->setHeadModelNearCutoff(static_cast<float>(front), static_cast<float>(behind));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setHeadModelFarCutoffRatio(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    double v; JS_ToFloat64(ctx, &v, argv[0]);
+    d->engine->setHeadModelFarCutoffRatio(static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setHeadModelElevation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    double nearHz, farHz;
+    JS_ToFloat64(ctx, &nearHz, argv[0]); JS_ToFloat64(ctx, &farHz, argv[1]);
+    d->engine->setHeadModelElevation(static_cast<float>(nearHz), static_cast<float>(farHz));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setHeadModelCutoffRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    double minHz, maxHz;
+    JS_ToFloat64(ctx, &minHz, argv[0]); JS_ToFloat64(ctx, &maxHz, argv[1]);
+    d->engine->setHeadModelCutoffRange(static_cast<float>(minHz), static_cast<float>(maxHz));
+    return JS_UNDEFINED;
+}
+
 // --- Aux sends ---
 
 static JSValue js_audioctx_setVoiceSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2884,6 +2944,15 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("setPlaybackSpatialMaxDistance", 2, js_audioctx_setPlaybackSpatialMaxDistance),
     JS_CFUNC_DEF("setPlaybackSpatialRolloff", 2, js_audioctx_setPlaybackSpatialRolloff),
     JS_CFUNC_DEF("setPlaybackSpatialDistanceModel", 2, js_audioctx_setPlaybackSpatialDistanceModel),
+
+    // Head model
+    JS_CFUNC_DEF("setHeadModelEnabled", 1, js_audioctx_setHeadModelEnabled),
+    JS_CFUNC_DEF("setHeadModelIldStrength", 1, js_audioctx_setHeadModelIldStrength),
+    JS_CFUNC_DEF("setHeadModelBehindAttenuation", 1, js_audioctx_setHeadModelBehindAttenuation),
+    JS_CFUNC_DEF("setHeadModelNearCutoff", 2, js_audioctx_setHeadModelNearCutoff),
+    JS_CFUNC_DEF("setHeadModelFarCutoffRatio", 1, js_audioctx_setHeadModelFarCutoffRatio),
+    JS_CFUNC_DEF("setHeadModelElevation", 2, js_audioctx_setHeadModelElevation),
+    JS_CFUNC_DEF("setHeadModelCutoffRange", 2, js_audioctx_setHeadModelCutoffRange),
 
     // Aux sends
     JS_CFUNC_DEF("setVoiceSend", 3, js_audioctx_setVoiceSend),

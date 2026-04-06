@@ -12,6 +12,30 @@
         }
         #hud .zone { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
         #hud .help { position: fixed; bottom: 12px; left: 12px; opacity: 0.6; font-size: 11px; }
+
+        #panel {
+            position: absolute; top: 10px; right: 10px; width: 260px;
+            background: rgba(0,0,0,0.75); border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 6px; padding: 10px 12px; font-family: monospace;
+            font-size: 11px; color: #ccc; pointer-events: auto;
+            max-height: calc(100vh - 30px); overflow-y: auto;
+        }
+        #panel h3 { margin: 0 0 8px; font-size: 13px; color: #fff; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 4px; }
+        #panel label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+        #panel label span { flex: 0 0 auto; min-width: 60px; }
+        #panel input[type=range] { flex: 1; margin: 0 6px; height: 14px; cursor: pointer; }
+        #panel .val { text-align: right; min-width: 50px; color: #8cf; font-size: 10px; }
+        #panel .toggle { margin: 6px 0; }
+        #panel .toggle input { margin-right: 6px; cursor: pointer; }
+        #panel .section { margin-top: 10px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.1); }
+        #panel .section-title { font-size: 11px; color: #aaa; margin-bottom: 4px; }
+
+        #panel-toggle {
+            position: absolute; top: 10px; right: 10px;
+            background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 4px; color: #fff; font-family: monospace; font-size: 11px;
+            padding: 4px 10px; cursor: pointer; pointer-events: auto; display: none;
+        }
     </style>
 </head>
 <body>
@@ -19,8 +43,88 @@
     <div id="hud">
         <div class="zone" id="zone-label">---</div>
         <div id="pos-label">0, 0, 0</div>
-        <div class="help">WASD move &middot; Space up &middot; Ctrl down &middot; Mouse drag look &middot; Walk between zones to hear the difference</div>
+        <div class="help">WASD move &middot; Space up &middot; Ctrl down &middot; Mouse drag look &middot; H toggle panel</div>
     </div>
+
+    <div id="panel">
+        <h3>Head Model</h3>
+
+        <div class="toggle">
+            <label><input type="checkbox" id="hm-enabled" checked> Enabled</label>
+        </div>
+
+        <div class="section">
+            <div class="section-title">ILD (level difference)</div>
+            <label>
+                <span>Strength</span>
+                <input type="range" id="hm-ild" min="0" max="1" step="0.01" value="0.85">
+                <span class="val" id="hm-ild-val">0.85</span>
+            </label>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Behind attenuation</div>
+            <label>
+                <span>Amount</span>
+                <input type="range" id="hm-behind" min="0" max="1" step="0.01" value="0.45">
+                <span class="val" id="hm-behind-val">0.45</span>
+            </label>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Near ear cutoff (Hz)</div>
+            <label>
+                <span>Front</span>
+                <input type="range" id="hm-near-front" min="500" max="20000" step="100" value="18000">
+                <span class="val" id="hm-near-front-val">18000</span>
+            </label>
+            <label>
+                <span>Behind</span>
+                <input type="range" id="hm-near-behind" min="200" max="10000" step="100" value="2000">
+                <span class="val" id="hm-near-behind-val">2000</span>
+            </label>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Far ear shadow</div>
+            <label>
+                <span>Ratio</span>
+                <input type="range" id="hm-far-ratio" min="0" max="1" step="0.01" value="0.95">
+                <span class="val" id="hm-far-ratio-val">0.95</span>
+            </label>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Elevation influence (Hz)</div>
+            <label>
+                <span>Near</span>
+                <input type="range" id="hm-elev-near" min="0" max="10000" step="100" value="5000">
+                <span class="val" id="hm-elev-near-val">5000</span>
+            </label>
+            <label>
+                <span>Far</span>
+                <input type="range" id="hm-elev-far" min="0" max="10000" step="100" value="2000">
+                <span class="val" id="hm-elev-far-val">2000</span>
+            </label>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Cutoff clamps (Hz)</div>
+            <label>
+                <span>Min</span>
+                <input type="range" id="hm-min-cut" min="50" max="2000" step="50" value="200">
+                <span class="val" id="hm-min-cut-val">200</span>
+            </label>
+            <label>
+                <span>Max</span>
+                <input type="range" id="hm-max-cut" min="5000" max="22000" step="100" value="20000">
+                <span class="val" id="hm-max-cut-val">20000</span>
+            </label>
+        </div>
+    </div>
+
+    <button id="panel-toggle">H Show Panel</button>
+
     <script src="three.min.js"></script>
     <script src="main.js"></script>
 </body>
