@@ -165,5 +165,5 @@ Virtual time starts from the wall clock at initialization, so timers created dur
 - `[INFO]` and `[console.log]` lines go to stderr; REPL output goes to stdout. Separate them with `2>/dev/null`.
 - Screenshots are PNG format (typically 30-50KB for 1024x768).
 - The default viewport is 1024x768.
-- Audio bindings are installed but non-functional (AudioContext constructor throws; apps should catch and degrade gracefully).
+- Audio engine runs in headless mode (no audio device output). `advanceTime()` pumps the audio DSP pipeline, so voices, effects, sequencer, metering, recording, and FFT analysis all work. Use `getBusPeakL/R()`, `getBusRmsL/R()`, `getSpectrum()`, and `stopRecording()` to inspect audio output numerically.
 - In the REPL, the prompt (`bro>`) is printed to stderr so it doesn't contaminate piped output.

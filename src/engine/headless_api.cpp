@@ -25,6 +25,8 @@
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_scene.h"
 
+#include <broaudio/engine.h>
+
 #include <stb_image_write.h>
 
 #include <include/core/SkCanvas.h>
@@ -98,6 +100,13 @@ void Engine::advanceTime(double ms) {
             webglScene->webglContext()->unbindCanvasFBO();
 
         flush();
+
+        // Pump headless audio engine: render frames matching this time step
+        if (audioEngine_) {
+            int audioFrames = static_cast<int>(step * audioEngine_->sampleRate() / 1000.0 + 0.5);
+            if (audioFrames > 0)
+                audioEngine_->renderBlock(audioFrames);
+        }
 
         // Periodic GC + orphan sweep (every ~1s of virtual time)
         if (virtualTime_ - lastGCMs_ >= kGCIntervalMs) {

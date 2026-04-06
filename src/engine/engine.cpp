@@ -138,13 +138,13 @@ Engine::Engine(const EngineConfig& config)
     js::Timers::install(jsRuntime_->getContext(), timers_.get());
 
     // 4b. Audio engine + bindings
+    audioEngine_ = std::make_unique<broaudio::Engine>();
     if (displayMode_ == DisplayMode::Windowed) {
-        audioEngine_ = std::make_unique<broaudio::Engine>();
         audioEngine_->init();
-        js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
     } else {
-        js::AudioBindings::install(jsRuntime_->getContext(), nullptr);
+        audioEngine_->initHeadless();
     }
+    js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
 
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
