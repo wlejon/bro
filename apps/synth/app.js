@@ -1480,7 +1480,10 @@
             $$('#seq-mode-btns .btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             var layer = Synth.Layers.getActive();
-            if (layer) layer.mode = btn.getAttribute('data-mode');
+            if (layer) {
+                layer.mode = btn.getAttribute('data-mode');
+                if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+            }
             buildLayerRows();
         });
     });
@@ -1490,7 +1493,11 @@
             $$('#arp-pattern-btns .btn').forEach(function(b) { b.classList.remove('active'); });
             btn.classList.add('active');
             var layer = Synth.Layers.getActive();
-            if (layer) { layer.arpPattern = btn.getAttribute('data-pattern'); layer.arpIndex = 0; }
+            if (layer) {
+                layer.arpPattern = btn.getAttribute('data-pattern');
+                layer.arpIndex = 0;
+                if (Synth.Sequencer.isPlaying()) Synth.Sequencer.rebuild();
+            }
         });
     });
 

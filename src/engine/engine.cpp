@@ -839,7 +839,10 @@ void Engine::run() {
             if (sl) sl->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
         }
 
-        // 5f. Render pass 2: composite UI overlay (premultiplied alpha)
+        // 5f. Render pass 2: composite canvas textures (below UI, above background)
+        compositeCanvasScenes(viewportWidth_, viewportHeight_);
+
+        // 5f2. Render pass 3: composite UI overlay on top (premultiplied alpha)
         GLuint uiTex = skia->getUITexture();
         if (uiTex) {
             float w = (float)viewportWidth_, h = (float)viewportHeight_;
@@ -874,9 +877,6 @@ void Engine::run() {
 
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
-
-        // 5f2. Composite canvas FBO textures ON TOP of the UI (like a browser)
-        compositeCanvasScenes(viewportWidth_, viewportHeight_);
 
         // 5g. Render pass 3: composite system overlay (premultiplied alpha)
         if (systemOverlay_ && systemOverlay_->isVisible()) {

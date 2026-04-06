@@ -173,6 +173,17 @@
             currentStep = newStep;
             if (onStepCallback) onStepCallback(currentStep);
 
+            // Re-randomize arp notes each loop so "random" isn't static
+            if (currentStep === 0) {
+                var Layers = Synth.Layers;
+                for (var ri = 0; ri < layerSequences.length; ri++) {
+                    var rl = Layers.get(layerSequences[ri].layerIdx);
+                    if (rl && rl.mode === 'arpeggiator' && rl.arpPattern === 'random') {
+                        loadLayerNotes(layerSequences[ri].seq, rl);
+                    }
+                }
+            }
+
             if (currentStep === 0 && onLoopCompleteCallback) {
                 var cb = onLoopCompleteCallback;
                 onLoopCompleteCallback = null;
