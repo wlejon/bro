@@ -1,5 +1,4 @@
 #include "layout/el_svg.h"
-#include "svg/svg_parser.h"
 #include "svg/svg_renderer.h"
 #include "dom/element.h"
 #include "render/renderer.h"
@@ -36,8 +35,7 @@ void ElSvg::draw(render::Renderer* renderer,
     float h = box.contentRect.height;
 
     if (w > 0 && h > 0) {
-        auto svgRoot = svg::parseSvgTree(elem);
-        svg::renderSvg(renderer, svgRoot, x, y, w, h);
+        svg::renderSvg(renderer, elem, x, y, w, h);
     }
 }
 

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <sstream>
+#include <unordered_map>
 
 namespace bro::dom {
 
@@ -194,15 +195,113 @@ static std::string htmlEscapeAttr(const std::string& val) {
     return result;
 }
 
+// HTML5 spec: SVG elements that require mixed-case tag names.
+// Maps UPPERCASED tag → correct SVG casing.
+static const std::unordered_map<std::string, std::string> kSvgTagCaseMap = {
+    {"CLIPPATH", "clipPath"},
+    {"LINEARGRADIENT", "linearGradient"},
+    {"RADIALGRADIENT", "radialGradient"},
+    {"TEXTPATH", "textPath"},
+    {"FEBLEND", "feBlend"},
+    {"FECOLORMATRIX", "feColorMatrix"},
+    {"FECOMPONENTTRANSFER", "feComponentTransfer"},
+    {"FECOMPOSITE", "feComposite"},
+    {"FEDIFFUSELIGHTING", "feDiffuseLighting"},
+    {"FEDISPLACEMENTMAP", "feDisplacementMap"},
+    {"FEDISTANTLIGHT", "feDistantLight"},
+    {"FEDROPSHADOW", "feDropShadow"},
+    {"FEFLOOD", "feFlood"},
+    {"FEFUNCA", "feFuncA"},
+    {"FEFUNCB", "feFuncB"},
+    {"FEFUNCG", "feFuncG"},
+    {"FEFUNCR", "feFuncR"},
+    {"FEGAUSSIANBLUR", "feGaussianBlur"},
+    {"FEIMAGE", "feImage"},
+    {"FEMERGE", "feMerge"},
+    {"FEMERGENODE", "feMergeNode"},
+    {"FEMORPHOLOGY", "feMorphology"},
+    {"FEOFFSET", "feOffset"},
+    {"FEPOINTLIGHT", "fePointLight"},
+    {"FESPECULARLIGHTING", "feSpecularLighting"},
+    {"FESPOTLIGHT", "feSpotLight"},
+    {"FETILE", "feTile"},
+    {"FETURBULENCE", "feTurbulence"},
+    {"FOREIGNOBJECT", "foreignObject"},
+    {"GLYPHREF", "glyphRef"},
+    {"ALTGLYPH", "altGlyph"},
+    {"ALTGLYPHDEF", "altGlyphDef"},
+    {"ALTGLYPHITEM", "altGlyphItem"},
+    {"ANIMATECOLOR", "animateColor"},
+    {"ANIMATEMOTION", "animateMotion"},
+    {"ANIMATETRANSFORM", "animateTransform"},
+};
+
+static std::string svgCorrectTagName(const std::string& upperTag) {
+    auto it = kSvgTagCaseMap.find(upperTag);
+    if (it != kSvgTagCaseMap.end()) return it->second;
+    // Default: lowercase (works for svg, rect, circle, path, g, defs, etc.)
+    std::string lower = upperTag;
+    for (auto& c : lower)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return lower;
+}
+
+// SVG attributes that need mixed-case (gumbo lowercases all attributes).
+static const std::unordered_map<std::string, std::string> kSvgAttrCaseMap = {
+    // Core SVG attributes
+    {"viewbox", "viewBox"},
+    {"preserveaspectratio", "preserveAspectRatio"},
+    // Gradient attributes
+    {"gradientunits", "gradientUnits"},
+    {"gradienttransform", "gradientTransform"},
+    {"spreadmethod", "spreadMethod"},
+    // Pattern attributes
+    {"patternunits", "patternUnits"},
+    {"patterntransform", "patternTransform"},
+    {"patterncontentunits", "patternContentUnits"},
+    // Filter attributes
+    {"filterunits", "filterUnits"},
+    {"stddeviation", "stdDeviation"},
+    {"basefrequency", "baseFrequency"},
+    {"numoctaves", "numOctaves"},
+    {"kernelunitlength", "kernelUnitLength"},
+    {"surfacescale", "surfaceScale"},
+    {"diffuseconstant", "diffuseConstant"},
+    {"specularconstant", "specularConstant"},
+    {"specularexponent", "specularExponent"},
+    {"limitingconeangle", "limitingConeAngle"},
+    {"pointsatx", "pointsAtX"},
+    {"pointsaty", "pointsAtY"},
+    {"pointsatz", "pointsAtZ"},
+    {"xchannelselector", "xChannelSelector"},
+    {"ychannelselector", "yChannelSelector"},
+    {"tablevalues", "tableValues"},
+    // Clip / Mask attributes
+    {"clippathunits", "clipPathUnits"},
+    {"maskunits", "maskUnits"},
+    {"maskcontentunits", "maskContentUnits"},
+    // Marker attributes
+    {"markerunits", "markerUnits"},
+    {"markerwidth", "markerWidth"},
+    {"markerheight", "markerHeight"},
+    {"refx", "refX"},
+    {"refy", "refY"},
+    // Text attributes
+    {"startoffset", "startOffset"},
+    {"textlength", "textLength"},
+    {"lengthadjust", "lengthAdjust"},
+    // Namespace prefixed
+    {"xlink:href", "xlink:href"},
+};
+
 std::string Element::outerHTML() const {
     std::ostringstream oss;
-    std::string lower_tag = tag_;
-    for (auto& c : lower_tag) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    oss << "<" << lower_tag;
+    std::string serialized_tag = svgCorrectTagName(tag_);
+    oss << "<" << serialized_tag;
     for (const auto& [key, val] : attributes_) {
-        oss << " " << key << "=\"" << htmlEscapeAttr(val) << "\"";
+        auto attrIt = kSvgAttrCaseMap.find(key);
+        const std::string& attrName = (attrIt != kSvgAttrCaseMap.end()) ? attrIt->second : key;
+        oss << " " << attrName << "=\"" << htmlEscapeAttr(val) << "\"";
     }
     if (attributes_.find("style") == attributes_.end()) {
         std::string css = style_.cssText();
@@ -212,7 +311,7 @@ std::string Element::outerHTML() const {
     }
     oss << ">";
     oss << innerHTML();
-    oss << "</" << lower_tag << ">";
+    oss << "</" << serialized_tag << ">";
     return oss.str();
 }
 

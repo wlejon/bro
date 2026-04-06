@@ -120,7 +120,18 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
             GumboVector* attrs = &child->v.element.attributes;
             for (unsigned int j = 0; j < attrs->length; ++j) {
                 auto* attr = static_cast<GumboAttribute*>(attrs->data[j]);
-                childElem->setAttribute(attr->name, attr->value ? attr->value : "");
+                std::string attrName = attr->name;
+                // Reconstruct namespace prefix for SVG/XML attributes
+                switch (attr->attr_namespace) {
+                    case GUMBO_ATTR_NAMESPACE_XLINK:
+                        attrName = "xlink:" + attrName; break;
+                    case GUMBO_ATTR_NAMESPACE_XML:
+                        attrName = "xml:" + attrName; break;
+                    case GUMBO_ATTR_NAMESPACE_XMLNS:
+                        if (attrName != "xmlns") attrName = "xmlns:" + attrName; break;
+                    default: break;
+                }
+                childElem->setAttribute(attrName, attr->value ? attr->value : "");
             }
 
             parentElem->appendChild(childElem);

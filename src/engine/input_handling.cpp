@@ -1443,7 +1443,6 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     // Check if target or an ancestor is a scrollable overflow element
     {
         auto* el = target;
-        bool blockedByHidden = false;
         while (el) {
             std::string ov = getOverflowY(el->computedStyle());
             if (overflowScrollable(ov)) {
@@ -1459,15 +1458,11 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
                 uiDirty_ = true;
                 return;
             }
-            if (ov == "hidden") {
-                blockedByHidden = true;
-                break;
-            }
+            // overflow:hidden means this element isn't scrollable, but wheel
+            // events should still propagate to scrollable ancestors (matches
+            // browser behavior). Just skip and keep walking up.
             el = composedParent(el);
         }
-
-        // overflow:hidden ancestor blocks viewport scroll too
-        if (blockedByHidden) return;
     }
 
     // Viewport scrolling

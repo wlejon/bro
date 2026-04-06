@@ -124,6 +124,10 @@ private:
     }
 
     static void buildChildren(LayoutNodeAdapter* parent, dom::Element* elem) {
+        // SVG is a replaced element — its content is rendered by SkSVGDOM,
+        // not by CSS layout. Don't descend into SVG children.
+        if (elem->svgControl()) return;
+
         // If element has shadow DOM, use composed children (top-level slot replacement)
         std::vector<dom::Node*> childNodes;
         dom::ShadowRoot* sr = nullptr;

@@ -44,6 +44,8 @@ build_config() {
         skia_use_system_harfbuzz=false
         skia_use_gl=true
         skia_enable_ganesh=true
+        skia_enable_svg=true
+        skia_use_expat=true
         skia_use_x11=false
         skia_use_dng_sdk=false
         skia_use_piex=false
