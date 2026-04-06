@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <glad/gl.h>
+#include <include/core/SkSurface.h>
 
 
 namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
@@ -129,6 +130,8 @@ private:
     void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
     void compositeCanvasScenes(int w, int h);
     void compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO);
+    void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
+    void compositeLayers();
     void ensureReplacedElements(dom::Element* elem);
 
     DisplayMode displayMode_;
@@ -150,6 +153,23 @@ private:
     AppManifest manifest_;
     std::vector<std::unique_ptr<render::SceneLayer>> sceneLayers_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
+
+    // Compositing layers — ordered list of HTML and canvas layers
+    // built during the draw traversal for correct DOM stacking order.
+    struct UILayer {
+        enum Type { HTML, Canvas };
+        Type type;
+        // HTML: Skia surface + GL texture
+        sk_sp<SkSurface> surface;
+        GLuint texture = 0;
+        // Canvas: reference to CanvasScene + layout rect
+        canvas::CanvasScene* canvasScene = nullptr;
+        float cx = 0, cy = 0, cw = 0, ch = 0;
+    };
+    std::vector<UILayer> uiLayers_;
+    // Pool of reusable Skia surfaces for HTML layers
+    std::vector<sk_sp<SkSurface>> htmlSurfacePool_;
+    int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<SystemOverlay> systemOverlay_;
 

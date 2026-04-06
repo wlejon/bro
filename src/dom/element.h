@@ -137,6 +137,10 @@ public:
     void setSelectControl(std::unique_ptr<layout::ElSelect> ctrl);
     void setSvgControl(std::unique_ptr<layout::ElSvg> ctrl);
 
+    // Canvas scene (opaque pointer — set by engine, read by draw traversal)
+    void setCanvasScene(void* scene) { canvasScene_ = scene; }
+    void* canvasScene() const { return canvasScene_; }
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -161,6 +165,7 @@ private:
     std::unique_ptr<layout::ElTextarea> textareaControl_;
     std::unique_ptr<layout::ElSelect> selectControl_;
     std::unique_ptr<layout::ElSvg> svgControl_;
+    void* canvasScene_ = nullptr;
 };
 
 // Template implementation — must be in header

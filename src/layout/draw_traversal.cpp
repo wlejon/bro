@@ -3,6 +3,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
+#include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -259,6 +260,19 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         if (needsClip) {
             renderer_->restore();
         }
+        if (hasOpacity) renderer_->restore();
+        return;
+    }
+
+    // Canvas elements: trigger a layer break so the compositor can
+    // interleave canvas textures with HTML layers in document order.
+    if (elem->canvasScene() && visible) {
+        auto* scene = static_cast<canvas::CanvasScene*>(elem->canvasScene());
+        if (layerBreakCb_) {
+            layerBreakCb_(scene, x, y, w, h);
+        }
+        // Canvas children are fallback content — skip when scene is active
+        if (needsClip) renderer_->restore();
         if (hasOpacity) renderer_->restore();
         return;
     }

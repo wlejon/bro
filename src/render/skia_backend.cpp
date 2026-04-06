@@ -528,6 +528,39 @@ void SkiaRenderer::uploadToGPU() {
                          GL_BGRA, GL_UNSIGNED_BYTE);
 }
 
+sk_sp<SkSurface> SkiaRenderer::switchSurface(sk_sp<SkSurface> newSurface) {
+    // Restore the save() from beginFrame on the current surface
+    if (canvas_) canvas_->restore();
+
+    auto prev = surface_;
+    surface_ = std::move(newSurface);
+    canvas_ = surface_ ? surface_->getCanvas() : nullptr;
+
+    if (canvas_) {
+        canvas_->clear(SK_ColorTRANSPARENT);
+        canvas_->save();
+    }
+
+    return prev;
+}
+
+GLuint SkiaRenderer::uploadSurfaceToTexture(SkSurface* surface, GLuint existingTex) {
+    if (!surface || !gl_) return 0;
+
+    SkPixmap pixmap;
+    if (!surface->peekPixels(&pixmap)) return 0;
+
+    int w = static_cast<int>(pixmap.width());
+    int h = static_cast<int>(pixmap.height());
+
+    GLuint tex = existingTex;
+    if (!tex) {
+        tex = gl_->createTexture2D(w, h, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
+    }
+    gl_->uploadTexture2D(tex, pixmap.addr(), w, h, GL_BGRA, GL_UNSIGNED_BYTE);
+    return tex;
+}
+
 GLuint SkiaRenderer::renderTextToTexture(std::string_view text,
                                           uint64_t font_handle,
                                           Color color,

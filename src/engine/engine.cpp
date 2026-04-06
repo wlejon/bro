@@ -259,6 +259,7 @@ Engine::Engine(const EngineConfig& config)
                         }, el);
                     }
                     auto* ptr = scene.get();
+                    if (el) el->setCanvasScene(ptr);
                     addCanvasScene(std::move(scene));
                     return js::CanvasBindings::wrapContext2D(ctx, ptr);
                 }
@@ -302,6 +303,7 @@ Engine::Engine(const EngineConfig& config)
                     }, el);
                 }
                 auto* ptr = scene.get();
+                if (el) el->setCanvasScene(ptr);
                 scene->init(nullptr);
                 canvasScenes_.push_back(std::move(scene));
                 return js::CanvasBindings::wrapContext2D(ctx, ptr);
@@ -454,6 +456,70 @@ void Engine::compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint t
 
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void Engine::drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
+    if (!tex || !gl_) return;
+
+    render::TextureVertex quad[6] = {
+        {x,   y,   0, 0}, {x+w, y,   1, 0}, {x+w, y+h, 1, 1},
+        {x,   y,   0, 0}, {x+w, y+h, 1, 1}, {x,   y+h, 0, 1},
+    };
+
+    glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+
+    glBindVertexArray(uiQuadVAO_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                          (void*)offsetof(render::TextureVertex, u));
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+void Engine::compositeLayers() {
+    if (!gl_) return;
+
+    auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+    if (!skia) return;
+
+    float vw = static_cast<float>(viewportWidth_);
+    float vh = static_cast<float>(viewportHeight_);
+
+    glUseProgram(gl_->textureProgram());
+    float viewport[2] = {vw, vh};
+    glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+    glUniform1i(gl_->textureSamplerLoc(), 0);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_SCISSOR_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    for (auto& layer : uiLayers_) {
+        if (layer.type == UILayer::HTML) {
+            if (layer.texture) {
+                drawTexturedQuad(layer.texture, 0, 0, vw, vh);
+            }
+        } else {
+            // Canvas layer — upload fresh pixels and draw at layout position
+            if (layer.canvasScene) {
+                layer.canvasScene->rasterize(gl_.get());
+                GLuint tex = layer.canvasScene->texture();
+                if (tex) {
+                    // Canvas textures use non-premultiplied alpha
+                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    drawTexturedQuad(tex, layer.cx, layer.cy, layer.cw, layer.ch);
+                    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                }
+            }
+        }
+    }
 }
 
 Engine::~Engine() {
@@ -720,12 +786,67 @@ void Engine::run() {
 
         // === GPU FRAME (OpenGL) ===
 
-        // 5a. Rasterize UI to Skia surface (CPU) if dirty
+        // 5a. Rasterize HTML layers to Skia surfaces if dirty
         double tRaster = tLayout;
         if (uiDirty_ || !hasRenderedOnce_) {
-            renderer_->beginFrame(viewportWidth_, viewportHeight_);
+            // Invalidate surface pool on viewport resize
+            if (htmlSurfacePoolW_ != viewportWidth_ || htmlSurfacePoolH_ != viewportHeight_) {
+                htmlSurfacePool_.clear();
+                for (auto& layer : uiLayers_) {
+                    if (layer.type == UILayer::HTML && layer.texture) {
+                        gl_->deleteTexture(layer.texture);
+                        layer.texture = 0;
+                    }
+                }
+                uiLayers_.clear();
+                htmlSurfacePoolW_ = viewportWidth_;
+                htmlSurfacePoolH_ = viewportHeight_;
+            }
+
+            // Reset layer list for this frame
+            uiLayers_.clear();
+            int htmlLayerIdx = 0;
+
+            // Set up layer break callback — when the draw traversal hits
+            // a <canvas>, we finalize the current HTML layer and start a new one.
+            drawTraversal_->setLayerBreakCallback(
+                [this, skia, &htmlLayerIdx](canvas::CanvasScene* scene,
+                                            float x, float y, float w, float h) {
+                    // Start next HTML layer with a pooled surface
+                    htmlLayerIdx++;
+                    while (htmlLayerIdx >= (int)htmlSurfacePool_.size()) {
+                        htmlSurfacePool_.push_back(SkSurfaces::Raster(
+                            SkImageInfo::MakeN32Premul(viewportWidth_, viewportHeight_)));
+                    }
+                    // Switch to new surface; the previous surface becomes an HTML layer
+                    auto prevSurf = skia->switchSurface(htmlSurfacePool_[htmlLayerIdx]);
+                    UILayer htmlLayer;
+                    htmlLayer.type = UILayer::HTML;
+                    htmlLayer.surface = std::move(prevSurf);
+                    uiLayers_.push_back(std::move(htmlLayer));
+
+                    // Insert canvas layer
+                    UILayer canvasLayer;
+                    canvasLayer.type = UILayer::Canvas;
+                    canvasLayer.canvasScene = scene;
+                    canvasLayer.cx = x; canvasLayer.cy = y;
+                    canvasLayer.cw = w; canvasLayer.ch = h;
+                    uiLayers_.push_back(std::move(canvasLayer));
+                });
 
             double tDraw0 = util::currentTimeMs();
+
+            renderer_->beginFrame(viewportWidth_, viewportHeight_);
+
+            // Ensure pool has a surface for HTML layer 0
+            if (htmlSurfacePool_.empty()) {
+                htmlSurfacePool_.push_back(SkSurfaces::Raster(
+                    SkImageInfo::MakeN32Premul(viewportWidth_, viewportHeight_)));
+            }
+            // Switch to pool surface for HTML layer 0; renderer's
+            // own surface is saved and restored at endFrame.
+            auto origSurface = skia->switchSurface(htmlSurfacePool_[0]);
+
             if (document_ && document_->documentElement()) {
                 drawTraversal_->draw(document_->documentElement(), 0, -scrollY_,
                                      viewportWidth_, viewportHeight_);
@@ -785,7 +906,6 @@ void Engine::run() {
                                 bx + bw - es.width - es.margin,
                                 by, bh, contentH, viewH,
                                 elem->scrollTopValue());
-                            // Use per-element hover/drag state for visual feedback
                             bool isHovered = (scrollbarHoveredElement_ == elem);
                             bool isDragging = (scrollbarDragTarget_ == elem);
                             elementScrollbar_.drawWithState(renderer_.get(), m,
@@ -793,7 +913,6 @@ void Engine::run() {
                         }
                     }
 
-                    // Recurse into composed children (shadow DOM aware)
                     float childOffsetX = absX;
                     float childOffsetY = absY - elem->scrollTopValue();
                     elem->forEachComposedChild([&](dom::Element* child) {
@@ -804,79 +923,58 @@ void Engine::run() {
                                    0.0f, -scrollY_);
             }
 
+            // Capture the current (last) HTML layer
+            auto lastPoolSurf = skia->switchSurface(origSurface);
+            UILayer lastHtml;
+            lastHtml.type = UILayer::HTML;
+            lastHtml.surface = std::move(lastPoolSurf);
+            uiLayers_.push_back(std::move(lastHtml));
+
             renderer_->endFrame();
+
+            // Upload each HTML layer surface to its own GL texture
+            for (auto& layer : uiLayers_) {
+                if (layer.type == UILayer::HTML && layer.surface) {
+                    layer.texture = skia->uploadSurfaceToTexture(
+                        layer.surface.get(), layer.texture);
+                }
+            }
+
+            drawTraversal_->setLayerBreakCallback(nullptr);
             hasRenderedOnce_ = true;
             uiDirty_ = false;
             tRaster = util::currentTimeMs();
         }
 
-        // 5b. Upload Skia pixels to GL texture
-        double tUpload0 = util::currentTimeMs();
-        skia->uploadToGPU();
-        accumUploadMs_ += util::currentTimeMs() - tUpload0;
-        accumRasterMs_ += util::currentTimeMs() - tLayout;
+        accumRasterMs_ += tRaster - tLayout;
 
         double tGpu = util::currentTimeMs();
 
-        // 5c. Rasterize canvas scenes into their per-canvas FBOs
+        // 5b. Update canvas scene scroll + clean up detached
         for (auto& cs : canvasScenes_) {
             cs->setViewportScroll(scrollY_);
-            cs->rasterize(gl_.get());
+            cs->checkDetached();
         }
         canvasScenes_.erase(
             std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
                 [](auto& cs) { return cs->isDetached(); }),
             canvasScenes_.end());
 
-        // 5d. Set viewport and clear
+        // 5c. Set viewport and clear
         glViewport(0, 0, viewportWidth_, viewportHeight_);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // 5e. Render pass 1: scene layers (WebGL etc.) draw to default framebuffer
+        // 5d. Render pass 1: scene layers (WebGL etc.) draw to default framebuffer
         for (auto& sl : sceneLayers_) {
             if (sl) sl->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
         }
 
-        // 5f. Render pass 2: composite canvas textures (below UI, above background)
-        compositeCanvasScenes(viewportWidth_, viewportHeight_);
-
-        // 5f2. Render pass 3: composite UI overlay on top (premultiplied alpha)
-        GLuint uiTex = skia->getUITexture();
-        if (uiTex) {
-            float w = (float)viewportWidth_, h = (float)viewportHeight_;
-            render::TextureVertex quad[6] = {
-                {0, 0, 0, 0}, {w, 0, 1, 0}, {w, h, 1, 1},
-                {0, 0, 0, 0}, {w, h, 1, 1}, {0, h, 0, 1},
-            };
-
-            glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
-            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-
-            glBindVertexArray(uiQuadVAO_);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
-                                  (void*)offsetof(render::TextureVertex, u));
-
-            glUseProgram(gl_->textureProgram());
-            float viewport[2] = {w, h};
-            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
-            glUniform1i(gl_->textureSamplerLoc(), 0);
-
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_SCISSOR_TEST);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, uiTex);
-
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-        }
+        // 5e. Render pass 2: composite UI layers in DOM order
+        //     HTML layers (cached textures) interleaved with canvas layers
+        //     (freshly uploaded textures). Correct document-order stacking.
+        compositeLayers();
 
         // 5g. Render pass 3: composite system overlay (premultiplied alpha)
         if (systemOverlay_ && systemOverlay_->isVisible()) {

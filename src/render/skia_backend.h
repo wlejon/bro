@@ -92,6 +92,15 @@ public:
     /// Upload Skia pixels to the GL texture. Call after endFrame().
     void uploadToGPU();
 
+    /// Switch the active drawing surface mid-frame (for compositing layers).
+    /// Returns the previous surface. The new surface is cleared to transparent.
+    /// Call between beginFrame() and endFrame().
+    sk_sp<SkSurface> switchSurface(sk_sp<SkSurface> newSurface);
+
+    /// Upload any Skia raster surface to a GL texture.
+    /// Reuses existingTex if size matches, otherwise creates a new one.
+    GLuint uploadSurfaceToTexture(SkSurface* surface, GLuint existingTex = 0);
+
     /// Access the UI overlay GL texture (BGRA8, premultiplied alpha).
     GLuint getUITexture() const { return uiTexture_; }
 

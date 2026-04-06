@@ -162,8 +162,13 @@ public:
         h = static_cast<float>(surfHeight_);
     }
 
-    /// Mark the canvas as dirty (needing GL texture re-upload).
+    /// Mark the canvas as dirty (needing re-rasterization).
     void markDirty() { dirty_ = true; }
+    bool isDirty() const { return dirty_; }
+    void clearDirty() { dirty_ = false; }
+    void checkDetached() {
+        if (detachedCb_ && detachedCb_(detachedUd_)) detached_ = true;
+    }
 
 private:
     int queryLayoutWidth() const;

@@ -2,10 +2,12 @@
 
 #include "layout/font_manager.h"
 #include "render/renderer.h"
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+namespace bro::canvas { class CanvasScene; }
 namespace bro::dom { class Element; class Node; }
 
 namespace bro::layout {
@@ -34,6 +36,13 @@ public:
 
     // Set base path for resolving relative image URLs
     void setBasePath(const std::string& path) { basePath_ = path; }
+
+    // Layer break callback: invoked when a canvas element is encountered
+    // during traversal. The compositor uses this to split HTML rendering
+    // into separate layers around canvas elements.
+    using LayerBreakCallback = std::function<void(canvas::CanvasScene* scene,
+                                                   float x, float y, float w, float h)>;
+    void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
 
     // Viewport
     void setViewport(int w, int h) { viewportW_ = w; viewportH_ = h; }
@@ -66,6 +75,7 @@ private:
     int viewportH_ = 0;
 
     std::unordered_map<std::string, CachedImage> imageCache_;
+    LayerBreakCallback layerBreakCb_;
 };
 
 } // namespace bro::layout
