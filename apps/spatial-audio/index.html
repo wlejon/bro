@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        html, body { margin: 0; overflow: hidden; background: transparent; }
+        canvas { width: 100%; height: 100%; display: block; }
+        #hud {
+            position: absolute; top: 0; left: 0; right: 0;
+            pointer-events: none; padding: 12px; font-family: monospace;
+            color: #fff; text-shadow: 0 0 4px #000, 0 0 8px #000;
+            font-size: 13px; line-height: 1.5;
+        }
+        #hud .zone { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+        #hud .help { position: fixed; bottom: 12px; left: 12px; opacity: 0.6; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <canvas id="c" width="1024" height="768"></canvas>
+    <div id="hud">
+        <div class="zone" id="zone-label">---</div>
+        <div id="pos-label">0, 0, 0</div>
+        <div class="help">WASD move &middot; Space up &middot; Ctrl down &middot; Mouse drag look &middot; Walk between zones to hear the difference</div>
+    </div>
+    <script src="three.min.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>

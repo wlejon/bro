@@ -1912,6 +1912,48 @@ static JSValue js_audioctx_processEffectsOffline(JSContext* ctx, JSValueConst th
     return arr;
 }
 
+// --- Voice lifecycle (raw integer ID) ---
+
+static JSValue js_audioctx_createVoice(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d) return JS_UNDEFINED;
+    return JS_NewInt32(ctx, d->engine->createVoice());
+}
+
+static JSValue js_audioctx_removeVoice(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    d->engine->removeVoice(voiceId);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_startVoice(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double when; JS_ToFloat64(ctx, &when, argv[1]);
+    d->engine->startVoice(voiceId, when);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_stopVoice(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double when; JS_ToFloat64(ctx, &when, argv[1]);
+    d->engine->stopVoice(voiceId, when);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoicePersistent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    d->engine->setVoicePersistent(voiceId, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
 // --- Voice note context ---
 
 static JSValue js_audioctx_setVoiceNote(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2023,6 +2065,43 @@ static JSValue js_audioctx_setVoiceUnisonStereoWidth(JSContext* ctx, JSValueCons
     int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
     double v; JS_ToFloat64(ctx, &v, argv[1]);
     d->engine->setVoiceUnisonStereoWidth(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+// --- Per-voice filter ---
+
+static JSValue js_audioctx_setVoiceFilterEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    d->engine->setVoiceFilterEnabled(voiceId, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceFilterType(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    const char* s = JS_ToCString(ctx, argv[1]);
+    if (s) { d->engine->setVoiceFilterType(voiceId, parseFilterType(s)); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceFilterFrequency(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoiceFilterFrequency(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceFilterQ(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoiceFilterQ(voiceId, static_cast<float>(v));
     return JS_UNDEFINED;
 }
 
@@ -2167,6 +2246,153 @@ static JSValue js_audioctx_setListenerOrientation(JSContext* ctx, JSValueConst t
     d->engine->setListenerOrientation(
         static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(fz),
         static_cast<float>(ux), static_cast<float>(uy), static_cast<float>(uz));
+    return JS_UNDEFINED;
+}
+
+// --- Spatial sources (voice) ---
+
+static broaudio::DistanceModel parseDistanceModel(const char* s) {
+    if (strcmp(s, "linear") == 0) return broaudio::DistanceModel::Linear;
+    if (strcmp(s, "exponential") == 0) return broaudio::DistanceModel::Exponential;
+    return broaudio::DistanceModel::Inverse; // default
+}
+
+static JSValue js_audioctx_setVoiceSpatialEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    d->engine->setVoiceSpatialEnabled(voiceId, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceSpatialPosition(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 4) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double x, y, z;
+    JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]); JS_ToFloat64(ctx, &z, argv[3]);
+    d->engine->setVoiceSpatialPosition(voiceId, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceSpatialRefDistance(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoiceSpatialRefDistance(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceSpatialMaxDistance(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoiceSpatialMaxDistance(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceSpatialRolloff(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setVoiceSpatialRolloff(voiceId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setVoiceSpatialDistanceModel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    const char* s = JS_ToCString(ctx, argv[1]);
+    if (s) { d->engine->setVoiceSpatialDistanceModel(voiceId, parseDistanceModel(s)); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+// --- Spatial sources (clip playback) ---
+
+static JSValue js_audioctx_setPlaybackSpatialEnabled(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->setPlaybackSpatialEnabled(id, JS_ToBool(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackSpatialPosition(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 4) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double x, y, z;
+    JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]); JS_ToFloat64(ctx, &z, argv[3]);
+    d->engine->setPlaybackSpatialPosition(id, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackSpatialRefDistance(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setPlaybackSpatialRefDistance(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackSpatialMaxDistance(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setPlaybackSpatialMaxDistance(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackSpatialRolloff(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    double v; JS_ToFloat64(ctx, &v, argv[1]);
+    d->engine->setPlaybackSpatialRolloff(id, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackSpatialDistanceModel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    const char* s = JS_ToCString(ctx, argv[1]);
+    if (s) { d->engine->setPlaybackSpatialDistanceModel(id, parseDistanceModel(s)); JS_FreeCString(ctx, s); }
+    return JS_UNDEFINED;
+}
+
+// --- Aux sends ---
+
+static JSValue js_audioctx_setVoiceSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int voiceId, sendBusId; JS_ToInt32(ctx, &voiceId, argv[0]); JS_ToInt32(ctx, &sendBusId, argv[1]);
+    double v; JS_ToFloat64(ctx, &v, argv[2]);
+    d->engine->setVoiceSend(voiceId, sendBusId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setPlaybackSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int id, sendBusId; JS_ToInt32(ctx, &id, argv[0]); JS_ToInt32(ctx, &sendBusId, argv[1]);
+    double v; JS_ToFloat64(ctx, &v, argv[2]);
+    d->engine->setPlaybackSend(id, sendBusId, static_cast<float>(v));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_audioctx_setBusSend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = static_cast<AudioCtxData*>(JS_GetOpaque(this_val, js_audioctx_class_id));
+    if (!d || argc < 3) return JS_UNDEFINED;
+    int busId, sendBusId; JS_ToInt32(ctx, &busId, argv[0]); JS_ToInt32(ctx, &sendBusId, argv[1]);
+    double v; JS_ToFloat64(ctx, &v, argv[2]);
+    d->engine->setBusSend(busId, sendBusId, static_cast<float>(v));
     return JS_UNDEFINED;
 }
 
@@ -2598,6 +2824,13 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     // Offline effect processing
     JS_CFUNC_DEF("processEffectsOffline", 2, js_audioctx_processEffectsOffline),
 
+    // Voice lifecycle
+    JS_CFUNC_DEF("createVoice", 0, js_audioctx_createVoice),
+    JS_CFUNC_DEF("removeVoice", 1, js_audioctx_removeVoice),
+    JS_CFUNC_DEF("startVoice", 2, js_audioctx_startVoice),
+    JS_CFUNC_DEF("stopVoice", 2, js_audioctx_stopVoice),
+    JS_CFUNC_DEF("setVoicePersistent", 2, js_audioctx_setVoicePersistent),
+
     // Direct voice parameter control
     JS_CFUNC_DEF("setVoiceNote", 3, js_audioctx_setVoiceNote),
     JS_CFUNC_DEF("setVoiceWaveform", 2, js_audioctx_setVoiceWaveform),
@@ -2614,6 +2847,12 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     JS_CFUNC_DEF("setVoiceUnisonDetune", 2, js_audioctx_setVoiceUnisonDetune),
     JS_CFUNC_DEF("setVoiceUnisonStereoWidth", 2, js_audioctx_setVoiceUnisonStereoWidth),
 
+    // Per-voice filter
+    JS_CFUNC_DEF("setVoiceFilterEnabled", 2, js_audioctx_setVoiceFilterEnabled),
+    JS_CFUNC_DEF("setVoiceFilterType", 2, js_audioctx_setVoiceFilterType),
+    JS_CFUNC_DEF("setVoiceFilterFrequency", 2, js_audioctx_setVoiceFilterFrequency),
+    JS_CFUNC_DEF("setVoiceFilterQ", 2, js_audioctx_setVoiceFilterQ),
+
     // Bus effect order
     JS_CFUNC_DEF("setBusEffectOrder", 2, js_audioctx_setBusEffectOrder),
 
@@ -2626,9 +2865,30 @@ static const JSCFunctionListEntry js_audioctx_proto_funcs[] = {
     // Spectrum
     JS_CFUNC_DEF("getSpectrum", 1, js_audioctx_getSpectrum),
 
-    // Spatial audio
+    // Spatial audio — listener
     JS_CFUNC_DEF("setListenerPosition", 3, js_audioctx_setListenerPosition),
     JS_CFUNC_DEF("setListenerOrientation", 6, js_audioctx_setListenerOrientation),
+
+    // Spatial audio — voice sources
+    JS_CFUNC_DEF("setVoiceSpatialEnabled", 2, js_audioctx_setVoiceSpatialEnabled),
+    JS_CFUNC_DEF("setVoiceSpatialPosition", 4, js_audioctx_setVoiceSpatialPosition),
+    JS_CFUNC_DEF("setVoiceSpatialRefDistance", 2, js_audioctx_setVoiceSpatialRefDistance),
+    JS_CFUNC_DEF("setVoiceSpatialMaxDistance", 2, js_audioctx_setVoiceSpatialMaxDistance),
+    JS_CFUNC_DEF("setVoiceSpatialRolloff", 2, js_audioctx_setVoiceSpatialRolloff),
+    JS_CFUNC_DEF("setVoiceSpatialDistanceModel", 2, js_audioctx_setVoiceSpatialDistanceModel),
+
+    // Spatial audio — playback sources
+    JS_CFUNC_DEF("setPlaybackSpatialEnabled", 2, js_audioctx_setPlaybackSpatialEnabled),
+    JS_CFUNC_DEF("setPlaybackSpatialPosition", 4, js_audioctx_setPlaybackSpatialPosition),
+    JS_CFUNC_DEF("setPlaybackSpatialRefDistance", 2, js_audioctx_setPlaybackSpatialRefDistance),
+    JS_CFUNC_DEF("setPlaybackSpatialMaxDistance", 2, js_audioctx_setPlaybackSpatialMaxDistance),
+    JS_CFUNC_DEF("setPlaybackSpatialRolloff", 2, js_audioctx_setPlaybackSpatialRolloff),
+    JS_CFUNC_DEF("setPlaybackSpatialDistanceModel", 2, js_audioctx_setPlaybackSpatialDistanceModel),
+
+    // Aux sends
+    JS_CFUNC_DEF("setVoiceSend", 3, js_audioctx_setVoiceSend),
+    JS_CFUNC_DEF("setPlaybackSend", 3, js_audioctx_setPlaybackSend),
+    JS_CFUNC_DEF("setBusSend", 3, js_audioctx_setBusSend),
 
     // Factory methods
     JS_CFUNC_DEF("createVoiceAllocator", 1, js_audioctx_createVoiceAllocator),
