@@ -224,9 +224,9 @@ public:
 private:
     dom::Element* elem_;
 
-    static inline dom::Element* hoveredElement_ = nullptr;
-    static inline dom::Element* activeElement_ = nullptr;
-    static inline std::unordered_map<dom::Element*, std::unique_ptr<ElementRefAdapter>> cache_;
+    static inline thread_local dom::Element* hoveredElement_ = nullptr;
+    static inline thread_local dom::Element* activeElement_ = nullptr;
+    static inline thread_local std::unordered_map<dom::Element*, std::unique_ptr<ElementRefAdapter>> cache_;
 };
 
 } // namespace bro::layout

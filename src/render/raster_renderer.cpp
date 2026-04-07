@@ -115,6 +115,27 @@ uint64_t RasterRenderer::createFont(std::string_view family, float size, int wei
 #else
     sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #endif
+
+    // Map CSS generic family names to real font names (must match SkiaRenderer)
+    auto resolveGeneric = [](const std::string& name) -> const char* {
+#ifdef _WIN32
+        if (name == "sans-serif")  return "Arial";
+        if (name == "serif")       return "Times New Roman";
+        if (name == "monospace")   return "Consolas";
+        if (name == "cursive")     return "Comic Sans MS";
+        if (name == "fantasy")     return "Impact";
+        if (name == "system-ui")   return "Segoe UI";
+#else
+        if (name == "sans-serif")  return "Liberation Sans";
+        if (name == "serif")       return "Liberation Serif";
+        if (name == "monospace")   return "Liberation Mono";
+        if (name == "cursive")     return "DejaVu Sans";
+        if (name == "fantasy")     return "DejaVu Sans";
+        if (name == "system-ui")   return "Liberation Sans";
+#endif
+        return nullptr;
+    };
+
     // CSS font-family is comma-separated — try each name in order.
     sk_sp<SkTypeface> typeface;
     std::string families(family);
@@ -124,13 +145,18 @@ uint64_t RasterRenderer::createFont(std::string_view family, float size, int wei
         while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
         while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
         if (name.empty()) continue;
+        // Try CSS generic name first
+        const char* resolved = resolveGeneric(name);
+        if (resolved) {
+            typeface = mgr->matchFamilyStyle(resolved, style);
+            if (typeface) break;
+        }
         typeface = mgr->matchFamilyStyle(name.c_str(), style);
         if (typeface) break;
     }
     if (!typeface) typeface = mgr->matchFamilyStyle(nullptr, SkFontStyle());
     auto sk_font = std::make_unique<SkFont>(typeface, size);
-    sk_font->setEdging(SkFont::Edging::kSubpixelAntiAlias);
-    sk_font->setSubpixel(true);
+    sk_font->setEdging(SkFont::Edging::kAntiAlias);
     uint64_t handle = nextHandle_++;
     fonts_[handle] = { std::move(typeface), std::move(sk_font) };
     return handle;

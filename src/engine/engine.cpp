@@ -41,6 +41,7 @@
 
 #include <cstring>
 #include "layout/draw_traversal.h"
+#include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/layout_node_adapter.h"
@@ -564,6 +565,12 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers) {
 }
 
 Engine::~Engine() {
+    // Ensure layout thread is stopped (safety — normally joined in run())
+    if (layoutThread_.joinable()) {
+        layoutShared_.state.store(kLayoutShutdown, std::memory_order_release);
+        layoutShared_.state.notify_one();
+        layoutThread_.join();
+    }
     // Ensure raster thread is stopped (safety — normally joined in run())
     if (rasterThread_.joinable()) {
         rasterShared_.state.store(kRasterShutdown, std::memory_order_release);
@@ -584,6 +591,9 @@ Engine::~Engine() {
     sceneLayers_.clear();
     canvasScenes_.clear();
     systemOverlay_.reset();
+
+    // 0. Clear ElementRefAdapter cache (holds raw pointers to elements)
+    layout::ElementRefAdapter::clearCache();
 
     // 1. Clear timers (they hold JS callbacks)
     if (timers_ && jsRuntime_) {
@@ -672,6 +682,60 @@ static bool modalEventWatcher(void* userdata, SDL_Event* event)
         static_cast<Engine*>(userdata)->tickTimersOnly();
     }
     return true; // keep the event in the queue
+}
+
+// ---------------------------------------------------------------------------
+// Layout thread — owns style resolution + layout computation.
+// Reads DOM tree (read-only after JS phase), writes computedStyle_ and
+// layoutBox_ on each element. No GL needed — uses CPU-only RasterRenderer
+// for text measurement.
+// ---------------------------------------------------------------------------
+
+void Engine::layoutThreadFunc() {
+    // Thread-local renderer for text measurement (CPU-only, no GL required)
+    auto layoutRenderer = std::make_unique<render::RasterRenderer>();
+    layout::FontManager layoutFontManager;
+    layout::SkiaTextMetrics layoutTextMetrics(layoutRenderer.get(), &layoutFontManager);
+
+    LOG_INFO("Layout thread started");
+
+    while (true) {
+        layoutShared_.state.wait(kLayoutIdle, std::memory_order_acquire);
+        uint32_t s = layoutShared_.state.load(std::memory_order_acquire);
+
+        if (s == kLayoutShutdown) break;
+        if (s != kLayoutDomStable) continue;
+
+        layoutShared_.state.store(kLayoutBusy, std::memory_order_relaxed);
+
+        int vpW = layoutShared_.vpWidth.load(std::memory_order_relaxed);
+        int vpH = layoutShared_.vpHeight.load(std::memory_order_relaxed);
+
+        // Style resolution + layout computation
+        if (document_) {
+            document_->resolveStyles();
+            document_->clearStructureDirty();
+            document_->performLayout(static_cast<float>(vpW),
+                                     static_cast<float>(vpH),
+                                     layoutTextMetrics);
+            document_->clearDirty();
+        }
+
+        // Transition to done — use compare_exchange to avoid overwriting
+        // a pending kLayoutShutdown signal from the main thread.
+        uint32_t expected = kLayoutBusy;
+        if (layoutShared_.state.compare_exchange_strong(
+                expected, kLayoutDone,
+                std::memory_order_release, std::memory_order_acquire)) {
+            layoutShared_.state.notify_one();
+        } else {
+            // State was changed (shutdown) — exit
+            break;
+        }
+    }
+
+    layoutRenderer.reset();
+    LOG_INFO("Layout thread stopped");
 }
 
 // ---------------------------------------------------------------------------
@@ -871,12 +935,21 @@ void Engine::rasterThreadFunc() {
         GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glFlush();  // ensure fence is submitted to GPU command stream
 
-        // Publish results: fence, layer buffer, state
+        // Publish results: fence, layer buffer, state.
+        // Use compare_exchange to avoid overwriting a pending kRasterShutdown.
         rasterShared_.fenceSync.store(reinterpret_cast<uintptr_t>(fence),
                                        std::memory_order_relaxed);
         rasterShared_.frontBuffer.store(backIdx, std::memory_order_relaxed);
-        rasterShared_.state.store(kRasterTexturesReady, std::memory_order_release);
-        rasterShared_.state.notify_one();
+        uint32_t expected = kRasterBusy;
+        if (rasterShared_.state.compare_exchange_strong(
+                expected, kRasterTexturesReady,
+                std::memory_order_release, std::memory_order_acquire)) {
+            rasterShared_.state.notify_one();
+        } else {
+            // Shutdown requested while busy — clean up fence and exit
+            glDeleteSync(fence);
+            break;
+        }
     }
 
     // Cleanup
@@ -959,6 +1032,9 @@ void Engine::run() {
         }
     }
 
+    // Launch layout thread (style resolution + layout computation)
+    layoutThread_ = std::thread(&Engine::layoutThreadFunc, this);
+
     // Launch raster thread
     rasterThread_ = std::thread(&Engine::rasterThreadFunc, this);
 
@@ -1031,81 +1107,35 @@ void Engine::run() {
             lastGCMs_ = now;
         }
 
-        // 4. Re-layout when DOM is dirty.
-        //    Only run layout when the raster thread is idle — this ensures
-        //    layout writes (computed styles, layout boxes) never overlap with
-        //    the raster thread's read-only DOM traversal.
+        // 4. Signal layout thread when DOM is dirty.
+        //    Layout thread runs resolveStyles + performLayout on its own thread.
+        //    Only signal when layout thread idle AND raster thread idle — ensures
+        //    no overlap between layout writes, raster reads, and JS mutations.
+        //    ensureReplacedElements must run on main thread before layout (needs renderer).
 
         double tLayout = tJs;
+        bool layoutIdle = (layoutShared_.state.load(std::memory_order_acquire) == kLayoutIdle);
         bool rasterIdle = (rasterShared_.state.load(std::memory_order_acquire) == kRasterIdle);
+        bool layoutSignaled = false;
 
-        if (rasterIdle && document_ && (document_->isDirty() || !hasRenderedOnce_)) {
+        if (layoutIdle && rasterIdle && document_ && (document_->isDirty() || !hasRenderedOnce_)) {
             if (document_->isStructureDirty()) {
                 ensureReplacedElements(document_->documentElement());
             }
-            document_->resolveStyles();
-            document_->clearStructureDirty();
-            document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
-            document_->clearDirty();
-            // Update document height for scroll clamping
-            if (document_->documentElement()) {
-                auto& box = document_->documentElement()->layoutBox();
-                documentHeight_ = box.marginBox().height;
-            }
-
-            // Process auto-scroll-to-bottom for tracked overflow elements.
-            if (document_ && !document_->scrollToBottomElements().empty()) {
-                auto pending = document_->scrollToBottomElements();
-                for (auto* elem : pending) {
-                    std::string ov = getOverflowY(elem->computedStyle());
-                    if (overflowClips(ov)) {
-                        elem->setScrollTopValue(maxScrollTop(elem));
-                    }
-                    elem->setScrollToBottom(false);
-                }
-            }
-
-            // Notify ResizeObserver / IntersectionObserver after layout
-            if (jsRuntime_) {
-                auto* ctx = jsRuntime_->getContext();
-                if (JS_IsUndefined(observerCheckFn_)) {
-                    observerCheckFn_ = JS_Eval(ctx, js_observer_check,
-                                               strlen(js_observer_check),
-                                               "<observer-check>",
-                                               JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-                }
-                if (!JS_IsUndefined(observerCheckFn_) && !JS_IsException(observerCheckFn_)) {
-                    JSValue r = JS_EvalFunction(ctx, JS_DupValue(ctx, observerCheckFn_));
-                    JS_FreeValue(ctx, r);
-                }
-            }
-
-            uiDirty_ = true;
-            tLayout = util::currentTimeMs();
+            layoutShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
+            layoutShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
+            layoutShared_.state.store(kLayoutDomStable, std::memory_order_release);
+            layoutShared_.state.notify_one();
+            layoutSignaled = true;
         }
-        accumLayoutMs_ += tLayout - tJs;
+        accumLayoutMs_ += util::currentTimeMs() - tJs;
 
         // === GPU FRAME (threaded rasterization + main-thread compositing) ===
+        // Layout thread runs in parallel with composite + swap below.
 
-        // 5a. Signal raster thread if dirty + not throttled + raster idle.
-        //     Snapshot viewport, scroll, and document height for the raster thread.
-        double tRaster = tLayout;
-        bool uiThrottled = (now - lastUIRenderMs_ < kUIFrameIntervalMs);
-        if (rasterIdle && (uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
-            rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
-            rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
-            rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),
-                                             std::memory_order_relaxed);
-            rasterShared_.state.store(kRasterDomStable, std::memory_order_release);
-            rasterShared_.state.notify_one();
-            uiDirty_ = false;
-            hasRenderedOnce_ = true;
-            lastUIRenderMs_ = now;
-        }
-
-        // 5b. Signal canvas threads (each has its own GL context + GrDirectContext).
+        // 5a. Signal canvas threads (each has its own GL context + GrDirectContext).
         //     Done every frame since canvases animate independently of HTML layout.
-        //     Canvas threads run in parallel with the raster thread.
+        double tRaster = util::currentTimeMs();
         int front = rasterShared_.frontBuffer.load(std::memory_order_acquire);
         auto& frontLayers = layerBuffers_[front].layers;
         for (auto& layer : frontLayers) {
@@ -1114,9 +1144,8 @@ void Engine::run() {
             }
         }
         tRaster = util::currentTimeMs();
-        accumRasterMs_ += tRaster - tLayout;
 
-        // 5c. Check if raster thread has new textures ready.
+        // 5b. Check if raster thread has new textures ready.
         //     If so, wait on GL fence (GPU-side wait) and transition back to idle.
         if (rasterShared_.state.load(std::memory_order_acquire) == kRasterTexturesReady) {
             auto fence = reinterpret_cast<GLsync>(
@@ -1128,14 +1157,16 @@ void Engine::run() {
             // Re-read front buffer (raster thread may have flipped it)
             front = rasterShared_.frontBuffer.load(std::memory_order_acquire);
             rasterShared_.state.store(kRasterIdle, std::memory_order_release);
+            rasterIdle = true;
         }
 
-        // 5c2. Wait for canvas thread fences before compositing.
+        // 5b2. Wait for canvas thread fences before compositing.
         for (auto& layer : frontLayers) {
             if (layer.type == UILayer::Canvas && layer.canvasScene) {
                 layer.canvasScene->consumeFence();
             }
         }
+        accumRasterMs_ += util::currentTimeMs() - tRaster;
 
         double tGpu = util::currentTimeMs();
 
@@ -1230,6 +1261,88 @@ void Engine::run() {
         // Swap buffers (may block on vsync — not counted as GPU work)
         gl_->swapBuffers();
 
+        // 5j. Wait for layout thread and consume results.
+        //     Layout ran in parallel with composite+swap above.
+        if (layoutSignaled) {
+            // Wait for layout to finish (blocking — but it overlapped with composite)
+            uint32_t ls = layoutShared_.state.load(std::memory_order_acquire);
+            if (ls == kLayoutBusy || ls == kLayoutDomStable) {
+                layoutShared_.state.wait(kLayoutBusy, std::memory_order_acquire);
+                while (layoutShared_.state.load(std::memory_order_acquire) == kLayoutDomStable) {
+                    layoutShared_.state.wait(kLayoutDomStable, std::memory_order_acquire);
+                }
+                ls = layoutShared_.state.load(std::memory_order_acquire);
+            }
+
+            if (ls == kLayoutDone) {
+                layoutShared_.state.store(kLayoutIdle, std::memory_order_release);
+
+                // Update document height for scroll clamping
+                if (document_ && document_->documentElement()) {
+                    auto& box = document_->documentElement()->layoutBox();
+                    documentHeight_ = box.marginBox().height;
+                }
+
+                // Process auto-scroll-to-bottom for tracked overflow elements.
+                if (document_ && !document_->scrollToBottomElements().empty()) {
+                    auto pending = document_->scrollToBottomElements();
+                    for (auto* elem : pending) {
+                        std::string ov = getOverflowY(elem->computedStyle());
+                        if (overflowClips(ov)) {
+                            elem->setScrollTopValue(maxScrollTop(elem));
+                        }
+                        elem->setScrollToBottom(false);
+                    }
+                }
+
+                // Notify ResizeObserver / IntersectionObserver after layout
+                if (jsRuntime_) {
+                    auto* ctx = jsRuntime_->getContext();
+                    if (JS_IsUndefined(observerCheckFn_)) {
+                        observerCheckFn_ = JS_Eval(ctx, js_observer_check,
+                                                   strlen(js_observer_check),
+                                                   "<observer-check>",
+                                                   JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+                    }
+                    if (!JS_IsUndefined(observerCheckFn_) && !JS_IsException(observerCheckFn_)) {
+                        JSValue r = JS_EvalFunction(ctx, JS_DupValue(ctx, observerCheckFn_));
+                        JS_FreeValue(ctx, r);
+                    }
+                }
+
+                uiDirty_ = true;
+
+                // Signal raster thread now that layout is complete.
+                rasterIdle = (rasterShared_.state.load(std::memory_order_acquire) == kRasterIdle);
+                bool uiThrottled = (now - lastUIRenderMs_ < kUIFrameIntervalMs);
+                if (rasterIdle && !uiThrottled) {
+                    rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
+                    rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
+                    rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),
+                                                     std::memory_order_relaxed);
+                    rasterShared_.state.store(kRasterDomStable, std::memory_order_release);
+                    rasterShared_.state.notify_one();
+                    uiDirty_ = false;
+                    hasRenderedOnce_ = true;
+                    lastUIRenderMs_ = now;
+                }
+            }
+        } else if (rasterIdle) {
+            // No layout this frame — signal raster directly if dirty.
+            bool uiThrottled = (now - lastUIRenderMs_ < kUIFrameIntervalMs);
+            if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
+                rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
+                rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
+                rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),
+                                                 std::memory_order_relaxed);
+                rasterShared_.state.store(kRasterDomStable, std::memory_order_release);
+                rasterShared_.state.notify_one();
+                uiDirty_ = false;
+                hasRenderedOnce_ = true;
+                lastUIRenderMs_ = now;
+            }
+        }
+
         // 6. Frame time tracking
         totalFrameMs_ = util::currentTimeMs() - frameStart;
         double totalFrameMs = totalFrameMs_;
@@ -1265,6 +1378,13 @@ void Engine::run() {
                                            viewportWidth_, viewportHeight_);
             }
         }
+    }
+
+    // --- Layout thread shutdown ---
+    layoutShared_.state.store(kLayoutShutdown, std::memory_order_release);
+    layoutShared_.state.notify_one();
+    if (layoutThread_.joinable()) {
+        layoutThread_.join();
     }
 
     // --- Raster thread shutdown ---

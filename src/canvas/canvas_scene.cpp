@@ -157,8 +157,18 @@ void CanvasScene::canvasThreadFunc(SDL_Window* win) {
 
         canvasShared_.fenceSync.store(reinterpret_cast<uintptr_t>(fence),
                                        std::memory_order_relaxed);
-        canvasShared_.state.store(kCanvasTextureReady, std::memory_order_release);
-        canvasShared_.state.notify_one();
+        // Transition to textureReady — use compare_exchange to avoid overwriting
+        // a pending kCanvasShutdown signal from the main thread.
+        uint32_t expected = kCanvasBusy;
+        if (canvasShared_.state.compare_exchange_strong(
+                expected, kCanvasTextureReady,
+                std::memory_order_release, std::memory_order_acquire)) {
+            canvasShared_.state.notify_one();
+        } else {
+            // State was changed (shutdown) — delete the fence and exit
+            glDeleteSync(fence);
+            break;
+        }
     }
 
     // Cleanup GL resources on this thread's context

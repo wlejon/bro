@@ -46,6 +46,15 @@ enum RasterState : uint32_t {
     kRasterShutdown      = 4,  // Main thread: terminate raster thread
 };
 
+/// Layout thread state machine (atomics only, no mutexes).
+enum LayoutState : uint32_t {
+    kLayoutIdle      = 0,  // Layout thread waiting for work
+    kLayoutDomStable = 1,  // Main thread: DOM is stable, go layout
+    kLayoutBusy      = 2,  // Layout thread computing styles + layout
+    kLayoutDone      = 3,  // Layout thread: results ready
+    kLayoutShutdown  = 4,  // Main thread: terminate layout thread
+};
+
 struct EngineConfig {
     std::string appDir;
     int width = 1024;
@@ -162,6 +171,9 @@ private:
     /// Raster thread entry point (windowed mode only).
     void rasterThreadFunc();
 
+    /// Layout thread entry point (windowed mode only).
+    void layoutThreadFunc();
+
     DisplayMode displayMode_;
 
     std::unique_ptr<platform::Window> window_;
@@ -198,6 +210,15 @@ private:
     RasterShared rasterShared_;
     std::thread rasterThread_;
     SDL_GLContext rasterGLContext_ = nullptr;
+
+    // --- Layout thread state ---
+    struct LayoutShared {
+        std::atomic<uint32_t> state{kLayoutIdle};
+        std::atomic<int> vpWidth{0};
+        std::atomic<int> vpHeight{0};
+    };
+    LayoutShared layoutShared_;
+    std::thread layoutThread_;
 
     // Double-buffered layer lists for lock-free handoff.
     // Raster thread writes to back buffer, main reads front buffer.
