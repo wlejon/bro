@@ -140,7 +140,16 @@ void ElInput::draw(render::Renderer* renderer,
                    const htmlayout::layout::LayoutBox& box,
                    const htmlayout::css::ComputedStyle& /*style*/,
                    float offsetX, float offsetY) {
-    if (!renderer_ || !elem_) return;
+    if (!renderer || !elem_) return;
+
+    // Use the caller's renderer (may differ from construction renderer,
+    // e.g. raster thread has its own SkiaRenderer). Leave it set — the
+    // raster thread is idle when the main thread uses control methods,
+    // so no race condition.
+    if (renderer != renderer_) {
+        renderer_ = renderer;
+        cachedFontHandle_ = 0;  // invalidate — handle belongs to old renderer
+    }
 
     float x = box.contentRect.x + offsetX;
     float y = box.contentRect.y + offsetY;
@@ -155,13 +164,12 @@ void ElInput::draw(render::Renderer* renderer,
     if (t == InputType::Hidden) return;
 
     switch (t) {
-        case InputType::Checkbox: drawCheckbox_(x, y, w, h); return;
-        case InputType::Radio:    drawRadio_(x, y, w, h); return;
-        case InputType::Range:    drawRange_(x, y, w, h); return;
-        case InputType::Color:    drawColor_(x, y, w, h); return;
-        default: break;
+        case InputType::Checkbox: drawCheckbox_(x, y, w, h); break;
+        case InputType::Radio:    drawRadio_(x, y, w, h); break;
+        case InputType::Range:    drawRange_(x, y, w, h); break;
+        case InputType::Color:    drawColor_(x, y, w, h); break;
+        default: drawText_(x, y, w, h); break;
     }
-    drawText_(x, y, w, h);
 }
 
 void ElInput::drawText_(float x, float y, float w, float h) {

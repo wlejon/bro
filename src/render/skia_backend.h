@@ -33,6 +33,10 @@ public:
     explicit SkiaRenderer(GLContext& gl);
     ~SkiaRenderer() override;
 
+    /// Create a standalone Ganesh GL GrDirectContext for the current thread's GL context.
+    /// Returns nullptr if GPU initialization fails.
+    static sk_sp<GrDirectContext> createGrContext();
+
     /// GPU Skia context (Ganesh GL) — nullptr if CPU-only mode.
     GrDirectContext* grContext() const { return grContext_.get(); }
 

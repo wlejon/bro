@@ -6,13 +6,18 @@
 #include "layout/skia_text_metrics.h"
 #include "layout/font_manager.h"
 #include "render/skia_backend.h"
+#include <atomic>
+#include <bit>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <glad/gl.h>
 #include <include/core/SkSurface.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
 #include <quickjs.h>
 
+typedef struct SDL_GLContextState* SDL_GLContext;
 
 namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
 namespace broaudio { class Engine; }
@@ -32,6 +37,15 @@ namespace bro::engine {
 
 enum class DisplayMode { Windowed, Headless };
 
+/// Raster thread state machine (atomics only, no mutexes).
+enum RasterState : uint32_t {
+    kRasterIdle          = 0,  // Raster thread waiting for work
+    kRasterDomStable     = 1,  // Main thread: DOM is stable, go rasterize
+    kRasterBusy          = 2,  // Raster thread is drawing
+    kRasterTexturesReady = 3,  // Raster thread: new textures + GL fence ready
+    kRasterShutdown      = 4,  // Main thread: terminate raster thread
+};
+
 struct EngineConfig {
     std::string appDir;
     int width = 1024;
@@ -43,6 +57,15 @@ struct EngineConfig {
 
 class Engine {
 public:
+    // Compositing layer entry — built by the raster thread, consumed by the main thread.
+    struct UILayer {
+        enum Type { HTML, Canvas };
+        Type type;
+        GLuint texture = 0;
+        canvas::CanvasScene* canvasScene = nullptr;
+        float cx = 0, cy = 0, cw = 0, ch = 0;
+    };
+
     explicit Engine(const EngineConfig& config);
     ~Engine();
 
@@ -133,8 +156,11 @@ private:
     void compositeCanvasScenes(int w, int h);
     void compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO);
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
-    void compositeLayers();
+    void compositeLayers(const std::vector<UILayer>& layers);
     void ensureReplacedElements(dom::Element* elem);
+
+    /// Raster thread entry point (windowed mode only).
+    void rasterThreadFunc();
 
     DisplayMode displayMode_;
 
@@ -159,23 +185,37 @@ private:
     std::vector<std::unique_ptr<render::SceneLayer>> sceneLayers_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
 
-    // Compositing layers — ordered list of HTML and canvas layers
-    // built during the draw traversal for correct DOM stacking order.
-    struct UILayer {
-        enum Type { HTML, Canvas };
-        Type type;
-        // HTML: GL texture (owned by htmlSurfacePool_)
-        GLuint texture = 0;
-        // Canvas: reference to CanvasScene + layout rect
-        canvas::CanvasScene* canvasScene = nullptr;
-        float cx = 0, cy = 0, cw = 0, ch = 0;
+    // --- Raster thread state ---
+    // Shared atomic communication between main and raster threads.
+    struct RasterShared {
+        std::atomic<uint32_t> state{kRasterIdle};
+        std::atomic<uintptr_t> fenceSync{0};      // GLsync handle
+        std::atomic<int> vpWidth{0};
+        std::atomic<int> vpHeight{0};
+        std::atomic<uint32_t> scrollYBits{0};      // float via bit_cast
+        std::atomic<int> frontBuffer{0};            // 0 or 1
     };
-    std::vector<UILayer> uiLayers_;
+    RasterShared rasterShared_;
+    std::thread rasterThread_;
+    SDL_GLContext rasterGLContext_ = nullptr;
+
+    // Main thread's own GrDirectContext (for canvas scenes after raster thread
+    // takes ownership of the SkiaRenderer's GrDirectContext).
+    sk_sp<GrDirectContext> mainGrContext_;
+
+    // Double-buffered layer lists for lock-free handoff.
+    // Raster thread writes to back buffer, main reads front buffer.
+    struct LayerBuffer {
+        std::vector<UILayer> layers;
+    };
+    LayerBuffer layerBuffers_[2];
+
     // Pool of reusable GPU-backed Skia surfaces for HTML layers.
-    // Each entry owns an FBO + GL texture — rendering goes directly
-    // to GPU via Ganesh with no CPU→GPU upload.
+    // Owned by the raster thread — FBOs are per-context but textures
+    // are shared across GL contexts for compositing on the main thread.
     std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_;
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
+
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<SystemOverlay> systemOverlay_;
 

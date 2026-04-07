@@ -87,4 +87,16 @@ void Window::setTitle(const std::string& title) {
     }
 }
 
+SDL_GLContext Window::createSharedContext() {
+    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+    SDL_GLContext shared = SDL_GL_CreateContext(m_window);
+    if (!shared) {
+        LOG_ERROR("Failed to create shared GL context: %s", SDL_GetError());
+        return nullptr;
+    }
+    // Restore main context as current on this thread
+    SDL_GL_MakeCurrent(m_window, m_glContext);
+    return shared;
+}
+
 } // namespace bro::platform

@@ -44,12 +44,15 @@ namespace bro::render {
 // SkiaRenderer — Skia raster rendering + OpenGL display
 // ===========================================================================
 
+sk_sp<GrDirectContext> SkiaRenderer::createGrContext() {
+    auto glInterface = GrGLMakeNativeInterface();
+    if (!glInterface) return nullptr;
+    return GrDirectContexts::MakeGL(glInterface);
+}
+
 SkiaRenderer::SkiaRenderer(GLContext& gl) : gl_(&gl) {
     // Try to create Skia GPU (Ganesh GL) context
-    auto glInterface = GrGLMakeNativeInterface();
-    if (glInterface) {
-        grContext_ = GrDirectContexts::MakeGL(glInterface);
-    }
+    grContext_ = createGrContext();
     if (grContext_) {
         gpuMode_ = true;
         LOG_INFO("SkiaRenderer created (GPU-accelerated Ganesh GL backend)");

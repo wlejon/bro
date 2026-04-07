@@ -62,11 +62,17 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
 #include <glad/gl.h>
+#include <bit>
 #include <cstdio>
 #include <stdexcept>
 #include <functional>
 #include <string>
+#include <thread>
 #include <unordered_map>
+
+#include <include/gpu/ganesh/GrDirectContext.h>
+#include <include/gpu/ganesh/gl/GrGLInterface.h>
+#include <include/gpu/ganesh/gl/GrGLDirectContext.h>
 
 namespace bro::engine {
 
@@ -395,10 +401,15 @@ void Engine::addSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     if (scene) {
         scene->init(gl_.get());
-        // Share GPU Skia context for hardware-accelerated canvas rendering
-        auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-        if (skia && skia->grContext()) {
-            scene->setGrContext(skia->grContext());
+        // Use main thread's GrDirectContext for canvas (raster thread owns its own).
+        // Fall back to renderer's context if mainGrContext_ not yet created (startup).
+        if (mainGrContext_) {
+            scene->setGrContext(mainGrContext_.get());
+        } else {
+            auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+            if (skia && skia->grContext()) {
+                scene->setGrContext(skia->grContext());
+            }
         }
     }
     canvasScenes_.push_back(std::move(scene));
@@ -486,11 +497,9 @@ void Engine::drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-void Engine::compositeLayers() {
+void Engine::compositeLayers(const std::vector<UILayer>& layers) {
     if (!gl_) return;
-
-    auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-    if (!skia) return;
+    if (layers.empty()) return;
 
     float vw = static_cast<float>(viewportWidth_);
     float vh = static_cast<float>(viewportHeight_);
@@ -518,7 +527,7 @@ void Engine::compositeLayers() {
                           (void*)offsetof(render::TextureVertex, u));
     glActiveTexture(GL_TEXTURE0);
 
-    for (auto& layer : uiLayers_) {
+    for (auto& layer : layers) {
         if (layer.type == UILayer::HTML) {
             if (layer.texture) {
                 render::TextureVertex quad[6] = {
@@ -551,6 +560,18 @@ void Engine::compositeLayers() {
 }
 
 Engine::~Engine() {
+    // Ensure raster thread is stopped (safety — normally joined in run())
+    if (rasterThread_.joinable()) {
+        rasterShared_.state.store(kRasterShutdown, std::memory_order_release);
+        rasterShared_.state.notify_one();
+        rasterThread_.join();
+    }
+    if (rasterGLContext_) {
+        SDL_GL_DestroyContext(rasterGLContext_);
+        rasterGLContext_ = nullptr;
+    }
+    mainGrContext_.reset();
+
     for (auto& sl : sceneLayers_) {
         if (sl) sl->onCleanup();
     }
@@ -648,6 +669,222 @@ static bool modalEventWatcher(void* userdata, SDL_Event* event)
 }
 
 // ---------------------------------------------------------------------------
+// Raster thread — owns HTML draw traversal + GPU surface pool.
+// Reads DOM layout data (read-only after main thread layout completes),
+// produces GPU textures, signals main thread via atomic state + GL fence.
+// ---------------------------------------------------------------------------
+
+void Engine::rasterThreadFunc() {
+    // Make the shared GL context current on this thread
+    SDL_GL_MakeCurrent(window_->getSDLWindow(), rasterGLContext_);
+
+    // Create a raster-thread-local SkiaRenderer (creates its own GrDirectContext
+    // internally — each thread needs its own since Skia GPU contexts aren't thread-safe).
+    // The GLContext reference is shared for texture/FBO helper methods only.
+    auto rasterRenderer = std::make_unique<render::SkiaRenderer>(*gl_);
+    if (!rasterRenderer->grContext()) {
+        LOG_ERROR("Raster thread: SkiaRenderer failed to create GrDirectContext");
+        return;
+    }
+    // Separate FontManager so font handles are created against the raster renderer.
+    // The shared FontManager caches handles for the main thread's renderer — those
+    // handles are invalid on the raster thread's SkiaRenderer.
+    layout::FontManager rasterFontManager;
+    auto rasterDrawTraversal = std::make_unique<layout::DrawTraversal>(
+        rasterRenderer.get(), &rasterFontManager);
+
+    LOG_INFO("Raster thread started");
+
+    while (true) {
+        // Wait for work (C++20 atomic wait — futex, not a mutex)
+        rasterShared_.state.wait(kRasterIdle, std::memory_order_acquire);
+        uint32_t s = rasterShared_.state.load(std::memory_order_acquire);
+
+        if (s == kRasterShutdown) break;
+        if (s != kRasterDomStable) continue;
+
+        rasterShared_.state.store(kRasterBusy, std::memory_order_relaxed);
+
+        // Read snapshot values from main thread
+        int vpW = rasterShared_.vpWidth.load(std::memory_order_relaxed);
+        int vpH = rasterShared_.vpHeight.load(std::memory_order_relaxed);
+        float scrollY = std::bit_cast<float>(
+            rasterShared_.scrollYBits.load(std::memory_order_relaxed));
+
+        // Determine which layer buffer to write to (back buffer)
+        int backIdx = 1 - rasterShared_.frontBuffer.load(std::memory_order_relaxed);
+        auto& backBuf = layerBuffers_[backIdx];
+        backBuf.layers.clear();
+
+        // Reset Ganesh GL state tracking for this frame
+        rasterRenderer->grContext()->resetContext();
+
+        // Invalidate surface pool on viewport resize
+        if (htmlSurfacePoolW_ != vpW || htmlSurfacePoolH_ != vpH) {
+            for (auto& ps : htmlSurfacePool_) {
+                rasterRenderer->destroyGPUSurface(ps);
+            }
+            htmlSurfacePool_.clear();
+            htmlSurfacePoolW_ = vpW;
+            htmlSurfacePoolH_ = vpH;
+        }
+
+        int htmlLayerIdx = 0;
+
+        // Set up layer break callback for canvas elements
+        rasterDrawTraversal->setLayerBreakCallback(
+            [this, &rasterRenderer, &htmlLayerIdx, &backBuf, vpW, vpH](
+                canvas::CanvasScene* scene, float x, float y, float w, float h) {
+                int prevIdx = htmlLayerIdx;
+                htmlLayerIdx++;
+                while (htmlLayerIdx >= static_cast<int>(htmlSurfacePool_.size())) {
+                    htmlSurfacePool_.push_back(
+                        rasterRenderer->createGPUSurface(vpW, vpH));
+                }
+                rasterRenderer->switchSurface(htmlSurfacePool_[htmlLayerIdx].surface);
+
+                UILayer htmlLayer;
+                htmlLayer.type = UILayer::HTML;
+                htmlLayer.texture = htmlSurfacePool_[prevIdx].texture;
+                backBuf.layers.push_back(std::move(htmlLayer));
+
+                UILayer canvasLayer;
+                canvasLayer.type = UILayer::Canvas;
+                canvasLayer.canvasScene = scene;
+                canvasLayer.cx = x; canvasLayer.cy = y;
+                canvasLayer.cw = w; canvasLayer.ch = h;
+                backBuf.layers.push_back(std::move(canvasLayer));
+            });
+
+        // Begin frame
+        rasterRenderer->beginFrame(vpW, vpH);
+
+        // Ensure pool has a GPU surface for HTML layer 0
+        if (htmlSurfacePool_.empty()) {
+            htmlSurfacePool_.push_back(rasterRenderer->createGPUSurface(vpW, vpH));
+        }
+        // Rewrap existing pool surfaces with fresh Skia wrappers
+        for (auto& ps : htmlSurfacePool_) {
+            rasterRenderer->rewrapGPUSurface(ps, vpW, vpH);
+        }
+        // Switch to pool surface for HTML layer 0
+        auto origSurface = rasterRenderer->switchSurface(htmlSurfacePool_[0].surface);
+
+        // Draw traversal — reads layout boxes and computed styles (read-only)
+        if (document_ && document_->documentElement()) {
+            rasterDrawTraversal->draw(document_->documentElement(), 0, -scrollY,
+                                      vpW, vpH);
+        }
+
+        // Draw overlays (select dropdowns, color pickers) on top of all elements.
+        // These read active element state which is stable while raster is running.
+        if (document_) {
+            auto* activeEl = document_->activeElement();
+            auto* sel = getElSelect(activeEl);
+            if (sel && sel->isOpen()) {
+                sel->drawDropdown();
+            }
+            auto* inp = getElInput(activeEl);
+            if (inp && inp->isPickerOpen()) {
+                inp->drawColorPicker();
+            }
+        }
+
+        // Draw viewport scrollbar
+        {
+            float vh = static_cast<float>(vpH);
+            auto& vs = viewportScrollbar_.style();
+            auto m = viewportScrollbar_.layout(
+                static_cast<float>(vpW) - vs.width - vs.margin,
+                0.0f, vh, documentHeight_, vh, scrollY);
+            viewportScrollbar_.draw(rasterRenderer.get(), m);
+        }
+
+        // Draw scrollbars for overflow elements
+        if (document_) {
+            std::function<void(dom::Element*, float, float)> drawElemScrollbars;
+            drawElemScrollbars = [&](dom::Element* elem, float offsetX, float offsetY) {
+                if (!elem) return;
+                auto& style = elem->computedStyle();
+                {
+                    auto it = style.find("display");
+                    if (it != style.end() && it->second == "none") return;
+                }
+                auto& lbox = elem->layoutBox();
+                float absX = lbox.contentRect.x + offsetX;
+                float absY = lbox.contentRect.y + offsetY;
+
+                std::string ov = getOverflowY(style);
+                if (overflowScrollable(ov)) {
+                    float maxST = maxScrollTop(elem);
+                    if (maxST > 0) {
+                        float viewH = lbox.contentRect.height;
+                        float contentH = viewH + maxST;
+                        float bx = absX - lbox.padding.left - lbox.border.left;
+                        float by = absY - lbox.padding.top - lbox.border.top;
+                        float bw = lbox.fullWidth();
+                        float bh = lbox.fullHeight();
+
+                        auto& es = elementScrollbar_.style();
+                        auto m = elementScrollbar_.layout(
+                            bx + bw - es.width - es.margin,
+                            by, bh, contentH, viewH,
+                            elem->scrollTopValue());
+                        elementScrollbar_.draw(rasterRenderer.get(), m);
+                    }
+                }
+
+                float childOffsetX = absX;
+                float childOffsetY = absY - elem->scrollTopValue();
+                elem->forEachComposedChild([&](dom::Element* child) {
+                    drawElemScrollbars(child, childOffsetX, childOffsetY);
+                });
+            };
+            drawElemScrollbars(document_->documentElement(), 0.0f, -scrollY);
+        }
+
+        // Capture the last HTML layer
+        rasterRenderer->switchSurface(origSurface);
+        UILayer lastHtml;
+        lastHtml.type = UILayer::HTML;
+        lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
+        backBuf.layers.push_back(std::move(lastHtml));
+
+        // Flush each pool surface's deferred Ganesh ops
+        for (int i = 0; i <= htmlLayerIdx; ++i) {
+            if (htmlSurfacePool_[i].surface && rasterRenderer->grContext()) {
+                rasterRenderer->grContext()->flush(htmlSurfacePool_[i].surface.get());
+            }
+        }
+        rasterRenderer->endFrame();
+
+        rasterDrawTraversal->setLayerBreakCallback(nullptr);
+
+        // GL fence sync — ensures all GPU commands complete before main thread
+        // samples the textures for compositing.
+        GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();  // ensure fence is submitted to GPU command stream
+
+        // Publish results: fence, layer buffer, state
+        rasterShared_.fenceSync.store(reinterpret_cast<uintptr_t>(fence),
+                                       std::memory_order_relaxed);
+        rasterShared_.frontBuffer.store(backIdx, std::memory_order_relaxed);
+        rasterShared_.state.store(kRasterTexturesReady, std::memory_order_release);
+        rasterShared_.state.notify_one();
+    }
+
+    // Cleanup
+    for (auto& ps : htmlSurfacePool_) {
+        rasterRenderer->destroyGPUSurface(ps);
+    }
+    htmlSurfacePool_.clear();
+    // SkiaRenderer destructor handles GrContext cleanup
+    rasterRenderer.reset();
+    SDL_GL_MakeCurrent(window_->getSDLWindow(), nullptr);
+    LOG_INFO("Raster thread stopped");
+}
+
+// ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 
@@ -699,6 +936,30 @@ void Engine::run() {
     }
 
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
+
+    // --- Raster thread setup ---
+    // Create a shared GL context for the raster thread (textures shared, FBOs per-context).
+    rasterGLContext_ = window_->createSharedContext();
+    if (!rasterGLContext_) {
+        LOG_ERROR("Failed to create shared GL context for raster thread");
+        return;
+    }
+
+    // Main thread gets its own GrDirectContext for canvas scenes
+    // (the raster thread will create its own for HTML draw traversal).
+    mainGrContext_ = render::SkiaRenderer::createGrContext();
+    if (!mainGrContext_) {
+        LOG_ERROR("Failed to create main-thread GrDirectContext");
+        return;
+    }
+
+    // Wire existing canvas scenes to the main thread's GrDirectContext
+    for (auto& cs : canvasScenes_) {
+        if (cs) cs->setGrContext(mainGrContext_.get());
+    }
+
+    // Launch raster thread
+    rasterThread_ = std::thread(&Engine::rasterThreadFunc, this);
 
     // Event watcher keeps JS timers alive during Windows' modal move/resize loop.
     SDL_AddEventWatch(modalEventWatcher, this);
@@ -770,12 +1031,14 @@ void Engine::run() {
         }
 
         // 4. Re-layout when DOM is dirty.
-        //    The cached Skia texture is composited every GPU frame (cheap).
-        //    Layout must always run before rasterization so computed styles
-        //    are fresh — never rasterize with stale styles.
+        //    Only run layout when the raster thread is idle — this ensures
+        //    layout writes (computed styles, layout boxes) never overlap with
+        //    the raster thread's read-only DOM traversal.
 
         double tLayout = tJs;
-        if (document_ && (document_->isDirty() || !hasRenderedOnce_)) {
+        bool rasterIdle = (rasterShared_.state.load(std::memory_order_acquire) == kRasterIdle);
+
+        if (rasterIdle && document_ && (document_->isDirty() || !hasRenderedOnce_)) {
             if (document_->isStructureDirty()) {
                 ensureReplacedElements(document_->documentElement());
             }
@@ -791,7 +1054,6 @@ void Engine::run() {
 
             // Process auto-scroll-to-bottom for tracked overflow elements.
             if (document_ && !document_->scrollToBottomElements().empty()) {
-                // Copy the set since setScrollToBottom(false) mutates it.
                 auto pending = document_->scrollToBottomElements();
                 for (auto* elem : pending) {
                     std::string ov = getOverflowY(elem->computedStyle());
@@ -805,7 +1067,6 @@ void Engine::run() {
             // Notify ResizeObserver / IntersectionObserver after layout
             if (jsRuntime_) {
                 auto* ctx = jsRuntime_->getContext();
-                // Compile observer check once, reuse thereafter
                 if (JS_IsUndefined(observerCheckFn_)) {
                     observerCheckFn_ = JS_Eval(ctx, js_observer_check,
                                                strlen(js_observer_check),
@@ -823,200 +1084,60 @@ void Engine::run() {
         }
         accumLayoutMs_ += tLayout - tJs;
 
-        // === GPU FRAME (OpenGL) ===
+        // === GPU FRAME (threaded rasterization + main-thread compositing) ===
 
-        // 5a. Rasterize HTML layers to Skia surfaces if dirty
-        //     Throttled to ~120fps — HTML controls don't need full frame rate.
-        //     Canvas/WebGL layers still render every frame independently.
+        // 5a. Signal raster thread if dirty + not throttled + raster idle.
+        //     Snapshot viewport, scroll, and document height for the raster thread.
         double tRaster = tLayout;
         bool uiThrottled = (now - lastUIRenderMs_ < kUIFrameIntervalMs);
-        if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
-            // Invalidate surface pool on viewport resize
-            if (htmlSurfacePoolW_ != viewportWidth_ || htmlSurfacePoolH_ != viewportHeight_) {
-                for (auto& ps : htmlSurfacePool_) {
-                    skia->destroyGPUSurface(ps);
-                }
-                htmlSurfacePool_.clear();
-                uiLayers_.clear();
-                htmlSurfacePoolW_ = viewportWidth_;
-                htmlSurfacePoolH_ = viewportHeight_;
-            }
-
-            // Reset layer list for this frame
-            uiLayers_.clear();
-            int htmlLayerIdx = 0;
-
-            // Set up layer break callback — when the draw traversal hits
-            // a <canvas>, we finalize the current HTML layer and start a new one.
-            drawTraversal_->setLayerBreakCallback(
-                [this, skia, &htmlLayerIdx](canvas::CanvasScene* scene,
-                                            float x, float y, float w, float h) {
-                    // Start next HTML layer with a pooled GPU surface
-                    int prevIdx = htmlLayerIdx;
-                    htmlLayerIdx++;
-                    while (htmlLayerIdx >= (int)htmlSurfacePool_.size()) {
-                        htmlSurfacePool_.push_back(
-                            skia->createGPUSurface(viewportWidth_, viewportHeight_));
-                    }
-                    // Switch to new surface; the previous surface becomes an HTML layer.
-                    // Surface was already rewrapped at frame start (or just created).
-                    skia->switchSurface(htmlSurfacePool_[htmlLayerIdx].surface);
-                    UILayer htmlLayer;
-                    htmlLayer.type = UILayer::HTML;
-                    htmlLayer.texture = htmlSurfacePool_[prevIdx].texture;
-                    uiLayers_.push_back(std::move(htmlLayer));
-
-                    // Insert canvas layer
-                    UILayer canvasLayer;
-                    canvasLayer.type = UILayer::Canvas;
-                    canvasLayer.canvasScene = scene;
-                    canvasLayer.cx = x; canvasLayer.cy = y;
-                    canvasLayer.cw = w; canvasLayer.ch = h;
-                    uiLayers_.push_back(std::move(canvasLayer));
-                });
-
-            double tDraw0 = util::currentTimeMs();
-
-            renderer_->beginFrame(viewportWidth_, viewportHeight_);
-
-            // Ensure pool has a GPU surface for HTML layer 0
-            if (htmlSurfacePool_.empty()) {
-                htmlSurfacePool_.push_back(
-                    skia->createGPUSurface(viewportWidth_, viewportHeight_));
-            }
-            // Rewrap existing pool surfaces with fresh Skia wrappers so
-            // Ganesh starts a clean deferred op list for this frame.
-            for (auto& ps : htmlSurfacePool_) {
-                skia->rewrapGPUSurface(ps, viewportWidth_, viewportHeight_);
-            }
-            // Switch to pool surface for HTML layer 0; renderer's
-            // own surface is saved and restored at endFrame.
-            auto origSurface = skia->switchSurface(htmlSurfacePool_[0].surface);
-
-            if (document_ && document_->documentElement()) {
-                drawTraversal_->draw(document_->documentElement(), 0, -scrollY_,
-                                     viewportWidth_, viewportHeight_);
-            }
-            // Draw overlays after all elements (z-order on top)
-            if (document_) {
-                auto* activeEl = document_->activeElement();
-                auto* sel = getElSelect(activeEl);
-                if (sel && sel->isOpen()) {
-                    sel->drawDropdown();
-                }
-                auto* inp = getElInput(activeEl);
-                if (inp && inp->isPickerOpen()) {
-                    inp->drawColorPicker();
-                }
-            }
-            accumDrawMs_ += util::currentTimeMs() - tDraw0;
-
-            // Draw viewport scrollbar
-            {
-                float vh = static_cast<float>(viewportHeight_);
-                auto& vs = viewportScrollbar_.style();
-                auto m = viewportScrollbar_.layout(
-                    static_cast<float>(viewportWidth_) - vs.width - vs.margin,
-                    0.0f, vh, documentHeight_, vh, scrollY_);
-                viewportScrollbar_.draw(renderer_.get(), m);
-            }
-
-            // Draw scrollbars for overflow elements
-            if (document_) {
-                std::function<void(dom::Element*, float, float)> drawElemScrollbars;
-                drawElemScrollbars = [&](dom::Element* elem, float offsetX, float offsetY) {
-                    if (!elem) return;
-                    auto& style = elem->computedStyle();
-                    {
-                        auto it = style.find("display");
-                        if (it != style.end() && it->second == "none") return;
-                    }
-
-                    auto& lbox = elem->layoutBox();
-                    float absX = lbox.contentRect.x + offsetX;
-                    float absY = lbox.contentRect.y + offsetY;
-
-                    std::string ov = getOverflowY(style);
-                    if (overflowScrollable(ov)) {
-                        float maxST = maxScrollTop(elem);
-                        if (maxST > 0) {
-                            float viewH = lbox.contentRect.height;
-                            float contentH = viewH + maxST;
-                            float bx = absX - lbox.padding.left - lbox.border.left;
-                            float by = absY - lbox.padding.top - lbox.border.top;
-                            float bw = lbox.fullWidth();
-                            float bh = lbox.fullHeight();
-
-                            auto& es = elementScrollbar_.style();
-                            auto m = elementScrollbar_.layout(
-                                bx + bw - es.width - es.margin,
-                                by, bh, contentH, viewH,
-                                elem->scrollTopValue());
-                            bool isHovered = (scrollbarHoveredElement_ == elem);
-                            bool isDragging = (scrollbarDragTarget_ == elem);
-                            elementScrollbar_.drawWithState(renderer_.get(), m,
-                                                            isHovered, isDragging);
-                        }
-                    }
-
-                    float childOffsetX = absX;
-                    float childOffsetY = absY - elem->scrollTopValue();
-                    elem->forEachComposedChild([&](dom::Element* child) {
-                        drawElemScrollbars(child, childOffsetX, childOffsetY);
-                    });
-                };
-                drawElemScrollbars(document_->documentElement(),
-                                   0.0f, -scrollY_);
-            }
-
-            // Capture the current (last) HTML layer
-            skia->switchSurface(origSurface);
-            UILayer lastHtml;
-            lastHtml.type = UILayer::HTML;
-            lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
-            uiLayers_.push_back(std::move(lastHtml));
-
-            // Flush each pool surface's deferred Ganesh ops so the backing
-            // textures contain the current frame's content before compositing.
-            for (int i = 0; i <= htmlLayerIdx; ++i) {
-                if (htmlSurfacePool_[i].surface && skia->grContext()) {
-                    skia->grContext()->flush(htmlSurfacePool_[i].surface.get());
-                }
-            }
-            renderer_->endFrame();
-
-            drawTraversal_->setLayerBreakCallback(nullptr);
-            hasRenderedOnce_ = true;
+        if (rasterIdle && (uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
+            rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
+            rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
+            rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),
+                                             std::memory_order_relaxed);
+            rasterShared_.state.store(kRasterDomStable, std::memory_order_release);
+            rasterShared_.state.notify_one();
             uiDirty_ = false;
+            hasRenderedOnce_ = true;
             lastUIRenderMs_ = now;
         }
 
-        // Rasterize canvas scenes (flush deferred Skia commands + upload texture).
-        // Done every frame since canvases animate independently of HTML layout.
+        // 5b. Rasterize canvas scenes on main thread (main GrContext).
+        //     Done every frame since canvases animate independently of HTML layout.
+        int front = rasterShared_.frontBuffer.load(std::memory_order_acquire);
+        auto& frontLayers = layerBuffers_[front].layers;
         {
             bool anyCanvasRasterized = false;
-            for (auto& layer : uiLayers_) {
+            for (auto& layer : frontLayers) {
                 if (layer.type == UILayer::Canvas && layer.canvasScene) {
                     layer.canvasScene->rasterize(gl_.get());
                     anyCanvasRasterized = true;
                 }
             }
-            // After Ganesh canvas rendering, reset GL state so the engine's
-            // raw GL compositing pass and next frame's SkiaRenderer see clean state.
-            if (anyCanvasRasterized) {
-                auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-                if (skia && skia->grContext()) {
-                    skia->grContext()->resetContext();
-                }
+            if (anyCanvasRasterized && mainGrContext_) {
+                mainGrContext_->resetContext();
             }
         }
         tRaster = util::currentTimeMs();
-
         accumRasterMs_ += tRaster - tLayout;
+
+        // 5c. Check if raster thread has new textures ready.
+        //     If so, wait on GL fence (GPU-side wait) and transition back to idle.
+        if (rasterShared_.state.load(std::memory_order_acquire) == kRasterTexturesReady) {
+            auto fence = reinterpret_cast<GLsync>(
+                rasterShared_.fenceSync.exchange(0, std::memory_order_relaxed));
+            if (fence) {
+                glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
+                glDeleteSync(fence);
+            }
+            // Re-read front buffer (raster thread may have flipped it)
+            front = rasterShared_.frontBuffer.load(std::memory_order_acquire);
+            rasterShared_.state.store(kRasterIdle, std::memory_order_release);
+        }
 
         double tGpu = util::currentTimeMs();
 
-        // 5b. Update canvas scene scroll + clean up detached
+        // 5d. Update canvas scene scroll + clean up detached
         for (auto& cs : canvasScenes_) {
             cs->setViewportScroll(scrollY_);
             cs->checkDetached();
@@ -1026,23 +1147,23 @@ void Engine::run() {
                 [](auto& cs) { return cs->isDetached(); }),
             canvasScenes_.end());
 
-        // 5c. Set viewport and clear
+        // 5e. Set viewport and clear
         glViewport(0, 0, viewportWidth_, viewportHeight_);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // 5d. Render pass 1: scene layers (WebGL etc.) draw to default framebuffer
+        // 5f. Render pass 1: scene layers (WebGL etc.) draw to default framebuffer
         for (auto& sl : sceneLayers_) {
             if (sl) sl->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
         }
 
-        // 5e. Render pass 2: composite UI layers in DOM order
-        //     HTML layers (cached textures) interleaved with canvas layers
-        //     (freshly uploaded textures). Correct document-order stacking.
-        compositeLayers();
+        // 5g. Render pass 2: composite UI layers in DOM order
+        //     HTML layers (cached textures from raster thread) interleaved with
+        //     canvas layers (freshly rasterized on main thread).
+        compositeLayers(layerBuffers_[front].layers);
 
-        // 5g. Render pass 3: composite system overlay (premultiplied alpha)
+        // 5h. Render pass 3: composite system overlay (premultiplied alpha)
         if (systemOverlay_ && systemOverlay_->isVisible()) {
             systemOverlay_->render(viewportWidth_, viewportHeight_);
 
@@ -1090,7 +1211,6 @@ void Engine::run() {
 
         // Restore WebGL shadow state so apps with internal caches (three.js)
         // see the same GL state they left on the previous frame.
-        // Uses shadow-tracked values — no expensive glGet* queries.
         {
             webgl::WebGLScene* wgl = nullptr;
             for (auto& sl : sceneLayers_) {
@@ -1144,6 +1264,18 @@ void Engine::run() {
             }
         }
     }
+
+    // --- Raster thread shutdown ---
+    rasterShared_.state.store(kRasterShutdown, std::memory_order_release);
+    rasterShared_.state.notify_one();
+    if (rasterThread_.joinable()) {
+        rasterThread_.join();
+    }
+    if (rasterGLContext_) {
+        SDL_GL_DestroyContext(rasterGLContext_);
+        rasterGLContext_ = nullptr;
+    }
+    mainGrContext_.reset();
 
     SDL_RemoveEventWatch(modalEventWatcher, this);
 }

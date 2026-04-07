@@ -95,7 +95,13 @@ void ElTextarea::draw(render::Renderer* renderer,
                       const htmlayout::layout::LayoutBox& box,
                       const htmlayout::css::ComputedStyle& /*style*/,
                       float offsetX, float offsetY) {
-    if (!renderer_ || !elem_) return;
+    if (!renderer || !elem_) return;
+
+    // Use the caller's renderer (raster thread has its own)
+    if (renderer != renderer_) {
+        renderer_ = renderer;
+        cachedFontHandle_ = 0;
+    }
 
     float x = box.contentRect.x + offsetX;
     float y = box.contentRect.y + offsetY;

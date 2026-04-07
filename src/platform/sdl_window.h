@@ -25,6 +25,10 @@ public:
     void setTitle(const std::string& title);
     void swapWindow();
 
+    /// Create a second GL context that shares textures with the main context.
+    /// The caller owns the returned context and must destroy it with SDL_GL_DestroyContext.
+    SDL_GLContext createSharedContext();
+
 private:
     SDL_Window* m_window = nullptr;
     SDL_GLContext m_glContext = nullptr;

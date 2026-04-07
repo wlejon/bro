@@ -71,7 +71,13 @@ public:
 
     /// Set Ganesh GPU context for GPU-accelerated canvas rendering.
     /// If set, Skia draws directly to GPU (no CPU raster + upload).
-    void setGrContext(GrDirectContext* ctx) { grContext_ = ctx; }
+    /// Invalidates existing surface so it's recreated with the new context.
+    void setGrContext(GrDirectContext* ctx) {
+        if (grContext_ != ctx) {
+            surface_.reset();
+            grContext_ = ctx;
+        }
+    }
 
     void cleanup();
 
