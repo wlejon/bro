@@ -226,6 +226,7 @@ private:
 
     // GL texture for compositing
     GLuint glTexture_ = 0;
+    int texWidth_ = 0, texHeight_ = 0;  // current GL texture dimensions
     bool dirty_ = false;  // surface pixels changed, need GL re-upload
 
     // Screen-space position for compositing

@@ -501,20 +501,45 @@ void Engine::compositeLayers() {
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
+    // Bind VAO and set up vertex attribs once for all quads
+    glBindVertexArray(uiQuadVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE,
+                          sizeof(render::TextureVertex), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
+                          sizeof(render::TextureVertex),
+                          (void*)offsetof(render::TextureVertex, u));
+    glActiveTexture(GL_TEXTURE0);
+
     for (auto& layer : uiLayers_) {
         if (layer.type == UILayer::HTML) {
             if (layer.texture) {
-                drawTexturedQuad(layer.texture, 0, 0, vw, vh);
+                render::TextureVertex quad[6] = {
+                    {0,  0,  0, 0}, {vw, 0,  1, 0}, {vw, vh, 1, 1},
+                    {0,  0,  0, 0}, {vw, vh, 1, 1}, {0,  vh, 0, 1},
+                };
+                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+                glBindTexture(GL_TEXTURE_2D, layer.texture);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
             }
         } else {
-            // Canvas layer — upload fresh pixels and draw at layout position
+            // Canvas layer — texture already uploaded in raster phase
             if (layer.canvasScene) {
-                layer.canvasScene->rasterize(gl_.get());
                 GLuint tex = layer.canvasScene->texture();
                 if (tex) {
+                    float cx = layer.cx, cy = layer.cy;
+                    float cw = layer.cw, ch = layer.ch;
+                    render::TextureVertex quad[6] = {
+                        {cx,    cy,    0, 0}, {cx+cw, cy,    1, 0}, {cx+cw, cy+ch, 1, 1},
+                        {cx,    cy,    0, 0}, {cx+cw, cy+ch, 1, 1}, {cx,    cy+ch, 0, 1},
+                    };
+                    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
                     // Canvas textures use non-premultiplied alpha
                     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                    drawTexturedQuad(tex, layer.cx, layer.cy, layer.cw, layer.ch);
+                    glBindTexture(GL_TEXTURE_2D, tex);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
                     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                 }
             }
@@ -948,8 +973,16 @@ void Engine::run() {
             drawTraversal_->setLayerBreakCallback(nullptr);
             hasRenderedOnce_ = true;
             uiDirty_ = false;
-            tRaster = util::currentTimeMs();
         }
+
+        // Rasterize canvas scenes (flush deferred Skia commands + upload texture).
+        // Done every frame since canvases animate independently of HTML layout.
+        for (auto& layer : uiLayers_) {
+            if (layer.type == UILayer::Canvas && layer.canvasScene) {
+                layer.canvasScene->rasterize(gl_.get());
+            }
+        }
+        tRaster = util::currentTimeMs();
 
         accumRasterMs_ += tRaster - tLayout;
 
@@ -1041,9 +1074,11 @@ void Engine::run() {
             }
         }
 
-        // 5g. Swap buffers
-        gl_->swapBuffers();
+        // Measure GPU work before swap (swap includes vsync wait)
         accumGpuMs_ += util::currentTimeMs() - tGpu;
+
+        // Swap buffers (may block on vsync — not counted as GPU work)
+        gl_->swapBuffers();
 
         // 6. Frame time tracking
         totalFrameMs_ = util::currentTimeMs() - frameStart;

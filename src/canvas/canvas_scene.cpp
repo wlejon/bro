@@ -779,7 +779,8 @@ void CanvasScene::rasterize(render::GLContext* gl) {
     SkPixmap pixmap;
     if (!surface_->peekPixels(&pixmap)) return;
 
-    // Create or resize GL texture
+    // Create or resize GL texture — use glTexSubImage2D when size unchanged
+    bool needsAlloc = false;
     if (!glTexture_) {
         glGenTextures(1, &glTexture_);
         glBindTexture(GL_TEXTURE_2D, glTexture_);
@@ -787,13 +788,21 @@ void CanvasScene::rasterize(render::GLContext* gl) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        needsAlloc = true;
     } else {
         glBindTexture(GL_TEXTURE_2D, glTexture_);
+        if (canvasW != texWidth_ || canvasH != texHeight_) needsAlloc = true;
     }
 
-    // Skia N32 premul = BGRA on little-endian.  Upload as BGRA.
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, canvasW, canvasH, 0,
-                 GL_BGRA, GL_UNSIGNED_BYTE, pixmap.addr());
+    if (needsAlloc) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, canvasW, canvasH, 0,
+                     GL_BGRA, GL_UNSIGNED_BYTE, pixmap.addr());
+        texWidth_ = canvasW;
+        texHeight_ = canvasH;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, canvasW, canvasH,
+                        GL_BGRA, GL_UNSIGNED_BYTE, pixmap.addr());
+    }
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
