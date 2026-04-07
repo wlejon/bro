@@ -856,7 +856,8 @@ void Engine::run() {
                         htmlSurfacePool_.push_back(
                             skia->createGPUSurface(viewportWidth_, viewportHeight_));
                     }
-                    // Switch to new surface; the previous surface becomes an HTML layer
+                    // Switch to new surface; the previous surface becomes an HTML layer.
+                    // Surface was already rewrapped at frame start (or just created).
                     skia->switchSurface(htmlSurfacePool_[htmlLayerIdx].surface);
                     UILayer htmlLayer;
                     htmlLayer.type = UILayer::HTML;
@@ -880,6 +881,11 @@ void Engine::run() {
             if (htmlSurfacePool_.empty()) {
                 htmlSurfacePool_.push_back(
                     skia->createGPUSurface(viewportWidth_, viewportHeight_));
+            }
+            // Rewrap existing pool surfaces with fresh Skia wrappers so
+            // Ganesh starts a clean deferred op list for this frame.
+            for (auto& ps : htmlSurfacePool_) {
+                skia->rewrapGPUSurface(ps, viewportWidth_, viewportHeight_);
             }
             // Switch to pool surface for HTML layer 0; renderer's
             // own surface is saved and restored at endFrame.
@@ -968,8 +974,13 @@ void Engine::run() {
             lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
             uiLayers_.push_back(std::move(lastHtml));
 
-            // Flush all Ganesh GPU commands — HTML layer textures are now ready.
-            // No CPU→GPU upload needed since pool surfaces render directly to GPU.
+            // Flush each pool surface's deferred Ganesh ops so the backing
+            // textures contain the current frame's content before compositing.
+            for (int i = 0; i <= htmlLayerIdx; ++i) {
+                if (htmlSurfacePool_[i].surface && skia->grContext()) {
+                    skia->grContext()->flush(htmlSurfacePool_[i].surface.get());
+                }
+            }
             renderer_->endFrame();
 
             drawTraversal_->setLayerBreakCallback(nullptr);

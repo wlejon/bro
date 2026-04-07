@@ -588,6 +588,21 @@ SkiaRenderer::GPUSurface SkiaRenderer::createGPUSurface(int width, int height) {
     return result;
 }
 
+void SkiaRenderer::rewrapGPUSurface(GPUSurface& surf, int width, int height) {
+    if (!gpuMode_ || !grContext_ || !surf.fbo) return;
+    surf.surface.reset();
+    GrGLFramebufferInfo fbInfo;
+    fbInfo.fFBOID = surf.fbo;
+    fbInfo.fFormat = GL_RGBA8;
+    fbInfo.fProtected = skgpu::Protected::kNo;
+    auto backendRT = GrBackendRenderTargets::MakeGL(width, height, 0, 0, fbInfo);
+    surf.surface = SkSurfaces::WrapBackendRenderTarget(
+        grContext_.get(), backendRT,
+        kTopLeft_GrSurfaceOrigin,
+        kRGBA_8888_SkColorType,
+        SkColorSpace::MakeSRGB(), nullptr);
+}
+
 void SkiaRenderer::destroyGPUSurface(GPUSurface& surf) {
     surf.surface.reset();
     if (surf.fbo) { glDeleteFramebuffers(1, &surf.fbo); surf.fbo = 0; }

@@ -116,6 +116,10 @@ public:
     /// Create a GPU-backed Skia surface at the given dimensions.
     GPUSurface createGPUSurface(int width, int height);
 
+    /// Recreate the SkSurface wrapper for an existing FBO/texture.
+    /// Cheap — only the Skia wrapper is recreated, GL resources stay alive.
+    void rewrapGPUSurface(GPUSurface& surf, int width, int height);
+
     /// Destroy a GPU surface, releasing FBO and texture resources.
     void destroyGPUSurface(GPUSurface& surf);
 
