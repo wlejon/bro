@@ -331,14 +331,15 @@ static JSValue js_tokenlist_add(JSContext* ctx, JSValueConst this_val,
     auto* el = getTokenListElement(this_val);
     if (!el) return JS_UNDEFINED;
     auto tokens = splitClasses(el->className());
+    bool changed = false;
     for (int i = 0; i < argc; ++i) {
         std::string token = jsToStdString(ctx, argv[i]);
         if (token.empty()) continue;
         bool found = false;
         for (auto& t : tokens) { if (t == token) { found = true; break; } }
-        if (!found) tokens.push_back(token);
+        if (!found) { tokens.push_back(token); changed = true; }
     }
-    el->setClassName(joinClasses(tokens));
+    if (changed) el->setClassName(joinClasses(tokens));
     return JS_UNDEFINED;
 }
 
@@ -347,11 +348,12 @@ static JSValue js_tokenlist_remove(JSContext* ctx, JSValueConst this_val,
     auto* el = getTokenListElement(this_val);
     if (!el) return JS_UNDEFINED;
     auto tokens = splitClasses(el->className());
+    size_t origSize = tokens.size();
     for (int i = 0; i < argc; ++i) {
         std::string token = jsToStdString(ctx, argv[i]);
         tokens.erase(std::remove(tokens.begin(), tokens.end(), token), tokens.end());
     }
-    el->setClassName(joinClasses(tokens));
+    if (tokens.size() != origSize) el->setClassName(joinClasses(tokens));
     return JS_UNDEFINED;
 }
 
@@ -366,17 +368,20 @@ static JSValue js_tokenlist_toggle(JSContext* ctx, JSValueConst this_val,
     bool hasForce = (argc >= 2 && !JS_IsUndefined(argv[1]));
 
     if (it != tokens.end()) {
+        // Token present — force=true means keep it (no change)
         if (hasForce && JS_ToBool(ctx, argv[1])) {
-            el->setClassName(joinClasses(tokens));
             return JS_TRUE;
         }
+        // Remove token
         tokens.erase(it);
         el->setClassName(joinClasses(tokens));
         return JS_FALSE;
     } else {
+        // Token absent — force=false means keep it absent (no change)
         if (hasForce && !JS_ToBool(ctx, argv[1])) {
             return JS_FALSE;
         }
+        // Add token
         tokens.push_back(token);
         el->setClassName(joinClasses(tokens));
         return JS_TRUE;

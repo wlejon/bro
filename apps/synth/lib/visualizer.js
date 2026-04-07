@@ -129,7 +129,7 @@
             }
 
             updateMicInfo();
-            if (frameCount % 3 === 0) updateBusMeters();
+            if (frameCount % 10 === 0) updateBusMeters();
         },
 
         pause: function() {
@@ -362,11 +362,19 @@
             if (isNaN(busId) || busId < 0) continue;
             var peakL = SC.getBusPeakL(busId);
             var peakR = SC.getBusPeakR(busId);
-            var pctL = Math.min(100, peakL * 100);
-            var pctR = Math.min(100, peakR * 100);
+            // Round to integers and skip DOM mutation if unchanged —
+            // each style.width change triggers full document relayout (~3ms)
+            var pctL = Math.min(100, Math.round(peakL * 100));
+            var pctR = Math.min(100, Math.round(peakR * 100));
             var bars = meters[i].children;
-            if (bars[0]) bars[0].style.width = pctL + '%';
-            if (bars[1]) bars[1].style.width = pctR + '%';
+            if (bars[0] && bars[0]._lastPct !== pctL) {
+                bars[0]._lastPct = pctL;
+                bars[0].style.width = pctL + '%';
+            }
+            if (bars[1] && bars[1]._lastPct !== pctR) {
+                bars[1]._lastPct = pctR;
+                bars[1].style.width = pctR + '%';
+            }
         }
     }
 

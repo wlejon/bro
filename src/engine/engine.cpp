@@ -769,9 +769,18 @@ void Engine::run() {
 
             // Notify ResizeObserver / IntersectionObserver after layout
             if (jsRuntime_) {
-                    JSValue r = JS_Eval(jsRuntime_->getContext(), js_observer_check,
-                                    strlen(js_observer_check), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
-                JS_FreeValue(jsRuntime_->getContext(), r);
+                auto* ctx = jsRuntime_->getContext();
+                // Compile observer check once, reuse thereafter
+                if (JS_IsUndefined(observerCheckFn_)) {
+                    observerCheckFn_ = JS_Eval(ctx, js_observer_check,
+                                               strlen(js_observer_check),
+                                               "<observer-check>",
+                                               JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+                }
+                if (!JS_IsUndefined(observerCheckFn_) && !JS_IsException(observerCheckFn_)) {
+                    JSValue r = JS_EvalFunction(ctx, JS_DupValue(ctx, observerCheckFn_));
+                    JS_FreeValue(ctx, r);
+                }
             }
 
             uiDirty_ = true;

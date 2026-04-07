@@ -10,6 +10,7 @@
 #include <string>
 #include <glad/gl.h>
 #include <include/core/SkSurface.h>
+#include <quickjs.h>
 
 
 namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
@@ -150,6 +151,9 @@ private:
     bool running_ = false;
     int viewportWidth_;
     int viewportHeight_;
+
+    // Pre-compiled observer check function (avoids JS_Eval parse per frame)
+    JSValue observerCheckFn_ = JS_UNDEFINED;
     AppManifest manifest_;
     std::vector<std::unique_ptr<render::SceneLayer>> sceneLayers_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
