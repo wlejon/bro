@@ -819,7 +819,6 @@ void Engine::run() {
             }
 
             uiDirty_ = true;
-            lastUIRenderMs_ = now;
             tLayout = util::currentTimeMs();
         }
         accumLayoutMs_ += tLayout - tJs;
@@ -827,8 +826,11 @@ void Engine::run() {
         // === GPU FRAME (OpenGL) ===
 
         // 5a. Rasterize HTML layers to Skia surfaces if dirty
+        //     Throttled to ~120fps — HTML controls don't need full frame rate.
+        //     Canvas/WebGL layers still render every frame independently.
         double tRaster = tLayout;
-        if (uiDirty_ || !hasRenderedOnce_) {
+        bool uiThrottled = (now - lastUIRenderMs_ < kUIFrameIntervalMs);
+        if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
             // Invalidate surface pool on viewport resize
             if (htmlSurfacePoolW_ != viewportWidth_ || htmlSurfacePoolH_ != viewportHeight_) {
                 for (auto& ps : htmlSurfacePool_) {
@@ -986,6 +988,7 @@ void Engine::run() {
             drawTraversal_->setLayerBreakCallback(nullptr);
             hasRenderedOnce_ = true;
             uiDirty_ = false;
+            lastUIRenderMs_ = now;
         }
 
         // Rasterize canvas scenes (flush deferred Skia commands + upload texture).
