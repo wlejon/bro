@@ -506,8 +506,9 @@ void SkiaRenderer::endFrame() {
     canvas_ = nullptr;
 
     if (gpuMode_ && grContext_) {
-        // Flush Skia GPU commands — renders directly to uiTexture_ via FBO
-        grContext_->flushAndSubmit(surface_.get());
+        // Flush all Skia GPU commands across all surfaces (including
+        // HTML layer pool surfaces that were drawn to via switchSurface).
+        grContext_->flushAndSubmit();
         pixelsPending_ = false;
     } else {
         pixelsPending_ = (surface_ && uiTexture_);
@@ -559,6 +560,38 @@ GLuint SkiaRenderer::uploadSurfaceToTexture(SkSurface* surface, GLuint existingT
     }
     gl_->uploadTexture2D(tex, pixmap.addr(), w, h, GL_BGRA, GL_UNSIGNED_BYTE);
     return tex;
+}
+
+SkiaRenderer::GPUSurface SkiaRenderer::createGPUSurface(int width, int height) {
+    GPUSurface result;
+    if (!gpuMode_ || !grContext_ || !gl_) return result;
+
+    result.texture = gl_->createTexture2D(width, height, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
+
+    glGenFramebuffers(1, &result.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, result.fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, result.texture, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    GrGLFramebufferInfo fbInfo;
+    fbInfo.fFBOID = result.fbo;
+    fbInfo.fFormat = GL_RGBA8;
+    fbInfo.fProtected = skgpu::Protected::kNo;
+    auto backendRT = GrBackendRenderTargets::MakeGL(width, height, 0, 0, fbInfo);
+    result.surface = SkSurfaces::WrapBackendRenderTarget(
+        grContext_.get(), backendRT,
+        kTopLeft_GrSurfaceOrigin,
+        kRGBA_8888_SkColorType,
+        SkColorSpace::MakeSRGB(), nullptr);
+
+    return result;
+}
+
+void SkiaRenderer::destroyGPUSurface(GPUSurface& surf) {
+    surf.surface.reset();
+    if (surf.fbo) { glDeleteFramebuffers(1, &surf.fbo); surf.fbo = 0; }
+    if (surf.texture && gl_) { gl_->deleteTexture(surf.texture); surf.texture = 0; }
 }
 
 GLuint SkiaRenderer::renderTextToTexture(std::string_view text,

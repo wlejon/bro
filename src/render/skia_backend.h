@@ -104,6 +104,21 @@ public:
     /// Reuses existingTex if size matches, otherwise creates a new one.
     GLuint uploadSurfaceToTexture(SkSurface* surface, GLuint existingTex = 0);
 
+    /// GPU-backed Skia surface (Ganesh) with its own FBO + GL texture.
+    /// Used for HTML compositing layers so rendering goes directly to GPU
+    /// with no CPU→GPU upload.
+    struct GPUSurface {
+        sk_sp<SkSurface> surface;
+        GLuint texture = 0;
+        GLuint fbo = 0;
+    };
+
+    /// Create a GPU-backed Skia surface at the given dimensions.
+    GPUSurface createGPUSurface(int width, int height);
+
+    /// Destroy a GPU surface, releasing FBO and texture resources.
+    void destroyGPUSurface(GPUSurface& surf);
+
     /// Access the UI overlay GL texture (BGRA8, premultiplied alpha).
     GLuint getUITexture() const { return uiTexture_; }
 

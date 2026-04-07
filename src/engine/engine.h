@@ -5,6 +5,7 @@
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "layout/font_manager.h"
+#include "render/skia_backend.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -163,16 +164,17 @@ private:
     struct UILayer {
         enum Type { HTML, Canvas };
         Type type;
-        // HTML: Skia surface + GL texture
-        sk_sp<SkSurface> surface;
+        // HTML: GL texture (owned by htmlSurfacePool_)
         GLuint texture = 0;
         // Canvas: reference to CanvasScene + layout rect
         canvas::CanvasScene* canvasScene = nullptr;
         float cx = 0, cy = 0, cw = 0, ch = 0;
     };
     std::vector<UILayer> uiLayers_;
-    // Pool of reusable Skia surfaces for HTML layers
-    std::vector<sk_sp<SkSurface>> htmlSurfacePool_;
+    // Pool of reusable GPU-backed Skia surfaces for HTML layers.
+    // Each entry owns an FBO + GL texture — rendering goes directly
+    // to GPU via Ganesh with no CPU→GPU upload.
+    std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_;
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<SystemOverlay> systemOverlay_;

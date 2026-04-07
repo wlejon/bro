@@ -597,6 +597,13 @@ Engine::~Engine() {
     }
 
     // 3. GL cleanup (windowed only)
+    {
+        auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+        if (skia) {
+            for (auto& ps : htmlSurfacePool_) skia->destroyGPUSurface(ps);
+        }
+        htmlSurfacePool_.clear();
+    }
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
     if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
 
@@ -824,13 +831,10 @@ void Engine::run() {
         if (uiDirty_ || !hasRenderedOnce_) {
             // Invalidate surface pool on viewport resize
             if (htmlSurfacePoolW_ != viewportWidth_ || htmlSurfacePoolH_ != viewportHeight_) {
-                htmlSurfacePool_.clear();
-                for (auto& layer : uiLayers_) {
-                    if (layer.type == UILayer::HTML && layer.texture) {
-                        gl_->deleteTexture(layer.texture);
-                        layer.texture = 0;
-                    }
+                for (auto& ps : htmlSurfacePool_) {
+                    skia->destroyGPUSurface(ps);
                 }
+                htmlSurfacePool_.clear();
                 uiLayers_.clear();
                 htmlSurfacePoolW_ = viewportWidth_;
                 htmlSurfacePoolH_ = viewportHeight_;
@@ -845,17 +849,18 @@ void Engine::run() {
             drawTraversal_->setLayerBreakCallback(
                 [this, skia, &htmlLayerIdx](canvas::CanvasScene* scene,
                                             float x, float y, float w, float h) {
-                    // Start next HTML layer with a pooled surface
+                    // Start next HTML layer with a pooled GPU surface
+                    int prevIdx = htmlLayerIdx;
                     htmlLayerIdx++;
                     while (htmlLayerIdx >= (int)htmlSurfacePool_.size()) {
-                        htmlSurfacePool_.push_back(SkSurfaces::Raster(
-                            SkImageInfo::MakeN32Premul(viewportWidth_, viewportHeight_)));
+                        htmlSurfacePool_.push_back(
+                            skia->createGPUSurface(viewportWidth_, viewportHeight_));
                     }
                     // Switch to new surface; the previous surface becomes an HTML layer
-                    auto prevSurf = skia->switchSurface(htmlSurfacePool_[htmlLayerIdx]);
+                    skia->switchSurface(htmlSurfacePool_[htmlLayerIdx].surface);
                     UILayer htmlLayer;
                     htmlLayer.type = UILayer::HTML;
-                    htmlLayer.surface = std::move(prevSurf);
+                    htmlLayer.texture = htmlSurfacePool_[prevIdx].texture;
                     uiLayers_.push_back(std::move(htmlLayer));
 
                     // Insert canvas layer
@@ -871,14 +876,14 @@ void Engine::run() {
 
             renderer_->beginFrame(viewportWidth_, viewportHeight_);
 
-            // Ensure pool has a surface for HTML layer 0
+            // Ensure pool has a GPU surface for HTML layer 0
             if (htmlSurfacePool_.empty()) {
-                htmlSurfacePool_.push_back(SkSurfaces::Raster(
-                    SkImageInfo::MakeN32Premul(viewportWidth_, viewportHeight_)));
+                htmlSurfacePool_.push_back(
+                    skia->createGPUSurface(viewportWidth_, viewportHeight_));
             }
             // Switch to pool surface for HTML layer 0; renderer's
             // own surface is saved and restored at endFrame.
-            auto origSurface = skia->switchSurface(htmlSurfacePool_[0]);
+            auto origSurface = skia->switchSurface(htmlSurfacePool_[0].surface);
 
             if (document_ && document_->documentElement()) {
                 drawTraversal_->draw(document_->documentElement(), 0, -scrollY_,
@@ -957,21 +962,15 @@ void Engine::run() {
             }
 
             // Capture the current (last) HTML layer
-            auto lastPoolSurf = skia->switchSurface(origSurface);
+            skia->switchSurface(origSurface);
             UILayer lastHtml;
             lastHtml.type = UILayer::HTML;
-            lastHtml.surface = std::move(lastPoolSurf);
+            lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
             uiLayers_.push_back(std::move(lastHtml));
 
+            // Flush all Ganesh GPU commands — HTML layer textures are now ready.
+            // No CPU→GPU upload needed since pool surfaces render directly to GPU.
             renderer_->endFrame();
-
-            // Upload each HTML layer surface to its own GL texture
-            for (auto& layer : uiLayers_) {
-                if (layer.type == UILayer::HTML && layer.surface) {
-                    layer.texture = skia->uploadSurfaceToTexture(
-                        layer.surface.get(), layer.texture);
-                }
-            }
 
             drawTraversal_->setLayerBreakCallback(nullptr);
             hasRenderedOnce_ = true;
