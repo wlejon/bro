@@ -26,6 +26,7 @@
 #include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
+#include "js/worker.h"
 
 #include "api/api.h"
 #include "runtime/runtime.h"
@@ -317,6 +318,9 @@ Engine::Engine(const EngineConfig& config)
             });
     }
 
+    // 9d. Install Worker bindings
+    js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath);
+
     // 10. Load and execute scripts
     for (auto& scriptPath : manifest_.scriptPaths) {
         std::string code = AppLoader::loadFile(scriptPath);
@@ -604,6 +608,7 @@ Engine::~Engine() {
     if (jsRuntime_) {
         JSContext* ctx = jsRuntime_->getContext();
         js::setElementFinalizerShutdown(true);
+        js::cleanupWorkerBindings(ctx);
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
         if (gl_) {
@@ -1089,6 +1094,10 @@ void Engine::run() {
         double tGlSave = util::currentTimeMs();
 
         // 3b. Run pending JS jobs (promises, etc.)
+        jsRuntime_->executePendingJobs();
+
+        // 3b2. Drain worker→main messages (calls onmessage callbacks)
+        js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
 
         // 3c. Unbind WebGL FBO

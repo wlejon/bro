@@ -42,6 +42,8 @@ add_library(bro_js STATIC
     webgl2_bindings_queries.cpp
     image_bindings.cpp
     headless_bindings.cpp
+    message_serializer.cpp
+    worker.cpp
     ${GENERATED_HEADERS}
 )
 target_include_directories(bro_js PUBLIC ${CMAKE_SOURCE_DIR}/src)

@@ -15,6 +15,7 @@
 #include "js/timers.h"
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
+#include "js/worker.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -103,6 +104,8 @@ void Engine::advanceTime(double ms) {
         if (webglScene && webglScene->webglContext())
             webglScene->webglContext()->bindCanvasFBO();
         timers_->fireAnimationFrames(virtualTime_);
+        jsRuntime_->executePendingJobs();
+        js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
         if (webglScene && webglScene->webglContext())
             webglScene->webglContext()->unbindCanvasFBO();
