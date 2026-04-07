@@ -5,21 +5,22 @@ A lightweight desktop application runtime that runs HTML/CSS/JS apps as native w
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────┐
-│                    bro <app-dir>                      │
-├──────────┬──────────┬──────────┬──────────┬───────────┤
-│  QuickJS │  brokit  │htmlayout │   Skia   │   SDL3    │
-│   (JS)   │ (APIs)   │ (Layout) │ (Render) │ (Window)  │
-└──────────┴──────────┴──────────┴──────────┴───────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         bro <app-dir>                            │
+├──────────┬──────────┬──────────┬──────────┬──────────┬───────────┤
+│  QuickJS │  brokit  │htmlayout │ broaudio │   Skia   │   SDL3    │
+│   (JS)   │ (APIs)   │ (Layout) │ (Audio)  │ (Render) │ (Window)  │
+└──────────┴──────────┴──────────┴──────────┴──────────┴───────────┘
 ```
 
 - **QuickJS** — ES2023 JavaScript engine with DOM API bindings.
 - **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
 - **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
+- **broaudio** — Real-time audio engine: synthesis (oscillators, wavetable, noise), effects (filters, delay, reverb), spatial audio, MIDI input, and mixing bus architecture. See [broaudio](https://github.com/wlejon/broaudio).
 - **Skia** — 2D rasterization (text, paths, images, gradients). Renders to a CPU surface, uploaded to GPU each frame.
 - **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU.
 
-C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the three repos.
+C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the four repos.
 
 ## Features
 
@@ -30,7 +31,7 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing).
 - SVG rendering (basic shapes, paths, transforms)
 - Canvas 2D API
 - WebGL 2.0
-- Audio playback (SDL3)
+- Web Audio API with synthesis (oscillators, wavetable, noise), effects, spatial audio, and MIDI input (broaudio)
 - Form controls (`<input>`, `<textarea>`, `<select>` with text editing, cursor, focus, tab navigation)
 - Web Components with Shadow DOM (custom elements, slots, style encapsulation)
 - Fetch API, localStorage/sessionStorage

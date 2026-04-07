@@ -48,9 +48,9 @@ Skia is a pre-built dependency. On Linux, run `third_party/skia/build_skia_linux
 
 ## Architecture
 
-Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~6K LOC of C++20.
+Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~31K LOC of C++20.
 
-**Stack:** QuickJS (JS engine) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + Skia (raster rendering) + SDL3 (windowing + GPU display)
+**Stack:** QuickJS (JS engine) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + broaudio (audio engine) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 
 **Two executables, one Engine:**
 - `bro` — windowed app runner (DisplayMode::Windowed)
@@ -97,6 +97,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | QuickJS | `qjs` | JS engine, built as library |
 | brokit | `brokit` | Web-standard + system APIs (fetch, streams, storage, fs, crypto, events) |
 | htmlayout | `htmlayout` | HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, layout |
+| broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) |
 | SDL3 | `SDL3::SDL3` | Built from submodule (static) |
 | Skia | `skia` (imported) | Pre-built binaries, auto-detected |
 
