@@ -395,6 +395,11 @@ void Engine::addSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     if (scene) {
         scene->init(gl_.get());
+        // Share GPU Skia context for hardware-accelerated canvas rendering
+        auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+        if (skia && skia->grContext()) {
+            scene->setGrContext(skia->grContext());
+        }
     }
     canvasScenes_.push_back(std::move(scene));
 }
@@ -536,11 +541,9 @@ void Engine::compositeLayers() {
                         {cx,    cy,    0, 0}, {cx+cw, cy+ch, 1, 1}, {cx,    cy+ch, 0, 1},
                     };
                     glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-                    // Canvas textures use non-premultiplied alpha
-                    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                    // Canvas textures use premultiplied alpha (same as HTML layers)
                     glBindTexture(GL_TEXTURE_2D, tex);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
-                    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                 }
             }
         }
@@ -977,9 +980,21 @@ void Engine::run() {
 
         // Rasterize canvas scenes (flush deferred Skia commands + upload texture).
         // Done every frame since canvases animate independently of HTML layout.
-        for (auto& layer : uiLayers_) {
-            if (layer.type == UILayer::Canvas && layer.canvasScene) {
-                layer.canvasScene->rasterize(gl_.get());
+        {
+            bool anyCanvasRasterized = false;
+            for (auto& layer : uiLayers_) {
+                if (layer.type == UILayer::Canvas && layer.canvasScene) {
+                    layer.canvasScene->rasterize(gl_.get());
+                    anyCanvasRasterized = true;
+                }
+            }
+            // After Ganesh canvas rendering, reset GL state so the engine's
+            // raw GL compositing pass and next frame's SkiaRenderer see clean state.
+            if (anyCanvasRasterized) {
+                auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+                if (skia && skia->grContext()) {
+                    skia->grContext()->resetContext();
+                }
             }
         }
         tRaster = util::currentTimeMs();

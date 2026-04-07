@@ -14,6 +14,10 @@
 #include <include/core/SkPathBuilder.h>
 #include <include/core/SkPixmap.h>
 #include <include/core/SkSamplingOptions.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
+#include <include/gpu/ganesh/GrBackendSurface.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
+#include <include/gpu/ganesh/gl/GrGLBackendSurface.h>
 
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
@@ -61,10 +65,15 @@ CanvasScene::~CanvasScene() {
 void CanvasScene::cleanup() {
     surface_.reset();
     surfWidth_ = surfHeight_ = 0;
+    if (gpuFBO_) {
+        glDeleteFramebuffers(1, &gpuFBO_);
+        gpuFBO_ = 0;
+    }
     if (glTexture_) {
         glDeleteTextures(1, &glTexture_);
         glTexture_ = 0;
     }
+    texWidth_ = texHeight_ = 0;
     fontCache_.clear();
 }
 
@@ -93,10 +102,47 @@ int CanvasScene::queryLayoutHeight() const {
 void CanvasScene::ensureSurface(int w, int h) {
     if (surface_ && surfWidth_ == w && surfHeight_ == h) return;
 
-    auto info = SkImageInfo::MakeN32Premul(w, h);
-    surface_ = SkSurfaces::Raster(info);
     surfWidth_ = w;
     surfHeight_ = h;
+
+    if (grContext_) {
+        // GPU path: create FBO + texture, wrap with Skia Ganesh
+        if (!glTexture_) {
+            glGenTextures(1, &glTexture_);
+        }
+        glBindTexture(GL_TEXTURE_2D, glTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        texWidth_ = w;
+        texHeight_ = h;
+
+        if (!gpuFBO_) {
+            glGenFramebuffers(1, &gpuFBO_);
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, gpuFBO_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, glTexture_, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        GrGLFramebufferInfo fbInfo;
+        fbInfo.fFBOID = gpuFBO_;
+        fbInfo.fFormat = GL_RGBA8;
+        auto backendRT = GrBackendRenderTargets::MakeGL(w, h, 0, 0, fbInfo);
+        surface_ = SkSurfaces::WrapBackendRenderTarget(
+            grContext_, backendRT,
+            kTopLeft_GrSurfaceOrigin,
+            kRGBA_8888_SkColorType,
+            SkColorSpace::MakeSRGB(), nullptr);
+    } else {
+        // CPU fallback (headless --no-gpu)
+        auto info = SkImageInfo::MakeN32Premul(w, h);
+        surface_ = SkSurfaces::Raster(info);
+    }
 
     // Clear to transparent (canvas default)
     if (surface_) {
@@ -768,18 +814,31 @@ void CanvasScene::rasterize(render::GLContext* gl) {
     ensureSurface(canvasW, canvasH);
 
     // Replay deferred canvas commands onto the Skia surface
+    if (grContext_) {
+        // Tell Ganesh to re-sync with actual GL state before drawing,
+        // since the engine's raw GL operations may have changed it.
+        grContext_->resetContext();
+    }
+
     flushCommands();
 
     if (!dirty_) return;
     dirty_ = false;
 
+    if (grContext_) {
+        // GPU path: Skia already drew to the FBO texture via Ganesh.
+        // Flush GPU commands and restore default framebuffer.
+        grContext_->flushAndSubmit();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return;
+    }
+
+    // CPU fallback: upload raster pixels to GL texture
     if (!surface_) return;
 
-    // Read pixels from Skia surface
     SkPixmap pixmap;
     if (!surface_->peekPixels(&pixmap)) return;
 
-    // Create or resize GL texture — use glTexSubImage2D when size unchanged
     bool needsAlloc = false;
     if (!glTexture_) {
         glGenTextures(1, &glTexture_);

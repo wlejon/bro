@@ -17,6 +17,8 @@
 
 #include <glad/gl.h>
 
+class GrDirectContext;
+
 namespace bro::render { class GLContext; }
 
 namespace bro::canvas {
@@ -66,6 +68,11 @@ public:
     void setDetachedCallback(DetachedCallback cb, void* ud) { detachedCb_ = cb; detachedUd_ = ud; }
 
     void init(render::GLContext* gl) { gl_ = gl; }
+
+    /// Set Ganesh GPU context for GPU-accelerated canvas rendering.
+    /// If set, Skia draws directly to GPU (no CPU raster + upload).
+    void setGrContext(GrDirectContext* ctx) { grContext_ = ctx; }
+
     void cleanup();
 
     render::Renderer* renderer() const { return renderer_; }
@@ -213,6 +220,8 @@ private:
 
     render::Renderer* renderer_;
     render::GLContext* gl_ = nullptr;
+    GrDirectContext* grContext_ = nullptr;  // GPU Skia context (null = CPU fallback)
+    GLuint gpuFBO_ = 0;                    // FBO for GPU-backed canvas surface
     LayoutCallback layoutCb_ = nullptr;
     void* layoutUd_ = nullptr;
     DetachedCallback detachedCb_ = nullptr;

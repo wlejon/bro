@@ -33,6 +33,9 @@ public:
     explicit SkiaRenderer(GLContext& gl);
     ~SkiaRenderer() override;
 
+    /// GPU Skia context (Ganesh GL) — nullptr if CPU-only mode.
+    GrDirectContext* grContext() const { return grContext_.get(); }
+
     void clear(Color color) override;
 
     void drawRect(float x, float y, float w, float h, Color color) override;
