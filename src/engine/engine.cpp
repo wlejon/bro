@@ -401,11 +401,15 @@ void Engine::addSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     if (scene) {
         scene->init(gl_.get());
-        // Use main thread's GrDirectContext for canvas (raster thread owns its own).
-        // Fall back to renderer's context if mainGrContext_ not yet created (startup).
-        if (mainGrContext_) {
-            scene->setGrContext(mainGrContext_.get());
+        // In windowed GPU mode, each canvas gets its own thread with a shared
+        // GL context + GrDirectContext for parallel rasterization.
+        if (displayMode_ == DisplayMode::Windowed && window_) {
+            auto ctx = window_->createSharedContext();
+            if (ctx) {
+                scene->startThread(ctx, window_->getSDLWindow());
+            }
         } else {
+            // Headless / CPU fallback: use renderer's GrContext directly
             auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
             if (skia && skia->grContext()) {
                 scene->setGrContext(skia->grContext());
@@ -570,7 +574,9 @@ Engine::~Engine() {
         SDL_GL_DestroyContext(rasterGLContext_);
         rasterGLContext_ = nullptr;
     }
-    mainGrContext_.reset();
+
+    // Canvas threads are stopped by ~CanvasScene (unique_ptr destruction)
+    canvasScenes_.clear();
 
     for (auto& sl : sceneLayers_) {
         if (sl) sl->onCleanup();
@@ -945,17 +951,12 @@ void Engine::run() {
         return;
     }
 
-    // Main thread gets its own GrDirectContext for canvas scenes
-    // (the raster thread will create its own for HTML draw traversal).
-    mainGrContext_ = render::SkiaRenderer::createGrContext();
-    if (!mainGrContext_) {
-        LOG_ERROR("Failed to create main-thread GrDirectContext");
-        return;
-    }
-
-    // Wire existing canvas scenes to the main thread's GrDirectContext
+    // Start canvas threads for any existing canvas scenes
     for (auto& cs : canvasScenes_) {
-        if (cs) cs->setGrContext(mainGrContext_.get());
+        if (cs && !cs->isThreaded()) {
+            auto ctx = window_->createSharedContext();
+            if (ctx) cs->startThread(ctx, window_->getSDLWindow());
+        }
     }
 
     // Launch raster thread
@@ -1102,20 +1103,14 @@ void Engine::run() {
             lastUIRenderMs_ = now;
         }
 
-        // 5b. Rasterize canvas scenes on main thread (main GrContext).
+        // 5b. Signal canvas threads (each has its own GL context + GrDirectContext).
         //     Done every frame since canvases animate independently of HTML layout.
+        //     Canvas threads run in parallel with the raster thread.
         int front = rasterShared_.frontBuffer.load(std::memory_order_acquire);
         auto& frontLayers = layerBuffers_[front].layers;
-        {
-            bool anyCanvasRasterized = false;
-            for (auto& layer : frontLayers) {
-                if (layer.type == UILayer::Canvas && layer.canvasScene) {
-                    layer.canvasScene->rasterize(gl_.get());
-                    anyCanvasRasterized = true;
-                }
-            }
-            if (anyCanvasRasterized && mainGrContext_) {
-                mainGrContext_->resetContext();
+        for (auto& layer : frontLayers) {
+            if (layer.type == UILayer::Canvas && layer.canvasScene) {
+                layer.canvasScene->prepareAndSignal();
             }
         }
         tRaster = util::currentTimeMs();
@@ -1133,6 +1128,13 @@ void Engine::run() {
             // Re-read front buffer (raster thread may have flipped it)
             front = rasterShared_.frontBuffer.load(std::memory_order_acquire);
             rasterShared_.state.store(kRasterIdle, std::memory_order_release);
+        }
+
+        // 5c2. Wait for canvas thread fences before compositing.
+        for (auto& layer : frontLayers) {
+            if (layer.type == UILayer::Canvas && layer.canvasScene) {
+                layer.canvasScene->consumeFence();
+            }
         }
 
         double tGpu = util::currentTimeMs();
@@ -1275,7 +1277,11 @@ void Engine::run() {
         SDL_GL_DestroyContext(rasterGLContext_);
         rasterGLContext_ = nullptr;
     }
-    mainGrContext_.reset();
+
+    // Stop canvas threads before GL context cleanup
+    for (auto& cs : canvasScenes_) {
+        if (cs) cs->stopThread();
+    }
 
     SDL_RemoveEventWatch(modalEventWatcher, this);
 }

@@ -3,7 +3,9 @@
 #include "canvas/canvas2d.h"
 #include "render/renderer.h"
 
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 #include <unordered_map>
 
@@ -14,14 +16,26 @@
 #include <include/core/SkPathBuilder.h>
 #include <include/core/SkSurface.h>
 #include <include/core/SkTypeface.h>
+#include <include/gpu/ganesh/GrDirectContext.h>
 
 #include <glad/gl.h>
 
 class GrDirectContext;
+struct SDL_Window;
+typedef struct SDL_GLContextState* SDL_GLContext;
 
 namespace bro::render { class GLContext; }
 
 namespace bro::canvas {
+
+/// Canvas thread state machine (atomics only, no mutexes).
+enum CanvasThreadState : uint32_t {
+    kCanvasIdle            = 0,  // Canvas thread waiting for work
+    kCanvasCommandsReady   = 1,  // Main thread: commands staged, go rasterize
+    kCanvasBusy            = 2,  // Canvas thread is processing
+    kCanvasTextureReady    = 3,  // Canvas thread: new texture + GL fence ready
+    kCanvasShutdown        = 4,  // Main thread: terminate canvas thread
+};
 
 /// Deferred canvas command — recorded during JS, replayed during rasterize().
 struct CanvasCmd {
@@ -80,6 +94,28 @@ public:
     }
 
     void cleanup();
+
+    // --- Threading (windowed GPU mode) ---
+
+    /// Start a dedicated canvas thread with the given shared GL context.
+    /// Called from the main thread after createSharedContext().
+    void startThread(SDL_GLContext glCtx, SDL_Window* win);
+
+    /// Stop the canvas thread and destroy the GL context.
+    void stopThread();
+
+    /// Main thread: query layout, swap commands, signal canvas thread.
+    /// No-op if not threaded or no work to do.
+    void prepareAndSignal();
+
+    /// Main thread: if canvas thread has a texture ready, consume the GL fence.
+    void consumeFence();
+
+    /// Synchronously flush all pending commands (blocks until canvas thread idle).
+    /// Used by getImageData() which needs immediate surface access.
+    void flushSync();
+
+    bool isThreaded() const { return threaded_; }
 
     render::Renderer* renderer() const { return renderer_; }
     int width() const { return queryLayoutWidth(); }
@@ -210,8 +246,13 @@ public:
     }
 
 private:
+    /// Canvas thread entry point.
+    void canvasThreadFunc(SDL_Window* win);
+
     /// Replay all deferred commands onto the Skia canvas.
     void flushCommands();
+    /// Replay staged commands (canvas thread path).
+    void flushStagedCommands();
 
     int queryLayoutWidth() const;
     int queryLayoutHeight() const;
@@ -292,6 +333,20 @@ private:
         SkFont font;
     };
     std::unordered_map<std::string, FontCacheEntry> fontCache_;
+
+    // --- Canvas thread state ---
+    bool threaded_ = false;
+    struct CanvasShared {
+        std::atomic<uint32_t> state{kCanvasIdle};
+        std::atomic<uintptr_t> fenceSync{0};
+        std::atomic<int> canvasWidth{0};
+        std::atomic<int> canvasHeight{0};
+    };
+    CanvasShared canvasShared_;
+    std::thread canvasThread_;
+    SDL_GLContext canvasGLContext_ = nullptr;
+    sk_sp<GrDirectContext> threadGrContext_;
+    std::vector<CanvasCmd> stagedCommands_;
 };
 
 } // namespace bro::canvas

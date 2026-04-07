@@ -1,5 +1,9 @@
 #include "canvas/canvas_scene.h"
 #include "render/gl_context.h"
+#include "render/skia_backend.h"
+#include "util/log.h"
+
+#include <SDL3/SDL.h>
 
 #include <include/core/SkColorSpace.h>
 #include <include/core/SkData.h>
@@ -59,6 +63,7 @@ CanvasScene::CanvasScene(render::Renderer* renderer)
 }
 
 CanvasScene::~CanvasScene() {
+    stopThread();
     cleanup();
 }
 
@@ -75,6 +80,257 @@ void CanvasScene::cleanup() {
     }
     texWidth_ = texHeight_ = 0;
     fontCache_.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Threading
+// ---------------------------------------------------------------------------
+
+void CanvasScene::startThread(SDL_GLContext glCtx, SDL_Window* win) {
+    if (threaded_ || !glCtx || !win) return;
+    canvasGLContext_ = glCtx;
+    threaded_ = true;
+    canvasShared_.state.store(kCanvasIdle, std::memory_order_relaxed);
+    canvasThread_ = std::thread(&CanvasScene::canvasThreadFunc, this, win);
+}
+
+void CanvasScene::stopThread() {
+    if (!threaded_) return;
+    canvasShared_.state.store(kCanvasShutdown, std::memory_order_release);
+    canvasShared_.state.notify_one();
+    if (canvasThread_.joinable()) {
+        canvasThread_.join();
+    }
+    threadGrContext_.reset();
+    if (canvasGLContext_) {
+        SDL_GL_DestroyContext(canvasGLContext_);
+        canvasGLContext_ = nullptr;
+    }
+    threaded_ = false;
+}
+
+void CanvasScene::canvasThreadFunc(SDL_Window* win) {
+    SDL_GL_MakeCurrent(win, canvasGLContext_);
+
+    threadGrContext_ = render::SkiaRenderer::createGrContext();
+    if (!threadGrContext_) {
+        LOG_ERROR("Canvas thread: failed to create GrDirectContext");
+        return;
+    }
+    // Wire this thread's GrContext for surface creation
+    grContext_ = threadGrContext_.get();
+
+    LOG_INFO("Canvas thread started");
+
+    while (true) {
+        canvasShared_.state.wait(kCanvasIdle, std::memory_order_acquire);
+        uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
+
+        if (s == kCanvasShutdown) break;
+        if (s != kCanvasCommandsReady) continue;
+
+        canvasShared_.state.store(kCanvasBusy, std::memory_order_relaxed);
+
+        int cw = canvasShared_.canvasWidth.load(std::memory_order_relaxed);
+        int ch = canvasShared_.canvasHeight.load(std::memory_order_relaxed);
+
+        ensureSurface(cw, ch);
+
+        if (threadGrContext_) {
+            threadGrContext_->resetContext();
+        }
+
+        flushStagedCommands();
+
+        if (dirty_) {
+            dirty_ = false;
+            if (threadGrContext_) {
+                threadGrContext_->flushAndSubmit();
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            }
+        }
+
+        // GL fence sync — ensures GPU commands complete before main thread
+        // samples the texture for compositing.
+        GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+
+        canvasShared_.fenceSync.store(reinterpret_cast<uintptr_t>(fence),
+                                       std::memory_order_relaxed);
+        canvasShared_.state.store(kCanvasTextureReady, std::memory_order_release);
+        canvasShared_.state.notify_one();
+    }
+
+    // Cleanup GL resources on this thread's context
+    surface_.reset();
+    threadGrContext_->flushAndSubmit();
+    grContext_ = nullptr;
+
+    SDL_GL_MakeCurrent(win, nullptr);
+    LOG_INFO("Canvas thread stopped");
+}
+
+void CanvasScene::prepareAndSignal() {
+    if (!threaded_) return;
+
+    // Only signal when canvas thread is idle
+    uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
+    if (s != kCanvasIdle) return;
+
+    // Check if element was removed from the DOM
+    if (detachedCb_ && detachedCb_(detachedUd_)) {
+        detached_ = true;
+        return;
+    }
+
+    // Query element layout position and size (main thread, DOM access)
+    float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
+    if (layoutCb_) {
+        layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
+        if (layoutW <= 0 || layoutH <= 0) return;
+    }
+
+    screenX_ = layoutX;
+    screenY_ = layoutY - viewportScrollY_;
+
+    int canvasW = static_cast<int>(layoutW);
+    int canvasH = static_cast<int>(layoutH);
+
+    // Only signal if there's work to do (commands or resize)
+    bool needsResize = (canvasW != surfWidth_ || canvasH != surfHeight_);
+    if (commands_.empty() && !needsResize) return;
+
+    // Swap commands to staged buffer (main thread only touches both when idle)
+    std::swap(commands_, stagedCommands_);
+
+    // Publish dimensions and signal
+    canvasShared_.canvasWidth.store(canvasW, std::memory_order_relaxed);
+    canvasShared_.canvasHeight.store(canvasH, std::memory_order_relaxed);
+    canvasShared_.state.store(kCanvasCommandsReady, std::memory_order_release);
+    canvasShared_.state.notify_one();
+}
+
+void CanvasScene::consumeFence() {
+    if (!threaded_) return;
+
+    uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
+    if (s == kCanvasTextureReady) {
+        auto fence = reinterpret_cast<GLsync>(
+            canvasShared_.fenceSync.exchange(0, std::memory_order_relaxed));
+        if (fence) {
+            glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
+            glDeleteSync(fence);
+        }
+        canvasShared_.state.store(kCanvasIdle, std::memory_order_release);
+    } else if (s == kCanvasBusy) {
+        // Canvas thread still working — wait for it to finish
+        canvasShared_.state.wait(kCanvasBusy, std::memory_order_acquire);
+        // Recurse once to consume the fence (now should be kCanvasTextureReady)
+        consumeFence();
+    }
+}
+
+void CanvasScene::flushSync() {
+    if (!threaded_) {
+        flushCommands();
+        return;
+    }
+
+    // If canvas thread is busy, wait for it to finish first
+    uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
+    if (s == kCanvasBusy) {
+        canvasShared_.state.wait(kCanvasBusy, std::memory_order_acquire);
+        s = canvasShared_.state.load(std::memory_order_acquire);
+    }
+    if (s == kCanvasTextureReady) {
+        consumeFence();
+        s = canvasShared_.state.load(std::memory_order_acquire);
+    }
+
+    // Now idle — swap commands and signal
+    if (s == kCanvasIdle && !commands_.empty()) {
+        int cw = queryLayoutWidth();
+        int ch = queryLayoutHeight();
+        std::swap(commands_, stagedCommands_);
+        canvasShared_.canvasWidth.store(cw, std::memory_order_relaxed);
+        canvasShared_.canvasHeight.store(ch, std::memory_order_relaxed);
+        canvasShared_.state.store(kCanvasCommandsReady, std::memory_order_release);
+        canvasShared_.state.notify_one();
+
+        // Wait for completion
+        canvasShared_.state.wait(kCanvasCommandsReady, std::memory_order_acquire);
+        canvasShared_.state.wait(kCanvasBusy, std::memory_order_acquire);
+        consumeFence();
+    }
+}
+
+void CanvasScene::flushStagedCommands() {
+    if (stagedCommands_.empty()) return;
+
+    auto* c = skCanvas();
+    if (!c) { stagedCommands_.clear(); return; }
+
+    for (auto& cmd : stagedCommands_) {
+        switch (cmd.type) {
+        case CanvasCmd::kFillRect:
+        case CanvasCmd::kStrokeRect:
+            c->drawRect(SkRect::MakeXYWH(cmd.p[0], cmd.p[1], cmd.p[2], cmd.p[3]), cmd.paint);
+            break;
+        case CanvasCmd::kClearRect: {
+            SkPaint clr;
+            clr.setBlendMode(SkBlendMode::kClear);
+            c->drawRect(SkRect::MakeXYWH(cmd.p[0], cmd.p[1], cmd.p[2], cmd.p[3]), clr);
+            break;
+        }
+        case CanvasCmd::kStrokePath:
+        case CanvasCmd::kFillPath:
+            c->drawPath(cmd.path, cmd.paint);
+            break;
+        case CanvasCmd::kClipPath:
+            c->clipPath(cmd.path, true);
+            break;
+        case CanvasCmd::kFillText:
+        case CanvasCmd::kStrokeText:
+            c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
+                              cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
+            break;
+        case CanvasCmd::kDrawImage:
+            c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,
+                             SkCanvas::kStrict_SrcRectConstraint);
+            break;
+        case CanvasCmd::kPutImageData:
+            c->save();
+            c->resetMatrix();
+            c->drawImage(cmd.img, cmd.p[0], cmd.p[1], cmd.samp, &cmd.paint);
+            c->restore();
+            break;
+        case CanvasCmd::kSave:    c->save(); break;
+        case CanvasCmd::kRestore: c->restore(); break;
+        case CanvasCmd::kTranslate: c->translate(cmd.p[0], cmd.p[1]); break;
+        case CanvasCmd::kRotate:    c->rotate(cmd.p[0]); break;
+        case CanvasCmd::kScale:     c->scale(cmd.p[0], cmd.p[1]); break;
+        case CanvasCmd::kSetTransform: {
+            c->resetMatrix();
+            SkMatrix m;
+            m.setAll(cmd.p[0], cmd.p[2], cmd.p[4], cmd.p[1], cmd.p[3], cmd.p[5], 0, 0, 1);
+            c->concat(m);
+            break;
+        }
+        case CanvasCmd::kResetTransform:
+            c->resetMatrix();
+            break;
+        case CanvasCmd::kConcatTransform: {
+            SkMatrix m;
+            m.setAll(cmd.p[0], cmd.p[2], cmd.p[4], cmd.p[1], cmd.p[3], cmd.p[5], 0, 0, 1);
+            c->concat(m);
+            break;
+        }
+        case CanvasCmd::kReset:
+            c->clear(SK_ColorTRANSPARENT);
+            break;
+        }
+    }
+    stagedCommands_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -673,7 +929,11 @@ void CanvasScene::drawImage(const void* rgbaData, int imgW, int imgH,
 
 std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
     // Flush deferred commands so pixel state is current
-    flushCommands();
+    if (threaded_) {
+        flushSync();
+    } else {
+        flushCommands();
+    }
 
     std::vector<uint8_t> pixels(w * h * 4, 0);
     if (!surface_) return pixels;

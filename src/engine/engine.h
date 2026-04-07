@@ -199,10 +199,6 @@ private:
     std::thread rasterThread_;
     SDL_GLContext rasterGLContext_ = nullptr;
 
-    // Main thread's own GrDirectContext (for canvas scenes after raster thread
-    // takes ownership of the SkiaRenderer's GrDirectContext).
-    sk_sp<GrDirectContext> mainGrContext_;
-
     // Double-buffered layer lists for lock-free handoff.
     // Raster thread writes to back buffer, main reads front buffer.
     struct LayerBuffer {
