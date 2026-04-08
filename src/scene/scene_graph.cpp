@@ -84,6 +84,30 @@ SceneNode* SceneGraph::findByName(const std::string& name) const {
     return nullptr;
 }
 
+void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
+                           const Vec3& eye, const Vec3& target, const Vec3& up) {
+    projectionMatrix_ = Mat4::perspective(fovY, aspect, nearZ, farZ);
+    viewMatrix_ = Mat4::lookAt(eye, target, up);
+    cameraEye_ = eye;
+}
+
+void SceneGraph::setCameraOrtho(float left, float right, float bottom, float top,
+                                float nearZ, float farZ,
+                                const Vec3& eye, const Vec3& target, const Vec3& up) {
+    projectionMatrix_ = Mat4::orthographic(left, right, bottom, top, nearZ, farZ);
+    viewMatrix_ = Mat4::lookAt(eye, target, up);
+    cameraEye_ = eye;
+}
+
+void SceneGraph::setCameraPosition(float x, float y) {
+    cameraX_ = x;
+    cameraY_ = y;
+}
+
+void SceneGraph::setCameraZoom(float z) {
+    cameraZoom_ = z;
+}
+
 void SceneGraph::syncPhysics() {
     if (!physicsWorld_) return;
     for (auto& [id, node] : nodes_) {

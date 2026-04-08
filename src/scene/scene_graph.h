@@ -57,10 +57,28 @@ public:
     /// Update world matrices for any dirty nodes, then render all visible nodes.
     void render();
 
-    // --- Camera (2D: offset + zoom) ---
+    // --- Camera ---
 
-    void setCameraPosition(float x, float y) { cameraX_ = x; cameraY_ = y; }
-    void setCameraZoom(float z) { cameraZoom_ = z; }
+    /// Set a full 3D camera (perspective projection + lookAt view).
+    /// Call with fovY in radians, aspect ratio, near/far clip, eye position, look-at target.
+    void setCamera(float fovY, float aspect, float nearZ, float farZ,
+                   const Vec3& eye, const Vec3& target, const Vec3& up = {0, 1, 0});
+
+    /// Set an orthographic camera.
+    void setCameraOrtho(float left, float right, float bottom, float top,
+                        float nearZ, float farZ,
+                        const Vec3& eye, const Vec3& target, const Vec3& up = {0, 1, 0});
+
+    /// Direct matrix access (for Phase 4 MeshNode rendering).
+    const Mat4& viewMatrix() const { return viewMatrix_; }
+    const Mat4& projectionMatrix() const { return projectionMatrix_; }
+
+    /// Camera eye position (for lighting calculations).
+    const Vec3& cameraEye() const { return cameraEye_; }
+
+    // --- Legacy 2D camera (sets ortho projection + top-down view) ---
+    void setCameraPosition(float x, float y);
+    void setCameraZoom(float z);
     float cameraX() const { return cameraX_; }
     float cameraY() const { return cameraY_; }
     float cameraZoom() const { return cameraZoom_; }
@@ -75,6 +93,12 @@ private:
     canvas::CanvasScene* canvasScene_ = nullptr;
     physics::PhysicsWorld* physicsWorld_ = nullptr;
 
+    // 3D camera matrices
+    Mat4 viewMatrix_;
+    Mat4 projectionMatrix_;
+    Vec3 cameraEye_;
+
+    // Legacy 2D camera state (drives the CanvasScene 2D path)
     float cameraX_ = 0, cameraY_ = 0;
     float cameraZoom_ = 1.0f;
 };

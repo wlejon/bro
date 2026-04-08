@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <functional>
@@ -180,6 +181,52 @@ struct Mat4 {
             m[0][1] * d.x + m[1][1] * d.y + m[2][1] * d.z,
             m[0][2] * d.x + m[1][2] * d.y + m[2][2] * d.z
         };
+    }
+
+    /// Perspective projection matrix (like glFrustum / gluPerspective).
+    /// fovY in radians, aspect = width/height.
+    static Mat4 perspective(float fovY, float aspect, float nearZ, float farZ) {
+        float f = 1.0f / std::tan(fovY * 0.5f);
+        Mat4 r{};
+        std::memset(r.m, 0, sizeof(r.m));
+        r.m[0][0] = f / aspect;
+        r.m[1][1] = f;
+        r.m[2][2] = (farZ + nearZ) / (nearZ - farZ);
+        r.m[2][3] = -1.0f;
+        r.m[3][2] = (2.0f * farZ * nearZ) / (nearZ - farZ);
+        return r;
+    }
+
+    /// Orthographic projection matrix.
+    static Mat4 orthographic(float left, float right, float bottom, float top,
+                             float nearZ, float farZ) {
+        Mat4 r{};
+        std::memset(r.m, 0, sizeof(r.m));
+        r.m[0][0] = 2.0f / (right - left);
+        r.m[1][1] = 2.0f / (top - bottom);
+        r.m[2][2] = -2.0f / (farZ - nearZ);
+        r.m[3][0] = -(right + left) / (right - left);
+        r.m[3][1] = -(top + bottom) / (top - bottom);
+        r.m[3][2] = -(farZ + nearZ) / (farZ - nearZ);
+        r.m[3][3] = 1.0f;
+        return r;
+    }
+
+    /// Look-at view matrix (camera at eye, looking at center, with up vector).
+    static Mat4 lookAt(const Vec3& eye, const Vec3& center, const Vec3& up) {
+        Vec3 f = (center - eye).normalized();
+        Vec3 s = f.cross(up).normalized();
+        Vec3 u = s.cross(f);
+        Mat4 r{};
+        std::memset(r.m, 0, sizeof(r.m));
+        r.m[0][0] =  s.x; r.m[1][0] =  s.y; r.m[2][0] =  s.z;
+        r.m[0][1] =  u.x; r.m[1][1] =  u.y; r.m[2][1] =  u.z;
+        r.m[0][2] = -f.x; r.m[1][2] = -f.y; r.m[2][2] = -f.z;
+        r.m[3][0] = -s.dot(eye);
+        r.m[3][1] = -u.dot(eye);
+        r.m[3][2] =  f.dot(eye);
+        r.m[3][3] = 1.0f;
+        return r;
     }
 
     /// Access as flat float[16] pointer (column-major, for GL/bromesh).

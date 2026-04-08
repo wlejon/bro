@@ -817,6 +817,61 @@ static JSValue js_sg_destroyNode(JSContext* ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
+// --- Helper: parse a [x, y, z] array into Vec3 ---
+static scene::Vec3 jsGetVec3(JSContext* ctx, JSValueConst obj, const char* prop,
+                             float dx = 0, float dy = 0, float dz = 0) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
+    scene::Vec3 r{dx, dy, dz};
+    if (JS_IsArray(v)) {
+        JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
+        JSValue e2 = JS_GetPropertyUint32(ctx, v, 2);
+        double tx = dx, ty = dy, tz = dz;
+        JS_ToFloat64(ctx, &tx, e0);
+        JS_ToFloat64(ctx, &ty, e1);
+        JS_ToFloat64(ctx, &tz, e2);
+        r = {(float)tx, (float)ty, (float)tz};
+        JS_FreeValue(ctx, e0);
+        JS_FreeValue(ctx, e1);
+        JS_FreeValue(ctx, e2);
+    }
+    JS_FreeValue(ctx, v);
+    return r;
+}
+
+// setCamera({fov, near, far, aspect, position, target, up})
+static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst opts = argv[0];
+    double fov = jsGetProp(ctx, opts, "fov", 60.0) * 3.14159265 / 180.0; // degrees to radians
+    double nearZ = jsGetProp(ctx, opts, "near", 0.1);
+    double farZ = jsGetProp(ctx, opts, "far", 1000.0);
+    double aspect = jsGetProp(ctx, opts, "aspect", 0.0);
+
+    // If aspect not provided, default to 4:3 (canvas may not be available here)
+    if (aspect <= 0) aspect = 4.0 / 3.0;
+
+    scene::Vec3 position = jsGetVec3(ctx, opts, "position", 0, 5, -10);
+    scene::Vec3 target = jsGetVec3(ctx, opts, "target", 0, 0, 0);
+    scene::Vec3 up = jsGetVec3(ctx, opts, "up", 0, 1, 0);
+
+    std::string mode = jsGetStr(ctx, opts, "mode", "perspective");
+    if (mode == "orthographic" || mode == "ortho") {
+        double size = jsGetProp(ctx, opts, "size", 10.0);
+        float halfW = (float)(size * aspect * 0.5);
+        float halfH = (float)(size * 0.5);
+        g->setCameraOrtho(-halfW, halfW, -halfH, halfH,
+                          (float)nearZ, (float)farZ, position, target, up);
+    } else {
+        g->setCamera((float)fov, (float)aspect, (float)nearZ, (float)farZ,
+                     position, target, up);
+    }
+
+    return JS_UNDEFINED;
+}
+
 // Camera properties
 static JSValue js_sg_get_cameraX(JSContext* ctx, JSValueConst this_val) {
     auto* g = getGraph(this_val);
@@ -863,6 +918,7 @@ static const JSCFunctionListEntry js_scenegraph_proto[] = {
     JS_CFUNC_DEF("findById", 1, js_sg_findById),
     JS_CFUNC_DEF("findByName", 1, js_sg_findByName),
     JS_CFUNC_DEF("destroyNode", 1, js_sg_destroyNode),
+    JS_CFUNC_DEF("setCamera", 1, js_sg_setCamera),
     JS_CFUNC_DEF("render", 0, js_sg_render),
     JS_CFUNC_DEF("syncPhysics", 0, js_sg_syncPhysics),
 };
