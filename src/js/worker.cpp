@@ -157,6 +157,7 @@ void Worker::threadFunc()
     // structuredClone, fetch, streams, noise, etc.
     brokit::api::installAll(ctx);
     brokit::api::addFetchBasePath(ctx, basePath_);
+    brokit::api::addFsBasePath(ctx, basePath_);
 
     // --- 3. Install own Timers ---
     auto timers = std::make_unique<Timers>();

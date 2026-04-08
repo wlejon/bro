@@ -1,105 +1,78 @@
-// Minimal WebGL2 test: colored triangle
+// Three.js WebGL2 test: noise-displaced terrain with custom shaders
 
-// Test Phase 4 stubs
 console.log('devicePixelRatio: ' + window.devicePixelRatio);
 console.log('navigator.userAgent: ' + navigator.userAgent);
 console.log('innerWidth x innerHeight: ' + innerWidth + 'x' + innerHeight);
 
-var img = new Image();
-console.log('Image created, complete=' + img.complete);
-img.onload = function() { console.log('Image onload fired: ' + img.width + 'x' + img.height); };
-img.src = 'test.png';
-
 var canvas = document.querySelector('#c');
-console.log('canvas.width=' + canvas.width + ' canvas.height=' + canvas.height);
-console.log('canvas.clientWidth=' + canvas.clientWidth + ' canvas.clientHeight=' + canvas.clientHeight);
 
-var gl = canvas.getContext('webgl2');
+var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+renderer.setSize(canvas.width, canvas.height);
+console.log('Three.js renderer created');
 
-if (!gl) {
-    console.log('ERROR: Failed to get WebGL2 context');
-} else {
-    console.log('WebGL2 context created successfully!');
-    console.log('  VERSION: ' + gl.getParameter(gl.VERSION));
-    console.log('  RENDERER: ' + gl.getParameter(gl.RENDERER));
-    console.log('  MAX_TEXTURE_SIZE: ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0.1, 0.1, 0.15);
 
-    // Vertex shader
-    var vsSource = `#version 300 es
-    layout(location = 0) in vec2 aPosition;
-    layout(location = 1) in vec3 aColor;
-    out vec3 vColor;
-    void main() {
-        gl_Position = vec4(aPosition, 0.0, 1.0);
-        vColor = aColor;
-    }`;
+var camera = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 0.1, 100);
+camera.position.set(0, 1.5, 2.0);
+camera.lookAt(0, 0, 0);
 
-    // Fragment shader
-    var fsSource = `#version 300 es
-    precision highp float;
-    in vec3 vColor;
-    out vec4 fragColor;
-    void main() {
-        fragColor = vec4(vColor, 1.0);
-    }`;
+// Load shaders via brokit fs
+var fs = globalThis.__brokit_fs;
+var vertexShader = fs.readFileSync('shaders/custom.vert', 'utf-8');
+var fragmentShader = fs.readFileSync('shaders/custom.frag', 'utf-8');
+console.log('Shaders loaded');
 
-    // Compile shaders
-    var vs = gl.createShader(gl.VERTEX_SHADER);
-    gl.shaderSource(vs, vsSource);
-    gl.compileShader(vs);
-    if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
-        console.log('VS error: ' + gl.getShaderInfoLog(vs));
-    }
+// Create terrain plane
+var geometry = new THREE.PlaneGeometry(4, 4, 128, 128);
+geometry.rotateX(-Math.PI / 2); // lay flat (XZ plane, Y is up)
+var count = geometry.attributes.position.count;
 
-    var fs = gl.createShader(gl.FRAGMENT_SHADER);
-    gl.shaderSource(fs, fsSource);
-    gl.compileShader(fs);
-    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
-        console.log('FS error: ' + gl.getShaderInfoLog(fs));
-    }
+// Create custom attributes
+var customPos = new Float32Array(count * 3);
+var customColor = new Float32Array(count * 4);
 
-    // Link program
-    var prog = gl.createProgram();
-    gl.attachShader(prog, vs);
-    gl.attachShader(prog, fs);
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-        console.log('Link error: ' + gl.getProgramInfoLog(prog));
-    }
+for (var i = 0; i < count; i++) {
+    // Small random offset per vertex (subtle detail)
+    customPos[i * 3    ] = (Math.random() - 0.5) * 0.05;
+    customPos[i * 3 + 1] = (Math.random() - 0.5) * 0.05;
+    customPos[i * 3 + 2] = (Math.random() - 0.5) * 0.05;
 
-    // Triangle vertices: position (x,y) + color (r,g,b)
-    var vertices = new Float32Array([
-         0.0,  0.5,  1.0, 0.0, 0.0,
-        -0.5, -0.5,  0.0, 1.0, 0.0,
-         0.5, -0.5,  0.0, 0.0, 1.0,
-    ]);
+    // Color gradient across the terrain (X → red, Z → blue)
+    var x = geometry.attributes.position.getX(i);
+    var z = geometry.attributes.position.getZ(i);
+    customColor[i * 4    ] = (x + 2) / 4; // red: left to right
+    customColor[i * 4 + 1] = 0.5;         // green: constant
+    customColor[i * 4 + 2] = (z + 2) / 4; // blue: front to back
+    customColor[i * 4 + 3] = 1.0;
+}
 
-    var vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
+geometry.setAttribute('aCustomPos', new THREE.BufferAttribute(customPos, 3));
+geometry.setAttribute('aCustomColor', new THREE.BufferAttribute(customColor, 4));
 
-    var vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+// ShaderMaterial with custom uniforms
+var material = new THREE.ShaderMaterial({
+    vertexShader: vertexShader,
+    fragmentShader: fragmentShader,
+    uniforms: {
+        uTime: { value: 0.0 },
+        uScale: { value: 0.4 }
+    },
+    side: THREE.DoubleSide
+});
 
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 20, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 20, 8);
+var mesh = new THREE.Mesh(geometry, material);
+scene.add(mesh);
 
-    gl.bindVertexArray(null);
+console.log('Setup complete, starting render loop');
 
-    console.log('Setup complete, starting render loop');
+var clock = new THREE.Clock();
 
-    function render() {
-        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-        gl.clearColor(0.1, 0.1, 0.15, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+function render() {
+    var elapsed = clock.getElapsedTime();
+    material.uniforms.uTime.value = elapsed * 0.5;
 
-        gl.useProgram(prog);
-        gl.bindVertexArray(vao);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-        requestAnimationFrame(render);
-    }
+    renderer.render(scene, camera);
     requestAnimationFrame(render);
 }
+requestAnimationFrame(render);

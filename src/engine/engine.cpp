@@ -239,8 +239,9 @@ Engine::Engine(const EngineConfig& config)
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
 
-    // Register app directory as fetch base path (overlay: last added = checked first)
+    // Register app directory as base path for fetch and fs (overlay: last added = checked first)
     brokit::api::addFetchBasePath(jsRuntime_->getContext(), manifest_.basePath);
+    brokit::api::addFsBasePath(jsRuntime_->getContext(), manifest_.basePath);
 
     if (gl_) {
         // GPU path: WebGL2 + full canvas factory (windowed or GPU headless)
