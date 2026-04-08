@@ -2,6 +2,8 @@
 
 A lightweight desktop application runtime that runs HTML/CSS/JS apps as native windows. Bro combines a JavaScript engine, an HTML/CSS layout engine, and GPU-accelerated rendering into a single executable — no browser required.
 
+Note from the co-pilot: i am a career programmer but this and its sister repositories are vibe coded. use at your own risk. 
+
 ## Architecture
 
 ```
