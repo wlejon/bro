@@ -4,9 +4,12 @@
 #include "scene/shape_node.h"
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
+#include "scene/mesh_node.h"
 #include "physics/physics_world.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
+
+#include <bromesh/primitives/primitives.h>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
@@ -776,6 +779,123 @@ static JSValue js_sg_createPhysicsNode(JSContext* ctx, JSValueConst this_val, in
     return wrapNode(ctx, node, g);
 }
 
+// createMesh({mesh, color, name, x, y, z, ...})
+// mesh: "box"|"sphere"|"cylinder"|"capsule"|"plane"|"torus" or {type, ...params}
+static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createMesh();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        // Position
+        double x = jsGetProp(ctx, opts, "x", 0);
+        double y = jsGetProp(ctx, opts, "y", 0);
+        double z = jsGetProp(ctx, opts, "z", 0);
+        node->setPosition((float)x, (float)y, (float)z);
+
+        // Scale (uniform or per-axis)
+        JSValue scaleVal = JS_GetPropertyStr(ctx, opts, "scale");
+        if (!JS_IsUndefined(scaleVal)) {
+            double s = 1;
+            JS_ToFloat64(ctx, &s, scaleVal);
+            node->setScale((float)s, (float)s, (float)s);
+        }
+        JS_FreeValue(ctx, scaleVal);
+
+        // Rotation (Euler degrees for convenience)
+        JSValue rxVal = JS_GetPropertyStr(ctx, opts, "rx");
+        JSValue ryVal = JS_GetPropertyStr(ctx, opts, "ry");
+        JSValue rzVal = JS_GetPropertyStr(ctx, opts, "rz");
+        if (!JS_IsUndefined(rxVal) || !JS_IsUndefined(ryVal) || !JS_IsUndefined(rzVal)) {
+            double rx = 0, ry = 0, rz = 0;
+            if (!JS_IsUndefined(rxVal)) JS_ToFloat64(ctx, &rx, rxVal);
+            if (!JS_IsUndefined(ryVal)) JS_ToFloat64(ctx, &ry, ryVal);
+            if (!JS_IsUndefined(rzVal)) JS_ToFloat64(ctx, &rz, rzVal);
+            float toRad = 3.14159265f / 180.0f;
+            node->setRotationEuler((float)rx * toRad, (float)ry * toRad, (float)rz * toRad);
+        }
+        JS_FreeValue(ctx, rxVal);
+        JS_FreeValue(ctx, ryVal);
+        JS_FreeValue(ctx, rzVal);
+
+        // Color
+        JSValue colorVal = JS_GetPropertyStr(ctx, opts, "color");
+        if (JS_IsString(colorVal)) {
+            uint8_t r, g2, b, a;
+            if (parseColor(jsStr(ctx, colorVal), r, g2, b, a)) {
+                node->setColor(r / 255.0f, g2 / 255.0f, b / 255.0f, a / 255.0f);
+            }
+        } else if (JS_IsArray(colorVal)) {
+            double cr = 1, cg = 1, cb = 1, ca = 1;
+            JSValue e0 = JS_GetPropertyUint32(ctx, colorVal, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, colorVal, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, colorVal, 2);
+            JSValue e3 = JS_GetPropertyUint32(ctx, colorVal, 3);
+            JS_ToFloat64(ctx, &cr, e0);
+            JS_ToFloat64(ctx, &cg, e1);
+            JS_ToFloat64(ctx, &cb, e2);
+            if (!JS_IsUndefined(e3)) JS_ToFloat64(ctx, &ca, e3);
+            node->setColor((float)cr, (float)cg, (float)cb, (float)ca);
+            JS_FreeValue(ctx, e0);
+            JS_FreeValue(ctx, e1);
+            JS_FreeValue(ctx, e2);
+            JS_FreeValue(ctx, e3);
+        }
+        JS_FreeValue(ctx, colorVal);
+
+        // Mesh primitive
+        std::string meshType = jsGetStr(ctx, opts, "mesh", "box");
+        bromesh::MeshData meshData;
+
+        if (meshType == "box") {
+            double hw = jsGetProp(ctx, opts, "halfW", 0.5);
+            double hh = jsGetProp(ctx, opts, "halfH", 0.5);
+            double hd = jsGetProp(ctx, opts, "halfD", 0.5);
+            meshData = bromesh::box((float)hw, (float)hh, (float)hd);
+        } else if (meshType == "sphere") {
+            double radius = jsGetProp(ctx, opts, "radius", 0.5);
+            int segments = (int)jsGetProp(ctx, opts, "segments", 16);
+            int rings = (int)jsGetProp(ctx, opts, "rings", 12);
+            meshData = bromesh::sphere((float)radius, segments, rings);
+        } else if (meshType == "cylinder") {
+            double radius = jsGetProp(ctx, opts, "radius", 0.5);
+            double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
+            int segments = (int)jsGetProp(ctx, opts, "segments", 16);
+            meshData = bromesh::cylinder((float)radius, (float)halfH, segments);
+        } else if (meshType == "capsule") {
+            double radius = jsGetProp(ctx, opts, "radius", 0.5);
+            double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
+            int segments = (int)jsGetProp(ctx, opts, "segments", 16);
+            int rings = (int)jsGetProp(ctx, opts, "rings", 8);
+            meshData = bromesh::capsule((float)radius, (float)halfH, segments, rings);
+        } else if (meshType == "plane") {
+            double hw = jsGetProp(ctx, opts, "halfW", 5.0);
+            double hd = jsGetProp(ctx, opts, "halfD", 5.0);
+            int sx = (int)jsGetProp(ctx, opts, "subdivX", 1);
+            int sz = (int)jsGetProp(ctx, opts, "subdivZ", 1);
+            meshData = bromesh::plane((float)hw, (float)hd, sx, sz);
+        } else if (meshType == "torus") {
+            double major = jsGetProp(ctx, opts, "majorRadius", 1.0);
+            double minor = jsGetProp(ctx, opts, "minorRadius", 0.3);
+            int majSeg = (int)jsGetProp(ctx, opts, "majorSegments", 24);
+            int minSeg = (int)jsGetProp(ctx, opts, "minorSegments", 12);
+            meshData = bromesh::torus((float)major, (float)minor, majSeg, minSeg);
+        }
+
+        node->setMesh(std::move(meshData));
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
 // findById(id) → SceneNode | null
 static JSValue js_sg_findById(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(this_val);
@@ -915,6 +1035,7 @@ static const JSCFunctionListEntry js_scenegraph_proto[] = {
     JS_CFUNC_DEF("createShape", 1, js_sg_createShape),
     JS_CFUNC_DEF("createSprite", 1, js_sg_createSprite),
     JS_CFUNC_DEF("createPhysicsNode", 1, js_sg_createPhysicsNode),
+    JS_CFUNC_DEF("createMesh", 1, js_sg_createMesh),
     JS_CFUNC_DEF("findById", 1, js_sg_findById),
     JS_CFUNC_DEF("findByName", 1, js_sg_findByName),
     JS_CFUNC_DEF("destroyNode", 1, js_sg_destroyNode),

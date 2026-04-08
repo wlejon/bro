@@ -1,24 +1,83 @@
 #include "scene/scene_graph.h"
 #include "canvas/canvas_scene.h"
 #include "physics/physics_world.h"
+#include "util/log.h"
 
 namespace bro::scene {
+
+// ---------------------------------------------------------------------------
+// Mesh shader sources (GLSL 330 core)
+// ---------------------------------------------------------------------------
+
+static const char* kMeshVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+
+uniform mat4 uMVP;
+uniform mat4 uModel;
+
+out vec3 vWorldPos;
+out vec3 vNormal;
+out vec2 vUV;
+
+void main() {
+    vec4 worldPos = uModel * vec4(aPos, 1.0);
+    vWorldPos = worldPos.xyz;
+    vNormal = mat3(uModel) * aNormal;
+    vUV = aUV;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+)";
+
+static const char* kMeshFragSrc = R"(
+#version 330 core
+in vec3 vWorldPos;
+in vec3 vNormal;
+in vec2 vUV;
+
+uniform vec4 uColor;
+uniform vec3 uLightDir;
+uniform vec3 uCameraPos;
+
+out vec4 FragColor;
+
+void main() {
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(uLightDir);
+
+    // Ambient + diffuse + specular
+    float ambient = 0.15;
+    float diff = max(dot(N, L), 0.0);
+
+    vec3 V = normalize(uCameraPos - vWorldPos);
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.3;
+
+    float light = ambient + diff * 0.7 + spec;
+    FragColor = vec4(uColor.rgb * light, uColor.a);
+}
+)";
+
+// ---------------------------------------------------------------------------
+// Construction / destruction
+// ---------------------------------------------------------------------------
 
 SceneGraph::SceneGraph() {
     root_ = std::make_unique<SceneNode>("__root__");
 }
 
 SceneGraph::~SceneGraph() {
-    // Clear children before destroying nodes map, since node destructors
-    // detach from parent (which accesses siblings vector).
-    // Destroy in reverse creation order to handle parent-child deps.
     root_->traverse([](SceneNode* n) {
-        // Orphan all children to prevent dangling parent pointers
         for (auto* c : n->children()) {
-            // Will be destroyed by the nodes_ map
         }
     });
     nodes_.clear();
+
+    // Destroy GL resources
+    destroyMeshFBO();
+    if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -47,6 +106,18 @@ PhysicsNode* SceneGraph::createPhysicsNode(const std::string& name) {
     auto* ptr = node.get();
     nodes_[ptr->id()] = std::move(node);
     return ptr;
+}
+
+MeshNode* SceneGraph::createMesh(const std::string& name) {
+    auto node = std::make_unique<MeshNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+void SceneGraph::setCanvasSize(int w, int h) {
+    canvasWidth_ = w;
+    canvasHeight_ = h;
 }
 
 void SceneGraph::collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids) {
@@ -120,31 +191,202 @@ void SceneGraph::syncPhysics() {
     }
 }
 
-void SceneGraph::render() {
-    if (!canvasScene_) return;
+// ---------------------------------------------------------------------------
+// Mesh GL pipeline (lazy init)
+// ---------------------------------------------------------------------------
 
-    // Clear canvas before redrawing the scene
-    canvasScene_->reset();
+static GLuint compileShader(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type);
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    GLint ok = 0;
+    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetShaderInfoLog(s, sizeof(log), nullptr, log);
+        LOG_ERROR("Mesh shader compile error: %s", log);
+        glDeleteShader(s);
+        return 0;
+    }
+    return s;
+}
 
-    // Apply camera transform
-    canvasScene_->save();
-    canvasScene_->translate(-cameraX_, -cameraY_);
-    if (cameraZoom_ != 1.0f) {
-        canvasScene_->scale(cameraZoom_, cameraZoom_);
+void SceneGraph::ensureMeshPipeline() {
+    if (meshProgram_) return;
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER, kMeshVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kMeshFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
     }
 
-    // Depth-first render traversal
+    meshProgram_ = glCreateProgram();
+    glAttachShader(meshProgram_, vs);
+    glAttachShader(meshProgram_, fs);
+    glLinkProgram(meshProgram_);
+
+    GLint ok = 0;
+    glGetProgramiv(meshProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(meshProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Mesh program link error: %s", log);
+        glDeleteProgram(meshProgram_);
+        meshProgram_ = 0;
+    }
+
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    if (meshProgram_) {
+        uMVP_ = glGetUniformLocation(meshProgram_, "uMVP");
+        uModel_ = glGetUniformLocation(meshProgram_, "uModel");
+        uColor_ = glGetUniformLocation(meshProgram_, "uColor");
+        uLightDir_ = glGetUniformLocation(meshProgram_, "uLightDir");
+        uCameraPos_ = glGetUniformLocation(meshProgram_, "uCameraPos");
+    }
+}
+
+void SceneGraph::ensureMeshFBO() {
+    if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return;
+    if (meshFBO_ && meshFBOWidth_ == canvasWidth_ && meshFBOHeight_ == canvasHeight_) return;
+
+    destroyMeshFBO();
+
+    meshFBOWidth_ = canvasWidth_;
+    meshFBOHeight_ = canvasHeight_;
+
+    glGenFramebuffers(1, &meshFBO_);
+    glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
+
+    // Color attachment (RGBA8)
+    glGenTextures(1, &meshColorTex_);
+    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, meshFBOWidth_, meshFBOHeight_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, meshColorTex_, 0);
+
+    // Depth renderbuffer
+    glGenRenderbuffers(1, &meshDepthRBO_);
+    glBindRenderbuffer(GL_RENDERBUFFER, meshDepthRBO_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, meshFBOWidth_, meshFBOHeight_);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                              GL_RENDERBUFFER, meshDepthRBO_);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOG_ERROR("Mesh FBO incomplete: 0x%x", status);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneGraph::destroyMeshFBO() {
+    if (meshDepthRBO_) { glDeleteRenderbuffers(1, &meshDepthRBO_); meshDepthRBO_ = 0; }
+    if (meshColorTex_) { glDeleteTextures(1, &meshColorTex_); meshColorTex_ = 0; }
+    if (meshFBO_) { glDeleteFramebuffers(1, &meshFBO_); meshFBO_ = 0; }
+    meshFBOWidth_ = 0;
+    meshFBOHeight_ = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
+void SceneGraph::render() {
+    hasMeshContent_ = false;
+
+    // 2D render path (CanvasScene)
+    if (canvasScene_) {
+        canvasScene_->reset();
+        canvasScene_->save();
+        canvasScene_->translate(-cameraX_, -cameraY_);
+        if (cameraZoom_ != 1.0f) {
+            canvasScene_->scale(cameraZoom_, cameraZoom_);
+        }
+    }
+
+    // Check if we have any mesh nodes to render
+    bool hasMeshNodes = false;
+    for (auto& [id, node] : nodes_) {
+        if (node->type() == SceneNode::Type::Mesh && node->visible()) {
+            hasMeshNodes = true;
+            break;
+        }
+    }
+
+    // Set up 3D pipeline if needed
+    if (hasMeshNodes && canvasWidth_ > 0 && canvasHeight_ > 0) {
+        ensureMeshPipeline();
+        ensureMeshFBO();
+
+        if (meshProgram_ && meshFBO_) {
+            // Bind FBO and set up GL state for 3D rendering
+            glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
+            glViewport(0, 0, meshFBOWidth_, meshFBOHeight_);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // transparent background
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+
+            glUseProgram(meshProgram_);
+
+            // Set per-frame uniforms
+            Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
+            glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
+            glUniform3f(uCameraPos_, cameraEye_.x, cameraEye_.y, cameraEye_.z);
+
+            hasMeshContent_ = true;
+        }
+    }
+
+    // Depth-first render traversal (handles both 2D and 3D nodes)
     renderNode(root_.get());
 
-    canvasScene_->restore();
+    // Tear down 3D state
+    if (hasMeshContent_) {
+        glUseProgram(0);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    // Restore 2D camera
+    if (canvasScene_) {
+        canvasScene_->restore();
+    }
 }
 
 void SceneGraph::renderNode(SceneNode* node) {
     if (!node->visible()) return;
-    node->onRender(*this);
+
+    if (node->type() == SceneNode::Type::Mesh && hasMeshContent_) {
+        renderMeshNode(static_cast<MeshNode*>(node));
+    } else {
+        node->onRender(*this);
+    }
+
     for (auto* child : node->children()) {
         renderNode(child);
     }
+}
+
+void SceneGraph::renderMeshNode(MeshNode* mesh) {
+    // Compute MVP = projection * view * model(world)
+    Mat4 vp = projectionMatrix_ * viewMatrix_;
+    Mat4 mvp = vp * mesh->worldMatrix();
+
+    glUniformMatrix4fv(uMVP_, 1, GL_FALSE, mvp.data());
+    glUniformMatrix4fv(uModel_, 1, GL_FALSE, mesh->worldMatrix().data());
+    glUniform4fv(uColor_, 1, mesh->color());
+
+    mesh->onRender(*this);
 }
 
 } // namespace bro::scene

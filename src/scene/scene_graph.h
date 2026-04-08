@@ -4,6 +4,9 @@
 #include "scene/shape_node.h"
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
+#include "scene/mesh_node.h"
+
+#include <glad/gl.h>
 
 #include <memory>
 #include <unordered_map>
@@ -29,6 +32,7 @@ public:
     ShapeNode* createShape(const std::string& name = "");
     SpriteNode* createSprite(const std::string& name = "");
     PhysicsNode* createPhysicsNode(const std::string& name = "");
+    MeshNode* createMesh(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);
@@ -54,8 +58,20 @@ public:
     void setCanvasScene(canvas::CanvasScene* scene) { canvasScene_ = scene; }
     canvas::CanvasScene* canvasScene() const { return canvasScene_; }
 
+    /// Set canvas dimensions (needed for FBO sizing).
+    void setCanvasSize(int w, int h);
+    int canvasWidth() const { return canvasWidth_; }
+    int canvasHeight() const { return canvasHeight_; }
+
     /// Update world matrices for any dirty nodes, then render all visible nodes.
+    /// 3D MeshNodes are rendered into an FBO via GL. 2D nodes render via CanvasScene.
     void render();
+
+    /// Get the color texture of the 3D FBO (for compositing). 0 if no 3D content.
+    GLuint meshFBOTexture() const { return meshColorTex_; }
+
+    /// Returns true if any MeshNodes were rendered this frame.
+    bool hasMeshContent() const { return hasMeshContent_; }
 
     // --- Camera ---
 
@@ -85,7 +101,13 @@ public:
 
 private:
     void renderNode(SceneNode* node);
+    void renderMeshNode(MeshNode* mesh);
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
+
+    // --- Mesh GL pipeline (lazy init) ---
+    void ensureMeshPipeline();
+    void ensureMeshFBO();
+    void destroyMeshFBO();
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
@@ -101,6 +123,25 @@ private:
     // Legacy 2D camera state (drives the CanvasScene 2D path)
     float cameraX_ = 0, cameraY_ = 0;
     float cameraZoom_ = 1.0f;
+
+    // Canvas size for FBO
+    int canvasWidth_ = 0, canvasHeight_ = 0;
+
+    // Mesh rendering GL resources (shared across all MeshNodes)
+    GLuint meshProgram_ = 0;
+    GLint uMVP_ = -1;
+    GLint uModel_ = -1;
+    GLint uColor_ = -1;
+    GLint uLightDir_ = -1;
+    GLint uCameraPos_ = -1;
+
+    // Mesh FBO
+    GLuint meshFBO_ = 0;
+    GLuint meshColorTex_ = 0;
+    GLuint meshDepthRBO_ = 0;
+    int meshFBOWidth_ = 0, meshFBOHeight_ = 0;
+
+    bool hasMeshContent_ = false;
 };
 
 } // namespace bro::scene
