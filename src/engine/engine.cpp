@@ -11,7 +11,6 @@
 #include "platform/event_loop.h"
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
-#include "render/scene_layer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "js/runtime.h"
@@ -37,7 +36,6 @@
 #include <broaudio/engine.h>
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
-#include "webgl/webgl_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/node.h"
@@ -287,10 +285,17 @@ Engine::Engine(const EngineConfig& config)
                     return js::CanvasBindings::wrapContext2D(ctx, ptr);
                 }
                 if (type == "webgl2" || type == "webgl") {
-                    auto* webglCtx = new webgl::WebGL2RenderingContext(
-                        viewportWidth_, viewportHeight_);
-                    auto scene = std::make_unique<webgl::WebGLScene>(webglCtx);
-                    addSceneLayer(std::move(scene));
+                    // Size to element layout (fall back to viewport if no layout yet)
+                    int cw = viewportWidth_, ch = viewportHeight_;
+                    if (el) {
+                        auto& box = el->layoutBox();
+                        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
+                        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
+                    }
+                    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch);
+                    auto* webglCtx = ctx2.get();
+                    if (el) el->setWebglContext(webglCtx);
+                    webglEntries_.push_back({std::move(ctx2), el});
                     return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
                 }
                 if (type == "scene") {
@@ -458,13 +463,6 @@ Engine::Engine(const EngineConfig& config)
     }
 }
 
-void Engine::addSceneLayer(std::unique_ptr<render::SceneLayer> layer) {
-    if (layer) {
-        layer->onInit(gl_.get(), viewportWidth_, viewportHeight_);
-    }
-    sceneLayers_.push_back(std::move(layer));
-}
-
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     if (scene) {
         scene->init(gl_.get());
@@ -610,21 +608,28 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers) {
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
         } else {
-            // Canvas layer — texture already uploaded in raster phase
+            // Canvas/WebGL layer — get texture from canvas scene or direct texture
+            GLuint tex = 0;
             if (layer.canvasScene) {
-                GLuint tex = layer.canvasScene->texture();
-                if (tex) {
-                    float cx = layer.cx, cy = layer.cy;
-                    float cw = layer.cw, ch = layer.ch;
-                    render::TextureVertex quad[6] = {
-                        {cx,    cy,    0, 0}, {cx+cw, cy,    1, 0}, {cx+cw, cy+ch, 1, 1},
-                        {cx,    cy,    0, 0}, {cx+cw, cy+ch, 1, 1}, {cx,    cy+ch, 0, 1},
-                    };
-                    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-                    // Canvas textures use premultiplied alpha (same as HTML layers)
-                    glBindTexture(GL_TEXTURE_2D, tex);
-                    glDrawArrays(GL_TRIANGLES, 0, 6);
-                }
+                tex = layer.canvasScene->texture();
+            } else {
+                tex = layer.texture;  // WebGL direct texture
+            }
+            if (tex) {
+                float cx = layer.cx, cy = layer.cy;
+                float cw = layer.cw, ch = layer.ch;
+
+                // WebGL textures are bottom-up (origin at lower-left) so flip V coords
+                float v0 = layer.canvasScene ? 0.0f : 1.0f;
+                float v1 = layer.canvasScene ? 1.0f : 0.0f;
+
+                render::TextureVertex quad[6] = {
+                    {cx,    cy,    0, v0}, {cx+cw, cy,    1, v0}, {cx+cw, cy+ch, 1, v1},
+                    {cx,    cy,    0, v0}, {cx+cw, cy+ch, 1, v1}, {cx,    cy+ch, 0, v1},
+                };
+                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
             }
         }
     }
@@ -654,10 +659,8 @@ Engine::~Engine() {
     // Canvas threads are stopped by ~CanvasScene (unique_ptr destruction)
     canvasScenes_.clear();
 
-    for (auto& sl : sceneLayers_) {
-        if (sl) sl->onCleanup();
-    }
-    sceneLayers_.clear();
+    // WebGL contexts (unique_ptr destruction handles cleanup)
+    webglEntries_.clear();
     canvasScenes_.clear();
     systemOverlay_.reset();
 
@@ -884,10 +887,11 @@ void Engine::rasterThreadFunc() {
 
         int htmlLayerIdx = 0;
 
-        // Set up layer break callback for canvas elements
+        // Set up layer break callback for canvas/WebGL elements
         rasterDrawTraversal->setLayerBreakCallback(
             [this, &rasterRenderer, &htmlLayerIdx, &backBuf, vpW, vpH](
-                canvas::CanvasScene* scene, float x, float y, float w, float h) {
+                canvas::CanvasScene* scene, unsigned int directTexture,
+                float x, float y, float w, float h) {
                 int prevIdx = htmlLayerIdx;
                 htmlLayerIdx++;
                 while (htmlLayerIdx >= static_cast<int>(htmlSurfacePool_.size())) {
@@ -904,6 +908,7 @@ void Engine::rasterThreadFunc() {
                 UILayer canvasLayer;
                 canvasLayer.type = UILayer::Canvas;
                 canvasLayer.canvasScene = scene;
+                canvasLayer.texture = directTexture;  // non-zero for WebGL
                 canvasLayer.cx = x; canvasLayer.cy = y;
                 canvasLayer.cw = w; canvasLayer.ch = h;
                 backBuf.layers.push_back(std::move(canvasLayer));
@@ -1167,13 +1172,21 @@ void Engine::run() {
         }
 
         // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)
-        webgl::WebGLScene* webglScene = nullptr;
-        for (auto& sl : sceneLayers_) {
-            webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get());
-            if (webglScene) break;
-        }
-        if (webglScene && webglScene->webglContext()) {
-            webglScene->webglContext()->bindCanvasFBO();
+        //    Also resize WebGL FBO to match element layout if needed.
+        webgl::WebGL2RenderingContext* activeWebGL = nullptr;
+        if (!webglEntries_.empty()) {
+            auto& entry = webglEntries_[0];
+            activeWebGL = entry.context.get();
+            if (entry.element) {
+                auto& box = entry.element->layoutBox();
+                int ew = static_cast<int>(box.contentRect.width);
+                int eh = static_cast<int>(box.contentRect.height);
+                if (ew > 0 && eh > 0 &&
+                    (ew != activeWebGL->canvasWidth() || eh != activeWebGL->canvasHeight())) {
+                    activeWebGL->resize(ew, eh);
+                }
+            }
+            activeWebGL->bindCanvasFBO();
         }
 
         // 3a. Fire requestAnimationFrame callbacks
@@ -1189,8 +1202,8 @@ void Engine::run() {
         jsRuntime_->executePendingJobs();
 
         // 3c. Unbind WebGL FBO
-        if (webglScene && webglScene->webglContext()) {
-            webglScene->webglContext()->unbindCanvasFBO();
+        if (activeWebGL) {
+            activeWebGL->unbindCanvasFBO();
         }
 
         double tJs = util::currentTimeMs();
@@ -1298,12 +1311,7 @@ void Engine::run() {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // 5f. Render pass 1: scene layers (WebGL etc.) draw to default framebuffer
-        for (auto& sl : sceneLayers_) {
-            if (sl) sl->onRender(gl_.get(), viewportWidth_, viewportHeight_, totalFrameMs_);
-        }
-
-        // 5g. Render pass 2: composite UI layers in DOM order
+        // 5f. Composite UI layers in DOM order
         //     HTML layers (cached textures from raster thread) interleaved with
         //     canvas layers (freshly rasterized on main thread).
         compositeLayers(layerBuffers_[front].layers);
@@ -1356,15 +1364,8 @@ void Engine::run() {
 
         // Restore WebGL shadow state so apps with internal caches (three.js)
         // see the same GL state they left on the previous frame.
-        {
-            webgl::WebGLScene* wgl = nullptr;
-            for (auto& sl : sceneLayers_) {
-                wgl = dynamic_cast<webgl::WebGLScene*>(sl.get());
-                if (wgl) break;
-            }
-            if (wgl && wgl->webglContext()) {
-                wgl->webglContext()->restoreState();
-            }
+        if (activeWebGL) {
+            activeWebGL->restoreState();
         }
 
         // Measure GPU work before swap (swap includes vsync wait)
@@ -1533,9 +1534,7 @@ void Engine::handleResize(int w, int h) {
     uiDirty_ = true;
     hasRenderedOnce_ = false;
     drawTraversal_->setViewport(w, h);
-    for (auto& sl : sceneLayers_) {
-        if (sl) sl->onResize(w, h);
-    }
+    // WebGL canvases resize based on element layout, not viewport — handled per-frame
     if (systemOverlay_) {
         systemOverlay_->onResize(w, h);
     }

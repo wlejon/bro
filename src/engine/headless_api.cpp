@@ -8,7 +8,6 @@
 
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
-#include "render/scene_layer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "js/runtime.h"
@@ -23,7 +22,6 @@
 #include "layout/skia_text_metrics.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
-#include "webgl/webgl_scene.h"
 
 #include <broaudio/engine.h>
 
@@ -78,9 +76,9 @@ void Engine::flush() {
 void Engine::advanceTime(double ms) {
     if (displayMode_ != DisplayMode::Headless) return;
 
-    // Bind WebGL canvas FBO so rAF draw commands target it correctly
-    webgl::WebGLScene* webglScene = nullptr;
-    for (auto& sl : sceneLayers_) { webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get()); if (webglScene) break; }
+    // Get active WebGL context for FBO binding
+    webgl::WebGL2RenderingContext* activeWebGL = nullptr;
+    if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
 
     double remaining = ms;
     while (remaining > 0) {
@@ -101,14 +99,12 @@ void Engine::advanceTime(double ms) {
             JS_FreeValue(jsRuntime_->getContext(), global);
         }
 
-        if (webglScene && webglScene->webglContext())
-            webglScene->webglContext()->bindCanvasFBO();
+        if (activeWebGL) activeWebGL->bindCanvasFBO();
         timers_->fireAnimationFrames(virtualTime_);
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
-        if (webglScene && webglScene->webglContext())
-            webglScene->webglContext()->unbindCanvasFBO();
+        if (activeWebGL) activeWebGL->unbindCanvasFBO();
 
         flush();
 
@@ -154,24 +150,20 @@ bool Engine::screenshot(const std::string& path) {
     if (!document_) return false;
 
     // Bind WebGL canvas FBO before firing rAF (so GL draw commands target the canvas)
-    webgl::WebGLScene* webglScene = nullptr;
-    for (auto& sl : sceneLayers_) { webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get()); if (webglScene) break; }
-    if (webglScene && webglScene->webglContext()) {
-        webglScene->webglContext()->bindCanvasFBO();
-    }
+    webgl::WebGL2RenderingContext* activeWebGL = nullptr;
+    if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
+    if (activeWebGL) activeWebGL->bindCanvasFBO();
 
     // Fire any pending rAF callbacks so canvas commands are up to date
     timers_->fireAnimationFrames(virtualTime_);
     jsRuntime_->executePendingJobs();
 
     // Unbind WebGL canvas FBO
-    if (webglScene && webglScene->webglContext()) {
-        webglScene->webglContext()->unbindCanvasFBO();
-    }
+    if (activeWebGL) activeWebGL->unbindCanvasFBO();
 
     // GPU compositing path: replicate the windowed render pass to an offscreen FBO,
-    // then read back pixels. This captures scene layers (WebGL, Canvas2D) + UI overlay.
-    if (gl_ && (!sceneLayers_.empty() || !canvasScenes_.empty())) {
+    // then read back pixels. This captures WebGL, Canvas2D + UI overlay.
+    if (gl_ && (!webglEntries_.empty() || !canvasScenes_.empty())) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -204,9 +196,8 @@ bool Engine::screenshot(const std::string& path) {
         glViewport(0, 0, w, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        for (auto& sl : sceneLayers_) { if (sl) sl->onRender(gl_.get(), w, h, 0.0); }
 
-        // 5. Composite UI overlay (premultiplied alpha)
+        // 4. Composite UI overlay (premultiplied alpha)
         GLuint uiTex = skia->getUITexture();
         if (uiTex) {
             float fw = (float)w, fh = (float)h;
@@ -248,21 +239,67 @@ bool Engine::screenshot(const std::string& path) {
             glDeleteVertexArrays(1, &quadVAO);
         }
 
-        // 6. Composite canvas FBO textures ON TOP of the UI
+        // 5. Composite canvas FBO textures ON TOP of the UI
         compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
 
-        // 7. Read back pixels
+        // 5b. Composite WebGL textures at element positions
+        for (auto& entry : webglEntries_) {
+            GLuint tex = entry.context->colorTexture();
+            if (!tex || !entry.element) continue;
+            auto& box = entry.element->layoutBox();
+            float ex = box.contentRect.x, ey = box.contentRect.y;
+            float ew = box.contentRect.width, eh = box.contentRect.height;
+            // Walk up layout parents to get absolute position
+            for (auto* lp = entry.element->layoutParent(); lp; lp = lp->layoutParent()) {
+                auto& pb = lp->layoutBox();
+                ex += pb.contentRect.x;
+                ey += pb.contentRect.y;
+            }
+            // WebGL textures are bottom-up — flip V
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {ex,    ey,    0, 1}, {ex+ew, ey,    1, 1}, {ex+ew, ey+eh, 1, 0},
+                {ex,    ey,    0, 1}, {ex+ew, ey+eh, 1, 0}, {ex,    ey+eh, 0, 0},
+            };
+
+            GLuint quadVBO = 0, quadVAO = 0;
+            glGenBuffers(1, &quadVBO);
+            glGenVertexArrays(1, &quadVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
+
+        // 6. Read back pixels
         std::vector<uint8_t> pixels(w * h * 4);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 
-        // 8. Cleanup compositing FBO + restore WebGL state
+        // 7. Cleanup compositing FBO + restore WebGL state
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDeleteFramebuffers(1, &compositeFBO);
         gl_->deleteTexture(compositeTex);
 
-        if (webglScene && webglScene->webglContext()) {
-            webglScene->webglContext()->restoreState();
-        }
+        if (activeWebGL) activeWebGL->restoreState();
 
         // 9. Flip vertically (OpenGL reads bottom-to-top, PNG is top-to-bottom)
         int rowBytes = w * 4;
@@ -331,19 +368,17 @@ std::vector<uint8_t> Engine::capturePixels() {
     if (!document_) return {};
 
     // Bind WebGL canvas FBO before firing rAF
-    webgl::WebGLScene* webglScene = nullptr;
-    for (auto& sl : sceneLayers_) { webglScene = dynamic_cast<webgl::WebGLScene*>(sl.get()); if (webglScene) break; }
-    if (webglScene && webglScene->webglContext())
-        webglScene->webglContext()->bindCanvasFBO();
+    webgl::WebGL2RenderingContext* activeWebGL2 = nullptr;
+    if (!webglEntries_.empty()) activeWebGL2 = webglEntries_[0].context.get();
+    if (activeWebGL2) activeWebGL2->bindCanvasFBO();
 
     timers_->fireAnimationFrames(virtualTime_);
     jsRuntime_->executePendingJobs();
 
-    if (webglScene && webglScene->webglContext())
-        webglScene->webglContext()->unbindCanvasFBO();
+    if (activeWebGL2) activeWebGL2->unbindCanvasFBO();
 
     // GPU compositing path
-    if (gl_ && (!sceneLayers_.empty() || !canvasScenes_.empty())) {
+    if (gl_ && (!webglEntries_.empty() || !canvasScenes_.empty())) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -372,7 +407,6 @@ std::vector<uint8_t> Engine::capturePixels() {
         glViewport(0, 0, w, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-        for (auto& sl : sceneLayers_) { if (sl) sl->onRender(gl_.get(), w, h, 0.0); }
 
         // Composite UI overlay
         GLuint uiTex = skia->getUITexture();
@@ -419,6 +453,48 @@ std::vector<uint8_t> Engine::capturePixels() {
         // Composite canvas FBO textures ON TOP of the UI
         compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
 
+        // Composite WebGL textures at element positions
+        for (auto& entry : webglEntries_) {
+            GLuint tex = entry.context->colorTexture();
+            if (!tex || !entry.element) continue;
+            auto& box = entry.element->layoutBox();
+            float ex = box.contentRect.x, ey = box.contentRect.y;
+            float ew = box.contentRect.width, eh = box.contentRect.height;
+            for (auto* lp = entry.element->layoutParent(); lp; lp = lp->layoutParent()) {
+                auto& pb = lp->layoutBox();
+                ex += pb.contentRect.x;
+                ey += pb.contentRect.y;
+            }
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {ex,    ey,    0, 1}, {ex+ew, ey,    1, 1}, {ex+ew, ey+eh, 1, 0},
+                {ex,    ey,    0, 1}, {ex+ew, ey+eh, 1, 0}, {ex,    ey+eh, 0, 0},
+            };
+            GLuint quadVBO = 0, quadVAO = 0;
+            glGenBuffers(1, &quadVBO);
+            glGenVertexArrays(1, &quadVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
+
         // Read back pixels
         std::vector<uint8_t> pixels(w * h * 4);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -427,8 +503,7 @@ std::vector<uint8_t> Engine::capturePixels() {
         glDeleteFramebuffers(1, &compositeFBO);
         gl_->deleteTexture(compositeTex);
 
-        if (webglScene && webglScene->webglContext())
-            webglScene->webglContext()->restoreState();
+        if (activeWebGL2) activeWebGL2->restoreState();
 
         // Flip vertically (OpenGL reads bottom-to-top)
         int rowBytes = w * 4;

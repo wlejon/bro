@@ -141,6 +141,10 @@ public:
     void setCanvasScene(void* scene) { canvasScene_ = scene; }
     void* canvasScene() const { return canvasScene_; }
 
+    // WebGL context (opaque pointer — set by engine, read by draw traversal)
+    void setWebglContext(void* ctx) { webglContext_ = ctx; }
+    void* webglContext() const { return webglContext_; }
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -166,6 +170,7 @@ private:
     std::unique_ptr<layout::ElSelect> selectControl_;
     std::unique_ptr<layout::ElSvg> svgControl_;
     void* canvasScene_ = nullptr;
+    void* webglContext_ = nullptr;
 };
 
 // Template implementation — must be in header

@@ -19,7 +19,8 @@
 
 typedef struct SDL_GLContextState* SDL_GLContext;
 
-namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
+namespace bro::render { class GLContext; class RasterRenderer; }
+namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::scene { class SceneGraph; }
@@ -162,7 +163,6 @@ private:
     void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);
     void dispatchScrollEvent(dom::Element* el);
     void advanceFocus(bool reverse);
-    void addSceneLayer(std::unique_ptr<render::SceneLayer> layer);
     void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
     void compositeCanvasScenes(int w, int h);
     void compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO);
@@ -196,8 +196,14 @@ private:
     // Pre-compiled observer check function (avoids JS_Eval parse per frame)
     JSValue observerCheckFn_ = JS_UNDEFINED;
     AppManifest manifest_;
-    std::vector<std::unique_ptr<render::SceneLayer>> sceneLayers_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
+
+    // WebGL contexts (owned by engine, associated with canvas elements)
+    struct WebGLEntry {
+        std::unique_ptr<webgl::WebGL2RenderingContext> context;
+        dom::Element* element = nullptr;  // non-owning
+    };
+    std::vector<WebGLEntry> webglEntries_;
 
     // --- Raster thread state ---
     // Shared atomic communication between main and raster threads.

@@ -37,10 +37,13 @@ public:
     // Set base path for resolving relative image URLs
     void setBasePath(const std::string& path) { basePath_ = path; }
 
-    // Layer break callback: invoked when a canvas element is encountered
+    // Layer break callback: invoked when a canvas or WebGL element is encountered
     // during traversal. The compositor uses this to split HTML rendering
-    // into separate layers around canvas elements.
+    // into separate layers around canvas/WebGL elements.
+    // For Canvas2D: scene is non-null, directTexture is 0.
+    // For WebGL: scene is null, directTexture is the FBO color texture.
     using LayerBreakCallback = std::function<void(canvas::CanvasScene* scene,
+                                                   unsigned int directTexture,
                                                    float x, float y, float w, float h)>;
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
 
