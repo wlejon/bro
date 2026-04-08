@@ -8,6 +8,7 @@ add_subdirectory(layout)
 add_subdirectory(canvas)
 add_subdirectory(webgl)
 add_subdirectory(physics)
+add_subdirectory(scene)
 add_subdirectory(engine)
 add_subdirectory(headless)
 

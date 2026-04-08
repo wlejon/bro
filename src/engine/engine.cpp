@@ -28,8 +28,10 @@
 #include "js/image_bindings.h"
 #include "js/worker.h"
 #include "js/physics_bindings.h"
+#include "js/scene_bindings.h"
 
 #include "physics/physics_world.h"
+#include "scene/scene_graph.h"
 #include "api/api.h"
 #include "runtime/runtime.h"
 #include <broaudio/engine.h>
@@ -162,6 +164,9 @@ Engine::Engine(const EngineConfig& config)
         physicsWorld_->startThread();
     js::PhysicsBindings::install(jsRuntime_->getContext(), physicsWorld_.get());
 
+    // 4c. Scene graph bindings
+    js::SceneBindings::install(jsRuntime_->getContext());
+
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
     textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get(), &fontManager_);
@@ -288,15 +293,54 @@ Engine::Engine(const EngineConfig& config)
                     addSceneLayer(std::move(scene));
                     return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
                 }
+                if (type == "scene") {
+                    // Create a 2D canvas for the scene graph to render into
+                    auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                    if (el) {
+                        canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
+                            auto* elem = static_cast<dom::Element*>(ud);
+                            if (!elem->parentNode()) {
+                                ox = oy = ow = oh = 0;
+                                return;
+                            }
+                            auto& box = elem->layoutBox();
+                            ox = box.contentRect.x;
+                            oy = box.contentRect.y;
+                            for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
+                                auto& pb = lp->layoutBox();
+                                ox += pb.contentRect.x;
+                                oy += pb.contentRect.y;
+                                oy -= lp->scrollTopValue();
+                            }
+                            ow = box.contentRect.width;
+                            oh = box.contentRect.height;
+                        }, el);
+                        canvasScene->setDetachedCallback([](void* ud) -> bool {
+                            auto* n = static_cast<dom::Element*>(ud);
+                            while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                            return n->tagName() != "html" && n->tagName() != "HTML";
+                        }, el);
+                    }
+                    auto* csPtr = canvasScene.get();
+                    if (el) el->setCanvasScene(csPtr);
+                    addCanvasScene(std::move(canvasScene));
+
+                    auto graph = std::make_unique<scene::SceneGraph>();
+                    graph->setCanvasScene(csPtr);
+                    graph->setPhysicsWorld(physicsWorld_.get());
+                    auto* graphPtr = graph.get();
+                    sceneGraphs_.push_back(std::move(graph));
+                    return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
+                }
                 return JS_NULL;
             });
     } else {
-        // CPU path: 2D canvas only, no WebGL
+        // CPU path: 2D canvas + scene graph, no WebGL
         js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
-            [this](JSContext* ctx, dom::Element* el, const std::string&) -> JSValue {
-                auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+            [this](JSContext* ctx, dom::Element* el, const std::string& type) -> JSValue {
+                auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
                 if (el) {
-                    scene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
+                    canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
                         auto* elem = static_cast<dom::Element*>(ud);
                         if (!elem->parentNode()) {
                             ox = oy = ow = oh = 0;
@@ -314,17 +358,25 @@ Engine::Engine(const EngineConfig& config)
                         ow = box.contentRect.width;
                         oh = box.contentRect.height;
                     }, el);
-                    scene->setDetachedCallback([](void* ud) -> bool {
+                    canvasScene->setDetachedCallback([](void* ud) -> bool {
                         auto* n = static_cast<dom::Element*>(ud);
                         while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
                         return n->tagName() != "html" && n->tagName() != "HTML";
                     }, el);
                 }
-                auto* ptr = scene.get();
-                if (el) el->setCanvasScene(ptr);
-                scene->init(nullptr);
-                canvasScenes_.push_back(std::move(scene));
-                return js::CanvasBindings::wrapContext2D(ctx, ptr);
+                auto* csPtr = canvasScene.get();
+                if (el) el->setCanvasScene(csPtr);
+                canvasScene->init(nullptr);
+                canvasScenes_.push_back(std::move(canvasScene));
+                if (type == "scene") {
+                    auto graph = std::make_unique<scene::SceneGraph>();
+                    graph->setCanvasScene(csPtr);
+                    graph->setPhysicsWorld(physicsWorld_.get());
+                    auto* graphPtr = graph.get();
+                    sceneGraphs_.push_back(std::move(graph));
+                    return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
+                }
+                return js::CanvasBindings::wrapContext2D(ctx, csPtr);
             });
     }
 
@@ -596,6 +648,9 @@ Engine::~Engine() {
         rasterGLContext_ = nullptr;
     }
 
+    // Destroy scene graphs before canvas scenes (they hold canvas pointers)
+    sceneGraphs_.clear();
+
     // Canvas threads are stopped by ~CanvasScene (unique_ptr destruction)
     canvasScenes_.clear();
 
@@ -620,6 +675,7 @@ Engine::~Engine() {
         js::setElementFinalizerShutdown(true);
         js::cleanupWorkerBindings(ctx);
         js::PhysicsBindings::cleanup(ctx);
+        js::SceneBindings::cleanup(ctx);
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
         if (gl_) {
@@ -1081,6 +1137,11 @@ void Engine::run() {
         // 1b. Consume physics step from previous frame (makes new positions available to JS).
         if (physicsWorld_) {
             physicsWorld_->consumeStep();
+        }
+
+        // 1c. Sync scene graph physics nodes (body transforms → node transforms).
+        for (auto& sg : sceneGraphs_) {
+            sg->syncPhysics();
         }
 
         // 2. Tick timers + JS execution
