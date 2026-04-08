@@ -496,6 +496,11 @@ static JSClassDef js_oscnode_class = {
     "OscillatorNode", js_oscnode_finalizer, nullptr, nullptr, nullptr
 };
 
+static JSValue js_osc_get_voiceId(JSContext* ctx, JSValueConst this_val) {
+    auto* d = static_cast<OscNodeData*>(JS_GetOpaque(this_val, js_oscnode_class_id));
+    return d ? JS_NewInt32(ctx, d->voiceId) : JS_UNDEFINED;
+}
+
 static JSValue js_osc_get_type(JSContext* ctx, JSValueConst this_val) {
     auto* d = static_cast<OscNodeData*>(JS_GetOpaque(this_val, js_oscnode_class_id));
     return d ? JS_NewString(ctx, d->type.c_str()) : JS_UNDEFINED;
@@ -3278,6 +3283,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
     JS_NewClass(rt, js_oscnode_class_id, &js_oscnode_class);
     {
         static const JSCFunctionListEntry osc_funcs[] = {
+            JS_CGETSET_DEF("voiceId", js_osc_get_voiceId, nullptr),
             JS_CGETSET_DEF("type", js_osc_get_type, js_osc_set_type),
             JS_CFUNC_DEF("connect", 1, js_osc_connect),
             JS_CFUNC_DEF("disconnect", 0, js_osc_disconnect),
