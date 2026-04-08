@@ -21,6 +21,7 @@ typedef struct SDL_GLContextState* SDL_GLContext;
 
 namespace bro::render { class SceneLayer; class GLContext; class RasterRenderer; }
 namespace broaudio { class Engine; }
+namespace bro::physics { class PhysicsWorld; }
 namespace bro::engine { class SystemOverlay; }
 namespace bro::canvas { class CanvasScene; }
 
@@ -234,6 +235,9 @@ private:
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
 
     std::unique_ptr<broaudio::Engine> audioEngine_;
+    std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
+    double physicsAccumMs_ = 0.0;
+    double lastPhysicsTimeMs_ = 0.0;
     std::unique_ptr<SystemOverlay> systemOverlay_;
 
     // Headless-specific

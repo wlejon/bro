@@ -27,7 +27,9 @@
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
 #include "js/worker.h"
+#include "js/physics_bindings.h"
 
+#include "physics/physics_world.h"
 #include "api/api.h"
 #include "runtime/runtime.h"
 #include <broaudio/engine.h>
@@ -152,6 +154,13 @@ Engine::Engine(const EngineConfig& config)
         audioEngine_->initHeadless();
     }
     js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
+
+    // 4c. Physics engine + bindings
+    physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
+    physicsWorld_->init();
+    if (displayMode_ == DisplayMode::Windowed)
+        physicsWorld_->startThread();
+    js::PhysicsBindings::install(jsRuntime_->getContext(), physicsWorld_.get());
 
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
@@ -609,6 +618,7 @@ Engine::~Engine() {
         JSContext* ctx = jsRuntime_->getContext();
         js::setElementFinalizerShutdown(true);
         js::cleanupWorkerBindings(ctx);
+        js::PhysicsBindings::cleanup(ctx);
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
         if (gl_) {
@@ -636,6 +646,10 @@ Engine::~Engine() {
         js::DomBindings::cleanup(ctx);
         jsRuntime_->executePendingJobs();
         JS_RunGC(jsRuntime_->getRuntime());
+        // Second GC pass — typed arrays and closures may form reference
+        // chains that need multiple collections to fully release.
+        jsRuntime_->executePendingJobs();
+        JS_RunGC(jsRuntime_->getRuntime());
     }
 
     // 3. GL cleanup (windowed only)
@@ -661,6 +675,7 @@ Engine::~Engine() {
     // Audio engine must also outlive JS runtime because VoiceAllocator/MidiInput
     // destructors reference it (removeVoice, close).
     jsRuntime_.reset();
+    physicsWorld_.reset();
     audioEngine_.reset();
     document_.reset();
     timers_.reset();
@@ -1056,6 +1071,11 @@ void Engine::run() {
             break;
         }
 
+        // 1b. Consume physics step from previous frame (makes new positions available to JS).
+        if (physicsWorld_) {
+            physicsWorld_->consumeStep();
+        }
+
         // 2. Tick timers + JS execution
         double now = util::currentTimeMs();
         double t0 = now;
@@ -1114,6 +1134,21 @@ void Engine::run() {
             js::DomBindings::sweepOrphanedWrappers(jsRuntime_->getContext());
             JS_RunGC(jsRuntime_->getRuntime());
             lastGCMs_ = now;
+        }
+
+        // 3e. Signal physics thread at fixed rate (not every frame).
+        if (physicsWorld_ && physicsWorld_->isIdle()) {
+            double stepMs = physicsWorld_->timeStep() * 1000.0;
+            double nowPhys = util::currentTimeMs();
+            if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
+            physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_);
+            lastPhysicsTimeMs_ = nowPhys;
+            if (physicsAccumMs_ >= stepMs) {
+                physicsAccumMs_ -= stepMs;
+                if (physicsAccumMs_ > stepMs * 3)
+                    physicsAccumMs_ = 0;
+                physicsWorld_->signalStep();
+            }
         }
 
         // 4. Signal layout thread when DOM is dirty.
@@ -1387,6 +1422,11 @@ void Engine::run() {
                                            viewportWidth_, viewportHeight_);
             }
         }
+    }
+
+    // --- Physics thread shutdown ---
+    if (physicsWorld_) {
+        physicsWorld_->shutdown();
     }
 
     // --- Layout thread shutdown ---
