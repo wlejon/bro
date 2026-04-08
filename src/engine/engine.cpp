@@ -28,6 +28,7 @@
 #include "js/worker.h"
 #include "js/physics_bindings.h"
 #include "js/scene_bindings.h"
+#include "js/mesh_bindings.h"
 
 #include "physics/physics_world.h"
 #include "scene/scene_graph.h"
@@ -164,6 +165,9 @@ Engine::Engine(const EngineConfig& config)
 
     // 4c. Scene graph bindings
     js::SceneBindings::install(jsRuntime_->getContext());
+
+    // 4d. Mesh bindings (standalone Mesh class wrapping bromesh)
+    js::MeshBindings::install(jsRuntime_->getContext());
 
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
@@ -349,7 +353,7 @@ Engine::Engine(const EngineConfig& config)
                             el->setSceneGraphFBOTexture(tex);
                         });
                     }
-                    sceneGraphs_.push_back(std::move(graph));
+                    sceneGraphs_.push_back({std::move(graph), el});
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }
                 return JS_NULL;
@@ -406,7 +410,7 @@ Engine::Engine(const EngineConfig& config)
                             el->setSceneGraphFBOTexture(tex);
                         });
                     }
-                    sceneGraphs_.push_back(std::move(graph));
+                    sceneGraphs_.push_back({std::move(graph), el});
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }
                 return js::CanvasBindings::wrapContext2D(ctx, csPtr);
@@ -706,6 +710,7 @@ Engine::~Engine() {
         js::setElementFinalizerShutdown(true);
         js::cleanupWorkerBindings(ctx);
         js::PhysicsBindings::cleanup(ctx);
+        js::MeshBindings::cleanup(ctx);
         js::SceneBindings::cleanup(ctx);
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
@@ -1174,7 +1179,7 @@ void Engine::run() {
 
         // 1c. Sync scene graph physics nodes (body transforms → node transforms).
         for (auto& sg : sceneGraphs_) {
-            sg->syncPhysics();
+            sg.graph->syncPhysics();
         }
 
         // 2. Tick timers + JS execution

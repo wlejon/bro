@@ -1,4 +1,5 @@
 #include "js/scene_bindings.h"
+#include "js/mesh_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/shape_node.h"
@@ -904,12 +905,25 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
         node->setEmissive((float)emissive);
 
-        // Mesh: either a named primitive or raw vertex data
+        // Mesh: either a Mesh object, raw vertex data, or a named primitive
         bromesh::MeshData meshData;
         bool hasRawData = false;
 
-        // Check for raw vertex data first (positions + indices arrays)
+        // Check for a Mesh object via the "data" property
         {
+            JSValue dataVal = JS_GetPropertyStr(ctx, opts, "data");
+            if (!JS_IsUndefined(dataVal)) {
+                auto* md = MeshBindings::getMeshData(ctx, dataVal);
+                if (md) {
+                    meshData = *md;
+                    hasRawData = true;
+                }
+            }
+            JS_FreeValue(ctx, dataVal);
+        }
+
+        // Check for raw vertex data (positions + indices arrays)
+        if (!hasRawData) {
             std::vector<float> positions, normals;
             std::vector<uint32_t> indices;
             if (jsReadFloatArray(ctx, opts, "positions", positions) &&

@@ -43,6 +43,7 @@ add_library(bro_js STATIC
     image_bindings.cpp
     physics_bindings.cpp
     scene_bindings.cpp
+    mesh_bindings.cpp
     headless_bindings.cpp
     message_serializer.cpp
     worker.cpp
@@ -50,6 +51,6 @@ add_library(bro_js STATIC
 )
 target_include_directories(bro_js PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(bro_js PRIVATE ${GEN_DIR})
-target_link_libraries(bro_js PUBLIC qjs brokit bro_dom bro_util bro_canvas bro_physics bro_scene broaudio bro_webgl stb_image SDL3::SDL3)
+target_link_libraries(bro_js PUBLIC qjs brokit bro_dom bro_util bro_canvas bro_physics bro_scene broaudio bro_webgl stb_image SDL3::SDL3 bromesh)
 # QuickJS headers
 target_include_directories(bro_js PRIVATE ${CMAKE_SOURCE_DIR}/third_party/quickjs)
