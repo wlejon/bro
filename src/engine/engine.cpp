@@ -626,6 +626,12 @@ Engine::~Engine() {
         }
         js::cleanupCustomElements(ctx);
 
+        // Free cached compiled function (holds a GC-tracked JSValue).
+        if (!JS_IsUndefined(observerCheckFn_)) {
+            JS_FreeValue(ctx, observerCheckFn_);
+            observerCheckFn_ = JS_UNDEFINED;
+        }
+
         // Clean up global properties (prevents leaked references).
         // Delete document BEFORE elem_map — the map holds JS refs to elements
         // whose finalizers call freeNode(); deleting the map first can free
