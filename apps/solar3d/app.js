@@ -172,7 +172,7 @@ console.log('Meshes generated');
 
 var cam = {
     pos: [0, 15, 80],
-    yaw: Math.PI,
+    yaw: 0,
     pitch: -0.15,
     speed: 30,
     sensitivity: 0.003

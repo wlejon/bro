@@ -243,7 +243,11 @@ private:
 
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
-    std::vector<std::unique_ptr<scene::SceneGraph>> sceneGraphs_;
+    struct SceneGraphEntry {
+        std::unique_ptr<scene::SceneGraph> graph;
+        dom::Element* element = nullptr;  // non-owning
+    };
+    std::vector<SceneGraphEntry> sceneGraphs_;
     double physicsAccumMs_ = 0.0;
     double lastPhysicsTimeMs_ = 0.0;
     std::unique_ptr<SystemOverlay> systemOverlay_;

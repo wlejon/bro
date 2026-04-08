@@ -107,11 +107,6 @@ void MeshNode::onRender(SceneGraph& graph) {
     if (gpuDirty_) uploadToGPU();
     if (!vao_ || indexCount_ == 0) return;
 
-    // The SceneGraph sets up the shader, FBO, and uniforms (MVP, color, etc.)
-    // before calling onRender. We just need to bind our VAO and draw.
-    // MVP and material are set by SceneGraph::renderMeshNode().
-    // This is called from SceneGraph::renderMeshNode() which handles all that.
-
     glBindVertexArray(vao_);
     glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);

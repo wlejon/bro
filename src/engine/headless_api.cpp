@@ -162,8 +162,8 @@ bool Engine::screenshot(const std::string& path) {
     if (activeWebGL) activeWebGL->unbindCanvasFBO();
 
     // GPU compositing path: replicate the windowed render pass to an offscreen FBO,
-    // then read back pixels. This captures WebGL, Canvas2D + UI overlay.
-    if (gl_ && (!webglEntries_.empty() || !canvasScenes_.empty())) {
+    // then read back pixels. This captures WebGL, Canvas2D, scene graph 3D + UI overlay.
+    if (gl_ && (!webglEntries_.empty() || !canvasScenes_.empty() || !sceneGraphs_.empty())) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -241,6 +241,54 @@ bool Engine::screenshot(const std::string& path) {
 
         // 5. Composite canvas FBO textures ON TOP of the UI
         compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
+
+        // 5a. Composite scene graph mesh FBO textures at element positions
+        for (auto& entry : sceneGraphs_) {
+            if (!entry.element || !entry.graph) continue;
+            GLuint tex = entry.element->sceneGraphFBOTexture();
+            if (!tex) continue;
+            auto& box = entry.element->layoutBox();
+            float ex = box.contentRect.x, ey = box.contentRect.y;
+            float ew = box.contentRect.width, eh = box.contentRect.height;
+            for (auto* lp = entry.element->layoutParent(); lp; lp = lp->layoutParent()) {
+                auto& pb = lp->layoutBox();
+                ex += pb.contentRect.x;
+                ey += pb.contentRect.y;
+            }
+            // Mesh FBO textures are bottom-up (OpenGL) — flip V
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {ex,    ey,    0, 1}, {ex+ew, ey,    1, 1}, {ex+ew, ey+eh, 1, 0},
+                {ex,    ey,    0, 1}, {ex+ew, ey+eh, 1, 0}, {ex,    ey+eh, 0, 0},
+            };
+
+            GLuint quadVBO = 0, quadVAO = 0;
+            glGenBuffers(1, &quadVBO);
+            glGenVertexArrays(1, &quadVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
 
         // 5b. Composite WebGL textures at element positions
         for (auto& entry : webglEntries_) {
@@ -378,7 +426,7 @@ std::vector<uint8_t> Engine::capturePixels() {
     if (activeWebGL2) activeWebGL2->unbindCanvasFBO();
 
     // GPU compositing path
-    if (gl_ && (!webglEntries_.empty() || !canvasScenes_.empty())) {
+    if (gl_ && (!webglEntries_.empty() || !canvasScenes_.empty() || !sceneGraphs_.empty())) {
         auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
         int w = viewportWidth_, h = viewportHeight_;
 
@@ -452,6 +500,49 @@ std::vector<uint8_t> Engine::capturePixels() {
 
         // Composite canvas FBO textures ON TOP of the UI
         compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
+
+        // Composite scene graph mesh FBO textures at element positions
+        for (auto& entry : sceneGraphs_) {
+            if (!entry.element || !entry.graph) continue;
+            GLuint tex = entry.element->sceneGraphFBOTexture();
+            if (!tex) continue;
+            auto& box = entry.element->layoutBox();
+            float ex = box.contentRect.x, ey = box.contentRect.y;
+            float ew = box.contentRect.width, eh = box.contentRect.height;
+            for (auto* lp = entry.element->layoutParent(); lp; lp = lp->layoutParent()) {
+                auto& pb = lp->layoutBox();
+                ex += pb.contentRect.x;
+                ey += pb.contentRect.y;
+            }
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {ex,    ey,    0, 1}, {ex+ew, ey,    1, 1}, {ex+ew, ey+eh, 1, 0},
+                {ex,    ey,    0, 1}, {ex+ew, ey+eh, 1, 0}, {ex,    ey+eh, 0, 0},
+            };
+            GLuint quadVBO = 0, quadVAO = 0;
+            glGenBuffers(1, &quadVBO);
+            glGenVertexArrays(1, &quadVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
 
         // Composite WebGL textures at element positions
         for (auto& entry : webglEntries_) {

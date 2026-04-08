@@ -332,6 +332,13 @@ void SceneGraph::render() {
             // Bind FBO and set up GL state for 3D rendering
             glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
             glViewport(0, 0, meshFBOWidth_, meshFBOHeight_);
+            // Reset GL state that Skia/Ganesh may have changed
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_BLEND);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glDepthMask(GL_TRUE);
+
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // transparent background
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glEnable(GL_DEPTH_TEST);
