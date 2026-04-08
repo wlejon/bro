@@ -85,6 +85,7 @@ var COLORS_DARK = [
 var settings = {
     startLevel: 1,
     sfxVol: 80,
+    musicVol: 70,
     ghostPiece: true,
     gridLines: true
 };
@@ -146,28 +147,337 @@ function saveSettings() {
 // --- JSON polyfill for bro engine (QuickJS has JSON built-in) ---
 // (No polyfill needed — QuickJS supports JSON natively)
 
-// --- Audio ---
+// --- Audio (broaudio engine) ---
 var audioCtx = null;
+var musicBus = -1;
+var sfxBus = -1;
+var melodyAlloc = null;
+var bassAlloc = null;
+var percAlloc = null;
+var melodySeq = null;
+var bassSeq = null;
+var percSeq = null;
+var currentSongIndex = -1;
+var musicPlaying = false;
+
+// --- Song data: 3 original chiptune songs ---
+// Each note: [beat, midiNote, velocity, duration]
+
+var SONGS = [
+    // Song A: "Block March" - E minor, driving 4/4 march feel
+    // A section (bars 1-4): main theme
+    // B section (bars 5-8): contrasting descent, builds back to resolve on E
+    {
+        name: "Block March", baseBPM: 140, loopBeats: 32,
+        melodyWave: "square",
+        bassWave: "triangle",
+        melody: [
+            // -- A section (beats 0-15) --
+            [0, 76, 0.9, 1],      // E5
+            [1, 71, 0.8, 0.5],    // B4
+            [1.5, 72, 0.8, 0.5],  // C5
+            [2, 74, 0.9, 1],      // D5
+            [3, 72, 0.8, 0.5],    // C5
+            [3.5, 71, 0.8, 0.5],  // B4
+            [4, 69, 0.9, 1],      // A4
+            [5, 69, 0.7, 0.5],    // A4
+            [5.5, 72, 0.8, 0.5],  // C5
+            [6, 76, 0.9, 1],      // E5
+            [7, 74, 0.8, 0.5],    // D5
+            [7.5, 72, 0.8, 0.5],  // C5
+            [8, 71, 0.9, 1.5],    // B4
+            [9.5, 72, 0.7, 0.5],  // C5
+            [10, 74, 0.9, 1],     // D5
+            [11, 76, 0.9, 1],     // E5
+            [12, 72, 0.9, 1],     // C5
+            [13, 69, 0.9, 1],     // A4
+            [14, 69, 0.9, 1.75],  // A4
+            // -- B section (beats 16-31) --
+            [16, 74, 0.9, 1],     // D5
+            [17, 76, 0.9, 0.5],   // E5
+            [17.5, 74, 0.8, 0.5], // D5
+            [18, 72, 0.9, 1],     // C5
+            [19, 71, 0.7, 0.5],   // B4
+            [19.5, 69, 0.8, 0.5], // A4
+            [20, 71, 0.9, 1],     // B4
+            [21, 72, 0.8, 0.5],   // C5
+            [21.5, 74, 0.8, 0.5], // D5
+            [22, 76, 0.9, 1.5],   // E5
+            [23.5, 74, 0.7, 0.5], // D5
+            [24, 72, 0.9, 1],     // C5
+            [25, 69, 0.8, 0.5],   // A4
+            [25.5, 69, 0.7, 0.5], // A4
+            [26, 71, 0.9, 1],     // B4
+            [27, 67, 0.8, 0.5],   // G4
+            [27.5, 69, 0.8, 0.5], // A4
+            [28, 71, 0.9, 1],     // B4
+            [29, 72, 0.8, 0.5],   // C5
+            [29.5, 71, 0.7, 0.5], // B4
+            [30, 76, 0.9, 1.75]   // E5 (resolve)
+        ],
+        bass: [
+            // -- A section --
+            [0, 40, 0.7, 1],     // E2
+            [1, 40, 0.5, 1],
+            [2, 38, 0.7, 1],     // D2
+            [3, 38, 0.5, 1],
+            [4, 45, 0.7, 1],     // A2
+            [5, 45, 0.5, 1],
+            [6, 40, 0.7, 1],     // E2
+            [7, 40, 0.5, 1],
+            [8, 47, 0.7, 1],     // B2
+            [9, 47, 0.5, 1],
+            [10, 38, 0.7, 1],    // D2
+            [11, 38, 0.5, 1],
+            [12, 45, 0.7, 1],    // A2
+            [13, 45, 0.5, 1],
+            [14, 40, 0.7, 1.75], // E2
+            // -- B section --
+            [16, 38, 0.7, 1],    // D2
+            [17, 38, 0.5, 1],
+            [18, 36, 0.7, 1],    // C2
+            [19, 36, 0.5, 1],
+            [20, 47, 0.7, 1],    // B2
+            [21, 47, 0.5, 1],
+            [22, 40, 0.7, 1],    // E2
+            [23, 40, 0.5, 1],
+            [24, 36, 0.7, 1],    // C2
+            [25, 36, 0.5, 1],
+            [26, 47, 0.7, 1],    // B2
+            [27, 47, 0.5, 1],
+            [28, 47, 0.7, 1],    // B2
+            [29, 47, 0.5, 1],
+            [30, 40, 0.7, 1.75]  // E2 (resolve)
+        ],
+        perc: [
+            // -- A section --
+            [0, 36, 0.9, 0.25],   // kick
+            [2, 36, 0.9, 0.25],
+            [4, 36, 0.9, 0.25],
+            [6, 36, 0.9, 0.25],
+            [8, 36, 0.9, 0.25],
+            [10, 36, 0.9, 0.25],
+            [12, 36, 0.9, 0.25],
+            [14, 36, 0.9, 0.25],
+            [1, 42, 0.6, 0.15],   // hi-hat
+            [3, 42, 0.6, 0.15],
+            [5, 42, 0.6, 0.15],
+            [7, 42, 0.6, 0.15],
+            [9, 42, 0.6, 0.15],
+            [11, 42, 0.6, 0.15],
+            [13, 42, 0.6, 0.15],
+            [15, 42, 0.6, 0.15],
+            // -- B section --
+            [16, 36, 0.9, 0.25],
+            [18, 36, 0.9, 0.25],
+            [20, 36, 0.9, 0.25],
+            [22, 36, 0.9, 0.25],
+            [24, 36, 0.9, 0.25],
+            [26, 36, 0.9, 0.25],
+            [28, 36, 0.9, 0.25],
+            [30, 36, 0.9, 0.25],
+            [17, 42, 0.6, 0.15],
+            [19, 42, 0.6, 0.15],
+            [21, 42, 0.6, 0.15],
+            [23, 42, 0.6, 0.15],
+            [25, 42, 0.6, 0.15],
+            [27, 42, 0.6, 0.15],
+            [29, 42, 0.6, 0.15],
+            [31, 42, 0.6, 0.15]
+        ]
+    },
+    // Song B: "Crystal Stack" - C major, bouncy and playful
+    {
+        name: "Crystal Stack", baseBPM: 128, loopBeats: 16,
+        melodyWave: "square",
+        bassWave: "triangle",
+        melody: [
+            [0, 72, 0.8, 0.75],   // C5
+            [0.75, 74, 0.7, 0.25],// D5
+            [1, 76, 0.9, 1],      // E5
+            [2, 72, 0.8, 0.5],    // C5
+            [2.5, 74, 0.7, 0.5],  // D5
+            [3, 76, 0.8, 0.5],    // E5
+            [3.5, 79, 0.9, 0.5],  // G5
+            [4, 81, 0.9, 1.5],    // A5
+            [5.5, 79, 0.7, 0.5],  // G5
+            [6, 76, 0.8, 1],      // E5
+            [7, 74, 0.7, 0.5],    // D5
+            [7.5, 72, 0.7, 0.5],  // C5
+            [8, 74, 0.9, 1],      // D5
+            [9, 72, 0.7, 0.5],    // C5
+            [9.5, 69, 0.8, 0.5],  // A4
+            [10, 72, 0.9, 1],     // C5
+            [11, 74, 0.8, 0.5],   // D5
+            [11.5, 76, 0.8, 0.5], // E5
+            [12, 79, 0.9, 1],     // G5
+            [13, 76, 0.8, 1],     // E5
+            [14, 72, 0.8, 1.75]   // C5
+        ],
+        bass: [
+            [0, 48, 0.7, 1],     // C3
+            [1, 48, 0.5, 1],
+            [2, 48, 0.7, 1],
+            [3, 52, 0.5, 1],     // E3
+            [4, 45, 0.7, 1],     // A2
+            [5, 45, 0.5, 1],
+            [6, 48, 0.7, 1],     // C3
+            [7, 43, 0.5, 1],     // G2
+            [8, 50, 0.7, 1],     // D3
+            [9, 50, 0.5, 1],
+            [10, 48, 0.7, 1],    // C3
+            [11, 48, 0.5, 1],
+            [12, 43, 0.7, 1],    // G2
+            [13, 43, 0.5, 1],
+            [14, 48, 0.7, 1.75]  // C3
+        ],
+        perc: [
+            [0, 36, 0.8, 0.25],
+            [2, 36, 0.6, 0.25],
+            [4, 36, 0.8, 0.25],
+            [6, 36, 0.6, 0.25],
+            [8, 36, 0.8, 0.25],
+            [10, 36, 0.6, 0.25],
+            [12, 36, 0.8, 0.25],
+            [14, 36, 0.6, 0.25],
+            [0.5, 42, 0.4, 0.1],
+            [1.5, 42, 0.4, 0.1],
+            [2.5, 42, 0.4, 0.1],
+            [3.5, 42, 0.4, 0.1],
+            [4.5, 42, 0.4, 0.1],
+            [5.5, 42, 0.4, 0.1],
+            [6.5, 42, 0.4, 0.1],
+            [7.5, 42, 0.4, 0.1]
+        ]
+    },
+    // Song C: "Neon Rush" - D minor, intense and driving for high levels
+    {
+        name: "Neon Rush", baseBPM: 155, loopBeats: 16,
+        melodyWave: "square",
+        bassWave: "sawtooth",
+        melody: [
+            [0, 74, 0.9, 0.5],    // D5
+            [0.5, 74, 0.8, 0.5],  // D5
+            [1, 77, 0.9, 0.5],    // F5
+            [1.5, 74, 0.8, 0.5],  // D5
+            [2, 72, 0.9, 0.5],    // C5
+            [2.5, 69, 0.8, 0.5],  // A4
+            [3, 72, 0.9, 1],      // C5
+            [4, 74, 0.9, 0.5],    // D5
+            [4.5, 77, 0.9, 0.5],  // F5
+            [5, 79, 0.9, 0.5],    // G5
+            [5.5, 77, 0.8, 0.5],  // F5
+            [6, 74, 0.9, 1],      // D5
+            [7, 72, 0.8, 0.5],    // C5
+            [7.5, 69, 0.7, 0.5],  // A4
+            [8, 70, 0.9, 0.5],    // Bb4
+            [8.5, 70, 0.8, 0.5],  // Bb4
+            [9, 72, 0.9, 0.5],    // C5
+            [9.5, 74, 0.9, 0.5],  // D5
+            [10, 77, 0.9, 1],     // F5
+            [11, 79, 0.9, 0.5],   // G5
+            [11.5, 77, 0.8, 0.5], // F5
+            [12, 74, 0.9, 1],     // D5
+            [13, 69, 0.8, 0.5],   // A4
+            [13.5, 72, 0.8, 0.5], // C5
+            [14, 74, 0.9, 1.75]   // D5
+        ],
+        bass: [
+            [0, 38, 0.8, 0.5],   // D2
+            [0.5, 38, 0.6, 0.5],
+            [1, 38, 0.8, 0.5],
+            [1.5, 38, 0.6, 0.5],
+            [2, 36, 0.8, 0.5],   // C2
+            [2.5, 36, 0.6, 0.5],
+            [3, 36, 0.8, 1],
+            [4, 38, 0.8, 0.5],   // D2
+            [4.5, 38, 0.6, 0.5],
+            [5, 41, 0.8, 0.5],   // F2
+            [5.5, 41, 0.6, 0.5],
+            [6, 38, 0.8, 1],     // D2
+            [7, 36, 0.8, 1],     // C2
+            [8, 34, 0.8, 0.5],   // Bb1
+            [8.5, 34, 0.6, 0.5],
+            [9, 36, 0.8, 0.5],   // C2
+            [9.5, 36, 0.6, 0.5],
+            [10, 41, 0.8, 1],    // F2
+            [11, 43, 0.8, 1],    // G2
+            [12, 38, 0.8, 1],    // D2
+            [13, 33, 0.8, 1],    // A1
+            [14, 38, 0.8, 1.75]  // D2
+        ],
+        perc: [
+            [0, 36, 0.9, 0.2],
+            [1, 36, 0.7, 0.2],
+            [2, 36, 0.9, 0.2],
+            [3, 36, 0.7, 0.2],
+            [4, 36, 0.9, 0.2],
+            [5, 36, 0.7, 0.2],
+            [6, 36, 0.9, 0.2],
+            [7, 36, 0.7, 0.2],
+            [8, 36, 0.9, 0.2],
+            [9, 36, 0.7, 0.2],
+            [10, 36, 0.9, 0.2],
+            [11, 36, 0.7, 0.2],
+            [12, 36, 0.9, 0.2],
+            [13, 36, 0.7, 0.2],
+            [14, 36, 0.9, 0.2],
+            [15, 36, 0.7, 0.2]
+        ]
+    }
+];
 
 function initAudio() {
-    try { audioCtx = new AudioContext(); } catch(e) { audioCtx = null; }
+    try { audioCtx = new AudioContext(); } catch(e) { audioCtx = null; return; }
+
+    // Create mix buses: one for music, one for SFX
+    try {
+        musicBus = audioCtx.createBus();
+        sfxBus = audioCtx.createBus();
+        audioCtx.setBusGain(musicBus, settings.musicVol / 100);
+        audioCtx.setBusGain(sfxBus, settings.sfxVol / 100);
+
+        // Music bus effects: reverb for depth
+        audioCtx.setBusReverbEnabled(musicBus, true);
+        audioCtx.setBusReverbRoomSize(musicBus, 0.3);
+        audioCtx.setBusReverbDamping(musicBus, 0.6);
+        audioCtx.setBusReverbMix(musicBus, 0.15);
+
+        // Subtle chorus on music
+        audioCtx.setBusChorusEnabled(musicBus, true);
+        audioCtx.setBusChorusRate(musicBus, 0.8);
+        audioCtx.setBusChorusDepth(musicBus, 0.3);
+        audioCtx.setBusChorusMix(musicBus, 0.1);
+
+        // Master compressor for polish
+        audioCtx.setCompressorEnabled(true);
+        audioCtx.setCompressorThreshold(-12);
+        audioCtx.setCompressorRatio(3);
+        audioCtx.setCompressorAttack(0.01);
+        audioCtx.setCompressorRelease(0.1);
+    } catch(e) {
+        musicBus = -1;
+        sfxBus = -1;
+    }
 }
 
+// --- SFX (direct voice API — OscillatorNode.stop() leaks voices) ---
 function playTone(freq, duration, type, vol) {
     if (!audioCtx) return;
     var v = (vol !== undefined ? vol : 1.0) * (settings.sfxVol / 100);
     if (v <= 0) return;
     try {
-        var osc = audioCtx.createOscillator();
-        var gain = audioCtx.createGain();
-        osc.type = type || "square";
-        osc.frequency.value = freq;
-        gain.gain.value = v * 0.15;
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
+        var voiceId = audioCtx.createVoice();
+        audioCtx.setVoiceWaveform(voiceId, type || "square");
+        audioCtx.setVoiceFrequency(voiceId, freq);
+        audioCtx.setVoiceGain(voiceId, v * 15.0);
+        audioCtx.setVoiceAttack(voiceId, 0.003);
+        audioCtx.setVoiceDecay(voiceId, duration * 0.8);
+        audioCtx.setVoiceSustain(voiceId, 0.0);
+        audioCtx.setVoiceRelease(voiceId, 0.02);
         var t = audioCtx.currentTime;
-        osc.start(t);
-        osc.stop(t + duration);
+        audioCtx.startVoice(voiceId, t);
+        audioCtx.stopVoice(voiceId, t + duration);
     } catch(e) {}
 }
 
@@ -201,6 +511,211 @@ function sfxCombo(n) {
     var f = 400 + n * 80;
     if (f > 1200) f = 1200;
     playTone(f, 0.1, "square", 0.6);
+}
+
+// --- Music system (broaudio Sequence + VoiceAllocator) ---
+function getSongForLevel(lvl) {
+    if (lvl <= 7) return 0;        // Block March
+    if (lvl <= 14) return 1;       // Crystal Stack
+    return 2;                       // Neon Rush
+}
+
+function getMusicBPM(songIdx, lvl) {
+    var song = SONGS[songIdx];
+    return song.baseBPM + (lvl - 1) * 4;
+}
+
+function midiToHz(note) {
+    return 440 * Math.pow(2, (note - 69) / 12);
+}
+
+function buildSequences(songIdx) {
+    if (!audioCtx) return;
+    var song = SONGS[songIdx];
+
+    // Clean up existing sequences
+    stopMusic();
+
+    // Create melody voice allocator
+    melodyAlloc = audioCtx.createVoiceAllocator(8);
+    melodyAlloc.setStealPolicy("oldest");
+    melodyAlloc.setVoiceSetup(function(voiceId, note, velocity) {
+        var freq = 440 * Math.pow(2, (note - 69) / 12);
+        audioCtx.setVoiceNote(voiceId, note, velocity);
+        audioCtx.setVoiceWaveform(voiceId, song.melodyWave);
+        audioCtx.setVoiceFrequency(voiceId, freq);
+        audioCtx.setVoiceGain(voiceId, 15.0);
+        audioCtx.setVoicePan(voiceId, 0);
+        audioCtx.setVoiceAttack(voiceId, 0.008);
+        audioCtx.setVoiceDecay(voiceId, 0.08);
+        audioCtx.setVoiceSustain(voiceId, 0.7);
+        audioCtx.setVoiceRelease(voiceId, 0.06);
+        if (musicBus !== -1) {
+            audioCtx.setVoiceBus(voiceId, musicBus);
+        }
+    });
+
+    // Create bass voice allocator
+    bassAlloc = audioCtx.createVoiceAllocator(4);
+    bassAlloc.setStealPolicy("oldest");
+    bassAlloc.setVoiceSetup(function(voiceId, note, velocity) {
+        var freq = 440 * Math.pow(2, (note - 69) / 12);
+        audioCtx.setVoiceNote(voiceId, note, velocity);
+        audioCtx.setVoiceWaveform(voiceId, song.bassWave);
+        audioCtx.setVoiceFrequency(voiceId, freq);
+        audioCtx.setVoiceGain(voiceId, 15.0);
+        audioCtx.setVoicePan(voiceId, 0);
+        audioCtx.setVoiceAttack(voiceId, 0.01);
+        audioCtx.setVoiceDecay(voiceId, 0.1);
+        audioCtx.setVoiceSustain(voiceId, 0.8);
+        audioCtx.setVoiceRelease(voiceId, 0.08);
+        if (musicBus !== -1) {
+            audioCtx.setVoiceBus(voiceId, musicBus);
+        }
+    });
+
+    // Create percussion voice allocator
+    percAlloc = audioCtx.createVoiceAllocator(4);
+    percAlloc.setStealPolicy("oldest");
+    percAlloc.setVoiceSetup(function(voiceId, note, velocity) {
+        audioCtx.setVoiceNote(voiceId, note, velocity);
+        if (note >= 40) {
+            // Hi-hat: white noise, very short
+            audioCtx.setVoiceWaveform(voiceId, "whitenoise");
+            audioCtx.setVoiceGain(voiceId, 10.0);
+            audioCtx.setVoiceAttack(voiceId, 0.001);
+            audioCtx.setVoiceDecay(voiceId, 0.04);
+            audioCtx.setVoiceSustain(voiceId, 0.0);
+            audioCtx.setVoiceRelease(voiceId, 0.02);
+            audioCtx.setVoiceFilterEnabled(voiceId, true);
+            audioCtx.setVoiceFilterType(voiceId, "highpass");
+            audioCtx.setVoiceFilterFrequency(voiceId, 8000);
+        } else {
+            // Kick: triangle low freq, punchy
+            audioCtx.setVoiceWaveform(voiceId, "triangle");
+            audioCtx.setVoiceFrequency(voiceId, 55);
+            audioCtx.setVoiceGain(voiceId, 15.0);
+            audioCtx.setVoiceAttack(voiceId, 0.002);
+            audioCtx.setVoiceDecay(voiceId, 0.12);
+            audioCtx.setVoiceSustain(voiceId, 0.0);
+            audioCtx.setVoiceRelease(voiceId, 0.05);
+        }
+        if (musicBus !== -1) {
+            audioCtx.setVoiceBus(voiceId, musicBus);
+        }
+    });
+
+    // Build melody sequence
+    melodySeq = audioCtx.createSequence(melodyAlloc);
+    for (var i = 0; i < song.melody.length; i++) {
+        var n = song.melody[i];
+        melodySeq.addNote(n[0], n[1], n[2], n[3]);
+    }
+    melodySeq.setLoopEnabled(true);
+    melodySeq.setLoopRange(0, song.loopBeats);
+
+    // Build bass sequence
+    bassSeq = audioCtx.createSequence(bassAlloc);
+    for (var i = 0; i < song.bass.length; i++) {
+        var n = song.bass[i];
+        bassSeq.addNote(n[0], n[1], n[2], n[3]);
+    }
+    bassSeq.setLoopEnabled(true);
+    bassSeq.setLoopRange(0, song.loopBeats);
+
+    // Build percussion sequence
+    percSeq = audioCtx.createSequence(percAlloc);
+    for (var i = 0; i < song.perc.length; i++) {
+        var n = song.perc[i];
+        percSeq.addNote(n[0], n[1], n[2], n[3]);
+    }
+    percSeq.setLoopEnabled(true);
+    percSeq.setLoopRange(0, song.loopBeats);
+
+    currentSongIndex = songIdx;
+}
+
+function startMusic() {
+    if (!audioCtx || !melodySeq) return;
+    var bpm = getMusicBPM(currentSongIndex, level);
+    melodySeq.setBPM(bpm);
+    bassSeq.setBPM(bpm);
+    percSeq.setBPM(bpm);
+    var t = audioCtx.currentTime;
+    melodySeq.play(t);
+    bassSeq.play(t);
+    percSeq.play(t);
+    musicPlaying = true;
+}
+
+function stopMusic() {
+    musicPlaying = false;
+    if (melodySeq) { try { melodySeq.stop(); } catch(e) {} }
+    if (bassSeq) { try { bassSeq.stop(); } catch(e) {} }
+    if (percSeq) { try { percSeq.stop(); } catch(e) {} }
+    if (melodyAlloc) { try { melodyAlloc.allNotesOff(); } catch(e) {} }
+    if (bassAlloc) { try { bassAlloc.allNotesOff(); } catch(e) {} }
+    if (percAlloc) { try { percAlloc.allNotesOff(); } catch(e) {} }
+    melodySeq = null;
+    bassSeq = null;
+    percSeq = null;
+    melodyAlloc = null;
+    bassAlloc = null;
+    percAlloc = null;
+    currentSongIndex = -1;
+}
+
+function pauseMusic() {
+    if (!musicPlaying) return;
+    var t = audioCtx.currentTime;
+    if (melodySeq) { try { melodySeq.pause(t); } catch(e) {} }
+    if (bassSeq) { try { bassSeq.pause(t); } catch(e) {} }
+    if (percSeq) { try { percSeq.pause(t); } catch(e) {} }
+    if (melodyAlloc) { try { melodyAlloc.allNotesOff(); } catch(e) {} }
+    if (bassAlloc) { try { bassAlloc.allNotesOff(); } catch(e) {} }
+    if (percAlloc) { try { percAlloc.allNotesOff(); } catch(e) {} }
+}
+
+function resumeMusic() {
+    if (!musicPlaying) return;
+    var t = audioCtx.currentTime;
+    if (melodySeq) { try { melodySeq.resume(t); } catch(e) {} }
+    if (bassSeq) { try { bassSeq.resume(t); } catch(e) {} }
+    if (percSeq) { try { percSeq.resume(t); } catch(e) {} }
+}
+
+function updateMusicBPM() {
+    if (!musicPlaying || !melodySeq) return;
+    var bpm = getMusicBPM(currentSongIndex, level);
+    melodySeq.setBPM(bpm);
+    bassSeq.setBPM(bpm);
+    percSeq.setBPM(bpm);
+}
+
+function updateMusicVolume() {
+    if (!audioCtx || musicBus === -1) return;
+    try { audioCtx.setBusGain(musicBus, settings.musicVol / 100); } catch(e) {}
+}
+
+function updateSfxVolume() {
+    if (!audioCtx || sfxBus === -1) return;
+    try { audioCtx.setBusGain(sfxBus, settings.sfxVol / 100); } catch(e) {}
+}
+
+function checkSongChange() {
+    var wantSong = getSongForLevel(level);
+    if (wantSong !== currentSongIndex) {
+        buildSequences(wantSong);
+        startMusic();
+    }
+}
+
+function updateSequences() {
+    if (!musicPlaying || !audioCtx) return;
+    var t = audioCtx.currentTime;
+    if (melodySeq) { try { melodySeq.update(t); } catch(e) {} }
+    if (bassSeq) { try { bassSeq.update(t); } catch(e) {} }
+    if (percSeq) { try { percSeq.update(t); } catch(e) {} }
 }
 
 // --- Game state ---
@@ -404,6 +919,8 @@ function clearLines() {
         level = newLevel;
         sfxLevelUp();
         showActionText("LEVEL " + level);
+        checkSongChange();
+        updateMusicBPM();
     }
 
     // Sound effects
@@ -615,11 +1132,17 @@ function startGame() {
 
     overlayEl.style.display = "none";
     updateHUD();
+
+    // Start music for current level
+    var songIdx = getSongForLevel(level);
+    buildSequences(songIdx);
+    startMusic();
 }
 
 function gameOver() {
     gameState = STATE_GAMEOVER;
     cur = null;
+    stopMusic();
     sfxGameOver();
 
     var statsText = "Score: " + score + "  Level: " + level +
@@ -631,6 +1154,7 @@ function gameOver() {
 function pauseGame() {
     if (gameState === STATE_PLAYING) {
         gameState = STATE_PAUSED;
+        pauseMusic();
         showMenu("menu-pause");
     }
 }
@@ -641,6 +1165,7 @@ function resumeGame() {
         overlayEl.style.display = "none";
         keysDown = {};
         dasDir = 0;
+        resumeMusic();
     }
 }
 
@@ -802,6 +1327,12 @@ function menuAdjust(dir) {
         settings.sfxVol += dir * 10;
         if (settings.sfxVol < 0) settings.sfxVol = 0;
         if (settings.sfxVol > 100) settings.sfxVol = 100;
+        updateSfxVolume();
+    } else if (setting === "musicVol") {
+        settings.musicVol += dir * 10;
+        if (settings.musicVol < 0) settings.musicVol = 0;
+        if (settings.musicVol > 100) settings.musicVol = 100;
+        updateMusicVolume();
     } else if (setting === "ghostPiece") {
         settings.ghostPiece = !settings.ghostPiece;
     } else if (setting === "gridLines") {
@@ -819,6 +1350,8 @@ function updateSettingsDisplay() {
     if (el) el.textContent = String(settings.startLevel);
     el = document.getElementById("opt-sfxVol");
     if (el) el.textContent = String(settings.sfxVol);
+    el = document.getElementById("opt-musicVol");
+    if (el) el.textContent = String(settings.musicVol);
     el = document.getElementById("opt-ghostPiece");
     if (el) el.textContent = settings.ghostPiece ? "ON" : "OFF";
     el = document.getElementById("opt-gridLines");
@@ -1328,6 +1861,7 @@ function gameLoop(timestamp) {
     if (dt < 0) dt = 0;
 
     update(dt);
+    updateSequences();
     draw();
 }
 
