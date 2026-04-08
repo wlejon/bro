@@ -15,14 +15,14 @@ Note from the co-pilot: i am a career programmer but this and its sister reposit
 └──────────┴──────────┴──────────┴──────────┴──────────┴───────────┘
 ```
 
-- **QuickJS** — ES2023 JavaScript engine with DOM API bindings.
+- **QuickJS** — JavaScript engine (ES2020+) with DOM API bindings.
 - **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
 - **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
 - **broaudio** — Real-time audio engine: synthesis (oscillators, wavetable, noise), effects (filters, delay, reverb), spatial audio, MIDI input, and mixing bus architecture. See [broaudio](https://github.com/wlejon/broaudio).
-- **Skia** — 2D rasterization (text, paths, images, gradients). Renders to a CPU surface, uploaded to GPU each frame.
+- **Skia** — 2D rasterization (text, paths, images, gradients). GPU-accelerated via Ganesh GL backend, with CPU raster fallback.
 - **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU.
 
-C++20. Two executables: `bro` (windowed) and `bro-headless` (automated testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the four repos.
+C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the four repos.
 
 ## Features
 
