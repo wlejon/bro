@@ -8,6 +8,7 @@
 
 #include <glad/gl.h>
 
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -72,6 +73,11 @@ public:
 
     /// Returns true if any MeshNodes were rendered this frame.
     bool hasMeshContent() const { return hasMeshContent_; }
+
+    /// Callback invoked after render() with the current mesh FBO texture (or 0).
+    /// Used to push the texture ID to the DOM element for compositing.
+    using FBOTextureCallback = std::function<void(unsigned int texId)>;
+    void setFBOTextureCallback(FBOTextureCallback cb) { fboTexCb_ = std::move(cb); }
 
     // --- Camera ---
 
@@ -142,6 +148,7 @@ private:
     int meshFBOWidth_ = 0, meshFBOHeight_ = 0;
 
     bool hasMeshContent_ = false;
+    FBOTextureCallback fboTexCb_;
 };
 
 } // namespace bro::scene

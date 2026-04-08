@@ -265,8 +265,24 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         return;
     }
 
-    // Canvas/WebGL elements: trigger a layer break so the compositor can
-    // interleave canvas textures with HTML layers in document order.
+    // Canvas/WebGL/SceneGraph elements: trigger a layer break so the compositor
+    // can interleave canvas textures with HTML layers in document order.
+    // SceneGraph check must come first since scene elements also have a canvasScene.
+    if (elem->sceneGraph() && visible) {
+        // 3D mesh FBO layer (texture ID stored on element by scene graph render)
+        unsigned int fboTex = elem->sceneGraphFBOTexture();
+        if (fboTex && layerBreakCb_) {
+            layerBreakCb_(nullptr, fboTex, x, y, w, h);
+        }
+        // 2D canvas layer (for ShapeNode/SpriteNode content)
+        if (elem->canvasScene() && layerBreakCb_) {
+            auto* scene = static_cast<canvas::CanvasScene*>(elem->canvasScene());
+            layerBreakCb_(scene, 0, x, y, w, h);
+        }
+        if (needsClip) renderer_->restore();
+        if (hasOpacity) renderer_->restore();
+        return;
+    }
     if (elem->canvasScene() && visible) {
         auto* scene = static_cast<canvas::CanvasScene*>(elem->canvasScene());
         if (layerBreakCb_) {

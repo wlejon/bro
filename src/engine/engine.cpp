@@ -330,10 +330,25 @@ Engine::Engine(const EngineConfig& config)
                     if (el) el->setCanvasScene(csPtr);
                     addCanvasScene(std::move(canvasScene));
 
+                    // Size to element layout (fall back to viewport)
+                    int cw = viewportWidth_, ch = viewportHeight_;
+                    if (el) {
+                        auto& box = el->layoutBox();
+                        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
+                        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
+                    }
+
                     auto graph = std::make_unique<scene::SceneGraph>();
                     graph->setCanvasScene(csPtr);
                     graph->setPhysicsWorld(physicsWorld_.get());
+                    graph->setCanvasSize(cw, ch);
                     auto* graphPtr = graph.get();
+                    if (el) {
+                        el->setSceneGraph(graphPtr);
+                        graphPtr->setFBOTextureCallback([el](unsigned int tex) {
+                            el->setSceneGraphFBOTexture(tex);
+                        });
+                    }
                     sceneGraphs_.push_back(std::move(graph));
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }
@@ -374,10 +389,23 @@ Engine::Engine(const EngineConfig& config)
                 canvasScene->init(nullptr);
                 canvasScenes_.push_back(std::move(canvasScene));
                 if (type == "scene") {
+                    int cw = viewportWidth_, ch = viewportHeight_;
+                    if (el) {
+                        auto& box = el->layoutBox();
+                        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
+                        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
+                    }
                     auto graph = std::make_unique<scene::SceneGraph>();
                     graph->setCanvasScene(csPtr);
                     graph->setPhysicsWorld(physicsWorld_.get());
+                    graph->setCanvasSize(cw, ch);
                     auto* graphPtr = graph.get();
+                    if (el) {
+                        el->setSceneGraph(graphPtr);
+                        graphPtr->setFBOTextureCallback([el](unsigned int tex) {
+                            el->setSceneGraphFBOTexture(tex);
+                        });
+                    }
                     sceneGraphs_.push_back(std::move(graph));
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }

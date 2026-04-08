@@ -145,6 +145,14 @@ public:
     void setWebglContext(void* ctx) { webglContext_ = ctx; }
     void* webglContext() const { return webglContext_; }
 
+    // Scene graph (opaque pointer — set by engine, read by draw traversal for 3D FBO compositing)
+    void setSceneGraph(void* graph) { sceneGraph_ = graph; }
+    void* sceneGraph() const { return sceneGraph_; }
+
+    // Scene graph mesh FBO texture (set by scene graph render, read by draw traversal)
+    void setSceneGraphFBOTexture(unsigned int tex) { sceneGraphFBOTex_ = tex; }
+    unsigned int sceneGraphFBOTexture() const { return sceneGraphFBOTex_; }
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -171,6 +179,8 @@ private:
     std::unique_ptr<layout::ElSvg> svgControl_;
     void* canvasScene_ = nullptr;
     void* webglContext_ = nullptr;
+    void* sceneGraph_ = nullptr;
+    unsigned int sceneGraphFBOTex_ = 0;
 };
 
 // Template implementation — must be in header

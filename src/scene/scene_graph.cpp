@@ -361,6 +361,11 @@ void SceneGraph::render() {
     if (canvasScene_) {
         canvasScene_->restore();
     }
+
+    // Notify the DOM element of the current FBO texture for compositing
+    if (fboTexCb_) {
+        fboTexCb_(hasMeshContent_ ? meshColorTex_ : 0);
+    }
 }
 
 void SceneGraph::renderNode(SceneNode* node) {
