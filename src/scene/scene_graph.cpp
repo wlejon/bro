@@ -40,6 +40,7 @@ in vec2 vUV;
 uniform vec4 uColor;
 uniform vec3 uLightDir;
 uniform vec3 uCameraPos;
+uniform float uEmissive;
 
 out vec4 FragColor;
 
@@ -56,7 +57,9 @@ void main() {
     float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.3;
 
     float light = ambient + diff * 0.7 + spec;
-    FragColor = vec4(uColor.rgb * light, uColor.a);
+    vec3 lit = uColor.rgb * light;
+    vec3 emissiveColor = uColor.rgb;
+    FragColor = vec4(mix(lit, emissiveColor, uEmissive), uColor.a);
 }
 )";
 
@@ -246,6 +249,7 @@ void SceneGraph::ensureMeshPipeline() {
         uColor_ = glGetUniformLocation(meshProgram_, "uColor");
         uLightDir_ = glGetUniformLocation(meshProgram_, "uLightDir");
         uCameraPos_ = glGetUniformLocation(meshProgram_, "uCameraPos");
+        uEmissive_ = glGetUniformLocation(meshProgram_, "uEmissive");
     }
 }
 
@@ -390,6 +394,7 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniformMatrix4fv(uMVP_, 1, GL_FALSE, mvp.data());
     glUniformMatrix4fv(uModel_, 1, GL_FALSE, mesh->worldMatrix().data());
     glUniform4fv(uColor_, 1, mesh->color());
+    glUniform1f(uEmissive_, mesh->emissive());
 
     mesh->onRender(*this);
 }

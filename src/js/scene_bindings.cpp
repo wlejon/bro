@@ -779,8 +779,57 @@ static JSValue js_sg_createPhysicsNode(JSContext* ctx, JSValueConst this_val, in
     return wrapNode(ctx, node, g);
 }
 
+// --- Helper: read a typed array property into a vector<float> or vector<uint32_t> ---
+static bool jsReadFloatArray(JSContext* ctx, JSValueConst obj, const char* prop,
+                             std::vector<float>& out) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return false; }
+
+    size_t offset = 0, byteLen = 0, bpe = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &offset, &byteLen, &bpe);
+    if (JS_IsException(abuf)) {
+        JS_FreeValue(ctx, abuf);
+        JS_FreeValue(ctx, v);
+        return false;
+    }
+    size_t abufLen = 0;
+    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!raw) { JS_FreeValue(ctx, v); return false; }
+
+    const float* data = reinterpret_cast<const float*>(raw + offset);
+    size_t count = byteLen / sizeof(float);
+    out.assign(data, data + count);
+    JS_FreeValue(ctx, v);
+    return true;
+}
+
+static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop,
+                              std::vector<uint32_t>& out) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return false; }
+
+    size_t offset = 0, byteLen = 0, bpe = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &offset, &byteLen, &bpe);
+    if (JS_IsException(abuf)) {
+        JS_FreeValue(ctx, abuf);
+        JS_FreeValue(ctx, v);
+        return false;
+    }
+    size_t abufLen = 0;
+    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!raw) { JS_FreeValue(ctx, v); return false; }
+
+    const uint32_t* data = reinterpret_cast<const uint32_t*>(raw + offset);
+    size_t count = byteLen / sizeof(uint32_t);
+    out.assign(data, data + count);
+    JS_FreeValue(ctx, v);
+    return true;
+}
+
 // createMesh({mesh, color, name, x, y, z, ...})
-// mesh: "box"|"sphere"|"cylinder"|"capsule"|"plane"|"torus" or {type, ...params}
+// mesh: "box"|"sphere"|"cylinder"|"capsule"|"plane"|"torus" or raw {positions, normals, indices}
 static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(this_val);
     if (!g) return JS_UNDEFINED;
@@ -851,43 +900,66 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, colorVal);
 
-        // Mesh primitive
-        std::string meshType = jsGetStr(ctx, opts, "mesh", "box");
-        bromesh::MeshData meshData;
+        // Emissive
+        double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
+        node->setEmissive((float)emissive);
 
-        if (meshType == "box") {
-            double hw = jsGetProp(ctx, opts, "halfW", 0.5);
-            double hh = jsGetProp(ctx, opts, "halfH", 0.5);
-            double hd = jsGetProp(ctx, opts, "halfD", 0.5);
-            meshData = bromesh::box((float)hw, (float)hh, (float)hd);
-        } else if (meshType == "sphere") {
-            double radius = jsGetProp(ctx, opts, "radius", 0.5);
-            int segments = (int)jsGetProp(ctx, opts, "segments", 16);
-            int rings = (int)jsGetProp(ctx, opts, "rings", 12);
-            meshData = bromesh::sphere((float)radius, segments, rings);
-        } else if (meshType == "cylinder") {
-            double radius = jsGetProp(ctx, opts, "radius", 0.5);
-            double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
-            int segments = (int)jsGetProp(ctx, opts, "segments", 16);
-            meshData = bromesh::cylinder((float)radius, (float)halfH, segments);
-        } else if (meshType == "capsule") {
-            double radius = jsGetProp(ctx, opts, "radius", 0.5);
-            double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
-            int segments = (int)jsGetProp(ctx, opts, "segments", 16);
-            int rings = (int)jsGetProp(ctx, opts, "rings", 8);
-            meshData = bromesh::capsule((float)radius, (float)halfH, segments, rings);
-        } else if (meshType == "plane") {
-            double hw = jsGetProp(ctx, opts, "halfW", 5.0);
-            double hd = jsGetProp(ctx, opts, "halfD", 5.0);
-            int sx = (int)jsGetProp(ctx, opts, "subdivX", 1);
-            int sz = (int)jsGetProp(ctx, opts, "subdivZ", 1);
-            meshData = bromesh::plane((float)hw, (float)hd, sx, sz);
-        } else if (meshType == "torus") {
-            double major = jsGetProp(ctx, opts, "majorRadius", 1.0);
-            double minor = jsGetProp(ctx, opts, "minorRadius", 0.3);
-            int majSeg = (int)jsGetProp(ctx, opts, "majorSegments", 24);
-            int minSeg = (int)jsGetProp(ctx, opts, "minorSegments", 12);
-            meshData = bromesh::torus((float)major, (float)minor, majSeg, minSeg);
+        // Mesh: either a named primitive or raw vertex data
+        bromesh::MeshData meshData;
+        bool hasRawData = false;
+
+        // Check for raw vertex data first (positions + indices arrays)
+        {
+            std::vector<float> positions, normals;
+            std::vector<uint32_t> indices;
+            if (jsReadFloatArray(ctx, opts, "positions", positions) &&
+                jsReadUint32Array(ctx, opts, "indices", indices)) {
+                meshData.positions = std::move(positions);
+                meshData.indices = std::move(indices);
+                if (jsReadFloatArray(ctx, opts, "normals", normals)) {
+                    meshData.normals = std::move(normals);
+                }
+                hasRawData = true;
+            }
+        }
+
+        if (!hasRawData) {
+            std::string meshType = jsGetStr(ctx, opts, "mesh", "box");
+
+            if (meshType == "box") {
+                double hw = jsGetProp(ctx, opts, "halfW", 0.5);
+                double hh = jsGetProp(ctx, opts, "halfH", 0.5);
+                double hd = jsGetProp(ctx, opts, "halfD", 0.5);
+                meshData = bromesh::box((float)hw, (float)hh, (float)hd);
+            } else if (meshType == "sphere") {
+                double radius = jsGetProp(ctx, opts, "radius", 0.5);
+                int segments = (int)jsGetProp(ctx, opts, "segments", 16);
+                int rings = (int)jsGetProp(ctx, opts, "rings", 12);
+                meshData = bromesh::sphere((float)radius, segments, rings);
+            } else if (meshType == "cylinder") {
+                double radius = jsGetProp(ctx, opts, "radius", 0.5);
+                double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
+                int segments = (int)jsGetProp(ctx, opts, "segments", 16);
+                meshData = bromesh::cylinder((float)radius, (float)halfH, segments);
+            } else if (meshType == "capsule") {
+                double radius = jsGetProp(ctx, opts, "radius", 0.5);
+                double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
+                int segments = (int)jsGetProp(ctx, opts, "segments", 16);
+                int rings = (int)jsGetProp(ctx, opts, "rings", 8);
+                meshData = bromesh::capsule((float)radius, (float)halfH, segments, rings);
+            } else if (meshType == "plane") {
+                double hw = jsGetProp(ctx, opts, "halfW", 5.0);
+                double hd = jsGetProp(ctx, opts, "halfD", 5.0);
+                int sx = (int)jsGetProp(ctx, opts, "subdivX", 1);
+                int sz = (int)jsGetProp(ctx, opts, "subdivZ", 1);
+                meshData = bromesh::plane((float)hw, (float)hd, sx, sz);
+            } else if (meshType == "torus") {
+                double major = jsGetProp(ctx, opts, "majorRadius", 1.0);
+                double minor = jsGetProp(ctx, opts, "minorRadius", 0.3);
+                int majSeg = (int)jsGetProp(ctx, opts, "majorSegments", 24);
+                int minSeg = (int)jsGetProp(ctx, opts, "minorSegments", 12);
+                meshData = bromesh::torus((float)major, (float)minor, majSeg, minSeg);
+            }
         }
 
         node->setMesh(std::move(meshData));

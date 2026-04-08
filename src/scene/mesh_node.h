@@ -35,6 +35,9 @@ public:
     }
     const float* color() const { return color_; }
 
+    void setEmissive(float e) { emissive_ = e; }
+    float emissive() const { return emissive_; }
+
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
@@ -52,6 +55,7 @@ private:
 
     // Material
     float color_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float emissive_ = 0.0f;
 };
 
 } // namespace bro::scene
