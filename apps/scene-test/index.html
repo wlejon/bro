@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head><style>html,body{margin:0;background:#222;}</style></head>
+<body>
+<canvas id="c" width="1024" height="768"></canvas>
+<script>
+var c = document.getElementById('c');
+console.log('canvas element:', c ? 'found' : 'null');
+var scene = c.getContext('scene');
+console.log('scene context:', scene ? 'got it' : 'null');
+
+// Create a single bright red rectangle
+var rect = scene.createShape({
+    shape: 'rect', width: 200, height: 200,
+    fill: 'red', x: 400, y: 300
+});
+console.log('rect node:', rect ? 'created (id=' + rect.id + ')' : 'null');
+
+// Render once immediately
+scene.render();
+console.log('render() called');
+
+// Also render on interval
+setInterval(function() {
+    scene.render();
+}, 100);
+</script>
+</body>
+</html>

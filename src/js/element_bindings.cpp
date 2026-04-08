@@ -1224,7 +1224,7 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     const char* typeStr = JS_ToCString(ctx, argv[0]);
     std::string type = typeStr ? typeStr : "";
     if (typeStr) JS_FreeCString(ctx, typeStr);
-    if (type != "2d" && type != "webgl" && type != "webgl2") return JS_NULL;
+    if (type != "2d" && type != "webgl" && type != "webgl2" && type != "scene") return JS_NULL;
 
     // Return cached context if one already exists for this element.
     // Verify the element is still in the DOM — if it was removed and a new
