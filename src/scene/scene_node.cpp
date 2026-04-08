@@ -26,14 +26,38 @@ void SceneNode::setPosition(float x, float y, float z) {
     markDirty();
 }
 
-void SceneNode::setRotation(float radians) {
-    rotation_ = radians;
+void SceneNode::setPosition(const Vec3& pos) {
+    position_ = pos;
     localDirty_ = true;
     markDirty();
 }
 
-void SceneNode::setScale(float sx, float sy) {
-    scale_ = {sx, sy, 1};
+void SceneNode::setRotation(const Quat& q) {
+    rotation_ = q;
+    localDirty_ = true;
+    markDirty();
+}
+
+void SceneNode::setRotationEuler(float rx, float ry, float rz) {
+    rotation_ = Quat::fromEuler(rx, ry, rz);
+    localDirty_ = true;
+    markDirty();
+}
+
+void SceneNode::setRotationZ(float radians) {
+    rotation_ = Quat::fromAxisAngle({0, 0, 1}, radians);
+    localDirty_ = true;
+    markDirty();
+}
+
+void SceneNode::setScale(float sx, float sy, float sz) {
+    scale_ = {sx, sy, sz};
+    localDirty_ = true;
+    markDirty();
+}
+
+void SceneNode::setScale(const Vec3& s) {
+    scale_ = s;
     localDirty_ = true;
     markDirty();
 }
@@ -59,12 +83,12 @@ void SceneNode::removeFromParent() {
     if (parent_) parent_->removeChild(this);
 }
 
-const Mat3& SceneNode::localMatrix() const {
+const Mat4& SceneNode::localMatrix() const {
     if (localDirty_) updateLocalMatrix();
     return localMatrix_;
 }
 
-const Mat3& SceneNode::worldMatrix() const {
+const Mat4& SceneNode::worldMatrix() const {
     if (dirty_) updateWorldMatrix();
     return worldMatrix_;
 }
@@ -89,10 +113,7 @@ void SceneNode::markDirty() {
 }
 
 void SceneNode::updateLocalMatrix() const {
-    // T * R * S
-    localMatrix_ = Mat3::translate(position_.x, position_.y)
-                  * Mat3::rotate(rotation_)
-                  * Mat3::scale(scale_.x, scale_.y);
+    localMatrix_ = Mat4::trs(position_, rotation_, scale_);
     localDirty_ = false;
 }
 

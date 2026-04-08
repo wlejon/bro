@@ -1,4 +1,4 @@
-# Multi-Repo Workflow: bro + htmlayout + brokit + broaudio
+# Multi-Repo Workflow: bro + htmlayout + brokit + broaudio + bromesh
 
 bro depends on three sibling libraries, each with a standalone repo and a git submodule fallback:
 
@@ -7,6 +7,7 @@ bro depends on three sibling libraries, each with a standalone repo and a git su
 | **htmlayout** | `../htmlayout` | `third_party/htmlayout` |
 | **brokit** | `../brokit` | `third_party/brokit` |
 | **broaudio** | `../broaudio` | `third_party/broaudio` |
+| **bromesh** | `../bromesh` | `third_party/bromesh` |
 
 ## Directory Layout
 
@@ -16,15 +17,17 @@ D:/projects/
 │   └── third_party/
 │       ├── htmlayout/            # submodule (CI / fallback)
 │       ├── brokit/               # submodule (CI / fallback)
-│       └── broaudio/             # submodule (CI / fallback)
+│       ├── broaudio/             # submodule (CI / fallback)
+│       └── bromesh/              # submodule (CI / fallback)
 ├── htmlayout/                    # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
-└── broaudio/                     # standalone repo (preferred for dev)
+├── broaudio/                     # standalone repo (preferred for dev)
+└── bromesh/                      # standalone repo (preferred for dev)
 ```
 
 ## How It Works
 
-bro's CMake auto-detects standalone repos at `../htmlayout` and `../brokit`. If found, it builds from there directly — **no submodule copy involved**. This means:
+bro's CMake auto-detects standalone repos at `../htmlayout`, `../brokit`, `../broaudio`, and `../bromesh`. If found, it builds from there directly — **no submodule copy involved**. This means:
 
 - **Edit once** — only touch files in the standalone repo
 - **One build** — `cmake --build build` in bro compiles both libraries from their standalone source
@@ -120,11 +123,11 @@ git commit -m "Update broaudio: description"
 To use a different location for either library:
 
 ```bash
-cmake -B build -DBROKIT_DIR=/path/to/brokit -DHTMLAYOUT_DIR=/path/to/htmlayout -DBROAUDIO_DIR=/path/to/broaudio
+cmake -B build -DBROKIT_DIR=/path/to/brokit -DHTMLAYOUT_DIR=/path/to/htmlayout -DBROAUDIO_DIR=/path/to/broaudio -DBROMESH_DIR=/path/to/bromesh
 ```
 
 Set to a nonexistent path to force using the submodule:
 
 ```bash
-cmake -B build -DBROKIT_DIR=none -DBROAUDIO_DIR=none
+cmake -B build -DBROKIT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none
 ```

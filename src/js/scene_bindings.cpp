@@ -194,15 +194,71 @@ static JSValue js_node_set_y(JSContext* ctx, JSValueConst this_val, JSValueConst
     return JS_UNDEFINED;
 }
 
+// --- Z position ---
+static JSValue js_node_get_z(JSContext* ctx, JSValueConst this_val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    return w ? JS_NewFloat64(ctx, w->node->position().z) : JS_UNDEFINED;
+}
+static JSValue js_node_set_z(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (w) w->node->setPosition(w->node->position().x, w->node->position().y, jsNum(ctx, val));
+    return JS_UNDEFINED;
+}
+
+// --- Rotation (Euler angles per axis, radians) ---
+
 static JSValue js_node_get_rotation(JSContext* ctx, JSValueConst this_val) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->rotation()) : JS_UNDEFINED;
+    if (!w) return JS_UNDEFINED;
+    // Backward compat: returns Z-axis rotation in radians
+    return JS_NewFloat64(ctx, w->node->rotation().toEuler().z);
 }
 static JSValue js_node_set_rotation(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setRotation(jsNum(ctx, val));
+    if (w) w->node->setRotationZ(jsNum(ctx, val));
     return JS_UNDEFINED;
 }
+
+static JSValue js_node_get_rotationX(JSContext* ctx, JSValueConst this_val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    return w ? JS_NewFloat64(ctx, w->node->rotation().toEuler().x) : JS_UNDEFINED;
+}
+static JSValue js_node_set_rotationX(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (w) {
+        auto e = w->node->rotation().toEuler();
+        w->node->setRotationEuler(jsNum(ctx, val), e.y, e.z);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_get_rotationY(JSContext* ctx, JSValueConst this_val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    return w ? JS_NewFloat64(ctx, w->node->rotation().toEuler().y) : JS_UNDEFINED;
+}
+static JSValue js_node_set_rotationY(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (w) {
+        auto e = w->node->rotation().toEuler();
+        w->node->setRotationEuler(e.x, jsNum(ctx, val), e.z);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_get_rotationZ(JSContext* ctx, JSValueConst this_val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    return w ? JS_NewFloat64(ctx, w->node->rotation().toEuler().z) : JS_UNDEFINED;
+}
+static JSValue js_node_set_rotationZ(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (w) {
+        auto e = w->node->rotation().toEuler();
+        w->node->setRotationEuler(e.x, e.y, jsNum(ctx, val));
+    }
+    return JS_UNDEFINED;
+}
+
+// --- Scale ---
 
 static JSValue js_node_get_scaleX(JSContext* ctx, JSValueConst this_val) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
@@ -210,7 +266,7 @@ static JSValue js_node_get_scaleX(JSContext* ctx, JSValueConst this_val) {
 }
 static JSValue js_node_set_scaleX(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setScale(jsNum(ctx, val), w->node->scale().y);
+    if (w) w->node->setScale(jsNum(ctx, val), w->node->scale().y, w->node->scale().z);
     return JS_UNDEFINED;
 }
 static JSValue js_node_get_scaleY(JSContext* ctx, JSValueConst this_val) {
@@ -219,7 +275,16 @@ static JSValue js_node_get_scaleY(JSContext* ctx, JSValueConst this_val) {
 }
 static JSValue js_node_set_scaleY(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setScale(w->node->scale().x, jsNum(ctx, val));
+    if (w) w->node->setScale(w->node->scale().x, jsNum(ctx, val), w->node->scale().z);
+    return JS_UNDEFINED;
+}
+static JSValue js_node_get_scaleZ(JSContext* ctx, JSValueConst this_val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    return w ? JS_NewFloat64(ctx, w->node->scale().z) : JS_UNDEFINED;
+}
+static JSValue js_node_set_scaleZ(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (w) w->node->setScale(w->node->scale().x, w->node->scale().y, jsNum(ctx, val));
     return JS_UNDEFINED;
 }
 
@@ -256,14 +321,16 @@ static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSVal
     return JS_UNDEFINED;
 }
 
-// localToWorld(x, y) → {x, y}
+// localToWorld(x, y[, z]) → {x, y, z}
 static JSValue js_node_localToWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
     if (!w || argc < 2) return JS_UNDEFINED;
-    auto wp = w->node->localToWorld({(float)jsNum(ctx, argv[0]), (float)jsNum(ctx, argv[1]), 0});
+    float z = (argc > 2) ? (float)jsNum(ctx, argv[2]) : 0.0f;
+    auto wp = w->node->localToWorld({(float)jsNum(ctx, argv[0]), (float)jsNum(ctx, argv[1]), z});
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "x", JS_NewFloat64(ctx, wp.x));
     JS_SetPropertyStr(ctx, obj, "y", JS_NewFloat64(ctx, wp.y));
+    JS_SetPropertyStr(ctx, obj, "z", JS_NewFloat64(ctx, wp.z));
     return obj;
 }
 
@@ -419,9 +486,14 @@ static const JSCFunctionListEntry js_scenenode_proto[] = {
     // Transform
     JS_CGETSET_DEF("x", js_node_get_x, js_node_set_x),
     JS_CGETSET_DEF("y", js_node_get_y, js_node_set_y),
+    JS_CGETSET_DEF("z", js_node_get_z, js_node_set_z),
     JS_CGETSET_DEF("rotation", js_node_get_rotation, js_node_set_rotation),
+    JS_CGETSET_DEF("rotationX", js_node_get_rotationX, js_node_set_rotationX),
+    JS_CGETSET_DEF("rotationY", js_node_get_rotationY, js_node_set_rotationY),
+    JS_CGETSET_DEF("rotationZ", js_node_get_rotationZ, js_node_set_rotationZ),
     JS_CGETSET_DEF("scaleX", js_node_get_scaleX, js_node_set_scaleX),
     JS_CGETSET_DEF("scaleY", js_node_get_scaleY, js_node_set_scaleY),
+    JS_CGETSET_DEF("scaleZ", js_node_get_scaleZ, js_node_set_scaleZ),
 
     // Shape properties
     JS_CGETSET_DEF("width", js_node_get_width, js_node_set_width),

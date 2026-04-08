@@ -46,7 +46,7 @@ void SpriteNode::onRender(SceneGraph& graph) {
     const auto& wm = worldMatrix();
 
     cs->save();
-    cs->setTransform(wm.a, wm.c, wm.b, wm.d, wm.tx, wm.ty);
+    cs->setTransform(wm.m[0][0], wm.m[0][1], wm.m[1][0], wm.m[1][1], wm.m[3][0], wm.m[3][1]);
 
     if (opacity_ < 1.0f) {
         cs->setGlobalAlpha(opacity_);

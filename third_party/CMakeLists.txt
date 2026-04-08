@@ -53,6 +53,18 @@ else()
     add_subdirectory(broaudio EXCLUDE_FROM_ALL)
 endif()
 
+# --- bromesh (mesh generation + manipulation library) ---
+# Prefer the standalone repo at ../bromesh for local development.
+# Falls back to the git submodule at third_party/bromesh.
+set(BROMESH_DIR "${CMAKE_SOURCE_DIR}/../bromesh" CACHE PATH "Path to standalone bromesh repo")
+if(EXISTS "${BROMESH_DIR}/CMakeLists.txt")
+    message(STATUS "bromesh: using standalone repo at ${BROMESH_DIR}")
+    add_subdirectory("${BROMESH_DIR}" "${CMAKE_BINARY_DIR}/bromesh" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "bromesh: using submodule at third_party/bromesh")
+    add_subdirectory(bromesh EXCLUDE_FROM_ALL)
+endif()
+
 # --- Jolt Physics ---
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
 set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)          # don't clobber bro's flags

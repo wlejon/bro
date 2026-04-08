@@ -14,8 +14,12 @@ void ShapeNode::onRender(SceneGraph& graph) {
 
     // Apply world transform via canvas save/restore
     cs->save();
-    // Canvas transform: setTransform(a, b, c, d, e, f) maps to our Mat3
-    cs->setTransform(wm.a, wm.c, wm.b, wm.d, wm.tx, wm.ty);
+    // Extract 2D affine components from 4x4 column-major matrix:
+    // Canvas setTransform(a, b, c, d, e, f) where the matrix is:
+    //   | a c e |     col-major Mat4: a=m[0][0], b=m[0][1], c=m[1][0], d=m[1][1], e=m[3][0], f=m[3][1]
+    //   | b d f |
+    //   | 0 0 1 |
+    cs->setTransform(wm.m[0][0], wm.m[0][1], wm.m[1][0], wm.m[1][1], wm.m[3][0], wm.m[3][1]);
 
     // Compute anchor offset
     float ax, ay;
