@@ -99,6 +99,9 @@ void SceneGraph::syncPhysics() {
 void SceneGraph::render() {
     if (!canvasScene_) return;
 
+    // Clear canvas before redrawing the scene
+    canvasScene_->reset();
+
     // Apply camera transform
     canvasScene_->save();
     canvasScene_->translate(-cameraX_, -cameraY_);
