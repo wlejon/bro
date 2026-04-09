@@ -137,6 +137,33 @@ static void computeOffset(dom::MouseEvent& evt, dom::Element* target) {
     evt.setOffsetY(evt.clientY() - static_cast<double>(absY));
 }
 
+// Convert SDL3 mouse button id (1=left, 2=middle, 3=right, 4=X1, 5=X2)
+// into the DOM MouseEvent.button index (0=left, 1=middle, 2=right, 3=back, 4=forward).
+// SDL and the DOM disagree on both the base index and the middle/right ordering.
+static int sdlToDomButton(int sdlButton) {
+    switch (sdlButton) {
+        case 1: return 0;  // SDL left   -> DOM primary
+        case 2: return 1;  // SDL middle -> DOM auxiliary
+        case 3: return 2;  // SDL right  -> DOM secondary
+        case 4: return 3;  // SDL X1     -> DOM back
+        case 5: return 4;  // SDL X2     -> DOM forward
+        default: return sdlButton - 1;
+    }
+}
+
+// MouseEvent.buttons bitmask values, keyed by DOM button index.
+// Note that DOM swaps right (2) and middle (4) relative to a naive 1<<n encoding.
+static int domButtonMask(int domButton) {
+    switch (domButton) {
+        case 0: return 1;   // left
+        case 1: return 4;   // middle
+        case 2: return 2;   // right
+        case 3: return 8;   // back
+        case 4: return 16;  // forward
+        default: return 0;
+    }
+}
+
 // Build a MouseEvent with standard fields populated
 static void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
                                int button, int buttons,
@@ -286,8 +313,12 @@ void Engine::handleMouseDown(float x, float y, int button) {
     float docX = x, docY = y + scrollY_;
     uiDirty_ = true;
 
-    // Update button bitmask
-    pressedButtons_ |= (1 << button);
+    // Convert SDL button id to DOM convention up front so every downstream
+    // event sees the standard 0=left/1=middle/2=right indexing.
+    button = sdlToDomButton(button);
+
+    // Update button bitmask (DOM convention: 1=left, 2=right, 4=middle, ...)
+    pressedButtons_ |= domButtonMask(button);
 
     // --- Scrollbar interaction (before DOM hit testing) ---
 
@@ -571,8 +602,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
     float docX = x, docY = y + scrollY_;
     uiDirty_ = true;
 
-    // Update button bitmask
-    pressedButtons_ &= ~(1 << button);
+    // Match handleMouseDown: SDL -> DOM button index.
+    button = sdlToDomButton(button);
+
+    // Update button bitmask (DOM convention)
+    pressedButtons_ &= ~domButtonMask(button);
 
     // End scrollbar drags
     if (viewportScrollbar_.isDragging()) {
