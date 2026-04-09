@@ -476,7 +476,7 @@ static JSValue js_mesh_computeTangents(JSContext* ctx, JSValueConst this_val, in
 
 static JSValue js_mesh_simplify(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = getMW(this_val);
-    if (!w || argc < 1) return JS_UNDEFINED;
+    if (!w || !w->data || argc < 1) return JS_UNDEFINED;
     float ratio = (float)optNum(ctx, argv, argc, 0, 0.5);
     float error = (float)optNum(ctx, argv, argc, 1, 0.01);
     *w->data = bromesh::simplify(*w->data, ratio, error);
@@ -485,7 +485,7 @@ static JSValue js_mesh_simplify(JSContext* ctx, JSValueConst this_val, int argc,
 
 static JSValue js_mesh_simplifyWithAttributes(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = getMW(this_val);
-    if (!w || argc < 1) return JS_UNDEFINED;
+    if (!w || !w->data || argc < 1) return JS_UNDEFINED;
     float ratio = (float)optNum(ctx, argv, argc, 0, 0.5);
     float error = (float)optNum(ctx, argv, argc, 1, 0.01);
     float uvW = (float)optNum(ctx, argv, argc, 2, 1.0);
@@ -496,7 +496,7 @@ static JSValue js_mesh_simplifyWithAttributes(JSContext* ctx, JSValueConst this_
 
 static JSValue js_mesh_simplifyToTriangleCount(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = getMW(this_val);
-    if (!w || argc < 1) return JS_UNDEFINED;
+    if (!w || !w->data || argc < 1) return JS_UNDEFINED;
     int target = optInt(ctx, argv, argc, 0, 100);
     float error = (float)optNum(ctx, argv, argc, 1, 0.01);
     *w->data = bromesh::simplifyToTriangleCount(*w->data, (size_t)target, error);
@@ -522,7 +522,7 @@ static JSValue js_mesh_generateLODChain(JSContext* ctx, JSValueConst this_val, i
 
 static JSValue js_mesh_subdivideLoop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = getMW(this_val);
-    if (!w) return JS_UNDEFINED;
+    if (!w || !w->data) return JS_UNDEFINED;
     int iter = optInt(ctx, argv, argc, 0, 1);
     auto welded = bromesh::weldVertices(*w->data);
     *w->data = bromesh::subdivideLoop(welded, iter);
@@ -531,7 +531,7 @@ static JSValue js_mesh_subdivideLoop(JSContext* ctx, JSValueConst this_val, int 
 
 static JSValue js_mesh_subdivideCatmullClark(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = getMW(this_val);
-    if (!w) return JS_UNDEFINED;
+    if (!w || !w->data) return JS_UNDEFINED;
     int iter = optInt(ctx, argv, argc, 0, 1);
     auto welded = bromesh::weldVertices(*w->data);
     *w->data = bromesh::subdivideCatmullClark(welded, iter);
@@ -540,7 +540,7 @@ static JSValue js_mesh_subdivideCatmullClark(JSContext* ctx, JSValueConst this_v
 
 static JSValue js_mesh_subdivideMidpoint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = getMW(this_val);
-    if (!w) return JS_UNDEFINED;
+    if (!w || !w->data) return JS_UNDEFINED;
     int iter = optInt(ctx, argv, argc, 0, 1);
     auto welded = bromesh::weldVertices(*w->data);
     *w->data = bromesh::subdivideMidpoint(welded, iter);
@@ -1266,6 +1266,23 @@ void MeshBindings::cleanup(JSContext* ctx) {
 bromesh::MeshData* MeshBindings::getMeshData(JSContext* ctx, JSValueConst val) {
     (void)ctx;
     return getMD(val);
+}
+
+std::unique_ptr<bromesh::MeshData> MeshBindings::takeMeshData(JSContext* ctx, JSValueConst val) {
+    (void)ctx;
+    auto* w = getMW(val);
+    if (!w) return nullptr;
+    return std::move(w->data);  // source Mesh left neutered (data == nullptr)
+}
+
+JSValue MeshBindings::wrapMeshData(JSContext* ctx, std::unique_ptr<bromesh::MeshData> data) {
+    if (!data) return JS_ThrowTypeError(ctx, "wrapMeshData: null MeshData");
+    // JS_NewObjectClass uses the prototype registered via JS_SetClassProto in install().
+    JSValue obj = JS_NewObjectClass(ctx, js_mesh_class_id);
+    if (JS_IsException(obj)) return obj;
+    auto* w = new MeshWrapper{std::move(data)};
+    JS_SetOpaque(obj, w);
+    return obj;
 }
 
 JSClassID MeshBindings::classId() {

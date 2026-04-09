@@ -1,6 +1,9 @@
 #include "js/message_serializer.h"
+#include "js/mesh_bindings.h"
+#include <bromesh/mesh_data.h>
 #include "util/log.h"
 #include <cstring>
+#include <memory>
 #include <string>
 
 extern "C" {
@@ -25,7 +28,13 @@ enum Tag : uint8_t {
     kArrayBuffer     = 0x09,  // copied
     kTransferIndex   = 0x0A,  // index into transferredBuffers
     kTypedArray      = 0x0B,  // TypedArray: subtype + byte offset + length + ArrayBuffer
+    kTransferMesh    = 0x0C,  // index into transferredObjects (zero-copy Mesh)
 };
+
+// Deleter for MeshData* stored in TransferredObject (type=kMesh).
+static void deleteMeshData(void* p) {
+    delete static_cast<bromesh::MeshData*>(p);
+}
 
 // ---------------------------------------------------------------------------
 // Writer / Reader helpers
@@ -93,6 +102,7 @@ private:
 static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
                        const JSValue* transfers, size_t numTransfers,
                        std::vector<std::vector<uint8_t>>& transferBufs,
+                       std::vector<TransferredObject>& transferObjs,
                        int depth)
 {
     if (depth > 64) {
@@ -135,6 +145,38 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
         w.bytes(reinterpret_cast<const uint8_t*>(s), len);
         JS_FreeCString(ctx, s);
         return true;
+    }
+
+    // Mesh — C++-backed opaque object. Only transferable, never structured-cloned:
+    // the underlying MeshData lives in a unique_ptr inside the MeshWrapper, and
+    // we move it across threads by pointer (no byte copy). The source Mesh is
+    // left neutered after transfer.
+    {
+        JSClassID meshClassId = MeshBindings::classId();
+        if (meshClassId != 0 && JS_GetOpaque(val, meshClassId) != nullptr) {
+            // Must be in the transfer list — otherwise structured-cloning a Mesh
+            // is not supported.
+            for (size_t i = 0; i < numTransfers; i++) {
+                if (JS_VALUE_GET_PTR(val) == JS_VALUE_GET_PTR(transfers[i])) {
+                    auto data = MeshBindings::takeMeshData(ctx, val);
+                    if (!data) {
+                        JS_ThrowTypeError(ctx, "postMessage: Mesh is already neutered");
+                        return false;
+                    }
+                    // Hand off raw pointer to the Message. release() so the
+                    // unique_ptr doesn't delete on scope exit.
+                    uint32_t idx = static_cast<uint32_t>(transferObjs.size());
+                    transferObjs.emplace_back(TransferredObject::kMesh,
+                                              static_cast<void*>(data.release()),
+                                              &deleteMeshData);
+                    w.u8(kTransferMesh);
+                    w.u32(idx);
+                    return true;
+                }
+            }
+            JS_ThrowTypeError(ctx, "postMessage: Mesh must be listed in the transferList");
+            return false;
+        }
     }
 
     // ArrayBuffer — check transfer list first
@@ -227,7 +269,7 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
         w.u32(len);
         for (uint32_t i = 0; i < len; i++) {
             JSValue elem = JS_GetPropertyUint32(ctx, val, i);
-            bool ok = writeValue(ctx, elem, w, transfers, numTransfers, transferBufs, depth + 1);
+            bool ok = writeValue(ctx, elem, w, transfers, numTransfers, transferBufs, transferObjs, depth + 1);
             JS_FreeValue(ctx, elem);
             if (!ok) return false;
         }
@@ -257,7 +299,7 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
 
             // Value
             JSValue propVal = JS_GetProperty(ctx, val, props[i].atom);
-            ok = writeValue(ctx, propVal, w, transfers, numTransfers, transferBufs, depth + 1);
+            ok = writeValue(ctx, propVal, w, transfers, numTransfers, transferBufs, transferObjs, depth + 1);
             JS_FreeValue(ctx, propVal);
             if (!ok) break;
         }
@@ -275,8 +317,10 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
 
 bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Message& out)
 {
-    // Collect transfer list
+    // Collect transfer list. Allowed entries: ArrayBuffer (data copy today)
+    // or Mesh (true zero-copy transfer of the underlying bromesh::MeshData).
     std::vector<JSValue> transfers;
+    JSClassID meshClassId = MeshBindings::classId();
     if (!JS_IsUndefined(transferList) && JS_IsArray(transferList)) {
         JSValue lenVal = JS_GetPropertyStr(ctx, transferList, "length");
         uint32_t len;
@@ -285,10 +329,13 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
         transfers.resize(len);
         for (uint32_t i = 0; i < len; i++) {
             transfers[i] = JS_GetPropertyUint32(ctx, transferList, i);
-            if (!JS_IsArrayBuffer(transfers[i])) {
+            bool isAB   = JS_IsArrayBuffer(transfers[i]);
+            bool isMesh = meshClassId != 0 &&
+                          JS_GetOpaque(transfers[i], meshClassId) != nullptr;
+            if (!isAB && !isMesh) {
                 for (uint32_t j = 0; j <= i; j++)
                     JS_FreeValue(ctx, transfers[j]);
-                JS_ThrowTypeError(ctx, "postMessage: transfer list must contain ArrayBuffers");
+                JS_ThrowTypeError(ctx, "postMessage: transfer list must contain ArrayBuffers or Mesh objects");
                 return false;
             }
         }
@@ -296,11 +343,12 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
 
     out.data.clear();
     out.transferredBuffers.clear();
+    out.transferredObjects.clear();
 
     Writer w(out.data);
     bool ok = writeValue(ctx, value, w,
                          transfers.data(), transfers.size(),
-                         out.transferredBuffers, 0);
+                         out.transferredBuffers, out.transferredObjects, 0);
 
     for (auto& t : transfers)
         JS_FreeValue(ctx, t);
@@ -310,7 +358,7 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
 // ---------------------------------------------------------------------------
 // Deserialize
 // ---------------------------------------------------------------------------
-static JSValue readValue(JSContext* ctx, Reader& r, const Message& msg)
+static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
 {
     if (!r.ok(1))
         return JS_ThrowTypeError(ctx, "postMessage: truncated data");
@@ -356,6 +404,19 @@ static JSValue readValue(JSContext* ctx, Reader& r, const Message& msg)
             return JS_NewArrayBufferCopy(ctx, nullptr, 0);
         // Create ArrayBuffer owning a copy of the transferred data
         return JS_NewArrayBufferCopy(ctx, buf.data(), buf.size());
+    }
+    case kTransferMesh: {
+        if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated mesh transfer index");
+        uint32_t idx = r.u32();
+        if (idx >= msg.transferredObjects.size())
+            return JS_ThrowTypeError(ctx, "postMessage: invalid mesh transfer index");
+        auto& obj = msg.transferredObjects[idx];
+        if (obj.type != TransferredObject::kMesh || !obj.ptr)
+            return JS_ThrowTypeError(ctx, "postMessage: mesh transfer slot already consumed");
+        // Take ownership: release the pointer from the TransferredObject and
+        // hand it to a unique_ptr that the new JS Mesh will own on this thread.
+        auto* raw = static_cast<bromesh::MeshData*>(obj.release());
+        return MeshBindings::wrapMeshData(ctx, std::unique_ptr<bromesh::MeshData>(raw));
     }
     case kTypedArray: {
         if (!r.ok(1 + 4 + 4 + 4))
@@ -454,7 +515,7 @@ static JSValue readValue(JSContext* ctx, Reader& r, const Message& msg)
     }
 }
 
-JSValue deserializeMessage(JSContext* ctx, const Message& msg)
+JSValue deserializeMessage(JSContext* ctx, Message& msg)
 {
     Reader r(msg.data.data(), msg.data.size());
     return readValue(ctx, r, msg);

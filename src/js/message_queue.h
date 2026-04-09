@@ -7,10 +7,59 @@
 
 namespace bro::js {
 
+/// A heavyweight object transferred by pointer across a postMessage boundary.
+/// Used for types whose data lives in C++ (e.g. Mesh) so they can cross thread
+/// boundaries with no JS-heap round-trip. The Message owns the pointer until
+/// deserialize extracts it and transfers ownership to a destination wrapper.
+struct TransferredObject {
+    enum Type : uint8_t {
+        kNone = 0,
+        kMesh = 1,  // bromesh::MeshData*
+    };
+
+    uint8_t type = kNone;
+    void* ptr = nullptr;
+    void (*deleter)(void*) = nullptr;
+
+    TransferredObject() = default;
+    TransferredObject(uint8_t t, void* p, void (*d)(void*))
+        : type(t), ptr(p), deleter(d) {}
+
+    TransferredObject(const TransferredObject&) = delete;
+    TransferredObject& operator=(const TransferredObject&) = delete;
+
+    TransferredObject(TransferredObject&& o) noexcept
+        : type(o.type), ptr(o.ptr), deleter(o.deleter) {
+        o.type = kNone; o.ptr = nullptr; o.deleter = nullptr;
+    }
+    TransferredObject& operator=(TransferredObject&& o) noexcept {
+        if (this != &o) {
+            if (ptr && deleter) deleter(ptr);
+            type = o.type; ptr = o.ptr; deleter = o.deleter;
+            o.type = kNone; o.ptr = nullptr; o.deleter = nullptr;
+        }
+        return *this;
+    }
+    ~TransferredObject() {
+        if (ptr && deleter) deleter(ptr);
+    }
+
+    /// Relinquish ownership of the payload without deleting it. The caller
+    /// becomes responsible for deleting via the returned (ptr, deleter) pair.
+    void* release() noexcept {
+        void* p = ptr;
+        ptr = nullptr;
+        deleter = nullptr;
+        type = kNone;
+        return p;
+    }
+};
+
 /// A serialized message for cross-thread postMessage.
 struct Message {
-    std::vector<uint8_t> data;                            // Serialized payload
-    std::vector<std::vector<uint8_t>> transferredBuffers;  // Zero-copy transferred ArrayBuffers
+    std::vector<uint8_t> data;                             // Serialized payload
+    std::vector<std::vector<uint8_t>> transferredBuffers;  // Transferred ArrayBuffers (byte copy today)
+    std::vector<TransferredObject> transferredObjects;     // Transferred opaque C++ objects (true zero-copy)
 };
 
 /// Single-producer, single-consumer lock-free message queue.

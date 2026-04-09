@@ -15,7 +15,9 @@ namespace bro::js {
 bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Message& out);
 
 /// Deserialize a Message back into a JSValue on the target context.
+/// The message is passed by non-const reference because deserialization may
+/// move ownership of transferred C++ objects out of it (e.g. Mesh transfers).
 /// Returns the deserialized value, or JS_EXCEPTION on error.
-JSValue deserializeMessage(JSContext* ctx, const Message& msg);
+JSValue deserializeMessage(JSContext* ctx, Message& msg);
 
 }  // namespace bro::js

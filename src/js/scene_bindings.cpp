@@ -11,6 +11,7 @@
 #include "util/log.h"
 
 #include <bromesh/primitives/primitives.h>
+#include <bromesh/analysis/raycast.h>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
@@ -966,6 +967,28 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
         node->setEmissive((float)emissive);
 
+        // Depth bias (polygon offset). Pass either a single number for the
+        // `units` argument, or an array [factor, units]. Negative values pull
+        // the mesh forward in the depth buffer, useful for layering LODs.
+        JSValue dbVal = JS_GetPropertyStr(ctx, opts, "depthBias");
+        if (!JS_IsUndefined(dbVal)) {
+            if (JS_IsArray(dbVal)) {
+                double f = 0, u = 0;
+                JSValue e0 = JS_GetPropertyUint32(ctx, dbVal, 0);
+                JSValue e1 = JS_GetPropertyUint32(ctx, dbVal, 1);
+                JS_ToFloat64(ctx, &f, e0);
+                JS_ToFloat64(ctx, &u, e1);
+                node->setDepthBias((float)f, (float)u);
+                JS_FreeValue(ctx, e0);
+                JS_FreeValue(ctx, e1);
+            } else {
+                double u = 0;
+                JS_ToFloat64(ctx, &u, dbVal);
+                node->setDepthBias(0.0f, (float)u);
+            }
+        }
+        JS_FreeValue(ctx, dbVal);
+
         // Mesh: either a Mesh object, raw vertex data, or a named primitive
         bromesh::MeshData meshData;
         bool hasRawData = false;
@@ -981,6 +1004,21 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
                 }
             }
             JS_FreeValue(ctx, dataVal);
+        }
+
+        // Also accept a Mesh object via the "mesh" property (same key used by
+        // updateMesh). If "mesh" is a string we fall through to the named-
+        // primitive path below.
+        if (!hasRawData) {
+            JSValue meshVal = JS_GetPropertyStr(ctx, opts, "mesh");
+            if (!JS_IsUndefined(meshVal)) {
+                auto* md = MeshBindings::getMeshData(ctx, meshVal);
+                if (md) {
+                    meshData = *md;
+                    hasRawData = true;
+                }
+            }
+            JS_FreeValue(ctx, meshVal);
         }
 
         // Check for raw vertex data (positions + indices arrays)
@@ -1075,6 +1113,152 @@ static JSValue js_sg_destroyNode(JSContext* ctx, JSValueConst this_val, int argc
     auto* cw = static_cast<NodeWrapper*>(JS_GetOpaque(argv[0], js_scenenode_class_id));
     if (cw) g->destroyNode(cw->node);
     return JS_UNDEFINED;
+}
+
+// ---------------------------------------------------------------------------
+// raycast(origin, direction, maxDistance) → { hit, point, normal, distance, node } | null
+//
+// Walks every MeshNode in the graph, inverse-transforms the ray into each
+// node's local space (via its TRS components), calls bromesh::raycast, and
+// keeps the closest hit. Hit position and normal are returned in world space.
+//
+// Assumes the node's world transform is a composition of translate, rotate,
+// and uniform scale (which is what the TRS path in Mat4 produces and what
+// every MeshNode in the engine currently uses). Non-uniform scale would need
+// a proper inverse-transpose for normal transforms — not worth supporting
+// until a caller actually needs it.
+// ---------------------------------------------------------------------------
+static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(this_val);
+    if (!g || argc < 2) return JS_NULL;
+
+    // Parse origin + direction from JS arrays or object args.
+    auto parseVec3 = [&](JSValueConst v, scene::Vec3& out) -> bool {
+        if (!JS_IsArray(v)) return false;
+        JSValue ex = JS_GetPropertyUint32(ctx, v, 0);
+        JSValue ey = JS_GetPropertyUint32(ctx, v, 1);
+        JSValue ez = JS_GetPropertyUint32(ctx, v, 2);
+        double x = 0, y = 0, z = 0;
+        bool ok = !JS_ToFloat64(ctx, &x, ex)
+               && !JS_ToFloat64(ctx, &y, ey)
+               && !JS_ToFloat64(ctx, &z, ez);
+        JS_FreeValue(ctx, ex);
+        JS_FreeValue(ctx, ey);
+        JS_FreeValue(ctx, ez);
+        if (!ok) return false;
+        out = {(float)x, (float)y, (float)z};
+        return true;
+    };
+
+    scene::Vec3 origin, dir;
+    if (!parseVec3(argv[0], origin)) return JS_ThrowTypeError(ctx, "raycast: origin must be [x,y,z]");
+    if (!parseVec3(argv[1], dir))    return JS_ThrowTypeError(ctx, "raycast: direction must be [x,y,z]");
+
+    double maxDist = 0.0;  // 0 = unlimited per bromesh::raycast
+    if (argc >= 3) JS_ToFloat64(ctx, &maxDist, argv[2]);
+
+    // Normalize direction so `distance` in the hit result is in world units
+    // regardless of the caller's input magnitude.
+    dir = dir.normalized();
+    if (dir.lengthSq() < 1e-12f) return JS_NULL;
+
+    // Walk the graph. Track the closest hit across all mesh nodes.
+    float closestDist = (maxDist > 0.0) ? (float)maxDist : 1e30f;
+    scene::MeshNode* closestNode = nullptr;
+    bromesh::RayHit closestHit;
+    scene::Vec3 closestWorldPoint;
+    scene::Vec3 closestWorldNormal;
+
+    g->root()->traverse([&](scene::SceneNode* node) {
+        if (!node || node->type() != scene::SceneNode::Type::Mesh) return;
+        if (!node->visible()) return;
+        auto* mn = static_cast<scene::MeshNode*>(node);
+        const bromesh::MeshData& md = mn->mesh();
+        if (md.positions.empty() || md.indices.empty()) return;
+
+        // Build world→local inverse from the node's TRS components. This
+        // assumes the node's world matrix is (parent) * T * R * S with
+        // uniform scale; good enough for terrain chunks and the current
+        // MeshNode usage. For parented nodes we'd need to walk and compose
+        // parent inverses — skipped until needed.
+        const scene::Vec3& nodePos = node->position();
+        const scene::Quat& nodeRot = node->rotation();
+        const scene::Vec3& nodeScl = node->scale();
+
+        scene::Vec3 localOrigin = origin - nodePos;
+        localOrigin = nodeRot.conjugate().rotate(localOrigin);
+        // Uniform scale is the common case; divide component-wise to handle
+        // non-uniform without misbehaving (hit normal is still treated as
+        // uniform below, which is a known limitation).
+        if (nodeScl.x != 0.0f) localOrigin.x /= nodeScl.x;
+        if (nodeScl.y != 0.0f) localOrigin.y /= nodeScl.y;
+        if (nodeScl.z != 0.0f) localOrigin.z /= nodeScl.z;
+
+        scene::Vec3 localDir = nodeRot.conjugate().rotate(dir);
+        if (nodeScl.x != 0.0f) localDir.x /= nodeScl.x;
+        if (nodeScl.y != 0.0f) localDir.y /= nodeScl.y;
+        if (nodeScl.z != 0.0f) localDir.z /= nodeScl.z;
+
+        // localDir's magnitude affects bromesh::raycast's reported distance
+        // (it treats the direction as-is). We normalize and rescale the
+        // distance-bound accordingly so closestDist stays in world units.
+        float localDirLen = localDir.length();
+        if (localDirLen < 1e-12f) return;
+        scene::Vec3 localDirN = localDir * (1.0f / localDirLen);
+        // The closest world hit so far, converted into local-space distance.
+        // For a uniform scale, local distance = world distance / scale.
+        // We use nodeScl.x as the scale factor (uniform assumption).
+        float scale = nodeScl.x != 0.0f ? nodeScl.x : 1.0f;
+        float localMaxDist = closestDist / scale;
+
+        float o[3] = { localOrigin.x, localOrigin.y, localOrigin.z };
+        float d[3] = { localDirN.x, localDirN.y, localDirN.z };
+        bromesh::RayHit hit = bromesh::raycast(md, o, d, localMaxDist);
+        if (!hit.hit) return;
+
+        // Convert the local hit back to world space.
+        scene::Vec3 localHit{hit.position[0], hit.position[1], hit.position[2]};
+        localHit.x *= nodeScl.x;
+        localHit.y *= nodeScl.y;
+        localHit.z *= nodeScl.z;
+        scene::Vec3 worldHit = nodeRot.rotate(localHit) + nodePos;
+
+        // Distance in world = distance from world ray origin.
+        scene::Vec3 toHit = worldHit - origin;
+        float worldDist = toHit.length();
+        if (worldDist >= closestDist) return;
+
+        scene::Vec3 localNormal{hit.normal[0], hit.normal[1], hit.normal[2]};
+        scene::Vec3 worldNormal = nodeRot.rotate(localNormal).normalized();
+
+        closestDist = worldDist;
+        closestNode = mn;
+        closestHit = hit;
+        closestWorldPoint = worldHit;
+        closestWorldNormal = worldNormal;
+    });
+
+    if (!closestNode) return JS_NULL;
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "hit", JS_TRUE);
+    JS_SetPropertyStr(ctx, out, "distance", JS_NewFloat64(ctx, closestDist));
+
+    JSValue point = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, point, 0, JS_NewFloat64(ctx, closestWorldPoint.x));
+    JS_SetPropertyUint32(ctx, point, 1, JS_NewFloat64(ctx, closestWorldPoint.y));
+    JS_SetPropertyUint32(ctx, point, 2, JS_NewFloat64(ctx, closestWorldPoint.z));
+    JS_SetPropertyStr(ctx, out, "point", point);
+
+    JSValue normal = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, normal, 0, JS_NewFloat64(ctx, closestWorldNormal.x));
+    JS_SetPropertyUint32(ctx, normal, 1, JS_NewFloat64(ctx, closestWorldNormal.y));
+    JS_SetPropertyUint32(ctx, normal, 2, JS_NewFloat64(ctx, closestWorldNormal.z));
+    JS_SetPropertyStr(ctx, out, "normal", normal);
+
+    JS_SetPropertyStr(ctx, out, "node", wrapNode(ctx, closestNode, g));
+
+    return out;
 }
 
 // --- Helper: parse a [x, y, z] array into Vec3 ---
@@ -1181,6 +1365,7 @@ static const JSCFunctionListEntry js_scenegraph_proto[] = {
     JS_CFUNC_DEF("destroyNode", 1, js_sg_destroyNode),
     JS_CFUNC_DEF("setCamera", 1, js_sg_setCamera),
     JS_CFUNC_DEF("syncPhysics", 0, js_sg_syncPhysics),
+    JS_CFUNC_DEF("raycast", 2, js_sg_raycast),
 };
 
 // ---------------------------------------------------------------------------
