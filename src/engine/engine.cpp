@@ -1240,7 +1240,17 @@ void Engine::run() {
         }
 
         // 3c2. Auto-render scene graphs (after JS has updated transforms/camera).
+        //       Resize to match element layout if needed (mirrors WebGL resize above).
         for (auto& sg : sceneGraphs_) {
+            if (sg.element) {
+                auto& box = sg.element->layoutBox();
+                int ew = static_cast<int>(box.contentRect.width);
+                int eh = static_cast<int>(box.contentRect.height);
+                if (ew > 0 && eh > 0 &&
+                    (ew != sg.graph->canvasWidth() || eh != sg.graph->canvasHeight())) {
+                    sg.graph->setCanvasSize(ew, eh);
+                }
+            }
             sg.graph->render();
         }
 

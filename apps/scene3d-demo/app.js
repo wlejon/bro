@@ -5,7 +5,7 @@ var canvas = document.querySelector('#canvas');
 var scene = canvas.getContext('scene');
 var info = document.querySelector('#info');
 
-var W = 1024, H = 768;
+var W = canvas.clientWidth, H = canvas.clientHeight;
 var CX = W / 2, CY = H / 2;
 
 var paused = false;

@@ -4,7 +4,7 @@
 var canvas = document.getElementById('c');
 var scene = canvas.getContext('scene');
 var info = document.getElementById('info');
-var W = 1024, H = 768;
+var W = canvas.clientWidth, H = canvas.clientHeight;
 
 // ============================================================================
 // 3D Math helpers (for camera control only — rendering uses scene graph)

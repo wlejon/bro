@@ -42,7 +42,7 @@ function scenePrimitives() {
         fov: 50,
         position: [0, 8, 18],
         target: [0, 0, 0],
-        aspect: 1024 / 768
+        aspect: canvas.clientWidth / canvas.clientHeight
     });
 
     // Box
@@ -87,7 +87,7 @@ function sceneTransforms() {
         fov: 50,
         position: [0, 10, 20],
         target: [0, 2, 0],
-        aspect: 1024 / 768
+        aspect: canvas.clientWidth / canvas.clientHeight
     });
 
     // Original box
@@ -137,7 +137,7 @@ function sceneCSG() {
         fov: 50,
         position: [0, 8, 16],
         target: [0, 1, 0],
-        aspect: 1024 / 768
+        aspect: canvas.clientWidth / canvas.clientHeight
     });
 
     var sphereA = Mesh.sphere(1.2, 24, 16);
@@ -185,7 +185,7 @@ function sceneSimplify() {
         fov: 50,
         position: [0, 5, 16],
         target: [0, 1, 0],
-        aspect: 1024 / 768
+        aspect: canvas.clientWidth / canvas.clientHeight
     });
 
     // High-res sphere
@@ -225,7 +225,7 @@ function sceneSubdivide() {
         fov: 50,
         position: [0, 6, 16],
         target: [0, 1.5, 0],
-        aspect: 1024 / 768
+        aspect: canvas.clientWidth / canvas.clientHeight
     });
 
     // Start with a low-poly box
@@ -286,7 +286,7 @@ function sceneIsosurface() {
         fov: 50,
         position: [0, 8, 20],
         target: [0, 2, 0],
-        aspect: 1024 / 768
+        aspect: canvas.clientWidth / canvas.clientHeight
     });
 
     // Generate a scalar field: sphere + sine waves
@@ -337,7 +337,7 @@ function sceneAnalysis() {
         fov: 50,
         position: [0, 8, 18],
         target: [0, 2, 0],
-        aspect: 1024 / 768
+        aspect: canvas.clientWidth / canvas.clientHeight
     });
 
     // Test mesh
@@ -442,11 +442,11 @@ function animate() {
         // Slowly orbit camera
         var cam = null;
         if (currentScene === 0) {
-            cam = { fov: 50, position: [Math.sin(t*0.3)*18, 8, Math.cos(t*0.3)*18], target: [0,0,0], aspect: 1024/768 };
+            cam = { fov: 50, position: [Math.sin(t*0.3)*18, 8, Math.cos(t*0.3)*18], target: [0,0,0], aspect: canvas.clientWidth/canvas.clientHeight };
         } else if (currentScene === 2) {
-            cam = { fov: 50, position: [Math.sin(t*0.2)*16, 8, Math.cos(t*0.2)*16], target: [0,1,0], aspect: 1024/768 };
+            cam = { fov: 50, position: [Math.sin(t*0.2)*16, 8, Math.cos(t*0.2)*16], target: [0,1,0], aspect: canvas.clientWidth/canvas.clientHeight };
         } else if (currentScene === 5) {
-            cam = { fov: 50, position: [Math.sin(t*0.25)*20, 8, Math.cos(t*0.25)*20], target: [0,2,0], aspect: 1024/768 };
+            cam = { fov: 50, position: [Math.sin(t*0.25)*20, 8, Math.cos(t*0.25)*20], target: [0,2,0], aspect: canvas.clientWidth/canvas.clientHeight };
         }
         if (cam) scene.setCamera(cam);
     }
