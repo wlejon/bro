@@ -403,7 +403,22 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniform4fv(uColor_, 1, mesh->color());
     glUniform1f(uEmissive_, mesh->emissive());
 
+    // Per-mesh polygon offset (depth bias). Used by callers that need to
+    // layer co-located meshes — e.g. terrain LOD shells that overlap and need
+    // the high-detail mesh to consistently win the depth test.
+    float pf = mesh->depthBiasFactor();
+    float pu = mesh->depthBiasUnits();
+    if (pf != 0.0f || pu != 0.0f) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(pf, pu);
+    }
+
     mesh->onRender(*this);
+
+    if (pf != 0.0f || pu != 0.0f) {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(0.0f, 0.0f);
+    }
 }
 
 } // namespace bro::scene

@@ -38,6 +38,18 @@ public:
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
 
+    /// Polygon offset (forwarded to glPolygonOffset before drawing this mesh).
+    /// Negative `units` pulls the surface forward in the depth buffer, useful
+    /// for layering co-located meshes (e.g. high-detail LOD meshes that should
+    /// always win the depth test against lower-detail backdrops).
+    /// Set both to 0 to disable.
+    void setDepthBias(float factor, float units) {
+        depthBiasFactor_ = factor;
+        depthBiasUnits_ = units;
+    }
+    float depthBiasFactor() const { return depthBiasFactor_; }
+    float depthBiasUnits() const { return depthBiasUnits_; }
+
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
@@ -56,6 +68,10 @@ private:
     // Material
     float color_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float emissive_ = 0.0f;
+
+    // Polygon offset (per-mesh depth bias for layered LOD meshes)
+    float depthBiasFactor_ = 0.0f;
+    float depthBiasUnits_ = 0.0f;
 };
 
 } // namespace bro::scene
