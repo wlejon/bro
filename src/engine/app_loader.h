@@ -5,10 +5,16 @@
 
 namespace bro::engine {
 
+struct ScriptEntry {
+    std::string path;    // non-empty for <script src="...">
+    std::string code;    // non-empty for inline <script>...</script>
+    bool isInline() const { return path.empty(); }
+};
+
 struct AppManifest {
     std::string htmlPath;
     std::string basePath;
-    std::vector<std::string> scriptPaths;
+    std::vector<ScriptEntry> scripts;    // in document order (external + inline)
     std::vector<std::string> stylePaths;
 };
 

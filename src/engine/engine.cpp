@@ -420,12 +420,18 @@ Engine::Engine(const EngineConfig& config)
     // 9d. Install Worker bindings
     js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath);
 
-    // 10. Load and execute scripts
-    for (auto& scriptPath : manifest_.scriptPaths) {
-        std::string code = AppLoader::loadFile(scriptPath);
-        if (!code.empty()) {
-            if (!jsRuntime_->eval(code, scriptPath)) {
-                LOG_ERROR("Failed to execute script: %s", scriptPath.c_str());
+    // 10. Load and execute scripts (external + inline, in document order)
+    for (auto& script : manifest_.scripts) {
+        if (script.isInline()) {
+            if (!jsRuntime_->eval(script.code, "<inline>")) {
+                LOG_ERROR("Failed to execute inline script");
+            }
+        } else {
+            std::string code = AppLoader::loadFile(script.path);
+            if (!code.empty()) {
+                if (!jsRuntime_->eval(code, script.path)) {
+                    LOG_ERROR("Failed to execute script: %s", script.path.c_str());
+                }
             }
         }
     }

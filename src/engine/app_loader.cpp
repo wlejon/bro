@@ -75,20 +75,31 @@ AppManifest AppLoader::loadApp(const std::string& appDir) {
         }
     }
 
-    // Extract <script src="...">
+    // Extract all <script> tags in document order (both src="..." and inline)
     {
-        std::regex scriptRe(R"(<script[^>]+src\s*=\s*["']([^"']+)["'])",
+        std::regex scriptRe(R"(<script([^>]*)>([\s\S]*?)</script>)",
                             std::regex_constants::icase);
+        std::regex srcRe(R"(src\s*=\s*["']([^"']+)["'])",
+                         std::regex_constants::icase);
         auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
-            std::string src = (*it)[1].str();
-            manifest.scriptPaths.push_back(resolveRelativePath(appDir, src));
+            std::string attrs = (*it)[1].str();
+            std::string body = (*it)[2].str();
+            std::smatch srcMatch;
+            if (std::regex_search(attrs, srcMatch, srcRe)) {
+                // External script
+                std::string resolved = resolveRelativePath(appDir, srcMatch[1].str());
+                manifest.scripts.push_back({resolved, {}});
+            } else if (!body.empty()) {
+                // Inline script
+                manifest.scripts.push_back({{}, body});
+            }
         }
     }
 
     LOG_INFO("AppLoader: loaded manifest from '%s' (%zu styles, %zu scripts)",
-             appDir.c_str(), manifest.stylePaths.size(), manifest.scriptPaths.size());
+             appDir.c_str(), manifest.stylePaths.size(), manifest.scripts.size());
 
     return manifest;
 }
