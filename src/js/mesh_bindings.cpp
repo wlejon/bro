@@ -836,7 +836,7 @@ static JSValue js_mesh_union(JSContext* ctx, JSValueConst, int argc, JSValueCons
     auto* b = getMD(argv[1]);
     if (!a || !b) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
     auto result = bromesh::booleanUnion(*a, *b);
-    bromesh::computeNormals(result);
+    result = bromesh::computeCreaseNormals(result);
     return wrapMesh(ctx, std::move(result));
 }
 
@@ -846,7 +846,7 @@ static JSValue js_mesh_subtract(JSContext* ctx, JSValueConst, int argc, JSValueC
     auto* b = getMD(argv[1]);
     if (!a || !b) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
     auto result = bromesh::booleanDifference(*a, *b);
-    bromesh::computeNormals(result);
+    result = bromesh::computeCreaseNormals(result);
     return wrapMesh(ctx, std::move(result));
 }
 
@@ -856,7 +856,7 @@ static JSValue js_mesh_intersect(JSContext* ctx, JSValueConst, int argc, JSValue
     auto* b = getMD(argv[1]);
     if (!a || !b) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
     auto result = bromesh::booleanIntersection(*a, *b);
-    bromesh::computeNormals(result);
+    result = bromesh::computeCreaseNormals(result);
     return wrapMesh(ctx, std::move(result));
 }
 
@@ -869,8 +869,8 @@ static JSValue js_mesh_splitByPlane(JSContext* ctx, JSValueConst, int argc, JSVa
     float nz = (float)optNum(ctx, argv, argc, 3, 0);
     float offset = (float)optNum(ctx, argv, argc, 4, 0);
     auto [front, back] = bromesh::splitByPlane(*md, nx, ny, nz, offset);
-    bromesh::computeNormals(front);
-    bromesh::computeNormals(back);
+    front = bromesh::computeCreaseNormals(front);
+    back = bromesh::computeCreaseNormals(back);
     JSValue arr = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, arr, 0, wrapMesh(ctx, std::move(front)));
     JS_SetPropertyUint32(ctx, arr, 1, wrapMesh(ctx, std::move(back)));
