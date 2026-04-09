@@ -36,7 +36,7 @@ namespace bro::js {
 // Class ID
 // ---------------------------------------------------------------------------
 
-static JSClassID js_mesh_class_id = 0;
+static thread_local JSClassID js_mesh_class_id = 0;
 
 // ---------------------------------------------------------------------------
 // Opaque wrapper
@@ -151,10 +151,14 @@ static bool readUint8ArrayVal(JSContext* ctx, JSValueConst v, std::vector<uint8_
 }
 
 /// Create a Float32Array from a vector<float>.
+/// QuickJS's js_typed_array_constructor reads argv[1] and argv[2] unconditionally
+/// even when constructing with a single ArrayBuffer arg, so we must provide a
+/// 3-element argv with explicit JS_UNDEFINED for offset and length.
 static JSValue makeFloat32Array(JSContext* ctx, const std::vector<float>& vec) {
     size_t bytes = vec.size() * sizeof(float);
     JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(vec.data()), bytes);
-    JSValue arr = JS_NewTypedArray(ctx, 1, &abuf, JS_TYPED_ARRAY_FLOAT32);
+    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
     JS_FreeValue(ctx, abuf);
     return arr;
 }
@@ -163,7 +167,8 @@ static JSValue makeFloat32Array(JSContext* ctx, const std::vector<float>& vec) {
 static JSValue makeUint32Array(JSContext* ctx, const std::vector<uint32_t>& vec) {
     size_t bytes = vec.size() * sizeof(uint32_t);
     JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(vec.data()), bytes);
-    JSValue arr = JS_NewTypedArray(ctx, 1, &abuf, JS_TYPED_ARRAY_UINT32);
+    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT32);
     JS_FreeValue(ctx, abuf);
     return arr;
 }
@@ -1007,7 +1012,8 @@ static JSValue js_mesh_loadVOX(JSContext* ctx, JSValueConst, int argc, JSValueCo
     // Voxels as Uint8Array
     {
         JSValue abuf = JS_NewArrayBufferCopy(ctx, vox.voxels.data(), vox.voxels.size());
-        JSValue arr = JS_NewTypedArray(ctx, 1, &abuf, JS_TYPED_ARRAY_UINT8);
+        JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+        JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8);
         JS_FreeValue(ctx, abuf);
         JS_SetPropertyStr(ctx, obj, "voxels", arr);
     }
@@ -1015,7 +1021,8 @@ static JSValue js_mesh_loadVOX(JSContext* ctx, JSValueConst, int argc, JSValueCo
     {
         size_t bytes = 256 * 4 * sizeof(float);
         JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(vox.palette), bytes);
-        JSValue arr = JS_NewTypedArray(ctx, 1, &abuf, JS_TYPED_ARRAY_FLOAT32);
+        JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+        JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
         JS_FreeValue(ctx, abuf);
         JS_SetPropertyStr(ctx, obj, "palette", arr);
     }
@@ -1152,11 +1159,12 @@ static const JSCFunctionListEntry js_mesh_proto[] = {
 // Wrap helper (creates a JS Mesh from MeshData)
 // ---------------------------------------------------------------------------
 
-static JSValue s_mesh_proto = JS_UNDEFINED;
+static thread_local JSValue s_mesh_proto = JS_UNDEFINED;
 
 static JSValue wrapMesh(JSContext* ctx, bromesh::MeshData&& data) {
+    // JS_NewObjectClass picks up the prototype registered via JS_SetClassProto
+    // in install(), so we don't need a manual JS_SetPrototype here.
     JSValue obj = JS_NewObjectClass(ctx, js_mesh_class_id);
-    JS_SetPrototype(ctx, obj, JS_DupValue(ctx, s_mesh_proto));
     auto* w = new MeshWrapper{std::make_unique<bromesh::MeshData>(std::move(data))};
     JS_SetOpaque(obj, w);
     return obj;
@@ -1166,7 +1174,7 @@ static JSValue wrapMesh(JSContext* ctx, bromesh::MeshData&& data) {
 // Install / Cleanup
 // ---------------------------------------------------------------------------
 
-static JSValue s_mesh_ctor = JS_UNDEFINED;
+static thread_local JSValue s_mesh_ctor = JS_UNDEFINED;
 
 void MeshBindings::install(JSContext* ctx) {
     JSRuntime* rt = JS_GetRuntime(ctx);
@@ -1177,6 +1185,11 @@ void MeshBindings::install(JSContext* ctx) {
     s_mesh_proto = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, s_mesh_proto,
                                js_mesh_proto, sizeof(js_mesh_proto) / sizeof(js_mesh_proto[0]));
+
+    // Register the prototype with the class so JS_NewObjectClass attaches it
+    // automatically. JS_SetClassProto takes ownership of the passed value, so
+    // dup it to keep s_mesh_proto usable.
+    JS_SetClassProto(ctx, js_mesh_class_id, JS_DupValue(ctx, s_mesh_proto));
 
     // Constructor
     s_mesh_ctor = JS_NewCFunction2(ctx, js_mesh_ctor, "Mesh", 1,

@@ -1,4 +1,5 @@
 #include "js/worker.h"
+#include "js/mesh_bindings.h"
 #include "js/message_serializer.h"
 #include "js/runtime.h"
 #include "js/timers.h"
@@ -163,6 +164,9 @@ void Worker::threadFunc()
     auto timers = std::make_unique<Timers>();
     Timers::install(ctx, timers.get());
 
+    // --- 3b. Install Mesh class (for marching cubes / mesh generation in workers) ---
+    MeshBindings::install(ctx);
+
     // --- 4. Store context data for C callbacks ---
     WorkerCtxData wcd;
     wcd.worker = this;
@@ -252,7 +256,16 @@ void Worker::threadFunc()
 
     // --- 8. Cleanup ---
     timers->clearAll(ctx);
+    MeshBindings::cleanup(ctx);
     JS_SetContextOpaque(ctx, nullptr);
+
+    // Drain microtasks and run GC to break reference cycles (e.g. the
+    // Mesh prototype↔constructor cycle from JS_SetConstructor) before
+    // the runtime destructor asserts on a non-empty gc_obj_list.
+    runtime->executePendingJobs();
+    JS_RunGC(runtime->getRuntime());
+    runtime->executePendingJobs();
+    JS_RunGC(runtime->getRuntime());
     // runtime dtor frees JSContext + JSRuntime
 
     alive_.store(false, std::memory_order_release);
@@ -402,6 +415,13 @@ void cleanupWorkerBindings(JSContext* ctx)
     for (Worker* w : it->second.workers) {
         w->terminate();
         if (!JS_IsUndefined(w->jsObject)) {
+            // The JS Worker object may still be referenced elsewhere (e.g.
+            // in a cycle broken later by JS_RunGC during JS_FreeRuntime).
+            // Null out the opaque's back-pointer so its finalizer won't
+            // dereference the Worker we're about to delete.
+            auto* opaque = static_cast<WorkerOpaque*>(
+                JS_GetOpaque(w->jsObject, js_worker_class_id));
+            if (opaque) opaque->worker = nullptr;
             JS_FreeValue(ctx, w->jsObject);
             w->jsObject = JS_UNDEFINED;
         }
