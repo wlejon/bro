@@ -1239,6 +1239,11 @@ void Engine::run() {
             activeWebGL->unbindCanvasFBO();
         }
 
+        // 3c2. Auto-render scene graphs (after JS has updated transforms/camera).
+        for (auto& sg : sceneGraphs_) {
+            sg.graph->render();
+        }
+
         double tJs = util::currentTimeMs();
         accumJsMs_ += tJs - t0;
         accumGlStateMs_ += tJs - tGlSave;  // GL save is inside JS phase

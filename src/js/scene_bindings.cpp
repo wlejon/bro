@@ -1000,13 +1000,6 @@ static JSValue js_sg_findByName(JSContext* ctx, JSValueConst this_val, int argc,
     return node ? wrapNode(ctx, node, g) : JS_NULL;
 }
 
-// render() — manually trigger scene graph render
-static JSValue js_sg_render(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
-    auto* g = getGraph(this_val);
-    if (g) g->render();
-    return JS_UNDEFINED;
-}
-
 // syncPhysics() — manually sync physics transforms
 static JSValue js_sg_syncPhysics(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* g = getGraph(this_val);
@@ -1126,7 +1119,6 @@ static const JSCFunctionListEntry js_scenegraph_proto[] = {
     JS_CFUNC_DEF("findByName", 1, js_sg_findByName),
     JS_CFUNC_DEF("destroyNode", 1, js_sg_destroyNode),
     JS_CFUNC_DEF("setCamera", 1, js_sg_setCamera),
-    JS_CFUNC_DEF("render", 0, js_sg_render),
     JS_CFUNC_DEF("syncPhysics", 0, js_sg_syncPhysics),
 };
 

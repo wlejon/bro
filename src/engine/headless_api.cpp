@@ -21,6 +21,7 @@
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "canvas/canvas_scene.h"
+#include "scene/scene_graph.h"
 #include "webgl/webgl2_context.h"
 
 #include <broaudio/engine.h>
@@ -105,6 +106,11 @@ void Engine::advanceTime(double ms) {
         js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
         if (activeWebGL) activeWebGL->unbindCanvasFBO();
+
+        // Auto-render scene graphs after JS execution
+        for (auto& sg : sceneGraphs_) {
+            sg.graph->render();
+        }
 
         flush();
 

@@ -2,7 +2,6 @@
 switchDemo(0);
 for (var i = 0; i < 10; i++) {
     advanceTime(16);
-    scene.render();
 }
 flush();
 screenshot('scene3d-final.png');

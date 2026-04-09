@@ -189,9 +189,6 @@ class SceneGraph {
    */
   destroyNode(node) {}
 
-  /** Manually trigger a render pass. */
-  render() {}
-
   /** Sync all physics node transforms from the physics world. */
   syncPhysics() {}
 }

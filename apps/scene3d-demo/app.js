@@ -467,5 +467,4 @@ setInterval(function() {
         scene.syncPhysics();
     }
 
-    scene.render();
 }, 16);

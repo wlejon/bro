@@ -11,9 +11,8 @@ var rect = scene.createShape({
 });
 console.log('rect id:', rect.id, 'x:', rect.x, 'y:', rect.y);
 
-scene.render();
-console.log('render() called');
-
+// advanceTime triggers auto-render internally
+advanceTime(16);
 flush();
 screenshot('scene-test-output.png');
 console.log('screenshot saved');

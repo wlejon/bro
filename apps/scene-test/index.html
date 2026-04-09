@@ -15,15 +15,7 @@ var rect = scene.createShape({
     fill: 'red', x: 400, y: 300
 });
 console.log('rect node:', rect ? 'created (id=' + rect.id + ')' : 'null');
-
-// Render once immediately
-scene.render();
-console.log('render() called');
-
-// Also render on interval
-setInterval(function() {
-    scene.render();
-}, 100);
+console.log('scene graph renders automatically each frame');
 </script>
 </body>
 </html>

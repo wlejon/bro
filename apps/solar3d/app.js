@@ -352,9 +352,6 @@ function render() {
         m.node.z = m.pos[2];
     }
 
-    // Render the scene graph (handles all GL rendering + compositing)
-    scene.render();
-
     // Update audio positions
     updateAudio();
 
