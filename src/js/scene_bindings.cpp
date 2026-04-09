@@ -477,6 +477,66 @@ static JSValue js_node_syncToPhysics(JSContext* ctx, JSValueConst this_val, int,
     return JS_UNDEFINED;
 }
 
+// --- Forward decls used by updateMesh (defined later) ---
+static bool jsReadFloatArray(JSContext* ctx, JSValueConst obj, const char* prop,
+                             std::vector<float>& out);
+static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop,
+                              std::vector<uint32_t>& out);
+
+// updateMesh(meshOrOpts) — replace geometry on an existing MeshNode in place.
+// Accepts either a Mesh object or a plain options object {positions, normals?, indices, data?}.
+static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (!w || !w->node)
+        return JS_ThrowTypeError(ctx, "updateMesh: invalid node");
+    if (w->node->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "updateMesh: node is not a MeshNode");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "updateMesh: missing argument");
+
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
+    bromesh::MeshData meshData;
+    bool gotData = false;
+
+    // Path 1: argument is a Mesh object directly
+    if (auto* md = MeshBindings::getMeshData(ctx, argv[0])) {
+        meshData = *md;
+        gotData = true;
+    }
+
+    // Path 2: argument is an options object with .data (Mesh) or raw typed arrays
+    if (!gotData && JS_IsObject(argv[0])) {
+        JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+        if (!JS_IsUndefined(dataVal)) {
+            if (auto* md = MeshBindings::getMeshData(ctx, dataVal)) {
+                meshData = *md;
+                gotData = true;
+            }
+        }
+        JS_FreeValue(ctx, dataVal);
+
+        if (!gotData) {
+            std::vector<float> positions, normals;
+            std::vector<uint32_t> indices;
+            if (jsReadFloatArray(ctx, argv[0], "positions", positions) &&
+                jsReadUint32Array(ctx, argv[0], "indices", indices)) {
+                meshData.positions = std::move(positions);
+                meshData.indices = std::move(indices);
+                if (jsReadFloatArray(ctx, argv[0], "normals", normals)) {
+                    meshData.normals = std::move(normals);
+                }
+                gotData = true;
+            }
+        }
+    }
+
+    if (!gotData)
+        return JS_ThrowTypeError(ctx, "updateMesh: argument must be a Mesh or {positions,indices}");
+
+    meshNode->setMesh(std::move(meshData));
+    return JS_DupValue(ctx, this_val);
+}
+
 // ---------------------------------------------------------------------------
 // SceneNode prototype
 // ---------------------------------------------------------------------------
@@ -518,6 +578,7 @@ static const JSCFunctionListEntry js_scenenode_proto[] = {
     JS_CFUNC_DEF("destroy", 0, js_node_destroy),
     JS_CFUNC_DEF("localToWorld", 2, js_node_localToWorld),
     JS_CFUNC_DEF("syncToPhysics", 0, js_node_syncToPhysics),
+    JS_CFUNC_DEF("updateMesh", 1, js_node_updateMesh),
 };
 
 // ---------------------------------------------------------------------------
