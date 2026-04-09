@@ -8,6 +8,7 @@
 #include <bromesh/manipulation/normals.h>
 #include <bromesh/manipulation/simplify.h>
 #include <bromesh/manipulation/subdivide.h>
+#include <bromesh/manipulation/weld.h>
 #include <bromesh/manipulation/smooth.h>
 #include <bromesh/optimization/optimize.h>
 #include <bromesh/isosurface/marching_cubes.h>
@@ -518,7 +519,8 @@ static JSValue js_mesh_subdivideLoop(JSContext* ctx, JSValueConst this_val, int 
     auto* w = getMW(this_val);
     if (!w) return JS_UNDEFINED;
     int iter = optInt(ctx, argv, argc, 0, 1);
-    *w->data = bromesh::subdivideLoop(*w->data, iter);
+    auto welded = bromesh::weldVertices(*w->data);
+    *w->data = bromesh::subdivideLoop(welded, iter);
     return JS_DupValue(ctx, this_val);
 }
 
@@ -526,7 +528,8 @@ static JSValue js_mesh_subdivideCatmullClark(JSContext* ctx, JSValueConst this_v
     auto* w = getMW(this_val);
     if (!w) return JS_UNDEFINED;
     int iter = optInt(ctx, argv, argc, 0, 1);
-    *w->data = bromesh::subdivideCatmullClark(*w->data, iter);
+    auto welded = bromesh::weldVertices(*w->data);
+    *w->data = bromesh::subdivideCatmullClark(welded, iter);
     return JS_DupValue(ctx, this_val);
 }
 
@@ -534,7 +537,8 @@ static JSValue js_mesh_subdivideMidpoint(JSContext* ctx, JSValueConst this_val, 
     auto* w = getMW(this_val);
     if (!w) return JS_UNDEFINED;
     int iter = optInt(ctx, argv, argc, 0, 1);
-    *w->data = bromesh::subdivideMidpoint(*w->data, iter);
+    auto welded = bromesh::weldVertices(*w->data);
+    *w->data = bromesh::subdivideMidpoint(welded, iter);
     return JS_DupValue(ctx, this_val);
 }
 
@@ -644,26 +648,13 @@ static JSValue makeRayHit(JSContext* ctx, const bromesh::RayHit& h) {
 static JSValue js_mesh_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* md = getMD(this_val);
     if (!md || argc < 2) return JS_UNDEFINED;
-    float origin[3] = {0,0,0}, dir[3] = {0,0,-1};
+    float origin[3], dir[3];
+    double tmp;
     for (int i = 0; i < 3; i++) {
         JSValue e = JS_GetPropertyUint32(ctx, argv[0], i);
-        JS_ToFloat64(ctx, (double*)&origin[i], e); // safe: float written via double
-        JS_FreeValue(ctx, e);
+        JS_ToFloat64(ctx, &tmp, e); origin[i] = (float)tmp; JS_FreeValue(ctx, e);
         e = JS_GetPropertyUint32(ctx, argv[1], i);
-        JS_ToFloat64(ctx, (double*)&dir[i], e);
-        JS_FreeValue(ctx, e);
-    }
-    // Fix: use double then cast
-    double o[3], d[3];
-    for (int i = 0; i < 3; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, argv[0], i);
-        JS_ToFloat64(ctx, &o[i], e);
-        JS_FreeValue(ctx, e);
-        e = JS_GetPropertyUint32(ctx, argv[1], i);
-        JS_ToFloat64(ctx, &d[i], e);
-        JS_FreeValue(ctx, e);
-        origin[i] = (float)o[i];
-        dir[i] = (float)d[i];
+        JS_ToFloat64(ctx, &tmp, e); dir[i] = (float)tmp; JS_FreeValue(ctx, e);
     }
     float maxDist = (float)optNum(ctx, argv, argc, 2, 0.0);
     auto hit = bromesh::raycast(*md, origin, dir, maxDist);
@@ -844,7 +835,9 @@ static JSValue js_mesh_union(JSContext* ctx, JSValueConst, int argc, JSValueCons
     auto* a = getMD(argv[0]);
     auto* b = getMD(argv[1]);
     if (!a || !b) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-    return wrapMesh(ctx, bromesh::booleanUnion(*a, *b));
+    auto result = bromesh::booleanUnion(*a, *b);
+    bromesh::computeNormals(result);
+    return wrapMesh(ctx, std::move(result));
 }
 
 static JSValue js_mesh_subtract(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -852,7 +845,9 @@ static JSValue js_mesh_subtract(JSContext* ctx, JSValueConst, int argc, JSValueC
     auto* a = getMD(argv[0]);
     auto* b = getMD(argv[1]);
     if (!a || !b) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-    return wrapMesh(ctx, bromesh::booleanDifference(*a, *b));
+    auto result = bromesh::booleanDifference(*a, *b);
+    bromesh::computeNormals(result);
+    return wrapMesh(ctx, std::move(result));
 }
 
 static JSValue js_mesh_intersect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -860,7 +855,9 @@ static JSValue js_mesh_intersect(JSContext* ctx, JSValueConst, int argc, JSValue
     auto* a = getMD(argv[0]);
     auto* b = getMD(argv[1]);
     if (!a || !b) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-    return wrapMesh(ctx, bromesh::booleanIntersection(*a, *b));
+    auto result = bromesh::booleanIntersection(*a, *b);
+    bromesh::computeNormals(result);
+    return wrapMesh(ctx, std::move(result));
 }
 
 static JSValue js_mesh_splitByPlane(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -872,6 +869,8 @@ static JSValue js_mesh_splitByPlane(JSContext* ctx, JSValueConst, int argc, JSVa
     float nz = (float)optNum(ctx, argv, argc, 3, 0);
     float offset = (float)optNum(ctx, argv, argc, 4, 0);
     auto [front, back] = bromesh::splitByPlane(*md, nx, ny, nz, offset);
+    bromesh::computeNormals(front);
+    bromesh::computeNormals(back);
     JSValue arr = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, arr, 0, wrapMesh(ctx, std::move(front)));
     JS_SetPropertyUint32(ctx, arr, 1, wrapMesh(ctx, std::move(back)));
