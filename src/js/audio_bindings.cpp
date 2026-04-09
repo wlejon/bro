@@ -1130,7 +1130,10 @@ static JSValue js_seq_setBPM(JSContext* ctx, JSValueConst this_val, int argc, JS
     auto* d = static_cast<SequenceData*>(JS_GetOpaque(this_val, js_sequence_class_id));
     if (!d || argc < 1) return JS_UNDEFINED;
     double v; JS_ToFloat64(ctx, &v, argv[0]);
-    d->seq->setBPM(v);
+    if (s_audioEngine)
+        d->seq->setBPM(v, s_audioEngine->currentTime());
+    else
+        d->seq->setBPM(v);
     return JS_UNDEFINED;
 }
 
