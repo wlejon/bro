@@ -1,5 +1,21 @@
 // =============================================================================
-// Endless Terrain — chunked, streaming, deformable
+// Endless Terrain — multi-LOD clipmap world
+// =============================================================================
+//
+// The world is conceptually one infinite density field. We sample it as
+// concentric LOD shells centered on the camera:
+//
+//   LOD 0: small chunks at full detail, near the camera
+//   LOD 1: larger chunks (2x cell size) at the next ring out
+//   LOD 2: 4x cell size, even further out
+//   ...
+//
+// Each LOD shell has its own chunk grid (LOD L chunks span 32 * 2^L world
+// units). Every shell samples the SAME noise field, so the hills/mountains
+// line up across LOD boundaries — moving forward gradually replaces a coarse
+// silhouette of a far mountain with the high-detail version, no discrete
+// "swap one chunk for a better chunk" snap.
+//
 // =============================================================================
 
 var canvas = document.getElementById('c');
@@ -13,14 +29,30 @@ var info = document.getElementById('info');
 var SEED = 42;
 var CHUNK_GRID = 32;
 var CELL_SIZE = 1.0;
-var CHUNK_WORLD_SIZE = CHUNK_GRID * CELL_SIZE;
 
-var VIEW_DIST = 5;          // horizontal chunk radius around camera
-var VIEW_DIST_Y = 3;        // vertical chunk radius
-var UNLOAD_MARGIN = 2;      // extra distance before unloading
-var WORKER_COUNT = 4;       // parallel worker threads
-var MAX_INFLIGHT_PER_WORKER = 2;
-var MAX_MESH_OPS_PER_FRAME = 2;
+// LOD shell layout. Each LOD level uses chunks that are 2x the world size of
+// the previous level, so the shell at LOD L extends roughly 2x further than
+// LOD L-1 with the same number of chunks.
+var LOD_LEVELS = 9;          // 0..4 → 32m, 64m, 128m, 256m, 512m chunks
+var LOD_RING_RADIUS = 4;     // chunks per side from camera at each LOD (~2km out at LOD 4)
+var LOD_RING_RADIUS_Y = 1;   // vertical chunks per side at each LOD (3 layers)
+var WORKER_COUNT = 2;
+var MAX_INFLIGHT_PER_WORKER = 8;
+var MAX_MESH_OPS_PER_FRAME = 32;
+
+function lodCellSize(lod) { return CELL_SIZE * (1 << lod); }
+function lodChunkSize(lod) { return CHUNK_GRID * lodCellSize(lod); }
+
+// Per-LOD tint. Slightly different shades of green so the LOD shells are
+// visible at a glance — set everything to the same color when you want a
+// uniform look.
+var LOD_COLORS = [
+    [0.42, 0.58, 0.32],   // LOD 0 — fresh green (closest)
+    [0.40, 0.55, 0.34],   // LOD 1
+    [0.38, 0.52, 0.36],   // LOD 2
+    [0.36, 0.49, 0.38],   // LOD 3
+    [0.34, 0.46, 0.40]    // LOD 4 — gray-green (farthest)
+];
 
 // ---------------------------------------------------------------------------
 // 3D math helpers (camera only)
@@ -73,26 +105,32 @@ function pickWorker() {
 // ---------------------------------------------------------------------------
 
 // state: 'pending' | 'loading' | 'loaded'
+// lod: LOD level (chunks at different LODs live in separate coord grids)
+// cx,cy,cz: chunk coords *in this LOD's grid*
 // node: SceneNode | null
-// density: Float32Array | null
-// edits: Float32Array (5 floats per edit) — accumulated deformations
 var chunks = {};                    // id -> chunk record
 var pendingQueue = [];              // ids waiting to dispatch
 var meshOpQueue = [];               // worker results waiting to be applied to scene
 
-function chunkId(cx, cy, cz) { return cx + ',' + cy + ',' + cz; }
+// Player edits live in world space as a flat list (5 floats per edit:
+// x, y, z, radius, strength). When meshing a chunk we filter to only the
+// edits whose sphere overlaps the chunk bbox. This works across all LODs
+// because each LOD chunk is just a different rasterization of the same
+// world-space density field.
+var allEdits = [];
 
-function ensureChunk(cx, cy, cz) {
-    var id = chunkId(cx, cy, cz);
+function chunkId(lod, cx, cy, cz) {
+    return lod + ':' + cx + ',' + cy + ',' + cz;
+}
+
+function ensureChunk(lod, cx, cy, cz) {
+    var id = chunkId(lod, cx, cy, cz);
     var c = chunks[id];
     if (!c) {
         c = {
-            id: id, cx: cx, cy: cy, cz: cz,
+            id: id, lod: lod, cx: cx, cy: cy, cz: cz,
             state: 'pending',
-            node: null,
-            density: null,
-            edits: null,
-            lod: 0
+            node: null
         };
         chunks[id] = c;
         pendingQueue.push(id);
@@ -100,9 +138,33 @@ function ensureChunk(cx, cy, cz) {
     return c;
 }
 
-function chunkDist(c, ccx, ccy, ccz) {
-    var dx = c.cx - ccx, dy = c.cy - ccy, dz = c.cz - ccz;
-    return Math.sqrt(dx*dx + dy*dy + dz*dz);
+// World-space distance from camera to a chunk's center, in horizontal plane
+// (used for the LOD shell distance test and pending-queue ordering).
+function chunkDistXZ(c) {
+    var sz = lodChunkSize(c.lod);
+    var wx = (c.cx + 0.5) * sz - cam.pos[0];
+    var wz = (c.cz + 0.5) * sz - cam.pos[2];
+    return Math.sqrt(wx*wx + wz*wz);
+}
+
+// Collect edits whose sphere intersects a chunk's world bbox.
+function editsForChunk(lod, cx, cy, cz) {
+    var sz = lodChunkSize(lod);
+    var minX = cx * sz, maxX = minX + sz;
+    var minY = cy * sz, maxY = minY + sz;
+    var minZ = cz * sz, maxZ = minZ + sz;
+    var out = null;
+    var n = allEdits.length;
+    for (var i = 0; i < n; i += 5) {
+        var ex = allEdits[i],     ey = allEdits[i + 1];
+        var ez = allEdits[i + 2], er = allEdits[i + 3];
+        if (ex + er < minX || ex - er > maxX) continue;
+        if (ey + er < minY || ey - er > maxY) continue;
+        if (ez + er < minZ || ez - er > maxZ) continue;
+        if (!out) out = [];
+        out.push(ex, ey, ez, er, allEdits[i + 4]);
+    }
+    return out ? new Float32Array(out) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,16 +195,15 @@ function onWorkerMessage(slot, msg) {
 function dispatchPending() {
     if (pendingQueue.length === 0) return;
 
-    // Sort pending by distance to camera so closest chunks generate first
-    var ccx = Math.floor(cam.pos[0] / CHUNK_WORLD_SIZE);
-    var ccy = Math.floor(cam.pos[1] / CHUNK_WORLD_SIZE);
-    var ccz = Math.floor(cam.pos[2] / CHUNK_WORLD_SIZE);
-
+    // Order: lower LOD (= finer detail, closer to camera) first, then by
+    // world-space distance. This makes the high-detail near rings appear
+    // before the slow background fills in.
     pendingQueue.sort(function(a, b) {
         var ca = chunks[a], cb = chunks[b];
         if (!ca) return 1;
         if (!cb) return -1;
-        return chunkDist(ca, ccx, ccy, ccz) - chunkDist(cb, ccx, ccy, ccz);
+        if (ca.lod !== cb.lod) return ca.lod - cb.lod;
+        return chunkDistXZ(ca) - chunkDistXZ(cb);
     });
 
     var stillPending = [];
@@ -163,18 +224,16 @@ function dispatchPending() {
         c.state = 'loading';
         slot.busy++;
 
-        var edits = c.edits;
+        var edits = editsForChunk(c.lod, c.cx, c.cy, c.cz);
         var transfers = [];
-        // Send a copy of edits — we keep the master list locally
-        var editsCopy = edits ? new Float32Array(edits) : null;
-        if (editsCopy) transfers.push(editsCopy.buffer);
+        if (edits) transfers.push(edits.buffer);
 
         slot.worker.postMessage({
             type: 'generate',
             id: c.id,
             cx: c.cx, cy: c.cy, cz: c.cz,
             lod: c.lod,
-            edits: editsCopy
+            edits: edits
         }, transfers);
     }
     pendingQueue = stillPending;
@@ -187,10 +246,16 @@ function applyMeshOps() {
         var c = chunks[msg.id];
         if (!c) continue;  // chunk was unloaded while in flight
 
-        c.density = msg.density;
+        if (c.dirty) {
+            // Edit landed while this chunk was generating — discard the stale
+            // result and re-queue. The next dispatch will pick up the new edits.
+            c.dirty = false;
+            c.state = 'pending';
+            pendingQueue.push(c.id);
+            continue;
+        }
 
         if (msg.empty) {
-            // No mesh to draw; if there was a node, destroy it
             if (c.node) {
                 c.node.destroy();
                 c.node = null;
@@ -200,23 +265,31 @@ function applyMeshOps() {
             continue;
         }
 
+        var sz = lodChunkSize(c.lod);
         if (c.node) {
-            // Update existing node in place
-            c.node.updateMesh({
-                positions: msg.positions,
-                normals: msg.normals,
-                indices: msg.indices
-            });
+            // msg.mesh is a transferred Mesh handle — the underlying MeshData
+            // lives in C++ and was moved across threads by pointer.
+            c.node.updateMesh(msg.mesh);
         } else {
+            // Polygon offset bias by LOD: finer LOD (lower index) gets a more
+            // negative units value so it consistently wins the depth test
+            // against any coarser LOD chunks underneath it. The factor term
+            // scales with depth slope, so distant near-edge-on geometry also
+            // resolves cleanly.
+            var biasUnits = -2.0 * (LOD_LEVELS - c.lod);
+            var biasFactor = -1.0 * (LOD_LEVELS - c.lod);
+            // Subtle tint per LOD: each level gets a slightly different shade
+            // so the layering is visible without screaming "debug colors".
+            // Disable by setting all the same.
+            var col = LOD_COLORS[c.lod] || [0.45, 0.55, 0.35];
             c.node = scene.createMesh({
                 name: 'chunk_' + c.id,
-                positions: msg.positions,
-                normals: msg.normals,
-                indices: msg.indices,
-                x: c.cx * CHUNK_WORLD_SIZE,
-                y: c.cy * CHUNK_WORLD_SIZE,
-                z: c.cz * CHUNK_WORLD_SIZE,
-                color: [0.45, 0.55, 0.35]
+                mesh: msg.mesh,
+                x: c.cx * sz,
+                y: c.cy * sz,
+                z: c.cz * sz,
+                color: col,
+                depthBias: [biasFactor, biasUnits]
             });
         }
         c.state = 'loaded';
@@ -225,31 +298,50 @@ function applyMeshOps() {
 }
 
 function updateLoadedChunks() {
-    var ccx = Math.floor(cam.pos[0] / CHUNK_WORLD_SIZE);
-    var ccy = Math.floor(cam.pos[1] / CHUNK_WORLD_SIZE);
-    var ccz = Math.floor(cam.pos[2] / CHUNK_WORLD_SIZE);
+    // Each LOD level fully covers a disc out to LOD_RING_RADIUS chunks. The
+    // discs OVERLAP — LOD 1 also covers everything LOD 0 covers, LOD 2 covers
+    // everything LOD 0 and 1 cover, and so on. There are no rings or holes.
+    //
+    // Stacking is what eliminates the LOD-snap pop: when the camera moves, a
+    // newly-revealed area is already populated by the coarse outer shells, so
+    // the higher-detail shell quietly fills in on top instead of replacing
+    // anything visually. Per-mesh polygon offset (set in applyMeshOps) makes
+    // the high-LOD chunks always win the depth test against the coarse ones
+    // they sit on.
+    var wantedIds = {};
 
-    // Request chunks within view distance
-    for (var dz = -VIEW_DIST; dz <= VIEW_DIST; dz++) {
-        for (var dy = -VIEW_DIST_Y; dy <= VIEW_DIST_Y; dy++) {
-            for (var dx = -VIEW_DIST; dx <= VIEW_DIST; dx++) {
-                // Sphere-ish culling
-                if (dx*dx + dz*dz > VIEW_DIST * VIEW_DIST) continue;
-                ensureChunk(ccx + dx, ccy + dy, ccz + dz);
+    for (var lod = 0; lod < LOD_LEVELS; lod++) {
+        var sz = lodChunkSize(lod);
+        var ccx = Math.floor(cam.pos[0] / sz);
+        var ccy = Math.floor(cam.pos[1] / sz);
+        var ccz = Math.floor(cam.pos[2] / sz);
+
+        var outerDist = LOD_RING_RADIUS * sz;
+        var rChunks = LOD_RING_RADIUS + 1;
+        var rChunksY = LOD_RING_RADIUS_Y;
+
+        for (var dz = -rChunks; dz <= rChunks; dz++) {
+            for (var dy = -rChunksY; dy <= rChunksY; dy++) {
+                for (var dx = -rChunks; dx <= rChunks; dx++) {
+                    var cx = ccx + dx, cy = ccy + dy, cz = ccz + dz;
+
+                    var wcx = (cx + 0.5) * sz - cam.pos[0];
+                    var wcz = (cz + 0.5) * sz - cam.pos[2];
+                    var dist = Math.sqrt(wcx*wcx + wcz*wcz);
+                    if (dist > outerDist) continue;
+
+                    var id = chunkId(lod, cx, cy, cz);
+                    wantedIds[id] = true;
+                    ensureChunk(lod, cx, cy, cz);
+                }
             }
         }
     }
 
-    // Unload chunks that drifted too far
-    var unloadDist = VIEW_DIST + UNLOAD_MARGIN;
-    var unloadDistSq = unloadDist * unloadDist;
+    // Unload anything that fell outside every shell.
     var toRemove = [];
     for (var id in chunks) {
-        var c = chunks[id];
-        var ddx = c.cx - ccx, ddy = c.cy - ccy, ddz = c.cz - ccz;
-        if (ddx*ddx + ddz*ddz > unloadDistSq || Math.abs(ddy) > VIEW_DIST_Y + UNLOAD_MARGIN) {
-            toRemove.push(id);
-        }
+        if (!wantedIds[id]) toRemove.push(id);
     }
     for (var i = 0; i < toRemove.length; i++) {
         var c = chunks[toRemove[i]];
@@ -263,10 +355,10 @@ function updateLoadedChunks() {
 // ---------------------------------------------------------------------------
 
 var cam = {
-    pos: [0, 60, 0],
+    pos: [0, 80, 0],
     yaw: 0,
-    pitch: -0.3,
-    speed: 30,
+    pitch: -0.2,
+    speed: 60,
     sensitivity: 0.003
 };
 
@@ -318,77 +410,42 @@ document.addEventListener('mousemove', function(e) {
 // ---------------------------------------------------------------------------
 
 function deformAt(wx, wy, wz, radius, strength) {
-    // Find all chunks intersecting the edit sphere
-    var minCx = Math.floor((wx - radius) / CHUNK_WORLD_SIZE);
-    var maxCx = Math.floor((wx + radius) / CHUNK_WORLD_SIZE);
-    var minCy = Math.floor((wy - radius) / CHUNK_WORLD_SIZE);
-    var maxCy = Math.floor((wy + radius) / CHUNK_WORLD_SIZE);
-    var minCz = Math.floor((wz - radius) / CHUNK_WORLD_SIZE);
-    var maxCz = Math.floor((wz + radius) / CHUNK_WORLD_SIZE);
+    // Append the edit to the world-space master list. Future chunk generations
+    // (at any LOD) will pick it up via editsForChunk.
+    allEdits.push(wx, wy, wz, radius, strength);
 
-    for (var cx = minCx; cx <= maxCx; cx++) {
-        for (var cy = minCy; cy <= maxCy; cy++) {
-            for (var cz = minCz; cz <= maxCz; cz++) {
-                var id = chunkId(cx, cy, cz);
-                var c = chunks[id];
-                if (!c) continue;  // chunk not loaded; skip
+    // Re-mesh every currently-loaded chunk (across all LODs) whose bbox the
+    // edit sphere touches. We don't filter by LOD: the user expects close-up
+    // detail to update, and the coarse rings will quietly catch up.
+    for (var id in chunks) {
+        var c = chunks[id];
+        var sz = lodChunkSize(c.lod);
+        var minX = c.cx * sz, maxX = minX + sz;
+        var minY = c.cy * sz, maxY = minY + sz;
+        var minZ = c.cz * sz, maxZ = minZ + sz;
 
-                // Append edit (5 floats: x, y, z, radius, strength)
-                var oldLen = c.edits ? c.edits.length : 0;
-                var newEdits = new Float32Array(oldLen + 5);
-                if (c.edits) newEdits.set(c.edits, 0);
-                newEdits[oldLen + 0] = wx;
-                newEdits[oldLen + 1] = wy;
-                newEdits[oldLen + 2] = wz;
-                newEdits[oldLen + 3] = radius;
-                newEdits[oldLen + 4] = strength;
-                c.edits = newEdits;
+        if (wx + radius < minX || wx - radius > maxX) continue;
+        if (wy + radius < minY || wy - radius > maxY) continue;
+        if (wz + radius < minZ || wz - radius > maxZ) continue;
 
-                // Re-queue for generation if not already
-                if (c.state === 'loaded') {
-                    c.state = 'pending';
-                    pendingQueue.push(id);
-                }
-            }
+        if (c.state === 'loaded') {
+            c.state = 'pending';
+            pendingQueue.push(id);
+        } else if (c.state === 'loading') {
+            // applyMeshOps will discard the stale result and re-queue.
+            c.dirty = true;
         }
     }
 }
 
-// Simple ray-march against density field of loaded chunks for deformation targeting
+// Pick a point to deform: cast a ray against the scene's mesh nodes. The
+// scene graph owns the real triangles in C++, so we delegate to a native
+// raycast rather than keeping a parallel density grid on the JS side. This
+// is what retired the per-chunk density field from the worker message and
+// the main-thread chunk record.
 function deformRayTarget() {
-    // March a ray from camera forward; return first solid hit position
-    var origin = cam.pos;
-    var dir = camForward();
-    var maxDist = 60;
-    var stepSize = 0.5;
-
-    for (var t = 0.5; t < maxDist; t += stepSize) {
-        var px = origin[0] + dir[0] * t;
-        var py = origin[1] + dir[1] * t;
-        var pz = origin[2] + dir[2] * t;
-
-        var cx = Math.floor(px / CHUNK_WORLD_SIZE);
-        var cy = Math.floor(py / CHUNK_WORLD_SIZE);
-        var cz = Math.floor(pz / CHUNK_WORLD_SIZE);
-        var c = chunks[chunkId(cx, cy, cz)];
-        if (!c || !c.density) continue;
-
-        var G = CHUNK_GRID + 1;
-        var step = CELL_SIZE * (1 << c.lod);
-        // Sample nearest voxel
-        var lx = (px - cx * CHUNK_WORLD_SIZE) / step;
-        var ly = (py - cy * CHUNK_WORLD_SIZE) / step;
-        var lz = (pz - cz * CHUNK_WORLD_SIZE) / step;
-        var ix = Math.max(0, Math.min(G - 1, Math.floor(lx)));
-        var iy = Math.max(0, Math.min(G - 1, Math.floor(ly)));
-        var iz = Math.max(0, Math.min(G - 1, Math.floor(lz)));
-        var d = c.density[(iz * G + iy) * G + ix];
-        if (d < 0) {
-            // Inside solid — return this point
-            return [px, py, pz];
-        }
-    }
-    return null;
+    var hit = scene.raycast(cam.pos, camForward(), 80);
+    return hit ? hit.point : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -416,12 +473,16 @@ function render() {
     if (keys['control']) cam.pos[1] -= moveSpeed;
 
     // --- Camera matrix ---
+    // Far plane has to comfortably reach the outermost LOD shell so distant
+    // mountains aren't clipped. LOD_RING_RADIUS * lodChunkSize(LOD_LEVELS - 1)
+    // is the world distance to the last shell's outer edge.
     var W = canvas.clientWidth, H = canvas.clientHeight;
+    var maxViewDist = LOD_RING_RADIUS * lodChunkSize(LOD_LEVELS - 1);
     scene.setCamera({
         fov: 70,
         aspect: W / H,
         near: 0.5,
-        far: 600,
+        far: maxViewDist * 1.5,
         position: cam.pos,
         target: v3add(cam.pos, fwd)
     });
@@ -431,8 +492,10 @@ function render() {
     if (deformCooldown <= 0 && (mouseDown.left || mouseDown.right)) {
         var hit = deformRayTarget();
         if (hit) {
-            var strength = mouseDown.left ? 6.0 : -6.0;  // dig or place
-            deformAt(hit[0], hit[1], hit[2], 4.0, strength);
+            // Left = dig (push toward air, density positive)
+            // Right = place (push toward solid, density negative)
+            var strength = mouseDown.left ? 18.0 : -18.0;
+            deformAt(hit[0], hit[1], hit[2], 6.0, strength);
             deformCooldown = 0.08;  // ~12 deforms per second
         }
     }
@@ -446,16 +509,20 @@ function render() {
 
     // --- HUD ---
     var loaded = 0, pending = 0, loading = 0;
+    var perLod = new Array(LOD_LEVELS);
+    for (var L = 0; L < LOD_LEVELS; L++) perLod[L] = 0;
     for (var id in chunks) {
-        var s = chunks[id].state;
-        if (s === 'loaded') loaded++;
+        var ch = chunks[id];
+        var s = ch.state;
+        if (s === 'loaded') { loaded++; perLod[ch.lod]++; }
         else if (s === 'pending') pending++;
         else if (s === 'loading') loading++;
     }
     info.textContent =
         'Pos: ' + cam.pos[0].toFixed(0) + ',' + cam.pos[1].toFixed(0) + ',' + cam.pos[2].toFixed(0) +
         '\nChunks: ' + loaded + ' loaded, ' + loading + ' loading, ' + pending + ' pending' +
-        '\nWorkers: ' + workersReady + '/' + WORKER_COUNT;
+        '\nLOD: ' + perLod.join('/') +
+        '\nView: ' + Math.round(maxViewDist) + 'm  Workers: ' + workersReady + '/' + WORKER_COUNT;
 
     requestAnimationFrame(render);
 }
