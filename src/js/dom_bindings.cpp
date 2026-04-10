@@ -3,6 +3,8 @@
 #include "js/custom_elements.h"
 #include "dom/document.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include "dom_polyfills.js.h"
 #include "observer_polyfills.js.h"
 
@@ -29,7 +31,6 @@ JSClassID js_htmlcollection_class_id = 0;
 // Per-context state
 // ===========================================================================
 
-std::unordered_map<JSRuntime*, bool> s_classes_registered;
 std::unordered_map<JSContext*, bro::dom::Document*> s_ctx_documents;
 std::unordered_map<JSContext*, DomBindings::GetContextFactory> s_ctx_factories;
 std::unordered_map<JSContext*, void*> s_ctx_sdl_windows;
@@ -100,10 +101,8 @@ JSValue DomBindings::wrapDocument(JSContext* ctx, void* document_ptr)
 {
     if (!document_ptr) return JS_NULL;
 
-    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_document_class_id));
-    if (JS_IsException(obj)) return obj;
-    JS_SetOpaque(obj, document_ptr);
-    return obj;
+    return qjsbind::wrap_unowned<bro::dom::Document>(ctx,
+        static_cast<bro::dom::Document*>(document_ptr));
 }
 
 // ===========================================================================
@@ -114,36 +113,13 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
 {
     JSRuntime* rt = JS_GetRuntime(ctx);
 
-    // ----- Allocate class IDs (idempotent — no-op if already non-zero) -----
-    JS_NewClassID(rt, &js_document_class_id);
-    JS_NewClassID(rt, &js_element_class_id);
-    JS_NewClassID(rt, &js_node_class_id);
-    JS_NewClassID(rt, &js_event_class_id);
-    JS_NewClassID(rt, &js_nodelist_class_id);
-    JS_NewClassID(rt, &js_cssstyle_class_id);
-    JS_NewClassID(rt, &js_computed_class_id);
-    JS_NewClassID(rt, &js_tokenlist_class_id);
-    JS_NewClassID(rt, &js_shadowroot_class_id);
-    JS_NewClassID(rt, &js_htmlcollection_class_id);
-
-    // ----- Register classes on the runtime (once per runtime) -----
-    if (!s_classes_registered[rt]) {
-        registerDocumentClasses(rt);
-        registerElementClasses(rt);
-        registerNodeClasses(rt);
-        registerEventClasses(rt);
-        registerStyleClasses(rt);
-        registerShadowRootClasses(rt);
-        s_classes_registered[rt] = true;
-    }
-
-    // ----- Create prototypes (per-context via JS_SetClassProto) -----
-    installDocumentPrototypes(ctx);
-    installElementPrototypes(ctx);
-    installNodePrototypes(ctx);
-    installEventPrototypes(ctx);
-    installStylePrototypes(ctx);
-    installShadowRootPrototypes(ctx);
+    // ----- qjsbind-managed classes (handle IDs, class registration, prototypes) -----
+    installEventBindings(ctx);
+    installNodeBindings(ctx);
+    installDocumentBindings(ctx);
+    installShadowRootBindings(ctx);
+    installElementBindings(ctx);
+    installStyleBindings(ctx);
 
     // ----- Stash Document pointer for orphan management (per-context) -----
     s_ctx_documents[ctx] = static_cast<bro::dom::Document*>(document_ptr);
@@ -189,7 +165,6 @@ void DomBindings::cleanup(JSContext* ctx) {
 
 void DomBindings::cleanupRuntime(JSRuntime* rt) {
     cleanupCanvasContextCache(rt);
-    s_classes_registered.erase(rt);
 }
 
 void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {

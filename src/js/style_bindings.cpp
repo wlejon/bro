@@ -1,5 +1,7 @@
 #include "js/dom_bindings_internal.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <algorithm>
 #include <sstream>
 
@@ -76,12 +78,7 @@ static JSClassExoticMethods js_cssstyle_exotic = {
     js_cssstyle_set_property,
 };
 
-static JSClassDef js_cssstyle_class = {
-    "CSSStyleDeclaration",
-    nullptr,
-    nullptr, nullptr,
-    &js_cssstyle_exotic,
-};
+// JSClassDef replaced by qjsbind::Class in installStyleBindings()
 
 static JSValue js_cssstyle_get_cssText(JSContext* ctx, JSValueConst this_val)
 {
@@ -198,11 +195,7 @@ static JSClassExoticMethods js_computed_exotic = {
     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
 };
 
-static JSClassDef js_computed_class = {
-    "CSSStyleDeclaration",
-    nullptr, nullptr, nullptr,
-    &js_computed_exotic,
-};
+// JSClassDef replaced by qjsbind::Class in installStyleBindings()
 
 static JSValue js_computed_getPropertyValue(JSContext* ctx,
                                             JSValueConst this_val,
@@ -255,10 +248,7 @@ JSValue js_window_getComputedStyle(JSContext* ctx,
 // DOMTokenList wrapper (classList)
 // ===========================================================================
 
-static JSClassDef js_tokenlist_class = {
-    "DOMTokenList",
-    nullptr, nullptr, nullptr, nullptr
-};
+// JSClassDef replaced by qjsbind::Class in installStyleBindings()
 
 static inline bro::dom::Element* getTokenListElement(JSValueConst val) {
     return static_cast<bro::dom::Element*>(
@@ -427,30 +417,40 @@ JSValue wrapTokenList(JSContext* ctx, bro::dom::Element* elem) {
 }
 
 // ===========================================================================
+// Tag types for qjsbind (multiple classes wrap the same C++ pointer type)
+// ===========================================================================
+
+struct CSSStyleTag {};  // tag for CSSStyleDeclaration (wraps StyleProxy*)
+struct ComputedTag {};  // tag for ComputedStyleDeclaration (wraps Element*)
+struct TokenListTag {}; // tag for DOMTokenList (wraps Element*)
+
+// ===========================================================================
 // Registration
 // ===========================================================================
 
-void registerStyleClasses(JSRuntime* rt) {
-    JS_NewClass(rt, js_cssstyle_class_id, &js_cssstyle_class);
-    JS_NewClass(rt, js_computed_class_id, &js_computed_class);
-    JS_NewClass(rt, js_tokenlist_class_id, &js_tokenlist_class);
-}
+void installStyleBindings(JSContext* ctx) {
+    // CSSStyleDeclaration — exotic methods for dynamic camelCase property access
+    qjsbind::Class<CSSStyleTag>(ctx, "CSSStyleDeclaration",
+                                 qjsbind::NoGlobal | qjsbind::NoDestructor,
+                                 nullptr, &js_cssstyle_exotic)
+        .function_list(js_cssstyle_proto_funcs,
+                       sizeof(js_cssstyle_proto_funcs) / sizeof(js_cssstyle_proto_funcs[0]));
+    js_cssstyle_class_id = qjsbind::class_id<CSSStyleTag>();
 
-void installStylePrototypes(JSContext* ctx) {
-    JSValue css_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, css_proto, js_cssstyle_proto_funcs,
-                               sizeof(js_cssstyle_proto_funcs) / sizeof(js_cssstyle_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_cssstyle_class_id, css_proto);
+    // ComputedStyleDeclaration — exotic methods for computed style lookup
+    qjsbind::Class<ComputedTag>(ctx, "CSSStyleDeclaration",
+                                 qjsbind::NoGlobal | qjsbind::NoDestructor,
+                                 nullptr, &js_computed_exotic)
+        .function_list(js_computed_proto_funcs,
+                       sizeof(js_computed_proto_funcs) / sizeof(js_computed_proto_funcs[0]));
+    js_computed_class_id = qjsbind::class_id<ComputedTag>();
 
-    JSValue comp_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, comp_proto, js_computed_proto_funcs,
-                               sizeof(js_computed_proto_funcs) / sizeof(js_computed_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_computed_class_id, comp_proto);
-
-    JSValue tl_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, tl_proto, js_tokenlist_proto_funcs,
-                               sizeof(js_tokenlist_proto_funcs) / sizeof(js_tokenlist_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_tokenlist_class_id, tl_proto);
+    // DOMTokenList
+    qjsbind::Class<TokenListTag>(ctx, "DOMTokenList",
+                                  qjsbind::NoGlobal | qjsbind::NoDestructor)
+        .function_list(js_tokenlist_proto_funcs,
+                       sizeof(js_tokenlist_proto_funcs) / sizeof(js_tokenlist_proto_funcs[0]));
+    js_tokenlist_class_id = qjsbind::class_id<TokenListTag>();
 }
 
 } // namespace bro::js

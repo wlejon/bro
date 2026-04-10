@@ -2,6 +2,8 @@
 #include "js/custom_elements.h"
 #include "js/image_bindings.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <SDL3/SDL_mouse.h>
 
 namespace bro::js {
@@ -10,10 +12,7 @@ namespace bro::js {
 // Document wrapper
 // ===========================================================================
 
-static JSClassDef js_document_class = {
-    "Document",
-    nullptr, nullptr, nullptr, nullptr
-};
+using Doc = bro::dom::Document;
 
 bro::dom::Document* getDocument(JSValueConst val)
 {
@@ -21,52 +20,9 @@ bro::dom::Document* getDocument(JSValueConst val)
         JS_GetOpaque(val, js_document_class_id));
 }
 
-static JSValue js_document_get_title(JSContext* ctx, JSValueConst this_val)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc) return JS_UNDEFINED;
-    return JS_NewString(ctx, doc->title().c_str());
-}
-
-static JSValue js_document_set_title(JSContext* ctx, JSValueConst this_val,
-                                     JSValueConst val)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc) return JS_UNDEFINED;
-    doc->setTitle(jsToStdString(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_document_get_body(JSContext* ctx, JSValueConst this_val)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc) return JS_NULL;
-    auto* body = doc->body();
-    if (!body) return JS_NULL;
-    return DomBindings::wrapElement(ctx, body);
-}
-
-static JSValue js_document_get_documentElement(JSContext* ctx,
-                                               JSValueConst this_val)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc) return JS_NULL;
-    auto* root = doc->documentElement();
-    if (!root) return JS_NULL;
-    return DomBindings::wrapElement(ctx, root);
-}
-
-static JSValue js_document_getElementById(JSContext* ctx,
-                                          JSValueConst this_val,
-                                          int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc || argc < 1) return JS_NULL;
-    std::string id = jsToStdString(ctx, argv[0]);
-    auto* el = doc->getElementById(id);
-    if (!el) return JS_NULL;
-    return DomBindings::wrapElement(ctx, el);
-}
+// ---------------------------------------------------------------------------
+// Complex methods requiring raw signatures
+// ---------------------------------------------------------------------------
 
 static JSValue js_document_createElement(JSContext* ctx,
                                          JSValueConst this_val,
@@ -100,104 +56,6 @@ static JSValue js_document_createElementNS(JSContext* ctx,
     return DomBindings::wrapElement(ctx, el);
 }
 
-static JSValue js_document_createTextNode(JSContext* ctx,
-                                          JSValueConst this_val,
-                                          int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc || argc < 1) return JS_NULL;
-    std::string text = jsToStdString(ctx, argv[0]);
-    auto* textNode = doc->createTextNode(text);
-    if (!textNode) return JS_NULL;
-    return wrapAnyNode(ctx, textNode);
-}
-
-static JSValue js_document_createDocumentFragment(JSContext* ctx,
-                                                  JSValueConst this_val,
-                                                  int /*argc*/, JSValueConst* /*argv*/)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc) return JS_NULL;
-    auto* el = doc->createElement("#DOCUMENT-FRAGMENT");
-    if (!el) return JS_NULL;
-    return DomBindings::wrapElement(ctx, el);
-}
-
-static JSValue js_document_querySelector(JSContext* ctx,
-                                         JSValueConst this_val,
-                                         int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc || argc < 1) return JS_NULL;
-    std::string sel = jsToStdString(ctx, argv[0]);
-    auto results = doc->querySelectorAll(sel);
-    if (results.empty()) return JS_NULL;
-    return DomBindings::wrapElement(ctx, results[0]);
-}
-
-static JSValue js_document_querySelectorAll(JSContext* ctx,
-                                            JSValueConst this_val,
-                                            int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc || argc < 1) return JS_NewArray(ctx);
-    std::string sel = jsToStdString(ctx, argv[0]);
-    auto results = doc->querySelectorAll(sel);
-    return wrapNodeList(ctx, results);
-}
-
-static JSValue js_document_get_nodeType(JSContext* ctx, JSValueConst /*this_val*/)
-{
-    return JS_NewInt32(ctx, 9);
-}
-
-static JSValue js_document_get_nodeName(JSContext* ctx, JSValueConst /*this_val*/)
-{
-    return JS_NewString(ctx, "#document");
-}
-
-static JSValue js_document_createComment(JSContext* ctx,
-                                         JSValueConst this_val,
-                                         int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc) return JS_NULL;
-    std::string text = (argc >= 1) ? jsToStdString(ctx, argv[0]) : "";
-    auto* comment = doc->createComment(text);
-    if (!comment) return JS_NULL;
-    return wrapAnyNode(ctx, comment);
-}
-
-static JSValue js_document_getElementsByTagName(JSContext* ctx,
-                                                JSValueConst this_val,
-                                                int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc || argc < 1) return JS_NewArray(ctx);
-    std::string tag = jsToStdString(ctx, argv[0]);
-    return wrapLiveHTMLCollection(ctx, nullptr, doc, tag);
-}
-
-static JSValue js_document_getElementsByClassName(JSContext* ctx,
-                                                  JSValueConst this_val,
-                                                  int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc || argc < 1) return JS_NewArray(ctx);
-    std::string cls = jsToStdString(ctx, argv[0]);
-    return wrapLiveHTMLCollection(ctx, nullptr, doc, "." + cls);
-}
-
-static JSValue js_document_getElementsByName(JSContext* ctx,
-                                             JSValueConst this_val,
-                                             int argc, JSValueConst* argv)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc || argc < 1) return wrapNodeList(ctx, {});
-    std::string name = jsToStdString(ctx, argv[0]);
-    return wrapLiveHTMLCollection(ctx, nullptr, doc, "[name=\"" + name + "\"]");
-}
-
 static JSValue js_document_importNode(JSContext* ctx,
                                       JSValueConst this_val,
                                       int argc, JSValueConst* argv)
@@ -206,7 +64,6 @@ static JSValue js_document_importNode(JSContext* ctx,
     if (!doc || argc < 1) return JS_NULL;
 
     // importNode clones the node into this document
-    // We delegate to cloneNode since we have a single document model
     auto* node = unwrapNode(ctx, argv[0]);
     if (!node) return JS_NULL;
 
@@ -222,13 +79,9 @@ static JSValue js_document_importNode(JSContext* ctx,
         }
 
         if (deep) {
-            // Recursively clone children via JS cloneNode
             JSValue srcWrapper = DomBindings::wrapElement(ctx, srcEl);
-            JSValue trueVal = JS_TRUE;
-            // We need a deep clone - build it manually
             for (auto* child : srcEl->childNodes()) {
                 if (child->nodeType() == bro::dom::NodeType::Element) {
-                    // Recursive import
                     JSValue childWrapper = DomBindings::wrapElement(ctx, child);
                     JSValue deepArgs[2] = { childWrapper, JS_TRUE };
                     JSValue imported = js_document_importNode(ctx, this_val, 2, deepArgs);
@@ -269,8 +122,6 @@ static JSValue js_document_adoptNode(JSContext* ctx,
                                      JSValueConst /*this_val*/,
                                      int argc, JSValueConst* argv)
 {
-    // adoptNode removes the node from its parent and returns it
-    // In our single-document model, this is equivalent to removing from parent
     if (argc < 1) return JS_NULL;
     auto* node = unwrapNode(ctx, argv[0]);
     if (!node) return JS_NULL;
@@ -279,24 +130,7 @@ static JSValue js_document_adoptNode(JSContext* ctx,
     return JS_DupValue(ctx, argv[0]);
 }
 
-static JSValue js_document_get_defaultView(JSContext* ctx, JSValueConst /*this_val*/)
-{
-    return JS_GetGlobalObject(ctx);
-}
-
-static JSValue js_document_get_activeElement(JSContext* ctx, JSValueConst this_val)
-{
-    auto* doc = getDocument(this_val);
-    if (!doc) return JS_NULL;
-    auto* el = doc->activeElement();
-    if (!el) return JS_NULL;
-    return DomBindings::wrapElement(ctx, el);
-}
-
-// ---------------------------------------------------------------------------
 // Event listener delegation — forward to documentElement
-// ---------------------------------------------------------------------------
-
 static JSValue js_document_addEventListener(JSContext* ctx,
                                             JSValueConst this_val,
                                             int argc, JSValueConst* argv)
@@ -331,7 +165,6 @@ static JSValue js_document_removeEventListener(JSContext* ctx,
     return JS_UNDEFINED;
 }
 
-// document.exitPointerLock()
 static JSValue js_document_exitPointerLock(JSContext* ctx, JSValueConst /*this_val*/,
                                             int /*argc*/, JSValueConst* /*argv*/) {
     auto it = s_ctx_sdl_windows.find(ctx);
@@ -341,47 +174,76 @@ static JSValue js_document_exitPointerLock(JSContext* ctx, JSValueConst /*this_v
     return JS_UNDEFINED;
 }
 
-static const JSCFunctionListEntry js_document_proto_funcs[] = {
-    // Properties
-    JS_CGETSET_DEF("title",           js_document_get_title,           js_document_set_title),
-    JS_CGETSET_DEF("body",            js_document_get_body,            nullptr),
-    JS_CGETSET_DEF("documentElement", js_document_get_documentElement, nullptr),
-    JS_CGETSET_DEF("nodeType",        js_document_get_nodeType,        nullptr),
-    JS_CGETSET_DEF("nodeName",        js_document_get_nodeName,        nullptr),
-    JS_CGETSET_DEF("defaultView",     js_document_get_defaultView,     nullptr),
-    JS_CGETSET_DEF("activeElement",  js_document_get_activeElement,   nullptr),
-    // Methods
-    JS_CFUNC_DEF("getElementById",          1, js_document_getElementById),
-    JS_CFUNC_DEF("createElement",           1, js_document_createElement),
-    JS_CFUNC_DEF("createElementNS",         2, js_document_createElementNS),
-    JS_CFUNC_DEF("createTextNode",          1, js_document_createTextNode),
-    JS_CFUNC_DEF("createComment",           1, js_document_createComment),
-    JS_CFUNC_DEF("createDocumentFragment",  0, js_document_createDocumentFragment),
-    JS_CFUNC_DEF("querySelector",           1, js_document_querySelector),
-    JS_CFUNC_DEF("querySelectorAll",        1, js_document_querySelectorAll),
-    JS_CFUNC_DEF("getElementsByTagName",    1, js_document_getElementsByTagName),
-    JS_CFUNC_DEF("getElementsByClassName",  1, js_document_getElementsByClassName),
-    JS_CFUNC_DEF("getElementsByName",       1, js_document_getElementsByName),
-    JS_CFUNC_DEF("importNode",              2, js_document_importNode),
-    JS_CFUNC_DEF("adoptNode",               1, js_document_adoptNode),
-    JS_CFUNC_DEF("addEventListener",         2, js_document_addEventListener),
-    JS_CFUNC_DEF("removeEventListener",      2, js_document_removeEventListener),
-    JS_CFUNC_DEF("exitPointerLock",          0, js_document_exitPointerLock),
-};
-
 // ===========================================================================
 // Registration
 // ===========================================================================
 
-void registerDocumentClasses(JSRuntime* rt) {
-    JS_NewClass(rt, js_document_class_id, &js_document_class);
-}
+void installDocumentBindings(JSContext* ctx) {
+    qjsbind::Class<Doc>(ctx, "Document", qjsbind::NoGlobal | qjsbind::NoDestructor)
+        // Properties
+        .prop("title",
+            [](Doc* d) -> std::string { return d->title(); },
+            [](Doc* d, std::string val) { d->setTitle(val); })
+        .get("body", [](Doc* d, JSContext* cx) -> JSValue {
+            auto* body = d->body();
+            return body ? DomBindings::wrapElement(cx, body) : JS_NULL;
+        })
+        .get("documentElement", [](Doc* d, JSContext* cx) -> JSValue {
+            auto* root = d->documentElement();
+            return root ? DomBindings::wrapElement(cx, root) : JS_NULL;
+        })
+        .get("nodeType", [](Doc*) -> int { return 9; })
+        .get("nodeName", [](Doc*) -> std::string { return "#document"; })
+        .get("defaultView", [](Doc*, JSContext* cx) -> JSValue {
+            return JS_GetGlobalObject(cx);
+        })
+        .get("activeElement", [](Doc* d, JSContext* cx) -> JSValue {
+            auto* el = d->activeElement();
+            return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
+        })
+        // Simple methods with auto conversion
+        .method("getElementById", [](Doc* d, JSContext* cx, std::string id) -> JSValue {
+            auto* el = d->getElementById(id);
+            return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
+        })
+        .method("createTextNode", [](Doc* d, JSContext* cx, std::string text) -> JSValue {
+            auto* tn = d->createTextNode(text);
+            return tn ? wrapAnyNode(cx, tn) : JS_NULL;
+        })
+        .method("createComment", [](Doc* d, JSContext* cx, std::string text) -> JSValue {
+            auto* c = d->createComment(text);
+            return c ? wrapAnyNode(cx, c) : JS_NULL;
+        })
+        .method("createDocumentFragment", [](Doc* d, JSContext* cx) -> JSValue {
+            auto* el = d->createElement("#DOCUMENT-FRAGMENT");
+            return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
+        })
+        .method("querySelector", [](Doc* d, JSContext* cx, std::string sel) -> JSValue {
+            auto results = d->querySelectorAll(sel);
+            return results.empty() ? JS_NULL : DomBindings::wrapElement(cx, results[0]);
+        })
+        .method("querySelectorAll", [](Doc* d, JSContext* cx, std::string sel) -> JSValue {
+            return wrapNodeList(cx, d->querySelectorAll(sel));
+        })
+        .method("getElementsByTagName", [](Doc* d, JSContext* cx, std::string tag) -> JSValue {
+            return wrapLiveHTMLCollection(cx, nullptr, d, tag);
+        })
+        .method("getElementsByClassName", [](Doc* d, JSContext* cx, std::string cls) -> JSValue {
+            return wrapLiveHTMLCollection(cx, nullptr, d, "." + cls);
+        })
+        .method("getElementsByName", [](Doc* d, JSContext* cx, std::string name) -> JSValue {
+            return wrapLiveHTMLCollection(cx, nullptr, d, "[name=\"" + name + "\"]");
+        })
+        // Complex methods — raw signatures
+        .method_raw("createElement", js_document_createElement, 1)
+        .method_raw("createElementNS", js_document_createElementNS, 2)
+        .method_raw("importNode", js_document_importNode, 2)
+        .method_raw("adoptNode", js_document_adoptNode, 1)
+        .method_raw("addEventListener", js_document_addEventListener, 2)
+        .method_raw("removeEventListener", js_document_removeEventListener, 2)
+        .method_raw("exitPointerLock", js_document_exitPointerLock, 0);
 
-void installDocumentPrototypes(JSContext* ctx) {
-    JSValue doc_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, doc_proto, js_document_proto_funcs,
-                               sizeof(js_document_proto_funcs) / sizeof(js_document_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_document_class_id, doc_proto);
+    js_document_class_id = qjsbind::class_id<Doc>();
 }
 
 } // namespace bro::js

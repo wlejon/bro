@@ -1,6 +1,8 @@
 #include "js/dom_bindings_internal.h"
 #include "util/log.h"
 
+#include <qjsbind/qjsbind.h>
+
 namespace bro::js {
 
 // ===========================================================================
@@ -11,32 +13,10 @@ struct NodeListData {
     std::vector<bro::dom::Element*> elements;
 };
 
-static void js_nodelist_finalizer(JSRuntime* /*rt*/, JSValue val)
-{
-    auto* data = static_cast<NodeListData*>(
-        JS_GetOpaque(val, js_nodelist_class_id));
-    delete data;
-}
-
-static JSClassDef js_nodelist_class = {
-    "NodeList",
-    js_nodelist_finalizer,
-    nullptr, nullptr, nullptr
-};
-
-static JSValue js_nodelist_length(JSContext* ctx, JSValueConst this_val)
-{
-    auto* data = static_cast<NodeListData*>(
-        JS_GetOpaque(this_val, js_nodelist_class_id));
-    if (!data) return JS_UNDEFINED;
-    return JS_NewInt32(ctx, static_cast<int32_t>(data->elements.size()));
-}
-
 static JSValue js_nodelist_item(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv)
 {
-    auto* data = static_cast<NodeListData*>(
-        JS_GetOpaque(this_val, js_nodelist_class_id));
+    auto* data = qjsbind::unwrap<NodeListData>(ctx, this_val);
     if (!data || argc < 1) return JS_UNDEFINED;
 
     int32_t idx = 0;
@@ -47,19 +27,12 @@ static JSValue js_nodelist_item(JSContext* ctx, JSValueConst this_val,
     return DomBindings::wrapElement(ctx, data->elements[static_cast<size_t>(idx)]);
 }
 
-static const JSCFunctionListEntry js_nodelist_proto_funcs[] = {
-    JS_CGETSET_DEF("length", js_nodelist_length, nullptr),
-    JS_CFUNC_DEF("item", 1, js_nodelist_item),
-};
-
 JSValue wrapNodeList(JSContext* ctx,
                      const std::vector<bro::dom::Element*>& elems)
 {
-    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_nodelist_class_id));
-    if (JS_IsException(obj)) return obj;
-
     auto* data = new NodeListData{elems};
-    JS_SetOpaque(obj, data);
+    JSValue obj = qjsbind::wrap<NodeListData>(ctx, data);
+    if (JS_IsException(obj)) return obj;
 
     // Also set indexed properties so nodeList[0] works.
     for (size_t i = 0; i < elems.size(); ++i) {
@@ -74,24 +47,10 @@ JSValue wrapNodeList(JSContext* ctx,
 // Live HTMLCollection — re-queries DOM on every access
 // ===========================================================================
 
-// Stored as opaque data: the root element and CSS selector for re-querying.
 struct HTMLCollectionData {
     bro::dom::Element* root;     // element to search from (or nullptr for document)
     bro::dom::Document* doc;     // document to search from (when root is nullptr)
     std::string selector;
-};
-
-static void js_htmlcollection_finalizer(JSRuntime* /*rt*/, JSValue val)
-{
-    auto* data = static_cast<HTMLCollectionData*>(
-        JS_GetOpaque(val, js_htmlcollection_class_id));
-    delete data;
-}
-
-static JSClassDef js_htmlcollection_class = {
-    "HTMLCollection",
-    js_htmlcollection_finalizer,
-    nullptr, nullptr, nullptr
 };
 
 static std::vector<bro::dom::Element*> htmlcollection_query(HTMLCollectionData* data)
@@ -106,8 +65,7 @@ static std::vector<bro::dom::Element*> htmlcollection_query(HTMLCollectionData* 
 
 static JSValue js_htmlcollection_length(JSContext* ctx, JSValueConst this_val)
 {
-    auto* data = static_cast<HTMLCollectionData*>(
-        JS_GetOpaque(this_val, js_htmlcollection_class_id));
+    auto* data = qjsbind::unwrap<HTMLCollectionData>(ctx, this_val);
     if (!data) return JS_NewInt32(ctx, 0);
     auto results = htmlcollection_query(data);
     return JS_NewInt32(ctx, static_cast<int32_t>(results.size()));
@@ -116,8 +74,7 @@ static JSValue js_htmlcollection_length(JSContext* ctx, JSValueConst this_val)
 static JSValue js_htmlcollection_item(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv)
 {
-    auto* data = static_cast<HTMLCollectionData*>(
-        JS_GetOpaque(this_val, js_htmlcollection_class_id));
+    auto* data = qjsbind::unwrap<HTMLCollectionData>(ctx, this_val);
     if (!data || argc < 1) return JS_NULL;
     int32_t idx = 0;
     JS_ToInt32(ctx, &idx, argv[0]);
@@ -131,8 +88,7 @@ static JSValue js_htmlcollection_item(JSContext* ctx, JSValueConst this_val,
 static JSValue js_htmlcollection_namedItem(JSContext* ctx, JSValueConst this_val,
                                            int argc, JSValueConst* argv)
 {
-    auto* data = static_cast<HTMLCollectionData*>(
-        JS_GetOpaque(this_val, js_htmlcollection_class_id));
+    auto* data = qjsbind::unwrap<HTMLCollectionData>(ctx, this_val);
     if (!data || argc < 1) return JS_NULL;
     std::string name = jsToStdString(ctx, argv[0]);
     auto results = htmlcollection_query(data);
@@ -147,11 +103,9 @@ JSValue wrapLiveHTMLCollection(JSContext* ctx, bro::dom::Element* root,
                                bro::dom::Document* doc,
                                const std::string& selector)
 {
-    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_htmlcollection_class_id));
-    if (JS_IsException(obj)) return obj;
-
     auto* data = new HTMLCollectionData{root, doc, selector};
-    JS_SetOpaque(obj, data);
+    JSValue obj = qjsbind::wrap<HTMLCollectionData>(ctx, data);
+    if (JS_IsException(obj)) return obj;
 
     // Override length as a live getter
     JSValue getLen = JS_NewCFunction2(ctx, [](JSContext* cx,
@@ -629,20 +583,24 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 // Registration
 // ===========================================================================
 
-void registerNodeClasses(JSRuntime* rt) {
-    JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class);
-    JS_NewClass(rt, js_node_class_id, &js_node_class);
-    JS_NewClass(rt, js_htmlcollection_class_id, &js_htmlcollection_class);
-}
+void installNodeBindings(JSContext* ctx) {
+    JSRuntime* rt = JS_GetRuntime(ctx);
 
-void installNodePrototypes(JSContext* ctx) {
-    JSValue nl_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, nl_proto, js_nodelist_proto_funcs,
-                               sizeof(js_nodelist_proto_funcs) / sizeof(js_nodelist_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_nodelist_class_id, nl_proto);
-    // HTMLCollection gets an empty prototype — methods set per-instance
-    JSValue hc_proto = JS_NewObject(ctx);
-    JS_SetClassProto(ctx, js_htmlcollection_class_id, hc_proto);
+    // NodeList via qjsbind
+    qjsbind::Class<NodeListData>(ctx, "NodeList", qjsbind::NoGlobal)
+        .get("length", [](NodeListData* d) -> int {
+            return static_cast<int>(d->elements.size());
+        })
+        .method_raw("item", js_nodelist_item, 1);
+    js_nodelist_class_id = qjsbind::class_id<NodeListData>();
+
+    // HTMLCollection via qjsbind (methods set per-instance by wrapLiveHTMLCollection)
+    qjsbind::Class<HTMLCollectionData>(ctx, "HTMLCollection", qjsbind::NoGlobal);
+    js_htmlcollection_class_id = qjsbind::class_id<HTMLCollectionData>();
+
+    // Node class — manual (per-instance pattern doesn't fit qjsbind)
+    JS_NewClassID(rt, &js_node_class_id);
+    JS_NewClass(rt, js_node_class_id, &js_node_class);
     // Node class has no prototype functions — properties are set per-instance
 }
 

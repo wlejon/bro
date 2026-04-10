@@ -17,6 +17,8 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include <qjsbind/qjsbind.h>
+
 namespace bro::js {
 
 // ===========================================================================
@@ -38,7 +40,6 @@ extern JSClassID js_htmlcollection_class_id;
 // Per-context / per-runtime state (defined in dom_bindings.cpp)
 // ===========================================================================
 
-extern std::unordered_map<JSRuntime*, bool> s_classes_registered;
 extern std::unordered_map<JSContext*, bro::dom::Document*> s_ctx_documents;
 extern std::unordered_map<JSContext*, DomBindings::GetContextFactory> s_ctx_factories;
 
@@ -140,26 +141,20 @@ void notifyMutationObservers(JSContext* ctx, JSValueConst target,
                              JSValueConst removedNodes); // JS array or JS_NULL
 
 // ===========================================================================
-// Per-module class registration & prototype installation
-// Called by DomBindings::install() in dom_bindings.cpp
+// Per-module binding installation (called by DomBindings::install())
+// qjsbind-managed classes — handle IDs, class registration, and prototypes
 // ===========================================================================
 
-void registerNodeClasses(JSRuntime* rt);
-void installNodePrototypes(JSContext* ctx);
+void installEventBindings(JSContext* ctx);
+void installNodeBindings(JSContext* ctx);
+void installDocumentBindings(JSContext* ctx);
+void installShadowRootBindings(JSContext* ctx);
 
-void registerEventClasses(JSRuntime* rt);
-void installEventPrototypes(JSContext* ctx);
+// ===========================================================================
+// qjsbind-managed classes — element and style
+// ===========================================================================
 
-void registerStyleClasses(JSRuntime* rt);
-void installStylePrototypes(JSContext* ctx);
-
-void registerElementClasses(JSRuntime* rt);
-void installElementPrototypes(JSContext* ctx);
-
-void registerShadowRootClasses(JSRuntime* rt);
-void installShadowRootPrototypes(JSContext* ctx);
-
-void registerDocumentClasses(JSRuntime* rt);
-void installDocumentPrototypes(JSContext* ctx);
+void installElementBindings(JSContext* ctx);
+void installStyleBindings(JSContext* ctx);
 
 } // namespace bro::js

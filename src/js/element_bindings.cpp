@@ -6,6 +6,7 @@
 #include "dom/shadow_root.h"
 #include "layout/el_select.h"
 
+#include <qjsbind/qjsbind.h>
 #include <SDL3/SDL_mouse.h>
 
 #include "dataset_proxy.js.h"
@@ -59,10 +60,7 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
     }
 }
 
-static JSClassDef js_element_class = {
-    "Element",
-    js_element_finalizer, nullptr, nullptr, nullptr
-};
+// JSClassDef replaced by qjsbind::Class in installElementBindings()
 
 bro::dom::Element* getElement(JSValueConst val)
 {
@@ -2254,15 +2252,14 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
 // Registration
 // ===========================================================================
 
-void registerElementClasses(JSRuntime* rt) {
-    JS_NewClass(rt, js_element_class_id, &js_element_class);
-}
+void installElementBindings(JSContext* ctx) {
+    using Elem = bro::dom::Element;
+    qjsbind::Class<Elem>(ctx, "Element", qjsbind::NoGlobal,
+                          js_element_finalizer)
+        .function_list(js_element_proto_funcs,
+                       sizeof(js_element_proto_funcs) / sizeof(js_element_proto_funcs[0]));
 
-void installElementPrototypes(JSContext* ctx) {
-    JSValue elem_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, elem_proto, js_element_proto_funcs,
-                               sizeof(js_element_proto_funcs) / sizeof(js_element_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_element_class_id, elem_proto);
+    js_element_class_id = qjsbind::class_id<Elem>();
 }
 
 } // namespace bro::js

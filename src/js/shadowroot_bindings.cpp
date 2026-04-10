@@ -1,22 +1,15 @@
 #include "js/dom_bindings_internal.h"
 #include "js/custom_elements.h"
 
+#include <qjsbind/qjsbind.h>
+
 namespace bro::js {
 
 // ===========================================================================
 // ShadowRoot wrapper
 // ===========================================================================
 
-static JSClassDef js_shadowroot_class = {
-    "ShadowRoot",
-    nullptr,
-    nullptr, nullptr, nullptr
-};
-
-static bro::dom::ShadowRoot* getShadowRoot(JSValueConst val) {
-    return static_cast<bro::dom::ShadowRoot*>(
-        JS_GetOpaque(val, js_shadowroot_class_id));
-}
+using SR = bro::dom::ShadowRoot;
 
 JSValue wrapShadowRoot(JSContext* ctx, bro::dom::ShadowRoot* sr) {
     if (!sr) return JS_NULL;
@@ -36,38 +29,21 @@ JSValue wrapShadowRoot(JSContext* ctx, bro::dom::ShadowRoot* sr) {
     }
     JS_FreeValue(ctx, existing);
 
-    JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_shadowroot_class_id));
+    JSValue obj = qjsbind::wrap_unowned<SR>(ctx, sr);
     if (JS_IsException(obj)) {
         JS_FreeValue(ctx, elemMap);
         JS_FreeValue(ctx, global);
         return obj;
     }
-    JS_SetOpaque(obj, sr);
     JS_SetPropertyStr(ctx, elemMap, key.c_str(), JS_DupValue(ctx, obj));
     JS_FreeValue(ctx, elemMap);
     JS_FreeValue(ctx, global);
     return obj;
 }
 
-// ---- Properties -----------------------------------------------------------
-
-static JSValue js_shadowroot_get_host(JSContext* ctx, JSValueConst this_val) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr || !sr->host()) return JS_NULL;
-    return DomBindings::wrapElement(ctx, sr->host());
-}
-
-static JSValue js_shadowroot_get_mode(JSContext* ctx, JSValueConst this_val) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr) return JS_UNDEFINED;
-    return JS_NewString(ctx, sr->modeString().c_str());
-}
-
-static JSValue js_shadowroot_get_innerHTML(JSContext* ctx, JSValueConst this_val) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr) return JS_UNDEFINED;
-    return JS_NewString(ctx, sr->innerHTML().c_str());
-}
+// ---------------------------------------------------------------------------
+// Complex methods requiring raw signatures
+// ---------------------------------------------------------------------------
 
 static void upgradeShadowChildren(JSContext* ctx, bro::dom::Node* node) {
     if (!node) return;
@@ -92,8 +68,8 @@ static void upgradeShadowChildren(JSContext* ctx, bro::dom::Node* node) {
 }
 
 static JSValue js_shadowroot_set_innerHTML(JSContext* ctx, JSValueConst this_val,
-                                           JSValueConst val) {
-    auto* sr = getShadowRoot(this_val);
+                                           int /*argc*/, JSValueConst* argv) {
+    auto* sr = qjsbind::unwrap<SR>(ctx, this_val);
     if (!sr) return JS_UNDEFINED;
 
     // Capture old children for MutationObserver
@@ -103,7 +79,7 @@ static JSValue js_shadowroot_set_innerHTML(JSContext* ctx, JSValueConst this_val
         JS_SetPropertyUint32(ctx, removedArr, rmIdx++, wrapAnyNode(ctx, child));
     }
 
-    std::string html = jsToStdString(ctx, val);
+    std::string html = jsToStdString(ctx, argv[0]);
     auto* doc = getDocumentForCtx(ctx);
     sr->setInnerHTML(html, doc);
 
@@ -129,98 +105,9 @@ static JSValue js_shadowroot_set_innerHTML(JSContext* ctx, JSValueConst this_val
     return JS_UNDEFINED;
 }
 
-static JSValue js_shadowroot_get_nodeType(JSContext* ctx, JSValueConst /*this_val*/) {
-    return JS_NewInt32(ctx, 11);
-}
-
-static JSValue js_shadowroot_get_nodeName(JSContext* ctx, JSValueConst /*this_val*/) {
-    return JS_NewString(ctx, "#document-fragment");
-}
-
-// ---- Tree navigation ------------------------------------------------------
-
-static JSValue js_shadowroot_get_childNodes(JSContext* ctx, JSValueConst this_val) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr) return JS_NewArray(ctx);
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t idx = 0;
-    for (auto* child : sr->childNodes()) {
-        JSValue w;
-        if (child->nodeType() == bro::dom::NodeType::Element)
-            w = DomBindings::wrapElement(ctx, child);
-        else
-            w = wrapAnyNode(ctx, child);
-        JS_SetPropertyUint32(ctx, arr, idx++, w);
-    }
-    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, static_cast<int32_t>(idx)));
-    return arr;
-}
-
-static JSValue js_shadowroot_get_children(JSContext* ctx, JSValueConst this_val) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr) return JS_NewArray(ctx);
-    std::vector<bro::dom::Element*> elems;
-    for (auto* child : sr->childNodes()) {
-        if (child->nodeType() == bro::dom::NodeType::Element)
-            elems.push_back(static_cast<bro::dom::Element*>(child));
-    }
-    return wrapNodeList(ctx, elems);
-}
-
-static JSValue js_shadowroot_get_firstChild(JSContext* ctx, JSValueConst this_val) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr || sr->childNodes().empty()) return JS_NULL;
-    auto* child = sr->childNodes().front();
-    if (child->nodeType() == bro::dom::NodeType::Element)
-        return DomBindings::wrapElement(ctx, child);
-    return wrapAnyNode(ctx, child);
-}
-
-static JSValue js_shadowroot_get_lastChild(JSContext* ctx, JSValueConst this_val) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr || sr->childNodes().empty()) return JS_NULL;
-    auto* child = sr->childNodes().back();
-    if (child->nodeType() == bro::dom::NodeType::Element)
-        return DomBindings::wrapElement(ctx, child);
-    return wrapAnyNode(ctx, child);
-}
-
-// ---- Query methods --------------------------------------------------------
-
-static JSValue js_shadowroot_getElementById(JSContext* ctx, JSValueConst this_val,
-                                             int argc, JSValueConst* argv) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr || argc < 1) return JS_NULL;
-    std::string id = jsToStdString(ctx, argv[0]);
-    auto* el = sr->getElementById(id);
-    if (!el) return JS_NULL;
-    return DomBindings::wrapElement(ctx, el);
-}
-
-static JSValue js_shadowroot_querySelector(JSContext* ctx, JSValueConst this_val,
-                                            int argc, JSValueConst* argv) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr || argc < 1) return JS_NULL;
-    std::string sel = jsToStdString(ctx, argv[0]);
-    auto* el = sr->querySelector(sel);
-    if (!el) return JS_NULL;
-    return DomBindings::wrapElement(ctx, el);
-}
-
-static JSValue js_shadowroot_querySelectorAll(JSContext* ctx, JSValueConst this_val,
-                                               int argc, JSValueConst* argv) {
-    auto* sr = getShadowRoot(this_val);
-    if (!sr || argc < 1) return wrapNodeList(ctx, {});
-    std::string sel = jsToStdString(ctx, argv[0]);
-    auto results = sr->querySelectorAll(sel);
-    return wrapNodeList(ctx, results);
-}
-
-// ---- DOM manipulation -----------------------------------------------------
-
 static JSValue js_shadowroot_appendChild(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
-    auto* sr = getShadowRoot(this_val);
+    auto* sr = qjsbind::unwrap<SR>(ctx, this_val);
     if (!sr || argc < 1) return JS_UNDEFINED;
     auto* child = unwrapNode(ctx, argv[0]);
     if (!child) return JS_UNDEFINED;
@@ -286,7 +173,7 @@ static JSValue js_shadowroot_appendChild(JSContext* ctx, JSValueConst this_val,
 
 static JSValue js_shadowroot_removeChild(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
-    auto* sr = getShadowRoot(this_val);
+    auto* sr = qjsbind::unwrap<SR>(ctx, this_val);
     if (!sr || argc < 1) return JS_UNDEFINED;
     auto* child = unwrapNode(ctx, argv[0]);
     if (child) {
@@ -310,7 +197,7 @@ static JSValue js_shadowroot_removeChild(JSContext* ctx, JSValueConst this_val,
 
 static JSValue js_shadowroot_insertBefore(JSContext* ctx, JSValueConst this_val,
                                            int argc, JSValueConst* argv) {
-    auto* sr = getShadowRoot(this_val);
+    auto* sr = qjsbind::unwrap<SR>(ctx, this_val);
     if (!sr || argc < 2) return JS_UNDEFINED;
     auto* newChild = unwrapNode(ctx, argv[0]);
     bro::dom::Node* refChild = nullptr;
@@ -342,40 +229,91 @@ static JSValue js_shadowroot_insertBefore(JSContext* ctx, JSValueConst this_val,
 }
 
 // ===========================================================================
-// ShadowRoot prototype function list
-// ===========================================================================
-
-static const JSCFunctionListEntry js_shadowroot_proto_funcs[] = {
-    JS_CGETSET_DEF("host",       js_shadowroot_get_host,      nullptr),
-    JS_CGETSET_DEF("mode",       js_shadowroot_get_mode,      nullptr),
-    JS_CGETSET_DEF("innerHTML",  js_shadowroot_get_innerHTML, js_shadowroot_set_innerHTML),
-    JS_CGETSET_DEF("nodeType",   js_shadowroot_get_nodeType,  nullptr),
-    JS_CGETSET_DEF("nodeName",   js_shadowroot_get_nodeName,  nullptr),
-    JS_CGETSET_DEF("childNodes", js_shadowroot_get_childNodes, nullptr),
-    JS_CGETSET_DEF("children",   js_shadowroot_get_children,  nullptr),
-    JS_CGETSET_DEF("firstChild", js_shadowroot_get_firstChild, nullptr),
-    JS_CGETSET_DEF("lastChild",  js_shadowroot_get_lastChild, nullptr),
-    JS_CFUNC_DEF("getElementById",  1, js_shadowroot_getElementById),
-    JS_CFUNC_DEF("querySelector",   1, js_shadowroot_querySelector),
-    JS_CFUNC_DEF("querySelectorAll",1, js_shadowroot_querySelectorAll),
-    JS_CFUNC_DEF("appendChild",     1, js_shadowroot_appendChild),
-    JS_CFUNC_DEF("removeChild",     1, js_shadowroot_removeChild),
-    JS_CFUNC_DEF("insertBefore",    2, js_shadowroot_insertBefore),
-};
-
-// ===========================================================================
 // Registration
 // ===========================================================================
 
-void registerShadowRootClasses(JSRuntime* rt) {
-    JS_NewClass(rt, js_shadowroot_class_id, &js_shadowroot_class);
-}
+void installShadowRootBindings(JSContext* ctx) {
+    // innerHTML needs a raw setter — register as get() then override below
+    qjsbind::Class<SR>(ctx, "ShadowRoot", qjsbind::NoGlobal | qjsbind::NoDestructor)
+        // Properties
+        .get("host", [](SR* sr, JSContext* cx) -> JSValue {
+            if (!sr->host()) return JS_NULL;
+            return DomBindings::wrapElement(cx, sr->host());
+        })
+        .get("mode", [](SR* sr) -> std::string { return sr->modeString(); })
+        .get("innerHTML", [](SR* sr) -> std::string { return sr->innerHTML(); })
+        .get("nodeType", [](SR*) -> int { return 11; })
+        .get("nodeName", [](SR*) -> std::string { return "#document-fragment"; })
+        .get("childNodes", [](SR* sr, JSContext* cx) -> JSValue {
+            JSValue arr = JS_NewArray(cx);
+            uint32_t idx = 0;
+            for (auto* child : sr->childNodes()) {
+                JSValue w;
+                if (child->nodeType() == bro::dom::NodeType::Element)
+                    w = DomBindings::wrapElement(cx, child);
+                else
+                    w = wrapAnyNode(cx, child);
+                JS_SetPropertyUint32(cx, arr, idx++, w);
+            }
+            JS_SetPropertyStr(cx, arr, "length", JS_NewInt32(cx, static_cast<int32_t>(idx)));
+            return arr;
+        })
+        .get("children", [](SR* sr, JSContext* cx) -> JSValue {
+            std::vector<bro::dom::Element*> elems;
+            for (auto* child : sr->childNodes()) {
+                if (child->nodeType() == bro::dom::NodeType::Element)
+                    elems.push_back(static_cast<bro::dom::Element*>(child));
+            }
+            return wrapNodeList(cx, elems);
+        })
+        .get("firstChild", [](SR* sr, JSContext* cx) -> JSValue {
+            if (sr->childNodes().empty()) return JS_NULL;
+            auto* child = sr->childNodes().front();
+            if (child->nodeType() == bro::dom::NodeType::Element)
+                return DomBindings::wrapElement(cx, child);
+            return wrapAnyNode(cx, child);
+        })
+        .get("lastChild", [](SR* sr, JSContext* cx) -> JSValue {
+            if (sr->childNodes().empty()) return JS_NULL;
+            auto* child = sr->childNodes().back();
+            if (child->nodeType() == bro::dom::NodeType::Element)
+                return DomBindings::wrapElement(cx, child);
+            return wrapAnyNode(cx, child);
+        })
+        // Query methods
+        .method("getElementById", [](SR* sr, JSContext* cx, std::string id) -> JSValue {
+            auto* el = sr->getElementById(id);
+            return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
+        })
+        .method("querySelector", [](SR* sr, JSContext* cx, std::string sel) -> JSValue {
+            auto* el = sr->querySelector(sel);
+            return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
+        })
+        .method("querySelectorAll", [](SR* sr, JSContext* cx, std::string sel) -> JSValue {
+            return wrapNodeList(cx, sr->querySelectorAll(sel));
+        })
+        // DOM manipulation — raw signatures
+        .method_raw("appendChild", js_shadowroot_appendChild, 1)
+        .method_raw("removeChild", js_shadowroot_removeChild, 1)
+        .method_raw("insertBefore", js_shadowroot_insertBefore, 2);
 
-void installShadowRootPrototypes(JSContext* ctx) {
-    JSValue sr_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, sr_proto, js_shadowroot_proto_funcs,
-                               sizeof(js_shadowroot_proto_funcs) / sizeof(js_shadowroot_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_shadowroot_class_id, sr_proto);
+    // Override innerHTML with getter+setter (raw setter for MutationObserver support)
+    JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<SR>());
+    {
+        JSAtom atom = JS_NewAtom(ctx, "innerHTML");
+        JS_DefinePropertyGetSet(ctx, proto, atom,
+            JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                auto* sr = qjsbind::unwrap<SR>(cx, this_val);
+                if (!sr) return JS_UNDEFINED;
+                return JS_NewString(cx, sr->innerHTML().c_str());
+            }, "innerHTML", 0),
+            JS_NewCFunction(ctx, js_shadowroot_set_innerHTML, "innerHTML", 1),
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    }
+    JS_FreeValue(ctx, proto);
+
+    js_shadowroot_class_id = qjsbind::class_id<SR>();
 }
 
 } // namespace bro::js

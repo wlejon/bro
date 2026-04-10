@@ -4,6 +4,7 @@
 #include "webgl/webgl_objects.h"
 
 #include <quickjs.h>
+#include <qjsbind/qjsbind.h>
 #include <glad/gl.h>
 
 namespace bro::js {
@@ -11,7 +12,7 @@ namespace bro::js {
 using namespace webgl2;
 
 // ===========================================================================
-// Class IDs
+// Class IDs (synced from qjsbind after registration)
 // ===========================================================================
 
 namespace webgl2 {
@@ -27,31 +28,6 @@ namespace webgl2 {
 }
 
 // ===========================================================================
-// Class definitions (no custom finalizers — C++ context owns GL object lifetime)
-// ===========================================================================
-
-static JSClassDef js_webgl2_ctx_class = { "WebGL2RenderingContext", nullptr, nullptr, nullptr, nullptr };
-
-// WebGL object classes need finalizers to free the small C++ wrapper structs
-#define DEFINE_WEBGL_CLASS(Name, CppType, classId)                              \
-    static void js_##Name##_finalizer(JSRuntime*, JSValue val) {                \
-        delete static_cast<CppType*>(JS_GetOpaque(val, classId));               \
-    }                                                                           \
-    static JSClassDef js_##Name##_class = { #Name, js_##Name##_finalizer,       \
-                                            nullptr, nullptr, nullptr };
-
-DEFINE_WEBGL_CLASS(WebGLBuffer, bro::webgl::WebGLBuffer, js_webgl_buffer_class_id)
-DEFINE_WEBGL_CLASS(WebGLTexture, bro::webgl::WebGLTexture, js_webgl_texture_class_id)
-DEFINE_WEBGL_CLASS(WebGLProgram, bro::webgl::WebGLProgram, js_webgl_program_class_id)
-DEFINE_WEBGL_CLASS(WebGLShader, bro::webgl::WebGLShader, js_webgl_shader_class_id)
-DEFINE_WEBGL_CLASS(WebGLFramebuffer, bro::webgl::WebGLFramebuffer, js_webgl_framebuffer_class_id)
-DEFINE_WEBGL_CLASS(WebGLRenderbuffer, bro::webgl::WebGLRenderbuffer, js_webgl_renderbuffer_class_id)
-DEFINE_WEBGL_CLASS(WebGLVertexArrayObject, bro::webgl::WebGLVertexArrayObject, js_webgl_vao_class_id)
-DEFINE_WEBGL_CLASS(WebGLUniformLocation, bro::webgl::WebGLUniformLocation, js_webgl_uniform_loc_class_id)
-
-#undef DEFINE_WEBGL_CLASS
-
-// ===========================================================================
 // Object wrapping implementations
 // ===========================================================================
 
@@ -59,11 +35,7 @@ namespace webgl2 {
 
 #define IMPL_WRAP(Name, CppType, classId)                                       \
     JSValue wrap##Name(JSContext* ctx, CppType obj) {                            \
-        JSValue jsObj = JS_NewObjectClass(ctx, (int)classId);                    \
-        if (JS_IsException(jsObj)) return jsObj;                                 \
-        auto* p = new CppType(obj);                                             \
-        JS_SetOpaque(jsObj, p);                                                 \
-        return jsObj;                                                           \
+        return qjsbind::wrap<CppType>(ctx, new CppType(obj));                   \
     }
 
 IMPL_WRAP(Buffer, bro::webgl::WebGLBuffer, js_webgl_buffer_class_id)
@@ -157,7 +129,10 @@ static const JSCFunctionListEntry webgl2_constants[] = {
     JS_PROP_INT32_DEF("DYNAMIC_READ", 0x88E9, 0),
     JS_PROP_INT32_DEF("DYNAMIC_COPY", 0x88EA, 0),
 
-    // Depth / stencil
+    // Depth/stencil
+    JS_PROP_INT32_DEF("DEPTH_TEST", 0x0B71, 0),
+    JS_PROP_INT32_DEF("STENCIL_TEST", 0x0B90, 0),
+    JS_PROP_INT32_DEF("SCISSOR_TEST", 0x0C11, 0),
     JS_PROP_INT32_DEF("NEVER", 0x0200, 0),
     JS_PROP_INT32_DEF("LESS", 0x0201, 0),
     JS_PROP_INT32_DEF("EQUAL", 0x0202, 0),
@@ -174,80 +149,58 @@ static const JSCFunctionListEntry webgl2_constants[] = {
     JS_PROP_INT32_DEF("INCR_WRAP", 0x8507, 0),
     JS_PROP_INT32_DEF("DECR_WRAP", 0x8508, 0),
 
-    // Enable caps
+    // Enable/disable caps
     JS_PROP_INT32_DEF("BLEND", 0x0BE2, 0),
-    JS_PROP_INT32_DEF("DEPTH_TEST", 0x0B71, 0),
     JS_PROP_INT32_DEF("DITHER", 0x0BD0, 0),
+    JS_PROP_INT32_DEF("CULL_FACE", 0x0B44, 0),
     JS_PROP_INT32_DEF("POLYGON_OFFSET_FILL", 0x8037, 0),
     JS_PROP_INT32_DEF("SAMPLE_ALPHA_TO_COVERAGE", 0x809E, 0),
     JS_PROP_INT32_DEF("SAMPLE_COVERAGE", 0x80A0, 0),
-    JS_PROP_INT32_DEF("SCISSOR_TEST", 0x0C11, 0),
-    JS_PROP_INT32_DEF("STENCIL_TEST", 0x0B90, 0),
-    JS_PROP_INT32_DEF("CULL_FACE", 0x0B44, 0),
     JS_PROP_INT32_DEF("RASTERIZER_DISCARD", 0x8C89, 0),
 
-    // Cull face
+    // Face culling
     JS_PROP_INT32_DEF("FRONT", 0x0404, 0),
     JS_PROP_INT32_DEF("BACK", 0x0405, 0),
     JS_PROP_INT32_DEF("FRONT_AND_BACK", 0x0408, 0),
     JS_PROP_INT32_DEF("CW", 0x0900, 0),
     JS_PROP_INT32_DEF("CCW", 0x0901, 0),
 
-    // Texture targets
+    // Textures
     JS_PROP_INT32_DEF("TEXTURE_2D", 0x0DE1, 0),
-    JS_PROP_INT32_DEF("TEXTURE_3D", 0x806F, 0),
     JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP", 0x8513, 0),
+    JS_PROP_INT32_DEF("TEXTURE_3D", 0x806F, 0),
     JS_PROP_INT32_DEF("TEXTURE_2D_ARRAY", 0x8C1A, 0),
-    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_POSITIVE_X", 0x8515, 0),
-    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_NEGATIVE_X", 0x8516, 0),
-    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_POSITIVE_Y", 0x8517, 0),
-    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_NEGATIVE_Y", 0x8518, 0),
-    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_POSITIVE_Z", 0x8519, 0),
-    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_NEGATIVE_Z", 0x851A, 0),
-
-    // Texture params
+    JS_PROP_INT32_DEF("TEXTURE0", 0x84C0, 0),
     JS_PROP_INT32_DEF("TEXTURE_MAG_FILTER", 0x2800, 0),
     JS_PROP_INT32_DEF("TEXTURE_MIN_FILTER", 0x2801, 0),
     JS_PROP_INT32_DEF("TEXTURE_WRAP_S", 0x2802, 0),
     JS_PROP_INT32_DEF("TEXTURE_WRAP_T", 0x2803, 0),
     JS_PROP_INT32_DEF("TEXTURE_WRAP_R", 0x8072, 0),
-    JS_PROP_INT32_DEF("TEXTURE_MIN_LOD", 0x813A, 0),
-    JS_PROP_INT32_DEF("TEXTURE_MAX_LOD", 0x813B, 0),
-    JS_PROP_INT32_DEF("TEXTURE_BASE_LEVEL", 0x813C, 0),
-    JS_PROP_INT32_DEF("TEXTURE_MAX_LEVEL", 0x813D, 0),
     JS_PROP_INT32_DEF("TEXTURE_COMPARE_MODE", 0x884C, 0),
     JS_PROP_INT32_DEF("TEXTURE_COMPARE_FUNC", 0x884D, 0),
-
-    // Texture filter values
+    JS_PROP_INT32_DEF("TEXTURE_MAX_LEVEL", 0x813D, 0),
+    JS_PROP_INT32_DEF("TEXTURE_BASE_LEVEL", 0x813C, 0),
+    JS_PROP_INT32_DEF("TEXTURE_MIN_LOD", 0x813A, 0),
+    JS_PROP_INT32_DEF("TEXTURE_MAX_LOD", 0x813B, 0),
+    JS_PROP_INT32_DEF("TEXTURE_MAX_ANISOTROPY_EXT", 0x84FE, 0),
+    JS_PROP_INT32_DEF("COMPARE_REF_TO_TEXTURE", 0x884E, 0),
     JS_PROP_INT32_DEF("NEAREST", 0x2600, 0),
     JS_PROP_INT32_DEF("LINEAR", 0x2601, 0),
     JS_PROP_INT32_DEF("NEAREST_MIPMAP_NEAREST", 0x2700, 0),
     JS_PROP_INT32_DEF("LINEAR_MIPMAP_NEAREST", 0x2701, 0),
     JS_PROP_INT32_DEF("NEAREST_MIPMAP_LINEAR", 0x2702, 0),
     JS_PROP_INT32_DEF("LINEAR_MIPMAP_LINEAR", 0x2703, 0),
-
-    // Texture wrap values
     JS_PROP_INT32_DEF("REPEAT", 0x2901, 0),
     JS_PROP_INT32_DEF("CLAMP_TO_EDGE", 0x812F, 0),
     JS_PROP_INT32_DEF("MIRRORED_REPEAT", 0x8370, 0),
 
-    // Texture units
-    JS_PROP_INT32_DEF("TEXTURE0", 0x84C0, 0),
-    JS_PROP_INT32_DEF("TEXTURE1", 0x84C1, 0),
-    JS_PROP_INT32_DEF("TEXTURE2", 0x84C2, 0),
-    JS_PROP_INT32_DEF("TEXTURE3", 0x84C3, 0),
-    JS_PROP_INT32_DEF("TEXTURE4", 0x84C4, 0),
-    JS_PROP_INT32_DEF("TEXTURE5", 0x84C5, 0),
-    JS_PROP_INT32_DEF("TEXTURE6", 0x84C6, 0),
-    JS_PROP_INT32_DEF("TEXTURE7", 0x84C7, 0),
-    JS_PROP_INT32_DEF("TEXTURE8", 0x84C8, 0),
-    JS_PROP_INT32_DEF("TEXTURE9", 0x84C9, 0),
-    JS_PROP_INT32_DEF("TEXTURE10", 0x84CA, 0),
-    JS_PROP_INT32_DEF("TEXTURE11", 0x84CB, 0),
-    JS_PROP_INT32_DEF("TEXTURE12", 0x84CC, 0),
-    JS_PROP_INT32_DEF("TEXTURE13", 0x84CD, 0),
-    JS_PROP_INT32_DEF("TEXTURE14", 0x84CE, 0),
-    JS_PROP_INT32_DEF("TEXTURE15", 0x84CF, 0),
+    // Texture cube map faces
+    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_POSITIVE_X", 0x8515, 0),
+    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_NEGATIVE_X", 0x8516, 0),
+    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_POSITIVE_Y", 0x8517, 0),
+    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_NEGATIVE_Y", 0x8518, 0),
+    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_POSITIVE_Z", 0x8519, 0),
+    JS_PROP_INT32_DEF("TEXTURE_CUBE_MAP_NEGATIVE_Z", 0x851A, 0),
 
     // Pixel formats
     JS_PROP_INT32_DEF("ALPHA", 0x1906, 0),
@@ -257,26 +210,33 @@ static const JSCFunctionListEntry webgl2_constants[] = {
     JS_PROP_INT32_DEF("LUMINANCE_ALPHA", 0x190A, 0),
     JS_PROP_INT32_DEF("DEPTH_COMPONENT", 0x1902, 0),
     JS_PROP_INT32_DEF("DEPTH_STENCIL", 0x84F9, 0),
+    JS_PROP_INT32_DEF("R8", 0x8229, 0),
+    JS_PROP_INT32_DEF("R16F", 0x822D, 0),
+    JS_PROP_INT32_DEF("R32F", 0x822E, 0),
+    JS_PROP_INT32_DEF("RG8", 0x822B, 0),
+    JS_PROP_INT32_DEF("RG16F", 0x822F, 0),
+    JS_PROP_INT32_DEF("RG32F", 0x8230, 0),
+    JS_PROP_INT32_DEF("RGB8", 0x8051, 0),
+    JS_PROP_INT32_DEF("RGBA8", 0x8058, 0),
+    JS_PROP_INT32_DEF("SRGB8", 0x8C41, 0),
+    JS_PROP_INT32_DEF("SRGB8_ALPHA8", 0x8C43, 0),
+    JS_PROP_INT32_DEF("RGB16F", 0x881B, 0),
+    JS_PROP_INT32_DEF("RGB32F", 0x8815, 0),
+    JS_PROP_INT32_DEF("RGBA16F", 0x881A, 0),
+    JS_PROP_INT32_DEF("RGBA32F", 0x8814, 0),
+    JS_PROP_INT32_DEF("R11F_G11F_B10F", 0x8C3A, 0),
+    JS_PROP_INT32_DEF("RGB9_E5", 0x8C3D, 0),
+    JS_PROP_INT32_DEF("DEPTH_COMPONENT16", 0x81A5, 0),
+    JS_PROP_INT32_DEF("DEPTH_COMPONENT24", 0x81A6, 0),
+    JS_PROP_INT32_DEF("DEPTH_COMPONENT32F", 0x8CAC, 0),
+    JS_PROP_INT32_DEF("DEPTH24_STENCIL8", 0x88F0, 0),
+    JS_PROP_INT32_DEF("DEPTH32F_STENCIL8", 0x8CAD, 0),
     JS_PROP_INT32_DEF("RED", 0x1903, 0),
     JS_PROP_INT32_DEF("RG", 0x8227, 0),
     JS_PROP_INT32_DEF("RED_INTEGER", 0x8D94, 0),
     JS_PROP_INT32_DEF("RG_INTEGER", 0x8228, 0),
     JS_PROP_INT32_DEF("RGB_INTEGER", 0x8D98, 0),
     JS_PROP_INT32_DEF("RGBA_INTEGER", 0x8D99, 0),
-
-    // Sized internal formats
-    JS_PROP_INT32_DEF("R8", 0x8229, 0),
-    JS_PROP_INT32_DEF("RG8", 0x822B, 0),
-    JS_PROP_INT32_DEF("RGB8", 0x8051, 0),
-    JS_PROP_INT32_DEF("RGBA8", 0x8058, 0),
-    JS_PROP_INT32_DEF("R16F", 0x822D, 0),
-    JS_PROP_INT32_DEF("RG16F", 0x822F, 0),
-    JS_PROP_INT32_DEF("RGB16F", 0x881B, 0),
-    JS_PROP_INT32_DEF("RGBA16F", 0x881A, 0),
-    JS_PROP_INT32_DEF("R32F", 0x822E, 0),
-    JS_PROP_INT32_DEF("RG32F", 0x8230, 0),
-    JS_PROP_INT32_DEF("RGB32F", 0x8815, 0),
-    JS_PROP_INT32_DEF("RGBA32F", 0x8814, 0),
     JS_PROP_INT32_DEF("R8I", 0x8231, 0),
     JS_PROP_INT32_DEF("R8UI", 0x8232, 0),
     JS_PROP_INT32_DEF("R16I", 0x8233, 0),
@@ -295,108 +255,49 @@ static const JSCFunctionListEntry webgl2_constants[] = {
     JS_PROP_INT32_DEF("RGBA16UI", 0x8D76, 0),
     JS_PROP_INT32_DEF("RGBA32I", 0x8D82, 0),
     JS_PROP_INT32_DEF("RGBA32UI", 0x8D70, 0),
-    JS_PROP_INT32_DEF("DEPTH_COMPONENT16", 0x81A5, 0),
-    JS_PROP_INT32_DEF("DEPTH_COMPONENT24", 0x81A6, 0),
-    JS_PROP_INT32_DEF("DEPTH_COMPONENT32F", 0x8CAC, 0),
-    JS_PROP_INT32_DEF("DEPTH24_STENCIL8", 0x88F0, 0),
-    JS_PROP_INT32_DEF("DEPTH32F_STENCIL8", 0x8CAD, 0),
-    JS_PROP_INT32_DEF("SRGB8", 0x8C41, 0),
-    JS_PROP_INT32_DEF("SRGB8_ALPHA8", 0x8C43, 0),
-    JS_PROP_INT32_DEF("R11F_G11F_B10F", 0x8C3A, 0),
-    JS_PROP_INT32_DEF("RGB9_E5", 0x8C3D, 0),
     JS_PROP_INT32_DEF("RGB10_A2", 0x8059, 0),
     JS_PROP_INT32_DEF("RGB10_A2UI", 0x906F, 0),
-
-    // Unsigned int types
+    JS_PROP_INT32_DEF("UNSIGNED_INT_2_10_10_10_REV", 0x8368, 0),
     JS_PROP_INT32_DEF("UNSIGNED_SHORT_5_6_5", 0x8363, 0),
     JS_PROP_INT32_DEF("UNSIGNED_SHORT_4_4_4_4", 0x8033, 0),
     JS_PROP_INT32_DEF("UNSIGNED_SHORT_5_5_5_1", 0x8034, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_2_10_10_10_REV", 0x8368, 0),
     JS_PROP_INT32_DEF("UNSIGNED_INT_24_8", 0x84FA, 0),
     JS_PROP_INT32_DEF("FLOAT_32_UNSIGNED_INT_24_8_REV", 0x8DAD, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_5_9_9_9_REV", 0x8C3E, 0),
 
-    // Shader types
-    JS_PROP_INT32_DEF("FRAGMENT_SHADER", 0x8B30, 0),
+    // Shaders
     JS_PROP_INT32_DEF("VERTEX_SHADER", 0x8B31, 0),
+    JS_PROP_INT32_DEF("FRAGMENT_SHADER", 0x8B30, 0),
     JS_PROP_INT32_DEF("COMPILE_STATUS", 0x8B81, 0),
     JS_PROP_INT32_DEF("LINK_STATUS", 0x8B82, 0),
-    JS_PROP_INT32_DEF("VALIDATE_STATUS", 0x8B83, 0),
-    JS_PROP_INT32_DEF("DELETE_STATUS", 0x8B80, 0),
-    JS_PROP_INT32_DEF("SHADER_TYPE", 0x8B4F, 0),
     JS_PROP_INT32_DEF("ACTIVE_UNIFORMS", 0x8B86, 0),
     JS_PROP_INT32_DEF("ACTIVE_ATTRIBUTES", 0x8B89, 0),
-    JS_PROP_INT32_DEF("ACTIVE_UNIFORM_BLOCKS", 0x8A36, 0),
-    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_VARYINGS", 0x8C83, 0),
 
-    // Uniform types (for getActiveUniform)
-    JS_PROP_INT32_DEF("FLOAT_VEC2", 0x8B50, 0),
-    JS_PROP_INT32_DEF("FLOAT_VEC3", 0x8B51, 0),
-    JS_PROP_INT32_DEF("FLOAT_VEC4", 0x8B52, 0),
-    JS_PROP_INT32_DEF("INT_VEC2", 0x8B53, 0),
-    JS_PROP_INT32_DEF("INT_VEC3", 0x8B54, 0),
-    JS_PROP_INT32_DEF("INT_VEC4", 0x8B55, 0),
-    JS_PROP_INT32_DEF("BOOL", 0x8B56, 0),
-    JS_PROP_INT32_DEF("BOOL_VEC2", 0x8B57, 0),
-    JS_PROP_INT32_DEF("BOOL_VEC3", 0x8B58, 0),
-    JS_PROP_INT32_DEF("BOOL_VEC4", 0x8B59, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT2", 0x8B5A, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT3", 0x8B5B, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT4", 0x8B5C, 0),
-    JS_PROP_INT32_DEF("SAMPLER_2D", 0x8B5E, 0),
-    JS_PROP_INT32_DEF("SAMPLER_CUBE", 0x8B60, 0),
-    JS_PROP_INT32_DEF("SAMPLER_3D", 0x8B5F, 0),
-    JS_PROP_INT32_DEF("SAMPLER_2D_SHADOW", 0x8B62, 0),
-    JS_PROP_INT32_DEF("SAMPLER_2D_ARRAY", 0x8DC1, 0),
-    JS_PROP_INT32_DEF("SAMPLER_2D_ARRAY_SHADOW", 0x8DC4, 0),
-    JS_PROP_INT32_DEF("SAMPLER_CUBE_SHADOW", 0x8DC5, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_VEC2", 0x8DC6, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_VEC3", 0x8DC7, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_VEC4", 0x8DC8, 0),
-    JS_PROP_INT32_DEF("INT_SAMPLER_2D", 0x8DCA, 0),
-    JS_PROP_INT32_DEF("INT_SAMPLER_3D", 0x8DCB, 0),
-    JS_PROP_INT32_DEF("INT_SAMPLER_CUBE", 0x8DCC, 0),
-    JS_PROP_INT32_DEF("INT_SAMPLER_2D_ARRAY", 0x8DCF, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_SAMPLER_2D", 0x8DD2, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_SAMPLER_3D", 0x8DD3, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_SAMPLER_CUBE", 0x8DD4, 0),
-    JS_PROP_INT32_DEF("UNSIGNED_INT_SAMPLER_2D_ARRAY", 0x8DD7, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT2x3", 0x8B65, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT2x4", 0x8B66, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT3x2", 0x8B67, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT3x4", 0x8B68, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT4x2", 0x8B69, 0),
-    JS_PROP_INT32_DEF("FLOAT_MAT4x3", 0x8B6A, 0),
-
-    // Framebuffer
+    // Framebuffers
     JS_PROP_INT32_DEF("FRAMEBUFFER", 0x8D40, 0),
-    JS_PROP_INT32_DEF("READ_FRAMEBUFFER", 0x8CA8, 0),
-    JS_PROP_INT32_DEF("DRAW_FRAMEBUFFER", 0x8CA9, 0),
     JS_PROP_INT32_DEF("RENDERBUFFER", 0x8D41, 0),
     JS_PROP_INT32_DEF("COLOR_ATTACHMENT0", 0x8CE0, 0),
     JS_PROP_INT32_DEF("COLOR_ATTACHMENT1", 0x8CE1, 0),
     JS_PROP_INT32_DEF("COLOR_ATTACHMENT2", 0x8CE2, 0),
     JS_PROP_INT32_DEF("COLOR_ATTACHMENT3", 0x8CE3, 0),
-    JS_PROP_INT32_DEF("COLOR_ATTACHMENT4", 0x8CE4, 0),
-    JS_PROP_INT32_DEF("COLOR_ATTACHMENT5", 0x8CE5, 0),
-    JS_PROP_INT32_DEF("COLOR_ATTACHMENT6", 0x8CE6, 0),
-    JS_PROP_INT32_DEF("COLOR_ATTACHMENT7", 0x8CE7, 0),
     JS_PROP_INT32_DEF("DEPTH_ATTACHMENT", 0x8D00, 0),
     JS_PROP_INT32_DEF("STENCIL_ATTACHMENT", 0x8D20, 0),
     JS_PROP_INT32_DEF("DEPTH_STENCIL_ATTACHMENT", 0x821A, 0),
     JS_PROP_INT32_DEF("FRAMEBUFFER_COMPLETE", 0x8CD5, 0),
-    JS_PROP_INT32_DEF("NONE", 0, 0),
+    JS_PROP_INT32_DEF("READ_FRAMEBUFFER", 0x8CA8, 0),
+    JS_PROP_INT32_DEF("DRAW_FRAMEBUFFER", 0x8CA9, 0),
     JS_PROP_INT32_DEF("DRAW_BUFFER0", 0x8825, 0),
+    JS_PROP_INT32_DEF("NONE", 0, 0),
 
     // Pixel store
     JS_PROP_INT32_DEF("UNPACK_ALIGNMENT", 0x0CF5, 0),
     JS_PROP_INT32_DEF("PACK_ALIGNMENT", 0x0D05, 0),
     JS_PROP_INT32_DEF("UNPACK_FLIP_Y_WEBGL", 0x9240, 0),
     JS_PROP_INT32_DEF("UNPACK_PREMULTIPLY_ALPHA_WEBGL", 0x9241, 0),
+    JS_PROP_INT32_DEF("UNPACK_COLORSPACE_CONVERSION_WEBGL", 0x9243, 0),
     JS_PROP_INT32_DEF("UNPACK_ROW_LENGTH", 0x0CF2, 0),
-    JS_PROP_INT32_DEF("UNPACK_SKIP_ROWS", 0x0CF3, 0),
-    JS_PROP_INT32_DEF("UNPACK_SKIP_PIXELS", 0x0CF4, 0),
     JS_PROP_INT32_DEF("UNPACK_IMAGE_HEIGHT", 0x806E, 0),
+    JS_PROP_INT32_DEF("UNPACK_SKIP_PIXELS", 0x0CF4, 0),
+    JS_PROP_INT32_DEF("UNPACK_SKIP_ROWS", 0x0CF3, 0),
     JS_PROP_INT32_DEF("UNPACK_SKIP_IMAGES", 0x806D, 0),
 
     // getParameter
@@ -452,57 +353,54 @@ static const JSCFunctionListEntry webgl2_constants[] = {
 static const int webgl2_constants_count = sizeof(webgl2_constants) / sizeof(webgl2_constants[0]);
 
 // ===========================================================================
-// Prototype (held alive so we can look it up)
-// ===========================================================================
-
-static JSValue js_webgl2_proto = JS_UNDEFINED;
-
-// ===========================================================================
 // Install / wrap / cleanup
 // ===========================================================================
 
+// Tag type for WebGL2RenderingContext (borrowed pointer, no destructor)
+struct WebGL2CtxTag {};
+
 void WebGL2Bindings::install(JSContext* ctx) {
-    JSRuntime* rt = JS_GetRuntime(ctx);
+    // --- Register WebGL2 context class (no destructor — C++ context owns GL lifetime) ---
+    qjsbind::Class<WebGL2CtxTag>(ctx, "WebGL2RenderingContext",
+                                  qjsbind::NoGlobal | qjsbind::NoDestructor)
+        .function_list(webgl2_constants, webgl2_constants_count)
+        .function_list(webgl2_state_funcs, webgl2_state_funcs_count)
+        .function_list(webgl2_buffer_funcs, webgl2_buffer_funcs_count)
+        .function_list(webgl2_shader_funcs, webgl2_shader_funcs_count)
+        .function_list(webgl2_texture_funcs, webgl2_texture_funcs_count)
+        .function_list(webgl2_framebuffer_funcs, webgl2_framebuffer_funcs_count)
+        .function_list(webgl2_query_funcs, webgl2_query_funcs_count);
+    js_webgl2_ctx_class_id = qjsbind::class_id<WebGL2CtxTag>();
 
-    // Allocate class IDs
-    JS_NewClassID(rt, &js_webgl2_ctx_class_id);
-    JS_NewClassID(rt, &js_webgl_buffer_class_id);
-    JS_NewClassID(rt, &js_webgl_texture_class_id);
-    JS_NewClassID(rt, &js_webgl_program_class_id);
-    JS_NewClassID(rt, &js_webgl_shader_class_id);
-    JS_NewClassID(rt, &js_webgl_framebuffer_class_id);
-    JS_NewClassID(rt, &js_webgl_renderbuffer_class_id);
-    JS_NewClassID(rt, &js_webgl_vao_class_id);
-    JS_NewClassID(rt, &js_webgl_uniform_loc_class_id);
+    // --- Register WebGL object classes (default delete-ptr finalizer) ---
+    qjsbind::Class<bro::webgl::WebGLBuffer>(ctx, "WebGLBuffer", qjsbind::NoGlobal);
+    js_webgl_buffer_class_id = qjsbind::class_id<bro::webgl::WebGLBuffer>();
 
-    // Register classes
-    JS_NewClass(rt, js_webgl2_ctx_class_id, &js_webgl2_ctx_class);
-    JS_NewClass(rt, js_webgl_buffer_class_id, &js_WebGLBuffer_class);
-    JS_NewClass(rt, js_webgl_texture_class_id, &js_WebGLTexture_class);
-    JS_NewClass(rt, js_webgl_program_class_id, &js_WebGLProgram_class);
-    JS_NewClass(rt, js_webgl_shader_class_id, &js_WebGLShader_class);
-    JS_NewClass(rt, js_webgl_framebuffer_class_id, &js_WebGLFramebuffer_class);
-    JS_NewClass(rt, js_webgl_renderbuffer_class_id, &js_WebGLRenderbuffer_class);
-    JS_NewClass(rt, js_webgl_vao_class_id, &js_WebGLVertexArrayObject_class);
-    JS_NewClass(rt, js_webgl_uniform_loc_class_id, &js_WebGLUniformLocation_class);
+    qjsbind::Class<bro::webgl::WebGLTexture>(ctx, "WebGLTexture", qjsbind::NoGlobal);
+    js_webgl_texture_class_id = qjsbind::class_id<bro::webgl::WebGLTexture>();
 
-    // Build WebGL2RenderingContext prototype
-    js_webgl2_proto = JS_NewObject(ctx);
+    qjsbind::Class<bro::webgl::WebGLProgram>(ctx, "WebGLProgram", qjsbind::NoGlobal);
+    js_webgl_program_class_id = qjsbind::class_id<bro::webgl::WebGLProgram>();
 
-    // Register constants on prototype
-    JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_constants, webgl2_constants_count);
+    qjsbind::Class<bro::webgl::WebGLShader>(ctx, "WebGLShader", qjsbind::NoGlobal);
+    js_webgl_shader_class_id = qjsbind::class_id<bro::webgl::WebGLShader>();
 
-    // Register method categories
-    JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_state_funcs, webgl2_state_funcs_count);
-    JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_buffer_funcs, webgl2_buffer_funcs_count);
-    JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_shader_funcs, webgl2_shader_funcs_count);
-    JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_texture_funcs, webgl2_texture_funcs_count);
-    JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_framebuffer_funcs, webgl2_framebuffer_funcs_count);
-    JS_SetPropertyFunctionList(ctx, js_webgl2_proto, webgl2_query_funcs, webgl2_query_funcs_count);
+    qjsbind::Class<bro::webgl::WebGLFramebuffer>(ctx, "WebGLFramebuffer", qjsbind::NoGlobal);
+    js_webgl_framebuffer_class_id = qjsbind::class_id<bro::webgl::WebGLFramebuffer>();
 
-    // Create a constructor function for WebGL2RenderingContext
+    qjsbind::Class<bro::webgl::WebGLRenderbuffer>(ctx, "WebGLRenderbuffer", qjsbind::NoGlobal);
+    js_webgl_renderbuffer_class_id = qjsbind::class_id<bro::webgl::WebGLRenderbuffer>();
+
+    qjsbind::Class<bro::webgl::WebGLVertexArrayObject>(ctx, "WebGLVertexArrayObject", qjsbind::NoGlobal);
+    js_webgl_vao_class_id = qjsbind::class_id<bro::webgl::WebGLVertexArrayObject>();
+
+    qjsbind::Class<bro::webgl::WebGLUniformLocation>(ctx, "WebGLUniformLocation", qjsbind::NoGlobal);
+    js_webgl_uniform_loc_class_id = qjsbind::class_id<bro::webgl::WebGLUniformLocation>();
+
+    // --- three.js compatibility: expose WebGL2RenderingContext as a global constructor ---
     // three.js checks: typeof WebGL2RenderingContext !== "undefined"
     // three.js checks: ctx.constructor.name === "WebGL2RenderingContext"
+    JSValue proto = JS_GetClassProto(ctx, js_webgl2_ctx_class_id);
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue ctor = JS_NewObject(ctx);
     JSAtom nameAtom = JS_NewAtom(ctx, "name");
@@ -510,18 +408,15 @@ void WebGL2Bindings::install(JSContext* ctx) {
                            JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, nameAtom);
 
-    // Set constructor on prototype so instances get constructor.name
-    JS_SetPropertyStr(ctx, js_webgl2_proto, "constructor", JS_DupValue(ctx, ctor));
+    JS_SetPropertyStr(ctx, proto, "constructor", JS_DupValue(ctx, ctor));
     JS_SetPropertyStr(ctx, global, "WebGL2RenderingContext", ctor);
     JS_FreeValue(ctx, global);
-
-    JS_SetClassProto(ctx, js_webgl2_ctx_class_id, js_webgl2_proto);
+    JS_FreeValue(ctx, proto);
 }
 
 JSValue WebGL2Bindings::wrapContext(JSContext* ctx, webgl::WebGL2RenderingContext* glCtx) {
-    JSValue obj = JS_NewObjectClass(ctx, (int)js_webgl2_ctx_class_id);
+    JSValue obj = qjsbind::wrap_unowned<WebGL2CtxTag>(ctx, reinterpret_cast<WebGL2CtxTag*>(glCtx));
     if (JS_IsException(obj)) return obj;
-    JS_SetOpaque(obj, glCtx);
 
     // Three.js state.reset() accesses gl.canvas.width / gl.canvas.height
     JSValue canvas = JS_NewObject(ctx);

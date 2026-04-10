@@ -17,6 +17,8 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include <qjsbind/qjsbind.h>
+
 namespace bro::js {
 
 // ============================================================================
@@ -275,8 +277,6 @@ void Worker::threadFunc()
 // JS bindings — Worker constructor on main thread
 // ============================================================================
 
-static JSClassID js_worker_class_id = 0;
-
 struct WorkerOpaque {
     Worker* worker = nullptr;
 };
@@ -291,18 +291,14 @@ static std::unordered_map<JSContext*, WorkerBindingsState> s_workerState;
 
 static void js_worker_finalizer(JSRuntime* /*rt*/, JSValue val)
 {
-    auto* opaque = static_cast<WorkerOpaque*>(JS_GetOpaque(val, js_worker_class_id));
+    auto* opaque = static_cast<WorkerOpaque*>(
+        JS_GetOpaque(val, qjsbind::class_id<WorkerOpaque>()));
     if (opaque) {
         if (opaque->worker)
             opaque->worker->terminate();
         delete opaque;
     }
 }
-
-static JSClassDef js_worker_class = {
-    .class_name = "Worker",
-    .finalizer = js_worker_finalizer,
-};
 
 static JSValue js_worker_ctor(JSContext* ctx, JSValueConst new_target,
                               int argc, JSValueConst* argv)
@@ -328,7 +324,7 @@ static JSValue js_worker_ctor(JSContext* ctx, JSValueConst new_target,
 
     // Create JS object
     JSValue proto = JS_GetPropertyStr(ctx, new_target, "prototype");
-    JSValue obj = JS_NewObjectProtoClass(ctx, proto, js_worker_class_id);
+    JSValue obj = JS_NewObjectProtoClass(ctx, proto, qjsbind::class_id<WorkerOpaque>());
     JS_FreeValue(ctx, proto);
     if (JS_IsException(obj)) {
         delete worker;
@@ -351,7 +347,7 @@ static JSValue js_worker_ctor(JSContext* ctx, JSValueConst new_target,
 static JSValue js_worker_postMessage(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv)
 {
-    auto* opaque = static_cast<WorkerOpaque*>(JS_GetOpaque(this_val, js_worker_class_id));
+    auto* opaque = qjsbind::unwrap<WorkerOpaque>(ctx, this_val);
     if (!opaque || !opaque->worker || !opaque->worker->isAlive())
         return JS_ThrowTypeError(ctx, "Worker is not running");
 
@@ -366,38 +362,27 @@ static JSValue js_worker_postMessage(JSContext* ctx, JSValueConst this_val,
 static JSValue js_worker_terminate(JSContext* ctx, JSValueConst this_val,
                                    int /*argc*/, JSValueConst* /*argv*/)
 {
-    auto* opaque = static_cast<WorkerOpaque*>(JS_GetOpaque(this_val, js_worker_class_id));
+    auto* opaque = qjsbind::unwrap<WorkerOpaque>(ctx, this_val);
     if (opaque && opaque->worker)
         opaque->worker->terminate();
     return JS_UNDEFINED;
 }
 
-static const JSCFunctionListEntry js_worker_proto_funcs[] = {
-    JS_CFUNC_DEF("postMessage", 1, js_worker_postMessage),
-    JS_CFUNC_DEF("terminate", 0, js_worker_terminate),
-};
-
 void installWorkerBindings(JSContext* ctx, const std::string& appBasePath)
 {
-    JSRuntime* rt = JS_GetRuntime(ctx);
+    // Register class and prototype via qjsbind (NoGlobal — we set a custom constructor below)
+    qjsbind::Class<WorkerOpaque>(ctx, "Worker", qjsbind::NoGlobal,
+                                  js_worker_finalizer)
+        .method_raw("postMessage", js_worker_postMessage, 1)
+        .method_raw("terminate", js_worker_terminate, 0);
 
-    // Register class (once per runtime)
-    if (js_worker_class_id == 0)
-        JS_NewClassID(rt, &js_worker_class_id);
-    JS_NewClass(rt, js_worker_class_id, &js_worker_class);
-
-    // Prototype
-    JSValue proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, proto, js_worker_proto_funcs,
-                               sizeof(js_worker_proto_funcs) / sizeof(js_worker_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_worker_class_id, proto);
-
-    // Constructor
+    // Install custom constructor on globalThis (needs new_target access)
+    JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<WorkerOpaque>());
     JSValue ctor = JS_NewCFunction2(ctx, js_worker_ctor, "Worker", 1,
                                     JS_CFUNC_constructor, 0);
     JS_SetConstructor(ctx, ctor, proto);
+    JS_FreeValue(ctx, proto);
 
-    // Install on global
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "Worker", ctor);
     JS_FreeValue(ctx, global);
@@ -419,8 +404,7 @@ void cleanupWorkerBindings(JSContext* ctx)
             // in a cycle broken later by JS_RunGC during JS_FreeRuntime).
             // Null out the opaque's back-pointer so its finalizer won't
             // dereference the Worker we're about to delete.
-            auto* opaque = static_cast<WorkerOpaque*>(
-                JS_GetOpaque(w->jsObject, js_worker_class_id));
+            auto* opaque = qjsbind::unwrap<WorkerOpaque>(ctx, w->jsObject);
             if (opaque) opaque->worker = nullptr;
             JS_FreeValue(ctx, w->jsObject);
             w->jsObject = JS_UNDEFINED;
