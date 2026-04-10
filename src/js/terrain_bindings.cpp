@@ -1,14 +1,13 @@
 #include "js/terrain_bindings.h"
+
+#include <qjsbind/qjsbind.h>
+
 #include "scene/terrain_manager.h"
 #include "scene/scene_graph.h"
 #include "js/scene_bindings.h"
 
 #include <string>
 #include <vector>
-
-extern "C" {
-#include "quickjs.h"
-}
 
 namespace bro::js {
 
@@ -32,22 +31,11 @@ static int jsGetInt(JSContext* ctx, JSValueConst obj, const char* prop, int def 
 // TerrainWrapper — opaque data attached to JS terrain objects
 // -------------------------------------------------------------------------
 
-static JSClassID js_terrain_class_id = 0;
-
 struct TerrainWrapper {
     std::unique_ptr<scene::TerrainManager> manager;
 };
 
-static void terrain_finalizer(JSRuntime*, JSValue val) {
-    auto* w = static_cast<TerrainWrapper*>(JS_GetOpaque(val, js_terrain_class_id));
-    delete w;
-}
-
-static JSClassDef js_terrain_class = { "Terrain", terrain_finalizer };
-
-static TerrainWrapper* getTerrain(JSValueConst val) {
-    return static_cast<TerrainWrapper*>(JS_GetOpaque(val, js_terrain_class_id));
-}
+using TW = TerrainWrapper;
 
 // -------------------------------------------------------------------------
 // Parse TerrainConfig from JS options object
@@ -171,27 +159,12 @@ static bool parseVec3(JSContext* ctx, JSValueConst val, scene::Vec3& out) {
 }
 
 // -------------------------------------------------------------------------
-// Terrain methods
+// Complex methods needing raw argc/argv
 // -------------------------------------------------------------------------
-
-// terrain.update(camX, camY, camZ)
-static JSValue js_terrain_update(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = getTerrain(this_val);
-    if (!w || !w->manager) return JS_UNDEFINED;
-    if (argc < 3) return JS_ThrowTypeError(ctx, "terrain.update(camX, camY, camZ)");
-
-    double x = 0, y = 0, z = 0;
-    JS_ToFloat64(ctx, &x, argv[0]);
-    JS_ToFloat64(ctx, &y, argv[1]);
-    JS_ToFloat64(ctx, &z, argv[2]);
-
-    int loaded = w->manager->update((float)x, (float)y, (float)z);
-    return JS_NewInt32(ctx, loaded);
-}
 
 // terrain.raycast(origin, direction, maxDist)
 static JSValue js_terrain_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = getTerrain(this_val);
+    auto* w = qjsbind::unwrap<TW>(ctx, this_val);
     if (!w || !w->manager) return JS_NULL;
     if (argc < 2) return JS_ThrowTypeError(ctx, "terrain.raycast(origin, dir[, maxDist])");
 
@@ -237,48 +210,9 @@ static JSValue js_terrain_raycast(JSContext* ctx, JSValueConst this_val, int arg
     return out;
 }
 
-// terrain.setVoxel(wx, wy, wz, material)
-static JSValue js_terrain_setVoxel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = getTerrain(this_val);
-    if (!w || !w->manager) return JS_FALSE;
-    if (argc < 4) return JS_ThrowTypeError(ctx, "terrain.setVoxel(wx, wy, wz, material)");
-
-    double wx = 0, wy = 0, wz = 0;
-    int32_t mat = 0;
-    JS_ToFloat64(ctx, &wx, argv[0]);
-    JS_ToFloat64(ctx, &wy, argv[1]);
-    JS_ToFloat64(ctx, &wz, argv[2]);
-    JS_ToInt32(ctx, &mat, argv[3]);
-
-    bool ok = w->manager->setVoxel((float)wx, (float)wy, (float)wz, (uint8_t)mat);
-    return ok ? JS_TRUE : JS_FALSE;
-}
-
-// terrain.getVoxel(wx, wy, wz)
-static JSValue js_terrain_getVoxel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = getTerrain(this_val);
-    if (!w || !w->manager) return JS_NewInt32(ctx, 0);
-    if (argc < 3) return JS_ThrowTypeError(ctx, "terrain.getVoxel(wx, wy, wz)");
-
-    double wx = 0, wy = 0, wz = 0;
-    JS_ToFloat64(ctx, &wx, argv[0]);
-    JS_ToFloat64(ctx, &wy, argv[1]);
-    JS_ToFloat64(ctx, &wz, argv[2]);
-
-    uint8_t mat = w->manager->getVoxel((float)wx, (float)wy, (float)wz);
-    return JS_NewInt32(ctx, mat);
-}
-
-// terrain.rebuild()
-static JSValue js_terrain_rebuild(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* w = getTerrain(this_val);
-    if (w && w->manager) w->manager->rebuildDirty();
-    return JS_UNDEFINED;
-}
-
 // terrain.configure(opts) — reconfigure and rebuild
 static JSValue js_terrain_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = getTerrain(this_val);
+    auto* w = qjsbind::unwrap<TW>(ctx, this_val);
     if (!w || !w->manager || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
 
     auto cfg = parseConfig(ctx, argv[0]);
@@ -286,84 +220,10 @@ static JSValue js_terrain_configure(JSContext* ctx, JSValueConst this_val, int a
     return JS_UNDEFINED;
 }
 
-// terrain.destroy()
-static JSValue js_terrain_destroy(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* w = getTerrain(this_val);
-    if (w && w->manager) {
-        w->manager->clear();
-        w->manager.reset();
-    }
-    return JS_UNDEFINED;
-}
-
-// -------------------------------------------------------------------------
-// Terrain property getters
-// -------------------------------------------------------------------------
-
-static JSValue js_terrain_get_chunkCount(JSContext* ctx, JSValueConst this_val) {
-    auto* w = getTerrain(this_val);
-    return (w && w->manager) ? JS_NewInt32(ctx, w->manager->chunkCount()) : JS_NewInt32(ctx, 0);
-}
-
-static JSValue js_terrain_get_triangleCount(JSContext* ctx, JSValueConst this_val) {
-    auto* w = getTerrain(this_val);
-    return (w && w->manager) ? JS_NewInt32(ctx, w->manager->totalTriangles()) : JS_NewInt32(ctx, 0);
-}
-
-static JSValue js_terrain_get_vertexCount(JSContext* ctx, JSValueConst this_val) {
-    auto* w = getTerrain(this_val);
-    return (w && w->manager) ? JS_NewInt32(ctx, w->manager->totalVertices()) : JS_NewInt32(ctx, 0);
-}
-
-static JSValue js_terrain_get_farDistance(JSContext* ctx, JSValueConst this_val) {
-    auto* w = getTerrain(this_val);
-    return (w && w->manager) ? JS_NewFloat64(ctx, w->manager->farDistance()) : JS_NewFloat64(ctx, 1000);
-}
-
-static JSValue js_terrain_get_planetRadius(JSContext* ctx, JSValueConst this_val) {
-    auto* w = getTerrain(this_val);
-    return (w && w->manager) ? JS_NewFloat64(ctx, w->manager->config().planetRadius) : JS_NewFloat64(ctx, 0);
-}
-
-static JSValue js_terrain_get_origin(JSContext* ctx, JSValueConst this_val) {
-    auto* w = getTerrain(this_val);
-    if (!w || !w->manager) return JS_NULL;
-    auto& o = w->manager->config().origin;
-    JSValue arr = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, o.x));
-    JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, o.y));
-    JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, o.z));
-    return arr;
-}
-
-// -------------------------------------------------------------------------
-// Terrain prototype
-// -------------------------------------------------------------------------
-
-static const JSCFunctionListEntry js_terrain_proto[] = {
-    JS_CFUNC_DEF("update", 3, js_terrain_update),
-    JS_CFUNC_DEF("raycast", 2, js_terrain_raycast),
-    JS_CFUNC_DEF("setVoxel", 4, js_terrain_setVoxel),
-    JS_CFUNC_DEF("getVoxel", 3, js_terrain_getVoxel),
-    JS_CFUNC_DEF("rebuild", 0, js_terrain_rebuild),
-    JS_CFUNC_DEF("configure", 1, js_terrain_configure),
-    JS_CFUNC_DEF("destroy", 0, js_terrain_destroy),
-    JS_CGETSET_DEF("chunkCount", js_terrain_get_chunkCount, nullptr),
-    JS_CGETSET_DEF("triangleCount", js_terrain_get_triangleCount, nullptr),
-    JS_CGETSET_DEF("vertexCount", js_terrain_get_vertexCount, nullptr),
-    JS_CGETSET_DEF("farDistance", js_terrain_get_farDistance, nullptr),
-    JS_CGETSET_DEF("planetRadius", js_terrain_get_planetRadius, nullptr),
-    JS_CGETSET_DEF("origin", js_terrain_get_origin, nullptr),
-};
-
 // -------------------------------------------------------------------------
 // Factory: scene.createTerrain(opts) — called from scene_bindings.cpp
 // -------------------------------------------------------------------------
 
-static JSValue s_terrain_proto = JS_UNDEFINED;
-
-// This function is exposed via the header and called from scene_bindings
-// when `scene.createTerrain(opts)` is invoked from JS.
 JSValue createTerrainJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst opts) {
     if (!graph) return JS_ThrowTypeError(ctx, "createTerrain: no scene graph");
 
@@ -371,10 +231,7 @@ JSValue createTerrainJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst o
     auto mgr = std::make_unique<scene::TerrainManager>(*graph);
     mgr->configure(cfg);
 
-    JSValue obj = JS_NewObjectClass(ctx, js_terrain_class_id);
-    JS_SetPrototype(ctx, obj, JS_DupValue(ctx, s_terrain_proto));
-    JS_SetOpaque(obj, new TerrainWrapper{std::move(mgr)});
-    return obj;
+    return qjsbind::wrap<TW>(ctx, new TW{std::move(mgr)});
 }
 
 // -------------------------------------------------------------------------
@@ -382,18 +239,57 @@ JSValue createTerrainJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst o
 // -------------------------------------------------------------------------
 
 void TerrainBindings::install(JSContext* ctx) {
-    JS_NewClassID(JS_GetRuntime(ctx), &js_terrain_class_id);
-    JS_NewClass(JS_GetRuntime(ctx), js_terrain_class_id, &js_terrain_class);
-
-    s_terrain_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, s_terrain_proto,
-                               js_terrain_proto,
-                               sizeof(js_terrain_proto) / sizeof(js_terrain_proto[0]));
+    qjsbind::Class<TW>(ctx, "Terrain")
+        // No constructor — created via scene.createTerrain()
+        .method("update", [](TW* self, JSContext*, double x, double y, double z) -> int {
+            if (!self->manager) return 0;
+            return self->manager->update((float)x, (float)y, (float)z);
+        })
+        .method_raw("raycast", js_terrain_raycast, 2)
+        .method("setVoxel", [](TW* self, double wx, double wy, double wz, int mat) -> bool {
+            if (!self->manager) return false;
+            return self->manager->setVoxel((float)wx, (float)wy, (float)wz, (uint8_t)mat);
+        })
+        .method("getVoxel", [](TW* self, double wx, double wy, double wz) -> int {
+            if (!self->manager) return 0;
+            return (int)self->manager->getVoxel((float)wx, (float)wy, (float)wz);
+        })
+        .method("rebuild", [](TW* self) {
+            if (self->manager) self->manager->rebuildDirty();
+        })
+        .method_raw("configure", js_terrain_configure, 1)
+        .method("destroy", [](TW* self) {
+            if (self->manager) {
+                self->manager->clear();
+                self->manager.reset();
+            }
+        })
+        .get("chunkCount", [](TW* self) -> int {
+            return self->manager ? self->manager->chunkCount() : 0;
+        })
+        .get("triangleCount", [](TW* self) -> int {
+            return self->manager ? self->manager->totalTriangles() : 0;
+        })
+        .get("vertexCount", [](TW* self) -> int {
+            return self->manager ? self->manager->totalVertices() : 0;
+        })
+        .get("farDistance", [](TW* self) -> double {
+            return self->manager ? self->manager->farDistance() : 1000.0;
+        })
+        .get("planetRadius", [](TW* self) -> double {
+            return self->manager ? (double)self->manager->config().planetRadius : 0.0;
+        })
+        .get("origin", [](TW* self, JSContext* ctx) -> JSValue {
+            if (!self->manager) return JS_NULL;
+            auto& o = self->manager->config().origin;
+            JSValue arr = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, o.x));
+            JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, o.y));
+            JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, o.z));
+            return arr;
+        });
 }
 
-void TerrainBindings::cleanup(JSContext* ctx) {
-    JS_FreeValue(ctx, s_terrain_proto);
-    s_terrain_proto = JS_UNDEFINED;
-}
+void TerrainBindings::cleanup(JSContext*) {}
 
 } // namespace bro::js

@@ -3,451 +3,67 @@
 #include "canvas/canvas_scene.h"
 #include "canvas/canvas2d.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <string>
 #include <cstring>
 
 namespace bro::js {
 
-static JSClassID js_ctx2d_class_id = 0;
-
-static JSClassDef js_ctx2d_class = {
-    "CanvasRenderingContext2D",
-    nullptr, nullptr, nullptr, nullptr
+// Non-owning wrapper so qjsbind's delete-destructor doesn't free the scene
+struct Ctx2DWrapper {
+    canvas::CanvasScene* scene = nullptr;
 };
 
-static inline canvas::CanvasScene* getScene(JSValueConst val) {
-    return static_cast<canvas::CanvasScene*>(JS_GetOpaque(val, js_ctx2d_class_id));
-}
+using CW = Ctx2DWrapper;
 
-static std::string jsStr(JSContext* ctx, JSValueConst val) {
-    const char* s = JS_ToCString(ctx, val);
-    std::string result = s ? s : "";
-    if (s) JS_FreeCString(ctx, s);
-    return result;
-}
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
 
-static double jsFloat(JSContext* ctx, JSValueConst val) {
-    double v = 0;
-    JS_ToFloat64(ctx, &v, val);
-    return v;
-}
-
-// =========================================================================
-// Property getters/setters
-// =========================================================================
-
-static JSValue js_get_fillStyle(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    uint8_t r, g, b, a;
-    sc->getFillColor(r, g, b, a);
+static std::string colorToRGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", r, g, b, a / 255.0f);
-    return JS_NewString(ctx, buf);
+    return buf;
 }
 
-static JSValue js_set_fillStyle(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    uint8_t r, g, b, a;
-    if (canvas::parseCSSColor(jsStr(ctx, val), r, g, b, a))
-        sc->setFillColor(r, g, b, a);
-    return JS_UNDEFINED;
-}
+// ---------------------------------------------------------------------------
+// Raw functions for complex methods needing raw argc/argv
+// ---------------------------------------------------------------------------
 
-static JSValue js_get_strokeStyle(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    uint8_t r, g, b, a;
-    sc->getStrokeColor(r, g, b, a);
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", r, g, b, a / 255.0f);
-    return JS_NewString(ctx, buf);
-}
+static JSValue js_drawImage(JSContext* ctx, JSValueConst this_val,
+                            int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 3) return JS_UNDEFINED;
 
-static JSValue js_set_strokeStyle(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    uint8_t r, g, b, a;
-    if (canvas::parseCSSColor(jsStr(ctx, val), r, g, b, a))
-        sc->setStrokeColor(r, g, b, a);
-    return JS_UNDEFINED;
-}
+    ImagePixels pix;
+    if (!ImageBindings::getImagePixels(argv[0], pix)) return JS_UNDEFINED;
 
-static JSValue js_get_lineWidth(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewFloat64(ctx, sc->lineWidth()) : JS_UNDEFINED;
-}
+    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
 
-static JSValue js_set_lineWidth(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setLineWidth((float)jsFloat(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_get_globalAlpha(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewFloat64(ctx, sc->globalAlpha()) : JS_UNDEFINED;
-}
-
-static JSValue js_set_globalAlpha(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setGlobalAlpha((float)jsFloat(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_get_font(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewString(ctx, sc->fontString().c_str()) : JS_UNDEFINED;
-}
-
-static JSValue js_set_font(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setFont(jsStr(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_get_canvas_width(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewInt32(ctx, sc->width()) : JS_UNDEFINED;
-}
-
-static JSValue js_get_canvas_height(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewInt32(ctx, sc->height()) : JS_UNDEFINED;
-}
-
-// --- lineCap ---
-static JSValue js_get_lineCap(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    static const char* names[] = {"butt", "round", "square"};
-    int v = sc->lineCap();
-    return JS_NewString(ctx, (v >= 0 && v <= 2) ? names[v] : "butt");
-}
-
-static JSValue js_set_lineCap(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    std::string s = jsStr(ctx, val);
-    if (s == "butt") sc->setLineCap(0);
-    else if (s == "round") sc->setLineCap(1);
-    else if (s == "square") sc->setLineCap(2);
-    return JS_UNDEFINED;
-}
-
-// --- lineJoin ---
-static JSValue js_get_lineJoin(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    static const char* names[] = {"miter", "round", "bevel"};
-    int v = sc->lineJoin();
-    return JS_NewString(ctx, (v >= 0 && v <= 2) ? names[v] : "miter");
-}
-
-static JSValue js_set_lineJoin(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    std::string s = jsStr(ctx, val);
-    if (s == "miter") sc->setLineJoin(0);
-    else if (s == "round") sc->setLineJoin(1);
-    else if (s == "bevel") sc->setLineJoin(2);
-    return JS_UNDEFINED;
-}
-
-// --- miterLimit ---
-static JSValue js_get_miterLimit(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewFloat64(ctx, sc->miterLimit()) : JS_UNDEFINED;
-}
-
-static JSValue js_set_miterLimit(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setMiterLimit((float)jsFloat(ctx, val));
-    return JS_UNDEFINED;
-}
-
-// --- globalCompositeOperation ---
-static JSValue js_get_globalCompositeOperation(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    static const char* names[] = {
-        "source-over", "source-in", "source-out", "source-atop",
-        "destination-over", "destination-in", "destination-out", "destination-atop",
-        "lighter", "darken", "xor", "lighter",
-        "multiply", "screen", "overlay",
-        "color-dodge", "color-burn", "hard-light", "soft-light",
-        "difference", "exclusion"
-    };
-    int v = sc->globalCompositeOperation();
-    if (v >= 0 && v < 21) return JS_NewString(ctx, names[v]);
-    return JS_NewString(ctx, "source-over");
-}
-
-static JSValue js_set_globalCompositeOperation(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    std::string s = jsStr(ctx, val);
-    static const char* names[] = {
-        "source-over", "source-in", "source-out", "source-atop",
-        "destination-over", "destination-in", "destination-out", "destination-atop",
-        "lighten", "darken", "xor", "lighter",
-        "multiply", "screen", "overlay",
-        "color-dodge", "color-burn", "hard-light", "soft-light",
-        "difference", "exclusion"
-    };
-    for (int i = 0; i < 21; i++) {
-        if (s == names[i]) { sc->setGlobalCompositeOperation(i); return JS_UNDEFINED; }
+    if (argc >= 9) {
+        sc->drawImage(pix.data, pix.width, pix.height,
+                      F(1), F(2), F(3), F(4), F(5), F(6), F(7), F(8));
+    } else if (argc >= 5) {
+        sc->drawImage(pix.data, pix.width, pix.height,
+                      0, 0, (float)pix.width, (float)pix.height,
+                      F(1), F(2), F(3), F(4));
+    } else {
+        sc->drawImage(pix.data, pix.width, pix.height,
+                      0, 0, (float)pix.width, (float)pix.height,
+                      F(1), F(2), (float)pix.width, (float)pix.height);
     }
     return JS_UNDEFINED;
 }
 
-// --- textAlign ---
-static JSValue js_get_textAlign(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    static const char* names[] = {"start", "center", "right", "end"};
-    int v = sc->textAlign();
-    return JS_NewString(ctx, (v >= 0 && v <= 3) ? names[v] : "start");
-}
-
-static JSValue js_set_textAlign(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    std::string s = jsStr(ctx, val);
-    if (s == "left" || s == "start") sc->setTextAlign(0);
-    else if (s == "center") sc->setTextAlign(1);
-    else if (s == "right") sc->setTextAlign(2);
-    else if (s == "end") sc->setTextAlign(3);
-    return JS_UNDEFINED;
-}
-
-// --- textBaseline ---
-static JSValue js_get_textBaseline(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    static const char* names[] = {"alphabetic", "top", "middle", "bottom", "hanging", "ideographic"};
-    int v = sc->textBaseline();
-    return JS_NewString(ctx, (v >= 0 && v <= 5) ? names[v] : "alphabetic");
-}
-
-static JSValue js_set_textBaseline(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    std::string s = jsStr(ctx, val);
-    if (s == "alphabetic") sc->setTextBaseline(0);
-    else if (s == "top") sc->setTextBaseline(1);
-    else if (s == "middle") sc->setTextBaseline(2);
-    else if (s == "bottom") sc->setTextBaseline(3);
-    else if (s == "hanging") sc->setTextBaseline(4);
-    else if (s == "ideographic") sc->setTextBaseline(5);
-    return JS_UNDEFINED;
-}
-
-// --- shadowBlur / shadowColor / shadowOffsetX / shadowOffsetY ---
-static JSValue js_get_shadowBlur(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewFloat64(ctx, sc->shadowBlur()) : JS_UNDEFINED;
-}
-
-static JSValue js_set_shadowBlur(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setShadowBlur((float)jsFloat(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_get_shadowColor(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    uint8_t r, g, b, a;
-    sc->getShadowColor(r, g, b, a);
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", r, g, b, a / 255.0f);
-    return JS_NewString(ctx, buf);
-}
-
-static JSValue js_set_shadowColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (!sc) return JS_UNDEFINED;
-    uint8_t r, g, b, a;
-    if (canvas::parseCSSColor(jsStr(ctx, val), r, g, b, a))
-        sc->setShadowColor(r, g, b, a);
-    return JS_UNDEFINED;
-}
-
-static JSValue js_get_shadowOffsetX(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewFloat64(ctx, sc->shadowOffsetX()) : JS_UNDEFINED;
-}
-
-static JSValue js_set_shadowOffsetX(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setShadowOffsetX((float)jsFloat(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_get_shadowOffsetY(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewFloat64(ctx, sc->shadowOffsetY()) : JS_UNDEFINED;
-}
-
-static JSValue js_set_shadowOffsetY(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setShadowOffsetY((float)jsFloat(ctx, val));
-    return JS_UNDEFINED;
-}
-
-// --- imageSmoothingEnabled ---
-static JSValue js_get_imageSmoothingEnabled(JSContext* ctx, JSValueConst this_val) {
-    auto* sc = getScene(this_val);
-    return sc ? JS_NewBool(ctx, sc->imageSmoothingEnabled()) : JS_UNDEFINED;
-}
-
-static JSValue js_set_imageSmoothingEnabled(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->setImageSmoothingEnabled(JS_ToBool(ctx, val) != 0);
-    return JS_UNDEFINED;
-}
-
-// =========================================================================
-// Methods
-// =========================================================================
-
-static JSValue js_fillRect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 4) return JS_UNDEFINED;
-    sc->fillRect((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                 (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_strokeRect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 4) return JS_UNDEFINED;
-    sc->strokeRect((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                   (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_clearRect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 4) return JS_UNDEFINED;
-    sc->clearRect((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                  (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_reset(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->reset();
-    return JS_UNDEFINED;
-}
-
-static JSValue js_fillText(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 3) return JS_UNDEFINED;
-    sc->fillText(jsStr(ctx, argv[0]), (float)jsFloat(ctx, argv[1]), (float)jsFloat(ctx, argv[2]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_strokeText(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 3) return JS_UNDEFINED;
-    sc->strokeText(jsStr(ctx, argv[0]), (float)jsFloat(ctx, argv[1]), (float)jsFloat(ctx, argv[2]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_measureText(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 1) return JS_UNDEFINED;
-    auto metrics = sc->measureText(jsStr(ctx, argv[0]));
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "width", JS_NewFloat64(ctx, metrics.width));
-    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxAscent", JS_NewFloat64(ctx, metrics.ascent));
-    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxDescent", JS_NewFloat64(ctx, metrics.descent));
-    return obj;
-}
-
-static JSValue js_save(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val); if (sc) sc->save(); return JS_UNDEFINED;
-}
-
-static JSValue js_restore(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val); if (sc) sc->restore(); return JS_UNDEFINED;
-}
-
-static JSValue js_translate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 2) return JS_UNDEFINED;
-    sc->translate((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_rotate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 1) return JS_UNDEFINED;
-    sc->rotate((float)jsFloat(ctx, argv[0]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_scale(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 2) return JS_UNDEFINED;
-    sc->scale((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_setTransform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 6) return JS_UNDEFINED;
-    sc->setTransform((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                     (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]),
-                     (float)jsFloat(ctx, argv[4]), (float)jsFloat(ctx, argv[5]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_resetTransform(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val);
-    if (sc) sc->resetTransform();
-    return JS_UNDEFINED;
-}
-
-static JSValue js_transform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 6) return JS_UNDEFINED;
-    sc->transform((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                  (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]),
-                  (float)jsFloat(ctx, argv[4]), (float)jsFloat(ctx, argv[5]));
-    return JS_UNDEFINED;
-}
-
-// --- Path API ---
-
-static JSValue js_beginPath(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val); if (sc) sc->beginPath(); return JS_UNDEFINED;
-}
-
-static JSValue js_moveTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 2) return JS_UNDEFINED;
-    sc->moveTo((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_lineTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 2) return JS_UNDEFINED;
-    sc->lineTo((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_polyline(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
+static JSValue js_polyline(JSContext* ctx, JSValueConst this_val,
+                           int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
     if (!sc || argc < 1) return JS_UNDEFINED;
 
-    // Accept Float32Array (or any TypedArray backed by float32)
-    size_t offset = 0, byteLen = 0;
-    size_t bytesPerElement = 0;
+    size_t offset = 0, byteLen = 0, bytesPerElement = 0;
     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &byteLen, &bytesPerElement);
     if (JS_IsException(abuf)) {
         JS_FreeValue(ctx, abuf);
@@ -467,132 +83,21 @@ static JSValue js_polyline(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     return JS_UNDEFINED;
 }
 
-static JSValue js_closePath(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val); if (sc) sc->closePath(); return JS_UNDEFINED;
-}
-
-static JSValue js_stroke(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val); if (sc) sc->stroke(); return JS_UNDEFINED;
-}
-
-static JSValue js_fill(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val); if (sc) sc->fill(); return JS_UNDEFINED;
-}
-
-static JSValue js_clip(JSContext*, JSValueConst this_val, int, JSValueConst*) {
-    auto* sc = getScene(this_val); if (sc) sc->clip(); return JS_UNDEFINED;
-}
-
-static JSValue js_arc(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 5) return JS_UNDEFINED;
-    bool acw = (argc >= 6) ? JS_ToBool(ctx, argv[5]) != 0 : false;
-    sc->arc((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-            (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]),
-            (float)jsFloat(ctx, argv[4]), acw);
-    return JS_UNDEFINED;
-}
-
-static JSValue js_arcTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 5) return JS_UNDEFINED;
-    sc->arcTo((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-              (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]),
-              (float)jsFloat(ctx, argv[4]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_bezierCurveTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 6) return JS_UNDEFINED;
-    sc->bezierCurveTo((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                      (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]),
-                      (float)jsFloat(ctx, argv[4]), (float)jsFloat(ctx, argv[5]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_quadraticCurveTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 4) return JS_UNDEFINED;
-    sc->quadraticCurveTo((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                         (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_ellipse(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 7) return JS_UNDEFINED;
-    bool acw = (argc >= 8) ? JS_ToBool(ctx, argv[7]) != 0 : false;
-    sc->ellipse((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-                (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]),
-                (float)jsFloat(ctx, argv[4]), (float)jsFloat(ctx, argv[5]),
-                (float)jsFloat(ctx, argv[6]), acw);
-    return JS_UNDEFINED;
-}
-
-static JSValue js_rect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 4) return JS_UNDEFINED;
-    sc->rect((float)jsFloat(ctx, argv[0]), (float)jsFloat(ctx, argv[1]),
-             (float)jsFloat(ctx, argv[2]), (float)jsFloat(ctx, argv[3]));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_isPointInPath(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 2) return JS_FALSE;
-    return JS_NewBool(ctx, sc->isPointInPath((float)jsFloat(ctx, argv[0]),
-                                              (float)jsFloat(ctx, argv[1])));
-}
-
-// --- drawImage ---
-
-static JSValue js_drawImage(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
-    if (!sc || argc < 3) return JS_UNDEFINED;
-
-    ImagePixels pix;
-    if (!ImageBindings::getImagePixels(argv[0], pix)) return JS_UNDEFINED;
-
-    if (argc >= 9) {
-        // drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh)
-        sc->drawImage(pix.data, pix.width, pix.height,
-                      (float)jsFloat(ctx, argv[1]), (float)jsFloat(ctx, argv[2]),
-                      (float)jsFloat(ctx, argv[3]), (float)jsFloat(ctx, argv[4]),
-                      (float)jsFloat(ctx, argv[5]), (float)jsFloat(ctx, argv[6]),
-                      (float)jsFloat(ctx, argv[7]), (float)jsFloat(ctx, argv[8]));
-    } else if (argc >= 5) {
-        // drawImage(img, dx, dy, dw, dh)
-        sc->drawImage(pix.data, pix.width, pix.height,
-                      0, 0, (float)pix.width, (float)pix.height,
-                      (float)jsFloat(ctx, argv[1]), (float)jsFloat(ctx, argv[2]),
-                      (float)jsFloat(ctx, argv[3]), (float)jsFloat(ctx, argv[4]));
-    } else {
-        // drawImage(img, dx, dy)
-        sc->drawImage(pix.data, pix.width, pix.height,
-                      0, 0, (float)pix.width, (float)pix.height,
-                      (float)jsFloat(ctx, argv[1]), (float)jsFloat(ctx, argv[2]),
-                      (float)pix.width, (float)pix.height);
-    }
-    return JS_UNDEFINED;
-}
-
-// --- getImageData / putImageData ---
-
-static JSValue js_getImageData(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
+static JSValue js_getImageData(JSContext* ctx, JSValueConst this_val,
+                               int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
     if (!sc || argc < 4) return JS_UNDEFINED;
 
-    int x = (int)jsFloat(ctx, argv[0]), y = (int)jsFloat(ctx, argv[1]);
-    int w = (int)jsFloat(ctx, argv[2]), h = (int)jsFloat(ctx, argv[3]);
+    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (int)v; };
+    int x = F(0), y = F(1), wi = F(2), h = F(3);
 
-    auto pixels = sc->getImageData(x, y, w, h);
+    auto pixels = sc->getImageData(x, y, wi, h);
 
     JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, wi));
     JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
 
-    // Create a Uint8ClampedArray for the data
     JSValue abuf = JS_NewArrayBufferCopy(ctx, pixels.data(), pixels.size());
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue u8cCtor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
@@ -605,24 +110,23 @@ static JSValue js_getImageData(JSContext* ctx, JSValueConst this_val, int argc, 
     return obj;
 }
 
-static JSValue js_putImageData(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* sc = getScene(this_val);
+static JSValue js_putImageData(JSContext* ctx, JSValueConst this_val,
+                               int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
     if (!sc || argc < 3) return JS_UNDEFINED;
 
-    // argv[0] is an ImageData object with .data, .width, .height
     JSValue wVal = JS_GetPropertyStr(ctx, argv[0], "width");
     JSValue hVal = JS_GetPropertyStr(ctx, argv[0], "height");
     JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
 
-    int w = 0, h = 0;
-    JS_ToInt32(ctx, &w, wVal);
+    int wi = 0, h = 0;
+    JS_ToInt32(ctx, &wi, wVal);
     JS_ToInt32(ctx, &h, hVal);
 
-    // Get the underlying buffer from the typed array
     size_t len = 0;
     uint8_t* buf = JS_GetArrayBuffer(ctx, &len, dataVal);
     if (!buf) {
-        // Try as typed array
         size_t offset, blen;
         JSValue abuf = JS_GetTypedArrayBuffer(ctx, dataVal, &offset, &blen, nullptr);
         buf = JS_GetArrayBuffer(ctx, &len, abuf);
@@ -630,11 +134,13 @@ static JSValue js_putImageData(JSContext* ctx, JSValueConst this_val, int argc, 
         JS_FreeValue(ctx, abuf);
     }
 
-    int dx = (int)jsFloat(ctx, argv[1]);
-    int dy = (int)jsFloat(ctx, argv[2]);
+    double dx_d = 0, dy_d = 0;
+    JS_ToFloat64(ctx, &dx_d, argv[1]);
+    JS_ToFloat64(ctx, &dy_d, argv[2]);
+    int dx = (int)dx_d, dy = (int)dy_d;
 
-    if (buf && w > 0 && h > 0) {
-        sc->putImageData(buf, w, h, dx, dy);
+    if (buf && wi > 0 && h > 0) {
+        sc->putImageData(buf, wi, h, dx, dy);
     }
 
     JS_FreeValue(ctx, wVal);
@@ -643,11 +149,13 @@ static JSValue js_putImageData(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
-// --- createImageData ---
-
-static JSValue js_createImageData(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+static JSValue js_createImageData(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
     if (argc < 2) return JS_UNDEFINED;
-    int w = (int)jsFloat(ctx, argv[0]), h = (int)jsFloat(ctx, argv[1]);
+    double wd = 0, hd = 0;
+    JS_ToFloat64(ctx, &wd, argv[0]);
+    JS_ToFloat64(ctx, &hd, argv[1]);
+    int w = (int)wd, h = (int)hd;
     if (w <= 0 || h <= 0) return JS_UNDEFINED;
 
     JSValue obj = JS_NewObject(ctx);
@@ -667,93 +175,397 @@ static JSValue js_createImageData(JSContext* ctx, JSValueConst, int argc, JSValu
     return obj;
 }
 
+static JSValue js_measureText(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    auto metrics = sc->measureText(str);
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewFloat64(ctx, metrics.width));
+    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxAscent", JS_NewFloat64(ctx, metrics.ascent));
+    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxDescent", JS_NewFloat64(ctx, metrics.descent));
+    return obj;
+}
+
+static JSValue js_arc(JSContext* ctx, JSValueConst this_val,
+                      int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 5) return JS_UNDEFINED;
+    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
+    bool acw = (argc >= 6) ? JS_ToBool(ctx, argv[5]) != 0 : false;
+    sc->arc(F(0), F(1), F(2), F(3), F(4), acw);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ellipse(JSContext* ctx, JSValueConst this_val,
+                          int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 7) return JS_UNDEFINED;
+    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
+    bool acw = (argc >= 8) ? JS_ToBool(ctx, argv[7]) != 0 : false;
+    sc->ellipse(F(0), F(1), F(2), F(3), F(4), F(5), F(6), acw);
+    return JS_UNDEFINED;
+}
+
+// ---------------------------------------------------------------------------
+// Raw getter/setter functions for string-enum properties
+// These need raw JSValue handling (color parsing, enum string lookup, etc.)
+// They use the JSCFunction signature for use with JS_NewCFunction.
+// ---------------------------------------------------------------------------
+
+static JSValue raw_get_fillStyle(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    uint8_t r, g, b, a;
+    sc->getFillColor(r, g, b, a);
+    return JS_NewString(ctx, colorToRGBA(r, g, b, a).c_str());
+}
+
+static JSValue raw_set_fillStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    uint8_t r, g, b, a;
+    if (canvas::parseCSSColor(str, r, g, b, a))
+        sc->setFillColor(r, g, b, a);
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_strokeStyle(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    uint8_t r, g, b, a;
+    sc->getStrokeColor(r, g, b, a);
+    return JS_NewString(ctx, colorToRGBA(r, g, b, a).c_str());
+}
+
+static JSValue raw_set_strokeStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    uint8_t r, g, b, a;
+    if (canvas::parseCSSColor(str, r, g, b, a))
+        sc->setStrokeColor(r, g, b, a);
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_lineCap(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    static const char* names[] = {"butt", "round", "square"};
+    int v = sc->lineCap();
+    return JS_NewString(ctx, (v >= 0 && v <= 2) ? names[v] : "butt");
+}
+
+static JSValue raw_set_lineCap(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    if (str == "butt") sc->setLineCap(0);
+    else if (str == "round") sc->setLineCap(1);
+    else if (str == "square") sc->setLineCap(2);
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_lineJoin(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    static const char* names[] = {"miter", "round", "bevel"};
+    int v = sc->lineJoin();
+    return JS_NewString(ctx, (v >= 0 && v <= 2) ? names[v] : "miter");
+}
+
+static JSValue raw_set_lineJoin(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    if (str == "miter") sc->setLineJoin(0);
+    else if (str == "round") sc->setLineJoin(1);
+    else if (str == "bevel") sc->setLineJoin(2);
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_globalCompositeOp(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    static const char* names[] = {
+        "source-over", "source-in", "source-out", "source-atop",
+        "destination-over", "destination-in", "destination-out", "destination-atop",
+        "lighter", "darken", "xor", "lighter",
+        "multiply", "screen", "overlay",
+        "color-dodge", "color-burn", "hard-light", "soft-light",
+        "difference", "exclusion"
+    };
+    int v = sc->globalCompositeOperation();
+    if (v >= 0 && v < 21) return JS_NewString(ctx, names[v]);
+    return JS_NewString(ctx, "source-over");
+}
+
+static JSValue raw_set_globalCompositeOp(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    static const char* names[] = {
+        "source-over", "source-in", "source-out", "source-atop",
+        "destination-over", "destination-in", "destination-out", "destination-atop",
+        "lighten", "darken", "xor", "lighter",
+        "multiply", "screen", "overlay",
+        "color-dodge", "color-burn", "hard-light", "soft-light",
+        "difference", "exclusion"
+    };
+    for (int i = 0; i < 21; i++) {
+        if (str == names[i]) { sc->setGlobalCompositeOperation(i); return JS_UNDEFINED; }
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_textAlign(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    static const char* names[] = {"start", "center", "right", "end"};
+    int v = sc->textAlign();
+    return JS_NewString(ctx, (v >= 0 && v <= 3) ? names[v] : "start");
+}
+
+static JSValue raw_set_textAlign(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    if (str == "left" || str == "start") sc->setTextAlign(0);
+    else if (str == "center") sc->setTextAlign(1);
+    else if (str == "right") sc->setTextAlign(2);
+    else if (str == "end") sc->setTextAlign(3);
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_textBaseline(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    static const char* names[] = {"alphabetic", "top", "middle", "bottom", "hanging", "ideographic"};
+    int v = sc->textBaseline();
+    return JS_NewString(ctx, (v >= 0 && v <= 5) ? names[v] : "alphabetic");
+}
+
+static JSValue raw_set_textBaseline(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    if (str == "alphabetic") sc->setTextBaseline(0);
+    else if (str == "top") sc->setTextBaseline(1);
+    else if (str == "middle") sc->setTextBaseline(2);
+    else if (str == "bottom") sc->setTextBaseline(3);
+    else if (str == "hanging") sc->setTextBaseline(4);
+    else if (str == "ideographic") sc->setTextBaseline(5);
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_shadowColor(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    uint8_t r, g, b, a;
+    sc->getShadowColor(r, g, b, a);
+    return JS_NewString(ctx, colorToRGBA(r, g, b, a).c_str());
+}
+
+static JSValue raw_set_shadowColor(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    uint8_t r, g, b, a;
+    if (canvas::parseCSSColor(str, r, g, b, a))
+        sc->setShadowColor(r, g, b, a);
+    return JS_UNDEFINED;
+}
+
+// ---------------------------------------------------------------------------
+// Helper to define a raw getter/setter property on a prototype
+// ---------------------------------------------------------------------------
+
+static void defineRawProp(JSContext* ctx, JSValue proto, const char* name,
+                          JSCFunction* getter, JSCFunction* setter) {
+    JSAtom atom = JS_NewAtom(ctx, name);
+    JSValue getterFn = JS_NewCFunction(ctx, getter, name, 0);
+    JSValue setterFn = setter ? JS_NewCFunction(ctx, setter, name, 1) : JS_UNDEFINED;
+    JS_DefinePropertyGetSet(ctx, proto, atom, getterFn, setterFn,
+                            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
+}
+
 // =========================================================================
-// Prototype
+// install / cleanup / wrapContext2D
 // =========================================================================
-
-static const JSCFunctionListEntry js_ctx2d_proto_funcs[] = {
-    // Properties
-    JS_CGETSET_DEF("fillStyle",   js_get_fillStyle,   js_set_fillStyle),
-    JS_CGETSET_DEF("strokeStyle", js_get_strokeStyle,  js_set_strokeStyle),
-    JS_CGETSET_DEF("lineWidth",   js_get_lineWidth,    js_set_lineWidth),
-    JS_CGETSET_DEF("globalAlpha", js_get_globalAlpha,   js_set_globalAlpha),
-    JS_CGETSET_DEF("font",        js_get_font,          js_set_font),
-    JS_CGETSET_DEF("canvasWidth",  js_get_canvas_width, nullptr),
-    JS_CGETSET_DEF("canvasHeight", js_get_canvas_height, nullptr),
-    JS_CGETSET_DEF("lineCap",     js_get_lineCap,       js_set_lineCap),
-    JS_CGETSET_DEF("lineJoin",    js_get_lineJoin,      js_set_lineJoin),
-    JS_CGETSET_DEF("miterLimit",  js_get_miterLimit,    js_set_miterLimit),
-    JS_CGETSET_DEF("globalCompositeOperation", js_get_globalCompositeOperation, js_set_globalCompositeOperation),
-    JS_CGETSET_DEF("textAlign",   js_get_textAlign,     js_set_textAlign),
-    JS_CGETSET_DEF("textBaseline", js_get_textBaseline,  js_set_textBaseline),
-    JS_CGETSET_DEF("shadowBlur",  js_get_shadowBlur,    js_set_shadowBlur),
-    JS_CGETSET_DEF("shadowColor", js_get_shadowColor,   js_set_shadowColor),
-    JS_CGETSET_DEF("shadowOffsetX", js_get_shadowOffsetX, js_set_shadowOffsetX),
-    JS_CGETSET_DEF("shadowOffsetY", js_get_shadowOffsetY, js_set_shadowOffsetY),
-    JS_CGETSET_DEF("imageSmoothingEnabled", js_get_imageSmoothingEnabled, js_set_imageSmoothingEnabled),
-
-    // Methods — drawing
-    JS_CFUNC_DEF("fillRect",    4, js_fillRect),
-    JS_CFUNC_DEF("strokeRect",  4, js_strokeRect),
-    JS_CFUNC_DEF("clearRect",   4, js_clearRect),
-    JS_CFUNC_DEF("reset",       0, js_reset),
-    JS_CFUNC_DEF("fillText",    3, js_fillText),
-    JS_CFUNC_DEF("strokeText",  3, js_strokeText),
-    JS_CFUNC_DEF("measureText", 1, js_measureText),
-
-    // Methods — state
-    JS_CFUNC_DEF("save",        0, js_save),
-    JS_CFUNC_DEF("restore",     0, js_restore),
-    JS_CFUNC_DEF("translate",   2, js_translate),
-    JS_CFUNC_DEF("rotate",      1, js_rotate),
-    JS_CFUNC_DEF("scale",       2, js_scale),
-    JS_CFUNC_DEF("setTransform", 6, js_setTransform),
-    JS_CFUNC_DEF("resetTransform", 0, js_resetTransform),
-    JS_CFUNC_DEF("transform",   6, js_transform),
-
-    // Methods — path
-    JS_CFUNC_DEF("beginPath",   0, js_beginPath),
-    JS_CFUNC_DEF("moveTo",      2, js_moveTo),
-    JS_CFUNC_DEF("lineTo",      2, js_lineTo),
-    JS_CFUNC_DEF("polyline",    1, js_polyline),
-    JS_CFUNC_DEF("closePath",   0, js_closePath),
-    JS_CFUNC_DEF("stroke",      0, js_stroke),
-    JS_CFUNC_DEF("fill",        0, js_fill),
-    JS_CFUNC_DEF("clip",        0, js_clip),
-    JS_CFUNC_DEF("arc",         6, js_arc),
-    JS_CFUNC_DEF("arcTo",       5, js_arcTo),
-    JS_CFUNC_DEF("bezierCurveTo", 6, js_bezierCurveTo),
-    JS_CFUNC_DEF("quadraticCurveTo", 4, js_quadraticCurveTo),
-    JS_CFUNC_DEF("ellipse",     8, js_ellipse),
-    JS_CFUNC_DEF("rect",        4, js_rect),
-    JS_CFUNC_DEF("isPointInPath", 2, js_isPointInPath),
-
-    // Methods — image
-    JS_CFUNC_DEF("drawImage",   9, js_drawImage),
-    JS_CFUNC_DEF("getImageData", 4, js_getImageData),
-    JS_CFUNC_DEF("putImageData", 3, js_putImageData),
-    JS_CFUNC_DEF("createImageData", 2, js_createImageData),
-};
-
-static JSValue js_ctx2d_proto = JS_UNDEFINED;
 
 void CanvasBindings::install(JSContext* ctx) {
-    JS_NewClassID(JS_GetRuntime(ctx), &js_ctx2d_class_id);
-    JS_NewClass(JS_GetRuntime(ctx), js_ctx2d_class_id, &js_ctx2d_class);
+    // Register the class with qjsbind — destructor finalizes at end of block
+    {
+        qjsbind::Class<CW>(ctx, "CanvasRenderingContext2D")
+            // --- Simple numeric/bool properties ---
+            .prop("lineWidth",
+                [](CW* w) -> double { return w->scene ? w->scene->lineWidth() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setLineWidth((float)v); })
+            .prop("globalAlpha",
+                [](CW* w) -> double { return w->scene ? w->scene->globalAlpha() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setGlobalAlpha((float)v); })
+            .prop("font",
+                [](CW* w, JSContext* c) -> JSValue {
+                    return w->scene ? JS_NewString(c, w->scene->fontString().c_str()) : JS_UNDEFINED;
+                },
+                [](CW* w, std::string v) { if (w->scene) w->scene->setFont(v); })
+            .prop("miterLimit",
+                [](CW* w) -> double { return w->scene ? w->scene->miterLimit() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setMiterLimit((float)v); })
+            .prop("shadowBlur",
+                [](CW* w) -> double { return w->scene ? w->scene->shadowBlur() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setShadowBlur((float)v); })
+            .prop("shadowOffsetX",
+                [](CW* w) -> double { return w->scene ? w->scene->shadowOffsetX() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setShadowOffsetX((float)v); })
+            .prop("shadowOffsetY",
+                [](CW* w) -> double { return w->scene ? w->scene->shadowOffsetY() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setShadowOffsetY((float)v); })
+            .prop("imageSmoothingEnabled",
+                [](CW* w) -> bool { return w->scene ? w->scene->imageSmoothingEnabled() : false; },
+                [](CW* w, bool v) { if (w->scene) w->scene->setImageSmoothingEnabled(v); })
 
-    js_ctx2d_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, js_ctx2d_proto, js_ctx2d_proto_funcs,
-                               sizeof(js_ctx2d_proto_funcs) / sizeof(js_ctx2d_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_ctx2d_class_id, js_ctx2d_proto);
+            // --- Read-only properties ---
+            .get("canvasWidth",
+                [](CW* w) -> int { return w->scene ? w->scene->width() : 0; })
+            .get("canvasHeight",
+                [](CW* w) -> int { return w->scene ? w->scene->height() : 0; })
+
+            // --- Simple void methods ---
+            .method("save", [](CW* w) { if (w->scene) w->scene->save(); })
+            .method("restore", [](CW* w) { if (w->scene) w->scene->restore(); })
+            .method("reset", [](CW* w) { if (w->scene) w->scene->reset(); })
+            .method("beginPath", [](CW* w) { if (w->scene) w->scene->beginPath(); })
+            .method("closePath", [](CW* w) { if (w->scene) w->scene->closePath(); })
+            .method("stroke", [](CW* w) { if (w->scene) w->scene->stroke(); })
+            .method("fill", [](CW* w) { if (w->scene) w->scene->fill(); })
+            .method("clip", [](CW* w) { if (w->scene) w->scene->clip(); })
+            .method("resetTransform", [](CW* w) { if (w->scene) w->scene->resetTransform(); })
+
+            // --- Methods with typed args ---
+            .method("fillRect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->fillRect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("strokeRect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->strokeRect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("clearRect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->clearRect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("fillText", [](CW* w, std::string text, double x, double y) {
+                if (w->scene) w->scene->fillText(text, (float)x, (float)y);
+            })
+            .method("strokeText", [](CW* w, std::string text, double x, double y) {
+                if (w->scene) w->scene->strokeText(text, (float)x, (float)y);
+            })
+            .method("translate", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->translate((float)x, (float)y);
+            })
+            .method("rotate", [](CW* w, double angle) {
+                if (w->scene) w->scene->rotate((float)angle);
+            })
+            .method("scale", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->scale((float)x, (float)y);
+            })
+            .method("setTransform", [](CW* w, double a, double b, double c, double d, double e, double f) {
+                if (w->scene) w->scene->setTransform((float)a, (float)b, (float)c, (float)d, (float)e, (float)f);
+            })
+            .method("transform", [](CW* w, double a, double b, double c, double d, double e, double f) {
+                if (w->scene) w->scene->transform((float)a, (float)b, (float)c, (float)d, (float)e, (float)f);
+            })
+            .method("moveTo", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->moveTo((float)x, (float)y);
+            })
+            .method("lineTo", [](CW* w, double x, double y) {
+                if (w->scene) w->scene->lineTo((float)x, (float)y);
+            })
+            .method("arcTo", [](CW* w, double x1, double y1, double x2, double y2, double r) {
+                if (w->scene) w->scene->arcTo((float)x1, (float)y1, (float)x2, (float)y2, (float)r);
+            })
+            .method("bezierCurveTo", [](CW* w, double cp1x, double cp1y, double cp2x, double cp2y, double x, double y) {
+                if (w->scene) w->scene->bezierCurveTo((float)cp1x, (float)cp1y, (float)cp2x, (float)cp2y, (float)x, (float)y);
+            })
+            .method("quadraticCurveTo", [](CW* w, double cpx, double cpy, double x, double y) {
+                if (w->scene) w->scene->quadraticCurveTo((float)cpx, (float)cpy, (float)x, (float)y);
+            })
+            .method("rect", [](CW* w, double x, double y, double wi, double h) {
+                if (w->scene) w->scene->rect((float)x, (float)y, (float)wi, (float)h);
+            })
+            .method("isPointInPath", [](CW* w, double x, double y) -> bool {
+                return w->scene ? w->scene->isPointInPath((float)x, (float)y) : false;
+            })
+
+            // --- Complex methods needing raw argc/argv ---
+            .method_raw("arc", js_arc, 6)
+            .method_raw("ellipse", js_ellipse, 8)
+            .method_raw("polyline", js_polyline, 1)
+            .method_raw("drawImage", js_drawImage, 9)
+            .method_raw("getImageData", js_getImageData, 4)
+            .method_raw("putImageData", js_putImageData, 3)
+            .method_raw("createImageData", js_createImageData, 2)
+            .method_raw("measureText", js_measureText, 1);
+    }
+    // Class destructor has run — proto is now registered. Add raw string-enum properties.
+    JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<CW>());
+
+    defineRawProp(ctx, proto, "fillStyle",               raw_get_fillStyle,       raw_set_fillStyle);
+    defineRawProp(ctx, proto, "strokeStyle",             raw_get_strokeStyle,     raw_set_strokeStyle);
+    defineRawProp(ctx, proto, "lineCap",                 raw_get_lineCap,         raw_set_lineCap);
+    defineRawProp(ctx, proto, "lineJoin",                raw_get_lineJoin,        raw_set_lineJoin);
+    defineRawProp(ctx, proto, "globalCompositeOperation",raw_get_globalCompositeOp, raw_set_globalCompositeOp);
+    defineRawProp(ctx, proto, "textAlign",               raw_get_textAlign,       raw_set_textAlign);
+    defineRawProp(ctx, proto, "textBaseline",            raw_get_textBaseline,    raw_set_textBaseline);
+    defineRawProp(ctx, proto, "shadowColor",             raw_get_shadowColor,     raw_set_shadowColor);
+
+    JS_FreeValue(ctx, proto);
 }
 
 void CanvasBindings::cleanup(JSContext*) {
 }
 
 JSValue CanvasBindings::wrapContext2D(JSContext* ctx, canvas::CanvasScene* scene) {
-    JSValue obj = JS_NewObjectClass(ctx, (int)js_ctx2d_class_id);
-    JS_SetOpaque(obj, scene);
-    return obj;
+    auto* w = new Ctx2DWrapper{scene};
+    return qjsbind::wrap<CW>(ctx, w);
 }
 
 } // namespace bro::js

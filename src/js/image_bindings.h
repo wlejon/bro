@@ -1,13 +1,9 @@
 #pragma once
 
+#include <qjsbind/qjsbind.h>
+
 #include <cstdint>
 #include <string>
-
-struct JSContext;
-struct JSValue;
-
-// Forward-declared as opaque — defined in QuickJS
-typedef struct JSValue JSValue;
 
 namespace bro::js {
 

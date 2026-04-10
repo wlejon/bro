@@ -11,6 +11,8 @@
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/analysis/raycast.h>
 #include <bromesh/analysis/bvh.h>
@@ -25,13 +27,6 @@
 JPH_SUPPRESS_WARNINGS
 
 namespace bro::js {
-
-// ---------------------------------------------------------------------------
-// Class IDs
-// ---------------------------------------------------------------------------
-
-static JSClassID js_scenegraph_class_id = 0;
-static JSClassID js_scenenode_class_id = 0;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -138,173 +133,38 @@ struct NodeWrapper {
     scene::SceneGraph* graph;
 };
 
-static void js_scenenode_finalizer(JSRuntime*, JSValue val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(val, js_scenenode_class_id));
-    delete w;
-}
-
-static JSClassDef js_scenenode_class = {
-    "SceneNode", js_scenenode_finalizer, nullptr, nullptr, nullptr
-};
-
-static JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGraph* graph);
-
-// ---------------------------------------------------------------------------
-// SceneNode properties
-// ---------------------------------------------------------------------------
-
-static JSValue js_node_get_id(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewInt32(ctx, w->node->id()) : JS_UNDEFINED;
-}
-
-static JSValue js_node_get_name(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewString(ctx, w->node->name().c_str()) : JS_UNDEFINED;
-}
-
-static JSValue js_node_set_name(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setName(jsStr(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_visible(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewBool(ctx, w->node->visible()) : JS_UNDEFINED;
-}
-
-static JSValue js_node_set_visible(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setVisible(JS_ToBool(ctx, val));
-    return JS_UNDEFINED;
-}
-
-// --- Position ---
-
-static JSValue js_node_get_x(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->position().x) : JS_UNDEFINED;
-}
-static JSValue js_node_set_x(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setPosition(jsNum(ctx, val), w->node->position().y, w->node->position().z);
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_y(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->position().y) : JS_UNDEFINED;
-}
-static JSValue js_node_set_y(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setPosition(w->node->position().x, jsNum(ctx, val), w->node->position().z);
-    return JS_UNDEFINED;
-}
-
-// --- Z position ---
-static JSValue js_node_get_z(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->position().z) : JS_UNDEFINED;
-}
-static JSValue js_node_set_z(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setPosition(w->node->position().x, w->node->position().y, jsNum(ctx, val));
-    return JS_UNDEFINED;
-}
-
-// --- Rotation (Euler angles per axis, radians) ---
-
-static JSValue js_node_get_rotation(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (!w) return JS_UNDEFINED;
-    // Backward compat: returns Z-axis rotation in radians
-    return JS_NewFloat64(ctx, w->node->rotation().toEuler().z);
-}
-static JSValue js_node_set_rotation(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setRotationZ(jsNum(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_rotationX(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->rotation().toEuler().x) : JS_UNDEFINED;
-}
-static JSValue js_node_set_rotationX(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) {
-        auto e = w->node->rotation().toEuler();
-        w->node->setRotationEuler(jsNum(ctx, val), e.y, e.z);
-    }
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_rotationY(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->rotation().toEuler().y) : JS_UNDEFINED;
-}
-static JSValue js_node_set_rotationY(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) {
-        auto e = w->node->rotation().toEuler();
-        w->node->setRotationEuler(e.x, jsNum(ctx, val), e.z);
-    }
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_rotationZ(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->rotation().toEuler().z) : JS_UNDEFINED;
-}
-static JSValue js_node_set_rotationZ(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) {
-        auto e = w->node->rotation().toEuler();
-        w->node->setRotationEuler(e.x, e.y, jsNum(ctx, val));
-    }
-    return JS_UNDEFINED;
-}
-
-// --- Scale ---
-
-static JSValue js_node_get_scaleX(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->scale().x) : JS_UNDEFINED;
-}
-static JSValue js_node_set_scaleX(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setScale(jsNum(ctx, val), w->node->scale().y, w->node->scale().z);
-    return JS_UNDEFINED;
-}
-static JSValue js_node_get_scaleY(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->scale().y) : JS_UNDEFINED;
-}
-static JSValue js_node_set_scaleY(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setScale(w->node->scale().x, jsNum(ctx, val), w->node->scale().z);
-    return JS_UNDEFINED;
-}
-static JSValue js_node_get_scaleZ(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    return w ? JS_NewFloat64(ctx, w->node->scale().z) : JS_UNDEFINED;
-}
-static JSValue js_node_set_scaleZ(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w) w->node->setScale(w->node->scale().x, w->node->scale().y, jsNum(ctx, val));
-    return JS_UNDEFINED;
+static JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGraph* graph) {
+    auto* w = new NodeWrapper{node, graph};
+    return qjsbind::wrap<NodeWrapper>(ctx, w);
 }
 
 // ---------------------------------------------------------------------------
-// SceneNode methods
+// Shape / Physics helpers (cast node to subclass)
+// ---------------------------------------------------------------------------
+
+static scene::ShapeNode* asShape(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, val);
+    if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
+        return static_cast<scene::ShapeNode*>(w->node);
+    return nullptr;
+}
+
+static scene::PhysicsNode* asPhysics(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, val);
+    if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
+        return static_cast<scene::PhysicsNode*>(w->node);
+    return nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// SceneNode raw methods (complex arg handling — kept as standalone functions)
 // ---------------------------------------------------------------------------
 
 // add(child)
 static JSValue js_node_add(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* pw = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    auto* pw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (!pw || argc < 1) return JS_UNDEFINED;
-    auto* cw = static_cast<NodeWrapper*>(JS_GetOpaque(argv[0], js_scenenode_class_id));
+    auto* cw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
     if (!cw) return JS_ThrowTypeError(ctx, "argument must be a SceneNode");
     pw->node->addChild(cw->node);
     return JS_DupValue(ctx, this_val);
@@ -312,40 +172,16 @@ static JSValue js_node_add(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 
 // remove(child)
 static JSValue js_node_remove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* pw = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    auto* pw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (!pw || argc < 1) return JS_UNDEFINED;
-    auto* cw = static_cast<NodeWrapper*>(JS_GetOpaque(argv[0], js_scenenode_class_id));
+    auto* cw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
     if (cw) pw->node->removeChild(cw->node);
     return JS_UNDEFINED;
 }
 
-// children → SceneNode[]
-//
-// Returns a fresh JS array of wrapped child nodes. Each access copies the
-// current child list — the array is not live, so callers iterating it can
-// safely call destroy()/removeChild() during the loop without surprises.
-static JSValue js_node_get_children(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (!w || !w->node) return JS_NewArray(ctx);
-    const auto& kids = w->node->children();
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t i = 0;
-    for (auto* child : kids) {
-        if (child) JS_SetPropertyUint32(ctx, arr, i++, wrapNode(ctx, child, w->graph));
-    }
-    return arr;
-}
-
-// childCount → number — cheap size check that doesn't allocate the array.
-static JSValue js_node_get_childCount(JSContext* ctx, JSValueConst this_val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (!w || !w->node) return JS_NewInt32(ctx, 0);
-    return JS_NewInt32(ctx, (int32_t)w->node->children().size());
-}
-
 // destroy()
 static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (w && w->graph) {
         w->graph->destroyNode(w->node);
         w->node = nullptr;
@@ -355,7 +191,7 @@ static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSVal
 
 // localToWorld(x, y[, z]) → {x, y, z}
 static JSValue js_node_localToWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (!w || argc < 2) return JS_UNDEFINED;
     float z = (argc > 2) ? (float)jsNum(ctx, argv[2]) : 0.0f;
     auto wp = w->node->localToWorld({(float)jsNum(ctx, argv[0]), (float)jsNum(ctx, argv[1]), z});
@@ -366,137 +202,9 @@ static JSValue js_node_localToWorld(JSContext* ctx, JSValueConst this_val, int a
     return obj;
 }
 
-// ---------------------------------------------------------------------------
-// Shape-specific properties (only work on ShapeNodes, silently ignored otherwise)
-// ---------------------------------------------------------------------------
-
-static scene::ShapeNode* asShape(JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(val, js_scenenode_class_id));
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
-        return static_cast<scene::ShapeNode*>(w->node);
-    return nullptr;
-}
-
-static JSValue js_node_get_width(JSContext* ctx, JSValueConst this_val) {
-    if (auto* s = asShape(this_val)) return JS_NewFloat64(ctx, s->width());
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Sprite)
-        return JS_NewFloat64(ctx, static_cast<scene::SpriteNode*>(w->node)->width());
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_width(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* s = asShape(this_val)) s->setSize(jsNum(ctx, val), s->height());
-    return JS_UNDEFINED;
-}
-static JSValue js_node_get_height(JSContext* ctx, JSValueConst this_val) {
-    if (auto* s = asShape(this_val)) return JS_NewFloat64(ctx, s->height());
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_height(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* s = asShape(this_val)) s->setSize(s->width(), jsNum(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_radius(JSContext* ctx, JSValueConst this_val) {
-    if (auto* s = asShape(this_val)) return JS_NewFloat64(ctx, s->radius());
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_radius(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* s = asShape(this_val)) s->setRadius(jsNum(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_fillColor(JSContext* ctx, JSValueConst this_val) {
-    if (auto* s = asShape(this_val)) {
-        auto c = s->fillColor();
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", c.r, c.g, c.b, c.a / 255.0f);
-        return JS_NewString(ctx, buf);
-    }
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_fillColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* s = asShape(this_val)) {
-        uint8_t r, g, b, a;
-        if (parseColor(jsStr(ctx, val), r, g, b, a)) {
-            s->setFillColor({r, g, b, a});
-        }
-    }
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_strokeColor(JSContext* ctx, JSValueConst this_val) {
-    if (auto* s = asShape(this_val)) {
-        auto c = s->strokeColor();
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", c.r, c.g, c.b, c.a / 255.0f);
-        return JS_NewString(ctx, buf);
-    }
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_strokeColor(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* s = asShape(this_val)) {
-        uint8_t r, g, b, a;
-        if (parseColor(jsStr(ctx, val), r, g, b, a)) {
-            s->setStrokeColor({r, g, b, a});
-        }
-    }
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_strokeWidth(JSContext* ctx, JSValueConst this_val) {
-    if (auto* s = asShape(this_val)) return JS_NewFloat64(ctx, s->strokeWidth());
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_strokeWidth(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* s = asShape(this_val)) {
-        s->setStrokeWidth(jsNum(ctx, val));
-        s->setHasStroke(true);
-    }
-    return JS_UNDEFINED;
-}
-
-// ---------------------------------------------------------------------------
-// Physics-specific properties
-// ---------------------------------------------------------------------------
-
-static scene::PhysicsNode* asPhysics(JSValueConst val) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(val, js_scenenode_class_id));
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
-        return static_cast<scene::PhysicsNode*>(w->node);
-    return nullptr;
-}
-
-static JSValue js_node_get_autoSync(JSContext* ctx, JSValueConst this_val) {
-    if (auto* p = asPhysics(this_val)) return JS_NewBool(ctx, p->autoSync());
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_autoSync(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* p = asPhysics(this_val)) p->setAutoSync(JS_ToBool(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_pixelsPerUnit(JSContext* ctx, JSValueConst this_val) {
-    if (auto* p = asPhysics(this_val)) return JS_NewFloat64(ctx, p->pixelsPerUnit());
-    return JS_UNDEFINED;
-}
-static JSValue js_node_set_pixelsPerUnit(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    if (auto* p = asPhysics(this_val)) p->setPixelsPerUnit(jsNum(ctx, val));
-    return JS_UNDEFINED;
-}
-
-static JSValue js_node_get_bodyId(JSContext* ctx, JSValueConst this_val) {
-    if (auto* p = asPhysics(this_val)) {
-        if (p->hasBody())
-            return JS_NewInt32(ctx, (int32_t)p->bodyId().GetIndexAndSequenceNumber());
-        return JS_NULL;
-    }
-    return JS_UNDEFINED;
-}
-
 // syncToPhysics()
 static JSValue js_node_syncToPhysics(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics) {
         auto* pn = static_cast<scene::PhysicsNode*>(w->node);
         if (w->graph && w->graph->physicsWorld())
@@ -511,20 +219,9 @@ static bool jsReadFloatArray(JSContext* ctx, JSValueConst obj, const char* prop,
 static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop,
                               std::vector<uint32_t>& out);
 
-// updateMesh(meshOrOpts[, opts]) — replace geometry on an existing MeshNode.
-//
-// Forms:
-//   node.updateMesh(meshObj)                         // copy
-//   node.updateMesh(meshObj, { transfer: true })     // consume by move
-//   node.updateMesh({ mesh: m, transfer: true })     // same as above
-//   node.updateMesh({ positions, indices, normals }) // raw vertex data
-//
-// With `transfer: true`, the Mesh's underlying MeshData is moved out of the JS
-// wrapper directly into the MeshNode (zero-copy, matching postMessage
-// transferList semantics). The source Mesh is left neutered. Clone first if
-// you still need it.
+// updateMesh(meshOrOpts[, opts])
 static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (!w || !w->node)
         return JS_ThrowTypeError(ctx, "updateMesh: invalid node");
     if (w->node->type() != scene::SceneNode::Type::Mesh)
@@ -536,8 +233,6 @@ static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int arg
     bromesh::MeshData meshData;
     bool gotData = false;
 
-    // Read the optional second-arg opts object (for positional form) or the
-    // transfer flag off the first arg when it's an options object.
     bool transfer = false;
     if (argc >= 2 && JS_IsObject(argv[1])) {
         transfer = jsGetBool(ctx, argv[1], "transfer", false);
@@ -603,87 +298,25 @@ static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int arg
 }
 
 // ---------------------------------------------------------------------------
-// SceneNode prototype
-// ---------------------------------------------------------------------------
-
-static const JSCFunctionListEntry js_scenenode_proto[] = {
-    // Common properties
-    JS_CGETSET_DEF("id", js_node_get_id, nullptr),
-    JS_CGETSET_DEF("name", js_node_get_name, js_node_set_name),
-    JS_CGETSET_DEF("visible", js_node_get_visible, js_node_set_visible),
-    JS_CGETSET_DEF("children", js_node_get_children, nullptr),
-    JS_CGETSET_DEF("childCount", js_node_get_childCount, nullptr),
-
-    // Transform
-    JS_CGETSET_DEF("x", js_node_get_x, js_node_set_x),
-    JS_CGETSET_DEF("y", js_node_get_y, js_node_set_y),
-    JS_CGETSET_DEF("z", js_node_get_z, js_node_set_z),
-    JS_CGETSET_DEF("rotation", js_node_get_rotation, js_node_set_rotation),
-    JS_CGETSET_DEF("rotationX", js_node_get_rotationX, js_node_set_rotationX),
-    JS_CGETSET_DEF("rotationY", js_node_get_rotationY, js_node_set_rotationY),
-    JS_CGETSET_DEF("rotationZ", js_node_get_rotationZ, js_node_set_rotationZ),
-    JS_CGETSET_DEF("scaleX", js_node_get_scaleX, js_node_set_scaleX),
-    JS_CGETSET_DEF("scaleY", js_node_get_scaleY, js_node_set_scaleY),
-    JS_CGETSET_DEF("scaleZ", js_node_get_scaleZ, js_node_set_scaleZ),
-
-    // Shape properties
-    JS_CGETSET_DEF("width", js_node_get_width, js_node_set_width),
-    JS_CGETSET_DEF("height", js_node_get_height, js_node_set_height),
-    JS_CGETSET_DEF("radius", js_node_get_radius, js_node_set_radius),
-    JS_CGETSET_DEF("fillColor", js_node_get_fillColor, js_node_set_fillColor),
-    JS_CGETSET_DEF("strokeColor", js_node_get_strokeColor, js_node_set_strokeColor),
-    JS_CGETSET_DEF("strokeWidth", js_node_get_strokeWidth, js_node_set_strokeWidth),
-
-    // Physics properties
-    JS_CGETSET_DEF("autoSync", js_node_get_autoSync, js_node_set_autoSync),
-    JS_CGETSET_DEF("pixelsPerUnit", js_node_get_pixelsPerUnit, js_node_set_pixelsPerUnit),
-    JS_CGETSET_DEF("bodyId", js_node_get_bodyId, nullptr),
-
-    // Methods
-    JS_CFUNC_DEF("add", 1, js_node_add),
-    JS_CFUNC_DEF("remove", 1, js_node_remove),
-    JS_CFUNC_DEF("destroy", 0, js_node_destroy),
-    JS_CFUNC_DEF("localToWorld", 2, js_node_localToWorld),
-    JS_CFUNC_DEF("syncToPhysics", 0, js_node_syncToPhysics),
-    JS_CFUNC_DEF("updateMesh", 1, js_node_updateMesh),
-};
-
-// ---------------------------------------------------------------------------
-// SceneGraph JS wrapper
+// SceneGraph wrapper
 // ---------------------------------------------------------------------------
 
 struct GraphWrapper {
     scene::SceneGraph* graph;
 };
 
-static void js_scenegraph_finalizer(JSRuntime*, JSValue val) {
-    auto* w = static_cast<GraphWrapper*>(JS_GetOpaque(val, js_scenegraph_class_id));
-    delete w;
-}
-
-static JSClassDef js_scenegraph_class = {
-    "SceneGraph", js_scenegraph_finalizer, nullptr, nullptr, nullptr
-};
-
-static inline scene::SceneGraph* getGraph(JSValueConst val) {
-    auto* w = static_cast<GraphWrapper*>(JS_GetOpaque(val, js_scenegraph_class_id));
+static inline scene::SceneGraph* getGraph(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<GraphWrapper>(ctx, val);
     return w ? w->graph : nullptr;
 }
 
 // ---------------------------------------------------------------------------
-// SceneGraph methods
+// SceneGraph raw methods
 // ---------------------------------------------------------------------------
-
-// root → SceneNode
-static JSValue js_sg_get_root(JSContext* ctx, JSValueConst this_val) {
-    auto* g = getGraph(this_val);
-    if (!g) return JS_UNDEFINED;
-    return wrapNode(ctx, g->root(), g);
-}
 
 // createNode(name?) → SceneNode
 static JSValue js_sg_createNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g) return JS_UNDEFINED;
     std::string name = (argc > 0) ? jsStr(ctx, argv[0]) : "";
     auto* node = g->createNode(name);
@@ -692,9 +325,8 @@ static JSValue js_sg_createNode(JSContext* ctx, JSValueConst this_val, int argc,
 }
 
 // createShape(opts?) → SceneNode (ShapeNode)
-// opts: { shape, width, height, radius, fill, stroke, strokeWidth, ... }
 static JSValue js_sg_createShape(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g) return JS_UNDEFINED;
 
     auto* node = g->createShape();
@@ -816,7 +448,7 @@ static JSValue js_sg_createShape(JSContext* ctx, JSValueConst this_val, int argc
 
 // createSprite(opts?) → SceneNode (SpriteNode)
 static JSValue js_sg_createSprite(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g) return JS_UNDEFINED;
 
     auto* node = g->createSprite();
@@ -870,9 +502,8 @@ static JSValue js_sg_createSprite(JSContext* ctx, JSValueConst this_val, int arg
 }
 
 // createPhysicsNode(opts) → SceneNode (PhysicsNode)
-// opts: { body: bodyTag, pixelsPerUnit, autoSync, name }
 static JSValue js_sg_createPhysicsNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g) return JS_UNDEFINED;
 
     auto* node = g->createPhysicsNode();
@@ -958,9 +589,8 @@ static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop
 }
 
 // createMesh({mesh, color, name, x, y, z, ...})
-// mesh: "box"|"sphere"|"cylinder"|"capsule"|"plane"|"torus" or raw {positions, normals, indices}
 static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g) return JS_UNDEFINED;
 
     auto* node = g->createMesh();
@@ -1033,9 +663,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
         node->setEmissive((float)emissive);
 
-        // Depth bias (polygon offset). Pass either a single number for the
-        // `units` argument, or an array [factor, units]. Negative values pull
-        // the mesh forward in the depth buffer, useful for layering LODs.
+        // Depth bias
         JSValue dbVal = JS_GetPropertyStr(ctx, opts, "depthBias");
         if (!JS_IsUndefined(dbVal)) {
             if (JS_IsArray(dbVal)) {
@@ -1055,13 +683,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, dbVal);
 
-        // Mesh: either a Mesh object, raw vertex data, or a named primitive.
-        //
-        // By default a Mesh argument is COPIED into the new MeshNode, leaving
-        // the JS Mesh usable. Set `transfer: true` in the options to move the
-        // MeshData out of the wrapper instead — the source Mesh is neutered,
-        // matching postMessage transferList semantics. This is the zero-copy
-        // path the terrain worker pipeline uses.
+        // Mesh data
         bromesh::MeshData meshData;
         bool hasRawData = false;
 
@@ -1085,9 +707,6 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
             return took;
         };
 
-        // Prefer "mesh" key, fall back to legacy "data". If "mesh" is a
-        // string ("box", "sphere", ...) the MeshBindings check returns null
-        // and we fall through to the named-primitive branch.
         if (tryKey("mesh")) hasRawData = true;
         else if (tryKey("data")) hasRawData = true;
 
@@ -1153,7 +772,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
 
 // findById(id) → SceneNode | null
 static JSValue js_sg_findById(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1) return JS_NULL;
     int32_t id;
     JS_ToInt32(ctx, &id, argv[0]);
@@ -1163,46 +782,33 @@ static JSValue js_sg_findById(JSContext* ctx, JSValueConst this_val, int argc, J
 
 // findByName(name) → SceneNode | null
 static JSValue js_sg_findByName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1) return JS_NULL;
     auto* node = g->findByName(jsStr(ctx, argv[0]));
     return node ? wrapNode(ctx, node, g) : JS_NULL;
 }
 
-// syncPhysics() — manually sync physics transforms
+// syncPhysics()
 static JSValue js_sg_syncPhysics(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (g) g->syncPhysics();
     return JS_UNDEFINED;
 }
 
 // destroyNode(node)
 static JSValue js_sg_destroyNode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1) return JS_UNDEFINED;
-    auto* cw = static_cast<NodeWrapper*>(JS_GetOpaque(argv[0], js_scenenode_class_id));
+    auto* cw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
     if (cw) g->destroyNode(cw->node);
     return JS_UNDEFINED;
 }
 
-// ---------------------------------------------------------------------------
 // raycast(origin, direction, maxDistance) → { hit, point, normal, distance, node } | null
-//
-// Walks every MeshNode in the graph, inverse-transforms the ray into each
-// node's local space (via its TRS components), calls bromesh::raycast, and
-// keeps the closest hit. Hit position and normal are returned in world space.
-//
-// Assumes the node's world transform is a composition of translate, rotate,
-// and uniform scale (which is what the TRS path in Mat4 produces and what
-// every MeshNode in the engine currently uses). Non-uniform scale would need
-// a proper inverse-transpose for normal transforms — not worth supporting
-// until a caller actually needs it.
-// ---------------------------------------------------------------------------
 static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g || argc < 2) return JS_NULL;
 
-    // Parse origin + direction from JS arrays or object args.
     auto parseVec3 = [&](JSValueConst v, scene::Vec3& out) -> bool {
         if (!JS_IsArray(v)) return false;
         JSValue ex = JS_GetPropertyUint32(ctx, v, 0);
@@ -1224,15 +830,12 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
     if (!parseVec3(argv[0], origin)) return JS_ThrowTypeError(ctx, "raycast: origin must be [x,y,z]");
     if (!parseVec3(argv[1], dir))    return JS_ThrowTypeError(ctx, "raycast: direction must be [x,y,z]");
 
-    double maxDist = 0.0;  // 0 = unlimited per bromesh::raycast
+    double maxDist = 0.0;
     if (argc >= 3) JS_ToFloat64(ctx, &maxDist, argv[2]);
 
-    // Normalize direction so `distance` in the hit result is in world units
-    // regardless of the caller's input magnitude.
     dir = dir.normalized();
     if (dir.lengthSq() < 1e-12f) return JS_NULL;
 
-    // Walk the graph. Track the closest hit across all mesh nodes.
     float closestDist = (maxDist > 0.0) ? (float)maxDist : 1e30f;
     scene::MeshNode* closestNode = nullptr;
     bromesh::RayHit closestHit;
@@ -1246,20 +849,12 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         const bromesh::MeshData& md = mn->mesh();
         if (md.positions.empty() || md.indices.empty()) return;
 
-        // Build world→local inverse from the node's TRS components. This
-        // assumes the node's world matrix is (parent) * T * R * S with
-        // uniform scale; good enough for terrain chunks and the current
-        // MeshNode usage. For parented nodes we'd need to walk and compose
-        // parent inverses — skipped until needed.
         const scene::Vec3& nodePos = node->position();
         const scene::Quat& nodeRot = node->rotation();
         const scene::Vec3& nodeScl = node->scale();
 
         scene::Vec3 localOrigin = origin - nodePos;
         localOrigin = nodeRot.conjugate().rotate(localOrigin);
-        // Uniform scale is the common case; divide component-wise to handle
-        // non-uniform without misbehaving (hit normal is still treated as
-        // uniform below, which is a known limitation).
         if (nodeScl.x != 0.0f) localOrigin.x /= nodeScl.x;
         if (nodeScl.y != 0.0f) localOrigin.y /= nodeScl.y;
         if (nodeScl.z != 0.0f) localOrigin.z /= nodeScl.z;
@@ -1269,26 +864,15 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         if (nodeScl.y != 0.0f) localDir.y /= nodeScl.y;
         if (nodeScl.z != 0.0f) localDir.z /= nodeScl.z;
 
-        // localDir's magnitude affects bromesh raycast's reported distance
-        // (it treats the direction as-is). We normalize and rescale the
-        // distance-bound accordingly so closestDist stays in world units.
         float localDirLen = localDir.length();
         if (localDirLen < 1e-12f) return;
         scene::Vec3 localDirN = localDir * (1.0f / localDirLen);
-        // The closest world hit so far, converted into local-space distance.
-        // For a uniform scale, local distance = world distance / scale.
-        // We use nodeScl.x as the scale factor (uniform assumption).
         float scale = nodeScl.x != 0.0f ? nodeScl.x : 1.0f;
         float localMaxDist = closestDist / scale;
 
-        // Early-out: local-space AABB slab test against the cached bounds.
-        // Prunes most terrain chunks without touching the BVH at all, which
-        // is the big win for terrain apps where the raycast walks thousands
-        // of mesh nodes per click.
+        // Early-out: local-space AABB slab test
         {
             const bromesh::BBox& lb = mn->localBounds();
-            // Expand zero-extent axes slightly so a flat mesh (e.g. a plane)
-            // still passes the slab test along its degenerate axis.
             float bmin[3] = { lb.min[0], lb.min[1], lb.min[2] };
             float bmax[3] = { lb.max[0], lb.max[1], lb.max[2] };
             float invD[3];
@@ -1310,21 +894,17 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
             if (tmax < 0.0f || tmin > tmax || tmin > localMaxDist) return;
         }
 
-        // BVH raycast. MeshNode lazily builds + caches the BVH against the
-        // current mesh; rebuilt after setMesh.
         float o[3] = { localOrigin.x, localOrigin.y, localOrigin.z };
         float d[3] = { localDirN.x, localDirN.y, localDirN.z };
         bromesh::RayHit hit = mn->bvh().raycast(md, o, d, localMaxDist);
         if (!hit.hit) return;
 
-        // Convert the local hit back to world space.
         scene::Vec3 localHit{hit.position[0], hit.position[1], hit.position[2]};
         localHit.x *= nodeScl.x;
         localHit.y *= nodeScl.y;
         localHit.z *= nodeScl.z;
         scene::Vec3 worldHit = nodeRot.rotate(localHit) + nodePos;
 
-        // Distance in world = distance from world ray origin.
         scene::Vec3 toHit = worldHit - origin;
         float worldDist = toHit.length();
         if (worldDist >= closestDist) return;
@@ -1345,10 +925,6 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_SetPropertyStr(ctx, out, "hit", JS_TRUE);
     JS_SetPropertyStr(ctx, out, "distance", JS_NewFloat64(ctx, closestDist));
 
-    // Build the world-space hit point once and expose it under both names:
-    // `position` matches Mesh.raycast()'s field name (the natural choice for
-    // anyone who learned the API there first); `point` is the original alias
-    // and is kept so existing callers don't break.
     JSValue position = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, position, 0, JS_NewFloat64(ctx, closestWorldPoint.x));
     JS_SetPropertyUint32(ctx, position, 1, JS_NewFloat64(ctx, closestWorldPoint.y));
@@ -1393,7 +969,7 @@ static scene::Vec3 jsGetVec3(JSContext* ctx, JSValueConst obj, const char* prop,
     return r;
 }
 
-// Parse a [x, y, z, w] array into Quat. Returns identity if property missing.
+// Parse a [x, y, z, w] array into Quat
 static scene::Quat jsGetQuat(JSContext* ctx, JSValueConst obj, const char* prop, bool& found) {
     JSValue v = JS_GetPropertyStr(ctx, obj, prop);
     scene::Quat r{0, 0, 0, 1};
@@ -1421,21 +997,19 @@ static scene::Quat jsGetQuat(JSContext* ctx, JSValueConst obj, const char* prop,
 
 // setCamera({fov, near, far, aspect, position, target|quaternion, up})
 static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
 
     JSValueConst opts = argv[0];
-    double fov = jsGetProp(ctx, opts, "fov", 60.0) * 3.14159265 / 180.0; // degrees to radians
+    double fov = jsGetProp(ctx, opts, "fov", 60.0) * 3.14159265 / 180.0;
     double nearZ = jsGetProp(ctx, opts, "near", 0.1);
     double farZ = jsGetProp(ctx, opts, "far", 1000.0);
     double aspect = jsGetProp(ctx, opts, "aspect", 0.0);
 
-    // If aspect not provided, default to 4:3 (canvas may not be available here)
     if (aspect <= 0) aspect = 4.0 / 3.0;
 
     scene::Vec3 position = jsGetVec3(ctx, opts, "position", 0, 5, -10);
 
-    // Check for quaternion-based camera (avoids lookAt precision loss)
     bool hasQuat = false;
     scene::Quat quat = jsGetQuat(ctx, opts, "quaternion", hasQuat);
 
@@ -1462,38 +1036,9 @@ static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
-// Camera properties
-static JSValue js_sg_get_cameraX(JSContext* ctx, JSValueConst this_val) {
-    auto* g = getGraph(this_val);
-    return g ? JS_NewFloat64(ctx, g->cameraX()) : JS_UNDEFINED;
-}
-static JSValue js_sg_set_cameraX(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* g = getGraph(this_val);
-    if (g) g->setCameraPosition((float)jsNum(ctx, val), g->cameraY());
-    return JS_UNDEFINED;
-}
-static JSValue js_sg_get_cameraY(JSContext* ctx, JSValueConst this_val) {
-    auto* g = getGraph(this_val);
-    return g ? JS_NewFloat64(ctx, g->cameraY()) : JS_UNDEFINED;
-}
-static JSValue js_sg_set_cameraY(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* g = getGraph(this_val);
-    if (g) g->setCameraPosition(g->cameraX(), (float)jsNum(ctx, val));
-    return JS_UNDEFINED;
-}
-static JSValue js_sg_get_cameraZoom(JSContext* ctx, JSValueConst this_val) {
-    auto* g = getGraph(this_val);
-    return g ? JS_NewFloat64(ctx, g->cameraZoom()) : JS_UNDEFINED;
-}
-static JSValue js_sg_set_cameraZoom(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* g = getGraph(this_val);
-    if (g) g->setCameraZoom((float)jsNum(ctx, val));
-    return JS_UNDEFINED;
-}
-
 // setFog({start, end, color})
 static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
 
     JSValueConst opts = argv[0];
@@ -1506,10 +1051,9 @@ static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 // createTerrain(opts) → Terrain
 static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(this_val);
+    auto* g = getGraph(ctx, this_val);
     if (!g) return JS_NULL;
     JSValueConst opts = (argc >= 1 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED;
-    // If no opts provided, create a temporary empty object for defaults.
     JSValue tmpOpts = JS_UNDEFINED;
     if (JS_IsUndefined(opts)) {
         tmpOpts = JS_NewObject(ctx);
@@ -1521,79 +1065,248 @@ static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int ar
 }
 
 // ---------------------------------------------------------------------------
-// SceneGraph prototype
-// ---------------------------------------------------------------------------
-
-static const JSCFunctionListEntry js_scenegraph_proto[] = {
-    JS_CGETSET_DEF("root", js_sg_get_root, nullptr),
-    JS_CGETSET_DEF("cameraX", js_sg_get_cameraX, js_sg_set_cameraX),
-    JS_CGETSET_DEF("cameraY", js_sg_get_cameraY, js_sg_set_cameraY),
-    JS_CGETSET_DEF("cameraZoom", js_sg_get_cameraZoom, js_sg_set_cameraZoom),
-
-    JS_CFUNC_DEF("createNode", 1, js_sg_createNode),
-    JS_CFUNC_DEF("createShape", 1, js_sg_createShape),
-    JS_CFUNC_DEF("createSprite", 1, js_sg_createSprite),
-    JS_CFUNC_DEF("createPhysicsNode", 1, js_sg_createPhysicsNode),
-    JS_CFUNC_DEF("createMesh", 1, js_sg_createMesh),
-    JS_CFUNC_DEF("createTerrain", 1, js_sg_createTerrain),
-    JS_CFUNC_DEF("findById", 1, js_sg_findById),
-    JS_CFUNC_DEF("findByName", 1, js_sg_findByName),
-    JS_CFUNC_DEF("destroyNode", 1, js_sg_destroyNode),
-    JS_CFUNC_DEF("setCamera", 1, js_sg_setCamera),
-    JS_CFUNC_DEF("setFog", 1, js_sg_setFog),
-    JS_CFUNC_DEF("syncPhysics", 0, js_sg_syncPhysics),
-    JS_CFUNC_DEF("raycast", 2, js_sg_raycast),
-};
-
-// ---------------------------------------------------------------------------
-// Node wrapping helper
-// ---------------------------------------------------------------------------
-
-static JSValue s_scenenode_proto = JS_UNDEFINED;
-
-static JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGraph* graph) {
-    JSValue obj = JS_NewObjectClass(ctx, js_scenenode_class_id);
-    JS_SetPrototype(ctx, obj, JS_DupValue(ctx, s_scenenode_proto));
-    JS_SetOpaque(obj, new NodeWrapper{node, graph});
-    return obj;
-}
-
-// ---------------------------------------------------------------------------
 // Install / Cleanup
 // ---------------------------------------------------------------------------
 
-static JSValue s_scenegraph_proto = JS_UNDEFINED;
-
 void SceneBindings::install(JSContext* ctx) {
-    // SceneNode class
-    JS_NewClassID(JS_GetRuntime(ctx), &js_scenenode_class_id);
-    JS_NewClass(JS_GetRuntime(ctx), js_scenenode_class_id, &js_scenenode_class);
+    // --- SceneNode class ---
+    qjsbind::Class<NodeWrapper>(ctx, "SceneNode")
+        // Common properties
+        .get("id", [](NodeWrapper* w) -> int { return w->node ? w->node->id() : 0; })
+        .prop("name",
+            [](NodeWrapper* w) -> std::string { return w->node ? w->node->name() : ""; },
+            [](NodeWrapper* w, std::string val) { if (w->node) w->node->setName(val); })
+        .prop("visible",
+            [](NodeWrapper* w) -> bool { return w->node ? w->node->visible() : false; },
+            [](NodeWrapper* w, bool val) { if (w->node) w->node->setVisible(val); })
+        .get("childCount", [](NodeWrapper* w) -> int {
+            return (w && w->node) ? (int)w->node->children().size() : 0;
+        })
 
-    s_scenenode_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, s_scenenode_proto,
-                               js_scenenode_proto, sizeof(js_scenenode_proto) / sizeof(js_scenenode_proto[0]));
+        // Transform
+        .prop("x",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->position().x : 0; },
+            [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition((float)val, w->node->position().y, w->node->position().z); })
+        .prop("y",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->position().y : 0; },
+            [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition(w->node->position().x, (float)val, w->node->position().z); })
+        .prop("z",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->position().z : 0; },
+            [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition(w->node->position().x, w->node->position().y, (float)val); })
+        .prop("rotation",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().z : 0; },
+            [](NodeWrapper* w, double val) { if (w->node) w->node->setRotationZ((float)val); })
+        .prop("rotationX",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().x : 0; },
+            [](NodeWrapper* w, double val) {
+                if (w->node) {
+                    auto e = w->node->rotation().toEuler();
+                    w->node->setRotationEuler((float)val, e.y, e.z);
+                }
+            })
+        .prop("rotationY",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().y : 0; },
+            [](NodeWrapper* w, double val) {
+                if (w->node) {
+                    auto e = w->node->rotation().toEuler();
+                    w->node->setRotationEuler(e.x, (float)val, e.z);
+                }
+            })
+        .prop("rotationZ",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().z : 0; },
+            [](NodeWrapper* w, double val) {
+                if (w->node) {
+                    auto e = w->node->rotation().toEuler();
+                    w->node->setRotationEuler(e.x, e.y, (float)val);
+                }
+            })
+        .prop("scaleX",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->scale().x : 1; },
+            [](NodeWrapper* w, double val) { if (w->node) w->node->setScale((float)val, w->node->scale().y, w->node->scale().z); })
+        .prop("scaleY",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->scale().y : 1; },
+            [](NodeWrapper* w, double val) { if (w->node) w->node->setScale(w->node->scale().x, (float)val, w->node->scale().z); })
+        .prop("scaleZ",
+            [](NodeWrapper* w) -> double { return w->node ? w->node->scale().z : 1; },
+            [](NodeWrapper* w, double val) { if (w->node) w->node->setScale(w->node->scale().x, w->node->scale().y, (float)val); })
 
-    // SceneGraph class
-    JS_NewClassID(JS_GetRuntime(ctx), &js_scenegraph_class_id);
-    JS_NewClass(JS_GetRuntime(ctx), js_scenegraph_class_id, &js_scenegraph_class);
+        // Shape properties (silently return undefined / no-op for non-shape nodes)
+        .prop("width",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node) {
+                    if (w->node->type() == scene::SceneNode::Type::Shape)
+                        return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->width());
+                    if (w->node->type() == scene::SceneNode::Type::Sprite)
+                        return JS_NewFloat64(ctx, static_cast<scene::SpriteNode*>(w->node)->width());
+                }
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                    auto* s = static_cast<scene::ShapeNode*>(w->node);
+                    s->setSize(val, s->height());
+                }
+            })
+        .prop("height",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
+                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->height());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                    auto* s = static_cast<scene::ShapeNode*>(w->node);
+                    s->setSize(s->width(), val);
+                }
+            })
+        .prop("radius",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
+                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->radius());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
+                    static_cast<scene::ShapeNode*>(w->node)->setRadius(val);
+            })
+        .prop("fillColor",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                    auto c = static_cast<scene::ShapeNode*>(w->node)->fillColor();
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", c.r, c.g, c.b, c.a / 255.0f);
+                    return JS_NewString(ctx, buf);
+                }
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                    uint8_t r, g, b, a;
+                    if (parseColor(jsStr(ctx, val), r, g, b, a))
+                        static_cast<scene::ShapeNode*>(w->node)->setFillColor({r, g, b, a});
+                }
+            })
+        .prop("strokeColor",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                    auto c = static_cast<scene::ShapeNode*>(w->node)->strokeColor();
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", c.r, c.g, c.b, c.a / 255.0f);
+                    return JS_NewString(ctx, buf);
+                }
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                    uint8_t r, g, b, a;
+                    if (parseColor(jsStr(ctx, val), r, g, b, a))
+                        static_cast<scene::ShapeNode*>(w->node)->setStrokeColor({r, g, b, a});
+                }
+            })
+        .prop("strokeWidth",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
+                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->strokeWidth());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                    auto* s = static_cast<scene::ShapeNode*>(w->node);
+                    s->setStrokeWidth(val);
+                    s->setHasStroke(true);
+                }
+            })
 
-    s_scenegraph_proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, s_scenegraph_proto,
-                               js_scenegraph_proto, sizeof(js_scenegraph_proto) / sizeof(js_scenegraph_proto[0]));
+        // Physics properties
+        .prop("autoSync",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
+                    return JS_NewBool(ctx, static_cast<scene::PhysicsNode*>(w->node)->autoSync());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, bool val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
+                    static_cast<scene::PhysicsNode*>(w->node)->setAutoSync(val);
+            })
+        .prop("pixelsPerUnit",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
+                    return JS_NewFloat64(ctx, static_cast<scene::PhysicsNode*>(w->node)->pixelsPerUnit());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
+                    static_cast<scene::PhysicsNode*>(w->node)->setPixelsPerUnit(val);
+            })
+        .get("bodyId", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics) {
+                auto* p = static_cast<scene::PhysicsNode*>(w->node);
+                if (p->hasBody())
+                    return JS_NewInt32(ctx, (int32_t)p->bodyId().GetIndexAndSequenceNumber());
+                return JS_NULL;
+            }
+            return JS_UNDEFINED;
+        })
+
+        // Complex read-only properties
+        .get("children", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->node) return JS_NewArray(ctx);
+            const auto& kids = w->node->children();
+            JSValue arr = JS_NewArray(ctx);
+            uint32_t i = 0;
+            for (auto* child : kids) {
+                if (child) JS_SetPropertyUint32(ctx, arr, i++, wrapNode(ctx, child, w->graph));
+            }
+            return arr;
+        })
+
+        // Methods (raw — complex arg handling)
+        .method_raw("add", js_node_add, 1)
+        .method_raw("remove", js_node_remove, 1)
+        .method_raw("destroy", js_node_destroy, 0)
+        .method_raw("localToWorld", js_node_localToWorld, 2)
+        .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
+        .method_raw("updateMesh", js_node_updateMesh, 1);
+
+    // --- SceneGraph class ---
+    qjsbind::Class<GraphWrapper>(ctx, "SceneGraph")
+        // Properties
+        .get("root", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
+            return (w && w->graph) ? wrapNode(ctx, w->graph->root(), w->graph) : JS_UNDEFINED;
+        })
+        .prop("cameraX",
+            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->cameraX() : 0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setCameraPosition((float)val, w->graph->cameraY()); })
+        .prop("cameraY",
+            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->cameraY() : 0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setCameraPosition(w->graph->cameraX(), (float)val); })
+        .prop("cameraZoom",
+            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->cameraZoom() : 1; },
+            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setCameraZoom((float)val); })
+
+        // Methods (all raw — complex arg handling)
+        .method_raw("createNode", js_sg_createNode, 1)
+        .method_raw("createShape", js_sg_createShape, 1)
+        .method_raw("createSprite", js_sg_createSprite, 1)
+        .method_raw("createPhysicsNode", js_sg_createPhysicsNode, 1)
+        .method_raw("createMesh", js_sg_createMesh, 1)
+        .method_raw("createTerrain", js_sg_createTerrain, 1)
+        .method_raw("findById", js_sg_findById, 1)
+        .method_raw("findByName", js_sg_findByName, 1)
+        .method_raw("destroyNode", js_sg_destroyNode, 1)
+        .method_raw("setCamera", js_sg_setCamera, 1)
+        .method_raw("setFog", js_sg_setFog, 1)
+        .method_raw("syncPhysics", js_sg_syncPhysics, 0)
+        .method_raw("raycast", js_sg_raycast, 2);
 }
 
 JSValue SceneBindings::wrapSceneGraph(JSContext* ctx, scene::SceneGraph* graph) {
-    JSValue obj = JS_NewObjectClass(ctx, js_scenegraph_class_id);
-    JS_SetPrototype(ctx, obj, JS_DupValue(ctx, s_scenegraph_proto));
-    JS_SetOpaque(obj, new GraphWrapper{graph});
-    return obj;
+    return qjsbind::wrap<GraphWrapper>(ctx, new GraphWrapper{graph});
 }
 
 void SceneBindings::cleanup(JSContext* ctx) {
-    JS_FreeValue(ctx, s_scenenode_proto);
-    JS_FreeValue(ctx, s_scenegraph_proto);
-    s_scenenode_proto = JS_UNDEFINED;
-    s_scenegraph_proto = JS_UNDEFINED;
+    // qjsbind handles class registration; no manual proto cleanup needed.
+    (void)ctx;
 }
 
 } // namespace bro::js

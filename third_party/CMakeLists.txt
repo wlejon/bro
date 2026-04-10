@@ -69,6 +69,17 @@ else()
     add_subdirectory(broaudio EXCLUDE_FROM_ALL)
 endif()
 
+# --- qjsbind (C++20 QuickJS binding library, header-only) ---
+# Prefer the standalone repo at ../qjsbind for local development.
+set(QJSBIND_DIR "${CMAKE_SOURCE_DIR}/../qjsbind" CACHE PATH "Path to standalone qjsbind repo")
+if(EXISTS "${QJSBIND_DIR}/CMakeLists.txt")
+    message(STATUS "qjsbind: using standalone repo at ${QJSBIND_DIR}")
+    add_subdirectory("${QJSBIND_DIR}" "${CMAKE_BINARY_DIR}/qjsbind" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "qjsbind: using submodule at third_party/qjsbind")
+    add_subdirectory(qjsbind EXCLUDE_FROM_ALL)
+endif()
+
 # --- bromesh (mesh generation + manipulation library) ---
 # Prefer the standalone repo at ../bromesh for local development.
 # Falls back to the git submodule at third_party/bromesh.

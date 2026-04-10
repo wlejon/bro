@@ -4,6 +4,8 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include <qjsbind/qjsbind.h>
+
 namespace bro::scene { class SceneGraph; }
 namespace bro::physics { class PhysicsWorld; }
 

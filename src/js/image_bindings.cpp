@@ -1,7 +1,9 @@
 #include "js/image_bindings.h"
+
+#include <qjsbind/qjsbind.h>
+
 #include "util/log.h"
 
-#include <quickjs.h>
 #include <stb_image.h>
 #include <string>
 #include <vector>
@@ -9,7 +11,6 @@
 
 namespace bro::js {
 
-static JSClassID js_image_class_id = 0;
 static std::string s_basePath;  // App directory for resolving relative paths
 
 struct ImageData {
@@ -22,20 +23,7 @@ struct ImageData {
     JSContext* ctx = nullptr;
 };
 
-static void js_image_finalizer(JSRuntime*, JSValue val) {
-    auto* img = static_cast<ImageData*>(JS_GetOpaque(val, js_image_class_id));
-    if (img) {
-        delete img;
-    }
-}
-
-static JSClassDef js_image_class = {
-    "Image", js_image_finalizer, nullptr, nullptr, nullptr
-};
-
-static inline ImageData* getImage(JSValueConst val) {
-    return static_cast<ImageData*>(JS_GetOpaque(val, js_image_class_id));
-}
+using ID = ImageData;
 
 // Resolve an image src path against the app base directory.
 static std::string resolvePath(const std::string& src) {
@@ -49,26 +37,16 @@ static std::string resolvePath(const std::string& src) {
     return path + src;
 }
 
-// --- Properties ---
+// -------------------------------------------------------------------------
+// Complex property setters/methods needing raw signatures
+// -------------------------------------------------------------------------
 
-static JSValue js_image_get_width(JSContext* ctx, JSValueConst this_val) {
-    auto* img = getImage(this_val); if (!img) return JS_UNDEFINED;
-    return JS_NewInt32(ctx, img->width);
-}
-
-static JSValue js_image_get_height(JSContext* ctx, JSValueConst this_val) {
-    auto* img = getImage(this_val); if (!img) return JS_UNDEFINED;
-    return JS_NewInt32(ctx, img->height);
-}
-
-static JSValue js_image_get_src(JSContext* ctx, JSValueConst this_val) {
-    auto* img = getImage(this_val); if (!img) return JS_UNDEFINED;
-    return JS_NewString(ctx, img->src.c_str());
-}
-
-static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* img = getImage(this_val); if (!img) return JS_UNDEFINED;
-    const char* s = JS_ToCString(ctx, val);
+// src setter — loads image via stb_image and fires onload
+static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
+                                int /*argc*/, JSValueConst* argv) {
+    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+    if (!img) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
     if (!s) return JS_UNDEFINED;
     img->src = s;
     JS_FreeCString(ctx, s);
@@ -101,37 +79,23 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, JSValueCo
     return JS_UNDEFINED;
 }
 
-static JSValue js_image_get_complete(JSContext* ctx, JSValueConst this_val) {
-    auto* img = getImage(this_val); if (!img) return JS_UNDEFINED;
-    return JS_NewBool(ctx, img->complete);
-}
-
-static JSValue js_image_get_onload(JSContext* ctx, JSValueConst this_val) {
-    auto* img = getImage(this_val); if (!img) return JS_UNDEFINED;
-    return JS_DupValue(ctx, img->onload);
-}
-
-static JSValue js_image_set_onload(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    auto* img = getImage(this_val); if (!img) return JS_UNDEFINED;
+// onload setter — manages JSValue ref counting
+static JSValue js_image_set_onload(JSContext* ctx, JSValueConst this_val,
+                                    int /*argc*/, JSValueConst* argv) {
+    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+    if (!img) return JS_UNDEFINED;
     if (!JS_IsUndefined(img->onload)) {
         JS_FreeValue(ctx, img->onload);
     }
-    img->onload = JS_DupValue(ctx, val);
+    img->onload = JS_DupValue(ctx, argv[0]);
     return JS_UNDEFINED;
 }
 
-static JSValue js_image_get_naturalWidth(JSContext* ctx, JSValueConst this_val) {
-    return js_image_get_width(ctx, this_val);
-}
-
-static JSValue js_image_get_naturalHeight(JSContext* ctx, JSValueConst this_val) {
-    return js_image_get_height(ctx, this_val);
-}
-
-// addEventListener/removeEventListener — dispatch "load" via onload
+// addEventListener — dispatch "load" via onload
 static JSValue js_image_addEventListener(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
-    auto* img = getImage(this_val); if (!img || argc < 2) return JS_UNDEFINED;
+    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+    if (!img || argc < 2) return JS_UNDEFINED;
     const char* type = JS_ToCString(ctx, argv[0]);
     if (!type) return JS_UNDEFINED;
     if (std::string(type) == "load") {
@@ -142,9 +106,11 @@ static JSValue js_image_addEventListener(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// removeEventListener
 static JSValue js_image_removeEventListener(JSContext* ctx, JSValueConst this_val,
                                              int argc, JSValueConst* argv) {
-    auto* img = getImage(this_val); if (!img || argc < 2) return JS_UNDEFINED;
+    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+    if (!img || argc < 2) return JS_UNDEFINED;
     const char* type = JS_ToCString(ctx, argv[0]);
     if (!type) return JS_UNDEFINED;
     if (std::string(type) == "load") {
@@ -157,64 +123,84 @@ static JSValue js_image_removeEventListener(JSContext* ctx, JSValueConst this_va
     return JS_UNDEFINED;
 }
 
-static const JSCFunctionListEntry js_image_proto_funcs[] = {
-    JS_CGETSET_DEF("width", js_image_get_width, nullptr),
-    JS_CGETSET_DEF("height", js_image_get_height, nullptr),
-    JS_CGETSET_DEF("naturalWidth", js_image_get_naturalWidth, nullptr),
-    JS_CGETSET_DEF("naturalHeight", js_image_get_naturalHeight, nullptr),
-    JS_CGETSET_DEF("src", js_image_get_src, js_image_set_src),
-    JS_CGETSET_DEF("complete", js_image_get_complete, nullptr),
-    JS_CGETSET_DEF("onload", js_image_get_onload, js_image_set_onload),
-    JS_CFUNC_DEF("addEventListener", 2, js_image_addEventListener),
-    JS_CFUNC_DEF("removeEventListener", 2, js_image_removeEventListener),
-};
-
-// --- Constructor ---
-
-static JSValue js_image_constructor(JSContext* ctx, JSValueConst /*new_target*/,
-                                     int /*argc*/, JSValueConst* /*argv*/) {
-    JSValue obj = JS_NewObjectClass(ctx, (int)js_image_class_id);
-    if (JS_IsException(obj)) return obj;
-    auto* img = new ImageData();
-    img->ctx = ctx;
-    JS_SetOpaque(obj, img);
-    return obj;
-}
-
-// --- Install ---
+// -------------------------------------------------------------------------
+// Install
+// -------------------------------------------------------------------------
 
 void ImageBindings::install(JSContext* ctx, const std::string& basePath) {
     s_basePath = basePath;
 
-    JSRuntime* rt = JS_GetRuntime(ctx);
-    JS_NewClassID(rt, &js_image_class_id);
-    JS_NewClass(rt, js_image_class_id, &js_image_class);
+    qjsbind::Class<ID>(ctx, "Image")
+        .constructor([](JSContext* ctx, int /*argc*/, JSValueConst* /*argv*/) -> ID* {
+            auto* img = new ID();
+            img->ctx = ctx;
+            return img;
+        })
+        .get("width", [](ID* self) -> int { return self->width; })
+        .get("height", [](ID* self) -> int { return self->height; })
+        .get("naturalWidth", [](ID* self) -> int { return self->width; })
+        .get("naturalHeight", [](ID* self) -> int { return self->height; })
+        .get("complete", [](ID* self) -> bool { return self->complete; })
+        .get("src", [](ID* self) -> std::string { return self->src; })
+        // src setter is complex (stb_image load + onload callback) — use prop with raw setter
+        // We can't use .prop() with a raw setter, so register src getter above and
+        // override with DefinePropertyGetSet below after the chain.
+        .get("onload", [](ID* self, JSContext* ctx) -> JSValue {
+            return JS_DupValue(ctx, self->onload);
+        })
+        .method_raw("addEventListener", js_image_addEventListener, 2)
+        .method_raw("removeEventListener", js_image_removeEventListener, 2);
 
-    JSValue proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, proto, js_image_proto_funcs,
-                               sizeof(js_image_proto_funcs) / sizeof(js_image_proto_funcs[0]));
-    JS_SetClassProto(ctx, js_image_class_id, proto);
+    // Manually set up src and onload as read-write properties with raw setters.
+    // We need to override the read-only getters set above with proper get+set pairs.
+    JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<ID>());
 
-    // Register Image constructor on global
+    // src property: getter (returns string) + raw setter (loads image)
+    {
+        JSAtom atom = JS_NewAtom(ctx, "src");
+        JS_DefinePropertyGetSet(ctx, proto, atom,
+            JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+                if (!img) return JS_UNDEFINED;
+                return JS_NewString(ctx, img->src.c_str());
+            }, "src", 0),
+            JS_NewCFunction(ctx, js_image_set_src, "src", 1),
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    }
+
+    // onload property: getter (returns dup'd JSValue) + raw setter (ref-counted)
+    {
+        JSAtom atom = JS_NewAtom(ctx, "onload");
+        JS_DefinePropertyGetSet(ctx, proto, atom,
+            JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+                if (!img) return JS_UNDEFINED;
+                return JS_DupValue(ctx, img->onload);
+            }, "onload", 0),
+            JS_NewCFunction(ctx, js_image_set_onload, "onload", 1),
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    }
+
+    JS_FreeValue(ctx, proto);
+
+    // Register HTMLImageElement as an alias for Image on global
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor = JS_NewCFunction2(ctx, js_image_constructor, "Image", 0,
-                                     JS_CFUNC_constructor, 0);
-    JS_SetPropertyStr(ctx, global, "Image", ctor);
-    JS_SetPropertyStr(ctx, global, "HTMLImageElement", JS_DupValue(ctx, ctor));
+    JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
+    JS_SetPropertyStr(ctx, global, "HTMLImageElement", JS_DupValue(ctx, imageCtor));
+    JS_FreeValue(ctx, imageCtor);
     JS_FreeValue(ctx, global);
 }
 
 JSValue ImageBindings::createImage(JSContext* ctx) {
-    JSValue obj = JS_NewObjectClass(ctx, (int)js_image_class_id);
-    if (JS_IsException(obj)) return obj;
-    auto* img = new ImageData();
+    auto* img = new ID();
     img->ctx = ctx;
-    JS_SetOpaque(obj, img);
-    return obj;
+    return qjsbind::wrap<ID>(ctx, img);
 }
 
 bool ImageBindings::getImagePixels(JSValue val, ImagePixels& out) {
-    auto* img = static_cast<ImageData*>(JS_GetOpaque(val, js_image_class_id));
+    auto* img = qjsbind::unwrap<ID>(nullptr, val);
     if (!img || !img->complete || img->pixels.empty()) return false;
     out.data = img->pixels.data();
     out.width = img->width;
