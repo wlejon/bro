@@ -14,19 +14,23 @@ static const char* kMeshVertSrc = R"(
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
+layout(location = 3) in vec4 aColor;
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
+uniform int uUseVertexColor;
 
 out vec3 vWorldPos;
 out vec3 vNormal;
 out vec2 vUV;
+out vec4 vColor;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
     vWorldPos = worldPos.xyz;
     vNormal = mat3(uModel) * aNormal;
     vUV = aUV;
+    vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
 )";
@@ -36,15 +40,20 @@ static const char* kMeshFragSrc = R"(
 in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vUV;
+in vec4 vColor;
 
 uniform vec4 uColor;
 uniform vec3 uLightDir;
 uniform vec3 uCameraPos;
 uniform float uEmissive;
+uniform int uUseVertexColor;
 
 out vec4 FragColor;
 
 void main() {
+    vec3 baseColor = (uUseVertexColor == 1) ? vColor.rgb : uColor.rgb;
+    float baseAlpha = (uUseVertexColor == 1) ? vColor.a : uColor.a;
+
     vec3 N = normalize(vNormal);
     vec3 L = normalize(uLightDir);
 
@@ -57,9 +66,8 @@ void main() {
     float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.3;
 
     float light = ambient + diff * 0.7 + spec;
-    vec3 lit = uColor.rgb * light;
-    vec3 emissiveColor = uColor.rgb;
-    FragColor = vec4(mix(lit, emissiveColor, uEmissive), uColor.a);
+    vec3 lit = baseColor * light;
+    FragColor = vec4(mix(lit, baseColor, uEmissive), baseAlpha);
 }
 )";
 
@@ -250,6 +258,7 @@ void SceneGraph::ensureMeshPipeline() {
         uLightDir_ = glGetUniformLocation(meshProgram_, "uLightDir");
         uCameraPos_ = glGetUniformLocation(meshProgram_, "uCameraPos");
         uEmissive_ = glGetUniformLocation(meshProgram_, "uEmissive");
+        uUseVertexColor_ = glGetUniformLocation(meshProgram_, "uUseVertexColor");
     }
 }
 
@@ -402,6 +411,7 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniformMatrix4fv(uModel_, 1, GL_FALSE, mesh->worldMatrix().data());
     glUniform4fv(uColor_, 1, mesh->color());
     glUniform1f(uEmissive_, mesh->emissive());
+    glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
 
     // Per-mesh polygon offset (depth bias). Used by callers that need to
     // layer co-located meshes — e.g. terrain LOD shells that overlap and need

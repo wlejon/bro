@@ -44,6 +44,7 @@ add_library(bro_js STATIC
     physics_bindings.cpp
     scene_bindings.cpp
     mesh_bindings.cpp
+    terrain_bindings.cpp
     headless_bindings.cpp
     message_serializer.cpp
     worker.cpp

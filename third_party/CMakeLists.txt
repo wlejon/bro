@@ -4,6 +4,22 @@ set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
 add_subdirectory(quickjs EXCLUDE_FROM_ALL)
 
+# --- FastNoise2 (SIMD noise generation) ---
+# Used directly by bro's terrain system. The source lives inside brokit's
+# third_party; brokit guards its own add_subdirectory with if(NOT TARGET FastNoise)
+# so this won't conflict.
+if(NOT TARGET FastNoise)
+    set(FASTNOISE2_NOISETOOL OFF CACHE BOOL "" FORCE)
+    set(FASTNOISE2_TESTS OFF CACHE BOOL "" FORCE)
+    # Resolve via brokit's tree (standalone or submodule).
+    set(_BROKIT_ROOT "${CMAKE_SOURCE_DIR}/../brokit")
+    if(NOT EXISTS "${_BROKIT_ROOT}/CMakeLists.txt")
+        set(_BROKIT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/brokit")
+    endif()
+    add_subdirectory("${_BROKIT_ROOT}/third_party/FastNoise2"
+                     "${CMAKE_BINARY_DIR}/FastNoise2" EXCLUDE_FROM_ALL)
+endif()
+
 # --- brokit (JS runtime APIs) ---
 # Prefer the standalone repo at ../brokit for local development.
 # Falls back to the git submodule at third_party/brokit.

@@ -51,14 +51,17 @@ void MeshNode::uploadToGPU() {
 
     glBindVertexArray(vao_);
 
-    // Interleave: pos(3) + normal(3) + uv(2) = 8 floats per vertex
+    // Interleave: pos(3) + normal(3) + uv(2) + color(4)
     size_t vertCount = mesh_.vertexCount();
     bool hasNormals = mesh_.hasNormals();
     bool hasUVs = mesh_.hasUVs();
+    bool hasColors = mesh_.hasColors();
+    hasVertexColors_ = hasColors;
 
     size_t stride = 3; // position always
     if (hasNormals) stride += 3;
     if (hasUVs) stride += 2;
+    if (hasColors) stride += 4;
 
     std::vector<float> interleaved(vertCount * stride);
     for (size_t i = 0; i < vertCount; i++) {
@@ -76,6 +79,13 @@ void MeshNode::uploadToGPU() {
         if (hasUVs) {
             interleaved[off + at + 0] = mesh_.uvs[i * 2 + 0];
             interleaved[off + at + 1] = mesh_.uvs[i * 2 + 1];
+            at += 2;
+        }
+        if (hasColors) {
+            interleaved[off + at + 0] = mesh_.colors[i * 4 + 0];
+            interleaved[off + at + 1] = mesh_.colors[i * 4 + 1];
+            interleaved[off + at + 2] = mesh_.colors[i * 4 + 2];
+            interleaved[off + at + 3] = mesh_.colors[i * 4 + 3];
         }
     }
 
@@ -95,6 +105,8 @@ void MeshNode::uploadToGPU() {
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, byteStride,
                               (void*)(3 * sizeof(float)));
+    } else {
+        glDisableVertexAttribArray(1);
     }
 
     // Attribute 2: uv (vec2)
@@ -103,6 +115,18 @@ void MeshNode::uploadToGPU() {
         glEnableVertexAttribArray(2);
         glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, byteStride,
                               (void*)(uvOffset * sizeof(float)));
+    } else {
+        glDisableVertexAttribArray(2);
+    }
+
+    // Attribute 3: color (vec4)
+    if (hasColors) {
+        size_t colorOffset = 3 + (hasNormals ? 3 : 0) + (hasUVs ? 2 : 0);
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, byteStride,
+                              (void*)(colorOffset * sizeof(float)));
+    } else {
+        glDisableVertexAttribArray(3);
     }
 
     // Index buffer

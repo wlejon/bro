@@ -1,5 +1,6 @@
 #include "js/scene_bindings.h"
 #include "js/mesh_bindings.h"
+#include "js/terrain_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/shape_node.h"
@@ -1454,6 +1455,22 @@ static JSValue js_sg_set_cameraZoom(JSContext* ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
+// createTerrain(opts) → Terrain
+static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(this_val);
+    if (!g) return JS_NULL;
+    JSValueConst opts = (argc >= 1 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED;
+    // If no opts provided, create a temporary empty object for defaults.
+    JSValue tmpOpts = JS_UNDEFINED;
+    if (JS_IsUndefined(opts)) {
+        tmpOpts = JS_NewObject(ctx);
+        opts = tmpOpts;
+    }
+    JSValue result = createTerrainJS(ctx, g, opts);
+    JS_FreeValue(ctx, tmpOpts);
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // SceneGraph prototype
 // ---------------------------------------------------------------------------
@@ -1469,6 +1486,7 @@ static const JSCFunctionListEntry js_scenegraph_proto[] = {
     JS_CFUNC_DEF("createSprite", 1, js_sg_createSprite),
     JS_CFUNC_DEF("createPhysicsNode", 1, js_sg_createPhysicsNode),
     JS_CFUNC_DEF("createMesh", 1, js_sg_createMesh),
+    JS_CFUNC_DEF("createTerrain", 1, js_sg_createTerrain),
     JS_CFUNC_DEF("findById", 1, js_sg_findById),
     JS_CFUNC_DEF("findByName", 1, js_sg_findByName),
     JS_CFUNC_DEF("destroyNode", 1, js_sg_destroyNode),

@@ -141,6 +141,7 @@ private:
     GLint uLightDir_ = -1;
     GLint uCameraPos_ = -1;
     GLint uEmissive_ = -1;
+    GLint uUseVertexColor_ = -1;
 
     // Mesh FBO
     GLuint meshFBO_ = 0;

@@ -46,6 +46,9 @@ public:
     }
     const float* color() const { return color_; }
 
+    /// Whether the current mesh has per-vertex colors (set after uploadToGPU).
+    bool hasVertexColors() const { return hasVertexColors_; }
+
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
 
@@ -83,6 +86,7 @@ private:
     GLsizei indexCount_ = 0;
 
     // Material
+    bool hasVertexColors_ = false;
     float color_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float emissive_ = 0.0f;
 

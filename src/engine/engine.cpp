@@ -29,6 +29,7 @@
 #include "js/physics_bindings.h"
 #include "js/scene_bindings.h"
 #include "js/mesh_bindings.h"
+#include "js/terrain_bindings.h"
 
 #include "physics/physics_world.h"
 #include "scene/scene_graph.h"
@@ -168,6 +169,9 @@ Engine::Engine(const EngineConfig& config)
 
     // 4d. Mesh bindings (standalone Mesh class wrapping bromesh)
     js::MeshBindings::install(jsRuntime_->getContext());
+
+    // 4e. Terrain bindings (infinite voxel terrain system)
+    js::TerrainBindings::install(jsRuntime_->getContext());
 
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
@@ -716,6 +720,7 @@ Engine::~Engine() {
         js::setElementFinalizerShutdown(true);
         js::cleanupWorkerBindings(ctx);
         js::PhysicsBindings::cleanup(ctx);
+        js::TerrainBindings::cleanup(ctx);
         js::MeshBindings::cleanup(ctx);
         js::SceneBindings::cleanup(ctx);
         js::AudioBindings::cleanup(ctx);
