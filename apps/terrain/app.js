@@ -20,7 +20,6 @@
 var canvas = document.getElementById('c');
 var scene = canvas.getContext('scene');
 var info = document.getElementById('info');
-var W = canvas.clientWidth, H = canvas.clientHeight;
 
 // ----------------------------------------------------------------------------
 // Constants
@@ -125,9 +124,10 @@ function maskMaterial(voxels, matId) {
 
 // Module-level state: the live voxel grid and the per-material mesh nodes
 // that visualise it. Block edits mutate `voxels` in place and call
-// rebuildMeshes() to refresh the scene.
+// rebuildMaterial(matId) to refresh just that material's mesh.
 var voxels = null;
 var terrainNodes = {};   // matId → SceneNode
+var matStats = {};       // matId → { tris, verts }
 var lastStats = { tris: 0, verts: 0, voxels: 0, materials: 0, seed: 0, ms: 0 };
 
 // World-space offset of the chunk's local (0,0,0) corner. The chunk is
@@ -141,6 +141,31 @@ function clearTerrain() {
         if (terrainNodes[key]) terrainNodes[key].destroy();
     }
     terrainNodes = {};
+    matStats = {};
+}
+
+// Look up a material descriptor by id.
+function findMaterial(matId) {
+    for (var i = 0; i < MATERIALS.length; i++) {
+        if (MATERIALS[i].id === matId) return MATERIALS[i];
+    }
+    return null;
+}
+
+// Recompute lastStats from per-material aggregates and the live voxel grid.
+function refreshTotals() {
+    var t = 0, v = 0, m = 0;
+    for (var id in matStats) {
+        t += matStats[id].tris;
+        v += matStats[id].verts;
+        m++;
+    }
+    var solid = 0;
+    for (var i = 0; i < voxels.length; i++) if (voxels[i] !== 0) solid++;
+    lastStats.tris = t;
+    lastStats.verts = v;
+    lastStats.materials = m;
+    lastStats.voxels = solid;
 }
 
 // Voxel grid index. (z * CHUNK_H + y) * CHUNK_W + x — must match
@@ -155,48 +180,48 @@ function inBounds(x, y, z) {
            z >= 0 && z < CHUNK_D;
 }
 
-// Rebuild the per-material meshes for the current `voxels` array. Used by
-// both world generation and live block edits.
-function rebuildMeshes() {
-    var t0 = Date.now();
+// Rebuild a single material's greedy mesh and update its scene node.
+// Block edits only need to re-mesh the material that actually changed
+// (the masked grids for other materials are unaffected — a grass cell
+// going to AIR reads as 0 in the dirt mask both before and after).
+function rebuildMaterial(matId) {
+    var mat = findMaterial(matId);
+    if (!mat) return;
 
-    var totalTris = 0, totalVerts = 0, totalVoxels = 0;
-    for (var i = 0; i < voxels.length; i++) if (voxels[i] !== 0) totalVoxels++;
+    var masked = maskMaterial(voxels, matId);
+    var mesh = Mesh.greedyMesh(masked, CHUNK_W, CHUNK_H, CHUNK_D, 1.0);
 
-    var matCount = 0;
-    for (var m = 0; m < MATERIALS.length; m++) {
-        var mat = MATERIALS[m];
-        var masked = maskMaterial(voxels, mat.id);
-        var mesh = Mesh.greedyMesh(masked, CHUNK_W, CHUNK_H, CHUNK_D, 1.0);
-
-        // Drop the old node for this material whether or not the new mesh
-        // is empty (a destroyed-then-empty material should disappear).
-        if (terrainNodes[mat.id]) {
-            terrainNodes[mat.id].destroy();
-            terrainNodes[mat.id] = null;
-        }
-
-        if (mesh.triangleCount === 0) continue;
-
-        totalTris  += mesh.triangleCount;
-        totalVerts += mesh.vertexCount;
-        matCount++;
-
-        terrainNodes[mat.id] = scene.createMesh({
-            mesh: mesh,
-            transfer: true,
-            x: CHUNK_ORIGIN_X,
-            y: CHUNK_ORIGIN_Y,
-            z: CHUNK_ORIGIN_Z,
-            color: mat.color,
-            name: 'terrain-' + mat.name
-        });
+    // Drop the old node whether or not the new mesh is empty.
+    if (terrainNodes[matId]) {
+        terrainNodes[matId].destroy();
+        terrainNodes[matId] = null;
     }
 
-    lastStats.tris = totalTris;
-    lastStats.verts = totalVerts;
-    lastStats.voxels = totalVoxels;
-    lastStats.materials = matCount;
+    if (mesh.triangleCount === 0) {
+        delete matStats[matId];
+        return;
+    }
+
+    matStats[matId] = { tris: mesh.triangleCount, verts: mesh.vertexCount };
+    terrainNodes[matId] = scene.createMesh({
+        mesh: mesh,
+        transfer: true,
+        x: CHUNK_ORIGIN_X,
+        y: CHUNK_ORIGIN_Y,
+        z: CHUNK_ORIGIN_Z,
+        color: mat.color,
+        name: 'terrain-' + mat.name
+    });
+}
+
+// Rebuild every material from scratch — used by initial world generation
+// and full regenerations (R key).
+function rebuildMeshes() {
+    var t0 = Date.now();
+    for (var m = 0; m < MATERIALS.length; m++) {
+        rebuildMaterial(MATERIALS[m].id);
+    }
+    refreshTotals();
     lastStats.ms = Date.now() - t0;
 }
 
@@ -234,6 +259,9 @@ function worldToVoxel(wx, wy, wz) {
 //   action: 'mine' → set the hit voxel to AIR
 //           'place' → set the empty voxel adjacent to the hit face to `mat`
 // Returns true if a block was modified.
+//
+// Only the material that actually changed gets re-meshed — every other
+// material's masked grid is identical before and after a single edit.
 function pickAndEdit(action, placeMat) {
     var fwd = camForward();
     var hit = scene.raycast(cam.pos, fwd, 200);
@@ -242,22 +270,29 @@ function pickAndEdit(action, placeMat) {
     var p = hit.position || hit.point;
     var n = hit.normal || [0, 1, 0];
 
-    var coord;
+    var coord, idx, changedMat;
     if (action === 'mine') {
         // Step into the block: away from the surface normal.
         coord = worldToVoxel(p[0] - n[0] * 0.5, p[1] - n[1] * 0.5, p[2] - n[2] * 0.5);
         if (!inBounds(coord[0], coord[1], coord[2])) return false;
-        if (voxels[voxelIdx(coord[0], coord[1], coord[2])] === AIR) return false;
-        voxels[voxelIdx(coord[0], coord[1], coord[2])] = AIR;
+        idx = voxelIdx(coord[0], coord[1], coord[2]);
+        if (voxels[idx] === AIR) return false;
+        changedMat = voxels[idx];
+        voxels[idx] = AIR;
     } else {
         // Step out of the block: along the surface normal.
         coord = worldToVoxel(p[0] + n[0] * 0.5, p[1] + n[1] * 0.5, p[2] + n[2] * 0.5);
         if (!inBounds(coord[0], coord[1], coord[2])) return false;
-        if (voxels[voxelIdx(coord[0], coord[1], coord[2])] !== AIR) return false;
-        voxels[voxelIdx(coord[0], coord[1], coord[2])] = placeMat;
+        idx = voxelIdx(coord[0], coord[1], coord[2]);
+        if (voxels[idx] !== AIR) return false;
+        voxels[idx] = placeMat;
+        changedMat = placeMat;
     }
 
-    rebuildMeshes();
+    var t0 = Date.now();
+    rebuildMaterial(changedMat);
+    refreshTotals();
+    lastStats.ms = Date.now() - t0;
     return true;
 }
 
@@ -389,10 +424,16 @@ function render() {
     if (keys[' ']) cam.pos[1] += moveSpeed;
     if (keys['control']) cam.pos[1] -= moveSpeed;
 
+    // Read canvas size every frame so the aspect ratio tracks window
+    // resizes — caching at startup gave wrong proportions whenever the
+    // window wasn't the size we were measured at.
+    var w = canvas.clientWidth || 1;
+    var h = canvas.clientHeight || 1;
+
     var target = v3add(cam.pos, fwd);
     scene.setCamera({
         fov: 65,
-        aspect: W / H,
+        aspect: w / h,
         near: 0.5,
         far: 500,
         position: cam.pos,
@@ -404,6 +445,7 @@ function render() {
         ', ' + cam.pos[2].toFixed(1) +
         ' | fps ' + fps +
         ' | tris ' + lastStats.tris +
+        ' | edit ' + lastStats.ms + 'ms' +
         ' | place: ' + activePlaceMatName() +
         ' | seed ' + lastStats.seed;
 
