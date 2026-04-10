@@ -89,6 +89,19 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
     cfg.lodScaleFactor = jsGetInt(ctx, opts, "lodScaleFactor", cfg.lodScaleFactor);
     cfg.planetRadius = (float)jsGetProp(ctx, opts, "planetRadius", cfg.planetRadius);
 
+    // origin: [x, y, z] — world-space position of this terrain
+    JSValue orig = JS_GetPropertyStr(ctx, opts, "origin");
+    if (JS_IsArray(orig)) {
+        JSValue ox = JS_GetPropertyUint32(ctx, orig, 0);
+        JSValue oy = JS_GetPropertyUint32(ctx, orig, 1);
+        JSValue oz = JS_GetPropertyUint32(ctx, orig, 2);
+        double vx = 0, vy = 0, vz = 0;
+        JS_ToFloat64(ctx, &vx, ox); JS_ToFloat64(ctx, &vy, oy); JS_ToFloat64(ctx, &vz, oz);
+        cfg.origin = {(float)vx, (float)vy, (float)vz};
+        JS_FreeValue(ctx, ox); JS_FreeValue(ctx, oy); JS_FreeValue(ctx, oz);
+    }
+    JS_FreeValue(ctx, orig);
+
     // noise: { frequency, octaves, gain, lacunarity }
     JSValue noise = JS_GetPropertyStr(ctx, opts, "noise");
     if (JS_IsObject(noise)) {
@@ -307,6 +320,22 @@ static JSValue js_terrain_get_farDistance(JSContext* ctx, JSValueConst this_val)
     return (w && w->manager) ? JS_NewFloat64(ctx, w->manager->farDistance()) : JS_NewFloat64(ctx, 1000);
 }
 
+static JSValue js_terrain_get_planetRadius(JSContext* ctx, JSValueConst this_val) {
+    auto* w = getTerrain(this_val);
+    return (w && w->manager) ? JS_NewFloat64(ctx, w->manager->config().planetRadius) : JS_NewFloat64(ctx, 0);
+}
+
+static JSValue js_terrain_get_origin(JSContext* ctx, JSValueConst this_val) {
+    auto* w = getTerrain(this_val);
+    if (!w || !w->manager) return JS_NULL;
+    auto& o = w->manager->config().origin;
+    JSValue arr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, o.x));
+    JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, o.y));
+    JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, o.z));
+    return arr;
+}
+
 // -------------------------------------------------------------------------
 // Terrain prototype
 // -------------------------------------------------------------------------
@@ -323,6 +352,8 @@ static const JSCFunctionListEntry js_terrain_proto[] = {
     JS_CGETSET_DEF("triangleCount", js_terrain_get_triangleCount, nullptr),
     JS_CGETSET_DEF("vertexCount", js_terrain_get_vertexCount, nullptr),
     JS_CGETSET_DEF("farDistance", js_terrain_get_farDistance, nullptr),
+    JS_CGETSET_DEF("planetRadius", js_terrain_get_planetRadius, nullptr),
+    JS_CGETSET_DEF("origin", js_terrain_get_origin, nullptr),
 };
 
 // -------------------------------------------------------------------------

@@ -98,8 +98,6 @@ void TerrainManager::configure(const TerrainConfig& config) {
     config_ = config;
     noise_->build(config_);
     lastCamChunk_ = {INT_MAX, INT_MAX, 0};
-    lastCurvatureCamX_ = 0.0f;
-    lastCurvatureCamZ_ = 0.0f;
 }
 
 // -------------------------------------------------------------------------
@@ -170,11 +168,13 @@ bool TerrainManager::isChunkCoveredByFinerLOD(int cx, int cz, int lod,
 // -------------------------------------------------------------------------
 
 ChunkCoord TerrainManager::worldToChunk(float wx, float wz) const {
+    float lx = wx - config_.origin.x;
+    float lz = wz - config_.origin.z;
     float chunkWorldX = config_.chunkSizeX * config_.cellSize;
     float chunkWorldZ = config_.chunkSizeZ * config_.cellSize;
     return {
-        static_cast<int>(std::floor(wx / chunkWorldX)),
-        static_cast<int>(std::floor(wz / chunkWorldZ)),
+        static_cast<int>(std::floor(lx / chunkWorldX)),
+        static_cast<int>(std::floor(lz / chunkWorldZ)),
         0
     };
 }
@@ -187,9 +187,9 @@ void TerrainManager::worldToLocal(float wx, float wy, float wz,
 
     outChunk = worldToChunk(wx, wz);
 
-    float localX = wx - outChunk.x * chunkWorldX;
-    float localY = wy;
-    float localZ = wz - outChunk.z * chunkWorldZ;
+    float localX = (wx - config_.origin.x) - outChunk.x * chunkWorldX;
+    float localY = wy - config_.origin.y;
+    float localZ = (wz - config_.origin.z) - outChunk.z * chunkWorldZ;
 
     lx = static_cast<int>(std::floor(localX / config_.cellSize));
     ly = static_cast<int>(std::floor(localY / config_.cellSize));
@@ -291,25 +291,40 @@ void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lo
 // Curvature — applied to mesh vertices (not heightmap) so colors stay correct
 // -------------------------------------------------------------------------
 
+// Map a flat-plane point onto the sphere surface.
+// Sphere center is at (0, -R, 0), so the surface at the "north pole" is the origin.
+// Returns world-space position with sphere center offset applied.
+Vec3 TerrainManager::sphereAnchor(float flatX, float flatZ) const {
+    float R = config_.planetRadius;
+    float lon = flatX / R;
+    float lat = flatZ / R;
+    Quat q = Quat::fromAxisAngle({0, 0, 1}, -lon) * Quat::fromAxisAngle({1, 0, 0}, lat);
+    Vec3 p = q.rotate({0, R, 0});
+    return {p.x, p.y - R, p.z};
+}
+
 void TerrainManager::applyCurvatureToMesh(bromesh::MeshData& mesh,
-                                           float chunkCenterX, float chunkCenterZ,
-                                           float effCellSize,
-                                           float camWX, float camWZ) const {
+                                           float chunkCenterX, float chunkCenterZ) const {
     if (config_.planetRadius <= 0.0f) return;
-    float invTwoR = 1.0f / (2.0f * config_.planetRadius);
+    float R = config_.planetRadius;
     size_t vertCount = mesh.vertexCount();
 
-    // heightmapGrid centers mesh at origin; vertices are offset from center.
-    // World position of vertex = chunkCenter + localPosition
+    Vec3 anchor = sphereAnchor(chunkCenterX, chunkCenterZ);
+
     for (size_t i = 0; i < vertCount; i++) {
         float localX = mesh.positions[i * 3 + 0];
+        float h      = mesh.positions[i * 3 + 1];
         float localZ = mesh.positions[i * 3 + 2];
-        float wx = chunkCenterX + localX;
-        float wz = chunkCenterZ + localZ;
-        float dx = wx - camWX;
-        float dz = wz - camWZ;
-        float d2 = dx * dx + dz * dz;
-        mesh.positions[i * 3 + 1] -= d2 * invTwoR;
+
+        // Map each vertex onto the sphere and express relative to anchor
+        float lon = (chunkCenterX + localX) / R;
+        float lat = (chunkCenterZ + localZ) / R;
+        Quat q = Quat::fromAxisAngle({0, 0, 1}, -lon) * Quat::fromAxisAngle({1, 0, 0}, lat);
+        Vec3 spherePos = q.rotate({0, R + h, 0});
+
+        mesh.positions[i * 3 + 0] = spherePos.x - anchor.x;
+        mesh.positions[i * 3 + 1] = (spherePos.y - R) - anchor.y;
+        mesh.positions[i * 3 + 2] = spherePos.z - anchor.z;
     }
 }
 
@@ -461,7 +476,10 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
 
         float chunkW = config_.chunkSizeX * effCellSize;
         float chunkD = config_.chunkSizeZ * effCellSize;
-        entry.meshNode->setPosition({cx * chunkW, 0.0f, cz * chunkD});
+        entry.meshNode->setPosition({
+            config_.origin.x + cx * chunkW,
+            config_.origin.y,
+            config_.origin.z + cz * chunkD});
         nodeToChunk_[entry.meshNode] = {cx, cz, lod};
         return;
     }
@@ -479,9 +497,16 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
     float centerX = cx * chunkW + chunkW * 0.5f;
     float centerZ = cz * chunkD + chunkD * 0.5f;
 
+    // Compute mesh node position (flat or on sphere), then offset by origin
+    Vec3 meshPos = {config_.origin.x + centerX, config_.origin.y, config_.origin.z + centerZ};
+
     if (lod > 0 && config_.planetRadius > 0.0f) {
-        applyCurvatureToMesh(mesh, centerX, centerZ, effCellSize,
-                             lastCurvatureCamX_, lastCurvatureCamZ_);
+        Vec3 anchor = sphereAnchor(centerX, centerZ);
+        meshPos = {config_.origin.x + anchor.x,
+                   config_.origin.y + anchor.y,
+                   config_.origin.z + anchor.z};
+
+        applyCurvatureToMesh(mesh, centerX, centerZ);
     }
 
     if (!entry.meshNode) {
@@ -490,7 +515,7 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
     }
 
     entry.meshNode->setMesh(std::move(mesh));
-    entry.meshNode->setPosition({centerX, 0.0f, centerZ});
+    entry.meshNode->setPosition(meshPos);
 
     if (lod == 0) {
         entry.meshNode->setDepthBias(-1.0f, -1.0f);
@@ -535,6 +560,10 @@ void TerrainManager::unloadChunk(const ChunkCoord& coord) {
 int TerrainManager::update(float camX, float camY, float camZ) {
     lastCamY_ = camY;
 
+    // Convert world-space camera to terrain-local coordinates
+    float localCamX = camX - config_.origin.x;
+    float localCamZ = camZ - config_.origin.z;
+
     ChunkCoord camChunk = worldToChunk(camX, camZ);
     bool camMoved = !(camChunk == lastCamChunk_);
     lastCamChunk_ = camChunk;
@@ -543,12 +572,6 @@ int TerrainManager::update(float camX, float camY, float camZ) {
     int maxPerFrame = config_.maxLoadsPerUpdate;
     int levelCount = std::max(1, config_.lodLevelCount);
 
-    // Initialize curvature center on first update
-    if (lastCurvatureCamX_ == 0.0f && lastCurvatureCamZ_ == 0.0f) {
-        lastCurvatureCamX_ = camX;
-        lastCurvatureCamZ_ = camZ;
-    }
-
     struct LoadCandidate {
         int cx, cz, lod, dist;
     };
@@ -556,9 +579,9 @@ int TerrainManager::update(float camX, float camY, float camZ) {
     for (int lod = 0; lod < levelCount; lod++) {
         float chunkWorld = lodChunkWorldSize(lod);
 
-        // Camera chunk at this LOD level
-        int camCX = static_cast<int>(std::floor(camX / chunkWorld));
-        int camCZ = static_cast<int>(std::floor(camZ / chunkWorld));
+        // Camera chunk at this LOD level (in terrain-local space)
+        int camCX = static_cast<int>(std::floor(localCamX / chunkWorld));
+        int camCZ = static_cast<int>(std::floor(localCamZ / chunkWorld));
 
         int r = lodLoadRadius(lod);
 
@@ -572,7 +595,7 @@ int TerrainManager::update(float camX, float camY, float camZ) {
                 int cz = camCZ + dz;
 
                 // Skip if covered by finer LOD
-                if (lod > 0 && isChunkCoveredByFinerLOD(cx, cz, lod, camX, camZ))
+                if (lod > 0 && isChunkCoveredByFinerLOD(cx, cz, lod, localCamX, localCamZ))
                     continue;
 
                 ChunkCoord coord{cx, cz, lod};
@@ -602,7 +625,7 @@ int TerrainManager::update(float camX, float camY, float camZ) {
                 if (coord.lod != lod) continue;
                 int dist = std::abs(coord.x - camCX) + std::abs(coord.z - camCZ);
                 if (dist > lodUnloadRadius(lod) ||
-                    (lod > 0 && isChunkCoveredByFinerLOD(coord.x, coord.z, lod, camX, camZ))) {
+                    (lod > 0 && isChunkCoveredByFinerLOD(coord.x, coord.z, lod, localCamX, localCamZ))) {
                     toUnload.push_back(coord);
                 }
             }
@@ -612,22 +635,21 @@ int TerrainManager::update(float camX, float camY, float camZ) {
         }
     }
 
-    // Rebake curvature when camera moves significantly.
-    // Heightmaps are pristine (no curvature); curvature is applied to mesh
-    // vertices in buildChunkMesh. So we just rebuild the meshes.
-    if (config_.planetRadius > 0.0f && levelCount > 1) {
-        float dx = camX - lastCurvatureCamX_;
-        float dz = camZ - lastCurvatureCamZ_;
-        float rebakeThreshold = lodChunkWorldSize(1) * 0.5f;
-        if (dx * dx + dz * dz > rebakeThreshold * rebakeThreshold) {
-            lastCurvatureCamX_ = camX;
-            lastCurvatureCamZ_ = camZ;
-
-            for (auto& [coord, entry] : chunks_) {
-                if (coord.lod > 0) {
-                    buildChunkMesh(entry, coord.x, coord.z, coord.lod);
-                }
-            }
+    // Dynamically update nearClipDist: only clip a LOD's fragments when finer
+    // LOD chunks are actually loaded to replace them.  Without this, distant
+    // planets whose finer LODs aren't loaded would clip to nothing.
+    std::vector<bool> lodHasChunks(levelCount, false);
+    for (auto& [coord, entry] : chunks_) {
+        if (coord.lod < levelCount) lodHasChunks[coord.lod] = true;
+    }
+    for (auto& [coord, entry] : chunks_) {
+        if (!entry.meshNode || coord.lod == 0) continue;
+        int finerLod = coord.lod - 1;
+        if (finerLod < levelCount && lodHasChunks[finerLod]) {
+            float finerCoverage = lodChunkWorldSize(finerLod) * lodLoadRadius(finerLod);
+            entry.meshNode->setNearClipDist(finerCoverage * 0.9f);
+        } else {
+            entry.meshNode->setNearClipDist(0.0f);
         }
     }
 

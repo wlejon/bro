@@ -86,6 +86,11 @@ public:
     void setCamera(float fovY, float aspect, float nearZ, float farZ,
                    const Vec3& eye, const Vec3& target, const Vec3& up = {0, 1, 0});
 
+    /// Set a 3D camera from a quaternion orientation (no lookAt — avoids precision loss).
+    /// The quaternion represents the camera's world-space orientation.
+    void setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
+                       const Vec3& eye, const Quat& orientation);
+
     /// Set an orthographic camera.
     void setCameraOrtho(float left, float right, float bottom, float top,
                         float nearZ, float farZ,

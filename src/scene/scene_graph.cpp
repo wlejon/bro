@@ -194,6 +194,20 @@ void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
     cameraEye_ = eye;
 }
 
+void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
+                               const Vec3& eye, const Quat& orientation) {
+    projectionMatrix_ = Mat4::perspective(fovY, aspect, nearZ, farZ);
+    // View matrix = inverse camera transform. For unit quaternion, inverse = conjugate.
+    Quat inv = orientation.conjugate();
+    viewMatrix_ = Mat4::fromQuat(inv);
+    // Translate in rotated space: view translation = inv.rotate(-eye)
+    Vec3 negEye = inv.rotate({-eye.x, -eye.y, -eye.z});
+    viewMatrix_.m[3][0] = negEye.x;
+    viewMatrix_.m[3][1] = negEye.y;
+    viewMatrix_.m[3][2] = negEye.z;
+    cameraEye_ = eye;
+}
+
 void SceneGraph::setCameraOrtho(float left, float right, float bottom, float top,
                                 float nearZ, float farZ,
                                 const Vec3& eye, const Vec3& target, const Vec3& up) {
@@ -385,7 +399,8 @@ void SceneGraph::render() {
             // Set per-frame uniforms
             Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
             glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
-            glUniform3f(uCameraPos_, cameraEye_.x, cameraEye_.y, cameraEye_.z);
+            // Camera pos is origin in camera-relative rendering
+            glUniform3f(uCameraPos_, 0.0f, 0.0f, 0.0f);
             glUniform1f(uFogStart_, fogStart_);
             glUniform1f(uFogEnd_, fogEnd_);
             glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
@@ -431,12 +446,24 @@ void SceneGraph::renderNode(SceneNode* node) {
 }
 
 void SceneGraph::renderMeshNode(MeshNode* mesh) {
-    // Compute MVP = projection * view * model(world)
-    Mat4 vp = projectionMatrix_ * viewMatrix_;
-    Mat4 mvp = vp * mesh->worldMatrix();
+    // Camera-relative rendering: offset model position by camera to avoid
+    // float precision issues at large world coordinates (planet scale).
+    Mat4 model = mesh->worldMatrix();
+    model.m[3][0] -= cameraEye_.x;
+    model.m[3][1] -= cameraEye_.y;
+    model.m[3][2] -= cameraEye_.z;
+
+    // View matrix without translation (rotation only) since model is now
+    // camera-relative
+    Mat4 viewRot = viewMatrix_;
+    viewRot.m[3][0] = 0.0f;
+    viewRot.m[3][1] = 0.0f;
+    viewRot.m[3][2] = 0.0f;
+
+    Mat4 mvp = projectionMatrix_ * viewRot * model;
 
     glUniformMatrix4fv(uMVP_, 1, GL_FALSE, mvp.data());
-    glUniformMatrix4fv(uModel_, 1, GL_FALSE, mesh->worldMatrix().data());
+    glUniformMatrix4fv(uModel_, 1, GL_FALSE, model.data());
     glUniform4fv(uColor_, 1, mesh->color());
     glUniform1f(uEmissive_, mesh->emissive());
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);

@@ -62,6 +62,10 @@ struct TerrainConfig {
     float mountainAmplitude = 0.0f;
     int   mountainOctaves   = 3;
 
+    // World-space origin of this terrain. Allows multiple terrains at
+    // different positions (e.g. multiple planets).
+    Vec3 origin = {0, 0, 0};
+
     // Material palette: RGBA floats, 4 per material ID. Index 0 = air.
     std::vector<float> palette;
 };
@@ -166,9 +170,9 @@ private:
     void generateHeightmap(ChunkEntry& entry, int cx, int cz, int lod);
     void buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod);
     void colorizeByHeight(bromesh::MeshData& mesh);
+    Vec3 sphereAnchor(float flatX, float flatZ) const;
     void applyCurvatureToMesh(bromesh::MeshData& mesh, float chunkCenterX,
-                              float chunkCenterZ, float effCellSize,
-                              float camWX, float camWZ) const;
+                              float chunkCenterZ) const;
     void loadChunk(int cx, int cz, int lod);
     void unloadChunk(const ChunkCoord& coord);
 
@@ -191,9 +195,6 @@ private:
     // Camera altitude (updated each frame, used for altitude-aware LOD)
     float lastCamY_ = 0.0f;
 
-    // Curvature rebake tracking
-    float lastCurvatureCamX_ = 0.0f;
-    float lastCurvatureCamZ_ = 0.0f;
 };
 
 } // namespace bro::scene

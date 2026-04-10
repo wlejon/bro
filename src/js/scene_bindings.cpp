@@ -1393,7 +1393,33 @@ static scene::Vec3 jsGetVec3(JSContext* ctx, JSValueConst obj, const char* prop,
     return r;
 }
 
-// setCamera({fov, near, far, aspect, position, target, up})
+// Parse a [x, y, z, w] array into Quat. Returns identity if property missing.
+static scene::Quat jsGetQuat(JSContext* ctx, JSValueConst obj, const char* prop, bool& found) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
+    scene::Quat r{0, 0, 0, 1};
+    found = false;
+    if (JS_IsArray(v)) {
+        found = true;
+        JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
+        JSValue e2 = JS_GetPropertyUint32(ctx, v, 2);
+        JSValue e3 = JS_GetPropertyUint32(ctx, v, 3);
+        double qx = 0, qy = 0, qz = 0, qw = 1;
+        JS_ToFloat64(ctx, &qx, e0);
+        JS_ToFloat64(ctx, &qy, e1);
+        JS_ToFloat64(ctx, &qz, e2);
+        JS_ToFloat64(ctx, &qw, e3);
+        r = {(float)qx, (float)qy, (float)qz, (float)qw};
+        JS_FreeValue(ctx, e0);
+        JS_FreeValue(ctx, e1);
+        JS_FreeValue(ctx, e2);
+        JS_FreeValue(ctx, e3);
+    }
+    JS_FreeValue(ctx, v);
+    return r;
+}
+
+// setCamera({fov, near, far, aspect, position, target|quaternion, up})
 static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
@@ -1408,19 +1434,29 @@ static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, 
     if (aspect <= 0) aspect = 4.0 / 3.0;
 
     scene::Vec3 position = jsGetVec3(ctx, opts, "position", 0, 5, -10);
-    scene::Vec3 target = jsGetVec3(ctx, opts, "target", 0, 0, 0);
-    scene::Vec3 up = jsGetVec3(ctx, opts, "up", 0, 1, 0);
 
-    std::string mode = jsGetStr(ctx, opts, "mode", "perspective");
-    if (mode == "orthographic" || mode == "ortho") {
-        double size = jsGetProp(ctx, opts, "size", 10.0);
-        float halfW = (float)(size * aspect * 0.5);
-        float halfH = (float)(size * 0.5);
-        g->setCameraOrtho(-halfW, halfW, -halfH, halfH,
-                          (float)nearZ, (float)farZ, position, target, up);
+    // Check for quaternion-based camera (avoids lookAt precision loss)
+    bool hasQuat = false;
+    scene::Quat quat = jsGetQuat(ctx, opts, "quaternion", hasQuat);
+
+    if (hasQuat) {
+        g->setCameraQuat((float)fov, (float)aspect, (float)nearZ, (float)farZ,
+                         position, quat.normalized());
     } else {
-        g->setCamera((float)fov, (float)aspect, (float)nearZ, (float)farZ,
-                     position, target, up);
+        scene::Vec3 target = jsGetVec3(ctx, opts, "target", 0, 0, 0);
+        scene::Vec3 up = jsGetVec3(ctx, opts, "up", 0, 1, 0);
+
+        std::string mode = jsGetStr(ctx, opts, "mode", "perspective");
+        if (mode == "orthographic" || mode == "ortho") {
+            double size = jsGetProp(ctx, opts, "size", 10.0);
+            float halfW = (float)(size * aspect * 0.5);
+            float halfH = (float)(size * 0.5);
+            g->setCameraOrtho(-halfW, halfW, -halfH, halfH,
+                              (float)nearZ, (float)farZ, position, target, up);
+        } else {
+            g->setCamera((float)fov, (float)aspect, (float)nearZ, (float)farZ,
+                         position, target, up);
+        }
     }
 
     return JS_UNDEFINED;
