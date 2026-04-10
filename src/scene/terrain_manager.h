@@ -46,26 +46,45 @@ struct TerrainConfig {
     // Terraced mode: step height in world units
     float terraceStep = 1.0f;
 
+    // Continental noise — large-scale amplitude modulation for mountain ranges.
+    // 0 = disabled (uniform amplitude). >0 adds regional variation.
+    float continentFrequency = 0.0f;   // very low (e.g. 0.002)
+    float continentMin       = 0.1f;   // amplitude scale in plains
+    float continentMax       = 1.5f;   // amplitude scale in mountain ranges
+
+    // LOD ring configuration
+    int   lodLevelCount  = 1;       // 1 = no LOD (current behavior)
+    int   lodScaleFactor = 4;       // each level is N× coarser
+    float planetRadius   = 0.0f;    // 0 = flat; 6371000 = Earth curvature
+
+    // Mountain pass — enormous low-frequency features layered on top
+    float mountainFrequency = 0.0f;   // 0 = disabled
+    float mountainAmplitude = 0.0f;
+    int   mountainOctaves   = 3;
+
     // Material palette: RGBA floats, 4 per material ID. Index 0 = air.
     std::vector<float> palette;
 };
 
 // -------------------------------------------------------------------------
-// Chunk coordinate
+// Chunk coordinate (includes LOD level)
 // -------------------------------------------------------------------------
 
 struct ChunkCoord {
-    int x = 0;
-    int z = 0;
-    bool operator==(const ChunkCoord& o) const { return x == o.x && z == o.z; }
+    int x   = 0;
+    int z   = 0;
+    int lod = 0;
+    bool operator==(const ChunkCoord& o) const {
+        return x == o.x && z == o.z && lod == o.lod;
+    }
 };
 
 struct ChunkCoordHash {
     size_t operator()(const ChunkCoord& c) const {
-        // Spread bits to reduce collisions on grid-aligned coords.
         auto h1 = std::hash<int>()(c.x);
         auto h2 = std::hash<int>()(c.z);
-        return h1 ^ (h2 * 2654435761u);
+        auto h3 = std::hash<int>()(c.lod);
+        return h1 ^ (h2 * 2654435761u) ^ (h3 * 2246822519u);
     }
 };
 
@@ -87,8 +106,9 @@ struct TerrainHit {
 // TerrainManager
 // -------------------------------------------------------------------------
 
-/// Manages an infinite voxel terrain. Owns VoxelChunks and creates MeshNodes
-/// in a SceneGraph. Drives chunk loading/unloading from camera position.
+/// Manages an infinite heightmap terrain with multi-LOD rings and optional
+/// planetary curvature. Creates MeshNodes in a SceneGraph. Drives chunk
+/// loading/unloading from camera position.
 class TerrainManager {
 public:
     explicit TerrainManager(SceneGraph& graph);
@@ -105,14 +125,13 @@ public:
     /// Returns the number of chunks loaded this frame.
     int update(float camX, float camY, float camZ);
 
-    /// Terrain-specific raycast. Returns chunk + voxel info.
+    /// Terrain-specific raycast (LOD 0 only). Returns chunk + voxel info.
     TerrainHit raycast(const Vec3& origin, const Vec3& dir, float maxDist) const;
 
-    /// Set a voxel at world coordinates. Finds the chunk, sets voxel, marks dirty.
-    /// material=0 removes the block. Returns false if chunk not loaded or OOB.
+    /// Height sculpting at world coordinates. material=0 lowers, >0 raises.
     bool setVoxel(float wx, float wy, float wz, uint8_t material);
 
-    /// Get a voxel at world coordinates. Returns 0 if chunk not loaded or OOB.
+    /// Get material based on heightmap height at world coordinates.
     uint8_t getVoxel(float wx, float wy, float wz) const;
 
     /// Rebuild meshes for all dirty chunks.
@@ -122,6 +141,9 @@ public:
     int chunkCount() const { return static_cast<int>(chunks_.size()); }
     int totalTriangles() const;
     int totalVertices() const;
+
+    /// World distance to edge of outermost LOD ring.
+    float farDistance() const;
 
     /// Destroy all chunks and reset state.
     void clear();
@@ -133,10 +155,21 @@ private:
         bool dirty_ = false;            // needs mesh rebuild
     };
 
-    void generateHeightmap(ChunkEntry& entry, int cx, int cz);
-    void buildChunkMesh(ChunkEntry& entry, int cx, int cz);
+    // LOD helpers
+    float lodCellSize(int lod) const;
+    float lodChunkWorldSize(int lod) const;
+    int   lodLoadRadius(int lod) const;
+    int   lodUnloadRadius(int lod) const;
+    bool  isChunkCoveredByFinerLOD(int cx, int cz, int lod,
+                                   float camWorldX, float camWorldZ) const;
+
+    void generateHeightmap(ChunkEntry& entry, int cx, int cz, int lod);
+    void buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod);
     void colorizeByHeight(bromesh::MeshData& mesh);
-    void loadChunk(int cx, int cz);
+    void applyCurvatureToMesh(bromesh::MeshData& mesh, float chunkCenterX,
+                              float chunkCenterZ, float effCellSize,
+                              float camWX, float camWZ) const;
+    void loadChunk(int cx, int cz, int lod);
     void unloadChunk(const ChunkCoord& coord);
 
     ChunkCoord worldToChunk(float wx, float wz) const;
@@ -147,15 +180,20 @@ private:
     TerrainConfig config_;
 
     std::unordered_map<ChunkCoord, ChunkEntry, ChunkCoordHash> chunks_;
-
-    // Reverse map: MeshNode pointer → ChunkCoord (for raycast identification)
     std::unordered_map<const MeshNode*, ChunkCoord> nodeToChunk_;
 
     // FastNoise2 state (opaque, defined in .cpp)
     struct NoiseState;
     std::unique_ptr<NoiseState> noise_;
 
-    ChunkCoord lastCamChunk_ = {INT_MAX, INT_MAX};
+    ChunkCoord lastCamChunk_ = {INT_MAX, INT_MAX, 0};
+
+    // Camera altitude (updated each frame, used for altitude-aware LOD)
+    float lastCamY_ = 0.0f;
+
+    // Curvature rebake tracking
+    float lastCurvatureCamX_ = 0.0f;
+    float lastCurvatureCamZ_ = 0.0f;
 };
 
 } // namespace bro::scene

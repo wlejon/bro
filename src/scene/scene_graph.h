@@ -98,6 +98,12 @@ public:
     /// Camera eye position (for lighting calculations).
     const Vec3& cameraEye() const { return cameraEye_; }
 
+    /// Set distance fog parameters. start/end in world units, color is RGB [0,1].
+    void setFog(float start, float end, float r, float g, float b) {
+        fogStart_ = start; fogEnd_ = end;
+        fogColor_[0] = r; fogColor_[1] = g; fogColor_[2] = b;
+    }
+
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);
     void setCameraZoom(float z);
@@ -142,6 +148,10 @@ private:
     GLint uCameraPos_ = -1;
     GLint uEmissive_ = -1;
     GLint uUseVertexColor_ = -1;
+    GLint uFogStart_ = -1;
+    GLint uFogEnd_ = -1;
+    GLint uFogColor_ = -1;
+    GLint uNearClip_ = -1;
 
     // Mesh FBO
     GLuint meshFBO_ = 0;
@@ -151,6 +161,11 @@ private:
 
     bool hasMeshContent_ = false;
     FBOTextureCallback fboTexCb_;
+
+    // Distance fog
+    float fogStart_ = 0.0f;
+    float fogEnd_ = 0.0f;
+    float fogColor_[3] = {0.0f, 0.0f, 0.0f};
 };
 
 } // namespace bro::scene

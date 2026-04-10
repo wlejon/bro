@@ -1455,6 +1455,19 @@ static JSValue js_sg_set_cameraZoom(JSContext* ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
+// setFog({start, end, color})
+static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst opts = argv[0];
+    double start = jsGetProp(ctx, opts, "start", 0.0);
+    double end = jsGetProp(ctx, opts, "end", 0.0);
+    scene::Vec3 color = jsGetVec3(ctx, opts, "color", 0.0f, 0.0f, 0.0f);
+    g->setFog((float)start, (float)end, color.x, color.y, color.z);
+    return JS_UNDEFINED;
+}
+
 // createTerrain(opts) → Terrain
 static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(this_val);
@@ -1491,6 +1504,7 @@ static const JSCFunctionListEntry js_scenegraph_proto[] = {
     JS_CFUNC_DEF("findByName", 1, js_sg_findByName),
     JS_CFUNC_DEF("destroyNode", 1, js_sg_destroyNode),
     JS_CFUNC_DEF("setCamera", 1, js_sg_setCamera),
+    JS_CFUNC_DEF("setFog", 1, js_sg_setFog),
     JS_CFUNC_DEF("syncPhysics", 0, js_sg_syncPhysics),
     JS_CFUNC_DEF("raycast", 2, js_sg_raycast),
 };

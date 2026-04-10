@@ -19,11 +19,13 @@ layout(location = 3) in vec4 aColor;
 uniform mat4 uMVP;
 uniform mat4 uModel;
 uniform int uUseVertexColor;
+uniform vec3 uCameraPos;
 
 out vec3 vWorldPos;
 out vec3 vNormal;
 out vec2 vUV;
 out vec4 vColor;
+out float vCamDist;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
@@ -31,6 +33,7 @@ void main() {
     vNormal = mat3(uModel) * aNormal;
     vUV = aUV;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
+    vCamDist = length(worldPos.xyz - uCameraPos);
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
 )";
@@ -41,16 +44,24 @@ in vec3 vWorldPos;
 in vec3 vNormal;
 in vec2 vUV;
 in vec4 vColor;
+in float vCamDist;
 
 uniform vec4 uColor;
 uniform vec3 uLightDir;
 uniform vec3 uCameraPos;
 uniform float uEmissive;
 uniform int uUseVertexColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+uniform vec3 uFogColor;
+uniform float uNearClip;
 
 out vec4 FragColor;
 
 void main() {
+    // Discard fragments within finer LOD coverage
+    if (uNearClip > 0.0 && vCamDist < uNearClip) discard;
+
     vec3 baseColor = (uUseVertexColor == 1) ? vColor.rgb : uColor.rgb;
     float baseAlpha = (uUseVertexColor == 1) ? vColor.a : uColor.a;
 
@@ -67,7 +78,17 @@ void main() {
 
     float light = ambient + diff * 0.7 + spec;
     vec3 lit = baseColor * light;
-    FragColor = vec4(mix(lit, baseColor, uEmissive), baseAlpha);
+    vec3 color = mix(lit, baseColor, uEmissive);
+
+    // Distance fog — fade to sky color at far boundary
+    if (uFogEnd > 0.0) {
+        float fogFactor = clamp((vCamDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
+        fogFactor = fogFactor * fogFactor; // smooth quadratic ramp
+        color = mix(color, uFogColor, fogFactor);
+        baseAlpha = mix(baseAlpha, 0.0, fogFactor);
+    }
+
+    FragColor = vec4(color, baseAlpha);
 }
 )";
 
@@ -259,6 +280,10 @@ void SceneGraph::ensureMeshPipeline() {
         uCameraPos_ = glGetUniformLocation(meshProgram_, "uCameraPos");
         uEmissive_ = glGetUniformLocation(meshProgram_, "uEmissive");
         uUseVertexColor_ = glGetUniformLocation(meshProgram_, "uUseVertexColor");
+        uFogStart_ = glGetUniformLocation(meshProgram_, "uFogStart");
+        uFogEnd_ = glGetUniformLocation(meshProgram_, "uFogEnd");
+        uFogColor_ = glGetUniformLocation(meshProgram_, "uFogColor");
+        uNearClip_ = glGetUniformLocation(meshProgram_, "uNearClip");
     }
 }
 
@@ -361,6 +386,9 @@ void SceneGraph::render() {
             Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
             glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
             glUniform3f(uCameraPos_, cameraEye_.x, cameraEye_.y, cameraEye_.z);
+            glUniform1f(uFogStart_, fogStart_);
+            glUniform1f(uFogEnd_, fogEnd_);
+            glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
 
             hasMeshContent_ = true;
         }
@@ -412,6 +440,7 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniform4fv(uColor_, 1, mesh->color());
     glUniform1f(uEmissive_, mesh->emissive());
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
+    glUniform1f(uNearClip_, mesh->nearClipDist());
 
     // Per-mesh polygon offset (depth bias). Used by callers that need to
     // layer co-located meshes — e.g. terrain LOD shells that overlap and need

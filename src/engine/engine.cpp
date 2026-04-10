@@ -241,6 +241,8 @@ Engine::Engine(const EngineConfig& config)
 
     // 9a. Install DOM JS bindings (after window so polyfills work)
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
+    js::DomBindings::setSDLWindow(jsRuntime_->getContext(),
+                                  window_ ? window_->getSDLWindow() : nullptr);
 
     // 9b. Install custom elements (after DOM bindings — needs element class ID)
     js::installCustomElements(jsRuntime_->getContext(),

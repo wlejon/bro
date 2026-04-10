@@ -21,6 +21,9 @@ public:
     /// Document pointer.
     static void install(JSContext* ctx, void* document_ptr);
 
+    /// Set SDL window for pointer lock support.
+    static void setSDLWindow(JSContext* ctx, void* sdl_window);
+
     // -----------------------------------------------------------------------
     // Helpers exposed so other modules can wrap / unwrap DOM objects.
     // -----------------------------------------------------------------------

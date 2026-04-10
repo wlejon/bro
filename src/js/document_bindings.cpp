@@ -2,6 +2,8 @@
 #include "js/custom_elements.h"
 #include "js/image_bindings.h"
 
+#include <SDL3/SDL_mouse.h>
+
 namespace bro::js {
 
 // ===========================================================================
@@ -329,6 +331,16 @@ static JSValue js_document_removeEventListener(JSContext* ctx,
     return JS_UNDEFINED;
 }
 
+// document.exitPointerLock()
+static JSValue js_document_exitPointerLock(JSContext* ctx, JSValueConst /*this_val*/,
+                                            int /*argc*/, JSValueConst* /*argv*/) {
+    auto it = s_ctx_sdl_windows.find(ctx);
+    if (it != s_ctx_sdl_windows.end() && it->second) {
+        SDL_SetWindowRelativeMouseMode(static_cast<SDL_Window*>(it->second), false);
+    }
+    return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry js_document_proto_funcs[] = {
     // Properties
     JS_CGETSET_DEF("title",           js_document_get_title,           js_document_set_title),
@@ -354,6 +366,7 @@ static const JSCFunctionListEntry js_document_proto_funcs[] = {
     JS_CFUNC_DEF("adoptNode",               1, js_document_adoptNode),
     JS_CFUNC_DEF("addEventListener",         2, js_document_addEventListener),
     JS_CFUNC_DEF("removeEventListener",      2, js_document_removeEventListener),
+    JS_CFUNC_DEF("exitPointerLock",          0, js_document_exitPointerLock),
 };
 
 // ===========================================================================

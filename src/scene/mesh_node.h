@@ -64,6 +64,11 @@ public:
     float depthBiasFactor() const { return depthBiasFactor_; }
     float depthBiasUnits() const { return depthBiasUnits_; }
 
+    /// Near clip distance — fragments closer than this are discarded.
+    /// Used to hide coarse LOD terrain where finer LODs are loaded.
+    void setNearClipDist(float d) { nearClipDist_ = d; }
+    float nearClipDist() const { return nearClipDist_; }
+
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
@@ -93,6 +98,9 @@ private:
     // Polygon offset (per-mesh depth bias for layered LOD meshes)
     float depthBiasFactor_ = 0.0f;
     float depthBiasUnits_ = 0.0f;
+
+    // Near clip distance — discard fragments closer than this (for LOD overlap)
+    float nearClipDist_ = 0.0f;
 };
 
 } // namespace bro::scene

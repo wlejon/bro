@@ -6,6 +6,8 @@
 #include "dom/shadow_root.h"
 #include "layout/el_select.h"
 
+#include <SDL3/SDL_mouse.h>
+
 #include "dataset_proxy.js.h"
 
 #include <algorithm>
@@ -2133,6 +2135,16 @@ static JSValue js_element_get_shadowRoot(JSContext* ctx, JSValueConst this_val) 
     return wrapShadowRoot(ctx, sr);
 }
 
+// requestPointerLock() — captures mouse with relative mode
+static JSValue js_element_requestPointerLock(JSContext* ctx, JSValueConst /*this_val*/,
+                                              int /*argc*/, JSValueConst* /*argv*/) {
+    auto it = s_ctx_sdl_windows.find(ctx);
+    if (it != s_ctx_sdl_windows.end() && it->second) {
+        SDL_SetWindowRelativeMouseMode(static_cast<SDL_Window*>(it->second), true);
+    }
+    return JS_UNDEFINED;
+}
+
 // ===========================================================================
 // Element prototype function list
 // ===========================================================================
@@ -2235,6 +2247,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("assignedSlot", js_element_get_assignedSlot, nullptr),
     JS_CFUNC_DEF("assignedNodes",             0, js_element_assignedNodes),
     JS_CFUNC_DEF("assignedElements",          0, js_element_assignedElements),
+    JS_CFUNC_DEF("requestPointerLock",        0, js_element_requestPointerLock),
 };
 
 // ===========================================================================

@@ -20,7 +20,10 @@ namespace bro::scene {
 
 struct TerrainManager::NoiseState {
     FastNoise::SmartNode<> node;
-    float maxAmplitude = 1.0f;  // theoretical peak of FBm output
+    FastNoise::SmartNode<> continentNode;  // large-scale amplitude modulation
+    FastNoise::SmartNode<> mountainNode;   // enormous mountain pass
+    float maxAmplitude = 1.0f;
+    float mountainMaxAmplitude = 1.0f;
 
     void build(const TerrainConfig& cfg) {
         auto simplex = FastNoise::New<FastNoise::Simplex>();
@@ -31,9 +34,6 @@ struct TerrainManager::NoiseState {
         fbm->SetLacunarity(cfg.noiseLacunarity);
         node = fbm;
 
-        // Compute the theoretical max amplitude of the FBm sum:
-        //   sum(gain^i, i=0..octaves-1)
-        // This lets us normalize the output to [-1, 1] regardless of settings.
         float amp = 0.0f;
         float g = 1.0f;
         for (int i = 0; i < cfg.noiseOctaves; i++) {
@@ -41,6 +41,40 @@ struct TerrainManager::NoiseState {
             g *= cfg.noiseGain;
         }
         maxAmplitude = std::max(amp, 1.0f);
+
+        // Continental noise: low-frequency simplex for regional variation
+        if (cfg.continentFrequency > 0.0f) {
+            auto csimplex = FastNoise::New<FastNoise::Simplex>();
+            auto cfbm = FastNoise::New<FastNoise::FractalFBm>();
+            cfbm->SetSource(csimplex);
+            cfbm->SetOctaveCount(3);
+            cfbm->SetGain(0.5f);
+            cfbm->SetLacunarity(2.0f);
+            continentNode = cfbm;
+        } else {
+            continentNode = nullptr;
+        }
+
+        // Mountain pass: enormous low-frequency features
+        if (cfg.mountainFrequency > 0.0f) {
+            auto msimplex = FastNoise::New<FastNoise::Simplex>();
+            auto mfbm = FastNoise::New<FastNoise::FractalFBm>();
+            mfbm->SetSource(msimplex);
+            mfbm->SetOctaveCount(cfg.mountainOctaves);
+            mfbm->SetGain(0.5f);
+            mfbm->SetLacunarity(2.0f);
+            mountainNode = mfbm;
+
+            float mamp = 0.0f;
+            float mg = 1.0f;
+            for (int i = 0; i < cfg.mountainOctaves; i++) {
+                mamp += mg;
+                mg *= 0.5f;
+            }
+            mountainMaxAmplitude = std::max(mamp, 1.0f);
+        } else {
+            mountainNode = nullptr;
+        }
     }
 };
 
@@ -63,7 +97,72 @@ void TerrainManager::configure(const TerrainConfig& config) {
     clear();
     config_ = config;
     noise_->build(config_);
-    lastCamChunk_ = {INT_MAX, INT_MAX};
+    lastCamChunk_ = {INT_MAX, INT_MAX, 0};
+    lastCurvatureCamX_ = 0.0f;
+    lastCurvatureCamZ_ = 0.0f;
+}
+
+// -------------------------------------------------------------------------
+// LOD helpers
+// -------------------------------------------------------------------------
+
+float TerrainManager::lodCellSize(int lod) const {
+    float cs = config_.cellSize;
+    for (int i = 0; i < lod; i++) cs *= config_.lodScaleFactor;
+    return cs;
+}
+
+float TerrainManager::lodChunkWorldSize(int lod) const {
+    return config_.chunkSizeX * lodCellSize(lod);
+}
+
+int TerrainManager::lodLoadRadius(int lod) const {
+    if (lod == 0) {
+        // At high altitudes, reduce LOD0 radius — fine detail isn't visible
+        float altitude = std::max(lastCamY_, 0.0f);
+        float lod0World = lodChunkWorldSize(0);
+        if (altitude > lod0World * 30.0f) return 0;  // skip LOD0 entirely
+        if (altitude > lod0World * 10.0f) {
+            float t = (altitude - lod0World * 10.0f) / (lod0World * 20.0f);
+            return std::max(2, static_cast<int>(config_.loadRadius * (1.0f - t)));
+        }
+        return config_.loadRadius;
+    }
+    // Outer LODs keep a minimum radius of 3 for a wide view
+    return std::max(3, config_.loadRadius / (lod + 1));
+}
+
+int TerrainManager::lodUnloadRadius(int lod) const {
+    return lodLoadRadius(lod) + 2;
+}
+
+bool TerrainManager::isChunkCoveredByFinerLOD(int cx, int cz, int lod,
+                                               float camWorldX, float camWorldZ) const {
+    if (lod == 0) return false;
+
+    int finerLod = lod - 1;
+    int finerRadius = lodLoadRadius(finerLod);
+    float finerChunkWorld = lodChunkWorldSize(finerLod);
+
+    // Camera chunk at finer level
+    int camFinerX = static_cast<int>(std::floor(camWorldX / finerChunkWorld));
+    int camFinerZ = static_cast<int>(std::floor(camWorldZ / finerChunkWorld));
+
+    // This chunk's world bounds → finer-level chunk coords
+    int scale = config_.lodScaleFactor;
+    int finerMinX = cx * scale;
+    int finerMaxX = (cx + 1) * scale - 1;
+    int finerMinZ = cz * scale;
+    int finerMaxZ = (cz + 1) * scale - 1;
+
+    // Check if ALL corners are within the finer level's load radius
+    for (int fx : {finerMinX, finerMaxX}) {
+        for (int fz : {finerMinZ, finerMaxZ}) {
+            int dist = std::abs(fx - camFinerX) + std::abs(fz - camFinerZ);
+            if (dist > finerRadius) return false;
+        }
+    }
+    return true;
 }
 
 // -------------------------------------------------------------------------
@@ -75,7 +174,8 @@ ChunkCoord TerrainManager::worldToChunk(float wx, float wz) const {
     float chunkWorldZ = config_.chunkSizeZ * config_.cellSize;
     return {
         static_cast<int>(std::floor(wx / chunkWorldX)),
-        static_cast<int>(std::floor(wz / chunkWorldZ))
+        static_cast<int>(std::floor(wz / chunkWorldZ)),
+        0
     };
 }
 
@@ -97,34 +197,119 @@ void TerrainManager::worldToLocal(float wx, float wy, float wz,
 }
 
 // -------------------------------------------------------------------------
-// Heightmap generation (noise → height values)
+// Heightmap generation (noise → height values, LOD-aware)
 // -------------------------------------------------------------------------
 
-void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz) {
-    // Grid has +1 vertices in each direction to produce sizeX * sizeZ quads.
+void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lod) {
     int gridW = config_.chunkSizeX + 1;
     int gridH = config_.chunkSizeZ + 1;
-    entry.heightmap.resize(static_cast<size_t>(gridW) * gridH);
+    size_t count = static_cast<size_t>(gridW) * gridH;
+    entry.heightmap.resize(count);
 
-    // World offset of this chunk's (0,0) corner in noise space.
-    // GenUniformGrid2D: position = index * step + offset
-    // For continuity across chunks: offset = chunkIndex * chunkSize * step
-    float worldOffX = cx * config_.chunkSizeX * config_.noiseFrequency;
-    float worldOffZ = cz * config_.chunkSizeZ * config_.noiseFrequency;
+    float effCellSize = lodCellSize(lod);
+
+    // Primary terrain noise
+    float step = effCellSize * config_.noiseFrequency;
+    float worldOffX = cx * config_.chunkSizeX * step;
+    float worldOffZ = cz * config_.chunkSizeZ * step;
 
     noise_->node->GenUniformGrid2D(entry.heightmap.data(),
                                    worldOffX, worldOffZ,
                                    gridW, gridH,
-                                   config_.noiseFrequency, config_.noiseFrequency,
+                                   step, step,
                                    config_.seed);
 
-    // Normalize FBm output by theoretical amplitude and convert to world heights.
+    // Continental noise — same world positions, much lower frequency
+    std::vector<float> continent;
+    if (noise_->continentNode) {
+        continent.resize(count);
+        float cstep = effCellSize * config_.continentFrequency;
+        float cwOffX = cx * config_.chunkSizeX * cstep;
+        float cwOffZ = cz * config_.chunkSizeZ * cstep;
+        noise_->continentNode->GenUniformGrid2D(continent.data(),
+                                                cwOffX, cwOffZ,
+                                                gridW, gridH,
+                                                cstep, cstep,
+                                                config_.seed + 7777);
+    }
+
+    // Mountain pass — enormous low-frequency terrain features
+    std::vector<float> mountain;
+    if (noise_->mountainNode) {
+        mountain.resize(count);
+        float mstep = effCellSize * config_.mountainFrequency;
+        float mwOffX = cx * config_.chunkSizeX * mstep;
+        float mwOffZ = cz * config_.chunkSizeZ * mstep;
+        noise_->mountainNode->GenUniformGrid2D(mountain.data(),
+                                               mwOffX, mwOffZ,
+                                               gridW, gridH,
+                                               mstep, mstep,
+                                               config_.seed + 55555);
+    }
+
     float invAmp = 1.0f / noise_->maxAmplitude;
-    for (size_t i = 0; i < entry.heightmap.size(); i++) {
+    float mInvAmp = noise_->mountainNode
+        ? (1.0f / noise_->mountainMaxAmplitude) : 1.0f;
+    float cMin = config_.continentMin;
+    float cMax = config_.continentMax;
+
+    for (size_t i = 0; i < count; i++) {
         float raw = entry.heightmap[i];
+        // Normalize but don't clamp — allow full height range
         float t = (raw * invAmp + 1.0f) * 0.5f;
-        t = std::clamp(t, 0.0f, 1.0f);
-        entry.heightmap[i] = config_.baseHeight + (t - 0.5f) * 2.0f * config_.heightAmplitude;
+
+        // Continental modulation: scale amplitude regionally
+        float ampScale = 1.0f;
+        if (!continent.empty()) {
+            float cn = (continent[i] * 0.5f + 0.5f);
+            cn = std::clamp(cn, 0.0f, 1.0f);
+            ampScale = cMin + cn * (cMax - cMin);
+        }
+
+        float h = config_.baseHeight
+            + (t - 0.5f) * 2.0f * config_.heightAmplitude * ampScale;
+
+        // Add enormous mountain features, gated by continental noise
+        // Mountains only appear in "mountain regions" (high ampScale)
+        if (!mountain.empty()) {
+            float mn = mountain[i] * mInvAmp;  // roughly [-1, 1]
+            float ridge = 1.0f - std::abs(mn);
+            // Fade mountains based on continental influence:
+            // ampScale ranges from continentMin to continentMax
+            // Normalize to [0,1] then threshold so only high regions get mountains
+            float mGate = (ampScale - cMin) / std::max(cMax - cMin, 0.01f);
+            mGate = std::clamp(mGate, 0.0f, 1.0f);
+            mGate = mGate * mGate;  // sharpen: only strong continental regions
+            h += ridge * config_.mountainAmplitude * mGate;
+        }
+
+        entry.heightmap[i] = h;
+    }
+}
+
+// -------------------------------------------------------------------------
+// Curvature — applied to mesh vertices (not heightmap) so colors stay correct
+// -------------------------------------------------------------------------
+
+void TerrainManager::applyCurvatureToMesh(bromesh::MeshData& mesh,
+                                           float chunkCenterX, float chunkCenterZ,
+                                           float effCellSize,
+                                           float camWX, float camWZ) const {
+    if (config_.planetRadius <= 0.0f) return;
+    float invTwoR = 1.0f / (2.0f * config_.planetRadius);
+    size_t vertCount = mesh.vertexCount();
+
+    // heightmapGrid centers mesh at origin; vertices are offset from center.
+    // World position of vertex = chunkCenter + localPosition
+    for (size_t i = 0; i < vertCount; i++) {
+        float localX = mesh.positions[i * 3 + 0];
+        float localZ = mesh.positions[i * 3 + 2];
+        float wx = chunkCenterX + localX;
+        float wz = chunkCenterZ + localZ;
+        float dx = wx - camWX;
+        float dz = wz - camWZ;
+        float d2 = dx * dx + dz * dz;
+        mesh.positions[i * 3 + 1] -= d2 * invTwoR;
     }
 }
 
@@ -154,7 +339,7 @@ void TerrainManager::colorizeByHeight(bromesh::MeshData& mesh) {
         float r, g, b;
 
         if (y <= seaF) {
-            samplePalette(5, r, g, b);  // sand
+            samplePalette(5, r, g, b);
         } else if (y <= grassTop) {
             float t = (y - seaF) / std::max(grassTop - seaF, 0.01f);
             float gr, gg, gb, dr, dg, db;
@@ -172,10 +357,9 @@ void TerrainManager::colorizeByHeight(bromesh::MeshData& mesh) {
             g = dg + (sg - dg) * t;
             b = db + (sb - db) * t;
         } else {
-            samplePalette(3, r, g, b);  // stone
+            samplePalette(3, r, g, b);
         }
 
-        // Slope-based darkening for depth cues
         float ny = mesh.normals.empty() ? 1.0f : mesh.normals[i * 3 + 1];
         float shade = 0.7f + 0.3f * std::max(ny, 0.0f);
         mesh.colors[i * 4 + 0] = r * shade;
@@ -186,59 +370,59 @@ void TerrainManager::colorizeByHeight(bromesh::MeshData& mesh) {
 }
 
 // -------------------------------------------------------------------------
-// Mesh building — mode-aware
+// Mesh building — mode-aware, LOD-aware
 // -------------------------------------------------------------------------
 
-void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz) {
+void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) {
     if (entry.heightmap.empty()) return;
 
     int gridW = config_.chunkSizeX + 1;
     int gridH = config_.chunkSizeZ + 1;
+    float effCellSize = lodCellSize(lod);
 
     bromesh::MeshData mesh;
 
     switch (config_.meshMode) {
     default:
     case 0: {
-        // --- Smooth: heightmapGrid with smooth normals ---
         mesh = bromesh::heightmapGrid(entry.heightmap.data(),
-                                      gridW, gridH, config_.cellSize);
+                                      gridW, gridH, effCellSize);
         break;
     }
     case 1: {
-        // --- Flat: heightmapGrid then per-face normals (low-poly) ---
         mesh = bromesh::heightmapGrid(entry.heightmap.data(),
-                                      gridW, gridH, config_.cellSize);
+                                      gridW, gridH, effCellSize);
         mesh = bromesh::computeFlatNormals(mesh);
         break;
     }
     case 2: {
-        // --- Terraced: quantize heights to steps, then flat normals ---
         float step = std::max(config_.terraceStep, 0.25f);
+        // Scale terrace step with LOD, but cap to avoid giant flat mesas
+        if (lod > 0) {
+            float scale = lodCellSize(lod) / config_.cellSize;
+            step *= std::sqrt(scale);  // sqrt scaling instead of linear
+        }
         std::vector<float> quantized(entry.heightmap.size());
         for (size_t i = 0; i < entry.heightmap.size(); i++) {
             quantized[i] = std::floor(entry.heightmap[i] / step) * step;
         }
         mesh = bromesh::heightmapGrid(quantized.data(),
-                                      gridW, gridH, config_.cellSize);
+                                      gridW, gridH, effCellSize);
         mesh = bromesh::computeFlatNormals(mesh);
         break;
     }
     case 3: {
-        // --- Blocky: convert heightmap to voxel grid, greedy mesh ---
         int sizeX = config_.chunkSizeX;
         int sizeZ = config_.chunkSizeZ;
 
-        // Determine voxel grid height from the max height in this chunk.
         float maxH = 0.0f;
         for (size_t i = 0; i < entry.heightmap.size(); i++)
             maxH = std::max(maxH, entry.heightmap[i]);
         int sizeY = std::max(static_cast<int>(maxH) + 2, 4);
 
-        bromesh::VoxelChunk voxels(sizeX, sizeY, sizeZ, config_.cellSize);
+        bromesh::VoxelChunk voxels(sizeX, sizeY, sizeZ, effCellSize);
         voxels.fill(0);
 
-        // Fill voxel columns from heightmap (sample at grid interior points)
         for (int z = 0; z < sizeZ; z++) {
             for (int x = 0; x < sizeX; x++) {
                 float fh = entry.heightmap[z * gridW + x];
@@ -249,10 +433,10 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz) {
                 float seaF = static_cast<float>(config_.seaLevel);
                 for (int y = 0; y <= h && y < sizeY; y++) {
                     uint8_t mat;
-                    if (y == 0)          mat = 4;  // bedrock
-                    else if (y == h)     mat = (h <= (int)seaF) ? 5 : 1;  // sand/grass
-                    else if (y >= h - 3) mat = (h <= (int)seaF) ? 5 : 2;  // sand/dirt
-                    else                 mat = 3;  // stone
+                    if (y == 0)          mat = 4;
+                    else if (y == h)     mat = (h <= (int)seaF) ? 5 : 1;
+                    else if (y >= h - 3) mat = (h <= (int)seaF) ? 5 : 2;
+                    else                 mat = 3;
                     voxels.setVoxel(x, y, z, mat);
                 }
             }
@@ -263,7 +447,6 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz) {
             config_.palette.empty() ? nullptr : config_.palette.data(),
             static_cast<int>(config_.palette.size() / 4));
 
-        // Blocky mesh is positioned at local origin (not centered like heightmapGrid).
         if (!entry.meshNode) {
             entry.meshNode = graph_.createMesh("terrain-chunk");
             graph_.root()->addChild(entry.meshNode);
@@ -276,19 +459,30 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz) {
         }
         entry.meshNode->setMesh(std::move(mesh));
 
-        // Voxel mesh is at local origin, position at chunk corner.
-        float wx = cx * sizeX * config_.cellSize;
-        float wz = cz * sizeZ * config_.cellSize;
-        entry.meshNode->setPosition({wx, 0.0f, wz});
-        nodeToChunk_[entry.meshNode] = {cx, cz};
-        return;  // blocky has its own positioning; skip the common path below
+        float chunkW = config_.chunkSizeX * effCellSize;
+        float chunkD = config_.chunkSizeZ * effCellSize;
+        entry.meshNode->setPosition({cx * chunkW, 0.0f, cz * chunkD});
+        nodeToChunk_[entry.meshNode] = {cx, cz, lod};
+        return;
     }
     }
 
     // --- Common path for heightmap-based modes (0, 1, 2) ---
     if (mesh.positions.empty()) return;
 
+    // Colorize BEFORE curvature so colors reflect true elevation, not curved Y
     colorizeByHeight(mesh);
+
+    // Apply curvature to mesh vertices for LOD > 0
+    float chunkW = config_.chunkSizeX * effCellSize;
+    float chunkD = config_.chunkSizeZ * effCellSize;
+    float centerX = cx * chunkW + chunkW * 0.5f;
+    float centerZ = cz * chunkD + chunkD * 0.5f;
+
+    if (lod > 0 && config_.planetRadius > 0.0f) {
+        applyCurvatureToMesh(mesh, centerX, centerZ, effCellSize,
+                             lastCurvatureCamX_, lastCurvatureCamZ_);
+    }
 
     if (!entry.meshNode) {
         entry.meshNode = graph_.createMesh("terrain-chunk");
@@ -296,30 +490,31 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz) {
     }
 
     entry.meshNode->setMesh(std::move(mesh));
+    entry.meshNode->setPosition({centerX, 0.0f, centerZ});
 
-    // heightmapGrid is centered at origin. Position node at chunk center.
-    float chunkW = config_.chunkSizeX * config_.cellSize;
-    float chunkD = config_.chunkSizeZ * config_.cellSize;
-    entry.meshNode->setPosition({
-        cx * chunkW + chunkW * 0.5f,
-        0.0f,
-        cz * chunkD + chunkD * 0.5f
-    });
+    if (lod == 0) {
+        entry.meshNode->setDepthBias(-1.0f, -1.0f);
+        entry.meshNode->setNearClipDist(0.0f);
+    } else {
+        // Clip this LOD's fragments where the finer LOD covers
+        float finerCoverage = lodChunkWorldSize(lod - 1) * lodLoadRadius(lod - 1);
+        entry.meshNode->setNearClipDist(finerCoverage * 0.9f);
+    }
 
-    nodeToChunk_[entry.meshNode] = {cx, cz};
+    nodeToChunk_[entry.meshNode] = {cx, cz, lod};
 }
 
 // -------------------------------------------------------------------------
 // Chunk loading / unloading
 // -------------------------------------------------------------------------
 
-void TerrainManager::loadChunk(int cx, int cz) {
-    ChunkCoord coord{cx, cz};
+void TerrainManager::loadChunk(int cx, int cz, int lod) {
+    ChunkCoord coord{cx, cz, lod};
     if (chunks_.count(coord)) return;
 
     auto& entry = chunks_[coord];
-    generateHeightmap(entry, cx, cz);
-    buildChunkMesh(entry, cx, cz);
+    generateHeightmap(entry, cx, cz, lod);
+    buildChunkMesh(entry, cx, cz, lod);
 }
 
 void TerrainManager::unloadChunk(const ChunkCoord& coord) {
@@ -334,77 +529,118 @@ void TerrainManager::unloadChunk(const ChunkCoord& coord) {
 }
 
 // -------------------------------------------------------------------------
-// Update (camera-driven loading/unloading)
+// Update (camera-driven loading/unloading, multi-LOD)
 // -------------------------------------------------------------------------
 
 int TerrainManager::update(float camX, float camY, float camZ) {
-    (void)camY;
+    lastCamY_ = camY;
 
     ChunkCoord camChunk = worldToChunk(camX, camZ);
     bool camMoved = !(camChunk == lastCamChunk_);
     lastCamChunk_ = camChunk;
 
-    int loaded = 0;
+    int totalLoaded = 0;
+    int maxPerFrame = config_.maxLoadsPerUpdate;
+    int levelCount = std::max(1, config_.lodLevelCount);
 
-    // Load chunks within loadRadius that aren't loaded yet.
-    // Build a sorted candidate list (closest first) and load up to
-    // maxLoadsPerUpdate per frame to avoid stalls.
+    // Initialize curvature center on first update
+    if (lastCurvatureCamX_ == 0.0f && lastCurvatureCamZ_ == 0.0f) {
+        lastCurvatureCamX_ = camX;
+        lastCurvatureCamZ_ = camZ;
+    }
+
     struct LoadCandidate {
-        int cx, cz, dist;
+        int cx, cz, lod, dist;
     };
-    std::vector<LoadCandidate> candidates;
 
-    int r = config_.loadRadius;
-    for (int dz = -r; dz <= r; dz++) {
-        for (int dx = -r; dx <= r; dx++) {
-            int dist = std::abs(dx) + std::abs(dz);
-            if (dist > r) continue;
-            int cx = camChunk.x + dx;
-            int cz = camChunk.z + dz;
-            if (!chunks_.count({cx, cz})) {
-                candidates.push_back({cx, cz, dist});
+    for (int lod = 0; lod < levelCount; lod++) {
+        float chunkWorld = lodChunkWorldSize(lod);
+
+        // Camera chunk at this LOD level
+        int camCX = static_cast<int>(std::floor(camX / chunkWorld));
+        int camCZ = static_cast<int>(std::floor(camZ / chunkWorld));
+
+        int r = lodLoadRadius(lod);
+
+        // Build load candidates
+        std::vector<LoadCandidate> candidates;
+        for (int dz = -r; dz <= r; dz++) {
+            for (int dx = -r; dx <= r; dx++) {
+                int dist = std::abs(dx) + std::abs(dz);
+                if (dist > r) continue;
+                int cx = camCX + dx;
+                int cz = camCZ + dz;
+
+                // Skip if covered by finer LOD
+                if (lod > 0 && isChunkCoveredByFinerLOD(cx, cz, lod, camX, camZ))
+                    continue;
+
+                ChunkCoord coord{cx, cz, lod};
+                if (!chunks_.count(coord)) {
+                    candidates.push_back({cx, cz, lod, dist});
+                }
+            }
+        }
+
+        if (!candidates.empty()) {
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const LoadCandidate& a, const LoadCandidate& b) {
+                          return a.dist < b.dist;
+                      });
+
+            for (auto& c : candidates) {
+                if (totalLoaded >= maxPerFrame) break;
+                loadChunk(c.cx, c.cz, c.lod);
+                totalLoaded++;
+            }
+        }
+
+        // Unload chunks beyond radius OR now covered by finer LOD
+        if (camMoved) {
+            std::vector<ChunkCoord> toUnload;
+            for (auto& [coord, entry] : chunks_) {
+                if (coord.lod != lod) continue;
+                int dist = std::abs(coord.x - camCX) + std::abs(coord.z - camCZ);
+                if (dist > lodUnloadRadius(lod) ||
+                    (lod > 0 && isChunkCoveredByFinerLOD(coord.x, coord.z, lod, camX, camZ))) {
+                    toUnload.push_back(coord);
+                }
+            }
+            for (auto& coord : toUnload) {
+                unloadChunk(coord);
             }
         }
     }
 
-    if (!candidates.empty()) {
-        std::sort(candidates.begin(), candidates.end(),
-                  [](const LoadCandidate& a, const LoadCandidate& b) {
-                      return a.dist < b.dist;
-                  });
+    // Rebake curvature when camera moves significantly.
+    // Heightmaps are pristine (no curvature); curvature is applied to mesh
+    // vertices in buildChunkMesh. So we just rebuild the meshes.
+    if (config_.planetRadius > 0.0f && levelCount > 1) {
+        float dx = camX - lastCurvatureCamX_;
+        float dz = camZ - lastCurvatureCamZ_;
+        float rebakeThreshold = lodChunkWorldSize(1) * 0.5f;
+        if (dx * dx + dz * dz > rebakeThreshold * rebakeThreshold) {
+            lastCurvatureCamX_ = camX;
+            lastCurvatureCamZ_ = camZ;
 
-        for (auto& c : candidates) {
-            if (loaded >= config_.maxLoadsPerUpdate) break;
-            loadChunk(c.cx, c.cz);
-            loaded++;
-        }
-    }
-
-    // Unload chunks beyond unloadRadius (only check when camera moved).
-    if (camMoved) {
-        std::vector<ChunkCoord> toUnload;
-        for (auto& [coord, entry] : chunks_) {
-            int dist = std::abs(coord.x - camChunk.x) + std::abs(coord.z - camChunk.z);
-            if (dist > config_.unloadRadius) {
-                toUnload.push_back(coord);
+            for (auto& [coord, entry] : chunks_) {
+                if (coord.lod > 0) {
+                    buildChunkMesh(entry, coord.x, coord.z, coord.lod);
+                }
             }
         }
-        for (auto& coord : toUnload) {
-            unloadChunk(coord);
-        }
     }
 
-    return loaded;
+    return totalLoaded;
 }
 
 // -------------------------------------------------------------------------
-// Raycast
+// Raycast (LOD 0 only)
 // -------------------------------------------------------------------------
 
 TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float maxDist) const {
     TerrainHit result;
 
-    // Walk all loaded chunks' MeshNodes, find closest hit.
     Vec3 ndir = dir.normalized();
     if (ndir.lengthSq() < 1e-12f) return result;
 
@@ -414,12 +650,13 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
     Vec3 closestWorldNormal;
 
     for (auto& [coord, entry] : chunks_) {
+        // Only raycast against LOD 0 (detail level)
+        if (coord.lod != 0) continue;
         if (!entry.meshNode || !entry.meshNode->visible()) continue;
 
         const auto& md = entry.meshNode->mesh();
         if (md.positions.empty() || md.indices.empty()) continue;
 
-        // Transform ray to local space.
         const Vec3& nodePos = entry.meshNode->position();
         const Quat& nodeRot = entry.meshNode->rotation();
         const Vec3& nodeScl = entry.meshNode->scale();
@@ -442,7 +679,6 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
         float scale = nodeScl.x != 0.0f ? nodeScl.x : 1.0f;
         float localMaxDist = closestDist / scale;
 
-        // AABB early-out.
         const bromesh::BBox& lb = entry.meshNode->localBounds();
         float bmin[3] = { lb.min[0], lb.min[1], lb.min[2] };
         float bmax[3] = { lb.max[0], lb.max[1], lb.max[2] };
@@ -464,13 +700,11 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
         }
         if (tmax < 0.0f || tmin > tmax || tmin > localMaxDist) continue;
 
-        // BVH raycast.
         float rayO[3] = { localOrigin.x, localOrigin.y, localOrigin.z };
         float rayD[3] = { localDirN.x, localDirN.y, localDirN.z };
         bromesh::RayHit hit = entry.meshNode->bvh().raycast(md, rayO, rayD, localMaxDist);
         if (!hit.hit) continue;
 
-        // Convert to world space.
         Vec3 localHit{hit.position[0], hit.position[1], hit.position[2]};
         localHit.x *= nodeScl.x;
         localHit.y *= nodeScl.y;
@@ -499,13 +733,11 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
     result.normal[2] = closestWorldNormal.z;
     result.distance = closestDist;
 
-    // Identify chunk from the reverse map.
     auto it = nodeToChunk_.find(closestNode);
     if (it != nodeToChunk_.end()) {
         result.chunk = it->second;
     }
 
-    // Convert hit to voxel coords (nudge inward by -normal*0.5).
     float nudgeX = closestWorldPos.x - closestWorldNormal.x * 0.5f;
     float nudgeY = closestWorldPos.y - closestWorldNormal.y * 0.5f;
     float nudgeZ = closestWorldPos.z - closestWorldNormal.z * 0.5f;
@@ -518,7 +750,6 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
     result.localY = ly;
     result.localZ = lz;
 
-    // Determine material from heightmap at the hit point.
     auto chunkIt = chunks_.find(hitChunk);
     if (chunkIt != chunks_.end()) {
         int gridW = config_.chunkSizeX + 1;
@@ -526,10 +757,10 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
         if (lx >= 0 && lx < gridW && lz >= 0 && lz < gridH) {
             float h = chunkIt->second.heightmap[lz * gridW + lx];
             float seaF = static_cast<float>(config_.seaLevel);
-            if (h <= seaF) result.material = 5;       // sand
-            else if (h <= seaF + config_.heightAmplitude * 0.6f) result.material = 1; // grass
-            else if (h <= seaF + config_.heightAmplitude * 0.85f) result.material = 2; // dirt
-            else result.material = 3;                  // stone
+            if (h <= seaF) result.material = 5;
+            else if (h <= seaF + config_.heightAmplitude * 0.6f) result.material = 1;
+            else if (h <= seaF + config_.heightAmplitude * 0.85f) result.material = 2;
+            else result.material = 3;
         }
     }
 
@@ -537,12 +768,10 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
 }
 
 // -------------------------------------------------------------------------
-// Voxel edits
+// Voxel edits (LOD 0 only)
 // -------------------------------------------------------------------------
 
 bool TerrainManager::setVoxel(float wx, float wy, float wz, uint8_t material) {
-    // Heightmap sculpting: raise or lower terrain at (wx, wz).
-    // material == 0 → lower by 1, material > 0 → raise by 1.
     ChunkCoord coord;
     int lx, ly, lz;
     worldToLocal(wx, wy, wz, coord, lx, ly, lz);
@@ -562,7 +791,6 @@ bool TerrainManager::setVoxel(float wx, float wy, float wz, uint8_t material) {
 }
 
 uint8_t TerrainManager::getVoxel(float wx, float wy, float wz) const {
-    // Return a material ID based on the heightmap height at (wx, wz).
     ChunkCoord coord;
     int lx, ly, lz;
     worldToLocal(wx, wy, wz, coord, lx, ly, lz);
@@ -580,7 +808,7 @@ uint8_t TerrainManager::getVoxel(float wx, float wy, float wz) const {
 void TerrainManager::rebuildDirty() {
     for (auto& [coord, entry] : chunks_) {
         if (entry.dirty_) {
-            buildChunkMesh(entry, coord.x, coord.z);
+            buildChunkMesh(entry, coord.x, coord.z, coord.lod);
             entry.dirty_ = false;
         }
     }
@@ -610,6 +838,11 @@ int TerrainManager::totalVertices() const {
     return total;
 }
 
+float TerrainManager::farDistance() const {
+    int maxLod = std::max(1, config_.lodLevelCount) - 1;
+    return lodChunkWorldSize(maxLod) * lodLoadRadius(maxLod);
+}
+
 // -------------------------------------------------------------------------
 // Cleanup
 // -------------------------------------------------------------------------
@@ -622,7 +855,7 @@ void TerrainManager::clear() {
     }
     chunks_.clear();
     nodeToChunk_.clear();
-    lastCamChunk_ = {INT_MAX, INT_MAX};
+    lastCamChunk_ = {INT_MAX, INT_MAX, 0};
 }
 
 } // namespace bro::scene

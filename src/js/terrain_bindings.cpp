@@ -79,6 +79,15 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
     cfg.seaLevel = jsGetInt(ctx, opts, "seaLevel", cfg.seaLevel);
     cfg.meshMode = jsGetInt(ctx, opts, "meshMode", cfg.meshMode);
     cfg.terraceStep = (float)jsGetProp(ctx, opts, "terraceStep", cfg.terraceStep);
+    cfg.continentFrequency = (float)jsGetProp(ctx, opts, "continentFrequency", cfg.continentFrequency);
+    cfg.continentMin = (float)jsGetProp(ctx, opts, "continentMin", cfg.continentMin);
+    cfg.continentMax = (float)jsGetProp(ctx, opts, "continentMax", cfg.continentMax);
+    cfg.mountainFrequency = (float)jsGetProp(ctx, opts, "mountainFrequency", cfg.mountainFrequency);
+    cfg.mountainAmplitude = (float)jsGetProp(ctx, opts, "mountainAmplitude", cfg.mountainAmplitude);
+    cfg.mountainOctaves = jsGetInt(ctx, opts, "mountainOctaves", cfg.mountainOctaves);
+    cfg.lodLevelCount = jsGetInt(ctx, opts, "lodLevels", cfg.lodLevelCount);
+    cfg.lodScaleFactor = jsGetInt(ctx, opts, "lodScaleFactor", cfg.lodScaleFactor);
+    cfg.planetRadius = (float)jsGetProp(ctx, opts, "planetRadius", cfg.planetRadius);
 
     // noise: { frequency, octaves, gain, lacunarity }
     JSValue noise = JS_GetPropertyStr(ctx, opts, "noise");
@@ -293,6 +302,11 @@ static JSValue js_terrain_get_vertexCount(JSContext* ctx, JSValueConst this_val)
     return (w && w->manager) ? JS_NewInt32(ctx, w->manager->totalVertices()) : JS_NewInt32(ctx, 0);
 }
 
+static JSValue js_terrain_get_farDistance(JSContext* ctx, JSValueConst this_val) {
+    auto* w = getTerrain(this_val);
+    return (w && w->manager) ? JS_NewFloat64(ctx, w->manager->farDistance()) : JS_NewFloat64(ctx, 1000);
+}
+
 // -------------------------------------------------------------------------
 // Terrain prototype
 // -------------------------------------------------------------------------
@@ -308,6 +322,7 @@ static const JSCFunctionListEntry js_terrain_proto[] = {
     JS_CGETSET_DEF("chunkCount", js_terrain_get_chunkCount, nullptr),
     JS_CGETSET_DEF("triangleCount", js_terrain_get_triangleCount, nullptr),
     JS_CGETSET_DEF("vertexCount", js_terrain_get_vertexCount, nullptr),
+    JS_CGETSET_DEF("farDistance", js_terrain_get_farDistance, nullptr),
 };
 
 // -------------------------------------------------------------------------

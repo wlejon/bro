@@ -32,6 +32,7 @@ JSClassID js_htmlcollection_class_id = 0;
 std::unordered_map<JSRuntime*, bool> s_classes_registered;
 std::unordered_map<JSContext*, bro::dom::Document*> s_ctx_documents;
 std::unordered_map<JSContext*, DomBindings::GetContextFactory> s_ctx_factories;
+std::unordered_map<JSContext*, void*> s_ctx_sdl_windows;
 
 bro::dom::Document* getDocumentForCtx(JSContext* ctx) {
     auto it = s_ctx_documents.find(ctx);
@@ -176,9 +177,14 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
 // Cleanup
 // ===========================================================================
 
+void DomBindings::setSDLWindow(JSContext* ctx, void* sdl_window) {
+    s_ctx_sdl_windows[ctx] = sdl_window;
+}
+
 void DomBindings::cleanup(JSContext* ctx) {
     s_ctx_documents.erase(ctx);
     s_ctx_factories.erase(ctx);
+    s_ctx_sdl_windows.erase(ctx);
 }
 
 void DomBindings::cleanupRuntime(JSRuntime* rt) {

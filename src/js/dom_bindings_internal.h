@@ -42,6 +42,9 @@ extern std::unordered_map<JSRuntime*, bool> s_classes_registered;
 extern std::unordered_map<JSContext*, bro::dom::Document*> s_ctx_documents;
 extern std::unordered_map<JSContext*, DomBindings::GetContextFactory> s_ctx_factories;
 
+// SDL window pointer for pointer lock support (stored as void* to avoid SDL header dependency)
+extern std::unordered_map<JSContext*, void*> s_ctx_sdl_windows;
+
 bro::dom::Document* getDocumentForCtx(JSContext* ctx);
 
 // ===========================================================================
