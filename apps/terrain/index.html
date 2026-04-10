@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Terrain</title>
+    <style>
+        html, body { margin: 0; padding: 0; overflow: hidden; background: #87ceeb; }
+        canvas { display: block; cursor: crosshair; width: 100vw; height: 100vh; }
+        #hud {
+            position: absolute; top: 10px; left: 10px;
+            color: #fff; font: 13px monospace;
+            background: rgba(0,0,0,0.55); padding: 10px 14px;
+            border-radius: 6px; pointer-events: none;
+            line-height: 1.5;
+        }
+        #hud b { color: #ffe066; }
+        #hud .title { color: #b5e853; font-size: 15px; font-weight: bold; }
+        #info { margin-top: 6px; color: #d0d0d0; }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 12px; height: 12px; margin: -6px 0 0 -6px;
+            border: 1px solid rgba(255,255,255,0.7);
+            border-radius: 50%; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="c"></canvas>
+    <div id="crosshair"></div>
+    <div id="hud">
+        <div class="title">Terrain</div>
+        <b>WASD</b> Move &nbsp; <b>Space/Shift</b> Up/Down<br>
+        <b>Mouse</b> Look (click to capture, Esc to release)<br>
+        <b>R</b> Regenerate with new seed<br>
+        <div id="info">Loading…</div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
