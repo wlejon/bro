@@ -86,27 +86,24 @@ console.log("\n[2] Analytic sphere SDF → marching cubes");
     check("MC produced triangles", mesh.triangleCount > 100);
 
     // BBox in voxel coords (cellSize=1) — sphere centered at (N/2,N/2,N/2),
-    // so each axis range is roughly (N/2 - R, N/2 + R).  Note: BBox.extentX
-    // is the *half*-extent (half of max-min), so it should ≈ R.
+    // so each axis range is roughly (N/2 - R, N/2 + R), full extent ~2R.
     var bb = mesh.computeBBox();
-    check("MC sphere half-extent X ≈ R (got " + bb.extentX.toFixed(2) +
-          " vs " + R.toFixed(2) + ")", Math.abs(bb.extentX - R) < 1.0);
-    check("MC sphere half-extent Y ≈ R", Math.abs(bb.extentY - R) < 1.0);
-    check("MC sphere half-extent Z ≈ R", Math.abs(bb.extentZ - R) < 1.0);
+    check("MC sphere extent X ≈ 2R (got " + bb.extentX.toFixed(2) +
+          " vs " + (2*R).toFixed(2) + ")", Math.abs(bb.extentX - 2*R) < 2.0);
+    check("MC sphere extent Y ≈ 2R", Math.abs(bb.extentY - 2*R) < 2.0);
+    check("MC sphere extent Z ≈ 2R", Math.abs(bb.extentZ - 2*R) < 2.0);
 
-    // Volume comparison only makes sense for manifold output.
-    // bromesh::computeVolume returns 0 for non-manifold meshes, and the
-    // current marching cubes implementation produces meshes that don't pass
-    // the strict manifold test (shared edges may have inconsistent winding
-    // at boundary cells). Skip the volume assertion if non-manifold.
-    if (mesh.isManifold()) {
-        var expectedVol = (4/3) * Math.PI * R * R * R;
-        var vol = mesh.computeVolume();
-        var err = Math.abs(vol - expectedVol) / expectedVol;
-        check("MC sphere volume within 5% of (4/3)πR³", err < 0.05);
-    } else {
-        console.log("  skip  volume check (MC mesh not strictly manifold)");
-    }
+    // Now that marching cubes welds shared-edge vertices, the output is a
+    // proper closed manifold and computeVolume returns the actual signed
+    // tetrahedron sum.
+    check("MC sphere is manifold", mesh.isManifold());
+    var expectedVol = (4/3) * Math.PI * R * R * R;
+    var vol = mesh.computeVolume();
+    var err = Math.abs(vol - expectedVol) / expectedVol;
+    check("MC sphere volume within 5% of (4/3)πR³ (got " +
+          vol.toFixed(2) + " vs " + expectedVol.toFixed(2) +
+          ", err " + (err*100).toFixed(2) + "%)",
+          err < 0.05);
 
     // Centered ray from outside should hit the mesh
     mesh.computeNormals();
@@ -180,12 +177,17 @@ console.log("\n[4] FastNoise → marching cubes round trip");
     check("noise → MC produced a non-empty mesh (" +
           mesh.triangleCount + " tris)", mesh.triangleCount > 0);
     check("noise → MC produced vertices", mesh.vertexCount > 0);
+    check("noise → MC produced manifold mesh", mesh.isManifold());
 
-    // Output bbox must lie inside the grid extent (cellSize=1).
+    // Output bbox lies inside the grid + 1 cell of boundary-closing pad on
+    // each side (allow [-1, N] in voxel coords).
     var bb = mesh.computeBBox();
-    check("MC mesh fits inside grid X", bb.min[0] >= 0 && bb.max[0] <= N);
-    check("MC mesh fits inside grid Y", bb.min[1] >= 0 && bb.max[1] <= N);
-    check("MC mesh fits inside grid Z", bb.min[2] >= 0 && bb.max[2] <= N);
+    check("MC mesh fits inside padded grid X",
+        bb.min[0] >= -1 && bb.max[0] <= N);
+    check("MC mesh fits inside padded grid Y",
+        bb.min[1] >= -1 && bb.max[1] <= N);
+    check("MC mesh fits inside padded grid Z",
+        bb.min[2] >= -1 && bb.max[2] <= N);
 
     // Determinism end-to-end: same noise + seed → same triangle count.
     var field2 = noise.genUniformGrid3D(0, 0, 0, N, N, N, 0.05, 1337);
@@ -197,12 +199,14 @@ console.log("\n[4] FastNoise → marching cubes round trip");
 // -----------------------------------------------------------------------------
 // 5. Calculable noise → predictable mesh
 //
-// FastNoise.Constant produces a uniform field. With the iso threshold below
-// the constant, every cell is "inside" → no surface should cross any cell
-// boundary → marching cubes should output zero triangles. This is the cleanest
-// "we know what shape this noise is, verify the mesh library agrees" test.
+// FastNoise.Constant produces a uniform field. The iso threshold determines
+// whether the entire grid is "inside" (above iso) or "outside" (below iso).
+// With closeBoundary on (the default), an all-inside field produces a closed
+// skin around the grid; an all-outside field produces no surface at all.
+// This is the cleanest "we know what shape this noise is, verify the mesh
+// library agrees" test.
 // -----------------------------------------------------------------------------
-console.log("\n[5] Constant FastNoise → predictable empty surface");
+console.log("\n[5] Constant FastNoise → predictable mesh");
 {
     var N = 16;
     var c = FastNoise.create("Constant");
@@ -215,14 +219,37 @@ console.log("\n[5] Constant FastNoise → predictable empty surface");
     }
     check("Constant(1.0) yields uniform field", allOne);
 
-    // iso=0: every cell is +1, no zero crossings → 0 tris
+    // iso=0: every cell is +1 (inside) → boundary-close produces a closed
+    // skin running along all six faces of the grid (one quad per boundary
+    // cell, not a single bounding box). The result should be:
+    //   - non-empty
+    //   - manifold (closed)
+    //   - bbox spans the grid (with a half-cell sentinel offset on each side)
+    //   - volume ≈ N³ (cubic skin enclosing the grid interior)
     var inside = Mesh.marchingCubes(grid, N, N, N, 0.0, 1.0);
-    check("uniform-positive field yields 0 triangles (iso=0)",
-        inside.triangleCount === 0);
+    check("uniform-positive field produces closed skin", inside.triangleCount > 0);
+    check("grid skin is manifold", inside.isManifold());
 
-    // iso=2: every cell is below threshold → 0 tris
+    var skinBB = inside.computeBBox();
+    check("skin bbox X spans full grid",
+          skinBB.min[0] < 0 && skinBB.max[0] > (N - 1));
+    check("skin bbox Y spans full grid",
+          skinBB.min[1] < 0 && skinBB.max[1] > (N - 1));
+    check("skin bbox Z spans full grid",
+          skinBB.min[2] < 0 && skinBB.max[2] > (N - 1));
+
+    // The skin sits at the half-cell boundary, so the enclosed volume is
+    // (N)³ (N+1 vertices but cells of size 1 → N units across). Allow ±5%.
+    var skinVol = inside.computeVolume();
+    var expectedSkinVol = N * N * N;
+    check("skin volume ≈ N³ (got " + skinVol.toFixed(0) +
+          " vs " + expectedSkinVol + ")",
+          Math.abs(skinVol - expectedSkinVol) / expectedSkinVol < 0.05);
+
+    // iso=2: every cell is below threshold → entire grid is "outside" → no
+    // surface anywhere, including the closed boundary.
     var outside = Mesh.marchingCubes(grid, N, N, N, 2.0, 1.0);
-    check("uniform-positive field yields 0 triangles (iso=2)",
+    check("uniform-below-iso field yields 0 triangles",
         outside.triangleCount === 0);
 }
 
@@ -256,26 +283,26 @@ console.log("\n[6] Noise-perturbed sphere SDF");
 
     var mesh = Mesh.marchingCubes(field, N, N, N, 0, 1.0);
     check("perturbed sphere has triangles", mesh.triangleCount > 200);
+    check("perturbed sphere is manifold", mesh.isManifold());
 
-    // Half-extent should still be near R (perturbation is small enough that
-    // bumps don't push the bbox far past the underlying sphere).
+    // Full extent should still be near 2R — small bumps don't push the bbox
+    // far past the underlying sphere.
     var bb = mesh.computeBBox();
-    check("perturbed half-extent X within 15% of R (got " +
+    check("perturbed extent X within 30% of 2R (got " +
           bb.extentX.toFixed(2) + ")",
-          Math.abs(bb.extentX - R) / R < 0.15);
-    check("perturbed half-extent Y within 15% of R",
-          Math.abs(bb.extentY - R) / R < 0.15);
-    check("perturbed half-extent Z within 15% of R",
-          Math.abs(bb.extentZ - R) / R < 0.15);
+          Math.abs(bb.extentX - 2*R) / (2*R) < 0.30);
+    check("perturbed extent Y within 30% of 2R",
+          Math.abs(bb.extentY - 2*R) / (2*R) < 0.30);
+    check("perturbed extent Z within 30% of 2R",
+          Math.abs(bb.extentZ - 2*R) / (2*R) < 0.30);
 
-    if (mesh.isManifold()) {
-        var refVol = (4/3) * Math.PI * R * R * R;
-        var vol = mesh.computeVolume();
-        var err = Math.abs(vol - refVol) / refVol;
-        check("perturbed volume within 25% of clean sphere", err < 0.25);
-    } else {
-        console.log("  skip  volume check (MC mesh not strictly manifold)");
-    }
+    var refVol = (4/3) * Math.PI * R * R * R;
+    var vol = mesh.computeVolume();
+    var err = Math.abs(vol - refVol) / refVol;
+    check("perturbed volume within 25% of clean sphere (" +
+          vol.toFixed(2) + " vs " + refVol.toFixed(2) +
+          ", err " + (err*100).toFixed(1) + "%)",
+          err < 0.25);
 }
 
 // -----------------------------------------------------------------------------
@@ -312,40 +339,37 @@ console.log("\n[7] Scene graph integration");
         name: 'integration-sphere'
     });
     check("scene.createMesh returned a node", node && typeof node === 'object');
-    // After transfer, the source Mesh wrapper has its MeshData moved out;
-    // its property accessors return undefined. Verify it's no longer reusable.
-    check("transferred Mesh is neutered",
-        sphere.triangleCount === undefined || sphere.triangleCount === 0);
-    check("transferred Mesh different from original (was " + triCount + ")",
-        sphere.triangleCount !== triCount);
+    // After transfer, the source Mesh wrapper has its MeshData moved out.
+    // The neutered Mesh reads as logically empty (triangleCount === 0),
+    // matching postMessage transferList semantics.
+    check("transferred Mesh has 0 triangles", sphere.triangleCount === 0);
+    check("transferred Mesh reads as empty", sphere.empty === true);
 
-    // scene.raycast should hit the node from outside. Note: scene.raycast
-    // returns { hit, distance, point, normal, node } — the world-space hit
-    // is in `point` (Mesh.raycast uses `position`, scene.raycast uses `point`).
+    // scene.raycast returns { hit, distance, position, point, normal, node }.
+    // `position` is the natural name (matches Mesh.raycast); `point` is kept
+    // as a backwards-compatible alias.
     var hit = scene.raycast([0, 0, 5], [0, 0, -1]);
     check("scene.raycast hits the transferred sphere", hit !== null);
     if (hit) {
-        check("scene.raycast point z ≈ 1.0 (got " +
-              hit.point[2].toFixed(3) + ")",
-            Math.abs(hit.point[2] - 1.0) < 0.1);
+        check("scene.raycast position z ≈ 1.0 (got " +
+              hit.position[2].toFixed(3) + ")",
+            Math.abs(hit.position[2] - 1.0) < 0.1);
         check("scene.raycast hit normal points +Z",
             hit.normal && hit.normal[2] > 0.5);
     }
 
     // updateMesh round-trip with a fresh primitive.
     var newGeom = Mesh.box(0.5, 0.5, 0.5);
-    var newGeomTris = newGeom.triangleCount;
     node.updateMesh(newGeom, { transfer: true });
-    check("updateMesh consumed the source Mesh",
-        newGeom.triangleCount === undefined ||
-        newGeom.triangleCount !== newGeomTris);
+    check("updateMesh consumed the source Mesh (now 0 tris)",
+        newGeom.triangleCount === 0);
 
     // Raycast again — now the box should be the hit target.
     var hit2 = scene.raycast([0, 0, 5], [0, 0, -1]);
     check("scene.raycast hits after updateMesh", hit2 !== null);
     if (hit2) {
-        check("updated box hit z ≈ 0.5 (got " + hit2.point[2].toFixed(3) + ")",
-            Math.abs(hit2.point[2] - 0.5) < 0.1);
+        check("updated box hit z ≈ 0.5 (got " + hit2.position[2].toFixed(3) + ")",
+            Math.abs(hit2.position[2] - 0.5) < 0.1);
     }
 
     node.destroy();
@@ -358,6 +382,16 @@ console.log("\n[8] Visual smoke test");
 {
     var canvas = document.getElementById('canvas');
     var scene = canvas.getContext('scene');
+
+    // Clear whatever the host app put in the scene so the screenshot only
+    // shows our noise blob.
+    var root = scene.root;
+    var kidsBefore = root.children;
+    check("scene.root.children is a real array", Array.isArray(kidsBefore));
+    for (var i = 0; i < kidsBefore.length; i++) {
+        if (kidsBefore[i] && kidsBefore[i].destroy) kidsBefore[i].destroy();
+    }
+    check("scene was cleared", root.childCount === 0);
 
     var N = 32;
     var noise = FastNoise.create("FractalFBm");
@@ -374,10 +408,8 @@ console.log("\n[8] Visual smoke test");
     blob.center();
     blob.computeNormals();
     check("rendered noise blob has triangles", blob.triangleCount > 0);
+    check("rendered noise blob is manifold", blob.isManifold());
 
-    // Re-aim the camera at the new mesh; mesh-demo's host app may have
-    // placed it elsewhere. We add the blob on top of whatever else is in
-    // the scene — that's fine for a smoke screenshot.
     scene.setCamera({
         fov: 50,
         position: [0, 0, N * 1.4],
