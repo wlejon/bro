@@ -279,29 +279,34 @@ static JSValue js_mesh_set_indices(JSContext* ctx, JSValueConst this_val, JSValu
     return JS_UNDEFINED;
 }
 
+// Property accessors return semantically-correct values for a neutered Mesh
+// (one whose MeshData has been moved out via takeMeshData) so callers can
+// reason about it as "an empty mesh" instead of "a broken object". This
+// matches postMessage transferList semantics: the source ArrayBuffer reads
+// as length-zero after a transfer, not undefined.
 static JSValue js_mesh_get_vertexCount(JSContext* ctx, JSValueConst this_val) {
     auto* md = getMD(this_val);
-    return md ? JS_NewInt32(ctx, (int32_t)md->vertexCount()) : JS_UNDEFINED;
+    return JS_NewInt32(ctx, md ? (int32_t)md->vertexCount() : 0);
 }
 static JSValue js_mesh_get_triangleCount(JSContext* ctx, JSValueConst this_val) {
     auto* md = getMD(this_val);
-    return md ? JS_NewInt32(ctx, (int32_t)md->triangleCount()) : JS_UNDEFINED;
+    return JS_NewInt32(ctx, md ? (int32_t)md->triangleCount() : 0);
 }
 static JSValue js_mesh_get_hasNormals(JSContext* ctx, JSValueConst this_val) {
     auto* md = getMD(this_val);
-    return md ? JS_NewBool(ctx, md->hasNormals()) : JS_UNDEFINED;
+    return JS_NewBool(ctx, md && md->hasNormals());
 }
 static JSValue js_mesh_get_hasUVs(JSContext* ctx, JSValueConst this_val) {
     auto* md = getMD(this_val);
-    return md ? JS_NewBool(ctx, md->hasUVs()) : JS_UNDEFINED;
+    return JS_NewBool(ctx, md && md->hasUVs());
 }
 static JSValue js_mesh_get_hasColors(JSContext* ctx, JSValueConst this_val) {
     auto* md = getMD(this_val);
-    return md ? JS_NewBool(ctx, md->hasColors()) : JS_UNDEFINED;
+    return JS_NewBool(ctx, md && md->hasColors());
 }
 static JSValue js_mesh_get_empty(JSContext* ctx, JSValueConst this_val) {
     auto* md = getMD(this_val);
-    return md ? JS_NewBool(ctx, md->empty()) : JS_UNDEFINED;
+    return JS_NewBool(ctx, !md || md->empty());
 }
 
 // ---------------------------------------------------------------------------

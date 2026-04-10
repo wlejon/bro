@@ -318,6 +318,30 @@ static JSValue js_node_remove(JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+// children → SceneNode[]
+//
+// Returns a fresh JS array of wrapped child nodes. Each access copies the
+// current child list — the array is not live, so callers iterating it can
+// safely call destroy()/removeChild() during the loop without surprises.
+static JSValue js_node_get_children(JSContext* ctx, JSValueConst this_val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (!w || !w->node) return JS_NewArray(ctx);
+    const auto& kids = w->node->children();
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (auto* child : kids) {
+        if (child) JS_SetPropertyUint32(ctx, arr, i++, wrapNode(ctx, child, w->graph));
+    }
+    return arr;
+}
+
+// childCount → number — cheap size check that doesn't allocate the array.
+static JSValue js_node_get_childCount(JSContext* ctx, JSValueConst this_val) {
+    auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
+    if (!w || !w->node) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, (int32_t)w->node->children().size());
+}
+
 // destroy()
 static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
@@ -586,6 +610,8 @@ static const JSCFunctionListEntry js_scenenode_proto[] = {
     JS_CGETSET_DEF("id", js_node_get_id, nullptr),
     JS_CGETSET_DEF("name", js_node_get_name, js_node_set_name),
     JS_CGETSET_DEF("visible", js_node_get_visible, js_node_set_visible),
+    JS_CGETSET_DEF("children", js_node_get_children, nullptr),
+    JS_CGETSET_DEF("childCount", js_node_get_childCount, nullptr),
 
     // Transform
     JS_CGETSET_DEF("x", js_node_get_x, js_node_set_x),
@@ -1318,6 +1344,15 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_SetPropertyStr(ctx, out, "hit", JS_TRUE);
     JS_SetPropertyStr(ctx, out, "distance", JS_NewFloat64(ctx, closestDist));
 
+    // Build the world-space hit point once and expose it under both names:
+    // `position` matches Mesh.raycast()'s field name (the natural choice for
+    // anyone who learned the API there first); `point` is the original alias
+    // and is kept so existing callers don't break.
+    JSValue position = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, position, 0, JS_NewFloat64(ctx, closestWorldPoint.x));
+    JS_SetPropertyUint32(ctx, position, 1, JS_NewFloat64(ctx, closestWorldPoint.y));
+    JS_SetPropertyUint32(ctx, position, 2, JS_NewFloat64(ctx, closestWorldPoint.z));
+    JS_SetPropertyStr(ctx, out, "position", position);
     JSValue point = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, point, 0, JS_NewFloat64(ctx, closestWorldPoint.x));
     JS_SetPropertyUint32(ctx, point, 1, JS_NewFloat64(ctx, closestWorldPoint.y));
