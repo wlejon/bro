@@ -108,16 +108,6 @@ function buildVoxelGrid(heights) {
     return voxels;
 }
 
-// Mask the voxel grid down to a single material (others → 0) so greedyMesh
-// produces only that material's faces. Returns a fresh Uint8Array.
-function maskMaterial(voxels, matId) {
-    var out = new Uint8Array(voxels.length);
-    for (var i = 0; i < voxels.length; i++) {
-        if (voxels[i] === matId) out[i] = matId;
-    }
-    return out;
-}
-
 // ----------------------------------------------------------------------------
 // Build the world from a seed
 // ----------------------------------------------------------------------------
@@ -128,7 +118,17 @@ function maskMaterial(voxels, matId) {
 var voxels = null;
 var terrainNodes = {};   // matId → SceneNode
 var matStats = {};       // matId → { tris, verts }
+var solidCount = 0;      // number of non-AIR voxels (updated incrementally)
 var lastStats = { tris: 0, verts: 0, voxels: 0, materials: 0, seed: 0, ms: 0 };
+
+// Deferred rebuild state — placement uses temp cubes for instant feedback,
+// then batches the greedy mesh rebuild.
+var pendingCubes = [];
+var dirtyMaterials = {};
+var pendingEditCount = 0;
+var pendingTimer = null;
+var PENDING_LIMIT = 100;
+var PENDING_TIMEOUT = 2000;  // ms
 
 // World-space offset of the chunk's local (0,0,0) corner. The chunk is
 // centered on the origin so the camera frames it nicely.
@@ -137,6 +137,11 @@ var CHUNK_ORIGIN_Y = 0;
 var CHUNK_ORIGIN_Z = -CHUNK_D * 0.5;
 
 function clearTerrain() {
+    if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; }
+    for (var i = 0; i < pendingCubes.length; i++) pendingCubes[i].destroy();
+    pendingCubes = [];
+    dirtyMaterials = {};
+    pendingEditCount = 0;
     for (var key in terrainNodes) {
         if (terrainNodes[key]) terrainNodes[key].destroy();
     }
@@ -152,7 +157,7 @@ function findMaterial(matId) {
     return null;
 }
 
-// Recompute lastStats from per-material aggregates and the live voxel grid.
+// Refresh tri/vert totals from per-material aggregates (no grid scan).
 function refreshTotals() {
     var t = 0, v = 0, m = 0;
     for (var id in matStats) {
@@ -160,12 +165,18 @@ function refreshTotals() {
         v += matStats[id].verts;
         m++;
     }
-    var solid = 0;
-    for (var i = 0; i < voxels.length; i++) if (voxels[i] !== 0) solid++;
     lastStats.tris = t;
     lastStats.verts = v;
     lastStats.materials = m;
-    lastStats.voxels = solid;
+    lastStats.voxels = solidCount;
+}
+
+// Count solid voxels (used once after world generation; edits update
+// solidCount incrementally via ±1).
+function countSolid() {
+    var n = 0;
+    for (var i = 0; i < voxels.length; i++) if (voxels[i] !== 0) n++;
+    return n;
 }
 
 // Voxel grid index. (z * CHUNK_H + y) * CHUNK_W + x — must match
@@ -181,37 +192,39 @@ function inBounds(x, y, z) {
 }
 
 // Rebuild a single material's greedy mesh and update its scene node.
-// Block edits only need to re-mesh the material that actually changed
-// (the masked grids for other materials are unaffected — a grass cell
-// going to AIR reads as 0 in the dirt mask both before and after).
+// The material filter is done in C++ (no JS masking loop) — the full
+// voxel grid is passed directly and greedyMesh ignores non-matching IDs.
 function rebuildMaterial(matId) {
     var mat = findMaterial(matId);
     if (!mat) return;
 
-    var masked = maskMaterial(voxels, matId);
-    var mesh = Mesh.greedyMesh(masked, CHUNK_W, CHUNK_H, CHUNK_D, 1.0);
-
-    // Drop the old node whether or not the new mesh is empty.
-    if (terrainNodes[matId]) {
-        terrainNodes[matId].destroy();
-        terrainNodes[matId] = null;
-    }
+    var mesh = Mesh.greedyMesh(voxels, CHUNK_W, CHUNK_H, CHUNK_D, 1.0, matId);
 
     if (mesh.triangleCount === 0) {
+        if (terrainNodes[matId]) {
+            terrainNodes[matId].destroy();
+            terrainNodes[matId] = null;
+        }
         delete matStats[matId];
         return;
     }
 
     matStats[matId] = { tris: mesh.triangleCount, verts: mesh.vertexCount };
-    terrainNodes[matId] = scene.createMesh({
-        mesh: mesh,
-        transfer: true,
-        x: CHUNK_ORIGIN_X,
-        y: CHUNK_ORIGIN_Y,
-        z: CHUNK_ORIGIN_Z,
-        color: mat.color,
-        name: 'terrain-' + mat.name
-    });
+
+    if (terrainNodes[matId]) {
+        // Fast path — reuse existing node, just swap the mesh data.
+        terrainNodes[matId].updateMesh(mesh, { transfer: true });
+    } else {
+        terrainNodes[matId] = scene.createMesh({
+            mesh: mesh,
+            transfer: true,
+            x: CHUNK_ORIGIN_X,
+            y: CHUNK_ORIGIN_Y,
+            z: CHUNK_ORIGIN_Z,
+            color: mat.color,
+            name: 'terrain-' + mat.name
+        });
+    }
 }
 
 // Rebuild every material from scratch — used by initial world generation
@@ -221,6 +234,32 @@ function rebuildMeshes() {
     for (var m = 0; m < MATERIALS.length; m++) {
         rebuildMaterial(MATERIALS[m].id);
     }
+    solidCount = countSolid();
+    refreshTotals();
+    lastStats.ms = Date.now() - t0;
+}
+
+// --- Deferred rebuild (placement batching) ---
+
+function scheduleDeferredRebuild() {
+    if (pendingTimer !== null) clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(flushPendingEdits, PENDING_TIMEOUT);
+}
+
+function flushPendingEdits() {
+    if (pendingTimer !== null) { clearTimeout(pendingTimer); pendingTimer = null; }
+    if (pendingEditCount === 0) return;
+
+    var t0 = Date.now();
+    for (var matId in dirtyMaterials) {
+        rebuildMaterial(parseInt(matId));
+    }
+    for (var i = 0; i < pendingCubes.length; i++) {
+        pendingCubes[i].destroy();
+    }
+    pendingCubes = [];
+    dirtyMaterials = {};
+    pendingEditCount = 0;
     refreshTotals();
     lastStats.ms = Date.now() - t0;
 }
@@ -260,8 +299,13 @@ function worldToVoxel(wx, wy, wz) {
 //           'place' → set the empty voxel adjacent to the hit face to `mat`
 // Returns true if a block was modified.
 //
-// Only the material that actually changed gets re-meshed — every other
-// material's masked grid is identical before and after a single edit.
+// Mining rebuilds the affected material's greedy mesh immediately — the
+// C++ greedyMesh with inline material filtering is fast enough (~5-15 ms
+// Release) that the hole is visible the same frame.
+//
+// Placement drops a temp cube for instant feedback and batches the greedy
+// mesh rebuild (deferred until PENDING_LIMIT edits or PENDING_TIMEOUT ms
+// of inactivity).
 function pickAndEdit(action, placeMat) {
     var fwd = camForward();
     var hit = scene.raycast(cam.pos, fwd, 200);
@@ -272,27 +316,48 @@ function pickAndEdit(action, placeMat) {
 
     var coord, idx, changedMat;
     if (action === 'mine') {
-        // Step into the block: away from the surface normal.
         coord = worldToVoxel(p[0] - n[0] * 0.5, p[1] - n[1] * 0.5, p[2] - n[2] * 0.5);
         if (!inBounds(coord[0], coord[1], coord[2])) return false;
         idx = voxelIdx(coord[0], coord[1], coord[2]);
         if (voxels[idx] === AIR) return false;
         changedMat = voxels[idx];
         voxels[idx] = AIR;
+        solidCount--;
+
+        // Immediate rebuild — no overlay needed, the hole is real.
+        var t0 = Date.now();
+        rebuildMaterial(changedMat);
+        refreshTotals();
+        lastStats.ms = Date.now() - t0;
     } else {
-        // Step out of the block: along the surface normal.
         coord = worldToVoxel(p[0] + n[0] * 0.5, p[1] + n[1] * 0.5, p[2] + n[2] * 0.5);
         if (!inBounds(coord[0], coord[1], coord[2])) return false;
         idx = voxelIdx(coord[0], coord[1], coord[2]);
         if (voxels[idx] !== AIR) return false;
         voxels[idx] = placeMat;
         changedMat = placeMat;
-    }
+        solidCount++;
 
-    var t0 = Date.now();
-    rebuildMaterial(changedMat);
-    refreshTotals();
-    lastStats.ms = Date.now() - t0;
+        // Instant visual feedback: drop a unit cube at the placed position.
+        var mat = findMaterial(placeMat);
+        pendingCubes.push(scene.createMesh({
+            mesh: 'box',
+            halfW: 0.5, halfH: 0.5, halfD: 0.5,
+            x: CHUNK_ORIGIN_X + coord[0] + 0.5,
+            y: CHUNK_ORIGIN_Y + coord[1] + 0.5,
+            z: CHUNK_ORIGIN_Z + coord[2] + 0.5,
+            color: mat.color,
+            name: 'temp-cube'
+        }));
+
+        dirtyMaterials[changedMat] = true;
+        pendingEditCount++;
+        if (pendingEditCount >= PENDING_LIMIT) {
+            flushPendingEdits();
+        } else {
+            scheduleDeferredRebuild();
+        }
+    }
     return true;
 }
 

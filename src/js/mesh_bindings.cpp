@@ -954,16 +954,23 @@ static JSValue js_mesh_greedyMesh(JSContext* ctx, JSValueConst, int argc, JSValu
     int gy = optInt(ctx, argv, argc, 2, 0);
     int gz = optInt(ctx, argv, argc, 3, 0);
     float cs = (float)optNum(ctx, argv, argc, 4, 1.0);
-    // Optional palette
+    // Optional palette (argv[5] = Float32Array, argv[6] = count)
     std::vector<float> palette;
     int palCount = 0;
-    if (argc > 5) {
+    if (argc > 5 && JS_IsObject(argv[5])) {
         readFloatArrayVal(ctx, argv[5], palette);
         palCount = optInt(ctx, argv, argc, 6, (int)(palette.size() / 4));
     }
+    // Optional material filter — only mesh voxels matching this ID.
+    // Skips the JS-side maskMaterial loop entirely.
+    int filterMat = optInt(ctx, argv, argc, 7, -1);
+    // Also accept argv[5] as filterMat when it's a plain number (no palette).
+    if (palette.empty() && argc > 5 && JS_IsNumber(argv[5]))
+        filterMat = optInt(ctx, argv, argc, 5, -1);
     return wrapMesh(ctx, bromesh::greedyMesh(
         voxels.data(), gx, gy, gz, cs,
-        palette.empty() ? nullptr : palette.data(), palCount));
+        palette.empty() ? nullptr : palette.data(), palCount,
+        filterMat));
 }
 
 // ---------------------------------------------------------------------------
