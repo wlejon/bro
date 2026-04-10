@@ -17,6 +17,7 @@ namespace bro::scene {
 
 struct TerrainManager::NoiseState {
     FastNoise::SmartNode<> node;
+    float maxAmplitude = 1.0f;  // theoretical peak of FBm output
 
     void build(const TerrainConfig& cfg) {
         auto simplex = FastNoise::New<FastNoise::Simplex>();
@@ -26,6 +27,17 @@ struct TerrainManager::NoiseState {
         fbm->SetGain(cfg.noiseGain);
         fbm->SetLacunarity(cfg.noiseLacunarity);
         node = fbm;
+
+        // Compute the theoretical max amplitude of the FBm sum:
+        //   sum(gain^i, i=0..octaves-1)
+        // This lets us normalize the output to [-1, 1] regardless of settings.
+        float amp = 0.0f;
+        float g = 1.0f;
+        for (int i = 0; i < cfg.noiseOctaves; i++) {
+            amp += g;
+            g *= cfg.noiseGain;
+        }
+        maxAmplitude = std::max(amp, 1.0f);
     }
 };
 
@@ -117,10 +129,15 @@ void TerrainManager::generateVoxels(ChunkEntry& entry, int cx, int cz) {
 
     uint8_t* voxels = chunk.data();
 
+    // Normalize noise by its theoretical FBm amplitude so the full range
+    // maps smoothly to [0, 1] instead of being hard-clamped.
+    float invAmp = 1.0f / noise_->maxAmplitude;
+
     for (int z = 0; z < sizeZ; z++) {
         for (int x = 0; x < sizeX; x++) {
             float raw = heightmap[z * sizeX + x];
-            float t = (raw + 1.0f) * 0.5f;
+            // Map [-maxAmplitude, maxAmplitude] → [0, 1]
+            float t = (raw * invAmp + 1.0f) * 0.5f;
             if (t < 0.0f) t = 0.0f;
             if (t > 1.0f) t = 1.0f;
 

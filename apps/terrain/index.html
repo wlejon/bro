@@ -5,6 +5,8 @@
     <style>
         html, body { margin: 0; padding: 0; overflow: hidden; background: #87ceeb; }
         canvas { display: block; cursor: crosshair; width: 100vw; height: 100vh; }
+
+        /* ---------- HUD (top-left stats) ---------- */
         #hud {
             position: absolute; top: 10px; left: 10px;
             color: #fff; font: 13px monospace;
@@ -13,28 +15,310 @@
             line-height: 1.5;
         }
         #hud b { color: #ffe066; }
-        #hud .title { color: #b5e853; font-size: 15px; font-weight: bold; }
-        #info { margin-top: 6px; color: #d0d0d0; }
+
+        /* ---------- Crosshair ---------- */
         #crosshair {
             position: absolute; top: 50%; left: 50%;
             width: 12px; height: 12px; margin: -6px 0 0 -6px;
             border: 1px solid rgba(255,255,255,0.7);
             border-radius: 50%; pointer-events: none;
         }
+
+        /* ---------- Settings panel ---------- */
+        #panel {
+            position: absolute; top: 10px; right: 10px;
+            width: 300px; max-height: calc(100vh - 20px);
+            overflow-y: auto; overflow-x: hidden;
+            background: rgba(15,15,20,0.88);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 8px; color: #ccc;
+            font: 12px/1.6 monospace;
+            padding: 0;
+            transition: opacity 0.15s;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.15) transparent;
+        }
+        #panel.hidden { display: none; }
+
+        #panel-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 14px 6px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            cursor: default; user-select: none;
+        }
+        #panel-header .title { color: #b5e853; font-size: 14px; font-weight: bold; }
+        #panel-header .hint  { color: #666; font-size: 11px; }
+
+        .section {
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            padding: 8px 14px 10px;
+        }
+        .section:last-child { border-bottom: none; }
+
+        .section-title {
+            color: #ffe066; font-size: 12px; font-weight: bold;
+            margin-bottom: 6px; cursor: pointer; user-select: none;
+        }
+        .section-title:hover { color: #fff; }
+        .section-body.collapsed { display: none; }
+
+        .row {
+            display: flex; align-items: center;
+            margin: 3px 0; gap: 6px;
+        }
+        .row label {
+            flex: 0 0 110px; color: #999; font-size: 11px;
+            text-align: right; white-space: nowrap;
+        }
+        .row input[type="range"] {
+            flex: 1; height: 4px;
+            accent-color: #b5e853;
+        }
+        .row .val {
+            flex: 0 0 48px; color: #b5e853;
+            font-size: 11px; text-align: right;
+        }
+
+        /* Color swatch rows */
+        .color-row {
+            display: flex; align-items: center;
+            margin: 2px 0; gap: 6px;
+        }
+        .color-row label {
+            flex: 0 0 80px; color: #999; font-size: 11px;
+            text-align: right;
+        }
+        .color-row input[type="color"] {
+            width: 32px; height: 20px; border: 1px solid #444;
+            border-radius: 3px; background: none; padding: 0; cursor: pointer;
+        }
+        .color-row .hex {
+            color: #777; font-size: 10px;
+        }
+
+        /* Buttons */
+        .btn-row { margin: 6px 0 2px; display: flex; gap: 6px; }
+        .btn {
+            flex: 1; padding: 5px 0; text-align: center;
+            background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 4px; color: #ccc; font: 11px monospace;
+            cursor: pointer; user-select: none;
+        }
+        .btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+        .btn.accent { border-color: #b5e853; color: #b5e853; }
+        .btn.accent:hover { background: rgba(181,232,83,0.15); }
+
+        /* Status indicator */
+        #status {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, 30px);
+            color: #ffe066; font: 13px monospace;
+            background: rgba(0,0,0,0.6); padding: 4px 12px;
+            border-radius: 4px; pointer-events: none;
+            opacity: 0; transition: opacity 0.2s;
+        }
+        #status.show { opacity: 1; }
     </style>
 </head>
 <body>
     <canvas id="c"></canvas>
     <div id="crosshair"></div>
+
     <div id="hud">
-        <div class="title">Terrain</div>
-        <b>WASD</b> Move &nbsp; <b>Space/Shift</b> Up/Down<br>
-        <b>Mouse</b> Look (click to capture, Esc to release)<br>
-        <b>L-click</b> Mine block &nbsp; <b>R-click</b> Place block<br>
-        <b>[</b> / <b>]</b> Cycle place material<br>
-        <b>R</b> Regenerate with new seed<br>
-        <div id="info">Loading…</div>
+        <div id="info">Loading...</div>
     </div>
+
+    <div id="status"></div>
+
+    <div id="panel">
+        <div id="panel-header">
+            <span class="title">Terrain Settings</span>
+            <span class="hint">Tab to toggle</span>
+        </div>
+
+        <!-- Noise -->
+        <div class="section" id="sec-noise">
+            <div class="section-title" data-toggle="noise">Noise</div>
+            <div class="section-body" id="body-noise">
+                <div class="row">
+                    <label>frequency</label>
+                    <input type="range" id="sl-frequency" min="0.005" max="0.15" step="0.001" value="0.035">
+                    <span class="val" id="v-frequency">0.035</span>
+                </div>
+                <div class="row">
+                    <label>octaves</label>
+                    <input type="range" id="sl-octaves" min="1" max="10" step="1" value="5">
+                    <span class="val" id="v-octaves">5</span>
+                </div>
+                <div class="row">
+                    <label>gain</label>
+                    <input type="range" id="sl-gain" min="0.1" max="1.0" step="0.01" value="0.50">
+                    <span class="val" id="v-gain">0.50</span>
+                </div>
+                <div class="row">
+                    <label>lacunarity</label>
+                    <input type="range" id="sl-lacunarity" min="1.0" max="4.0" step="0.05" value="2.00">
+                    <span class="val" id="v-lacunarity">2.00</span>
+                </div>
+                <div class="row">
+                    <label>seed</label>
+                    <input type="range" id="sl-seed" min="0" max="9999" step="1" value="1337">
+                    <span class="val" id="v-seed">1337</span>
+                </div>
+                <div class="btn-row">
+                    <div class="btn accent" id="btn-random-seed">Random Seed</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Terrain shape -->
+        <div class="section" id="sec-shape">
+            <div class="section-title" data-toggle="shape">Terrain Shape</div>
+            <div class="section-body" id="body-shape">
+                <div class="row">
+                    <label>baseHeight</label>
+                    <input type="range" id="sl-baseHeight" min="1" max="128" step="1" value="18">
+                    <span class="val" id="v-baseHeight">18</span>
+                </div>
+                <div class="row">
+                    <label>heightAmplitude</label>
+                    <input type="range" id="sl-heightAmplitude" min="1" max="128" step="1" value="16">
+                    <span class="val" id="v-heightAmplitude">16</span>
+                </div>
+                <div class="row">
+                    <label>seaLevel</label>
+                    <input type="range" id="sl-seaLevel" min="0" max="128" step="1" value="14">
+                    <span class="val" id="v-seaLevel">14</span>
+                </div>
+                <div class="row">
+                    <label>cellSize</label>
+                    <input type="range" id="sl-cellSize" min="0.25" max="4.0" step="0.25" value="1.0">
+                    <span class="val" id="v-cellSize">1.0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chunks / Performance -->
+        <div class="section" id="sec-chunks">
+            <div class="section-title" data-toggle="chunks">Chunks / Performance</div>
+            <div class="section-body" id="body-chunks">
+                <div class="row">
+                    <label>chunkSizeX</label>
+                    <input type="range" id="sl-chunkSizeX" min="8" max="128" step="8" value="64">
+                    <span class="val" id="v-chunkSizeX">64</span>
+                </div>
+                <div class="row">
+                    <label>chunkSizeY</label>
+                    <input type="range" id="sl-chunkSizeY" min="8" max="260" step="8" value="48">
+                    <span class="val" id="v-chunkSizeY">48</span>
+                </div>
+                <div class="row">
+                    <label>chunkSizeZ</label>
+                    <input type="range" id="sl-chunkSizeZ" min="8" max="128" step="8" value="64">
+                    <span class="val" id="v-chunkSizeZ">64</span>
+                </div>
+                <div class="row">
+                    <label>loadRadius</label>
+                    <input type="range" id="sl-loadRadius" min="1" max="10" step="1" value="4">
+                    <span class="val" id="v-loadRadius">4</span>
+                </div>
+                <div class="row">
+                    <label>unloadRadius</label>
+                    <input type="range" id="sl-unloadRadius" min="2" max="14" step="1" value="6">
+                    <span class="val" id="v-unloadRadius">6</span>
+                </div>
+                <div class="row">
+                    <label>loadsPerUpdate</label>
+                    <input type="range" id="sl-maxLoadsPerUpdate" min="1" max="8" step="1" value="2">
+                    <span class="val" id="v-maxLoadsPerUpdate">2</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Materials / Palette -->
+        <div class="section" id="sec-materials">
+            <div class="section-title" data-toggle="materials">Materials / Palette</div>
+            <div class="section-body" id="body-materials">
+                <div class="color-row">
+                    <label>1: grass</label>
+                    <input type="color" id="col-1" value="#6bb345">
+                    <span class="hex" id="hex-1">#6bb345</span>
+                </div>
+                <div class="color-row">
+                    <label>2: dirt</label>
+                    <input type="color" id="col-2" value="#85572e">
+                    <span class="hex" id="hex-2">#85572e</span>
+                </div>
+                <div class="color-row">
+                    <label>3: stone</label>
+                    <input type="color" id="col-3" value="#8c8c94">
+                    <span class="hex" id="hex-3">#8c8c94</span>
+                </div>
+                <div class="color-row">
+                    <label>4: bedrock</label>
+                    <input type="color" id="col-4" value="#2e2e33">
+                    <span class="hex" id="hex-4">#2e2e33</span>
+                </div>
+                <div class="color-row">
+                    <label>5: sand</label>
+                    <input type="color" id="col-5" value="#dbc77d">
+                    <span class="hex" id="hex-5">#dbc77d</span>
+                </div>
+                <div class="btn-row">
+                    <div class="btn" id="btn-reset-colors">Reset Colors</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Camera -->
+        <div class="section" id="sec-camera">
+            <div class="section-title" data-toggle="camera">Camera</div>
+            <div class="section-body" id="body-camera">
+                <div class="row">
+                    <label>moveSpeed</label>
+                    <input type="range" id="sl-speed" min="2" max="80" step="1" value="18">
+                    <span class="val" id="v-speed">18</span>
+                </div>
+                <div class="row">
+                    <label>sensitivity</label>
+                    <input type="range" id="sl-sensitivity" min="0.0005" max="0.010" step="0.0005" value="0.003">
+                    <span class="val" id="v-sensitivity">0.003</span>
+                </div>
+                <div class="row">
+                    <label>fov</label>
+                    <input type="range" id="sl-fov" min="30" max="120" step="1" value="65">
+                    <span class="val" id="v-fov">65</span>
+                </div>
+                <div class="row">
+                    <label>viewDistance</label>
+                    <input type="range" id="sl-far" min="100" max="2000" step="50" value="500">
+                    <span class="val" id="v-far">500</span>
+                </div>
+                <div class="btn-row">
+                    <div class="btn" id="btn-reset-pos">Reset Position</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Presets -->
+        <div class="section" id="sec-presets">
+            <div class="section-title" data-toggle="presets">Presets</div>
+            <div class="section-body" id="body-presets">
+                <div class="btn-row">
+                    <div class="btn accent" data-preset="default">Default</div>
+                    <div class="btn accent" data-preset="flat">Flat Plains</div>
+                </div>
+                <div class="btn-row">
+                    <div class="btn accent" data-preset="mountains">Mountains</div>
+                    <div class="btn accent" data-preset="islands">Islands</div>
+                </div>
+                <div class="btn-row">
+                    <div class="btn accent" data-preset="alien">Alien</div>
+                    <div class="btn accent" data-preset="micro">Micro</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>
