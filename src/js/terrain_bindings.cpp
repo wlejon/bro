@@ -77,6 +77,8 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
     cfg.baseHeight = jsGetInt(ctx, opts, "baseHeight", cfg.baseHeight);
     cfg.heightAmplitude = jsGetInt(ctx, opts, "heightAmplitude", cfg.heightAmplitude);
     cfg.seaLevel = jsGetInt(ctx, opts, "seaLevel", cfg.seaLevel);
+    cfg.meshMode = jsGetInt(ctx, opts, "meshMode", cfg.meshMode);
+    cfg.terraceStep = (float)jsGetProp(ctx, opts, "terraceStep", cfg.terraceStep);
 
     // noise: { frequency, octaves, gain, lacunarity }
     JSValue noise = JS_GetPropertyStr(ctx, opts, "noise");

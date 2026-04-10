@@ -4,6 +4,9 @@
 #include "util/log.h"
 
 #include <FastNoise/FastNoise.h>
+#include <bromesh/primitives/primitives.h>
+#include <bromesh/manipulation/normals.h>
+#include <bromesh/voxel/voxel_chunk.h>
 
 #include <algorithm>
 #include <cmath>
@@ -94,112 +97,216 @@ void TerrainManager::worldToLocal(float wx, float wy, float wz,
 }
 
 // -------------------------------------------------------------------------
-// Voxel generation (noise → heightmap → voxels)
+// Heightmap generation (noise → height values)
 // -------------------------------------------------------------------------
 
-void TerrainManager::generateVoxels(ChunkEntry& entry, int cx, int cz) {
-    auto& chunk = *entry.voxels;
-    chunk.fill(0);
-
-    int sizeX = config_.chunkSizeX;
-    int sizeY = config_.chunkSizeY;
-    int sizeZ = config_.chunkSizeZ;
+void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz) {
+    // Grid has +1 vertices in each direction to produce sizeX * sizeZ quads.
+    int gridW = config_.chunkSizeX + 1;
+    int gridH = config_.chunkSizeZ + 1;
+    entry.heightmap.resize(static_cast<size_t>(gridW) * gridH);
 
     // World offset of this chunk's (0,0) corner in noise space.
-    // GenUniformGrid2D computes position as: index * stepSize + offset
-    // For continuity across chunks, offset = chunkIndex * chunkSize * stepSize
-    float worldOffX = cx * sizeX * config_.noiseFrequency;
-    float worldOffZ = cz * sizeZ * config_.noiseFrequency;
+    // GenUniformGrid2D: position = index * step + offset
+    // For continuity across chunks: offset = chunkIndex * chunkSize * step
+    float worldOffX = cx * config_.chunkSizeX * config_.noiseFrequency;
+    float worldOffZ = cz * config_.chunkSizeZ * config_.noiseFrequency;
 
-    // Generate 2D heightmap using FastNoise2.
-    // GenUniformGrid2D(out, xOffset, yOffset, xCount, yCount, xStep, yStep, seed)
-    std::vector<float> heightmap(static_cast<size_t>(sizeX) * sizeZ);
-    noise_->node->GenUniformGrid2D(heightmap.data(),
+    noise_->node->GenUniformGrid2D(entry.heightmap.data(),
                                    worldOffX, worldOffZ,
-                                   sizeX, sizeZ,
+                                   gridW, gridH,
                                    config_.noiseFrequency, config_.noiseFrequency,
                                    config_.seed);
 
-    // Material IDs (matching the existing terrain convention)
-    const uint8_t BEDROCK = 4;
-    const uint8_t STONE   = 3;
-    const uint8_t DIRT    = 2;
-    const uint8_t GRASS   = 1;
-    const uint8_t SAND    = 5;
-
-    uint8_t* voxels = chunk.data();
-
-    // Normalize noise by its theoretical FBm amplitude so the full range
-    // maps smoothly to [0, 1] instead of being hard-clamped.
+    // Normalize FBm output by theoretical amplitude and convert to world heights.
     float invAmp = 1.0f / noise_->maxAmplitude;
-
-    for (int z = 0; z < sizeZ; z++) {
-        for (int x = 0; x < sizeX; x++) {
-            float raw = heightmap[z * sizeX + x];
-            // Map [-maxAmplitude, maxAmplitude] → [0, 1]
-            float t = (raw * invAmp + 1.0f) * 0.5f;
-            if (t < 0.0f) t = 0.0f;
-            if (t > 1.0f) t = 1.0f;
-
-            int h = static_cast<int>(config_.baseHeight + (t - 0.5f) * 2.0f * config_.heightAmplitude);
-            if (h < 1) h = 1;
-            if (h >= sizeY) h = sizeY - 1;
-
-            for (int y = 0; y <= h && y < sizeY; y++) {
-                uint8_t mat;
-                if (y == 0) {
-                    mat = BEDROCK;
-                } else if (y == h) {
-                    mat = (h <= config_.seaLevel) ? SAND : GRASS;
-                } else if (y >= h - 3) {
-                    mat = (h <= config_.seaLevel) ? SAND : DIRT;
-                } else {
-                    mat = STONE;
-                }
-                voxels[(z * sizeY + y) * sizeX + x] = mat;
-            }
-        }
+    for (size_t i = 0; i < entry.heightmap.size(); i++) {
+        float raw = entry.heightmap[i];
+        float t = (raw * invAmp + 1.0f) * 0.5f;
+        t = std::clamp(t, 0.0f, 1.0f);
+        entry.heightmap[i] = config_.baseHeight + (t - 0.5f) * 2.0f * config_.heightAmplitude;
     }
-    chunk.markDirty();
 }
 
 // -------------------------------------------------------------------------
-// Mesh building
+// Vertex coloring helpers
+// -------------------------------------------------------------------------
+
+void TerrainManager::colorizeByHeight(bromesh::MeshData& mesh) {
+    size_t vertCount = mesh.vertexCount();
+    mesh.colors.resize(vertCount * 4);
+
+    auto samplePalette = [&](int matID, float& r, float& g, float& b) {
+        int matCount = static_cast<int>(config_.palette.size() / 4);
+        if (matID < 0 || matID >= matCount) { r = g = b = 0.5f; return; }
+        int off = matID * 4;
+        r = config_.palette[off];
+        g = config_.palette[off + 1];
+        b = config_.palette[off + 2];
+    };
+
+    float seaF = static_cast<float>(config_.seaLevel);
+    float grassTop = seaF + config_.heightAmplitude * 0.6f;
+    float stoneBot = seaF + config_.heightAmplitude * 0.85f;
+
+    for (size_t i = 0; i < vertCount; i++) {
+        float y = mesh.positions[i * 3 + 1];
+        float r, g, b;
+
+        if (y <= seaF) {
+            samplePalette(5, r, g, b);  // sand
+        } else if (y <= grassTop) {
+            float t = (y - seaF) / std::max(grassTop - seaF, 0.01f);
+            float gr, gg, gb, dr, dg, db;
+            samplePalette(1, gr, gg, gb);
+            samplePalette(2, dr, dg, db);
+            r = gr + (dr - gr) * t * t;
+            g = gg + (dg - gg) * t * t;
+            b = gb + (db - gb) * t * t;
+        } else if (y <= stoneBot) {
+            float t = (y - grassTop) / std::max(stoneBot - grassTop, 0.01f);
+            float dr, dg, db, sr, sg, sb;
+            samplePalette(2, dr, dg, db);
+            samplePalette(3, sr, sg, sb);
+            r = dr + (sr - dr) * t;
+            g = dg + (sg - dg) * t;
+            b = db + (sb - db) * t;
+        } else {
+            samplePalette(3, r, g, b);  // stone
+        }
+
+        // Slope-based darkening for depth cues
+        float ny = mesh.normals.empty() ? 1.0f : mesh.normals[i * 3 + 1];
+        float shade = 0.7f + 0.3f * std::max(ny, 0.0f);
+        mesh.colors[i * 4 + 0] = r * shade;
+        mesh.colors[i * 4 + 1] = g * shade;
+        mesh.colors[i * 4 + 2] = b * shade;
+        mesh.colors[i * 4 + 3] = 1.0f;
+    }
+}
+
+// -------------------------------------------------------------------------
+// Mesh building — mode-aware
 // -------------------------------------------------------------------------
 
 void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz) {
-    auto& chunk = *entry.voxels;
+    if (entry.heightmap.empty()) return;
 
-    auto meshData = chunk.buildMesh(
-        config_.palette.empty() ? nullptr : config_.palette.data(),
-        static_cast<int>(config_.palette.size() / 4));
+    int gridW = config_.chunkSizeX + 1;
+    int gridH = config_.chunkSizeZ + 1;
 
-    if (meshData.empty()) {
-        if (entry.meshNode) {
+    bromesh::MeshData mesh;
+
+    switch (config_.meshMode) {
+    default:
+    case 0: {
+        // --- Smooth: heightmapGrid with smooth normals ---
+        mesh = bromesh::heightmapGrid(entry.heightmap.data(),
+                                      gridW, gridH, config_.cellSize);
+        break;
+    }
+    case 1: {
+        // --- Flat: heightmapGrid then per-face normals (low-poly) ---
+        mesh = bromesh::heightmapGrid(entry.heightmap.data(),
+                                      gridW, gridH, config_.cellSize);
+        mesh = bromesh::computeFlatNormals(mesh);
+        break;
+    }
+    case 2: {
+        // --- Terraced: quantize heights to steps, then flat normals ---
+        float step = std::max(config_.terraceStep, 0.25f);
+        std::vector<float> quantized(entry.heightmap.size());
+        for (size_t i = 0; i < entry.heightmap.size(); i++) {
+            quantized[i] = std::floor(entry.heightmap[i] / step) * step;
+        }
+        mesh = bromesh::heightmapGrid(quantized.data(),
+                                      gridW, gridH, config_.cellSize);
+        mesh = bromesh::computeFlatNormals(mesh);
+        break;
+    }
+    case 3: {
+        // --- Blocky: convert heightmap to voxel grid, greedy mesh ---
+        int sizeX = config_.chunkSizeX;
+        int sizeZ = config_.chunkSizeZ;
+
+        // Determine voxel grid height from the max height in this chunk.
+        float maxH = 0.0f;
+        for (size_t i = 0; i < entry.heightmap.size(); i++)
+            maxH = std::max(maxH, entry.heightmap[i]);
+        int sizeY = std::max(static_cast<int>(maxH) + 2, 4);
+
+        bromesh::VoxelChunk voxels(sizeX, sizeY, sizeZ, config_.cellSize);
+        voxels.fill(0);
+
+        // Fill voxel columns from heightmap (sample at grid interior points)
+        for (int z = 0; z < sizeZ; z++) {
+            for (int x = 0; x < sizeX; x++) {
+                float fh = entry.heightmap[z * gridW + x];
+                int h = static_cast<int>(fh);
+                if (h < 1) h = 1;
+                if (h >= sizeY) h = sizeY - 1;
+
+                float seaF = static_cast<float>(config_.seaLevel);
+                for (int y = 0; y <= h && y < sizeY; y++) {
+                    uint8_t mat;
+                    if (y == 0)          mat = 4;  // bedrock
+                    else if (y == h)     mat = (h <= (int)seaF) ? 5 : 1;  // sand/grass
+                    else if (y >= h - 3) mat = (h <= (int)seaF) ? 5 : 2;  // sand/dirt
+                    else                 mat = 3;  // stone
+                    voxels.setVoxel(x, y, z, mat);
+                }
+            }
+        }
+        voxels.markDirty();
+
+        mesh = voxels.buildMesh(
+            config_.palette.empty() ? nullptr : config_.palette.data(),
+            static_cast<int>(config_.palette.size() / 4));
+
+        // Blocky mesh is positioned at local origin (not centered like heightmapGrid).
+        if (!entry.meshNode) {
+            entry.meshNode = graph_.createMesh("terrain-chunk");
+            graph_.root()->addChild(entry.meshNode);
+        }
+        if (mesh.positions.empty()) {
             nodeToChunk_.erase(entry.meshNode);
             graph_.destroyNode(entry.meshNode);
             entry.meshNode = nullptr;
+            return;
         }
-        chunk.clearDirty();
-        return;
+        entry.meshNode->setMesh(std::move(mesh));
+
+        // Voxel mesh is at local origin, position at chunk corner.
+        float wx = cx * sizeX * config_.cellSize;
+        float wz = cz * sizeZ * config_.cellSize;
+        entry.meshNode->setPosition({wx, 0.0f, wz});
+        nodeToChunk_[entry.meshNode] = {cx, cz};
+        return;  // blocky has its own positioning; skip the common path below
     }
+    }
+
+    // --- Common path for heightmap-based modes (0, 1, 2) ---
+    if (mesh.positions.empty()) return;
+
+    colorizeByHeight(mesh);
 
     if (!entry.meshNode) {
         entry.meshNode = graph_.createMesh("terrain-chunk");
         graph_.root()->addChild(entry.meshNode);
     }
 
-    entry.meshNode->setMesh(std::move(meshData));
+    entry.meshNode->setMesh(std::move(mesh));
 
-    // Position the chunk in world space.
-    float wx = cx * config_.chunkSizeX * config_.cellSize;
-    float wz = cz * config_.chunkSizeZ * config_.cellSize;
-    entry.meshNode->setPosition({wx, 0.0f, wz});
+    // heightmapGrid is centered at origin. Position node at chunk center.
+    float chunkW = config_.chunkSizeX * config_.cellSize;
+    float chunkD = config_.chunkSizeZ * config_.cellSize;
+    entry.meshNode->setPosition({
+        cx * chunkW + chunkW * 0.5f,
+        0.0f,
+        cz * chunkD + chunkD * 0.5f
+    });
 
-    // Update reverse map.
     nodeToChunk_[entry.meshNode] = {cx, cz};
-
-    chunk.clearDirty();
 }
 
 // -------------------------------------------------------------------------
@@ -211,10 +318,7 @@ void TerrainManager::loadChunk(int cx, int cz) {
     if (chunks_.count(coord)) return;
 
     auto& entry = chunks_[coord];
-    entry.voxels = std::make_unique<bromesh::VoxelChunk>(
-        config_.chunkSizeX, config_.chunkSizeY, config_.chunkSizeZ, config_.cellSize);
-
-    generateVoxels(entry, cx, cz);
+    generateHeightmap(entry, cx, cz);
     buildChunkMesh(entry, cx, cz);
 }
 
@@ -414,10 +518,19 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
     result.localY = ly;
     result.localZ = lz;
 
-    // Read the material from the voxel grid.
+    // Determine material from heightmap at the hit point.
     auto chunkIt = chunks_.find(hitChunk);
     if (chunkIt != chunks_.end()) {
-        result.material = chunkIt->second.voxels->getVoxel(lx, ly, lz);
+        int gridW = config_.chunkSizeX + 1;
+        int gridH = config_.chunkSizeZ + 1;
+        if (lx >= 0 && lx < gridW && lz >= 0 && lz < gridH) {
+            float h = chunkIt->second.heightmap[lz * gridW + lx];
+            float seaF = static_cast<float>(config_.seaLevel);
+            if (h <= seaF) result.material = 5;       // sand
+            else if (h <= seaF + config_.heightAmplitude * 0.6f) result.material = 1; // grass
+            else if (h <= seaF + config_.heightAmplitude * 0.85f) result.material = 2; // dirt
+            else result.material = 3;                  // stone
+        }
     }
 
     return result;
@@ -428,6 +541,8 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
 // -------------------------------------------------------------------------
 
 bool TerrainManager::setVoxel(float wx, float wy, float wz, uint8_t material) {
+    // Heightmap sculpting: raise or lower terrain at (wx, wz).
+    // material == 0 → lower by 1, material > 0 → raise by 1.
     ChunkCoord coord;
     int lx, ly, lz;
     worldToLocal(wx, wy, wz, coord, lx, ly, lz);
@@ -435,29 +550,38 @@ bool TerrainManager::setVoxel(float wx, float wy, float wz, uint8_t material) {
     auto it = chunks_.find(coord);
     if (it == chunks_.end()) return false;
 
-    auto& chunk = *it->second.voxels;
-    if (lx < 0 || lx >= chunk.sizeX() ||
-        ly < 0 || ly >= chunk.sizeY() ||
-        lz < 0 || lz >= chunk.sizeZ()) return false;
+    int gridW = config_.chunkSizeX + 1;
+    int gridH = config_.chunkSizeZ + 1;
+    if (lx < 0 || lx >= gridW || lz < 0 || lz >= gridH) return false;
 
-    chunk.setVoxel(lx, ly, lz, material);
+    auto& hmap = it->second.heightmap;
+    float delta = (material == 0) ? -1.0f : 1.0f;
+    hmap[lz * gridW + lx] += delta;
+    it->second.dirty_ = true;
     return true;
 }
 
 uint8_t TerrainManager::getVoxel(float wx, float wy, float wz) const {
+    // Return a material ID based on the heightmap height at (wx, wz).
     ChunkCoord coord;
     int lx, ly, lz;
     worldToLocal(wx, wy, wz, coord, lx, ly, lz);
 
     auto it = chunks_.find(coord);
     if (it == chunks_.end()) return 0;
-    return it->second.voxels->getVoxel(lx, ly, lz);
+
+    int gridW = config_.chunkSizeX + 1;
+    if (lx < 0 || lx >= gridW || lz < 0 || lz >= config_.chunkSizeZ + 1) return 0;
+
+    float h = it->second.heightmap[lz * gridW + lx];
+    return (wy <= h) ? 1 : 0;
 }
 
 void TerrainManager::rebuildDirty() {
     for (auto& [coord, entry] : chunks_) {
-        if (entry.voxels->isDirty()) {
+        if (entry.dirty_) {
             buildChunkMesh(entry, coord.x, coord.z);
+            entry.dirty_ = false;
         }
     }
 }

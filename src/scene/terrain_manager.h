@@ -1,7 +1,7 @@
 #pragma once
 
 #include "scene/scene_node.h"
-#include <bromesh/voxel/voxel_chunk.h>
+#include <bromesh/mesh_data.h>
 
 #include <cstdint>
 #include <functional>
@@ -39,6 +39,12 @@ struct TerrainConfig {
     int baseHeight      = 18;
     int heightAmplitude = 16;
     int seaLevel        = 14;
+
+    // Mesh mode: 0=smooth, 1=flat, 2=terraced, 3=blocky
+    int meshMode = 0;
+
+    // Terraced mode: step height in world units
+    float terraceStep = 1.0f;
 
     // Material palette: RGBA floats, 4 per material ID. Index 0 = air.
     std::vector<float> palette;
@@ -122,12 +128,14 @@ public:
 
 private:
     struct ChunkEntry {
-        std::unique_ptr<bromesh::VoxelChunk> voxels;
+        std::vector<float> heightmap;   // gridW * gridH float heights
         MeshNode* meshNode = nullptr;   // owned by SceneGraph
+        bool dirty_ = false;            // needs mesh rebuild
     };
 
-    void generateVoxels(ChunkEntry& entry, int cx, int cz);
+    void generateHeightmap(ChunkEntry& entry, int cx, int cz);
     void buildChunkMesh(ChunkEntry& entry, int cx, int cz);
+    void colorizeByHeight(bromesh::MeshData& mesh);
     void loadChunk(int cx, int cz);
     void unloadChunk(const ChunkCoord& coord);
 

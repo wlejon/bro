@@ -49,6 +49,9 @@ var config = {
     loadRadius: 4,
     unloadRadius: 6,
     maxLoadsPerUpdate: 2,
+    // Mesh mode: 0=smooth, 1=flat, 2=terraced, 3=blocky
+    meshMode: 0,
+    terraceStep: 1.0,
     // Palette (RGBA floats, 6 materials)
     palette: DEFAULT_PALETTE.slice(),
 };
@@ -84,6 +87,8 @@ function buildTerrainOpts() {
         baseHeight: config.baseHeight,
         heightAmplitude: config.heightAmplitude,
         seaLevel: config.seaLevel,
+        meshMode: config.meshMode,
+        terraceStep: config.terraceStep,
         palette: config.palette.slice(),
     };
 }
@@ -154,11 +159,8 @@ function camRight() {
 var keys = {};
 var mouseCaptured = false;
 
-// Material cycling for placement
-var MATERIALS = ['grass', 'dirt', 'stone', 'bedrock', 'sand'];
-var placeMatIndex = 2;   // stone
-function activePlaceMat()     { return placeMatIndex + 1; }  // +1 because 0=air
-function activePlaceMatName() { return MATERIALS[placeMatIndex]; }
+// Sculpting mode
+var sculptMode = 'raise';  // 'raise' or 'lower'
 
 document.addEventListener('keydown', function(e) {
     // Don't capture keys when interacting with panel inputs
@@ -170,8 +172,7 @@ document.addEventListener('keydown', function(e) {
         e.preventDefault();
         panel.classList.toggle('hidden');
     }
-    if (e.key === '[') placeMatIndex = (placeMatIndex - 1 + MATERIALS.length) % MATERIALS.length;
-    if (e.key === ']') placeMatIndex = (placeMatIndex + 1) % MATERIALS.length;
+    if (e.key === '[' || e.key === ']') sculptMode = (sculptMode === 'raise') ? 'lower' : 'raise';
     if (e.key === 'Escape') mouseCaptured = false;
 });
 document.addEventListener('keyup', function(e) {
@@ -180,8 +181,8 @@ document.addEventListener('keyup', function(e) {
 
 canvas.addEventListener('mousedown', function(e) {
     if (!mouseCaptured) { mouseCaptured = true; return; }
-    if (e.button === 0) pickAndEdit('mine');
-    else if (e.button === 2) pickAndEdit('place', activePlaceMat());
+    if (e.button === 0) pickAndEdit('lower');
+    else if (e.button === 2) pickAndEdit('raise');
 });
 canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
@@ -197,19 +198,14 @@ document.addEventListener('mousemove', function(e) {
 // Block picking
 // ============================================================================
 
-function pickAndEdit(action, placeMat) {
+function pickAndEdit(action) {
     var fwd = camForward();
     var hit = terrain.raycast(cam.pos, fwd, 200);
     if (!hit) return;
 
     var p = hit.position;
-    var n = hit.normal;
-
-    if (action === 'mine') {
-        terrain.setVoxel(p[0] - n[0]*0.5, p[1] - n[1]*0.5, p[2] - n[2]*0.5, 0);
-    } else {
-        terrain.setVoxel(p[0] + n[0]*0.5, p[1] + n[1]*0.5, p[2] + n[2]*0.5, placeMat);
-    }
+    // material 0 = lower, material 1 = raise
+    terrain.setVoxel(p[0], p[1], p[2], action === 'lower' ? 0 : 1);
     terrain.rebuild();
 }
 
@@ -234,7 +230,17 @@ var SLIDERS = {
     'sl-loadRadius':       { key: 'loadRadius',       fmt: 0 },
     'sl-unloadRadius':     { key: 'unloadRadius',     fmt: 0 },
     'sl-maxLoadsPerUpdate':{ key: 'maxLoadsPerUpdate', fmt: 0 },
+    'sl-meshMode':         { key: 'meshMode',         fmt: 0 },
+    'sl-terraceStep':      { key: 'terraceStep',      fmt: 2 },
 };
+
+// Mode label names
+var MODE_NAMES = ['smooth', 'flat-shaded', 'terraced', 'blocky'];
+
+function updateModeLabel() {
+    var el = document.getElementById('mode-label');
+    if (el) el.textContent = MODE_NAMES[config.meshMode] || 'unknown';
+}
 
 // Camera sliders (don't trigger terrain reconfigure)
 var CAM_SLIDERS = {
@@ -259,6 +265,7 @@ function initSliders() {
                 var v = d.fmt === 0 ? parseInt(slider.value) : parseFloat(slider.value);
                 config[d.key] = v;
                 if (valSpan) valSpan.textContent = v.toFixed(d.fmt);
+                if (d.key === 'meshMode') updateModeLabel();
                 scheduleReconfigure();
             });
         })(el, valEl, def);
@@ -354,36 +361,56 @@ var PRESETS = {
         baseHeight: 18, heightAmplitude: 16, seaLevel: 14, cellSize: 1.0,
         chunkSizeX: 64, chunkSizeY: 48, chunkSizeZ: 64,
         loadRadius: 4, unloadRadius: 6, maxLoadsPerUpdate: 2,
+        meshMode: 0, terraceStep: 1.0,
     },
     'flat': {
         frequency: 0.01, octaves: 2, gain: 0.3, lacunarity: 2.0,
         baseHeight: 20, heightAmplitude: 3, seaLevel: 8, cellSize: 1.0,
         chunkSizeX: 64, chunkSizeY: 48, chunkSizeZ: 64,
         loadRadius: 4, unloadRadius: 6, maxLoadsPerUpdate: 2,
+        meshMode: 0, terraceStep: 1.0,
+    },
+    'lowpoly': {
+        frequency: 0.025, octaves: 4, gain: 0.50, lacunarity: 2.0,
+        baseHeight: 24, heightAmplitude: 20, seaLevel: 14, cellSize: 2.0,
+        chunkSizeX: 32, chunkSizeY: 48, chunkSizeZ: 32,
+        loadRadius: 6, unloadRadius: 8, maxLoadsPerUpdate: 2,
+        meshMode: 1, terraceStep: 1.0,
     },
     'mountains': {
         frequency: 0.020, octaves: 8, gain: 0.55, lacunarity: 2.2,
         baseHeight: 48, heightAmplitude: 44, seaLevel: 16, cellSize: 1.0,
         chunkSizeX: 64, chunkSizeY: 96, chunkSizeZ: 64,
         loadRadius: 4, unloadRadius: 6, maxLoadsPerUpdate: 2,
+        meshMode: 0, terraceStep: 1.0,
+    },
+    'terraced': {
+        frequency: 0.030, octaves: 5, gain: 0.50, lacunarity: 2.0,
+        baseHeight: 24, heightAmplitude: 20, seaLevel: 10, cellSize: 1.0,
+        chunkSizeX: 64, chunkSizeY: 48, chunkSizeZ: 64,
+        loadRadius: 4, unloadRadius: 6, maxLoadsPerUpdate: 2,
+        meshMode: 2, terraceStep: 2.0,
+    },
+    'blocky': {
+        frequency: 0.035, octaves: 5, gain: 0.50, lacunarity: 2.0,
+        baseHeight: 18, heightAmplitude: 16, seaLevel: 14, cellSize: 1.0,
+        chunkSizeX: 64, chunkSizeY: 48, chunkSizeZ: 64,
+        loadRadius: 4, unloadRadius: 6, maxLoadsPerUpdate: 2,
+        meshMode: 3, terraceStep: 1.0,
     },
     'islands': {
         frequency: 0.045, octaves: 4, gain: 0.45, lacunarity: 2.0,
         baseHeight: 12, heightAmplitude: 14, seaLevel: 18, cellSize: 1.0,
         chunkSizeX: 64, chunkSizeY: 48, chunkSizeZ: 64,
         loadRadius: 5, unloadRadius: 7, maxLoadsPerUpdate: 2,
+        meshMode: 0, terraceStep: 1.0,
     },
     'alien': {
         frequency: 0.08, octaves: 6, gain: 0.70, lacunarity: 3.0,
         baseHeight: 24, heightAmplitude: 20, seaLevel: 6, cellSize: 1.0,
         chunkSizeX: 64, chunkSizeY: 48, chunkSizeZ: 64,
         loadRadius: 4, unloadRadius: 6, maxLoadsPerUpdate: 2,
-    },
-    'micro': {
-        frequency: 0.035, octaves: 5, gain: 0.50, lacunarity: 2.0,
-        baseHeight: 18, heightAmplitude: 16, seaLevel: 14, cellSize: 0.25,
-        chunkSizeX: 64, chunkSizeY: 48, chunkSizeZ: 64,
-        loadRadius: 4, unloadRadius: 6, maxLoadsPerUpdate: 3,
+        meshMode: 0, terraceStep: 1.0,
     },
 };
 
@@ -396,6 +423,7 @@ function applyPreset(name) {
     }
     // Refresh all sliders to match
     syncSlidersFromConfig();
+    updateModeLabel();
     scheduleReconfigure();
 }
 
@@ -524,7 +552,6 @@ function render() {
         ' | fps ' + fps +
         ' | chunks ' + terrain.chunkCount +
         ' | tris ' + terrain.triangleCount +
-        ' | place: ' + activePlaceMatName() +
         ' | seed ' + config.seed;
 
     requestAnimationFrame(render);
