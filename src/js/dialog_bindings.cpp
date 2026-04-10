@@ -1,6 +1,8 @@
 #include "js/dialog_bindings.h"
 #include "util/log.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <SDL3/SDL_dialog.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
@@ -162,12 +164,9 @@ void DialogBindings::install(JSContext* ctx, SDL_Window* window,
     s_window = window;
     s_tickCb = std::move(tickCb);
 
-    JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "showOpenFileDialog",
-        JS_NewCFunction(ctx, js_showOpenFileDialog, "showOpenFileDialog", 0));
-    JS_SetPropertyStr(ctx, global, "showSaveFileDialog",
-        JS_NewCFunction(ctx, js_showSaveFileDialog, "showSaveFileDialog", 0));
-    JS_FreeValue(ctx, global);
+    qjsbind::Global(ctx)
+        .function("showOpenFileDialog", js_showOpenFileDialog, 0)
+        .function("showSaveFileDialog", js_showSaveFileDialog, 0);
 }
 
 } // namespace bro::js

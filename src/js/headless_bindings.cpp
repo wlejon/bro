@@ -4,11 +4,9 @@
 #include "dom/node.h"
 #include "util/log.h"
 
-#include <string>
+#include <qjsbind/qjsbind.h>
 
-extern "C" {
-#include "quickjs.h"
-}
+#include <string>
 
 namespace bro::js {
 
@@ -263,50 +261,28 @@ static JSValue js_resize(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
 // ---------------------------------------------------------------------------
 
 void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
-    JSValue global = JS_GetGlobalObject(ctx);
-
-    // Stash engine pointer
-    JS_SetPropertyStr(ctx, global, kEngineKey,
-                      JS_NewInt64(ctx, static_cast<int64_t>(
-                          reinterpret_cast<intptr_t>(engine))));
-
-    JS_SetPropertyStr(ctx, global, "screenshot",
-                      JS_NewCFunction(ctx, js_screenshot, "screenshot", 1));
-    JS_SetPropertyStr(ctx, global, "advanceTime",
-                      JS_NewCFunction(ctx, js_advanceTime, "advanceTime", 1));
-    JS_SetPropertyStr(ctx, global, "flush",
-                      JS_NewCFunction(ctx, js_flush, "flush", 0));
-    // sleep is an alias for advanceTime
-    JS_SetPropertyStr(ctx, global, "sleep",
-                      JS_NewCFunction(ctx, js_advanceTime, "sleep", 1));
-    JS_SetPropertyStr(ctx, global, "assert",
-                      JS_NewCFunction(ctx, js_assert, "assert", 2));
-
-    // Mouse input simulation
-    JS_SetPropertyStr(ctx, global, "mouseDown",
-                      JS_NewCFunction(ctx, js_mouseDown, "mouseDown", 3));
-    JS_SetPropertyStr(ctx, global, "mouseUp",
-                      JS_NewCFunction(ctx, js_mouseUp, "mouseUp", 3));
-    JS_SetPropertyStr(ctx, global, "mouseMove",
-                      JS_NewCFunction(ctx, js_mouseMove, "mouseMove", 2));
-    JS_SetPropertyStr(ctx, global, "click",
-                      JS_NewCFunction(ctx, js_click, "click", 3));
-    JS_SetPropertyStr(ctx, global, "wheel",
-                      JS_NewCFunction(ctx, js_wheel, "wheel", 4));
-
-    // Keyboard input simulation
-    JS_SetPropertyStr(ctx, global, "keyDown",
-                      JS_NewCFunction(ctx, js_keyDown, "keyDown", 4));
-    JS_SetPropertyStr(ctx, global, "keyUp",
-                      JS_NewCFunction(ctx, js_keyUp, "keyUp", 3));
-    JS_SetPropertyStr(ctx, global, "textInput",
-                      JS_NewCFunction(ctx, js_textInput, "textInput", 1));
-
-    // Viewport
-    JS_SetPropertyStr(ctx, global, "resize",
-                      JS_NewCFunction(ctx, js_resize, "resize", 2));
-
-    JS_FreeValue(ctx, global);
+    qjsbind::Global(ctx)
+        // Stash engine pointer
+        .value(kEngineKey, JS_NewInt64(ctx, static_cast<int64_t>(
+                               reinterpret_cast<intptr_t>(engine))))
+        // Core
+        .function("screenshot", js_screenshot, 1)
+        .function("advanceTime", js_advanceTime, 1)
+        .function("flush", js_flush, 0)
+        .function("sleep", js_advanceTime, 1)
+        .function("assert", js_assert, 2)
+        // Mouse input simulation
+        .function("mouseDown", js_mouseDown, 3)
+        .function("mouseUp", js_mouseUp, 3)
+        .function("mouseMove", js_mouseMove, 2)
+        .function("click", js_click, 3)
+        .function("wheel", js_wheel, 4)
+        // Keyboard input simulation
+        .function("keyDown", js_keyDown, 4)
+        .function("keyUp", js_keyUp, 3)
+        .function("textInput", js_textInput, 1)
+        // Viewport
+        .function("resize", js_resize, 2);
 }
 
 } // namespace bro::js

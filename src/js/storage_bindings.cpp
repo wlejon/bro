@@ -1,14 +1,12 @@
 #include "js/storage_bindings.h"
 #include "util/log.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <fstream>
 #include <sstream>
 #include <map>
 #include <string>
-
-extern "C" {
-#include "quickjs.h"
-}
 
 namespace bro::js {
 
@@ -214,18 +212,13 @@ void StorageBindings::install(JSContext* ctx, const std::string& storagePath)
     state->storagePath = storagePath;
     loadStorage(state);
 
-    JSValue global = JS_GetGlobalObject(ctx);
+    qjsbind::Global(ctx)
+        .value(kStorageKey, JS_NewInt64(ctx, static_cast<int64_t>(
+                                reinterpret_cast<intptr_t>(state))));
 
-    // Stash state pointer in JS global for retrieval by C callbacks.
-    JS_SetPropertyStr(ctx, global, kStorageKey,
-                      JS_NewInt64(ctx, static_cast<int64_t>(
-                          reinterpret_cast<intptr_t>(state))));
-
-    JSValue storage = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, storage, js_storage_funcs,
-                               sizeof(js_storage_funcs) / sizeof(js_storage_funcs[0]));
-    JS_SetPropertyStr(ctx, global, "localStorage", storage);
-    JS_FreeValue(ctx, global);
+    qjsbind::Namespace(ctx, "localStorage")
+        .function_list(js_storage_funcs,
+                       sizeof(js_storage_funcs) / sizeof(js_storage_funcs[0]));
 }
 
 // ---------------------------------------------------------------------------
@@ -312,16 +305,13 @@ void StorageBindings::installSessionStorage(JSContext* ctx)
 {
     auto* state = new StorageState(); // no storagePath → in-memory only
 
-    JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, kSessionStorageKey,
-                      JS_NewInt64(ctx, static_cast<int64_t>(
-                          reinterpret_cast<intptr_t>(state))));
+    qjsbind::Global(ctx)
+        .value(kSessionStorageKey, JS_NewInt64(ctx, static_cast<int64_t>(
+                                       reinterpret_cast<intptr_t>(state))));
 
-    JSValue storage = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, storage, js_session_storage_funcs,
-                               sizeof(js_session_storage_funcs) / sizeof(js_session_storage_funcs[0]));
-    JS_SetPropertyStr(ctx, global, "sessionStorage", storage);
-    JS_FreeValue(ctx, global);
+    qjsbind::Namespace(ctx, "sessionStorage")
+        .function_list(js_session_storage_funcs,
+                       sizeof(js_session_storage_funcs) / sizeof(js_session_storage_funcs[0]));
 }
 
 void StorageBindings::cleanup(JSContext* ctx)

@@ -5,6 +5,7 @@
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
+#include <qjsbind/qjsbind.h>
 
 #include <cstring>
 #include <string>
@@ -539,50 +540,26 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
     s_bodyTags.clear();
     s_nextTag = 1;
 
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue physics = JS_NewObject(ctx);
-
-    JS_SetPropertyStr(ctx, physics, "createWorld",
-        JS_NewCFunction(ctx, js_physics_createWorld, "createWorld", 1));
-    JS_SetPropertyStr(ctx, physics, "setGravity",
-        JS_NewCFunction(ctx, js_physics_setGravity, "setGravity", 3));
-    JS_SetPropertyStr(ctx, physics, "getGravity",
-        JS_NewCFunction(ctx, js_physics_getGravity, "getGravity", 0));
-    JS_SetPropertyStr(ctx, physics, "createBody",
-        JS_NewCFunction(ctx, js_physics_createBody, "createBody", 1));
-    JS_SetPropertyStr(ctx, physics, "destroyBody",
-        JS_NewCFunction(ctx, js_physics_destroyBody, "destroyBody", 1));
-    JS_SetPropertyStr(ctx, physics, "getTransform",
-        JS_NewCFunction(ctx, js_physics_getTransform, "getTransform", 1));
-    JS_SetPropertyStr(ctx, physics, "getVelocity",
-        JS_NewCFunction(ctx, js_physics_getVelocity, "getVelocity", 1));
-    JS_SetPropertyStr(ctx, physics, "setPosition",
-        JS_NewCFunction(ctx, js_physics_setPosition, "setPosition", 4));
-    JS_SetPropertyStr(ctx, physics, "setRotation",
-        JS_NewCFunction(ctx, js_physics_setRotation, "setRotation", 5));
-    JS_SetPropertyStr(ctx, physics, "setLinearVelocity",
-        JS_NewCFunction(ctx, js_physics_setLinearVelocity, "setLinearVelocity", 4));
-    JS_SetPropertyStr(ctx, physics, "addForce",
-        JS_NewCFunction(ctx, js_physics_addForce, "addForce", 4));
-    JS_SetPropertyStr(ctx, physics, "addImpulse",
-        JS_NewCFunction(ctx, js_physics_addImpulse, "addImpulse", 4));
-    JS_SetPropertyStr(ctx, physics, "addTorque",
-        JS_NewCFunction(ctx, js_physics_addTorque, "addTorque", 4));
-    JS_SetPropertyStr(ctx, physics, "raycast",
-        JS_NewCFunction(ctx, js_physics_raycast, "raycast", 7));
-    JS_SetPropertyStr(ctx, physics, "getContacts",
-        JS_NewCFunction(ctx, js_physics_getContacts, "getContacts", 0));
-    JS_SetPropertyStr(ctx, physics, "setTimeStep",
-        JS_NewCFunction(ctx, js_physics_setTimeStep, "setTimeStep", 1));
-    JS_SetPropertyStr(ctx, physics, "isActive",
-        JS_NewCFunction(ctx, js_physics_isActive, "isActive", 1));
-    JS_SetPropertyStr(ctx, physics, "activate",
-        JS_NewCFunction(ctx, js_physics_activate, "activate", 1));
-    JS_SetPropertyStr(ctx, physics, "getAllTransforms",
-        JS_NewCFunction(ctx, js_physics_getAllTransforms, "getAllTransforms", 0));
-
-    JS_SetPropertyStr(ctx, global, "Physics", physics);
-    JS_FreeValue(ctx, global);
+    qjsbind::Namespace(ctx, "Physics")
+        .function("createWorld", js_physics_createWorld, 1)
+        .function("setGravity", js_physics_setGravity, 3)
+        .function("getGravity", js_physics_getGravity, 0)
+        .function("createBody", js_physics_createBody, 1)
+        .function("destroyBody", js_physics_destroyBody, 1)
+        .function("getTransform", js_physics_getTransform, 1)
+        .function("getVelocity", js_physics_getVelocity, 1)
+        .function("setPosition", js_physics_setPosition, 4)
+        .function("setRotation", js_physics_setRotation, 5)
+        .function("setLinearVelocity", js_physics_setLinearVelocity, 4)
+        .function("addForce", js_physics_addForce, 4)
+        .function("addImpulse", js_physics_addImpulse, 4)
+        .function("addTorque", js_physics_addTorque, 4)
+        .function("raycast", js_physics_raycast, 7)
+        .function("getContacts", js_physics_getContacts, 0)
+        .function("setTimeStep", js_physics_setTimeStep, 1)
+        .function("isActive", js_physics_isActive, 1)
+        .function("activate", js_physics_activate, 1)
+        .function("getAllTransforms", js_physics_getAllTransforms, 0);
 }
 
 void PhysicsBindings::cleanup(JSContext* ctx) {

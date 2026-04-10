@@ -3,12 +3,10 @@
 #include "util/log.h"
 #include "util/time.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <vector>
 #include <algorithm>
-
-extern "C" {
-#include "quickjs.h"
-}
 
 namespace bro::js {
 
@@ -289,31 +287,18 @@ JSValue Timers::js_performanceNow(JSContext* ctx, JSValueConst /*this_val*/,
 
 void Timers::install(JSContext* ctx, Timers* instance)
 {
-    JSValue global = JS_GetGlobalObject(ctx);
-
-    // Stash the pointer via context opaque (invisible to JS, no truncation risk).
     JS_SetContextOpaque(ctx, instance);
 
-    JS_SetPropertyStr(ctx, global, "setTimeout",
-                      JS_NewCFunction(ctx, js_setTimeout, "setTimeout", 2));
-    JS_SetPropertyStr(ctx, global, "setInterval",
-                      JS_NewCFunction(ctx, js_setInterval, "setInterval", 2));
-    JS_SetPropertyStr(ctx, global, "clearTimeout",
-                      JS_NewCFunction(ctx, js_clearTimeout, "clearTimeout", 1));
-    JS_SetPropertyStr(ctx, global, "clearInterval",
-                      JS_NewCFunction(ctx, js_clearInterval, "clearInterval", 1));
-    JS_SetPropertyStr(ctx, global, "requestAnimationFrame",
-                      JS_NewCFunction(ctx, js_requestAnimationFrame, "requestAnimationFrame", 1));
-    JS_SetPropertyStr(ctx, global, "cancelAnimationFrame",
-                      JS_NewCFunction(ctx, js_cancelAnimationFrame, "cancelAnimationFrame", 1));
+    qjsbind::Global(ctx)
+        .function("setTimeout", js_setTimeout, 2)
+        .function("setInterval", js_setInterval, 2)
+        .function("clearTimeout", js_clearTimeout, 1)
+        .function("clearInterval", js_clearInterval, 1)
+        .function("requestAnimationFrame", js_requestAnimationFrame, 1)
+        .function("cancelAnimationFrame", js_cancelAnimationFrame, 1);
 
-    // performance.now()
-    JSValue perf = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, perf, "now",
-                      JS_NewCFunction(ctx, js_performanceNow, "now", 0));
-    JS_SetPropertyStr(ctx, global, "performance", perf);
-
-    JS_FreeValue(ctx, global);
+    qjsbind::Namespace(ctx, "performance")
+        .function("now", js_performanceNow, 0);
 }
 
 } // namespace bro::js
