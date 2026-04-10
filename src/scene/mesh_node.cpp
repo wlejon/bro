@@ -2,6 +2,8 @@
 #include "scene/scene_graph.h"
 #include "util/log.h"
 
+#include <bromesh/analysis/bbox.h>
+
 namespace bro::scene {
 
 MeshNode::MeshNode(const std::string& name) : SceneNode(name) {}
@@ -13,11 +15,23 @@ MeshNode::~MeshNode() {
 void MeshNode::setMesh(const bromesh::MeshData& mesh) {
     mesh_ = mesh;
     gpuDirty_ = true;
+    bvhDirty_ = true;
+    bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
 }
 
 void MeshNode::setMesh(bromesh::MeshData&& mesh) {
     mesh_ = std::move(mesh);
     gpuDirty_ = true;
+    bvhDirty_ = true;
+    bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
+}
+
+const bromesh::MeshBVH& MeshNode::bvh() const {
+    if (bvhDirty_) {
+        bvh_ = bromesh::MeshBVH::build(mesh_);
+        bvhDirty_ = false;
+    }
+    return bvh_;
 }
 
 void MeshNode::releaseGL() {

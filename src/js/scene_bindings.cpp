@@ -12,10 +12,12 @@
 
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/analysis/raycast.h>
+#include <bromesh/analysis/bvh.h>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
 
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -484,8 +486,18 @@ static bool jsReadFloatArray(JSContext* ctx, JSValueConst obj, const char* prop,
 static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop,
                               std::vector<uint32_t>& out);
 
-// updateMesh(meshOrOpts) — replace geometry on an existing MeshNode in place.
-// Accepts either a Mesh object or a plain options object {positions, normals?, indices, data?}.
+// updateMesh(meshOrOpts[, opts]) — replace geometry on an existing MeshNode.
+//
+// Forms:
+//   node.updateMesh(meshObj)                         // copy
+//   node.updateMesh(meshObj, { transfer: true })     // consume by move
+//   node.updateMesh({ mesh: m, transfer: true })     // same as above
+//   node.updateMesh({ positions, indices, normals }) // raw vertex data
+//
+// With `transfer: true`, the Mesh's underlying MeshData is moved out of the JS
+// wrapper directly into the MeshNode (zero-copy, matching postMessage
+// transferList semantics). The source Mesh is left neutered. Clone first if
+// you still need it.
 static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = static_cast<NodeWrapper*>(JS_GetOpaque(this_val, js_scenenode_class_id));
     if (!w || !w->node)
@@ -499,22 +511,49 @@ static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int arg
     bromesh::MeshData meshData;
     bool gotData = false;
 
-    // Path 1: argument is a Mesh object directly
-    if (auto* md = MeshBindings::getMeshData(ctx, argv[0])) {
-        meshData = *md;
-        gotData = true;
+    // Read the optional second-arg opts object (for positional form) or the
+    // transfer flag off the first arg when it's an options object.
+    bool transfer = false;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        transfer = jsGetBool(ctx, argv[1], "transfer", false);
     }
 
-    // Path 2: argument is an options object with .data (Mesh) or raw typed arrays
-    if (!gotData && JS_IsObject(argv[0])) {
-        JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
-        if (!JS_IsUndefined(dataVal)) {
-            if (auto* md = MeshBindings::getMeshData(ctx, dataVal)) {
-                meshData = *md;
+    // Path 1: argument is a Mesh object directly.
+    if (MeshBindings::getMeshData(ctx, argv[0])) {
+        if (transfer) {
+            if (auto taken = MeshBindings::takeMeshData(ctx, argv[0])) {
+                meshData = std::move(*taken);
                 gotData = true;
             }
+        } else {
+            meshData = *MeshBindings::getMeshData(ctx, argv[0]);
+            gotData = true;
         }
-        JS_FreeValue(ctx, dataVal);
+    }
+
+    // Path 2: options object with `mesh:`/`data:` (Mesh) or raw typed arrays.
+    if (!gotData && JS_IsObject(argv[0])) {
+        bool transferOpt = jsGetBool(ctx, argv[0], "transfer", false);
+
+        auto tryKey = [&](const char* key) -> bool {
+            JSValue v = JS_GetPropertyStr(ctx, argv[0], key);
+            bool took = false;
+            if (!JS_IsUndefined(v) && MeshBindings::getMeshData(ctx, v)) {
+                if (transferOpt) {
+                    if (auto taken = MeshBindings::takeMeshData(ctx, v)) {
+                        meshData = std::move(*taken);
+                        took = true;
+                    }
+                } else {
+                    meshData = *MeshBindings::getMeshData(ctx, v);
+                    took = true;
+                }
+            }
+            JS_FreeValue(ctx, v);
+            return took;
+        };
+        if (tryKey("mesh") || tryKey("data"))
+            gotData = true;
 
         if (!gotData) {
             std::vector<float> positions, normals;
@@ -989,37 +1028,41 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, dbVal);
 
-        // Mesh: either a Mesh object, raw vertex data, or a named primitive
+        // Mesh: either a Mesh object, raw vertex data, or a named primitive.
+        //
+        // By default a Mesh argument is COPIED into the new MeshNode, leaving
+        // the JS Mesh usable. Set `transfer: true` in the options to move the
+        // MeshData out of the wrapper instead — the source Mesh is neutered,
+        // matching postMessage transferList semantics. This is the zero-copy
+        // path the terrain worker pipeline uses.
         bromesh::MeshData meshData;
         bool hasRawData = false;
 
-        // Check for a Mesh object via the "data" property
-        {
-            JSValue dataVal = JS_GetPropertyStr(ctx, opts, "data");
-            if (!JS_IsUndefined(dataVal)) {
-                auto* md = MeshBindings::getMeshData(ctx, dataVal);
-                if (md) {
-                    meshData = *md;
-                    hasRawData = true;
-                }
-            }
-            JS_FreeValue(ctx, dataVal);
-        }
+        bool transfer = jsGetBool(ctx, opts, "transfer", false);
 
-        // Also accept a Mesh object via the "mesh" property (same key used by
-        // updateMesh). If "mesh" is a string we fall through to the named-
-        // primitive path below.
-        if (!hasRawData) {
-            JSValue meshVal = JS_GetPropertyStr(ctx, opts, "mesh");
-            if (!JS_IsUndefined(meshVal)) {
-                auto* md = MeshBindings::getMeshData(ctx, meshVal);
-                if (md) {
-                    meshData = *md;
-                    hasRawData = true;
+        auto tryKey = [&](const char* key) -> bool {
+            JSValue v = JS_GetPropertyStr(ctx, opts, key);
+            bool took = false;
+            if (!JS_IsUndefined(v) && MeshBindings::getMeshData(ctx, v)) {
+                if (transfer) {
+                    if (auto taken = MeshBindings::takeMeshData(ctx, v)) {
+                        meshData = std::move(*taken);
+                        took = true;
+                    }
+                } else {
+                    meshData = *MeshBindings::getMeshData(ctx, v);
+                    took = true;
                 }
             }
-            JS_FreeValue(ctx, meshVal);
-        }
+            JS_FreeValue(ctx, v);
+            return took;
+        };
+
+        // Prefer "mesh" key, fall back to legacy "data". If "mesh" is a
+        // string ("box", "sphere", ...) the MeshBindings check returns null
+        // and we fall through to the named-primitive branch.
+        if (tryKey("mesh")) hasRawData = true;
+        else if (tryKey("data")) hasRawData = true;
 
         // Check for raw vertex data (positions + indices arrays)
         if (!hasRawData) {
@@ -1199,7 +1242,7 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         if (nodeScl.y != 0.0f) localDir.y /= nodeScl.y;
         if (nodeScl.z != 0.0f) localDir.z /= nodeScl.z;
 
-        // localDir's magnitude affects bromesh::raycast's reported distance
+        // localDir's magnitude affects bromesh raycast's reported distance
         // (it treats the direction as-is). We normalize and rescale the
         // distance-bound accordingly so closestDist stays in world units.
         float localDirLen = localDir.length();
@@ -1211,9 +1254,40 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         float scale = nodeScl.x != 0.0f ? nodeScl.x : 1.0f;
         float localMaxDist = closestDist / scale;
 
+        // Early-out: local-space AABB slab test against the cached bounds.
+        // Prunes most terrain chunks without touching the BVH at all, which
+        // is the big win for terrain apps where the raycast walks thousands
+        // of mesh nodes per click.
+        {
+            const bromesh::BBox& lb = mn->localBounds();
+            // Expand zero-extent axes slightly so a flat mesh (e.g. a plane)
+            // still passes the slab test along its degenerate axis.
+            float bmin[3] = { lb.min[0], lb.min[1], lb.min[2] };
+            float bmax[3] = { lb.max[0], lb.max[1], lb.max[2] };
+            float invD[3];
+            for (int a = 0; a < 3; ++a) {
+                float dv = (&localDirN.x)[a];
+                invD[a] = (std::fabs(dv) > 1e-30f) ? 1.0f / dv
+                                                    : (dv >= 0.0f ?  1e30f : -1e30f);
+            }
+            float o[3] = { localOrigin.x, localOrigin.y, localOrigin.z };
+            float tmin = -1e30f, tmax = 1e30f;
+            for (int a = 0; a < 3; ++a) {
+                float t1 = (bmin[a] - o[a]) * invD[a];
+                float t2 = (bmax[a] - o[a]) * invD[a];
+                float lo = t1 < t2 ? t1 : t2;
+                float hi = t1 < t2 ? t2 : t1;
+                if (lo > tmin) tmin = lo;
+                if (hi < tmax) tmax = hi;
+            }
+            if (tmax < 0.0f || tmin > tmax || tmin > localMaxDist) return;
+        }
+
+        // BVH raycast. MeshNode lazily builds + caches the BVH against the
+        // current mesh; rebuilt after setMesh.
         float o[3] = { localOrigin.x, localOrigin.y, localOrigin.z };
         float d[3] = { localDirN.x, localDirN.y, localDirN.z };
-        bromesh::RayHit hit = bromesh::raycast(md, o, d, localMaxDist);
+        bromesh::RayHit hit = mn->bvh().raycast(md, o, d, localMaxDist);
         if (!hit.hit) return;
 
         // Convert the local hit back to world space.

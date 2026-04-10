@@ -2,6 +2,7 @@
 
 #include "scene/scene_node.h"
 #include <bromesh/mesh_data.h>
+#include <bromesh/analysis/bvh.h>
 #include <glad/gl.h>
 
 #include <vector>
@@ -23,10 +24,20 @@ public:
 
     // --- Mesh data ---
 
-    /// Set mesh geometry. Uploads to GPU on next render.
+    /// Set mesh geometry. Uploads to GPU on next render and invalidates the
+    /// cached BVH (rebuilt lazily on the next raycast).
     void setMesh(const bromesh::MeshData& mesh);
     void setMesh(bromesh::MeshData&& mesh);
     const bromesh::MeshData& mesh() const { return mesh_; }
+
+    /// Local-space AABB of the current mesh. Cached; updated in setMesh.
+    /// Returns an empty box for empty meshes.
+    const bromesh::BBox& localBounds() const { return bounds_; }
+
+    /// Lazily-built, cached BVH over the current mesh. Built on first call
+    /// after setMesh and reused until the next setMesh. Used by scene.raycast
+    /// to avoid O(N) ray-triangle tests on dense meshes (terrain chunks etc.).
+    const bromesh::MeshBVH& bvh() const;
 
     // --- Material ---
 
@@ -58,6 +69,12 @@ private:
 
     bromesh::MeshData mesh_;
     bool gpuDirty_ = false;
+
+    // Cached bounds + BVH. Both are invalidated (bvhDirty_ = true, bounds_
+    // recomputed) on every setMesh call.
+    bromesh::BBox bounds_;
+    mutable bromesh::MeshBVH bvh_;
+    mutable bool bvhDirty_ = true;
 
     // GL resources
     GLuint vao_ = 0;
