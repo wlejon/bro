@@ -77,7 +77,9 @@ console.log("\n[2] Pipeline determinism + structure");
     check("FBm 2D values byte-equal across calls", same);
 
     // Build a tiny voxel chunk: column heights derived from raw1.
-    var voxels = new Uint8Array(CW * CH * CD);
+    // NB: must NOT use `var voxels` — that would clobber app.js's global
+    // voxel grid (var is function-scoped). Use a distinct name.
+    var testVoxels = new Uint8Array(CW * CH * CD);
     var solidCount = 0;
     for (var z = 0; z < CD; z++) {
         for (var x = 0; x < CW; x++) {
@@ -85,7 +87,7 @@ console.log("\n[2] Pipeline determinism + structure");
             if (t < 0) t = 0; else if (t > 1) t = 1;
             var h = Math.floor(2 + t * (CH - 4));
             for (var y = 0; y <= h; y++) {
-                voxels[(z * CH + y) * CW + x] = 1;
+                testVoxels[(z * CH + y) * CW + x] = 1;
                 solidCount++;
             }
         }
@@ -94,7 +96,7 @@ console.log("\n[2] Pipeline determinism + structure");
 
     // greedyMesh on the full grid should produce one mesh with a non-trivial
     // triangle count and a bounding box that lies inside the chunk.
-    var mesh = Mesh.greedyMesh(voxels, CW, CH, CD, 1.0);
+    var mesh = Mesh.greedyMesh(testVoxels, CW, CH, CD, 1.0);
     check("greedyMesh produced a mesh", mesh.triangleCount > 0);
     check("greedyMesh produced normals", mesh.hasNormals);
 
@@ -108,18 +110,18 @@ console.log("\n[2] Pipeline determinism + structure");
 
     // Determinism: build it again and confirm same triangle count.
     var raw3 = fbm.genUniformGrid2D(0, 0, CW, CD, 0.05, 7);
-    var voxels2 = new Uint8Array(CW * CH * CD);
+    var testVoxels2 = new Uint8Array(CW * CH * CD);
     for (var z2 = 0; z2 < CD; z2++) {
         for (var x2 = 0; x2 < CW; x2++) {
             var t2 = (raw3[z2 * CW + x2] + 1) * 0.5;
             if (t2 < 0) t2 = 0; else if (t2 > 1) t2 = 1;
             var h2 = Math.floor(2 + t2 * (CH - 4));
             for (var y2 = 0; y2 <= h2; y2++) {
-                voxels2[(z2 * CH + y2) * CW + x2] = 1;
+                testVoxels2[(z2 * CH + y2) * CW + x2] = 1;
             }
         }
     }
-    var mesh2 = Mesh.greedyMesh(voxels2, CW, CH, CD, 1.0);
+    var mesh2 = Mesh.greedyMesh(testVoxels2, CW, CH, CD, 1.0);
     check("greedy meshing is deterministic (tri count match)",
         mesh.triangleCount === mesh2.triangleCount);
 }
@@ -135,12 +137,16 @@ console.log("\n[3] Scene-graph round trip");
     // Build a small mesh and add it as a fresh node — verifies transfer:true
     // still works for greedyMesh output (this is the whole point of the
     // recently-fixed pipeline).
-    var voxels = new Uint8Array(8 * 8 * 8);
+    //
+    // NB: rename the local — `var voxels` would clobber app.js's global
+    // voxel grid (JS var is function-scoped, not block-scoped) and the
+    // next rebuildMeshes() would read garbage past the end.
+    var smallVoxels = new Uint8Array(8 * 8 * 8);
     for (var z = 0; z < 8; z++)
         for (var x = 0; x < 8; x++)
-            voxels[(z * 8 + 0) * 8 + x] = 1;  // single ground layer
+            smallVoxels[(z * 8 + 0) * 8 + x] = 1;  // single ground layer
 
-    var mesh = Mesh.greedyMesh(voxels, 8, 8, 8, 1.0);
+    var mesh = Mesh.greedyMesh(smallVoxels, 8, 8, 8, 1.0);
     check("small chunk meshed", mesh.triangleCount > 0);
     var triBefore = mesh.triangleCount;
 
@@ -162,10 +168,72 @@ console.log("\n[3] Scene-graph round trip");
 }
 
 // -----------------------------------------------------------------------------
-// 4. Visual smoke test
+// 4. Block picking — mine + place via the camera-aligned raycast
+//
+// The app exposes pickAndEdit() on globalThis so headless tests can drive
+// the same code path as a left/right click. We mine a block, verify the
+// triangle count drops, place a stone block, verify it comes back, and
+// confirm scene.raycast still hits the modified terrain.
 // -----------------------------------------------------------------------------
-console.log("\n[4] Visual screenshot");
+console.log("\n[4] Block picking (mine + place)");
 {
+    var canvas = document.getElementById('c');
+    var scene = canvas.getContext('scene');
+
+    // Aim the camera straight down at the middle of the chunk so the
+    // raycast lands on a known column. The 0.5 offsets keep the ray inside
+    // a voxel cell instead of grazing corners (which precision-trips
+    // bromesh::raycast on the voxel grid boundaries).
+    cam.pos = [0.5, CHUNK_H + 5, 0.5];
+    cam.yaw = 0;
+    cam.pitch = -Math.PI / 2 + 0.001;   // straight down (avoid singular up)
+
+    var trisBefore = lastStats.tris;
+    check("scene has triangles before mining (" + trisBefore + ")", trisBefore > 0);
+
+    // Mine: should remove the highest block in the center column.
+    var mined = pickAndEdit('mine');
+    check("mining returned true", mined === true);
+    check("triangle count changed after mining",
+        lastStats.tris !== trisBefore);
+
+    // Mine a few more so the change is visible in the screenshot.
+    for (var i = 0; i < 5; i++) pickAndEdit('mine');
+
+    var trisAfterMine = lastStats.tris;
+    check("multiple mines kept the world non-empty", trisAfterMine > 0);
+
+    // Count solid voxels before placing — placing should add exactly one
+    // (the tris count is an unreliable proxy here because greedy merging
+    // can absorb a single new block by hiding neighbor faces).
+    var solidBefore = 0;
+    for (var i = 0; i < voxels.length; i++) if (voxels[i] !== 0) solidBefore++;
+
+    // Place a block back. After mining straight-down, the new ray hits the
+    // floor of the hole; placing puts a block on top of that floor.
+    var placed = pickAndEdit('place', STONE);
+    check("placing returned true", placed === true);
+
+    var solidAfter = 0;
+    for (var j = 0; j < voxels.length; j++) if (voxels[j] !== 0) solidAfter++;
+    check("place added exactly one solid voxel (" + solidBefore + " → " + solidAfter + ")",
+        solidAfter === solidBefore + 1);
+
+    // Sanity: scene.raycast still hits the (modified) terrain.
+    var hit = scene.raycast([0, CHUNK_H + 20, 0], [0, -1, 0], 200);
+    check("scene.raycast still hits terrain after edits", hit !== null);
+}
+
+// -----------------------------------------------------------------------------
+// 5. Visual smoke test
+// -----------------------------------------------------------------------------
+console.log("\n[5] Visual screenshot");
+{
+    // Pull the camera back to the default isometric framing for the shot.
+    cam.pos = [50, 42, 50];
+    cam.yaw = -Math.PI / 4;
+    cam.pitch = -0.30;
+
     advanceTime(32);
     flush();
     screenshot('terrain.png');

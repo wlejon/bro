@@ -123,20 +123,42 @@ function maskMaterial(voxels, matId) {
 // Build the world from a seed
 // ----------------------------------------------------------------------------
 
-var terrainNodes = [];
-var lastStats = { tris: 0, verts: 0, voxels: 0, materials: 0 };
+// Module-level state: the live voxel grid and the per-material mesh nodes
+// that visualise it. Block edits mutate `voxels` in place and call
+// rebuildMeshes() to refresh the scene.
+var voxels = null;
+var terrainNodes = {};   // matId → SceneNode
+var lastStats = { tris: 0, verts: 0, voxels: 0, materials: 0, seed: 0, ms: 0 };
+
+// World-space offset of the chunk's local (0,0,0) corner. The chunk is
+// centered on the origin so the camera frames it nicely.
+var CHUNK_ORIGIN_X = -CHUNK_W * 0.5;
+var CHUNK_ORIGIN_Y = 0;
+var CHUNK_ORIGIN_Z = -CHUNK_D * 0.5;
 
 function clearTerrain() {
-    for (var i = 0; i < terrainNodes.length; i++) terrainNodes[i].destroy();
-    terrainNodes = [];
+    for (var key in terrainNodes) {
+        if (terrainNodes[key]) terrainNodes[key].destroy();
+    }
+    terrainNodes = {};
 }
 
-function buildWorld(seed) {
-    var t0 = Date.now();
-    clearTerrain();
+// Voxel grid index. (z * CHUNK_H + y) * CHUNK_W + x — must match
+// buildVoxelGrid() and the layout greedyMesh expects.
+function voxelIdx(x, y, z) {
+    return (z * CHUNK_H + y) * CHUNK_W + x;
+}
 
-    var heights = buildHeightmap(seed);
-    var voxels = buildVoxelGrid(heights);
+function inBounds(x, y, z) {
+    return x >= 0 && x < CHUNK_W &&
+           y >= 0 && y < CHUNK_H &&
+           z >= 0 && z < CHUNK_D;
+}
+
+// Rebuild the per-material meshes for the current `voxels` array. Used by
+// both world generation and live block edits.
+function rebuildMeshes() {
+    var t0 = Date.now();
 
     var totalTris = 0, totalVerts = 0, totalVoxels = 0;
     for (var i = 0; i < voxels.length; i++) if (voxels[i] !== 0) totalVoxels++;
@@ -146,41 +168,97 @@ function buildWorld(seed) {
         var mat = MATERIALS[m];
         var masked = maskMaterial(voxels, mat.id);
         var mesh = Mesh.greedyMesh(masked, CHUNK_W, CHUNK_H, CHUNK_D, 1.0);
+
+        // Drop the old node for this material whether or not the new mesh
+        // is empty (a destroyed-then-empty material should disappear).
+        if (terrainNodes[mat.id]) {
+            terrainNodes[mat.id].destroy();
+            terrainNodes[mat.id] = null;
+        }
+
         if (mesh.triangleCount === 0) continue;
 
         totalTris  += mesh.triangleCount;
         totalVerts += mesh.vertexCount;
         matCount++;
 
-        var node = scene.createMesh({
+        terrainNodes[mat.id] = scene.createMesh({
             mesh: mesh,
             transfer: true,
-            // Center the chunk horizontally on the origin so the camera
-            // start position frames it nicely.
-            x: -CHUNK_W * 0.5,
-            y: 0,
-            z: -CHUNK_D * 0.5,
+            x: CHUNK_ORIGIN_X,
+            y: CHUNK_ORIGIN_Y,
+            z: CHUNK_ORIGIN_Z,
             color: mat.color,
             name: 'terrain-' + mat.name
         });
-        terrainNodes.push(node);
     }
 
-    lastStats = {
-        tris: totalTris,
-        verts: totalVerts,
-        voxels: totalVoxels,
-        materials: matCount,
-        seed: seed,
-        ms: Date.now() - t0
-    };
+    lastStats.tris = totalTris;
+    lastStats.verts = totalVerts;
+    lastStats.voxels = totalVoxels;
+    lastStats.materials = matCount;
+    lastStats.ms = Date.now() - t0;
+}
 
+function buildWorld(seed) {
+    clearTerrain();
+    var heights = buildHeightmap(seed);
+    voxels = buildVoxelGrid(heights);
+    lastStats.seed = seed;
+    rebuildMeshes();
     console.log('terrain: seed=' + seed +
-                ' voxels=' + totalVoxels +
-                ' tris=' + totalTris +
-                ' verts=' + totalVerts +
-                ' materials=' + matCount +
+                ' voxels=' + lastStats.voxels +
+                ' tris=' + lastStats.tris +
+                ' verts=' + lastStats.verts +
+                ' materials=' + lastStats.materials +
                 ' build=' + lastStats.ms + 'ms');
+}
+
+// ----------------------------------------------------------------------------
+// Block picking — mine + place via scene.raycast from the crosshair
+// ----------------------------------------------------------------------------
+
+// Convert a world-space point to its containing voxel coordinates. Hit
+// points sit exactly on the surface, so the caller nudges by ±normal*eps
+// before calling this to land on the right side of the boundary.
+function worldToVoxel(wx, wy, wz) {
+    return [
+        Math.floor(wx - CHUNK_ORIGIN_X),
+        Math.floor(wy - CHUNK_ORIGIN_Y),
+        Math.floor(wz - CHUNK_ORIGIN_Z)
+    ];
+}
+
+// Cast a ray from the camera through the crosshair (always screen center)
+// and either remove the hit block or place a new block adjacent to it.
+//   action: 'mine' → set the hit voxel to AIR
+//           'place' → set the empty voxel adjacent to the hit face to `mat`
+// Returns true if a block was modified.
+function pickAndEdit(action, placeMat) {
+    var fwd = camForward();
+    var hit = scene.raycast(cam.pos, fwd, 200);
+    if (!hit) return false;
+
+    var p = hit.position || hit.point;
+    var n = hit.normal || [0, 1, 0];
+
+    var coord;
+    if (action === 'mine') {
+        // Step into the block: away from the surface normal.
+        coord = worldToVoxel(p[0] - n[0] * 0.5, p[1] - n[1] * 0.5, p[2] - n[2] * 0.5);
+        if (!inBounds(coord[0], coord[1], coord[2])) return false;
+        if (voxels[voxelIdx(coord[0], coord[1], coord[2])] === AIR) return false;
+        voxels[voxelIdx(coord[0], coord[1], coord[2])] = AIR;
+    } else {
+        // Step out of the block: along the surface normal.
+        coord = worldToVoxel(p[0] + n[0] * 0.5, p[1] + n[1] * 0.5, p[2] + n[2] * 0.5);
+        if (!inBounds(coord[0], coord[1], coord[2])) return false;
+        if (voxels[voxelIdx(coord[0], coord[1], coord[2])] !== AIR) return false;
+        voxels[voxelIdx(coord[0], coord[1], coord[2])] = placeMat;
+    }
+
+    rebuildMeshes();
+    return true;
 }
 
 // ----------------------------------------------------------------------------
@@ -216,11 +294,27 @@ var keys = {};
 var mouseCaptured = false;
 var seed = 1337;
 
+// Material the player will place on right-click. Cycles through MATERIALS
+// (skipping AIR/BEDROCK) via [/] keys.
+var placeMatIndex = 2;   // STONE
+function activePlaceMat() {
+    return MATERIALS[placeMatIndex].id;
+}
+function activePlaceMatName() {
+    return MATERIALS[placeMatIndex].name;
+}
+
 document.addEventListener('keydown', function(e) {
     keys[e.key.toLowerCase()] = true;
     if (e.key === 'r' || e.key === 'R') {
         seed = (seed + 1) | 0;
         buildWorld(seed);
+    }
+    if (e.key === '[') {
+        placeMatIndex = (placeMatIndex - 1 + MATERIALS.length) % MATERIALS.length;
+    }
+    if (e.key === ']') {
+        placeMatIndex = (placeMatIndex + 1) % MATERIALS.length;
     }
     if (e.key === 'Escape') mouseCaptured = false;
 });
@@ -228,7 +322,23 @@ document.addEventListener('keyup', function(e) {
     keys[e.key.toLowerCase()] = false;
 });
 
-canvas.addEventListener('click', function() { mouseCaptured = true; });
+// Mouse buttons:
+//   - First click captures the pointer for look mode (mouseCaptured = true).
+//   - Once captured, left = mine the targeted block, right = place a block.
+canvas.addEventListener('mousedown', function(e) {
+    if (!mouseCaptured) {
+        mouseCaptured = true;
+        return;   // first click just captures, doesn't edit
+    }
+    if (e.button === 0) {
+        pickAndEdit('mine');
+    } else if (e.button === 2) {
+        pickAndEdit('place', activePlaceMat());
+    }
+});
+
+// Suppress the browser context menu so right-click can be used for placement.
+canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
 document.addEventListener('mousemove', function(e) {
     if (!mouseCaptured) return;
@@ -294,7 +404,7 @@ function render() {
         ', ' + cam.pos[2].toFixed(1) +
         ' | fps ' + fps +
         ' | tris ' + lastStats.tris +
-        ' | verts ' + lastStats.verts +
+        ' | place: ' + activePlaceMatName() +
         ' | seed ' + lastStats.seed;
 
     requestAnimationFrame(render);
