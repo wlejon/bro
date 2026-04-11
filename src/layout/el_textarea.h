@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layout/box.h"
+#include "layout/key_handle_result.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
 #include <string>
@@ -32,6 +33,10 @@ public:
 
     int rows() const;
     int cols() const;
+
+    // Key/text input handling — returns result for engine to dispatch events
+    KeyHandleResult handleKeyDown(dom::Element* el, int keycode, int mod);
+    KeyHandleResult handleTextInput(dom::Element* el, const std::string& text);
 
     void getContentSize(float& w, float& h);
 

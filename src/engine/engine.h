@@ -20,6 +20,7 @@
 
 typedef struct SDL_GLContextState* SDL_GLContext;
 
+namespace bro::layout { struct KeyHandleResult; }
 namespace bro::render { class GLContext; class RasterRenderer; class CPURasterRenderer; }
 namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
@@ -193,6 +194,7 @@ private:
 
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
+    void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",
                             const std::string& inputType = "");
     void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);

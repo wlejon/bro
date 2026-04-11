@@ -18,6 +18,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
+#include "layout/key_handle_result.h"
 #include "util/time.h"
 #include "util/log.h"
 
@@ -708,6 +709,24 @@ void Engine::dispatchInputEvent(dom::Element* el, const std::string& data,
     uiDirty_ = true;
 }
 
+/// Apply a KeyHandleResult from a control: dispatch events, handle unfocus.
+void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) {
+    if (r.dispatchChange) {
+        dom::Event changeEvt("change");
+        dispatchEvent(el, changeEvt);
+    }
+    if (r.dispatchInput) {
+        dispatchInputEvent(el, r.inputData, r.inputType);
+    }
+    if (r.unfocus) {
+        dispatchFocusEvents(el, nullptr);
+        safeStopTextInput(window_.get());
+    }
+    if (r.handled) {
+        uiDirty_ = true;
+    }
+}
+
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // F8: toggle perf overlay
     if (inputConfig_.overlayToggleKey != 0 &&
@@ -740,317 +759,24 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
-    // Check if a text input is focused — handle editing keys
+    // Delegate to the active control
     auto* activeEl = document_->activeElement();
-    auto* input = getElInput(activeEl);
+    layout::KeyHandleResult result;
 
-    // Handle checkbox/radio space toggle
-    if (input && input->isFocused()) {
-        auto itype = input->inputType(activeEl);
-        if ((itype == layout::ElInput::InputType::Checkbox || itype == layout::ElInput::InputType::Radio)
-            && keycode == SDLK_SPACE) {
-            if (itype == layout::ElInput::InputType::Checkbox) {
-                if (activeEl->hasAttribute("checked"))
-                    activeEl->removeAttribute("checked");
-                else
-                    activeEl->setAttribute("checked", "");
-            } else {
-                activeEl->setAttribute("checked", "");
-            }
-            dom::Event changeEvt("change");
-            dispatchEvent(activeEl, changeEvt);
-            dispatchInputEvent(activeEl);
-
-            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-            dispatchEvent(activeEl, evt);
-            return;
-        }
-
-        // Handle range arrow keys
-        if (itype == layout::ElInput::InputType::Range) {
-            bool handled = false;
-            if (keycode == SDLK_LEFT || keycode == SDLK_DOWN) {
-                float v = input->rangeValue() - input->rangeStep();
-                v = std::clamp(v, input->rangeMin(), input->rangeMax());
-                char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
-                activeEl->setAttribute("value", buf);
-                dispatchInputEvent(activeEl);
-                handled = true;
-            } else if (keycode == SDLK_RIGHT || keycode == SDLK_UP) {
-                float v = input->rangeValue() + input->rangeStep();
-                v = std::clamp(v, input->rangeMin(), input->rangeMax());
-                char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
-                activeEl->setAttribute("value", buf);
-                dispatchInputEvent(activeEl);
-                handled = true;
-            }
-            if (handled) {
-                auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-                dispatchEvent(activeEl, evt);
-                return;
-            }
-        }
-
-        // Skip text editing for non-text types
-        if (!input->isTextType(activeEl)) {
-            auto nontextEvt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-            dispatchEvent(activeEl, nontextEvt);
-            return;
-        }
+    if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+        result = input->handleKeyDown(activeEl, keycode, mod);
+    } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+        result = textarea->handleKeyDown(activeEl, keycode, mod);
+    } else if (auto* select = getElSelect(activeEl); select && select->isOpen()) {
+        result = select->handleKeyDown(activeEl, keycode, mod);
     }
 
-    if (input && input->isFocused() && input->isTextType(activeEl)) {
-        std::string val = activeEl->getAttribute("value");
-        int pos = input->cursorPos();
-        pos = std::clamp(pos, 0, static_cast<int>(val.size()));
-        bool handled = false;
-
-        if (keycode == SDLK_BACKSPACE) {
-            if (pos > 0) {
-                std::string deleted = val.substr(pos - 1, 1);
-                val.erase(pos - 1, 1);
-                input->setCursorPos(pos - 1);
-                activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl, deleted, "deleteContentBackward");
-            }
-            handled = true;
-        } else if (keycode == SDLK_DELETE) {
-            if (pos < static_cast<int>(val.size())) {
-                std::string deleted = val.substr(pos, 1);
-                val.erase(pos, 1);
-                activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl, deleted, "deleteContentForward");
-            }
-            handled = true;
-        } else if (keycode == SDLK_LEFT) {
-            if (pos > 0) {
-                input->setCursorPos(pos - 1);
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_RIGHT) {
-            if (pos < static_cast<int>(val.size())) {
-                input->setCursorPos(pos + 1);
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_HOME) {
-            input->setCursorPos(0);
-            uiDirty_ = true;
-            handled = true;
-        } else if (keycode == SDLK_END) {
-            input->setCursorPos(static_cast<int>(val.size()));
-            uiDirty_ = true;
-            handled = true;
-        } else if (input->inputType(activeEl) == layout::ElInput::InputType::Number &&
-                   (keycode == SDLK_UP || keycode == SDLK_DOWN)) {
-            // Increment/decrement number value
-            float v = 0;
-            if (!val.empty()) v = static_cast<float>(atof(val.c_str()));
-            float step = input->rangeStep();
-            v += (keycode == SDLK_UP) ? step : -step;
-            // Clamp to min/max if specified
-            float mn = input->rangeMin(), mx = input->rangeMax();
-            std::string minAttrStr = activeEl->getAttribute("min");
-            std::string maxAttrStr = activeEl->getAttribute("max");
-            if (!minAttrStr.empty()) v = std::max(v, mn);
-            if (!maxAttrStr.empty()) v = std::min(v, mx);
-            char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
-            activeEl->setAttribute("value", buf);
-            input->setCursorPos(static_cast<int>(strlen(buf)));
-            dispatchInputEvent(activeEl);
-            handled = true;
-        } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
-            // Unfocus the input on Enter
-            input->setFocused(false);
-            dispatchFocusEvents(activeEl, nullptr);
-            safeStopTextInput(window_.get());
-            uiDirty_ = true;
-            handled = true;
-        } else if (keycode == SDLK_ESCAPE) {
-            // Unfocus on Escape
-            input->setFocused(false);
-            dispatchFocusEvents(activeEl, nullptr);
-            safeStopTextInput(window_.get());
-            uiDirty_ = true;
-            handled = true;
-        } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
-            // Ctrl+A: select all (move cursor to end for now)
-            input->setCursorPos(static_cast<int>(val.size()));
-            uiDirty_ = true;
-            handled = true;
-        }
-
-        if (handled) {
-            // Still dispatch keydown event for JS listeners
-            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-            dispatchEvent(activeEl, evt);
-            return;
-        }
-    }
-
-    // Check if a textarea is focused — handle multi-line editing keys
-    auto* textarea = getElTextarea(activeEl);
-    if (textarea && textarea->isFocused()) {
-        std::string val = activeEl->getAttribute("value");
-        int pos = textarea->cursorPos();
-        pos = std::clamp(pos, 0, static_cast<int>(val.size()));
-        bool handled = false;
-
-        if (keycode == SDLK_BACKSPACE) {
-            if (pos > 0) {
-                std::string deleted = val.substr(pos - 1, 1);
-                val.erase(pos - 1, 1);
-                textarea->setCursorPos(pos - 1);
-                activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl, deleted, "deleteContentBackward");
-            }
-            handled = true;
-        } else if (keycode == SDLK_DELETE) {
-            if (pos < static_cast<int>(val.size())) {
-                std::string deleted = val.substr(pos, 1);
-                val.erase(pos, 1);
-                activeEl->setAttribute("value", val);
-                dispatchInputEvent(activeEl, deleted, "deleteContentForward");
-            }
-            handled = true;
-        } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
-            // Insert newline in textarea
-            val.insert(pos, 1, '\n');
-            textarea->setCursorPos(pos + 1);
-            activeEl->setAttribute("value", val);
-            dispatchInputEvent(activeEl, "\n", "insertLineBreak");
-            handled = true;
-        } else if (keycode == SDLK_LEFT) {
-            if (pos > 0) {
-                textarea->setCursorPos(pos - 1);
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_RIGHT) {
-            if (pos < static_cast<int>(val.size())) {
-                textarea->setCursorPos(pos + 1);
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_UP) {
-            // Move cursor up one line
-            int line = 0, col = 0;
-            for (int i = 0; i < pos; ++i) {
-                if (val[i] == '\n') { ++line; col = 0; } else { ++col; }
-            }
-            if (line > 0) {
-                // Find start of previous line
-                int prevLineStart = 0, prevLineLen = 0;
-                int curLine = 0;
-                for (int i = 0; i <= static_cast<int>(val.size()); ++i) {
-                    if (curLine == line - 1) { prevLineStart = i; break; }
-                    if (i < static_cast<int>(val.size()) && val[i] == '\n') ++curLine;
-                }
-                // Find length of previous line
-                for (int i = prevLineStart; i < static_cast<int>(val.size()) && val[i] != '\n'; ++i)
-                    ++prevLineLen;
-                textarea->setCursorPos(prevLineStart + std::min(col, prevLineLen));
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_DOWN) {
-            // Move cursor down one line
-            int line = 0, col = 0;
-            for (int i = 0; i < pos; ++i) {
-                if (val[i] == '\n') { ++line; col = 0; } else { ++col; }
-            }
-            // Find start of next line
-            int nextLineStart = -1;
-            int curLine = 0;
-            for (int i = 0; i < static_cast<int>(val.size()); ++i) {
-                if (val[i] == '\n') {
-                    if (curLine == line) { nextLineStart = i + 1; break; }
-                    ++curLine;
-                }
-            }
-            if (nextLineStart >= 0) {
-                int nextLineLen = 0;
-                for (int i = nextLineStart; i < static_cast<int>(val.size()) && val[i] != '\n'; ++i)
-                    ++nextLineLen;
-                textarea->setCursorPos(nextLineStart + std::min(col, nextLineLen));
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_HOME) {
-            // Move to start of current line
-            int lineStart = pos;
-            while (lineStart > 0 && val[lineStart - 1] != '\n') --lineStart;
-            textarea->setCursorPos(lineStart);
-            uiDirty_ = true;
-            handled = true;
-        } else if (keycode == SDLK_END) {
-            // Move to end of current line
-            int lineEnd = pos;
-            while (lineEnd < static_cast<int>(val.size()) && val[lineEnd] != '\n') ++lineEnd;
-            textarea->setCursorPos(lineEnd);
-            uiDirty_ = true;
-            handled = true;
-        } else if (keycode == SDLK_ESCAPE) {
-            textarea->setFocused(false);
-            dispatchFocusEvents(activeEl, nullptr);
-            safeStopTextInput(window_.get());
-            uiDirty_ = true;
-            handled = true;
-        } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
-            textarea->setCursorPos(static_cast<int>(val.size()));
-            uiDirty_ = true;
-            handled = true;
-        }
-
-        if (handled) {
-            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-            dispatchEvent(activeEl, evt);
-            return;
-        }
-    }
-
-    // Check if a select is open — handle arrow keys and enter
-    auto* select = getElSelect(activeEl);
-    if (select && select->isOpen()) {
-        auto opts = select->getOptions();
-        int hi = select->highlightedIndex();
-        bool handled = false;
-
-        if (keycode == SDLK_DOWN) {
-            if (hi < static_cast<int>(opts.size()) - 1) {
-                select->setHighlightedIndex(hi + 1);
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_UP) {
-            if (hi > 0) {
-                select->setHighlightedIndex(hi - 1);
-                uiDirty_ = true;
-            }
-            handled = true;
-        } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
-            if (hi >= 0 && hi < static_cast<int>(opts.size())) {
-                select->setSelectedIndex(hi);
-                activeEl->setAttribute("value", opts[hi].value);
-                dom::Event changeEvt("change");
-                dispatchEvent(activeEl, changeEvt);
-                dispatchInputEvent(activeEl);
-            }
-            select->setOpen(false);
-            uiDirty_ = true;
-            handled = true;
-        } else if (keycode == SDLK_ESCAPE) {
-            select->setOpen(false);
-            uiDirty_ = true;
-            handled = true;
-        }
-
-        if (handled) {
-            auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-            dispatchEvent(activeEl, evt);
-            return;
-        }
+    if (result.handled) {
+        applyKeyResult(activeEl, result);
+        // Still dispatch keydown event for JS listeners
+        auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+        dispatchEvent(activeEl, evt);
+        return;
     }
 
     // Default: dispatch keydown to body
@@ -1100,15 +826,6 @@ static bool isControlChar(const std::string& text) {
     return false;
 }
 
-// Validate text for number input (digits, minus, decimal point, 'e'/'E')
-static bool isValidNumberChar(const std::string& text) {
-    for (char c : text) {
-        if (!((c >= '0' && c <= '9') || c == '-' || c == '.' || c == 'e' || c == 'E' || c == '+'))
-            return false;
-    }
-    return !text.empty();
-}
-
 void Engine::handleTextInput(const std::string& text) {
     if (!document_) return;
 
@@ -1116,34 +833,17 @@ void Engine::handleTextInput(const std::string& text) {
     if (isControlChar(text)) return;
 
     auto* activeEl = document_->activeElement();
+    layout::KeyHandleResult result;
 
-    // Try textarea first (also text-editable)
-    auto* textarea = getElTextarea(activeEl);
-    if (textarea && textarea->isFocused()) {
-        std::string val = activeEl->getAttribute("value");
-        int pos = std::clamp(textarea->cursorPos(), 0, static_cast<int>(val.size()));
-        val.insert(pos, text);
-        textarea->setCursorPos(pos + static_cast<int>(text.size()));
-        activeEl->setAttribute("value", val);
-        dispatchInputEvent(activeEl, text, "insertText");
-        return;
+    if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+        result = textarea->handleTextInput(activeEl, text);
+    } else if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+        result = input->handleTextInput(activeEl, text);
     }
 
-    auto* input = getElInput(activeEl);
-    if (!input || !input->isFocused() || !input->isTextType(activeEl)) return;
-
-    // Number type: only allow numeric characters
-    if (input->inputType(activeEl) == layout::ElInput::InputType::Number) {
-        if (!isValidNumberChar(text)) return;
+    if (result.handled) {
+        applyKeyResult(activeEl, result);
     }
-
-    // Insert text at cursor position
-    std::string val = activeEl->getAttribute("value");
-    int pos = std::clamp(input->cursorPos(), 0, static_cast<int>(val.size()));
-    val.insert(pos, text);
-    input->setCursorPos(pos + static_cast<int>(text.size()));
-    activeEl->setAttribute("value", val);
-    dispatchInputEvent(activeEl, text, "insertText");
 }
 
 // ---------------------------------------------------------------------------

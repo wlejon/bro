@@ -4,6 +4,7 @@
 #include "dom/node.h"
 #include "render/renderer.h"
 
+#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <cstring>
 
@@ -68,6 +69,42 @@ uint64_t ElSelect::getFontHandle() const {
     }
     cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
     return cachedFontHandle_;
+}
+
+// ---------------------------------------------------------------------------
+// Key handling
+// ---------------------------------------------------------------------------
+
+KeyHandleResult ElSelect::handleKeyDown(dom::Element* el, int keycode, int /*mod*/) {
+    KeyHandleResult r;
+    if (!open_) return r;
+
+    auto opts = getOptions();
+    int hi = highlightedIndex_;
+
+    if (keycode == SDLK_DOWN) {
+        if (hi < static_cast<int>(opts.size()) - 1)
+            setHighlightedIndex(hi + 1);
+        r.handled = true;
+    } else if (keycode == SDLK_UP) {
+        if (hi > 0)
+            setHighlightedIndex(hi - 1);
+        r.handled = true;
+    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+        if (hi >= 0 && hi < static_cast<int>(opts.size())) {
+            setSelectedIndex(hi);
+            el->setAttribute("value", opts[hi].value);
+            r.dispatchChange = true;
+            r.dispatchInput = true;
+        }
+        setOpen(false);
+        r.handled = true;
+    } else if (keycode == SDLK_ESCAPE) {
+        setOpen(false);
+        r.handled = true;
+    }
+
+    return r;
 }
 
 void ElSelect::getContentSize(float& w, float& h) {

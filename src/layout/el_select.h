@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layout/box.h"
+#include "layout/key_handle_result.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
 #include <string>
@@ -46,6 +47,9 @@ public:
 
     struct DrawPos { float x, y, w, h; };
     DrawPos lastDrawPos() const { return lastDrawPos_; }
+
+    // Key handling — returns result for engine to dispatch events
+    KeyHandleResult handleKeyDown(dom::Element* el, int keycode, int mod);
 
     void getContentSize(float& w, float& h);
 

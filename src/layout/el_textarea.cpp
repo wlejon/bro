@@ -2,6 +2,7 @@
 #include "dom/element.h"
 #include "render/renderer.h"
 
+#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <cstring>
 
@@ -49,6 +50,138 @@ uint64_t ElTextarea::getFontHandle() const {
     }
     cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
     return cachedFontHandle_;
+}
+
+// ---------------------------------------------------------------------------
+// Key handling
+// ---------------------------------------------------------------------------
+
+// Helper: compute line and column from cursor position
+static void cursorLineCol(const std::string& val, int pos, int& line, int& col) {
+    line = 0; col = 0;
+    for (int i = 0; i < pos; ++i) {
+        if (val[i] == '\n') { ++line; col = 0; } else { ++col; }
+    }
+}
+
+// Helper: find start and length of a given line number
+static int lineStart(const std::string& val, int targetLine) {
+    int curLine = 0;
+    for (int i = 0; i <= static_cast<int>(val.size()); ++i) {
+        if (curLine == targetLine) return i;
+        if (i < static_cast<int>(val.size()) && val[i] == '\n') ++curLine;
+    }
+    return static_cast<int>(val.size());
+}
+
+static int lineLength(const std::string& val, int start) {
+    int len = 0;
+    for (int i = start; i < static_cast<int>(val.size()) && val[i] != '\n'; ++i)
+        ++len;
+    return len;
+}
+
+KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod) {
+    KeyHandleResult r;
+    std::string val = el->getAttribute("value");
+    int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+
+    if (keycode == SDLK_BACKSPACE) {
+        if (pos > 0) {
+            r.inputData = val.substr(pos - 1, 1);
+            val.erase(pos - 1, 1);
+            setCursorPos(pos - 1);
+            el->setAttribute("value", val);
+            r.dispatchInput = true;
+            r.inputType = "deleteContentBackward";
+        }
+        r.handled = true;
+    } else if (keycode == SDLK_DELETE) {
+        if (pos < static_cast<int>(val.size())) {
+            r.inputData = val.substr(pos, 1);
+            val.erase(pos, 1);
+            el->setAttribute("value", val);
+            r.dispatchInput = true;
+            r.inputType = "deleteContentForward";
+        }
+        r.handled = true;
+    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+        val.insert(pos, 1, '\n');
+        setCursorPos(pos + 1);
+        el->setAttribute("value", val);
+        r.handled = true;
+        r.dispatchInput = true;
+        r.inputData = "\n";
+        r.inputType = "insertLineBreak";
+    } else if (keycode == SDLK_LEFT) {
+        if (pos > 0) setCursorPos(pos - 1);
+        r.handled = true;
+    } else if (keycode == SDLK_RIGHT) {
+        if (pos < static_cast<int>(val.size())) setCursorPos(pos + 1);
+        r.handled = true;
+    } else if (keycode == SDLK_UP) {
+        int line, col;
+        cursorLineCol(val, pos, line, col);
+        if (line > 0) {
+            int prev = lineStart(val, line - 1);
+            setCursorPos(prev + std::min(col, lineLength(val, prev)));
+        }
+        r.handled = true;
+    } else if (keycode == SDLK_DOWN) {
+        int line, col;
+        cursorLineCol(val, pos, line, col);
+        // Find next line
+        int nextStart = -1;
+        int curLine = 0;
+        for (int i = 0; i < static_cast<int>(val.size()); ++i) {
+            if (val[i] == '\n') {
+                if (curLine == line) { nextStart = i + 1; break; }
+                ++curLine;
+            }
+        }
+        if (nextStart >= 0) {
+            setCursorPos(nextStart + std::min(col, lineLength(val, nextStart)));
+        }
+        r.handled = true;
+    } else if (keycode == SDLK_HOME) {
+        // Start of current line
+        int ls = pos;
+        while (ls > 0 && val[ls - 1] != '\n') --ls;
+        setCursorPos(ls);
+        r.handled = true;
+    } else if (keycode == SDLK_END) {
+        // End of current line
+        int le = pos;
+        while (le < static_cast<int>(val.size()) && val[le] != '\n') ++le;
+        setCursorPos(le);
+        r.handled = true;
+    } else if (keycode == SDLK_ESCAPE) {
+        setFocused(false);
+        r.handled = true;
+        r.unfocus = true;
+    } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
+        setCursorPos(static_cast<int>(val.size()));
+        r.handled = true;
+    }
+
+    return r;
+}
+
+KeyHandleResult ElTextarea::handleTextInput(dom::Element* el, const std::string& text) {
+    KeyHandleResult r;
+    if (!focused_) return r;
+
+    std::string val = el->getAttribute("value");
+    int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+    val.insert(pos, text);
+    setCursorPos(pos + static_cast<int>(text.size()));
+    el->setAttribute("value", val);
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = text;
+    r.inputType = "insertText";
+    return r;
 }
 
 void ElTextarea::getContentSize(float& w, float& h) {

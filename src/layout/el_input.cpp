@@ -3,6 +3,7 @@
 #include "dom/element.h"
 #include "render/renderer.h"
 
+#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -81,6 +82,142 @@ void ElInput::setRangeValue(float v) {
         v = mn + std::round((v - mn) / st) * st;
         v = std::clamp(v, mn, mx);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Key handling
+// ---------------------------------------------------------------------------
+
+KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
+    KeyHandleResult r;
+    auto itype = inputType(el);
+
+    // Checkbox/radio: space toggles
+    if ((itype == InputType::Checkbox || itype == InputType::Radio)
+        && keycode == SDLK_SPACE) {
+        if (itype == InputType::Checkbox) {
+            if (el->hasAttribute("checked"))
+                el->removeAttribute("checked");
+            else
+                el->setAttribute("checked", "");
+        } else {
+            el->setAttribute("checked", "");
+        }
+        r.handled = true;
+        r.dispatchChange = true;
+        r.dispatchInput = true;
+        return r;
+    }
+
+    // Range: arrow keys adjust value
+    if (itype == InputType::Range) {
+        if (keycode == SDLK_LEFT || keycode == SDLK_DOWN) {
+            float v = std::clamp(rangeValue() - rangeStep(), rangeMin(), rangeMax());
+            char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+            el->setAttribute("value", buf);
+            r.handled = true;
+            r.dispatchInput = true;
+            return r;
+        }
+        if (keycode == SDLK_RIGHT || keycode == SDLK_UP) {
+            float v = std::clamp(rangeValue() + rangeStep(), rangeMin(), rangeMax());
+            char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+            el->setAttribute("value", buf);
+            r.handled = true;
+            r.dispatchInput = true;
+            return r;
+        }
+    }
+
+    // Non-text types: nothing more to handle
+    if (!isTextType(el)) return r;
+
+    // Text editing
+    std::string val = el->getAttribute("value");
+    int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+
+    if (keycode == SDLK_BACKSPACE) {
+        if (pos > 0) {
+            r.inputData = val.substr(pos - 1, 1);
+            val.erase(pos - 1, 1);
+            setCursorPos(pos - 1);
+            el->setAttribute("value", val);
+            r.dispatchInput = true;
+            r.inputType = "deleteContentBackward";
+        }
+        r.handled = true;
+    } else if (keycode == SDLK_DELETE) {
+        if (pos < static_cast<int>(val.size())) {
+            r.inputData = val.substr(pos, 1);
+            val.erase(pos, 1);
+            el->setAttribute("value", val);
+            r.dispatchInput = true;
+            r.inputType = "deleteContentForward";
+        }
+        r.handled = true;
+    } else if (keycode == SDLK_LEFT) {
+        if (pos > 0) setCursorPos(pos - 1);
+        r.handled = true;
+    } else if (keycode == SDLK_RIGHT) {
+        if (pos < static_cast<int>(val.size())) setCursorPos(pos + 1);
+        r.handled = true;
+    } else if (keycode == SDLK_HOME) {
+        setCursorPos(0);
+        r.handled = true;
+    } else if (keycode == SDLK_END) {
+        setCursorPos(static_cast<int>(val.size()));
+        r.handled = true;
+    } else if (itype == InputType::Number &&
+               (keycode == SDLK_UP || keycode == SDLK_DOWN)) {
+        float v = val.empty() ? 0.0f : static_cast<float>(atof(val.c_str()));
+        float step = rangeStep();
+        v += (keycode == SDLK_UP) ? step : -step;
+        std::string minStr = el->getAttribute("min");
+        std::string maxStr = el->getAttribute("max");
+        if (!minStr.empty()) v = std::max(v, rangeMin());
+        if (!maxStr.empty()) v = std::min(v, rangeMax());
+        char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
+        el->setAttribute("value", buf);
+        setCursorPos(static_cast<int>(strlen(buf)));
+        r.handled = true;
+        r.dispatchInput = true;
+    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER ||
+               keycode == SDLK_ESCAPE) {
+        setFocused(false);
+        r.handled = true;
+        r.unfocus = true;
+    } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
+        setCursorPos(static_cast<int>(val.size()));
+        r.handled = true;
+    }
+
+    return r;
+}
+
+KeyHandleResult ElInput::handleTextInput(dom::Element* el, const std::string& text) {
+    KeyHandleResult r;
+    if (!focused_ || !isTextType(el)) return r;
+
+    // Number type: only allow numeric characters
+    if (inputType(el) == InputType::Number) {
+        for (char c : text) {
+            if (!((c >= '0' && c <= '9') || c == '-' || c == '.' ||
+                  c == 'e' || c == 'E' || c == '+'))
+                return r;
+        }
+    }
+
+    std::string val = el->getAttribute("value");
+    int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+    val.insert(pos, text);
+    setCursorPos(pos + static_cast<int>(text.size()));
+    el->setAttribute("value", val);
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = text;
+    r.inputType = "insertText";
+    return r;
 }
 
 void ElInput::getContentSize(float& w, float& h, float maxWidth) {
