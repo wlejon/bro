@@ -302,7 +302,7 @@ T.Screens = (function() {
                         rebinding = true;
                         rebindActionName = controlName;
                         var prompt = document.getElementById("rebind-prompt");
-                        if (prompt) prompt.style.display = "";
+                        if (prompt) prompt.style.display = "block";
                     }
                 }
             }, { onBack: function() { switchTo(backTarget); } });
@@ -311,7 +311,7 @@ T.Screens = (function() {
 
     function showHUD() {
         var el = document.getElementById("hud");
-        if (el) el.style.display = "";
+        if (el) el.style.display = "block";
     }
     function hideHUD() {
         var el = document.getElementById("hud");
@@ -326,7 +326,7 @@ T.Screens = (function() {
             countdownPhase = 3;
             T.Audio.sfxCountdown();
             var el = document.getElementById("countdown-text");
-            if (el) { el.textContent = "3"; el.style.display = ""; el.style.color = "#4fc3f7"; }
+            if (el) { el.textContent = "3"; el.style.display = "block"; el.style.color = "#4fc3f7"; }
         },
         exit: function() {
             var el = document.getElementById("countdown-text");

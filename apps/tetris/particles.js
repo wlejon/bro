@@ -40,7 +40,7 @@ T.FX = {
         var el = document.getElementById("action-text");
         if (el) {
             el.textContent = text;
-            el.style.display = "";
+            el.style.display = "block";
         }
     },
 

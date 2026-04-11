@@ -576,8 +576,8 @@ T.Board = {
         var comboVal = document.getElementById("hud-combo");
         if (comboLabel && comboVal) {
             if (B.combo > 0) {
-                comboLabel.style.display = "";
-                comboVal.style.display = "";
+                comboLabel.style.display = "block";
+                comboVal.style.display = "block";
                 comboVal.textContent = String(B.combo);
             } else {
                 comboLabel.style.display = "none";
@@ -590,14 +590,14 @@ T.Board = {
         var extraVal = document.getElementById("hud-extra");
         if (extraLabel && extraVal) {
             if (B.mode === "sprint") {
-                extraLabel.style.display = "";
-                extraVal.style.display = "";
+                extraLabel.style.display = "block";
+                extraVal.style.display = "block";
                 var remaining = Math.max(0, 40 - B.totalLines);
                 extraLabel.textContent = "LEFT";
                 extraVal.textContent = String(remaining);
             } else if (B.mode === "ultra") {
-                extraLabel.style.display = "";
-                extraVal.style.display = "";
+                extraLabel.style.display = "block";
+                extraVal.style.display = "block";
                 var remain = Math.max(0, Math.ceil(B.modeTimer / 1000));
                 var mins = Math.floor(remain / 60);
                 var secs = remain % 60;
