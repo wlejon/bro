@@ -157,6 +157,10 @@ apps/myapp/
   app.js          # loaded via <script src="...">
 ```
 
+## Warning
+
+while you technically could easily wire this up to be an actual web browser, it was not built for that. i have not paid mind to security at all. this exposes a _lot_ more of your system to javascript than a browser does. it'd be better if we didn't run random internet code in this unsecured sandbox.
+
 ## License
 
 [MIT](LICENSE)
