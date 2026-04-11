@@ -606,6 +606,7 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
             if (html.empty()) continue;
 
             Panel panel;
+            panel.fontManager = std::make_unique<layout::FontManager>();
             panel.name = fullRel;
 
             // Assign tab label and group based on panel path
@@ -676,7 +677,7 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
 
             // Initial layout (uses local fontManager — data moves with panel)
             {
-                layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
+                layout::SkiaTextMetrics textMetrics(renderer_.get(), panel.fontManager.get());
                 panel.document->resolveStyles();
                 panel.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
             }
@@ -716,7 +717,7 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
             panels_.push_back(std::move(panel));
             auto& finalPanel = panels_.back();
             finalPanel.drawTraversal = std::make_unique<layout::DrawTraversal>(
-                renderer_.get(), &finalPanel.fontManager);
+                renderer_.get(), finalPanel.fontManager.get());
             finalPanel.drawTraversal->setBasePath(savedBasePath);
             finalPanel.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
         } else {
@@ -789,7 +790,7 @@ void SystemOverlay::render(int vpW, int vpH) {
         if (!panel.active || !panel.document) continue;
         if (panel.document->isDirty()) {
             panel.document->clearStructureDirty();
-            layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
+            layout::SkiaTextMetrics textMetrics(renderer_.get(), panel.fontManager.get());
             panel.document->resolveStyles();
             panel.document->performLayout(static_cast<float>(vpW), textMetrics);
             panel.document->clearDirty();
@@ -823,7 +824,7 @@ void SystemOverlay::onResize(int w, int h) {
             panel.drawTraversal->setViewport(w, h);
         }
         if (panel.document) {
-            layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
+            layout::SkiaTextMetrics textMetrics(renderer_.get(), panel.fontManager.get());
             panel.document->resolveStyles();
             panel.document->performLayout(static_cast<float>(w), textMetrics);
         }

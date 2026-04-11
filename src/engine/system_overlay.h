@@ -170,7 +170,7 @@ public:
         JSContext* jsCtx = nullptr;
         std::unique_ptr<js::Timers> timers;
         std::unique_ptr<layout::DrawTraversal> drawTraversal;
-        layout::FontManager fontManager;
+        std::unique_ptr<layout::FontManager> fontManager;
         std::unique_ptr<dom::Document> document;
         JSValue broPerfObj = JS_UNDEFINED;  // cached ref for fast updates
     };
