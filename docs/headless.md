@@ -41,6 +41,10 @@ These functions are available in addition to all standard DOM APIs:
 | `keyUp(keycode [, scancode, mod])` | Simulate a key release (SDL keycodes) |
 | `textInput(text)` | Simulate text input (for typing into focused input/textarea) |
 | `resize(w, h)` | Resize the virtual viewport |
+| `inspect(selector [, verbose])` | Return formatted box model, position, computed styles, and DOM info for an element. Pass `true` for verbose (all styles). See [inspect.md](inspect.md). |
+| `inspectTree(selector [, depth])` | Return a tree view of element layout (sizes + positions). Default depth 3. Traverses shadow DOM. |
+| `computedStyle(selector [, property])` | Return a specific computed style value (string), or all styles as a JS object if no property given. |
+| `elements(selector)` | Return a summary of all matching elements with sizes and positions. |
 
 All standard DOM APIs work as expected: `document.querySelector()`, `el.click()`, `el.textContent`, `el.innerHTML`, `el.outerHTML`, `el.getBoundingClientRect()`, `el.style`, event dispatch, etc. Note that `el.click()` dispatches a click event directly on the element (no hit testing), while `click(x, y)` goes through the full engine input pipeline with hit testing, focus management, and event bubbling.
 

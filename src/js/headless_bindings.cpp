@@ -1,12 +1,19 @@
 #include "js/headless_bindings.h"
 #include "engine/engine.h"
 #include "dom/element.h"
+#include "dom/text_node.h"
 #include "dom/node.h"
+#include "dom/document.h"
+#include "dom/shadow_root.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
 
 #include <string>
+#include <sstream>
+#include <iomanip>
+#include <algorithm>
+#include <cmath>
 
 namespace bro::js {
 
@@ -257,6 +264,344 @@ static JSValue js_resize(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
 }
 
 // ---------------------------------------------------------------------------
+// CSS/Layout inspection
+// ---------------------------------------------------------------------------
+
+// Format a float, trimming trailing zeros: 10.00 -> "10", 10.50 -> "10.5"
+static std::string fmtF(float v) {
+    if (v == 0.0f) return "0";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.2f", v);
+    std::string s(buf);
+    if (s.find('.') != std::string::npos) {
+        while (s.back() == '0') s.pop_back();
+        if (s.back() == '.') s.pop_back();
+    }
+    return s;
+}
+
+// Format edges: "5" if all equal, "5 10" if top/bottom == left/right, "5 10 5 10" otherwise
+static std::string fmtEdges(const htmlayout::layout::Edges& e) {
+    if (e.top == e.right && e.right == e.bottom && e.bottom == e.left)
+        return fmtF(e.top);
+    if (e.top == e.bottom && e.left == e.right)
+        return fmtF(e.top) + " " + fmtF(e.right);
+    return fmtF(e.top) + " " + fmtF(e.right) + " " + fmtF(e.bottom) + " " + fmtF(e.left);
+}
+
+// Build element descriptor: <tag#id.class1.class2>
+static std::string elemDesc(bro::dom::Element* el) {
+    std::string s = "<" + el->tagName();
+    std::string id = el->id();
+    if (!id.empty()) s += "#" + id;
+    std::string cls = el->getAttribute("class");
+    if (!cls.empty()) {
+        // Split classes by whitespace, join with dots
+        std::istringstream iss(cls);
+        std::string tok;
+        while (iss >> tok) s += "." + tok;
+    }
+    s += ">";
+    return s;
+}
+
+// Compute absolute position by walking layout parent chain
+static void absolutePos(bro::dom::Element* el, float& ax, float& ay) {
+    auto& box = el->layoutBox();
+    ax = box.contentRect.x - box.padding.left - box.border.left;
+    ay = box.contentRect.y - box.padding.top - box.border.top;
+    for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
+        auto& pb = lp->layoutBox();
+        ax += pb.contentRect.x;
+        ay += pb.contentRect.y;
+        ay -= lp->scrollTopValue();
+    }
+}
+
+// Build full inspection string for a single element
+static std::string buildInspectString(bro::dom::Element* el, bool verbose) {
+    std::ostringstream out;
+    auto& box = el->layoutBox();
+    float ax, ay;
+    absolutePos(el, ax, ay);
+
+    // Header
+    out << elemDesc(el) << "\n";
+
+    // Box model
+    out << "  Box Model:\n";
+    out << "    content:  " << fmtF(box.contentRect.width) << " x "
+        << fmtF(box.contentRect.height) << "\n";
+    out << "    padding:  " << fmtEdges(box.padding) << "\n";
+    out << "    border:   " << fmtEdges(box.border) << "\n";
+    out << "    margin:   " << fmtEdges(box.margin) << "\n";
+    out << "    full:     " << fmtF(box.fullWidth()) << " x "
+        << fmtF(box.fullHeight()) << "\n";
+
+    // Position
+    out << "  Position:\n";
+    out << "    relative: (" << fmtF(box.contentRect.x) << ", "
+        << fmtF(box.contentRect.y) << ")\n";
+    out << "    absolute: (" << fmtF(ax) << ", " << fmtF(ay) << ")\n";
+
+    // Scroll state
+    float scrollTop = el->scrollTopValue();
+    float natH = box.naturalHeight;
+    if (scrollTop > 0 || natH > box.contentRect.height + 0.5f) {
+        out << "  Scroll:\n";
+        out << "    scrollTop:    " << fmtF(scrollTop) << "\n";
+        out << "    scrollHeight: " << fmtF(natH) << "\n";
+        out << "    overflow:     " << fmtF(natH - box.contentRect.height) << "px hidden\n";
+    }
+
+    // Flags
+    if (box.textTruncated)
+        out << "  Flags: text-truncated\n";
+
+    // Computed styles
+    auto& styles = el->computedStyle();
+    if (!styles.empty()) {
+        // In verbose mode, show all. Otherwise show key layout properties.
+        out << "  Computed Styles:\n";
+        if (verbose) {
+            // Sort for stable output
+            std::vector<std::pair<std::string, std::string>> sorted(styles.begin(), styles.end());
+            std::sort(sorted.begin(), sorted.end());
+            for (auto& [k, v] : sorted) {
+                out << "    " << k << ": " << v << "\n";
+            }
+        } else {
+            // Key layout/visual properties
+            static const char* keys[] = {
+                "display", "position", "flex-direction", "justify-content", "align-items",
+                "width", "height", "min-width", "min-height", "max-width", "max-height",
+                "overflow", "overflow-x", "overflow-y",
+                "color", "background-color", "background",
+                "font-size", "font-family", "font-weight",
+                "opacity", "visibility", "z-index", "transform",
+                "box-sizing", "text-align", "vertical-align",
+                "white-space", "text-overflow",
+                "gap", "row-gap", "column-gap", "flex-wrap", "flex-grow", "flex-shrink",
+                "grid-template-columns", "grid-template-rows",
+            };
+            for (auto* key : keys) {
+                auto it = styles.find(key);
+                if (it != styles.end() && !it->second.empty()) {
+                    out << "    " << key << ": " << it->second << "\n";
+                }
+            }
+        }
+    }
+
+    // Inline styles
+    auto& inlineStyle = el->style();
+    if (!inlineStyle.empty()) {
+        out << "  Inline Styles:\n";
+        out << "    " << inlineStyle.cssText() << "\n";
+    }
+
+    // Attributes (non-style, non-class, non-id)
+    auto& attrs = el->attributes();
+    bool hasExtra = false;
+    for (auto& [k, v] : attrs) {
+        if (k == "id" || k == "class" || k == "style") continue;
+        if (!hasExtra) { out << "  Attributes:\n"; hasExtra = true; }
+        out << "    " << k << "=\"" << v << "\"\n";
+    }
+
+    // Children summary
+    int elemCount = 0, textCount = 0;
+    for (auto* child : el->childNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) ++elemCount;
+        else if (child->nodeType() == bro::dom::NodeType::Text) ++textCount;
+    }
+    out << "  Children: " << elemCount << " element" << (elemCount != 1 ? "s" : "")
+        << ", " << textCount << " text node" << (textCount != 1 ? "s" : "") << "\n";
+
+    // Shadow DOM
+    if (el->hasShadow()) {
+        auto* sr = el->shadowRoot();
+        out << "  Shadow DOM: " << (sr->mode() == bro::dom::ShadowRoot::Mode::Open ? "open" : "closed") << "\n";
+    }
+
+    return out.str();
+}
+
+// Build tree view recursively
+static void buildTreeString(std::ostringstream& out, bro::dom::Element* el,
+                            int depth, int maxDepth, const std::string& indent) {
+    auto& box = el->layoutBox();
+    float ax, ay;
+    absolutePos(el, ax, ay);
+
+    out << indent << elemDesc(el) << "  "
+        << fmtF(box.fullWidth()) << "x" << fmtF(box.fullHeight())
+        << " @ (" << fmtF(ax) << ", " << fmtF(ay) << ")";
+
+    // Show key style hints inline
+    auto& styles = el->computedStyle();
+    auto displayIt = styles.find("display");
+    if (displayIt != styles.end() && displayIt->second != "block")
+        out << " [" << displayIt->second << "]";
+    auto posIt = styles.find("position");
+    if (posIt != styles.end() && posIt->second != "static")
+        out << " [" << posIt->second << "]";
+    auto ovIt = styles.find("overflow");
+    if (ovIt != styles.end() && ovIt->second != "visible")
+        out << " [overflow:" << ovIt->second << "]";
+    if (el->hasShadow())
+        out << " [shadow]";
+
+    out << "\n";
+
+    if (depth >= maxDepth) return;
+
+    // Show children (use composed tree to see through shadow DOM)
+    std::string childIndent = indent + "  ";
+    for (auto* child : el->composedChildNodes()) {
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            buildTreeString(out, static_cast<bro::dom::Element*>(child),
+                           depth + 1, maxDepth, childIndent);
+        } else if (child->nodeType() == bro::dom::NodeType::Text) {
+            auto* text = static_cast<bro::dom::TextNode*>(child);
+            std::string data = text->data();
+            // Trim whitespace
+            size_t start = data.find_first_not_of(" \t\n\r");
+            if (start == std::string::npos) continue; // skip whitespace-only
+            size_t end = data.find_last_not_of(" \t\n\r");
+            data = data.substr(start, end - start + 1);
+            if (data.size() > 40) data = data.substr(0, 37) + "...";
+            out << childIndent << "#text \"" << data << "\"\n";
+        }
+    }
+}
+
+static JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "inspect(selector [, verbose]) requires a selector");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* selector = JS_ToCString(ctx, argv[0]);
+    if (!selector) return JS_EXCEPTION;
+
+    // Flush layout so box info is current
+    engine->flush();
+
+    auto* el = engine->querySelector(selector);
+    if (!el) {
+        JS_FreeCString(ctx, selector);
+        return JS_ThrowTypeError(ctx, "inspect: no element matches '%s'", selector);
+    }
+    JS_FreeCString(ctx, selector);
+
+    bool verbose = false;
+    if (argc >= 2) verbose = JS_ToBool(ctx, argv[1]);
+
+    std::string result = buildInspectString(el, verbose);
+    return JS_NewString(ctx, result.c_str());
+}
+
+static JSValue js_inspectTree(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "inspectTree(selector [, depth]) requires a selector");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* selector = JS_ToCString(ctx, argv[0]);
+    if (!selector) return JS_EXCEPTION;
+
+    // Flush layout so box info is current
+    engine->flush();
+
+    auto* el = engine->querySelector(selector);
+    if (!el) {
+        JS_FreeCString(ctx, selector);
+        return JS_ThrowTypeError(ctx, "inspectTree: no element matches '%s'", selector);
+    }
+    JS_FreeCString(ctx, selector);
+
+    int maxDepth = 3;
+    if (argc >= 2) JS_ToInt32(ctx, &maxDepth, argv[1]);
+
+    std::ostringstream out;
+    buildTreeString(out, el, 0, maxDepth, "");
+    return JS_NewString(ctx, out.str().c_str());
+}
+
+static JSValue js_computedStyle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "computedStyle(selector [, property]) requires a selector");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* selector = JS_ToCString(ctx, argv[0]);
+    if (!selector) return JS_EXCEPTION;
+
+    // Flush layout so styles are current
+    engine->flush();
+
+    auto* el = engine->querySelector(selector);
+    if (!el) {
+        JS_FreeCString(ctx, selector);
+        return JS_ThrowTypeError(ctx, "computedStyle: no element matches '%s'", selector);
+    }
+    JS_FreeCString(ctx, selector);
+
+    auto& styles = el->computedStyle();
+
+    // If a specific property is requested, return just that value
+    if (argc >= 2 && JS_IsString(argv[1])) {
+        const char* prop = JS_ToCString(ctx, argv[1]);
+        if (!prop) return JS_EXCEPTION;
+        std::string propStr(prop);
+        JS_FreeCString(ctx, prop);
+
+        auto it = styles.find(propStr);
+        if (it != styles.end())
+            return JS_NewString(ctx, it->second.c_str());
+        return JS_NewString(ctx, "");
+    }
+
+    // No property specified — return all as a JS object
+    JSValue obj = JS_NewObject(ctx);
+    for (auto& [k, v] : styles) {
+        JS_SetPropertyStr(ctx, obj, k.c_str(), JS_NewString(ctx, v.c_str()));
+    }
+    return obj;
+}
+
+static JSValue js_elements(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "elements(selector) requires a selector");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* selector = JS_ToCString(ctx, argv[0]);
+    if (!selector) return JS_EXCEPTION;
+
+    engine->flush();
+
+    auto* doc = engine->document();
+    if (!doc || !doc->documentElement()) {
+        JS_FreeCString(ctx, selector);
+        return JS_NewString(ctx, "(no document)\n");
+    }
+
+    auto results = doc->documentElement()->querySelectorAll(std::string(selector));
+    JS_FreeCString(ctx, selector);
+
+    std::ostringstream out;
+    out << results.size() << " match" << (results.size() != 1 ? "es" : "") << ":\n";
+    for (size_t i = 0; i < results.size(); ++i) {
+        auto* el = results[i];
+        auto& box = el->layoutBox();
+        float ax, ay;
+        absolutePos(el, ax, ay);
+        out << "  [" << i << "] " << elemDesc(el) << "  "
+            << fmtF(box.fullWidth()) << "x" << fmtF(box.fullHeight())
+            << " @ (" << fmtF(ax) << ", " << fmtF(ay) << ")\n";
+    }
+    return JS_NewString(ctx, out.str().c_str());
+}
+
+// ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
 
@@ -282,7 +627,12 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("keyUp", js_keyUp, 3)
         .function("textInput", js_textInput, 1)
         // Viewport
-        .function("resize", js_resize, 2);
+        .function("resize", js_resize, 2)
+        // CSS/Layout inspection
+        .function("inspect", js_inspect, 2)
+        .function("inspectTree", js_inspectTree, 2)
+        .function("computedStyle", js_computedStyle, 2)
+        .function("elements", js_elements, 1);
 }
 
 } // namespace bro::js
