@@ -1183,8 +1183,8 @@ void Engine::run() {
     eventLoop_->onMouseUp = [this](float x, float y, uint8_t btn) {
         handleMouseUp(x, y, static_cast<int>(btn));
     };
-    eventLoop_->onMouseMove = [this](float x, float y) {
-        handleMouseMove(x, y);
+    eventLoop_->onMouseMove = [this](float x, float y, float xrel, float yrel) {
+        handleMouseMove(x, y, xrel, yrel);
     };
     eventLoop_->onKeyDown = [this](int32_t keycode, int32_t scancode, uint16_t mod, bool repeat) {
         handleKeyDown(keycode, scancode, static_cast<int>(mod), repeat);

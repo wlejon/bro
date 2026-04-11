@@ -162,7 +162,8 @@ static JSValue js_mouseMove(JSContext* ctx, JSValueConst, int argc, JSValueConst
     if (JS_ToFloat64(ctx, &x, argv[0])) return JS_EXCEPTION;
     if (JS_ToFloat64(ctx, &y, argv[1])) return JS_EXCEPTION;
 
-    engine->handleMouseMove(static_cast<float>(x), static_cast<float>(y));
+    float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
     engine->flush();
     return JS_UNDEFINED;
 }

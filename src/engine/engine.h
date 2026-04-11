@@ -113,11 +113,14 @@ public:
     /// Input events forwarded from the event loop.
     void handleMouseDown(float x, float y, int button);
     void handleMouseUp(float x, float y, int button);
-    void handleMouseMove(float x, float y);
+    void handleMouseMove(float x, float y, float xrel, float yrel);
     void handleKeyDown(int keycode, int scancode, int mod, bool repeat);
     void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
     void handleTextInput(const std::string& text);
     void handleWheel(float x, float y, float dx, float dy);
+
+    float getLastMouseX() const { return lastMouseX_; }
+    float getLastMouseY() const { return lastMouseY_; }
 
     // --- Headless API (also usable in windowed mode) ---
 

@@ -35,7 +35,8 @@ void EventLoop::pollEvents() {
 
             case SDL_EVENT_MOUSE_MOTION:
                 if (onMouseMove) {
-                    onMouseMove(event.motion.x, event.motion.y);
+                    onMouseMove(event.motion.x, event.motion.y,
+                                event.motion.xrel, event.motion.yrel);
                 }
                 break;
 
