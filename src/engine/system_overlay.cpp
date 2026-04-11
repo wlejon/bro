@@ -7,6 +7,7 @@
 #include "render/gl_context.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
+#include "layout/el_select.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -438,6 +439,21 @@ namespace bro::engine {
 // SystemOverlay implementation — uses shared JS runtime with per-panel contexts
 // ---------------------------------------------------------------------------
 
+// Initialize replaced element controls (<select>) on overlay panel DOMs.
+static void initReplacedElements(dom::Element* elem, render::Renderer* renderer) {
+    if (!elem) return;
+    if (elem->tagName() == "SELECT" && !elem->selectControl()) {
+        auto ctrl = std::make_unique<layout::ElSelect>(renderer);
+        ctrl->setElement(elem);
+        ctrl->initSelectedIndex();
+        elem->setSelectControl(std::move(ctrl));
+    }
+    for (auto* child : elem->childNodes()) {
+        if (child->nodeType() == dom::NodeType::Element)
+            initReplacedElements(static_cast<dom::Element*>(child), renderer);
+    }
+}
+
 SystemOverlay::SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH,
                              Settings* settings, platform::Window* window)
     : jsRuntime_(jsRuntime)
@@ -716,6 +732,17 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
                 }
             }
 
+            // Initialize replaced elements (e.g. <select>) after scripts
+            // have populated options via createElement/appendChild.
+            initReplacedElements(panel.document->documentElement(), renderer_.get());
+
+            // Re-layout after scripts may have modified the DOM
+            {
+                layout::SkiaTextMetrics textMetrics(renderer_.get(), panel.fontManager.get());
+                panel.document->resolveStyles();
+                panel.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
+            }
+
             // Move panel into vector FIRST, then create DrawTraversal with
             // the stable fontManager address. DrawTraversal stores a raw pointer
             // to fontManager, so it must point to the final location.
@@ -855,7 +882,14 @@ void SystemOverlay::onResize(int w, int h) {
 
 dom::Element* SystemOverlay::hitTestPanel(Panel& panel, float x, float y) {
     if (!panel.document || !panel.document->documentElement()) return nullptr;
-    return hitTestElement(panel.document->documentElement(), x, y, 0.0f, 0.0f);
+    auto* hit = hitTestElement(panel.document->documentElement(), x, y, 0.0f, 0.0f);
+    if (!hit) return nullptr;
+    // Don't count hits on the document element (<html>) or transparent body —
+    // these span the full viewport and would block clicks to panels underneath.
+    if (hit == panel.document->documentElement()) return nullptr;
+    auto& tag = hit->tagName();
+    if (tag == "BODY" && hit->layoutBox().fullHeight() < 1.0f) return nullptr;
+    return hit;
 }
 
 bool SystemOverlay::handleMouseDown(float x, float y, int button) {
