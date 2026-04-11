@@ -2,6 +2,7 @@
 #include "engine/key_mapping.h"
 #include "engine/hit_testing.h"
 #include "engine/overflow.h"
+#include "engine/replaced_elements.h"
 #include "engine/system_overlay.h"
 
 #include "observer_check.js.h"
@@ -82,14 +83,6 @@
 #include <include/gpu/ganesh/gl/GrGLDirectContext.h>
 
 namespace bro::engine {
-
-// ---------------------------------------------------------------------------
-// Form control helpers (used by both draw loop and event handlers)
-// ---------------------------------------------------------------------------
-
-static layout::ElInput* getElInput(dom::Element* el);
-static layout::ElTextarea* getElTextarea(dom::Element* el);
-static layout::ElSelect* getElSelect(dom::Element* el);
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -1052,17 +1045,7 @@ void Engine::rasterThreadFunc() {
 
         // Draw overlays (select dropdowns, color pickers) on top of all elements.
         // These read active element state which is stable while raster is running.
-        if (document_) {
-            auto* activeEl = document_->activeElement();
-            auto* sel = getElSelect(activeEl);
-            if (sel && sel->isOpen()) {
-                sel->drawDropdown();
-            }
-            auto* inp = getElInput(activeEl);
-            if (inp && inp->isPickerOpen()) {
-                inp->drawColorPicker();
-            }
-        }
+        drawActiveOverlays(document_.get());
 
         // Draw viewport scrollbar
         {
@@ -1722,17 +1705,6 @@ void Engine::handleResize(int w, int h) {
     }
 }
 
-// Input focus helpers (also defined in input_handling.cpp for use there)
-static layout::ElInput* getElInput(dom::Element* el) {
-    return el ? el->inputControl() : nullptr;
-}
-static layout::ElTextarea* getElTextarea(dom::Element* el) {
-    return el ? el->textareaControl() : nullptr;
-}
-static layout::ElSelect* getElSelect(dom::Element* el) {
-    return el ? el->selectControl() : nullptr;
-}
-
 // Input handling methods (handleMouse*, handleKey*, handleTextInput,
 // handleWheel, advanceFocus, dispatchInputEvent) are in input_handling.cpp.
 
@@ -1761,46 +1733,7 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
 // ---------------------------------------------------------------------------
 
 void Engine::ensureReplacedElements(dom::Element* elem) {
-    if (!elem) return;
-
-    const auto& tag = elem->tagName();
-
-    if (tag == "INPUT" && !elem->inputControl()) {
-        auto ctrl = std::make_unique<layout::ElInput>(renderer_.get());
-        ctrl->setElement(elem);
-        elem->setInputControl(std::move(ctrl));
-    } else if (tag == "TEXTAREA" && !elem->textareaControl()) {
-        auto ctrl = std::make_unique<layout::ElTextarea>(renderer_.get());
-        ctrl->setElement(elem);
-        elem->setTextareaControl(std::move(ctrl));
-    } else if (tag == "SELECT" && !elem->selectControl()) {
-        auto ctrl = std::make_unique<layout::ElSelect>(renderer_.get());
-        ctrl->setElement(elem);
-        ctrl->initSelectedIndex();
-        elem->setSelectControl(std::move(ctrl));
-    } else if ((tag == "SVG" || tag == "svg") && !elem->svgControl()) {
-        auto ctrl = std::make_unique<layout::ElSvg>(renderer_.get());
-        ctrl->setElement(elem);
-        ctrl->parseAttributes();
-        elem->setSvgControl(std::move(ctrl));
-    }
-
-    // Recurse into children
-    for (auto* child : elem->childNodes()) {
-        if (child->nodeType() == dom::NodeType::Element) {
-            ensureReplacedElements(static_cast<dom::Element*>(child));
-        }
-    }
-
-    // Recurse into shadow DOM
-    if (elem->hasShadow()) {
-        auto* sr = elem->shadowRoot();
-        for (auto* child : sr->childNodes()) {
-            if (child->nodeType() == dom::NodeType::Element) {
-                ensureReplacedElements(static_cast<dom::Element*>(child));
-            }
-        }
-    }
+    bro::engine::ensureReplacedElements(elem, renderer_.get());
 }
 
 // Headless/capture API (flush, advanceTime, eval, screenshot, capturePixels,

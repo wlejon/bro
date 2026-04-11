@@ -34,6 +34,7 @@ add_library(bro_engine STATIC
     hit_testing.cpp
     scrollbar.cpp
     app_loader.cpp
+    replaced_elements.cpp
     system_overlay.cpp
     settings.cpp
     ${GENERATED_HEADERS}

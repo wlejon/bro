@@ -2,6 +2,7 @@
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
 #include "engine/hit_testing.h"
+#include "engine/replaced_elements.h"
 #include "engine/settings.h"
 #include "render/renderer.h"
 #include "render/gl_context.h"
@@ -439,20 +440,8 @@ namespace bro::engine {
 // SystemOverlay implementation — uses shared JS runtime with per-panel contexts
 // ---------------------------------------------------------------------------
 
-// Initialize replaced element controls (<select>) on overlay panel DOMs.
-static void initReplacedElements(dom::Element* elem, render::Renderer* renderer) {
-    if (!elem) return;
-    if (elem->tagName() == "SELECT" && !elem->selectControl()) {
-        auto ctrl = std::make_unique<layout::ElSelect>(renderer);
-        ctrl->setElement(elem);
-        ctrl->initSelectedIndex();
-        elem->setSelectControl(std::move(ctrl));
-    }
-    for (auto* child : elem->childNodes()) {
-        if (child->nodeType() == dom::NodeType::Element)
-            initReplacedElements(static_cast<dom::Element*>(child), renderer);
-    }
-}
+// Replaced element initialization now uses the shared ensureReplacedElements()
+// from replaced_elements.h — no local duplicate needed.
 
 SystemOverlay::SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH,
                              Settings* settings, platform::Window* window)
@@ -740,7 +729,7 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
 
             // Initialize replaced elements (e.g. <select>) after scripts
             // have populated options via createElement/appendChild.
-            initReplacedElements(panel.document->documentElement(), renderer_.get());
+            ensureReplacedElements(panel.document->documentElement(), renderer_.get());
 
             // Re-layout after scripts may have modified the DOM
             {
@@ -852,6 +841,12 @@ void SystemOverlay::render(int vpW, int vpH) {
         panel.drawTraversal->draw(panel.document->documentElement(), 0, 0, vpW, vpH);
     }
 
+    // Draw open dropdowns / color pickers on top of all panels
+    for (auto& panel : panels_) {
+        if (!isPanelVisible(panel) || !panel.document) continue;
+        drawActiveOverlays(panel.document.get());
+    }
+
     renderer_->endFrame();
     renderer_->uploadToGPU();
     renderDirty_ = false;
@@ -897,12 +892,38 @@ dom::Element* SystemOverlay::hitTestPanel(Panel& panel, float x, float y) {
 bool SystemOverlay::handleMouseDown(float x, float y, int button) {
     if (!isVisible()) return false;
 
+    // Check if click is inside an open dropdown in any panel first
+    for (auto& panel : panels_) {
+        if (!isPanelVisible(panel) || !panel.document) continue;
+        ControlContext cctx{panel.document.get(), panel.jsCtx,
+                           renderer_.get(), window_, &renderDirty_};
+        auto* prevActive = panel.document->activeElement();
+        auto disp = unfocusPreviousControl(cctx, prevActive, x, y);
+        if (disp == ClickDisposition::Consumed) {
+            renderDirty_ = true;
+            return true;
+        }
+    }
+
     // Iterate panels in reverse (last rendered = on top)
     for (int i = static_cast<int>(panels_.size()) - 1; i >= 0; i--) {
         auto& panel = panels_[i];
         if (!isPanelVisible(panel)) continue;
         dom::Element* target = hitTestPanel(panel, x, y);
         if (target) {
+            ControlContext cctx{panel.document.get(), panel.jsCtx,
+                               renderer_.get(), window_, &renderDirty_};
+
+            auto* prevActive = panel.document->activeElement();
+            panel.document->setActiveElement(target);
+            if (target != prevActive) {
+                dispatchFocusEvents(cctx, prevActive, target);
+            }
+
+            // Activate the clicked control (select dropdown, input, etc.)
+            focusNewControl(cctx, target, x, y);
+
+            // Dispatch mousedown event
             dom::MouseEvent evt("mousedown");
             evt.setClientX(static_cast<double>(x));
             evt.setClientY(static_cast<double>(y));
@@ -937,6 +958,19 @@ bool SystemOverlay::handleMouseUp(float x, float y, int button) {
             clickEvt.setButton(button);
             js::dispatchDomEvent(panel.jsCtx, target, clickEvt);
 
+            // End range slider dragging
+            if (panel.document) {
+                auto* activeEl = panel.document->activeElement();
+                auto* input = getElInput(activeEl);
+                if (input && input->isDragging()) {
+                    input->setDragging(false);
+                    ControlContext cctx{panel.document.get(), panel.jsCtx,
+                                       renderer_.get(), window_, &renderDirty_};
+                    dom::Event changeEvt("change");
+                    dispatchControlEvent(cctx, activeEl, changeEvt);
+                }
+            }
+
             renderDirty_ = true;
             return true;
         }
@@ -946,6 +980,14 @@ bool SystemOverlay::handleMouseUp(float x, float y, int button) {
 
 bool SystemOverlay::handleMouseMove(float x, float y) {
     if (!isVisible()) return false;
+
+    // Update dropdown highlight on hover (across all panels)
+    for (auto& panel : panels_) {
+        if (!isPanelVisible(panel) || !panel.document) continue;
+        ControlContext cctx{panel.document.get(), panel.jsCtx,
+                           renderer_.get(), window_, &renderDirty_};
+        updateDropdownHover(cctx, x, y);
+    }
 
     dom::Element* newTarget = nullptr;
     Panel* newPanel = nullptr;

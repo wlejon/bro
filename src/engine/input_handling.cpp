@@ -5,6 +5,7 @@
 #include "engine/hit_testing.h"
 #include "engine/key_mapping.h"
 #include "engine/overflow.h"
+#include "engine/replaced_elements.h"
 #include "engine/settings.h"
 #include "engine/system_overlay.h"
 
@@ -71,16 +72,6 @@ static void dispatchActionEvent(JSContext* ctx, Settings* settings,
 // Input focus helpers
 // ---------------------------------------------------------------------------
 
-static layout::ElInput* getElInput(dom::Element* el) {
-    return el ? el->inputControl() : nullptr;
-}
-static layout::ElTextarea* getElTextarea(dom::Element* el) {
-    return el ? el->textareaControl() : nullptr;
-}
-static layout::ElSelect* getElSelect(dom::Element* el) {
-    return el ? el->selectControl() : nullptr;
-}
-
 // Safe wrapper: SDL_GetModState() requires SDL_INIT_VIDEO. In --no-gpu
 // headless mode no SDL video subsystem is initialized, so the call would
 // dereference an internal NULL pointer and crash.  Return 0 (no modifiers)
@@ -100,49 +91,6 @@ static void safeStopTextInput(platform::Window* window) {
 // Returns true if the element is a focusable text-editing control (input or textarea)
 static bool isTextEditable(dom::Element* el) {
     return getElInput(el) || getElTextarea(el);
-}
-
-// Pick a color from the color picker grid at pixel position (x, y).
-// The grid is a 10x8 HSL palette anchored at (gridX, gridY) with size (gridW, gridH).
-// Returns a hex color string like "#ff8800".
-static std::string pickColorFromGrid(float x, float y,
-                                     float gridX, float gridY,
-                                     float gridW, float gridH) {
-    float cellW = (gridW - 4) / 10.0f;
-    float cellH = (gridH - 4) / 8.0f;
-    int col = std::clamp(static_cast<int>((x - gridX - 2) / cellW), 0, 9);
-    int row = std::clamp(static_cast<int>((y - gridY - 2) / cellH), 0, 7);
-
-    float hue = col * 36.0f;
-    float sat, lit;
-    if (row == 0) {
-        sat = 0.0f; lit = col / 9.0f;
-    } else {
-        sat = 1.0f; lit = 0.15f + (row - 1) * 0.1f;
-    }
-
-    auto hue2rgb = [](float p, float q, float t) -> float {
-        if (t < 0) t += 1; if (t > 1) t -= 1;
-        if (t < 1.0f/6) return p + (q-p)*6*t;
-        if (t < 1.0f/2) return q;
-        if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
-        return p;
-    };
-    uint8_t cr, cg, cb;
-    if (sat == 0) {
-        cr = cg = cb = static_cast<uint8_t>(lit * 255);
-    } else {
-        float q = lit < 0.5f ? lit*(1+sat) : lit+sat-lit*sat;
-        float p = 2*lit-q;
-        float hn = hue/360.0f;
-        cr = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
-        cg = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
-        cb = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
-    }
-
-    char hex[8];
-    snprintf(hex, sizeof(hex), "#%02x%02x%02x", cr, cg, cb);
-    return hex;
 }
 
 // Build a KeyboardEvent with all modifier fields set.
@@ -437,217 +385,26 @@ void Engine::handleMouseDown(float x, float y, int button) {
             // Track focus change
             auto* prevActive = document_->activeElement();
 
-            // Unfocus previous controls
-            auto* prevInput = getElInput(prevActive);
-            if (prevInput) {
-                // Close color picker if clicking outside it
-                if (prevInput->isPickerOpen()) {
-                    auto dp = prevInput->lastDrawPos();
-                    float px = dp.x, py = dp.y + dp.h + 2;
-                    float pw = 200.0f, ph = 160.0f;
-                    bool inPicker = (x >= px && x < px + pw && y >= py && y < py + ph);
-                    bool inSwatch = (x >= dp.x && x < dp.x + dp.w && y >= dp.y && y < dp.y + dp.h);
-                    if (inPicker) {
-                        // Click inside picker — select the color
-                        std::string hex = pickColorFromGrid(x, y, px, py, pw, ph);
-                        prevActive->setAttribute("value", hex.c_str());
-                        dom::Event changeEvt("change");
-                        dispatchEvent(prevActive, changeEvt);
-                        dispatchInputEvent(prevActive);
-                        prevInput->setPickerOpen(false);
-                        uiDirty_ = true;
-                        return; // consumed the click
-                    } else if (inSwatch) {
-                        prevInput->setPickerOpen(false);
-                        uiDirty_ = true;
-                        return; // consumed — don't fall through
-                    } else {
-                        prevInput->setPickerOpen(false);
-                    }
-                }
-                prevInput->setFocused(false);
-                uiDirty_ = true;
-            }
-            auto* prevTextarea = getElTextarea(prevActive);
-            if (prevTextarea) {
-                prevTextarea->setFocused(false);
-                uiDirty_ = true;
-            }
-            auto* prevSelect = getElSelect(prevActive);
-            if (prevSelect && prevSelect->isOpen()) {
-                // Check if click is inside the dropdown
-                auto dp = prevSelect->lastDrawPos();
-                auto opts = prevSelect->getOptions();
-                float lineH = prevSelect->dropdownLineHeight();
-                float dropY = dp.y + dp.h;
-                float dropH = lineH * static_cast<float>(opts.size()) + 2.0f;
-                bool inDropdown = (x >= dp.x && x < dp.x + dp.w &&
-                                   y >= dropY && y < dropY + dropH);
-                if (inDropdown) {
-                    // Select the clicked option
-                    int idx = static_cast<int>((y - dropY - 1.0f) / lineH);
-                    idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
-                    prevSelect->setSelectedIndex(idx);
-                    prevSelect->setOpen(false);
-                    // Update value attribute
-                    if (prevActive) {
-                        prevActive->setAttribute("value", opts[idx].value);
-                        dom::Event changeEvt("change");
-                        dispatchEvent(prevActive, changeEvt);
-                        dispatchInputEvent(prevActive);
-                    }
-                    uiDirty_ = true;
-                    // Don't process further — we handled the dropdown click
-                    computeOffset(evt, target);
-                    dispatchEvent(target, evt);
-                    return;
-                }
-                prevSelect->setOpen(false);
-                uiDirty_ = true;
+            // Unfocus previous controls and check if click was consumed
+            ControlContext cctx{document_.get(), jsRuntime_->getContext(),
+                               renderer_.get(), window_.get(), &uiDirty_};
+            auto disp = unfocusPreviousControl(cctx, prevActive, x, docY);
+            if (disp == ClickDisposition::Consumed) {
+                computeOffset(evt, target);
+                dispatchEvent(target, evt);
+                jsRuntime_->executePendingJobs();
+                return;
             }
 
             // Set new active element and dispatch focus events
             document_->setActiveElement(target);
             if (target != prevActive) {
-                dispatchFocusEvents(prevActive, target);
+                bro::engine::dispatchFocusEvents(cctx, prevActive, target);
             }
             jsRuntime_->executePendingJobs();
 
-            // Focus new input if clicking on one
-            auto* newInput = getElInput(target);
-            auto* newTextarea = getElTextarea(target);
-            auto* newSelect = getElSelect(target);
-
-            if (newInput) {
-                newInput->setFocused(true);
-                auto itype = newInput->inputType(target);
-
-                if (itype == layout::ElInput::InputType::Checkbox) {
-                    // Toggle checked state
-                    if (target->hasAttribute("checked")) {
-                        target->removeAttribute("checked");
-                    } else {
-                        target->setAttribute("checked", "");
-                    }
-                    dom::Event changeEvt("change");
-                    dispatchEvent(target, changeEvt);
-                    dispatchInputEvent(target);
-                    uiDirty_ = true;
-                } else if (itype == layout::ElInput::InputType::Radio) {
-                    // Uncheck other radios with same name
-                    std::string nameStr = target->getAttribute("name");
-                    const char* name = nameStr.empty() ? nullptr : nameStr.c_str();
-                    if (name && *name && document_) {
-                        auto* body = document_->body();
-                        if (body) {
-                            auto radios = body->querySelectorAll("input[type=\"radio\"]");
-                            for (auto* el : radios) {
-                                if (el == target) continue;
-                                auto* otherInput = getElInput(el);
-                                if (otherInput) {
-                                    std::string otherNameStr = el->getAttribute("name");
-                                    if (!otherNameStr.empty() && otherNameStr == nameStr) {
-                                        el->removeAttribute("checked");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    target->setAttribute("checked", "");
-                    dom::Event changeEvt("change");
-                    dispatchEvent(target, changeEvt);
-                    dispatchInputEvent(target);
-                    uiDirty_ = true;
-                } else if (itype == layout::ElInput::InputType::Range) {
-                    // Click to set value at position
-                    auto dp = newInput->lastDrawPos();
-                    float thumbR = 7.0f;
-                    float trackStart = dp.x + thumbR;
-                    float trackEnd = dp.x + dp.w - thumbR;
-                    float pct = (trackEnd > trackStart) ?
-                        std::clamp((x - trackStart) / (trackEnd - trackStart), 0.0f, 1.0f) : 0.0f;
-                    float mn = newInput->rangeMin(), mx = newInput->rangeMax();
-                    float val = mn + pct * (mx - mn);
-                    // Snap to step
-                    float step = newInput->rangeStep();
-                    if (step > 0) {
-                        val = mn + std::round((val - mn) / step) * step;
-                        val = std::clamp(val, mn, mx);
-                    }
-                    char buf[64];
-                    snprintf(buf, sizeof(buf), "%g", static_cast<double>(val));
-                    target->setAttribute("value", buf);
-                    newInput->setDragging(true);
-                    dispatchInputEvent(target);
-                    uiDirty_ = true;
-                } else if (itype == layout::ElInput::InputType::Color) {
-                    if (newInput->isPickerOpen()) {
-                        // Click inside picker to select color
-                        auto dp = newInput->lastDrawPos();
-                        float px = dp.x, py = dp.y + dp.h + 2;
-                        float pw = 200.0f, ph = 160.0f;
-                        if (x >= px && x < px + pw && y >= py && y < py + ph) {
-                            std::string hex = pickColorFromGrid(x, y, px, py, pw, ph);
-                            target->setAttribute("value", hex.c_str());
-                            dom::Event changeEvt("change");
-                            dispatchEvent(target, changeEvt);
-                            dispatchInputEvent(target);
-                        }
-                        newInput->setPickerOpen(false);
-                    } else {
-                        newInput->setPickerOpen(true);
-                    }
-                    safeStopTextInput(window_.get());
-                    uiDirty_ = true;
-                } else if (newInput->isTextType(target)) {
-                    // Check for number spin button click
-                    if (newInput->inputType(target) == layout::ElInput::InputType::Number) {
-                        auto dp = newInput->lastDrawPos();
-                        float btnW = 16.0f;
-                        float bx = dp.x + dp.w - btnW;
-                        if (x >= bx && x <= dp.x + dp.w) {
-                            // Click on spin buttons
-                            std::string val = target->getAttribute("value");
-                            float v = val.empty() ? 0 : static_cast<float>(atof(val.c_str()));
-                            float step = newInput->rangeStep();
-                            float midY = dp.y + dp.h / 2;
-                            v += (y < midY) ? step : -step;
-                            std::string minAttr = target->getAttribute("min");
-                            std::string maxAttr = target->getAttribute("max");
-                            if (!minAttr.empty()) v = std::max(v, newInput->rangeMin());
-                            if (!maxAttr.empty()) v = std::min(v, newInput->rangeMax());
-                            char buf[64]; snprintf(buf, sizeof(buf), "%g", static_cast<double>(v));
-                            target->setAttribute("value", buf);
-                            newInput->setCursorPos(static_cast<int>(strlen(buf)));
-                            dispatchInputEvent(target);
-                        }
-                    }
-                    std::string valStr = target->getAttribute("value");
-                    newInput->setCursorPos(static_cast<int>(valStr.size()));
-                    safeStartTextInput(window_.get());
-                    uiDirty_ = true;
-                } else {
-                    // Button types — no text input
-                    safeStopTextInput(window_.get());
-                    uiDirty_ = true;
-                }
-            } else if (newTextarea) {
-                newTextarea->setFocused(true);
-                std::string taValStr = target->getAttribute("value");
-                newTextarea->setCursorPos(static_cast<int>(taValStr.size()));
-                safeStartTextInput(window_.get());
-                uiDirty_ = true;
-            } else if (newSelect) {
-                // Toggle dropdown open/close
-                newSelect->setOpen(!newSelect->isOpen());
-                if (newSelect->isOpen()) {
-                    newSelect->setHighlightedIndex(newSelect->selectedIndex());
-                }
-                safeStopTextInput(window_.get());
-                uiDirty_ = true;
-            } else {
-                safeStopTextInput(window_.get());
-            }
+            // Focus/activate the newly-clicked control
+            focusNewControl(cctx, target, x, docY);
 
             computeOffset(evt, target);
             dispatchEvent(target, evt);
@@ -862,24 +619,10 @@ void Engine::handleMouseMove(float x, float y) {
     }
 
     // Update dropdown highlight on hover
-    if (document_) {
-        auto* activeEl = document_->activeElement();
-        auto* select = getElSelect(activeEl);
-        if (select && select->isOpen()) {
-            auto dp = select->lastDrawPos();
-            auto opts = select->getOptions();
-            float lineH = select->dropdownLineHeight();
-            float dropY = dp.y + dp.h;
-            float dropH = lineH * static_cast<float>(opts.size()) + 2.0f;
-            if (x >= dp.x && x < dp.x + dp.w && y >= dropY && y < dropY + dropH) {
-                int idx = static_cast<int>((y - dropY - 1.0f) / lineH);
-                idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
-                if (idx != select->highlightedIndex()) {
-                    select->setHighlightedIndex(idx);
-                    uiDirty_ = true;
-                }
-            }
-        }
+    {
+        ControlContext cctx{document_.get(), jsRuntime_->getContext(),
+                           renderer_.get(), window_.get(), &uiDirty_};
+        updateDropdownHover(cctx, x, y);
     }
 
     // Dispatch mousemove event
