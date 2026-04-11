@@ -564,7 +564,8 @@ Engine::Engine(const EngineConfig& config)
     // 12. System overlay (loads panels from system/ sibling directory)
     //     Shares the JS runtime — each panel gets its own JSContext.
     systemOverlay_ = std::make_unique<SystemOverlay>(jsRuntime_.get(), gl_.get(),
-                                                      viewportWidth_, viewportHeight_);
+                                                      viewportWidth_, viewportHeight_,
+                                                      settings_.get(), window_.get());
     systemOverlay_->loadPanels("system");
 
     // Headless: do initial layout + flush

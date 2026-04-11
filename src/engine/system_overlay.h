@@ -20,10 +20,13 @@ extern "C" {
 
 namespace bro::render { class GLContext; }
 namespace bro::layout { class DrawTraversal; }
-namespace bro::dom { class Document; }
+namespace bro::dom { class Document; class Element; }
 namespace bro::js { class Runtime; class Timers; }
+namespace bro::platform { class Window; }
 
 namespace bro::engine {
+
+class Settings;
 
 /// CPU-raster Renderer for system overlay panels.
 /// Uses a CPU SkSurface and uploads pixels to a GL texture for compositing.
@@ -108,10 +111,12 @@ private:
 class SystemOverlay {
 public:
     /// Construct with shared JS runtime. Each panel gets its own JSContext.
-    SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH);
+    SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH,
+                  Settings* settings = nullptr, platform::Window* window = nullptr);
     ~SystemOverlay();
 
     /// Scan systemDir for subdirectories containing index.html and load each as a panel.
+    /// Recurses into subdirectories (e.g. settings/graphics/).
     void loadPanels(const std::string& systemDir);
 
     /// Toggle overlay visibility.
@@ -137,8 +142,31 @@ public:
     /// Handle viewport resize.
     void onResize(int w, int h);
 
+    // --- Mouse event forwarding (Phase 1) ---
+
+    /// Forward mouse events to overlay panel DOMs. Returns true if consumed.
+    bool handleMouseDown(float x, float y, int button);
+    bool handleMouseUp(float x, float y, int button);
+    bool handleMouseMove(float x, float y);
+
+    // --- Panel visibility control (Phase 2) ---
+
+    /// Show a panel by name (e.g. "settings/graphics"). Hides other panels in
+    /// the same group. Panels with group="" are always visible.
+    void showPanel(const std::string& name);
+
+    /// Get the name of the active settings panel.
+    const std::string& getActivePanel() const { return activePanel_; }
+
+    /// Get list of panel names and tab labels (for nav panel).
+    struct PanelInfo { std::string name; std::string tabLabel; };
+    std::vector<PanelInfo> getPanelList() const;
+
     struct Panel {
         std::string name;
+        std::string tabLabel;   // display label for nav bar (empty = hidden from nav)
+        std::string group;      // panels in the same group are mutually exclusive ("" = always visible)
+        bool active = true;     // whether this panel is currently shown
         JSContext* jsCtx = nullptr;
         std::unique_ptr<js::Timers> timers;
         std::unique_ptr<layout::DrawTraversal> drawTraversal;
@@ -149,14 +177,25 @@ public:
 
 private:
     void installBroObject(Panel& panel);
+    void scanPanelDir(const std::string& baseDir, const std::string& relPath);
+
+    /// Hit-test a single panel's DOM. Returns the deepest element hit, or nullptr.
+    dom::Element* hitTestPanel(Panel& panel, float x, float y);
 
     js::Runtime* jsRuntime_;  // shared, not owned
     render::GLContext* gl_;
+    Settings* settings_ = nullptr;       // not owned
+    platform::Window* window_ = nullptr; // not owned
     std::unique_ptr<SystemRenderer> renderer_;
     int viewportWidth_;
     int viewportHeight_;
     bool visible_ = false;
     bool renderDirty_ = true;  // true when panels need re-rasterize + upload
+    std::string activePanel_;  // name of the currently visible settings panel
+
+    // Mouse tracking for overlay panels
+    dom::Element* overlayHoverTarget_ = nullptr;
+    Panel* overlayHoverPanel_ = nullptr;
 
     std::vector<Panel> panels_;
 };

@@ -1,14 +1,21 @@
 #include "engine/system_overlay.h"
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
+#include "engine/hit_testing.h"
+#include "engine/settings.h"
 #include "render/renderer.h"
 #include "render/gl_context.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "dom/document.h"
+#include "dom/element.h"
+#include "dom/event.h"
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
+#include "js/event_dispatch.h"
+#include "js/settings_bindings.h"
+#include "platform/sdl_window.h"
 
 #include "api/api.h"
 #include "util/log.h"
@@ -431,9 +438,12 @@ namespace bro::engine {
 // SystemOverlay implementation — uses shared JS runtime with per-panel contexts
 // ---------------------------------------------------------------------------
 
-SystemOverlay::SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH)
+SystemOverlay::SystemOverlay(js::Runtime* jsRuntime, render::GLContext* gl, int vpW, int vpH,
+                             Settings* settings, platform::Window* window)
     : jsRuntime_(jsRuntime)
     , gl_(gl)
+    , settings_(settings)
+    , window_(window)
     , viewportWidth_(vpW)
     , viewportHeight_(vpH) {
 
@@ -491,6 +501,61 @@ void SystemOverlay::installBroObject(Panel& panel) {
     JS_SetPropertyStr(ctx, bro, "viewport", viewport);
 
     JS_SetPropertyStr(ctx, bro, "perf", perf);
+
+    // Stash SystemOverlay pointer for C function callbacks
+    JSValue ptrVal = JS_NewInt64(ctx, static_cast<int64_t>(
+        reinterpret_cast<intptr_t>(this)));
+
+    // __bro.showPanel(name) — switch the active settings panel
+    JS_SetPropertyStr(ctx, bro, "showPanel",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<SystemOverlay*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_UNDEFINED;
+            const char* name = JS_ToCString(cx, argv[0]);
+            if (!name) return JS_UNDEFINED;
+            self->showPanel(name);
+            JS_FreeCString(cx, name);
+            return JS_UNDEFINED;
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.getPanels() — array of {name, tabLabel} for nav panel
+    JS_SetPropertyStr(ctx, bro, "getPanels",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<SystemOverlay*>(static_cast<intptr_t>(p));
+            if (!self) return JS_NewArray(cx);
+            auto list = self->getPanelList();
+            JSValue arr = JS_NewArray(cx);
+            for (size_t i = 0; i < list.size(); i++) {
+                JSValue obj = JS_NewObject(cx);
+                JS_SetPropertyStr(cx, obj, "name",
+                    JS_NewString(cx, list[i].name.c_str()));
+                JS_SetPropertyStr(cx, obj, "tabLabel",
+                    JS_NewString(cx, list[i].tabLabel.c_str()));
+                JS_SetPropertyUint32(cx, arr, static_cast<uint32_t>(i), obj);
+            }
+            return arr;
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.getActivePanel() — get the currently active panel name
+    JS_SetPropertyStr(ctx, bro, "getActivePanel",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<SystemOverlay*>(static_cast<intptr_t>(p));
+            if (!self) return JS_UNDEFINED;
+            return JS_NewString(cx, self->getActivePanel().c_str());
+        }, 0, 0, 1, &ptrVal));
+
     JS_SetPropertyStr(ctx, global, "__bro", bro);
 
     // Keep a reference to perf for fast updates
@@ -506,105 +571,159 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
         return;
     }
 
-    for (const auto& entry : fs::directory_iterator(systemDir, ec)) {
-        if (!entry.is_directory()) continue;
+    scanPanelDir(systemDir, "");
 
-        std::string panelDir = entry.path().string();
-        std::string htmlPath = panelDir + "/index.html";
-
-        if (!fs::exists(htmlPath, ec)) continue;
-
-        std::string html = AppLoader::loadFile(htmlPath);
-        if (html.empty()) continue;
-
-        Panel panel;
-        panel.name = entry.path().filename().string();
-        std::string savedBasePath = panelDir;
-
-        // Extract inline CSS from the HTML, prepended with UA defaults
-        std::string userStyles = kDefaultStyles;
-        userStyles += "\n";
-        {
-            std::regex styleRe(R"(<style[^>]*>([\s\S]*?)</style>)",
-                               std::regex_constants::icase);
-            auto begin = std::sregex_iterator(html.begin(), html.end(), styleRe);
-            auto end = std::sregex_iterator();
-            for (auto it = begin; it != end; ++it) {
-                userStyles += (*it)[1].str() + "\n";
+    // Default: first settings panel is active
+    for (auto& p : panels_) {
+        if (!p.group.empty()) {
+            if (activePanel_.empty()) {
+                activePanel_ = p.name;
+                p.active = true;
+            } else {
+                p.active = false;
             }
         }
-
-        // Parse HTML with htmlayout
-        panel.document = std::make_unique<dom::Document>();
-        panel.document->parse(html, userStyles);
-
-        // Create a dedicated JSContext for this panel on the shared runtime
-        panel.jsCtx = jsRuntime_->createContext();
-
-        // Install standard bindings on the panel's context
-        brokit::api::installConsole(panel.jsCtx);
-        panel.timers = std::make_unique<js::Timers>();
-        js::Timers::install(panel.jsCtx, panel.timers.get());
-
-        // Set window = globalThis
-        JSValue global = JS_GetGlobalObject(panel.jsCtx);
-        JS_SetPropertyStr(panel.jsCtx, global, "window", JS_DupValue(panel.jsCtx, global));
-        JS_FreeValue(panel.jsCtx, global);
-
-        // Install full DOM bindings (same code path as the app)
-        js::DomBindings::install(panel.jsCtx, panel.document.get());
-
-        // Install __bro perf object
-        installBroObject(panel);
-
-        // Initial layout (uses local fontManager — data moves with panel)
-        {
-            layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
-            panel.document->resolveStyles();
-            panel.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
-        }
-
-        LOG_INFO("SystemOverlay: loaded panel '%s'", panel.name.c_str());
-
-        // Extract and execute inline scripts
-        {
-            std::regex scriptRe(R"(<script[^>]*>([\s\S]*?)</script>)",
-                                std::regex_constants::icase);
-            auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
-            auto end = std::sregex_iterator();
-            for (auto it = begin; it != end; ++it) {
-                std::string code = (*it)[1].str();
-                if (!code.empty()) {
-                    std::string filename = "<system/" + panel.name + ">";
-                    JSValue result = JS_Eval(panel.jsCtx, code.c_str(), code.size(),
-                                             filename.c_str(), JS_EVAL_TYPE_GLOBAL);
-                    if (JS_IsException(result)) {
-                        JSValue ex = JS_GetException(panel.jsCtx);
-                        const char* str = JS_ToCString(panel.jsCtx, ex);
-                        if (str) {
-                            LOG_ERROR("SystemOverlay JS error in '%s': %s",
-                                      panel.name.c_str(), str);
-                            JS_FreeCString(panel.jsCtx, str);
-                        }
-                        JS_FreeValue(panel.jsCtx, ex);
-                    }
-                    JS_FreeValue(panel.jsCtx, result);
-                }
-            }
-        }
-
-        // Move panel into vector FIRST, then create DrawTraversal with
-        // the stable fontManager address. DrawTraversal stores a raw pointer
-        // to fontManager, so it must point to the final location.
-        panels_.push_back(std::move(panel));
-        auto& finalPanel = panels_.back();
-        finalPanel.drawTraversal = std::make_unique<layout::DrawTraversal>(
-            renderer_.get(), &finalPanel.fontManager);
-        finalPanel.drawTraversal->setBasePath(savedBasePath);
-        finalPanel.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
     }
 
     LOG_INFO("SystemOverlay: loaded %zu panel(s)", panels_.size());
+}
+
+void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& relPath) {
+    std::error_code ec;
+    std::string dirPath = relPath.empty() ? baseDir : baseDir + "/" + relPath;
+
+    for (const auto& entry : fs::directory_iterator(dirPath, ec)) {
+        if (!entry.is_directory()) continue;
+
+        std::string subName = entry.path().filename().string();
+        std::string fullRel = relPath.empty() ? subName : relPath + "/" + subName;
+        std::string panelDir = baseDir + "/" + fullRel;
+        std::string htmlPath = panelDir + "/index.html";
+
+        if (fs::exists(htmlPath, ec)) {
+            // This directory has an index.html — load it as a panel
+            std::string html = AppLoader::loadFile(htmlPath);
+            if (html.empty()) continue;
+
+            Panel panel;
+            panel.name = fullRel;
+
+            // Assign tab label and group based on panel path
+            if (fullRel == "perf") {
+                panel.tabLabel = "Perf";
+                panel.group = "";  // always visible
+            } else if (fullRel == "nav") {
+                panel.tabLabel = "";  // nav bar itself has no tab
+                panel.group = "";     // always visible
+            } else if (fullRel.rfind("settings/", 0) == 0) {
+                // settings/* panels are in the "settings" group
+                panel.group = "settings";
+                // Derive tab label from last path component
+                auto lastSlash = fullRel.rfind('/');
+                std::string leaf = (lastSlash != std::string::npos)
+                    ? fullRel.substr(lastSlash + 1) : fullRel;
+                // Capitalize first letter
+                if (!leaf.empty()) leaf[0] = static_cast<char>(toupper(leaf[0]));
+                panel.tabLabel = leaf;
+                panel.active = false;  // will be set by loadPanels
+            } else {
+                panel.tabLabel = fullRel;
+                panel.group = "";
+            }
+
+            std::string savedBasePath = panelDir;
+
+            // Extract inline CSS from the HTML, prepended with UA defaults
+            std::string userStyles = kDefaultStyles;
+            userStyles += "\n";
+            {
+                std::regex styleRe(R"(<style[^>]*>([\s\S]*?)</style>)",
+                                   std::regex_constants::icase);
+                auto begin = std::sregex_iterator(html.begin(), html.end(), styleRe);
+                auto end = std::sregex_iterator();
+                for (auto it = begin; it != end; ++it) {
+                    userStyles += (*it)[1].str() + "\n";
+                }
+            }
+
+            // Parse HTML with htmlayout
+            panel.document = std::make_unique<dom::Document>();
+            panel.document->parse(html, userStyles);
+
+            // Create a dedicated JSContext for this panel on the shared runtime
+            panel.jsCtx = jsRuntime_->createContext();
+
+            // Install standard bindings on the panel's context
+            brokit::api::installConsole(panel.jsCtx);
+            panel.timers = std::make_unique<js::Timers>();
+            js::Timers::install(panel.jsCtx, panel.timers.get());
+
+            // Set window = globalThis
+            JSValue global = JS_GetGlobalObject(panel.jsCtx);
+            JS_SetPropertyStr(panel.jsCtx, global, "window", JS_DupValue(panel.jsCtx, global));
+            JS_FreeValue(panel.jsCtx, global);
+
+            // Install full DOM bindings (same code path as the app)
+            js::DomBindings::install(panel.jsCtx, panel.document.get());
+
+            // Install settings bindings if available (Phase 4)
+            if (settings_) {
+                js::SettingsBindings::install(panel.jsCtx, settings_, window_);
+            }
+
+            // Install __bro perf object + nav helpers
+            installBroObject(panel);
+
+            // Initial layout (uses local fontManager — data moves with panel)
+            {
+                layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
+                panel.document->resolveStyles();
+                panel.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
+            }
+
+            LOG_INFO("SystemOverlay: loaded panel '%s'", panel.name.c_str());
+
+            // Extract and execute inline scripts
+            {
+                std::regex scriptRe(R"(<script[^>]*>([\s\S]*?)</script>)",
+                                    std::regex_constants::icase);
+                auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
+                auto end = std::sregex_iterator();
+                for (auto it = begin; it != end; ++it) {
+                    std::string code = (*it)[1].str();
+                    if (!code.empty()) {
+                        std::string filename = "<system/" + panel.name + ">";
+                        JSValue result = JS_Eval(panel.jsCtx, code.c_str(), code.size(),
+                                                 filename.c_str(), JS_EVAL_TYPE_GLOBAL);
+                        if (JS_IsException(result)) {
+                            JSValue ex = JS_GetException(panel.jsCtx);
+                            const char* str = JS_ToCString(panel.jsCtx, ex);
+                            if (str) {
+                                LOG_ERROR("SystemOverlay JS error in '%s': %s",
+                                          panel.name.c_str(), str);
+                                JS_FreeCString(panel.jsCtx, str);
+                            }
+                            JS_FreeValue(panel.jsCtx, ex);
+                        }
+                        JS_FreeValue(panel.jsCtx, result);
+                    }
+                }
+            }
+
+            // Move panel into vector FIRST, then create DrawTraversal with
+            // the stable fontManager address. DrawTraversal stores a raw pointer
+            // to fontManager, so it must point to the final location.
+            panels_.push_back(std::move(panel));
+            auto& finalPanel = panels_.back();
+            finalPanel.drawTraversal = std::make_unique<layout::DrawTraversal>(
+                renderer_.get(), &finalPanel.fontManager);
+            finalPanel.drawTraversal->setBasePath(savedBasePath);
+            finalPanel.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
+        } else {
+            // No index.html here — recurse into subdirectory
+            scanPanelDir(baseDir, fullRel);
+        }
+    }
 }
 
 void SystemOverlay::toggle() {
@@ -644,7 +763,7 @@ void SystemOverlay::tick(double nowMs) {
     if (!visible_) return;
 
     for (auto& panel : panels_) {
-        if (!panel.timers) continue;
+        if (!panel.active || !panel.timers) continue;
         panel.timers->tick(nowMs);
         panel.timers->fireAnimationFrames(nowMs);
     }
@@ -653,9 +772,9 @@ void SystemOverlay::tick(double nowMs) {
     // (jsRuntime_->executePendingJobs()) — not here, to avoid
     // draining app jobs before the WebGL FBO is bound.
 
-    // Check if any panel became dirty from timer callbacks
+    // Check if any active panel became dirty from timer callbacks
     for (auto& panel : panels_) {
-        if (panel.document && panel.document->isDirty()) {
+        if (panel.active && panel.document && panel.document->isDirty()) {
             renderDirty_ = true;
             break;
         }
@@ -665,9 +784,9 @@ void SystemOverlay::tick(double nowMs) {
 void SystemOverlay::render(int vpW, int vpH) {
     if (!visible_ || !renderer_ || !renderDirty_) return;
 
-    // Re-layout dirty panels
+    // Re-layout dirty active panels
     for (auto& panel : panels_) {
-        if (!panel.document) continue;
+        if (!panel.active || !panel.document) continue;
         if (panel.document->isDirty()) {
             panel.document->clearStructureDirty();
             layout::SkiaTextMetrics textMetrics(renderer_.get(), &panel.fontManager);
@@ -677,11 +796,11 @@ void SystemOverlay::render(int vpW, int vpH) {
         }
     }
 
-    // Rasterize all panels to own Skia surface
+    // Rasterize active panels to own Skia surface
     renderer_->beginFrame(vpW, vpH);
 
     for (auto& panel : panels_) {
-        if (!panel.document || !panel.drawTraversal) continue;
+        if (!panel.active || !panel.document || !panel.drawTraversal) continue;
         panel.drawTraversal->draw(panel.document->documentElement(), 0, 0, vpW, vpH);
     }
 
@@ -709,6 +828,151 @@ void SystemOverlay::onResize(int w, int h) {
             panel.document->performLayout(static_cast<float>(w), textMetrics);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Mouse event forwarding (Phase 1)
+// ---------------------------------------------------------------------------
+
+dom::Element* SystemOverlay::hitTestPanel(Panel& panel, float x, float y) {
+    if (!panel.document || !panel.document->documentElement()) return nullptr;
+    return hitTestElement(panel.document->documentElement(), x, y, 0.0f, 0.0f);
+}
+
+bool SystemOverlay::handleMouseDown(float x, float y, int button) {
+    if (!visible_) return false;
+
+    // Iterate panels in reverse (last rendered = on top)
+    for (int i = static_cast<int>(panels_.size()) - 1; i >= 0; i--) {
+        auto& panel = panels_[i];
+        if (!panel.active) continue;
+        dom::Element* target = hitTestPanel(panel, x, y);
+        if (target) {
+            dom::MouseEvent evt("mousedown");
+            evt.setClientX(static_cast<double>(x));
+            evt.setClientY(static_cast<double>(y));
+            evt.setButton(button);
+            js::dispatchDomEvent(panel.jsCtx, target, evt);
+            renderDirty_ = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SystemOverlay::handleMouseUp(float x, float y, int button) {
+    if (!visible_) return false;
+
+    for (int i = static_cast<int>(panels_.size()) - 1; i >= 0; i--) {
+        auto& panel = panels_[i];
+        if (!panel.active) continue;
+        dom::Element* target = hitTestPanel(panel, x, y);
+        if (target) {
+            // mouseup
+            dom::MouseEvent upEvt("mouseup");
+            upEvt.setClientX(static_cast<double>(x));
+            upEvt.setClientY(static_cast<double>(y));
+            upEvt.setButton(button);
+            js::dispatchDomEvent(panel.jsCtx, target, upEvt);
+
+            // click (on same target as mousedown, simplified)
+            dom::MouseEvent clickEvt("click");
+            clickEvt.setClientX(static_cast<double>(x));
+            clickEvt.setClientY(static_cast<double>(y));
+            clickEvt.setButton(button);
+            js::dispatchDomEvent(panel.jsCtx, target, clickEvt);
+
+            renderDirty_ = true;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SystemOverlay::handleMouseMove(float x, float y) {
+    if (!visible_) return false;
+
+    dom::Element* newTarget = nullptr;
+    Panel* newPanel = nullptr;
+
+    // Find topmost hit
+    for (int i = static_cast<int>(panels_.size()) - 1; i >= 0; i--) {
+        auto& panel = panels_[i];
+        if (!panel.active) continue;
+        dom::Element* target = hitTestPanel(panel, x, y);
+        if (target) {
+            newTarget = target;
+            newPanel = &panel;
+            break;
+        }
+    }
+
+    // Handle mouseenter/mouseleave transitions
+    if (newTarget != overlayHoverTarget_) {
+        if (overlayHoverTarget_ && overlayHoverPanel_) {
+            dom::MouseEvent leaveEvt("mouseleave");
+            leaveEvt.setClientX(static_cast<double>(x));
+            leaveEvt.setClientY(static_cast<double>(y));
+            js::dispatchDomEvent(overlayHoverPanel_->jsCtx, overlayHoverTarget_, leaveEvt);
+        }
+        if (newTarget && newPanel) {
+            dom::MouseEvent enterEvt("mouseenter");
+            enterEvt.setClientX(static_cast<double>(x));
+            enterEvt.setClientY(static_cast<double>(y));
+            js::dispatchDomEvent(newPanel->jsCtx, newTarget, enterEvt);
+        }
+        overlayHoverTarget_ = newTarget;
+        overlayHoverPanel_ = newPanel;
+        renderDirty_ = true;
+    }
+
+    // Dispatch mousemove if over an overlay element
+    if (newTarget && newPanel) {
+        dom::MouseEvent moveEvt("mousemove");
+        moveEvt.setClientX(static_cast<double>(x));
+        moveEvt.setClientY(static_cast<double>(y));
+        js::dispatchDomEvent(newPanel->jsCtx, newTarget, moveEvt);
+        return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Panel visibility control (Phase 2)
+// ---------------------------------------------------------------------------
+
+void SystemOverlay::showPanel(const std::string& name) {
+    // Deactivate all panels in the same group, activate the named one
+    std::string targetGroup;
+    for (auto& panel : panels_) {
+        if (panel.name == name) {
+            targetGroup = panel.group;
+            break;
+        }
+    }
+
+    if (targetGroup.empty()) return;  // can't show/hide ungrouped panels
+
+    for (auto& panel : panels_) {
+        if (panel.group == targetGroup) {
+            panel.active = (panel.name == name);
+            if (panel.active && panel.document) {
+                panel.document->markDirty();
+            }
+        }
+    }
+    activePanel_ = name;
+    renderDirty_ = true;
+}
+
+std::vector<SystemOverlay::PanelInfo> SystemOverlay::getPanelList() const {
+    std::vector<PanelInfo> result;
+    for (const auto& panel : panels_) {
+        if (!panel.tabLabel.empty()) {
+            result.push_back({ panel.name, panel.tabLabel });
+        }
+    }
+    return result;
 }
 
 } // namespace bro::engine

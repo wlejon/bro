@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #e0e0e0;
+}
+
+#nav-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 28px;
+    background: rgba(0, 0, 0, 230);
+    border-bottom: 1px solid #333;
+    display: flex;
+    padding: 0 8px;
+}
+
+.tab {
+    display: inline-block;
+    padding: 6px 14px;
+    cursor: pointer;
+    color: #888;
+    border-bottom: 2px solid transparent;
+    margin-right: 2px;
+}
+
+.tab:hover {
+    color: #ccc;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.tab.active {
+    color: #64dc64;
+    border-bottom-color: #64dc64;
+}
+</style>
+</head>
+<body>
+<div id="nav-bar"></div>
+
+<script>
+(function() {
+    var bar = document.getElementById('nav-bar');
+    if (!bar) return;
+
+    function render() {
+        var panels = __bro.getPanels();
+        var active = __bro.getActivePanel();
+
+        // Clear existing tabs
+        bar.innerHTML = '';
+
+        for (var i = 0; i < panels.length; i++) {
+            var p = panels[i];
+            var tab = document.createElement('div');
+            tab.className = 'tab';
+            tab.textContent = p.tabLabel;
+            tab.setAttribute('data-panel', p.name);
+
+            if (p.name === active) {
+                tab.className = 'tab active';
+            }
+
+            tab.addEventListener('click', function(e) {
+                var name = this.getAttribute('data-panel');
+                __bro.showPanel(name);
+                // Re-render tabs to update active state
+                render();
+            });
+
+            bar.appendChild(tab);
+        }
+    }
+
+    render();
+})();
+</script>
+</body>
+</html>

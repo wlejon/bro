@@ -368,6 +368,13 @@ void Engine::handleMouseDown(float x, float y, int button) {
     // event sees the standard 0=left/1=middle/2=right indexing.
     button = sdlToDomButton(button);
 
+    // Forward to system overlay first — if it consumes, skip app handling
+    if (systemOverlay_ && systemOverlay_->isVisible() &&
+        systemOverlay_->handleMouseDown(x, y, button)) {
+        pressedButtons_ |= domButtonMask(button);
+        return;
+    }
+
     // Update button bitmask (DOM convention: 1=left, 2=right, 4=middle, ...)
     pressedButtons_ |= domButtonMask(button);
 
@@ -659,6 +666,12 @@ void Engine::handleMouseUp(float x, float y, int button) {
     // Update button bitmask (DOM convention)
     pressedButtons_ &= ~domButtonMask(button);
 
+    // Forward to system overlay first
+    if (systemOverlay_ && systemOverlay_->isVisible() &&
+        systemOverlay_->handleMouseUp(x, y, button)) {
+        return;
+    }
+
     // End scrollbar drags
     if (viewportScrollbar_.isDragging()) {
         viewportScrollbar_.endDrag();
@@ -751,6 +764,12 @@ void Engine::handleMouseUp(float x, float y, int button) {
 void Engine::handleMouseMove(float x, float y) {
     // x, y = screen space. docX, docY = document space (see handleMouseDown).
     float docX = x, docY = y + scrollY_;
+
+    // Forward to system overlay first (but don't block app mousemove —
+    // overlay consumes only if mouse is over an overlay element)
+    if (systemOverlay_ && systemOverlay_->isVisible()) {
+        systemOverlay_->handleMouseMove(x, y);
+    }
 
     // Viewport scrollbar drag
     if (viewportScrollbar_.isDragging()) {
