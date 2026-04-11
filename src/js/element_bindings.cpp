@@ -184,7 +184,9 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
         }
         el->childNodes().clear();
         for (auto* child : oldKids) {
-            if (child->nodeType() != bro::dom::NodeType::Element) {
+            if (child->nodeType() == bro::dom::NodeType::Element) {
+                invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+            } else {
                 if (doc) doc->freeNode(child);
             }
         }
@@ -255,7 +257,12 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
         }
         el->childNodes().clear();
         for (auto* child : oldKids) {
-            if (child->nodeType() != bro::dom::NodeType::Element) {
+            if (child->nodeType() == bro::dom::NodeType::Element) {
+                // Element children are kept alive for JS GC, but we must
+                // invalidate their wrappers and unregister ids so they
+                // don't appear in document lookups while detached.
+                invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+            } else {
                 if (doc) doc->freeNode(child);
             }
         }
@@ -727,6 +734,9 @@ static JSValue js_element_setAttribute(JSContext* ctx, JSValueConst this_val,
     std::string newVal = jsToStdString(ctx, argv[1]);
     std::string oldVal = el->getAttribute(name);
     el->setAttribute(name, newVal);
+    // Setting the style attribute must sync into the inline style proxy
+    if (name == "style")
+        el->style().setCssText(newVal);
     if (oldVal != newVal) {
         fireAttributeChangedCallback(ctx, this_val, name, oldVal, newVal);
         notifyMutationObservers(ctx, this_val, "attributes",
@@ -1812,7 +1822,9 @@ static JSValue js_element_replaceChildren(JSContext* ctx, JSValueConst this_val,
     }
     el->childNodes().clear();
     for (auto* child : oldKids) {
-        if (child->nodeType() != bro::dom::NodeType::Element) {
+        if (child->nodeType() == bro::dom::NodeType::Element) {
+            invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+        } else {
             if (doc) doc->freeNode(child);
         }
     }

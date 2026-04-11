@@ -155,6 +155,10 @@ Engine::Engine(const EngineConfig& config)
     timers_ = std::make_unique<js::Timers>();
     js::Timers::install(jsRuntime_->getContext(), timers_.get());
 
+    // Seed the timer time base so setTimeout/setInterval use the correct clock.
+    // In headless mode this is virtual time; in windowed mode, real time.
+    timers_->tick(displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs());
+
     // 4b. Audio engine + bindings
     audioEngine_ = std::make_unique<broaudio::Engine>();
     if (displayMode_ == DisplayMode::Windowed) {

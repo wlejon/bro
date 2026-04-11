@@ -308,6 +308,13 @@ void Document::freeNode(Node* node) {
     for (auto* child : kids) {
         freeNode(child);
     }
+    // Unregister element id from the lookup map
+    if (node->nodeType() == NodeType::Element) {
+        auto* elem = static_cast<Element*>(node);
+        std::string id = elem->id();
+        if (!id.empty())
+            unregisterElementId(id);
+    }
     ownedNodes_.erase(node);
 }
 

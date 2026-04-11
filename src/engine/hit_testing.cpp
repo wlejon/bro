@@ -63,21 +63,40 @@ dom::Element* hitTestElement(dom::Element* elem, float x, float y,
         }
     }
 
-    // Border box bounds.
     // Skip bounds clipping for the document element (<html>) — it should accept
-    // hits across the entire viewport, matching browser behavior. Elements that
-    // visually overflow <html> (e.g. when html has height < 100%) must remain
-    // interactive.
+    // hits across the entire viewport, matching browser behavior.
     bool isDocumentElement = (elem->parentNode() == nullptr ||
                               elem->parentNode()->nodeType() == dom::NodeType::Document);
+
+    // Determine if this element clips child hit testing to its border box.
+    // Elements with overflow:visible (the default) allow absolutely positioned
+    // children to overflow, so we must test children even when the click is
+    // outside this element's bounds.
+    bool clipsChildren = false;
     if (!isDocumentElement) {
-        float bx = absX - box.padding.left - box.border.left;
-        float by = absY - box.padding.top  - box.border.top;
-        float bw = box.fullWidth();
-        float bh = box.fullHeight();
-        if (testX < bx || testX >= bx + bw || testY < by || testY >= by + bh)
-            return nullptr;
+        auto ovIt = style.find("overflow");
+        if (ovIt != style.end() && ovIt->second != "visible")
+            clipsChildren = true;
+        if (!clipsChildren) {
+            auto ovxIt = style.find("overflow-x");
+            auto ovyIt = style.find("overflow-y");
+            if ((ovxIt != style.end() && ovxIt->second != "visible") ||
+                (ovyIt != style.end() && ovyIt->second != "visible"))
+                clipsChildren = true;
+        }
     }
+
+    // Border box bounds
+    float bx = absX - box.padding.left - box.border.left;
+    float by = absY - box.padding.top  - box.border.top;
+    float bw = box.fullWidth();
+    float bh = box.fullHeight();
+    bool insideBounds = isDocumentElement ||
+        (testX >= bx && testX < bx + bw && testY >= by && testY < by + bh);
+
+    // If this element clips and point is outside, reject entirely
+    if (clipsChildren && !insideBounds)
+        return nullptr;
 
     // Adjust child offset for element-level scroll
     float childOffsetX = absX;
@@ -92,8 +111,10 @@ dom::Element* hitTestElement(dom::Element* elem, float x, float y,
         if (hit) return hit;
     }
 
-    // No child hit — this element is the target
-    return elem;
+    // No child hit — return this element only if point is inside its bounds
+    if (insideBounds)
+        return elem;
+    return nullptr;
 }
 
 dom::Element* hitTestNode(dom::Node* node, float x, float y,

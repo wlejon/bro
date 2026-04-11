@@ -46,6 +46,22 @@ static layout::ElSelect* getElSelect(dom::Element* el) {
     return el ? el->selectControl() : nullptr;
 }
 
+// Safe wrapper: SDL_GetModState() requires SDL_INIT_VIDEO. In --no-gpu
+// headless mode no SDL video subsystem is initialized, so the call would
+// dereference an internal NULL pointer and crash.  Return 0 (no modifiers)
+// when there is no window.
+static int safeGetModState(platform::Window* window) {
+    return window ? static_cast<int>(SDL_GetModState()) : 0;
+}
+
+// Safe wrappers for SDL text input — no-ops when there is no window.
+static void safeStartTextInput(platform::Window* window) {
+    if (window) SDL_StartTextInput(window->getSDLWindow());
+}
+static void safeStopTextInput(platform::Window* window) {
+    if (window) SDL_StopTextInput(window->getSDLWindow());
+}
+
 // Returns true if the element is a focusable text-editing control (input or textarea)
 static bool isTextEditable(dom::Element* el) {
     return getElInput(el) || getElTextarea(el);
@@ -369,7 +385,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
     if (document_) {
         dom::MouseEvent evt("mousedown");
-        int mod = SDL_GetModState();
+        int mod = safeGetModState(window_.get());
         populateMouseEvent(evt, x, y, button, pressedButtons_,
                           lastMouseX_, lastMouseY_, scrollY_, mod);
 
@@ -539,7 +555,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     } else {
                         newInput->setPickerOpen(true);
                     }
-                    SDL_StopTextInput(window_->getSDLWindow());
+                    safeStopTextInput(window_.get());
                     uiDirty_ = true;
                 } else if (newInput->isTextType(target)) {
                     // Check for number spin button click
@@ -566,18 +582,18 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     }
                     std::string valStr = target->getAttribute("value");
                     newInput->setCursorPos(static_cast<int>(valStr.size()));
-                    SDL_StartTextInput(window_->getSDLWindow());
+                    safeStartTextInput(window_.get());
                     uiDirty_ = true;
                 } else {
                     // Button types — no text input
-                    SDL_StopTextInput(window_->getSDLWindow());
+                    safeStopTextInput(window_.get());
                     uiDirty_ = true;
                 }
             } else if (newTextarea) {
                 newTextarea->setFocused(true);
                 std::string taValStr = target->getAttribute("value");
                 newTextarea->setCursorPos(static_cast<int>(taValStr.size()));
-                SDL_StartTextInput(window_->getSDLWindow());
+                safeStartTextInput(window_.get());
                 uiDirty_ = true;
             } else if (newSelect) {
                 // Toggle dropdown open/close
@@ -585,10 +601,10 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 if (newSelect->isOpen()) {
                     newSelect->setHighlightedIndex(newSelect->selectedIndex());
                 }
-                SDL_StopTextInput(window_->getSDLWindow());
+                safeStopTextInput(window_.get());
                 uiDirty_ = true;
             } else {
-                SDL_StopTextInput(window_->getSDLWindow());
+                safeStopTextInput(window_.get());
             }
 
             computeOffset(evt, target);
@@ -634,7 +650,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
     if (document_) {
         dom::Element* target = hitTest(docX, docY);
-        int mod = SDL_GetModState();
+        int mod = safeGetModState(window_.get());
 
         // Dispatch mouseup event
         {
@@ -818,7 +834,7 @@ void Engine::handleMouseMove(float x, float y) {
 
         // Dispatch mouseover/mouseout when element changes (bubbling versions)
         if (target != hoveredElement_) {
-            int mod = SDL_GetModState();
+            int mod = safeGetModState(window_.get());
 
             // mouseout on previous element (bubbles)
             if (hoveredElement_) {
@@ -866,7 +882,7 @@ void Engine::handleMouseMove(float x, float y) {
 
         // Always dispatch mousemove
         if (target) {
-            int mod = SDL_GetModState();
+            int mod = safeGetModState(window_.get());
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
                               lastMouseX_, lastMouseY_, scrollY_, mod);
@@ -1049,14 +1065,14 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             // Unfocus the input on Enter
             input->setFocused(false);
             dispatchFocusEvents(activeEl, nullptr);
-            SDL_StopTextInput(window_->getSDLWindow());
+            safeStopTextInput(window_.get());
             uiDirty_ = true;
             handled = true;
         } else if (keycode == SDLK_ESCAPE) {
             // Unfocus on Escape
             input->setFocused(false);
             dispatchFocusEvents(activeEl, nullptr);
-            SDL_StopTextInput(window_->getSDLWindow());
+            safeStopTextInput(window_.get());
             uiDirty_ = true;
             handled = true;
         } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
@@ -1179,7 +1195,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         } else if (keycode == SDLK_ESCAPE) {
             textarea->setFocused(false);
             dispatchFocusEvents(activeEl, nullptr);
-            SDL_StopTextInput(window_->getSDLWindow());
+            safeStopTextInput(window_.get());
             uiDirty_ = true;
             handled = true;
         } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
@@ -1402,17 +1418,17 @@ void Engine::advanceFocus(bool reverse) {
         if (newInput->isTextType(nextEl)) {
             std::string v = nextEl->getAttribute("value");
             newInput->setCursorPos(static_cast<int>(v.size()));
-            SDL_StartTextInput(window_->getSDLWindow());
+            safeStartTextInput(window_.get());
         } else {
-            SDL_StopTextInput(window_->getSDLWindow());
+            safeStopTextInput(window_.get());
         }
     } else if (newTa) {
         newTa->setFocused(true);
         std::string v = nextEl->getAttribute("value");
         newTa->setCursorPos(static_cast<int>(v.size()));
-        SDL_StartTextInput(window_->getSDLWindow());
+        safeStartTextInput(window_.get());
     } else {
-        SDL_StopTextInput(window_->getSDLWindow());
+        safeStopTextInput(window_.get());
     }
 
     uiDirty_ = true;
@@ -1431,7 +1447,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     // Dispatch wheel event to JS
     if (target) {
         dom::WheelEvent wheelEvt("wheel", true, true);
-        int mod = SDL_GetModState();
+        int mod = safeGetModState(window_.get());
         populateMouseEvent(wheelEvt, x, y, -1, pressedButtons_,
                           lastMouseX_, lastMouseY_, scrollY_, mod);
         // SDL gives scroll amounts in lines; convert to pixels for DOM_DELTA_PIXEL

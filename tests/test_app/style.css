@@ -1,0 +1,3 @@
+/* Minimal styles for layout tests - gives elements measurable dimensions */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { margin: 0; padding: 0; width: 1920px; height: 1080px; }
