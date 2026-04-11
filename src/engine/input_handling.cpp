@@ -969,11 +969,20 @@ void Engine::dispatchInputEvent(dom::Element* el, const std::string& data,
 }
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
-    // Configurable overlay toggle key (default: F8)
+    // F8: toggle perf overlay
     if (inputConfig_.overlayToggleKey != 0 &&
         keycode == static_cast<int>(inputConfig_.overlayToggleKey) && !repeat) {
         if (systemOverlay_) {
-            systemOverlay_->toggle();
+            systemOverlay_->togglePerf();
+            uiDirty_ = true;
+        }
+        return;
+    }
+
+    // Escape: toggle settings menu
+    if (keycode == SDLK_ESCAPE && !repeat) {
+        if (systemOverlay_) {
+            systemOverlay_->toggleSettings();
             uiDirty_ = true;
         }
         return;

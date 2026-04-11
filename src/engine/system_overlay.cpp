@@ -616,11 +616,11 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
 
             // Assign tab label and group based on panel path
             if (fullRel == "perf") {
-                panel.tabLabel = "Perf";
-                panel.group = "";  // always visible
+                panel.tabLabel = "";   // not shown in settings nav
+                panel.group = "perf";
             } else if (fullRel == "nav") {
-                panel.tabLabel = "";  // nav bar itself has no tab
-                panel.group = "";     // always visible
+                panel.tabLabel = "";   // nav bar itself has no tab
+                panel.group = "nav";
             } else if (fullRel.rfind("settings/", 0) == 0) {
                 // settings/* panels are in the "settings" group
                 panel.group = "settings";
@@ -732,10 +732,16 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
     }
 }
 
-void SystemOverlay::toggle() {
-    visible_ = !visible_;
+void SystemOverlay::togglePerf() {
+    perfVisible_ = !perfVisible_;
     renderDirty_ = true;
-    LOG_INFO("SystemOverlay: %s", visible_ ? "visible" : "hidden");
+    LOG_INFO("SystemOverlay: perf %s", perfVisible_ ? "visible" : "hidden");
+}
+
+void SystemOverlay::toggleSettings() {
+    settingsVisible_ = !settingsVisible_;
+    renderDirty_ = true;
+    LOG_INFO("SystemOverlay: settings %s", settingsVisible_ ? "visible" : "hidden");
 }
 
 void SystemOverlay::updatePerf(double fps, double frameTime, double js, double layout,
@@ -765,11 +771,18 @@ void SystemOverlay::updatePerf(double fps, double frameTime, double js, double l
     }
 }
 
+bool SystemOverlay::isPanelVisible(const Panel& panel) const {
+    if (panel.group == "perf") return perfVisible_;
+    if (panel.group == "nav") return settingsVisible_;
+    if (panel.group == "settings") return settingsVisible_ && panel.active;
+    return false;
+}
+
 void SystemOverlay::tick(double nowMs) {
-    if (!visible_) return;
+    if (!isVisible()) return;
 
     for (auto& panel : panels_) {
-        if (!panel.active || !panel.timers) continue;
+        if (!isPanelVisible(panel) || !panel.timers) continue;
         panel.timers->tick(nowMs);
         panel.timers->fireAnimationFrames(nowMs);
     }
@@ -778,9 +791,9 @@ void SystemOverlay::tick(double nowMs) {
     // (jsRuntime_->executePendingJobs()) — not here, to avoid
     // draining app jobs before the WebGL FBO is bound.
 
-    // Check if any active panel became dirty from timer callbacks
+    // Check if any visible panel became dirty from timer callbacks
     for (auto& panel : panels_) {
-        if (panel.active && panel.document && panel.document->isDirty()) {
+        if (isPanelVisible(panel) && panel.document && panel.document->isDirty()) {
             renderDirty_ = true;
             break;
         }
@@ -788,11 +801,11 @@ void SystemOverlay::tick(double nowMs) {
 }
 
 void SystemOverlay::render(int vpW, int vpH) {
-    if (!visible_ || !renderer_ || !renderDirty_) return;
+    if (!isVisible() || !renderer_ || !renderDirty_) return;
 
-    // Re-layout dirty active panels
+    // Re-layout dirty visible panels
     for (auto& panel : panels_) {
-        if (!panel.active || !panel.document) continue;
+        if (!isPanelVisible(panel) || !panel.document) continue;
         if (panel.document->isDirty()) {
             panel.document->clearStructureDirty();
             layout::SkiaTextMetrics textMetrics(renderer_.get(), panel.fontManager.get());
@@ -802,11 +815,11 @@ void SystemOverlay::render(int vpW, int vpH) {
         }
     }
 
-    // Rasterize active panels to own Skia surface
+    // Rasterize visible panels to own Skia surface
     renderer_->beginFrame(vpW, vpH);
 
     for (auto& panel : panels_) {
-        if (!panel.active || !panel.document || !panel.drawTraversal) continue;
+        if (!isPanelVisible(panel) || !panel.document || !panel.drawTraversal) continue;
         panel.drawTraversal->draw(panel.document->documentElement(), 0, 0, vpW, vpH);
     }
 
@@ -846,12 +859,12 @@ dom::Element* SystemOverlay::hitTestPanel(Panel& panel, float x, float y) {
 }
 
 bool SystemOverlay::handleMouseDown(float x, float y, int button) {
-    if (!visible_) return false;
+    if (!isVisible()) return false;
 
     // Iterate panels in reverse (last rendered = on top)
     for (int i = static_cast<int>(panels_.size()) - 1; i >= 0; i--) {
         auto& panel = panels_[i];
-        if (!panel.active) continue;
+        if (!isPanelVisible(panel)) continue;
         dom::Element* target = hitTestPanel(panel, x, y);
         if (target) {
             dom::MouseEvent evt("mousedown");
@@ -867,11 +880,11 @@ bool SystemOverlay::handleMouseDown(float x, float y, int button) {
 }
 
 bool SystemOverlay::handleMouseUp(float x, float y, int button) {
-    if (!visible_) return false;
+    if (!isVisible()) return false;
 
     for (int i = static_cast<int>(panels_.size()) - 1; i >= 0; i--) {
         auto& panel = panels_[i];
-        if (!panel.active) continue;
+        if (!isPanelVisible(panel)) continue;
         dom::Element* target = hitTestPanel(panel, x, y);
         if (target) {
             // mouseup
@@ -896,7 +909,7 @@ bool SystemOverlay::handleMouseUp(float x, float y, int button) {
 }
 
 bool SystemOverlay::handleMouseMove(float x, float y) {
-    if (!visible_) return false;
+    if (!isVisible()) return false;
 
     dom::Element* newTarget = nullptr;
     Panel* newPanel = nullptr;
@@ -904,7 +917,7 @@ bool SystemOverlay::handleMouseMove(float x, float y) {
     // Find topmost hit
     for (int i = static_cast<int>(panels_.size()) - 1; i >= 0; i--) {
         auto& panel = panels_[i];
-        if (!panel.active) continue;
+        if (!isPanelVisible(panel)) continue;
         dom::Element* target = hitTestPanel(panel, x, y);
         if (target) {
             newTarget = target;

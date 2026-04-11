@@ -119,9 +119,14 @@ public:
     /// Recurses into subdirectories (e.g. settings/graphics/).
     void loadPanels(const std::string& systemDir);
 
-    /// Toggle overlay visibility.
-    void toggle();
-    bool isVisible() const { return visible_; }
+    /// Toggle perf overlay (F8).
+    void togglePerf();
+    /// Toggle settings menu (Esc).
+    void toggleSettings();
+    /// True if any overlay content is visible.
+    bool isVisible() const { return perfVisible_ || settingsVisible_; }
+    bool isPerfVisible() const { return perfVisible_; }
+    bool isSettingsVisible() const { return settingsVisible_; }
 
     /// Update performance data (called each stats accumulation cycle).
     void updatePerf(double fps, double frameTime, double js, double layout,
@@ -193,6 +198,9 @@ private:
     /// Hit-test a single panel's DOM. Returns the deepest element hit, or nullptr.
     dom::Element* hitTestPanel(Panel& panel, float x, float y);
 
+    /// Check if a panel should currently render.
+    bool isPanelVisible(const Panel& panel) const;
+
     js::Runtime* jsRuntime_;  // shared, not owned
     render::GLContext* gl_;
     Settings* settings_ = nullptr;       // not owned
@@ -200,7 +208,8 @@ private:
     std::unique_ptr<SystemRenderer> renderer_;
     int viewportWidth_;
     int viewportHeight_;
-    bool visible_ = false;
+    bool perfVisible_ = false;
+    bool settingsVisible_ = false;
     bool renderDirty_ = true;  // true when panels need re-rasterize + upload
     std::string activePanel_;  // name of the currently visible settings panel
 
