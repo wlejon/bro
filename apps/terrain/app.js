@@ -131,33 +131,65 @@ function hideStatus() {
 }
 
 // ============================================================================
-// Camera (FPS-style fly)
+// Camera (6DOF quaternion-based with smooth velocity controls)
 // ============================================================================
 
 function v3add(a, b)   { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
 function v3scale(a, s) { return [a[0]*s, a[1]*s, a[2]*s]; }
 
+// Quaternion helpers: [x, y, z, w]
+function quatFromAxis(ax, ay, az, angle) {
+    var s = Math.sin(angle * 0.5), c = Math.cos(angle * 0.5);
+    return [ax * s, ay * s, az * s, c];
+}
+function quatMul(a, b) {
+    return [
+        a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+        a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+        a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+        a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2]
+    ];
+}
+function quatNorm(q) {
+    var len = Math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+    if (len < 1e-12) return [0, 0, 0, 1];
+    return [q[0]/len, q[1]/len, q[2]/len, q[3]/len];
+}
+function quatRotVec(q, v) {
+    var x = q[0], y = q[1], z = q[2], w = q[3];
+    var vx = v[0], vy = v[1], vz = v[2];
+    var tx = 2 * (y*vz - z*vy);
+    var ty = 2 * (z*vx - x*vz);
+    var tz = 2 * (x*vy - y*vx);
+    return [
+        vx + w*tx + (y*tz - z*ty),
+        vy + w*ty + (z*tx - x*tz),
+        vz + w*tz + (x*ty - y*tx)
+    ];
+}
+
 var cam = {
     pos: [50, 42, 50],
-    yaw: -Math.PI / 4,
-    pitch: -0.30,
+    rot: quatFromAxis(0, 1, 0, -Math.PI / 4),
+    vel: [0, 0, 0],
+    accel: 12.0,
+    damping: 6.0,
+    rollSpeed: 2.5,
 };
+// Apply initial pitch
+cam.rot = quatNorm(quatMul(cam.rot, quatFromAxis(1, 0, 0, -0.30)));
 
-function camForward() {
-    var cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
-    var cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
-    return [sy * cp, sp, -cy * cp];
-}
-function camRight() {
-    return [Math.cos(cam.yaw), 0, Math.sin(cam.yaw)];
-}
+function camForward() { return quatRotVec(cam.rot, [0, 0, -1]); }
+function camRight()   { return quatRotVec(cam.rot, [1, 0, 0]); }
+function camUp()      { return quatRotVec(cam.rot, [0, 1, 0]); }
 
 // ============================================================================
 // Input
 // ============================================================================
 
 var keys = {};
-var mouseCaptured = false;
+var mouseAccumX = 0, mouseAccumY = 0;
+var rightMouseDown = false;
 
 // Sculpting mode
 var sculptMode = 'raise';  // 'raise' or 'lower'
@@ -173,25 +205,31 @@ document.addEventListener('keydown', function(e) {
         panel.classList.toggle('hidden');
     }
     if (e.key === '[' || e.key === ']') sculptMode = (sculptMode === 'raise') ? 'lower' : 'raise';
-    if (e.key === 'Escape') mouseCaptured = false;
 });
 document.addEventListener('keyup', function(e) {
     keys[e.key.toLowerCase()] = false;
 });
 
 canvas.addEventListener('mousedown', function(e) {
-    if (!mouseCaptured) { mouseCaptured = true; return; }
     if (e.button === 0) pickAndEdit('lower');
-    else if (e.button === 2) pickAndEdit('raise');
+    else if (e.button === 2) {
+        rightMouseDown = true;
+        canvas.requestPointerLock();
+    }
+});
+document.addEventListener('mouseup', function(e) {
+    if (e.button === 2) {
+        rightMouseDown = false;
+        document.exitPointerLock();
+    }
 });
 canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
+// Accumulate mouse deltas — applied smoothly during update
 document.addEventListener('mousemove', function(e) {
-    if (!mouseCaptured) return;
-    cam.yaw += e.movementX * camConfig.sensitivity;
-    cam.pitch -= e.movementY * camConfig.sensitivity;
-    if (cam.pitch >  1.4) cam.pitch =  1.4;
-    if (cam.pitch < -1.4) cam.pitch = -1.4;
+    if (!rightMouseDown) return;
+    mouseAccumX += e.movementX;
+    mouseAccumY += e.movementY;
 });
 
 // ============================================================================
@@ -476,8 +514,9 @@ function initButtons() {
     if (resetPosBtn) {
         resetPosBtn.addEventListener('click', function() {
             cam.pos = [50, 42, 50];
-            cam.yaw = -Math.PI / 4;
-            cam.pitch = -0.30;
+            cam.vel = [0, 0, 0];
+            cam.rot = quatFromAxis(0, 1, 0, -Math.PI / 4);
+            cam.rot = quatNorm(quatMul(cam.rot, quatFromAxis(1, 0, 0, -0.30)));
         });
     }
 }
@@ -519,31 +558,84 @@ function render() {
         fpsAccum = 0;
     }
 
-    // Camera movement
-    var moveSpeed = camConfig.speed * dt;
-    if (keys['shift']) moveSpeed *= 3;
-    var fwd = camForward();
+    // --- Mouse look: apply accumulated deltas as quaternion rotation ---
+    var dx = mouseAccumX * camConfig.sensitivity;
+    var dy = mouseAccumY * camConfig.sensitivity;
+    mouseAccumX = 0;
+    mouseAccumY = 0;
+
+    if (dx !== 0 || dy !== 0) {
+        var yawQ   = quatFromAxis(0, 1, 0, -dx);
+        var right  = camRight();
+        var pitchQ = quatFromAxis(right[0], right[1], right[2], -dy);
+        cam.rot = quatNorm(quatMul(pitchQ, quatMul(yawQ, cam.rot)));
+    }
+
+    // --- Roll (Q/E) ---
+    var rollInput = 0;
+    if (keys['q']) rollInput += 1;
+    if (keys['e']) rollInput -= 1;
+    if (rollInput !== 0) {
+        var fwd = camForward();
+        var rollQ = quatFromAxis(fwd[0], fwd[1], fwd[2], rollInput * cam.rollSpeed * dt);
+        cam.rot = quatNorm(quatMul(rollQ, cam.rot));
+    }
+
+    // --- Velocity-based movement (smooth acceleration + damping) ---
+    var maxSpeed = camConfig.speed;
+    if (keys['shift']) maxSpeed *= 3;
+
+    var fwd   = camForward();
     var right = camRight();
-    if (keys['w']) cam.pos = v3add(cam.pos, v3scale(fwd, moveSpeed));
-    if (keys['s']) cam.pos = v3add(cam.pos, v3scale(fwd, -moveSpeed));
-    if (keys['a']) cam.pos = v3add(cam.pos, v3scale(right, -moveSpeed));
-    if (keys['d']) cam.pos = v3add(cam.pos, v3scale(right, moveSpeed));
-    if (keys[' ']) cam.pos[1] += moveSpeed;
-    if (keys['control']) cam.pos[1] -= moveSpeed;
+    var up    = camUp();
+
+    var thrustX = 0, thrustY = 0, thrustZ = 0;
+    if (keys['w']) { thrustX += fwd[0];   thrustY += fwd[1];   thrustZ += fwd[2]; }
+    if (keys['s']) { thrustX -= fwd[0];   thrustY -= fwd[1];   thrustZ -= fwd[2]; }
+    if (keys['a']) { thrustX -= right[0]; thrustY -= right[1]; thrustZ -= right[2]; }
+    if (keys['d']) { thrustX += right[0]; thrustY += right[1]; thrustZ += right[2]; }
+    if (keys[' '])       { thrustX += up[0]; thrustY += up[1]; thrustZ += up[2]; }
+    if (keys['control']) { thrustX -= up[0]; thrustY -= up[1]; thrustZ -= up[2]; }
+
+    var thrustLen = Math.sqrt(thrustX*thrustX + thrustY*thrustY + thrustZ*thrustZ);
+    if (thrustLen > 1e-6) {
+        var inv = 1.0 / thrustLen;
+        thrustX *= inv; thrustY *= inv; thrustZ *= inv;
+    }
+
+    var targetVelX = thrustX * maxSpeed;
+    var targetVelY = thrustY * maxSpeed;
+    var targetVelZ = thrustZ * maxSpeed;
+
+    var blend = 1.0 - Math.exp(-cam.accel * dt);
+    var dampBlend = 1.0 - Math.exp(-cam.damping * dt);
+
+    if (thrustLen > 1e-6) {
+        cam.vel[0] += (targetVelX - cam.vel[0]) * blend;
+        cam.vel[1] += (targetVelY - cam.vel[1]) * blend;
+        cam.vel[2] += (targetVelZ - cam.vel[2]) * blend;
+    } else {
+        cam.vel[0] *= (1.0 - dampBlend);
+        cam.vel[1] *= (1.0 - dampBlend);
+        cam.vel[2] *= (1.0 - dampBlend);
+    }
+
+    cam.pos[0] += cam.vel[0] * dt;
+    cam.pos[1] += cam.vel[1] * dt;
+    cam.pos[2] += cam.vel[2] * dt;
 
     // Drive chunk loading/unloading
     terrain.update(cam.pos[0], cam.pos[1], cam.pos[2]);
 
     var w = canvas.clientWidth || 1;
     var h = canvas.clientHeight || 1;
-    var target = v3add(cam.pos, fwd);
     scene.setCamera({
         fov: camConfig.fov,
         aspect: w / h,
         near: 0.5,
         far: camConfig.far,
         position: cam.pos,
-        target: target,
+        quaternion: cam.rot,
     });
 
     info.textContent =
