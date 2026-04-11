@@ -7,7 +7,6 @@
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
-#include "engine/system_overlay.h"
 
 #include "platform/sdl_window.h"
 #include "js/runtime.h"
@@ -317,8 +316,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
     button = sdlToDomButton(button);
 
     // Forward to system overlay first — if it consumes, skip app handling
-    if (systemOverlay_ && systemOverlay_->isVisible() &&
-        systemOverlay_->handleMouseDown(x, y, button)) {
+    if (systemHandleMouseDown(x, y, button)) {
         pressedButtons_ |= domButtonMask(button);
         return;
     }
@@ -424,8 +422,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
     pressedButtons_ &= ~domButtonMask(button);
 
     // Forward to system overlay first
-    if (systemOverlay_ && systemOverlay_->isVisible() &&
-        systemOverlay_->handleMouseUp(x, y, button)) {
+    if (systemHandleMouseUp(x, y, button)) {
         return;
     }
 
@@ -524,8 +521,8 @@ void Engine::handleMouseMove(float x, float y) {
 
     // Forward to system overlay first (but don't block app mousemove —
     // overlay consumes only if mouse is over an overlay element)
-    if (systemOverlay_ && systemOverlay_->isVisible()) {
-        systemOverlay_->handleMouseMove(x, y);
+    if (isSystemVisible()) {
+        systemHandleMouseMove(x, y);
     }
 
     // Viewport scrollbar drag
@@ -715,19 +712,15 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     // F8: toggle perf overlay
     if (inputConfig_.overlayToggleKey != 0 &&
         keycode == static_cast<int>(inputConfig_.overlayToggleKey) && !repeat) {
-        if (systemOverlay_) {
-            systemOverlay_->togglePerf();
-            uiDirty_ = true;
-        }
+        toggleSystemPerf();
+        uiDirty_ = true;
         return;
     }
 
     // Escape: toggle settings menu
     if (keycode == SDLK_ESCAPE && !repeat) {
-        if (systemOverlay_) {
-            systemOverlay_->toggleSettings();
-            uiDirty_ = true;
-        }
+        toggleSystemSettings();
+        uiDirty_ = true;
         return;
     }
 

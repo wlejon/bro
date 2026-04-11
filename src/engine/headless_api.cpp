@@ -2,7 +2,7 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
-#include "engine/system_overlay.h"
+#include "render/cpu_raster_renderer.h"
 
 #include "observer_check.js.h"
 
@@ -394,16 +394,15 @@ bool Engine::screenshot(const std::string& path) {
     // Render HTML/CSS overlay on top
     drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
 
-    // Render system overlay on top of everything
-    if (systemOverlay_ && systemOverlay_->isVisible()) {
-        systemOverlay_->tick(virtualTime_);
-        systemOverlay_->render(viewportWidth_, viewportHeight_);
+    // Render system panels on top of everything
+    if (isSystemVisible()) {
+        tickSystemPanels(virtualTime_);
+        renderSystemPanels();
 
-        auto* sysRenderer = systemOverlay_->getRenderer();
-        if (sysRenderer && sysRenderer->surface()) {
+        if (systemRenderer_ && systemRenderer_->surface()) {
             auto* appCanvas = renderer_->getCanvas();
             if (appCanvas) {
-                sk_sp<SkImage> sysImage = sysRenderer->surface()->makeImageSnapshot();
+                sk_sp<SkImage> sysImage = systemRenderer_->surface()->makeImageSnapshot();
                 if (sysImage) {
                     SkPaint paint;
                     paint.setBlendMode(SkBlendMode::kSrcOver);
@@ -639,14 +638,13 @@ std::vector<uint8_t> Engine::capturePixels() {
 
     drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
 
-    if (systemOverlay_ && systemOverlay_->isVisible()) {
-        systemOverlay_->tick(virtualTime_);
-        systemOverlay_->render(viewportWidth_, viewportHeight_);
-        auto* sysRenderer = systemOverlay_->getRenderer();
-        if (sysRenderer && sysRenderer->surface()) {
+    if (isSystemVisible()) {
+        tickSystemPanels(virtualTime_);
+        renderSystemPanels();
+        if (systemRenderer_ && systemRenderer_->surface()) {
             auto* appCanvas = renderer_->getCanvas();
             if (appCanvas) {
-                sk_sp<SkImage> sysImage = sysRenderer->surface()->makeImageSnapshot();
+                sk_sp<SkImage> sysImage = systemRenderer_->surface()->makeImageSnapshot();
                 if (sysImage) {
                     SkPaint paint;
                     paint.setBlendMode(SkBlendMode::kSrcOver);
@@ -695,16 +693,7 @@ dom::Element* Engine::querySelector(const std::string& selector) const {
     return document_->querySelector(selector);
 }
 
-dom::Element* Engine::overlayQuerySelector(const std::string& panelName,
-                                            const std::string& selector) const {
-    if (!systemOverlay_) return nullptr;
-    return systemOverlay_->querySelector(panelName, selector);
-}
-
-std::vector<std::string> Engine::overlayPanelNames() const {
-    if (!systemOverlay_) return {};
-    return systemOverlay_->getPanelNames();
-}
+// overlayQuerySelector() and overlayPanelNames() are in system_panels.cpp.
 
 void Engine::dispatchClickOn(dom::Element* target) {
     if (!target || !jsRuntime_) return;

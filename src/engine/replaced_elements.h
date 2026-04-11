@@ -21,7 +21,7 @@ namespace bro::engine {
 
 /// Walk a DOM subtree and attach ElSelect / ElInput / ElTextarea / ElSvg
 /// controllers to any replaced elements that don't already have one.
-/// Used by both the main Engine and the SystemOverlay.
+/// Used by the Engine for both the app document and system panels.
 void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer);
 
 // ---------------------------------------------------------------------------
@@ -30,7 +30,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer);
 
 /// Lightweight context for replaced-element mouse interaction.
 /// Abstracts away the differences between Engine (single document, scrollY,
-/// window) and SystemOverlay (per-panel document, no scroll, no window).
+/// window) and system panels (per-panel document, no scroll).
 struct ControlContext {
     dom::Document* document;
     JSContext* jsCtx;

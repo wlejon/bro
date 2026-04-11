@@ -20,12 +20,11 @@
 
 typedef struct SDL_GLContextState* SDL_GLContext;
 
-namespace bro::render { class GLContext; class RasterRenderer; }
+namespace bro::render { class GLContext; class RasterRenderer; class CPURasterRenderer; }
 namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::scene { class SceneGraph; }
-namespace bro::engine { class SystemOverlay; }
 namespace bro::canvas { class CanvasScene; }
 
 namespace bro::platform {
@@ -133,8 +132,8 @@ public:
     /// Access the timers.
     js::Timers* timers() const { return timers_.get(); }
 
-    /// Access the system overlay.
-    SystemOverlay* systemOverlay() const { return systemOverlay_.get(); }
+    /// True if any system panel content is visible.
+    bool isSystemVisible() const;
 
     /// Access the settings manager.
     Settings* settings() const { return settings_.get(); }
@@ -205,6 +204,39 @@ private:
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
     void compositeLayers(const std::vector<UILayer>& layers);
     void ensureReplacedElements(dom::Element* elem);
+
+    // --- System panel management (implementation in system_panels.cpp) ---
+    struct SystemDocument {
+        std::string name;
+        std::string tabLabel;
+        std::string group;
+        bool active = true;
+        JSContext* jsCtx = nullptr;
+        std::unique_ptr<js::Timers> timers;
+        std::unique_ptr<layout::DrawTraversal> drawTraversal;
+        std::unique_ptr<layout::FontManager> fontManager;
+        std::unique_ptr<dom::Document> document;
+        JSValue broPerfObj = JS_UNDEFINED;
+    };
+
+    void initSystemPanels();
+    void destroySystemPanels();
+    void loadSystemPanels(const std::string& systemDir);
+    void scanSystemPanelDir(const std::string& baseDir, const std::string& relPath);
+    void installBroObject(SystemDocument& doc);
+    bool isSystemDocVisible(const SystemDocument& doc) const;
+    void toggleSystemPerf();
+    void toggleSystemSettings();
+    void showSystemPanel(const std::string& name);
+    void tickSystemPanels(double nowMs);
+    void updateSystemPerf(double fps, double frameTime, double js, double layout,
+                          double raster, double gpu, double draw, int vpW, int vpH);
+    void renderSystemPanels();
+    void resizeSystemPanels(int w, int h);
+    dom::Element* systemHitTest(SystemDocument& doc, float x, float y);
+    bool systemHandleMouseDown(float x, float y, int button);
+    bool systemHandleMouseUp(float x, float y, int button);
+    bool systemHandleMouseMove(float x, float y);
 
     /// Raster thread entry point (windowed mode only).
     void rasterThreadFunc();
@@ -287,7 +319,16 @@ private:
     std::vector<SceneGraphEntry> sceneGraphs_;
     double physicsAccumMs_ = 0.0;
     double lastPhysicsTimeMs_ = 0.0;
-    std::unique_ptr<SystemOverlay> systemOverlay_;
+    // System panels (settings, perf, nav)
+    std::vector<SystemDocument> systemDocs_;
+    std::unique_ptr<render::CPURasterRenderer> systemRenderer_;
+    bool systemPerfVisible_ = false;
+    bool systemSettingsVisible_ = false;
+    bool systemDirty_ = true;
+    bool systemMouseConsumed_ = false;
+    std::string systemActivePanel_;
+    dom::Element* systemHoverTarget_ = nullptr;
+    SystemDocument* systemHoverDoc_ = nullptr;
 
     // Headless-specific
     double virtualTime_ = 0.0;

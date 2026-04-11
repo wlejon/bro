@@ -3,7 +3,7 @@
 #include "engine/hit_testing.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
-#include "engine/system_overlay.h"
+#include "render/cpu_raster_renderer.h"
 
 #include "observer_check.js.h"
 #include "canvas_resize.js.h"
@@ -554,12 +554,9 @@ Engine::Engine(const EngineConfig& config)
         glGenBuffers(1, &uiQuadVBO_);
     }
 
-    // 12. System overlay (loads panels from system/ sibling directory)
+    // 12. System panels (loads from system/ sibling directory)
     //     Shares the JS runtime — each panel gets its own JSContext.
-    systemOverlay_ = std::make_unique<SystemOverlay>(jsRuntime_.get(), gl_.get(),
-                                                      viewportWidth_, viewportHeight_,
-                                                      settings_.get(), window_.get());
-    systemOverlay_->loadPanels("system");
+    initSystemPanels();
 
     // Headless: do initial layout + flush
     if (displayMode_ == DisplayMode::Headless) {
@@ -769,7 +766,7 @@ Engine::~Engine() {
     // WebGL contexts (unique_ptr destruction handles cleanup)
     webglEntries_.clear();
     canvasScenes_.clear();
-    systemOverlay_.reset();
+    destroySystemPanels();
 
     // 0. Clear ElementRefAdapter cache (holds raw pointers to elements)
     layout::ElementRefAdapter::clearCache();
@@ -1265,10 +1262,8 @@ void Engine::run() {
             JS_FreeValue(jsRuntime_->getContext(), global);
         }
 
-        // 2b. Tick system overlay timers
-        if (systemOverlay_) {
-            systemOverlay_->tick(now);
-        }
+        // 2b. Tick system panel timers
+        tickSystemPanels(now);
 
         // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)
         //    Also resize WebGL FBO to match element layout if needed.
@@ -1430,15 +1425,15 @@ void Engine::run() {
         //     canvas layers (freshly rasterized on main thread).
         compositeLayers(layerBuffers_[front].layers);
 
-        // 5h. Render pass 3: composite system overlay (premultiplied alpha)
-        if (systemOverlay_ && systemOverlay_->isVisible()) {
-            systemOverlay_->render(viewportWidth_, viewportHeight_);
+        // 5h. Render pass 3: composite system panels (premultiplied alpha)
+        if (isSystemVisible()) {
+            renderSystemPanels();
 
             // Ganesh may have changed GL state — restore what we need
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glViewport(0, 0, viewportWidth_, viewportHeight_);
 
-            GLuint sysTex = systemOverlay_->getTexture();
+            GLuint sysTex = systemRenderer_ ? systemRenderer_->getTexture() : 0;
             if (sysTex) {
                 float w = (float)viewportWidth_, h = (float)viewportHeight_;
                 render::TextureVertex quad[6] = {
@@ -1597,8 +1592,8 @@ void Engine::run() {
             uiDirty_ = true;  // refresh overlay
 
             // Push perf data to system overlay JS
-            if (systemOverlay_) {
-                systemOverlay_->updatePerf(statsFps_, statsFrameTimeMs_,
+            {
+                updateSystemPerf(statsFps_, statsFrameTimeMs_,
                                            phaseJsMs_, phaseLayoutMs_,
                                            phaseRasterMs_, phaseGpuMs_,
                                            phaseDrawMs_,
@@ -1649,8 +1644,8 @@ void Engine::handleResize(int w, int h) {
     hasRenderedOnce_ = false;
     drawTraversal_->setViewport(w, h);
     // WebGL canvases resize based on element layout, not viewport — handled per-frame
-    if (systemOverlay_) {
-        systemOverlay_->onResize(w, h);
+    {
+        resizeSystemPanels(w, h);
     }
     if (document_) {
         document_->resolveStyles();

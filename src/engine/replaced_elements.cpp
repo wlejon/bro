@@ -1,5 +1,5 @@
 // Shared replaced-element initialization and interaction logic.
-// Used by both Engine (main app) and SystemOverlay (system panels).
+// Used by the Engine for both the app document and system panels.
 
 #include "engine/replaced_elements.h"
 
