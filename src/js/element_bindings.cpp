@@ -1304,8 +1304,17 @@ static const htmlayout::layout::LayoutBox& getLayoutBox(bro::dom::Element* el) {
     return el->layoutBox();
 }
 
+// Per CSSOM spec, inline non-replaced elements return 0 for client/scroll dimensions.
+static bool isInlineDisplay(bro::dom::Element* el) {
+    if (!el) return false;
+    auto& style = el->computedStyle();
+    auto it = style.find("display");
+    return it != style.end() && it->second == "inline";
+}
+
 static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
+    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
     auto& box = getLayoutBox(el);
     float cw = box.contentRect.width + box.padding.left + box.padding.right;
     if (cw > 0) return JS_NewInt32(ctx, static_cast<int>(cw));
@@ -1314,6 +1323,7 @@ static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val)
 
 static JSValue js_element_get_clientHeight(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
+    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
     auto& box = getLayoutBox(el);
     float ch = box.contentRect.height + box.padding.top + box.padding.bottom;
     if (ch > 0) return JS_NewInt32(ctx, static_cast<int>(ch));
@@ -1345,16 +1355,28 @@ static JSValue js_element_get_offsetTop(JSContext* ctx, JSValueConst this_val) {
 }
 
 static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val) {
+    // Per spec: scrollWidth = max(clientWidth, scrollable content width including padding)
+    // Inline non-replaced elements return 0.
+    auto* el = getElement(this_val);
+    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(el);
+    float clientW = box.contentRect.width + box.padding.left + box.padding.right;
+    if (clientW > 0) return JS_NewInt32(ctx, static_cast<int>(clientW));
     return js_element_get_offsetWidth(ctx, this_val);
 }
 
 static JSValue js_element_get_scrollHeight(JSContext* ctx, JSValueConst this_val) {
+    // Per spec: scrollHeight = max(clientHeight, scrollable content height including padding)
+    // Inline non-replaced elements return 0.
     auto* el = getElement(this_val);
     if (!el) return JS_NewInt32(ctx, 0);
+    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
     auto& box = el->layoutBox();
-    // scrollHeight should return the full content height, not the clamped visible height.
-    // For overflow elements, naturalHeight holds the unclamped content extent.
-    float h = box.naturalHeight > box.contentRect.height ? box.naturalHeight : box.contentRect.height;
+    float clientH = box.contentRect.height + box.padding.top + box.padding.bottom;
+    // naturalHeight is the unclamped content height (before min/max-height).
+    // scrollHeight includes padding around that content.
+    float scrollH = box.naturalHeight + box.padding.top + box.padding.bottom;
+    float h = scrollH > clientH ? scrollH : clientH;
     if (h > 0)
         return JS_NewInt32(ctx, static_cast<int>(h));
     return js_element_get_offsetHeight(ctx, this_val);

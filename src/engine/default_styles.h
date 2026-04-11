@@ -14,7 +14,7 @@ html {
     color: #000;
     font-family: Arial, Helvetica, sans-serif;
     font-size: 16px;
-    line-height: 1.2;
+    line-height: normal;
 }
 
 /* ---------- Hidden elements ---------- */

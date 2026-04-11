@@ -157,14 +157,12 @@ static std::string resolveColorToRgb(const std::string& value) {
         return "rgba(0, 0, 0, 0)";
     if (value == "currentcolor" || value == "currentColor" || value == "inherit")
         return value;
-    // Already rgb()/rgba() — pass through
-    if (value.size() > 3 && value[0] == 'r' && value[1] == 'g' && value[2] == 'b')
-        return value;
 
     auto c = htmlayout::css::parseColor(value);
     // parseColor returns {0,0,0,0} for unrecognized — if alpha is 0 and input
     // wasn't "transparent", it likely failed to parse
-    if (c.a == 0 && value != "transparent") return value;
+    if (c.a == 0 && c.r == 0 && c.g == 0 && c.b == 0 && value != "transparent")
+        return value;
 
     if (c.a == 255) {
         char buf[32];
@@ -188,6 +186,35 @@ static std::string getComputedProperty(bro::dom::Element* el, const std::string&
     } else {
         // Fall back to CSS initial value for known properties
         value = htmlayout::css::initialValue(prop);
+    }
+
+    // Resolve gap shorthand from longhands if not directly present
+    if (prop == "gap" && (value == "normal" || value.empty())) {
+        auto rg = style.find("row-gap");
+        auto cg = style.find("column-gap");
+        if (rg != style.end() && cg != style.end()) {
+            if (rg->second == cg->second)
+                return rg->second;
+            return rg->second + " " + cg->second;
+        } else if (rg != style.end()) {
+            return rg->second;
+        } else if (cg != style.end()) {
+            return cg->second;
+        }
+    }
+
+    // Resolve width/height to used values from layout box (matches Chrome getComputedStyle)
+    if ((prop == "width" || prop == "height") &&
+        (value == "auto" || value.empty())) {
+        auto& box = el->layoutBox();
+        float v = (prop == "width")
+            ? box.contentRect.width
+            : box.contentRect.height;
+        if (v >= 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.4gpx", v);
+            return buf;
+        }
     }
 
     // Resolve colors to rgb() notation (matches browser getComputedStyle behavior)
