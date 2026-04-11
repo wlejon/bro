@@ -1054,6 +1054,7 @@ void CanvasScene::flushCommands() {
         }
     }
     commands_.clear();
+    dirty_ = true;
 }
 
 // ---------------------------------------------------------------------------
