@@ -29,48 +29,46 @@ h2 {
 }
 
 .slider-row {
-    display: flex;
     margin-bottom: 12px;
+    height: 16px;
 }
 
-.slider-row .label {
-    width: 100px;
+.label {
+    display: inline-block;
+    width: 80px;
     color: #999;
-    padding-top: 2px;
+    vertical-align: middle;
 }
 
 .slider-track {
-    flex: 1;
+    display: inline-block;
+    width: 170px;
     height: 10px;
     background: #1a1a1a;
     border: 1px solid #333;
-    margin-top: 3px;
+    vertical-align: middle;
     cursor: pointer;
-    position: relative;
 }
 
 .slider-fill {
+    display: inline-block;
     height: 10px;
     background: #40a0f0;
     min-width: 0;
 }
 
 .slider-value {
+    display: inline-block;
     width: 45px;
     text-align: right;
     color: #ccc;
     margin-left: 8px;
+    vertical-align: middle;
 }
 
-.checkbox-row {
-    display: flex;
+.row {
     margin-bottom: 10px;
-    cursor: pointer;
-}
-
-.checkbox-row .label {
-    width: 100px;
-    color: #999;
+    height: 20px;
 }
 
 .checkbox {
@@ -79,7 +77,6 @@ h2 {
     height: 14px;
     border: 1px solid #555;
     background: #1a1a1a;
-    margin-right: 8px;
     text-align: center;
     line-height: 14px;
     font-size: 11px;
@@ -136,7 +133,7 @@ h2 {
         <span class="slider-value" id="sfx-val">100%</span>
     </div>
 
-    <div class="checkbox-row" id="mute-row">
+    <div class="row" id="mute-row">
         <span class="label">Mute</span>
         <span class="checkbox" id="mute-cb"></span>
     </div>
@@ -158,7 +155,6 @@ h2 {
     var muteRow = document.getElementById('mute-row');
     var resetBtn = document.getElementById('reset-btn');
 
-    // Resolve elements
     for (var i = 0; i < sliders.length; i++) {
         sliders[i].trackEl = document.getElementById(sliders[i].track);
         sliders[i].fillEl = document.getElementById(sliders[i].fill);
@@ -167,8 +163,6 @@ h2 {
 
     function load() {
         var all = bro.settings.getAll();
-
-        // Sliders
         var vals = [all.audio.masterVolume, all.audio.musicVolume, all.audio.sfxVolume];
         for (var i = 0; i < sliders.length; i++) {
             var pct = Math.round(vals[i] * 100);
@@ -176,7 +170,6 @@ h2 {
             sliders[i].valEl.textContent = pct + '%';
         }
 
-        // Mute
         if (all.audio.muted) {
             muteCb.textContent = 'x';
             muteCb.className = 'checkbox checked';

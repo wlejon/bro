@@ -29,37 +29,41 @@ h2 {
 }
 
 .slider-row {
-    display: flex;
     margin-bottom: 12px;
+    height: 16px;
 }
 
-.slider-row .label {
-    width: 130px;
+.label {
+    display: inline-block;
+    width: 110px;
     color: #999;
-    padding-top: 2px;
+    vertical-align: middle;
 }
 
 .slider-track {
-    flex: 1;
+    display: inline-block;
+    width: 140px;
     height: 10px;
     background: #1a1a1a;
     border: 1px solid #333;
-    margin-top: 3px;
+    vertical-align: middle;
     cursor: pointer;
-    position: relative;
 }
 
 .slider-fill {
+    display: inline-block;
     height: 10px;
     background: #f0c040;
     min-width: 0;
 }
 
 .slider-value {
-    width: 55px;
+    display: inline-block;
+    width: 50px;
     text-align: right;
     color: #ccc;
     margin-left: 8px;
+    vertical-align: middle;
 }
 
 .divider {
@@ -75,24 +79,23 @@ h3 {
 }
 
 .action-row {
-    display: flex;
     margin-bottom: 6px;
     padding: 3px 0;
 }
 
 .action-name {
+    display: inline-block;
     width: 130px;
     color: #ccc;
 }
 
 .action-keys {
-    flex: 1;
+    display: inline-block;
     color: #f0c040;
 }
 
 .no-actions {
     color: #666;
-    font-style: italic;
     margin-bottom: 8px;
 }
 
@@ -152,27 +155,22 @@ h3 {
     var actionsList = document.getElementById('actions-list');
     var resetBtn = document.getElementById('reset-btn');
 
-    // Scroll speed: 1-200 range
     var scrollMin = 1, scrollMax = 200;
-    // Double-click: 100-1000ms range
     var dblMin = 100, dblMax = 1000;
 
     function load() {
         var all = bro.settings.getAll();
 
-        // Scroll speed
         var scrollPct = (all.input.scrollSpeed - scrollMin) / (scrollMax - scrollMin);
         scrollPct = Math.max(0, Math.min(1, scrollPct));
         scrollFill.style.setProperty('width', Math.round(scrollPct * 100) + '%');
         scrollVal.textContent = Math.round(all.input.scrollSpeed).toString();
 
-        // Double-click threshold
         var dblPct = (all.input.doubleClickThresholdMs - dblMin) / (dblMax - dblMin);
         dblPct = Math.max(0, Math.min(1, dblPct));
         dblclickFill.style.setProperty('width', Math.round(dblPct * 100) + '%');
         dblclickVal.textContent = Math.round(all.input.doubleClickThresholdMs).toString();
 
-        // Action bindings
         var actions = bro.settings.getActions();
         actionsList.innerHTML = '';
         if (actions.length === 0) {

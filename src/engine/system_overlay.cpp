@@ -573,14 +573,19 @@ void SystemOverlay::loadPanels(const std::string& systemDir) {
 
     scanPanelDir(systemDir, "");
 
-    // Default: first settings panel is active
+    // Default: prefer "settings/graphics" as initial active, else first found
     for (auto& p : panels_) {
         if (!p.group.empty()) {
-            if (activePanel_.empty()) {
+            p.active = false;
+            if (activePanel_.empty() || p.name == "settings/graphics") {
+                if (!activePanel_.empty()) {
+                    // Deactivate the one we previously set
+                    for (auto& q : panels_) {
+                        if (q.name == activePanel_) q.active = false;
+                    }
+                }
                 activePanel_ = p.name;
                 p.active = true;
-            } else {
-                p.active = false;
             }
         }
     }

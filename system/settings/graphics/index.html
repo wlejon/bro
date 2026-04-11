@@ -29,18 +29,21 @@ h2 {
 }
 
 .row {
-    display: flex;
     margin-bottom: 10px;
+    height: 20px;
 }
 
-.row .label {
+.label {
+    display: inline-block;
     width: 120px;
     color: #999;
-    padding-top: 2px;
+    vertical-align: top;
 }
 
-.row .control {
-    flex: 1;
+.control {
+    display: inline-block;
+    width: 200px;
+    vertical-align: top;
 }
 
 select {
@@ -50,18 +53,7 @@ select {
     padding: 3px 6px;
     font-family: Consolas, monospace;
     font-size: 12px;
-    width: 100%;
-}
-
-.checkbox-row {
-    display: flex;
-    margin-bottom: 10px;
-    cursor: pointer;
-}
-
-.checkbox-row .label {
-    width: 120px;
-    color: #999;
+    width: 200px;
 }
 
 .checkbox {
@@ -70,7 +62,6 @@ select {
     height: 14px;
     border: 1px solid #555;
     background: #1a1a1a;
-    margin-right: 8px;
     text-align: center;
     line-height: 14px;
     font-size: 11px;
@@ -97,7 +88,6 @@ select {
     cursor: pointer;
     font-family: Consolas, monospace;
     font-size: 11px;
-    margin-right: 6px;
 }
 
 .btn:hover {
@@ -115,12 +105,12 @@ select {
         <span class="control"><select id="resolution"></select></span>
     </div>
 
-    <div class="checkbox-row" id="fullscreen-row">
+    <div class="row" id="fullscreen-row">
         <span class="label">Fullscreen</span>
         <span class="checkbox" id="fullscreen-cb"></span>
     </div>
 
-    <div class="checkbox-row" id="vsync-row">
+    <div class="row" id="vsync-row">
         <span class="label">VSync</span>
         <span class="checkbox" id="vsync-cb"></span>
     </div>
