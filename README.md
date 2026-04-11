@@ -6,15 +6,6 @@ Note from the co-pilot: i am a career programmer but this and its sister reposit
 
 ## Architecture
 
-```
-┌────────────────────────────────────────────────────────────────────────────────────┐
-│                                  bro <app-dir>                                     │
-├────────┬─────────┬──────────┬──────────┬─────────┬──────┬──────┬───────┬───────────┤
-│QuickJS │ qjsbind │  brokit  │htmlayout │broaudio │bromesh│ Jolt │ Skia  │   SDL3    │
-│  (JS)  │(Binding)│  (APIs)  │ (Layout) │ (Audio) │(Mesh)│(Phys)│(Raster)│ (Window) │
-└────────┴─────────┴──────────┴──────────┴─────────┴──────┴──────┴───────┴───────────┘
-```
-
 - **QuickJS** — JavaScript engine (ES2020+).
 - **qjsbind** — Header-only C++20 binding library for exposing C++ classes/functions to QuickJS with automatic type conversion. See [qjsbind](https://github.com/wlejon/qjsbind).
 - **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
