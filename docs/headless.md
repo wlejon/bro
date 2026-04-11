@@ -60,6 +60,10 @@ All input functions go through the full engine pipeline (hit testing, focus mana
 
 Note: `el.click()` (DOM method) dispatches a click event directly on the element without hit testing. `click(x, y)` (headless global) goes through the full engine input pipeline with hit testing, focus, and bubbling — use this when testing user interactions.
 
+### Settings
+
+The `bro.settings` API is available in headless mode for reading and writing persistent engine settings (graphics, audio, input, action bindings). See [settings.md](settings.md) for the full API reference.
+
 ### CSS/Layout inspection
 
 | Function | Description |

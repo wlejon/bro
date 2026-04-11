@@ -2,6 +2,7 @@
 
 #include "engine/app_loader.h"
 #include "engine/scrollbar.h"
+#include "engine/settings.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "layout/font_manager.h"
@@ -79,6 +80,7 @@ struct InputConfig {
 struct EngineConfig {
     std::string appDir;
     std::string title;   // window title override (empty = use <title> from HTML)
+    std::string settingsPath; // path to .bro_settings.json (empty = auto-detect)
     DisplayMode displayMode = DisplayMode::Windowed;
     GraphicsConfig graphics;
     InputConfig input;
@@ -133,6 +135,9 @@ public:
 
     /// Access the system overlay.
     SystemOverlay* systemOverlay() const { return systemOverlay_.get(); }
+
+    /// Access the settings manager.
+    Settings* settings() const { return settings_.get(); }
 
     /// Run pending JS jobs and re-layout if dirty.
     void flush();
@@ -265,6 +270,7 @@ private:
     std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_;
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
 
+    std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
     struct SceneGraphEntry {

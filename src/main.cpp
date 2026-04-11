@@ -183,6 +183,10 @@ int main(int argc, char* argv[]) {
 
     bro::engine::EngineConfig config;
 
+    // Settings persist next to the executable
+    std::string settingsDir = exeDir();
+    config.settingsPath = settingsDir + "/.bro_settings.json";
+
     if (argc >= 2) {
         // Explicit app directory argument
         config.appDir = argv[1];

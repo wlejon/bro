@@ -35,6 +35,7 @@ add_library(bro_engine STATIC
     scrollbar.cpp
     app_loader.cpp
     system_overlay.cpp
+    settings.cpp
     ${GENERATED_HEADERS}
 )
 target_include_directories(bro_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)

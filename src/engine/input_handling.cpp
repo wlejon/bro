@@ -5,6 +5,7 @@
 #include "engine/hit_testing.h"
 #include "engine/key_mapping.h"
 #include "engine/overflow.h"
+#include "engine/settings.h"
 #include "engine/system_overlay.h"
 
 #include "platform/sdl_window.h"
@@ -31,6 +32,40 @@
 #include <vector>
 
 namespace bro::engine {
+
+// ---------------------------------------------------------------------------
+// Action event dispatch helper
+// ---------------------------------------------------------------------------
+
+/// Dispatch an "action" event on document body if the key maps to a defined action.
+/// The JS event has: detail = { action: "name", phase: "down"|"up" }
+static void dispatchActionEvent(JSContext* ctx, Settings* settings,
+                                dom::Element* target,
+                                int keycode, int mod, const char* phase) {
+    if (!settings || !target || !ctx) return;
+
+    std::string webKey = sdlKeycodeToWebKey(keycode, mod);
+    std::string action = settings->getActionForKey(webKey);
+    if (action.empty()) return;
+
+    // Create JS event with detail
+    JSValue jsEvent = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, jsEvent, "type", JS_NewString(ctx, "action"));
+    JS_SetPropertyStr(ctx, jsEvent, "bubbles", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, jsEvent, "cancelable", JS_NewBool(ctx, 1));
+
+    JSValue detail = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, detail, "action", JS_NewString(ctx, action.c_str()));
+    JS_SetPropertyStr(ctx, detail, "phase", JS_NewString(ctx, phase));
+    JS_SetPropertyStr(ctx, detail, "key", JS_NewString(ctx, webKey.c_str()));
+    JS_SetPropertyStr(ctx, jsEvent, "detail", detail);
+
+    dom::Event evt("action");
+    evt.setIsTrusted(true);
+    js::dispatchDomEvent(ctx, target, evt, jsEvent);
+
+    JS_FreeValue(ctx, jsEvent);
+}
 
 // ---------------------------------------------------------------------------
 // Input focus helpers
@@ -1260,6 +1295,12 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     if (target) {
         dispatchEvent(target, evt);
     }
+
+    // Dispatch action event if key is bound to an action
+    if (settings_ && jsRuntime_ && document_->body()) {
+        dispatchActionEvent(jsRuntime_->getContext(), settings_.get(),
+                            document_->body(), keycode, mod, "down");
+    }
 }
 
 void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
@@ -1276,6 +1317,12 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     dom::Element* target = focusedControl ? activeEl : document_->body();
     if (target) {
         dispatchEvent(target, evt);
+    }
+
+    // Dispatch action event if key is bound to an action
+    if (settings_ && jsRuntime_ && document_->body()) {
+        dispatchActionEvent(jsRuntime_->getContext(), settings_.get(),
+                            document_->body(), keycode, mod, "up");
     }
 }
 

@@ -12,6 +12,7 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <windows.h>
 #include <io.h>
 #define isatty _isatty
 #define fileno _fileno
@@ -21,6 +22,23 @@
 
 extern "C" {
 #include "quickjs.h"
+}
+
+// Get the directory containing the current executable.
+static std::string exeDir() {
+    std::string path;
+#ifdef _WIN32
+    char buf[260];
+    DWORD len = GetModuleFileNameA(nullptr, buf, 260);
+    if (len > 0 && len < 260) path = std::string(buf, len);
+#else
+    char buf[4096];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len > 0) { buf[len] = '\0'; path = buf; }
+#endif
+    auto slash = path.find_last_of("/\\");
+    if (slash != std::string::npos) return path.substr(0, slash);
+    return ".";
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +205,7 @@ int main(int argc, char* argv[]) {
     try {
         bro::engine::EngineConfig config;
         config.appDir = appDir;
+        config.settingsPath = exeDir() + "/.bro_settings.json";
         config.displayMode = bro::engine::DisplayMode::Headless;
         config.graphics.width = width;
         config.graphics.height = height;

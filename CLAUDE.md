@@ -85,8 +85,9 @@ engine  (orchestrates all subsystems, main loop)
 - **Single DOM:** HTML is parsed with gumbo into a `bro::dom` tree. CSS is resolved by `htmlayout::css::Cascade`, layout by `htmlayout::layout::layoutTree()`, and rendering by `DrawTraversal` which walks the tree and issues Skia draw calls.
 - **GPU rendering:** `GPUContext` owns the `SDL_GPUDevice`, shader pipelines (color + texture), and manages the D3D12 render passes. `SkiaRenderer` rasterizes HTML/CSS to a Skia surface, uploads to a `SDL_GPUTexture` via transfer buffers, and composites as a fullscreen textured quad. Canvas 2D commands are batched into vertex buffers and drawn via the color pipeline.
 - **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization. `SkiaRenderer` (GPU-accelerated, windowed) and `RasterRenderer` (CPU Skia with real fonts, headless) both implement it. Both use Skia with platform-native font backends (DirectWrite on Windows, FreeType/fontconfig on Linux) for accurate text metrics.
-- **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via `htmlayout::layout::hitTest()` → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners.
+- **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via `htmlayout::layout::hitTest()` → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners. Key events also dispatch `"action"` events if the key is bound to a named action via `bro.settings`.
 - **Dirty tracking:** DOM mutations call `document_->markDirty()`. Main loop only re-layouts when `isDirty()` is true.
+- **Settings system:** Three-layer priority (engine defaults < app overrides < user overrides). `Settings` class in `engine/settings.h` manages resolution, persistence (`.bro_settings.json`), and runtime change callbacks. JS API exposed as `bro.settings.*`. See `docs/settings.md`.
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.
 - **JS lifetime:** QuickJS context must outlive all DOM elements (they hold JS function references).
 

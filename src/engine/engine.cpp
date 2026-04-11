@@ -20,6 +20,7 @@
 #include "js/event_dispatch.h"
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
+#include "js/settings_bindings.h"
 #include "js/dialog_bindings.h"
 #include "js/window_bindings.h"
 #include "js/custom_elements.h"
@@ -104,6 +105,21 @@ Engine::Engine(const EngineConfig& config)
     , elementScrollbar_(config.elementScrollbar)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
 
+    // === Settings system ===
+    settings_ = std::make_unique<Settings>(config.settingsPath);
+    settings_->applyAppOverrides(config.graphics, config.input);
+
+    // Use resolved settings for window creation
+    auto& gfx = settings_->graphics();
+    auto& inp = settings_->input();
+    viewportWidth_ = gfx.width;
+    viewportHeight_ = gfx.height;
+    uiFrameIntervalMs_ = gfx.maxFrameIntervalMs;
+    inputConfig_.scrollSpeed = inp.scrollSpeed;
+    inputConfig_.doubleClickThresholdMs = inp.doubleClickThresholdMs;
+    inputConfig_.doubleClickDistancePx = inp.doubleClickDistancePx;
+    inputConfig_.overlayToggleKey = inp.overlayToggleKey;
+
     // === Mode-specific initialization ===
 
     // hasGL: true when we have a GPU context (windowed, or headless with GPU)
@@ -113,9 +129,9 @@ Engine::Engine(const EngineConfig& config)
         // Create window (hidden for headless, visible for windowed)
         bool hidden = (displayMode_ == DisplayMode::Headless);
         window_ = std::make_unique<platform::Window>("Bro",
-            static_cast<uint32_t>(config.graphics.width),
-            static_cast<uint32_t>(config.graphics.height), hidden,
-            config.graphics.resizable, config.graphics.vsync);
+            static_cast<uint32_t>(gfx.width),
+            static_cast<uint32_t>(gfx.height), hidden,
+            gfx.resizable, gfx.vsync);
 
         // GL context (shader programs + helpers)
         gl_ = std::make_unique<render::GLContext>(*window_);
@@ -168,6 +184,44 @@ Engine::Engine(const EngineConfig& config)
     }
     js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
 
+    // Apply initial audio settings from persisted user overrides
+    {
+        auto& audio = settings_->audio();
+        float vol = audio.muted ? 0.0f : audio.masterVolume;
+        audioEngine_->setMasterGain(vol);
+    }
+
+    // Register settings change callback for runtime changes
+    settings_->setChangeCallback([this](const std::string& category,
+                                        const std::string& key) {
+        if (category == "graphics" || category == "*") {
+            auto& gfx = settings_->graphics();
+            if ((key == "fullscreen" || key == "*") && window_)
+                window_->setFullscreen(gfx.fullscreen);
+            if ((key == "vsync" || key == "*") && window_)
+                window_->setVSync(gfx.vsync);
+            if ((key == "width" || key == "height" || key == "*") && window_ && !gfx.fullscreen)
+                window_->setWindowSize(static_cast<uint32_t>(gfx.width),
+                                       static_cast<uint32_t>(gfx.height));
+            if ((key == "resizable" || key == "*") && window_)
+                window_->setResizable(gfx.resizable);
+            if (key == "maxFrameIntervalMs" || key == "*")
+                uiFrameIntervalMs_ = gfx.maxFrameIntervalMs;
+        }
+        if (category == "audio" || category == "*") {
+            auto& audio = settings_->audio();
+            float vol = audio.muted ? 0.0f : audio.masterVolume;
+            audioEngine_->setMasterGain(vol);
+        }
+        if (category == "input" || category == "*") {
+            auto& inp = settings_->input();
+            inputConfig_.scrollSpeed = inp.scrollSpeed;
+            inputConfig_.doubleClickThresholdMs = inp.doubleClickThresholdMs;
+            inputConfig_.doubleClickDistancePx = inp.doubleClickDistancePx;
+            inputConfig_.overlayToggleKey = inp.overlayToggleKey;
+        }
+    });
+
     // 4c. Physics engine + bindings
     physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
     physicsWorld_->init();
@@ -199,6 +253,10 @@ Engine::Engine(const EngineConfig& config)
     std::string storagePath = manifest_.basePath + "/.storage.json";
     js::StorageBindings::install(jsRuntime_->getContext(), storagePath);
     js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
+
+    // Settings JS API (bro.settings.*)
+    js::SettingsBindings::install(jsRuntime_->getContext(), settings_.get(),
+                                  window_ ? window_.get() : nullptr);
 
     // Set the base path so relative paths work.
     drawTraversal_->setBasePath(manifest_.basePath);

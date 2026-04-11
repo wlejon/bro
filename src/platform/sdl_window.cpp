@@ -91,6 +91,58 @@ void Window::setTitle(const std::string& title) {
     }
 }
 
+void Window::setFullscreen(bool fullscreen) {
+    if (!m_window) return;
+    if (!SDL_SetWindowFullscreen(m_window, fullscreen)) {
+        LOG_ERROR("Failed to set fullscreen: %s", SDL_GetError());
+    }
+}
+
+void Window::setVSync(bool enabled) {
+    if (enabled) {
+        if (!SDL_GL_SetSwapInterval(-1)) {
+            SDL_GL_SetSwapInterval(1);
+        }
+    } else {
+        SDL_GL_SetSwapInterval(0);
+    }
+}
+
+void Window::setResizable(bool resizable) {
+    if (!m_window) return;
+    if (!SDL_SetWindowResizable(m_window, resizable)) {
+        LOG_ERROR("Failed to set resizable: %s", SDL_GetError());
+    }
+}
+
+void Window::setWindowSize(uint32_t width, uint32_t height) {
+    if (!m_window) return;
+    if (!SDL_SetWindowSize(m_window, static_cast<int>(width), static_cast<int>(height))) {
+        LOG_ERROR("Failed to set window size: %s", SDL_GetError());
+    }
+    m_width = width;
+    m_height = height;
+}
+
+std::vector<DisplayModeInfo> Window::getDisplayModes() const {
+    std::vector<DisplayModeInfo> result;
+    if (!m_window) return result;
+
+    SDL_DisplayID displayID = SDL_GetDisplayForWindow(m_window);
+    if (!displayID) return result;
+
+    int count = 0;
+    const SDL_DisplayMode* const* modes = SDL_GetFullscreenDisplayModes(displayID, &count);
+    if (!modes) return result;
+
+    for (int i = 0; i < count; i++) {
+        if (modes[i]) {
+            result.push_back({modes[i]->w, modes[i]->h, modes[i]->refresh_rate});
+        }
+    }
+    return result;
+}
+
 SDL_GLContext Window::createSharedContext() {
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
     SDL_GLContext shared = SDL_GL_CreateContext(m_window);
