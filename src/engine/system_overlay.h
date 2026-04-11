@@ -115,8 +115,8 @@ public:
                   Settings* settings = nullptr, platform::Window* window = nullptr);
     ~SystemOverlay();
 
-    /// Scan systemDir for subdirectories containing index.html and load each as a panel.
-    /// Recurses into subdirectories (e.g. settings/graphics/).
+    /// Scan systemDir for .html files and load each as a panel.
+    /// Recurses into subdirectories (e.g. settings/).
     void loadPanels(const std::string& systemDir);
 
     /// Toggle perf overlay (F8).

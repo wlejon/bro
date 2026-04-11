@@ -614,46 +614,52 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
     std::string dirPath = relPath.empty() ? baseDir : baseDir + "/" + relPath;
 
     for (const auto& entry : fs::directory_iterator(dirPath, ec)) {
-        if (!entry.is_directory()) continue;
+        if (entry.is_directory()) {
+            // Recurse into subdirectory (e.g. settings/)
+            std::string subName = entry.path().filename().string();
+            std::string fullRel = relPath.empty() ? subName : relPath + "/" + subName;
+            scanPanelDir(baseDir, fullRel);
+            continue;
+        }
 
-        std::string subName = entry.path().filename().string();
-        std::string fullRel = relPath.empty() ? subName : relPath + "/" + subName;
-        std::string panelDir = baseDir + "/" + fullRel;
-        std::string htmlPath = panelDir + "/index.html";
+        // Only process .html files
+        if (entry.path().extension() != ".html") continue;
 
-        if (fs::exists(htmlPath, ec)) {
-            // This directory has an index.html — load it as a panel
-            std::string html = AppLoader::loadFile(htmlPath);
-            if (html.empty()) continue;
+        std::string htmlPath = entry.path().string();
+        std::string html = AppLoader::loadFile(htmlPath);
+        if (html.empty()) continue;
 
-            Panel panel;
-            panel.fontManager = std::make_unique<layout::FontManager>();
-            panel.name = fullRel;
+        // Derive panel name from relative path without extension
+        // e.g. "nav.html" -> "nav", "settings/graphics.html" -> "settings/graphics"
+        std::string stem = entry.path().stem().string();
+        std::string fullRel = relPath.empty() ? stem : relPath + "/" + stem;
 
-            // Assign tab label and group based on panel path
-            if (fullRel == "perf") {
-                panel.tabLabel = "";   // not shown in settings nav
-                panel.group = "perf";
-            } else if (fullRel == "nav") {
-                panel.tabLabel = "";   // nav bar itself has no tab
-                panel.group = "nav";
-            } else if (fullRel.rfind("settings/", 0) == 0) {
-                // settings/* panels are in the "settings" group
-                panel.group = "settings";
-                // Derive tab label from last path component
-                auto lastSlash = fullRel.rfind('/');
-                std::string leaf = (lastSlash != std::string::npos)
-                    ? fullRel.substr(lastSlash + 1) : fullRel;
-                // Capitalize first letter
-                if (!leaf.empty()) leaf[0] = static_cast<char>(toupper(leaf[0]));
-                panel.tabLabel = leaf;
-                panel.active = false;  // will be set by loadPanels
-            } else {
-                panel.tabLabel = fullRel;
-                panel.group = "";
-            }
+        Panel panel;
+        panel.fontManager = std::make_unique<layout::FontManager>();
+        panel.name = fullRel;
 
-            std::string savedBasePath = panelDir;
+        // Assign tab label and group based on panel path
+        if (fullRel == "perf") {
+            panel.tabLabel = "";   // not shown in settings nav
+            panel.group = "perf";
+        } else if (fullRel == "nav") {
+            panel.tabLabel = "";   // nav bar itself has no tab
+            panel.group = "nav";
+        } else if (fullRel.rfind("settings/", 0) == 0) {
+            // settings/* panels are in the "settings" group
+            panel.group = "settings";
+            // Derive tab label from last path component
+            std::string leaf = stem;
+            // Capitalize first letter
+            if (!leaf.empty()) leaf[0] = static_cast<char>(toupper(leaf[0]));
+            panel.tabLabel = leaf;
+            panel.active = false;  // will be set by loadPanels
+        } else {
+            panel.tabLabel = fullRel;
+            panel.group = "";
+        }
+
+        std::string savedBasePath = dirPath;
 
             // Extract inline CSS from the HTML, prepended with UA defaults
             std::string userStyles = kDefaultStyles;
@@ -752,10 +758,6 @@ void SystemOverlay::scanPanelDir(const std::string& baseDir, const std::string& 
                 renderer_.get(), finalPanel.fontManager.get());
             finalPanel.drawTraversal->setBasePath(savedBasePath);
             finalPanel.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
-        } else {
-            // No index.html here — recurse into subdirectory
-            scanPanelDir(baseDir, fullRel);
-        }
     }
 }
 
