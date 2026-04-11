@@ -7,6 +7,7 @@
 #include "js/scene_bindings.h"
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::js {
@@ -33,6 +34,15 @@ static int jsGetInt(JSContext* ctx, JSValueConst obj, const char* prop, int def 
 
 struct TerrainWrapper {
     std::unique_ptr<scene::TerrainManager> manager;
+
+    explicit TerrainWrapper(std::unique_ptr<scene::TerrainManager> mgr)
+        : manager(std::move(mgr)) { allInstances().insert(this); }
+    ~TerrainWrapper() { allInstances().erase(this); }
+
+    static std::unordered_set<TerrainWrapper*>& allInstances() {
+        static std::unordered_set<TerrainWrapper*> s;
+        return s;
+    }
 };
 
 using TW = TerrainWrapper;
@@ -231,7 +241,7 @@ JSValue createTerrainJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst o
     auto mgr = std::make_unique<scene::TerrainManager>(*graph);
     mgr->configure(cfg);
 
-    return qjsbind::wrap<TW>(ctx, new TW{std::move(mgr)});
+    return qjsbind::wrap<TW>(ctx, new TW(std::move(mgr)));
 }
 
 // -------------------------------------------------------------------------
@@ -290,6 +300,15 @@ void TerrainBindings::install(JSContext* ctx) {
         });
 }
 
-void TerrainBindings::cleanup(JSContext*) {}
+void TerrainBindings::cleanup(JSContext*) {
+    // Clear all live TerrainManagers before scene graphs are destroyed,
+    // so their destructors don't access dangling SceneGraph references.
+    for (auto* tw : TW::allInstances()) {
+        if (tw->manager) {
+            tw->manager->clear();
+            tw->manager.reset();
+        }
+    }
+}
 
 } // namespace bro::js

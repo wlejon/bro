@@ -757,6 +757,12 @@ Engine::~Engine() {
         rasterGLContext_ = nullptr;
     }
 
+    // Clear terrain managers before destroying scene graphs — their destructors
+    // call SceneGraph::destroyNode(), which crashes if the graph is already gone.
+    if (jsRuntime_) {
+        js::TerrainBindings::cleanup(jsRuntime_->getContext());
+    }
+
     // Destroy scene graphs before canvas scenes (they hold canvas pointers)
     sceneGraphs_.clear();
 
