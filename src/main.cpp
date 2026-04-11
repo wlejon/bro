@@ -190,6 +190,13 @@ int main(int argc, char* argv[]) {
     if (argc >= 2) {
         // Explicit app directory argument
         config.appDir = argv[1];
+
+        // Load bro.json from the app directory if present
+        std::string appConfig = config.appDir + "/bro.json";
+        if (fileExists(appConfig)) {
+            parseConfig(appConfig, config);
+            config.appDir = argv[1]; // preserve explicit appDir over bro.json "app" field
+        }
     } else {
         // No arguments — try to auto-detect app from exe directory
         std::string dir = exeDir();

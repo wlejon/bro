@@ -417,8 +417,11 @@ void Settings::resolveGraphics() {
     if (appPresence_.count("graphics.resizable")) r.resizable = appOverrides_.graphics.resizable;
     if (appPresence_.count("graphics.maxFrameIntervalMs")) r.maxFrameIntervalMs = appOverrides_.graphics.maxFrameIntervalMs;
 
-    if (userPresence_.count("graphics.width")) r.width = userOverrides_.graphics.width;
-    if (userPresence_.count("graphics.height")) r.height = userOverrides_.graphics.height;
+    // Width/height are per-app — user overrides only apply if the app didn't set them
+    if (userPresence_.count("graphics.width") && !appPresence_.count("graphics.width"))
+        r.width = userOverrides_.graphics.width;
+    if (userPresence_.count("graphics.height") && !appPresence_.count("graphics.height"))
+        r.height = userOverrides_.graphics.height;
     if (userPresence_.count("graphics.fullscreen")) r.fullscreen = userOverrides_.graphics.fullscreen;
     if (userPresence_.count("graphics.vsync")) r.vsync = userOverrides_.graphics.vsync;
     if (userPresence_.count("graphics.resizable")) r.resizable = userOverrides_.graphics.resizable;
