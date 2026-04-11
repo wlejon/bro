@@ -7,22 +7,27 @@ Note from the co-pilot: i am a career programmer but this and its sister reposit
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                         bro <app-dir>                            │
-├──────────┬──────────┬──────────┬──────────┬──────────┬───────────┤
-│  QuickJS │  brokit  │htmlayout │ broaudio │   Skia   │   SDL3    │
-│   (JS)   │ (APIs)   │ (Layout) │ (Audio)  │ (Render) │ (Window)  │
-└──────────┴──────────┴──────────┴──────────┴──────────┴───────────┘
+┌────────────────────────────────────────────────────────────────────────────────────┐
+│                                  bro <app-dir>                                     │
+├────────┬─────────┬──────────┬──────────┬─────────┬──────┬──────┬───────┬───────────┤
+│QuickJS │ qjsbind │  brokit  │htmlayout │broaudio │bromesh│ Jolt │ Skia  │   SDL3    │
+│  (JS)  │(Binding)│  (APIs)  │ (Layout) │ (Audio) │(Mesh)│(Phys)│(Raster)│ (Window) │
+└────────┴─────────┴──────────┴──────────┴─────────┴──────┴──────┴───────┴───────────┘
 ```
 
-- **QuickJS** — JavaScript engine (ES2020+) with DOM API bindings.
+- **QuickJS** — JavaScript engine (ES2020+).
+- **qjsbind** — Header-only C++20 binding library for exposing C++ classes/functions to QuickJS with automatic type conversion. See [qjsbind](https://github.com/wlejon/qjsbind).
 - **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
 - **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
 - **broaudio** — Real-time audio engine: synthesis (oscillators, wavetable, noise), effects (filters, delay, reverb), spatial audio, MIDI input, and mixing bus architecture. See [broaudio](https://github.com/wlejon/broaudio).
+- **bromesh** — Mesh generation (primitives, isosurface, voxel), manipulation (subdivision, simplification, CSG), analysis (raycasting, collision), baking, optimization, and I/O (OBJ, glTF, STL, PLY, FBX, VOX). See [bromesh](https://github.com/wlejon/bromesh).
+- **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
 - **Skia** — 2D rasterization (text, paths, images, gradients). GPU-accelerated via Ganesh GL backend, with CPU raster fallback.
 - **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU.
 
-C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the four repos.
+Also uses **glad** (OpenGL 3.3 Core loader), **stb_image** (image loading/writing), and **FastNoise2** (SIMD noise generation, via brokit).
+
+C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
 ## Features
 
@@ -34,6 +39,11 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 - Canvas 2D API
 - WebGL 2.0
 - Web Audio API with synthesis (oscillators, wavetable, noise), effects, spatial audio, and MIDI input (broaudio)
+- 3D scene graph with mesh rendering, cameras (perspective/orthographic), transforms, and terrain
+- Mesh generation and manipulation: primitives, CSG, isosurface extraction, simplification, raycasting (bromesh)
+- Rigid body physics with contact detection (Jolt)
+- Procedural noise generation (FastNoise2)
+- Web Workers
 - Form controls (`<input>`, `<textarea>`, `<select>` with text editing, cursor, focus, tab navigation)
 - Web Components with Shadow DOM (custom elements, slots, style encapsulation)
 - Fetch API, localStorage/sessionStorage
@@ -151,4 +161,4 @@ apps/myapp/
 
 [MIT](LICENSE)
 
-Third-party dependencies are under their own permissive licenses (MIT, BSD-3-Clause, zlib, Apache-2.0). See each library's LICENSE file in `third_party/`.
+Third-party dependencies are under their own permissive licenses (MIT, BSD-3-Clause, zlib, Apache-2.0). See each library's LICENSE file in `third_party/` or its respective repository.

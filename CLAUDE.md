@@ -50,7 +50,7 @@ Skia is a pre-built dependency. On Linux, run `third_party/skia/build_skia_linux
 
 Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~31K LOC of C++20.
 
-**Stack:** QuickJS (JS engine) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + broaudio (audio engine) + Skia (raster rendering) + SDL3 (windowing + GPU display)
+**Stack:** QuickJS (JS engine) + qjsbind (C++/JS bindings) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + broaudio (audio engine) + bromesh (mesh generation/manipulation) + Jolt (physics) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 
 **Two executables, one Engine:**
 - `bro` — windowed app runner (DisplayMode::Windowed)
@@ -67,11 +67,15 @@ platform  (SDL3 window, event loop)
   ↑
 render  (abstract Renderer interface, SkiaRenderer, RasterRenderer)
   ↑
+svg  (SVG rendering via Skia SVG module)
+  ↑
 layout  (htmlayout adapters, draw traversal, replaced elements)
   ↑
 dom  (Document/Element/TextNode tree, events, style proxy)
   ↑
-js  (QuickJS wrapper, console, timers, DOM bindings)
+canvas  (Canvas 2D API)    webgl  (WebGL 2.0 context)    scene  (3D scene graph, meshes, terrain, sprites)    physics  (Jolt physics world)
+  ↑
+js  (QuickJS + qjsbind bindings: DOM, canvas, WebGL, audio, mesh, physics, scene)
   ↑
 engine  (orchestrates all subsystems, main loop)
 ```
@@ -90,17 +94,23 @@ engine  (orchestrates all subsystems, main loop)
 
 Headless mode is driven by JavaScript — the same language apps are written in. Three invocation modes: JS REPL (interactive), script file (`test.js`), or inline expressions (`-e "expr"`). Headless-specific globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`. All standard DOM APIs work (`querySelector`, `.click()`, `.textContent`, `getBoundingClientRect()`, etc.). See `docs/headless.md` for full reference.
 
-## Third-party dependencies (all in third_party/ as git submodules)
+## Third-party dependencies (in third_party/)
 
 | Library | Target | Notes |
 |---------|--------|-------|
-| QuickJS | `qjs` | JS engine, built as library |
-| brokit | `brokit` | Web-standard + system APIs (fetch, streams, storage, fs, crypto, events) |
-| htmlayout | `htmlayout` | HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, layout |
-| broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) |
-| SDL3 | `SDL3::SDL3` | Built from submodule (static) |
-| Skia | `skia` (imported) | Pre-built binaries, auto-detected |
+| QuickJS | `qjs` | JS engine, built as library (submodule) |
+| qjsbind | `qjsbind` | Header-only C++20 QuickJS binding library (standalone or submodule) |
+| brokit | `brokit` | Web-standard + system APIs (fetch, streams, storage, fs, crypto, events) (standalone or submodule) |
+| htmlayout | `htmlayout` | HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, layout (standalone or submodule) |
+| broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) (standalone or submodule) |
+| bromesh | `bromesh` | Mesh generation, manipulation, analysis, and I/O (standalone or submodule) |
+| Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
+| SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
+| Skia | `skia` (imported) | Pre-built 2D rasterization binaries, auto-detected |
+| glad | `glad` | OpenGL 3.3 Core loader for WebGL and scene rendering |
+| stb_image | `stb_image` | Image loading and writing (stb_image.h, stb_image_write.h) |
+| FastNoise2 | `FastNoise` | SIMD noise generation (via brokit) |
 
 ## Namespace
 
-All code is under `bro::` with sub-namespaces matching module directories: `bro::render`, `bro::dom`, `bro::js`, `bro::platform`, `bro::engine`, `bro::layout`.
+All code is under `bro::` with sub-namespaces matching module directories: `bro::render`, `bro::dom`, `bro::js`, `bro::platform`, `bro::engine`, `bro::layout`, `bro::canvas`, `bro::webgl`, `bro::scene`, `bro::physics`, `bro::svg`.
