@@ -8,9 +8,6 @@ namespace bro::dom { class Element; }
 
 namespace bro::engine {
 
-/// Pixels per mouse wheel tick.
-static constexpr float kScrollSpeed = 48.0f;
-
 /// Get the effective vertical overflow value for an element.
 /// Checks overflow-y first (more specific), then falls back to overflow.
 std::string getOverflowY(const htmlayout::css::ComputedStyle& style);

@@ -649,15 +649,13 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
         // Dispatch click event (only if mouseup is on the same element as mousedown)
         if (target && target == mouseDownTarget_) {
-            // Double-click detection
+            // Double-click detection (thresholds from config)
             double now = util::currentTimeMs();
-            static constexpr double kDblClickThresholdMs = 500.0;
-            static constexpr float kDblClickDistancePx = 5.0f;
 
             if (lastClickTarget_ == target &&
-                (now - lastClickTimeMs_) < kDblClickThresholdMs &&
-                std::abs(x - lastClickX_) < kDblClickDistancePx &&
-                std::abs(y - lastClickY_) < kDblClickDistancePx) {
+                (now - lastClickTimeMs_) < inputConfig_.doubleClickThresholdMs &&
+                std::abs(x - lastClickX_) < inputConfig_.doubleClickDistancePx &&
+                std::abs(y - lastClickY_) < inputConfig_.doubleClickDistancePx) {
                 clickCount_++;
             } else {
                 clickCount_ = 1;
@@ -901,8 +899,9 @@ void Engine::dispatchInputEvent(dom::Element* el, const std::string& data,
 }
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
-    // F8 toggles system overlay
-    if (keycode == SDLK_F8 && !repeat) {
+    // Configurable overlay toggle key (default: F8)
+    if (inputConfig_.overlayToggleKey != 0 &&
+        keycode == static_cast<int>(inputConfig_.overlayToggleKey) && !repeat) {
         if (systemOverlay_) {
             systemOverlay_->toggle();
             uiDirty_ = true;
@@ -1436,9 +1435,8 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         populateMouseEvent(wheelEvt, x, y, -1, pressedButtons_,
                           lastMouseX_, lastMouseY_, scrollY_, mod);
         // SDL gives scroll amounts in lines; convert to pixels for DOM_DELTA_PIXEL
-        static constexpr float kPixelsPerLine = 48.0f;
-        wheelEvt.setDeltaX(static_cast<double>(-dx * kPixelsPerLine));
-        wheelEvt.setDeltaY(static_cast<double>(-dy * kPixelsPerLine));
+        wheelEvt.setDeltaX(static_cast<double>(-dx * inputConfig_.scrollSpeed));
+        wheelEvt.setDeltaY(static_cast<double>(-dy * inputConfig_.scrollSpeed));
         wheelEvt.setDeltaZ(0.0);
         wheelEvt.setDeltaMode(dom::WheelEvent::DOM_DELTA_PIXEL);
         computeOffset(wheelEvt, target);
@@ -1482,7 +1480,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
             if (overflowScrollable(ov)) {
                 float maxST = maxScrollTop(el);
                 if (maxST <= 0) break; // content fits, no scrolling needed
-                float scrollPx = -dy * kScrollSpeed;
+                float scrollPx = -dy * inputConfig_.scrollSpeed;
                 float prevScroll = el->scrollTopValue();
                 float newScroll = std::clamp(prevScroll + scrollPx, 0.0f, maxST);
                 el->setScrollTopValue(newScroll);
@@ -1502,7 +1500,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     // Viewport scrolling
     float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(viewportHeight_));
     float prevScroll = scrollY_;
-    scrollY_ = std::clamp(scrollY_ - dy * kScrollSpeed, 0.0f, maxScroll);
+    scrollY_ = std::clamp(scrollY_ - dy * inputConfig_.scrollSpeed, 0.0f, maxScroll);
     if (scrollY_ != prevScroll) {
         // Dispatch scroll event on document element
         if (document_->documentElement()) {

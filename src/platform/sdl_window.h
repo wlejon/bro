@@ -10,7 +10,8 @@ namespace bro::platform {
 
 class Window {
 public:
-    Window(const std::string& title, uint32_t width, uint32_t height, bool hidden = false);
+    Window(const std::string& title, uint32_t width, uint32_t height,
+           bool hidden = false, bool resizable = true, bool vsync = true);
     ~Window();
 
     Window(const Window&) = delete;

@@ -58,13 +58,33 @@ enum LayoutState : uint32_t {
     kLayoutShutdown  = 4,  // Main thread: terminate layout thread
 };
 
+/// Graphics/display settings configurable per app.
+struct GraphicsConfig {
+    int width = 1920;
+    int height = 1080;
+    bool useGPU = true;       // headless uses GPU by default; --no-gpu disables
+    bool resizable = true;    // whether the window can be resized
+    bool vsync = true;        // true = adaptive or standard vsync; false = uncapped
+    double maxFrameIntervalMs = 8.0;  // layout/raster throttle (0 = uncapped)
+};
+
+/// Input behavior settings configurable per app.
+struct InputConfig {
+    float scrollSpeed = 48.0f;             // pixels per mouse wheel tick
+    double doubleClickThresholdMs = 500.0; // max time between clicks for dblclick
+    float doubleClickDistancePx = 5.0f;    // max movement between clicks for dblclick
+    uint32_t overlayToggleKey = 0x40000041u; // SDLK_F8; 0 = disabled
+};
+
 struct EngineConfig {
     std::string appDir;
-    int width = 1024;
-    int height = 768;
-    DisplayMode displayMode = DisplayMode::Windowed;
-    bool useGPU = true;  // headless uses GPU by default; --no-gpu disables
     std::string title;   // window title override (empty = use <title> from HTML)
+    DisplayMode displayMode = DisplayMode::Windowed;
+    GraphicsConfig graphics;
+    InputConfig input;
+    Scrollbar::Style viewportScrollbar;    // default Scrollbar::Style
+    Scrollbar::Style elementScrollbar{5.0f, 1.0f, 16.0f,
+        {255,255,255,20}, {255,255,255,100}, {255,255,255,150}, {255,255,255,180}};
 };
 
 class Engine {
@@ -156,6 +176,10 @@ public:
     void tickTimersOnly();
 
 private:
+    // Per-app configuration (stored for use throughout engine lifetime)
+    GraphicsConfig graphicsConfig_;
+    InputConfig inputConfig_;
+
     dom::Element* hitTest(float x, float y);
     void dispatchEvent(dom::Element* target, dom::Event& event);
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",
@@ -288,16 +312,15 @@ private:
     float scrollY_ = 0.0f;
     float documentHeight_ = 0.0f;
 
-    // Scrollbar components
+    // Scrollbar components (styles from config)
     Scrollbar viewportScrollbar_;
-    Scrollbar elementScrollbar_{Scrollbar::Style{5.0f, 1.0f, 16.0f,
-        {255,255,255,20}, {255,255,255,100}, {255,255,255,150}, {255,255,255,180}}};
+    Scrollbar elementScrollbar_;
     bool draggingViewportScrollbar_ = false;
     dom::Element* scrollbarDragTarget_ = nullptr;
     dom::Element* scrollbarHoveredElement_ = nullptr;
 
-    // UI render throttle — layout+rasterize at most every ~60fps
-    static constexpr double kUIFrameIntervalMs = 8.0;
+    // UI render throttle — layout+rasterize at most every N ms (from config)
+    double uiFrameIntervalMs_ = 8.0;
     double lastUIRenderMs_ = 0.0;
 
     // QuickJS cycle-collector GC — run periodically to free cyclic garbage

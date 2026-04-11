@@ -7,7 +7,8 @@
 
 namespace bro::platform {
 
-Window::Window(const std::string& title, uint32_t width, uint32_t height, bool hidden)
+Window::Window(const std::string& title, uint32_t width, uint32_t height,
+               bool hidden, bool resizable, bool vsync)
     : m_width(width), m_height(height)
 {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -26,7 +27,7 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height, bool h
     SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
     if (hidden) {
         flags |= SDL_WINDOW_HIDDEN;
-    } else {
+    } else if (resizable) {
         flags |= SDL_WINDOW_RESIZABLE;
     }
     m_window = SDL_CreateWindow(title.c_str(),
@@ -56,11 +57,14 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height, bool h
              title.c_str(), width, height,
              GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));
 
-    // Enable vsync — matches monitor refresh rate (e.g. 360 Hz).
-    // Use adaptive vsync (-1) when available, fall back to standard (1).
+    // VSync: adaptive (-1) preferred, standard (1) fallback, or disabled (0).
     if (!hidden) {
-        if (!SDL_GL_SetSwapInterval(-1)) {
-            SDL_GL_SetSwapInterval(1);
+        if (vsync) {
+            if (!SDL_GL_SetSwapInterval(-1)) {
+                SDL_GL_SetSwapInterval(1);
+            }
+        } else {
+            SDL_GL_SetSwapInterval(0);
         }
     }
 }

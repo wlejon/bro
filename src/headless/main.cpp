@@ -141,7 +141,9 @@ int main(int argc, char* argv[]) {
             "  bro-headless app/ -e \"expr\"     Evaluate inline expression(s)\n"
             "\n"
             "Options:\n"
-            "  --no-gpu  Disable GPU rendering (CPU-only, no WebGL)\n"
+            "  --no-gpu              Disable GPU rendering (CPU-only, no WebGL)\n"
+            "  --width N             Viewport width (default: 1920)\n"
+            "  --height N            Viewport height (default: 1080)\n"
             "\n"
             "Headless globals:\n"
             "  screenshot(path [, selector])  Render to PNG (optionally cropped to element)\n"
@@ -153,6 +155,8 @@ int main(int argc, char* argv[]) {
 
     // Parse args
     bool useGPU = true;
+    int width = 1920;
+    int height = 1080;
     std::string appDir;
     std::string scriptPath;
     std::vector<std::string> inlineExprs;
@@ -160,6 +164,10 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-gpu") == 0) {
             useGPU = false;
+        } else if (strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
+            width = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
+            height = atoi(argv[++i]);
         } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
             inlineExprs.push_back(argv[++i]);
         } else if (appDir.empty()) {
@@ -177,9 +185,14 @@ int main(int argc, char* argv[]) {
     int exitCode = 0;
 
     try {
-        auto* engine = new bro::engine::Engine(
-            bro::engine::EngineConfig{appDir, 1024, 768,
-                bro::engine::DisplayMode::Headless, useGPU});
+        bro::engine::EngineConfig config;
+        config.appDir = appDir;
+        config.displayMode = bro::engine::DisplayMode::Headless;
+        config.graphics.width = width;
+        config.graphics.height = height;
+        config.graphics.useGPU = useGPU;
+
+        auto* engine = new bro::engine::Engine(config);
         engine->run();  // initial layout, returns immediately in headless
 
         auto* rt = engine->jsRuntime();

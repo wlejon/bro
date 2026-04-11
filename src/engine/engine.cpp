@@ -95,20 +95,27 @@ static layout::ElSelect* getElSelect(dom::Element* el);
 // ---------------------------------------------------------------------------
 
 Engine::Engine(const EngineConfig& config)
-    : displayMode_(config.displayMode)
-    , viewportWidth_(config.width)
-    , viewportHeight_(config.height) {
+    : graphicsConfig_(config.graphics)
+    , inputConfig_(config.input)
+    , displayMode_(config.displayMode)
+    , viewportWidth_(config.graphics.width)
+    , viewportHeight_(config.graphics.height)
+    , viewportScrollbar_(config.viewportScrollbar)
+    , elementScrollbar_(config.elementScrollbar)
+    , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
 
     // === Mode-specific initialization ===
 
     // hasGL: true when we have a GPU context (windowed, or headless with GPU)
-    const bool hasGL = (displayMode_ == DisplayMode::Windowed) || config.useGPU;
+    const bool hasGL = (displayMode_ == DisplayMode::Windowed) || config.graphics.useGPU;
 
     if (hasGL) {
         // Create window (hidden for headless, visible for windowed)
         bool hidden = (displayMode_ == DisplayMode::Headless);
-        window_ = std::make_unique<platform::Window>("Bro", static_cast<uint32_t>(config.width),
-                                                      static_cast<uint32_t>(config.height), hidden);
+        window_ = std::make_unique<platform::Window>("Bro",
+            static_cast<uint32_t>(config.graphics.width),
+            static_cast<uint32_t>(config.graphics.height), hidden,
+            config.graphics.resizable, config.graphics.vsync);
 
         // GL context (shader programs + helpers)
         gl_ = std::make_unique<render::GLContext>(*window_);
@@ -1488,7 +1495,7 @@ void Engine::run() {
 
                 // Signal raster thread now that layout is complete.
                 rasterIdle = (rasterShared_.state.load(std::memory_order_acquire) == kRasterIdle);
-                bool uiThrottled = (now - lastUIRenderMs_ < kUIFrameIntervalMs);
+                bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
                 if (rasterIdle && !uiThrottled) {
                     rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                     rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
@@ -1503,7 +1510,7 @@ void Engine::run() {
             }
         } else if (rasterIdle) {
             // No layout this frame — signal raster directly if dirty.
-            bool uiThrottled = (now - lastUIRenderMs_ < kUIFrameIntervalMs);
+            bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
             if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
                 rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                 rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
