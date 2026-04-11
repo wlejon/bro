@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #e0e0e0;
+}
+
+#panel {
+    position: absolute;
+    top: 36px;
+    left: 8px;
+    width: 340px;
+    background: rgba(0, 0, 0, 224);
+    border: 1px solid #333;
+    padding: 14px;
+}
+
+h2 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    color: #40a0f0;
+    font-weight: bold;
+}
+
+.slider-row {
+    display: flex;
+    margin-bottom: 12px;
+}
+
+.slider-row .label {
+    width: 100px;
+    color: #999;
+    padding-top: 2px;
+}
+
+.slider-track {
+    flex: 1;
+    height: 10px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    margin-top: 3px;
+    cursor: pointer;
+    position: relative;
+}
+
+.slider-fill {
+    height: 10px;
+    background: #40a0f0;
+    min-width: 0;
+}
+
+.slider-value {
+    width: 45px;
+    text-align: right;
+    color: #ccc;
+    margin-left: 8px;
+}
+
+.checkbox-row {
+    display: flex;
+    margin-bottom: 10px;
+    cursor: pointer;
+}
+
+.checkbox-row .label {
+    width: 100px;
+    color: #999;
+}
+
+.checkbox {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 1px solid #555;
+    background: #1a1a1a;
+    margin-right: 8px;
+    text-align: center;
+    line-height: 14px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.checkbox.checked {
+    background: #2a3a5a;
+    border-color: #40a0f0;
+    color: #40a0f0;
+}
+
+.divider {
+    border-top: 1px solid #333;
+    margin: 12px 0;
+}
+
+.btn {
+    display: inline-block;
+    padding: 4px 12px;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #ccc;
+    cursor: pointer;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+}
+
+.btn:hover {
+    background: #3a3a3a;
+    border-color: #666;
+}
+</style>
+</head>
+<body>
+<div id="panel">
+    <h2>Audio</h2>
+
+    <div class="slider-row">
+        <span class="label">Master</span>
+        <span class="slider-track" id="master-track"><span class="slider-fill" id="master-fill"></span></span>
+        <span class="slider-value" id="master-val">100%</span>
+    </div>
+
+    <div class="slider-row">
+        <span class="label">Music</span>
+        <span class="slider-track" id="music-track"><span class="slider-fill" id="music-fill"></span></span>
+        <span class="slider-value" id="music-val">100%</span>
+    </div>
+
+    <div class="slider-row">
+        <span class="label">SFX</span>
+        <span class="slider-track" id="sfx-track"><span class="slider-fill" id="sfx-fill"></span></span>
+        <span class="slider-value" id="sfx-val">100%</span>
+    </div>
+
+    <div class="checkbox-row" id="mute-row">
+        <span class="label">Mute</span>
+        <span class="checkbox" id="mute-cb"></span>
+    </div>
+
+    <div class="divider"></div>
+
+    <span class="btn" id="reset-btn">Reset to Defaults</span>
+</div>
+
+<script>
+(function() {
+    var sliders = [
+        { key: 'audio.masterVolume', track: 'master-track', fill: 'master-fill', val: 'master-val' },
+        { key: 'audio.musicVolume', track: 'music-track', fill: 'music-fill', val: 'music-val' },
+        { key: 'audio.sfxVolume', track: 'sfx-track', fill: 'sfx-fill', val: 'sfx-val' }
+    ];
+
+    var muteCb = document.getElementById('mute-cb');
+    var muteRow = document.getElementById('mute-row');
+    var resetBtn = document.getElementById('reset-btn');
+
+    // Resolve elements
+    for (var i = 0; i < sliders.length; i++) {
+        sliders[i].trackEl = document.getElementById(sliders[i].track);
+        sliders[i].fillEl = document.getElementById(sliders[i].fill);
+        sliders[i].valEl = document.getElementById(sliders[i].val);
+    }
+
+    function load() {
+        var all = bro.settings.getAll();
+
+        // Sliders
+        var vals = [all.audio.masterVolume, all.audio.musicVolume, all.audio.sfxVolume];
+        for (var i = 0; i < sliders.length; i++) {
+            var pct = Math.round(vals[i] * 100);
+            sliders[i].fillEl.style.setProperty('width', pct + '%');
+            sliders[i].valEl.textContent = pct + '%';
+        }
+
+        // Mute
+        if (all.audio.muted) {
+            muteCb.textContent = 'x';
+            muteCb.className = 'checkbox checked';
+        } else {
+            muteCb.textContent = '';
+            muteCb.className = 'checkbox';
+        }
+    }
+
+    function handleSliderClick(slider, x) {
+        var rect = slider.trackEl.getBoundingClientRect();
+        var pct = (x - rect.left) / rect.width;
+        pct = Math.max(0, Math.min(1, pct));
+        bro.settings.set(slider.key, pct);
+        load();
+    }
+
+    for (var i = 0; i < sliders.length; i++) {
+        (function(s) {
+            s.trackEl.addEventListener('click', function(e) {
+                handleSliderClick(s, e.clientX);
+            });
+        })(sliders[i]);
+    }
+
+    muteRow.addEventListener('click', function() {
+        var cur = bro.settings.get('audio.muted');
+        bro.settings.set('audio.muted', !cur);
+        load();
+    });
+
+    resetBtn.addEventListener('click', function() {
+        bro.settings.reset('audio');
+        load();
+    });
+
+    load();
+})();
+</script>
+</body>
+</html>

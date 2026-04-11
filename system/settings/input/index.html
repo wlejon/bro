@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #e0e0e0;
+}
+
+#panel {
+    position: absolute;
+    top: 36px;
+    left: 8px;
+    width: 340px;
+    background: rgba(0, 0, 0, 224);
+    border: 1px solid #333;
+    padding: 14px;
+}
+
+h2 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    color: #f0c040;
+    font-weight: bold;
+}
+
+.slider-row {
+    display: flex;
+    margin-bottom: 12px;
+}
+
+.slider-row .label {
+    width: 130px;
+    color: #999;
+    padding-top: 2px;
+}
+
+.slider-track {
+    flex: 1;
+    height: 10px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    margin-top: 3px;
+    cursor: pointer;
+    position: relative;
+}
+
+.slider-fill {
+    height: 10px;
+    background: #f0c040;
+    min-width: 0;
+}
+
+.slider-value {
+    width: 55px;
+    text-align: right;
+    color: #ccc;
+    margin-left: 8px;
+}
+
+.divider {
+    border-top: 1px solid #333;
+    margin: 12px 0;
+}
+
+h3 {
+    margin: 0 0 8px 0;
+    font-size: 12px;
+    color: #bbb;
+    font-weight: normal;
+}
+
+.action-row {
+    display: flex;
+    margin-bottom: 6px;
+    padding: 3px 0;
+}
+
+.action-name {
+    width: 130px;
+    color: #ccc;
+}
+
+.action-keys {
+    flex: 1;
+    color: #f0c040;
+}
+
+.no-actions {
+    color: #666;
+    font-style: italic;
+    margin-bottom: 8px;
+}
+
+.btn {
+    display: inline-block;
+    padding: 4px 12px;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #ccc;
+    cursor: pointer;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+}
+
+.btn:hover {
+    background: #3a3a3a;
+    border-color: #666;
+}
+</style>
+</head>
+<body>
+<div id="panel">
+    <h2>Input</h2>
+
+    <div class="slider-row">
+        <span class="label">Scroll Speed</span>
+        <span class="slider-track" id="scroll-track"><span class="slider-fill" id="scroll-fill"></span></span>
+        <span class="slider-value" id="scroll-val">48</span>
+    </div>
+
+    <div class="slider-row">
+        <span class="label">Dbl-Click (ms)</span>
+        <span class="slider-track" id="dblclick-track"><span class="slider-fill" id="dblclick-fill"></span></span>
+        <span class="slider-value" id="dblclick-val">500</span>
+    </div>
+
+    <div class="divider"></div>
+
+    <h3>Action Bindings</h3>
+    <div id="actions-list"></div>
+
+    <div class="divider"></div>
+
+    <span class="btn" id="reset-btn">Reset to Defaults</span>
+</div>
+
+<script>
+(function() {
+    var scrollTrack = document.getElementById('scroll-track');
+    var scrollFill = document.getElementById('scroll-fill');
+    var scrollVal = document.getElementById('scroll-val');
+
+    var dblclickTrack = document.getElementById('dblclick-track');
+    var dblclickFill = document.getElementById('dblclick-fill');
+    var dblclickVal = document.getElementById('dblclick-val');
+
+    var actionsList = document.getElementById('actions-list');
+    var resetBtn = document.getElementById('reset-btn');
+
+    // Scroll speed: 1-200 range
+    var scrollMin = 1, scrollMax = 200;
+    // Double-click: 100-1000ms range
+    var dblMin = 100, dblMax = 1000;
+
+    function load() {
+        var all = bro.settings.getAll();
+
+        // Scroll speed
+        var scrollPct = (all.input.scrollSpeed - scrollMin) / (scrollMax - scrollMin);
+        scrollPct = Math.max(0, Math.min(1, scrollPct));
+        scrollFill.style.setProperty('width', Math.round(scrollPct * 100) + '%');
+        scrollVal.textContent = Math.round(all.input.scrollSpeed).toString();
+
+        // Double-click threshold
+        var dblPct = (all.input.doubleClickThresholdMs - dblMin) / (dblMax - dblMin);
+        dblPct = Math.max(0, Math.min(1, dblPct));
+        dblclickFill.style.setProperty('width', Math.round(dblPct * 100) + '%');
+        dblclickVal.textContent = Math.round(all.input.doubleClickThresholdMs).toString();
+
+        // Action bindings
+        var actions = bro.settings.getActions();
+        actionsList.innerHTML = '';
+        if (actions.length === 0) {
+            var noAct = document.createElement('div');
+            noAct.className = 'no-actions';
+            noAct.textContent = 'No actions defined by this app';
+            actionsList.appendChild(noAct);
+        } else {
+            for (var i = 0; i < actions.length; i++) {
+                var row = document.createElement('div');
+                row.className = 'action-row';
+
+                var nameSpan = document.createElement('span');
+                nameSpan.className = 'action-name';
+                nameSpan.textContent = actions[i].action;
+
+                var keysSpan = document.createElement('span');
+                keysSpan.className = 'action-keys';
+                keysSpan.textContent = actions[i].keys.join(', ');
+
+                row.appendChild(nameSpan);
+                row.appendChild(keysSpan);
+                actionsList.appendChild(row);
+            }
+        }
+    }
+
+    scrollTrack.addEventListener('click', function(e) {
+        var rect = scrollTrack.getBoundingClientRect();
+        var pct = (e.clientX - rect.left) / rect.width;
+        pct = Math.max(0, Math.min(1, pct));
+        var val = scrollMin + pct * (scrollMax - scrollMin);
+        bro.settings.set('input.scrollSpeed', val);
+        load();
+    });
+
+    dblclickTrack.addEventListener('click', function(e) {
+        var rect = dblclickTrack.getBoundingClientRect();
+        var pct = (e.clientX - rect.left) / rect.width;
+        pct = Math.max(0, Math.min(1, pct));
+        var val = dblMin + pct * (dblMax - dblMin);
+        bro.settings.set('input.doubleClickThresholdMs', val);
+        load();
+    });
+
+    resetBtn.addEventListener('click', function() {
+        bro.settings.reset('input');
+        load();
+    });
+
+    load();
+})();
+</script>
+</body>
+</html>

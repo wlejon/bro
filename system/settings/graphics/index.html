@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #e0e0e0;
+}
+
+#panel {
+    position: absolute;
+    top: 36px;
+    left: 8px;
+    width: 340px;
+    background: rgba(0, 0, 0, 224);
+    border: 1px solid #333;
+    padding: 14px;
+}
+
+h2 {
+    margin: 0 0 12px 0;
+    font-size: 13px;
+    color: #64dc64;
+    font-weight: bold;
+}
+
+.row {
+    display: flex;
+    margin-bottom: 10px;
+}
+
+.row .label {
+    width: 120px;
+    color: #999;
+    padding-top: 2px;
+}
+
+.row .control {
+    flex: 1;
+}
+
+select {
+    background: #1a1a1a;
+    color: #e0e0e0;
+    border: 1px solid #444;
+    padding: 3px 6px;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    width: 100%;
+}
+
+.checkbox-row {
+    display: flex;
+    margin-bottom: 10px;
+    cursor: pointer;
+}
+
+.checkbox-row .label {
+    width: 120px;
+    color: #999;
+}
+
+.checkbox {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 1px solid #555;
+    background: #1a1a1a;
+    margin-right: 8px;
+    text-align: center;
+    line-height: 14px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.checkbox.checked {
+    background: #2a5a2a;
+    border-color: #64dc64;
+    color: #64dc64;
+}
+
+.divider {
+    border-top: 1px solid #333;
+    margin: 12px 0;
+}
+
+.btn {
+    display: inline-block;
+    padding: 4px 12px;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #ccc;
+    cursor: pointer;
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    margin-right: 6px;
+}
+
+.btn:hover {
+    background: #3a3a3a;
+    border-color: #666;
+}
+</style>
+</head>
+<body>
+<div id="panel">
+    <h2>Graphics</h2>
+
+    <div class="row">
+        <span class="label">Resolution</span>
+        <span class="control"><select id="resolution"></select></span>
+    </div>
+
+    <div class="checkbox-row" id="fullscreen-row">
+        <span class="label">Fullscreen</span>
+        <span class="checkbox" id="fullscreen-cb"></span>
+    </div>
+
+    <div class="checkbox-row" id="vsync-row">
+        <span class="label">VSync</span>
+        <span class="checkbox" id="vsync-cb"></span>
+    </div>
+
+    <div class="row">
+        <span class="label">FPS Cap</span>
+        <span class="control"><select id="fps-cap"></select></span>
+    </div>
+
+    <div class="divider"></div>
+
+    <span class="btn" id="reset-btn">Reset to Defaults</span>
+</div>
+
+<script>
+(function() {
+    var resSelect = document.getElementById('resolution');
+    var fullscreenCb = document.getElementById('fullscreen-cb');
+    var fullscreenRow = document.getElementById('fullscreen-row');
+    var vsyncCb = document.getElementById('vsync-cb');
+    var vsyncRow = document.getElementById('vsync-row');
+    var fpsCap = document.getElementById('fps-cap');
+    var resetBtn = document.getElementById('reset-btn');
+
+    // Populate resolution dropdown
+    var modes = bro.settings.getDisplayModes();
+    var seen = {};
+    for (var i = 0; i < modes.length; i++) {
+        var key = modes[i].width + 'x' + modes[i].height;
+        if (seen[key]) continue;
+        seen[key] = true;
+        var opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = key;
+        resSelect.appendChild(opt);
+    }
+
+    // FPS cap options
+    var caps = [
+        { label: 'Uncapped', value: 0 },
+        { label: '30 FPS', value: 33.33 },
+        { label: '60 FPS', value: 16.67 },
+        { label: '120 FPS', value: 8.33 },
+        { label: '144 FPS', value: 6.94 },
+        { label: '240 FPS', value: 4.17 }
+    ];
+    for (var i = 0; i < caps.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = caps[i].value.toString();
+        opt.textContent = caps[i].label;
+        fpsCap.appendChild(opt);
+    }
+
+    function load() {
+        var all = bro.settings.getAll();
+
+        // Resolution
+        var cur = all.graphics.width + 'x' + all.graphics.height;
+        resSelect.value = cur;
+
+        // Fullscreen
+        if (all.graphics.fullscreen) {
+            fullscreenCb.textContent = 'x';
+            fullscreenCb.className = 'checkbox checked';
+        } else {
+            fullscreenCb.textContent = '';
+            fullscreenCb.className = 'checkbox';
+        }
+
+        // VSync
+        if (all.graphics.vsync) {
+            vsyncCb.textContent = 'x';
+            vsyncCb.className = 'checkbox checked';
+        } else {
+            vsyncCb.textContent = '';
+            vsyncCb.className = 'checkbox';
+        }
+
+        // FPS cap
+        var interval = all.graphics.maxFrameIntervalMs;
+        var best = '0';
+        for (var i = 0; i < caps.length; i++) {
+            if (Math.abs(caps[i].value - interval) < 0.5) {
+                best = caps[i].value.toString();
+                break;
+            }
+        }
+        fpsCap.value = best;
+    }
+
+    // Event handlers
+    resSelect.addEventListener('change', function() {
+        var parts = resSelect.value.split('x');
+        bro.settings.set('graphics.width', parseInt(parts[0]));
+        bro.settings.set('graphics.height', parseInt(parts[1]));
+    });
+
+    fullscreenRow.addEventListener('click', function() {
+        var cur = bro.settings.get('graphics.fullscreen');
+        bro.settings.set('graphics.fullscreen', !cur);
+        load();
+    });
+
+    vsyncRow.addEventListener('click', function() {
+        var cur = bro.settings.get('graphics.vsync');
+        bro.settings.set('graphics.vsync', !cur);
+        load();
+    });
+
+    fpsCap.addEventListener('change', function() {
+        bro.settings.set('graphics.maxFrameIntervalMs', parseFloat(fpsCap.value));
+    });
+
+    resetBtn.addEventListener('click', function() {
+        bro.settings.reset('graphics');
+        load();
+    });
+
+    load();
+})();
+</script>
+</body>
+</html>
