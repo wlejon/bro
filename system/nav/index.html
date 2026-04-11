@@ -27,59 +27,53 @@ html, body {
     padding: 6px 14px;
     cursor: pointer;
     color: #888;
-    border-bottom: 2px solid transparent;
-    margin-right: 2px;
-}
-
-.tab:hover {
-    color: #ccc;
-    background: rgba(255, 255, 255, 0.05);
 }
 
 .tab.active {
     color: #64dc64;
-    border-bottom-color: #64dc64;
 }
 </style>
 </head>
 <body>
-<div id="nav-bar"></div>
+<div id="nav-bar">
+    <div class="tab" id="tab-perf" data-panel="perf">Perf</div>
+    <div class="tab active" id="tab-graphics" data-panel="settings/graphics">Graphics</div>
+    <div class="tab" id="tab-audio" data-panel="settings/audio">Audio</div>
+    <div class="tab" id="tab-input" data-panel="settings/input">Input</div>
+</div>
 
 <script>
 (function() {
-    var bar = document.getElementById('nav-bar');
-    if (!bar) return;
+    var tabs = [
+        document.getElementById('tab-perf'),
+        document.getElementById('tab-graphics'),
+        document.getElementById('tab-audio'),
+        document.getElementById('tab-input')
+    ];
 
-    function render() {
-        var panels = __bro.getPanels();
+    function updateActive() {
         var active = __bro.getActivePanel();
-
-        // Clear existing tabs
-        bar.innerHTML = '';
-
-        for (var i = 0; i < panels.length; i++) {
-            var p = panels[i];
-            var tab = document.createElement('div');
-            tab.className = 'tab';
-            tab.textContent = p.tabLabel;
-            tab.setAttribute('data-panel', p.name);
-
-            if (p.name === active) {
-                tab.className = 'tab active';
+        for (var i = 0; i < tabs.length; i++) {
+            if (!tabs[i]) continue;
+            var panel = tabs[i].getAttribute('data-panel');
+            if (panel === active) {
+                tabs[i].className = 'tab active';
+            } else {
+                tabs[i].className = 'tab';
             }
-
-            tab.addEventListener('click', function(e) {
-                var name = this.getAttribute('data-panel');
-                __bro.showPanel(name);
-                // Re-render tabs to update active state
-                render();
-            });
-
-            bar.appendChild(tab);
         }
     }
 
-    render();
+    for (var i = 0; i < tabs.length; i++) {
+        if (!tabs[i]) continue;
+        tabs[i].addEventListener('click', function(e) {
+            var name = this.getAttribute('data-panel');
+            if (name !== 'perf') {
+                __bro.showPanel(name);
+            }
+            updateActive();
+        });
+    }
 })();
 </script>
 </body>

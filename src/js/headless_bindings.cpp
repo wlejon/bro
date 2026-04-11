@@ -602,6 +602,89 @@ static JSValue js_elements(JSContext* ctx, JSValueConst, int argc, JSValueConst*
 }
 
 // ---------------------------------------------------------------------------
+// Overlay panel inspection
+// ---------------------------------------------------------------------------
+
+// inspectOverlay(panelName, selector [, verbose])
+static JSValue js_inspectOverlay(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "inspectOverlay(panelName, selector [, verbose])");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* panel = JS_ToCString(ctx, argv[0]);
+    const char* selector = JS_ToCString(ctx, argv[1]);
+    if (!panel || !selector) {
+        if (panel) JS_FreeCString(ctx, panel);
+        if (selector) JS_FreeCString(ctx, selector);
+        return JS_EXCEPTION;
+    }
+
+    auto* el = engine->overlayQuerySelector(panel, selector);
+    if (!el) {
+        auto result = std::string("inspectOverlay: no element matches '") + selector +
+                      "' in panel '" + panel + "'";
+        JS_FreeCString(ctx, panel);
+        JS_FreeCString(ctx, selector);
+        return JS_ThrowTypeError(ctx, "%s", result.c_str());
+    }
+    JS_FreeCString(ctx, panel);
+    JS_FreeCString(ctx, selector);
+
+    bool verbose = false;
+    if (argc >= 3) verbose = JS_ToBool(ctx, argv[2]);
+
+    std::string result = buildInspectString(el, verbose);
+    return JS_NewString(ctx, result.c_str());
+}
+
+// inspectOverlayTree(panelName, selector [, depth])
+static JSValue js_inspectOverlayTree(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "inspectOverlayTree(panelName, selector [, depth])");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* panel = JS_ToCString(ctx, argv[0]);
+    const char* selector = JS_ToCString(ctx, argv[1]);
+    if (!panel || !selector) {
+        if (panel) JS_FreeCString(ctx, panel);
+        if (selector) JS_FreeCString(ctx, selector);
+        return JS_EXCEPTION;
+    }
+
+    auto* el = engine->overlayQuerySelector(panel, selector);
+    if (!el) {
+        auto result = std::string("inspectOverlayTree: no element matches '") + selector +
+                      "' in panel '" + panel + "'";
+        JS_FreeCString(ctx, panel);
+        JS_FreeCString(ctx, selector);
+        return JS_ThrowTypeError(ctx, "%s", result.c_str());
+    }
+    JS_FreeCString(ctx, panel);
+    JS_FreeCString(ctx, selector);
+
+    int maxDepth = 3;
+    if (argc >= 3) JS_ToInt32(ctx, &maxDepth, argv[2]);
+
+    std::ostringstream out;
+    buildTreeString(out, el, 0, maxDepth, "");
+    return JS_NewString(ctx, out.str().c_str());
+}
+
+// overlayPanels() — list all overlay panel names
+static JSValue js_overlayPanels(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_NewArray(ctx);
+
+    auto names = engine->overlayPanelNames();
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < names.size(); i++) {
+        JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i),
+                             JS_NewString(ctx, names[i].c_str()));
+    }
+    return arr;
+}
+
+// ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
 
@@ -632,7 +715,11 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("inspect", js_inspect, 2)
         .function("inspectTree", js_inspectTree, 2)
         .function("computedStyle", js_computedStyle, 2)
-        .function("elements", js_elements, 1);
+        .function("elements", js_elements, 1)
+        // Overlay panel inspection
+        .function("inspectOverlay", js_inspectOverlay, 3)
+        .function("inspectOverlayTree", js_inspectOverlayTree, 3)
+        .function("overlayPanels", js_overlayPanels, 0);
 }
 
 } // namespace bro::js

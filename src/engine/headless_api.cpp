@@ -695,6 +695,17 @@ dom::Element* Engine::querySelector(const std::string& selector) const {
     return document_->querySelector(selector);
 }
 
+dom::Element* Engine::overlayQuerySelector(const std::string& panelName,
+                                            const std::string& selector) const {
+    if (!systemOverlay_) return nullptr;
+    return systemOverlay_->querySelector(panelName, selector);
+}
+
+std::vector<std::string> Engine::overlayPanelNames() const {
+    if (!systemOverlay_) return {};
+    return systemOverlay_->getPanelNames();
+}
+
 void Engine::dispatchClickOn(dom::Element* target) {
     if (!target || !jsRuntime_) return;
     if (document_) document_->setActiveElement(target);

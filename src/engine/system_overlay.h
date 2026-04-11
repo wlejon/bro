@@ -162,6 +162,17 @@ public:
     struct PanelInfo { std::string name; std::string tabLabel; };
     std::vector<PanelInfo> getPanelList() const;
 
+    // --- Overlay DOM inspection (headless) ---
+
+    /// Query an element in an overlay panel's DOM.
+    /// panelName: e.g. "nav", "perf", "settings/graphics"
+    /// selector: CSS selector or #id
+    dom::Element* querySelector(const std::string& panelName,
+                                const std::string& selector);
+
+    /// Get all panel names.
+    std::vector<std::string> getPanelNames() const;
+
     struct Panel {
         std::string name;
         std::string tabLabel;   // display label for nav bar (empty = hidden from nav)

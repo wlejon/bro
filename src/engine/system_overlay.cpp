@@ -981,4 +981,26 @@ std::vector<SystemOverlay::PanelInfo> SystemOverlay::getPanelList() const {
     return result;
 }
 
+// ---------------------------------------------------------------------------
+// Overlay DOM inspection (headless)
+// ---------------------------------------------------------------------------
+
+dom::Element* SystemOverlay::querySelector(const std::string& panelName,
+                                            const std::string& selector) {
+    for (auto& panel : panels_) {
+        if (panel.name == panelName && panel.document) {
+            return panel.document->querySelector(selector);
+        }
+    }
+    return nullptr;
+}
+
+std::vector<std::string> SystemOverlay::getPanelNames() const {
+    std::vector<std::string> names;
+    for (const auto& panel : panels_) {
+        names.push_back(panel.name);
+    }
+    return names;
+}
+
 } // namespace bro::engine

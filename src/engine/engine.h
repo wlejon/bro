@@ -162,6 +162,13 @@ public:
     /// Find an element by selector (#id shorthand or CSS selector).
     dom::Element* querySelector(const std::string& selector) const;
 
+    /// Find an element in an overlay panel's DOM.
+    dom::Element* overlayQuerySelector(const std::string& panelName,
+                                       const std::string& selector) const;
+
+    /// Get overlay panel names.
+    std::vector<std::string> overlayPanelNames() const;
+
     /// Simulate a click on the given element.
     void dispatchClickOn(dom::Element* target);
 
