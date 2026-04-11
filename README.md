@@ -104,13 +104,13 @@ On Windows this uses the Visual Studio multi-config generator. On Linux it defau
 
 ```bash
 # Windows
-./build/src/Debug/bro.exe apps/hello
+./build/src/Debug/bro.exe apps/dashboard
 
 # Linux
-./build/src/bro apps/hello
+./build/src/bro apps/dashboard
 ```
 
-Loads `apps/hello/index.html`, applies stylesheets, executes scripts, and opens a window.
+Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a window.
 
 ### Headless mode
 
@@ -118,16 +118,16 @@ Headless mode runs the full engine pipeline (GPU rendering, real fonts, WebGL) w
 
 ```bash
 # Interactive JS REPL
-bro-headless apps/hello
+bro-headless apps/dashboard
 
 # Run a JS script file
-bro-headless apps/hello test.js
+bro-headless apps/dashboard test.js
 
 # Inline JS expressions
-bro-headless apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+bro-headless apps/dashboard -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
 
 # CPU-only mode (no GPU/WebGL — for CI without a GPU)
-bro-headless --no-gpu apps/hello
+bro-headless --no-gpu apps/dashboard
 ```
 
 On Linux without a display server, use `--no-gpu` or set `SDL_VIDEODRIVER=dummy`.

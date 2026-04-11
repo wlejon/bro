@@ -113,7 +113,7 @@ static void printUsage() {
         "next to the executable to run without arguments.\n"
         "\n"
         "Example:\n"
-        "  bro apps/hello\n"
+        "  bro apps/dashboard\n"
         "\n"
         "bro.json format:\n"
         "  {\"app\": \".\", \"title\": \"My App\", \"width\": 1200, \"height\": 800}\n"

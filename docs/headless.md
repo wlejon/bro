@@ -53,20 +53,18 @@ All standard DOM APIs work as expected: `document.querySelector()`, `el.click()`
 ### Interactive REPL
 
 ```
-> bro-headless apps/hello
+> bro-headless apps/dashboard
 
-bro> document.querySelector('#counter').textContent
-Count: 0
+bro> document.querySelector('#sidebar').className
+sidebar hidden-left
 
-bro> document.querySelector('#btn').click()
+bro> inspect('body')
+<BODY>
+  Box Model:
+    content:  1024 x 614.46
+    ...
 
-bro> document.querySelector('#counter').textContent
-Count: 1
-
-bro> screenshot('hello.png')
-
-bro> document.querySelector('#btn').getBoundingClientRect()
-[object Object]
+bro> screenshot('dashboard.png')
 
 bro> quit
 ```
@@ -74,7 +72,7 @@ bro> quit
 ### Inline expressions
 
 ```bash
-bro-headless apps/hello -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+bro-headless apps/dashboard -e "advanceTime(2000)" -e "screenshot('out.png')"
 ```
 
 Multiple `-e` flags are concatenated and evaluated together.
@@ -83,22 +81,15 @@ Multiple `-e` flags are concatenated and evaluated together.
 
 `test.js`:
 ```js
-const btn = document.querySelector('#btn');
-const counter = document.querySelector('#counter');
+// Advance time to trigger animations
+advanceTime(2000);
 
-screenshot('before.png');
-
-for (let i = 0; i < 3; i++) {
-    btn.click();
-    advanceTime(16);
-}
-
-assert(counter.textContent === 'Count: 3', 'counter should be 3 after 3 clicks');
+assert(document.querySelector('#sidebar') !== null, 'sidebar should exist');
 screenshot('after.png');
 ```
 
 ```bash
-bro-headless apps/hello test.js
+bro-headless apps/dashboard test.js
 ```
 
 Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occurs.
