@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; font-size: 16px; }
+body { background: white; }
+
+#flex-container {
+  display: flex;
+  flex-direction: row;
+  width: 600px;
+  height: 200px;
+  background: #eee;
+  gap: 10px;
+  padding: 10px;
+}
+
+.flex-item {
+  height: 100px;
+  background: #ccc;
+  border: 1px solid black;
+  padding: 10px;
+}
+
+#item1 { flex: 1; }
+#item2 { flex: 2; }
+#item3 { width: 100px; flex-shrink: 0; }
+
+#flex-center {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 300px;
+  height: 150px;
+  margin-top: 20px;
+  background: #ddd;
+}
+
+#centered {
+  width: 80px;
+  height: 40px;
+  background: #aaa;
+}
+
+#flex-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  width: 250px;
+  gap: 5px;
+  margin-top: 20px;
+  background: #eee;
+  padding: 5px;
+}
+
+.wrap-item {
+  width: 100px;
+  height: 50px;
+  background: #bbb;
+}
+</style>
+</head>
+<body>
+  <div id="flex-container">
+    <div id="item1" class="flex-item">1</div>
+    <div id="item2" class="flex-item">2</div>
+    <div id="item3" class="flex-item">3</div>
+  </div>
+  <div id="flex-center">
+    <div id="centered">C</div>
+  </div>
+  <div id="flex-wrap">
+    <div class="wrap-item">W1</div>
+    <div class="wrap-item">W2</div>
+    <div class="wrap-item">W3</div>
+  </div>
+</body>
+</html>

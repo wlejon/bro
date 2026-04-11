@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
+body { background: white; }
+
+#heading {
+  font-size: 32px;
+  font-weight: bold;
+  padding: 10px;
+  background: #eee;
+}
+
+#paragraph {
+  font-size: 16px;
+  line-height: 1.5;
+  width: 400px;
+  padding: 10px;
+  background: #f5f5f5;
+}
+
+#small-text {
+  font-size: 12px;
+  color: #666;
+  padding: 5px 10px;
+}
+
+#overflow-ellipsis {
+  width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: #ddd;
+  padding: 5px;
+  margin-top: 10px;
+}
+
+#overflow-hidden {
+  width: 200px;
+  height: 40px;
+  overflow: hidden;
+  background: #ddd;
+  padding: 5px;
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+#text-align-center {
+  text-align: center;
+  width: 300px;
+  background: #efe;
+  padding: 10px;
+  margin-top: 10px;
+}
+
+#text-align-right {
+  text-align: right;
+  width: 300px;
+  background: #eef;
+  padding: 10px;
+  margin-top: 5px;
+}
+</style>
+</head>
+<body>
+  <div id="heading">Heading Text</div>
+  <div id="paragraph">This is a paragraph with enough text to potentially wrap across multiple lines within the constrained width container.</div>
+  <div id="small-text">Small caption text</div>
+  <div id="overflow-ellipsis">This text should be truncated with an ellipsis because it is too long</div>
+  <div id="overflow-hidden">This text will be clipped because the container has a fixed height and overflow hidden set on it.</div>
+  <div id="text-align-center">Centered text</div>
+  <div id="text-align-right">Right-aligned text</div>
+</body>
+</html>

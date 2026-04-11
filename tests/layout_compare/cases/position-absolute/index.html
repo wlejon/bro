@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; font-size: 16px; }
+body { background: white; }
+
+#relative-parent {
+  position: relative;
+  width: 400px;
+  height: 300px;
+  background: #eee;
+  margin: 20px;
+  border: 2px solid black;
+}
+
+#abs-top-left {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 80px;
+  height: 60px;
+  background: #f99;
+}
+
+#abs-bottom-right {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  width: 80px;
+  height: 60px;
+  background: #99f;
+}
+
+#abs-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100px;
+  height: 50px;
+  margin-top: -25px;
+  margin-left: -50px;
+  background: #9f9;
+}
+
+#fixed-like {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  background: rgba(0,0,0,0.2);
+}
+
+#static-flow {
+  width: 200px;
+  height: 50px;
+  margin: 10px;
+  background: #ff9;
+}
+</style>
+</head>
+<body>
+  <div id="relative-parent">
+    <div id="abs-top-left">TL</div>
+    <div id="abs-bottom-right">BR</div>
+    <div id="abs-center">Center</div>
+    <div id="fixed-like">Bar</div>
+    <div id="static-flow">Static</div>
+  </div>
+</body>
+</html>

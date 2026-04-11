@@ -1,4 +1,6 @@
 #include "js/dom_bindings_internal.h"
+#include "css/properties.h"
+#include "css/color.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -140,12 +142,77 @@ JSValue wrapStyleProxy(JSContext* ctx, bro::dom::StyleProxy* style)
 // ComputedStyleDeclaration (read-only, backed by element's computedStyle map)
 // ===========================================================================
 
+// Is this a CSS property whose computed value should be resolved to rgb()?
+static bool isColorProperty(const std::string& prop) {
+    return prop == "color" || prop == "background-color" ||
+           prop == "border-top-color" || prop == "border-right-color" ||
+           prop == "border-bottom-color" || prop == "border-left-color" ||
+           prop == "outline-color";
+}
+
+// Resolve a CSS color value to rgb(r, g, b) or rgba(r, g, b, a) notation.
+// Returns the original value if it's already in rgb()/rgba() form or can't be parsed.
+static std::string resolveColorToRgb(const std::string& value) {
+    if (value.empty() || value == "transparent")
+        return "rgba(0, 0, 0, 0)";
+    if (value == "currentcolor" || value == "currentColor" || value == "inherit")
+        return value;
+    // Already rgb()/rgba() — pass through
+    if (value.size() > 3 && value[0] == 'r' && value[1] == 'g' && value[2] == 'b')
+        return value;
+
+    auto c = htmlayout::css::parseColor(value);
+    // parseColor returns {0,0,0,0} for unrecognized — if alpha is 0 and input
+    // wasn't "transparent", it likely failed to parse
+    if (c.a == 0 && value != "transparent") return value;
+
+    if (c.a == 255) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "rgb(%d, %d, %d)", c.r, c.g, c.b);
+        return buf;
+    } else {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "rgba(%d, %d, %d, %.2g)",
+                 c.r, c.g, c.b, c.a / 255.0);
+        return buf;
+    }
+}
+
 static std::string getComputedProperty(bro::dom::Element* el, const std::string& prop) {
     if (!el) return "";
     auto& style = el->computedStyle();
+    std::string value;
     auto it = style.find(prop);
-    if (it != style.end()) return it->second;
-    return "";
+    if (it != style.end()) {
+        value = it->second;
+    } else {
+        // Fall back to CSS initial value for known properties
+        value = htmlayout::css::initialValue(prop);
+    }
+
+    // Resolve colors to rgb() notation (matches browser getComputedStyle behavior)
+    if (isColorProperty(prop))
+        value = resolveColorToRgb(value);
+
+    // Resolve font-weight keywords to numeric (matches Chrome)
+    if (prop == "font-weight") {
+        if (value == "normal") return "400";
+        if (value == "bold") return "700";
+    }
+
+    // Resolve border-width to 0px when border-style is none
+    if ((prop == "border-top-width" || prop == "border-right-width" ||
+         prop == "border-bottom-width" || prop == "border-left-width") &&
+        (value == "medium" || value == "thin" || value == "thick")) {
+        // Check if the corresponding border-style is none
+        std::string sideProp = prop.substr(0, prop.rfind("-width")) + "-style";
+        auto sit = style.find(sideProp);
+        std::string borderStyle = (sit != style.end()) ? sit->second : "none";
+        if (borderStyle == "none" || borderStyle == "hidden")
+            return "0px";
+    }
+
+    return value;
 }
 
 static int js_computed_get_own_property(JSContext* ctx,

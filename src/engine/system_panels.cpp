@@ -149,22 +149,21 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
 
         std::string savedBasePath = dirPath;
 
-        // Extract inline CSS prepended with UA defaults
-        std::string userStyles = kDefaultStyles;
-        userStyles += "\n";
+        // Extract inline CSS from <style> elements
+        std::string authorStyles;
         {
             std::regex styleRe(R"(<style[^>]*>([\s\S]*?)</style>)",
                                std::regex_constants::icase);
             auto begin = std::sregex_iterator(html.begin(), html.end(), styleRe);
             auto end = std::sregex_iterator();
             for (auto it = begin; it != end; ++it) {
-                userStyles += (*it)[1].str() + "\n";
+                authorStyles += (*it)[1].str() + "\n";
             }
         }
 
-        // Parse HTML
+        // Parse HTML — UA defaults at UserAgent origin, inline styles at Author
         doc.document = std::make_unique<dom::Document>();
-        doc.document->parse(html, userStyles);
+        doc.document->parse(html, authorStyles, kDefaultStyles);
 
         // Create a dedicated JSContext on the shared runtime
         doc.jsCtx = jsRuntime_->createContext();

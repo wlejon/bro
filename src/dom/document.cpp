@@ -16,7 +16,8 @@ Document::~Document() = default;
 // Parsing with gumbo
 // ---------------------------------------------------------------------------
 
-void Document::parse(const std::string& html, const std::string& userCss) {
+void Document::parse(const std::string& html, const std::string& authorCss,
+                     const std::string& uaCss) {
     // Clear any existing tree
     root_ = nullptr;
     documentElement_ = nullptr;
@@ -25,9 +26,15 @@ void Document::parse(const std::string& html, const std::string& userCss) {
     ownedNodes_.clear();
     cascade_.clear();
 
-    // Add user CSS to cascade
-    if (!userCss.empty()) {
-        cascade_.addStylesheet(htmlayout::css::parse(userCss));
+    // Add UA default styles (lowest priority — author styles always win)
+    if (!uaCss.empty()) {
+        cascade_.addStylesheet(htmlayout::css::parse(uaCss), nullptr, nullptr,
+                               htmlayout::css::Origin::UserAgent);
+    }
+
+    // Add author CSS (app stylesheets)
+    if (!authorCss.empty()) {
+        cascade_.addStylesheet(htmlayout::css::parse(authorCss));
     }
 
     // Parse HTML with gumbo

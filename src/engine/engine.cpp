@@ -255,15 +255,14 @@ Engine::Engine(const EngineConfig& config)
     drawTraversal_->setBasePath(manifest_.basePath);
     drawTraversal_->setViewport(viewportWidth_, viewportHeight_);
 
-    // Load user stylesheets, prepended with browser-like defaults so apps
-    // are visible and have sensible form control styling without an
-    // explicit stylesheet.
-    std::string userStyles = kDefaultStyles;
-    userStyles += "\n";
+    // Load user stylesheets separately from UA defaults.
+    // UA defaults use UserAgent origin (lowest priority) so any author
+    // rule — even `* { margin: 0 }` — overrides them correctly.
+    std::string authorStyles;
     for (auto& cssPath : manifest_.stylePaths) {
         std::string css = AppLoader::loadFile(cssPath);
         if (!css.empty()) {
-            userStyles += css + "\n";
+            authorStyles += css + "\n";
         }
     }
 
@@ -274,7 +273,7 @@ Engine::Engine(const EngineConfig& config)
     // 8. Parse HTML and build bro::dom tree
     document_ = std::make_unique<dom::Document>();
     document_->setBasePath(manifest_.basePath);
-    document_->parse(html, userStyles);
+    document_->parse(html, authorStyles, kDefaultStyles);
 
     // 8a. Inject extracted templates back into the DOM tree
     if (!templateBlocks.empty())

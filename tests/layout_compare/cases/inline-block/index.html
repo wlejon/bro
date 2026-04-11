@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; font-size: 16px; }
+body { background: white; }
+
+#container {
+  width: 500px;
+  background: #eee;
+  padding: 10px;
+}
+
+.inline-block {
+  display: inline-block;
+  width: 100px;
+  height: 60px;
+  background: #ccc;
+  border: 1px solid black;
+  margin: 5px;
+  vertical-align: top;
+}
+
+#ib-middle {
+  vertical-align: middle;
+  height: 80px;
+  background: #bbb;
+}
+
+#block-after {
+  display: block;
+  width: 200px;
+  height: 40px;
+  background: #ddd;
+  margin-top: 10px;
+}
+
+#inline-text {
+  margin-top: 20px;
+}
+
+#inline-text span {
+  display: inline;
+  padding: 2px 8px;
+  background: #cfc;
+  border: 1px solid green;
+}
+</style>
+</head>
+<body>
+  <div id="container">
+    <div class="inline-block" id="ib-first">A</div>
+    <div class="inline-block" id="ib-middle">B</div>
+    <div class="inline-block" id="ib-last">C</div>
+    <div id="block-after">Block</div>
+  </div>
+  <div id="inline-text">
+    <span id="span1">Hello</span>
+    <span id="span2">World</span>
+  </div>
+</body>
+</html>

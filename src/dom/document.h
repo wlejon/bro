@@ -26,7 +26,10 @@ public:
     ~Document();
 
     // Parsing — parse HTML with gumbo, extract <style> CSS, build DOM tree
-    void parse(const std::string& html, const std::string& userCss = {});
+    // uaCss: user-agent default styles (lowest priority in cascade)
+    // authorCss: app/user stylesheets (normal author priority)
+    void parse(const std::string& html, const std::string& authorCss = {},
+               const std::string& uaCss = {});
 
     // Node creation — Document owns all nodes via ownedNodes_.
     Element* createElement(const std::string& tag);
