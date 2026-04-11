@@ -36,7 +36,6 @@ html, body {
 </head>
 <body>
 <div id="nav-bar">
-    <div class="tab" id="tab-perf" data-panel="perf">Perf</div>
     <div class="tab active" id="tab-graphics" data-panel="settings/graphics">Graphics</div>
     <div class="tab" id="tab-audio" data-panel="settings/audio">Audio</div>
     <div class="tab" id="tab-input" data-panel="settings/input">Input</div>
@@ -45,7 +44,6 @@ html, body {
 <script>
 (function() {
     var tabs = [
-        document.getElementById('tab-perf'),
         document.getElementById('tab-graphics'),
         document.getElementById('tab-audio'),
         document.getElementById('tab-input')
@@ -68,9 +66,7 @@ html, body {
         if (!tabs[i]) continue;
         tabs[i].addEventListener('click', function(e) {
             var name = this.getAttribute('data-panel');
-            if (name !== 'perf') {
-                __bro.showPanel(name);
-            }
+            __bro.showPanel(name);
             updateActive();
         });
     }
