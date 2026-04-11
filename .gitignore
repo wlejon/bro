@@ -4,6 +4,8 @@ build-debug/
 out/
 cmake-build-*/
 
+/node_modules/
+
 # IDE
 .vs/
 .vscode/
