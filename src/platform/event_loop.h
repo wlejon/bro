@@ -31,6 +31,7 @@ public:
     void run(std::function<void(float deltaTime)> perFrame);
 
     bool shouldQuit() const { return m_quit; }
+    void requestQuit() { m_quit = true; }
 
     /// Delta time of the last frame in seconds.
     float getDeltaTime() const { return m_deltaTime; }

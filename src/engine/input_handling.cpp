@@ -728,19 +728,20 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
 }
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
-    // F8: toggle perf overlay
-    if (inputConfig_.overlayToggleKey != 0 &&
-        keycode == static_cast<int>(inputConfig_.overlayToggleKey) && !repeat) {
-        toggleSystemPerf();
-        uiDirty_ = true;
-        return;
-    }
-
-    // Escape: toggle settings menu
-    if (keycode == SDLK_ESCAPE && !repeat) {
-        toggleSystemSettings();
-        uiDirty_ = true;
-        return;
+    // Check for system actions via the settings action binding system
+    if (!repeat && settings_) {
+        std::string webKey = sdlKeycodeToWebKey(keycode, mod);
+        std::string action = settings_->getActionForKey(webKey);
+        if (action == "system_toggle_perf") {
+            toggleSystemPerf();
+            uiDirty_ = true;
+            return;
+        }
+        if (action == "system_toggle_settings") {
+            toggleSystemSettings();
+            uiDirty_ = true;
+            return;
+        }
     }
 
     if (!document_) return;

@@ -91,6 +91,7 @@ public:
     void resetAll();
 
     // --- Action bindings ---
+    void defineEngineAction(const std::string& action, const std::vector<std::string>& defaultKeys);
     void defineAction(const std::string& action, const std::vector<std::string>& defaultKeys);
     void rebindAction(const std::string& action, const std::vector<std::string>& keys);
     std::vector<std::string> getKeysForAction(const std::string& action) const;

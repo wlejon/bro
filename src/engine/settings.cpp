@@ -338,6 +338,20 @@ void Settings::resetAll() {
 // Action bindings
 // ---------------------------------------------------------------------------
 
+void Settings::defineEngineAction(const std::string& action,
+                                  const std::vector<std::string>& defaultKeys) {
+    // Add to defaults layer (lowest priority — apps and users can override)
+    for (auto& b : defaults_.input.actionBindings) {
+        if (b.action == action) {
+            b.keys = defaultKeys;
+            resolve();
+            return;
+        }
+    }
+    defaults_.input.actionBindings.push_back({action, defaultKeys});
+    resolve();
+}
+
 void Settings::defineAction(const std::string& action,
                             const std::vector<std::string>& defaultKeys) {
     // Add to app layer
@@ -440,8 +454,25 @@ void Settings::resolveInput() {
     if (userPresence_.count("input.doubleClickDistancePx")) r.doubleClickDistancePx = userOverrides_.input.doubleClickDistancePx;
     if (userPresence_.count("input.overlayToggleKey")) r.overlayToggleKey = userOverrides_.input.overlayToggleKey;
 
-    // Merge action bindings: app defines them, user can override specific actions
-    r.actionBindings = appOverrides_.input.actionBindings;
+    // Merge action bindings: engine defaults < app overrides < user overrides
+    r.actionBindings = defaults_.input.actionBindings;
+
+    // App layer overrides defaults, adds new actions
+    for (auto& appBinding : appOverrides_.input.actionBindings) {
+        bool found = false;
+        for (auto& resolvedBinding : r.actionBindings) {
+            if (resolvedBinding.action == appBinding.action) {
+                resolvedBinding.keys = appBinding.keys;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            r.actionBindings.push_back(appBinding);
+        }
+    }
+
+    // User layer overrides everything
     for (auto& userBinding : userOverrides_.input.actionBindings) {
         bool found = false;
         for (auto& resolvedBinding : r.actionBindings) {

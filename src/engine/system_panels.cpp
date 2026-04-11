@@ -41,6 +41,12 @@ namespace bro::engine {
 
 void Engine::initSystemPanels() {
     systemRenderer_ = std::make_unique<render::CPURasterRenderer>(gl_.get());
+
+    // Load app-specific system panels first (app dir takes priority)
+    std::string appSystemDir = manifest_.basePath + "/system";
+    loadSystemPanels(appSystemDir);
+
+    // Load global system panels, skipping any already provided by the app
     loadSystemPanels("system");
 }
 
@@ -111,19 +117,26 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
     for (const auto& entry : fs::directory_iterator(dirPath, ec)) {
         if (entry.is_directory()) {
             std::string subName = entry.path().filename().string();
-            std::string fullRel = relPath.empty() ? subName : relPath + "/" + subName;
-            scanSystemPanelDir(baseDir, fullRel);
+            std::string subRel = relPath.empty() ? subName : relPath + "/" + subName;
+            scanSystemPanelDir(baseDir, subRel);
             continue;
         }
 
         if (entry.path().extension() != ".html") continue;
 
+        std::string stem = entry.path().stem().string();
+        std::string fullRel = relPath.empty() ? stem : relPath + "/" + stem;
+
+        // Skip if a panel with this name was already loaded (app override)
+        bool duplicate = false;
+        for (const auto& d : systemDocs_) {
+            if (d.name == fullRel) { duplicate = true; break; }
+        }
+        if (duplicate) continue;
+
         std::string htmlPath = entry.path().string();
         std::string html = AppLoader::loadFile(htmlPath);
         if (html.empty()) continue;
-
-        std::string stem = entry.path().stem().string();
-        std::string fullRel = relPath.empty() ? stem : relPath + "/" + stem;
 
         SystemDocument doc;
         doc.fontManager = std::make_unique<layout::FontManager>();

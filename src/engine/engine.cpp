@@ -100,6 +100,11 @@ Engine::Engine(const EngineConfig& config)
 
     // === Settings system ===
     settings_ = std::make_unique<Settings>(config.settingsPath);
+
+    // Define engine-level actions (lowest priority — apps can override)
+    settings_->defineEngineAction("system_toggle_perf", {"F8"});
+    settings_->defineEngineAction("system_toggle_settings", {"Escape"});
+
     settings_->applyAppOverrides(config.graphics, config.input);
 
     // Use resolved settings for window creation
@@ -548,6 +553,9 @@ Engine::Engine(const EngineConfig& config)
         // 11. Event loop
         eventLoop_ = std::make_unique<platform::EventLoop>();
 
+        // Install window.close() now that event loop exists
+        js::installWindowClose(jsRuntime_->getContext(), eventLoop_.get());
+
         // 13. Create UI overlay quad VAO/VBO
         glGenVertexArrays(1, &uiQuadVAO_);
         glGenBuffers(1, &uiQuadVBO_);
@@ -613,7 +621,6 @@ void Engine::compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint t
 
         float cx, cy, cw, ch;
         cs->getScreenRect(cx, cy, cw, ch);
-
         // Raster surface is top-down: V=0 at top, V=1 at bottom.
         render::TextureVertex quad[6] = {
             {cx,      cy,      0, 0}, {cx+cw, cy,      1, 0}, {cx+cw, cy+ch, 1, 1},

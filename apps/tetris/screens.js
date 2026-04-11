@@ -150,6 +150,7 @@ T.Screens = (function() {
                 else if (idx === 1) switchTo("highScores");
                 else if (idx === 2) switchTo("howToPlay");
                 else if (idx === 3) switchTo("credits");
+                else if (idx === 4) window.close();
             });
         }
     };

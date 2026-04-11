@@ -1,4 +1,5 @@
 #include "js/window_bindings.h"
+#include "platform/event_loop.h"
 
 #include "window_polyfill.js.h"
 
@@ -56,6 +57,25 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
                         "<window-bindings>", JS_EVAL_TYPE_GLOBAL);
     JS_FreeValue(ctx, r);
 
+    JS_FreeValue(ctx, global);
+}
+
+void installWindowClose(JSContext* ctx, platform::EventLoop* eventLoop) {
+    if (!eventLoop) return;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ptrVal = JS_NewInt64(ctx, static_cast<int64_t>(
+        reinterpret_cast<intptr_t>(eventLoop)));
+    JS_SetPropertyStr(ctx, global, "close",
+        JS_NewCFunctionData(ctx, [](JSContext*, JSValue, int, JSValue*,
+                                   int, JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(nullptr, &p, fdata[0]);
+            auto* loop = reinterpret_cast<platform::EventLoop*>(
+                static_cast<intptr_t>(p));
+            if (loop) loop->requestQuit();
+            return JS_UNDEFINED;
+        }, 0, 0, 1, &ptrVal));
+    JS_FreeValue(ctx, ptrVal);
     JS_FreeValue(ctx, global);
 }
 
