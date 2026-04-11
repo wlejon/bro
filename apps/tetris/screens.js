@@ -7,6 +7,7 @@ T.Screens = (function() {
     var overlay = null;
     var menuIndex = 0;
     var backTarget = "title"; // where Settings/Controls should return
+    var activeScreenId = ""; // DOM screen ID currently shown (e.g. "title", "mode-select")
 
     // --- Helpers ---
     function showOverlay(screenId) {
@@ -17,6 +18,7 @@ T.Screens = (function() {
         var el = document.getElementById("screen-" + screenId);
         if (el) el.style.display = "block";
         overlay.style.display = "block";
+        activeScreenId = screenId;
     }
 
     function hideOverlay() {
@@ -426,7 +428,8 @@ T.Screens = (function() {
             if (B.cur && !B.canPlace(B.cur.type, B.cur.x, B.cur.y + 1, B.cur.rot)) {
                 B.lockTimer += dt;
                 if (B.lockTimer >= B.lockDelay) {
-                    B.lockPiece();
+                    var lockResult = B.lockPiece();
+                    if (lockResult === -1) { gameOver(); return; }
                     if (B.checkModeEnd()) { finishGame(); return; }
                     if (!B.spawnPiece()) { gameOver(); return; }
                 }
@@ -747,6 +750,48 @@ T.Screens = (function() {
         init: function() {
             overlay = document.getElementById("overlay");
             initBgPieces();
+
+            // Mouse support for menu items
+            overlay.addEventListener("mousemove", function(e) {
+                if (!activeScreenId) return;
+                var target = e.target;
+                while (target && target !== overlay) {
+                    if (target.className && target.className.indexOf("menu-item") !== -1) break;
+                    target = target.parentNode;
+                }
+                if (!target || target === overlay) return;
+                var items = getMenuItems(activeScreenId);
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i] === target) {
+                        if (menuIndex !== i) {
+                            menuIndex = i;
+                            updateSelection(activeScreenId);
+                            T.Audio.sfxMenuMove();
+                        }
+                        break;
+                    }
+                }
+            });
+
+            overlay.addEventListener("click", function(e) {
+                if (!activeScreenId || rebinding) return;
+                var target = e.target;
+                while (target && target !== overlay) {
+                    if (target.className && target.className.indexOf("menu-item") !== -1) break;
+                    target = target.parentNode;
+                }
+                if (!target || target === overlay) return;
+                var items = getMenuItems(activeScreenId);
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i] === target) {
+                        menuIndex = i;
+                        updateSelection(activeScreenId);
+                        // Simulate Enter key to trigger the screen's select handler
+                        if (current && current.keydown) current.keydown("Enter");
+                        break;
+                    }
+                }
+            });
         },
         switchTo: switchTo,
         getName: function() { return currentName; },

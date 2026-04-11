@@ -161,15 +161,19 @@ T.Board = {
     lockPiece: function() {
         if (!this.cur) return;
         var cells = T.PIECES[this.cur.type][this.cur.rot & 3];
+        var lockedOut = false;
         for (var i = 0; i < cells.length; i++) {
             var r = this.cur.y + cells[i][0], c = this.cur.x + cells[i][1];
-            if (r >= 0 && r < this.ROWS && c >= 0 && c < this.COLS) {
+            if (r < 0) {
+                lockedOut = true;
+            } else if (r < this.ROWS && c >= 0 && c < this.COLS) {
                 this.board[r][c] = this.cur.type;
                 T.FX.flash(r, c, 200, T.COLORS_LIGHT[this.cur.type]);
             }
         }
         this.piecesPlaced++;
         T.Audio.sfxLock();
+        if (lockedOut) return -1; // piece locked above the board — top out
         return this.clearLines();
     },
 
@@ -345,7 +349,8 @@ T.Board = {
 
         this.cur.y = gy;
         T.Audio.sfxDrop();
-        this.lockPiece();
+        var lockResult = this.lockPiece();
+        if (lockResult === -1) return false;
         if (!this.spawnPiece()) return false;
         return true;
     },
