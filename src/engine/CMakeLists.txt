@@ -27,6 +27,7 @@ embed_js(canvas_resize.js   js_canvas_resize)
 
 add_library(bro_engine STATIC
     engine.cpp
+    css_transitions.cpp
     input_handling.cpp
     headless_api.cpp
     key_mapping.cpp

@@ -17,6 +17,7 @@
 
 namespace bro::layout { class FontManager; }
 namespace bro::render { class Renderer; }
+namespace bro::engine { class TransitionManager; }
 
 namespace bro::dom {
 
@@ -75,6 +76,12 @@ public:
 
     // Resolve computed styles for all elements in the tree
     void resolveStyles();
+
+    // Set transition manager for CSS transitions (optional, set by Engine).
+    void setTransitionManager(engine::TransitionManager* tm, double time) {
+        transitionManager_ = tm;
+        transitionTime_ = time;
+    }
 
     // Perform layout on the tree using htmlayout
     void performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics);
@@ -138,6 +145,10 @@ private:
 
     // CSS cascade
     htmlayout::css::Cascade cascade_;
+
+    // CSS transitions (optional, set by Engine)
+    engine::TransitionManager* transitionManager_ = nullptr;
+    double transitionTime_ = 0;
 
     // Elements that need scroll-to-bottom after next layout
     std::unordered_set<Element*> scrollToBottomElements_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/app_loader.h"
+#include "engine/css_transitions.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
 #include "layout/draw_traversal.h"
@@ -257,6 +258,7 @@ private:
     std::unique_ptr<js::Runtime> jsRuntime_;
     std::unique_ptr<js::Timers> timers_;
     std::unique_ptr<dom::Document> document_;
+    TransitionManager transitionManager_;
     std::unique_ptr<layout::DrawTraversal> drawTraversal_;
     std::unique_ptr<layout::SkiaTextMetrics> textMetrics_;
     layout::FontManager fontManager_;

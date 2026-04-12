@@ -47,6 +47,13 @@ namespace bro::engine {
 
 void Engine::flush() {
     jsRuntime_->executePendingJobs();
+    // Tick transitions and mark dirty if any are active
+    if (document_) {
+        document_->setTransitionManager(&transitionManager_, virtualTime_);
+        if (transitionManager_.tick(virtualTime_)) {
+            document_->markDirty();
+        }
+    }
     if (document_ && document_->isDirty()) {
         if (document_->isStructureDirty()) {
             ensureReplacedElements(document_->documentElement());

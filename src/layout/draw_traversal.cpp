@@ -18,7 +18,404 @@
 #include <sstream>
 #include <stb_image.h>
 
+#include <include/core/SkColorFilter.h>
+#include <include/effects/SkImageFilters.h>
+
 namespace bro::layout {
+
+// ---------------------------------------------------------------------------
+// CSS Transform parsing → 2D affine matrix [a b c d e f]
+// Supports: translate, translateX, translateY, scale, scaleX, scaleY,
+//           rotate, skewX, skewY, matrix
+// ---------------------------------------------------------------------------
+struct AffineMatrix {
+    float a = 1, b = 0, c = 0, d = 1, e = 0, f = 0;
+
+    // Multiply this * rhs (post-multiply)
+    AffineMatrix operator*(const AffineMatrix& r) const {
+        return {
+            a * r.a + c * r.b,
+            b * r.a + d * r.b,
+            a * r.c + c * r.d,
+            b * r.c + d * r.d,
+            a * r.e + c * r.f + e,
+            b * r.e + d * r.f + f
+        };
+    }
+
+    bool isIdentity() const {
+        return a == 1 && b == 0 && c == 0 && d == 1 && e == 0 && f == 0;
+    }
+
+    // Invert (returns false if singular)
+    bool invert(AffineMatrix& out) const {
+        float det = a * d - b * c;
+        if (std::abs(det) < 1e-9f) return false;
+        float invDet = 1.0f / det;
+        out.a =  d * invDet;
+        out.b = -b * invDet;
+        out.c = -c * invDet;
+        out.d =  a * invDet;
+        out.e = (c * f - d * e) * invDet;
+        out.f = (b * e - a * f) * invDet;
+        return true;
+    }
+};
+
+// Parse a single float from a position in a string, advancing pos past it.
+static float parseNextFloat(const std::string& s, size_t& pos) {
+    while (pos < s.size() && (s[pos] == ' ' || s[pos] == ',' || s[pos] == '\t'))
+        ++pos;
+    char* end = nullptr;
+    float v = std::strtof(s.c_str() + pos, &end);
+    pos = static_cast<size_t>(end - s.c_str());
+    // Skip optional units (px, deg, rad, turn, %)
+    while (pos < s.size() && std::isalpha(static_cast<unsigned char>(s[pos])))
+        ++pos;
+    if (pos < s.size() && s[pos] == '%') ++pos;
+    return v;
+}
+
+// Convert an angle value to radians. Supports deg (default), rad, turn, grad.
+static float parseAngleRad(const std::string& s, size_t& pos) {
+    while (pos < s.size() && (s[pos] == ' ' || s[pos] == ','))
+        ++pos;
+    char* end = nullptr;
+    float v = std::strtof(s.c_str() + pos, &end);
+    size_t unitStart = static_cast<size_t>(end - s.c_str());
+    std::string unit;
+    size_t u = unitStart;
+    while (u < s.size() && std::isalpha(static_cast<unsigned char>(s[u])))
+        unit += s[u++];
+    pos = u;
+    if (unit == "rad") return v;
+    if (unit == "turn") return v * 2.0f * 3.14159265f;
+    if (unit == "grad") return v * 3.14159265f / 200.0f;
+    return v * 3.14159265f / 180.0f; // deg (default)
+}
+
+// Parse CSS transform string into a combined 2D affine matrix.
+// ref is the element's border box size (for percentage-based translate).
+static AffineMatrix parseTransform(const std::string& val, float refW, float refH) {
+    AffineMatrix result;
+    size_t pos = 0;
+    while (pos < val.size()) {
+        // Skip whitespace
+        while (pos < val.size() && (val[pos] == ' ' || val[pos] == '\t'))
+            ++pos;
+        if (pos >= val.size()) break;
+
+        // Find function name
+        size_t nameStart = pos;
+        while (pos < val.size() && val[pos] != '(' && val[pos] != ' ')
+            ++pos;
+        std::string func = val.substr(nameStart, pos - nameStart);
+        if (pos >= val.size() || val[pos] != '(') break;
+        ++pos; // skip '('
+
+        AffineMatrix m;
+        if (func == "translate") {
+            float tx = parseNextFloat(val, pos);
+            float ty = 0;
+            // Check for second argument
+            size_t saved = pos;
+            while (saved < val.size() && (val[saved] == ' ' || val[saved] == ','))
+                ++saved;
+            if (saved < val.size() && val[saved] != ')')
+                ty = parseNextFloat(val, pos);
+            m.e = tx; m.f = ty;
+        } else if (func == "translateX") {
+            m.e = parseNextFloat(val, pos);
+        } else if (func == "translateY") {
+            m.f = parseNextFloat(val, pos);
+        } else if (func == "scale") {
+            float sx = parseNextFloat(val, pos);
+            float sy = sx;
+            size_t saved = pos;
+            while (saved < val.size() && (val[saved] == ' ' || val[saved] == ','))
+                ++saved;
+            if (saved < val.size() && val[saved] != ')')
+                sy = parseNextFloat(val, pos);
+            m.a = sx; m.d = sy;
+        } else if (func == "scaleX") {
+            m.a = parseNextFloat(val, pos);
+        } else if (func == "scaleY") {
+            m.d = parseNextFloat(val, pos);
+        } else if (func == "rotate") {
+            float rad = parseAngleRad(val, pos);
+            float cosA = std::cos(rad), sinA = std::sin(rad);
+            m.a = cosA; m.c = -sinA;
+            m.b = sinA; m.d =  cosA;
+        } else if (func == "skewX") {
+            float rad = parseAngleRad(val, pos);
+            m.c = std::tan(rad);
+        } else if (func == "skewY") {
+            float rad = parseAngleRad(val, pos);
+            m.b = std::tan(rad);
+        } else if (func == "skew") {
+            float radX = parseAngleRad(val, pos);
+            float radY = 0;
+            size_t saved = pos;
+            while (saved < val.size() && (val[saved] == ' ' || val[saved] == ','))
+                ++saved;
+            if (saved < val.size() && val[saved] != ')')
+                radY = parseAngleRad(val, pos);
+            m.c = std::tan(radX);
+            m.b = std::tan(radY);
+        } else if (func == "matrix") {
+            m.a = parseNextFloat(val, pos);
+            m.b = parseNextFloat(val, pos);
+            m.c = parseNextFloat(val, pos);
+            m.d = parseNextFloat(val, pos);
+            m.e = parseNextFloat(val, pos);
+            m.f = parseNextFloat(val, pos);
+        } else {
+            // Unknown function — skip to closing paren
+        }
+
+        // Skip to closing paren
+        while (pos < val.size() && val[pos] != ')')
+            ++pos;
+        if (pos < val.size()) ++pos; // skip ')'
+
+        result = result * m;
+    }
+    return result;
+}
+
+// Parse transform-origin into pixel offsets relative to border box top-left.
+static void parseTransformOrigin(const htmlayout::css::ComputedStyle& style,
+                                  float bw, float bh,
+                                  float& ox, float& oy) {
+    ox = bw * 0.5f;
+    oy = bh * 0.5f;
+    auto it = style.find("transform-origin");
+    if (it == style.end() || it->second.empty()) return;
+
+    const std::string& val = it->second;
+    size_t pos = 0;
+
+    // Parse X
+    while (pos < val.size() && val[pos] == ' ') ++pos;
+    if (pos < val.size()) {
+        if (val.compare(pos, 4, "left") == 0) { ox = 0; pos += 4; }
+        else if (val.compare(pos, 5, "right") == 0) { ox = bw; pos += 5; }
+        else if (val.compare(pos, 6, "center") == 0) { ox = bw * 0.5f; pos += 6; }
+        else {
+            char* end = nullptr;
+            float v = std::strtof(val.c_str() + pos, &end);
+            if (end != val.c_str() + pos) {
+                size_t upos = static_cast<size_t>(end - val.c_str());
+                if (upos < val.size() && val[upos] == '%')
+                    ox = v * bw / 100.0f;
+                else
+                    ox = v;
+                pos = upos;
+                while (pos < val.size() && (std::isalpha(static_cast<unsigned char>(val[pos])) || val[pos] == '%'))
+                    ++pos;
+            }
+        }
+    }
+
+    // Parse Y
+    while (pos < val.size() && (val[pos] == ' ' || val[pos] == ',')) ++pos;
+    if (pos < val.size()) {
+        if (val.compare(pos, 3, "top") == 0) { oy = 0; }
+        else if (val.compare(pos, 6, "bottom") == 0) { oy = bh; }
+        else if (val.compare(pos, 6, "center") == 0) { oy = bh * 0.5f; }
+        else {
+            char* end = nullptr;
+            float v = std::strtof(val.c_str() + pos, &end);
+            if (end != val.c_str() + pos) {
+                size_t upos = static_cast<size_t>(end - val.c_str());
+                if (upos < val.size() && val[upos] == '%')
+                    oy = v * bh / 100.0f;
+                else
+                    oy = v;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CSS filter parsing → Skia SkImageFilter chain
+// Supports: blur, brightness, contrast, grayscale, sepia, saturate,
+//           hue-rotate, invert, opacity, drop-shadow
+// ---------------------------------------------------------------------------
+static sk_sp<SkImageFilter> parseCSSFilter(const std::string& val) {
+    sk_sp<SkImageFilter> result;
+    size_t pos = 0;
+    while (pos < val.size()) {
+        while (pos < val.size() && (val[pos] == ' ' || val[pos] == '\t'))
+            ++pos;
+        if (pos >= val.size()) break;
+
+        size_t nameStart = pos;
+        while (pos < val.size() && val[pos] != '(') ++pos;
+        std::string func = val.substr(nameStart, pos - nameStart);
+        // Trim trailing whitespace from function name
+        while (!func.empty() && func.back() == ' ') func.pop_back();
+        if (pos >= val.size()) break;
+        ++pos; // skip '('
+
+        // Parse the argument(s)
+        auto readFloat = [&]() -> float {
+            while (pos < val.size() && (val[pos] == ' ' || val[pos] == ','))
+                ++pos;
+            char* end = nullptr;
+            float v = std::strtof(val.c_str() + pos, &end);
+            pos = static_cast<size_t>(end - val.c_str());
+            // Handle % suffix
+            if (pos < val.size() && val[pos] == '%') {
+                v /= 100.0f;
+                ++pos;
+            }
+            // Skip unit suffixes (px, deg, rad, turn)
+            while (pos < val.size() && std::isalpha(static_cast<unsigned char>(val[pos])))
+                ++pos;
+            return v;
+        };
+
+        if (func == "blur") {
+            float sigma = readFloat();
+            result = SkImageFilters::Blur(sigma, sigma, std::move(result));
+        } else if (func == "brightness") {
+            float v = readFloat();
+            // brightness: multiply RGB by v
+            float m[20] = {
+                v, 0, 0, 0, 0,
+                0, v, 0, 0, 0,
+                0, 0, v, 0, 0,
+                0, 0, 0, 1, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "contrast") {
+            float v = readFloat();
+            // contrast: scale RGB around 0.5
+            float t = 0.5f * (1.0f - v);
+            float m[20] = {
+                v, 0, 0, 0, t,
+                0, v, 0, 0, t,
+                0, 0, v, 0, t,
+                0, 0, 0, 1, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "grayscale") {
+            float v = readFloat();
+            v = std::clamp(v, 0.0f, 1.0f);
+            float inv = 1.0f - v;
+            // ITU-R BT.601 luma coefficients
+            float m[20] = {
+                0.2126f + 0.7874f * inv, 0.7152f - 0.7152f * inv, 0.0722f - 0.0722f * inv, 0, 0,
+                0.2126f - 0.2126f * inv, 0.7152f + 0.2848f * inv, 0.0722f - 0.0722f * inv, 0, 0,
+                0.2126f - 0.2126f * inv, 0.7152f - 0.7152f * inv, 0.0722f + 0.9278f * inv, 0, 0,
+                0, 0, 0, 1, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "sepia") {
+            float v = readFloat();
+            v = std::clamp(v, 0.0f, 1.0f);
+            float inv = 1.0f - v;
+            float m[20] = {
+                0.393f + 0.607f * inv, 0.769f - 0.769f * inv, 0.189f - 0.189f * inv, 0, 0,
+                0.349f - 0.349f * inv, 0.686f + 0.314f * inv, 0.168f - 0.168f * inv, 0, 0,
+                0.272f - 0.272f * inv, 0.534f - 0.534f * inv, 0.131f + 0.869f * inv, 0, 0,
+                0, 0, 0, 1, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "saturate") {
+            float v = readFloat();
+            // Same as grayscale but inverted: v=1 is identity, v=0 is full grayscale
+            float m[20] = {
+                0.2126f + 0.7874f * v, 0.7152f - 0.7152f * v, 0.0722f - 0.0722f * v, 0, 0,
+                0.2126f - 0.2126f * v, 0.7152f + 0.2848f * v, 0.0722f - 0.0722f * v, 0, 0,
+                0.2126f - 0.2126f * v, 0.7152f - 0.7152f * v, 0.0722f + 0.9278f * v, 0, 0,
+                0, 0, 0, 1, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "hue-rotate") {
+            // Read angle in degrees
+            while (pos < val.size() && (val[pos] == ' ')) ++pos;
+            char* end = nullptr;
+            float deg = std::strtof(val.c_str() + pos, &end);
+            pos = static_cast<size_t>(end - val.c_str());
+            // Skip unit
+            while (pos < val.size() && std::isalpha(static_cast<unsigned char>(val[pos])))
+                ++pos;
+            float rad = deg * 3.14159265f / 180.0f;
+            float cosA = std::cos(rad), sinA = std::sin(rad);
+            // Hue rotation matrix (rotate in RGB color space around the gray axis)
+            float m[20] = {
+                0.213f + cosA * 0.787f - sinA * 0.213f,
+                0.715f - cosA * 0.715f - sinA * 0.715f,
+                0.072f - cosA * 0.072f + sinA * 0.928f, 0, 0,
+                0.213f - cosA * 0.213f + sinA * 0.143f,
+                0.715f + cosA * 0.285f + sinA * 0.140f,
+                0.072f - cosA * 0.072f - sinA * 0.283f, 0, 0,
+                0.213f - cosA * 0.213f - sinA * 0.787f,
+                0.715f - cosA * 0.715f + sinA * 0.715f,
+                0.072f + cosA * 0.928f + sinA * 0.072f, 0, 0,
+                0, 0, 0, 1, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "invert") {
+            float v = readFloat();
+            v = std::clamp(v, 0.0f, 1.0f);
+            // invert: lerp between identity and full inversion
+            float s = 1.0f - 2.0f * v; // scale: 1 at v=0, -1 at v=1
+            float t = v;               // translate: 0 at v=0, 1 at v=1
+            float m[20] = {
+                s, 0, 0, 0, t,
+                0, s, 0, 0, t,
+                0, 0, s, 0, t,
+                0, 0, 0, 1, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "opacity") {
+            float v = readFloat();
+            float m[20] = {
+                1, 0, 0, 0, 0,
+                0, 1, 0, 0, 0,
+                0, 0, 1, 0, 0,
+                0, 0, 0, v, 0
+            };
+            auto cf = SkColorFilters::Matrix(m);
+            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+        } else if (func == "drop-shadow") {
+            float dx = readFloat();
+            float dy = readFloat();
+            float blur = readFloat();
+            // Try to parse color (remaining tokens before ')')
+            render::Color sc = {0, 0, 0, 255};
+            size_t colorStart = pos;
+            while (pos < val.size() && val[pos] != ')') ++pos;
+            std::string colorStr = val.substr(colorStart, pos - colorStart);
+            // Trim
+            size_t ca = colorStr.find_first_not_of(" \t");
+            if (ca != std::string::npos) {
+                colorStr = colorStr.substr(ca);
+                size_t cb = colorStr.find_last_not_of(" \t");
+                if (cb != std::string::npos) colorStr = colorStr.substr(0, cb + 1);
+                DrawTraversal::tryParseColor(colorStr, sc);
+            }
+            SkColor skc = SkColorSetARGB(sc.a, sc.r, sc.g, sc.b);
+            auto shadow = SkImageFilters::DropShadow(dx, dy, blur / 2.0f, blur / 2.0f, skc, std::move(result));
+            result = std::move(shadow);
+        }
+
+        // Skip to closing paren
+        while (pos < val.size() && val[pos] != ')') ++pos;
+        if (pos < val.size()) ++pos;
+    }
+    return result;
+}
 
 /// Get the effective vertical overflow value, checking overflow-y then overflow.
 static std::string getOverflowY(const htmlayout::css::ComputedStyle& style) {
@@ -114,6 +511,25 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     float bw = box.fullWidth();
     float bh = box.fullHeight();
 
+    // CSS Transform: wrap entire element drawing in a transform
+    bool hasTransform = false;
+    {
+        auto trIt = style.find("transform");
+        if (trIt != style.end() && !trIt->second.empty() && trIt->second != "none") {
+            AffineMatrix mat = parseTransform(trIt->second, bw, bh);
+            if (!mat.isIdentity()) {
+                hasTransform = true;
+                float ox, oy;
+                parseTransformOrigin(style, bw, bh, ox, oy);
+                // Apply: translate to origin, concat matrix, translate back
+                renderer_->save();
+                renderer_->translate(bx + ox, by + oy);
+                renderer_->concat(mat.a, mat.b, mat.c, mat.d, mat.e, mat.f);
+                renderer_->translate(-(bx + ox), -(by + oy));
+            }
+        }
+    }
+
     // Opacity: wrap entire element in a layer
     bool hasOpacity = false;
     auto opIt = style.find("opacity");
@@ -125,43 +541,83 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         }
     }
 
+    // CSS filter: wrap element drawing in a filter layer
+    bool hasFilter = false;
+    {
+        auto fIt = style.find("filter");
+        if (fIt != style.end() && !fIt->second.empty() && fIt->second != "none") {
+            auto filter = parseCSSFilter(fIt->second);
+            if (filter) {
+                hasFilter = true;
+                // Use a generous bounds that includes blur/shadow overflow
+                renderer_->saveLayerWithFilter(filter.get(),
+                    bx - 50, by - 50, bw + 100, bh + 100);
+            }
+        }
+    }
+
     if (visible) {
-        // Box shadow (drawn before background, behind the element)
+        // Box shadows (drawn before background, behind the element).
+        // Supports multiple comma-separated shadows.  CSS spec: first shadow
+        // in the list is drawn on top (closest to element), so we draw in
+        // reverse order.
         auto bsIt = style.find("box-shadow");
         if (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none") {
             float radius = getBorderRadius(style);
-            // Parse: offsetX offsetY blur spread color [inset]
-            // Simplified: single shadow, no inset
-            std::string val = bsIt->second;
-            bool inset = false;
-            if (val.find("inset") != std::string::npos) {
-                inset = true;
-                // Remove "inset" from the string
-                auto pos = val.find("inset");
-                val.erase(pos, 5);
-            }
-            std::istringstream iss(val);
-            std::vector<float> nums;
-            std::string colorStr;
-            std::string token;
-            while (iss >> token) {
-                char* end = nullptr;
-                float v = std::strtof(token.c_str(), &end);
-                if (end != token.c_str() && (*end == '\0' || *end == 'p'))
-                    nums.push_back(v);
-                else {
-                    if (!colorStr.empty()) colorStr += ' ';
-                    colorStr += token;
+
+            // Split on commas, respecting parentheses (for rgb()/rgba())
+            std::vector<std::string> shadows;
+            {
+                const auto& full = bsIt->second;
+                int depth = 0;
+                size_t start = 0;
+                for (size_t i = 0; i <= full.size(); ++i) {
+                    if (i < full.size() && full[i] == '(') ++depth;
+                    else if (i < full.size() && full[i] == ')') --depth;
+                    else if ((i == full.size() || full[i] == ',') && depth <= 0) {
+                        std::string s = full.substr(start, i - start);
+                        // Trim leading/trailing whitespace
+                        size_t a = s.find_first_not_of(" \t");
+                        size_t b = s.find_last_not_of(" \t");
+                        if (a != std::string::npos)
+                            shadows.push_back(s.substr(a, b - a + 1));
+                        start = i + 1;
+                    }
                 }
             }
-            if (nums.size() >= 2) {
-                float sdx = nums[0], sdy = nums[1];
-                float sblur = nums.size() >= 3 ? nums[2] : 0;
-                float sspread = nums.size() >= 4 ? nums[3] : 0;
-                render::Color sc = {0, 0, 0, 80};
-                if (!colorStr.empty()) tryParseColor(colorStr, sc);
-                renderer_->drawBoxShadow(bx, by, bw, bh, radius, radius,
-                                        sdx, sdy, sblur, sspread, sc, inset);
+
+            // Draw in reverse order (last shadow = furthest from element = drawn first)
+            for (int si = static_cast<int>(shadows.size()) - 1; si >= 0; --si) {
+                std::string val = shadows[si];
+                bool inset = false;
+                auto ipos = val.find("inset");
+                if (ipos != std::string::npos) {
+                    inset = true;
+                    val.erase(ipos, 5);
+                }
+                std::istringstream iss(val);
+                std::vector<float> nums;
+                std::string colorStr;
+                std::string token;
+                while (iss >> token) {
+                    char* end = nullptr;
+                    float v = std::strtof(token.c_str(), &end);
+                    if (end != token.c_str() && (*end == '\0' || *end == 'p'))
+                        nums.push_back(v);
+                    else {
+                        if (!colorStr.empty()) colorStr += ' ';
+                        colorStr += token;
+                    }
+                }
+                if (nums.size() >= 2) {
+                    float sdx = nums[0], sdy = nums[1];
+                    float sblur = nums.size() >= 3 ? nums[2] : 0;
+                    float sspread = nums.size() >= 4 ? nums[3] : 0;
+                    render::Color sc = {0, 0, 0, 80};
+                    if (!colorStr.empty()) tryParseColor(colorStr, sc);
+                    renderer_->drawBoxShadow(bx, by, bw, bh, radius, radius,
+                                            sdx, sdy, sblur, sspread, sc, inset);
+                }
             }
         }
 
@@ -261,7 +717,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         if (needsClip) {
             renderer_->restore();
         }
+        if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
+        if (hasTransform) renderer_->restore();
         return;
     }
 
@@ -280,7 +738,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             layerBreakCb_(scene, 0, x, y, w, h);
         }
         if (needsClip) renderer_->restore();
+        if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
+        if (hasTransform) renderer_->restore();
         return;
     }
     if (elem->canvasScene() && visible) {
@@ -289,7 +749,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             layerBreakCb_(scene, 0, x, y, w, h);
         }
         if (needsClip) renderer_->restore();
+        if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
+        if (hasTransform) renderer_->restore();
         return;
     }
     if (elem->webglContext() && visible) {
@@ -298,7 +760,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             layerBreakCb_(nullptr, webglCtx->colorTexture(), x, y, w, h);
         }
         if (needsClip) renderer_->restore();
+        if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
+        if (hasTransform) renderer_->restore();
         return;
     }
 
@@ -330,7 +794,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (needsClip) {
         renderer_->restore();
     }
+    if (hasFilter) renderer_->restore();
     if (hasOpacity) renderer_->restore();
+    if (hasTransform) renderer_->restore();
 }
 
 void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w, float h) {

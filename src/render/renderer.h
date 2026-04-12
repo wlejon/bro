@@ -8,6 +8,7 @@
 #include <vector>
 
 class SkCanvas;
+class SkImageFilter;
 class SkSurface;
 
 namespace bro::render {
@@ -106,6 +107,17 @@ public:
     virtual void saveLayerAlpha(uint8_t alpha) = 0;
     virtual void translate(float dx, float dy) = 0;
     virtual void scale(float sx, float sy) = 0;
+    virtual void rotate(float degrees) = 0;
+
+    // Concatenate a 2D affine matrix [a b c d e f] (column-major: a,b = first col,
+    // c,d = second col, e,f = translation).  Maps to CSS matrix(a,b,c,d,e,f).
+    virtual void concat(float a, float b, float c, float d, float e, float f) = 0;
+
+    // Save a layer with a CSS image filter applied. Everything drawn until
+    // the matching restore() passes through the filter.  Takes ownership of
+    // the filter reference.  If filter is null, behaves like save().
+    virtual void saveLayerWithFilter(SkImageFilter* filter,
+                                     float x, float y, float w, float h) = 0;
 
     virtual void setClip(float x, float y, float w, float h) = 0;
     virtual void resetClip() = 0;

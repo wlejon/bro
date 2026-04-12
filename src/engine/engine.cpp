@@ -568,6 +568,7 @@ Engine::Engine(const EngineConfig& config)
     // Headless: do initial layout + flush
     if (displayMode_ == DisplayMode::Headless) {
         ensureReplacedElements(document_->documentElement());
+        document_->setTransitionManager(&transitionManager_, virtualTime_);
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
         flush();
@@ -917,7 +918,13 @@ void Engine::layoutThreadFunc() {
 
         // Style resolution + layout computation
         if (document_) {
+            double now = util::currentTimeMs();
+            document_->setTransitionManager(&transitionManager_, now);
             document_->resolveStyles();
+            // If transitions are active, keep re-rendering
+            if (transitionManager_.tick(now)) {
+                document_->markDirty();
+            }
             document_->clearStructureDirty();
             document_->performLayout(static_cast<float>(vpW),
                                      static_cast<float>(vpH),

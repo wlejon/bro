@@ -1,4 +1,5 @@
 #include "dom/document.h"
+#include "engine/css_transitions.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/layout_node_adapter.h"
 #include "css/parser.h"
@@ -241,7 +242,18 @@ void Document::resolveStylesRecursive(Element* elem,
             }
         }
 
+        // CSS transitions: detect property changes and start transitions
+        if (transitionManager_ && !elem->computedStyle().empty()) {
+            transitionManager_->onStyleChange(elem, elem->computedStyle(), computed, transitionTime_);
+        }
+
         elem->setComputedStyle(std::move(computed));
+
+        // CSS transitions: apply interpolated overrides after setting style
+        if (transitionManager_) {
+            transitionManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
+        }
+
         elem->clearDirty();
     }
 

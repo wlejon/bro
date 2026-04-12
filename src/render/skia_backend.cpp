@@ -23,6 +23,7 @@
 #include <include/core/SkPathBuilder.h>
 #include <include/utils/SkParsePath.h>
 #include <include/effects/SkGradient.h>
+#include <include/core/SkImageFilter.h>
 #include <include/core/SkMaskFilter.h>
 #include <include/core/SkBlurTypes.h>
 #ifdef _WIN32
@@ -320,8 +321,48 @@ void SkiaRenderer::drawBoxShadow(float x, float y, float w, float h,
                                  float blur, float spread,
                                  Color color, bool inset) {
     if (!canvas_) return;
-    (void)inset; // TODO: inset shadows
 
+    if (inset) {
+        // Inset shadow: clip to element bounds, then draw a large rect with a
+        // hole cut out (the hole is the element rect shrunk by spread and offset).
+        canvas_->save();
+        SkRect clipRect = SkRect::MakeXYWH(x, y, w, h);
+        if (rx > 0 || ry > 0)
+            canvas_->clipRRect(SkRRect::MakeRectXY(clipRect, rx, ry));
+        else
+            canvas_->clipRect(clipRect);
+
+        // Inner hole: offset inward, shrunk by spread
+        float ix = x + offsetX + spread;
+        float iy = y + offsetY + spread;
+        float iw = w - spread * 2;
+        float ih = h - spread * 2;
+        float ir = std::max(0.0f, rx - spread);
+
+        // Outer rect (large enough to cover blur extent outside clip)
+        float pad = blur * 2 + 100;
+        SkRect outerRect = SkRect::MakeXYWH(x - pad, y - pad, w + pad * 2, h + pad * 2);
+
+        SkPathBuilder pb;
+        pb.addRect(outerRect);
+        if (ir > 0)
+            pb.addRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(ix, iy, iw, ih), ir, ir));
+        else
+            pb.addRect(SkRect::MakeXYWH(ix, iy, iw, ih));
+        pb.setFillType(SkPathFillType::kEvenOdd);
+        SkPath path = pb.detach();
+
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+        if (blur > 0)
+            paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+        canvas_->drawPath(path, paint);
+        canvas_->restore();
+        return;
+    }
+
+    // Outer shadow
     float sx = x + offsetX - spread;
     float sy = y + offsetY - spread;
     float sw = w + spread * 2;
@@ -361,6 +402,30 @@ void SkiaRenderer::translate(float dx, float dy) {
 
 void SkiaRenderer::scale(float sx, float sy) {
     if (canvas_) canvas_->scale(sx, sy);
+}
+
+void SkiaRenderer::rotate(float degrees) {
+    if (canvas_) canvas_->rotate(degrees);
+}
+
+void SkiaRenderer::saveLayerWithFilter(SkImageFilter* filter, float x, float y, float w, float h) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setImageFilter(sk_ref_sp(filter));
+    SkRect bounds = SkRect::MakeXYWH(x, y, w, h);
+    canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
+}
+
+void SkiaRenderer::concat(float a, float b, float c, float d, float e, float f) {
+    if (!canvas_) return;
+    // CSS matrix(a,b,c,d,e,f) maps to SkMatrix:
+    //   [a c e]     SkMatrix uses row-major: [scaleX skewX transX]
+    //   [b d f]                               [skewY scaleY transY]
+    //   [0 0 1]                               [persp0 persp1 persp2]
+    SkMatrix m = SkMatrix::MakeAll(a, c, e,
+                                   b, d, f,
+                                   0, 0, 1);
+    canvas_->concat(m);
 }
 
 void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h) {
