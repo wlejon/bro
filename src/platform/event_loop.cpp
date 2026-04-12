@@ -73,13 +73,13 @@ void EventLoop::pollEvents() {
 
             case SDL_EVENT_DROP_FILE:
                 if (onDropFile && event.drop.data) {
-                    onDropFile(event.drop.data);
+                    onDropFile(event.drop.data, event.drop.x, event.drop.y);
                 }
                 break;
 
             case SDL_EVENT_DROP_TEXT:
                 if (onDropText && event.drop.data) {
-                    onDropText(event.drop.data);
+                    onDropText(event.drop.data, event.drop.x, event.drop.y);
                 }
                 break;
 

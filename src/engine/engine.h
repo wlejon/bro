@@ -119,8 +119,8 @@ public:
     void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
     void handleTextInput(const std::string& text);
     void handleWheel(float x, float y, float dx, float dy);
-    void handleDropFile(const std::string& path);
-    void handleDropText(const std::string& text);
+    void handleDropFile(const std::string& path, float x = -1, float y = -1);
+    void handleDropText(const std::string& text, float x = -1, float y = -1);
 
     // Clipboard simulation (for headless testing — bypasses system clipboard)
     void simulatePaste(const std::string& text);

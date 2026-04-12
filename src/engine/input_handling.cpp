@@ -1122,11 +1122,13 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
 // File/text drop handling
 // ---------------------------------------------------------------------------
 
-void Engine::handleDropFile(const std::string& path) {
+void Engine::handleDropFile(const std::string& path, float x, float y) {
     if (!document_) return;
 
-    // Hit test at last known mouse position
-    float docX = lastMouseX_, docY = lastMouseY_ + scrollY_;
+    // Use provided coordinates, fall back to last mouse position
+    float dropX = (x >= 0) ? x : lastMouseX_;
+    float dropY = (y >= 0) ? y : lastMouseY_;
+    float docX = dropX, docY = dropY + scrollY_;
     dom::Element* target = hitTest(docX, docY);
     if (!target) target = document_->body();
     if (!target) return;
@@ -1148,10 +1150,12 @@ void Engine::handleDropFile(const std::string& path) {
     dispatchEvent(target, dropEvt);
 }
 
-void Engine::handleDropText(const std::string& text) {
+void Engine::handleDropText(const std::string& text, float x, float y) {
     if (!document_) return;
 
-    float docX = lastMouseX_, docY = lastMouseY_ + scrollY_;
+    float dropX = (x >= 0) ? x : lastMouseX_;
+    float dropY = (y >= 0) ? y : lastMouseY_;
+    float docX = dropX, docY = dropY + scrollY_;
     dom::Element* target = hitTest(docX, docY);
     if (!target) target = document_->body();
     if (!target) return;

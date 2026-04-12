@@ -1266,11 +1266,11 @@ void Engine::run() {
         handleWheel(x, y, dx, dy);
     };
 
-    eventLoop_->onDropFile = [this](const std::string& path) {
-        handleDropFile(path);
+    eventLoop_->onDropFile = [this](const std::string& path, float x, float y) {
+        handleDropFile(path, x, y);
     };
-    eventLoop_->onDropText = [this](const std::string& text) {
-        handleDropText(text);
+    eventLoop_->onDropText = [this](const std::string& text, float x, float y) {
+        handleDropText(text, x, y);
     };
 
     // Initial layout

@@ -21,8 +21,8 @@ public:
     std::function<void(int32_t keycode, int32_t scancode, uint16_t mod, bool repeat)> onKeyUp;
     std::function<void(const std::string& text)> onTextInput;
     std::function<void(float x, float y, float dx, float dy)> onWheel;
-    std::function<void(const std::string& path)> onDropFile;
-    std::function<void(const std::string& text)> onDropText;
+    std::function<void(const std::string& path, float x, float y)> onDropFile;
+    std::function<void(const std::string& text, float x, float y)> onDropText;
 
     /// Polls all pending SDL events and dispatches to callbacks.
     /// Call once per frame.
