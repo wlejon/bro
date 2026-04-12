@@ -769,7 +769,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // Children's offset is the parent's absolute content position
     // (so child positions, which are relative to parent content area, become absolute)
     float childOffsetX = x;
-    float childOffsetY = y - elem->scrollTopValue();
+    // Clamp scrollTop to valid range — JS may have set it before layout updated
+    float maxST = std::max(0.0f, box.naturalHeight - box.contentRect.height);
+    float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxST);
+    float childOffsetY = y - scrollTop;
 
     // Draw composed children (shadow DOM + slot replacement)
     for (auto* child : elem->composedChildNodes())

@@ -1402,8 +1402,12 @@ static JSValue js_element_set_scrollTop(JSContext* ctx, JSValueConst this_val, J
     if (!el) return JS_UNDEFINED;
     double v = 0;
     JS_ToFloat64(ctx, &v, val);
+    // Clamp to [0, maxScroll] per spec
+    auto& box = el->layoutBox();
+    float maxScroll = std::max(0.0f, box.naturalHeight - box.contentRect.height);
+    float clamped = std::clamp(static_cast<float>(v), 0.0f, maxScroll);
     float prev = el->scrollTopValue();
-    el->setScrollTopValue(static_cast<float>(v));
+    el->setScrollTopValue(clamped);
     if (el->document()) el->document()->markDirty();
     if (static_cast<float>(v) != prev) {
         bro::dom::Event evt("scroll", false, false);
