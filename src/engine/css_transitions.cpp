@@ -503,9 +503,7 @@ void TransitionManager::onStyleChange(dom::Element* elem,
         }
         if (!found) {
             et.active.push_back({prop, oldVal, newVal, currentTime, dur, delay, easing});
-            if (eventCallback_) {
-                eventCallback_(elem, "transitionstart", prop, 0.0);
-            }
+            pendingEvents_.push_back({elem, "transitionstart", prop, 0.0});
         }
 
         // Set the current value to the start value (transition hasn't progressed yet)
@@ -520,14 +518,12 @@ bool TransitionManager::tick(double currentTime) {
         auto& et = it->second;
         dom::Element* elem = it->first;
 
-        // Fire transitionend for completed transitions before removing them
-        if (eventCallback_) {
-            for (auto& tr : et.active) {
-                double elapsed = currentTime - tr.startTime - tr.delay;
-                if (elapsed >= tr.duration) {
-                    eventCallback_(elem, "transitionend", tr.property,
-                                   tr.duration / 1000.0);
-                }
+        // Queue transitionend for completed transitions before removing them
+        for (auto& tr : et.active) {
+            double elapsed = currentTime - tr.startTime - tr.delay;
+            if (elapsed >= tr.duration) {
+                pendingEvents_.push_back({elem, "transitionend", tr.property,
+                                          tr.duration / 1000.0});
             }
         }
 
@@ -625,12 +621,17 @@ void AnimationManager::onStyleChange(dom::Element* elem,
         int numIdx = 0;
         while (iss >> tok) {
             char* end = nullptr;
-            std::strtof(tok.c_str(), &end);
-            bool isTime = (end != tok.c_str() &&
-                (std::string(end) == "s" || std::string(end) == "ms"));
+            float numVal = std::strtof(tok.c_str(), &end);
+            bool isNumber = (end != tok.c_str());
+            std::string suffix = isNumber ? std::string(end) : "";
+            bool isTime = isNumber && (suffix == "s" || suffix == "ms");
+            bool isBareNumber = isNumber && suffix.empty();
             if (isTime) {
                 if (numIdx == 0) { durStr = tok; ++numIdx; }
                 else { delayStr = tok; ++numIdx; }
+            } else if (isBareNumber && numVal > 0) {
+                // Bare number = iteration count (e.g. "3")
+                iterStr = tok;
             } else if (tok == "ease" || tok == "linear" || tok == "ease-in" ||
                        tok == "ease-out" || tok == "ease-in-out") {
                 timingStr = tok;
@@ -684,9 +685,7 @@ void AnimationManager::onStyleChange(dom::Element* elem,
     ea.active.push_back({animName, dur, delay, easing, iterCount,
                          alternate, reverse, fillMode, currentTime, 0});
 
-    if (eventCallback_) {
-        eventCallback_(elem, "animationstart", animName, 0.0);
-    }
+    pendingEvents_.push_back({elem, "animationstart", animName, 0.0});
 }
 
 bool AnimationManager::tick(double currentTime) {
@@ -696,32 +695,30 @@ bool AnimationManager::tick(double currentTime) {
         auto& ea = it->second;
         dom::Element* elem = it->first;
 
-        if (eventCallback_) {
-            for (auto& a : ea.active) {
-                double elapsed = currentTime - a.startTime - a.delay;
-                if (elapsed < 0) continue;
+        for (auto& a : ea.active) {
+            double elapsed = currentTime - a.startTime - a.delay;
+            if (elapsed < 0) continue;
 
-                // Check for iteration events
-                int currentIter = (a.duration > 0)
-                    ? static_cast<int>(elapsed / a.duration) : 0;
-                if (currentIter > a.completedIterations && a.completedIterations > 0) {
-                    // Don't fire iteration event on the final completion
-                    bool isComplete = a.iterationCount >= 0 &&
-                        elapsed >= a.duration * a.iterationCount;
-                    if (!isComplete) {
-                        eventCallback_(elem, "animationiteration", a.name,
-                                       elapsed / 1000.0);
-                    }
+            // Check for iteration events
+            int currentIter = (a.duration > 0)
+                ? static_cast<int>(elapsed / a.duration) : 0;
+            if (currentIter > a.completedIterations && a.completedIterations > 0) {
+                // Don't fire iteration event on the final completion
+                bool isComplete = a.iterationCount >= 0 &&
+                    elapsed >= a.duration * a.iterationCount;
+                if (!isComplete) {
+                    pendingEvents_.push_back({elem, "animationiteration", a.name,
+                                              elapsed / 1000.0});
                 }
-                a.completedIterations = currentIter;
+            }
+            a.completedIterations = currentIter;
 
-                // Check for completion
-                if (a.iterationCount >= 0 &&
-                    elapsed >= a.duration * a.iterationCount) {
-                    double totalDuration = a.duration * a.iterationCount;
-                    eventCallback_(elem, "animationend", a.name,
-                                   totalDuration / 1000.0);
-                }
+            // Check for completion
+            if (a.iterationCount >= 0 &&
+                elapsed >= a.duration * a.iterationCount) {
+                double totalDuration = a.duration * a.iterationCount;
+                pendingEvents_.push_back({elem, "animationend", a.name,
+                                          totalDuration / 1000.0});
             }
         }
 

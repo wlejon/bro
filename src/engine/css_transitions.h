@@ -3,7 +3,6 @@
 #include <css/cascade.h>
 
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -50,13 +49,14 @@ struct ElementTransitions {
     htmlayout::css::ComputedStyle targetStyle;
 };
 
-// Callback for transition/animation lifecycle events.
-// type: "transitionrun", "transitionstart", "transitionend",
-//       "animationstart", "animationend", "animationiteration"
-// name: property name (transitions) or animation name (animations)
-// elapsedTime: seconds elapsed
-using CSSEventCallback = std::function<void(dom::Element* elem,
-    const std::string& type, const std::string& name, double elapsedTime)>;
+// Queued CSS event for thread-safe dispatch.
+// Events are queued on the layout thread, then drained on the main thread.
+struct PendingCSSEvent {
+    dom::Element* element;
+    std::string type;   // "transitionstart", "transitionend", "animationstart", etc.
+    std::string name;   // property name (transitions) or animation name (animations)
+    double elapsedTime; // seconds
+};
 
 // Manages CSS transitions for all elements.
 class TransitionManager {
@@ -89,11 +89,13 @@ public:
     static std::string interpolate(const std::string& from, const std::string& to,
                                    float t, const std::string& property);
 
-    // Set callback for transition lifecycle events.
-    void setEventCallback(CSSEventCallback cb) { eventCallback_ = std::move(cb); }
+    // Take all pending events (call from main thread after layout completes).
+    std::vector<PendingCSSEvent> takePendingEvents() {
+        return std::move(pendingEvents_);
+    }
 
 private:
-    CSSEventCallback eventCallback_;
+    std::vector<PendingCSSEvent> pendingEvents_;
     std::unordered_map<dom::Element*, ElementTransitions> elements_;
 };
 
@@ -142,11 +144,13 @@ public:
     void removeElement(dom::Element* elem);
     bool hasActiveAnimations() const { return !elements_.empty(); }
 
-    // Set callback for animation lifecycle events.
-    void setEventCallback(CSSEventCallback cb) { eventCallback_ = std::move(cb); }
+    // Take all pending events (call from main thread after layout completes).
+    std::vector<PendingCSSEvent> takePendingEvents() {
+        return std::move(pendingEvents_);
+    }
 
 private:
-    CSSEventCallback eventCallback_;
+    std::vector<PendingCSSEvent> pendingEvents_;
     const std::vector<htmlayout::css::KeyframeBlock>* keyframes_ = nullptr;
     std::unordered_map<dom::Element*, ElementAnimations> elements_;
 
