@@ -119,6 +119,75 @@ static std::string colorToRGBA(float r, float g, float b, float a) {
     return oss.str();
 }
 
+// Parse a CSS function call like "rotate(30deg)" into name + numeric args.
+// Returns false if the string doesn't look like func(...).
+struct CSSFunc {
+    std::string name;
+    std::vector<float> args;
+    std::vector<std::string> argUnits; // unit suffix for each arg
+};
+
+static bool parseCSSFunctions(const std::string& val, std::vector<CSSFunc>& out) {
+    out.clear();
+    size_t pos = 0;
+    while (pos < val.size()) {
+        while (pos < val.size() && (val[pos] == ' ' || val[pos] == '\t'))
+            ++pos;
+        if (pos >= val.size()) break;
+
+        size_t nameStart = pos;
+        while (pos < val.size() && val[pos] != '(' && val[pos] != ' ')
+            ++pos;
+        if (pos >= val.size() || val[pos] != '(') return false;
+        std::string func = val.substr(nameStart, pos - nameStart);
+        ++pos; // skip '('
+
+        CSSFunc cf;
+        cf.name = func;
+
+        // Parse args until ')'
+        while (pos < val.size() && val[pos] != ')') {
+            while (pos < val.size() && (val[pos] == ' ' || val[pos] == ',' || val[pos] == '\t'))
+                ++pos;
+            if (pos >= val.size() || val[pos] == ')') break;
+            char* end = nullptr;
+            float v = std::strtof(val.c_str() + pos, &end);
+            if (end == val.c_str() + pos) return false; // not a number
+            size_t uStart = static_cast<size_t>(end - val.c_str());
+            std::string unit;
+            while (uStart < val.size() && (std::isalpha(static_cast<unsigned char>(val[uStart])) || val[uStart] == '%'))
+                unit += val[uStart++];
+            cf.args.push_back(v);
+            cf.argUnits.push_back(unit);
+            pos = uStart;
+        }
+        if (pos < val.size()) ++pos; // skip ')'
+
+        out.push_back(std::move(cf));
+    }
+    return !out.empty();
+}
+
+static std::string interpolateCSSFunctions(const std::vector<CSSFunc>& a,
+                                            const std::vector<CSSFunc>& b,
+                                            float t) {
+    std::ostringstream oss;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (i > 0) oss << " ";
+        oss << a[i].name << "(";
+        size_t nArgs = a[i].args.size();
+        for (size_t j = 0; j < nArgs; ++j) {
+            if (j > 0) oss << ", ";
+            float v = a[i].args[j] + (b[i].args[j] - a[i].args[j]) * t;
+            oss << v;
+            if (!b[i].argUnits[j].empty()) oss << b[i].argUnits[j];
+            else if (!a[i].argUnits[j].empty()) oss << a[i].argUnits[j];
+        }
+        oss << ")";
+    }
+    return oss.str();
+}
+
 std::string TransitionManager::interpolate(const std::string& from, const std::string& to,
                                            float t, const std::string& property) {
     // Try numeric interpolation first (handles px, em, %, unitless)
@@ -148,6 +217,26 @@ std::string TransitionManager::interpolate(const std::string& from, const std::s
             float b = b1 + (b2 - b1) * t;
             float a = a1 + (a2 - a1) * t;
             return colorToRGBA(r, g, b, a);
+        }
+    }
+
+    // Try CSS function interpolation (transforms, filters, etc.)
+    // e.g. "rotate(0deg)" → "rotate(360deg)", "scale(1)" → "scale(1.5)"
+    {
+        std::vector<CSSFunc> funcsA, funcsB;
+        if (parseCSSFunctions(from, funcsA) && parseCSSFunctions(to, funcsB) &&
+            funcsA.size() == funcsB.size()) {
+            bool compatible = true;
+            for (size_t i = 0; i < funcsA.size(); ++i) {
+                if (funcsA[i].name != funcsB[i].name ||
+                    funcsA[i].args.size() != funcsB[i].args.size()) {
+                    compatible = false;
+                    break;
+                }
+            }
+            if (compatible) {
+                return interpolateCSSFunctions(funcsA, funcsB, t);
+            }
         }
     }
 
@@ -404,20 +493,34 @@ const htmlayout::css::KeyframeBlock* AnimationManager::findKeyframes(const std::
 void AnimationManager::onStyleChange(dom::Element* elem,
                                      const htmlayout::css::ComputedStyle& newStyle,
                                      double currentTime) {
-    // Check for animation declarations
+    // Check for animation declarations — try longhands first, then shorthand
     std::string animName;
+    std::string durStr, timingStr, delayStr, iterStr, directionStr, fillModeStr;
+
     auto anIt = newStyle.find("animation-name");
     if (anIt != newStyle.end() && anIt->second != "none" && !anIt->second.empty()) {
         animName = anIt->second;
+        // Read longhand properties
+        auto it = newStyle.find("animation-duration");
+        if (it != newStyle.end()) durStr = it->second;
+        it = newStyle.find("animation-timing-function");
+        if (it != newStyle.end()) timingStr = it->second;
+        it = newStyle.find("animation-delay");
+        if (it != newStyle.end()) delayStr = it->second;
+        it = newStyle.find("animation-iteration-count");
+        if (it != newStyle.end()) iterStr = it->second;
+        it = newStyle.find("animation-direction");
+        if (it != newStyle.end()) directionStr = it->second;
+        it = newStyle.find("animation-fill-mode");
+        if (it != newStyle.end()) fillModeStr = it->second;
     } else {
         // Try shorthand: animation: name duration timing delay iteration direction fill
         auto aIt = newStyle.find("animation");
         if (aIt == newStyle.end() || aIt->second.empty() || aIt->second == "none")
             return;
-        // Parse shorthand — first non-time, non-keyword token is the name
+        // Parse shorthand
         std::istringstream iss(aIt->second);
         std::string tok;
-        std::string dur, timing, delay, iterStr, direction, fillMode;
         int numIdx = 0;
         while (iss >> tok) {
             char* end = nullptr;
@@ -425,25 +528,23 @@ void AnimationManager::onStyleChange(dom::Element* elem,
             bool isTime = (end != tok.c_str() &&
                 (std::string(end) == "s" || std::string(end) == "ms"));
             if (isTime) {
-                if (numIdx == 0) { dur = tok; ++numIdx; }
-                else { delay = tok; ++numIdx; }
+                if (numIdx == 0) { durStr = tok; ++numIdx; }
+                else { delayStr = tok; ++numIdx; }
             } else if (tok == "ease" || tok == "linear" || tok == "ease-in" ||
                        tok == "ease-out" || tok == "ease-in-out") {
-                timing = tok;
+                timingStr = tok;
             } else if (tok == "infinite") {
                 iterStr = tok;
             } else if (tok == "alternate" || tok == "alternate-reverse" ||
                        tok == "reverse" || tok == "normal") {
-                direction = tok;
+                directionStr = tok;
             } else if (tok == "none" || tok == "forwards" || tok == "backwards" || tok == "both") {
-                fillMode = tok;
+                fillModeStr = tok;
             } else {
                 animName = tok;
             }
         }
         if (animName.empty()) return;
-        // Store parsed values back for use below
-        // (We'll re-read from newStyle, so set them if not already there)
     }
 
     // Check if we already have this animation running on this element
@@ -454,58 +555,30 @@ void AnimationManager::onStyleChange(dom::Element* elem,
 
     if (!findKeyframes(animName)) return; // no keyframes defined
 
-    // Parse animation properties
-    auto getDur = [&]() -> double {
-        auto it = newStyle.find("animation-duration");
-        if (it != newStyle.end()) return parseDurationMs(it->second);
-        // Try from shorthand
-        auto aIt = newStyle.find("animation");
-        if (aIt != newStyle.end()) {
-            std::istringstream iss(aIt->second);
-            std::string tok;
-            while (iss >> tok) {
-                char* end = nullptr;
-                std::strtof(tok.c_str(), &end);
-                if (end != tok.c_str() && (std::string(end) == "s" || std::string(end) == "ms"))
-                    return parseDurationMs(tok);
-            }
-        }
-        return 0;
-    };
-
-    double dur = getDur();
+    // Parse collected values
+    double dur = parseDurationMs(durStr);
     if (dur <= 0) return;
 
     CubicBezier easing = CubicBezier::ease();
-    auto tfIt = newStyle.find("animation-timing-function");
-    if (tfIt != newStyle.end()) easing = parseTimingFunction(tfIt->second);
+    if (!timingStr.empty()) easing = parseTimingFunction(timingStr);
 
     double delay = 0;
-    auto dlIt = newStyle.find("animation-delay");
-    if (dlIt != newStyle.end()) delay = parseDurationMs(dlIt->second);
+    if (!delayStr.empty()) delay = parseDurationMs(delayStr);
 
     int iterCount = 1;
-    auto icIt = newStyle.find("animation-iteration-count");
-    if (icIt != newStyle.end()) {
-        if (icIt->second == "infinite") iterCount = -1;
-        else {
-            char* end = nullptr;
-            int v = static_cast<int>(std::strtof(icIt->second.c_str(), &end));
-            if (end != icIt->second.c_str() && v > 0) iterCount = v;
-        }
+    if (iterStr == "infinite") iterCount = -1;
+    else if (!iterStr.empty()) {
+        char* end = nullptr;
+        int v = static_cast<int>(std::strtof(iterStr.c_str(), &end));
+        if (end != iterStr.c_str() && v > 0) iterCount = v;
     }
 
     bool alternate = false, reverse = false;
-    auto dirIt = newStyle.find("animation-direction");
-    if (dirIt != newStyle.end()) {
-        if (dirIt->second == "reverse") reverse = true;
-        else if (dirIt->second == "alternate") alternate = true;
-        else if (dirIt->second == "alternate-reverse") { alternate = true; reverse = true; }
-    }
+    if (directionStr == "reverse") reverse = true;
+    else if (directionStr == "alternate") alternate = true;
+    else if (directionStr == "alternate-reverse") { alternate = true; reverse = true; }
 
-    std::string fillMode = "none";
-    auto fmIt = newStyle.find("animation-fill-mode");
-    if (fmIt != newStyle.end()) fillMode = fmIt->second;
+    std::string fillMode = fillModeStr.empty() ? "none" : fillModeStr;
 
     ea.active.push_back({animName, dur, delay, easing, iterCount,
                          alternate, reverse, fillMode, currentTime, 0});

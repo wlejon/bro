@@ -597,8 +597,7 @@ void Engine::loadCustomFonts() {
         // Read font file
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {
-            util::log(util::LogLevel::Warn, __FILE__, __LINE__,
-                      "Failed to load @font-face '{}' from '{}'", ff.family, path);
+            LOG_WARN("Failed to load @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
             continue;
         }
         auto size = file.tellg();
@@ -609,8 +608,8 @@ void Engine::loadCustomFonts() {
 
         if (renderer_->registerCustomFont(ff.family, data.data(), data.size(),
                                           ff.weight, ff.italic)) {
-            util::log(util::LogLevel::Info, __FILE__, __LINE__,
-                      "Loaded @font-face '{}' from '{}'", ff.family, path);
+            LOG_INFO("Loaded @font-face '%s' from '%s'", ff.family.c_str(), path.c_str());
+            loadedFonts_.push_back({ff.family, data, ff.weight, ff.italic});
         }
     }
 }
@@ -939,6 +938,13 @@ static bool modalEventWatcher(void* userdata, SDL_Event* event)
 void Engine::layoutThreadFunc() {
     // Thread-local renderer for text measurement (CPU-only, no GL required)
     auto layoutRenderer = std::make_unique<render::RasterRenderer>();
+
+    // Register custom fonts on the layout renderer so text measurement uses them
+    for (auto& font : loadedFonts_) {
+        layoutRenderer->registerCustomFont(font.family, font.data.data(),
+                                           font.data.size(), font.weight, font.italic);
+    }
+
     layout::FontManager layoutFontManager;
     layout::SkiaTextMetrics layoutTextMetrics(layoutRenderer.get(), &layoutFontManager);
 
@@ -960,11 +966,13 @@ void Engine::layoutThreadFunc() {
         if (document_) {
             double now = util::currentTimeMs();
             document_->setTransitionManager(&transitionManager_, now);
-            animationManager_.setKeyframes(&document_->cascade().keyframes());
+            auto& kfs = document_->cascade().keyframes();
+            animationManager_.setKeyframes(&kfs);
             document_->setAnimationManager(&animationManager_);
             document_->resolveStyles();
             // If transitions or animations are active, keep re-rendering
             bool animActive = transitionManager_.tick(now) | animationManager_.tick(now);
+            layoutShared_.animationsActive.store(animActive, std::memory_order_relaxed);
             if (animActive) {
                 document_->markDirty();
             }
@@ -1010,6 +1018,12 @@ void Engine::rasterThreadFunc() {
         LOG_ERROR("Raster thread: SkiaRenderer failed to create GrDirectContext");
         return;
     }
+    // Register custom fonts on the raster renderer
+    for (auto& font : loadedFonts_) {
+        rasterRenderer->registerCustomFont(font.family, font.data.data(),
+                                           font.data.size(), font.weight, font.italic);
+    }
+
     // Separate FontManager so font handles are created against the raster renderer.
     // The shared FontManager caches handles for the main thread's renderer — those
     // handles are invalid on the raster thread's SkiaRenderer.
@@ -1252,6 +1266,10 @@ void Engine::run() {
     // Initial layout
     if (document_) {
         ensureReplacedElements(document_->documentElement());
+        double now = util::currentTimeMs();
+        document_->setTransitionManager(&transitionManager_, now);
+        animationManager_.setKeyframes(&document_->cascade().keyframes());
+        document_->setAnimationManager(&animationManager_);
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
         if (document_->documentElement()) {
@@ -1414,7 +1432,8 @@ void Engine::run() {
         bool rasterIdle = (rasterShared_.state.load(std::memory_order_acquire) == kRasterIdle);
         bool layoutSignaled = false;
 
-        if (layoutIdle && rasterIdle && document_ && (document_->isDirty() || !hasRenderedOnce_)) {
+        bool animActive = layoutShared_.animationsActive.load(std::memory_order_relaxed);
+        if (layoutIdle && rasterIdle && document_ && (document_->isDirty() || animActive || !hasRenderedOnce_)) {
             if (document_->isStructureDirty()) {
                 ensureReplacedElements(document_->documentElement());
             }

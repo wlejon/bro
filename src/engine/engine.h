@@ -261,6 +261,15 @@ private:
     std::unique_ptr<dom::Document> document_;
     TransitionManager transitionManager_;
     AnimationManager animationManager_;
+
+    // Loaded custom font data for registering on layout thread's renderer
+    struct LoadedFont {
+        std::string family;
+        std::vector<char> data;
+        int weight;
+        bool italic;
+    };
+    std::vector<LoadedFont> loadedFonts_;
     std::unique_ptr<layout::DrawTraversal> drawTraversal_;
     std::unique_ptr<layout::SkiaTextMetrics> textMetrics_;
     layout::FontManager fontManager_;
@@ -301,6 +310,7 @@ private:
         std::atomic<uint32_t> state{kLayoutIdle};
         std::atomic<int> vpWidth{0};
         std::atomic<int> vpHeight{0};
+        std::atomic<bool> animationsActive{false};
     };
     LayoutShared layoutShared_;
     std::thread layoutThread_;

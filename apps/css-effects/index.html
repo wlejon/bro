@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CSS Effects</title>
+    <style>
+        body {
+            background: #0f0f1a;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 22px;
+            color: #7dd3fc;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-size: 16px;
+            color: #a78bfa;
+            margin: 20px 0 10px 0;
+            border-bottom: 1px solid #333;
+            padding-bottom: 4px;
+        }
+        .grid {
+            display: flex;
+            flex-wrap: wrap;
+        }
+        .card {
+            background: #1a1a2e;
+            border: 1px solid #2a2a4a;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 6px;
+            width: 200px;
+            text-align: center;
+        }
+        .card h3 {
+            margin: 0 0 8px 0;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .box {
+            width: 80px;
+            height: 80px;
+            background: #3b82f6;
+            margin: 10px auto;
+            border-radius: 4px;
+        }
+        .img-box {
+            width: 120px;
+            height: 80px;
+            background: linear-gradient(135deg, #f472b6, #8b5cf6, #3b82f6);
+            margin: 10px auto;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        /* === Transforms === */
+        .translate-demo { transform: translate(20px, 10px); }
+        .scale-demo { transform: scale(1.3); }
+        .scale-xy-demo { transform: scale(1.5, 0.7); }
+        .rotate-demo { transform: rotate(30deg); }
+        .rotate-neg-demo { transform: rotate(-15deg); }
+        .skewx-demo { transform: skewX(20deg); }
+        .skewy-demo { transform: skewY(15deg); }
+        .combo-demo { transform: rotate(10deg) scale(1.1) translate(5px, -5px); }
+        .origin-tl { transform: rotate(20deg); transform-origin: top left; }
+        .origin-br { transform: rotate(20deg); transform-origin: bottom right; }
+
+        /* === Filters === */
+        .blur-demo { filter: blur(3px); }
+        .brightness-hi { filter: brightness(1.5); }
+        .brightness-lo { filter: brightness(0.5); }
+        .contrast-demo { filter: contrast(2.0); }
+        .grayscale-demo { filter: grayscale(1); }
+        .sepia-demo { filter: sepia(1); }
+        .saturate-demo { filter: saturate(3); }
+        .hue-demo { filter: hue-rotate(90deg); }
+        .invert-demo { filter: invert(1); }
+        .opacity-demo { filter: opacity(0.4); }
+        .drop-shadow-demo { filter: drop-shadow(4px 4px 6px rgba(0,0,0,0.8)); }
+        .filter-combo { filter: contrast(1.2) saturate(1.5) hue-rotate(30deg); }
+
+        /* === Box Shadows === */
+        .shadow-basic { box-shadow: 4px 4px 10px rgba(0,0,0,0.5); }
+        .shadow-color { box-shadow: 0 0 15px #3b82f6; }
+        .shadow-inset { box-shadow: inset 0 0 15px rgba(0,0,0,0.6); }
+        .shadow-multi {
+            box-shadow: 3px 3px 6px rgba(59,130,246,0.5), -3px -3px 6px rgba(244,114,182,0.5);
+        }
+        .shadow-glow {
+            box-shadow: 0 0 10px #a78bfa, 0 0 20px #a78bfa, 0 0 40px rgba(167,139,250,0.3);
+            background: #a78bfa;
+        }
+        .shadow-sharp { box-shadow: 5px 5px 0px #f472b6; }
+    </style>
+</head>
+<body>
+    <h1>CSS Visual Effects</h1>
+
+    <!-- Transforms -->
+    <h2>CSS Transforms</h2>
+    <div class="grid">
+        <div class="card">
+            <h3>translate(20px, 10px)</h3>
+            <div class="box translate-demo"></div>
+        </div>
+        <div class="card">
+            <h3>scale(1.3)</h3>
+            <div class="box scale-demo"></div>
+        </div>
+        <div class="card">
+            <h3>scale(1.5, 0.7)</h3>
+            <div class="box scale-xy-demo"></div>
+        </div>
+        <div class="card">
+            <h3>rotate(30deg)</h3>
+            <div class="box rotate-demo"></div>
+        </div>
+        <div class="card">
+            <h3>rotate(-15deg)</h3>
+            <div class="box rotate-neg-demo"></div>
+        </div>
+        <div class="card">
+            <h3>skewX(20deg)</h3>
+            <div class="box skewx-demo"></div>
+        </div>
+        <div class="card">
+            <h3>skewY(15deg)</h3>
+            <div class="box skewy-demo"></div>
+        </div>
+        <div class="card">
+            <h3>rotate + scale + translate</h3>
+            <div class="box combo-demo"></div>
+        </div>
+        <div class="card">
+            <h3>origin: top left</h3>
+            <div class="box origin-tl"></div>
+        </div>
+        <div class="card">
+            <h3>origin: bottom right</h3>
+            <div class="box origin-br"></div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <h2>CSS Filters</h2>
+    <div class="grid">
+        <div class="card">
+            <h3>Original</h3>
+            <div class="img-box">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>blur(3px)</h3>
+            <div class="img-box blur-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>brightness(1.5)</h3>
+            <div class="img-box brightness-hi">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>brightness(0.5)</h3>
+            <div class="img-box brightness-lo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>contrast(2.0)</h3>
+            <div class="img-box contrast-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>grayscale(1)</h3>
+            <div class="img-box grayscale-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>sepia(1)</h3>
+            <div class="img-box sepia-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>saturate(3)</h3>
+            <div class="img-box saturate-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>hue-rotate(90deg)</h3>
+            <div class="img-box hue-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>invert(1)</h3>
+            <div class="img-box invert-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>opacity(0.4)</h3>
+            <div class="img-box opacity-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>drop-shadow</h3>
+            <div class="img-box drop-shadow-demo">SAMPLE</div>
+        </div>
+        <div class="card">
+            <h3>contrast + saturate + hue</h3>
+            <div class="img-box filter-combo">SAMPLE</div>
+        </div>
+    </div>
+
+    <!-- Box Shadows -->
+    <h2>Box Shadows</h2>
+    <div class="grid">
+        <div class="card">
+            <h3>Basic drop shadow</h3>
+            <div class="box shadow-basic"></div>
+        </div>
+        <div class="card">
+            <h3>Color glow</h3>
+            <div class="box shadow-color"></div>
+        </div>
+        <div class="card">
+            <h3>Inset shadow</h3>
+            <div class="box shadow-inset"></div>
+        </div>
+        <div class="card">
+            <h3>Multi-color</h3>
+            <div class="box shadow-multi"></div>
+        </div>
+        <div class="card">
+            <h3>Neon glow</h3>
+            <div class="box shadow-glow"></div>
+        </div>
+        <div class="card">
+            <h3>Hard shadow</h3>
+            <div class="box shadow-sharp"></div>
+        </div>
+    </div>
+</body>
+</html>
