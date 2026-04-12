@@ -274,9 +274,16 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
                             bro::dom::Event& event,
                             int phase,
                             JSValue originalJsEvent = JS_UNDEFINED) {
+    // Check if this element has registered listeners OR an inline handler
     auto& listeners = current->listeners();
     auto it = listeners.find(event.type());
-    if (it == listeners.end() || it->second.empty()) return;
+    bool hasListeners = (it != listeners.end() && !it->second.empty());
+    bool hasInlineHandler = false;
+    if (phase == AT_TARGET || phase == BUBBLING_PHASE) {
+        std::string attrName = "on" + event.type();
+        hasInlineHandler = !current->getAttribute(attrName).empty();
+    }
+    if (!hasListeners && !hasInlineHandler) return;
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
@@ -296,17 +303,14 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     }
 
     JSValue listenersArr = JS_GetPropertyStr(ctx, jsElem, "__bro_listeners");
-    if (JS_IsUndefined(listenersArr) || !JS_IsArray(listenersArr)) {
-        JS_FreeValue(ctx, listenersArr);
-        JS_FreeValue(ctx, jsElem);
-        JS_FreeValue(ctx, global);
-        return;
-    }
+    bool hasListenersArr = !JS_IsUndefined(listenersArr) && JS_IsArray(listenersArr);
 
     int64_t len = 0;
-    JSValue lenVal = JS_GetPropertyStr(ctx, listenersArr, "length");
-    JS_ToInt64(ctx, &len, lenVal);
-    JS_FreeValue(ctx, lenVal);
+    if (hasListenersArr) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, listenersArr, "length");
+        JS_ToInt64(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+    }
 
     // Build the JS event object — reuse original if provided (preserves detail, etc.)
     bool ownsEvent = JS_IsUndefined(originalJsEvent);
@@ -441,6 +445,46 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         }
         // Truncate by setting length
         JS_SetPropertyStr(ctx, listenersArr, "length", JS_NewInt64(ctx, dst));
+    }
+
+    // --- Inline event handler attributes (onclick, onmouseover, etc.) ---
+    // Per DOM spec, inline handlers fire during AT_TARGET or BUBBLING phase,
+    // after any registered listeners on the same element.
+    if ((phase == AT_TARGET || phase == BUBBLING_PHASE) && !event.propagationStopped()) {
+        std::string attrName = "on" + event.type();
+        std::string handlerCode = current->getAttribute(attrName);
+        if (!handlerCode.empty()) {
+            // Compile the handler as a function body with 'event' parameter.
+            // 'this' is bound to the element.
+            std::string funcSource = "(function(event){" + handlerCode + "\n})";
+            JSValue func = JS_Eval(ctx, funcSource.c_str(), funcSource.size(),
+                                   attrName.c_str(), JS_EVAL_TYPE_GLOBAL);
+            if (JS_IsFunction(ctx, func)) {
+                JSValue result = JS_Call(ctx, func, jsElem, 1, &jsEvent);
+                if (JS_IsException(result)) {
+                    Runtime::checkException(ctx, result);
+                }
+                // onclick returning false means preventDefault
+                if (JS_IsBool(result) && !JS_ToBool(ctx, result)) {
+                    event.preventDefault();
+                }
+                JS_FreeValue(ctx, result);
+            } else if (JS_IsException(func)) {
+                Runtime::checkException(ctx, func);
+            }
+            JS_FreeValue(ctx, func);
+
+            // Check propagation flags set by handler
+            JSValue stoppedVal2 = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
+            if (JS_ToBool(ctx, stoppedVal2))
+                event.stopPropagation();
+            JS_FreeValue(ctx, stoppedVal2);
+
+            JSValue preventedVal2 = JS_GetPropertyStr(ctx, jsEvent, "_prevented");
+            if (JS_ToBool(ctx, preventedVal2))
+                event.preventDefault();
+            JS_FreeValue(ctx, preventedVal2);
+        }
     }
 
     JS_FreeValue(ctx, jsEvent);
