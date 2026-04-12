@@ -365,7 +365,10 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 float contentH = viewH + maxST;
                 float newScroll = elementScrollbar_.scrollToPosition(y,
                     contentH, viewH, em);
-                hitElem->setScrollTopValue(std::clamp(newScroll, 0.0f, maxST));
+                float prev = hitElem->scrollTopValue();
+                float clamped = std::clamp(newScroll, 0.0f, maxST);
+                hitElem->setScrollTopValue(clamped);
+                if (clamped != prev) dispatchScrollEvent(hitElem);
             }
             uiDirty_ = true;
             return; // consumed
@@ -556,7 +559,10 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         auto m = elementScrollbar_.layout(0, 0, bh, contentH, viewH,
             elem->scrollTopValue());
         float newScroll = elementScrollbar_.updateDrag(y, contentH, viewH, m);
-        elem->setScrollTopValue(std::clamp(newScroll, 0.0f, maxST));
+        float prev = elem->scrollTopValue();
+        float clamped = std::clamp(newScroll, 0.0f, maxST);
+        elem->setScrollTopValue(clamped);
+        if (clamped != prev) dispatchScrollEvent(elem);
         uiDirty_ = true;
         lastMouseX_ = x;
         lastMouseY_ = y;

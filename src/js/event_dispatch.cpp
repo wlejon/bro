@@ -243,6 +243,28 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
         JS_SetPropertyStr(ctx, jsEvent, "isComposing",
                           JS_NewBool(ctx, inputEvt->isComposing()));
     }
+
+    // TransitionEvent properties
+    auto* transEvt = dynamic_cast<bro::dom::TransitionEvent*>(&event);
+    if (transEvt) {
+        JS_SetPropertyStr(ctx, jsEvent, "propertyName",
+                          JS_NewString(ctx, transEvt->propertyName().c_str()));
+        JS_SetPropertyStr(ctx, jsEvent, "elapsedTime",
+                          JS_NewFloat64(ctx, transEvt->elapsedTime()));
+        JS_SetPropertyStr(ctx, jsEvent, "pseudoElement",
+                          JS_NewString(ctx, transEvt->pseudoElement().c_str()));
+    }
+
+    // AnimationEvent properties
+    auto* animEvt = dynamic_cast<bro::dom::AnimationEvent*>(&event);
+    if (animEvt) {
+        JS_SetPropertyStr(ctx, jsEvent, "animationName",
+                          JS_NewString(ctx, animEvt->animationName().c_str()));
+        JS_SetPropertyStr(ctx, jsEvent, "elapsedTime",
+                          JS_NewFloat64(ctx, animEvt->elapsedTime()));
+        JS_SetPropertyStr(ctx, jsEvent, "pseudoElement",
+                          JS_NewString(ctx, animEvt->pseudoElement().c_str()));
+    }
 }
 
 // Stash the composedPath as a JS array on the event object

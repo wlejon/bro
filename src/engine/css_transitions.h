@@ -50,6 +50,14 @@ struct ElementTransitions {
     htmlayout::css::ComputedStyle targetStyle;
 };
 
+// Callback for transition/animation lifecycle events.
+// type: "transitionrun", "transitionstart", "transitionend",
+//       "animationstart", "animationend", "animationiteration"
+// name: property name (transitions) or animation name (animations)
+// elapsedTime: seconds elapsed
+using CSSEventCallback = std::function<void(dom::Element* elem,
+    const std::string& type, const std::string& name, double elapsedTime)>;
+
 // Manages CSS transitions for all elements.
 class TransitionManager {
 public:
@@ -81,8 +89,11 @@ public:
     static std::string interpolate(const std::string& from, const std::string& to,
                                    float t, const std::string& property);
 
-private:
+    // Set callback for transition lifecycle events.
+    void setEventCallback(CSSEventCallback cb) { eventCallback_ = std::move(cb); }
 
+private:
+    CSSEventCallback eventCallback_;
     std::unordered_map<dom::Element*, ElementTransitions> elements_;
 };
 
@@ -131,7 +142,11 @@ public:
     void removeElement(dom::Element* elem);
     bool hasActiveAnimations() const { return !elements_.empty(); }
 
+    // Set callback for animation lifecycle events.
+    void setEventCallback(CSSEventCallback cb) { eventCallback_ = std::move(cb); }
+
 private:
+    CSSEventCallback eventCallback_;
     const std::vector<htmlayout::css::KeyframeBlock>* keyframes_ = nullptr;
     std::unordered_map<dom::Element*, ElementAnimations> elements_;
 

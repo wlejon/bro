@@ -206,4 +206,42 @@ private:
     bool isComposing_ = false;
 };
 
+class TransitionEvent : public Event {
+public:
+    TransitionEvent(const std::string& type, bool bubbles = true, bool cancelable = false);
+    ~TransitionEvent() override = default;
+
+    const std::string& propertyName() const { return propertyName_; }
+    double elapsedTime() const { return elapsedTime_; }
+    const std::string& pseudoElement() const { return pseudoElement_; }
+
+    void setPropertyName(const std::string& v) { propertyName_ = v; }
+    void setElapsedTime(double v) { elapsedTime_ = v; }
+    void setPseudoElement(const std::string& v) { pseudoElement_ = v; }
+
+private:
+    std::string propertyName_;
+    double elapsedTime_ = 0.0;
+    std::string pseudoElement_;
+};
+
+class AnimationEvent : public Event {
+public:
+    AnimationEvent(const std::string& type, bool bubbles = true, bool cancelable = false);
+    ~AnimationEvent() override = default;
+
+    const std::string& animationName() const { return animationName_; }
+    double elapsedTime() const { return elapsedTime_; }
+    const std::string& pseudoElement() const { return pseudoElement_; }
+
+    void setAnimationName(const std::string& v) { animationName_ = v; }
+    void setElapsedTime(double v) { elapsedTime_ = v; }
+    void setPseudoElement(const std::string& v) { pseudoElement_ = v; }
+
+private:
+    std::string animationName_;
+    double elapsedTime_ = 0.0;
+    std::string pseudoElement_;
+};
+
 } // namespace bro::dom

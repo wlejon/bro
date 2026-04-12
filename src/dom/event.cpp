@@ -75,4 +75,14 @@ InputEvent::InputEvent(const std::string& type, bool bubbles, bool cancelable)
 {
 }
 
+TransitionEvent::TransitionEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
+AnimationEvent::AnimationEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
 } // namespace bro::dom

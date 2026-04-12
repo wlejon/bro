@@ -1402,8 +1402,14 @@ static JSValue js_element_set_scrollTop(JSContext* ctx, JSValueConst this_val, J
     if (!el) return JS_UNDEFINED;
     double v = 0;
     JS_ToFloat64(ctx, &v, val);
+    float prev = el->scrollTopValue();
     el->setScrollTopValue(static_cast<float>(v));
     if (el->document()) el->document()->markDirty();
+    if (static_cast<float>(v) != prev) {
+        bro::dom::Event evt("scroll", false, false);
+        evt.setIsTrusted(true);
+        dispatchDomEvent(ctx, el, evt);
+    }
     return JS_UNDEFINED;
 }
 

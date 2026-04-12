@@ -175,6 +175,26 @@ Engine::Engine(const EngineConfig& config)
     // In headless mode this is virtual time; in windowed mode, real time.
     timers_->tick(displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs());
 
+    // 4a2. CSS transition/animation event callbacks
+    transitionManager_.setEventCallback(
+        [this](dom::Element* elem, const std::string& type,
+               const std::string& name, double elapsedTime) {
+            dom::TransitionEvent evt(type, true, false);
+            evt.setPropertyName(name);
+            evt.setElapsedTime(elapsedTime);
+            evt.setIsTrusted(true);
+            dispatchEvent(elem, evt);
+        });
+    animationManager_.setEventCallback(
+        [this](dom::Element* elem, const std::string& type,
+               const std::string& name, double elapsedTime) {
+            dom::AnimationEvent evt(type, true, false);
+            evt.setAnimationName(name);
+            evt.setElapsedTime(elapsedTime);
+            evt.setIsTrusted(true);
+            dispatchEvent(elem, evt);
+        });
+
     // 4b. Audio engine + bindings
     audioEngine_ = std::make_unique<broaudio::Engine>();
     if (displayMode_ == DisplayMode::Windowed) {
@@ -1363,7 +1383,19 @@ void Engine::run() {
             JS_FreeValue(jsRuntime_->getContext(), global);
         }
 
-        // 2b. Tick system panel timers
+        // 2b. Tick brokit WebSocket (pump pending connections/messages)
+        {
+            JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
+            JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_ws_tick");
+            if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
+                JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
+                JS_FreeValue(jsRuntime_->getContext(), ret);
+            }
+            JS_FreeValue(jsRuntime_->getContext(), tickFn);
+            JS_FreeValue(jsRuntime_->getContext(), global);
+        }
+
+        // 2c. Tick system panel timers
         tickSystemPanels(now);
 
         // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)

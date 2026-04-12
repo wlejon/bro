@@ -249,6 +249,16 @@ void Worker::threadFunc()
         JS_FreeValue(ctx, tickFn);
         JS_FreeValue(ctx, g);
 
+        // Tick WebSocket (pump pending connections/messages)
+        g = JS_GetGlobalObject(ctx);
+        tickFn = JS_GetPropertyStr(ctx, g, "__brokit_ws_tick");
+        if (JS_IsFunction(ctx, tickFn)) {
+            JSValue ret = JS_Call(ctx, tickFn, JS_UNDEFINED, 0, nullptr);
+            JS_FreeValue(ctx, ret);
+        }
+        JS_FreeValue(ctx, tickFn);
+        JS_FreeValue(ctx, g);
+
         // If no immediate work, sleep briefly to avoid busy-spinning.
         // 1ms gives good timer precision without burning CPU.
         if (!didWork) {
