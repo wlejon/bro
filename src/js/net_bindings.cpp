@@ -2,6 +2,8 @@
 #include "net/network_manager.h"
 #include "util/log.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -282,6 +284,23 @@ static JSValue js_net_set_onmessage(JSContext* ctx, JSValueConst, int argc, JSVa
 }
 
 // ---------------------------------------------------------------------------
+// Function list for bro.net namespace
+// ---------------------------------------------------------------------------
+
+static const JSCFunctionListEntry js_net_funcs[] = {
+    JS_CFUNC_DEF("init", 0, js_net_init),
+    JS_CFUNC_DEF("host", 1, js_net_host),
+    JS_CFUNC_DEF("connect", 1, js_net_connect),
+    JS_CFUNC_DEF("send", 3, js_net_send),
+    JS_CFUNC_DEF("broadcast", 2, js_net_broadcast),
+    JS_CFUNC_DEF("disconnect", 2, js_net_disconnect),
+    JS_CFUNC_DEF("close", 0, js_net_close),
+    JS_CFUNC_DEF("stats", 1, js_net_stats),
+    JS_CFUNC_DEF("connections", 0, js_net_connections),
+    JS_CFUNC_DEF("isHosting", 0, js_net_isHosting),
+};
+
+// ---------------------------------------------------------------------------
 // Install / Cleanup
 // ---------------------------------------------------------------------------
 
@@ -335,7 +354,7 @@ void NetBindings::install(JSContext* ctx, net::NetworkManager* mgr) {
         JS_FreeValue(s_ctx, args[1]);
     };
 
-    // Create bro.net object
+    // Create bro.net object using qjsbind::Global for bro, then attach net
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
     if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -345,27 +364,9 @@ void NetBindings::install(JSContext* ctx, net::NetworkManager* mgr) {
 
     JSValue netObj = JS_NewObject(ctx);
 
-    // Methods
-    JS_SetPropertyStr(ctx, netObj, "init",
-        JS_NewCFunction(ctx, js_net_init, "init", 0));
-    JS_SetPropertyStr(ctx, netObj, "host",
-        JS_NewCFunction(ctx, js_net_host, "host", 1));
-    JS_SetPropertyStr(ctx, netObj, "connect",
-        JS_NewCFunction(ctx, js_net_connect, "connect", 1));
-    JS_SetPropertyStr(ctx, netObj, "send",
-        JS_NewCFunction(ctx, js_net_send, "send", 3));
-    JS_SetPropertyStr(ctx, netObj, "broadcast",
-        JS_NewCFunction(ctx, js_net_broadcast, "broadcast", 2));
-    JS_SetPropertyStr(ctx, netObj, "disconnect",
-        JS_NewCFunction(ctx, js_net_disconnect, "disconnect", 2));
-    JS_SetPropertyStr(ctx, netObj, "close",
-        JS_NewCFunction(ctx, js_net_close, "close", 0));
-    JS_SetPropertyStr(ctx, netObj, "stats",
-        JS_NewCFunction(ctx, js_net_stats, "stats", 1));
-    JS_SetPropertyStr(ctx, netObj, "connections",
-        JS_NewCFunction(ctx, js_net_connections, "connections", 0));
-    JS_SetPropertyStr(ctx, netObj, "isHosting",
-        JS_NewCFunction(ctx, js_net_isHosting, "isHosting", 0));
+    // Methods via function list
+    JS_SetPropertyFunctionList(ctx, netObj, js_net_funcs,
+                               sizeof(js_net_funcs) / sizeof(js_net_funcs[0]));
 
     // Callback properties via getter/setter
     JSAtom onconnectAtom = JS_NewAtom(ctx, "onconnect");
