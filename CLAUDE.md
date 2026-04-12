@@ -112,6 +112,21 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | stb_image | `stb_image` | Image loading and writing (stb_image.h, stb_image_write.h) |
 | FastNoise2 | `FastNoise` | SIMD noise generation (via brokit) |
 
+## JS API Documentation (in docs/)
+
+API references are written as annotated `.js` files with JSDoc comments and usage examples:
+
+| File | API Surface |
+|------|-------------|
+| `docs/audio-api.js` | `AudioContext`, Web Audio-inspired nodes, synth, sequencing, spatial, mix buses |
+| `docs/mesh-api.js` | `bro.mesh` — primitives, CSG, simplification, UV, import/export |
+| `docs/noise-api.js` | `bro.noise` — FastNoise2 SIMD noise generation |
+| `docs/scene-api.js` | `bro.scene` — 3D scene graph, shapes, sprites, meshes, physics nodes |
+| `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
+| `docs/worker-api.js` | `Worker` — web worker threads |
+
+Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system), `docs/inspect.md` (DOM inspector).
+
 ## Namespace
 
 All code is under `bro::` with sub-namespaces matching module directories: `bro::render`, `bro::dom`, `bro::js`, `bro::platform`, `bro::engine`, `bro::layout`, `bro::canvas`, `bro::webgl`, `bro::scene`, `bro::physics`, `bro::svg`.
