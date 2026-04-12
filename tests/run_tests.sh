@@ -48,7 +48,7 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
     fi
 
     # Run the test
-    if OUTPUT=$("$BRO" --no-gpu "$TEST_APP" "$TEST_FILE" 2>&1); then
+    if OUTPUT=$("$BRO" "$TEST_APP" "$TEST_FILE" 2>&1); then
         echo "  PASS  $REL"
         ((PASSED++))
     else

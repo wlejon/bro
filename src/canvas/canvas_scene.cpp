@@ -572,13 +572,36 @@ void CanvasScene::applyFont() {
     auto mgr = SkFontMgr_New_FontConfig(nullptr);
 #endif
 
+    // Resolve CSS generic family names to platform font names
+    auto resolveGeneric = [](const std::string& name) -> const char* {
+#ifdef _WIN32
+        if (name == "sans-serif")  return "Arial";
+        if (name == "serif")       return "Times New Roman";
+        if (name == "monospace")   return "Consolas";
+        if (name == "cursive")     return "Comic Sans MS";
+        if (name == "fantasy")     return "Impact";
+        if (name == "system-ui")   return "Segoe UI";
+#else
+        if (name == "sans-serif")  return "Liberation Sans";
+        if (name == "serif")       return "Liberation Serif";
+        if (name == "monospace")   return "Liberation Mono";
+        if (name == "cursive")     return "DejaVu Sans";
+        if (name == "fantasy")     return "DejaVu Sans";
+        if (name == "system-ui")   return "Liberation Sans";
+#endif
+        return nullptr;
+    };
+
+    const char* resolved = resolveGeneric(pf.family);
+    const char* familyName = resolved ? resolved : pf.family.c_str();
+
     SkFontStyle style(
         pf.weight,
         SkFontStyle::kNormal_Width,
         pf.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
 
-    sk_sp<SkTypeface> tf = mgr->matchFamilyStyle(pf.family.c_str(), style);
-    if (!tf) tf = mgr->matchFamilyStyle("sans-serif", style);
+    sk_sp<SkTypeface> tf = mgr->matchFamilyStyle(familyName, style);
+    if (!tf && resolved) tf = mgr->matchFamilyStyle(pf.family.c_str(), style);
     if (!tf) tf = mgr->matchFamilyStyle(nullptr, style);
 
     SkFont f(tf, pf.size);

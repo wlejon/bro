@@ -121,7 +121,7 @@ ctx.font = '16px sans-serif';
 var metrics = ctx.measureText('test');
 assert(metrics !== null && metrics !== undefined, 'measureText returns object');
 assert(typeof metrics.width === 'number', 'measureText has width');
-assert(metrics.width >= 0, 'measureText width is non-negative');
+assert(metrics.width > 0, 'measureText width is positive');
 assert(typeof metrics.actualBoundingBoxAscent === 'number', 'measureText has ascent');
 assert(typeof metrics.actualBoundingBoxDescent === 'number', 'measureText has descent');
 
