@@ -79,6 +79,20 @@ struct InputConfig {
     uint32_t overlayToggleKey = 0x40000041u; // SDLK_F8; 0 = disabled
 };
 
+/// Crosshair configuration — rendered directly in the GL/Skia pipeline.
+struct CrosshairConfig {
+    bool visible = false;
+    enum Style : uint8_t { Cross, Dot, Circle, CrossDot } style = Cross;
+    float size = 20.0f;           // arm length from center
+    float thickness = 2.0f;       // line width in pixels
+    float gap = 4.0f;             // gap around center (pixels)
+    float dotSize = 2.0f;         // center dot radius
+    float outlineThickness = 1.0f;
+    bool outline = true;          // dark outline for visibility on any background
+    uint8_t r = 0, g = 255, b = 0, a = 204;   // color (pre-apply opacity if desired)
+    uint8_t outR = 0, outG = 0, outB = 0, outA = 180; // outline color
+};
+
 struct EngineConfig {
     std::string appDir;
     std::string title;   // window title override (empty = use <title> from HTML)
@@ -184,6 +198,10 @@ public:
     /// Simulate a click on the given element.
     void dispatchClickOn(dom::Element* target);
 
+    /// Crosshair configuration (read/write from JS bindings).
+    CrosshairConfig& crosshair() { return crosshair_; }
+    const CrosshairConfig& crosshair() const { return crosshair_; }
+
     /// Get display mode.
     DisplayMode displayMode() const { return displayMode_; }
 
@@ -227,6 +245,8 @@ private:
     void compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO);
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
     void compositeLayers(const std::vector<UILayer>& layers);
+    void drawCrosshairGL();                  // windowed/headless GPU path
+    void drawCrosshairSkia(SkCanvas* canvas); // headless CPU path
     void ensureReplacedElements(dom::Element* elem);
 
     // --- System panel management (implementation in system_panels.cpp) ---
@@ -347,6 +367,7 @@ private:
     std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_;
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
 
+    CrosshairConfig crosshair_;
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;

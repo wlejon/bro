@@ -394,6 +394,9 @@ bool Engine::screenshot(const std::string& path) {
             glDeleteVertexArrays(1, &quadVAO);
         }
 
+        // 5c. Draw crosshair overlay
+        drawCrosshairGL();
+
         // 6. Read back pixels
         std::vector<uint8_t> pixels(w * h * 4);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -461,6 +464,9 @@ bool Engine::screenshot(const std::string& path) {
             }
         }
     }
+
+    // Draw crosshair on the Skia surface
+    drawCrosshairSkia(renderer_->getCanvas());
 
     renderer_->endFrame();
 
@@ -641,6 +647,9 @@ std::vector<uint8_t> Engine::capturePixels() {
             glDeleteVertexArrays(1, &quadVAO);
         }
 
+        // Draw crosshair overlay
+        drawCrosshairGL();
+
         // Read back pixels
         std::vector<uint8_t> pixels(w * h * 4);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
@@ -703,6 +712,9 @@ std::vector<uint8_t> Engine::capturePixels() {
             }
         }
     }
+
+    // Draw crosshair on the Skia surface
+    drawCrosshairSkia(renderer_->getCanvas());
 
     renderer_->endFrame();
     return renderer_->capturePixels();

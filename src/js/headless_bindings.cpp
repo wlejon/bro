@@ -784,6 +784,38 @@ static JSValue js_inspectOverlayTree(JSContext* ctx, JSValueConst, int argc, JSV
     return JS_NewString(ctx, out.str().c_str());
 }
 
+// getPixel(x, y) — returns {r, g, b, a} for the pixel at (x, y)
+static JSValue js_getPixel(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "getPixel(x, y) requires x and y");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int x, y;
+    if (JS_ToInt32(ctx, &x, argv[0])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &y, argv[1])) return JS_EXCEPTION;
+
+    auto pixels = engine->capturePixels();
+    int w = engine->viewportWidth();
+    int h = engine->viewportHeight();
+
+    if (pixels.empty() || x < 0 || y < 0 || x >= w || y >= h) {
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "r", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, obj, "g", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, obj, "b", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, obj, "a", JS_NewInt32(ctx, 0));
+        return obj;
+    }
+
+    size_t offset = (static_cast<size_t>(y) * w + x) * 4;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "r", JS_NewInt32(ctx, pixels[offset]));
+    JS_SetPropertyStr(ctx, obj, "g", JS_NewInt32(ctx, pixels[offset + 1]));
+    JS_SetPropertyStr(ctx, obj, "b", JS_NewInt32(ctx, pixels[offset + 2]));
+    JS_SetPropertyStr(ctx, obj, "a", JS_NewInt32(ctx, pixels[offset + 3]));
+    return obj;
+}
+
 // overlayPanels() — list all overlay panel names
 static JSValue js_overlayPanels(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* engine = getEngine(ctx);
@@ -840,7 +872,9 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         // Overlay panel inspection
         .function("inspectOverlay", js_inspectOverlay, 3)
         .function("inspectOverlayTree", js_inspectOverlayTree, 3)
-        .function("overlayPanels", js_overlayPanels, 0);
+        .function("overlayPanels", js_overlayPanels, 0)
+        // Pixel inspection
+        .function("getPixel", js_getPixel, 2);
 }
 
 } // namespace bro::js

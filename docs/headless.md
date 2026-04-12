@@ -41,6 +41,7 @@ These functions are available in addition to all standard DOM APIs:
 |----------|-------------|
 | `screenshot(path)` | Render the current frame to a PNG file. Composites scene layers (WebGL, Canvas 2D) with the HTML/CSS UI overlay. Throws on failure. |
 | `screenshot(path, selector)` | Render the current frame and crop to the element's bounding box before saving. |
+| `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at viewport coordinates. Renders the full composited frame (HTML, Canvas, WebGL, crosshair) and reads back the pixel. |
 
 ### Input simulation
 

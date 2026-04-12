@@ -17,6 +17,13 @@ var info   = document.getElementById('info');
 var status = document.getElementById('status');
 var panel  = document.getElementById('panel');
 
+// Engine crosshair — replaces the old CSS circle
+bro.crosshair.configure({
+    style: 'circle', size: 6, thickness: 1,
+    color: '#ffffff', opacity: 0.7, outline: false
+});
+bro.crosshair.show();
+
 // ============================================================================
 // Config — single source of truth for all terrain parameters
 // ============================================================================

@@ -474,6 +474,12 @@ bro.net.onconnect = (connId) => {
     connectScreen.classList.add('hidden');
     canvas.classList.add('active');
     hud.classList.remove('hidden');
+    bro.crosshair.configure({
+        style: 'crossdot', size: 10, thickness: 2, gap: 3, dotSize: 1,
+        color: '#ffffff', opacity: 0.8, outline: true,
+        outlineThickness: 1, outlineColor: '#000000'
+    });
+    bro.crosshair.show();
     buildScene();
     const name = nameInput.value.trim() || 'Player';
     sendName(name);
@@ -484,6 +490,7 @@ bro.net.ondisconnect = () => {
     serverConn = null;
     myId = null;
     pointerLocked = false;
+    bro.crosshair.hide();
     canvas.classList.remove('active');
     hud.classList.add('hidden');
     connectScreen.classList.remove('hidden');
