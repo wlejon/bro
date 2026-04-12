@@ -76,6 +76,13 @@ public:
     virtual uint64_t createFont(std::string_view family, float size, int weight, bool italic) = 0;
     virtual void deleteFont(uint64_t font_handle) = 0;
 
+    // Register a custom font from file data (for @font-face support).
+    // Returns true on success. The font will be used when createFont matches
+    // the given family name, weight, and style.
+    virtual bool registerCustomFont(const std::string& family,
+                                    const void* data, size_t len,
+                                    int weight, bool italic) { return false; }
+
     virtual void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) = 0;
     virtual void drawImage(const void* data, size_t len, float x, float y, float w, float h) = 0;
 

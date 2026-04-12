@@ -389,4 +389,243 @@ void TransitionManager::removeElement(dom::Element* elem) {
     elements_.erase(elem);
 }
 
+// ---------------------------------------------------------------------------
+// AnimationManager
+// ---------------------------------------------------------------------------
+
+const htmlayout::css::KeyframeBlock* AnimationManager::findKeyframes(const std::string& name) const {
+    if (!keyframes_) return nullptr;
+    for (auto& kf : *keyframes_) {
+        if (kf.name == name) return &kf;
+    }
+    return nullptr;
+}
+
+void AnimationManager::onStyleChange(dom::Element* elem,
+                                     const htmlayout::css::ComputedStyle& newStyle,
+                                     double currentTime) {
+    // Check for animation declarations
+    std::string animName;
+    auto anIt = newStyle.find("animation-name");
+    if (anIt != newStyle.end() && anIt->second != "none" && !anIt->second.empty()) {
+        animName = anIt->second;
+    } else {
+        // Try shorthand: animation: name duration timing delay iteration direction fill
+        auto aIt = newStyle.find("animation");
+        if (aIt == newStyle.end() || aIt->second.empty() || aIt->second == "none")
+            return;
+        // Parse shorthand — first non-time, non-keyword token is the name
+        std::istringstream iss(aIt->second);
+        std::string tok;
+        std::string dur, timing, delay, iterStr, direction, fillMode;
+        int numIdx = 0;
+        while (iss >> tok) {
+            char* end = nullptr;
+            std::strtof(tok.c_str(), &end);
+            bool isTime = (end != tok.c_str() &&
+                (std::string(end) == "s" || std::string(end) == "ms"));
+            if (isTime) {
+                if (numIdx == 0) { dur = tok; ++numIdx; }
+                else { delay = tok; ++numIdx; }
+            } else if (tok == "ease" || tok == "linear" || tok == "ease-in" ||
+                       tok == "ease-out" || tok == "ease-in-out") {
+                timing = tok;
+            } else if (tok == "infinite") {
+                iterStr = tok;
+            } else if (tok == "alternate" || tok == "alternate-reverse" ||
+                       tok == "reverse" || tok == "normal") {
+                direction = tok;
+            } else if (tok == "none" || tok == "forwards" || tok == "backwards" || tok == "both") {
+                fillMode = tok;
+            } else {
+                animName = tok;
+            }
+        }
+        if (animName.empty()) return;
+        // Store parsed values back for use below
+        // (We'll re-read from newStyle, so set them if not already there)
+    }
+
+    // Check if we already have this animation running on this element
+    auto& ea = elements_[elem];
+    for (auto& a : ea.active) {
+        if (a.name == animName) return; // already running
+    }
+
+    if (!findKeyframes(animName)) return; // no keyframes defined
+
+    // Parse animation properties
+    auto getDur = [&]() -> double {
+        auto it = newStyle.find("animation-duration");
+        if (it != newStyle.end()) return parseDurationMs(it->second);
+        // Try from shorthand
+        auto aIt = newStyle.find("animation");
+        if (aIt != newStyle.end()) {
+            std::istringstream iss(aIt->second);
+            std::string tok;
+            while (iss >> tok) {
+                char* end = nullptr;
+                std::strtof(tok.c_str(), &end);
+                if (end != tok.c_str() && (std::string(end) == "s" || std::string(end) == "ms"))
+                    return parseDurationMs(tok);
+            }
+        }
+        return 0;
+    };
+
+    double dur = getDur();
+    if (dur <= 0) return;
+
+    CubicBezier easing = CubicBezier::ease();
+    auto tfIt = newStyle.find("animation-timing-function");
+    if (tfIt != newStyle.end()) easing = parseTimingFunction(tfIt->second);
+
+    double delay = 0;
+    auto dlIt = newStyle.find("animation-delay");
+    if (dlIt != newStyle.end()) delay = parseDurationMs(dlIt->second);
+
+    int iterCount = 1;
+    auto icIt = newStyle.find("animation-iteration-count");
+    if (icIt != newStyle.end()) {
+        if (icIt->second == "infinite") iterCount = -1;
+        else {
+            char* end = nullptr;
+            int v = static_cast<int>(std::strtof(icIt->second.c_str(), &end));
+            if (end != icIt->second.c_str() && v > 0) iterCount = v;
+        }
+    }
+
+    bool alternate = false, reverse = false;
+    auto dirIt = newStyle.find("animation-direction");
+    if (dirIt != newStyle.end()) {
+        if (dirIt->second == "reverse") reverse = true;
+        else if (dirIt->second == "alternate") alternate = true;
+        else if (dirIt->second == "alternate-reverse") { alternate = true; reverse = true; }
+    }
+
+    std::string fillMode = "none";
+    auto fmIt = newStyle.find("animation-fill-mode");
+    if (fmIt != newStyle.end()) fillMode = fmIt->second;
+
+    ea.active.push_back({animName, dur, delay, easing, iterCount,
+                         alternate, reverse, fillMode, currentTime, 0});
+}
+
+bool AnimationManager::tick(double currentTime) {
+    bool anyActive = false;
+
+    for (auto it = elements_.begin(); it != elements_.end(); ) {
+        auto& ea = it->second;
+        dom::Element* elem = it->first;
+
+        ea.active.erase(
+            std::remove_if(ea.active.begin(), ea.active.end(),
+                [currentTime](const Animation& a) {
+                    if (a.iterationCount < 0) return false; // infinite
+                    double elapsed = currentTime - a.startTime - a.delay;
+                    return elapsed >= a.duration * a.iterationCount;
+                }),
+            ea.active.end());
+
+        if (ea.active.empty()) {
+            it = elements_.erase(it);
+        } else {
+            elem->markDirty();
+            anyActive = true;
+            ++it;
+        }
+    }
+
+    return anyActive;
+}
+
+void AnimationManager::applyOverrides(dom::Element* elem,
+                                      htmlayout::css::ComputedStyle& style,
+                                      double currentTime) const {
+    auto it = elements_.find(elem);
+    if (it == elements_.end()) return;
+
+    for (auto& anim : it->second.active) {
+        auto* kf = findKeyframes(anim.name);
+        if (!kf || kf->stops.empty()) continue;
+
+        double elapsed = currentTime - anim.startTime - anim.delay;
+        if (elapsed < 0) {
+            // In delay period — apply backwards fill if applicable
+            if (anim.fillMode != "backwards" && anim.fillMode != "both") continue;
+            elapsed = 0;
+        }
+
+        // Compute iteration and progress
+        double iterProgress = elapsed / anim.duration;
+        int currentIter = static_cast<int>(iterProgress);
+        float localProgress = static_cast<float>(iterProgress - currentIter);
+
+        // Clamp to iteration count
+        if (anim.iterationCount >= 0 && currentIter >= anim.iterationCount) {
+            if (anim.fillMode == "forwards" || anim.fillMode == "both") {
+                currentIter = anim.iterationCount - 1;
+                localProgress = 1.0f;
+            } else {
+                continue;
+            }
+        }
+
+        // Handle direction
+        bool thisIterReverse = anim.reverse;
+        if (anim.alternate && (currentIter % 2 != 0))
+            thisIterReverse = !thisIterReverse;
+        if (thisIterReverse)
+            localProgress = 1.0f - localProgress;
+
+        // Apply easing
+        localProgress = anim.easing.evaluate(localProgress);
+
+        // Find bracketing keyframe stops
+        float t = std::clamp(localProgress, 0.0f, 1.0f);
+        const htmlayout::css::KeyframeStop* before = &kf->stops.front();
+        const htmlayout::css::KeyframeStop* after = &kf->stops.back();
+
+        for (size_t i = 0; i < kf->stops.size() - 1; ++i) {
+            if (t >= kf->stops[i].offset && t <= kf->stops[i + 1].offset) {
+                before = &kf->stops[i];
+                after = &kf->stops[i + 1];
+                break;
+            }
+        }
+
+        // Interpolate between stops
+        float segmentRange = after->offset - before->offset;
+        float segmentT = segmentRange > 0 ? (t - before->offset) / segmentRange : 0;
+
+        // Build property maps for the two stops
+        std::unordered_map<std::string, std::string> beforeProps, afterProps;
+        for (auto& d : before->declarations) beforeProps[d.property] = d.value;
+        for (auto& d : after->declarations) afterProps[d.property] = d.value;
+
+        // Interpolate each property present in either stop
+        std::unordered_set<std::string> allProps;
+        for (auto& [k, v] : beforeProps) allProps.insert(k);
+        for (auto& [k, v] : afterProps) allProps.insert(k);
+
+        for (auto& prop : allProps) {
+            auto bIt = beforeProps.find(prop);
+            auto aIt = afterProps.find(prop);
+            if (bIt != beforeProps.end() && aIt != afterProps.end()) {
+                style[prop] = TransitionManager::interpolate(bIt->second, aIt->second,
+                                                             segmentT, prop);
+            } else if (aIt != afterProps.end()) {
+                // Only in after — snap at start of segment
+                style[prop] = aIt->second;
+            } else {
+                style[prop] = bIt->second;
+            }
+        }
+    }
+}
+
+void AnimationManager::removeElement(dom::Element* elem) {
+    elements_.erase(elem);
+}
+
 } // namespace bro::engine

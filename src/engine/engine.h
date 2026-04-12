@@ -226,6 +226,7 @@ private:
     };
 
     void initSystemPanels();
+    void loadCustomFonts();
     void destroySystemPanels();
     void loadSystemPanels(const std::string& systemDir);
     void scanSystemPanelDir(const std::string& baseDir, const std::string& relPath);
@@ -259,6 +260,7 @@ private:
     std::unique_ptr<js::Timers> timers_;
     std::unique_ptr<dom::Document> document_;
     TransitionManager transitionManager_;
+    AnimationManager animationManager_;
     std::unique_ptr<layout::DrawTraversal> drawTraversal_;
     std::unique_ptr<layout::SkiaTextMetrics> textMetrics_;
     layout::FontManager fontManager_;

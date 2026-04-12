@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::dom { class Element; }
@@ -76,12 +77,65 @@ public:
     // Check if any transitions are running.
     bool hasActiveTransitions() const { return !elements_.empty(); }
 
-private:
     // Interpolate between two CSS values at progress t ∈ [0,1].
     static std::string interpolate(const std::string& from, const std::string& to,
                                    float t, const std::string& property);
 
+private:
+
     std::unordered_map<dom::Element*, ElementTransitions> elements_;
+};
+
+// ---------------------------------------------------------------------------
+// CSS Animations (@keyframes)
+// ---------------------------------------------------------------------------
+
+// A single in-flight animation instance on an element.
+struct Animation {
+    std::string name;           // @keyframes name
+    double duration;            // ms
+    double delay;               // ms
+    CubicBezier easing;
+    int iterationCount;         // -1 = infinite
+    bool alternate;             // direction: alternate
+    bool reverse;               // direction: reverse
+    std::string fillMode;       // none, forwards, backwards, both
+    double startTime;           // ms (engine time)
+    int completedIterations = 0;
+};
+
+struct ElementAnimations {
+    std::vector<Animation> active;
+};
+
+class AnimationManager {
+public:
+    // Called during style resolution to detect animation-name changes.
+    void onStyleChange(dom::Element* elem,
+                       const htmlayout::css::ComputedStyle& newStyle,
+                       double currentTime);
+
+    // Tick all animations. Returns true if any are active.
+    bool tick(double currentTime);
+
+    // Apply animation property overrides to computed style.
+    void applyOverrides(dom::Element* elem,
+                        htmlayout::css::ComputedStyle& style,
+                        double currentTime) const;
+
+    // Set the keyframe store (from htmlayout Cascade).
+    void setKeyframes(const std::vector<htmlayout::css::KeyframeBlock>* kf) {
+        keyframes_ = kf;
+    }
+
+    void removeElement(dom::Element* elem);
+    bool hasActiveAnimations() const { return !elements_.empty(); }
+
+private:
+    const std::vector<htmlayout::css::KeyframeBlock>* keyframes_ = nullptr;
+    std::unordered_map<dom::Element*, ElementAnimations> elements_;
+
+    const htmlayout::css::KeyframeBlock* findKeyframes(const std::string& name) const;
 };
 
 } // namespace bro::engine

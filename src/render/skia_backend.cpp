@@ -165,7 +165,15 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
         while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
         while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
         if (name.empty()) continue;
-        // Try CSS generic name first
+        // Check custom fonts first (@font-face registered)
+        for (auto& cf : customFonts_) {
+            if (cf.family == name) {
+                typeface = cf.typeface;
+                break;
+            }
+        }
+        if (typeface) break;
+        // Try CSS generic name
         const char* resolved = resolveGeneric(name);
         if (resolved) {
             typeface = font_mgr->matchFamilyStyle(resolved, style);
@@ -406,6 +414,25 @@ void SkiaRenderer::scale(float sx, float sy) {
 
 void SkiaRenderer::rotate(float degrees) {
     if (canvas_) canvas_->rotate(degrees);
+}
+
+bool SkiaRenderer::registerCustomFont(const std::string& family,
+                                       const void* data, size_t len,
+                                       int weight, bool italic) {
+    auto skData = SkData::MakeWithCopy(data, len);
+    auto typeface = SkFontMgr::RefEmpty()->makeFromData(skData);
+    if (!typeface) {
+        // Try with platform font manager
+#ifdef _WIN32
+        auto mgr = SkFontMgr_New_DirectWrite();
+#else
+        auto mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
+        typeface = mgr->makeFromData(skData);
+    }
+    if (!typeface) return false;
+    customFonts_.push_back({family, weight, italic, typeface});
+    return true;
 }
 
 void SkiaRenderer::saveLayerWithFilter(SkImageFilter* filter, float x, float y, float w, float h) {

@@ -47,10 +47,13 @@ namespace bro::engine {
 
 void Engine::flush() {
     jsRuntime_->executePendingJobs();
-    // Tick transitions and mark dirty if any are active
+    // Tick transitions and animations, mark dirty if any are active
     if (document_) {
         document_->setTransitionManager(&transitionManager_, virtualTime_);
-        if (transitionManager_.tick(virtualTime_)) {
+        animationManager_.setKeyframes(&document_->cascade().keyframes());
+        document_->setAnimationManager(&animationManager_);
+        bool animActive = transitionManager_.tick(virtualTime_) | animationManager_.tick(virtualTime_);
+        if (animActive) {
             document_->markDirty();
         }
     }

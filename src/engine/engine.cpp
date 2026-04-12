@@ -5,6 +5,8 @@
 #include "engine/replaced_elements.h"
 #include "render/cpu_raster_renderer.h"
 
+#include <fstream>
+
 #include "observer_check.js.h"
 #include "canvas_resize.js.h"
 
@@ -565,13 +567,51 @@ Engine::Engine(const EngineConfig& config)
     //     Shares the JS runtime — each panel gets its own JSContext.
     initSystemPanels();
 
+    // Load @font-face custom fonts from the cascade
+    loadCustomFonts();
+
     // Headless: do initial layout + flush
     if (displayMode_ == DisplayMode::Headless) {
         ensureReplacedElements(document_->documentElement());
         document_->setTransitionManager(&transitionManager_, virtualTime_);
+        animationManager_.setKeyframes(&document_->cascade().keyframes());
+        document_->setAnimationManager(&animationManager_);
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
         flush();
+    }
+}
+
+void Engine::loadCustomFonts() {
+    if (!document_ || !renderer_) return;
+    auto& fontFaces = document_->cascade().fontFaces();
+    std::string basePath = document_->basePath();
+
+    for (auto& ff : fontFaces) {
+        // Resolve relative URL against app base path
+        std::string path = ff.src;
+        if (!path.empty() && path[0] != '/' && path.find(':') == std::string::npos) {
+            path = basePath + "/" + path;
+        }
+
+        // Read font file
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file.is_open()) {
+            util::log(util::LogLevel::Warn, __FILE__, __LINE__,
+                      "Failed to load @font-face '{}' from '{}'", ff.family, path);
+            continue;
+        }
+        auto size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<char> data(size);
+        file.read(data.data(), size);
+        file.close();
+
+        if (renderer_->registerCustomFont(ff.family, data.data(), data.size(),
+                                          ff.weight, ff.italic)) {
+            util::log(util::LogLevel::Info, __FILE__, __LINE__,
+                      "Loaded @font-face '{}' from '{}'", ff.family, path);
+        }
     }
 }
 
@@ -920,9 +960,12 @@ void Engine::layoutThreadFunc() {
         if (document_) {
             double now = util::currentTimeMs();
             document_->setTransitionManager(&transitionManager_, now);
+            animationManager_.setKeyframes(&document_->cascade().keyframes());
+            document_->setAnimationManager(&animationManager_);
             document_->resolveStyles();
-            // If transitions are active, keep re-rendering
-            if (transitionManager_.tick(now)) {
+            // If transitions or animations are active, keep re-rendering
+            bool animActive = transitionManager_.tick(now) | animationManager_.tick(now);
+            if (animActive) {
                 document_->markDirty();
             }
             document_->clearStructureDirty();

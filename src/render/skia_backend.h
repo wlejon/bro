@@ -82,6 +82,9 @@ public:
     void concat(float a, float b, float c, float d, float e, float f) override;
     void saveLayerWithFilter(SkImageFilter* filter,
                              float x, float y, float w, float h) override;
+    bool registerCustomFont(const std::string& family,
+                            const void* data, size_t len,
+                            int weight, bool italic) override;
 
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;
@@ -168,6 +171,15 @@ private:
     };
     std::unordered_map<uint64_t, FontEntry> fonts_;
     uint64_t next_font_handle_ = 1;
+
+    // Custom font typefaces registered via @font-face
+    struct CustomFont {
+        std::string family;
+        int weight;
+        bool italic;
+        sk_sp<SkTypeface> typeface;
+    };
+    std::vector<CustomFont> customFonts_;
 
     // Cached text textures for scene-layer rendering
     struct TextCacheEntry { GLuint tex; int w; int h; };

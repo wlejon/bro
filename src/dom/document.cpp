@@ -247,11 +247,21 @@ void Document::resolveStylesRecursive(Element* elem,
             transitionManager_->onStyleChange(elem, elem->computedStyle(), computed, transitionTime_);
         }
 
+        // CSS animations: detect animation-name and start animations
+        if (animationManager_) {
+            animationManager_->onStyleChange(elem, computed, transitionTime_);
+        }
+
         elem->setComputedStyle(std::move(computed));
 
         // CSS transitions: apply interpolated overrides after setting style
         if (transitionManager_) {
             transitionManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
+        }
+
+        // CSS animations: apply keyframe overrides
+        if (animationManager_) {
+            animationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }
 
         elem->clearDirty();
@@ -580,6 +590,24 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
     }
 
     gumbo_destroy_output(&kGumboDefaultOptions, output);
+
+    // Extract <style> elements from the fragment and add CSS to the cascade
+    std::vector<Element*> newElems;
+    for (auto* child : parent->childNodes()) {
+        if (child->nodeType() == NodeType::Element)
+            collectElements(child, newElems);
+    }
+    for (auto* elem : newElems) {
+        if (elem->tagName() == "STYLE") {
+            std::string css = elem->textContent();
+            if (!css.empty()) {
+                cascade_.addStylesheet(htmlayout::css::parse(css));
+            }
+        }
+        std::string elemId = elem->id();
+        if (!elemId.empty()) idMap_[elemId] = elem;
+    }
+
     markStructureDirty();
 }
 
