@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>FPS Arena</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Connect screen -->
+    <div id="connect-screen">
+        <h1>FPS Arena</h1>
+        <div class="form">
+            <div class="field">
+                <label>Name</label>
+                <input id="name-input" type="text" placeholder="Your name" maxlength="16" value="Player">
+            </div>
+            <div class="field">
+                <label>Server</label>
+                <input id="address-input" type="text" placeholder="127.0.0.1:27015" value="127.0.0.1:27015">
+            </div>
+            <button id="connect-btn">Connect</button>
+            <div id="error-msg"></div>
+        </div>
+        <div class="controls-info">
+            <p>WASD Move | Mouse Look | Click Shoot</p>
+        </div>
+    </div>
+
+    <!-- Game canvas -->
+    <canvas id="game" width="1920" height="1080"></canvas>
+
+    <!-- HUD overlay -->
+    <div id="hud" class="hidden">
+        <!-- Crosshair -->
+        <div id="crosshair">
+            <div class="ch ch-h"></div>
+            <div class="ch ch-v"></div>
+        </div>
+
+        <!-- Health bar -->
+        <div id="health-bar">
+            <div id="health-fill"></div>
+            <span id="health-text">100</span>
+        </div>
+
+        <!-- Score -->
+        <div id="score-display">
+            <span id="kills-count">0</span> kills
+        </div>
+
+        <!-- Kill feed -->
+        <div id="kill-feed"></div>
+
+        <!-- Connection info -->
+        <div id="net-info"></div>
+
+        <!-- Death screen -->
+        <div id="death-screen" class="hidden">
+            <div class="death-text">YOU DIED</div>
+            <div class="death-sub">Respawning...</div>
+        </div>
+
+        <!-- Click to play prompt -->
+        <div id="click-prompt" class="hidden">Click to play</div>
+    </div>
+
+    <script src="client.js"></script>
+</body>
+</html>
