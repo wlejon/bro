@@ -289,8 +289,10 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
     if (JS_IsUndefined(elemMap)) {
-        JS_FreeValue(ctx, global);
-        return;
+        // Map doesn't exist yet (no JS has accessed any DOM element).
+        // Create it so inline handlers and wrapElement can use it.
+        elemMap = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "__bro_elem_map", JS_DupValue(ctx, elemMap));
     }
 
     std::string elemKey = std::to_string(current->nodeId());

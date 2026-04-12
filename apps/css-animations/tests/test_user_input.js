@@ -80,8 +80,9 @@ test('element.click() on transition card toggles active class on child', functio
     assertTrue(card !== null, 'should find a transition card');
     card.click();
     flush();
-    assertTrue(hasClass('.t-color', 'active'),
-        '.t-color should have active class after click');
+    // First transition-card is multi-property (reordered)
+    assertTrue(hasClass('.t-multi', 'active'),
+        '.t-multi should have active class after click');
 });
 
 // ---------------------------------------------------------------------------
@@ -91,8 +92,8 @@ test('second element.click() toggles active class off', function() {
     var card = document.querySelector('.transition-card');
     card.click();
     flush();
-    assertFalse(hasClass('.t-color', 'active'),
-        '.t-color should NOT have active class after second click');
+    assertFalse(hasClass('.t-multi', 'active'),
+        '.t-multi should NOT have active class after second click');
 });
 
 // ---------------------------------------------------------------------------
@@ -150,11 +151,11 @@ test('mouseDown and mouseUp on different elements does not trigger click', funct
 // ---------------------------------------------------------------------------
 test('click each transition card toggles its child box', function() {
     var pairs = [
-        { card: '.transition-card:nth-child(1)', box: '.t-color' },
-        { card: '.transition-card:nth-child(2)', box: '.t-scale' },
-        { card: '.transition-card:nth-child(3)', box: '.t-rotate' },
-        { card: '.transition-card:nth-child(4)', box: '.t-shadow' },
-        { card: '.transition-card:nth-child(5)', box: '.t-multi' },
+        { card: '.transition-card:nth-child(1)', box: '.t-multi' },
+        { card: '.transition-card:nth-child(2)', box: '.t-color' },
+        { card: '.transition-card:nth-child(3)', box: '.t-scale' },
+        { card: '.transition-card:nth-child(4)', box: '.t-rotate' },
+        { card: '.transition-card:nth-child(5)', box: '.t-shadow' },
         { card: '.transition-card:nth-child(6)', box: '.t-opacity' },
         { card: '.transition-card:nth-child(7)', box: '.t-size' },
         { card: '.transition-card:nth-child(8)', box: '.t-cubic' }
@@ -250,7 +251,7 @@ test('mouseup event fires on target element', function() {
 // ---------------------------------------------------------------------------
 test('click event fires via addEventListener', function() {
     var clickCount = 0;
-    var card = document.querySelectorAll('.transition-card')[3]; // t-shadow card
+    var card = document.querySelectorAll('.transition-card')[4]; // t-shadow card
     card.addEventListener('click', function() { clickCount++; });
 
     var pos = getCenter('.t-shadow');
@@ -267,7 +268,7 @@ test('click event fires via addEventListener', function() {
 test('click on child box bubbles to parent transition-card', function() {
     var parentClicked = false;
     var cards = document.querySelectorAll('.transition-card');
-    var card = cards[4]; // t-multi parent card
+    var card = cards[0]; // t-multi parent card (first after reorder)
     card.addEventListener('click', function() { parentClicked = true; });
 
     var pos = getCenter('.t-multi');

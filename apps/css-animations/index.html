@@ -275,37 +275,37 @@
     </div>
 
     <!-- CSS Transitions -->
-    <h2>CSS Transitions (auto-looping)</h2>
+    <h2>CSS Transitions (click to toggle)</h2>
     <div class="grid">
-        <div class="card transition-card">
-            <h3>background-color 0.5s</h3>
-            <div class="box t-color"></div>
-        </div>
-        <div class="card transition-card">
-            <h3>scale 0.3s ease-out</h3>
-            <div class="box t-scale"></div>
-        </div>
-        <div class="card transition-card">
-            <h3>rotate 0.5s ease-in-out</h3>
-            <div class="box t-rotate"></div>
-        </div>
-        <div class="card transition-card">
-            <h3>box-shadow 0.4s</h3>
-            <div class="box t-shadow"></div>
-        </div>
-        <div class="card transition-card">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-multi');if(b)b.classList.toggle('active')">
             <h3>multi-property</h3>
             <div class="box t-multi"></div>
         </div>
-        <div class="card transition-card">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-color');if(b)b.classList.toggle('active')">
+            <h3>background-color 0.5s</h3>
+            <div class="box t-color"></div>
+        </div>
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-scale');if(b)b.classList.toggle('active')">
+            <h3>scale 0.3s ease-out</h3>
+            <div class="box t-scale"></div>
+        </div>
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-rotate');if(b)b.classList.toggle('active')">
+            <h3>rotate 0.5s ease-in-out</h3>
+            <div class="box t-rotate"></div>
+        </div>
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-shadow');if(b)b.classList.toggle('active')">
+            <h3>box-shadow 0.4s</h3>
+            <div class="box t-shadow"></div>
+        </div>
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-opacity');if(b)b.classList.toggle('active')">
             <h3>opacity 0.5s</h3>
             <div class="box t-opacity"></div>
         </div>
-        <div class="card transition-card">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-size');if(b)b.classList.toggle('active')">
             <h3>width+height 0.4s</h3>
             <div class="box t-size"></div>
         </div>
-        <div class="card transition-card">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-cubic');if(b)b.classList.toggle('active')">
             <h3>cubic-bezier (elastic)</h3>
             <div class="box t-cubic"></div>
         </div>
@@ -332,17 +332,7 @@
     </div>
 
     <script>
-        // Auto-toggle transition classes on a loop
-        var boxes = document.querySelectorAll('.transition-card .box');
-        function toggleAll() {
-            for (var i = 0; i < boxes.length; i++) {
-                boxes[i].classList.toggle('active');
-            }
-        }
-        // Stagger: toggle on after 1s, off after 2.5s, repeat
-        setInterval(toggleAll, 1500);
-        // Start the first toggle after a short delay
-        setTimeout(toggleAll, 500);
+        // Transitions use inline onclick attributes (click to toggle)
     </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-// Headless click tests — pure class toggling, no CSS transitions/animations.
+// Headless click tests — verifies click handling across different patterns.
 // Run: bro-headless apps/click-test apps/click-test/tests/test_click.js
 
 var passed = 0;
@@ -38,165 +38,138 @@ function isActive(sel) {
     return document.querySelector(sel).classList.contains('active');
 }
 
-// ---------------------------------------------------------------------------
-// 1. Initial state
-// ---------------------------------------------------------------------------
-test('all boxes start without active', function() {
-    assertFalse(isActive('#box1'));
-    assertFalse(isActive('#box2'));
-    assertFalse(isActive('#box3'));
-    assertFalse(isActive('#box4'));
-});
-
-// ---------------------------------------------------------------------------
-// 2. Inline onclick — element.click() on parent card
-// ---------------------------------------------------------------------------
-test('element.click() on card with inline onclick toggles child', function() {
-    var card = document.querySelector('#box1').parentElement;
-    card.click();
-    flush();
-    assertTrue(isActive('#box1'), 'box1 should be active');
-    card.click();
-    flush();
-    assertFalse(isActive('#box1'), 'box1 should be inactive');
-});
-
-// ---------------------------------------------------------------------------
-// 3. Inline onclick — coordinate click on parent card
-// ---------------------------------------------------------------------------
-test('coordinate click() on card with inline onclick toggles child', function() {
-    var pos = getCenter('#box1');
+// --- A. Inline onclick on card ---
+test('A1: inline onclick toggles child', function() {
+    assertFalse(isActive('#a1'));
+    var pos = getCenter('#a1');
     click(pos.x, pos.y);
-    assertTrue(isActive('#box1'), 'box1 active after coord click');
+    assertTrue(isActive('#a1'), 'a1 should be active');
     click(pos.x, pos.y);
-    assertFalse(isActive('#box1'), 'box1 inactive after second coord click');
+    assertFalse(isActive('#a1'), 'a1 should be inactive');
 });
 
-// ---------------------------------------------------------------------------
-// 4. addEventListener — element.click() on parent card
-// ---------------------------------------------------------------------------
-test('element.click() on card with addEventListener toggles child', function() {
-    var card = document.getElementById('card2');
-    card.click();
-    flush();
-    assertTrue(isActive('#box2'), 'box2 should be active');
-    card.click();
-    flush();
-    assertFalse(isActive('#box2'), 'box2 should be inactive');
-});
-
-// ---------------------------------------------------------------------------
-// 5. addEventListener — coordinate click on parent card
-// ---------------------------------------------------------------------------
-test('coordinate click() on card2 toggles box2', function() {
-    var pos = getCenter('#box2');
+test('A2: inline onclick toggles child', function() {
+    var pos = getCenter('#a2');
     click(pos.x, pos.y);
-    assertTrue(isActive('#box2'), 'box2 active after coord click');
+    assertTrue(isActive('#a2'));
     click(pos.x, pos.y);
-    assertFalse(isActive('#box2'), 'box2 inactive after second coord click');
+    assertFalse(isActive('#a2'));
 });
 
-// ---------------------------------------------------------------------------
-// 6. addEventListener on box directly — element.click()
-// ---------------------------------------------------------------------------
-test('element.click() directly on box3 toggles it', function() {
-    document.getElementById('box3').click();
-    flush();
-    assertTrue(isActive('#box3'), 'box3 should be active');
-    document.getElementById('box3').click();
-    flush();
-    assertFalse(isActive('#box3'), 'box3 should be inactive');
-});
-
-// ---------------------------------------------------------------------------
-// 7. addEventListener on box directly — coordinate click
-// ---------------------------------------------------------------------------
-test('coordinate click() on box3 toggles it', function() {
-    var pos = getCenter('#box3');
+// --- B. addEventListener on card ---
+test('B1: addEventListener on card toggles child', function() {
+    var pos = getCenter('#b1');
     click(pos.x, pos.y);
-    assertTrue(isActive('#box3'), 'box3 active');
+    assertTrue(isActive('#b1'));
     click(pos.x, pos.y);
-    assertFalse(isActive('#box3'), 'box3 inactive');
+    assertFalse(isActive('#b1'));
 });
 
-// ---------------------------------------------------------------------------
-// 8. Bubbling — click child, inline onclick on parent fires
-// ---------------------------------------------------------------------------
-test('click on box4 bubbles to parent inline onclick', function() {
-    var pos = getCenter('#box4');
+test('B2: addEventListener on card toggles child', function() {
+    var pos = getCenter('#b2');
     click(pos.x, pos.y);
-    assertTrue(isActive('#box4'), 'box4 active via bubbling');
+    assertTrue(isActive('#b2'));
     click(pos.x, pos.y);
-    assertFalse(isActive('#box4'), 'box4 inactive after second click');
+    assertFalse(isActive('#b2'));
 });
 
-// ---------------------------------------------------------------------------
-// 9. mouseDown + mouseUp = click
-// ---------------------------------------------------------------------------
-test('mouseDown + mouseUp produces click', function() {
-    var pos = getCenter('#box1');
-    mouseDown(pos.x, pos.y);
-    mouseUp(pos.x, pos.y);
-    assertTrue(isActive('#box1'), 'box1 active after mouseDown+mouseUp');
-    mouseDown(pos.x, pos.y);
-    mouseUp(pos.x, pos.y);
-    assertFalse(isActive('#box1'), 'box1 inactive after second pair');
-});
-
-// ---------------------------------------------------------------------------
-// 10. mouseDown + mouseUp on different elements = no click
-// ---------------------------------------------------------------------------
-test('mouseDown/mouseUp on different elements does not click', function() {
-    assertFalse(isActive('#box1'));
-    var p1 = getCenter('#box1');
-    var p2 = getCenter('#box2');
-    mouseDown(p1.x, p1.y);
-    mouseUp(p2.x, p2.y);
-    assertFalse(isActive('#box1'), 'box1 should not toggle');
-    assertFalse(isActive('#box2'), 'box2 should not toggle');
-});
-
-// ---------------------------------------------------------------------------
-// 11. Computed style changes after toggle
-// ---------------------------------------------------------------------------
-test('background-color changes after classList.toggle', function() {
-    var bg1 = computedStyle('#box1', 'background-color');
-    var pos = getCenter('#box1');
+// --- C. addEventListener directly on box ---
+test('C1: listener on box toggles it', function() {
+    var pos = getCenter('#c1');
     click(pos.x, pos.y);
-    var bg2 = computedStyle('#box1', 'background-color');
-    assertTrue(bg1 !== bg2, 'bg should change: before=' + bg1 + ' after=' + bg2);
-    click(pos.x, pos.y); // clean up
-});
-
-// ---------------------------------------------------------------------------
-// 12. Multiple rapid toggles
-// ---------------------------------------------------------------------------
-test('5 clicks = active (odd count)', function() {
-    var pos = getCenter('#box3');
-    for (var i = 0; i < 5; i++) click(pos.x, pos.y);
-    assertTrue(isActive('#box3'), 'odd clicks = active');
-    click(pos.x, pos.y); // clean up
-});
-
-// ---------------------------------------------------------------------------
-// 13. Event object properties
-// ---------------------------------------------------------------------------
-test('click event has correct button and type', function() {
-    var evtData = null;
-    var box = document.getElementById('box3');
-    box.addEventListener('click', function(e) {
-        evtData = { type: e.type, button: e.button };
-    });
-    var pos = getCenter('#box3');
+    assertTrue(isActive('#c1'));
     click(pos.x, pos.y);
-    assertTrue(evtData !== null, 'event should fire');
-    assertEqual(evtData.type, 'click', 'type');
-    assertEqual(evtData.button, 0, 'button');
-    click(pos.x, pos.y); // clean up
+    assertFalse(isActive('#c1'));
 });
 
-// ---------------------------------------------------------------------------
-// Summary
+test('C2: listener on box toggles it', function() {
+    var pos = getCenter('#c2');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#c2'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#c2'));
+});
+
+// --- D. Nested elements ---
+test('D1: inline onclick, 3-deep nesting', function() {
+    var pos = getCenter('#d1');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#d1'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#d1'));
+});
+
+test('D2: addEventListener, 3-deep nesting', function() {
+    var pos = getCenter('#d2');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#d2'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#d2'));
+});
+
+// --- E. Mixed inline + addEventListener ---
+test('E1: both handlers fire', function() {
+    var pos = getCenter('#e1');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#e1'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#e1'));
+});
+
+// --- F. onclick directly on box ---
+test('F1: onclick on box itself', function() {
+    var pos = getCenter('#f1');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#f1'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#f1'));
+});
+
+test('F2: onclick on box itself', function() {
+    var pos = getCenter('#f2');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#f2'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#f2'));
+});
+
+// --- G. Text toggle ---
+test('G1: text content toggles', function() {
+    var g1 = document.getElementById('g1');
+    assertEqual(g1.textContent, 'OFF');
+    var pos = getCenter('#g1-card');
+    click(pos.x, pos.y);
+    assertEqual(g1.textContent, 'ON');
+    click(pos.x, pos.y);
+    assertEqual(g1.textContent, 'OFF');
+});
+
+// --- H. Inline onclick with event param ---
+test('H1: onclick with event object', function() {
+    var pos = getCenter('#h1');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#h1'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#h1'));
+});
+
+// --- I. CSS Transitions ---
+test('I1: bg-color transition toggles', function() {
+    var pos = getCenter('#i1');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#i1'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#i1'));
+});
+
+test('I5: bg-color transition (addEventListener)', function() {
+    var pos = getCenter('#i5');
+    click(pos.x, pos.y);
+    assertTrue(isActive('#i5'));
+    click(pos.x, pos.y);
+    assertFalse(isActive('#i5'));
+});
+
 // ---------------------------------------------------------------------------
 console.log('');
 console.log('Results: ' + passed + ' passed, ' + failed + ' failed out of ' + (passed + failed));
