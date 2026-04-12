@@ -677,6 +677,9 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 dispatchEvent(target, enterEvt);
             }
 
+            // Mark old and new hovered elements dirty for :hover style re-resolve
+            if (hoveredElement_) hoveredElement_->markDirty();
+            if (target) target->markDirty();
             hoveredElement_ = target;
             uiDirty_ = true;
         }

@@ -19,6 +19,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "layout/draw_traversal.h"
+#include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
 #include "canvas/canvas_scene.h"
 #include "scene/scene_graph.h"
@@ -61,6 +62,7 @@ void Engine::flush() {
         if (document_->isStructureDirty()) {
             ensureReplacedElements(document_->documentElement());
         }
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
         document_->resolveStyles();
         document_->clearStructureDirty();
         document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
@@ -71,6 +73,24 @@ void Engine::flush() {
             JSValue r = JS_Eval(jsRuntime_->getContext(), js_observer_check,
                                 strlen(js_observer_check), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
             JS_FreeValue(jsRuntime_->getContext(), r);
+        }
+    }
+
+    // Drain CSS transition/animation events and dispatch to JS.
+    {
+        for (auto& ev : transitionManager_.takePendingEvents()) {
+            dom::TransitionEvent tevt(ev.type, true, false);
+            tevt.setPropertyName(ev.name);
+            tevt.setElapsedTime(ev.elapsedTime);
+            tevt.setIsTrusted(true);
+            dispatchEvent(ev.element, tevt);
+        }
+        for (auto& ev : animationManager_.takePendingEvents()) {
+            dom::AnimationEvent aevt(ev.type, true, false);
+            aevt.setAnimationName(ev.name);
+            aevt.setElapsedTime(ev.elapsedTime);
+            aevt.setIsTrusted(true);
+            dispatchEvent(ev.element, aevt);
         }
     }
 

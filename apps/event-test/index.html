@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @keyframes flash {
+            0%   { background-color: #22c55e; }
+            50%  { background-color: #eab308; }
+            100% { background-color: #22c55e; }
+        }
+
+        body {
+            font-family: sans-serif;
+            font-size: 14px;
+            background: #111;
+            color: #eee;
+            padding: 20px;
+        }
+
+        h2 { color: #93c5fd; margin: 16px 0 8px 0; }
+
+        .box {
+            width: 120px;
+            height: 60px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        /* Transition test: hover changes color over 0.5s */
+        #trans-box {
+            background: #3b82f6;
+            transition: background-color 0.5s ease;
+        }
+        #trans-box:hover {
+            background-color: #ef4444;
+        }
+
+        /* Animation test: runs 3 iterations */
+        #anim-box {
+            animation: flash 1s ease-in-out 3;
+        }
+
+        #log {
+            margin-top: 16px;
+            background: #1e1e2e;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 8px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        #log div { padding: 2px 0; }
+    </style>
+</head>
+<body>
+    <h2>Transition: hover me</h2>
+    <div class="box" id="trans-box">Hover</div>
+
+    <h2>Animation: 3x flash</h2>
+    <div class="box" id="anim-box">Flash</div>
+
+    <h2>Event log</h2>
+    <div id="log"></div>
+
+    <script>
+        function log(msg) {
+            var el = document.getElementById('log');
+            var d = document.createElement('div');
+            d.textContent = msg;
+            el.appendChild(d);
+            el.scrollTop = el.scrollHeight;
+        }
+
+        // Transition events
+        var tb = document.getElementById('trans-box');
+        tb.addEventListener('transitionstart', function(e) {
+            log('transitionstart: ' + e.propertyName);
+        });
+        tb.addEventListener('transitionend', function(e) {
+            log('transitionend: ' + e.propertyName + ' (' + e.elapsedTime + 's)');
+        });
+
+        // Animation events
+        var ab = document.getElementById('anim-box');
+        ab.addEventListener('animationstart', function(e) {
+            log('animationstart: ' + e.animationName);
+        });
+        ab.addEventListener('animationiteration', function(e) {
+            log('animationiteration: ' + e.animationName + ' (' + e.elapsedTime + 's)');
+        });
+        ab.addEventListener('animationend', function(e) {
+            log('animationend: ' + e.animationName + ' (' + e.elapsedTime + 's)');
+        });
+
+        log('Waiting for events...');
+        log('Hover the blue box to test transitions.');
+        log('The green box should flash 3 times with animation events.');
+    </script>
+</body>
+</html>

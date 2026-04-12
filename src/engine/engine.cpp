@@ -175,26 +175,6 @@ Engine::Engine(const EngineConfig& config)
     // In headless mode this is virtual time; in windowed mode, real time.
     timers_->tick(displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs());
 
-    // 4a2. CSS transition/animation event callbacks
-    transitionManager_.setEventCallback(
-        [this](dom::Element* elem, const std::string& type,
-               const std::string& name, double elapsedTime) {
-            dom::TransitionEvent evt(type, true, false);
-            evt.setPropertyName(name);
-            evt.setElapsedTime(elapsedTime);
-            evt.setIsTrusted(true);
-            dispatchEvent(elem, evt);
-        });
-    animationManager_.setEventCallback(
-        [this](dom::Element* elem, const std::string& type,
-               const std::string& name, double elapsedTime) {
-            dom::AnimationEvent evt(type, true, false);
-            evt.setAnimationName(name);
-            evt.setElapsedTime(elapsedTime);
-            evt.setIsTrusted(true);
-            dispatchEvent(elem, evt);
-        });
-
     // 4b. Audio engine + bindings
     audioEngine_ = std::make_unique<broaudio::Engine>();
     if (displayMode_ == DisplayMode::Windowed) {
@@ -593,6 +573,7 @@ Engine::Engine(const EngineConfig& config)
     // Headless: do initial layout + flush
     if (displayMode_ == DisplayMode::Headless) {
         ensureReplacedElements(document_->documentElement());
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
         document_->setTransitionManager(&transitionManager_, virtualTime_);
         animationManager_.setKeyframes(&document_->cascade().keyframes());
         document_->setAnimationManager(&animationManager_);
@@ -984,6 +965,8 @@ void Engine::layoutThreadFunc() {
 
         // Style resolution + layout computation
         if (document_) {
+            layout::ElementRefAdapter::setHoveredElement(
+                layoutShared_.hoveredElement.load(std::memory_order_relaxed));
             double now = util::currentTimeMs();
             document_->setTransitionManager(&transitionManager_, now);
             auto& kfs = document_->cascade().keyframes();
@@ -1293,6 +1276,7 @@ void Engine::run() {
     // Initial layout
     if (document_) {
         ensureReplacedElements(document_->documentElement());
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
         double now = util::currentTimeMs();
         document_->setTransitionManager(&transitionManager_, now);
         animationManager_.setKeyframes(&document_->cascade().keyframes());
@@ -1352,6 +1336,21 @@ void Engine::run() {
                 if (document_ && document_->documentElement()) {
                     auto& box = document_->documentElement()->layoutBox();
                     documentHeight_ = box.marginBox().height;
+                }
+                // Also drain here (early layout completion from previous frame)
+                for (auto& ev : transitionManager_.takePendingEvents()) {
+                    dom::TransitionEvent tevt(ev.type, true, false);
+                    tevt.setPropertyName(ev.name);
+                    tevt.setElapsedTime(ev.elapsedTime);
+                    tevt.setIsTrusted(true);
+                    dispatchEvent(ev.element, tevt);
+                }
+                for (auto& ev : animationManager_.takePendingEvents()) {
+                    dom::AnimationEvent aevt(ev.type, true, false);
+                    aevt.setAnimationName(ev.name);
+                    aevt.setElapsedTime(ev.elapsedTime);
+                    aevt.setIsTrusted(true);
+                    dispatchEvent(ev.element, aevt);
                 }
             }
         }
@@ -1499,6 +1498,7 @@ void Engine::run() {
             }
             layoutShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
             layoutShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
+            layoutShared_.hoveredElement.store(hoveredElement_, std::memory_order_relaxed);
             layoutShared_.state.store(kLayoutDomStable, std::memory_order_release);
             layoutShared_.state.notify_one();
             layoutSignaled = true;
@@ -1673,6 +1673,29 @@ void Engine::run() {
                     }
                 }
 
+                // Drain CSS transition/animation events on the main thread.
+                {
+                    auto te = transitionManager_.takePendingEvents();
+                    auto ae = animationManager_.takePendingEvents();
+                    for (auto& ev : te) {
+                        dom::TransitionEvent tevt(ev.type, true, false);
+                        tevt.setPropertyName(ev.name);
+                        tevt.setElapsedTime(ev.elapsedTime);
+                        tevt.setIsTrusted(true);
+                        dispatchEvent(ev.element, tevt);
+                    }
+                    for (auto& ev : ae) {
+                        dom::AnimationEvent aevt(ev.type, true, false);
+                        aevt.setAnimationName(ev.name);
+                        aevt.setElapsedTime(ev.elapsedTime);
+                        aevt.setIsTrusted(true);
+                        dispatchEvent(ev.element, aevt);
+                    }
+                }
+
+                // Flush microtasks from event handlers (may have queued DOM mutations)
+                jsRuntime_->executePendingJobs();
+
                 uiDirty_ = true;
 
                 // Signal raster thread now that layout is complete.
@@ -1789,6 +1812,7 @@ void Engine::handleResize(int w, int h) {
         resizeSystemPanels(w, h);
     }
     if (document_) {
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(w), static_cast<float>(h), *textMetrics_);
         if (document_->documentElement()) {

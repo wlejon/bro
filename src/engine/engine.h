@@ -313,6 +313,7 @@ private:
         std::atomic<int> vpWidth{0};
         std::atomic<int> vpHeight{0};
         std::atomic<bool> animationsActive{false};
+        std::atomic<dom::Element*> hoveredElement{nullptr};
     };
     LayoutShared layoutShared_;
     std::thread layoutThread_;
