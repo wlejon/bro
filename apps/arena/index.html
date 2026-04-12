@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Arena</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="hud">
+        <div id="status">Disconnected</div>
+        <div id="players-online"></div>
+    </div>
+    <div id="connect-screen">
+        <h1>Arena</h1>
+        <div class="field">
+            <label>Name</label>
+            <input type="text" id="name-input" value="Player" maxlength="16">
+        </div>
+        <div class="field">
+            <label>Server</label>
+            <input type="text" id="address-input" value="127.0.0.1:27015">
+        </div>
+        <button id="connect-btn">Connect</button>
+        <div id="error-msg"></div>
+    </div>
+    <canvas id="game"></canvas>
+    <script src="client.js"></script>
+</body>
+</html>
