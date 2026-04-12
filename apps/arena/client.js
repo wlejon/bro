@@ -62,6 +62,7 @@ bro.net.onconnect = (connId) => {
     serverConn = connId;
     connected = true;
     connectScreen.classList.add('hidden');
+    canvas.classList.add('active');
     statusEl.textContent = 'Connected';
 
     // Send our name
@@ -76,7 +77,8 @@ bro.net.ondisconnect = (connId, reason) => {
     players.clear();
     statusEl.textContent = 'Disconnected (reason: ' + reason + ')';
 
-    // Show connect screen again
+    // Show connect screen again, hide canvas
+    canvas.classList.remove('active');
     connectScreen.classList.remove('hidden');
     connectBtn.textContent = 'Connect';
     connectBtn.disabled = false;

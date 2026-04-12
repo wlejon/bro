@@ -61,7 +61,10 @@ function broadcastJSON(obj) {
 // ── Networking ───────────────────────────────────────────────────────────────
 
 bro.net.init();
-bro.net.host(PORT);
+if (!bro.net.host(PORT)) {
+    console.error(`Failed to bind port ${PORT} — is another server running?`);
+    bro.server.stop();
+}
 console.log(`Arena server hosting on port ${PORT}`);
 console.log(`Tick rate: ${bro.server.tickrate} Hz`);
 console.log(`Arena: ${ARENA_W}x${ARENA_H}`);
