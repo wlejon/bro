@@ -23,14 +23,10 @@ const players = new Map(); // id → { x, y, vx, vy, color, name, score }
 const keys = { up: false, down: false, left: false, right: false };
 let lastInputSent = '';
 
-// ── Canvas sizing ────────────────────────────────────────────────────────────
+// ── Canvas sizing (from layout box) ──────────────────────────────────────────
 
-function resize() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-}
-resize();
-window.addEventListener('resize', resize);
+const CANVAS_W = 1920;
+const CANVAS_H = 1080;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -163,26 +159,27 @@ setInterval(() => {
 function draw() {
     requestAnimationFrame(draw);
 
-    const W = canvas.width;
-    const H = canvas.height;
+    const W = CANVAS_W;
+    const H = CANVAS_H;
     ctx.clearRect(0, 0, W, H);
 
-    if (!connected || players.size === 0) return;
-
-    // Camera: center on our player
-    const me = players.get(myId);
-    const camX = me ? me.x - W / 2 : arena.w / 2 - W / 2;
-    const camY = me ? me.y - H / 2 : arena.h / 2 - H / 2;
+    // Always draw arena background (centered in viewport)
+    const camX = connected && players.has(myId)
+        ? players.get(myId).x - W / 2
+        : arena.w / 2 - W / 2;
+    const camY = connected && players.has(myId)
+        ? players.get(myId).y - H / 2
+        : arena.h / 2 - H / 2;
 
     ctx.save();
     ctx.translate(-camX, -camY);
 
-    // ── Draw arena background ──
+    // ── Arena background ──
     ctx.fillStyle = '#0f3460';
     ctx.fillRect(0, 0, arena.w, arena.h);
 
     // Grid lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 1;
     for (let x = 0; x <= arena.w; x += 50) {
         ctx.beginPath();
@@ -225,7 +222,7 @@ function draw() {
             ctx.stroke();
         }
 
-        // Direction indicator (small dot showing velocity direction)
+        // Direction indicator
         if (p.vx !== 0 || p.vy !== 0) {
             const len = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
             const nx = p.vx / len;
@@ -238,12 +235,20 @@ function draw() {
 
         // Name label
         ctx.fillStyle = 'white';
-        ctx.font = '12px system-ui, sans-serif';
+        ctx.font = '12px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(p.name, p.x, p.y - 24);
     }
 
     ctx.restore();
+
+    // ── "Waiting" message when not connected ──
+    if (!connected || players.size === 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(connected ? 'Waiting for state...' : 'Not connected', W / 2, H / 2);
+    }
 }
 
 requestAnimationFrame(draw);
