@@ -108,6 +108,9 @@ set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(jolt/Build EXCLUDE_FROM_ALL)
 
+# --- GameNetworkingSockets (via vcpkg) ---
+find_package(GameNetworkingSockets CONFIG REQUIRED)
+
 # --- Skia (pre-built, optional) ---
 include(skia/skia.cmake)
 

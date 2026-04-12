@@ -34,8 +34,10 @@
 #include "js/scene_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/terrain_bindings.h"
+#include "js/net_bindings.h"
 
 #include "physics/physics_world.h"
+#include "net/network_manager.h"
 #include "scene/scene_graph.h"
 #include "api/api.h"
 #include "runtime/runtime.h"
@@ -237,6 +239,10 @@ Engine::Engine(const EngineConfig& config)
 
     // 4e. Terrain bindings (infinite voxel terrain system)
     js::TerrainBindings::install(jsRuntime_->getContext());
+
+    // 4f. Network manager + bindings
+    networkManager_ = std::make_unique<net::NetworkManager>();
+    js::NetBindings::install(jsRuntime_->getContext(), networkManager_.get());
 
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
@@ -834,6 +840,7 @@ Engine::~Engine() {
         JSContext* ctx = jsRuntime_->getContext();
         js::setElementFinalizerShutdown(true);
         js::cleanupWorkerBindings(ctx);
+        js::NetBindings::cleanup(ctx);
         js::PhysicsBindings::cleanup(ctx);
         js::TerrainBindings::cleanup(ctx);
         js::MeshBindings::cleanup(ctx);
@@ -1433,6 +1440,12 @@ void Engine::run() {
         // 3b2. Drain worker→main messages (calls onmessage callbacks)
         js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
+
+        // 3b3. Poll network (drain incoming messages, fire JS callbacks)
+        if (networkManager_ && networkManager_->isInitialized()) {
+            networkManager_->poll();
+            jsRuntime_->executePendingJobs();
+        }
 
         // 3c. Unbind WebGL FBO
         if (activeWebGL) {

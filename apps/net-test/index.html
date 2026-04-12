@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Test</title>
+    <style>
+        body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+        h1 { color: #0f3460; }
+        .log { background: #16213e; padding: 10px; border-radius: 4px; margin: 10px 0; min-height: 200px; overflow-y: auto; }
+        button { background: #0f3460; color: white; border: none; padding: 8px 16px; margin: 4px; cursor: pointer; border-radius: 4px; }
+        button:hover { background: #1a508b; }
+        input { background: #16213e; color: white; border: 1px solid #0f3460; padding: 8px; border-radius: 4px; }
+        .status { color: #e94560; font-weight: bold; }
+        .connected { color: #0f0; }
+    </style>
+</head>
+<body>
+    <h1>bro.net - Network Test</h1>
+
+    <div>
+        <button id="btn-init">Init Network</button>
+        <button id="btn-host">Host (port 27015)</button>
+        <button id="btn-connect">Connect</button>
+        <button id="btn-send">Send Test Message</button>
+        <button id="btn-broadcast">Broadcast</button>
+        <button id="btn-close">Close</button>
+    </div>
+
+    <div>
+        <span>Connect to: </span>
+        <input id="addr" type="text" value="127.0.0.1:27015" />
+    </div>
+
+    <div>
+        <span>Status: </span><span id="status" class="status">Not initialized</span>
+    </div>
+
+    <div>
+        <span>Connections: </span><span id="conns">0</span>
+    </div>
+
+    <div class="log" id="log"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

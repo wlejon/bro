@@ -26,6 +26,7 @@
 #include "webgl/webgl2_context.h"
 
 #include <broaudio/engine.h>
+#include "net/network_manager.h"
 
 #include <stb_image_write.h>
 
@@ -147,6 +148,13 @@ void Engine::advanceTime(double ms) {
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
+
+        // Poll network (drain incoming messages, fire JS callbacks)
+        if (networkManager_ && networkManager_->isInitialized()) {
+            networkManager_->poll();
+            jsRuntime_->executePendingJobs();
+        }
+
         if (activeWebGL) activeWebGL->unbindCanvasFBO();
 
         // Auto-render scene graphs after JS execution
