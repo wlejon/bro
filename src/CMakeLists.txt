@@ -12,6 +12,7 @@ add_subdirectory(scene)
 add_subdirectory(net)
 add_subdirectory(engine)
 add_subdirectory(headless)
+add_subdirectory(server)
 
 add_executable(bro main.cpp)
 target_link_libraries(bro PRIVATE bro_engine)

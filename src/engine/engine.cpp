@@ -35,6 +35,7 @@
 #include "js/mesh_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
+#include "js/server_bindings.h"
 
 #include "physics/physics_world.h"
 #include "net/network_manager.h"
@@ -122,7 +123,74 @@ Engine::Engine(const EngineConfig& config)
     inputConfig_.doubleClickDistancePx = inp.doubleClickDistancePx;
     inputConfig_.overlayToggleKey = inp.overlayToggleKey;
 
-    // === Mode-specific initialization ===
+    // === Common JS runtime initialization ===
+
+    // 4. JS runtime + bindings
+    jsRuntime_ = std::make_unique<js::Runtime>();
+    jsRuntime_->setModuleLoader();
+
+    // Wire brokit logging through bro's LOG_* macros
+    brokit::Runtime::setLogCallback([](brokit::Runtime::LogLevel level, const std::string& msg) {
+        switch (level) {
+            case brokit::Runtime::LogLevel::Warn:  LOG_WARN("[console] %s", msg.c_str()); break;
+            case brokit::Runtime::LogLevel::Error: LOG_ERROR("[console] %s", msg.c_str()); break;
+            default: LOG_INFO("[console] %s", msg.c_str()); break;
+        }
+    });
+
+    // Install all brokit APIs (console, timers, URL, crypto, encoding, fetch, etc.)
+    brokit::api::installAll(jsRuntime_->getContext());
+
+    timers_ = std::make_unique<js::Timers>();
+    js::Timers::install(jsRuntime_->getContext(), timers_.get());
+
+    // Seed the timer time base so setTimeout/setInterval use the correct clock.
+    // In headless mode this is virtual time; in windowed/server mode, real time.
+    timers_->tick(displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs());
+
+    // Physics engine + bindings (all modes)
+    physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
+    physicsWorld_->init();
+    if (displayMode_ != DisplayMode::Headless)
+        physicsWorld_->startThread();
+    js::PhysicsBindings::install(jsRuntime_->getContext(), physicsWorld_.get());
+
+    // Mesh bindings (standalone Mesh class wrapping bromesh — all modes)
+    js::MeshBindings::install(jsRuntime_->getContext());
+
+    // Terrain bindings (infinite voxel terrain system — all modes)
+    js::TerrainBindings::install(jsRuntime_->getContext());
+
+    // Network manager + bindings (all modes)
+    networkManager_ = std::make_unique<net::NetworkManager>();
+    js::NetBindings::install(jsRuntime_->getContext(), networkManager_.get());
+
+    // === Server mode: lightweight init — no rendering, DOM, or audio ===
+
+    if (displayMode_ == DisplayMode::Server) {
+        // Storage (persisted key/value)
+        std::string storagePath = config.appDir + "/.storage.json";
+        js::StorageBindings::install(jsRuntime_->getContext(), storagePath);
+        js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
+
+        // Settings JS API
+        js::SettingsBindings::install(jsRuntime_->getContext(), settings_.get(), nullptr);
+
+        // Register app directory as base path for fetch and fs
+        brokit::api::addFetchBasePath(jsRuntime_->getContext(), config.appDir);
+        brokit::api::addFsBasePath(jsRuntime_->getContext(), config.appDir);
+
+        // Worker bindings
+        js::installWorkerBindings(jsRuntime_->getContext(), config.appDir);
+
+        // Server-specific JS API (bro.server.*)
+        js::ServerBindings::install(jsRuntime_->getContext(), this);
+
+        LOG_INFO("Server mode initialized (no rendering, no DOM, no audio)");
+        return;
+    }
+
+    // === Windowed / Headless initialization (rendering + DOM) ===
 
     // hasGL: true when we have a GPU context (windowed, or headless with GPU)
     const bool hasGL = (displayMode_ == DisplayMode::Windowed) || config.graphics.useGPU;
@@ -151,31 +219,6 @@ Engine::Engine(const EngineConfig& config)
     if (displayMode_ == DisplayMode::Headless) {
         virtualTime_ = util::currentTimeMs();
     }
-
-    // === Common initialization ===
-
-    // 4. JS runtime + bindings
-    jsRuntime_ = std::make_unique<js::Runtime>();
-    jsRuntime_->setModuleLoader();
-
-    // Wire brokit logging through bro's LOG_* macros
-    brokit::Runtime::setLogCallback([](brokit::Runtime::LogLevel level, const std::string& msg) {
-        switch (level) {
-            case brokit::Runtime::LogLevel::Warn:  LOG_WARN("[console] %s", msg.c_str()); break;
-            case brokit::Runtime::LogLevel::Error: LOG_ERROR("[console] %s", msg.c_str()); break;
-            default: LOG_INFO("[console] %s", msg.c_str()); break;
-        }
-    });
-
-    // Install all brokit APIs (console, timers, URL, crypto, encoding, fetch, etc.)
-    brokit::api::installAll(jsRuntime_->getContext());
-
-    timers_ = std::make_unique<js::Timers>();
-    js::Timers::install(jsRuntime_->getContext(), timers_.get());
-
-    // Seed the timer time base so setTimeout/setInterval use the correct clock.
-    // In headless mode this is virtual time; in windowed mode, real time.
-    timers_->tick(displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs());
 
     // 4b. Audio engine + bindings
     audioEngine_ = std::make_unique<broaudio::Engine>();
@@ -224,25 +267,8 @@ Engine::Engine(const EngineConfig& config)
         }
     });
 
-    // 4c. Physics engine + bindings
-    physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
-    physicsWorld_->init();
-    if (displayMode_ == DisplayMode::Windowed)
-        physicsWorld_->startThread();
-    js::PhysicsBindings::install(jsRuntime_->getContext(), physicsWorld_.get());
-
-    // 4c. Scene graph bindings
+    // Scene graph bindings (windowed/headless only — needs renderer)
     js::SceneBindings::install(jsRuntime_->getContext());
-
-    // 4d. Mesh bindings (standalone Mesh class wrapping bromesh)
-    js::MeshBindings::install(jsRuntime_->getContext());
-
-    // 4e. Terrain bindings (infinite voxel terrain system)
-    js::TerrainBindings::install(jsRuntime_->getContext());
-
-    // 4f. Network manager + bindings
-    networkManager_ = std::make_unique<net::NetworkManager>();
-    js::NetBindings::install(jsRuntime_->getContext(), networkManager_.get());
 
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
@@ -840,6 +866,7 @@ Engine::~Engine() {
         JSContext* ctx = jsRuntime_->getContext();
         js::setElementFinalizerShutdown(true);
         js::cleanupWorkerBindings(ctx);
+        js::ServerBindings::cleanup(ctx);
         js::NetBindings::cleanup(ctx);
         js::PhysicsBindings::cleanup(ctx);
         js::TerrainBindings::cleanup(ctx);
@@ -1237,10 +1264,99 @@ void Engine::rasterThreadFunc() {
 // Main loop
 // ---------------------------------------------------------------------------
 
+double Engine::serverUptime() const {
+    if (serverStartTime_ <= 0.0) return 0.0;
+    return (util::currentTimeMs() - serverStartTime_) / 1000.0;
+}
+
 void Engine::run() {
     // Headless mode: initial layout is done in constructor, return immediately.
     // The HeadlessController drives subsequent frames via advanceTime/flush.
     if (displayMode_ == DisplayMode::Headless) {
+        return;
+    }
+
+    // Server mode: tick loop driven by real wall-clock time.
+    if (displayMode_ == DisplayMode::Server) {
+        running_ = true;
+        serverStartTime_ = util::currentTimeMs();
+        LOG_INFO("[server] Running at %.0f ticks/sec", serverTickRate_);
+
+        while (running_ && !serverStopRequested_) {
+            double tickStart = util::currentTimeMs();
+            double tickIntervalMs = 1000.0 / serverTickRate_;
+
+            // 1. Tick timers
+            timers_->tick(tickStart);
+
+            // 2. Pump brokit fetch (HTTP requests)
+            {
+                JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
+                JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_fetch_tick");
+                if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
+                    JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
+                    JS_FreeValue(jsRuntime_->getContext(), ret);
+                }
+                JS_FreeValue(jsRuntime_->getContext(), tickFn);
+                JS_FreeValue(jsRuntime_->getContext(), global);
+            }
+
+            // 3. Pump brokit WebSocket
+            {
+                JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
+                JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_ws_tick");
+                if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
+                    JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
+                    JS_FreeValue(jsRuntime_->getContext(), ret);
+                }
+                JS_FreeValue(jsRuntime_->getContext(), tickFn);
+                JS_FreeValue(jsRuntime_->getContext(), global);
+            }
+
+            // 4. Execute pending JS jobs
+            jsRuntime_->executePendingJobs();
+
+            // 5. Drain worker messages
+            js::tickWorkers(jsRuntime_->getContext());
+            jsRuntime_->executePendingJobs();
+
+            // 6. Poll network
+            if (networkManager_ && networkManager_->isInitialized()) {
+                networkManager_->poll();
+                jsRuntime_->executePendingJobs();
+            }
+
+            // 7. Step physics (fixed timestep accumulator)
+            if (physicsWorld_ && physicsWorld_->isIdle()) {
+                physicsWorld_->consumeStep();
+                double stepMs = physicsWorld_->timeStep() * 1000.0;
+                double nowPhys = util::currentTimeMs();
+                if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
+                physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_);
+                lastPhysicsTimeMs_ = nowPhys;
+                if (physicsAccumMs_ >= stepMs) {
+                    physicsAccumMs_ -= stepMs;
+                    physicsWorld_->signalStep();
+                }
+            }
+
+            // 8. Periodic GC
+            double now = util::currentTimeMs();
+            if (now - lastGCMs_ >= kGCIntervalMs) {
+                JS_RunGC(jsRuntime_->getRuntime());
+                lastGCMs_ = now;
+            }
+
+            // 9. Sleep until next tick
+            double elapsed = util::currentTimeMs() - tickStart;
+            double sleepMs = tickIntervalMs - elapsed;
+            if (sleepMs > 0.5) {
+                std::this_thread::sleep_for(
+                    std::chrono::microseconds(static_cast<int64_t>(sleepMs * 1000.0)));
+            }
+        }
+
+        LOG_INFO("[server] Stopped (uptime: %.1fs)", serverUptime());
         return;
     }
 

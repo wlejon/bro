@@ -41,7 +41,7 @@ namespace bro::layout { class DrawTraversal; }
 
 namespace bro::engine {
 
-enum class DisplayMode { Windowed, Headless };
+enum class DisplayMode { Windowed, Headless, Server };
 
 /// Raster thread state machine (atomics only, no mutexes).
 enum RasterState : uint32_t {
@@ -193,6 +193,16 @@ public:
 
     /// Get virtual time (headless mode).
     double virtualTime() const { return virtualTime_; }
+
+    /// Server mode: request graceful shutdown.
+    void requestServerStop() { serverStopRequested_ = true; }
+
+    /// Server mode: get/set tick rate (ticks per second).
+    double serverTickRate() const { return serverTickRate_; }
+    void setServerTickRate(double hz) { serverTickRate_ = hz; }
+
+    /// Server mode: uptime in seconds since run() started.
+    double serverUptime() const;
 
     /// Lightweight tick: advance JS timers + pending jobs only.
     /// Used during modal blocking (window move/resize, file dialogs)
@@ -361,6 +371,11 @@ private:
 
     // Headless-specific
     double virtualTime_ = 0.0;
+
+    // Server-specific
+    double serverTickRate_ = 60.0;    // ticks per second
+    double serverStartTime_ = 0.0;   // wall-clock start time (ms)
+    bool serverStopRequested_ = false;
 
     // Stats tracking
     double statsAccumMs_ = 0.0;

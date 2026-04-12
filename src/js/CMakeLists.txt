@@ -47,6 +47,7 @@ add_library(bro_js STATIC
     terrain_bindings.cpp
     settings_bindings.cpp
     net_bindings.cpp
+    server_bindings.cpp
     headless_bindings.cpp
     message_serializer.cpp
     worker.cpp
