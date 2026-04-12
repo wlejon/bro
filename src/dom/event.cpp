@@ -85,4 +85,14 @@ AnimationEvent::AnimationEvent(const std::string& type, bool bubbles, bool cance
 {
 }
 
+ClipboardEvent::ClipboardEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
+DragEvent::DragEvent(const std::string& type, bool bubbles, bool cancelable)
+    : MouseEvent(type, bubbles, cancelable)
+{
+}
+
 } // namespace bro::dom

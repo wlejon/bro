@@ -1283,6 +1283,13 @@ void Engine::run() {
         handleWheel(x, y, dx, dy);
     };
 
+    eventLoop_->onDropFile = [this](const std::string& path) {
+        handleDropFile(path);
+    };
+    eventLoop_->onDropText = [this](const std::string& text) {
+        handleDropText(text);
+    };
+
     // Initial layout
     if (document_) {
         ensureReplacedElements(document_->documentElement());

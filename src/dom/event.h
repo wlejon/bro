@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <vector>
 #include <cstdint>
 
 namespace bro::dom {
@@ -242,6 +243,36 @@ private:
     std::string animationName_;
     double elapsedTime_ = 0.0;
     std::string pseudoElement_;
+};
+
+class ClipboardEvent : public Event {
+public:
+    ClipboardEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
+    ~ClipboardEvent() override = default;
+
+    const std::string& clipboardText() const { return clipboardText_; }
+    void setClipboardText(const std::string& v) { clipboardText_ = v; }
+
+private:
+    std::string clipboardText_;
+};
+
+class DragEvent : public MouseEvent {
+public:
+    DragEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
+    ~DragEvent() override = default;
+
+    // dataTransfer.files paths (for file drops)
+    const std::vector<std::string>& files() const { return files_; }
+    void addFile(const std::string& path) { files_.push_back(path); }
+
+    // dataTransfer text data
+    const std::string& dataText() const { return dataText_; }
+    void setDataText(const std::string& v) { dataText_ = v; }
+
+private:
+    std::vector<std::string> files_;
+    std::string dataText_;
 };
 
 } // namespace bro::dom

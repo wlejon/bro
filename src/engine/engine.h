@@ -119,6 +119,8 @@ public:
     void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
     void handleTextInput(const std::string& text);
     void handleWheel(float x, float y, float dx, float dy);
+    void handleDropFile(const std::string& path);
+    void handleDropText(const std::string& text);
 
     float getLastMouseX() const { return lastMouseX_; }
     float getLastMouseY() const { return lastMouseY_; }

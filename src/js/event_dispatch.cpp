@@ -265,6 +265,63 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
         JS_SetPropertyStr(ctx, jsEvent, "pseudoElement",
                           JS_NewString(ctx, animEvt->pseudoElement().c_str()));
     }
+
+    // ClipboardEvent — clipboardData with getData/setData
+    auto* clipEvt = dynamic_cast<bro::dom::ClipboardEvent*>(&event);
+    if (clipEvt) {
+        JSValue dt = JS_NewObject(ctx);
+        std::string text = clipEvt->clipboardText();
+        // Store the text in a closure for getData
+        JS_SetPropertyStr(ctx, dt, "_text", JS_NewString(ctx, text.c_str()));
+        // getData(type) — returns text for "text/plain" or "text"
+        JS_SetPropertyStr(ctx, dt, "getData", JS_NewCFunction2(ctx,
+            [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                JSValue t = JS_GetPropertyStr(c, this_val, "_text");
+                return t;
+            }, "getData", 1, JS_CFUNC_generic, 0));
+        // setData(type, data) — stash for reading back
+        JS_SetPropertyStr(ctx, dt, "setData", JS_NewCFunction2(ctx,
+            [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                if (argc >= 2) {
+                    JS_SetPropertyStr(c, this_val, "_text", JS_DupValue(c, argv[1]));
+                }
+                return JS_UNDEFINED;
+            }, "setData", 2, JS_CFUNC_generic, 0));
+        JS_SetPropertyStr(ctx, jsEvent, "clipboardData", dt);
+    }
+
+    // DragEvent — dataTransfer with files and text
+    auto* dragEvt = dynamic_cast<bro::dom::DragEvent*>(&event);
+    if (dragEvt) {
+        JSValue dt = JS_NewObject(ctx);
+        // dataTransfer.getData("text/plain")
+        JS_SetPropertyStr(ctx, dt, "_text",
+                          JS_NewString(ctx, dragEvt->dataText().c_str()));
+        JS_SetPropertyStr(ctx, dt, "getData", JS_NewCFunction2(ctx,
+            [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                return JS_GetPropertyStr(c, this_val, "_text");
+            }, "getData", 1, JS_CFUNC_generic, 0));
+        JS_SetPropertyStr(ctx, dt, "setData", JS_NewCFunction2(ctx,
+            [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                if (argc >= 2) {
+                    JS_SetPropertyStr(c, this_val, "_text", JS_DupValue(c, argv[1]));
+                }
+                return JS_UNDEFINED;
+            }, "setData", 2, JS_CFUNC_generic, 0));
+        // dataTransfer.files array
+        auto& files = dragEvt->files();
+        JSValue filesArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < files.size(); i++) {
+            JSValue fileObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, fileObj, "name",
+                JS_NewString(ctx, files[i].c_str()));
+            JS_SetPropertyStr(ctx, fileObj, "path",
+                JS_NewString(ctx, files[i].c_str()));
+            JS_SetPropertyInt64(ctx, filesArr, static_cast<int64_t>(i), fileObj);
+        }
+        JS_SetPropertyStr(ctx, dt, "files", filesArr);
+        JS_SetPropertyStr(ctx, jsEvent, "dataTransfer", dt);
+    }
 }
 
 // Stash the composedPath as a JS array on the event object

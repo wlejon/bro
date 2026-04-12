@@ -766,6 +766,77 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
+    // Clipboard: Ctrl+C / Ctrl+X / Ctrl+V
+    if ((mod & SDL_KMOD_CTRL) &&
+        (keycode == SDLK_C || keycode == SDLK_X || keycode == SDLK_V)) {
+
+        auto* activeEl = document_->activeElement();
+        dom::Element* target = activeEl ? activeEl : document_->body();
+
+        if (keycode == SDLK_V) {
+            // Paste: read system clipboard, dispatch paste event
+            char* clipText = SDL_GetClipboardText();
+            std::string text = clipText ? clipText : "";
+            SDL_free(clipText);
+
+            dom::ClipboardEvent pasteEvt("paste", true, true);
+            pasteEvt.setClipboardText(text);
+            pasteEvt.setIsTrusted(true);
+            dispatchEvent(target, pasteEvt);
+
+            // If not prevented, insert into focused input/textarea
+            if (!pasteEvt.defaultPrevented() && !text.empty() && activeEl) {
+                layout::KeyHandleResult r;
+                if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+                    r = input->handleTextInput(activeEl, text);
+                } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+                    r = textarea->handleTextInput(activeEl, text);
+                }
+                if (r.handled) {
+                    applyKeyResult(activeEl, r);
+                    uiDirty_ = true;
+                }
+            }
+        } else {
+            // Copy or Cut: get text from focused input/textarea
+            std::string text;
+            if (activeEl) {
+                if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+                    text = activeEl->getAttribute("value");
+                } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+                    text = activeEl->getAttribute("value");
+                }
+            }
+
+            std::string evtType = (keycode == SDLK_C) ? "copy" : "cut";
+            dom::ClipboardEvent clipEvt(evtType, true, true);
+            clipEvt.setClipboardText(text);
+            clipEvt.setIsTrusted(true);
+            dispatchEvent(target, clipEvt);
+
+            if (!clipEvt.defaultPrevented() && !text.empty()) {
+                SDL_SetClipboardText(text.c_str());
+
+                // Cut: clear the field
+                if (keycode == SDLK_X && activeEl) {
+                    activeEl->setAttribute("value", "");
+                    if (auto* input = getElInput(activeEl))
+                        input->setCursorPos(0);
+                    else if (auto* textarea = getElTextarea(activeEl))
+                        textarea->setCursorPos(0);
+
+                    dom::InputEvent inputEvt("input", true, false);
+                    inputEvt.setInputType("deleteByCut");
+                    inputEvt.setIsTrusted(true);
+                    dispatchEvent(activeEl, inputEvt);
+                    if (activeEl->document()) activeEl->document()->markDirty();
+                    uiDirty_ = true;
+                }
+            }
+        }
+        return;
+    }
+
     // Delegate to the active control
     auto* activeEl = document_->activeElement();
     layout::KeyHandleResult result;
@@ -1042,6 +1113,60 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         }
     }
     uiDirty_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// File/text drop handling
+// ---------------------------------------------------------------------------
+
+void Engine::handleDropFile(const std::string& path) {
+    if (!document_) return;
+
+    // Hit test at last known mouse position
+    float docX = lastMouseX_, docY = lastMouseY_ + scrollY_;
+    dom::Element* target = hitTest(docX, docY);
+    if (!target) target = document_->body();
+    if (!target) return;
+
+    // Dispatch dragenter, dragover, then drop
+    dom::DragEvent enterEvt("dragenter", true, true);
+    enterEvt.addFile(path);
+    enterEvt.setIsTrusted(true);
+    dispatchEvent(target, enterEvt);
+
+    dom::DragEvent overEvt("dragover", true, true);
+    overEvt.addFile(path);
+    overEvt.setIsTrusted(true);
+    dispatchEvent(target, overEvt);
+
+    dom::DragEvent dropEvt("drop", true, true);
+    dropEvt.addFile(path);
+    dropEvt.setIsTrusted(true);
+    dispatchEvent(target, dropEvt);
+}
+
+void Engine::handleDropText(const std::string& text) {
+    if (!document_) return;
+
+    float docX = lastMouseX_, docY = lastMouseY_ + scrollY_;
+    dom::Element* target = hitTest(docX, docY);
+    if (!target) target = document_->body();
+    if (!target) return;
+
+    dom::DragEvent enterEvt("dragenter", true, true);
+    enterEvt.setDataText(text);
+    enterEvt.setIsTrusted(true);
+    dispatchEvent(target, enterEvt);
+
+    dom::DragEvent overEvt("dragover", true, true);
+    overEvt.setDataText(text);
+    overEvt.setIsTrusted(true);
+    dispatchEvent(target, overEvt);
+
+    dom::DragEvent dropEvt("drop", true, true);
+    dropEvt.setDataText(text);
+    dropEvt.setIsTrusted(true);
+    dispatchEvent(target, dropEvt);
 }
 
 } // namespace bro::engine
