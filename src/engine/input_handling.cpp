@@ -1172,4 +1172,95 @@ void Engine::handleDropText(const std::string& text) {
     dispatchEvent(target, dropEvt);
 }
 
+// ---------------------------------------------------------------------------
+// Clipboard simulation (for headless testing)
+// ---------------------------------------------------------------------------
+
+void Engine::simulatePaste(const std::string& text) {
+    if (!document_) return;
+
+    auto* activeEl = document_->activeElement();
+    dom::Element* target = activeEl ? activeEl : document_->body();
+
+    dom::ClipboardEvent pasteEvt("paste", true, true);
+    pasteEvt.setClipboardText(text);
+    pasteEvt.setIsTrusted(true);
+    dispatchEvent(target, pasteEvt);
+
+    // If not prevented, insert into focused input/textarea
+    if (!pasteEvt.defaultPrevented() && !text.empty() && activeEl) {
+        layout::KeyHandleResult r;
+        if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+            r = input->handleTextInput(activeEl, text);
+        } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+            r = textarea->handleTextInput(activeEl, text);
+        }
+        if (r.handled) {
+            applyKeyResult(activeEl, r);
+            uiDirty_ = true;
+        }
+    }
+}
+
+std::string Engine::simulateCopy() {
+    if (!document_) return "";
+
+    auto* activeEl = document_->activeElement();
+    dom::Element* target = activeEl ? activeEl : document_->body();
+
+    std::string text;
+    if (activeEl) {
+        if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+            text = activeEl->getAttribute("value");
+        } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+            text = activeEl->getAttribute("value");
+        }
+    }
+
+    dom::ClipboardEvent clipEvt("copy", true, true);
+    clipEvt.setClipboardText(text);
+    clipEvt.setIsTrusted(true);
+    dispatchEvent(target, clipEvt);
+
+    return text;
+}
+
+std::string Engine::simulateCut() {
+    if (!document_) return "";
+
+    auto* activeEl = document_->activeElement();
+    dom::Element* target = activeEl ? activeEl : document_->body();
+
+    std::string text;
+    if (activeEl) {
+        if (auto* input = getElInput(activeEl); input && input->isFocused()) {
+            text = activeEl->getAttribute("value");
+        } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
+            text = activeEl->getAttribute("value");
+        }
+    }
+
+    dom::ClipboardEvent clipEvt("cut", true, true);
+    clipEvt.setClipboardText(text);
+    clipEvt.setIsTrusted(true);
+    dispatchEvent(target, clipEvt);
+
+    if (!clipEvt.defaultPrevented() && !text.empty() && activeEl) {
+        activeEl->setAttribute("value", "");
+        if (auto* input = getElInput(activeEl))
+            input->setCursorPos(0);
+        else if (auto* textarea = getElTextarea(activeEl))
+            textarea->setCursorPos(0);
+
+        dom::InputEvent inputEvt("input", true, false);
+        inputEvt.setInputType("deleteByCut");
+        inputEvt.setIsTrusted(true);
+        dispatchEvent(activeEl, inputEvt);
+        if (activeEl->document()) activeEl->document()->markDirty();
+        uiDirty_ = true;
+    }
+
+    return text;
+}
+
 } // namespace bro::engine

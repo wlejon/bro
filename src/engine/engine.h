@@ -122,6 +122,11 @@ public:
     void handleDropFile(const std::string& path);
     void handleDropText(const std::string& text);
 
+    // Clipboard simulation (for headless testing — bypasses system clipboard)
+    void simulatePaste(const std::string& text);
+    std::string simulateCopy();
+    std::string simulateCut();
+
     float getLastMouseX() const { return lastMouseX_; }
     float getLastMouseY() const { return lastMouseY_; }
 

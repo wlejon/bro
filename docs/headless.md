@@ -56,6 +56,11 @@ All input functions go through the full engine pipeline (hit testing, focus mana
 | `keyDown(keycode [, scancode, mod, repeat])` | Simulate a key press (SDL keycodes) |
 | `keyUp(keycode [, scancode, mod])` | Simulate a key release |
 | `textInput(text)` | Simulate text input (for typing into focused input/textarea) |
+| `paste(text)` | Simulate paste on focused element with the given text (dispatches paste event, inserts into input/textarea) |
+| `copy()` | Simulate copy on focused element (dispatches copy event, returns copied text) |
+| `cut()` | Simulate cut on focused element (dispatches cut event, clears field, returns cut text) |
+| `dropFiles(x, y, paths)` | Simulate file drop at coordinates. `paths` is an array of file path strings. Dispatches dragenter → dragover → drop. |
+| `dropText(x, y, text)` | Simulate text drop at coordinates. Dispatches dragenter → dragover → drop with text data. |
 | `resize(w, h)` | Resize the virtual viewport |
 
 Note: `el.click()` (DOM method) dispatches a click event directly on the element without hit testing. `click(x, y)` (headless global) goes through the full engine input pipeline with hit testing, focus, and bubbling — use this when testing user interactions.

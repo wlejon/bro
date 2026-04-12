@@ -264,6 +264,105 @@ static JSValue js_textInput(JSContext* ctx, JSValueConst, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
+// --- Clipboard simulation ---
+
+static JSValue js_paste(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "paste(text) requires text");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* text = JS_ToCString(ctx, argv[0]);
+    if (!text) return JS_EXCEPTION;
+
+    engine->simulatePaste(text);
+    JS_FreeCString(ctx, text);
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_copy(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    std::string text = engine->simulateCopy();
+    engine->flush();
+    return JS_NewString(ctx, text.c_str());
+}
+
+static JSValue js_cut(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    std::string text = engine->simulateCut();
+    engine->flush();
+    return JS_NewString(ctx, text.c_str());
+}
+
+// --- Drag & drop simulation ---
+
+static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "dropFiles(x, y, paths) requires x, y, and an array of paths");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    double x, y;
+    if (JS_ToFloat64(ctx, &x, argv[0])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &y, argv[1])) return JS_EXCEPTION;
+
+    // Move mouse to drop position first
+    float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
+
+    // Drop each file path
+    if (JS_IsArray(argv[2])) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, argv[2], "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue item = JS_GetPropertyUint32(ctx, argv[2], static_cast<uint32_t>(i));
+            const char* path = JS_ToCString(ctx, item);
+            if (path) {
+                engine->handleDropFile(path);
+                JS_FreeCString(ctx, path);
+            }
+            JS_FreeValue(ctx, item);
+        }
+    } else {
+        // Single string path
+        const char* path = JS_ToCString(ctx, argv[2]);
+        if (path) {
+            engine->handleDropFile(path);
+            JS_FreeCString(ctx, path);
+        }
+    }
+
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_dropText(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "dropText(x, y, text) requires x, y, and text");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    double x, y;
+    if (JS_ToFloat64(ctx, &x, argv[0])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &y, argv[1])) return JS_EXCEPTION;
+
+    const char* text = JS_ToCString(ctx, argv[2]);
+    if (!text) return JS_EXCEPTION;
+
+    // Move mouse to drop position first
+    float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
+
+    engine->handleDropText(text);
+    JS_FreeCString(ctx, text);
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
 static JSValue js_resize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "resize(w, h) requires width and height");
     auto* engine = getEngine(ctx);
@@ -724,6 +823,13 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("keyDown", js_keyDown, 4)
         .function("keyUp", js_keyUp, 3)
         .function("textInput", js_textInput, 1)
+        // Clipboard simulation
+        .function("paste", js_paste, 1)
+        .function("copy", js_copy, 0)
+        .function("cut", js_cut, 0)
+        // Drag & drop simulation
+        .function("dropFiles", js_dropFiles, 3)
+        .function("dropText", js_dropText, 3)
         // Viewport
         .function("resize", js_resize, 2)
         // CSS/Layout inspection
