@@ -277,35 +277,35 @@
     <!-- CSS Transitions -->
     <h2>CSS Transitions (click to toggle)</h2>
     <div class="grid">
-        <div class="card transition-card" data-target=".t-color">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-color');if(b)b.classList.toggle('active')">
             <h3>background-color 0.5s</h3>
             <div class="box t-color"></div>
         </div>
-        <div class="card transition-card" data-target=".t-scale">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-scale');if(b)b.classList.toggle('active')">
             <h3>scale 0.3s ease-out</h3>
             <div class="box t-scale"></div>
         </div>
-        <div class="card transition-card" data-target=".t-rotate">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-rotate');if(b)b.classList.toggle('active')">
             <h3>rotate 0.5s ease-in-out</h3>
             <div class="box t-rotate"></div>
         </div>
-        <div class="card transition-card" data-target=".t-shadow">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-shadow');if(b)b.classList.toggle('active')">
             <h3>box-shadow 0.4s</h3>
             <div class="box t-shadow"></div>
         </div>
-        <div class="card transition-card" data-target=".t-multi">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-multi');if(b)b.classList.toggle('active')">
             <h3>multi-property</h3>
             <div class="box t-multi"></div>
         </div>
-        <div class="card transition-card" data-target=".t-opacity">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-opacity');if(b)b.classList.toggle('active')">
             <h3>opacity 0.5s</h3>
             <div class="box t-opacity"></div>
         </div>
-        <div class="card transition-card" data-target=".t-size">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-size');if(b)b.classList.toggle('active')">
             <h3>width+height 0.4s</h3>
             <div class="box t-size"></div>
         </div>
-        <div class="card transition-card" data-target=".t-cubic">
+        <div class="card transition-card" onclick="var b=this.querySelector('.t-cubic');if(b)b.classList.toggle('active')">
             <h3>cubic-bezier (elastic)</h3>
             <div class="box t-cubic"></div>
         </div>
@@ -332,15 +332,7 @@
     </div>
 
     <script>
-        document.querySelectorAll('.transition-card').forEach(function(card) {
-            card.addEventListener('click', function() {
-                var selector = card.getAttribute('data-target');
-                var box = card.querySelector(selector);
-                if (box) {
-                    box.classList.toggle('active');
-                }
-            });
-        });
+        // Transitions use inline onclick attributes
     </script>
 </body>
 </html>

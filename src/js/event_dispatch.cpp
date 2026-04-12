@@ -312,6 +312,7 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         JS_FreeValue(ctx, lenVal);
     }
 
+
     // Build the JS event object — reuse original if provided (preserves detail, etc.)
     bool ownsEvent = JS_IsUndefined(originalJsEvent);
     JSValue jsEvent;
