@@ -121,6 +121,19 @@ static JSValue js_assert(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
 // (hit testing, focus, event dispatch, scrollbar interaction, etc.)
 // ---------------------------------------------------------------------------
 
+// Convert DOM button convention (0=left, 1=middle, 2=right) to SDL convention
+// (1=left, 2=middle, 3=right) since Engine::handleMouse*() expects SDL values.
+static int domToSdlButton(int domButton) {
+    switch (domButton) {
+        case 0: return 1;  // DOM primary   -> SDL left
+        case 1: return 2;  // DOM auxiliary  -> SDL middle
+        case 2: return 3;  // DOM secondary  -> SDL right
+        case 3: return 4;  // DOM back       -> SDL X1
+        case 4: return 5;  // DOM forward    -> SDL X2
+        default: return domButton + 1;
+    }
+}
+
 static JSValue js_mouseDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "mouseDown(x, y [, button]) requires x and y");
     auto* engine = getEngine(ctx);
@@ -132,7 +145,7 @@ static JSValue js_mouseDown(JSContext* ctx, JSValueConst, int argc, JSValueConst
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    engine->handleMouseDown(static_cast<float>(x), static_cast<float>(y), button);
+    engine->handleMouseDown(static_cast<float>(x), static_cast<float>(y), domToSdlButton(button));
     engine->flush();
     return JS_UNDEFINED;
 }
@@ -148,7 +161,7 @@ static JSValue js_mouseUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    engine->handleMouseUp(static_cast<float>(x), static_cast<float>(y), button);
+    engine->handleMouseUp(static_cast<float>(x), static_cast<float>(y), domToSdlButton(button));
     engine->flush();
     return JS_UNDEFINED;
 }
@@ -180,8 +193,9 @@ static JSValue js_click(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
     float fx = static_cast<float>(x), fy = static_cast<float>(y);
-    engine->handleMouseDown(fx, fy, button);
-    engine->handleMouseUp(fx, fy, button);
+    int sdlBtn = domToSdlButton(button);
+    engine->handleMouseDown(fx, fy, sdlBtn);
+    engine->handleMouseUp(fx, fy, sdlBtn);
     engine->flush();
     return JS_UNDEFINED;
 }

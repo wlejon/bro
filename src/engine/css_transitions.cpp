@@ -281,6 +281,57 @@ static std::vector<std::string> splitCSS(const std::string& val) {
 }
 
 // ---------------------------------------------------------------------------
+// CSS initial value defaults for transitioning from "nothing"
+// ---------------------------------------------------------------------------
+
+// Build an identity transform string matching the structure of the target
+// value, e.g. "scale(1.4)" → "scale(1)", "rotate(180deg)" → "rotate(0deg)".
+static std::string identityTransform(const std::string& target) {
+    std::vector<CSSFunc> funcs;
+    if (!parseCSSFunctions(target, funcs)) return "";
+    std::ostringstream oss;
+    for (size_t i = 0; i < funcs.size(); ++i) {
+        if (i > 0) oss << " ";
+        auto& fn = funcs[i];
+        oss << fn.name << "(";
+        // Determine identity value per function name
+        float identity = 0.0f; // translateX, translateY, rotate, skew → 0
+        if (fn.name == "scale" || fn.name == "scaleX" || fn.name == "scaleY" ||
+            fn.name == "scaleZ" || fn.name == "scale3d")
+            identity = 1.0f;
+        for (size_t j = 0; j < fn.args.size(); ++j) {
+            if (j > 0) oss << ", ";
+            oss << identity;
+            if (!fn.argUnits[j].empty()) oss << fn.argUnits[j];
+        }
+        oss << ")";
+    }
+    return oss.str();
+}
+
+// Return the CSS initial value for a property so transitions from an
+// absent/empty value can interpolate.  `newVal` is used to match the
+// structure of transform functions.
+static std::string initialValueForProperty(const std::string& prop,
+                                           const std::string& newVal) {
+    if (prop == "transform") return identityTransform(newVal);
+    if (prop == "opacity") return "1";
+    if (prop == "border-radius" || prop == "border-top-left-radius" ||
+        prop == "border-top-right-radius" || prop == "border-bottom-left-radius" ||
+        prop == "border-bottom-right-radius")
+        return "0px";
+    if (prop == "box-shadow") return "0 0 0 rgba(0, 0, 0, 0)";
+    if (prop == "filter") return "none";
+    if (prop == "margin" || prop == "margin-top" || prop == "margin-right" ||
+        prop == "margin-bottom" || prop == "margin-left" ||
+        prop == "padding" || prop == "padding-top" || prop == "padding-right" ||
+        prop == "padding-bottom" || prop == "padding-left" ||
+        prop == "top" || prop == "right" || prop == "bottom" || prop == "left")
+        return "0px";
+    return "";
+}
+
+// ---------------------------------------------------------------------------
 // TransitionManager
 // ---------------------------------------------------------------------------
 
@@ -310,14 +361,29 @@ void TransitionManager::onStyleChange(dom::Element* elem,
         // Parse each comma-separated transition
         auto parts = splitCSS(trIt->second);
         for (auto& part : parts) {
-            std::istringstream iss(part);
-            std::string tok;
+            // Tokenize respecting parentheses so cubic-bezier(...) stays intact.
+            std::vector<std::string> tokens;
+            {
+                size_t i = 0;
+                while (i < part.size()) {
+                    while (i < part.size() && (part[i] == ' ' || part[i] == '\t')) ++i;
+                    if (i >= part.size()) break;
+                    size_t start = i;
+                    int depth = 0;
+                    while (i < part.size() && (depth > 0 || (part[i] != ' ' && part[i] != '\t'))) {
+                        if (part[i] == '(') ++depth;
+                        else if (part[i] == ')') --depth;
+                        ++i;
+                    }
+                    tokens.push_back(part.substr(start, i - start));
+                }
+            }
             std::string prop = "all";
             std::string dur = "0s";
             std::string timing = "ease";
             std::string delay = "0s";
             int numIdx = 0;
-            while (iss >> tok) {
+            for (auto& tok : tokens) {
                 // Check if it's a duration/delay (contains 's' or 'ms')
                 char* end = nullptr;
                 std::strtof(tok.c_str(), &end);
@@ -348,10 +414,26 @@ void TransitionManager::onStyleChange(dom::Element* elem,
     // Check each property for changes
     bool isAll = (properties.size() == 1 && properties[0] == "all");
 
+    // Check if a computed longhand property is covered by a transition
+    // property, handling shorthand→longhand expansion.
+    auto shorthandCovers = [](const std::string& shorthand, const std::string& longhand) -> bool {
+        if (shorthand == longhand) return true;
+        // Simple prefix: "margin" covers "margin-top", etc.
+        if (longhand.size() > shorthand.size() &&
+            longhand.substr(0, shorthand.size()) == shorthand &&
+            longhand[shorthand.size()] == '-')
+            return true;
+        // border-radius expands to border-{top,bottom}-{left,right}-radius
+        if (shorthand == "border-radius" &&
+            longhand.find("border-") == 0 && longhand.find("-radius") != std::string::npos)
+            return true;
+        return false;
+    };
+
     auto shouldTransition = [&](const std::string& prop) -> bool {
         if (isAll) return true;
         for (auto& p : properties) {
-            if (p == prop || p == "all") return true;
+            if (p == "all" || shorthandCovers(p, prop)) return true;
         }
         return false;
     };
@@ -359,7 +441,8 @@ void TransitionManager::onStyleChange(dom::Element* elem,
     auto getIndex = [&](const std::string& prop) -> size_t {
         if (isAll) return 0;
         for (size_t i = 0; i < properties.size(); ++i) {
-            if (properties[i] == prop || properties[i] == "all") return i;
+            if (properties[i] == "all" || shorthandCovers(properties[i], prop))
+                return i;
         }
         return 0;
     };
@@ -376,7 +459,11 @@ void TransitionManager::onStyleChange(dom::Element* elem,
         auto oldIt = oldStyle.find(prop);
         std::string oldVal = (oldIt != oldStyle.end()) ? oldIt->second : "";
         if (oldVal == newVal) continue;
-        if (oldVal.empty()) continue; // Don't transition from nothing
+        if (oldVal.empty()) {
+            // Substitute CSS initial values so transitions from "nothing" work.
+            oldVal = initialValueForProperty(prop, newVal);
+            if (oldVal.empty()) continue;
+        }
 
         size_t idx = getIndex(prop);
         double dur = parseDurationMs(durations[idx % durations.size()]);

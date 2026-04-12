@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Click Test</title>
+    <style>
+        body {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        h2 {
+            font-size: 16px;
+            color: #7dd3fc;
+        }
+        .grid {
+            display: flex;
+            flex-wrap: wrap;
+        }
+        .card {
+            background: #2a2a4a;
+            border: 1px solid #3a3a5a;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 6px;
+            width: 160px;
+            height: 100px;
+            text-align: center;
+            cursor: pointer;
+        }
+        .card h3 {
+            margin: 0 0 8px 0;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+        .box {
+            width: 60px;
+            height: 60px;
+            background: #3b82f6;
+            margin: 0 auto;
+            border-radius: 4px;
+        }
+        .box.active {
+            background: #f472b6;
+        }
+        #log {
+            margin-top: 20px;
+            font-size: 12px;
+            color: #94a3b8;
+            max-height: 100px;
+            overflow: auto;
+        }
+    </style>
+</head>
+<body>
+    <h2>Click to Toggle (no transitions/animations)</h2>
+    <div class="grid">
+        <div class="card" onclick="var b=this.querySelector('.box');if(b)b.classList.toggle('active')">
+            <h3>inline onclick</h3>
+            <div class="box" id="box1"></div>
+        </div>
+        <div class="card" id="card2">
+            <h3>addEventListener</h3>
+            <div class="box" id="box2"></div>
+        </div>
+        <div class="card" id="card3">
+            <h3>click child directly</h3>
+            <div class="box" id="box3"></div>
+        </div>
+        <div class="card" onclick="var b=this.querySelector('.box');if(b)b.classList.toggle('active')">
+            <h3>bubbled from child</h3>
+            <div class="box" id="box4"></div>
+        </div>
+    </div>
+    <div id="log"></div>
+
+    <script>
+        function log(msg) {
+            var el = document.getElementById('log');
+            el.textContent = msg + '\n' + el.textContent;
+        }
+
+        // Card 2: addEventListener on parent
+        document.getElementById('card2').addEventListener('click', function() {
+            var b = document.getElementById('box2');
+            b.classList.toggle('active');
+            log('card2 click: box2 active=' + b.classList.contains('active'));
+        });
+
+        // Card 3: addEventListener directly on the box
+        document.getElementById('box3').addEventListener('click', function() {
+            this.classList.toggle('active');
+            log('box3 click: active=' + this.classList.contains('active'));
+        });
+    </script>
+</body>
+</html>

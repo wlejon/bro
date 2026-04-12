@@ -1,4 +1,5 @@
 #include "js/event_dispatch.h"
+#include "js/dom_bindings.h"
 #include "js/runtime.h"
 #include "dom/element.h"
 #include "dom/shadow_root.h"
@@ -298,8 +299,14 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
 
     if (JS_IsUndefined(jsElem) || JS_IsNull(jsElem)) {
         JS_FreeValue(ctx, jsElem);
-        JS_FreeValue(ctx, global);
-        return;
+        // Element has no JS wrapper yet. Create one on demand so that
+        // inline event handler attributes (onclick, etc.) can fire.
+        jsElem = DomBindings::wrapElement(ctx, current);
+        if (JS_IsUndefined(jsElem) || JS_IsException(jsElem)) {
+            JS_FreeValue(ctx, jsElem);
+            JS_FreeValue(ctx, global);
+            return;
+        }
     }
 
     JSValue listenersArr = JS_GetPropertyStr(ctx, jsElem, "__bro_listeners");

@@ -1308,6 +1308,27 @@ void Engine::run() {
     while (running_) {
         double frameStart = util::currentTimeMs();
 
+        // 0. Ensure layout thread is not running before we process events.
+        //    Event handlers run JS that can mutate the DOM (setAttribute,
+        //    classList.toggle, etc.) — those writes race with the layout
+        //    thread's resolveStyles() which reads element attributes.
+        {
+            uint32_t ls = layoutShared_.state.load(std::memory_order_acquire);
+            if (ls == kLayoutBusy || ls == kLayoutDomStable) {
+                layoutShared_.state.wait(kLayoutBusy, std::memory_order_acquire);
+                while (layoutShared_.state.load(std::memory_order_acquire) == kLayoutDomStable)
+                    layoutShared_.state.wait(kLayoutDomStable, std::memory_order_acquire);
+                ls = layoutShared_.state.load(std::memory_order_acquire);
+            }
+            if (ls == kLayoutDone) {
+                layoutShared_.state.store(kLayoutIdle, std::memory_order_release);
+                if (document_ && document_->documentElement()) {
+                    auto& box = document_->documentElement()->layoutBox();
+                    documentHeight_ = box.marginBox().height;
+                }
+            }
+        }
+
         // 1. Poll platform events
         eventLoop_->pollEvents();
         if (eventLoop_->shouldQuit()) {
