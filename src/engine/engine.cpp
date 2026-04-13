@@ -1516,6 +1516,12 @@ void Engine::run() {
     // Headless mode: initial layout is done in constructor, return immediately.
     // The HeadlessController drives subsequent frames via advanceTime/flush.
     if (displayMode_ == DisplayMode::Headless) {
+        // Resync virtual time to current wall clock so timers registered in
+        // test scripts fire correctly relative to advanceTime() calls.
+        // Without this, virtualTime_ (set early in the constructor) lags behind
+        // the wall clock by the time system panels and fonts finish loading.
+        virtualTime_ = util::currentTimeMs();
+        timers_->tick(virtualTime_);
         return;
     }
 
