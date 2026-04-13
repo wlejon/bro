@@ -171,6 +171,9 @@ void Engine::advanceTime(double ms) {
                 audioEngine_->renderBlock(audioFrames);
         }
 
+        // Tick crosshair spread system
+        crosshair_.tick(static_cast<float>(step * 0.001));
+
         // Periodic GC + orphan sweep (every ~1s of virtual time)
         if (virtualTime_ - lastGCMs_ >= kGCIntervalMs) {
             js::DomBindings::sweepOrphanedWrappers(jsRuntime_->getContext());

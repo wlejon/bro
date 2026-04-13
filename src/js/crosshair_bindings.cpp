@@ -87,6 +87,12 @@ static JSValue js_crosshair_get_visible(JSContext* ctx, JSValueConst, int, JSVal
     return JS_NewBool(ctx, eng->crosshair().visible);
 }
 
+static JSValue js_crosshair_get_currentSpread(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* eng = getEngine(ctx);
+    if (!eng) return JS_NewFloat64(ctx, 0.0);
+    return JS_NewFloat64(ctx, eng->crosshair().currentSpread);
+}
+
 static JSValue js_crosshair_configure(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "crosshair.configure() requires an options object");
@@ -121,11 +127,42 @@ static JSValue js_crosshair_configure(JSContext* ctx, JSValueConst, int argc, JS
         JS_FreeValue(ctx, v);
     };
 
+    // Visual
     readFloat("size", ch.size);
     readFloat("thickness", ch.thickness);
-    readFloat("gap", ch.gap);
     readFloat("dotSize", ch.dotSize);
     readFloat("outlineThickness", ch.outlineThickness);
+
+    // Spread system
+    readFloat("spread", ch.spread);
+    readFloat("moveSpread", ch.moveSpread);
+    readFloat("fireBloom", ch.fireBloom);
+    readFloat("adsSpread", ch.adsSpread);
+    readFloat("bloomDecay", ch.bloomDecay);
+    readFloat("lerpSpeed", ch.lerpSpeed);
+
+    // "gap" is an alias for "spread" (backward compat / simple usage)
+    {
+        JSValue v = JS_GetPropertyStr(ctx, opts, "gap");
+        if (JS_IsNumber(v)) {
+            double d;
+            JS_ToFloat64(ctx, &d, v);
+            ch.spread = static_cast<float>(d);
+        }
+        JS_FreeValue(ctx, v);
+    }
+
+    // When spread is set via configure, also sync currentSpread for immediate effect
+    // (avoids visible lerp on first show if spread differs from default)
+    {
+        JSValue v = JS_GetPropertyStr(ctx, opts, "spread");
+        JSValue g = JS_GetPropertyStr(ctx, opts, "gap");
+        if (JS_IsNumber(v) || JS_IsNumber(g)) {
+            ch.currentSpread = ch.spread;
+        }
+        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, g);
+    }
 
     // outline: bool
     JSValue outlineVal = JS_GetPropertyStr(ctx, opts, "outline");
@@ -170,10 +207,63 @@ static JSValue js_crosshair_configure(JSContext* ctx, JSValueConst, int argc, JS
     return JS_UNDEFINED;
 }
 
+// --- Spread state methods ---
+
+static JSValue js_crosshair_setMoving(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
+    if (!eng) return JS_UNDEFINED;
+    eng->crosshair().moving = (argc >= 1) ? JS_ToBool(ctx, argv[0]) : false;
+    return JS_UNDEFINED;
+}
+
+static JSValue js_crosshair_setAds(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
+    if (!eng) return JS_UNDEFINED;
+    eng->crosshair().aiming = (argc >= 1) ? JS_ToBool(ctx, argv[0]) : false;
+    return JS_UNDEFINED;
+}
+
+static JSValue js_crosshair_addBloom(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
+    if (!eng) return JS_UNDEFINED;
+    auto& ch = eng->crosshair();
+    if (argc >= 1 && JS_IsNumber(argv[0])) {
+        double d;
+        JS_ToFloat64(ctx, &d, argv[0]);
+        ch.currentBloom += static_cast<float>(d);
+    } else {
+        ch.currentBloom += ch.fireBloom;
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_crosshair_setSpread(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* eng = getEngine(ctx);
+    if (!eng) return JS_UNDEFINED;
+    if (argc >= 1 && JS_IsNumber(argv[0])) {
+        double d;
+        JS_ToFloat64(ctx, &d, argv[0]);
+        eng->crosshair().manualSpread = static_cast<float>(d);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_crosshair_autoSpread(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* eng = getEngine(ctx);
+    if (!eng) return JS_UNDEFINED;
+    eng->crosshair().manualSpread = -1.0f;
+    return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry js_crosshair_funcs[] = {
     JS_CFUNC_DEF("show", 0, js_crosshair_show),
     JS_CFUNC_DEF("hide", 0, js_crosshair_hide),
     JS_CFUNC_DEF("configure", 1, js_crosshair_configure),
+    JS_CFUNC_DEF("setMoving", 1, js_crosshair_setMoving),
+    JS_CFUNC_DEF("setAds", 1, js_crosshair_setAds),
+    JS_CFUNC_DEF("addBloom", 1, js_crosshair_addBloom),
+    JS_CFUNC_DEF("setSpread", 1, js_crosshair_setSpread),
+    JS_CFUNC_DEF("autoSpread", 0, js_crosshair_autoSpread),
 };
 
 // ---------------------------------------------------------------------------
@@ -205,6 +295,14 @@ void CrosshairBindings::install(JSContext* ctx, engine::Engine* engine) {
         JS_UNDEFINED,
         JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, visibleAtom);
+
+    // currentSpread getter
+    JSAtom spreadAtom = JS_NewAtom(ctx, "currentSpread");
+    JS_DefinePropertyGetSet(ctx, chObj, spreadAtom,
+        JS_NewCFunction(ctx, js_crosshair_get_currentSpread, "get currentSpread", 0),
+        JS_UNDEFINED,
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, spreadAtom);
 
     JS_SetPropertyStr(ctx, broObj, "crosshair", chObj);
     JS_FreeValue(ctx, broObj);

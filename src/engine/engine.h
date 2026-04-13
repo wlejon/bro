@@ -81,16 +81,34 @@ struct InputConfig {
 
 /// Crosshair configuration — rendered directly in the GL/Skia pipeline.
 struct CrosshairConfig {
+    // --- Visual ---
     bool visible = false;
     enum Style : uint8_t { Cross, Dot, Circle, CrossDot } style = Cross;
     float size = 20.0f;           // arm length from center
     float thickness = 2.0f;       // line width in pixels
-    float gap = 4.0f;             // gap around center (pixels)
     float dotSize = 2.0f;         // center dot radius
     float outlineThickness = 1.0f;
     bool outline = true;          // dark outline for visibility on any background
-    uint8_t r = 0, g = 255, b = 0, a = 204;   // color (pre-apply opacity if desired)
+    uint8_t r = 0, g = 255, b = 0, a = 204;   // color
     uint8_t outR = 0, outG = 0, outB = 0, outA = 180; // outline color
+
+    // --- Spread system ---
+    float spread = 4.0f;         // base spread (idle gap in pixels)
+    float moveSpread = 0.0f;     // added to spread when moving
+    float fireBloom = 0.0f;      // spread kick per shot
+    float adsSpread = -1.0f;     // spread when ADS (-1 = no ADS override)
+    float bloomDecay = 40.0f;    // bloom recovery (pixels/sec)
+    float lerpSpeed = 10.0f;     // spread interpolation speed (higher = faster)
+
+    // --- State (engine-managed, readable by app) ---
+    bool moving = false;
+    bool aiming = false;
+    float currentBloom = 0.0f;   // current fire bloom (decays over time)
+    float currentSpread = 4.0f;  // interpolated spread (used as gap when drawing)
+    float manualSpread = -1.0f;  // if >= 0, overrides spread system
+
+    /// Advance spread interpolation and bloom decay.
+    void tick(float dtSec);
 };
 
 struct EngineConfig {

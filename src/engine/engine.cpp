@@ -823,6 +823,35 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers) {
 }
 
 // ---------------------------------------------------------------------------
+// Crosshair spread system
+// ---------------------------------------------------------------------------
+
+void CrosshairConfig::tick(float dtSec) {
+    if (dtSec <= 0.0f) return;
+
+    // Compute target spread
+    float target;
+    if (manualSpread >= 0.0f) {
+        // Manual override — use directly, skip interpolation
+        currentSpread = manualSpread;
+        // Still decay bloom so it's ready if we switch back to auto
+        currentBloom = std::max(0.0f, currentBloom - bloomDecay * dtSec);
+        return;
+    }
+
+    target = (aiming && adsSpread >= 0.0f) ? adsSpread : spread;
+    if (moving) target += moveSpread;
+    target += currentBloom;
+
+    // Decay bloom
+    currentBloom = std::max(0.0f, currentBloom - bloomDecay * dtSec);
+
+    // Exponential lerp toward target
+    float alpha = 1.0f - expf(-lerpSpeed * dtSec);
+    currentSpread += (target - currentSpread) * alpha;
+}
+
+// ---------------------------------------------------------------------------
 // Crosshair rendering
 // ---------------------------------------------------------------------------
 
@@ -893,17 +922,17 @@ void Engine::drawCrosshairGL() {
     auto emitCrossArms = [&](float expand, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
         float e = expand;
         // Right arm
-        pushRect(cx + ch.gap - e, cy - ht - e,
-                 ch.size - ch.gap + 2*e, ch.thickness + 2*e, r, g, b, a);
+        pushRect(cx + ch.currentSpread - e, cy - ht - e,
+                 ch.size - ch.currentSpread + 2*e, ch.thickness + 2*e, r, g, b, a);
         // Left arm
         pushRect(cx - ch.size - e, cy - ht - e,
-                 ch.size - ch.gap + 2*e, ch.thickness + 2*e, r, g, b, a);
+                 ch.size - ch.currentSpread + 2*e, ch.thickness + 2*e, r, g, b, a);
         // Bottom arm
-        pushRect(cx - ht - e, cy + ch.gap - e,
-                 ch.thickness + 2*e, ch.size - ch.gap + 2*e, r, g, b, a);
+        pushRect(cx - ht - e, cy + ch.currentSpread - e,
+                 ch.thickness + 2*e, ch.size - ch.currentSpread + 2*e, r, g, b, a);
         // Top arm
         pushRect(cx - ht - e, cy - ch.size - e,
-                 ch.thickness + 2*e, ch.size - ch.gap + 2*e, r, g, b, a);
+                 ch.thickness + 2*e, ch.size - ch.currentSpread + 2*e, r, g, b, a);
     };
 
     bool hasCross = (ch.style == CrosshairConfig::Cross || ch.style == CrosshairConfig::CrossDot);
@@ -986,17 +1015,17 @@ void Engine::drawCrosshairSkia(SkCanvas* canvas) {
     auto drawCrossArms = [&](float expand, SkPaint& paint) {
         float e = expand;
         // Right
-        canvas->drawRect(SkRect::MakeXYWH(cx + ch.gap - e, cy - ht - e,
-                         ch.size - ch.gap + 2*e, ch.thickness + 2*e), paint);
+        canvas->drawRect(SkRect::MakeXYWH(cx + ch.currentSpread - e, cy - ht - e,
+                         ch.size - ch.currentSpread + 2*e, ch.thickness + 2*e), paint);
         // Left
         canvas->drawRect(SkRect::MakeXYWH(cx - ch.size - e, cy - ht - e,
-                         ch.size - ch.gap + 2*e, ch.thickness + 2*e), paint);
+                         ch.size - ch.currentSpread + 2*e, ch.thickness + 2*e), paint);
         // Bottom
-        canvas->drawRect(SkRect::MakeXYWH(cx - ht - e, cy + ch.gap - e,
-                         ch.thickness + 2*e, ch.size - ch.gap + 2*e), paint);
+        canvas->drawRect(SkRect::MakeXYWH(cx - ht - e, cy + ch.currentSpread - e,
+                         ch.thickness + 2*e, ch.size - ch.currentSpread + 2*e), paint);
         // Top
         canvas->drawRect(SkRect::MakeXYWH(cx - ht - e, cy - ch.size - e,
-                         ch.thickness + 2*e, ch.size - ch.gap + 2*e), paint);
+                         ch.thickness + 2*e, ch.size - ch.currentSpread + 2*e), paint);
     };
 
     // Outline
@@ -1909,7 +1938,8 @@ void Engine::run() {
         //     canvas layers (freshly rasterized on main thread).
         compositeLayers(layerBuffers_[front].layers);
 
-        // 5g. Draw crosshair overlay (runs at full frame rate, after app content)
+        // 5g. Tick + draw crosshair overlay (runs at full frame rate, after app content)
+        crosshair_.tick(static_cast<float>(totalFrameMs_ * 0.001));
         drawCrosshairGL();
 
         // 5h. Render pass 3: composite system panels (premultiplied alpha)
