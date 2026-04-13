@@ -105,6 +105,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | htmlayout | `htmlayout` | HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, layout (standalone or submodule) |
 | broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) (standalone or submodule) |
 | bromesh | `bromesh` | Mesh generation, manipulation, analysis, and I/O (standalone or submodule) |
+| brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
 | Skia | `skia` (imported) | Pre-built 2D rasterization binaries, auto-detected |
@@ -125,6 +126,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/worker-api.js` | `Worker` — web worker threads |
+| `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception for game bots |
 
 Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system), `docs/inspect.md` (DOM inspector).
 

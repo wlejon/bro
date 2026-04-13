@@ -92,6 +92,18 @@ else()
     add_subdirectory(bromesh EXCLUDE_FROM_ALL)
 endif()
 
+# --- brogameagent (game AI: navmesh, pathfinding, steering, behavior trees) ---
+# Prefer the standalone repo at ../brogameagent for local development.
+# Falls back to the git submodule at third_party/brogameagent.
+set(BROGAMEAGENT_DIR "${CMAKE_SOURCE_DIR}/../brogameagent" CACHE PATH "Path to standalone brogameagent repo")
+if(EXISTS "${BROGAMEAGENT_DIR}/CMakeLists.txt")
+    message(STATUS "brogameagent: using standalone repo at ${BROGAMEAGENT_DIR}")
+    add_subdirectory("${BROGAMEAGENT_DIR}" "${CMAKE_BINARY_DIR}/brogameagent" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "brogameagent: using submodule at third_party/brogameagent")
+    add_subdirectory(brogameagent EXCLUDE_FROM_ALL)
+endif()
+
 # --- Jolt Physics ---
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
 set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)          # don't clobber bro's flags

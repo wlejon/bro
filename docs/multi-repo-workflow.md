@@ -8,6 +8,7 @@ bro depends on three sibling libraries, each with a standalone repo and a git su
 | **brokit** | `../brokit` | `third_party/brokit` |
 | **broaudio** | `../broaudio` | `third_party/broaudio` |
 | **bromesh** | `../bromesh` | `third_party/bromesh` |
+| **brogameagent** | `../brogameagent` | `third_party/brogameagent` |
 
 ## Directory Layout
 
@@ -18,11 +19,13 @@ D:/projects/
 │       ├── htmlayout/            # submodule (CI / fallback)
 │       ├── brokit/               # submodule (CI / fallback)
 │       ├── broaudio/             # submodule (CI / fallback)
-│       └── bromesh/              # submodule (CI / fallback)
+│       ├── bromesh/              # submodule (CI / fallback)
+│       └── brogameagent/         # submodule (CI / fallback)
 ├── htmlayout/                    # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
 ├── broaudio/                     # standalone repo (preferred for dev)
-└── bromesh/                      # standalone repo (preferred for dev)
+├── bromesh/                      # standalone repo (preferred for dev)
+└── brogameagent/                 # standalone repo (preferred for dev)
 ```
 
 ## How It Works
@@ -123,7 +126,7 @@ git commit -m "Update broaudio: description"
 To use a different location for either library:
 
 ```bash
-cmake -B build -DBROKIT_DIR=/path/to/brokit -DHTMLAYOUT_DIR=/path/to/htmlayout -DBROAUDIO_DIR=/path/to/broaudio -DBROMESH_DIR=/path/to/bromesh
+cmake -B build -DBROKIT_DIR=/path/to/brokit -DHTMLAYOUT_DIR=/path/to/htmlayout -DBROAUDIO_DIR=/path/to/broaudio -DBROMESH_DIR=/path/to/bromesh -DBROGAMEAGENT_DIR=/path/to/brogameagent
 ```
 
 Set to a nonexistent path to force using the submodule:
