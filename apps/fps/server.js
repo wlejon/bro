@@ -235,6 +235,10 @@ function processShot(shooter) {
             bestVictim.deaths++;
             shooter.kills++;
 
+            // Reward/penalty for bots
+            if (shooter.isBot && bots.has(shooter.id)) bots.get(shooter.id).score += 2;
+            if (bestVictim.isBot && bots.has(bestVictim.id)) bots.get(bestVictim.id).score -= 1;
+
             // Broadcast kill event to real clients only
             for (const [id, p] of players) {
                 if (!p.isBot) sendEvent(id, EVT_KILL, shooter.id, bestVictim.id, 0);
@@ -389,8 +393,15 @@ setInterval(() => {
                 if (!p.isBot) sendSpawnEvent(id, p.x, p.z);
                 // Reset bot agent position on respawn
                 if (p.isBot && bots.has(id)) {
-                    bots.get(id).agent.setPosition(sp.x, sp.z);
-                    bots.get(id).agent.clearTarget();
+                    const bot = bots.get(id);
+                    bot.agent.setPosition(sp.x, sp.z);
+                    bot.agent.clearTarget();
+                    bot.state = ST_ROAM;
+                    bot.stateTimer = 0;
+                    bot.coverPoint = null;
+                    bot.peekPoint = null;
+                    bot.targetId = null;
+                    bot.score -= 1; // death penalty
                 }
                 console.log(p.name + ' respawned');
             }
@@ -472,9 +483,143 @@ const nav = bro.ai.game.createNavGrid({
 });
 
 const BOT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot'];
-const bots = new Map(); // botId → { player, agent, targetId, thinkTimer, shootDelay }
-let nextBotId = 10000; // high IDs to distinguish from real connection IDs
+const bots = new Map(); // botId → { player, agent, ... }
+let nextBotId = 10000;
 
+// ─── Bot tuning ─────────────────────────────────────────────────────────────
+const BOT_SPEED          = MOVE_SPEED * 0.90;
+const HEAL_RATE          = 8;         // HP/sec while healing in cover
+const HEAL_THRESHOLD     = 50;        // seek cover below this HP
+const HEAL_RESUME        = 85;        // stop healing above this HP
+const PEEK_DURATION      = 0.6;       // seconds exposed while peeking/shooting
+const COVER_RETREAT_TIME = 1.5;       // seconds hiding in cover before peeking
+const ENGAGE_RANGE       = 25;        // max distance to push toward a target
+const CLOSE_RANGE        = 10;        // switch to strafe/peek play
+const COVER_SEARCH_DIST  = 15;        // max distance to look for cover
+
+// ─── Bot states ─────────────────────────────────────────────────────────────
+const ST_ROAM  = 0;  // patrol between cover points, no urgent target
+const ST_PUSH  = 1;  // advance toward target (far away)
+const ST_COVER = 2;  // moving to a cover position
+const ST_PEEK  = 3;  // leaning out of cover to shoot
+const ST_HEAL  = 4;  // hunkered in cover, healing
+
+// ─── Cover point system ─────────────────────────────────────────────────────
+// Pre-compute candidate cover positions around every obstacle edge, offset by
+// player radius so bots don't clip into geometry.
+
+const COVER_POINTS = []; // { x, z, obstacleIdx }
+
+(function buildCoverPoints() {
+    const pad = PLAYER_RADIUS + 0.5;
+    for (let i = 0; i < OBSTACLES.length; i++) {
+        const o = OBSTACLES[i];
+        // 4 face centers (N/S/E/W offset from obstacle edge)
+        const pts = [
+            { x: o.x,            z: o.z - o.hd - pad },  // north
+            { x: o.x,            z: o.z + o.hd + pad },  // south
+            { x: o.x - o.hw - pad, z: o.z },              // west
+            { x: o.x + o.hw + pad, z: o.z },              // east
+            // 4 corners (diagonal offset)
+            { x: o.x - o.hw - pad, z: o.z - o.hd - pad },
+            { x: o.x + o.hw + pad, z: o.z - o.hd - pad },
+            { x: o.x - o.hw - pad, z: o.z + o.hd + pad },
+            { x: o.x + o.hw + pad, z: o.z + o.hd + pad },
+        ];
+        for (const pt of pts) {
+            // Must be inside arena and on walkable nav cell
+            const lim = ARENA_HALF - PLAYER_RADIUS - WALL_THICK - 0.5;
+            if (Math.abs(pt.x) < lim && Math.abs(pt.z) < lim && nav.isWalkable(pt.x, pt.z)) {
+                COVER_POINTS.push({ x: pt.x, z: pt.z, obstIdx: i });
+            }
+        }
+    }
+    console.log(COVER_POINTS.length + ' cover points generated');
+})();
+
+// Find best cover position: blocks LOS from threat, close to bot, not too close to threat
+function findCover(botX, botZ, threatX, threatZ) {
+    let best = null, bestScore = -Infinity;
+    for (const cp of COVER_POINTS) {
+        const dx = cp.x - botX, dz = cp.z - botZ;
+        const distToBot = Math.sqrt(dx * dx + dz * dz);
+        if (distToBot > COVER_SEARCH_DIST) continue;
+
+        // Must block LOS from threat
+        const inCover = !bro.ai.game.hasLineOfSight(cp.x, cp.z, threatX, threatZ,
+            OBSTACLES.concat(WALLS));
+        if (!inCover) continue;
+
+        // Score: prefer close to bot, not too far from threat (stay in fight)
+        const tx = cp.x - threatX, tz = cp.z - threatZ;
+        const distToThreat = Math.sqrt(tx * tx + tz * tz);
+
+        // Reward proximity to bot (easy to reach), penalize being too far from fight
+        const score = -distToBot * 2.0 - Math.max(0, distToThreat - ENGAGE_RANGE) * 3.0;
+        if (score > bestScore) {
+            bestScore = score;
+            best = cp;
+        }
+    }
+    return best;
+}
+
+// Find a cover point that HAS LOS to threat (good peek spot — cover nearby but can see enemy)
+function findPeekSpot(botX, botZ, threatX, threatZ) {
+    let best = null, bestScore = -Infinity;
+    for (const cp of COVER_POINTS) {
+        const dx = cp.x - botX, dz = cp.z - botZ;
+        const distToBot = Math.sqrt(dx * dx + dz * dz);
+        if (distToBot > 6) continue; // peek spots should be very near current position
+
+        // Must HAVE LOS to threat (we want to shoot from here)
+        const hasLOS = bro.ai.game.hasLineOfSight(cp.x, cp.z, threatX, threatZ,
+            OBSTACLES.concat(WALLS));
+        if (!hasLOS) continue;
+
+        const score = -distToBot; // closest peek point wins
+        if (score > bestScore) {
+            bestScore = score;
+            best = cp;
+        }
+    }
+    return best;
+}
+
+// ─── Reward-based target selection ──────────────────────────────────────────
+function botFindTarget(bot) {
+    const p = bot.player;
+    let bestId = null, bestScore = -Infinity;
+
+    for (const [id, other] of players) {
+        if (id === p.id || !other.alive) continue;
+        const dx = other.x - p.x, dz = other.z - p.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+
+        // Base score: prefer closer targets
+        let score = -dist * 1.0;
+
+        // Prefer low-health targets (easy kills = reward)
+        score += (MAX_HEALTH - other.health) * 0.5;
+
+        // Prefer targets we have LOS to (can engage immediately)
+        const hasLOS = bro.ai.game.hasLineOfSight(p.x, p.z, other.x, other.z,
+            OBSTACLES.concat(WALLS));
+        if (hasLOS) score += 15;
+
+        // Avoid targets when we're low HP (negative reward for dying)
+        if (p.health < HEAL_THRESHOLD && dist < CLOSE_RANGE) score -= 20;
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestId = id;
+        }
+    }
+
+    bot.targetId = bestId;
+}
+
+// ─── Bot spawn ──────────────────────────────────────────────────────────────
 function spawnBot() {
     const botId = nextBotId++;
     const sp = pickSpawn();
@@ -498,7 +643,7 @@ function spawnBot() {
     const agent = bro.ai.game.createAgent({
         navGrid: nav,
         x: sp.x, z: sp.z,
-        speed: MOVE_SPEED * 0.85, // slightly slower than players
+        speed: BOT_SPEED,
         radius: PLAYER_RADIUS,
     });
 
@@ -508,6 +653,12 @@ function spawnBot() {
         targetId: null,
         thinkTimer: 0,
         shootDelay: 0,
+        state: ST_ROAM,
+        stateTimer: 0,       // time spent in current state
+        coverPoint: null,     // current cover destination
+        peekPoint: null,      // where to peek from
+        roamIdx: Math.floor(Math.random() * COVER_POINTS.length), // patrol index
+        score: 0,             // cumulative reward score
     });
 
     console.log(name + ' spawned [' + players.size + ' total]');
@@ -516,26 +667,13 @@ function spawnBot() {
 // Spawn initial bots
 for (let i = 0; i < NUM_BOTS; i++) spawnBot();
 
-function botFindTarget(bot) {
-    const p = bot.player;
-    let bestId = null, bestDist = Infinity;
-
-    for (const [id, other] of players) {
-        if (id === p.id || !other.alive) continue;
-        const dx = other.x - p.x, dz = other.z - p.z;
-        const dist = dx * dx + dz * dz;
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestId = id;
-        }
-    }
-
-    bot.targetId = bestId;
-}
+// ─── Bot AI tick ────────────────────────────────────────────────────────────
 
 function botTick(bot, dt) {
     const p = bot.player;
     if (!p.alive) return;
+
+    bot.stateTimer += dt;
 
     // Rethink target periodically
     bot.thinkTimer -= dt;
@@ -545,59 +683,211 @@ function botTick(bot, dt) {
     }
 
     const target = bot.targetId ? players.get(bot.targetId) : null;
-    if (!target || !target.alive) {
-        // Wander: pick a random point
-        if (!bot.agent.hasTarget || bot.agent.atTarget) {
-            const wx = -ARENA_HALF * 0.8 + Math.random() * ARENA_HALF * 1.6;
-            const wz = -ARENA_HALF * 0.8 + Math.random() * ARENA_HALF * 1.6;
-            bot.agent.setTarget(wx, wz);
+    const hasTarget = target && target.alive;
+
+    let targetDist = Infinity;
+    let hasLOS = false;
+    if (hasTarget) {
+        const dx = target.x - p.x, dz = target.z - p.z;
+        targetDist = Math.sqrt(dx * dx + dz * dz);
+        hasLOS = bro.ai.game.hasLineOfSight(p.x, p.z, target.x, target.z,
+            OBSTACLES.concat(WALLS));
+    }
+
+    // ── State transitions ──
+    const prevState = bot.state;
+
+    if (!hasTarget) {
+        // No target: roam
+        bot.state = ST_ROAM;
+    } else if (p.health < HEAL_THRESHOLD && bot.state !== ST_HEAL) {
+        // Low HP: find cover and heal
+        const cover = findCover(p.x, p.z, target.x, target.z);
+        if (cover) {
+            bot.coverPoint = cover;
+            bot.state = ST_HEAL;
         }
-        bot.agent.update(dt);
-        p.x = bot.agent.x;
-        p.z = bot.agent.z;
-        p.yaw = bot.agent.yaw;
-        p.pitch = 0;
-        return;
+        // If no cover available, keep fighting
+    } else if (bot.state === ST_HEAL) {
+        // Stop healing when HP recovered
+        if (p.health >= HEAL_RESUME) {
+            bot.state = hasLOS ? ST_PEEK : ST_PUSH;
+        }
+    } else if (bot.state === ST_ROAM) {
+        // Spotted a target: engage
+        if (targetDist > CLOSE_RANGE) {
+            bot.state = ST_PUSH;
+        } else {
+            // Close range: find cover first
+            const cover = findCover(p.x, p.z, target.x, target.z);
+            bot.state = cover ? ST_COVER : ST_PUSH;
+            bot.coverPoint = cover;
+        }
+    } else if (bot.state === ST_PUSH && targetDist < CLOSE_RANGE) {
+        // Got close: switch to cover/peek play
+        const cover = findCover(p.x, p.z, target.x, target.z);
+        if (cover) {
+            bot.coverPoint = cover;
+            bot.state = ST_COVER;
+        }
+        // Otherwise keep pushing
+    } else if (bot.state === ST_COVER) {
+        // Arrived at cover: peek after a delay
+        const dx = p.x - (bot.coverPoint ? bot.coverPoint.x : p.x);
+        const dz = p.z - (bot.coverPoint ? bot.coverPoint.z : p.z);
+        const atCover = (dx * dx + dz * dz) < 1.5;
+        if (atCover && bot.stateTimer > COVER_RETREAT_TIME) {
+            const peek = findPeekSpot(p.x, p.z, target.x, target.z);
+            if (peek) {
+                bot.peekPoint = peek;
+                bot.state = ST_PEEK;
+            } else {
+                // No peek spot: push out
+                bot.state = ST_PUSH;
+            }
+        }
+    } else if (bot.state === ST_PEEK) {
+        // Done peeking: back to cover
+        if (bot.stateTimer > PEEK_DURATION) {
+            const cover = findCover(p.x, p.z, target.x, target.z);
+            if (cover) {
+                bot.coverPoint = cover;
+                bot.state = ST_COVER;
+            } else {
+                bot.state = ST_PUSH;
+            }
+        }
     }
 
-    // Move toward target
-    const dx = target.x - p.x, dz = target.z - p.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
+    // Reset timer on state change
+    if (bot.state !== prevState) bot.stateTimer = 0;
 
-    // If far, pathfind closer. If in range, strafe.
-    if (dist > 8) {
-        bot.agent.setTarget(target.x, target.z);
-    } else {
-        // Strafe: move perpendicular to target at medium range
-        const perpX = -dz / dist, perpZ = dx / dist;
-        const strafeDir = (Math.sin(Date.now() * 0.002 + p.id * 7) > 0) ? 1 : -1;
-        const strafeX = p.x + perpX * strafeDir * 3;
-        const strafeZ = p.z + perpZ * strafeDir * 3;
-        bot.agent.setTarget(strafeX, strafeZ);
+    // ── Execute current state ──
+    switch (bot.state) {
+        case ST_ROAM: {
+            // Patrol between cover points
+            if (!bot.agent.hasTarget || bot.agent.atTarget) {
+                bot.roamIdx = (bot.roamIdx + 1 + Math.floor(Math.random() * 3)) % COVER_POINTS.length;
+                const dest = COVER_POINTS[bot.roamIdx];
+                bot.agent.setTarget(dest.x, dest.z);
+            }
+            bot.agent.update(dt);
+            p.x = bot.agent.x;
+            p.z = bot.agent.z;
+            p.yaw = bot.agent.yaw;
+            p.pitch = 0;
+            break;
+        }
+
+        case ST_PUSH: {
+            if (!hasTarget) break;
+            // Advance toward target — strafe when close
+            if (targetDist > CLOSE_RANGE) {
+                bot.agent.setTarget(target.x, target.z);
+            } else {
+                // Strafe perpendicular
+                const dx = target.x - p.x, dz = target.z - p.z;
+                const perpX = -dz / targetDist, perpZ = dx / targetDist;
+                const strafeDir = (Math.sin(Date.now() * 0.003 + p.id * 7) > 0) ? 1 : -1;
+                bot.agent.setTarget(p.x + perpX * strafeDir * 3, p.z + perpZ * strafeDir * 3);
+            }
+            bot.agent.update(dt);
+            p.x = bot.agent.x;
+            p.z = bot.agent.z;
+
+            // Aim and shoot
+            botAimAndShoot(bot, target, hasLOS, targetDist, dt);
+            break;
+        }
+
+        case ST_COVER: {
+            // Move to cover point
+            if (bot.coverPoint) {
+                bot.agent.setTarget(bot.coverPoint.x, bot.coverPoint.z);
+            }
+            bot.agent.update(dt);
+            p.x = bot.agent.x;
+            p.z = bot.agent.z;
+
+            // Face toward threat while moving to cover
+            if (hasTarget) {
+                const aim = bot.agent.aimAt(target.x, EYE_HEIGHT, target.z, EYE_HEIGHT);
+                p.yaw = aim.yaw;
+                p.pitch = aim.pitch;
+            }
+
+            // Opportunistic shot while retreating to cover
+            if (hasLOS && targetDist < ENGAGE_RANGE) {
+                botShoot(bot, target, targetDist, dt);
+            }
+            break;
+        }
+
+        case ST_PEEK: {
+            // Move to peek position and shoot
+            if (bot.peekPoint) {
+                bot.agent.setTarget(bot.peekPoint.x, bot.peekPoint.z);
+            }
+            bot.agent.update(dt);
+            p.x = bot.agent.x;
+            p.z = bot.agent.z;
+
+            // Aim and shoot aggressively during peek
+            if (hasTarget) {
+                botAimAndShoot(bot, target, hasLOS, targetDist, dt);
+            }
+            break;
+        }
+
+        case ST_HEAL: {
+            // Move to cover and heal
+            if (bot.coverPoint) {
+                bot.agent.setTarget(bot.coverPoint.x, bot.coverPoint.z);
+            }
+            bot.agent.update(dt);
+            p.x = bot.agent.x;
+            p.z = bot.agent.z;
+
+            // Face threat direction
+            if (hasTarget) {
+                const aim = bot.agent.aimAt(target.x, EYE_HEIGHT, target.z, EYE_HEIGHT);
+                p.yaw = aim.yaw;
+                p.pitch = aim.pitch;
+            }
+
+            // Heal when in cover (no LOS to threat)
+            if (!hasLOS || !hasTarget) {
+                p.health = Math.min(MAX_HEALTH, p.health + HEAL_RATE * dt);
+            }
+            break;
+        }
     }
+}
 
-    bot.agent.update(dt);
-    p.x = bot.agent.x;
-    p.z = bot.agent.z;
+// ─── Bot aim + shoot helpers ────────────────────────────────────────────────
 
-    // Aim at target (with slight inaccuracy)
+function botAimAndShoot(bot, target, hasLOS, dist, dt) {
+    const p = bot.player;
     const aim = bot.agent.aimAt(target.x, EYE_HEIGHT, target.z, EYE_HEIGHT);
-    const inaccuracy = 0.03; // radians of aim wobble
+    const inaccuracy = 0.03;
     p.yaw = aim.yaw + (Math.random() - 0.5) * inaccuracy;
     p.pitch = aim.pitch + (Math.random() - 0.5) * inaccuracy;
 
-    // Check line of sight before shooting
-    const hasLOS = bro.ai.game.hasLineOfSight(p.x, p.z, target.x, target.z,
-        OBSTACLES.concat(WALLS));
+    botShoot(bot, target, dist, dt);
+}
 
-    // Shoot if in range and has LOS
+function botShoot(bot, target, dist, dt) {
+    const p = bot.player;
     p.shootCooldown = Math.max(0, p.shootCooldown - dt);
     bot.shootDelay = Math.max(0, bot.shootDelay - dt);
 
-    if (hasLOS && dist < 30 && p.shootCooldown <= 0 && bot.shootDelay <= 0) {
+    const hasLOS = bro.ai.game.hasLineOfSight(p.x, p.z, target.x, target.z,
+        OBSTACLES.concat(WALLS));
+
+    if (hasLOS && dist < ENGAGE_RANGE && p.shootCooldown <= 0 && bot.shootDelay <= 0) {
         processShot(p);
         p.shootCooldown = SHOOT_COOLDOWN;
-        bot.shootDelay = 0.1 + Math.random() * 0.15; // reaction time
+        bot.shootDelay = 0.1 + Math.random() * 0.15;
     }
 }
 
