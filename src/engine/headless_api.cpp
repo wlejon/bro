@@ -157,6 +157,15 @@ void Engine::advanceTime(double ms) {
 
         if (activeWebGL) activeWebGL->unbindCanvasFBO();
 
+        // Step AI bindings once per advanceTime step (deterministic, uses the
+        // headless virtual-time step as dt).
+        {
+            float aiDt = static_cast<float>(step * 0.001);
+            for (auto& sg : sceneGraphs_) {
+                sg.graph->syncAgents(aiDt);
+            }
+        }
+
         // Auto-render scene graphs after JS execution
         for (auto& sg : sceneGraphs_) {
             sg.graph->render();

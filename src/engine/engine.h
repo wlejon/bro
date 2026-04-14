@@ -397,6 +397,7 @@ private:
     std::vector<SceneGraphEntry> sceneGraphs_;
     double physicsAccumMs_ = 0.0;
     double lastPhysicsTimeMs_ = 0.0;
+    double lastFrameTimeMs_ = 0.0; // wall-clock time of previous frame's start (for syncAgents dt)
     // System panels (settings, perf, nav)
     std::vector<SystemDocument> systemDocs_;
     std::unique_ptr<render::CPURasterRenderer> systemRenderer_;

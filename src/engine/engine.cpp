@@ -1749,6 +1749,21 @@ void Engine::run() {
             sg.graph->syncPhysics();
         }
 
+        // 1d. Sync scene graph AI bindings (world.tick, per-agent think, transform write).
+        //     Uses real frame dt; the AIWorldTicker internally steps world at a fixed rate.
+        {
+            double nowMs = util::currentTimeMs();
+            float frameDt = (lastFrameTimeMs_ > 0.0)
+                ? static_cast<float>((nowMs - lastFrameTimeMs_) / 1000.0)
+                : 1.0f / 60.0f;
+            if (frameDt < 0.0f) frameDt = 0.0f;
+            if (frameDt > 0.1f) frameDt = 0.1f; // clamp on long stalls
+            lastFrameTimeMs_ = nowMs;
+            for (auto& sg : sceneGraphs_) {
+                sg.graph->syncAgents(frameDt);
+            }
+        }
+
         // 2. Tick timers + JS execution
         double now = util::currentTimeMs();
         double t0 = now;

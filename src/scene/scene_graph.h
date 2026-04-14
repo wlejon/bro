@@ -5,6 +5,8 @@
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
+#include "scene/agent_binding.h"
+#include "scene/ai_world_ticker.h"
 
 #include <glad/gl.h>
 
@@ -15,6 +17,7 @@
 
 namespace bro::canvas { class CanvasScene; }
 namespace bro::physics { class PhysicsWorld; }
+namespace brogameagent { class World; }
 
 namespace bro::scene {
 
@@ -52,6 +55,28 @@ public:
     /// Sync physics body transforms → scene node transforms.
     /// Call after physics step completes (when physics thread is idle).
     void syncPhysics();
+
+    // --- AI integration ---
+
+    /// Attach a brogameagent::World driven at a fixed step by the engine loop.
+    /// Caller retains ownership of the world (typically a JS-owned wrapper).
+    void attachAIWorld(brogameagent::World* world, float stepHz = 60.0f,
+                       int maxStepsPerFrame = 8);
+    void detachAIWorld();
+    AIWorldTicker* aiTicker() const { return aiTicker_.get(); }
+
+    /// Create or fetch an AgentBinding attached to a node. The binding lives
+    /// in a side-map owned by the scene graph so scene_node.h stays AI-free.
+    /// Returns nullptr if the node does not belong to this graph.
+    AgentBinding* attachAgentBinding(SceneNode* node);
+    AgentBinding* agentBinding(uint32_t nodeId) const;
+    AgentBinding* agentBinding(SceneNode* node) const;
+    void detachAgentBinding(SceneNode* node);
+
+    /// Step the AI world ticker (if attached), then step every agent binding
+    /// by dt, syncing agent.x/z/yaw into their scene nodes. Mirrors
+    /// syncPhysics() in shape; called once per frame before JS runs.
+    void syncAgents(float dt);
 
     // --- Rendering ---
 
@@ -128,6 +153,10 @@ private:
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
+
+    // AI integration
+    std::unique_ptr<AIWorldTicker> aiTicker_;
+    std::unordered_map<uint32_t, std::unique_ptr<AgentBinding>> agentBindings_;
 
     canvas::CanvasScene* canvasScene_ = nullptr;
     physics::PhysicsWorld* physicsWorld_ = nullptr;

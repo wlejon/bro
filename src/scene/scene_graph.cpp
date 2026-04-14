@@ -2,6 +2,7 @@
 #include "canvas/canvas_scene.h"
 #include "physics/physics_world.h"
 #include "util/log.h"
+#include "brogameagent/world.h"
 
 namespace bro::scene {
 
@@ -171,6 +172,7 @@ void SceneGraph::destroyNode(SceneNode* node) {
 
     // Destroy all collected nodes (children first due to ordering)
     for (auto id : ids) {
+        agentBindings_.erase(id);
         nodes_.erase(id);
     }
 }
@@ -233,6 +235,68 @@ void SceneGraph::syncPhysics() {
             if (pn->autoSync()) {
                 pn->syncFromPhysics(physicsWorld_);
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AI integration
+// ---------------------------------------------------------------------------
+
+void SceneGraph::attachAIWorld(brogameagent::World* world, float stepHz, int maxStepsPerFrame) {
+    if (!world) { aiTicker_.reset(); return; }
+    aiTicker_ = std::make_unique<AIWorldTicker>(world, stepHz, maxStepsPerFrame);
+}
+
+void SceneGraph::detachAIWorld() {
+    aiTicker_.reset();
+}
+
+AgentBinding* SceneGraph::attachAgentBinding(SceneNode* node) {
+    if (!node) return nullptr;
+    auto it = nodes_.find(node->id());
+    if (it == nodes_.end()) return nullptr;
+    auto& slot = agentBindings_[node->id()];
+    if (!slot) slot = std::make_unique<AgentBinding>(node);
+    return slot.get();
+}
+
+AgentBinding* SceneGraph::agentBinding(uint32_t nodeId) const {
+    auto it = agentBindings_.find(nodeId);
+    return (it != agentBindings_.end()) ? it->second.get() : nullptr;
+}
+
+AgentBinding* SceneGraph::agentBinding(SceneNode* node) const {
+    return node ? agentBinding(node->id()) : nullptr;
+}
+
+void SceneGraph::detachAgentBinding(SceneNode* node) {
+    if (!node) return;
+    agentBindings_.erase(node->id());
+}
+
+void SceneGraph::syncAgents(float dt) {
+    // 1. Fixed-step the AI world.
+    float nowSec = 0.0f;
+    brogameagent::World* world = nullptr;
+    if (aiTicker_) {
+        aiTicker_->tick(dt);
+        nowSec = aiTicker_->nowSec();
+        world = aiTicker_->world();
+    }
+
+    // 2. Step each binding (think + advance + transform sync).
+    // Iterate a snapshot of ids — a think() callback could theoretically
+    // spawn/destroy bindings, invalidating the map's iterators.
+    if (agentBindings_.empty()) return;
+    std::vector<uint32_t> ids;
+    ids.reserve(agentBindings_.size());
+    for (const auto& [id, _] : agentBindings_) ids.push_back(id);
+    for (uint32_t id : ids) {
+        auto it = agentBindings_.find(id);
+        if (it == agentBindings_.end()) continue;
+        if (AgentBinding* b = it->second.get()) {
+            b->step(world, dt, nowSec);
         }
     }
 }

@@ -6,10 +6,12 @@ add_library(bro_scene STATIC
     physics_node.cpp
     mesh_node.cpp
     terrain_manager.cpp
+    agent_binding.cpp
+    ai_world_ticker.cpp
 )
 
 target_include_directories(bro_scene PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util stb_image bromesh glad FastNoise)
+target_link_libraries(bro_scene PUBLIC bro_canvas bro_physics bro_util stb_image bromesh glad FastNoise brogameagent)
 target_compile_features(bro_scene PUBLIC cxx_std_20)
 
 if(MSVC)
