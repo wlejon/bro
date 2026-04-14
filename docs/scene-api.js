@@ -191,7 +191,45 @@ class SceneGraph {
 
   /** Sync all physics node transforms from the physics world. */
   syncPhysics() {}
+
+
+  // --- AI integration (see docs/ai-game-api.js for the full surface) -------
+
+  /**
+   * Bind a brogameagent::World and drive it at a fixed step from the engine
+   * main loop. After this, each frame: world.tick(1/stepHz) is invoked up to
+   * maxStepsPerFrame times based on the real frame delta, then every
+   * AgentBinding on this graph steps (think + advance + transform sync).
+   *
+   * @param {AIWorld} world  - from bro.ai.game.createWorld()
+   * @param {Object}  [opts]
+   * @param {number}  [opts.stepHz=60]
+   * @param {number}  [opts.maxStepsPerFrame=8]
+   */
+  attachAIWorld(world, opts) {}
+
+  /** Stop auto-ticking the AI world. */
+  detachAIWorld() {}
 }
+
+
+// -----------------------------------------------------------------------------
+// SceneNode AI extensions
+// -----------------------------------------------------------------------------
+//
+// Any scene node can own an AI binding. See docs/ai-game-api.js for the full
+// capability / think API; summary:
+//
+//   node.attachAgent(world, agent, {
+//     capabilities: ["move_to","basic_attack","hold"],
+//     thinkHz: 15,
+//     think(self, w) { ... },
+//   });
+//
+//   node.detachAgent();
+//
+// Once attached, the node's x/y/z/rotationY are driven by the agent each
+// frame (with yOffset applied on Y for ground clearance).
 
 
 // -----------------------------------------------------------------------------

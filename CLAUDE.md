@@ -38,7 +38,7 @@ bro-headless apps/dashboard test.js
 # Inline JS expression
 bro-headless apps/dashboard -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
 
-# CPU-only, no GPU/WebGL — for CI without GPU (or use SDL_VIDEODRIVER=dummy on Linux)
+# CPU-only, no GPU/WebGL
 bro-headless --no-gpu apps/dashboard
 ```
 
@@ -126,9 +126,9 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/worker-api.js` | `Worker` — web worker threads |
-| `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception for game bots |
+| `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
 
-Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system), `docs/inspect.md` (DOM inspector).
+Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system), `docs/inspect.md` (DOM inspector that's very useful in headless), `docs/moba-demo.md` (MOBA architecture).
 
 ## Namespace
 

@@ -184,3 +184,131 @@ const canSee = bro.ai.game.hasLineOfSight(
  * @returns {{ yaw: number, pitch: number }}
  */
 const aim2 = bro.ai.game.computeAim(0, 1.6, 0, 10, 1.6, -5);
+
+
+// -----------------------------------------------------------------------------
+// Capability / policy / AgentBinding — scene-driven AI
+// -----------------------------------------------------------------------------
+//
+// A scene node can own an "agent binding" — a capability set (the tools this
+// object can use) plus a JS think(self, world) callback (how it decides).
+// Minions, towers, and heroes all use the same binding shape; behaviour
+// differs only by which capabilities are enabled and which think() fn is
+// supplied. Difficulty scales along three orthogonal knobs:
+//   1. capability set — add or remove tools
+//   2. thinkHz        — how often the decision fires
+//   3. think fn       — simple scripted, MCTS wrapper, or NN policy
+//
+// Built-in capabilities (string ids used in opts.capabilities):
+//   "move_to"      — self.moveTo(x, z) sets the pathfinding target
+//   "lane_walk"    — self.laneWalk() steps through opts.laneWaypoints
+//   "basic_attack" — self.attack(targetId); blocks for 1/attacksPerSec
+//   "cast_ability" — self.cast(slot, targetId); blocks for cast time (~0.25s)
+//   "flee"         — self.flee([x, z]); retreats away from nearest enemy
+//   "hold"         — self.hold([dur]); no-op for dur seconds (always exposed)
+//
+// A `self` proxy is built fresh each think tick. It only exposes methods
+// whose capability is present on the binding — towers won't have .moveTo.
+
+
+/**
+ * Register a JS-authored capability. Returns the assigned capability id.
+ * Callbacks run from C++; keep them fast. `start` is invoked when the
+ * capability is chosen; `advance` each frame while it's in flight; `gate`
+ * when building the available-capability mask (optional, default true).
+ *
+ * @param {string} name
+ * @param {Object} spec
+ * @param {function} [spec.gate]     - () => boolean
+ * @param {function} [spec.start]    - () => void
+ * @param {function} [spec.advance]  - () => boolean (true = done)
+ * @param {number}   [spec.id]       - optional explicit id (default: auto-allocated from 100+)
+ * @returns {number} capability id
+ */
+bro.ai.game.registerCapability("kite", {
+    gate()    { return true; },
+    start()   { /* ... */ },
+    advance() { return true; /* done this tick */ },
+});
+
+
+// -----------------------------------------------------------------------------
+// SceneGraph.attachAIWorld — auto-tick a World each frame
+// -----------------------------------------------------------------------------
+
+/**
+ * Drive a brogameagent::World from the engine frame loop at a fixed step.
+ * Replaces the JS-side accumulator pattern (see apps/ai-arena's main.js).
+ *
+ * @param {AIWorld} world
+ * @param {Object}  [opts]
+ * @param {number}  [opts.stepHz=60]            - fixed-step rate
+ * @param {number}  [opts.maxStepsPerFrame=8]   - catch-up clamp for stalls
+ */
+scene.attachAIWorld(world, { stepHz: 60, maxStepsPerFrame: 8 });
+scene.detachAIWorld();
+
+
+// -----------------------------------------------------------------------------
+// SceneNode.attachAgent — bind an AI agent to a scene object
+// -----------------------------------------------------------------------------
+
+/**
+ * Attach an AI agent + capability set to a scene node. The binding takes
+ * care of steering, combat, aim, cast timing, and writing transforms. Call
+ * attachAIWorld first (the binding reads the world via the scene graph's
+ * attached ticker; the `world` arg here is the JS wrapper passed to think).
+ *
+ * @param {AIWorld} world
+ * @param {AIAgent} agent
+ * @param {Object}  [opts]
+ * @param {string[]} [opts.capabilities] - ids of enabled caps (default: all built-ins)
+ * @param {function(self, world): void} [opts.think] - imperative decision fn
+ * @param {number}  [opts.thinkHz=15]
+ * @param {number}  [opts.yOffset=0]    - extra Y on the node (ground clearance)
+ * @param {boolean} [opts.faceMovement=true]
+ * @param {Array<{x,z}>} [opts.laneWaypoints] - waypoints for lane_walk
+ * @param {string}  [opts.policy]       - "scripted_minion" as a C++ fallback
+ */
+minionNode.attachAgent(world, minionAgent, {
+    capabilities: ["lane_walk", "basic_attack", "hold"],
+    thinkHz: 10,
+    laneWaypoints: [{ x: -15, z: 0 }, { x: 0, z: 0 }, { x: 15, z: 0 }],
+    think(self, w) {
+        const e = w.nearestEnemy(self.agent);
+        if (e && self.inRange(e)) return self.attack(e.unit.id);
+        return self.laneWalk();
+    },
+});
+
+/** Remove the binding; the node stops receiving AI updates. */
+minionNode.detachAgent();
+
+
+// -----------------------------------------------------------------------------
+// The `self` proxy passed to think()
+// -----------------------------------------------------------------------------
+//
+// Built fresh each think tick. Read-only snapshots of unit state plus
+// imperative methods for the enabled capabilities. Exactly one method call
+// per think determines the next action (last call wins).
+//
+// Read-only:
+//   self.hp / mana / x / z / id / teamId / attackRange / alive
+//   self.agent                          — the underlying AIAgent (for world queries)
+//
+// Universal helpers (always available):
+//   self.distanceTo(target)             — target may be {x,z}, AIAgent, or self
+//   self.inRange(target [, range])      — default range is self.attackRange
+//   self.hold([dur])                    — no-op fallback
+//
+// Capability methods (present only when the cap is enabled):
+//   self.moveTo(x, z)                   // if move_to
+//   self.laneWalk()                     // if lane_walk
+//   self.attack(targetId)               // if basic_attack
+//   self.cast(slot, targetId)           // if cast_ability
+//   self.flee([x, z])                   // if flee
+//
+// A tower ({capabilities:["basic_attack","hold"]}) has no .moveTo / .laneWalk;
+// attempting to call them throws. A think() that falls through without
+// picking an action defaults to .hold().
