@@ -19,16 +19,20 @@ struct NavGridData {
     std::unique_ptr<brogameagent::NavGrid> grid;
 };
 
+struct UnitData {
+    brogameagent::Agent* agentRef;  // non-owning, kept alive by AgentData via JS ref
+};
+
 struct AgentData {
     brogameagent::Agent agent;
+    // Persistent per-agent unit proxy. Must NOT be a shared static — JS code
+    // frequently walks multiple agents in one expression, and a shared proxy
+    // would have its agentRef clobbered by the most recent .unit access.
+    std::unique_ptr<UnitData> unitProxy;
 };
 
 struct WorldData {
     brogameagent::World world;
-};
-
-struct UnitData {
-    brogameagent::Agent* agentRef;  // non-owning, kept alive by AgentData via JS ref
 };
 
 struct RewardTrackerData {
@@ -579,11 +583,14 @@ void AIBindings::install(JSContext* ctx) {
             .get("atTarget", [](AgentData* d) -> bool { return d->agent.atTarget(); })
             .get("unit",
                 [](AgentData* d, JSContext* ctx) -> JSValue {
-                    // Return a UnitData proxy that refers to this agent's unit
-                    // Use wrap_unowned since UnitData has NoDestructor
-                    static thread_local UnitData proxy;
-                    proxy.agentRef = &d->agent;
-                    return qjsbind::wrap_unowned<UnitData>(ctx, &proxy);
+                    // Lazily allocate a proxy per AgentData. The proxy is
+                    // kept alive by AgentData::unitProxy, so wrap_unowned
+                    // can safely return a JS handle into it.
+                    if (!d->unitProxy) {
+                        d->unitProxy = std::make_unique<UnitData>();
+                    }
+                    d->unitProxy->agentRef = &d->agent;
+                    return qjsbind::wrap_unowned<UnitData>(ctx, d->unitProxy.get());
                 })
             .get("velocity",
                 [](AgentData* d, JSContext* ctx) -> JSValue {
