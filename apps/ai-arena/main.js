@@ -105,6 +105,7 @@
             var preWalkable = state.nav.isWalkable(preX, preZ);
 
             var action;
+            var myTarget = null;
             if (myTeam === 1 && state.blueAi === "mcts" && state.mcts[a.unit.id]) {
                 var m = state.mcts[a.unit.id];
                 var ca = AI.mctsStep(a, w, m.mcts, m.cache);
@@ -113,16 +114,30 @@
                 AI.getMem(a.unit.id).intent = "MCTS";
                 // Movement already applied inside applyMcts; do not call agent.update(dt).
             } else {
-                var myTarget = AI.pickTargetFor(a, myEnemies, myFocus, Arena.OBSTACLES);
+                myTarget = AI.pickTargetFor(a, myEnemies, myFocus, Arena.OBSTACLES);
                 action = AI.scriptedTactical(
                     a, w, state.nav, myEnemies, myMates, myTarget,
                     Arena.OBSTACLES, state.elapsed);
                 a.update(dt);
             }
 
-            // Ranged fire — spawns a projectile when LOS + cooldown allow.
+            // Aim system: scripted policy already called requestAim at decision
+            // points. For MCTS (and as a safety net), seed desiredAim from the
+            // best available target. Then rotate the gun toward desiredAim by
+            // aimTurnSpeed*dt this tick so the projectile direction in tryShoot
+            // is current.
+            var aimMem = AI.getMem(a.unit.id);
+            var aimAt = action.fireAt ||
+                (action.attackTargetId >= 0 ? state.byId[action.attackTargetId] : null) ||
+                myTarget || myFocus;
+            if (aimAt && aimAt.unit && aimAt.unit.alive) {
+                AI.requestAim(aimMem, state.elapsed, aimAt.x - a.x, aimAt.z - a.z);
+            }
+            BotAim.tick(aimMem.aim, dt);
+
+            // Ranged fire — spawns a projectile when LOS + cooldown + aim alignment allow.
             if (action.fireAt) {
-                AI.tryShoot(a, w, action.fireAt, Arena.OBSTACLES, AI.getMem(a.unit.id), dt);
+                AI.tryShoot(a, w, action.fireAt, Arena.OBSTACLES, aimMem, dt);
             } else if (action.attackTargetId >= 0) {
                 // (legacy: used by MCTS `applyMcts` when it returns an attackSlot)
                 w.resolveAttack(a, action.attackTargetId);

@@ -79,8 +79,13 @@ var Render = {};
             var FOV = Math.PI / 2.2; // ~82 deg
             var RANGE = u.attackRange || 9;
             var memForAim = (typeof AI !== "undefined") ? AI.memory[uId] : null;
-            var aimX = memForAim ? memForAim.aimX : Math.sin(a.yaw);
-            var aimZ = memForAim ? memForAim.aimZ : -Math.cos(a.yaw);
+            var aimX, aimZ;
+            if (memForAim && memForAim.aim) {
+                var f = BotAim.forward(memForAim.aim);
+                aimX = f.x; aimZ = f.z;
+            } else {
+                aimX = Math.sin(a.yaw); aimZ = -Math.cos(a.yaw);
+            }
             var aimAng = Math.atan2(aimZ, aimX);
             var p1 = w2s(ax + Math.cos(aimAng - FOV / 2) * RANGE,
                          az + Math.sin(aimAng - FOV / 2) * RANGE);

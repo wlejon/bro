@@ -6,7 +6,74 @@
 //
 // Binary protocol, server-authoritative movement, hitscan shooting,
 // health/respawn. Clients send inputs; server resolves all game state.
-// AI bots use bro.ai.game for pathfinding and steering.
+// AI bots use bro.ai.game for pathfinding and steering, and the shared
+// BotAim system (apps/lib/bot_aim.js) for human-like aim tracking.
+
+// ─── BotAim — copy of apps/lib/bot_aim.js (keep in sync) ────────────────────
+// Server scripts can't <script src=...> a shared lib, so the canonical file
+// lives in apps/lib/bot_aim.js and is duplicated here. Edit both together.
+var BotAim = {};
+(function () {
+    "use strict";
+    function angleDelta(from, to) {
+        var d = to - from;
+        while (d >  Math.PI) d -= 2 * Math.PI;
+        while (d < -Math.PI) d += 2 * Math.PI;
+        return d;
+    }
+    BotAim.create = function (opts) {
+        opts = opts || {};
+        return {
+            yaw: 0, pitch: 0, desiredYaw: 0, desiredPitch: 0, sampleT: -1e9,
+            turnSpeed:      opts.turnSpeed   != null ? opts.turnSpeed   : 5.0,
+            sampleInterval: 1.0 / (opts.sampleHz != null ? opts.sampleHz : 15),
+            fireConeRad:    opts.fireConeRad != null ? opts.fireConeRad : 0.15,
+        };
+    };
+    BotAim.set = function (aim, yaw, pitch) {
+        aim.yaw = yaw; aim.pitch = pitch || 0;
+        aim.desiredYaw = aim.yaw; aim.desiredPitch = aim.pitch;
+        aim.sampleT = -1e9;
+    };
+    BotAim.requestAim = function (aim, simT, yaw, pitch) {
+        if (simT - aim.sampleT < aim.sampleInterval) return;
+        aim.sampleT = simT;
+        aim.desiredYaw = yaw; aim.desiredPitch = pitch || 0;
+    };
+    BotAim.requestAimAt = function (aim, simT, fromX, fromY, fromZ, toX, toY, toZ) {
+        var dx = toX - fromX, dy = toY - fromY, dz = toZ - fromZ;
+        var horizDist = Math.sqrt(dx * dx + dz * dz);
+        if (horizDist < 1e-4 && Math.abs(dy) < 1e-4) return;
+        var yaw = Math.atan2(dx, -dz);
+        var pitch = Math.atan2(dy, horizDist);
+        BotAim.requestAim(aim, simT, yaw, pitch);
+    };
+    BotAim.tick = function (aim, dt) {
+        var maxStep = aim.turnSpeed * dt;
+        var dy = angleDelta(aim.yaw, aim.desiredYaw);
+        if (dy >  maxStep) dy =  maxStep; else if (dy < -maxStep) dy = -maxStep;
+        aim.yaw += dy;
+        if (aim.yaw >  Math.PI) aim.yaw -= 2 * Math.PI;
+        else if (aim.yaw < -Math.PI) aim.yaw += 2 * Math.PI;
+        var dp = aim.desiredPitch - aim.pitch;
+        if (dp >  maxStep) dp =  maxStep; else if (dp < -maxStep) dp = -maxStep;
+        aim.pitch += dp;
+        var P = Math.PI / 2 - 0.01;
+        if (aim.pitch >  P) aim.pitch =  P; else if (aim.pitch < -P) aim.pitch = -P;
+    };
+    BotAim.forward = function (aim) {
+        var cp = Math.cos(aim.pitch);
+        return { x: Math.sin(aim.yaw)*cp, y: Math.sin(aim.pitch), z: -Math.cos(aim.yaw)*cp };
+    };
+    BotAim.canFireAt = function (aim, fromX, fromY, fromZ, toX, toY, toZ) {
+        var dx = toX - fromX, dy = toY - fromY, dz = toZ - fromZ;
+        var len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-4) return false;
+        var f = BotAim.forward(aim);
+        var dot = (f.x * dx + f.y * dy + f.z * dz) / len;
+        return dot >= Math.cos(aim.fireConeRad);
+    };
+})();
 
 const PORT = 27015;
 const TICK_RATE = 60;
@@ -402,6 +469,7 @@ setInterval(() => {
                     bot.peekPoint = null;
                     bot.targetId = null;
                     bot.score -= 1; // death penalty
+                    BotAim.set(bot.aim, 0, 0);
                 }
                 console.log(p.name + ' respawned');
             }
@@ -511,7 +579,11 @@ const ST_HEAL  = 4;  // hunkered in cover, healing
 const COVER_POINTS = []; // { x, z, obstacleIdx }
 
 (function buildCoverPoints() {
-    const pad = PLAYER_RADIUS + 0.5;
+    // pad must clear the nav grid's *snapped* padded-obstacle cells, not just
+    // the obstacle itself. Nav padding (0.6) + cellSize (0.5) inflates the
+    // unwalkable region; a smaller pad lands cover points inside that snap
+    // zone and findCover returns nothing.
+    const pad = PLAYER_RADIUS + 0.2 + 0.5 + 0.3;
     for (let i = 0; i < OBSTACLES.length; i++) {
         const o = OBSTACLES[i];
         // 4 face centers (N/S/E/W offset from obstacle edge)
@@ -659,6 +731,9 @@ function spawnBot() {
         peekPoint: null,      // where to peek from
         roamIdx: Math.floor(Math.random() * COVER_POINTS.length), // patrol index
         score: 0,             // cumulative reward score
+        // Smoothed aim — 15 Hz target sampling, 5 rad/s turn rate.
+        // The 8.6° fire cone gates shooting so bots only fire when on target.
+        aim: BotAim.create({ turnSpeed: 5.0, sampleHz: 15, fireConeRad: 0.15 }),
     });
 
     console.log(name + ' spawned [' + players.size + ' total]');
@@ -762,20 +837,45 @@ function botTick(bot, dt) {
     // Reset timer on state change
     if (bot.state !== prevState) bot.stateTimer = 0;
 
+    // ── Aim system: every state samples the target's eye position into the
+    // BotAim tracker; per-tick rotation produces realistic lag instead of
+    // instant snap-aim. Player yaw/pitch is read from the tracker after.
+    const simT = serverTick * dt;
+    if (hasTarget) {
+        BotAim.requestAimAt(bot.aim, simT,
+            p.x, EYE_HEIGHT, p.z,
+            target.x, EYE_HEIGHT, target.z);
+    } else if (bot.agent.hasTarget) {
+        // No combat target — face the direction we're moving so the body
+        // doesn't strafe sideways while patrolling.
+        const fy = bot.agent.yaw;
+        BotAim.requestAim(bot.aim, simT, fy, 0);
+    }
+    BotAim.tick(bot.aim, dt);
+
     // ── Execute current state ──
     switch (bot.state) {
         case ST_ROAM: {
-            // Patrol between cover points
+            // Patrol between cover points (or random walkable spots if cover
+            // generation produced nothing — defensive against nav misconfig).
             if (!bot.agent.hasTarget || bot.agent.atTarget) {
-                bot.roamIdx = (bot.roamIdx + 1 + Math.floor(Math.random() * 3)) % COVER_POINTS.length;
-                const dest = COVER_POINTS[bot.roamIdx];
-                bot.agent.setTarget(dest.x, dest.z);
+                if (COVER_POINTS.length > 0) {
+                    bot.roamIdx = (bot.roamIdx + 1 + Math.floor(Math.random() * 3)) % COVER_POINTS.length;
+                    const dest = COVER_POINTS[bot.roamIdx];
+                    bot.agent.setTarget(dest.x, dest.z);
+                } else {
+                    // Random walkable point inside the arena.
+                    const lim = ARENA_HALF - PLAYER_RADIUS - WALL_THICK - 1.0;
+                    for (let tries = 0; tries < 8; tries++) {
+                        const rx = (Math.random() * 2 - 1) * lim;
+                        const rz = (Math.random() * 2 - 1) * lim;
+                        if (nav.isWalkable(rx, rz)) { bot.agent.setTarget(rx, rz); break; }
+                    }
+                }
             }
             bot.agent.update(dt);
             p.x = bot.agent.x;
             p.z = bot.agent.z;
-            p.yaw = bot.agent.yaw;
-            p.pitch = 0;
             break;
         }
 
@@ -794,101 +894,77 @@ function botTick(bot, dt) {
             bot.agent.update(dt);
             p.x = bot.agent.x;
             p.z = bot.agent.z;
-
-            // Aim and shoot
-            botAimAndShoot(bot, target, hasLOS, targetDist, dt);
+            botShoot(bot, target, hasLOS, targetDist, dt);
             break;
         }
 
         case ST_COVER: {
-            // Move to cover point
             if (bot.coverPoint) {
                 bot.agent.setTarget(bot.coverPoint.x, bot.coverPoint.z);
             }
             bot.agent.update(dt);
             p.x = bot.agent.x;
             p.z = bot.agent.z;
-
-            // Face toward threat while moving to cover
-            if (hasTarget) {
-                const aim = bot.agent.aimAt(target.x, EYE_HEIGHT, target.z, EYE_HEIGHT);
-                p.yaw = aim.yaw;
-                p.pitch = aim.pitch;
-            }
-
-            // Opportunistic shot while retreating to cover
+            // Opportunistic shot while retreating to cover.
             if (hasLOS && targetDist < ENGAGE_RANGE) {
-                botShoot(bot, target, targetDist, dt);
+                botShoot(bot, target, hasLOS, targetDist, dt);
             }
             break;
         }
 
         case ST_PEEK: {
-            // Move to peek position and shoot
             if (bot.peekPoint) {
                 bot.agent.setTarget(bot.peekPoint.x, bot.peekPoint.z);
             }
             bot.agent.update(dt);
             p.x = bot.agent.x;
             p.z = bot.agent.z;
-
-            // Aim and shoot aggressively during peek
-            if (hasTarget) {
-                botAimAndShoot(bot, target, hasLOS, targetDist, dt);
-            }
+            if (hasTarget) botShoot(bot, target, hasLOS, targetDist, dt);
             break;
         }
 
         case ST_HEAL: {
-            // Move to cover and heal
             if (bot.coverPoint) {
                 bot.agent.setTarget(bot.coverPoint.x, bot.coverPoint.z);
             }
             bot.agent.update(dt);
             p.x = bot.agent.x;
             p.z = bot.agent.z;
-
-            // Face threat direction
-            if (hasTarget) {
-                const aim = bot.agent.aimAt(target.x, EYE_HEIGHT, target.z, EYE_HEIGHT);
-                p.yaw = aim.yaw;
-                p.pitch = aim.pitch;
-            }
-
-            // Heal when in cover (no LOS to threat)
+            // Heal when no LOS to threat (safely behind cover).
             if (!hasLOS || !hasTarget) {
                 p.health = Math.min(MAX_HEALTH, p.health + HEAL_RATE * dt);
             }
             break;
         }
     }
+
+    // Single source of truth: whatever state we're in, the rendered look
+    // direction comes from the smoothed aim tracker.
+    p.yaw = bot.aim.yaw;
+    p.pitch = bot.aim.pitch;
 }
 
-// ─── Bot aim + shoot helpers ────────────────────────────────────────────────
-
-function botAimAndShoot(bot, target, hasLOS, dist, dt) {
-    const p = bot.player;
-    const aim = bot.agent.aimAt(target.x, EYE_HEIGHT, target.z, EYE_HEIGHT);
-    const inaccuracy = 0.03;
-    p.yaw = aim.yaw + (Math.random() - 0.5) * inaccuracy;
-    p.pitch = aim.pitch + (Math.random() - 0.5) * inaccuracy;
-
-    botShoot(bot, target, dist, dt);
-}
-
-function botShoot(bot, target, dist, dt) {
+// ─── Bot shoot ──────────────────────────────────────────────────────────────
+// Aim is handled by the BotAim tracker (set in botTick). We only fire when:
+//   - cooldown elapsed
+//   - target in LOS and within engage range
+//   - the gun has rotated onto target (within fireConeRad)
+// processShot uses p.yaw/p.pitch (already written from bot.aim), so a slow
+// turn means early shots miss naturally — exactly the human-like behavior
+// the new aim system is meant to produce.
+function botShoot(bot, target, hasLOS, dist, dt) {
     const p = bot.player;
     p.shootCooldown = Math.max(0, p.shootCooldown - dt);
     bot.shootDelay = Math.max(0, bot.shootDelay - dt);
 
-    const hasLOS = bro.ai.game.hasLineOfSight(p.x, p.z, target.x, target.z,
-        OBSTACLES.concat(WALLS));
+    if (!hasLOS || dist >= ENGAGE_RANGE) return;
+    if (p.shootCooldown > 0 || bot.shootDelay > 0) return;
+    if (!BotAim.canFireAt(bot.aim, p.x, EYE_HEIGHT, p.z,
+                          target.x, EYE_HEIGHT, target.z)) return;
 
-    if (hasLOS && dist < ENGAGE_RANGE && p.shootCooldown <= 0 && bot.shootDelay <= 0) {
-        processShot(p);
-        p.shootCooldown = SHOOT_COOLDOWN;
-        bot.shootDelay = 0.1 + Math.random() * 0.15;
-    }
+    processShot(p);
+    p.shootCooldown = SHOOT_COOLDOWN;
+    bot.shootDelay = 0.1 + Math.random() * 0.15;
 }
 
 // Periodic status

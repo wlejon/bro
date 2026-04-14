@@ -23,9 +23,10 @@ var AI = {};
         if (!m) m = AI.memory[id] = {
             intent: "idle", perpSign: 1, lastFlip: -99,
             shootCd: 0, targetId: null,
-            // Aim direction — separate from movement yaw so render (and
-            // future gun-based fire) can show where we're actually looking.
-            aimX: 1, aimZ: 0,
+            // Aim system: 15Hz target sampling + turn-rate-limited rotation.
+            // See apps/lib/bot_aim.js. We use 2D top-down here (pitch=0); the
+            // y argument to requestAimAt is set to a constant agent eye level.
+            aim: BotAim.create({ turnSpeed: 5.0, sampleHz: 15, fireConeRad: 0.15 }),
             // Threat tracking — recent damage taken & who dealt most of it.
             threat: 0, threatSourceId: -1, lastHitT: -99,
             role: "front", coverX: null, coverZ: null,
@@ -55,8 +56,17 @@ var AI = {};
         }
     };
 
-    // Fire a projectile at `focus` if cooldown + LOS allow. Updates mem.shootCd.
-    // Uses computeLeadAim when the focus is moving fast enough to matter.
+    // Wrappers that pass the agent's aim sub-state through to BotAim.
+    // `dx, dz` is the 2D direction-to-target in arena coordinates.
+    AI.requestAim = function (mem, simT, dx, dz) {
+        // Translate top-down (dx, dz) into engine yaw (yaw 0 = -Z forward).
+        var yaw = Math.atan2(dx, -dz);
+        BotAim.requestAim(mem.aim, simT, yaw, 0);
+    };
+
+    // Fire a projectile along the agent's current aim direction. Aim is
+    // tracked by BotAim — the shot only goes when the gun has rotated onto
+    // the target (within fireConeRad).
     AI.tryShoot = function (agent, world, focus, obstacles, mem, dt) {
         mem.shootCd -= dt;
         if (!focus || !focus.unit.alive) return false;
@@ -69,32 +79,20 @@ var AI = {};
             return false;
         }
 
-        var PSPEED = 18;
-        // Lead the target if it's moving meaningfully.
-        var fv = focus.velocity;
-        var vMag = Math.sqrt(fv.x * fv.x + fv.z * fv.z);
-        var vx = dx, vz = dz;
-        if (vMag > 0.5) {
-            var lead = bro.ai.game.computeLeadAim(
-                agent.x, 1, agent.z,
-                focus.x, 1, focus.z,
-                fv.x, 0, fv.z,
-                PSPEED);
-            if (lead.valid) {
-                // computeLeadAim returns yaw/pitch using -Z forward.
-                // Convert to velocity vector: vx=sin(yaw), vz=-cos(yaw).
-                vx = Math.sin(lead.yaw);
-                vz = -Math.cos(lead.yaw);
-            }
+        // Hold fire if the gun isn't on target yet.
+        if (!BotAim.canFireAt(mem.aim, agent.x, 0, agent.z, focus.x, 0, focus.z)) {
+            return false;
         }
-        var mag = Math.max(0.01, Math.sqrt(vx * vx + vz * vz));
+
+        var f = BotAim.forward(mem.aim);
+        var PSPEED = 18;
         world.spawnProjectile({
             ownerId: u.id,
             teamId:  u.teamId,
-            x: agent.x + (dx / Math.max(0.01, dist)) * (u.radius + 0.4),
-            z: agent.z + (dz / Math.max(0.01, dist)) * (u.radius + 0.4),
-            vx: (vx / mag) * PSPEED,
-            vz: (vz / mag) * PSPEED,
+            x: agent.x + f.x * (u.radius + 0.4),
+            z: agent.z + f.z * (u.radius + 0.4),
+            vx: f.x * PSPEED,
+            vz: f.z * PSPEED,
             speed: PSPEED,
             radius: 0.22,
             damage: 9,
@@ -578,10 +576,7 @@ var AI = {};
             }
             if (shootAt) {
                 act.fireAt = shootAt;
-                var sdx = shootAt.x - agent.x, sdz = shootAt.z - agent.z;
-                var smag = Math.max(0.01, Math.hypot(sdx, sdz));
-                mem.aimX = sdx / smag;
-                mem.aimZ = sdz / smag;
+                AI.requestAim(mem, simT, shootAt.x - agent.x, shootAt.z - agent.z);
             }
             return act;
         }
@@ -593,12 +588,9 @@ var AI = {};
             return act;
         }
         mem.targetId = focus.unit.id;
-        // Latch aim toward the current focus so render + gun mechanics
-        // can use "where we're looking" independent of strafe direction.
-        var adx = focus.x - agent.x, adz = focus.z - agent.z;
-        var admag = Math.max(0.01, Math.hypot(adx, adz));
-        mem.aimX = adx / admag;
-        mem.aimZ = adz / admag;
+        // Request aim toward the current focus — actual aim rotates toward
+        // it at aimTurnSpeed; resampled at 15Hz so the gun lags realistically.
+        AI.requestAim(mem, simT, focus.x - agent.x, focus.z - agent.z);
 
         // ── ALLY HEAL ──────────────────────────────────────────────────
         // If a nearby teammate is hurt worse than us and we can cast heal,
@@ -693,11 +685,8 @@ var AI = {};
                     }
                     if (shootAt) {
                         act.fireAt = shootAt;
-                        // Re-aim toward the shot target so render + FOV match.
-                        var sdx = shootAt.x - agent.x, sdz = shootAt.z - agent.z;
-                        var smag = Math.max(0.01, Math.hypot(sdx, sdz));
-                        mem.aimX = sdx / smag;
-                        mem.aimZ = sdz / smag;
+                        AI.requestAim(mem, simT,
+                            shootAt.x - agent.x, shootAt.z - agent.z);
                     }
                     return act;
                 }
