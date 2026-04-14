@@ -1357,6 +1357,9 @@ void AIBindings::install(JSContext* ctx) {
     JS_SetPropertyStr(ctx, gameObj, "createMcts",
         JS_NewCFunction(ctx, js_createMcts, "createMcts", 1));
 
+    // Capabilities (JS-authored capability registration)
+    installRegisterCapability(ctx, gameObj);
+
     // ── Steering sub-namespace: bro.ai.game.steer ──────────────────────
     JSValue steerObj = JS_NewObject(ctx);
 
@@ -1430,6 +1433,39 @@ void AIBindings::install(JSContext* ctx) {
 
 void AIBindings::cleanup(JSContext*) {
     // qjsbind handles finalizers automatically
+}
+
+// ─── Cross-module helpers ──────────────────────────────────────────────────
+brogameagent::Agent* agentFromJS(JSContext* ctx, JSValueConst val) {
+    auto* d = qjsbind::unwrap<AgentData>(ctx, val);
+    return d ? &d->agent : nullptr;
+}
+
+brogameagent::World* worldFromJS(JSContext* ctx, JSValueConst val) {
+    auto* d = qjsbind::unwrap<WorldData>(ctx, val);
+    return d ? &d->world : nullptr;
+}
+
+JSValue findAgentJSRef(JSContext* ctx, JSValueConst worldJsRef, brogameagent::Agent* agent) {
+    if (!agent || JS_IsUndefined(worldJsRef) || JS_IsNull(worldJsRef)) return JS_NULL;
+    JSValue agents = JS_GetPropertyStr(ctx, worldJsRef, "__agents");
+    JSValue found = JS_NULL;
+    if (JS_IsArray(agents)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, agents, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue av = JS_GetPropertyUint32(ctx, agents, i);
+            auto* ad = qjsbind::unwrap<AgentData>(ctx, av);
+            if (ad && &ad->agent == agent) {
+                found = av; // transfer ownership to caller
+                av = JS_UNDEFINED;
+                break;
+            }
+            JS_FreeValue(ctx, av);
+        }
+    }
+    JS_FreeValue(ctx, agents);
+    return found;
 }
 
 } // namespace bro::js

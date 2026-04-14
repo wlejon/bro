@@ -1,4 +1,5 @@
 #include "js/scene_bindings.h"
+#include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/terrain_bindings.h"
 #include "scene/scene_graph.h"
@@ -1266,7 +1267,9 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("destroy", js_node_destroy, 0)
         .method_raw("localToWorld", js_node_localToWorld, 2)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
-        .method_raw("updateMesh", js_node_updateMesh, 1);
+        .method_raw("updateMesh", js_node_updateMesh, 1)
+        .method_raw("attachAgent", nodeAttachAgent, 3)
+        .method_raw("detachAgent", nodeDetachAgent, 0);
 
     // --- SceneGraph class ---
     qjsbind::Class<GraphWrapper>(ctx, "SceneGraph")
@@ -1297,7 +1300,9 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setCamera", js_sg_setCamera, 1)
         .method_raw("setFog", js_sg_setFog, 1)
         .method_raw("syncPhysics", js_sg_syncPhysics, 0)
-        .method_raw("raycast", js_sg_raycast, 2);
+        .method_raw("raycast", js_sg_raycast, 2)
+        .method_raw("attachAIWorld", graphAttachAIWorld, 2)
+        .method_raw("detachAIWorld", graphDetachAIWorld, 0);
 }
 
 JSValue SceneBindings::wrapSceneGraph(JSContext* ctx, scene::SceneGraph* graph) {
