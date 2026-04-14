@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AI Arena — brogameagent demo</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <div id="left">
+            <canvas id="arena" width="700" height="700"></canvas>
+            <div id="log-wrap">
+                <div id="log-title">DAMAGE LOG</div>
+                <div id="log"></div>
+            </div>
+            <div id="controls">
+                <button id="btn-pause">Pause</button>
+                <button id="btn-rewind">Rewind 2s</button>
+                <button id="btn-record">Record</button>
+                <button id="btn-play">Play</button>
+                <label>Blue AI:
+                    <select id="sel-ai">
+                        <option value="scripted">Scripted</option>
+                        <option value="mcts">MCTS</option>
+                    </select>
+                </label>
+                <label>Focus:
+                    <select id="sel-focus"></select>
+                </label>
+                <button id="btn-reset">Reset</button>
+            </div>
+        </div>
+        <div id="right">
+            <div class="panel">
+                <div class="panel-title">ROSTER</div>
+                <div id="roster"></div>
+            </div>
+            <div class="panel">
+                <div class="panel-title">MCTS STATS</div>
+                <div id="mcts-stats">—</div>
+            </div>
+            <div class="panel">
+                <div class="panel-title">OBSERVATION (focused)</div>
+                <canvas id="obs-canvas" width="320" height="70"></canvas>
+            </div>
+            <div class="panel">
+                <div class="panel-title">ACTION MASK</div>
+                <div id="mask-row"></div>
+            </div>
+            <div class="panel">
+                <div class="panel-title">REWARD SCORE</div>
+                <div id="reward-nums">Red 0.0 / Blue 0.0</div>
+                <canvas id="reward-canvas" width="320" height="90"></canvas>
+            </div>
+            <div class="panel">
+                <div class="panel-title">STATUS</div>
+                <div id="status">ready</div>
+            </div>
+        </div>
+    </div>
+    <script src="arena.js"></script>
+    <script src="ai.js"></script>
+    <script src="render.js"></script>
+    <script src="ui.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
