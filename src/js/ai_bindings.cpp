@@ -521,6 +521,18 @@ void AIBindings::install(JSContext* ctx) {
                 [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().effectiveMoveSpeed() : 0; })
             .method("tickCooldowns",
                 [](UnitData* d, double dt) { if (d->agentRef) d->agentRef->unit().tickCooldowns((float)dt); })
+            .method("setAbilitySlot",
+                [](UnitData* d, int slot, int abilityId) {
+                    if (!d->agentRef) return;
+                    if (slot < 0 || slot >= brogameagent::Unit::MAX_ABILITIES) return;
+                    d->agentRef->unit().abilitySlot[slot] = abilityId;
+                })
+            .method("getAbilitySlot",
+                [](UnitData* d, int slot) -> int {
+                    if (!d->agentRef) return -1;
+                    if (slot < 0 || slot >= brogameagent::Unit::MAX_ABILITIES) return -1;
+                    return d->agentRef->unit().abilitySlot[slot];
+                })
             .method("takeDamage",
                 [](UnitData* d, double amount, std::string kind) -> double {
                     if (!d->agentRef) return 0;

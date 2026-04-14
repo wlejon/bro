@@ -90,6 +90,13 @@ var Arena = {};
             u.manaRegenPerSec = 8;
             u.attacksPerSec = 1.4;
             u.armor = 4;
+            // Wire the registered abilities into this unit's slot table
+            // so resolveAbility(agent, slot, ...) can look them up. Without
+            // this every cast silently fails — abilitySlot defaults to -1.
+            u.setAbilitySlot(Arena.AB_HEAL,     Arena.AB_HEAL);
+            u.setAbilitySlot(Arena.AB_FIREBALL, Arena.AB_FIREBALL);
+            u.setAbilitySlot(Arena.AB_BEAM,     Arena.AB_BEAM);
+            u.setAbilitySlot(Arena.AB_GRENADE,  Arena.AB_GRENADE);
             world.addAgent(a);
             agentList.push(a);
             agentsById[r.id] = a;
@@ -97,10 +104,22 @@ var Arena = {};
 
         // ── Abilities ───────────────────────────────────────────────────
         world.registerAbility(Arena.AB_HEAL, {
-            cooldown: 6, manaCost: 25, range: 0,
-            fn: function (caster /*, w, targetId */) {
-                var u = caster.unit;
-                u.hp = Math.min(u.maxHp, u.hp + 35);
+            cooldown: 6, manaCost: 25, range: 4,
+            fn: function (caster, w, targetId) {
+                // Ally-target heal: the caster picks a friendly unit (or
+                // self) within 4u. Falls back to self if the target is
+                // invalid, dead, an enemy, or out of range.
+                var tgt = caster;
+                if (targetId !== caster.unit.id) {
+                    var found = w.findById(targetId);
+                    if (found && found.unit.alive &&
+                        found.unit.teamId === caster.unit.teamId) {
+                        var dx = found.x - caster.x;
+                        var dz = found.z - caster.z;
+                        if (dx * dx + dz * dz <= 16) tgt = found;
+                    }
+                }
+                tgt.unit.hp = Math.min(tgt.unit.maxHp, tgt.unit.hp + 35);
             },
         });
 

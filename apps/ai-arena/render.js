@@ -73,14 +73,19 @@ var Render = {};
                 }
             }
 
-            // FOV cone
+            // FOV cone — use the aim direction we latched toward the current
+            // target, not the velocity yaw (which rotates 90° when strafing
+            // and made the cone visibly "face sideways" while firing).
             var FOV = Math.PI / 2.2; // ~82 deg
-            var RANGE = 12;
-            var yaw = a.yaw;
-            var p1 = w2s(ax + Math.cos(yaw - FOV / 2 - Math.PI / 2) * RANGE,
-                         az + Math.sin(yaw - FOV / 2 - Math.PI / 2) * RANGE);
-            var p2 = w2s(ax + Math.cos(yaw + FOV / 2 - Math.PI / 2) * RANGE,
-                         az + Math.sin(yaw + FOV / 2 - Math.PI / 2) * RANGE);
+            var RANGE = u.attackRange || 9;
+            var memForAim = (typeof AI !== "undefined") ? AI.memory[uId] : null;
+            var aimX = memForAim ? memForAim.aimX : Math.sin(a.yaw);
+            var aimZ = memForAim ? memForAim.aimZ : -Math.cos(a.yaw);
+            var aimAng = Math.atan2(aimZ, aimX);
+            var p1 = w2s(ax + Math.cos(aimAng - FOV / 2) * RANGE,
+                         az + Math.sin(aimAng - FOV / 2) * RANGE);
+            var p2 = w2s(ax + Math.cos(aimAng + FOV / 2) * RANGE,
+                         az + Math.sin(aimAng + FOV / 2) * RANGE);
             ctx.fillStyle = color + "1a";
             ctx.beginPath();
             ctx.moveTo(pos.x, pos.y);

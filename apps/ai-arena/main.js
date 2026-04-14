@@ -71,6 +71,11 @@
     function simStep(dt) {
         var w = state.world;
 
+        // Reset the per-tick list of claimed cover / rally points so
+        // wounded ralliers fan out across this frame's search rather
+        // than all converging on the same cell.
+        AI.resetClaimedCover();
+
         // Partition agents by team so both scripted and MCTS policies
         // can reason about teammates and enemies (focus-fire, flee, etc).
         var teams = [[], []];
@@ -86,6 +91,8 @@
         for (var i = 0; i < all.length; i++) {
             var a = all[i];
             if (!a.unit.alive) continue;
+
+            AI.decayThreat(AI.getMem(a.unit.id), dt);
 
             var myTeam = a.unit.teamId;
             var myMates = teams[myTeam];
@@ -108,7 +115,8 @@
             } else {
                 var myTarget = AI.pickTargetFor(a, myEnemies, myFocus, Arena.OBSTACLES);
                 action = AI.scriptedTactical(
-                    a, w, state.nav, myEnemies, myTarget, Arena.OBSTACLES, state.elapsed);
+                    a, w, state.nav, myEnemies, myMates, myTarget,
+                    Arena.OBSTACLES, state.elapsed);
                 a.update(dt);
             }
 
@@ -152,6 +160,9 @@
             var attacker = state.byId[ev.attackerId];
             var target = state.byId[ev.targetId];
             if (!target) continue;
+            // Feed the threat tracker so cover/retreat logic knows who's
+            // actually being shot at and by whom.
+            AI.recordDamage(ev.targetId, ev.attackerId, ev.amount, state.elapsed);
             var aName = attacker ? attackerName(attacker) : "?";
             var tName = targetName(target);
             var cls = attacker && attacker.unit.teamId === 0 ? "log-red" : "log-blue";
