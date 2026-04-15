@@ -8,6 +8,7 @@
 #include <bromesh/manipulation/skin_transfer.h>
 #include <bromesh/rigging/skin_validate.h>
 #include <bromesh/animation/pose.h>
+#include <bromesh/animation/retarget.h>
 #include <bromesh/voxel/voxel_chunk.h>
 
 #include <cstring>
@@ -36,10 +37,15 @@ struct PoseWrapper {
     std::unique_ptr<bromesh::Pose> pose;
 };
 
+struct AnimationWrapper {
+    std::unique_ptr<bromesh::Animation> anim;
+};
+
 using SDW = SkinDataWrapper;
 using VCW = VoxelChunkWrapper;
 using SKW = SkeletonWrapper;
 using PW  = PoseWrapper;
+using AW  = AnimationWrapper;
 
 // ---------------------------------------------------------------------------
 // TypedArray helpers (local copies — keep this file standalone from
@@ -127,6 +133,138 @@ static JSValue wrapSkeleton(JSContext* ctx, bromesh::Skeleton&& skel) {
 static JSValue wrapPose(JSContext* ctx, bromesh::Pose&& pose) {
     return qjsbind::wrap<PW>(ctx,
         new PW{std::make_unique<bromesh::Pose>(std::move(pose))});
+}
+
+static JSValue wrapAnimation(JSContext* ctx, bromesh::Animation&& a) {
+    return qjsbind::wrap<AW>(ctx,
+        new AW{std::make_unique<bromesh::Animation>(std::move(a))});
+}
+
+// ---------------------------------------------------------------------------
+// AnimChannel <-> JS object
+// ---------------------------------------------------------------------------
+
+static const char* pathToString(bromesh::AnimChannel::Path p) {
+    switch (p) {
+        case bromesh::AnimChannel::Path::Translation: return "translation";
+        case bromesh::AnimChannel::Path::Rotation:    return "rotation";
+        case bromesh::AnimChannel::Path::Scale:       return "scale";
+    }
+    return "translation";
+}
+
+static bromesh::AnimChannel::Path pathFromString(const char* s) {
+    if (!s) return bromesh::AnimChannel::Path::Translation;
+    if (std::strcmp(s, "rotation") == 0) return bromesh::AnimChannel::Path::Rotation;
+    if (std::strcmp(s, "scale") == 0)    return bromesh::AnimChannel::Path::Scale;
+    return bromesh::AnimChannel::Path::Translation;
+}
+
+static const char* interpToString(bromesh::AnimChannel::Interp i) {
+    switch (i) {
+        case bromesh::AnimChannel::Interp::Linear:      return "linear";
+        case bromesh::AnimChannel::Interp::Step:        return "step";
+        case bromesh::AnimChannel::Interp::CubicSpline: return "cubicSpline";
+    }
+    return "linear";
+}
+
+static bromesh::AnimChannel::Interp interpFromString(const char* s) {
+    if (!s) return bromesh::AnimChannel::Interp::Linear;
+    if (std::strcmp(s, "step") == 0)        return bromesh::AnimChannel::Interp::Step;
+    if (std::strcmp(s, "cubicSpline") == 0) return bromesh::AnimChannel::Interp::CubicSpline;
+    return bromesh::AnimChannel::Interp::Linear;
+}
+
+static bromesh::AnimChannel readChannel(JSContext* ctx, JSValueConst obj) {
+    bromesh::AnimChannel c;
+    JSValue v;
+
+    v = JS_GetPropertyStr(ctx, obj, "boneIndex");
+    if (!JS_IsUndefined(v)) { int32_t b = -1; JS_ToInt32(ctx, &b, v); c.boneIndex = b; }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "path");
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        c.path = pathFromString(s);
+        if (s) JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "interp");
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        c.interp = interpFromString(s);
+        if (s) JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "times");
+    if (!JS_IsUndefined(v)) readFloatArrayVal(ctx, v, c.times);
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "values");
+    if (!JS_IsUndefined(v)) readFloatArrayVal(ctx, v, c.values);
+    JS_FreeValue(ctx, v);
+
+    return c;
+}
+
+static JSValue makeChannel(JSContext* ctx, const bromesh::AnimChannel& c) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "boneIndex", JS_NewInt32(ctx, c.boneIndex));
+    JS_SetPropertyStr(ctx, obj, "path",      JS_NewString(ctx, pathToString(c.path)));
+    JS_SetPropertyStr(ctx, obj, "interp",    JS_NewString(ctx, interpToString(c.interp)));
+    JS_SetPropertyStr(ctx, obj, "times",     makeFloat32Array(ctx, c.times));
+    JS_SetPropertyStr(ctx, obj, "values",    makeFloat32Array(ctx, c.values));
+    return obj;
+}
+
+static void readChannelsArray(JSContext* ctx, JSValueConst arr, std::vector<bromesh::AnimChannel>& out) {
+    if (!JS_IsArray(arr)) return;
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+    out.clear();
+    out.reserve((size_t)len);
+    for (int32_t i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, arr, (uint32_t)i);
+        out.push_back(readChannel(ctx, e));
+        JS_FreeValue(ctx, e);
+    }
+}
+
+static JSValue makeChannelsArray(JSContext* ctx, const std::vector<bromesh::AnimChannel>& chs) {
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < chs.size(); i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeChannel(ctx, chs[i]));
+    return arr;
+}
+
+static void readAnimationFromObj(JSContext* ctx, JSValueConst obj, bromesh::Animation& out) {
+    JSValue v;
+
+    v = JS_GetPropertyStr(ctx, obj, "name");
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { out.name = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "duration");
+    if (!JS_IsUndefined(v)) { double d = 0; JS_ToFloat64(ctx, &d, v); out.duration = (float)d; }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "channels");
+    if (!JS_IsUndefined(v)) readChannelsArray(ctx, v, out.channels);
+    JS_FreeValue(ctx, v);
+
+    // If duration was omitted, derive it from max channel time.
+    if (out.duration <= 0.0f) {
+        for (const auto& c : out.channels)
+            for (float t : c.times)
+                if (t > out.duration) out.duration = t;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +599,14 @@ void RiggingBindings::install(JSContext* ctx) {
         if (!w->skel) return JS_UNDEFINED;
         return wrapPose(ctx, bromesh::bindPose(*w->skel));
     })
+
+    .method("addRigifySockets", [](SKW* w) -> int {
+        return w->skel ? bromesh::addRigifySockets(*w->skel) : 0;
+    })
+
+    .method("findBoneBySuffix", [](SKW* w, std::string suffix) -> int {
+        return w->skel ? bromesh::findBoneBySuffix(*w->skel, suffix) : -1;
+    })
     ;
 
     // =======================================================================
@@ -556,6 +702,81 @@ void RiggingBindings::install(JSContext* ctx) {
     ;
 
     // =======================================================================
+    // Animation — keyframed channels, evaluated to Pose
+    // =======================================================================
+    qjsbind::Class<AW>(ctx, "Animation")
+
+    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> AW* {
+        auto a = std::make_unique<bromesh::Animation>();
+        if (argc > 0 && JS_IsObject(argv[0])) readAnimationFromObj(ctx, argv[0], *a);
+        return new AW{std::move(a)};
+    })
+
+    .prop("name",
+        [](AW* w, JSContext* ctx) -> JSValue {
+            return w->anim ? JS_NewString(ctx, w->anim->name.c_str()) : JS_UNDEFINED;
+        },
+        [](AW* w, JSContext* ctx, JSValue val) {
+            if (!w->anim) return;
+            const char* s = JS_ToCString(ctx, val);
+            if (s) { w->anim->name = s; JS_FreeCString(ctx, s); }
+        })
+
+    .prop("duration",
+        [](AW* w) { return (double)(w->anim ? w->anim->duration : 0.0f); },
+        [](AW* w, double d) { if (w->anim) w->anim->duration = (float)d; })
+
+    .prop("channels",
+        [](AW* w, JSContext* ctx) -> JSValue {
+            return w->anim ? makeChannelsArray(ctx, w->anim->channels) : JS_UNDEFINED;
+        },
+        [](AW* w, JSContext* ctx, JSValue val) {
+            if (w->anim) readChannelsArray(ctx, val, w->anim->channels);
+        })
+
+    .get("channelCount", [](AW* w) { return (int)(w->anim ? w->anim->channels.size() : 0); })
+
+    .method("evaluate", [](AW* w, JSContext* ctx, JSValue skelVal, double t,
+                            std::optional<JSValue> opts) -> JSValue {
+        if (!w->anim) return JS_UNDEFINED;
+        auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
+        if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "first argument must be a Skeleton");
+        bool loop = true;
+        if (opts && JS_IsObject(*opts)) {
+            JSValue v = JS_GetPropertyStr(ctx, *opts, "loop");
+            if (!JS_IsUndefined(v)) loop = JS_ToBool(ctx, v);
+            JS_FreeValue(ctx, v);
+        }
+        return wrapPose(ctx, bromesh::evaluateAnimation(*sk->skel, *w->anim, (float)t, loop));
+    })
+
+    .method("evaluateInto", [](AW* w, JSContext* ctx, JSValue skelVal, double t,
+                                JSValue poseVal, std::optional<JSValue> opts) -> JSValue {
+        if (!w->anim) return JS_UNDEFINED;
+        auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
+        auto* pw = qjsbind::unwrap<PW>(ctx, poseVal);
+        if (!sk || !sk->skel || !pw || !pw->pose)
+            return JS_ThrowTypeError(ctx, "evaluateInto requires (Skeleton, t, Pose)");
+        bool loop = true;
+        if (opts && JS_IsObject(*opts)) {
+            JSValue v = JS_GetPropertyStr(ctx, *opts, "loop");
+            if (!JS_IsUndefined(v)) loop = JS_ToBool(ctx, v);
+            JS_FreeValue(ctx, v);
+        }
+        bromesh::evaluateAnimationInto(*sk->skel, *w->anim, (float)t, loop, *pw->pose);
+        return JS_DupValue(ctx, poseVal);
+    })
+
+    .static_method("retarget", [](JSContext* ctx, JSValue animVal, JSValue srcSkel, JSValue dstSkel) -> JSValue {
+        auto* aw = qjsbind::unwrap<AW>(ctx, animVal);
+        auto* ss = qjsbind::unwrap<SKW>(ctx, srcSkel);
+        auto* ds = qjsbind::unwrap<SKW>(ctx, dstSkel);
+        if (!aw || !aw->anim || !ss || !ss->skel || !ds || !ds->skel)
+            return JS_ThrowTypeError(ctx, "retarget requires (Animation, srcSkeleton, dstSkeleton)");
+        return wrapAnimation(ctx, bromesh::retargetAnimation(*aw->anim, *ss->skel, *ds->skel));
+    })
+    ;
+
     // VoxelChunk — fixed-height voxel grid with greedy meshing
     // =======================================================================
     qjsbind::Class<VCW>(ctx, "VoxelChunk")
