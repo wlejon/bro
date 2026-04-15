@@ -2,12 +2,17 @@
 // bro Mesh API Reference
 // =============================================================================
 //
-// The Mesh class is a standalone global that wraps the bromesh C++ library.
-// It provides mesh generation, file I/O, manipulation, analysis, CSG boolean
-// operations, isosurface extraction, UV mapping, and optimization.
+// Three classes wrap the bromesh C++ library:
 //
-// Mesh objects hold geometry data (positions, normals, UVs, colors, indices)
-// and can be used independently or fed into the scene graph for rendering.
+//   Mesh             — geometry container (positions, normals, UVs, colors,
+//                      indices) plus primitive factories, I/O, CSG, isosurface
+//                      extraction, simplification, baking, UV, and analysis.
+//   MeshBVH          — bounding-volume hierarchy for accelerated ray queries
+//                      against a static Mesh.
+//   ProgressiveMesh  — pre-computed edge-collapse sequence for streaming LOD.
+//
+// Mesh objects hold geometry data and can be used independently or fed into
+// the scene graph for rendering.
 //
 // Basic usage:
 //   const box = Mesh.box();
@@ -90,7 +95,7 @@ class Mesh {
   clone() {}
 
 
-  // --- Static: Primitives ---------------------------------------------------
+  // --- Static: Primitives (parametric) --------------------------------------
 
   /**
    * Axis-aligned box centered at origin.
@@ -160,30 +165,83 @@ class Mesh {
   static heightmapGrid(heights, gridW, gridH, cellSize) {}
 
 
+  // --- Static: Primitives (procedural / Platonic) ---------------------------
+
+  /**
+   * Geodesic sphere by subdividing an icosahedron.
+   * Triangle count = 20 * 4^nsubdivisions.
+   * @param {number} [radius=0.5]
+   * @param {number} [nsubdivisions=2]
+   * @returns {Mesh}
+   */
+  static geodesicSphere(radius, nsubdivisions) {}
+
+  /** Unit icosahedron (20 triangles). @returns {Mesh} */
+  static icosahedron() {}
+
+  /** Unit dodecahedron. @returns {Mesh} */
+  static dodecahedron() {}
+
+  /** Unit octahedron (8 triangles). @returns {Mesh} */
+  static octahedron() {}
+
+  /** Unit tetrahedron (4 triangles). @returns {Mesh} */
+  static tetrahedron() {}
+
+  /**
+   * Cone along Y axis.
+   * @param {number} [radius=0.5]
+   * @param {number} [height=1]
+   * @param {number} [slices=16]
+   * @param {number} [stacks=4]
+   * @returns {Mesh}
+   */
+  static cone(radius, height, slices, stacks) {}
+
+  /**
+   * Disc (filled circle) in the XZ plane.
+   * @param {number} [radius=0.5]
+   * @param {number} [slices=16]
+   * @returns {Mesh}
+   */
+  static disc(radius, slices) {}
+
+  /**
+   * Procedural rock — displaced icosphere.
+   * @param {number} [radius=0.5]
+   * @param {number} [seed=42]
+   * @param {number} [nsubdivisions=2]
+   * @returns {Mesh}
+   */
+  static rock(radius, seed, nsubdivisions) {}
+
+  /**
+   * Trefoil knot.
+   * @param {number} [radius=1]
+   * @param {number} [slices=64]
+   * @param {number} [stacks=16]
+   * @returns {Mesh}
+   */
+  static trefoilKnot(radius, slices, stacks) {}
+
+  /**
+   * Klein bottle.
+   * @param {number} [slices=32]
+   * @param {number} [stacks=16]
+   * @returns {Mesh}
+   */
+  static kleinBottle(slices, stacks) {}
+
+
   // --- Static: CSG ----------------------------------------------------------
 
-  /**
-   * Boolean union of two meshes.
-   * @param {Mesh} a
-   * @param {Mesh} b
-   * @returns {Mesh}
-   */
+  /** Boolean union of two meshes. @returns {Mesh} */
   static union(a, b) {}
 
-  /**
-   * Boolean difference (a - b).
-   * @param {Mesh} a
-   * @param {Mesh} b
-   * @returns {Mesh}
-   */
+  /** Boolean difference (a - b). @returns {Mesh} */
   static subtract(a, b) {}
 
-  /**
-   * Boolean intersection of two meshes.
-   * @param {Mesh} a
-   * @param {Mesh} b
-   * @returns {Mesh}
-   */
+  /** Boolean intersection of two meshes. @returns {Mesh} */
   static intersect(a, b) {}
 
   /**
@@ -198,14 +256,15 @@ class Mesh {
   static splitByPlane(mesh, nx, ny, nz, offset) {}
 
   /**
-   * Merge multiple meshes into one.
+   * Merge multiple meshes into one. Index buffers are concatenated and
+   * rebased; attributes are carried through.
    * @param {Mesh[]} meshes
    * @returns {Mesh}
    */
   static merge(meshes) {}
 
 
-  // --- Static: Isosurface ---------------------------------------------------
+  // --- Static: Isosurface / voxel -------------------------------------------
 
   /**
    * Marching cubes isosurface extraction.
@@ -232,6 +291,30 @@ class Mesh {
   static dualContour(field, gridX, gridY, gridZ, isoLevel, cellSize) {}
 
   /**
+   * Naive surface nets — smoother than marching cubes with shared vertices.
+   * @param {Float32Array} field
+   * @param {number} gridX
+   * @param {number} gridY
+   * @param {number} gridZ
+   * @param {number} [isoLevel=0]
+   * @param {number} [cellSize=1]
+   * @returns {Mesh}
+   */
+  static surfaceNets(field, gridX, gridY, gridZ, isoLevel, cellSize) {}
+
+  /**
+   * Transvoxel for seamless LOD transitions between voxel chunks.
+   * @param {Float32Array} field - scalar values for this chunk
+   * @param {number} gridSize - cubic grid dimension
+   * @param {number} lod - LOD level of this chunk (0 = finest)
+   * @param {number[]} neighborLods - [+X, -X, +Y, -Y, +Z, -Z] (-1 = no neighbor)
+   * @param {number} [isoLevel=0]
+   * @param {number} [cellSize=1]
+   * @returns {Mesh}
+   */
+  static transvoxel(field, gridSize, lod, neighborLods, isoLevel, cellSize) {}
+
+  /**
    * Greedy meshing for voxel data.
    * @param {Uint8Array} voxels - 3D grid, 0 = empty, nonzero = palette index
    * @param {number} gridX
@@ -240,54 +323,38 @@ class Mesh {
    * @param {number} [cellSize=1]
    * @param {Float32Array} [palette] - RGBA per material
    * @param {number} [paletteCount]
+   * @param {number} [filterMaterial=-1] - render only this material id
    * @returns {Mesh}
    */
-  static greedyMesh(voxels, gridX, gridY, gridZ, cellSize, palette, paletteCount) {}
+  static greedyMesh(voxels, gridX, gridY, gridZ, cellSize, palette, paletteCount, filterMaterial) {}
 
 
   // --- Static: File I/O (load) ----------------------------------------------
 
-  /**
-   * Load a glTF/GLB file.
-   * @param {string} path
-   * @returns {{ meshes: Mesh[] }}
-   */
+  /** Load a glTF/GLB file. @returns {{ meshes: Mesh[] }} */
   static loadGLTF(path) {}
 
-  /**
-   * Load a Wavefront OBJ file.
-   * @param {string} path
-   * @returns {Mesh}
-   */
+  /** Load a Wavefront OBJ file. @returns {Mesh} */
   static loadOBJ(path) {}
 
-  /**
-   * Load an FBX file.
-   * @param {string} path
-   * @returns {Mesh[]}
-   */
+  /** Load an FBX file. @returns {Mesh[]} */
   static loadFBX(path) {}
 
-  /**
-   * Load a PLY file.
-   * @param {string} path
-   * @returns {Mesh}
-   */
+  /** Load a PLY file. @returns {Mesh} */
   static loadPLY(path) {}
 
-  /**
-   * Load a binary STL file.
-   * @param {string} path
-   * @returns {Mesh}
-   */
+  /** Load a binary STL file. @returns {Mesh} */
   static loadSTL(path) {}
 
   /**
    * Load a MagicaVoxel VOX file.
-   * @param {string} path
-   * @returns {{ sizeX: number, sizeY: number, sizeZ: number, voxels: Uint8Array, palette: Float32Array }}
+   * @returns {{ sizeX: number, sizeY: number, sizeZ: number,
+   *             voxels: Uint8Array, palette: Float32Array }}
    */
   static loadVOX(path) {}
+
+
+  // --- Static: Reconstruction ----------------------------------------------
 
   /**
    * Reconstruct a mesh from a point cloud.
@@ -301,56 +368,62 @@ class Mesh {
   static reconstruct(pointCloud, params) {}
 
 
-  // --- Transform (mutating, return this) ------------------------------------
+  // --- Static: Encoding / stripification ------------------------------------
 
   /**
-   * Translate all vertices.
-   * @param {number} dx
-   * @param {number} dy
-   * @param {number} dz
-   * @returns {Mesh} this
+   * Decode a previously encoded mesh back to a Mesh.
+   * The argument is an object produced by mesh.encode().
+   * @param {{vertexData: Uint8Array, indexData: Uint8Array,
+   *          vertexCount: number, vertexSize: number, indexCount: number,
+   *          hasNormals: boolean, hasUVs: boolean, hasColors: boolean}} encoded
+   * @returns {Mesh}
    */
+  static decode(encoded) {}
+
+  /**
+   * Convert a triangle list index buffer to a triangle strip.
+   * @param {Uint32Array} indices
+   * @param {number} vertexCount
+   * @param {number} [restartIndex=0xFFFFFFFF]
+   * @returns {Uint32Array}
+   */
+  static stripify(indices, vertexCount, restartIndex) {}
+
+  /**
+   * Convert a triangle strip back to a triangle list.
+   * @param {Uint32Array} strip
+   * @param {number} [restartIndex=0xFFFFFFFF]
+   * @returns {Uint32Array}
+   */
+  static unstripify(strip, restartIndex) {}
+
+
+  // --- Transform (mutating, return this) ------------------------------------
+
+  /** Translate all vertices. @returns {Mesh} this */
   translate(dx, dy, dz) {}
 
   /**
    * Scale all vertices. One arg = uniform, three = per-axis.
    * Non-uniform scale triggers normal recomputation.
-   * @param {number} sx
-   * @param {number} [sy=sx]
-   * @param {number} [sz=sx]
    * @returns {Mesh} this
    */
   scale(sx, sy, sz) {}
 
-  /**
-   * Rotate all vertices around an axis.
-   * @param {number} axisX
-   * @param {number} axisY
-   * @param {number} axisZ
-   * @param {number} angleRadians
-   * @returns {Mesh} this
-   */
+  /** Rotate around axis by angle (radians). @returns {Mesh} this */
   rotate(axisX, axisY, axisZ, angleRadians) {}
 
-  /** Center the mesh at the origin. @returns {Mesh} this */
+  /** Center at origin. @returns {Mesh} this */
   center() {}
 
-  /**
-   * Mirror across an axis. Flips winding order.
-   * @param {number} axis - 0=X, 1=Y, 2=Z
-   * @returns {Mesh} this
-   */
+  /** Mirror across an axis (0=X, 1=Y, 2=Z). Flips winding. @returns {Mesh} this */
   mirror(axis) {}
 
-  /**
-   * Apply a 4x4 column-major transformation matrix.
-   * @param {Float32Array} matrix - 16 floats
-   * @returns {Mesh} this
-   */
+  /** Apply a 4x4 column-major matrix. @param {Float32Array} matrix @returns {Mesh} this */
   transform(matrix) {}
 
 
-  // --- Normals --------------------------------------------------------------
+  // --- Normals / tangents ---------------------------------------------------
 
   /** Recompute smooth normals in-place. @returns {Mesh} this */
   computeNormals() {}
@@ -358,79 +431,98 @@ class Mesh {
   /** Compute flat normals (duplicates vertices). @returns {Mesh} new mesh */
   computeFlatNormals() {}
 
+  /**
+   * Recompute normals with hard creases above an angle threshold.
+   * @param {number} [angleThresholdDeg=30]
+   * @returns {Mesh} this
+   */
+  computeCreaseNormals(angleThresholdDeg) {}
+
   /** Compute tangents. @returns {Float32Array} 4 floats per vertex */
   computeTangents() {}
 
 
-  // --- Simplification (mutating, return this) -------------------------------
+  // --- Welding / repair (mutating, return this) -----------------------------
+
+  /** Merge coincident vertices. @param {number} [epsilon=1e-5] @returns {Mesh} this */
+  weld(epsilon) {}
+
+  /** Remove zero-area triangles. @returns {Mesh} this */
+  removeDegenerateTriangles(areaEpsilon) {}
+
+  /** Remove duplicate triangles (same three verts). @returns {Mesh} this */
+  removeDuplicateTriangles() {}
 
   /**
-   * Simplify mesh by target ratio.
-   * @param {number} targetRatio - 0.0 to 1.0
-   * @param {number} [targetError=0.01]
+   * Fill simple boundary loops with a fan. Only fills holes up to maxEdges.
+   * @param {number} [maxEdges=64]
    * @returns {Mesh} this
    */
-  simplify(targetRatio, targetError) {}
+  fillHoles(maxEdges) {}
 
   /**
-   * Simplify preserving UV and normal quality.
-   * @param {number} targetRatio
-   * @param {number} [targetError=0.01]
-   * @param {number} [uvWeight=1.0]
-   * @param {number} [normalWeight=0.5]
-   * @returns {Mesh} this
-   */
-  simplifyWithAttributes(targetRatio, targetError, uvWeight, normalWeight) {}
-
-  /**
-   * Simplify to a specific triangle count.
-   * @param {number} targetTriangles
-   * @param {number} [targetError=0.01]
-   * @returns {Mesh} this
-   */
-  simplifyToTriangleCount(targetTriangles, targetError) {}
-
-  /**
-   * Generate an array of LOD meshes at the given ratios.
-   * @param {Float32Array} ratios - e.g. [0.5, 0.25, 0.1]
+   * Split a mesh into its connected components.
    * @returns {Mesh[]}
    */
+  splitComponents() {}
+
+  /**
+   * Project the vertices of this mesh onto another mesh's surface.
+   * @param {Mesh} target
+   * @param {string} [mode="nearest"] - "nearest"|"projectAlongNormal"|"projectAlongAxis"
+   * @param {number} [maxDistance=0] - 0 = unlimited
+   * @param {number} [offset=0] - push along the target's normal after projection
+   * @param {number[]} [axis] - only used for "projectAlongAxis"
+   * @returns {Mesh} this
+   */
+  shrinkwrap(target, mode, maxDistance, offset, axis) {}
+
+
+  // --- Simplification (mutating, return this) -------------------------------
+
+  /** @param {number} targetRatio 0.0-1.0 @returns {Mesh} this */
+  simplify(targetRatio, targetError) {}
+
+  /** @returns {Mesh} this */
+  simplifyWithAttributes(targetRatio, targetError, uvWeight, normalWeight) {}
+
+  /** @returns {Mesh} this */
+  simplifyToTriangleCount(targetTriangles, targetError) {}
+
+  /** @param {Float32Array} ratios - e.g. [0.5, 0.25, 0.1] @returns {Mesh[]} */
   generateLODChain(ratios) {}
 
 
   // --- Subdivision (mutating, return this) ----------------------------------
 
-  /** @param {number} [iterations=1] @returns {Mesh} this */
+  /** Loop subdivision. @returns {Mesh} this */
   subdivideLoop(iterations) {}
 
-  /** @param {number} [iterations=1] @returns {Mesh} this */
+  /** Catmull–Clark subdivision. @returns {Mesh} this */
   subdivideCatmullClark(iterations) {}
 
-  /** @param {number} [iterations=1] @returns {Mesh} this */
+  /** Midpoint subdivision. @returns {Mesh} this */
   subdivideMidpoint(iterations) {}
 
 
-  // --- Smoothing (mutating, return this) ------------------------------------
+  // --- Smoothing / remeshing (mutating, return this) ------------------------
 
-  /**
-   * Laplacian smoothing.
-   * @param {number} [lambda=0.5]
-   * @param {number} [iterations=1]
-   * @returns {Mesh} this
-   */
+  /** Laplacian smoothing. @returns {Mesh} this */
   smoothLaplacian(lambda, iterations) {}
 
-  /**
-   * Taubin smoothing (volume-preserving).
-   * @param {number} [lambda=0.5]
-   * @param {number} [mu=-0.53]
-   * @param {number} [iterations=1]
-   * @returns {Mesh} this
-   */
+  /** Volume-preserving Taubin smoothing. @returns {Mesh} this */
   smoothTaubin(lambda, mu, iterations) {}
 
+  /**
+   * Isotropic remeshing — split long edges, collapse short ones, relax valence.
+   * @param {number} [targetEdgeLength=0] - 0 = auto
+   * @param {number} [iterations=5]
+   * @returns {Mesh} this
+   */
+  remeshIsotropic(targetEdgeLength, iterations) {}
 
-  // --- Optimization (mutating, return this) ---------------------------------
+
+  // --- GPU optimization (mutating) ------------------------------------------
 
   /** Reorder indices for GPU vertex cache. @returns {Mesh} this */
   optimizeVertexCache() {}
@@ -438,60 +530,95 @@ class Mesh {
   /** Reorder vertices for sequential access. @returns {Mesh} this */
   optimizeVertexFetch() {}
 
-  /**
-   * Reorder for reduced overdraw.
-   * @param {number} [threshold=1.05]
-   * @returns {Mesh} this
-   */
+  /** Reorder for reduced overdraw. @returns {Mesh} this */
   optimizeOverdraw(threshold) {}
 
+  /** Sort triangles by spatial locality. @returns {Mesh} this */
+  spatialSortTriangles() {}
 
-  // --- Analysis -------------------------------------------------------------
+  /** Sort vertices by a space-filling curve. @returns {Mesh} this */
+  spatialSortVertices() {}
 
   /**
-   * Compute axis-aligned bounding box.
-   * @returns {{ min: number[], max: number[], centerX, centerY, centerZ, extentX, extentY, extentZ }}
+   * Index buffer optimized for position-only rendering (Z-prepass, shadows).
+   * @returns {Uint32Array}
    */
+  generateShadowIndexBuffer() {}
+
+
+  // --- Meshlets / encoding --------------------------------------------------
+
+  /**
+   * Cluster the mesh into GPU-friendly meshlets for mesh-shader pipelines.
+   * @param {Object} [params]
+   * @param {number} [params.maxVertices=64]
+   * @param {number} [params.maxTriangles=124]
+   * @param {number} [params.coneWeight=0.5]
+   * @returns {Array<{ vertices: Uint32Array, triangles: Uint8Array,
+   *                   bounds: { center: number[], radius: number,
+   *                             coneApex: number[], coneAxis: number[], coneCutoff: number } }>}
+   */
+  buildMeshlets(params) {}
+
+  /**
+   * Encode mesh for compact streaming/storage. Round-trip via Mesh.decode().
+   * @returns {{ vertexData: Uint8Array, indexData: Uint8Array,
+   *            vertexCount: number, vertexSize: number, indexCount: number,
+   *            hasNormals: boolean, hasUVs: boolean, hasColors: boolean }}
+   */
+  encode() {}
+
+
+  // --- Cache / overdraw analysis --------------------------------------------
+
+  /** @returns {{ verticesTransformed, warpsExecuted, acmr, atvr }} */
+  analyzeVertexCache(cacheSize) {}
+
+  /** @returns {{ bytesFetched, overfetch }} */
+  analyzeVertexFetch(vertexSize) {}
+
+  /** @returns {{ pixelsCovered, pixelsShaded, overdraw }} */
+  analyzeOverdraw() {}
+
+
+  // --- Geometric analysis ---------------------------------------------------
+
+  /** @returns {{ min: number[], max: number[], centerX, centerY, centerZ, extentX, extentY, extentZ }} */
   computeBBox() {}
 
-  /** @returns {boolean} whether the mesh is manifold */
+  /** @returns {boolean} */
   isManifold() {}
 
   /** @returns {number} signed volume (manifold meshes only) */
   computeVolume() {}
 
+  /** Total surface area. @returns {number} */
+  surfaceArea() {}
+
+  /** Per-triangle areas. @returns {Float32Array} */
+  triangleAreas() {}
+
+  /**
+   * Sample random points uniformly on the surface.
+   * @param {number} numSamples
+   * @param {number} [seed=0] - 0 = non-deterministic
+   * @returns {Mesh} point cloud (positions + optional normals/UVs; no indices)
+   */
+  sampleSurface(numSamples, seed) {}
+
   /**
    * Cast a ray against the mesh.
-   * @param {number[]} origin - [x, y, z]
-   * @param {number[]} direction - [x, y, z]
-   * @param {number} [maxDistance=0] - 0 = unlimited
    * @returns {?{ distance, position: number[], normal: number[], triangleIndex, baryU, baryV, baryW }}
    */
   raycast(origin, direction, maxDistance) {}
 
-  /**
-   * Cast a ray and return all hits.
-   * @param {number[]} origin
-   * @param {number[]} direction
-   * @param {number} [maxDistance=0]
-   * @returns {Object[]} array of hit objects
-   */
+  /** @returns {Object[]} all hits */
   raycastAll(origin, direction, maxDistance) {}
 
-  /**
-   * Fast boolean ray intersection test.
-   * @param {number[]} origin
-   * @param {number[]} direction
-   * @param {number} [maxDistance=0]
-   * @returns {boolean}
-   */
+  /** @returns {boolean} */
   raycastTest(origin, direction, maxDistance) {}
 
-  /**
-   * Find the closest point on the mesh surface to a given point.
-   * @param {number[]} point - [x, y, z]
-   * @returns {?{ distance, position: number[], normal: number[], triangleIndex, baryU, baryV, baryW }}
-   */
+  /** @returns {?Object} closest point on the surface */
   closestPoint(point) {}
 
   /** @returns {boolean} */
@@ -500,12 +627,26 @@ class Mesh {
   /** @returns {{ triA: number, triB: number }[]} */
   findSelfIntersections() {}
 
-  /**
-   * Test whether this mesh intersects another.
-   * @param {Mesh} other
-   * @returns {boolean}
-   */
+  /** @param {Mesh} other @returns {boolean} */
   intersectsMesh(other) {}
+
+
+  // --- Convex ---------------------------------------------------------------
+
+  /** Convex hull of the mesh. @returns {Mesh} */
+  convexHull() {}
+
+  /**
+   * Approximate convex decomposition (V-HACD). Each returned mesh is convex
+   * and suitable for physics collision.
+   * @param {Object} [params]
+   * @param {number} [params.maxHulls=16]
+   * @param {number} [params.maxVerticesPerHull=64]
+   * @param {number} [params.resolution=100000]
+   * @param {number} [params.minVolumePerHull=0.001]
+   * @returns {Mesh[]}
+   */
+  convexDecomposition(params) {}
 
 
   // --- UV -------------------------------------------------------------------
@@ -524,6 +665,74 @@ class Mesh {
    */
   projectUVs(type, scale) {}
 
+  /**
+   * Per-triangle UV distortion (one entry per triangle).
+   * @returns {Array<{ stretch, areaDistortion, angleDistortion }>}
+   */
+  computeUVDistortion() {}
+
+  /**
+   * Aggregate UV quality metrics for the whole mesh.
+   * @returns {{ avgStretch, maxStretch, avgAreaDistortion, maxAreaDistortion,
+   *             avgAngleDistortion, maxAngleDistortion, uvSpaceUsage, triangleCount }}
+   */
+  measureUVQuality() {}
+
+
+  // --- Vertex-space baking (mutating, return this) --------------------------
+
+  /**
+   * Bake ambient occlusion into vertex colors.
+   * @param {number} [numRays=64]
+   * @param {number} [maxDistance=0] - 0 = auto from bbox
+   * @returns {Mesh} this
+   */
+  bakeAmbientOcclusion(numRays, maxDistance) {}
+
+  /** Bake mean curvature into vertex colors. @returns {Mesh} this */
+  bakeCurvature(scale) {}
+
+  /** Bake mesh thickness into vertex colors (SSS approximation). @returns {Mesh} this */
+  bakeThickness(numRays, maxDistance) {}
+
+
+  // --- Texture-space baking -------------------------------------------------
+  //
+  // Each texture bake returns:
+  //   { width, height, channels, pixels: Float32Array }
+  // Pixels are row-major, bottom-to-top (OpenGL convention).
+  // Requires the mesh to have UVs in [0,1].
+
+  /** @returns {TextureBuffer} 1-channel grayscale AO */
+  bakeAOToTexture(texWidth, texHeight, numRays, maxDistance) {}
+
+  /** @returns {TextureBuffer} 1-channel curvature */
+  bakeCurvatureToTexture(texWidth, texHeight, scale) {}
+
+  /** @returns {TextureBuffer} 1-channel thickness */
+  bakeThicknessToTexture(texWidth, texHeight, numRays, maxDistance) {}
+
+  /** @returns {TextureBuffer} 4-channel RGBA normals (xyz→[0,1], alpha=1) */
+  bakeNormalsToTexture(texWidth, texHeight) {}
+
+  /** @returns {TextureBuffer} 4-channel RGBA world position (alpha=1) */
+  bakePositionToTexture(texWidth, texHeight) {}
+
+  /**
+   * Bake tangent-space normals from a high-poly reference mesh onto this
+   * low-poly mesh's UV layout.
+   * @param {Mesh} reference - high-poly source
+   * @param {number} [searchDistance=0] - 0 = auto
+   * @returns {TextureBuffer} 4-channel RGBA tangent-space normals
+   */
+  bakeNormalsFromReference(reference, texWidth, texHeight, searchDistance) {}
+
+  /**
+   * Bake AO against a reference mesh onto this mesh's UV layout.
+   * @returns {TextureBuffer} 1-channel AO
+   */
+  bakeAOFromReference(reference, texWidth, texHeight, numRays, maxDistance) {}
+
 
   // --- File I/O (save) ------------------------------------------------------
 
@@ -531,4 +740,103 @@ class Mesh {
   /** @param {string} path @returns {boolean} */ saveOBJ(path) {}
   /** @param {string} path @returns {boolean} */ savePLY(path) {}
   /** @param {string} path @returns {boolean} */ saveSTL(path) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// MeshBVH
+// -----------------------------------------------------------------------------
+// Bounding-volume hierarchy built once per static Mesh, then reused to
+// accelerate repeated ray queries. The BVH references triangle indices of the
+// source mesh and must be rebuilt if the mesh geometry changes.
+
+class MeshBVH {
+
+  /**
+   * Build a BVH for the given mesh.
+   * @param {Mesh} mesh
+   * @param {number} [leafSize=8] - max triangles per leaf node
+   */
+  constructor(mesh, leafSize) {}
+
+  /** @returns {boolean} true if the BVH has no triangles */
+  get empty() {}
+
+  /** @returns {number} total node count */
+  get nodeCount() {}
+
+  /** @returns {number} indexed triangle count */
+  get triangleCount() {}
+
+  /**
+   * Root bounding box.
+   * @returns {{ min: number[], max: number[], centerX, centerY, centerZ, extentX, extentY, extentZ }}
+   */
+  bounds() {}
+
+  /**
+   * Cast a ray against the source mesh using this BVH.
+   * @param {Mesh} mesh - must be the same mesh the BVH was built against
+   * @param {number[]} origin - [x, y, z]
+   * @param {number[]} direction - [x, y, z] (need not be unit length)
+   * @param {number} [maxDistance=0] - 0 = unlimited
+   * @returns {?RayHit}
+   */
+  raycast(mesh, origin, direction, maxDistance) {}
+
+  /** Early-out hit test. @returns {boolean} */
+  raycastTest(mesh, origin, direction, maxDistance) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// ProgressiveMesh
+// -----------------------------------------------------------------------------
+// A full-resolution mesh plus an ordered edge-collapse sequence. Extract a
+// specific triangle count or LOD ratio on demand; serialize to a binary blob
+// for streaming.
+
+class ProgressiveMesh {
+
+  /**
+   * Build a progressive mesh via QEM-driven edge collapses.
+   * @param {Mesh} mesh
+   */
+  constructor(mesh) {}
+
+  /** Triangle count at full resolution. @returns {number} */
+  get maxTriangles() {}
+
+  /** Minimum reachable triangle count. @returns {number} */
+  get minTriangles() {}
+
+  /** Number of collapse records stored. @returns {number} */
+  get collapseCount() {}
+
+  /**
+   * Extract a mesh at a specific triangle count.
+   * @param {number} targetTriangles - clamped to [minTriangles, maxTriangles]
+   * @returns {Mesh}
+   */
+  atTriangleCount(targetTriangles) {}
+
+  /**
+   * Extract a mesh at a given LOD ratio.
+   * @param {number} ratio - 0.0 = minimum, 1.0 = full resolution
+   * @returns {Mesh}
+   */
+  atRatio(ratio) {}
+
+  /**
+   * Serialize to a compact binary blob for streaming.
+   * @returns {Uint8Array}
+   */
+  serialize() {}
+
+  /**
+   * Deserialize from a binary blob.
+   * @param {Uint8Array} bytes
+   * @returns {ProgressiveMesh}
+   */
+  static deserialize(bytes) {}
 }
