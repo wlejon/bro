@@ -216,10 +216,6 @@ function renderInfo() {
 // Animation update (CPU skinning)
 // ---------------------------------------------------------------------------
 
-// NOTE: CPU skinning is disabled by default — bromesh's glTF loader produces
-// skinning matrices with ~100x scale on the diagonal for MeshyAI exports
-// (root-node scale not composed into inverseBindMatrices). Set
-// state.enableSkinning = true to experiment once that's fixed upstream.
 function updateAnimation(dtMs) {
     const L = state.loaded;
     if (!L || !L.hasSkin || !L.hasSkel) return;
