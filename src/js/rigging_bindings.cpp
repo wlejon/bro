@@ -690,6 +690,10 @@ static JSValue js_rig_generateLocomotionCycle(JSContext* ctx, JSValueConst, int 
         if (!JS_IsUndefined(v)) { double x = 0; JS_ToFloat64(ctx, &x, v); p.bodyBobAmplitude = (float)x; }
         JS_FreeValue(ctx, v);
 
+        v = JS_GetPropertyStr(ctx, argv[2], "armSwingAmplitude");
+        if (!JS_IsUndefined(v)) { double x = 0; JS_ToFloat64(ctx, &x, v); p.armSwingAmplitude = (float)x; }
+        JS_FreeValue(ctx, v);
+
         v = JS_GetPropertyStr(ctx, argv[2], "gait");
         if (JS_IsObject(v)) {
             JSValue n = JS_GetPropertyStr(ctx, v, "name");
