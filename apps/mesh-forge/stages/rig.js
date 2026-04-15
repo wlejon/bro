@@ -62,9 +62,41 @@
                 const result = Rig.autoRig(m, ps.spec, ps.landmarks, {});
                 ps.skeleton = result.skeleton;
                 ps.skin = result.skin;
+
+                // Validate the skin (orphan verts, bad weight sums, NaNs).
+                const v = SkinData.validate(m, result.skin);
+
+                // Bind-pose sanity: applying the skeleton's bind pose should
+                // leave the mesh positions unchanged. If maxDelta is large
+                // then bind-pose world transforms disagree with the skin's
+                // inverseBindMatrices — autoRig's bone placement and the
+                // baked invBind are inconsistent and nothing downstream will
+                // work right.
+                const bindPose = ps.skeleton.bindPose();
+                const bindMats = bindPose.computeWorldMatrices(ps.skeleton);
+                const before = new Float32Array(m.positions);
+                m.applySkinning(ps.skin, bindMats);
+                const after = m.positions;
+                let maxD = 0, sumSq = 0;
+                for (let i = 0; i < before.length; i++) {
+                    const d = before[i] - after[i];
+                    if (Math.abs(d) > maxD) maxD = Math.abs(d);
+                    sumSq += d * d;
+                }
+                // Restore bind-pose positions so downstream stages see the
+                // mesh unchanged.
+                m.positions = before;
+                m.computeNormals();
+
                 rigOut.textContent =
                     'skeleton bones: ' + (result.skeleton?.boneCount ?? '?') + '\n' +
                     'skin verts: ' + (result.skin?.vertexCount ?? '?') + '\n' +
+                    'orphans: ' + v.orphanCount + '  badSum: ' + v.badSumCount +
+                    '  nan: ' + v.nanCount + '\n' +
+                    'maxInfluences: ' + v.maxInfluencesObserved +
+                    '  maxSumDev: ' + v.maxSumDeviation.toFixed(4) + '\n' +
+                    'bind-pose delta max: ' + maxD.toFixed(4) +
+                    '  rms: ' + Math.sqrt(sumSq / before.length).toFixed(4) + '\n' +
                     'missing: ' + ((result.missingLandmarks || []).join(', ') || 'none');
                 ctx.setStatus('rig done');
                 ctx.rebuildStageList();

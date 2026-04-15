@@ -58,6 +58,10 @@
 
         try {
             const pose = ps.activeAnim.evaluate(ps.skeleton, t, { loop: true });
+            // applySkinning multiplies pose*invBind internally (see
+            // bromesh/src/manipulation/skin.cpp), so pass WORLD matrices —
+            // passing computeSkinningMatrices here causes a double-inverse
+            // and the mesh collapses toward origin.
             const mats = pose.computeWorldMatrices(ps.skeleton);
 
             // Restore bind pose positions before each skinning application.
