@@ -567,6 +567,75 @@ static bromesh::WeightingOptions readWeightingOptions(JSContext* ctx, JSValueCon
     if (!JS_IsUndefined(v)) { double x = 1e-3; JS_ToFloat64(ctx, &x, v); wo.minWeight = (float)x; }
     JS_FreeValue(ctx, v);
 
+    // Per-method sub-options. The struct carries all three; only the one
+    // matching `method` is consulted by dispatchWeighting. We read them
+    // independently so a caller can set defaults once then switch methods.
+    v = JS_GetPropertyStr(ctx, obj, "voxel");
+    if (JS_IsObject(v)) {
+        JSValue w;
+        w = JS_GetPropertyStr(ctx, v, "maxResolution");
+        if (!JS_IsUndefined(w)) { int32_t x = 96; JS_ToInt32(ctx, &x, w); wo.voxel.maxResolution = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "maxInfluences");
+        if (!JS_IsUndefined(w)) { int32_t x = 4; JS_ToInt32(ctx, &x, w); wo.voxel.maxInfluences = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "falloffPower");
+        if (!JS_IsUndefined(w)) { double x = 4; JS_ToFloat64(ctx, &x, w); wo.voxel.falloffPower = (float)x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "minWeight");
+        if (!JS_IsUndefined(w)) { double x = 1e-3; JS_ToFloat64(ctx, &x, w); wo.voxel.minWeight = (float)x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "smoothIterations");
+        if (!JS_IsUndefined(w)) { int32_t x = 4; JS_ToInt32(ctx, &x, w); wo.voxel.smoothIterations = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "smoothAlpha");
+        if (!JS_IsUndefined(w)) { double x = 0.5; JS_ToFloat64(ctx, &x, w); wo.voxel.smoothAlpha = (float)x; }
+        JS_FreeValue(ctx, w);
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "boneHeat");
+    if (JS_IsObject(v)) {
+        JSValue w;
+        w = JS_GetPropertyStr(ctx, v, "maxInfluences");
+        if (!JS_IsUndefined(w)) { int32_t x = 4; JS_ToInt32(ctx, &x, w); wo.boneHeat.maxInfluences = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "minWeight");
+        if (!JS_IsUndefined(w)) { double x = 1e-3; JS_ToFloat64(ctx, &x, w); wo.boneHeat.minWeight = (float)x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "heatStrength");
+        if (!JS_IsUndefined(w)) { double x = 1.0; JS_ToFloat64(ctx, &x, w); wo.boneHeat.heatStrength = (float)x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "solverTol");
+        if (!JS_IsUndefined(w)) { double x = 1e-7; JS_ToFloat64(ctx, &x, w); wo.boneHeat.solverTol = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "solverMaxIter");
+        if (!JS_IsUndefined(w)) { int32_t x = 2000; JS_ToInt32(ctx, &x, w); wo.boneHeat.solverMaxIter = x; }
+        JS_FreeValue(ctx, w);
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "bbw");
+    if (JS_IsObject(v)) {
+        JSValue w;
+        w = JS_GetPropertyStr(ctx, v, "maxInfluences");
+        if (!JS_IsUndefined(w)) { int32_t x = 4; JS_ToInt32(ctx, &x, w); wo.bbw.maxInfluences = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "minWeight");
+        if (!JS_IsUndefined(w)) { double x = 1e-3; JS_ToFloat64(ctx, &x, w); wo.bbw.minWeight = (float)x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "anchorsPerBone");
+        if (!JS_IsUndefined(w)) { int32_t x = 3; JS_ToInt32(ctx, &x, w); wo.bbw.anchorsPerBone = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "eps");
+        if (!JS_IsUndefined(w)) { double x = 1e-4; JS_ToFloat64(ctx, &x, w); wo.bbw.eps = x; }
+        JS_FreeValue(ctx, w);
+        w = JS_GetPropertyStr(ctx, v, "maxIter");
+        if (!JS_IsUndefined(w)) { int32_t x = 5000; JS_ToInt32(ctx, &x, w); wo.bbw.maxIter = x; }
+        JS_FreeValue(ctx, w);
+    }
+    JS_FreeValue(ctx, v);
+
     return wo;
 }
 
