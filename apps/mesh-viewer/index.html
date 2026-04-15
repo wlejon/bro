@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mesh Viewer — MeshyAI GLB</title>
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; }
+        body {
+            background: #0a0a0a;
+            color: #eee;
+            font-family: system-ui, sans-serif;
+            overflow: hidden;
+        }
+        #hud {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            background: rgba(0,0,0,0.75);
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-size: 12px;
+            line-height: 1.5;
+            z-index: 10;
+            max-width: 460px;
+            pointer-events: none;
+        }
+        #hud h2 { font-size: 14px; margin: 0 0 6px 0; color: #7bed9f; }
+        #hud .key { color: #ffa502; font-weight: bold; }
+        #hud .section { margin-top: 6px; color: #74b9ff; font-weight: bold; }
+        #info {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            right: 12px;
+            background: rgba(0,0,0,0.75);
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-family: monospace;
+            z-index: 10;
+            white-space: pre;
+            overflow: hidden;
+        }
+        #status {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: rgba(0,0,0,0.75);
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            z-index: 10;
+            color: #7bed9f;
+        }
+        canvas { display: block; width: 100vw; height: 100vh; background: transparent; }
+    </style>
+</head>
+<body>
+    <div id="hud">
+        <h2>MeshyAI GLB Viewer</h2>
+        <div><span class="key">[</span> / <span class="key">]</span> prev / next file</div>
+        <div><span class="key">Space</span> pause/resume animation</div>
+        <div><span class="key">A</span> cycle animations</div>
+        <div><span class="key">B</span> toggle bind pose</div>
+        <div><span class="key">R</span> toggle auto-orbit</div>
+        <div><span class="key">W</span> toggle bone visualization</div>
+    </div>
+    <div id="status">Loading…</div>
+    <div id="info"></div>
+    <canvas id="canvas"></canvas>
+    <script src="app.js"></script>
+</body>
+</html>
