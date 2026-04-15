@@ -182,6 +182,8 @@ private:
     GLint uCameraPos_ = -1;
     GLint uEmissive_ = -1;
     GLint uUseVertexColor_ = -1;
+    GLint uUseTexture_ = -1;
+    GLint uBaseColorTex_ = -1;
     GLint uFogStart_ = -1;
     GLint uFogEnd_ = -1;
     GLint uFogColor_ = -1;

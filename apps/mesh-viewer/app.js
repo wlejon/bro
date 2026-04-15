@@ -136,15 +136,31 @@ function loadFile(idx) {
         });
     }
 
-    // Create one scene mesh node per sub-mesh.
+    // Create one scene mesh node per sub-mesh. If the glb ships a baseColor
+    // texture, hand it through and tint with baseColorFactor instead of a
+    // palette color.
+    const materials = gltf.materials || [];
+    const images    = gltf.images    || [];
+    const meshMat   = gltf.meshMaterial || [];
+
     for (let i = 0; i < meshes.length; i++) {
-        const color = PALETTE[i % PALETTE.length];
-        const node = scene.createMesh({
-            data: meshes[i],
-            color: color,
-            name: 'mesh-' + i,
-        });
-        state.nodes.push(node);
+        const opts = { data: meshes[i], name: 'mesh-' + i };
+
+        const matIdx = meshMat[i] ?? -1;
+        const mat = (matIdx >= 0 && matIdx < materials.length) ? materials[matIdx] : null;
+        const imgIdx = mat ? mat.baseColorTexture : -1;
+        const img = (imgIdx >= 0 && imgIdx < images.length) ? images[imgIdx] : null;
+
+        if (img && img.data && img.width > 0 && img.height > 0) {
+            opts.texture = { width: img.width, height: img.height, data: img.data };
+            // Tint with baseColorFactor (default [1,1,1,1]) so the texture
+            // renders at authored intensity.
+            opts.color = mat.baseColorFactor || [1,1,1,1];
+        } else {
+            opts.color = PALETTE[i % PALETTE.length];
+        }
+
+        state.nodes.push(scene.createMesh(opts));
     }
 
     state.loaded = {

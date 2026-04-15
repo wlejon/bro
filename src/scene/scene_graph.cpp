@@ -52,6 +52,8 @@ uniform vec3 uLightDir;
 uniform vec3 uCameraPos;
 uniform float uEmissive;
 uniform int uUseVertexColor;
+uniform int uUseTexture;
+uniform sampler2D uBaseColorTex;
 uniform float uFogStart;
 uniform float uFogEnd;
 uniform vec3 uFogColor;
@@ -63,8 +65,19 @@ void main() {
     // Discard fragments within finer LOD coverage
     if (uNearClip > 0.0 && vCamDist < uNearClip) discard;
 
-    vec3 baseColor = (uUseVertexColor == 1) ? vColor.rgb : uColor.rgb;
-    float baseAlpha = (uUseVertexColor == 1) ? vColor.a : uColor.a;
+    vec3 baseColor;
+    float baseAlpha;
+    if (uUseTexture == 1) {
+        vec4 tex = texture(uBaseColorTex, vUV);
+        baseColor = tex.rgb * uColor.rgb;
+        baseAlpha = tex.a   * uColor.a;
+    } else if (uUseVertexColor == 1) {
+        baseColor = vColor.rgb;
+        baseAlpha = vColor.a;
+    } else {
+        baseColor = uColor.rgb;
+        baseAlpha = uColor.a;
+    }
 
     vec3 N = normalize(vNormal);
     vec3 L = normalize(uLightDir);
@@ -358,6 +371,8 @@ void SceneGraph::ensureMeshPipeline() {
         uCameraPos_ = glGetUniformLocation(meshProgram_, "uCameraPos");
         uEmissive_ = glGetUniformLocation(meshProgram_, "uEmissive");
         uUseVertexColor_ = glGetUniformLocation(meshProgram_, "uUseVertexColor");
+        uUseTexture_     = glGetUniformLocation(meshProgram_, "uUseTexture");
+        uBaseColorTex_   = glGetUniformLocation(meshProgram_, "uBaseColorTex");
         uFogStart_ = glGetUniformLocation(meshProgram_, "uFogStart");
         uFogEnd_ = glGetUniformLocation(meshProgram_, "uFogEnd");
         uFogColor_ = glGetUniformLocation(meshProgram_, "uFogColor");
@@ -532,6 +547,18 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniform1f(uEmissive_, mesh->emissive());
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
     glUniform1f(uNearClip_, mesh->nearClipDist());
+
+    // Bind baseColor texture if present. Texture wins over vertex-color when
+    // both are set — matches glTF PBR "baseColorTexture * baseColorFactor".
+    bool bindTex = mesh->hasBaseColorTexture();
+    if (bindTex) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, mesh->baseColorTextureId());
+        glUniform1i(uBaseColorTex_, 0);
+        glUniform1i(uUseTexture_, 1);
+    } else {
+        glUniform1i(uUseTexture_, 0);
+    }
 
     // Per-mesh polygon offset (depth bias). Used by callers that need to
     // layer co-located meshes — e.g. terrain LOD shells that overlap and need

@@ -1262,6 +1262,47 @@ void MeshBindings::install(JSContext* ctx) {
             JS_SetPropertyUint32(ctx, animSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.animationSkeleton[i]));
         JS_SetPropertyStr(ctx, obj, "animationSkeleton", animSkelArr);
 
+        JSValue matSkelArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.meshMaterial.size(); i++)
+            JS_SetPropertyUint32(ctx, matSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.meshMaterial[i]));
+        JS_SetPropertyStr(ctx, obj, "meshMaterial", matSkelArr);
+
+        // Images — RGBA8, exposed as { name, mimeType, width, height, data: Uint8Array }.
+        JSValue imgArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.images.size(); i++) {
+            auto& im = scene.images[i];
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "name",     JS_NewString(ctx, im.name.c_str()));
+            JS_SetPropertyStr(ctx, o, "mimeType", JS_NewString(ctx, im.mimeType.c_str()));
+            JS_SetPropertyStr(ctx, o, "width",    JS_NewInt32(ctx, im.width));
+            JS_SetPropertyStr(ctx, o, "height",   JS_NewInt32(ctx, im.height));
+            if (!im.data.empty()) {
+                JSValue ab = JS_NewArrayBufferCopy(ctx, im.data.data(), im.data.size());
+                JSValue args[3] = { ab, JS_UNDEFINED, JS_UNDEFINED };
+                JS_SetPropertyStr(ctx, o, "data", JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8));
+                JS_FreeValue(ctx, ab);
+            } else {
+                JS_SetPropertyStr(ctx, o, "data", JS_NULL);
+            }
+            JS_SetPropertyUint32(ctx, imgArr, (uint32_t)i, o);
+        }
+        JS_SetPropertyStr(ctx, obj, "images", imgArr);
+
+        // Materials — { name, baseColorFactor: [r,g,b,a], baseColorTexture: number|-1 }.
+        JSValue matArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.materials.size(); i++) {
+            auto& m = scene.materials[i];
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, m.name.c_str()));
+            JSValue bc = JS_NewArray(ctx);
+            for (int k = 0; k < 4; k++)
+                JS_SetPropertyUint32(ctx, bc, k, JS_NewFloat64(ctx, m.baseColorFactor[k]));
+            JS_SetPropertyStr(ctx, o, "baseColorFactor", bc);
+            JS_SetPropertyStr(ctx, o, "baseColorTexture", JS_NewInt32(ctx, m.baseColorTexture));
+            JS_SetPropertyUint32(ctx, matArr, (uint32_t)i, o);
+        }
+        JS_SetPropertyStr(ctx, obj, "materials", matArr);
+
         return obj;
     })
     .static_method("loadOBJ", [](JSContext* ctx, std::string path) -> JSValue {

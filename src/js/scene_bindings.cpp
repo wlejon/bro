@@ -768,6 +768,28 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         node->setMesh(std::move(meshData));
     }
 
+    // Optional texture: { width, height, data: Uint8Array(rgba8) }
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValue tex = JS_GetPropertyStr(ctx, argv[0], "texture");
+        if (JS_IsObject(tex)) {
+            int w = (int)jsGetProp(ctx, tex, "width",  0);
+            int h = (int)jsGetProp(ctx, tex, "height", 0);
+            JSValue dataVal = JS_GetPropertyStr(ctx, tex, "data");
+            size_t bytes = 0;
+            size_t off = 0, len = 0;
+            JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
+            if (!JS_IsException(ab)) {
+                uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+                if (base && w > 0 && h > 0 && len >= (size_t)w * (size_t)h * 4) {
+                    node->setBaseColorTexture(w, h, base + off);
+                }
+                JS_FreeValue(ctx, ab);
+            }
+            JS_FreeValue(ctx, dataVal);
+        }
+        JS_FreeValue(ctx, tex);
+    }
+
     return wrapNode(ctx, node, g);
 }
 

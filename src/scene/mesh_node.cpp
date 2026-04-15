@@ -38,7 +38,28 @@ void MeshNode::releaseGL() {
     if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
     if (ibo_) { glDeleteBuffers(1, &ibo_); ibo_ = 0; }
+    if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
     indexCount_ = 0;
+}
+
+void MeshNode::setBaseColorTexture(int width, int height, const uint8_t* rgba) {
+    if (width <= 0 || height <= 0 || !rgba) {
+        clearBaseColorTexture();
+        return;
+    }
+    pendingTexData_.assign(rgba, rgba + (size_t)width * (size_t)height * 4);
+    pendingTexW_ = width;
+    pendingTexH_ = height;
+    textureDirty_ = true;
+}
+
+void MeshNode::clearBaseColorTexture() {
+    pendingTexData_.clear();
+    pendingTexW_ = 0;
+    pendingTexH_ = 0;
+    textureDirty_ = true;
+    // Actual glDeleteTextures is deferred to uploadToGPU / releaseGL so it
+    // runs on the render thread with a GL context bound.
 }
 
 void MeshNode::uploadToGPU() {
@@ -138,6 +159,30 @@ void MeshNode::uploadToGPU() {
 
     glBindVertexArray(0);
     gpuDirty_ = false;
+
+    if (textureDirty_) {
+        if (pendingTexW_ > 0 && pendingTexH_ > 0 && !pendingTexData_.empty()) {
+            if (!texture_) glGenTextures(1, &texture_);
+            glBindTexture(GL_TEXTURE_2D, texture_);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+                         pendingTexW_, pendingTexH_, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, pendingTexData_.data());
+            glGenerateMipmap(GL_TEXTURE_2D);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            // Free staged bytes — GL owns them now.
+            pendingTexData_.clear();
+            pendingTexData_.shrink_to_fit();
+        } else if (texture_) {
+            glDeleteTextures(1, &texture_);
+            texture_ = 0;
+        }
+        textureDirty_ = false;
+    }
 }
 
 void MeshNode::onRender(SceneGraph& graph) {

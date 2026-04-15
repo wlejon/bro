@@ -49,6 +49,14 @@ public:
     /// Whether the current mesh has per-vertex colors (set after uploadToGPU).
     bool hasVertexColors() const { return hasVertexColors_; }
 
+    /// Upload an RGBA8 baseColor texture (tightly packed, top-left origin).
+    /// Pass width=0 / height=0 / data=nullptr to clear. Takes a copy; the
+    /// caller's buffer can be freed immediately after.
+    void setBaseColorTexture(int width, int height, const uint8_t* rgba);
+    void clearBaseColorTexture();
+    bool hasBaseColorTexture() const { return texture_ != 0; }
+    GLuint baseColorTextureId() const { return texture_; }
+
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
 
@@ -88,7 +96,16 @@ private:
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
     GLuint ibo_ = 0;
+    GLuint texture_ = 0;
     GLsizei indexCount_ = 0;
+
+    // Staged texture upload — setBaseColorTexture captures the bytes and
+    // uploadToGPU() (which runs in the render thread with GL context bound)
+    // actually uploads. Lets us call setBaseColorTexture() from any thread.
+    std::vector<uint8_t> pendingTexData_;
+    int pendingTexW_ = 0;
+    int pendingTexH_ = 0;
+    bool textureDirty_ = false;
 
     // Material
     bool hasVertexColors_ = false;
