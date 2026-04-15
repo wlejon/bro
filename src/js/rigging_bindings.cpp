@@ -9,6 +9,7 @@
 #include <bromesh/rigging/skin_validate.h>
 #include <bromesh/animation/pose.h>
 #include <bromesh/animation/retarget.h>
+#include <bromesh/animation/ik.h>
 #include <bromesh/voxel/voxel_chunk.h>
 
 #include <cstring>
@@ -409,6 +410,112 @@ static JSValue makeSocketsArray(JSContext* ctx, const std::vector<bromesh::Socke
     for (size_t i = 0; i < sks.size(); i++)
         JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeSocket(ctx, sks[i]));
     return arr;
+}
+
+// ---------------------------------------------------------------------------
+// IK — raw C functions (registered as IK.* on the global object)
+// ---------------------------------------------------------------------------
+
+static bool readVec3FromJS(JSContext* ctx, JSValueConst v, float out[3]) {
+    if (!JS_IsArray(v) && !JS_IsObject(v)) return false;
+    for (int i = 0; i < 3; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+        if (JS_IsUndefined(e)) { JS_FreeValue(ctx, e); return false; }
+        double t = 0;
+        JS_ToFloat64(ctx, &t, e);
+        out[i] = (float)t;
+        JS_FreeValue(ctx, e);
+    }
+    return true;
+}
+
+static JSValue js_ik_twoBone(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 6)
+        return JS_ThrowTypeError(ctx, "IK.twoBone(skel, pose, rootBone, midBone, endBone, target, pole?)");
+    auto* sk = qjsbind::unwrap<SKW>(ctx, argv[0]);
+    auto* pw = qjsbind::unwrap<PW>(ctx, argv[1]);
+    if (!sk || !sk->skel || !pw || !pw->pose)
+        return JS_ThrowTypeError(ctx, "IK.twoBone: first two args must be Skeleton and Pose");
+    int32_t r = 0, m = 0, e = 0;
+    JS_ToInt32(ctx, &r, argv[2]);
+    JS_ToInt32(ctx, &m, argv[3]);
+    JS_ToInt32(ctx, &e, argv[4]);
+    float target[3] = {0,0,0};
+    if (!readVec3FromJS(ctx, argv[5], target))
+        return JS_ThrowTypeError(ctx, "IK.twoBone: target must be a [x,y,z] array");
+    float pole[3];
+    const float* polePtr = nullptr;
+    if (argc > 6 && !JS_IsUndefined(argv[6]) && !JS_IsNull(argv[6])) {
+        if (!readVec3FromJS(ctx, argv[6], pole))
+            return JS_ThrowTypeError(ctx, "IK.twoBone: pole must be a [x,y,z] array");
+        polePtr = pole;
+    }
+    bool ok = bromesh::solveTwoBoneIK(*sk->skel, *pw->pose, r, m, e, target, polePtr);
+    return JS_NewBool(ctx, ok);
+}
+
+static JSValue js_ik_fabrik(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 4)
+        return JS_ThrowTypeError(ctx, "IK.FABRIK(skel, pose, chain, target, options?)");
+    auto* sk = qjsbind::unwrap<SKW>(ctx, argv[0]);
+    auto* pw = qjsbind::unwrap<PW>(ctx, argv[1]);
+    if (!sk || !sk->skel || !pw || !pw->pose)
+        return JS_ThrowTypeError(ctx, "IK.FABRIK: first two args must be Skeleton and Pose");
+    if (!JS_IsArray(argv[2]))
+        return JS_ThrowTypeError(ctx, "IK.FABRIK: chain must be an array of bone indices");
+    JSValue lenV = JS_GetPropertyStr(ctx, argv[2], "length");
+    int32_t n = 0; JS_ToInt32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+    std::vector<int> chain;
+    chain.reserve((size_t)n);
+    for (int32_t i = 0; i < n; i++) {
+        JSValue elem = JS_GetPropertyUint32(ctx, argv[2], (uint32_t)i);
+        int32_t idx = 0; JS_ToInt32(ctx, &idx, elem);
+        chain.push_back(idx);
+        JS_FreeValue(ctx, elem);
+    }
+    float target[3];
+    if (!readVec3FromJS(ctx, argv[3], target))
+        return JS_ThrowTypeError(ctx, "IK.FABRIK: target must be a [x,y,z] array");
+    int iterations = 10;
+    float tolerance = 1e-3f;
+    if (argc > 4 && JS_IsObject(argv[4])) {
+        JSValue v;
+        v = JS_GetPropertyStr(ctx, argv[4], "iterations");
+        if (!JS_IsUndefined(v)) { int32_t x = 10; JS_ToInt32(ctx, &x, v); iterations = x; }
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[4], "tolerance");
+        if (!JS_IsUndefined(v)) { double x = 1e-3; JS_ToFloat64(ctx, &x, v); tolerance = (float)x; }
+        JS_FreeValue(ctx, v);
+    }
+    bool ok = bromesh::solveFABRIK(*sk->skel, *pw->pose, chain, target, iterations, tolerance);
+    return JS_NewBool(ctx, ok);
+}
+
+static JSValue js_ik_lookAt(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 4)
+        return JS_ThrowTypeError(ctx, "IK.lookAt(skel, pose, bone, target, options?)");
+    auto* sk = qjsbind::unwrap<SKW>(ctx, argv[0]);
+    auto* pw = qjsbind::unwrap<PW>(ctx, argv[1]);
+    if (!sk || !sk->skel || !pw || !pw->pose)
+        return JS_ThrowTypeError(ctx, "IK.lookAt: first two args must be Skeleton and Pose");
+    int32_t b = 0; JS_ToInt32(ctx, &b, argv[2]);
+    float target[3];
+    if (!readVec3FromJS(ctx, argv[3], target))
+        return JS_ThrowTypeError(ctx, "IK.lookAt: target must be a [x,y,z] array");
+    float fwd[3] = {0,0,1}, up[3] = {0,1,0};
+    const float* fwdPtr = nullptr;
+    const float* upPtr  = nullptr;
+    if (argc > 4 && JS_IsObject(argv[4])) {
+        JSValue v;
+        v = JS_GetPropertyStr(ctx, argv[4], "localForward");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v) && readVec3FromJS(ctx, v, fwd)) fwdPtr = fwd;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[4], "localUp");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v) && readVec3FromJS(ctx, v, up)) upPtr = up;
+        JS_FreeValue(ctx, v);
+    }
+    bool ok = bromesh::solveLookAt(*sk->skel, *pw->pose, b, target, fwdPtr, upPtr);
+    return JS_NewBool(ctx, ok);
 }
 
 // ---------------------------------------------------------------------------
@@ -855,6 +962,22 @@ void RiggingBindings::install(JSContext* ctx) {
             std::make_unique<bromesh::MeshData>(std::move(mesh)));
     })
     ;
+
+    // =======================================================================
+    // IK — global namespace object: IK.twoBone, IK.FABRIK, IK.lookAt
+    // =======================================================================
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ikObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ikObj, "twoBone",
+            JS_NewCFunction(ctx, js_ik_twoBone, "twoBone", 7));
+        JS_SetPropertyStr(ctx, ikObj, "FABRIK",
+            JS_NewCFunction(ctx, js_ik_fabrik,  "FABRIK",  5));
+        JS_SetPropertyStr(ctx, ikObj, "lookAt",
+            JS_NewCFunction(ctx, js_ik_lookAt,  "lookAt",  5));
+        JS_SetPropertyStr(ctx, global, "IK", ikObj);
+        JS_FreeValue(ctx, global);
+    }
 }
 
 void RiggingBindings::cleanup(JSContext*) {}
