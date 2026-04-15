@@ -60,13 +60,8 @@ window.scene = scene;
 // Camera - orbit, auto-fit on mesh load
 // ---------------------------------------------------------------------------
 
-const cam = {
-    target: [0, 1, 0],
-    dist: 4,
-    height: 1.5,
-    angle: 0,
-    auto: false,
-};
+const cam = Camera.createOrbit({ target: [0, 1, 0], dist: 4, fov: 45 });
+cam.auto = false;
 
 function fitCameraToMesh(mesh) {
     const bb = mesh.computeBBox();
@@ -78,22 +73,12 @@ function fitCameraToMesh(mesh) {
                           bb.max[2] - bb.min[2]);
     cam.target = [cx, cy, cz];
     cam.dist = Math.max(size * 2.2, 2);
-    cam.height = cy + size * 0.3;
-    cam.angle = 0;
+    cam.rot = Camera.quatFromAxis(1, 0, 0, -0.2);
 }
 
 function updateCamera() {
-    if (cam.auto) cam.angle += 0.004;
-    scene.setCamera({
-        fov: 45,
-        position: [
-            cam.target[0] + Math.sin(cam.angle) * cam.dist,
-            cam.height,
-            cam.target[2] + Math.cos(cam.angle) * cam.dist,
-        ],
-        target: cam.target,
-        aspect: canvas.clientWidth / canvas.clientHeight,
-    });
+    if (cam.auto) Camera.orbitLook(cam, -2, 0); // 2px/frame ≈ slow spin
+    scene.setCamera(Camera.orbitViewOpts(cam, canvas));
 }
 
 window.fitCameraToMesh = fitCameraToMesh;
@@ -202,18 +187,30 @@ document.addEventListener('keydown', (e) => {
 });
 
 canvas.addEventListener('wheel', (e) => {
-    cam.dist = Math.max(0.5, cam.dist * (1 + e.deltaY * 0.001));
+    const step = e.deltaY > 0 ? 0.2 : -0.2;
+    cam.dist = Math.max(0.5, cam.dist + step);
     e.preventDefault();
 }, { passive: false });
 
-let dragging = false, lastX = 0, lastY = 0;
-canvas.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; cam.auto = false; });
-window.addEventListener('mouseup', () => { dragging = false; });
-window.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
-    cam.angle -= (e.clientX - lastX) * 0.01;
-    cam.height += (e.clientY - lastY) * 0.02;
-    lastX = e.clientX; lastY = e.clientY;
+// Right-click + drag to orbit. Uses pointer lock so movementX/Y accumulate
+// cleanly even when the cursor would leave the canvas (the terrain app uses
+// the same pattern for its 6DOF camera in apps/terrain/app.js).
+let rightMouseDown = false;
+canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 2) return;
+    rightMouseDown = true;
+    cam.auto = false;
+    canvas.requestPointerLock();
+});
+document.addEventListener('mouseup', (e) => {
+    if (e.button !== 2) return;
+    rightMouseDown = false;
+    document.exitPointerLock();
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+document.addEventListener('mousemove', (e) => {
+    if (!rightMouseDown) return;
+    Camera.orbitLook(cam, e.movementX, e.movementY);
 });
 
 // ---------------------------------------------------------------------------
