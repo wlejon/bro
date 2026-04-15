@@ -4,7 +4,7 @@ extern "C" {
 #include "quickjs.h"
 }
 
-namespace bromesh { struct SkinData; class VoxelChunk; }
+namespace bromesh { struct SkinData; struct Skeleton; struct Pose; class VoxelChunk; }
 
 namespace bro::js {
 
@@ -24,6 +24,14 @@ public:
     /// Wrap an existing SkinData into a fresh JS SkinData.
     /// Used to return SkinData from skin transfer / autoRig.
     static JSValue wrapSkinData(JSContext* ctx, bromesh::SkinData&& data);
+
+    /// Skeleton accessors (cross-file use by Animation/IK/Rig bindings).
+    static bromesh::Skeleton* getSkeleton(JSContext* ctx, JSValueConst val);
+    static JSValue            wrapSkeleton(JSContext* ctx, bromesh::Skeleton&& skel);
+
+    /// Pose accessors (cross-file use by Animation/IK).
+    static bromesh::Pose* getPose(JSContext* ctx, JSValueConst val);
+    static JSValue        wrapPose(JSContext* ctx, bromesh::Pose&& pose);
 };
 
 } // namespace bro::js

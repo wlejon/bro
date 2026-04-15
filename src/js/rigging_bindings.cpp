@@ -7,6 +7,7 @@
 #include <bromesh/manipulation/skin.h>
 #include <bromesh/manipulation/skin_transfer.h>
 #include <bromesh/rigging/skin_validate.h>
+#include <bromesh/animation/pose.h>
 #include <bromesh/voxel/voxel_chunk.h>
 
 #include <cstring>
@@ -27,8 +28,18 @@ struct VoxelChunkWrapper {
     std::unique_ptr<bromesh::VoxelChunk> chunk;
 };
 
+struct SkeletonWrapper {
+    std::unique_ptr<bromesh::Skeleton> skel;
+};
+
+struct PoseWrapper {
+    std::unique_ptr<bromesh::Pose> pose;
+};
+
 using SDW = SkinDataWrapper;
 using VCW = VoxelChunkWrapper;
+using SKW = SkeletonWrapper;
+using PW  = PoseWrapper;
 
 // ---------------------------------------------------------------------------
 // TypedArray helpers (local copies — keep this file standalone from
@@ -106,6 +117,160 @@ static JSValue makeUint8Array(JSContext* ctx, const uint8_t* data, size_t len) {
 static JSValue wrapSkinData(JSContext* ctx, bromesh::SkinData&& data) {
     return qjsbind::wrap<SDW>(ctx,
         new SDW{std::make_unique<bromesh::SkinData>(std::move(data))});
+}
+
+static JSValue wrapSkeleton(JSContext* ctx, bromesh::Skeleton&& skel) {
+    return qjsbind::wrap<SKW>(ctx,
+        new SKW{std::make_unique<bromesh::Skeleton>(std::move(skel))});
+}
+
+static JSValue wrapPose(JSContext* ctx, bromesh::Pose&& pose) {
+    return qjsbind::wrap<PW>(ctx,
+        new PW{std::make_unique<bromesh::Pose>(std::move(pose))});
+}
+
+// ---------------------------------------------------------------------------
+// Bone / Socket JS object <-> struct conversion
+// ---------------------------------------------------------------------------
+
+static void readFloatN(JSContext* ctx, JSValueConst v, float* out, int n, const float* def) {
+    if (JS_IsUndefined(v) || JS_IsNull(v)) {
+        if (def) std::memcpy(out, def, sizeof(float) * (size_t)n);
+        return;
+    }
+    if (JS_IsArray(v)) {
+        for (int i = 0; i < n; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+            double tmp = def ? def[i] : 0.0;
+            if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &tmp, e);
+            out[i] = (float)tmp;
+            JS_FreeValue(ctx, e);
+        }
+        return;
+    }
+    // Try TypedArray.
+    std::vector<float> tmp;
+    if (readFloatArrayVal(ctx, v, tmp)) {
+        for (int i = 0; i < n; i++)
+            out[i] = (i < (int)tmp.size()) ? tmp[i] : (def ? def[i] : 0.0f);
+    } else if (def) {
+        std::memcpy(out, def, sizeof(float) * (size_t)n);
+    }
+}
+
+static JSValue makeFloatNArray(JSContext* ctx, const float* data, int n) {
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewFloat64(ctx, data[i]));
+    return arr;
+}
+
+static bromesh::Bone readBone(JSContext* ctx, JSValueConst obj) {
+    bromesh::Bone b;
+    JSValue v;
+
+    v = JS_GetPropertyStr(ctx, obj, "name");
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { b.name = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "parent");
+    if (!JS_IsUndefined(v)) { int32_t p = -1; JS_ToInt32(ctx, &p, v); b.parent = p; }
+    JS_FreeValue(ctx, v);
+
+    static const float defT[3] = {0,0,0};
+    static const float defR[4] = {0,0,0,1};
+    static const float defS[3] = {1,1,1};
+    static const float defIB[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+
+    v = JS_GetPropertyStr(ctx, obj, "localT");      readFloatN(ctx, v, b.localT,      3,  defT);  JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, obj, "localR");      readFloatN(ctx, v, b.localR,      4,  defR);  JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, obj, "localS");      readFloatN(ctx, v, b.localS,      3,  defS);  JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, obj, "inverseBind"); readFloatN(ctx, v, b.inverseBind, 16, defIB); JS_FreeValue(ctx, v);
+
+    return b;
+}
+
+static JSValue makeBone(JSContext* ctx, const bromesh::Bone& b) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name",        JS_NewString(ctx, b.name.c_str()));
+    JS_SetPropertyStr(ctx, obj, "parent",      JS_NewInt32(ctx, b.parent));
+    JS_SetPropertyStr(ctx, obj, "localT",      makeFloatNArray(ctx, b.localT, 3));
+    JS_SetPropertyStr(ctx, obj, "localR",      makeFloatNArray(ctx, b.localR, 4));
+    JS_SetPropertyStr(ctx, obj, "localS",      makeFloatNArray(ctx, b.localS, 3));
+    JS_SetPropertyStr(ctx, obj, "inverseBind", makeFloatNArray(ctx, b.inverseBind, 16));
+    return obj;
+}
+
+static bromesh::Socket readSocket(JSContext* ctx, JSValueConst obj) {
+    bromesh::Socket s;
+    JSValue v;
+
+    v = JS_GetPropertyStr(ctx, obj, "name");
+    if (JS_IsString(v)) {
+        const char* str = JS_ToCString(ctx, v);
+        if (str) { s.name = str; JS_FreeCString(ctx, str); }
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "bone");
+    if (!JS_IsUndefined(v)) { int32_t b = 0; JS_ToInt32(ctx, &b, v); s.bone = b; }
+    JS_FreeValue(ctx, v);
+
+    static const float defM[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+    v = JS_GetPropertyStr(ctx, obj, "offset"); readFloatN(ctx, v, s.offset, 16, defM); JS_FreeValue(ctx, v);
+
+    return s;
+}
+
+static JSValue makeSocket(JSContext* ctx, const bromesh::Socket& s) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name",   JS_NewString(ctx, s.name.c_str()));
+    JS_SetPropertyStr(ctx, obj, "bone",   JS_NewInt32(ctx, s.bone));
+    JS_SetPropertyStr(ctx, obj, "offset", makeFloatNArray(ctx, s.offset, 16));
+    return obj;
+}
+
+static void readBonesArray(JSContext* ctx, JSValueConst arr, std::vector<bromesh::Bone>& out) {
+    if (!JS_IsArray(arr)) return;
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+    out.clear();
+    out.reserve((size_t)len);
+    for (int32_t i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, arr, (uint32_t)i);
+        out.push_back(readBone(ctx, e));
+        JS_FreeValue(ctx, e);
+    }
+}
+
+static void readSocketsArray(JSContext* ctx, JSValueConst arr, std::vector<bromesh::Socket>& out) {
+    if (!JS_IsArray(arr)) return;
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+    out.clear();
+    out.reserve((size_t)len);
+    for (int32_t i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, arr, (uint32_t)i);
+        out.push_back(readSocket(ctx, e));
+        JS_FreeValue(ctx, e);
+    }
+}
+
+static JSValue makeBonesArray(JSContext* ctx, const std::vector<bromesh::Bone>& bones) {
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < bones.size(); i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeBone(ctx, bones[i]));
+    return arr;
+}
+
+static JSValue makeSocketsArray(JSContext* ctx, const std::vector<bromesh::Socket>& sks) {
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < sks.size(); i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeSocket(ctx, sks[i]));
+    return arr;
 }
 
 // ---------------------------------------------------------------------------
@@ -237,6 +402,160 @@ void RiggingBindings::install(JSContext* ctx) {
     ;
 
     // =======================================================================
+    // Skeleton — bones + sockets + bind pose
+    // =======================================================================
+    qjsbind::Class<SKW>(ctx, "Skeleton")
+
+    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> SKW* {
+        auto s = std::make_unique<bromesh::Skeleton>();
+        if (argc > 0 && JS_IsObject(argv[0])) {
+            JSValue v;
+            v = JS_GetPropertyStr(ctx, argv[0], "bones");
+            if (!JS_IsUndefined(v)) readBonesArray(ctx, v, s->bones);
+            JS_FreeValue(ctx, v);
+            v = JS_GetPropertyStr(ctx, argv[0], "sockets");
+            if (!JS_IsUndefined(v)) readSocketsArray(ctx, v, s->sockets);
+            JS_FreeValue(ctx, v);
+        }
+        return new SKW{std::move(s)};
+    })
+
+    .static_method("fromBones", [](JSContext* ctx, JSValue bones) -> JSValue {
+        bromesh::Skeleton s;
+        readBonesArray(ctx, bones, s.bones);
+        return wrapSkeleton(ctx, std::move(s));
+    })
+
+    .prop("bones",
+        [](SKW* w, JSContext* ctx) -> JSValue {
+            return w->skel ? makeBonesArray(ctx, w->skel->bones) : JS_UNDEFINED;
+        },
+        [](SKW* w, JSContext* ctx, JSValue val) {
+            if (w->skel) readBonesArray(ctx, val, w->skel->bones);
+        })
+    .prop("sockets",
+        [](SKW* w, JSContext* ctx) -> JSValue {
+            return w->skel ? makeSocketsArray(ctx, w->skel->sockets) : JS_UNDEFINED;
+        },
+        [](SKW* w, JSContext* ctx, JSValue val) {
+            if (w->skel) readSocketsArray(ctx, val, w->skel->sockets);
+        })
+
+    .get("boneCount",   [](SKW* w) { return (int)(w->skel ? w->skel->bones.size()   : 0); })
+    .get("socketCount", [](SKW* w) { return (int)(w->skel ? w->skel->sockets.size() : 0); })
+
+    .method("findBone",   [](SKW* w, std::string name) -> int {
+        return w->skel ? w->skel->findBone(name) : -1;
+    })
+    .method("findSocket", [](SKW* w, std::string name) -> int {
+        return w->skel ? w->skel->findSocket(name) : -1;
+    })
+
+    .method("addSocket", [](SKW* w, JSContext* ctx, JSValue obj) -> int {
+        if (!w->skel || !JS_IsObject(obj)) return -1;
+        w->skel->sockets.push_back(readSocket(ctx, obj));
+        return (int)w->skel->sockets.size() - 1;
+    })
+
+    .method("bindPose", [](SKW* w, JSContext* ctx) -> JSValue {
+        if (!w->skel) return JS_UNDEFINED;
+        return wrapPose(ctx, bromesh::bindPose(*w->skel));
+    })
+    ;
+
+    // =======================================================================
+    // Pose — flat array of local TRS per bone (stride 10)
+    // =======================================================================
+    qjsbind::Class<PW>(ctx, "Pose")
+
+    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> PW* {
+        auto p = std::make_unique<bromesh::Pose>();
+        if (argc > 0) {
+            // Either a Float32Array of pose data, or { data, boneCount }, or
+            // a number = bone count (zero-init).
+            if (JS_IsNumber(argv[0])) {
+                int32_t bc = 0; JS_ToInt32(ctx, &bc, argv[0]);
+                p->data.assign((size_t)bc * 10, 0.0f);
+                // identity quaternion + unit scale per bone
+                for (int32_t i = 0; i < bc; i++) {
+                    p->data[i*10 + 6] = 1.0f; // qw
+                    p->data[i*10 + 7] = 1.0f; // sx
+                    p->data[i*10 + 8] = 1.0f; // sy
+                    p->data[i*10 + 9] = 1.0f; // sz
+                }
+            } else if (JS_IsObject(argv[0])) {
+                JSValue v = JS_GetPropertyStr(ctx, argv[0], "data");
+                if (!JS_IsUndefined(v)) readFloatArrayVal(ctx, v, p->data);
+                else readFloatArrayVal(ctx, argv[0], p->data);
+                JS_FreeValue(ctx, v);
+            }
+        }
+        return new PW{std::move(p)};
+    })
+
+    .prop("data",
+        [](PW* w, JSContext* ctx) -> JSValue {
+            return w->pose ? makeFloat32Array(ctx, w->pose->data) : JS_UNDEFINED;
+        },
+        [](PW* w, JSContext* ctx, JSValue val) {
+            if (w->pose) readFloatArrayVal(ctx, val, w->pose->data);
+        })
+
+    .get("boneCount", [](PW* w) {
+        return (int)(w->pose ? w->pose->boneCount() : 0);
+    })
+
+    .method("clone", [](PW* w, JSContext* ctx) -> JSValue {
+        if (!w->pose) return JS_UNDEFINED;
+        return wrapPose(ctx, bromesh::Pose(*w->pose));
+    })
+
+    .method("computeWorldMatrices", [](PW* w, JSContext* ctx, JSValue skelVal) -> JSValue {
+        if (!w->pose) return JS_UNDEFINED;
+        auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
+        if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "argument must be a Skeleton");
+        std::vector<float> out;
+        bromesh::computeWorldMatrices(*sk->skel, *w->pose, out);
+        return makeFloat32Array(ctx, out);
+    })
+
+    .method("computeSkinningMatrices", [](PW* w, JSContext* ctx, JSValue skelVal) -> JSValue {
+        if (!w->pose) return JS_UNDEFINED;
+        auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
+        if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "argument must be a Skeleton");
+        std::vector<float> out;
+        bromesh::computeSkinningMatrices(*sk->skel, *w->pose, out);
+        return makeFloat32Array(ctx, out);
+    })
+
+    .method("socketWorld", [](PW* w, JSContext* ctx, JSValue skelVal, std::string name) -> JSValue {
+        if (!w->pose) return JS_NULL;
+        auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
+        if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "first argument must be a Skeleton");
+        float m[16];
+        if (!bromesh::socketWorldMatrix(*sk->skel, *w->pose, name, m)) return JS_NULL;
+        std::vector<float> v(m, m + 16);
+        return makeFloat32Array(ctx, v);
+    })
+
+    .static_method("blend", [](JSContext* ctx, JSValue aVal, JSValue bVal, double weight,
+                                std::optional<JSValue> mask) -> JSValue {
+        auto* aw = qjsbind::unwrap<PW>(ctx, aVal);
+        auto* bw = qjsbind::unwrap<PW>(ctx, bVal);
+        if (!aw || !aw->pose || !bw || !bw->pose)
+            return JS_ThrowTypeError(ctx, "blend requires two Pose arguments");
+        std::vector<uint8_t> maskVec;
+        const uint8_t* maskPtr = nullptr;
+        if (mask && !JS_IsUndefined(*mask) && !JS_IsNull(*mask)) {
+            if (readUint8ArrayVal(ctx, *mask, maskVec) && !maskVec.empty())
+                maskPtr = maskVec.data();
+        }
+        bromesh::blendPoses(*aw->pose, *bw->pose, (float)weight, maskPtr);
+        return JS_DupValue(ctx, aVal);
+    })
+    ;
+
+    // =======================================================================
     // VoxelChunk — fixed-height voxel grid with greedy meshing
     // =======================================================================
     qjsbind::Class<VCW>(ctx, "VoxelChunk")
@@ -330,6 +649,24 @@ bromesh::SkinData* RiggingBindings::getSkinData(JSContext* ctx, JSValueConst val
 
 JSValue RiggingBindings::wrapSkinData(JSContext* ctx, bromesh::SkinData&& data) {
     return bro::js::wrapSkinData(ctx, std::move(data));
+}
+
+bromesh::Skeleton* RiggingBindings::getSkeleton(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<SKW>(ctx, val);
+    return w ? w->skel.get() : nullptr;
+}
+
+JSValue RiggingBindings::wrapSkeleton(JSContext* ctx, bromesh::Skeleton&& skel) {
+    return bro::js::wrapSkeleton(ctx, std::move(skel));
+}
+
+bromesh::Pose* RiggingBindings::getPose(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<PW>(ctx, val);
+    return w ? w->pose.get() : nullptr;
+}
+
+JSValue RiggingBindings::wrapPose(JSContext* ctx, bromesh::Pose&& pose) {
+    return bro::js::wrapPose(ctx, std::move(pose));
 }
 
 } // namespace bro::js
