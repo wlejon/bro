@@ -1345,4 +1345,13 @@ JSValue RiggingBindings::wrapPose(JSContext* ctx, bromesh::Pose&& pose) {
     return bro::js::wrapPose(ctx, std::move(pose));
 }
 
+bromesh::Animation* RiggingBindings::getAnimation(JSContext* ctx, JSValueConst val) {
+    auto* w = qjsbind::unwrap<AW>(ctx, val);
+    return w ? w->anim.get() : nullptr;
+}
+
+JSValue RiggingBindings::wrapAnimation(JSContext* ctx, bromesh::Animation&& a) {
+    return bro::js::wrapAnimation(ctx, std::move(a));
+}
+
 } // namespace bro::js

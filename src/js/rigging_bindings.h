@@ -4,7 +4,7 @@ extern "C" {
 #include "quickjs.h"
 }
 
-namespace bromesh { struct SkinData; struct Skeleton; struct Pose; class VoxelChunk; }
+namespace bromesh { struct SkinData; struct Skeleton; struct Pose; struct Animation; class VoxelChunk; }
 
 namespace bro::js {
 
@@ -32,6 +32,10 @@ public:
     /// Pose accessors (cross-file use by Animation/IK).
     static bromesh::Pose* getPose(JSContext* ctx, JSValueConst val);
     static JSValue        wrapPose(JSContext* ctx, bromesh::Pose&& pose);
+
+    /// Animation accessors (cross-file use by glTF I/O).
+    static bromesh::Animation* getAnimation(JSContext* ctx, JSValueConst val);
+    static JSValue             wrapAnimation(JSContext* ctx, bromesh::Animation&& a);
 };
 
 } // namespace bro::js

@@ -750,7 +750,43 @@ void MeshBindings::install(JSContext* ctx) {
     }, qjsbind::returns_this)
 
     // ── Save I/O ────────────────────────────────────────────────────────
-    .method("saveGLTF", [](MW* w, std::string path) { return w->data ? bromesh::saveGLTF(*w->data, path) : false; })
+    .method("saveGLTF", [](MW* w, JSContext* ctx, std::string path, std::optional<JSValue> opts) -> JSValue {
+        if (!w->data) return JS_FALSE;
+        if (!opts || !JS_IsObject(*opts)) {
+            return JS_NewBool(ctx, bromesh::saveGLTF(*w->data, path));
+        }
+        bromesh::SkinData* skinPtr = nullptr;
+        bromesh::Skeleton* skelPtr = nullptr;
+        std::vector<bromesh::Animation> anims;
+        JSValue v;
+
+        v = JS_GetPropertyStr(ctx, *opts, "skin");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v))
+            skinPtr = RiggingBindings::getSkinData(ctx, v);
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, *opts, "skeleton");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v))
+            skelPtr = RiggingBindings::getSkeleton(ctx, v);
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, *opts, "animations");
+        if (JS_IsArray(v)) {
+            JSValue lenV = JS_GetPropertyStr(ctx, v, "length");
+            int32_t n = 0; JS_ToInt32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+            anims.reserve((size_t)n);
+            for (int32_t i = 0; i < n; i++) {
+                JSValue elem = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+                bromesh::Animation* a = RiggingBindings::getAnimation(ctx, elem);
+                if (a) anims.push_back(*a);
+                JS_FreeValue(ctx, elem);
+            }
+        }
+        JS_FreeValue(ctx, v);
+
+        bool ok = bromesh::saveGLTF(*w->data, skinPtr, skelPtr, anims, path);
+        return JS_NewBool(ctx, ok);
+    })
     .method("saveOBJ",  [](MW* w, std::string path) { return w->data ? bromesh::saveOBJ(*w->data, path) : false; })
     .method("savePLY",  [](MW* w, std::string path) { return w->data ? bromesh::savePLY(*w->data, path) : false; })
     .method("saveSTL",  [](MW* w, std::string path) { return w->data ? bromesh::saveSTL(*w->data, path) : false; })
@@ -1192,10 +1228,40 @@ void MeshBindings::install(JSContext* ctx) {
     .static_method("loadGLTF", [](JSContext* ctx, std::string path) -> JSValue {
         auto scene = bromesh::loadGLTF(path);
         JSValue obj = JS_NewObject(ctx);
+
         JSValue meshArr = JS_NewArray(ctx);
         for (size_t i = 0; i < scene.meshes.size(); i++)
             JS_SetPropertyUint32(ctx, meshArr, (uint32_t)i, wrapMesh(ctx, std::move(scene.meshes[i])));
         JS_SetPropertyStr(ctx, obj, "meshes", meshArr);
+
+        JSValue skinArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.skins.size(); i++)
+            JS_SetPropertyUint32(ctx, skinArr, (uint32_t)i,
+                RiggingBindings::wrapSkinData(ctx, std::move(scene.skins[i])));
+        JS_SetPropertyStr(ctx, obj, "skins", skinArr);
+
+        JSValue skelArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.skeletons.size(); i++)
+            JS_SetPropertyUint32(ctx, skelArr, (uint32_t)i,
+                RiggingBindings::wrapSkeleton(ctx, std::move(scene.skeletons[i])));
+        JS_SetPropertyStr(ctx, obj, "skeletons", skelArr);
+
+        JSValue animArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.animations.size(); i++)
+            JS_SetPropertyUint32(ctx, animArr, (uint32_t)i,
+                RiggingBindings::wrapAnimation(ctx, std::move(scene.animations[i])));
+        JS_SetPropertyStr(ctx, obj, "animations", animArr);
+
+        JSValue meshSkelArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.meshSkeleton.size(); i++)
+            JS_SetPropertyUint32(ctx, meshSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.meshSkeleton[i]));
+        JS_SetPropertyStr(ctx, obj, "meshSkeleton", meshSkelArr);
+
+        JSValue animSkelArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < scene.animationSkeleton.size(); i++)
+            JS_SetPropertyUint32(ctx, animSkelArr, (uint32_t)i, JS_NewInt32(ctx, scene.animationSkeleton[i]));
+        JS_SetPropertyStr(ctx, obj, "animationSkeleton", animSkelArr);
+
         return obj;
     })
     .static_method("loadOBJ", [](JSContext* ctx, std::string path) -> JSValue {

@@ -2,14 +2,28 @@
 // bro Mesh API Reference
 // =============================================================================
 //
-// Three classes wrap the bromesh C++ library:
+// The bromesh C++ library is exposed via these classes and namespaces:
 //
-//   Mesh             — geometry container (positions, normals, UVs, colors,
-//                      indices) plus primitive factories, I/O, CSG, isosurface
-//                      extraction, simplification, baking, UV, and analysis.
-//   MeshBVH          — bounding-volume hierarchy for accelerated ray queries
-//                      against a static Mesh.
+//   Mesh             — geometry container plus primitive factories, I/O, CSG,
+//                      isosurface extraction, simplification, baking, UV, and
+//                      analysis. Also: applySkinning, applyMorphTarget.
+//   MeshBVH          — bounding-volume hierarchy for accelerated ray queries.
 //   ProgressiveMesh  — pre-computed edge-collapse sequence for streaming LOD.
+//
+//   Skeleton         — bones + sockets + bindPose.
+//   Pose             — flat array of local TRS per bone (stride 10).
+//                      computeWorld/SkinningMatrices, socketWorld, blend.
+//   Animation        — keyframed channels; evaluate, evaluateInto, retarget.
+//   SkinData         — per-vertex bone weights/indices + inverse-bind matrices;
+//                      normalize, validate, transfer.
+//   RigSpec          — opaque template (humanoid / quadruped / hexapod /
+//                      octopod, or custom JSON).
+//   VoxelChunk       — fixed-size voxel grid with greedy meshing.
+//
+//   IK.*             — twoBone, FABRIK, lookAt solvers (mutate a Pose).
+//   Rig.*            — spec / specFromJSON / detectHumanoid / detectQuadruped
+//                      / missingLandmarks / fitSkeleton / autoRig /
+//                      generateLocomotionCycle.
 //
 // Mesh objects hold geometry data and can be used independently or fed into
 // the scene graph for rendering.
@@ -840,3 +854,273 @@ class ProgressiveMesh {
    */
   static deserialize(bytes) {}
 }
+
+
+// =============================================================================
+// Rigging / animation
+// =============================================================================
+//
+// Conventions
+//   Quaternions are xyzw.
+//   Matrices are column-major 4x4 (16 floats), matching glTF.
+//   Pose data layout (stride 10 per bone): T (3), R (4, xyzw), S (3).
+//   Bone indices in skin/animation refer to Skeleton::bones order.
+//
+// A typical rigging flow:
+//   const mesh = Mesh.loadGLTF(path).meshes[0];     // or autoRig from scratch
+//   const spec = Rig.spec('humanoid');
+//   const lm   = Rig.detectHumanoid(mesh);
+//   const r    = Rig.autoRig(mesh, spec, lm);
+//   const cycle = Rig.generateLocomotionCycle(r.skeleton, spec, { strideLength: 0.4 });
+//
+//   // Per frame:
+//   const pose    = cycle.evaluate(r.skeleton, t);
+//   const matrices = pose.computeSkinningMatrices(r.skeleton);
+//   mesh.applySkinning(r.skin, matrices);
+
+
+// -----------------------------------------------------------------------------
+// SkinData
+// -----------------------------------------------------------------------------
+class SkinData {
+  /**
+   * @param {Object} [opts]
+   * @param {Float32Array} [opts.boneWeights]         - 4 weights per vertex (stride 4)
+   * @param {Uint32Array}  [opts.boneIndices]         - 4 indices per vertex (stride 4)
+   * @param {Float32Array} [opts.inverseBindMatrices] - column-major mat4 per bone (stride 16)
+   * @param {number}       [opts.boneCount]           - explicit bone count (else derived from IBM)
+   */
+  constructor(opts) {}
+
+  /** @type {Float32Array} */ boneWeights;
+  /** @type {Uint32Array}  */ boneIndices;
+  /** @type {Float32Array} */ inverseBindMatrices;
+  /** @type {number}       */ boneCount;
+  /** @type {number}       */ vertexCount;
+
+  /** Deep copy. */
+  clone() {}
+
+  /** Normalize per-vertex weights to sum=1; returns this. */
+  normalize() {}
+
+  /**
+   * Validate skinning quality.
+   * @param {Mesh}     mesh
+   * @param {SkinData} skin
+   * @param {Object}   [options]
+   * @param {number}   [options.influences=4]
+   * @param {number}   [options.sumTolerance=1e-3]
+   * @returns {{ vertexCount: number, orphanCount: number, badSumCount: number,
+   *            nanCount: number, maxSumDeviation: number,
+   *            maxInfluencesObserved: number, clean: boolean }}
+   */
+  static validate(mesh, skin, options) {}
+
+  /**
+   * Project skin weights from `sourceMesh`/`sourceSkin` onto `targetMesh` by
+   * closest-point interpolation. Same Skeleton applies to the result.
+   * @param {Mesh} targetMesh
+   * @param {Mesh} sourceMesh
+   * @param {SkinData} sourceSkin
+   * @param {number} [maxDistance=0]   - 0 = unlimited
+   * @returns {SkinData}
+   */
+  static transfer(targetMesh, sourceMesh, sourceSkin, maxDistance) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// Skeleton
+// -----------------------------------------------------------------------------
+class Skeleton {
+  /**
+   * @param {Object} [opts]
+   * @param {Array}  [opts.bones]   - [{name, parent, localT, localR, localS, inverseBind}]
+   * @param {Array}  [opts.sockets] - [{name, bone, offset}]
+   */
+  constructor(opts) {}
+
+  /** Construct from a flat bone array. */
+  static fromBones(bones) {}
+
+  /** @type {Array} */ bones;
+  /** @type {Array} */ sockets;
+  /** @type {number} */ boneCount;
+  /** @type {number} */ socketCount;
+
+  findBone(name) {}     // -> int or -1
+  findSocket(name) {}   // -> int or -1
+
+  /** Append a socket; returns its new index. */
+  addSocket(socket) {}
+
+  /** Identity / bind-pose. */
+  bindPose() {}         // -> Pose
+
+  /** Append the standard Rigify-style sockets if matching bones exist. */
+  addRigifySockets() {} // -> int (count added)
+
+  /** Find a bone whose name ends with `suffix`. -1 if none. */
+  findBoneBySuffix(suffix) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// Pose
+// -----------------------------------------------------------------------------
+class Pose {
+  /**
+   * @param {number|Float32Array|{data:Float32Array}} [opts]
+   *        number          → zero-init pose with identity TRS for that many bones
+   *        Float32Array    → adopt as raw data
+   *        {data}          → adopt from object
+   */
+  constructor(opts) {}
+
+  /** @type {Float32Array} - stride 10/bone: T(3), R(4 xyzw), S(3) */ data;
+  /** @type {number} */ boneCount;
+
+  clone() {}
+
+  /** Float32Array of 16*boneCount column-major mat4 world transforms. */
+  computeWorldMatrices(skeleton) {}
+
+  /** Float32Array of 16*boneCount column-major mat4 world * inverseBind. */
+  computeSkinningMatrices(skeleton) {}
+
+  /** mat4 (Float32Array(16)) for a named socket, or null if unknown. */
+  socketWorld(skeleton, socketName) {}
+
+  /**
+   * Blend `b` into `a` in-place (lerp T/S, slerp R). Returns `a`.
+   * Optional `mask` is a Uint8Array of length boneCount; 1 enables blend.
+   */
+  static blend(a, b, weight, mask) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// Animation
+// -----------------------------------------------------------------------------
+class Animation {
+  /**
+   * @param {Object} opts
+   * @param {string} [opts.name]
+   * @param {number} [opts.duration]   - seconds; auto-derived if omitted
+   * @param {Array}  [opts.channels]   - [{boneIndex, path, interp, times, values}]
+   *                                     path:   'translation' | 'rotation' | 'scale'
+   *                                     interp: 'linear' | 'step' | 'cubicSpline'
+   */
+  constructor(opts) {}
+
+  /** @type {string} */ name;
+  /** @type {number} */ duration;
+  /** @type {Array}  */ channels;
+  /** @type {number} */ channelCount;
+
+  /** Evaluate at time t (seconds). loop defaults to true. */
+  evaluate(skeleton, t, options) {}      // -> Pose
+  evaluateInto(skeleton, t, pose, options) {} // -> pose (same instance)
+
+  /** Remap a clip from src to dst skeleton by bone name. */
+  static retarget(anim, srcSkeleton, dstSkeleton) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// IK — solvers (mutate the supplied Pose in place; return bool)
+// -----------------------------------------------------------------------------
+
+/** Two-bone analytic IK (root, mid, end). target / pole are [x,y,z] world. */
+function IK_twoBone(skel, pose, root, mid, end, target, pole) {}
+
+/** FABRIK solver for arbitrary chain (array of bone indices). */
+function IK_FABRIK(skel, pose, chain, target, options) {}
+// options: { iterations: 10, tolerance: 1e-3 }
+
+/** Look-at orientation on a single bone. */
+function IK_lookAt(skel, pose, bone, target, options) {}
+// options: { localForward: [0,0,1], localUp: [0,1,0] }
+
+
+// -----------------------------------------------------------------------------
+// Rig — high-level pipeline (global namespace object)
+// -----------------------------------------------------------------------------
+
+/** Built-in spec by name: 'humanoid' | 'quadruped' | 'hexapod' | 'octopod'. */
+function Rig_spec(name) {}             // -> RigSpec (empty if unknown)
+function Rig_specFromJSON(jsonText) {} // -> RigSpec
+function Rig_specFromFile(path) {}     // -> RigSpec
+
+/** Geometric landmark detection (returns { name: [x,y,z], ... }). */
+function Rig_detectHumanoid(mesh) {}
+function Rig_detectQuadruped(mesh) {}
+
+/** Names of spec landmarks not present in the supplied dict. */
+function Rig_missingLandmarks(spec, landmarks) {}  // -> string[]
+
+/** Build a Skeleton bound to a mesh via spec + landmarks. */
+function Rig_fitSkeleton(spec, landmarks, mesh) {} // -> Skeleton
+
+/**
+ * One-call autoRig:
+ * @returns {{ skeleton: Skeleton, skin: SkinData,
+ *             missingLandmarks: string[], warnings: string[],
+ *             methodUsed: string }}
+ */
+function Rig_autoRig(mesh, spec, landmarks, options) {}
+// options: { method: 'auto'|'voxelBind'|'boneHeat'|'bbw',
+//            smoothIterations: 2, smoothAlpha: 0.5, minWeight: 1e-3 }
+
+/** Synthesized walk/run cycle from skeleton + spec. */
+function Rig_generateLocomotionCycle(skeleton, spec, params) {} // -> Animation
+// params: { strideLength, cycleDuration, footLiftHeight, keyframesPerCycle,
+//           bodyBobAmplitude, gait: { name, phases:[float], dutyFactor } }
+
+
+// -----------------------------------------------------------------------------
+// VoxelChunk
+// -----------------------------------------------------------------------------
+class VoxelChunk {
+  /**
+   * @param {number} sizeX
+   * @param {number} sizeY
+   * @param {number} sizeZ
+   * @param {number} [cellSize=1]
+   */
+  constructor(sizeX, sizeY, sizeZ, cellSize) {}
+
+  /** @type {number}  */ sizeX;
+  /** @type {number}  */ sizeY;
+  /** @type {number}  */ sizeZ;
+  /** @type {number}  */ cellSize;
+  /** @type {boolean} */ isDirty;
+
+  getVoxel(x, y, z) {}                  // -> int (0 if OOB)
+  setVoxel(x, y, z, material) {}        // chainable
+  fill(value) {}                        // chainable
+  markDirty() {}
+  clearDirty() {}
+  data() {}                             // -> Uint8Array (copy)
+  setData(uint8Array) {}                // chainable; bulk copy + markDirty
+  buildMesh(palette, paletteCount) {}   // -> Mesh; palette = Float32Array (4 per material)
+}
+
+
+// -----------------------------------------------------------------------------
+// glTF rigged extensions
+// -----------------------------------------------------------------------------
+// Mesh.loadGLTF(path) returns:
+//   {
+//     meshes:            Mesh[],
+//     skins:             SkinData[],
+//     skeletons:         Skeleton[],
+//     animations:        Animation[],
+//     meshSkeleton:      number[],   // index into skeletons (-1 if unskinned)
+//     animationSkeleton: number[],   // index into skeletons
+//   }
+//
+// mesh.saveGLTF(path, opts?) — opts: { skin?, skeleton?, animations? }
+//   Without opts, saves an unskinned mesh (back-compat).
+//   With opts.skeleton, animations may be supplied.
