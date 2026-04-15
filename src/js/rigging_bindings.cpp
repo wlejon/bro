@@ -10,6 +10,13 @@
 #include <bromesh/animation/pose.h>
 #include <bromesh/animation/retarget.h>
 #include <bromesh/animation/ik.h>
+#include <bromesh/animation/locomotion.h>
+#include <bromesh/rigging/rig_spec.h>
+#include <bromesh/rigging/landmarks.h>
+#include <bromesh/rigging/landmark_detect.h>
+#include <bromesh/rigging/skeleton_fit.h>
+#include <bromesh/rigging/auto_rig.h>
+#include <bromesh/rigging/weighting.h>
 #include <bromesh/voxel/voxel_chunk.h>
 
 #include <cstring>
@@ -42,11 +49,16 @@ struct AnimationWrapper {
     std::unique_ptr<bromesh::Animation> anim;
 };
 
+struct RigSpecWrapper {
+    std::unique_ptr<bromesh::RigSpec> spec;
+};
+
 using SDW = SkinDataWrapper;
 using VCW = VoxelChunkWrapper;
 using SKW = SkeletonWrapper;
 using PW  = PoseWrapper;
 using AW  = AnimationWrapper;
+using RSW = RigSpecWrapper;
 
 // ---------------------------------------------------------------------------
 // TypedArray helpers (local copies — keep this file standalone from
@@ -410,6 +422,261 @@ static JSValue makeSocketsArray(JSContext* ctx, const std::vector<bromesh::Socke
     for (size_t i = 0; i < sks.size(); i++)
         JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeSocket(ctx, sks[i]));
     return arr;
+}
+
+// ---------------------------------------------------------------------------
+// Landmarks JS <-> bromesh::Landmarks
+// ---------------------------------------------------------------------------
+
+static bromesh::Landmarks readLandmarks(JSContext* ctx, JSValueConst obj) {
+    bromesh::Landmarks lm;
+    if (!JS_IsObject(obj)) return lm;
+    JSPropertyEnum* props = nullptr;
+    uint32_t count = 0;
+    if (JS_GetOwnPropertyNames(ctx, &props, &count, obj,
+                               JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) != 0) return lm;
+    for (uint32_t i = 0; i < count; i++) {
+        const char* name = JS_AtomToCString(ctx, props[i].atom);
+        if (!name) continue;
+        JSValue v = JS_GetProperty(ctx, obj, props[i].atom);
+        if (JS_IsArray(v) || JS_IsObject(v)) {
+            float xyz[3] = {0,0,0};
+            for (int k = 0; k < 3; k++) {
+                JSValue e = JS_GetPropertyUint32(ctx, v, (uint32_t)k);
+                double t = 0;
+                if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &t, e);
+                xyz[k] = (float)t;
+                JS_FreeValue(ctx, e);
+            }
+            lm.set(name, xyz[0], xyz[1], xyz[2]);
+        }
+        JS_FreeValue(ctx, v);
+        JS_FreeCString(ctx, name);
+    }
+    for (uint32_t i = 0; i < count; i++) JS_FreeAtom(ctx, props[i].atom);
+    js_free(ctx, props);
+    return lm;
+}
+
+static JSValue makeLandmarks(JSContext* ctx, const bromesh::Landmarks& lm) {
+    JSValue obj = JS_NewObject(ctx);
+    for (const auto& kv : lm.points) {
+        JSValue arr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, kv.second[0]));
+        JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, kv.second[1]));
+        JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, kv.second[2]));
+        JS_SetPropertyStr(ctx, obj, kv.first.c_str(), arr);
+    }
+    return obj;
+}
+
+static JSValue makeStringArray(JSContext* ctx, const std::vector<std::string>& v) {
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < v.size(); i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewString(ctx, v[i].c_str()));
+    return arr;
+}
+
+// ---------------------------------------------------------------------------
+// Rig.* — raw functions (registered as Rig.* on the global object)
+// ---------------------------------------------------------------------------
+
+static JSValue wrapRigSpec(JSContext* ctx, bromesh::RigSpec&& s) {
+    return qjsbind::wrap<RSW>(ctx,
+        new RSW{std::make_unique<bromesh::RigSpec>(std::move(s))});
+}
+
+static JSValue js_rig_spec(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Rig.spec(name)");
+    const char* name = JS_ToCString(ctx, argv[0]);
+    bromesh::RigSpec s = name ? bromesh::builtinRigSpec(name) : bromesh::RigSpec{};
+    if (name) JS_FreeCString(ctx, name);
+    return wrapRigSpec(ctx, std::move(s));
+}
+
+static JSValue js_rig_specFromJSON(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Rig.specFromJSON(jsonText)");
+    const char* json = JS_ToCString(ctx, argv[0]);
+    bromesh::RigSpec s = json ? bromesh::parseRigSpecJSON(json) : bromesh::RigSpec{};
+    if (json) JS_FreeCString(ctx, json);
+    return wrapRigSpec(ctx, std::move(s));
+}
+
+static JSValue js_rig_specFromFile(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Rig.specFromFile(path)");
+    const char* path = JS_ToCString(ctx, argv[0]);
+    bromesh::RigSpec s = path ? bromesh::loadRigSpecFile(path) : bromesh::RigSpec{};
+    if (path) JS_FreeCString(ctx, path);
+    return wrapRigSpec(ctx, std::move(s));
+}
+
+static JSValue js_rig_detectHumanoid(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Rig.detectHumanoid(mesh)");
+    auto* m = MeshBindings::getMeshData(ctx, argv[0]);
+    if (!m) return JS_ThrowTypeError(ctx, "argument must be a Mesh");
+    return makeLandmarks(ctx, bromesh::detectHumanoidLandmarks(*m));
+}
+
+static JSValue js_rig_detectQuadruped(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Rig.detectQuadruped(mesh)");
+    auto* m = MeshBindings::getMeshData(ctx, argv[0]);
+    if (!m) return JS_ThrowTypeError(ctx, "argument must be a Mesh");
+    return makeLandmarks(ctx, bromesh::detectQuadrupedLandmarks(*m));
+}
+
+static JSValue js_rig_missingLandmarks(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "Rig.missingLandmarks(spec, landmarks)");
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[0]);
+    if (!sw || !sw->spec) return JS_ThrowTypeError(ctx, "first argument must be a RigSpec");
+    auto lm = readLandmarks(ctx, argv[1]);
+    return makeStringArray(ctx, bromesh::missingLandmarks(*sw->spec, lm));
+}
+
+static JSValue js_rig_fitSkeleton(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "Rig.fitSkeleton(spec, landmarks, mesh)");
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[0]);
+    if (!sw || !sw->spec) return JS_ThrowTypeError(ctx, "first argument must be a RigSpec");
+    auto lm = readLandmarks(ctx, argv[1]);
+    auto* m = MeshBindings::getMeshData(ctx, argv[2]);
+    if (!m) return JS_ThrowTypeError(ctx, "third argument must be a Mesh");
+    return wrapSkeleton(ctx, bromesh::fitSkeleton(*sw->spec, lm, *m));
+}
+
+static bromesh::WeightingOptions readWeightingOptions(JSContext* ctx, JSValueConst obj) {
+    bromesh::WeightingOptions wo;
+    if (!JS_IsObject(obj)) return wo;
+    JSValue v;
+
+    v = JS_GetPropertyStr(ctx, obj, "method");
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        wo.method = bromesh::parseWeightingMethod(s ? s : "");
+        if (s) JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "smoothIterations");
+    if (!JS_IsUndefined(v)) { int32_t x = 2; JS_ToInt32(ctx, &x, v); wo.smoothIterations = x; }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "smoothAlpha");
+    if (!JS_IsUndefined(v)) { double x = 0.5; JS_ToFloat64(ctx, &x, v); wo.smoothAlpha = (float)x; }
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, obj, "minWeight");
+    if (!JS_IsUndefined(v)) { double x = 1e-3; JS_ToFloat64(ctx, &x, v); wo.minWeight = (float)x; }
+    JS_FreeValue(ctx, v);
+
+    return wo;
+}
+
+static JSValue js_rig_autoRig(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "Rig.autoRig(mesh, spec, landmarks, options?)");
+    auto* m  = MeshBindings::getMeshData(ctx, argv[0]);
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[1]);
+    if (!m)               return JS_ThrowTypeError(ctx, "mesh must be a Mesh");
+    if (!sw || !sw->spec) return JS_ThrowTypeError(ctx, "spec must be a RigSpec");
+    auto lm = readLandmarks(ctx, argv[2]);
+    bromesh::WeightingOptions wo = (argc > 3) ? readWeightingOptions(ctx, argv[3])
+                                              : bromesh::WeightingOptions{};
+    auto r = bromesh::autoRig(*m, *sw->spec, lm, wo);
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "skeleton", wrapSkeleton(ctx, std::move(r.skeleton)));
+    JS_SetPropertyStr(ctx, obj, "skin",     wrapSkinData(ctx, std::move(r.skin)));
+    JS_SetPropertyStr(ctx, obj, "missingLandmarks", makeStringArray(ctx, r.missingLandmarks));
+    JS_SetPropertyStr(ctx, obj, "warnings",         makeStringArray(ctx, r.warnings));
+    JS_SetPropertyStr(ctx, obj, "methodUsed",
+        JS_NewString(ctx, bromesh::weightingMethodName(r.methodUsed)));
+    return obj;
+}
+
+static JSValue js_rig_generateLocomotionCycle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx,
+        "Rig.generateLocomotionCycle(skeleton, spec, params?)");
+    auto* sk = qjsbind::unwrap<SKW>(ctx, argv[0]);
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[1]);
+    if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "first arg must be a Skeleton");
+    if (!sw || !sw->spec) return JS_ThrowTypeError(ctx, "second arg must be a RigSpec");
+    bromesh::LocomotionParams p;
+    if (argc > 2 && JS_IsObject(argv[2])) {
+        JSValue v;
+
+        v = JS_GetPropertyStr(ctx, argv[2], "strideLength");
+        if (!JS_IsUndefined(v)) { double x = 0; JS_ToFloat64(ctx, &x, v); p.strideLength = (float)x; }
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, argv[2], "cycleDuration");
+        if (!JS_IsUndefined(v)) { double x = 0; JS_ToFloat64(ctx, &x, v); p.cycleDuration = (float)x; }
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, argv[2], "footLiftHeight");
+        if (!JS_IsUndefined(v)) { double x = 0; JS_ToFloat64(ctx, &x, v); p.footLiftHeight = (float)x; }
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, argv[2], "keyframesPerCycle");
+        if (!JS_IsUndefined(v)) { int32_t x = 24; JS_ToInt32(ctx, &x, v); p.keyframesPerCycle = x; }
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, argv[2], "bodyBobAmplitude");
+        if (!JS_IsUndefined(v)) { double x = 0; JS_ToFloat64(ctx, &x, v); p.bodyBobAmplitude = (float)x; }
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, argv[2], "gait");
+        if (JS_IsObject(v)) {
+            JSValue n = JS_GetPropertyStr(ctx, v, "name");
+            if (JS_IsString(n)) {
+                const char* s = JS_ToCString(ctx, n);
+                if (s) { p.gait.name = s; JS_FreeCString(ctx, s); }
+            }
+            JS_FreeValue(ctx, n);
+            JSValue ph = JS_GetPropertyStr(ctx, v, "phases");
+            if (!JS_IsUndefined(ph) && JS_IsArray(ph)) {
+                JSValue lenV = JS_GetPropertyStr(ctx, ph, "length");
+                int32_t lp = 0; JS_ToInt32(ctx, &lp, lenV); JS_FreeValue(ctx, lenV);
+                p.gait.phases.clear(); p.gait.phases.reserve((size_t)lp);
+                for (int32_t i = 0; i < lp; i++) {
+                    JSValue e = JS_GetPropertyUint32(ctx, ph, (uint32_t)i);
+                    double t = 0; JS_ToFloat64(ctx, &t, e);
+                    p.gait.phases.push_back((float)t);
+                    JS_FreeValue(ctx, e);
+                }
+            }
+            JS_FreeValue(ctx, ph);
+            JSValue df = JS_GetPropertyStr(ctx, v, "dutyFactor");
+            if (!JS_IsUndefined(df)) { double x = 0.6; JS_ToFloat64(ctx, &x, df); p.gait.dutyFactor = (float)x; }
+            JS_FreeValue(ctx, df);
+        }
+        JS_FreeValue(ctx, v);
+    }
+    return wrapAnimation(ctx, bromesh::generateLocomotionCycle(*sk->skel, *sw->spec, p));
+}
+
+static JSValue js_rig_specName(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[0]);
+    if (!sw || !sw->spec) return JS_NULL;
+    return JS_NewString(ctx, sw->spec->name.c_str());
+}
+
+static JSValue js_rig_specToJSON(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[0]);
+    if (!sw || !sw->spec) return JS_NULL;
+    return JS_NewString(ctx, bromesh::serializeRigSpecJSON(*sw->spec).c_str());
+}
+
+static JSValue js_rig_specBoneCount(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewInt32(ctx, 0);
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[0]);
+    if (!sw || !sw->spec) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, (int)sw->spec->bones.size());
+}
+
+static JSValue js_rig_specLandmarkCount(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewInt32(ctx, 0);
+    auto* sw = qjsbind::unwrap<RSW>(ctx, argv[0]);
+    if (!sw || !sw->spec) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, (int)sw->spec->landmarks.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -884,6 +1151,40 @@ void RiggingBindings::install(JSContext* ctx) {
     })
     ;
 
+    // RigSpec — opaque wrapper for bromesh::RigSpec (build via Rig.spec/.specFromJSON)
+    // =======================================================================
+    qjsbind::Class<RSW>(ctx, "RigSpec")
+    .constructor([](JSContext*, int, JSValueConst*) -> RSW* {
+        return new RSW{std::make_unique<bromesh::RigSpec>()};
+    })
+    .get("name", [](RSW* w, JSContext* ctx) -> JSValue {
+        return w->spec ? JS_NewString(ctx, w->spec->name.c_str()) : JS_UNDEFINED;
+    })
+    .get("symmetric",     [](RSW* w) { return w->spec && w->spec->symmetric; })
+    .get("boneCount",     [](RSW* w) { return (int)(w->spec ? w->spec->bones.size()     : 0); })
+    .get("landmarkCount", [](RSW* w) { return (int)(w->spec ? w->spec->landmarks.size() : 0); })
+    .get("socketCount",   [](RSW* w) { return (int)(w->spec ? w->spec->sockets.size()   : 0); })
+    .method("toJSON", [](RSW* w, JSContext* ctx) -> JSValue {
+        if (!w->spec) return JS_NewString(ctx, "{}");
+        return JS_NewString(ctx, bromesh::serializeRigSpecJSON(*w->spec).c_str());
+    })
+    .method("landmarkNames", [](RSW* w, JSContext* ctx) -> JSValue {
+        if (!w->spec) return JS_NewArray(ctx);
+        std::vector<std::string> names;
+        names.reserve(w->spec->landmarks.size());
+        for (const auto& l : w->spec->landmarks) names.push_back(l.name);
+        return makeStringArray(ctx, names);
+    })
+    .method("boneNames", [](RSW* w, JSContext* ctx) -> JSValue {
+        if (!w->spec) return JS_NewArray(ctx);
+        std::vector<std::string> names;
+        names.reserve(w->spec->bones.size());
+        for (const auto& b : w->spec->bones) names.push_back(b.name);
+        return makeStringArray(ctx, names);
+    })
+    ;
+
+    // =======================================================================
     // VoxelChunk — fixed-height voxel grid with greedy meshing
     // =======================================================================
     qjsbind::Class<VCW>(ctx, "VoxelChunk")
@@ -964,10 +1265,11 @@ void RiggingBindings::install(JSContext* ctx) {
     ;
 
     // =======================================================================
-    // IK — global namespace object: IK.twoBone, IK.FABRIK, IK.lookAt
+    // IK + Rig — global namespace objects
     // =======================================================================
     {
         JSValue global = JS_GetGlobalObject(ctx);
+
         JSValue ikObj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, ikObj, "twoBone",
             JS_NewCFunction(ctx, js_ik_twoBone, "twoBone", 7));
@@ -976,6 +1278,36 @@ void RiggingBindings::install(JSContext* ctx) {
         JS_SetPropertyStr(ctx, ikObj, "lookAt",
             JS_NewCFunction(ctx, js_ik_lookAt,  "lookAt",  5));
         JS_SetPropertyStr(ctx, global, "IK", ikObj);
+
+        JSValue rigObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, rigObj, "spec",
+            JS_NewCFunction(ctx, js_rig_spec, "spec", 1));
+        JS_SetPropertyStr(ctx, rigObj, "specFromJSON",
+            JS_NewCFunction(ctx, js_rig_specFromJSON, "specFromJSON", 1));
+        JS_SetPropertyStr(ctx, rigObj, "specFromFile",
+            JS_NewCFunction(ctx, js_rig_specFromFile, "specFromFile", 1));
+        JS_SetPropertyStr(ctx, rigObj, "specName",
+            JS_NewCFunction(ctx, js_rig_specName, "specName", 1));
+        JS_SetPropertyStr(ctx, rigObj, "specToJSON",
+            JS_NewCFunction(ctx, js_rig_specToJSON, "specToJSON", 1));
+        JS_SetPropertyStr(ctx, rigObj, "specBoneCount",
+            JS_NewCFunction(ctx, js_rig_specBoneCount, "specBoneCount", 1));
+        JS_SetPropertyStr(ctx, rigObj, "specLandmarkCount",
+            JS_NewCFunction(ctx, js_rig_specLandmarkCount, "specLandmarkCount", 1));
+        JS_SetPropertyStr(ctx, rigObj, "detectHumanoid",
+            JS_NewCFunction(ctx, js_rig_detectHumanoid, "detectHumanoid", 1));
+        JS_SetPropertyStr(ctx, rigObj, "detectQuadruped",
+            JS_NewCFunction(ctx, js_rig_detectQuadruped, "detectQuadruped", 1));
+        JS_SetPropertyStr(ctx, rigObj, "missingLandmarks",
+            JS_NewCFunction(ctx, js_rig_missingLandmarks, "missingLandmarks", 2));
+        JS_SetPropertyStr(ctx, rigObj, "fitSkeleton",
+            JS_NewCFunction(ctx, js_rig_fitSkeleton, "fitSkeleton", 3));
+        JS_SetPropertyStr(ctx, rigObj, "autoRig",
+            JS_NewCFunction(ctx, js_rig_autoRig, "autoRig", 4));
+        JS_SetPropertyStr(ctx, rigObj, "generateLocomotionCycle",
+            JS_NewCFunction(ctx, js_rig_generateLocomotionCycle, "generateLocomotionCycle", 3));
+        JS_SetPropertyStr(ctx, global, "Rig", rigObj);
+
         JS_FreeValue(ctx, global);
     }
 }
