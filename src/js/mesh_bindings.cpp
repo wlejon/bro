@@ -1,4 +1,5 @@
 #include "js/mesh_bindings.h"
+#include "js/rigging_bindings.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -23,6 +24,7 @@
 #include <bromesh/manipulation/repair.h>
 #include <bromesh/manipulation/split_components.h>
 #include <bromesh/manipulation/shrinkwrap.h>
+#include <bromesh/manipulation/skin.h>
 #include <bromesh/optimization/optimize.h>
 #include <bromesh/optimization/analyze.h>
 #include <bromesh/optimization/meshlets.h>
@@ -1040,6 +1042,46 @@ void MeshBindings::install(JSContext* ctx) {
         JS_SetPropertyStr(ctx, o, "hasUVs",      JS_NewBool(ctx, w->data->hasUVs()));
         JS_SetPropertyStr(ctx, o, "hasColors",   JS_NewBool(ctx, w->data->hasColors()));
         return o;
+    })
+
+    // ── Skinning / morph (rigging) ─────────────────────────────────────
+    .method("applySkinning", [](MW* w, JSContext* ctx, JSValue skinVal, JSValue matricesVal) -> JSValue {
+        if (!w->data) return JS_ThrowTypeError(ctx, "neutered Mesh");
+        auto* skin = RiggingBindings::getSkinData(ctx, skinVal);
+        if (!skin) return JS_ThrowTypeError(ctx, "first argument must be a SkinData");
+        std::vector<float> mats;
+        if (!readFloatArrayVal(ctx, matricesVal, mats))
+            return JS_ThrowTypeError(ctx, "second argument must be a Float32Array of pose matrices");
+        size_t needed = skin->boneCount * 16;
+        if (mats.size() < needed)
+            return JS_ThrowRangeError(ctx, "pose matrices length %zu < boneCount*16 (%zu)",
+                                      mats.size(), needed);
+        bromesh::applySkinning(*w->data, *skin, mats.data());
+        return JS_UNDEFINED;
+    })
+    .method("applyMorphTarget", [](MW* w, JSContext* ctx, JSValue morph, double weight) -> JSValue {
+        if (!w->data) return JS_ThrowTypeError(ctx, "neutered Mesh");
+        if (!JS_IsObject(morph)) return JS_ThrowTypeError(ctx, "morph target must be an object");
+        bromesh::MorphTarget mt;
+        JSValue v;
+
+        v = JS_GetPropertyStr(ctx, morph, "name");
+        if (JS_IsString(v)) {
+            const char* s = JS_ToCString(ctx, v);
+            if (s) { mt.name = s; JS_FreeCString(ctx, s); }
+        }
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, morph, "deltaPositions");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v)) readFloatArrayVal(ctx, v, mt.deltaPositions);
+        JS_FreeValue(ctx, v);
+
+        v = JS_GetPropertyStr(ctx, morph, "deltaNormals");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v)) readFloatArrayVal(ctx, v, mt.deltaNormals);
+        JS_FreeValue(ctx, v);
+
+        bromesh::applyMorphTarget(*w->data, mt, (float)weight);
+        return JS_UNDEFINED;
     })
 
     // ── Static: Primitives ──────────────────────────────────────────────

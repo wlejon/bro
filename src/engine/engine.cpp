@@ -34,6 +34,7 @@
 #include "js/scene_bindings.h"
 #include "js/crosshair_bindings.h"
 #include "js/mesh_bindings.h"
+#include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
@@ -159,6 +160,9 @@ Engine::Engine(const EngineConfig& config)
 
     // Mesh bindings (standalone Mesh class wrapping bromesh — all modes)
     js::MeshBindings::install(jsRuntime_->getContext());
+
+    // Rigging bindings (SkinData, VoxelChunk; later: Skeleton/Pose/Animation/IK/Rig)
+    js::RiggingBindings::install(jsRuntime_->getContext());
 
     // AI bindings (game agent: navgrid, pathfinding, steering — all modes)
     js::AIBindings::install(jsRuntime_->getContext());
@@ -1118,6 +1122,7 @@ Engine::~Engine() {
         js::PhysicsBindings::cleanup(ctx);
         js::TerrainBindings::cleanup(ctx);
         js::MeshBindings::cleanup(ctx);
+        js::RiggingBindings::cleanup(ctx);
         js::AIBindings::cleanup(ctx);
         js::SceneBindings::cleanup(ctx);
         js::AudioBindings::cleanup(ctx);
