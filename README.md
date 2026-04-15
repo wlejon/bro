@@ -152,6 +152,10 @@ apps/myapp/
 
 while you technically could easily wire this up to be an actual web browser, it was not built for that. i have not paid mind to security at all. this exposes a _lot_ more of your system to javascript than a browser does. it'd be better if we didn't run random internet code in this unsecured sandbox.
 
+## why are there so many repos?
+
+splitting the codebase exploration into chunks makes coding agents work better for my workflow. i'll try to keep setup reasonable but i expect the submodule list will continue to grow.
+
 ## License
 
 [MIT](LICENSE)
