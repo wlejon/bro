@@ -55,7 +55,6 @@ html, body {
     height: 4px;
     background: #000;
     border: 1px solid rgba(255,255,255,0.35);
-    transform: translate(-50%, -100%);
     box-shadow: 0 0 2px rgba(0,0,0,0.8);
 }
 #dmg-overlay .hpbar.red  { border-color: rgba(231,76,60,0.85); }

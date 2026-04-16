@@ -277,14 +277,14 @@ var Scene3D = {};
     var UNIT_TOP_Y = 1.8;  // capsule center + halfHeight + radius = 0.9+0.5+0.4
     var BASE_CAM_DIST = 58;
     function syncHpBars(state) {
-        // Zoom-aware size: at default dist we show a 32px bar; scale is
-        // clamped so extreme zooms don't produce a pixel-dust or giant bar.
+        // Zoom-aware size: at default dist we show a 32px bar. Scale is
+        // clamped so extreme zooms don't produce pixel-dust or giant bars.
         var scale = BASE_CAM_DIST / Math.max(1, Scene3D.cam.dist);
-        if (scale < 0.45) scale = 0.45;
-        if (scale > 1.4)  scale = 1.4;
-        var barW = Math.round(32 * scale);
-        var barH = Math.max(3, Math.round(4 * scale));
-        var headOffsetPx = Math.round(10 * scale);
+        if (scale < 0.25) scale = 0.25;
+        if (scale > 1.5)  scale = 1.5;
+        var barW = Math.max(6, Math.round(32 * scale));
+        var barH = Math.max(2, Math.round(4 * scale));
+        var headOffsetPx = Math.max(4, Math.round(10 * scale));
 
         for (var i = 0; i < state.agents.length; i++) {
             var a = state.agents[i];
@@ -294,16 +294,23 @@ var Scene3D = {};
                 if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
                 continue;
             }
-            // Anchor at the actual capsule top, then nudge a few pixels up
-            // in screen space — robust across camera pitches and pans.
-            var sp = Scene3D.projectToScreen(a.x, UNIT_TOP_Y, a.z);
-            if (!sp) {
+            // Use the scene node's position — that's the authoritative world
+            // transform the engine actually renders, written by AgentBinding
+            // each tick. Reading a.x/a.z can lag/disagree depending on tick
+            // ordering, which made bars drift off-unit at extreme zooms.
+            var node = Scene3D.units[a.unit.id];
+            var wx = node ? node.x : a.x;
+            var wz = node ? node.z : a.z;
+            var sp = Scene3D.projectToScreen(wx, UNIT_TOP_Y, wz);
+            if (!sp || !isFinite(sp.x) || !isFinite(sp.y)) {
                 if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
                 continue;
             }
             hb.wrap.style.display = "block";
-            hb.wrap.style.left = sp.x + "px";
-            hb.wrap.style.top  = (sp.y - headOffsetPx) + "px";
+            // Explicit anchoring: center bar horizontally at sp.x, sit it
+            // just above sp.y by its own height plus a small pixel nudge.
+            hb.wrap.style.left = (sp.x - barW / 2) + "px";
+            hb.wrap.style.top  = (sp.y - barH - headOffsetPx) + "px";
             hb.wrap.style.width  = barW + "px";
             hb.wrap.style.height = barH + "px";
             var max = a.unit.maxHp || 1;
