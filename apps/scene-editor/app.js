@@ -6,10 +6,12 @@
 // tools, inference) builds on the screen→ray→hit pipeline proven here.
 // =============================================================================
 
-const canvas   = document.getElementById('canvas');
-const scene    = canvas.getContext('scene');
-const pickInfo = document.getElementById('pick-info');
-const toolName = document.getElementById('tool-name');
+const canvas     = document.getElementById('canvas');
+const scene      = canvas.getContext('scene');
+const pickInfo   = document.getElementById('pick-info');
+const toolName   = document.getElementById('tool-name');
+const snapInfo   = document.getElementById('snap-info');
+const snapMarker = document.getElementById('snap-marker');
 
 // --- Geometry: one box. Picking/edit state is rebuilt whenever the mesh
 // mutates (currently only push/pull). Buffers declared `let` so they can be
@@ -192,6 +194,10 @@ let faceGroups = computeFaceGroups(boxPositions, boxIndices);
 // and then push a fresh MeshData back into the scene.
 let editMesh = EditMesh.fromMeshData(boxPositions, boxIndices);
 
+// Snap-feature index for the inference engine: deduped vertices + model edges.
+// Re-derived alongside the BVH/face-groups whenever geometry mutates.
+let inferenceGeo = Inference.buildInferenceGeo(boxPositions, boxIndices, faceGroups);
+
 // Rebuild all mesh-derived state after the box buffers have been mutated.
 // Push/pull may flip winding and axis-parallel normals when the drag inverts
 // the geometry, so all three of positions/indices/normals need to flow back
@@ -200,9 +206,10 @@ function rebuildMeshState() {
     boxMesh.positions = boxPositions;
     boxMesh.indices   = boxIndices;
     if (boxNormals) boxMesh.normals = boxNormals;
-    boxBVH     = new MeshBVH(boxMesh);
-    faceGroups = computeFaceGroups(boxPositions, boxIndices);
-    editMesh   = EditMesh.fromMeshData(boxPositions, boxIndices);
+    boxBVH       = new MeshBVH(boxMesh);
+    faceGroups   = computeFaceGroups(boxPositions, boxIndices);
+    editMesh     = EditMesh.fromMeshData(boxPositions, boxIndices);
+    inferenceGeo = Inference.buildInferenceGeo(boxPositions, boxIndices, faceGroups);
 }
 
 function setHighlightFaceGroup(groupIdx) {
@@ -295,6 +302,7 @@ function setTool(t) {
     currentTool = t;
     if (toolName) toolName.textContent = t;
     clearHighlight();
+    showSnapMarker(null);
     pickInfo.textContent = 'no pick';
 }
 
@@ -541,6 +549,68 @@ function clearPushPull() {
     pushpull.workingIndices = null;
     pushpull.workingNormals = null;
     pushpull.inverted = false;
+    activeSnap = null;
+}
+
+// --- Inference snap marker --------------------------------------------------
+//
+// Resolves the cursor → best snap candidate via Inference.findSnap and renders
+// a small SVG glyph at the snap's screen position. Snap is also surfaced to
+// other tools — push/pull projects it onto the drag axis to lock depth, and
+// hover updates it for visual feedback even when no tool is dragging.
+
+const SNAP_SHAPES = {
+    'endpoint': '<circle cx="9" cy="9" r="5" fill="#2ecc71" stroke="#fff" stroke-width="1.5"/>',
+    'midpoint': '<polygon points="9,2 16,9 9,16 2,9" fill="none" stroke="#1abc9c" stroke-width="2"/>',
+    'on-edge':  '<rect x="3" y="3" width="12" height="12" fill="none" stroke="#e74c3c" stroke-width="2"/>',
+    'on-face':  '<polygon points="9,3 15,9 9,15 3,9" fill="#3498db" fill-opacity="0.4" stroke="#3498db" stroke-width="1.5"/>',
+};
+
+let activeSnap = null;
+
+function showSnapMarker(snap) {
+    activeSnap = snap;
+    if (!snap) {
+        snapMarker.style.display = 'none';
+        if (snapInfo) snapInfo.textContent = '';
+        return;
+    }
+    snapMarker.style.display = 'block';
+    snapMarker.style.left = snap.screen.x + 'px';
+    snapMarker.style.top  = snap.screen.y + 'px';
+    snapMarker.innerHTML  = '<svg width="18" height="18">' +
+        (SNAP_SHAPES[snap.type] || '') + '</svg>';
+    if (snapInfo) {
+        snapInfo.innerHTML = `snap: <b style="color:${snap.color}">${snap.label}</b>`;
+    }
+}
+
+// Look up the best snap for a canvas-relative cursor pixel + ray. Returns
+// either the inference snap (vertex/midpoint/edge) or — failing that — the
+// on-face fallback if `includeFaceFallback` is set.
+function resolveSnap(cx, cy, ray, includeFaceFallback) {
+    const camOpts = Camera.orbitViewOpts(cam, canvas);
+    const w = canvas.clientWidth || canvas.width;
+    const h = canvas.clientHeight || canvas.height;
+    const onFaceHit = includeFaceFallback
+        ? boxBVH.raycast(boxMesh, ray.origin, ray.dir, 0)
+        : null;
+    return Inference.findSnap({
+        cursorX: cx, cursorY: cy, ray,
+        camOpts, width: w, height: h,
+        geo: inferenceGeo,
+        onFaceHit,
+    });
+}
+
+// Project a snap point onto the push axis line through `pivot`. Returns the
+// scalar drag distance so applyPushPull(t) lands the pushed face coplanar
+// with the snapped feature along the axis.
+function snapAxisDistance(snap, pivot, axis) {
+    const dx = snap.position[0] - pivot[0];
+    const dy = snap.position[1] - pivot[1];
+    const dz = snap.position[2] - pivot[2];
+    return dx * axis[0] + dy * axis[1] + dz * axis[2];
 }
 
 // --- Input: right=rotate, middle=pan, wheel=zoom, left=tool ----------------
@@ -591,11 +661,29 @@ document.addEventListener('mouseup', (e) => {
 document.addEventListener('mousemove', (e) => {
     if (rightDown)  { Camera.orbitLook(cam, e.movementX, e.movementY); applyCamera(); return; }
     if (middleDown) { Camera.orbitPan (cam, e.movementX, e.movementY); applyCamera(); return; }
+    const r = canvas.getBoundingClientRect();
+    const cx = e.clientX - r.left;
+    const cy = e.clientY - r.top;
+    const ray = screenToRay(cx, cy);
     if (pushpull.active) {
-        const r = canvas.getBoundingClientRect();
-        const ray = screenToRay(e.clientX - r.left, e.clientY - r.top);
-        applyPushPull(rayVsAxisDistance(ray, pushpull.pivot, pushpull.axis));
+        // Inference takes priority over raw cursor projection: when a vertex,
+        // midpoint, or edge is within tolerance, lock the drag distance so the
+        // pushed face lands coplanar with the snapped feature along the axis.
+        const snap = resolveSnap(cx, cy, ray, false);
+        let dist;
+        if (snap) {
+            dist = snapAxisDistance(snap, pushpull.pivot, pushpull.axis);
+            showSnapMarker(snap);
+        } else {
+            dist = rayVsAxisDistance(ray, pushpull.pivot, pushpull.axis);
+            showSnapMarker(null);
+        }
+        applyPushPull(dist);
+        return;
     }
+    // Hover snap: includes on-face fallback so the marker tracks the cursor
+    // anywhere on the model, not just near features.
+    showSnapMarker(resolveSnap(cx, cy, ray, true));
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('auxclick',    (e) => { if (e.button === 1) e.preventDefault(); });
@@ -628,8 +716,10 @@ window.__editor = {
     get boxNormals()   { return boxNormals; },
     get faceGroups()   { return faceGroups; },
     get editMesh()     { return editMesh; },
+    get inferenceGeo() { return inferenceGeo; },
     get highlightNode(){ return highlightNode; },
     get currentTool()  { return currentTool; },
+    get activeSnap()   { return activeSnap; },
     clearHighlight, setHighlightTriangle, setHighlightTriangles,
     computeFaceGroups, setHighlightFaceGroup,
     setTool,
@@ -637,4 +727,6 @@ window.__editor = {
     beginPushPull, applyPushPull, commitPushPull, cancelPushPull,
     collectAffectedVertexIndices, rayVsAxisDistance,
     get pushpull() { return pushpull; },
+    // Inference hooks for headless testing.
+    resolveSnap, snapAxisDistance, showSnapMarker,
 };

@@ -33,6 +33,24 @@
             margin-top: 6px;
             min-height: 1em;
         }
+        #snap-info {
+            margin-top: 4px;
+            min-height: 1em;
+            font-family: system-ui, sans-serif;
+            font-size: 11px;
+            color: #aaa;
+        }
+        #snap-info b { color: #fff; }
+        #snap-marker {
+            position: absolute;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            z-index: 20;
+            display: none;
+            width: 18px;
+            height: 18px;
+        }
+        #snap-marker svg { display: block; }
     </style>
 </head>
 <body>
@@ -43,9 +61,12 @@
         <div class="hint"><b>S</b> select &nbsp;·&nbsp; <b>P</b> push/pull &nbsp;·&nbsp; <b>Esc</b> cancel</div>
         <div class="hint">tool: <span id="tool-name">select</span></div>
         <div id="pick-info">no pick</div>
+        <div id="snap-info"></div>
     </div>
+    <div id="snap-marker"></div>
     <script src="../lib/camera.js"></script>
     <script src="edit-mesh.js"></script>
+    <script src="inference.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
