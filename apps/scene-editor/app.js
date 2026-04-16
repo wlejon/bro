@@ -345,6 +345,12 @@ let currentTool = 'select';
 function setTool(t) {
     if (t === currentTool) return;
     if (pushpull.active) cancelPushPull();
+    // Tool switch closes any post-commit VCB window — stale lastOps from
+    // the previous tool shouldn't fire under the new tool.
+    MeasureBox.clearLastOp(measureBoxState);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
     currentTool = t;
     if (toolName) toolName.textContent = t;
     clearHighlight();
@@ -503,6 +509,13 @@ function beginPushPull(hit) {
     setHighlightTriangles(
         pushpull.faceTriangles, pushpull.axis,
         boxPositions, pushpull.workingIndices);
+    // Arm the VCB for distance input. Any buffer left from a previous
+    // post-commit window is cleared so the new drag starts with a blank
+    // value — cursor drives until the user types.
+    MeasureBox.clearLastOp(measureBoxState);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, true);
+    renderMeasureBox();
 }
 
 // Apply the current drag distance to the scene node via updateMesh. Does not
@@ -557,6 +570,19 @@ function applyPushPull(t) {
 
 function commitPushPull() {
     if (!pushpull.active) return;
+    // Stash the last-op BEFORE we clear pushpull — we need axis + a stable
+    // face reference point for the post-commit re-extrude path.
+    const lastOp = {
+        normal: pushpull.axis.slice(),
+        centroid: faceGroupCentroid(pushpull.groupIdx),
+        distance: pushpull.distance,
+    };
+    // After the commit the centroid has moved along the axis by `distance`;
+    // bring the saved centroid forward so findFaceGroupByNormal locates the
+    // now-displaced face.
+    lastOp.centroid[0] += pushpull.axis[0] * pushpull.distance;
+    lastOp.centroid[1] += pushpull.axis[1] * pushpull.distance;
+    lastOp.centroid[2] += pushpull.axis[2] * pushpull.distance;
     // Bake working buffers into the canonical box buffers; rebuild downstream.
     boxPositions = new Float32Array(pushpull.workingPositions);
     boxIndices   = new Uint32Array(pushpull.workingIndices);
@@ -569,6 +595,11 @@ function commitPushPull() {
         (pushpull.inverted ? '  [inverted through]' : '');
     clearPushPull();
     clearHighlight();
+    // Enter the post-commit VCB window so the user can retype a distance.
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setLastOp(measureBoxState, lastOp);
+    MeasureBox.setActive(measureBoxState, true);
+    renderMeasureBox();
 }
 
 function cancelPushPull() {
@@ -584,6 +615,12 @@ function cancelPushPull() {
     pickInfo.textContent = 'push/pull cancelled';
     clearPushPull();
     clearHighlight();
+    // Close VCB entirely — cancel wipes both the drag and any post-commit
+    // repeat window the user may have had open.
+    MeasureBox.clearLastOp(measureBoxState);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
 }
 
 function clearPushPull() {
@@ -636,6 +673,95 @@ for (const [type, color] of Object.entries(Inference._COLOR)) {
 }
 
 let activeSnap = null;
+
+// --- Measurement Box (VCB) --------------------------------------------------
+//
+// SketchUp-style precision input: during a push/pull drag, typing digits sets
+// an exact distance that overrides the cursor ray. After commit, the VCB
+// stays active so the user can type a new distance + Enter and re-extrude
+// the same face. A new mouse-drag or tool switch closes the post-commit
+// window.
+
+const measureBoxState = MeasureBox.createState();
+const measureBoxEl    = document.getElementById('measure-box');
+
+function renderMeasureBox() {
+    if (!measureBoxEl) return;
+    if (!measureBoxState.active) {
+        measureBoxEl.style.display = 'none';
+        return;
+    }
+    measureBoxEl.style.display = 'block';
+    const buf = measureBoxState.buffer;
+    const display = buf.length ? buf : '';
+    const hint = measureBoxState.lastOp && !pushpull.active
+        ? 'Type distance + Enter to re-extrude · Esc to dismiss'
+        : 'Type exact distance + Enter · Esc cancel';
+    measureBoxEl.innerHTML =
+        '<div class="label">Distance</div>' +
+        '<div><span class="value">' + (display || '&mdash;') + '</span>' +
+        '<span class="caret"></span></div>' +
+        '<div class="hint">' + hint + '</div>';
+}
+renderMeasureBox();
+
+// Find the face group whose normal matches `n` within cos tolerance. Used
+// by the post-commit re-apply: after a commit the face-group indices rebuild
+// but a normal-match + proximity-match is stable enough to recover the last
+// pushed face. Takes a reference position so ambiguous cases (two coplanar
+// faces with the same normal) prefer the one closer to where we last pushed.
+function findFaceGroupByNormal(n, ref) {
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < faceGroups.groups.length; i++) {
+        const g = faceGroups.groups[i];
+        const dot = g.normal[0]*n[0] + g.normal[1]*n[1] + g.normal[2]*n[2];
+        if (dot < 0.9995) continue;
+        // Centroid distance to ref (cheap proximity test).
+        const c = faceGroupCentroid(i);
+        const d = Math.hypot(c[0]-ref[0], c[1]-ref[1], c[2]-ref[2]);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    return bestIdx;
+}
+
+function faceGroupCentroid(gIdx) {
+    const tris = faceGroups.groups[gIdx].tris;
+    let cx = 0, cy = 0, cz = 0, n = 0;
+    for (const t of tris) {
+        for (let k = 0; k < 3; k++) {
+            const vi = boxIndices[t * 3 + k];
+            cx += boxPositions[vi * 3 + 0];
+            cy += boxPositions[vi * 3 + 1];
+            cz += boxPositions[vi * 3 + 2];
+            n++;
+        }
+    }
+    return [cx / n, cy / n, cz / n];
+}
+
+// Re-apply the last committed push/pull at a new distance. Returns true on
+// success. Matching strategy: find the face group whose normal is parallel
+// to the previous push axis and whose centroid is closest to the previous
+// centroid. Robust for simple single-primitive edits; may need refinement
+// once face-group splits (interior edges) come online.
+function redoLastPushPull(distance) {
+    const op = measureBoxState.lastOp;
+    if (!op) return false;
+    const gIdx = findFaceGroupByNormal(op.normal, op.centroid);
+    if (gIdx < 0) return false;
+    const g = faceGroups.groups[gIdx];
+    const centroid = faceGroupCentroid(gIdx);
+    beginPushPull({
+        triangleIndex: g.tris[0],
+        position: centroid,
+        normal: g.normal.slice(),
+        distance: 0,
+    });
+    applyPushPull(distance);
+    commitPushPull();
+    return true;
+}
 
 function hideSnapSpheres() {
     for (const t in snapSpheres) snapSpheres[t].visible = false;
@@ -731,6 +857,14 @@ function handleLeftDown(e) {
 
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 0) {
+        // Starting a new left-click closes any open post-commit VCB window;
+        // the user has moved on to a fresh interaction.
+        if (!pushpull.active && measureBoxState.lastOp) {
+            MeasureBox.clearLastOp(measureBoxState);
+            MeasureBox.clear(measureBoxState);
+            MeasureBox.setActive(measureBoxState, false);
+            renderMeasureBox();
+        }
         handleLeftDown(e);
     } else if (e.button === 2) {
         rightDown = true;
@@ -756,6 +890,14 @@ document.addEventListener('mousemove', (e) => {
     const cy = e.clientY - r.top;
     const ray = screenToRay(cx, cy);
     if (pushpull.active) {
+        // VCB takes absolute priority — a typed distance pins the preview
+        // regardless of cursor motion. The snap marker still tracks under
+        // the cursor so the user retains spatial context.
+        const vcbVal = MeasureBox.parseValue(measureBoxState.buffer);
+        if (vcbVal !== null) {
+            showSnapMarker(resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE));
+            return;
+        }
         // Inference takes priority over raw cursor projection when a vertex
         // or midpoint snaps. on-edge is excluded here: it's noisy under an
         // axis-constrained drag (the projected closest-point slides along the
@@ -785,9 +927,64 @@ canvas.addEventListener('wheel', (e) => {
     applyCamera();
     e.preventDefault();
 });
+// Route a key into the VCB + follow up with the side effect (drag preview,
+// commit, cancel). Returns true if the key was consumed; false lets the
+// global handler fall through to the tool-switch shortcuts.
+function handleMeasureBoxKey(key) {
+    if (!measureBoxState.active) return false;
+    const action = MeasureBox.feedKey(measureBoxState, key);
+    if (action === 'ignored') return false;
+    if (action === 'append') {
+        renderMeasureBox();
+        // Live preview: if the buffer parses to a number and we're mid-drag,
+        // update the geometry immediately. An invalid/empty buffer (e.g. the
+        // user just typed '-' or backspaced to '') keeps the last valid
+        // preview — the cursor doesn't reclaim control until the drag ends.
+        if (pushpull.active) {
+            const v = MeasureBox.parseValue(measureBoxState.buffer);
+            if (v !== null) applyPushPull(v);
+        }
+        return true;
+    }
+    if (action === 'commit') {
+        const v = MeasureBox.parseValue(measureBoxState.buffer);
+        if (pushpull.active) {
+            // Mid-drag Enter commits at the typed distance.
+            applyPushPull(v);
+            commitPushPull();
+        } else if (measureBoxState.lastOp) {
+            // Post-commit Enter re-runs the last op at the new distance.
+            // Clear buffer first so redoLastPushPull's commit repopulates
+            // lastOp with the fresh geometry — otherwise the buffer would
+            // be replayed on the next Enter.
+            MeasureBox.clear(measureBoxState);
+            renderMeasureBox();
+            redoLastPushPull(v);
+        }
+        return true;
+    }
+    if (action === 'cancel') {
+        renderMeasureBox();
+        // Esc wipes the whole interaction: active drag (if any), buffer,
+        // and post-commit window. One key, one predictable outcome.
+        if (pushpull.active) {
+            cancelPushPull();
+        } else {
+            MeasureBox.clearLastOp(measureBoxState);
+            MeasureBox.setActive(measureBoxState, false);
+            renderMeasureBox();
+        }
+        return true;
+    }
+    return false;
+}
+
 document.addEventListener('keydown', (e) => {
     // Ignore keybinds while typing in an input (none today, but future-proof).
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    // VCB gets first dibs — when active, digits/./-/Enter/Esc/Backspace flow
+    // into the measurement box and don't fall through to tool shortcuts.
+    if (handleMeasureBoxKey(e.key)) { e.preventDefault(); return; }
     const k = e.key.toLowerCase();
     if (k === 's') setTool('select');
     else if (k === 'p') setTool('pushpull');
@@ -822,4 +1019,7 @@ window.__editor = {
     get pushpull() { return pushpull; },
     // Inference hooks for headless testing.
     resolveSnap, snapAxisDistance, showSnapMarker,
+    // Measurement box (VCB) hooks for headless testing.
+    measureBoxState, renderMeasureBox, handleMeasureBoxKey,
+    redoLastPushPull, findFaceGroupByNormal, faceGroupCentroid,
 };

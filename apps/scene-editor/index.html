@@ -51,6 +51,38 @@
             height: 18px;
         }
         #snap-marker svg { display: block; }
+        /* VCB (Value Control Box): precision distance input. Bottom-right
+           corner, SketchUp-style. Shows the typed buffer with a blinking
+           caret and a trailing hint so the user learns the workflow. */
+        #measure-box {
+            position: absolute;
+            right: 14px;
+            bottom: 14px;
+            background: rgba(0,0,0,0.80);
+            color: #eee;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            z-index: 15;
+            pointer-events: none;
+            min-width: 180px;
+            display: none;
+        }
+        #measure-box .label { color: #aaa; font-size: 11px; font-family: system-ui, sans-serif; }
+        #measure-box .value { color: #ffa502; font-size: 16px; font-weight: bold; }
+        #measure-box .caret {
+            display: inline-block;
+            width: 1px;
+            background: #ffa502;
+            height: 14px;
+            margin-left: 2px;
+            vertical-align: -3px;
+            animation: vcb-blink 1.0s steps(2, start) infinite;
+        }
+        #measure-box .hint { color: #888; font-size: 10px; font-family: system-ui, sans-serif; margin-top: 2px; }
+        @keyframes vcb-blink { to { visibility: hidden; } }
     </style>
 </head>
 <body>
@@ -59,16 +91,19 @@
         <h2>Scene Editor</h2>
         <div class="hint"><b>right-drag</b> rotate &nbsp;·&nbsp; <b>middle-drag</b> pan &nbsp;·&nbsp; <b>wheel</b> zoom</div>
         <div class="hint"><b>S</b> select &nbsp;·&nbsp; <b>P</b> push/pull &nbsp;·&nbsp; <b>Esc</b> cancel</div>
+        <div class="hint">during drag: type <b>distance</b> + <b>Enter</b> for exact</div>
         <div class="hint">tool: <span id="tool-name">select</span></div>
         <div id="pick-info">no pick</div>
         <div id="snap-info"></div>
     </div>
     <div id="snap-marker"></div>
+    <div id="measure-box"></div>
     <script src="../lib/camera.js"></script>
     <script src="edit-mesh.js"></script>
     <script src="inference.js"></script>
     <script src="scene-axes.js"></script>
     <script src="edge-mesh.js"></script>
+    <script src="measure-box.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
