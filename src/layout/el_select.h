@@ -1,7 +1,6 @@
 #pragma once
 
 #include "layout/box.h"
-#include "layout/key_handle_result.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
 #include <string>
@@ -31,16 +30,8 @@ public:
               const htmlayout::css::ComputedStyle& style,
               float offsetX, float offsetY);
 
-    void drawDropdown();
-
     int selectedIndex() const { return selectedIndex_; }
     void setSelectedIndex(int idx) { selectedIndex_ = idx; }
-
-    bool isOpen() const { return open_; }
-    void setOpen(bool o) { open_ = o; }
-
-    int highlightedIndex() const { return highlightedIndex_; }
-    void setHighlightedIndex(int idx) { highlightedIndex_ = idx; }
 
     void setElement(dom::Element* el) { elem_ = el; }
     dom::Element* element() const { return elem_; }
@@ -48,13 +39,7 @@ public:
     struct DrawPos { float x, y, w, h; };
     DrawPos lastDrawPos() const { return lastDrawPos_; }
 
-    // Key handling — returns result for engine to dispatch events
-    KeyHandleResult handleKeyDown(dom::Element* el, int keycode, int mod);
-
     void getContentSize(float& w, float& h);
-
-    // Returns the line height used for dropdown items (for hover hit testing)
-    float dropdownLineHeight() const;
 
 private:
     uint64_t getFontHandle() const;
@@ -62,8 +47,6 @@ private:
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
     int selectedIndex_ = 0;
-    int highlightedIndex_ = -1;
-    bool open_ = false;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
     mutable uint64_t cachedFontHandle_ = 0;
 };

@@ -1407,9 +1407,9 @@ void Engine::rasterThreadFunc() {
                                       vpW, vpH);
         }
 
-        // Draw overlays (select dropdowns, color pickers) on top of all elements.
-        // These read active element state which is stable while raster is running.
-        drawActiveOverlays(document_.get());
+        // Draw the active app-context overlay (dropdown / color picker / etc.)
+        // on top of all elements.
+        overlayMgr_.drawIfContext(OverlayContext::App, rasterRenderer.get());
 
         // Draw viewport scrollbar
         {

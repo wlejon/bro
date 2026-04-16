@@ -6,6 +6,9 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
+#include "engine/color_picker_overlay.h"
+#include "engine/dropdown_overlay.h"
+#include "engine/overlay.h"
 #include "layout/el_select.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
@@ -80,46 +83,6 @@ static void safeStopTextInput(platform::Window* window) {
     if (window) SDL_StopTextInput(window->getSDLWindow());
 }
 
-// Pick a color from the color picker grid at pixel position (x, y).
-static std::string pickColorFromGrid(float x, float y,
-                                     float gridX, float gridY,
-                                     float gridW, float gridH) {
-    float cellW = (gridW - 4) / 10.0f;
-    float cellH = (gridH - 4) / 8.0f;
-    int col = std::clamp(static_cast<int>((x - gridX - 2) / cellW), 0, 9);
-    int row = std::clamp(static_cast<int>((y - gridY - 2) / cellH), 0, 7);
-
-    float hue = col * 36.0f;
-    float sat, lit;
-    if (row == 0) {
-        sat = 0.0f; lit = col / 9.0f;
-    } else {
-        sat = 1.0f; lit = 0.15f + (row - 1) * 0.1f;
-    }
-
-    auto hue2rgb = [](float p, float q, float t) -> float {
-        if (t < 0) t += 1; if (t > 1) t -= 1;
-        if (t < 1.0f/6) return p + (q-p)*6*t;
-        if (t < 1.0f/2) return q;
-        if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
-        return p;
-    };
-    uint8_t cr, cg, cb;
-    if (sat == 0) {
-        cr = cg = cb = static_cast<uint8_t>(lit * 255);
-    } else {
-        float q2 = lit < 0.5f ? lit*(1+sat) : lit+sat-lit*sat;
-        float p = 2*lit-q2;
-        float hn = hue/360.0f;
-        cr = static_cast<uint8_t>(hue2rgb(p, q2, hn+1.0f/3)*255);
-        cg = static_cast<uint8_t>(hue2rgb(p, q2, hn)*255);
-        cb = static_cast<uint8_t>(hue2rgb(p, q2, hn-1.0f/3)*255);
-    }
-
-    char hex[8];
-    snprintf(hex, sizeof(hex), "#%02x%02x%02x", cr, cg, cb);
-    return hex;
-}
 
 // ---------------------------------------------------------------------------
 // Event dispatch helpers
@@ -179,36 +142,10 @@ void dispatchFocusEvents(const ControlContext& ctx,
 
 ClickDisposition unfocusPreviousControl(
     const ControlContext& ctx,
-    dom::Element* prevActive,
-    float x, float y)
+    dom::Element* prevActive)
 {
     auto* prevInput = getElInput(prevActive);
     if (prevInput) {
-        // Close color picker if clicking outside it
-        if (prevInput->isPickerOpen()) {
-            auto dp = prevInput->lastDrawPos();
-            float px = dp.x, py = dp.y + dp.h + 2;
-            float pw = 200.0f, ph = 160.0f;
-            bool inPicker = (x >= px && x < px + pw && y >= py && y < py + ph);
-            bool inSwatch = (x >= dp.x && x < dp.x + dp.w &&
-                             y >= dp.y && y < dp.y + dp.h);
-            if (inPicker) {
-                std::string hex = pickColorFromGrid(x, y, px, py, pw, ph);
-                prevActive->setAttribute("value", hex.c_str());
-                dom::Event changeEvt("change");
-                dispatchControlEvent(ctx, prevActive, changeEvt);
-                dispatchInputEvent(ctx, prevActive);
-                prevInput->setPickerOpen(false);
-                *ctx.dirtyFlag = true;
-                return ClickDisposition::Consumed;
-            } else if (inSwatch) {
-                prevInput->setPickerOpen(false);
-                *ctx.dirtyFlag = true;
-                return ClickDisposition::Consumed;
-            } else {
-                prevInput->setPickerOpen(false);
-            }
-        }
         prevInput->setFocused(false);
         *ctx.dirtyFlag = true;
     }
@@ -219,34 +156,8 @@ ClickDisposition unfocusPreviousControl(
         *ctx.dirtyFlag = true;
     }
 
-    auto* prevSelect = getElSelect(prevActive);
-    if (prevSelect && prevSelect->isOpen()) {
-        // Check if click is inside the dropdown
-        auto dp = prevSelect->lastDrawPos();
-        auto opts = prevSelect->getOptions();
-        float lineH = prevSelect->dropdownLineHeight();
-        float dropY = dp.y + dp.h;
-        float dropH = lineH * static_cast<float>(opts.size()) + 2.0f;
-        bool inDropdown = (x >= dp.x && x < dp.x + dp.w &&
-                           y >= dropY && y < dropY + dropH);
-        if (inDropdown) {
-            // Select the clicked option
-            int idx = static_cast<int>((y - dropY - 1.0f) / lineH);
-            idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
-            prevSelect->setSelectedIndex(idx);
-            prevSelect->setOpen(false);
-            if (prevActive) {
-                prevActive->setAttribute("value", opts[idx].value);
-                dom::Event changeEvt("change");
-                dispatchControlEvent(ctx, prevActive, changeEvt);
-                dispatchInputEvent(ctx, prevActive);
-            }
-            *ctx.dirtyFlag = true;
-            return ClickDisposition::Consumed;
-        }
-        prevSelect->setOpen(false);
-        *ctx.dirtyFlag = true;
-    }
+    // Select dropdowns and color pickers are now managed by OverlayManager;
+    // click-outside dismissal is handled there, so nothing to do here.
 
     return ClickDisposition::PassThrough;
 }
@@ -323,22 +234,50 @@ void focusNewControl(
             dispatchInputEvent(ctx, target);
             *ctx.dirtyFlag = true;
         } else if (itype == layout::ElInput::InputType::Color) {
-            if (newInput->isPickerOpen()) {
+            // Open the engine color picker overlay anchored to this swatch.
+            // Supports alpha when the element has a `data-alpha` attribute.
+            if (ctx.overlays) {
                 auto dp = newInput->lastDrawPos();
-                float px = dp.x, py = dp.y + dp.h + 2;
-                float pw = 200.0f, ph = 160.0f;
-                if (x >= px && x < px + pw && y >= py && y < py + ph) {
-                    std::string hex = pickColorFromGrid(x, y, px, py, pw, ph);
-                    target->setAttribute("value", hex.c_str());
-                    dom::Event changeEvt("change");
-                    dispatchControlEvent(ctx, target, changeEvt);
-                    dispatchInputEvent(ctx, target);
-                }
-                newInput->setPickerOpen(false);
-            } else {
-                newInput->setPickerOpen(true);
+                std::string current = target->getAttribute("value");
+                if (current.empty()) current = "#000000";
+                bool withAlpha = target->hasAttribute("data-alpha");
+
+                JSContext* jsCtx = ctx.jsCtx;
+                bool* dirtyFlag = ctx.dirtyFlag;
+                dom::Element* elem = target;
+
+                auto onInput = [jsCtx, dirtyFlag, elem](const std::string& hex) {
+                    elem->setAttribute("value", hex);
+                    if (jsCtx) {
+                        dom::InputEvent evt("input");
+                        evt.setData(hex);
+                        evt.setIsTrusted(true);
+                        js::dispatchDomEvent(jsCtx, elem, evt);
+                    }
+                    if (dirtyFlag) *dirtyFlag = true;
+                };
+                auto onCommit = [jsCtx, dirtyFlag, elem](const std::string& hex) {
+                    elem->setAttribute("value", hex);
+                    if (jsCtx) {
+                        dom::Event evt("change");
+                        evt.setIsTrusted(true);
+                        js::dispatchDomEvent(jsCtx, elem, evt);
+                    }
+                    if (dirtyFlag) *dirtyFlag = true;
+                };
+
+                auto picker = std::make_unique<ColorPickerOverlay>(
+                    dp.x, dp.y, dp.w, dp.h,
+                    static_cast<float>(ctx.viewportW),
+                    static_cast<float>(ctx.viewportH),
+                    current, withAlpha,
+                    std::move(onInput), std::move(onCommit));
+                ctx.overlays->open(std::move(picker), ctx.overlayContext,
+                                   ctx.renderer);
+
+                // Enable SDL text input so the hex field receives characters.
+                safeStartTextInput(ctx.window);
             }
-            safeStopTextInput(ctx.window);
             *ctx.dirtyFlag = true;
         } else if (newInput->isTextType(target)) {
             // Number spin button click
@@ -379,60 +318,65 @@ void focusNewControl(
         safeStartTextInput(ctx.window);
         *ctx.dirtyFlag = true;
     } else if (newSelect) {
-        newSelect->setOpen(!newSelect->isOpen());
-        if (newSelect->isOpen()) {
-            newSelect->setHighlightedIndex(newSelect->selectedIndex());
+        // Open the engine dropdown overlay anchored to this select.
+        if (ctx.overlays) {
+            auto dp = newSelect->lastDrawPos();
+            auto opts = newSelect->getOptions();
+            std::vector<DropdownOverlay::Option> ddOpts;
+            ddOpts.reserve(opts.size());
+            for (auto& o : opts) ddOpts.push_back({o.value, o.text});
+
+            // Resolve font family / size from computed style.
+            std::string family = "Arial";
+            float fontSize = 16.0f;
+            {
+                auto& style = target->computedStyle();
+                auto it = style.find("font-family");
+                if (it != style.end() && !it->second.empty()) family = it->second;
+                auto sit = style.find("font-size");
+                if (sit != style.end()) {
+                    char* end = nullptr;
+                    float v = std::strtof(sit->second.c_str(), &end);
+                    if (end != sit->second.c_str() && v > 0) fontSize = v;
+                }
+            }
+
+            JSContext* jsCtx = ctx.jsCtx;
+            bool* dirtyFlag = ctx.dirtyFlag;
+            dom::Element* elem = target;
+            std::vector<DropdownOverlay::Option> optsCopy = ddOpts;
+            layout::ElSelect* sel = newSelect;
+
+            auto onSelect = [jsCtx, dirtyFlag, elem, optsCopy, sel](int index) {
+                if (index < 0 || index >= static_cast<int>(optsCopy.size())) return;
+                sel->setSelectedIndex(index);
+                elem->setAttribute("value", optsCopy[index].value);
+                if (jsCtx) {
+                    dom::Event changeEvt("change");
+                    changeEvt.setIsTrusted(true);
+                    js::dispatchDomEvent(jsCtx, elem, changeEvt);
+                    dom::InputEvent inputEvt("input");
+                    inputEvt.setData(optsCopy[index].value);
+                    inputEvt.setIsTrusted(true);
+                    js::dispatchDomEvent(jsCtx, elem, inputEvt);
+                }
+                if (dirtyFlag) *dirtyFlag = true;
+            };
+
+            auto dd = std::make_unique<DropdownOverlay>(
+                dp.x, dp.y, dp.w, dp.h,
+                static_cast<float>(ctx.viewportW),
+                static_cast<float>(ctx.viewportH),
+                std::move(ddOpts),
+                newSelect->selectedIndex(),
+                std::move(family), fontSize,
+                std::move(onSelect));
+            ctx.overlays->open(std::move(dd), ctx.overlayContext, ctx.renderer);
         }
         safeStopTextInput(ctx.window);
         *ctx.dirtyFlag = true;
     } else {
         safeStopTextInput(ctx.window);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Dropdown hover
-// ---------------------------------------------------------------------------
-
-bool updateDropdownHover(const ControlContext& ctx, float x, float y) {
-    if (!ctx.document) return false;
-    auto* activeEl = ctx.document->activeElement();
-    auto* select = getElSelect(activeEl);
-    if (!select || !select->isOpen()) return false;
-
-    auto dp = select->lastDrawPos();
-    auto opts = select->getOptions();
-    float lineH = select->dropdownLineHeight();
-    float dropY = dp.y + dp.h;
-    float dropH = lineH * static_cast<float>(opts.size()) + 2.0f;
-    if (x >= dp.x && x < dp.x + dp.w && y >= dropY && y < dropY + dropH) {
-        int idx = static_cast<int>((y - dropY - 1.0f) / lineH);
-        idx = std::clamp(idx, 0, static_cast<int>(opts.size()) - 1);
-        if (idx != select->highlightedIndex()) {
-            select->setHighlightedIndex(idx);
-            *ctx.dirtyFlag = true;
-        }
-        return true;
-    }
-    return false;
-}
-
-// ---------------------------------------------------------------------------
-// Draw active overlays (dropdowns, pickers)
-// ---------------------------------------------------------------------------
-
-void drawActiveOverlays(dom::Document* doc) {
-    if (!doc) return;
-    auto* activeEl = doc->activeElement();
-
-    auto* sel = getElSelect(activeEl);
-    if (sel && sel->isOpen()) {
-        sel->drawDropdown();
-    }
-
-    auto* inp = getElInput(activeEl);
-    if (inp && inp->isPickerOpen()) {
-        inp->drawColorPicker();
     }
 }
 

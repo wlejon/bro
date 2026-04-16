@@ -4,7 +4,6 @@
 #include "dom/node.h"
 #include "render/renderer.h"
 
-#include <SDL3/SDL_keycode.h>
 #include <algorithm>
 #include <cstring>
 
@@ -69,42 +68,6 @@ uint64_t ElSelect::getFontHandle() const {
     }
     cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
     return cachedFontHandle_;
-}
-
-// ---------------------------------------------------------------------------
-// Key handling
-// ---------------------------------------------------------------------------
-
-KeyHandleResult ElSelect::handleKeyDown(dom::Element* el, int keycode, int /*mod*/) {
-    KeyHandleResult r;
-    if (!open_) return r;
-
-    auto opts = getOptions();
-    int hi = highlightedIndex_;
-
-    if (keycode == SDLK_DOWN) {
-        if (hi < static_cast<int>(opts.size()) - 1)
-            setHighlightedIndex(hi + 1);
-        r.handled = true;
-    } else if (keycode == SDLK_UP) {
-        if (hi > 0)
-            setHighlightedIndex(hi - 1);
-        r.handled = true;
-    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
-        if (hi >= 0 && hi < static_cast<int>(opts.size())) {
-            setSelectedIndex(hi);
-            el->setAttribute("value", opts[hi].value);
-            r.dispatchChange = true;
-            r.dispatchInput = true;
-        }
-        setOpen(false);
-        r.handled = true;
-    } else if (keycode == SDLK_ESCAPE) {
-        setOpen(false);
-        r.handled = true;
-    }
-
-    return r;
 }
 
 void ElSelect::getContentSize(float& w, float& h) {
@@ -184,55 +147,6 @@ void ElSelect::draw(render::Renderer* renderer,
     };
     renderer_->drawPolygon(std::span<const render::PointF>(arrowPts, 3),
                           color, {0, 0, 0, 0}, 0.0f);
-
-    renderer_->restore();
-}
-
-float ElSelect::dropdownLineHeight() const {
-    uint64_t fontHandle = getFontHandle();
-    if (!fontHandle || !renderer_) return 20.0f;
-    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
-    return lm.lineHeight() + 8.0f; // line height + vertical padding
-}
-
-void ElSelect::drawDropdown() {
-    if (!open_ || !renderer_ || !elem_) return;
-
-    auto opts = getOptions();
-    if (opts.empty()) return;
-
-    uint64_t fontHandle = getFontHandle();
-    if (!fontHandle) return;
-
-    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
-    float lineHeight = lm.lineHeight() + 8.0f; // add vertical padding per item
-    float padX = 6.0f;
-    float padY = 4.0f; // vertical padding within each item
-
-    render::Color color = {0, 0, 0, 255};
-
-    float dropX = lastDrawPos_.x;
-    float dropY = lastDrawPos_.y + lastDrawPos_.h;
-    float dropW = lastDrawPos_.w;
-    float dropH = lineHeight * static_cast<float>(opts.size()) + 2.0f;
-
-    renderer_->save();
-    renderer_->resetClip();
-
-    renderer_->fillRect(dropX, dropY, dropW, dropH, {255, 255, 255, 255});
-    renderer_->drawRect(dropX, dropY, dropW, dropH, {118, 118, 118, 255});
-
-    for (int i = 0; i < static_cast<int>(opts.size()); ++i) {
-        float itemY = dropY + 1.0f + i * lineHeight;
-        if (i == highlightedIndex_) {
-            renderer_->fillRect(dropX + 1, itemY, dropW - 2, lineHeight, {0, 120, 215, 255});
-            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + lm.ascent,
-                               fontHandle, {255, 255, 255, 255});
-        } else {
-            renderer_->drawText(opts[i].text, dropX + padX, itemY + padY + lm.ascent,
-                               fontHandle, color);
-        }
-    }
 
     renderer_->restore();
 }

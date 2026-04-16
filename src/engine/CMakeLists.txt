@@ -38,6 +38,9 @@ add_library(bro_engine STATIC
     replaced_elements.cpp
     system_panels.cpp
     settings.cpp
+    overlay.cpp
+    dropdown_overlay.cpp
+    color_picker_overlay.cpp
     ${GENERATED_HEADERS}
 )
 target_include_directories(bro_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)

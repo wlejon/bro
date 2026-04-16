@@ -2,6 +2,7 @@
 
 #include "engine/app_loader.h"
 #include "engine/css_transitions.h"
+#include "engine/overlay.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
 #include "layout/draw_traversal.h"
@@ -190,6 +191,9 @@ public:
 
     /// Access the settings manager.
     Settings* settings() const { return settings_.get(); }
+
+    /// Access the overlay manager (hosts dropdowns, color picker, etc.).
+    OverlayManager& overlays() { return overlayMgr_; }
 
     /// Run pending JS jobs and re-layout if dirty.
     void flush();
@@ -394,6 +398,7 @@ private:
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
 
     CrosshairConfig crosshair_;
+    OverlayManager overlayMgr_;
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;

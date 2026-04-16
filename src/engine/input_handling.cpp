@@ -5,6 +5,7 @@
 #include "engine/hit_testing.h"
 #include "engine/key_mapping.h"
 #include "engine/overflow.h"
+#include "engine/overlay.h"
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 
@@ -316,6 +317,15 @@ void Engine::handleMouseDown(float x, float y, int button) {
     // event sees the standard 0=left/1=middle/2=right indexing.
     button = sdlToDomButton(button);
 
+    // Overlay manager sees every input event before the DOM so hover/click
+    // can't leak through to elements underneath. (Same pattern in the other
+    // handleMouse*/handleKey*/handleTextInput methods.)
+    if (overlayMgr_.handleMouseDown(x, y, button)) {
+        pressedButtons_ |= domButtonMask(button);
+        uiDirty_ = true;
+        return;
+    }
+
     // Forward to system overlay first — if it consumes, skip app handling
     if (systemHandleMouseDown(x, y, button)) {
         pressedButtons_ |= domButtonMask(button);
@@ -389,8 +399,10 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
             // Unfocus previous controls and check if click was consumed
             ControlContext cctx{document_.get(), jsRuntime_->getContext(),
-                               renderer_.get(), window_.get(), &uiDirty_};
-            auto disp = unfocusPreviousControl(cctx, prevActive, x, docY);
+                               renderer_.get(), window_.get(), &uiDirty_,
+                               &overlayMgr_, OverlayContext::App,
+                               viewportWidth_, viewportHeight_};
+            auto disp = unfocusPreviousControl(cctx, prevActive);
             if (disp == ClickDisposition::Consumed) {
                 computeOffset(evt, target);
                 dispatchEvent(target, evt);
@@ -424,6 +436,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
     // Update button bitmask (DOM convention)
     pressedButtons_ &= ~domButtonMask(button);
+
+    if (overlayMgr_.handleMouseUp(x, y, button)) {
+        uiDirty_ = true;
+        return;
+    }
 
     // Forward to system overlay first
     if (systemHandleMouseUp(x, y, button)) {
@@ -542,6 +559,14 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // x, y = screen space. docX, docY = document space (see handleMouseDown).
     float docX = x, docY = y + scrollY_;
 
+    // Overlay manager sees mousemove first. While an overlay is active,
+    // DOM hover is suppressed entirely — otherwise hovering elements under
+    // the dropdown/picker would trigger :hover styles and JS handlers.
+    bool overlayActive = overlayMgr_.hasActive();
+    if (overlayActive && overlayMgr_.handleMouseMove(x, y)) {
+        uiDirty_ = true;
+    }
+
     // Forward to system overlay first (but don't block app mousemove —
     // overlay consumes only if mouse is over an overlay element)
     if (isSystemVisible()) {
@@ -641,15 +666,8 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         }
     }
 
-    // Update dropdown highlight on hover
-    {
-        ControlContext cctx{document_.get(), jsRuntime_->getContext(),
-                           renderer_.get(), window_.get(), &uiDirty_};
-        updateDropdownHover(cctx, x, y);
-    }
-
-    // Dispatch mousemove event
-    if (document_) {
+    // Dispatch mousemove event (suppressed while any overlay is active)
+    if (document_ && !overlayActive) {
         dom::Element* target = hitTest(docX, docY);
 
         // Dispatch mouseover/mouseout when element changes (bubbling versions)
@@ -798,6 +816,11 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
 }
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
+    if (overlayMgr_.handleKeyDown(keycode, mod)) {
+        uiDirty_ = true;
+        return;
+    }
+
     // Check for system actions via the settings action binding system
     if (!repeat && settings_) {
         std::string webKey = sdlKeycodeToWebKey(keycode, mod);
@@ -909,8 +932,6 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         result = input->handleKeyDown(activeEl, keycode, mod);
     } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
         result = textarea->handleKeyDown(activeEl, keycode, mod);
-    } else if (auto* select = getElSelect(activeEl); select && select->isOpen()) {
-        result = select->handleKeyDown(activeEl, keycode, mod);
     }
 
     if (result.handled) {
@@ -945,7 +966,7 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     bool focusedControl = false;
     if (auto* input = getElInput(activeEl)) focusedControl = input->isFocused();
     if (auto* ta = getElTextarea(activeEl)) focusedControl = focusedControl || ta->isFocused();
-    if (auto* sel = getElSelect(activeEl)) focusedControl = focusedControl || sel->isOpen();
+    if (getElSelect(activeEl)) focusedControl = true;
     dom::Element* target = focusedControl ? activeEl : document_->body();
     if (target) {
         dispatchEvent(target, evt);
@@ -973,6 +994,11 @@ void Engine::handleTextInput(const std::string& text) {
 
     // Filter control characters for all inputs
     if (isControlChar(text)) return;
+
+    if (overlayMgr_.handleTextInput(text)) {
+        uiDirty_ = true;
+        return;
+    }
 
     auto* activeEl = document_->activeElement();
     layout::KeyHandleResult result;
@@ -1055,8 +1081,8 @@ void Engine::advanceFocus(bool reverse) {
         if (prevInput) prevInput->setFocused(false);
         auto* prevTa = getElTextarea(activeEl);
         if (prevTa) prevTa->setFocused(false);
-        auto* prevSel = getElSelect(activeEl);
-        if (prevSel) prevSel->setOpen(false);
+        // Tab-advancing away from a <select> dismisses any open dropdown.
+        if (getElSelect(activeEl)) overlayMgr_.close();
     }
 
     // Focus next
@@ -1093,6 +1119,11 @@ void Engine::advanceFocus(bool reverse) {
 
 void Engine::handleWheel(float x, float y, float dx, float dy) {
     if (!document_) return;
+
+    if (overlayMgr_.handleWheel(x, y, dx, dy)) {
+        uiDirty_ = true;
+        return;
+    }
 
     float docX = x, docY = y + scrollY_;
     dom::Element* target = hitTest(docX, docY);

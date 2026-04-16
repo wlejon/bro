@@ -253,6 +253,7 @@ bool Engine::screenshot(const std::string& path) {
         if (document_->documentElement()) {
             drawTraversal_->draw(document_->documentElement(), 0, 0, w, h);
         }
+        overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
         renderer_->endFrame();
         skia->uploadToGPU();
 
@@ -721,6 +722,8 @@ std::vector<uint8_t> Engine::capturePixels() {
     }
 
     drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
+
+    overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
 
     if (isSystemVisible()) {
         tickSystemPanels(virtualTime_);

@@ -55,11 +55,6 @@ public:
     struct DrawPos { float x, y, w, h; };
     DrawPos lastDrawPos() const { return lastDrawPos_; }
 
-    // Color picker
-    bool isPickerOpen() const { return pickerOpen_; }
-    void setPickerOpen(bool o) { pickerOpen_ = o; }
-    void drawColorPicker();
-
     // Key/text input handling — returns result for engine to dispatch events
     KeyHandleResult handleKeyDown(dom::Element* el, int keycode, int mod);
     KeyHandleResult handleTextInput(dom::Element* el, const std::string& text);
@@ -82,7 +77,6 @@ private:
     int cursorPos_ = 0;
     bool focused_ = false;
     bool dragging_ = false;
-    bool pickerOpen_ = false;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
     mutable uint64_t cachedFontHandle_ = 0;
 };

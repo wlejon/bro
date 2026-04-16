@@ -2,6 +2,7 @@
 
 #include "dom/element.h"
 #include "dom/event.h"
+#include "engine/overlay.h"
 #include "render/renderer.h"
 #include "layout/el_select.h"
 #include "layout/el_input.h"
@@ -37,23 +38,24 @@ struct ControlContext {
     render::Renderer* renderer;
     platform::Window* window;   // may be nullptr (headless / overlay)
     bool* dirtyFlag;            // points to uiDirty_ or renderDirty_
+    OverlayManager* overlays = nullptr;   // engine-wide overlay manager
+    OverlayContext overlayContext = OverlayContext::App; // which pass draws overlays
+    int viewportW = 0;         // for overlay anchoring (keep popups on-screen)
+    int viewportH = 0;
 };
 
 /// Result of handling a click on a previously-active control.
 enum class ClickDisposition {
     PassThrough,    // click was not consumed — continue processing
     Consumed,       // click was consumed (e.g. dropdown option selected)
-    ClosedOverlay,  // an overlay (dropdown/picker) was closed, continue
 };
 
-/// Unfocus the previously-active replaced element control (close open
-/// dropdowns, unfocus inputs/textareas).  If the click lands inside an
-/// open dropdown or color picker, the click is consumed and the caller
-/// should stop processing.
+/// Unfocus the previously-active replaced element control (unfocus inputs
+/// and textareas). Dropdowns and color pickers now live in the overlay
+/// manager, which handles click-outside dismissal itself.
 ClickDisposition unfocusPreviousControl(
     const ControlContext& ctx,
-    dom::Element* prevActive,
-    float x, float y);
+    dom::Element* prevActive);
 
 /// Activate a newly-clicked replaced element (toggle select dropdown,
 /// focus input/textarea, handle checkbox/radio/range/color/number).
@@ -61,15 +63,6 @@ void focusNewControl(
     const ControlContext& ctx,
     dom::Element* target,
     float x, float y);
-
-/// Update select dropdown highlight based on mouse position.
-/// Returns true if a dropdown consumed the hover.
-bool updateDropdownHover(
-    const ControlContext& ctx,
-    float x, float y);
-
-/// Draw open select dropdowns / color pickers for the active element.
-void drawActiveOverlays(dom::Document* doc);
 
 // ---------------------------------------------------------------------------
 // Inline helpers

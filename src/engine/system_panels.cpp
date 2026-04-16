@@ -471,11 +471,8 @@ void Engine::renderSystemPanels() {
                                 viewportWidth_, viewportHeight_);
     }
 
-    // Draw open dropdowns / color pickers on top of all panels
-    for (auto& doc : systemDocs_) {
-        if (!isSystemDocVisible(doc) || !doc.document) continue;
-        drawActiveOverlays(doc.document.get());
-    }
+    // Draw the active system-context overlay (if any) on top of panels.
+    overlayMgr_.drawIfContext(OverlayContext::System, systemRenderer_.get());
 
     systemRenderer_->endFrame();
     systemRenderer_->uploadToGPU();
@@ -522,9 +519,11 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
         ControlContext cctx{doc.document.get(), doc.jsCtx,
-                           systemRenderer_.get(), window_.get(), &systemDirty_};
+                           systemRenderer_.get(), window_.get(), &systemDirty_,
+                           &overlayMgr_, OverlayContext::System,
+                           viewportWidth_, viewportHeight_};
         auto* prevActive = doc.document->activeElement();
-        auto disp = unfocusPreviousControl(cctx, prevActive, x, y);
+        auto disp = unfocusPreviousControl(cctx, prevActive);
         if (disp == ClickDisposition::Consumed) {
             systemMouseConsumed_ = true;
             systemDirty_ = true;
@@ -539,7 +538,9 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
         dom::Element* target = systemHitTest(doc, x, y);
         if (target) {
             ControlContext cctx{doc.document.get(), doc.jsCtx,
-                               systemRenderer_.get(), window_.get(), &systemDirty_};
+                               systemRenderer_.get(), window_.get(), &systemDirty_,
+                               &overlayMgr_, OverlayContext::System,
+                               viewportWidth_, viewportHeight_};
 
             auto* prevActive = doc.document->activeElement();
             doc.document->setActiveElement(target);
@@ -593,7 +594,9 @@ bool Engine::systemHandleMouseUp(float x, float y, int button) {
                 if (input && input->isDragging()) {
                     input->setDragging(false);
                     ControlContext cctx{doc.document.get(), doc.jsCtx,
-                                       systemRenderer_.get(), window_.get(), &systemDirty_};
+                                       systemRenderer_.get(), window_.get(), &systemDirty_,
+                                       &overlayMgr_, OverlayContext::System,
+                                       viewportWidth_, viewportHeight_};
                     dom::Event changeEvt("change");
                     dispatchControlEvent(cctx, activeEl, changeEvt);
                 }
@@ -608,14 +611,6 @@ bool Engine::systemHandleMouseUp(float x, float y, int button) {
 
 bool Engine::systemHandleMouseMove(float x, float y) {
     if (!isSystemVisible()) return false;
-
-    // Update dropdown highlight on hover
-    for (auto& doc : systemDocs_) {
-        if (!isSystemDocVisible(doc) || !doc.document) continue;
-        ControlContext cctx{doc.document.get(), doc.jsCtx,
-                           systemRenderer_.get(), window_.get(), &systemDirty_};
-        updateDropdownHover(cctx, x, y);
-    }
 
     dom::Element* newTarget = nullptr;
     SystemDocument* newDoc = nullptr;
