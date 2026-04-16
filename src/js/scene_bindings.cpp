@@ -713,7 +713,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
 
         // Check for raw vertex data (positions + indices arrays)
         if (!hasRawData) {
-            std::vector<float> positions, normals;
+            std::vector<float> positions, normals, colors;
             std::vector<uint32_t> indices;
             if (jsReadFloatArray(ctx, opts, "positions", positions) &&
                 jsReadUint32Array(ctx, opts, "indices", indices)) {
@@ -721,6 +721,9 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
                 meshData.indices = std::move(indices);
                 if (jsReadFloatArray(ctx, opts, "normals", normals)) {
                     meshData.normals = std::move(normals);
+                }
+                if (jsReadFloatArray(ctx, opts, "colors", colors)) {
+                    meshData.colors = std::move(colors);
                 }
                 hasRawData = true;
             }
