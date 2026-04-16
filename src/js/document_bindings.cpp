@@ -1,10 +1,9 @@
 #include "js/dom_bindings_internal.h"
 #include "js/custom_elements.h"
 #include "js/image_bindings.h"
+#include "engine/engine.h"
 
 #include <qjsbind/qjsbind.h>
-
-#include <SDL3/SDL_mouse.h>
 
 namespace bro::js {
 
@@ -167,10 +166,10 @@ static JSValue js_document_removeEventListener(JSContext* ctx,
 
 static JSValue js_document_exitPointerLock(JSContext* ctx, JSValueConst /*this_val*/,
                                             int /*argc*/, JSValueConst* /*argv*/) {
-    auto it = s_ctx_sdl_windows.find(ctx);
-    if (it != s_ctx_sdl_windows.end() && it->second) {
-        SDL_SetWindowRelativeMouseMode(static_cast<SDL_Window*>(it->second), false);
-    }
+    auto it = s_ctx_engines.find(ctx);
+    if (it == s_ctx_engines.end() || !it->second) return JS_UNDEFINED;
+    auto* engine = static_cast<bro::engine::Engine*>(it->second);
+    engine->exitPointerLock();
     return JS_UNDEFINED;
 }
 
@@ -199,6 +198,13 @@ void installDocumentBindings(JSContext* ctx) {
         })
         .get("activeElement", [](Doc* d, JSContext* cx) -> JSValue {
             auto* el = d->activeElement();
+            return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
+        })
+        .get("pointerLockElement", [](Doc*, JSContext* cx) -> JSValue {
+            auto it = s_ctx_engines.find(cx);
+            if (it == s_ctx_engines.end() || !it->second) return JS_NULL;
+            auto* engine = static_cast<bro::engine::Engine*>(it->second);
+            auto* el = engine->pointerLockElement();
             return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
         })
         // Simple methods with auto conversion

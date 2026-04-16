@@ -355,6 +355,7 @@ Engine::Engine(const EngineConfig& config)
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());
     js::DomBindings::setSDLWindow(jsRuntime_->getContext(),
                                   window_ ? window_->getSDLWindow() : nullptr);
+    js::DomBindings::setEngine(jsRuntime_->getContext(), this);
 
     // 9b. Install custom elements (after DOM bindings — needs element class ID)
     js::installCustomElements(jsRuntime_->getContext(),
@@ -1654,6 +1655,9 @@ void Engine::run() {
     eventLoop_->onDropText = [this](const std::string& text, float x, float y) {
         handleDropText(text, x, y);
     };
+    // SDL drops relative mouse mode on focus loss on some platforms — keep our
+    // engine-side lock state in sync so apps see a pointerlockchange.
+    eventLoop_->onFocusLost = [this]() { exitPointerLock(); };
 
     // Initial layout
     if (document_) {

@@ -23,6 +23,7 @@ public:
     std::function<void(float x, float y, float dx, float dy)> onWheel;
     std::function<void(const std::string& path, float x, float y)> onDropFile;
     std::function<void(const std::string& text, float x, float y)> onDropText;
+    std::function<void()> onFocusLost;
 
     /// Polls all pending SDL events and dispatches to callbacks.
     /// Call once per frame.

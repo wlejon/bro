@@ -4,10 +4,10 @@
 #include "util/log.h"
 #include "dom/event.h"
 #include "dom/shadow_root.h"
+#include "engine/engine.h"
 #include "layout/el_select.h"
 
 #include <qjsbind/qjsbind.h>
-#include <SDL3/SDL_mouse.h>
 
 #include "dataset_proxy.js.h"
 
@@ -2177,13 +2177,15 @@ static JSValue js_element_get_shadowRoot(JSContext* ctx, JSValueConst this_val) 
     return wrapShadowRoot(ctx, sr);
 }
 
-// requestPointerLock() — captures mouse with relative mode
-static JSValue js_element_requestPointerLock(JSContext* ctx, JSValueConst /*this_val*/,
+// requestPointerLock() — captures mouse with relative mode and freezes hit-test
+// position to this element until document.exitPointerLock() is called.
+static JSValue js_element_requestPointerLock(JSContext* ctx, JSValueConst this_val,
                                               int /*argc*/, JSValueConst* /*argv*/) {
-    auto it = s_ctx_sdl_windows.find(ctx);
-    if (it != s_ctx_sdl_windows.end() && it->second) {
-        SDL_SetWindowRelativeMouseMode(static_cast<SDL_Window*>(it->second), true);
-    }
+    auto* el = getElement(this_val);
+    auto it = s_ctx_engines.find(ctx);
+    if (!el || it == s_ctx_engines.end() || !it->second) return JS_UNDEFINED;
+    auto* engine = static_cast<bro::engine::Engine*>(it->second);
+    engine->requestPointerLock(el);
     return JS_UNDEFINED;
 }
 

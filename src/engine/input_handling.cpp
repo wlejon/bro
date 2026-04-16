@@ -520,6 +520,25 @@ void Engine::handleMouseUp(float x, float y, int button) {
 }
 
 void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
+    // If the locked element was removed from the DOM, release the lock.
+    if (lockedElement_ && !lockedElement_->isAlive()) exitPointerLock();
+
+    // Pointer lock: OS cursor is pinned by SDL's relative mouse mode. SDL still
+    // accumulates a virtual x/y in motion events, but we ignore it — clientX/Y
+    // stays frozen at the lock position and movementX/Y carries the delta.
+    if (lockedElement_) {
+        if (document_) {
+            int mod = safeGetModState(window_.get());
+            dom::MouseEvent moveEvt("mousemove", true, true);
+            populateMouseEvent(moveEvt, lockedMouseX_, lockedMouseY_, -1,
+                               pressedButtons_, xrel, yrel, scrollY_, mod);
+            computeOffset(moveEvt, lockedElement_);
+            dispatchEvent(lockedElement_, moveEvt);
+            if (jsRuntime_) jsRuntime_->executePendingJobs();
+        }
+        return;
+    }
+
     // x, y = screen space. docX, docY = document space (see handleMouseDown).
     float docX = x, docY = y + scrollY_;
 
@@ -699,6 +718,48 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     lastMouseX_ = x;
     lastMouseY_ = y;
+}
+
+// ---------------------------------------------------------------------------
+// Pointer lock
+// ---------------------------------------------------------------------------
+
+bool Engine::requestPointerLock(dom::Element* target) {
+    if (!target || !target->isAlive()) return false;
+    if (lockedElement_ == target) return true;
+
+    lockedElement_ = target;
+    lockedMouseX_ = lastMouseX_;
+    lockedMouseY_ = lastMouseY_;
+
+    if (window_) {
+        SDL_SetWindowRelativeMouseMode(window_->getSDLWindow(), true);
+    }
+
+    // Notify listeners on document (document.addEventListener forwards to documentElement).
+    if (document_ && document_->documentElement()) {
+        dom::Event evt("pointerlockchange", true, false);
+        evt.setIsTrusted(true);
+        dispatchEvent(document_->documentElement(), evt);
+        if (jsRuntime_) jsRuntime_->executePendingJobs();
+    }
+    return true;
+}
+
+void Engine::exitPointerLock() {
+    if (!lockedElement_) return;
+    lockedElement_ = nullptr;
+
+    if (window_) {
+        SDL_SetWindowRelativeMouseMode(window_->getSDLWindow(), false);
+    }
+
+    if (document_ && document_->documentElement()) {
+        dom::Event evt("pointerlockchange", true, false);
+        evt.setIsTrusted(true);
+        dispatchEvent(document_->documentElement(), evt);
+        if (jsRuntime_) jsRuntime_->executePendingJobs();
+    }
 }
 
 // ---------------------------------------------------------------------------

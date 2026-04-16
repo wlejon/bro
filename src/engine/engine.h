@@ -163,6 +163,14 @@ public:
     float getLastMouseX() const { return lastMouseX_; }
     float getLastMouseY() const { return lastMouseY_; }
 
+    // --- Pointer lock ---
+    // requestPointerLock: freeze the reported cursor position, enable SDL relative
+    // mouse mode, and route all subsequent mousemove events to `target` until
+    // exitPointerLock() is called. Fires "pointerlockchange" on documentElement.
+    bool requestPointerLock(dom::Element* target);
+    void exitPointerLock();
+    dom::Element* pointerLockElement() const { return lockedElement_; }
+
     // --- Headless API (also usable in windowed mode) ---
 
     /// Access the document.
@@ -434,6 +442,13 @@ private:
     // Mouse tracking for mousemove movement deltas
     float lastMouseX_ = 0.0f;
     float lastMouseY_ = 0.0f;
+
+    // Pointer lock: while set, hit-testing/hover is frozen and mousemove events
+    // are routed to lockedElement_ with clientX/Y pinned to lockedMouse{X,Y}_.
+    // Only movementX/Y (SDL xrel/yrel) reflect the actual motion.
+    dom::Element* lockedElement_ = nullptr;
+    float lockedMouseX_ = 0.0f;
+    float lockedMouseY_ = 0.0f;
 
     // Double-click detection
     double lastClickTimeMs_ = 0.0;

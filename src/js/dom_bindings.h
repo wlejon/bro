@@ -24,6 +24,9 @@ public:
     /// Set SDL window for pointer lock support.
     static void setSDLWindow(JSContext* ctx, void* sdl_window);
 
+    /// Set engine pointer so bindings can call engine APIs (e.g. pointer lock).
+    static void setEngine(JSContext* ctx, void* engine);
+
     // -----------------------------------------------------------------------
     // Helpers exposed so other modules can wrap / unwrap DOM objects.
     // -----------------------------------------------------------------------

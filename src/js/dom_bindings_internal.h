@@ -46,6 +46,9 @@ extern std::unordered_map<JSContext*, DomBindings::GetContextFactory> s_ctx_fact
 // SDL window pointer for pointer lock support (stored as void* to avoid SDL header dependency)
 extern std::unordered_map<JSContext*, void*> s_ctx_sdl_windows;
 
+// Engine pointer (stored as void* to avoid including engine/engine.h here).
+extern std::unordered_map<JSContext*, void*> s_ctx_engines;
+
 bro::dom::Document* getDocumentForCtx(JSContext* ctx);
 
 // ===========================================================================
