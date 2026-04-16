@@ -32,13 +32,15 @@ let state = {
     paused: false,
     bindPoseOnly: false,
     time: 0,
-    cameraDist: 6,
-    cameraHeight: 2,
-    orbitAngle: 0,
     enableSkinning: true,
     showBones: false,
     boneNodes: [],
 };
+
+// Orbit camera — right-drag rotates, wheel zooms. Target + dist get reset
+// on each file load based on the mesh's bbox.
+const cam = Camera.createOrbit({ target: [0, 0, 0], dist: 6, fov: 45 });
+let rightDown = false;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -269,9 +271,9 @@ function loadFile(idx) {
     const cy = (minY + maxY) * 0.5;
     const cz = (minZ + maxZ) * 0.5;
     const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-    state.cameraDist = Math.max(size * 2.2, 2);
-    state.cameraHeight = cy + size * 0.3;
-    state.target = [cx, cy, cz];
+    cam.target = [cx, cy, cz];
+    cam.dist = Math.max(size * 2.2, 2);
+    state.modelSize = size;
 
     // Record basePositions snapshot for skinning restore.
     const bindMeshes = [];
@@ -320,7 +322,6 @@ function loadFile(idx) {
     };
 
     state.time = 0;
-    state.orbitAngle = 0;
 
     renderInfo();
     setStatus('[' + (idx+1) + '/' + state.files.length + '] ' + name);
@@ -408,7 +409,7 @@ function setupBoneNodes() {
     clearBoneNodes();
     const L = state.loaded;
     if (!L || !L.hasSkel) return;
-    const size = state.cameraDist * 0.012;
+    const size = cam.dist * 0.012;
     for (let i = 0; i < L.skeleton.boneCount; i++) {
         const s = scene.createMesh({
             data: Mesh.sphere(size, 8, 6),
@@ -447,22 +448,16 @@ function updateBoneNodes() {
 // Camera + loop
 // ---------------------------------------------------------------------------
 
-function updateCamera() {
-    if (state.autoOrbit) state.orbitAngle += 0.005;
-    const target = state.target || [0, 0, 0];
-    const dist = state.cameraDist;
-    const h = state.cameraHeight;
-    const cam = {
-        fov: 45,
-        position: [
-            target[0] + Math.sin(state.orbitAngle) * dist,
-            h,
-            target[2] + Math.cos(state.orbitAngle) * dist,
-        ],
-        target: target,
-        aspect: canvas.clientWidth / canvas.clientHeight,
-    };
-    scene.setCamera(cam);
+function updateCamera(dtMs) {
+    // Auto-orbit: yaw the camera slowly around the target. User drags always
+    // win — the delta is tiny per frame, so releasing the mouse resumes
+    // smoothly.
+    if (state.autoOrbit && !rightDown) {
+        // 60 px/sec * yawSpeed 0.005 ≈ 0.3 rad/s, matching the previous
+        // hand-rolled orbit rate (0.005 rad/frame at 60 fps).
+        Camera.orbitLook(cam, 60 * (dtMs * 0.001), 0);
+    }
+    scene.setCamera(Camera.orbitViewOpts(cam, canvas));
 }
 
 let lastT = 0;
@@ -474,7 +469,7 @@ function frame(t) {
     state.time += dt;
     updateAnimation(dt);
     if (state.showBones) updateBoneNodes();
-    updateCamera();
+    updateCamera(dt);
 
     requestAnimationFrame(frame);
 }
@@ -527,6 +522,30 @@ document.addEventListener('keydown', (e) => {
 
 openFolderBtn.addEventListener('click', openFolderDialog);
 openFileBtn.addEventListener('click', openFileDialog);
+
+// --- Orbit camera input: right-click-drag rotates, wheel zooms ---------------
+
+canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 2) {
+        rightDown = true;
+        e.preventDefault();
+    }
+});
+document.addEventListener('mouseup', (e) => {
+    if (e.button === 2) rightDown = false;
+});
+document.addEventListener('mousemove', (e) => {
+    if (!rightDown) return;
+    Camera.orbitLook(cam, e.movementX, e.movementY);
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('wheel', (e) => {
+    // Multiplicative zoom — feels consistent across model sizes. Clamp so
+    // the camera never flips inside the target.
+    const factor = Math.exp(e.deltaY * 0.001);
+    cam.dist = Math.max(0.1, cam.dist * factor);
+    e.preventDefault();
+});
 
 // ---------------------------------------------------------------------------
 // Go

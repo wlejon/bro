@@ -140,17 +140,74 @@
             quatFromAxis(1, 0, 0, pitch)));
     }
 
+    // Roll around the camera's forward axis. dir = +1 rolls counterclockwise
+    // when looking along forward (matches Q=left in terrain).
     function flyRoll(cam, dt, dir) {
-        cam.rot = quatNorm(quatMul(cam.rot,
-            quatFromAxis(0, 0, 1, dir * cam.rollSpeed * dt)));
+        const f = flyForward(cam);
+        cam.rot = quatNorm(quatMul(
+            quatFromAxis(f[0], f[1], f[2], dir * cam.rollSpeed * dt),
+            cam.rot));
     }
 
+    // Build a world-space thrust vector from a { key: bool } map using the
+    // canonical WASD + Space/Ctrl layout (camera-local up/down, not world).
+    // Returns a unit vector, or [0,0,0] when no keys are active.
+    function flyThrustFromKeys(cam, keys) {
+        const f = flyForward(cam);
+        const r = flyRight(cam);
+        const u = flyUp(cam);
+        let x = 0, y = 0, z = 0;
+        if (keys['w']) { x += f[0]; y += f[1]; z += f[2]; }
+        if (keys['s']) { x -= f[0]; y -= f[1]; z -= f[2]; }
+        if (keys['d']) { x += r[0]; y += r[1]; z += r[2]; }
+        if (keys['a']) { x -= r[0]; y -= r[1]; z -= r[2]; }
+        if (keys[' '])       { x += u[0]; y += u[1]; z += u[2]; }
+        if (keys['control']) { x -= u[0]; y -= u[1]; z -= u[2]; }
+        const len = Math.sqrt(x*x + y*y + z*z);
+        if (len < 1e-6) return [0, 0, 0];
+        const inv = 1 / len;
+        return [x * inv, y * inv, z * inv];
+    }
+
+    // Velocity-integrated movement with exponential-smoothed accel/damping.
+    // `thrust` is a world-space direction (typically unit-length, but any
+    // magnitude works — zero means coast). `speed` is target velocity.
+    function flyIntegrate(cam, thrust, dt, speed) {
+        const thrustLen = Math.sqrt(
+            thrust[0]*thrust[0] + thrust[1]*thrust[1] + thrust[2]*thrust[2]);
+        const accelBlend   = 1 - Math.exp(-cam.accel   * dt);
+        const dampingBlend = 1 - Math.exp(-cam.damping * dt);
+        if (thrustLen > 1e-6) {
+            cam.vel[0] += (thrust[0] * speed - cam.vel[0]) * accelBlend;
+            cam.vel[1] += (thrust[1] * speed - cam.vel[1]) * accelBlend;
+            cam.vel[2] += (thrust[2] * speed - cam.vel[2]) * accelBlend;
+        } else {
+            cam.vel[0] *= (1 - dampingBlend);
+            cam.vel[1] *= (1 - dampingBlend);
+            cam.vel[2] *= (1 - dampingBlend);
+        }
+        cam.pos[0] += cam.vel[0] * dt;
+        cam.pos[1] += cam.vel[1] * dt;
+        cam.pos[2] += cam.vel[2] * dt;
+    }
+
+    // target+up submission — broad engine compatibility.
     function flyViewOpts(cam, canvas) {
         return {
             fov: cam.fov, near: cam.near, far: cam.far,
             position: cam.pos.slice(),
             target: v3add(cam.pos, flyForward(cam)),
             up: flyUp(cam),
+            aspect: canvas.clientWidth / Math.max(1, canvas.clientHeight),
+        };
+    }
+
+    // position+quaternion submission — preserves full 6DOF roll exactly.
+    function flyViewOptsQuat(cam, canvas) {
+        return {
+            fov: cam.fov, near: cam.near, far: cam.far,
+            position: cam.pos.slice(),
+            quaternion: cam.rot.slice(),
             aspect: canvas.clientWidth / Math.max(1, canvas.clientHeight),
         };
     }
@@ -164,6 +221,7 @@
         // orbit
         createOrbit, orbitLook, orbitPosition, orbitUp, orbitViewOpts,
         // fly
-        createFly, flyLook, flyRoll, flyForward, flyRight, flyUp, flyViewOpts,
+        createFly, flyLook, flyRoll, flyThrustFromKeys, flyIntegrate,
+        flyForward, flyRight, flyUp, flyViewOpts, flyViewOptsQuat,
     };
 })(typeof window !== 'undefined' ? window : globalThis);
