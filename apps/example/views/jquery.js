@@ -3,7 +3,7 @@ window.views.jquery = {
     _interval: null,
     init: function(el) {
         if (!window.jQuery) {
-            var src = globalThis.__brokit_fs.readFileSync('lib/jquery-3.7.1.slim.min.js', 'utf-8');
+            var src = require('fs').readFileSync('lib/jquery-3.7.1.slim.min.js', 'utf-8');
             (0, eval)(src);
         }
         this._setup(el);

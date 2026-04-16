@@ -1,4 +1,4 @@
-var fs = globalThis.__brokit_fs;
+var fs = require('fs');
 var content = document.getElementById('content');
 var navLinks = document.querySelectorAll('.nav-link');
 var currentView = null;

@@ -5,14 +5,14 @@ window.views.webgl = {
         this.running = true;
 
         if (!window.THREE) {
-            var src = globalThis.__brokit_fs.readFileSync('lib/three.min.js', 'utf-8');
+            var src = require('fs').readFileSync('lib/three.min.js', 'utf-8');
             (0, eval)(src);
         }
         this._setup(el);
     },
     _setup: function(el) {
         var self = this;
-        var fs = globalThis.__brokit_fs;
+        var fs = require('fs');
         var canvas = el.querySelector('#wgl-canvas');
 
         var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
