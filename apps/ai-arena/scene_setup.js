@@ -21,6 +21,10 @@ var Scene3D = {};
     Scene3D.explosionPool = [];          // { node, t, maxT, r } entries
     Scene3D.dmgOverlay = null;           // HTML container for floating #s
     Scene3D.dmgDivs = [];                // pool of reusable divs
+    Scene3D.gizmos = {                   // focused-unit worldspace gizmos
+        focusRing: null, rangeRing: null, fovCone: null,
+        targetLine: null, intentDiv: null,
+    };
 
     Scene3D.UNIT_Y = 0.9;    // capsule center height (radius + halfHeight)
     var CAPSULE_R = 0.4;
@@ -33,6 +37,7 @@ var Scene3D = {};
         Scene3D.canvas = canvas;
         Scene3D.scene = canvas.getContext("scene");
         Scene3D.dmgOverlay = document.getElementById("dmg-overlay");
+        buildGizmos();
 
         Scene3D.cam = Camera.createOrbit({
             pivot: [0, 0, 0],
@@ -191,6 +196,7 @@ var Scene3D = {};
         syncProjectiles(state.world.projectiles);
         syncExplosions(dt);
         syncDamageNumbers();
+        syncGizmos(state);
     };
 
     // ─── Projectiles ──────────────────────────────────────────────────
@@ -303,6 +309,151 @@ var Scene3D = {};
         for (var j = floats.length; j < Scene3D.dmgDivs.length; j++) {
             Scene3D.dmgDivs[j].style.display = "none";
         }
+    }
+
+    // ─── Focused-unit gizmos ──────────────────────────────────────────
+    // One of each; hidden when there's no live focus. Transforms are
+    // rewritten each frame off the focused agent's state.
+    var FOV = Math.PI / 2.2;
+
+    function buildFovMesh(range) {
+        var half = FOV / 2;
+        // Local frame: forward = -Z (FPS convention). Triangle fan is on
+        // XZ plane, apex at origin.
+        var sR = Math.sin(+half) * range, cR = -Math.cos(+half) * range;
+        var sL = Math.sin(-half) * range, cL = -Math.cos(-half) * range;
+        return {
+            positions: new Float32Array([
+                0, 0, 0,
+                sR, 0, cR,
+                sL, 0, cL,
+            ]),
+            // CCW when viewed from +Y so the +Y normal is the visible face.
+            indices: new Uint32Array([0, 1, 2]),
+            normals: new Float32Array([0,1,0, 0,1,0, 0,1,0]),
+        };
+    }
+
+    function buildGizmos() {
+        var g = Scene3D.gizmos;
+        g.focusRing = Scene3D.scene.createMesh({
+            mesh: "torus", majorRadius: 0.7, minorRadius: 0.07,
+            majorSegments: 28, minorSegments: 8,
+            color: [1.0, 0.82, 0.29, 1.0],
+            emissive: 0.9,
+            name: "gizmo-focus",
+        });
+        g.rangeRing = Scene3D.scene.createMesh({
+            mesh: "torus", majorRadius: 1.0, minorRadius: 0.04,
+            majorSegments: 48, minorSegments: 6,
+            color: [1.0, 0.82, 0.29, 0.35],
+            emissive: 0.2,
+            name: "gizmo-range",
+        });
+        // FOV triangle is built at attackRange=1 then scaled per-frame to
+        // the agent's actual range.
+        var mesh = buildFovMesh(1.0);
+        g.fovCone = Scene3D.scene.createMesh({
+            positions: mesh.positions,
+            indices: mesh.indices,
+            normals: mesh.normals,
+            color: [1.0, 0.82, 0.29, 0.28],
+            emissive: 0.35,
+            name: "gizmo-fov",
+        });
+        // A thin unit-length box (halfW=0.5 is default for "box"). We scaleX
+        // to span the A→B distance and rotateY to point.
+        g.targetLine = Scene3D.scene.createMesh({
+            mesh: "box", halfW: 0.5, halfH: 0.04, halfD: 0.04,
+            color: [0.30, 0.86, 0.47, 0.8],
+            emissive: 0.6,
+            name: "gizmo-target",
+        });
+        g.focusRing.visible = false;
+        g.rangeRing.visible = false;
+        g.fovCone.visible = false;
+        g.targetLine.visible = false;
+
+        g.intentDiv = document.createElement("div");
+        g.intentDiv.className = "dmg";
+        g.intentDiv.style.color = "#ffd24a";
+        g.intentDiv.style.display = "none";
+        Scene3D.dmgOverlay.appendChild(g.intentDiv);
+    }
+
+    function syncGizmos(state) {
+        var g = Scene3D.gizmos;
+        var focus = state.byId[state.focusId];
+        if (!focus || !focus.unit.alive) {
+            g.focusRing.visible = false;
+            g.rangeRing.visible = false;
+            g.fovCone.visible = false;
+            g.targetLine.visible = false;
+            g.intentDiv.style.display = "none";
+            return;
+        }
+        var mem = AI.memory[focus.unit.id];
+        var range = focus.unit.attackRange || 9;
+
+        // Focus ring at the capsule base.
+        g.focusRing.visible = true;
+        g.focusRing.x = focus.x; g.focusRing.y = 0.02; g.focusRing.z = focus.z;
+        g.focusRing.rotationX = Math.PI / 2; // lay flat on XZ
+
+        // Range ring — torus's majorRadius=1, scale XZ by range.
+        g.rangeRing.visible = true;
+        g.rangeRing.x = focus.x; g.rangeRing.y = 0.02; g.rangeRing.z = focus.z;
+        g.rangeRing.rotationX = Math.PI / 2;
+        g.rangeRing.scaleX = range;
+        g.rangeRing.scaleZ = range;
+
+        // FOV cone — rotate to match aim (BotAim.forward if available, else
+        // agent yaw). FOV mesh was built for range=1, so scale to actual range.
+        g.fovCone.visible = true;
+        g.fovCone.x = focus.x; g.fovCone.y = 0.04; g.fovCone.z = focus.z;
+        g.fovCone.scaleX = range;
+        g.fovCone.scaleZ = range;
+        var aimYaw;
+        if (mem && mem.aim) {
+            var f = BotAim.forward(mem.aim);
+            aimYaw = Math.atan2(f.x, -f.z);
+        } else aimYaw = focus.yaw;
+        // Node rotation is CCW around +Y; agent FPS yaw is CW, so negate.
+        g.fovCone.rotationY = -aimYaw;
+
+        // Target line — only if we know the current target and it's alive.
+        var tid = mem && mem.targetId;
+        var tgt = tid != null ? state.byId[tid] : null;
+        if (tgt && tgt.unit.alive) {
+            var dx = tgt.x - focus.x, dz = tgt.z - focus.z;
+            var d = Math.hypot(dx, dz);
+            if (d > 0.05) {
+                var los = bro.ai.game.hasLineOfSight(
+                    focus.x, focus.z, tgt.x, tgt.z, Arena.OBSTACLES);
+                // No runtime color setter on meshes — hide line when no LOS
+                // rather than maintaining two nodes.
+                g.targetLine.visible = los;
+                if (los) {
+                    g.targetLine.x = (focus.x + tgt.x) / 2;
+                    g.targetLine.y = 1.1;
+                    g.targetLine.z = (focus.z + tgt.z) / 2;
+                    g.targetLine.scaleX = d;
+                    g.targetLine.rotationY = Math.atan2(-dz, dx);
+                }
+            } else g.targetLine.visible = false;
+        } else g.targetLine.visible = false;
+
+        // Intent label — float above capsule.
+        if (mem && mem.intent) {
+            var sp = Scene3D.projectToScreen(focus.x, 2.8, focus.z);
+            if (sp) {
+                g.intentDiv.style.display = "block";
+                g.intentDiv.style.left = sp.x + "px";
+                g.intentDiv.style.top = sp.y + "px";
+                g.intentDiv.style.opacity = "1";
+                if (g.intentDiv.textContent !== mem.intent) g.intentDiv.textContent = mem.intent;
+            } else g.intentDiv.style.display = "none";
+        } else g.intentDiv.style.display = "none";
     }
 
     // World (x, y, z) → canvas pixel coords; null if behind camera.
