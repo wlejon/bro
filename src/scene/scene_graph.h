@@ -145,16 +145,14 @@ public:
     float cameraY() const { return cameraY_; }
     float cameraZoom() const { return cameraZoom_; }
 
-    /// Iterate all HtmlNodes and let them run dirty layout/rasterization.
-    /// Intended to run on the raster thread (Ganesh isn't thread-safe, so
-    /// HtmlNode rasterization must happen on the thread that owns the
-    /// SkiaRenderer passed in). Safe to call when main thread is quiescent.
-    void materializeHtmlNodes(render::SkiaRenderer* rasterRenderer,
-                              layout::FontManager* rasterFontManager);
+    /// Iterate all HtmlNodes and run dirty layout/paint/GL upload. Runs on
+    /// the main/GL thread before scene render so the detached Documents stay
+    /// serialized with JS mutations.
+    void materializeHtmlNodes(render::SkiaRenderer* renderer,
+                              layout::FontManager* fontManager);
 
-    /// True if any HtmlNode's DOM subtree is dirty and needs re-rasterization
-    /// on the raster thread. Read on main thread to decide whether to signal
-    /// the layout/raster pipeline even when the main document is clean.
+    /// True if any HtmlNode's DOM subtree is dirty. Read on main thread to
+    /// force a frame when only scene-graph HTML content has changed.
     bool hasPendingHtmlWork() const;
 
 private:

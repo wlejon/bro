@@ -601,16 +601,6 @@ void SceneGraph::render() {
         if (hasMeshNodes && hasBillboardNodes) break;
     }
 
-    // HtmlNodes need a pending-pixel → GL upload before they can be sampled.
-    // Safe to call every frame — the function early-outs when nothing pending.
-    if (hasBillboardNodes) {
-        for (auto& [id, node] : nodes_) {
-            if (node->type() == SceneNode::Type::Html) {
-                static_cast<HtmlNode*>(node.get())->uploadPendingTexture();
-            }
-        }
-    }
-
     const bool has3D = (hasMeshNodes || hasBillboardNodes)
                        && canvasWidth_ > 0 && canvasHeight_ > 0;
 
@@ -963,16 +953,17 @@ void SceneGraph::renderBillboardNode(SceneNode* node) {
 }
 
 // ---------------------------------------------------------------------------
-// HtmlNode rasterization (called from the raster thread between frames)
+// HtmlNode rasterization — runs on the main/GL thread before scene render
+// so layout of the detached Documents stays serialized with JS mutations.
 // ---------------------------------------------------------------------------
 
-void SceneGraph::materializeHtmlNodes(render::SkiaRenderer* rasterRenderer,
-                                      layout::FontManager* rasterFontManager) {
-    if (!rasterRenderer || !rasterFontManager) return;
+void SceneGraph::materializeHtmlNodes(render::SkiaRenderer* renderer,
+                                      layout::FontManager* fontManager) {
+    if (!renderer || !fontManager) return;
     for (auto& [id, node] : nodes_) {
         if (node->type() != SceneNode::Type::Html) continue;
         auto* hn = static_cast<HtmlNode*>(node.get());
-        hn->materializePending(rasterRenderer, rasterFontManager);
+        hn->materializePending(renderer, fontManager);
     }
 }
 

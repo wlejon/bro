@@ -1471,17 +1471,6 @@ void Engine::rasterThreadFunc() {
         lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
         backBuf.layers.push_back(std::move(lastHtml));
 
-        // Rasterize dirty HtmlNodes into CPU pixel buffers. Main thread picks
-        // them up on its next SceneGraph::render pass and uploads to GL.
-        // Ganesh is not multi-threaded, so this must happen on the raster
-        // thread with the raster-local Skia + font manager.
-        for (auto& sg : sceneGraphs_) {
-            if (sg.graph) {
-                sg.graph->materializeHtmlNodes(rasterRenderer.get(),
-                                               &rasterFontManager);
-            }
-        }
-
         // Flush each pool surface's deferred Ganesh ops
         for (int i = 0; i <= htmlLayerIdx; ++i) {
             if (htmlSurfacePool_[i].surface && rasterRenderer->grContext()) {
@@ -1866,6 +1855,16 @@ void Engine::run() {
         // 3c. Unbind WebGL FBO
         if (activeWebGL) {
             activeWebGL->unbindCanvasFBO();
+        }
+
+        // 3c1. Materialize dirty HtmlNodes on the main thread (layout + paint
+        //       + GL upload). Runs here — not on the raster thread — so that
+        //       JS mutations to each HtmlNode's detached Document stay on the
+        //       same thread that reads it during style resolution + layout.
+        if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+            for (auto& sg : sceneGraphs_) {
+                if (sg.graph) sg.graph->materializeHtmlNodes(skia, &fontManager_);
+            }
         }
 
         // 3c2. Auto-render scene graphs (after JS has updated transforms/camera).

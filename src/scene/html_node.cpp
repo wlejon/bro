@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace bro::scene {
 
@@ -55,14 +56,14 @@ void HtmlNode::setHtml(const std::string& html) {
     if (!doc_ || !root_) return;
     doc_->parseInnerHTML(root_, html);
     doc_->markDirty();
-    dirty_.store(true, std::memory_order_release);
+    dirty_ = true;
 }
 
 void HtmlNode::setLayoutSize(float w, float h) {
     // Tiny layout sizes produce degenerate surfaces; clamp to at least 1 px.
     layoutW_ = std::max(1.0f, w);
     layoutH_ = std::max(1.0f, h);
-    dirty_.store(true, std::memory_order_release);
+    dirty_ = true;
 }
 
 void HtmlNode::setPxPerUnit(float p) {
@@ -72,26 +73,22 @@ void HtmlNode::setPxPerUnit(float p) {
 
 void HtmlNode::materializePending(render::SkiaRenderer* renderer,
                                    layout::FontManager* fontMgr) {
-    // JS mutations on the detached DOM set Document::dirty_ directly without
-    // touching our atomic — pick that up here so imperative edits via
-    // node.root trigger a re-raster.
-    bool needsRender = dirty_.load(std::memory_order_acquire);
-    if (!needsRender && doc_ && doc_->isDirty()) needsRender = true;
-    if (!needsRender) return;
     if (!doc_ || !renderer || !fontMgr) return;
+    // Imperative JS edits via node.root bump Document::dirty_ directly
+    // without touching ours — pick that up here.
+    if (!dirty_ && !doc_->isDirty()) return;
 
     int w = std::max(1, (int)std::ceil(layoutW_));
     int h = std::max(1, (int)std::ceil(layoutH_));
 
-    // Layout on the raster thread using the raster renderer's font metrics.
     layout::SkiaTextMetrics metrics(renderer, fontMgr);
     doc_->resolveStyles();
     doc_->performLayout((float)w, (float)h, metrics);
     doc_->clearDirty();
 
-    // CPU-backed SkSurface. We read pixels back to CPU and hand them to the
-    // main thread's GL context; that keeps texture ownership on main thread
-    // and side-steps Ganesh/GL fence synchronization entirely.
+    // CPU-backed SkSurface. We read pixels back and upload through GL rather
+    // than using a Ganesh-backed surface, to keep this independent of which
+    // GrDirectContext the caller's renderer owns.
     SkImageInfo info = SkImageInfo::MakeN32Premul(w, h);
     sk_sp<SkSurface> cpuSurface = SkSurfaces::Raster(info);
     if (!cpuSurface) {
@@ -100,7 +97,7 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer,
     }
     cpuSurface->getCanvas()->clear(SK_ColorTRANSPARENT);
 
-    // Hand the raster renderer our surface for this draw pass, then restore.
+    // Hand the caller's renderer our surface for this draw pass, then restore.
     sk_sp<SkSurface> prev = renderer->switchSurface(cpuSurface);
     {
         layout::DrawTraversal dt(renderer, fontMgr);
@@ -120,43 +117,11 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer,
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lk(stagingMutex_);
-        pendingPixels_ = std::move(buf);
-        pendingW_ = w;
-        pendingH_ = h;
-        pendingReady_ = true;
-    }
-    dirty_.store(false, std::memory_order_release);
-}
-
-void HtmlNode::uploadPendingTexture() {
-    // Quick atomic-ish check before acquiring the mutex; pendingReady_ is
-    // only written under the mutex but we tolerate a false-positive here.
-    // Note: the mutex is always cheap when no work is pending (no blocking
-    // on raster thread since materializePending only holds it briefly).
-    std::unique_lock<std::mutex> lk(stagingMutex_);
-    if (!pendingReady_) return;
-
-    int w = pendingW_;
-    int h = pendingH_;
-    if (w <= 0 || h <= 0 || pendingPixels_.empty()) {
-        pendingReady_ = false;
-        return;
-    }
-
-    // Move pixels out so we release the mutex before the GL call; GL upload
-    // is the expensive part and shouldn't block the raster thread's next
-    // materialize.
-    std::vector<uint8_t> pixels = std::move(pendingPixels_);
-    pendingReady_ = false;
-    lk.unlock();
-
     if (!texture_) glGenTextures(1, &texture_);
     glBindTexture(GL_TEXTURE_2D, texture_);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                 GL_RGBA, GL_UNSIGNED_BYTE, buf.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -164,6 +129,7 @@ void HtmlNode::uploadPendingTexture() {
     glBindTexture(GL_TEXTURE_2D, 0);
     texW_ = w;
     texH_ = h;
+    dirty_ = false;
 }
 
 void HtmlNode::releaseGL() {
