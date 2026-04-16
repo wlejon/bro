@@ -1,0 +1,75 @@
+<h1 class="view-title">Web Components</h1>
+
+<style>
+    .wc-section { background: #16213e; padding: 16px 20px; margin-bottom: 8px; }
+    .wc-section > p { color: #8888aa; margin-top: 4px; font-size: 14px; }
+    .wc-section h2 { color: #e94560; margin-bottom: 8px; }
+    code { background: #0a0a1a; padding: 2px 6px; color: #aaddaa; font-family: monospace; }
+    .wc-note { color: #aaddaa; font-style: italic; font-size: 13px; }
+    .wc-title { color: #e94560; font-size: 18px; font-weight: bold; padding: 8px; background: #0a0a1a; margin: 8px 0; }
+    .wc-btn { background-color: #0f3460; color: #e0e0e0; border: 1px solid #e94560; padding: 8px 16px; font-size: 14px; cursor: pointer; margin: 4px; }
+    fancy-card, info-panel, encap-demo, event-demo, outer-comp, inner-badge { display: block; margin: 8px 0; }
+</style>
+
+<!-- 1. Basic Shadow DOM -->
+<div class="wc-section">
+    <h2>1. Basic Shadow DOM</h2>
+    <p>Custom element with encapsulated styles.</p>
+    <fancy-card></fancy-card>
+    <fancy-card theme="blue"></fancy-card>
+    <p class="wc-note">The shadow styles (borders, colors) don't affect surrounding elements.</p>
+</div>
+
+<!-- 2. Slot Projection -->
+<div class="wc-section">
+    <h2>2. Slot Projection</h2>
+    <p>Light DOM children projected into shadow DOM slots.</p>
+    <info-panel>
+        <span slot="title">Server Status</span>
+        <span slot="icon">&#9679;</span>
+        <div>CPU: 42% | Memory: 6.2 GB / 16 GB</div>
+        <div>Uptime: 14d 7h 23m | Load: 2.1</div>
+    </info-panel>
+    <info-panel>
+        <span slot="title">Network Monitor</span>
+        <span slot="icon">&#9670;</span>
+        <div>Latency: 12ms | Bandwidth: 850 Mbps</div>
+    </info-panel>
+</div>
+
+<!-- 3. Style Encapsulation -->
+<div class="wc-section">
+    <h2>3. Style Encapsulation</h2>
+    <p>Outer document has <code>.wc-title { color: red }</code> but shadow DOM has its own.</p>
+    <div class="wc-title">Styled by OUTER stylesheet (red)</div>
+    <encap-demo></encap-demo>
+</div>
+
+<!-- 4. Event Retargeting -->
+<div class="wc-section">
+    <h2>4. Event Retargeting</h2>
+    <p>Click inside shadow DOM. The outer listener sees the host element as target.</p>
+    <div id="wc-event-wrapper">
+        <event-demo id="wc-event-comp"></event-demo>
+    </div>
+    <div class="log-box" id="wc-event-log" style="height:80px;"></div>
+</div>
+
+<!-- 5. Dynamic Shadow DOM -->
+<div class="wc-section">
+    <h2>5. Dynamic Shadow DOM</h2>
+    <p>Create and modify shadow DOM at runtime.</p>
+    <div>
+        <button class="wc-btn" id="wc-btn-create">Create Component</button>
+        <button class="wc-btn" id="wc-btn-update">Update Content</button>
+        <button class="wc-btn" id="wc-btn-reslot">Add Slotted</button>
+    </div>
+    <div id="wc-dynamic-container"></div>
+</div>
+
+<!-- 6. Nested Components -->
+<div class="wc-section">
+    <h2>6. Nested Components</h2>
+    <p>A component containing another component inside its shadow DOM.</p>
+    <outer-comp></outer-comp>
+</div>
