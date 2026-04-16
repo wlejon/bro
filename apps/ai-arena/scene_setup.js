@@ -267,13 +267,25 @@ var Scene3D = {};
 
     // Per-unit HP bar above the head. Uses the same project-to-screen trick
     // as damage numbers — an HTML overlay over the canvas, not a scene node.
-    // Fill color ramps green → yellow → red with declining health.
+    // Size and pixel offset both scale inversely with camera distance so the
+    // bar tracks the apparent capsule size whether zoomed in or out.
     function hpColor(frac) {
         if (frac >= 0.55) return "#4ae04a";      // green
         if (frac >= 0.25) return "#e6c64a";      // yellow
         return "#e74c3c";                         // red
     }
+    var UNIT_TOP_Y = 1.8;  // capsule center + halfHeight + radius = 0.9+0.5+0.4
+    var BASE_CAM_DIST = 58;
     function syncHpBars(state) {
+        // Zoom-aware size: at default dist we show a 32px bar; scale is
+        // clamped so extreme zooms don't produce a pixel-dust or giant bar.
+        var scale = BASE_CAM_DIST / Math.max(1, Scene3D.cam.dist);
+        if (scale < 0.45) scale = 0.45;
+        if (scale > 1.4)  scale = 1.4;
+        var barW = Math.round(32 * scale);
+        var barH = Math.max(3, Math.round(4 * scale));
+        var headOffsetPx = Math.round(10 * scale);
+
         for (var i = 0; i < state.agents.length; i++) {
             var a = state.agents[i];
             var hb = Scene3D.hpBars[a.unit.id];
@@ -282,15 +294,18 @@ var Scene3D = {};
                 if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
                 continue;
             }
-            // Anchor just above capsule top; matches intent label at y=2.8.
-            var sp = Scene3D.projectToScreen(a.x, 2.2, a.z);
+            // Anchor at the actual capsule top, then nudge a few pixels up
+            // in screen space — robust across camera pitches and pans.
+            var sp = Scene3D.projectToScreen(a.x, UNIT_TOP_Y, a.z);
             if (!sp) {
                 if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
                 continue;
             }
             hb.wrap.style.display = "block";
             hb.wrap.style.left = sp.x + "px";
-            hb.wrap.style.top = sp.y + "px";
+            hb.wrap.style.top  = (sp.y - headOffsetPx) + "px";
+            hb.wrap.style.width  = barW + "px";
+            hb.wrap.style.height = barH + "px";
             var max = a.unit.maxHp || 1;
             var pct = Math.max(0, Math.min(1, a.unit.hp / max));
             if (pct !== hb.lastPct) {
