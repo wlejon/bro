@@ -39,7 +39,8 @@ let state = {
 // Orbit camera — right-drag rotates, wheel zooms. Target + dist get reset
 // on each file load based on the mesh's bbox.
 const cam = Camera.createOrbit({ target: [0, 0, 0], dist: 6, fov: 45 });
-let rightDown = false;
+let rightDown  = false;
+let middleDown = false;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -510,22 +511,28 @@ openFileBtn.addEventListener('click', openFileDialog);
 
 syncToggleButtons();
 
-// --- Orbit camera input: right-click-drag rotates, wheel zooms ---------------
+// --- Orbit camera input: right=rotate, middle=pan, wheel=zoom ----------------
 
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 2) {
         rightDown = true;
         e.preventDefault();
+    } else if (e.button === 1) {
+        middleDown = true;
+        e.preventDefault();
     }
 });
 document.addEventListener('mouseup', (e) => {
-    if (e.button === 2) rightDown = false;
+    if (e.button === 2) rightDown  = false;
+    if (e.button === 1) middleDown = false;
 });
 document.addEventListener('mousemove', (e) => {
-    if (!rightDown) return;
-    Camera.orbitLook(cam, e.movementX, e.movementY);
+    if (rightDown)  Camera.orbitLook(cam, e.movementX, e.movementY);
+    if (middleDown) Camera.orbitPan (cam, e.movementX, e.movementY);
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+// Browsers auto-scroll on middle-click if we don't swallow this.
+canvas.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
 canvas.addEventListener('wheel', (e) => {
     // Multiplicative zoom — feels consistent across model sizes. Clamp so
     // the camera never flips inside the target.

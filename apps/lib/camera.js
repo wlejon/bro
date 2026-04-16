@@ -68,6 +68,9 @@
                                 : quatFromAxis(1, 0, 0, -0.2),
             yawSpeed:   opts.yawSpeed   != null ? opts.yawSpeed   : 0.005,
             pitchSpeed: opts.pitchSpeed != null ? opts.pitchSpeed : 0.005,
+            // Pan scales with `dist` so a drag covers a similar fraction of
+            // the view at any zoom. 0.0025 ≈ 1 pixel per 0.25% of radius.
+            panSpeed:   opts.panSpeed   != null ? opts.panSpeed   : 0.0025,
         };
     }
 
@@ -84,6 +87,18 @@
         const qy = quatFromAxis(0, 1, 0, yaw);
         const qp = quatFromAxis(1, 0, 0, pitch);
         cam.rot = quatNorm(quatMul(quatMul(qy, cam.rot), qp));
+    }
+
+    // Pan the orbit target along the camera's screen-space axes. Content
+    // follows the cursor (drag right → scene moves right). Rate scales with
+    // `dist` so panning feels consistent at any zoom level.
+    function orbitPan(cam, dx, dy) {
+        const right = quatRotVec(cam.rot, [1, 0, 0]);
+        const up    = quatRotVec(cam.rot, [0, 1, 0]);
+        const k = cam.dist * cam.panSpeed;
+        cam.target[0] += (-dx * right[0] + dy * up[0]) * k;
+        cam.target[1] += (-dx * right[1] + dy * up[1]) * k;
+        cam.target[2] += (-dx * right[2] + dy * up[2]) * k;
     }
 
     function orbitPosition(cam) {
@@ -219,7 +234,7 @@
         v3add, v3scale,
         quatFromAxis, quatMul, quatNorm, quatRotVec,
         // orbit
-        createOrbit, orbitLook, orbitPosition, orbitUp, orbitViewOpts,
+        createOrbit, orbitLook, orbitPan, orbitPosition, orbitUp, orbitViewOpts,
         // fly
         createFly, flyLook, flyRoll, flyThrustFromKeys, flyIntegrate,
         flyForward, flyRight, flyUp, flyViewOpts, flyViewOptsQuat,
