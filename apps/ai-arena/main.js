@@ -50,7 +50,6 @@ var App = {};
             rosterAccum: 0,
             statusAccum: 0,
             pendingLog: [],
-            sim: bro.ai.game.createSimulation(built.world),
             simSteps: 0,
             elapsed: 0,
             recorder: null,
@@ -60,7 +59,6 @@ var App = {};
             replayPlaying: false,
             replayElapsed: 0,
             lastMctsStats: null,
-            teamFocus: [null, null],
         };
 
         AI.memory = {};

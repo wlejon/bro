@@ -178,7 +178,10 @@ var UI = {};
     };
 
     UI.updateMctsStats = function (stats, enabled) {
-        if (!enabled) { UI.mctsStatsEl.textContent = "(disabled - Blue = scripted)"; return; }
+        if (!enabled) {
+            UI.mctsStatsEl.textContent = "(disabled — group MCTS pending)";
+            return;
+        }
         if (!stats) { UI.mctsStatsEl.textContent = "searching..."; return; }
         UI.mctsStatsEl.textContent =
             "iters:      " + stats.iterations + "\n" +
