@@ -107,6 +107,41 @@ static JSValue js_showOpenFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
 }
 
 // ---------------------------------------------------------------------------
+// showOpenFolderDialog(defaultLocation, allowMultiple)
+//   defaultLocation: optional starting folder path, or null
+//   allowMultiple: optional boolean
+//   Returns: array of folder paths, or empty array if cancelled
+// ---------------------------------------------------------------------------
+
+static JSValue js_showOpenFolderDialog(JSContext* ctx, JSValueConst /*this_val*/,
+                                       int argc, JSValueConst* argv)
+{
+    std::string defaultLoc;
+    bool allowMany = false;
+    if (argc >= 1 && JS_IsString(argv[0])) {
+        const char* s = JS_ToCString(ctx, argv[0]);
+        if (s) { defaultLoc = s; JS_FreeCString(ctx, s); }
+    }
+    if (argc >= 2) {
+        allowMany = JS_ToBool(ctx, argv[1]);
+    }
+
+    DialogResult result;
+    SDL_ShowOpenFolderDialog(dialogCallback, &result, s_window,
+                             defaultLoc.empty() ? nullptr : defaultLoc.c_str(),
+                             allowMany);
+
+    waitForDialog(result);
+
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < result.files.size(); i++) {
+        JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i),
+                             JS_NewString(ctx, result.files[i].c_str()));
+    }
+    return arr;
+}
+
+// ---------------------------------------------------------------------------
 // showSaveFileDialog(filters, defaultName)
 //   Returns: file path string, or null if cancelled
 // ---------------------------------------------------------------------------
@@ -165,8 +200,9 @@ void DialogBindings::install(JSContext* ctx, SDL_Window* window,
     s_tickCb = std::move(tickCb);
 
     qjsbind::Global(ctx)
-        .function("showOpenFileDialog", js_showOpenFileDialog, 0)
-        .function("showSaveFileDialog", js_showSaveFileDialog, 0);
+        .function("showOpenFileDialog",   js_showOpenFileDialog,   0)
+        .function("showOpenFolderDialog", js_showOpenFolderDialog, 0)
+        .function("showSaveFileDialog",   js_showSaveFileDialog,   0);
 }
 
 } // namespace bro::js

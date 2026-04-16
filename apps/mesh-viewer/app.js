@@ -1,35 +1,35 @@
 // =============================================================================
-// MeshyAI GLB viewer — loads rigged/animated glbs from D:/moba-game and
-// renders them with CPU skinning via the new rigging bindings.
+// GLB / GLTF viewer — browse a directory, load rigged/animated meshes, and
+// render with CPU skinning via the rigging bindings.
 // =============================================================================
 
-const FILES = [
-    'D:/moba-game/Meshy_AI_Stone_Sentinel_biped_Character_output.glb',
-    'D:/moba-game/Meshy_AI_Stone_Sentinel_biped_Animation_Walking_withSkin.glb',
-    'D:/moba-game/Meshy_AI_Stone_Sentinel_biped_Animation_Running_withSkin.glb',
-    'D:/moba-game/Meshy_AI_Crimson_Core_Knight_0414102836_texture.glb',
-    'D:/moba-game/Meshy_AI_Crimson_Core_Knight_0414114102_generate.glb',
-    'D:/moba-game/Meshy_AI_Gilded_Sentinel_0414102845_texture.glb',
-    'D:/moba-game/Meshy_AI_Gilded_Sentinel_0414120138_generate.glb',
-    'D:/moba-game/Meshy_AI_Golden_Core_Knight_0414102821_texture.glb',
-    'D:/moba-game/Meshy_AI_Golden_Gem_Knight_0414102900_texture.glb',
-];
+const fs   = require('fs');
+const path = require('path');
+
+const STORAGE_KEY    = 'mesh-viewer:dir';
+const EXTS           = ['.glb', '.gltf'];
 
 const PALETTE = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
                  '#16a085', '#d35400', '#c0392b', '#8e44ad'];
 
-const canvas  = document.getElementById('canvas');
-const scene   = canvas.getContext('scene');
-const statusEl = document.getElementById('status');
-const infoEl  = document.getElementById('info');
+const canvas    = document.getElementById('canvas');
+const scene     = canvas.getContext('scene');
+const statusEl  = document.getElementById('status');
+const infoEl    = document.getElementById('info');
+const openFolderBtn = document.getElementById('open-folder-btn');
+const openFileBtn   = document.getElementById('open-file-btn');
+const dirStatus = document.getElementById('dir-status');
+const fileListEl = document.getElementById('file-list');
 
 let state = {
-    fileIndex: 0,
-    loaded: null,       // { path, scene, bindMeshes[], node, skelIdx, skinIdx, animIdx, animations[], skeleton, skin, basePositions }
+    mode: 'folder',     // 'folder' (scanned list, [/] navigates) or 'file' (single-file pin, no list)
+    dir: '',            // currently-scanned directory (folder mode only)
+    files: [],          // absolute paths of .glb/.gltf found in dir (folder mode) or just [loadedPath] (file mode)
+    fileIndex: -1,
+    loaded: null,       // loaded gltf state (see loadFile)
     nodes: [],          // scene nodes
     autoOrbit: true,
     paused: false,
-    wire: false,
     bindPoseOnly: false,
     time: 0,
     cameraDist: 6,
@@ -37,7 +37,7 @@ let state = {
     orbitAngle: 0,
     enableSkinning: true,
     showBones: false,
-    boneNodes: [],    // scene nodes for bone markers
+    boneNodes: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -58,16 +58,161 @@ function clearBoneNodes() {
     state.boneNodes = [];
 }
 
-function bboxCenterRadius(mesh) {
-    const bb = mesh.computeBBox();
-    const cx = (bb.min[0] + bb.max[0]) * 0.5;
-    const cy = (bb.min[1] + bb.max[1]) * 0.5;
-    const cz = (bb.min[2] + bb.max[2]) * 0.5;
-    const dx = bb.max[0] - bb.min[0];
-    const dy = bb.max[1] - bb.min[1];
-    const dz = bb.max[2] - bb.min[2];
-    const r = Math.sqrt(dx*dx + dy*dy + dz*dz) * 0.5;
-    return { cx, cy, cz, r, dx, dy, dz };
+function fileName(p) {
+    return p.replace(/\\/g, '/').split('/').pop();
+}
+
+// ---------------------------------------------------------------------------
+// Directory scanning + file list UI
+// ---------------------------------------------------------------------------
+
+// Returns the last-used directory (from localStorage) if it still exists,
+// or null if the user has never picked a file. No hardcoded defaults — an
+// empty viewer on first launch invites the user to use "Open File…".
+function pickInitialDir() {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved && fs.existsSync(saved)) return saved;
+    } catch (e) {}
+    return null;
+}
+
+function scanDir(dir) {
+    let entries;
+    try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+        return { ok: false, error: e.message, files: [] };
+    }
+    const files = [];
+    for (const e of entries) {
+        if (!e.isFile || !e.isFile()) continue;
+        const lower = e.name.toLowerCase();
+        if (EXTS.some(ext => lower.endsWith(ext))) {
+            files.push(path.join(dir, e.name));
+        }
+    }
+    files.sort((a, b) => fileName(a).localeCompare(fileName(b)));
+    return { ok: true, files };
+}
+
+function renderFileList() {
+    fileListEl.innerHTML = '';
+    if (state.files.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = 'No .glb / .gltf files in this directory.';
+        fileListEl.appendChild(empty);
+        return;
+    }
+    for (let i = 0; i < state.files.length; i++) {
+        const item = document.createElement('div');
+        item.className = 'file-item' + (i === state.fileIndex ? ' selected' : '');
+        const num = document.createElement('span');
+        num.className = 'dim';
+        num.textContent = (i + 1).toString().padStart(2, ' ');
+        const name = document.createElement('span');
+        name.textContent = ' ' + fileName(state.files[i]);
+        item.appendChild(num);
+        item.appendChild(name);
+        item.addEventListener('click', () => {
+            state.fileIndex = i;
+            loadFile(i);
+            renderFileList();
+        });
+        fileListEl.appendChild(item);
+    }
+    // Scroll the selected item into view.
+    const sel = fileListEl.querySelector('.file-item.selected');
+    if (sel && sel.scrollIntoView) sel.scrollIntoView({ block: 'nearest' });
+}
+
+// Scan `dir`, populate the file list, and optionally select a specific file
+// (by absolute path) — loading it and scrolling it into view. If no
+// selectedPath is given, the first file is loaded (matching the previous
+// auto-load behavior).
+function setDirectory(dir, opts) {
+    opts = opts || {};
+    const autoload = opts.autoload !== false;
+    const selectedPath = opts.selectedPath || null;
+    const normalized = path.normalize(dir).replace(/\\/g, '/');
+    const res = scanDir(normalized);
+
+    state.dir = normalized;
+    dirStatus.textContent = normalized;
+
+    if (!res.ok) {
+        state.files = [];
+        state.fileIndex = -1;
+        dirStatus.textContent = 'Error: ' + res.error;
+        dirStatus.style.color = '#ff6b6b';
+        clearNodes();
+        setStatus('Invalid directory');
+        setInfo('');
+        renderFileList();
+        return;
+    }
+
+    try { localStorage.setItem(STORAGE_KEY, normalized); } catch (e) {}
+
+    state.files = res.files;
+    const countMsg = res.files.length + ' file' + (res.files.length === 1 ? '' : 's') + ' · ' + normalized;
+    dirStatus.textContent = countMsg;
+    dirStatus.style.color = '#888';
+
+    if (state.files.length === 0) {
+        state.fileIndex = -1;
+        clearNodes();
+        setStatus('No .glb/.gltf in directory');
+        setInfo('');
+        renderFileList();
+        return;
+    }
+
+    let targetIdx = 0;
+    if (selectedPath) {
+        const normSel = path.normalize(selectedPath).replace(/\\/g, '/');
+        const found = state.files.indexOf(normSel);
+        if (found >= 0) targetIdx = found;
+    }
+    state.fileIndex = targetIdx;
+    renderFileList();
+    if (autoload) loadFile(targetIdx);
+}
+
+// Native folder picker — scans the picked folder and shows its contents
+// in the file list. [/] walks through siblings.
+function openFolderDialog() {
+    if (typeof showOpenFolderDialog !== 'function') {
+        setStatus('Native folder dialog unavailable');
+        return;
+    }
+    const picked = showOpenFolderDialog(state.dir || null);
+    if (!picked || picked.length === 0) return;
+    const folder = picked[0].replace(/\\/g, '/');
+    state.mode = 'folder';
+    setDirectory(folder);
+}
+
+// Native file picker — loads exactly one file and does NOT scan its
+// containing folder. The file list shows just the loaded entry; [/] is a
+// no-op until the user opens a folder.
+function openFileDialog() {
+    if (typeof showOpenFileDialog !== 'function') {
+        setStatus('Native file dialog unavailable');
+        return;
+    }
+    const picked = showOpenFileDialog('GLB / GLTF|glb;gltf');
+    if (!picked || picked.length === 0) return;
+    const file = picked[0].replace(/\\/g, '/');
+    state.mode = 'file';
+    state.dir = '';
+    state.files = [file];
+    state.fileIndex = 0;
+    dirStatus.textContent = 'single file · ' + path.dirname(file);
+    dirStatus.style.color = '#888';
+    renderFileList();
+    loadFile(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -77,16 +222,21 @@ function bboxCenterRadius(mesh) {
 function loadFile(idx) {
     clearNodes();
 
-    const path = FILES[idx];
-    const name = path.split('/').pop();
+    if (idx < 0 || idx >= state.files.length) {
+        setStatus('No file');
+        return;
+    }
+
+    const filePath = state.files[idx];
+    const name = fileName(filePath);
     setStatus('Loading ' + name + ' …');
 
     let gltf;
     try {
-        gltf = Mesh.loadGLTF(path);
+        gltf = Mesh.loadGLTF(filePath);
     } catch (e) {
         setStatus('FAILED: ' + e.message);
-        setInfo('Could not load ' + path);
+        setInfo('Could not load ' + filePath);
         return;
     }
 
@@ -98,7 +248,6 @@ function loadFile(idx) {
         return;
     }
 
-    // Frame the first (or merged) mesh.
     const meshes = gltf.meshes;
     const hasSkin = gltf.skins && gltf.skins.length > 0 && gltf.skins[0].boneCount > 0;
     const hasSkel = gltf.skeletons && gltf.skeletons.length > 0 && gltf.skeletons[0].boneCount > 0;
@@ -136,9 +285,6 @@ function loadFile(idx) {
         });
     }
 
-    // Create one scene mesh node per sub-mesh. If the glb ships a baseColor
-    // texture, hand it through and tint with baseColorFactor instead of a
-    // palette color.
     const materials = gltf.materials || [];
     const images    = gltf.images    || [];
     const meshMat   = gltf.meshMaterial || [];
@@ -153,8 +299,6 @@ function loadFile(idx) {
 
         if (img && img.data && img.width > 0 && img.height > 0) {
             opts.texture = { width: img.width, height: img.height, data: img.data };
-            // Tint with baseColorFactor (default [1,1,1,1]) so the texture
-            // renders at authored intensity.
             opts.color = mat.baseColorFactor || [1,1,1,1];
         } else {
             opts.color = PALETTE[i % PALETTE.length];
@@ -164,7 +308,7 @@ function loadFile(idx) {
     }
 
     state.loaded = {
-        path, name,
+        path: filePath, name,
         gltf,
         bindMeshes,
         hasSkin, hasSkel, hasAnim,
@@ -179,7 +323,7 @@ function loadFile(idx) {
     state.orbitAngle = 0;
 
     renderInfo();
-    setStatus('[' + (idx+1) + '/' + FILES.length + '] ' + name);
+    setStatus('[' + (idx+1) + '/' + state.files.length + '] ' + name);
 }
 
 function renderInfo() {
@@ -221,7 +365,6 @@ function updateAnimation(dtMs) {
     if (!L || !L.hasSkin || !L.hasSkel) return;
     if (!state.enableSkinning) return;
 
-    // Advance anim clock
     let pose;
     if (state.bindPoseOnly || !L.hasAnim || L.animIdx < 0) {
         pose = L.skeleton.bindPose();
@@ -238,14 +381,12 @@ function updateAnimation(dtMs) {
     // double-inverse-bind multiply.
     const mats = pose.computeWorldMatrices(L.skeleton);
 
-    // Apply to each bind mesh (we assume skin applies to mesh 0 primarily, but
-    // try on all and silently skip mismatches).
     for (let i = 0; i < L.bindMeshes.length; i++) {
         const bm = L.bindMeshes[i];
         if (bm.mesh.vertexCount !== L.skin.vertexCount) continue;
 
-        // Restore bind positions before skinning (fresh copy — applySkinning
-        // mutates in place and would otherwise compound each frame).
+        // Restore bind positions before skinning (applySkinning mutates in
+        // place and would otherwise compound each frame).
         bm.mesh.positions = new Float32Array(bm.basePositions);
         if (bm.baseNormals) bm.mesh.normals = new Float32Array(bm.baseNormals);
 
@@ -342,14 +483,19 @@ function frame(t) {
 // Input
 // ---------------------------------------------------------------------------
 
+function navigate(delta) {
+    if (state.mode !== 'folder' || state.files.length === 0) return;
+    state.fileIndex = (state.fileIndex + delta + state.files.length) % state.files.length;
+    loadFile(state.fileIndex);
+    renderFileList();
+}
+
 document.addEventListener('keydown', (e) => {
     const k = e.key;
     if (k === ']' || k === 'ArrowRight') {
-        state.fileIndex = (state.fileIndex + 1) % FILES.length;
-        loadFile(state.fileIndex);
+        navigate(1);
     } else if (k === '[' || k === 'ArrowLeft') {
-        state.fileIndex = (state.fileIndex - 1 + FILES.length) % FILES.length;
-        loadFile(state.fileIndex);
+        navigate(-1);
     } else if (k === ' ') {
         state.paused = !state.paused;
         renderInfo();
@@ -370,12 +516,28 @@ document.addEventListener('keydown', (e) => {
         if (state.showBones) setupBoneNodes();
         else clearBoneNodes();
         renderInfo();
+    } else if (k === 'o' || k === 'O') {
+        openFolderDialog();
+        e.preventDefault();
+    } else if (k === 'f' || k === 'F') {
+        openFileDialog();
+        e.preventDefault();
     }
 });
+
+openFolderBtn.addEventListener('click', openFolderDialog);
+openFileBtn.addEventListener('click', openFileDialog);
 
 // ---------------------------------------------------------------------------
 // Go
 // ---------------------------------------------------------------------------
 
-loadFile(0);
+const initialDir = pickInitialDir();
+if (initialDir) {
+    state.mode = 'folder';
+    setDirectory(initialDir);
+} else {
+    dirStatus.textContent = 'Open Folder… (O) to browse, or Open File… (F) for one mesh.';
+    setStatus('Ready');
+}
 requestAnimationFrame(frame);

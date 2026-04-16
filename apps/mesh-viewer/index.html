@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Mesh Viewer — MeshyAI GLB</title>
+    <title>Mesh Viewer — GLB/GLTF</title>
     <style>
         html, body { margin: 0; padding: 0; height: 100%; }
         body {
@@ -20,17 +20,113 @@
             font-size: 12px;
             line-height: 1.5;
             z-index: 10;
-            max-width: 460px;
+            max-width: 300px;
             pointer-events: none;
         }
         #hud h2 { font-size: 14px; margin: 0 0 6px 0; color: #7bed9f; }
         #hud .key { color: #ffa502; font-weight: bold; }
         #hud .section { margin-top: 6px; color: #74b9ff; font-weight: bold; }
+
+        #file-panel {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 340px;
+            max-height: calc(100vh - 24px);
+            display: flex;
+            flex-direction: column;
+            background: rgba(0,0,0,0.80);
+            border-radius: 6px;
+            padding: 10px;
+            font-size: 12px;
+            z-index: 10;
+        }
+        #open-row {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+        #open-row button {
+            flex: 1;
+            color: #fff;
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        #open-folder-btn {
+            background: #2a4a6a;
+            border: 1px solid #3a6a9a;
+        }
+        #open-folder-btn:hover  { background: #3a6a9a; }
+        #open-folder-btn:active { background: #1a3a5a; }
+        #open-file-btn {
+            background: #333;
+            border: 1px solid #555;
+        }
+        #open-file-btn:hover  { background: #444; }
+        #open-file-btn:active { background: #222; }
+        #dir-status {
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 6px;
+            font-family: monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            direction: rtl;  /* show the tail of long paths */
+            text-align: left;
+        }
+        #file-list {
+            overflow-y: auto;
+            flex: 1;
+            min-height: 0;
+            border-top: 1px solid #222;
+            padding-top: 4px;
+        }
+        .file-item {
+            padding: 4px 6px;
+            cursor: pointer;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #ccc;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .file-item:hover { background: rgba(116, 185, 255, 0.15); color: #fff; }
+        .file-item.selected { background: #2a4a6a; color: #fff; font-weight: bold; }
+        .file-item .dim { color: #666; margin-right: 4px; }
+        #file-list .empty {
+            color: #888;
+            padding: 8px;
+            font-style: italic;
+        }
+
+        #status {
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.75);
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            z-index: 10;
+            color: #7bed9f;
+            max-width: 50vw;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
         #info {
             position: absolute;
             bottom: 12px;
             left: 12px;
-            right: 12px;
+            right: 364px;
             background: rgba(0,0,0,0.75);
             padding: 8px 14px;
             border-radius: 6px;
@@ -40,33 +136,31 @@
             white-space: pre;
             overflow: hidden;
         }
-        #status {
-            position: absolute;
-            top: 12px;
-            right: 12px;
-            background: rgba(0,0,0,0.75);
-            padding: 8px 14px;
-            border-radius: 6px;
-            font-size: 13px;
-            z-index: 10;
-            color: #7bed9f;
-        }
         canvas { display: block; width: 100vw; height: 100vh; background: transparent; }
     </style>
 </head>
 <body>
+    <canvas id="canvas"></canvas>
     <div id="hud">
-        <h2>MeshyAI GLB Viewer</h2>
+        <h2>GLB / GLTF Viewer</h2>
         <div><span class="key">[</span> / <span class="key">]</span> prev / next file</div>
         <div><span class="key">Space</span> pause/resume animation</div>
         <div><span class="key">A</span> cycle animations</div>
         <div><span class="key">B</span> toggle bind pose</div>
         <div><span class="key">R</span> toggle auto-orbit</div>
         <div><span class="key">W</span> toggle bone visualization</div>
+        <div><span class="key">O</span> open folder…  &nbsp; <span class="key">F</span> open file…</div>
     </div>
-    <div id="status">Loading…</div>
+    <div id="status">Ready</div>
+    <div id="file-panel">
+        <div id="open-row">
+            <button id="open-folder-btn" type="button">Open Folder…</button>
+            <button id="open-file-btn"   type="button">Open File…</button>
+        </div>
+        <div id="dir-status"></div>
+        <div id="file-list"></div>
+    </div>
     <div id="info"></div>
-    <canvas id="canvas"></canvas>
     <script src="app.js"></script>
 </body>
 </html>
