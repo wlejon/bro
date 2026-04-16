@@ -1,6 +1,6 @@
-// loop.js — Fixed-step simulation tick + per-frame render pump. HUD panel
-// updates are throttled at Config.*_HZ rather than firing every rAF frame
-// (DOM mutations are expensive).
+// loop.js — per-rAF HUD pump + event drain. The sim is auto-ticked by
+// Scene3D.scene.attachAIWorld, and each unit's decision loop runs inside
+// its AgentBinding via AI.think. Everything here runs on the render frame.
 var Loop = {};
 (function () {
     "use strict";
@@ -11,102 +11,11 @@ var Loop = {};
         return "?";
     }
 
-    // One fixed-step tick of the sim: policies → movement → fire/ability →
-    // world tick → damage event drain.
-    Loop.simStep = function (state, dt) {
-        var w = state.world;
-
-        // Reset this tick's claimed-cover list so wounded ralliers fan out
-        // across the frame rather than all converging on one cell.
-        AI.resetClaimedCover();
-
-        var teams = [[], []];
-        var all = state.agents;
-        for (var t = 0; t < all.length; t++) {
-            teams[all[t].unit.teamId].push(all[t]);
-        }
-        var focusTarget = [null, null];
-        focusTarget[0] = AI.chooseTeamFocus(teams[0], teams[1], Arena.OBSTACLES);
-        focusTarget[1] = AI.chooseTeamFocus(teams[1], teams[0], Arena.OBSTACLES);
-        state.teamFocus = focusTarget;
-
-        for (var i = 0; i < all.length; i++) {
-            var a = all[i];
-            if (!a.unit.alive) continue;
-
-            AI.decayThreat(AI.getMem(a.unit.id), dt);
-
-            var myTeam = a.unit.teamId;
-            var myMates = teams[myTeam];
-            var myEnemies = teams[1 - myTeam];
-            var myFocus = focusTarget[myTeam];
-
-            // Remember last walkable anchor so we can revert if the
-            // integrator drifts the agent onto a blocked cell.
-            var preX = a.x, preZ = a.z;
-            var preWalkable = state.nav.isWalkable(preX, preZ);
-
-            var action;
-            var myTarget = null;
-            if (myTeam === 1 && state.blueAi === "mcts" && state.mcts[a.unit.id]) {
-                var m = state.mcts[a.unit.id];
-                var ca = AI.mctsStep(a, w, m.mcts, m.cache);
-                state.lastMctsStats = m.mcts.lastStats;
-                action = AI.applyMcts(a, w, ca, dt);
-                AI.getMem(a.unit.id).intent = "MCTS";
-            } else {
-                myTarget = AI.pickTargetFor(a, myEnemies, myFocus, Arena.OBSTACLES);
-                action = AI.scriptedTactical(
-                    a, w, state.nav, myEnemies, myMates, myTarget,
-                    Arena.OBSTACLES, state.elapsed);
-                a.update(dt);
-            }
-
-            // Aim: scripted already called requestAim at decision points;
-            // for MCTS (and as a safety net) seed desiredAim from the best
-            // target. Snap yaw to the aim direction so strafers don't end
-            // up oriented sideways to their target.
-            var aimMem = AI.getMem(a.unit.id);
-            var aimAt = action.fireAt ||
-                (action.attackTargetId >= 0 ? state.byId[action.attackTargetId] : null) ||
-                myTarget || myFocus;
-            if (aimAt && aimAt.unit && aimAt.unit.alive) {
-                var aimDx = aimAt.x - a.x, aimDz = aimAt.z - a.z;
-                AI.requestAim(aimMem, state.elapsed, aimDx, aimDz);
-                a.setYaw(Math.atan2(aimDx, -aimDz));
-            }
-            BotAim.tick(aimMem.aim, dt);
-
-            if (action.fireAt) {
-                AI.tryShoot(a, w, action.fireAt, Arena.OBSTACLES, aimMem, dt);
-            } else if (action.attackTargetId >= 0) {
-                w.resolveAttack(a, action.attackTargetId);
-            }
-
-            // Post-integrate collision: if steering drifted the agent onto
-            // a blocked cell (corner clipping), snap back to the last
-            // walkable anchor; clearTarget lets velocity decay before the
-            // next attempt so we don't oscillate.
-            if (!state.nav.isWalkable(a.x, a.z)) {
-                var anchor = preWalkable
-                    ? { x: preX, z: preZ }
-                    : AI.findWalkableNear(state.nav, a.x, a.z, 3);
-                if (anchor) {
-                    a.setPosition(anchor.x, anchor.z);
-                    a.clearTarget();
-                }
-            }
-
-            if (action.useAbilityId >= 0) {
-                var tid = action.abilityTargetId >= 0 ? action.abilityTargetId : a.unit.id;
-                w.resolveAbility(a, action.useAbilityId, tid);
-            }
-        }
-
-        w.tick(dt);
-
-        // Drain damage events into the log + FX layer.
-        var evs = w.events;
+    // Drain damage events that accumulated since the previous frame into the
+    // log + FX layer + AI threat tracker. Called once per render frame; events
+    // may span multiple ticks when the scene catches up from a stall.
+    function drainEvents(state) {
+        var evs = state.world.events;
         for (var e = 0; e < evs.length; e++) {
             var ev = evs[e];
             var attacker = state.byId[ev.attackerId];
@@ -123,32 +32,29 @@ var Loop = {};
             });
             Render.addDamageNumber(target.x, target.z, ev.amount,
                 ev.killed ? "#ffd24a" : "#ffffff");
-            if (ev.killed) {
-                Render.addExplosion(target.x, target.z, 1.2);
+            if (ev.killed) Render.addExplosion(target.x, target.z, 1.2);
+        }
+        state.world.clearEvents();
+    }
+
+    // Per-rAF render frame. Auto-tick handled by the scene; we just drain
+    // events, maintain replay/recording, and pump HUD panels.
+    Loop.frame = function (state, canvas, dt) {
+        if (!state.paused) {
+            drainEvents(state);
+
+            state.snapshotAccum += dt;
+            if (state.snapshotAccum >= Config.SNAPSHOT_INTERVAL) {
+                state.snapshotAccum = 0;
+                state.snapshots.push({ t: state.elapsed, snap: state.world.snapshot() });
+                while (state.snapshots.length > Config.SNAPSHOT_KEEP) state.snapshots.shift();
+            }
+            if (state.recording && state.recorder) {
+                state.recorder.recordFrame(state.simSteps, state.elapsed, state.world);
             }
         }
-        w.clearEvents();
 
-        state.snapshotAccum += dt;
-        if (state.snapshotAccum >= Config.SNAPSHOT_INTERVAL) {
-            state.snapshotAccum = 0;
-            state.snapshots.push({ t: state.elapsed, snap: w.snapshot() });
-            while (state.snapshots.length > Config.SNAPSHOT_KEEP) state.snapshots.shift();
-        }
-
-        if (state.recording && state.recorder) {
-            state.recorder.recordFrame(state.simSteps, state.elapsed, w);
-        }
-
-        state.simSteps++;
-        state.elapsed += dt;
-    };
-
-    // Per-rAF render + throttled HUD updates. Called once per frame.
-    Loop.frame = function (state, canvas, dt) {
         Scene3D.update(state, dt);
-        // 2D overlays (projectiles, FX, gizmos) still live in Render for now;
-        // Phase 5/6 will migrate them into the 3D scene.
         Render.tickFx(dt);
 
         state.rosterAccum += dt;

@@ -1,6 +1,7 @@
-// main.js — Bootstrap: load the default scenario, wire controls, run the
-// rAF loop. All gameplay tick logic lives in loop.js; buttons in
-// controls.js; record/play in replay.js; world build in arena.js.
+// main.js — Bootstrap. Scene graph drives the sim via attachAIWorld, each
+// capsule node owns an agent binding whose think() is AI.think. The rAF
+// loop is thin now: refresh shared AI state each frame, then pump HUD
+// updates and drain damage events post-tick.
 var App = {};
 (function () {
     "use strict";
@@ -15,6 +16,15 @@ var App = {};
     };
 
     App.rebuild = function () {
+        // Detach any bindings/ticker from the previous world before destroying it.
+        if (App.state && App.state.world) {
+            Scene3D.scene.detachAIWorld();
+            for (var di = 0; di < App.state.agents.length; di++) {
+                var dn = Scene3D.units[App.state.agents[di].unit.id];
+                if (dn) { try { dn.detachAgent(); } catch (e) {} }
+            }
+        }
+
         var built = Arena.build(App.scenario);
         Scene3D.build(App.scenario);
 
@@ -24,30 +34,12 @@ var App = {};
             rewardTrackers[a.unit.id] = bro.ai.game.createRewardTracker(a, built.world);
         }
 
-        // One MCTS instance per Blue-team agent, with its own action cache.
-        // Stagger the initial TTLs so searches (12 ms budget each) don't
-        // all land on the same frame — otherwise N agents × 12 ms spikes
-        // every 15 frames, starving the render loop.
-        var mctsByAgent = {};
-        var mctsCount = 0;
-        for (var j = 0; j < built.agents.length; j++) {
-            var ag = built.agents[j];
-            if (ag.unit.teamId === 1) {
-                mctsByAgent[ag.unit.id] = {
-                    mcts: AI.createMcts(),
-                    cache: { action: null, ttl: mctsCount % 15 },
-                };
-                mctsCount++;
-            }
-        }
-
         App.state = {
             nav: built.nav,
             world: built.world,
             agents: built.agents,
             byId: built.byId,
             rewards: rewardTrackers,
-            mcts: mctsByAgent,
             snapshots: [],
             snapshotAccum: 0,
             blueAi: "scripted",
@@ -57,10 +49,7 @@ var App = {};
             rewardAccum: 0,
             rosterAccum: 0,
             statusAccum: 0,
-            simAccum: 0,
             pendingLog: [],
-            // Simulation wrapper — documented integration point; we drive
-            // policies manually so ability casts flow through our loop.
             sim: bro.ai.game.createSimulation(built.world),
             simSteps: 0,
             elapsed: 0,
@@ -75,6 +64,35 @@ var App = {};
         };
 
         AI.memory = {};
+
+        // Ensure shared state is populated before the first think() fires —
+        // attachAIWorld/attachAgent immediately schedule a tick.
+        AI.updateShared(App.state);
+
+        // Auto-tick the world off the scene frame update (replaces the
+        // manual accumulator + Loop.simStep from pre-refactor).
+        Scene3D.scene.attachAIWorld(built.world, {
+            stepHz: 60, maxStepsPerFrame: Config.MAX_STEPS_PER_FRAME,
+        });
+
+        // Bind each unit capsule to its agent with the scripted think().
+        // Capabilities:
+        //   move_to / cast_ability / flee / hold — built-ins used by think()
+        //   aimed_shot — declarative custom cap (see ai.js note)
+        var CAPS = ["move_to", "cast_ability", "flee", "hold", "aimed_shot"];
+        for (var j = 0; j < built.agents.length; j++) {
+            var ag = built.agents[j];
+            var node = Scene3D.units[ag.unit.id];
+            if (!node) continue;
+            node.attachAgent(built.world, ag, {
+                capabilities: CAPS,
+                thinkHz: 30,
+                faceMovement: true,
+                yOffset: Scene3D.UNIT_Y,
+                think: AI.think,
+            });
+        }
+
         Render.clearFx();
         UI.rebuildRoster(Arena.ROSTER);
         Controls.syncFromDom(App.state);
@@ -100,16 +118,14 @@ var App = {};
         }
 
         if (!state.paused) {
-            var stepDt = Config.SIM_STEP;
-            var maxSteps = Config.MAX_STEPS_PER_FRAME;
-            state.simAccum += dt;
-            while (state.simAccum >= stepDt && maxSteps-- > 0) {
-                Loop.simStep(state, stepDt);
-                state.simAccum -= stepDt;
-            }
-            if (state.simAccum > Config.MAX_SIM_ACCUM) {
-                state.simAccum = Config.MAX_SIM_ACCUM;
-            }
+            // Refresh shared AI state (team focus, teammate/enemy rosters,
+            // claimed cover) before bindings fire think() during this frame.
+            AI.updateShared(state);
+            // Elapsed time advances even though the scene ticks the world;
+            // we use it for HUD labels, snapshot intervals, and AI memory
+            // timestamps.
+            state.elapsed += dt;
+            state.simSteps = Math.round(state.elapsed / Config.SIM_STEP);
         }
 
         Loop.frame(state, App.canvas, dt);
@@ -120,6 +136,7 @@ var App = {};
 
     UI.init();
     Scene3D.init(App.canvas);
+    AI.registerCapabilities();
     App.rebuild();
     Controls.bind(App.rebuild);
 

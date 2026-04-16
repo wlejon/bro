@@ -13,6 +13,7 @@ var Arena = {};
     Arena.AB_FIREBALL = 1;
     Arena.AB_BEAM     = 2;
     Arena.AB_GRENADE  = 3;
+    Arena.AB_BASIC    = 4;
 
     // Populated by Arena.build(scenario). Downstream modules read these
     // rather than the scenario object so swapping scenarios is a single
@@ -95,10 +96,40 @@ var Arena = {};
         });
     }
 
+    // Basic shot: uses the caster's BotAim forward (set each think tick by
+    // ai.js). Cooldown comes from the ability spec; range gating is applied
+    // by the caster's think() before the cast is chosen.
+    function registerBasicShotAbility(world, ab) {
+        var p = ab.projectile;
+        world.registerAbility(ab.id, {
+            cooldown: ab.cooldown, manaCost: ab.manaCost, range: ab.range,
+            fn: function (caster, w /*, targetId*/) {
+                var mem = AI.getMem(caster.unit.id);
+                var f = BotAim.forward(mem.aim);
+                var u = caster.unit;
+                w.spawnProjectile({
+                    ownerId: u.id,
+                    teamId:  u.teamId,
+                    x: caster.x + f.x * (u.radius + 0.4),
+                    z: caster.z + f.z * (u.radius + 0.4),
+                    vx: f.x * p.speed,
+                    vz: f.z * p.speed,
+                    speed:  p.speed,
+                    radius: p.radius,
+                    damage: p.damage,
+                    remainingLife: p.life,
+                    kind: p.kind,
+                    mode: p.mode,
+                });
+            },
+        });
+    }
+
     var REGISTRARS = {
         "projectile": registerProjectileAbility,
         "grenade":    registerGrenadeAbility,
         "heal-ally":  registerHealAbility,
+        "basic-shot": registerBasicShotAbility,
     };
 
     Arena.build = function (scenario) {

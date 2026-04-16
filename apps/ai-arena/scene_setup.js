@@ -18,7 +18,7 @@ var Scene3D = {};
     Scene3D.obstacles = [];
     Scene3D.units = {};  // agentId → capsule node
 
-    var UNIT_Y = 0.9;        // capsule center height (radius + halfHeight)
+    Scene3D.UNIT_Y = 0.9;    // capsule center height (radius + halfHeight)
     var CAPSULE_R = 0.4;
     var CAPSULE_HALF_H = 0.5;
     var WALL_H = 2.5;
@@ -158,32 +158,22 @@ var Scene3D = {};
                 mesh: "capsule",
                 radius: CAPSULE_R, halfHeight: CAPSULE_HALF_H,
                 color: c,
-                x: r.x, y: UNIT_Y, z: r.z,
+                x: r.x, y: Scene3D.UNIT_Y, z: r.z,
                 name: "unit-" + r.id,
             });
             Scene3D.units[r.id] = node2;
         }
     };
 
-    // Per-frame transform sync. Phase 2 will flip this around — node.attachAgent
-    // writes transforms automatically — but for Phase 1 (sim still driven by the
-    // old loop) we push agent.x/z/yaw onto the capsule nodes manually.
-    Scene3D.update = function (state, dt) {
+    // The AgentBinding writes position + rotation each frame. We only manage
+    // visibility (so fallen units don't clutter the battlefield).
+    Scene3D.update = function (state /*, dt*/) {
         var agents = state.agents;
         for (var i = 0; i < agents.length; i++) {
             var a = agents[i];
             var node = Scene3D.units[a.unit.id];
             if (!node) continue;
-            if (!a.unit.alive) {
-                // Sink dead units below the floor so the HUD can still see
-                // them in the roster without cluttering the battlefield.
-                node.visible = false;
-                continue;
-            }
-            node.visible = true;
-            node.x = a.x;
-            node.z = a.z;
-            node.rotationY = a.yaw;
+            node.visible = !!a.unit.alive;
         }
     };
 })();

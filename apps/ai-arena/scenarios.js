@@ -5,11 +5,14 @@ var Scenarios = {};
 (function () {
     "use strict";
 
-    // Ability IDs (stable across scenarios).
+    // Ability IDs (stable across scenarios). AB_BASIC is the regular shot
+    // driven through the capability layer — registered like any other ability
+    // so its cooldown/projectile flows through world.registerAbility's fn.
     Scenarios.AB_HEAL     = 0;
     Scenarios.AB_FIREBALL = 1;
     Scenarios.AB_BEAM     = 2;
     Scenarios.AB_GRENADE  = 3;
+    Scenarios.AB_BASIC    = 4;
 
     function rosterLine(names, teamId, x, zStart, zStep, idOffset) {
         var list = [];
@@ -63,6 +66,18 @@ var Scenarios = {};
             projectile: {
                 speed: 10, radius: 0.5, damage: 28, splashRadius: 2.5,
                 kind: "magical", mode: "aoe",
+            },
+        },
+        {
+            // Basic shot fired along the agent's current aim forward. Cooldown
+            // matches unit.attacksPerSec (set per-unit below). Range equals
+            // unit.attackRange; think() gates firing on BotAim readiness.
+            id: Scenarios.AB_BASIC, slot: Scenarios.AB_BASIC,
+            cooldown: 1 / 1.4, manaCost: 0, range: 9,
+            kind: "basic-shot",
+            projectile: {
+                speed: 18, radius: 0.22, damage: 9, life: 1.2,
+                kind: "physical", mode: "single",
             },
         },
     ];

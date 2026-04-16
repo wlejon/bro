@@ -1,54 +1,57 @@
-// ai.js — Bot policies (tactical scripted + MCTS).
+// ai.js — Scripted policy as a think(self, world) callback for the
+// capability-based AgentBinding. Each unit runs this at thinkHz from the
+// scene's AI tick; it picks exactly one capability action per tick
+// (moveTo / cast / flee / hold) and — as a side effect — fires a basic shot
+// directly via world.spawnProjectile when BotAim is on target and the shoot
+// cooldown is ready. The aimed_shot behavior is declared as a registered
+// custom capability for documentation and future use (JS-registered caps
+// aren't directly invocable from `self` today).
 //
-// Designed to show visible intelligence, not just "walk to nearest enemy":
-//   - team focus-fire on weakest visible enemy
-//   - retreat + heal on low HP
-//   - kiting: hold ideal attack distance instead of hugging
-//   - ability use keyed on situation (cluster → grenade, line-up → beam)
-//   - LOS-aware: reposition when target is behind cover
+// Shared per-frame state (team focus, teammate/enemy rosters, claimedCover)
+// is refreshed in AI.updateShared(state) from loop.js before bindings tick,
+// so think() reads ready snapshots rather than recomputing per agent.
 var AI = {};
 (function () {
     "use strict";
 
-    function dist2(ax, az, bx, bz) {
-        var dx = ax - bx, dz = az - bz;
-        return dx * dx + dz * dz;
-    }
+    // ───────────────────────────────────────────────────────────────────────
+    // Scalar helpers
+    // ───────────────────────────────────────────────────────────────────────
+    function dist2(ax, az, bx, bz) { var dx = ax-bx, dz = az-bz; return dx*dx + dz*dz; }
     function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-    // Per-agent persistent state — remembered across ticks.
+    // ───────────────────────────────────────────────────────────────────────
+    // Per-agent memory (threat, aim, flee latch, cover latch, intent label)
+    // ───────────────────────────────────────────────────────────────────────
     AI.memory = {};
     AI.getMem = function (id) {
         var m = AI.memory[id];
         if (!m) m = AI.memory[id] = {
-            intent: "idle", perpSign: 1, lastFlip: -99,
-            shootCd: 0, targetId: null,
-            // Aim system: 15Hz target sampling + turn-rate-limited rotation.
-            // See apps/lib/bot_aim.js. We use 2D top-down here (pitch=0); the
-            // y argument to requestAimAt is set to a constant agent eye level.
+            intent: "idle", targetId: null,
+            shootCd: 0, lastThinkT: -1,
+            // Gun-lag aim: 15Hz target resample + turn-rate-limited rotation.
             aim: BotAim.create({ turnSpeed: 5.0, sampleHz: 15, fireConeRad: 0.15 }),
-            // Threat tracking — recent damage taken & who dealt most of it.
             threat: 0, threatSourceId: -1, lastHitT: -99,
-            role: "front", coverX: null, coverZ: null,
+            role: "front", coverX: null, coverZ: null, coverPickedT: -99,
             fleeX: null, fleeZ: null, fleePickedT: -99,
+            perpSign: 1, lastFlip: -99,
+            // Mirror of unit.abilityCooldowns (not exposed to JS yet). We seed
+            // it on successful cast; decay per think tick.
+            abCd: [0, 0, 0, 0, 0, 0, 0, 0],
         };
         return m;
     };
 
-    // Decay threat pressure; called once per agent per tick.
     AI.decayThreat = function (mem, dt) {
         var decay = Math.exp(-dt / 1.5);  // half-life ~1s
         mem.threat *= decay;
         if (mem.threat < 0.5) mem.threatSourceId = -1;
     };
 
-    // Called from main.js when a damage event is drained from world.events.
     AI.recordDamage = function (targetId, attackerId, amount, simT) {
         var m = AI.getMem(targetId);
         m.threat += amount;
         m.lastHitT = simT;
-        // Prefer sticking with the same threat source unless a new attacker
-        // is hitting us harder — this prevents thrashing between two shooters.
         if (attackerId !== m.threatSourceId) {
             if (m.threatSourceId < 0 || amount * 2 > m.threat) {
                 m.threatSourceId = attackerId;
@@ -56,70 +59,22 @@ var AI = {};
         }
     };
 
-    // Wrappers that pass the agent's aim sub-state through to BotAim.
-    // `dx, dz` is the 2D direction-to-target in arena coordinates.
-    AI.requestAim = function (mem, simT, dx, dz) {
-        // Translate top-down (dx, dz) into engine yaw (yaw 0 = -Z forward).
-        var yaw = Math.atan2(dx, -dz);
-        BotAim.requestAim(mem.aim, simT, yaw, 0);
-    };
+    // Per-tick fan-out: wounded ralliers append their chosen cover so
+    // downstream agents avoid piling on. Reset at the top of each frame.
+    AI.claimedCover = [];
+    AI.resetClaimedCover = function () { AI.claimedCover.length = 0; };
 
-    // Fire a projectile along the agent's current aim direction. Aim is
-    // tracked by BotAim — the shot only goes when the gun has rotated onto
-    // the target (within fireConeRad).
-    AI.tryShoot = function (agent, world, focus, obstacles, mem, dt) {
-        mem.shootCd -= dt;
-        if (!focus || !focus.unit.alive) return false;
-        if (mem.shootCd > 0) return false;
-        var u = agent.unit;
-        var dx = focus.x - agent.x, dz = focus.z - agent.z;
-        var dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist > u.attackRange) return false;
-        if (!bro.ai.game.hasLineOfSight(agent.x, agent.z, focus.x, focus.z, obstacles)) {
-            return false;
-        }
-
-        // Hold fire if the gun isn't on target yet.
-        if (!BotAim.canFireAt(mem.aim, agent.x, 0, agent.z, focus.x, 0, focus.z)) {
-            return false;
-        }
-
-        var f = BotAim.forward(mem.aim);
-        var PSPEED = 18;
-        world.spawnProjectile({
-            ownerId: u.id,
-            teamId:  u.teamId,
-            x: agent.x + f.x * (u.radius + 0.4),
-            z: agent.z + f.z * (u.radius + 0.4),
-            vx: f.x * PSPEED,
-            vz: f.z * PSPEED,
-            speed: PSPEED,
-            radius: 0.22,
-            damage: 9,
-            remainingLife: 1.2,
-            kind: "physical",
-            mode: "single",
-        });
-        mem.shootCd = 1.0 / Math.max(0.1, u.attacksPerSec);
-        return true;
-    };
-
-    // Choose a team focus target = weakest enemy that at least one teammate can see.
-    // Falls back to the overall closest enemy if nobody has LOS.
-    //
-    // Perception is distance-capped at ~1.8x attackRange so the team doesn't
-    // commit to a target they can see but can't shoot — prevents the "march
-    // across the arena in a straight line into a killzone" behavior.
+    // ───────────────────────────────────────────────────────────────────────
+    // Perception helpers (LOS + target selection)
+    // ───────────────────────────────────────────────────────────────────────
     AI.chooseTeamFocus = function (team, enemies, obstacles) {
         var best = null, bestHp = Infinity;
         var PERCEPT_MUL = 1.8;
         for (var i = 0; i < enemies.length; i++) {
             var e = enemies[i];
-            if (!e.unit.alive) continue;
             var seen = false;
             for (var j = 0; j < team.length; j++) {
                 var t = team[j];
-                if (!t.unit.alive) continue;
                 var perceptR = (t.unit.attackRange || 9) * PERCEPT_MUL;
                 if (dist2(t.x, t.z, e.x, e.z) > perceptR * perceptR) continue;
                 if (bro.ai.game.hasLineOfSight(t.x, t.z, e.x, e.z, obstacles)) {
@@ -130,74 +85,61 @@ var AI = {};
             if (e.unit.hp < bestHp) { bestHp = e.unit.hp; best = e; }
         }
         if (best) return best;
-        // Fallback: nearest to any teammate (no LOS required)
+        // No LOS fallback: nearest enemy to any teammate.
         var bestD = Infinity;
         for (var k = 0; k < enemies.length; k++) {
             var en = enemies[k];
-            if (!en.unit.alive) continue;
             for (var m = 0; m < team.length; m++) {
-                var tm = team[m];
-                if (!tm.unit.alive) continue;
-                var d = dist2(tm.x, tm.z, en.x, en.z);
+                var d = dist2(team[m].x, team[m].z, en.x, en.z);
                 if (d < bestD) { bestD = d; best = en; }
             }
         }
         return best;
     };
 
-    // Per-agent target selection: closest visible enemy, weighted toward low HP.
-    // Falls back to the team-level focus if nothing is in line of sight.
     AI.pickTargetFor = function (agent, enemies, teamFocus, obstacles) {
         var best = null, bestScore = -Infinity;
         var ax = agent.x, az = agent.z;
         for (var i = 0; i < enemies.length; i++) {
             var e = enemies[i];
-            if (!e.unit.alive) continue;
             var dx = e.x - ax, dz = e.z - az;
-            var d = Math.sqrt(dx * dx + dz * dz);
-            if (d > 18) continue;  // too far to bother
+            var d = Math.sqrt(dx*dx + dz*dz);
+            if (d > 18) continue;
             if (!bro.ai.game.hasLineOfSight(ax, az, e.x, e.z, obstacles)) continue;
-            // Prefer close, low-HP targets. Distance dominates unless HP is tiny.
             var score = -d - e.unit.hp * 0.04;
             if (score > bestScore) { bestScore = score; best = e; }
         }
         return best || teamFocus;
     };
 
-    // Pick a walkable cover point. A cell is "cover" relative to threats if
-    // the straight LOS line from every listed threat to that cell is blocked
-    // by an obstacle. We prefer cells that are (a) close to the agent,
-    // (b) toward the team centroid (don't break ranks), (c) not directly
-    // backward (keeps pressure on enemies). Returns {x, z} or null.
-    //
-    //  agent      — the one seeking cover (for current-position distance penalty)
-    //  threats    — array of {x, z} positions (enemies currently hitting us)
-    //  obstacles  — Arena.OBSTACLES
-    //  nav        — nav grid
-    //  opts       — { anchorX, anchorZ, anchorRadius, claimed } — optional:
-    //    anchor*  : sample ring is centered here instead of `agent` (for
-    //               rallying near a healthy ally without landing on top of
-    //               them); agent position is still used as the travel-cost
-    //               penalty so the returned point is reachable.
-    //    claimed  : array of {x, z} points already chosen by other agents
-    //               this tick. Candidates within 1u of any claimed point
-    //               are rejected so wounded ralliers fan out instead of
-    //               piling onto the same cell.
-    //    minThreatDistance : reject candidates closer than this to any
-    //               threat. Use when a low-HP unit needs to heal safely —
-    //               LOS blocked isn't enough if the threat can reach us.
+    // ───────────────────────────────────────────────────────────────────────
+    // Cover / movement helpers
+    // ───────────────────────────────────────────────────────────────────────
+    AI.findWalkableNear = function (nav, x, z, maxR) {
+        if (nav.isWalkable(x, z)) return { x: x, z: z };
+        for (var r = 0.5; r <= (maxR || 4); r += 0.5) {
+            for (var ang = 0; ang < Math.PI * 2; ang += Math.PI / 4) {
+                var nx = x + Math.cos(ang) * r, nz = z + Math.sin(ang) * r;
+                if (nav.isWalkable(nx, nz)) return { x: nx, z: nz };
+            }
+        }
+        return null;
+    };
+
+    // Find a walkable cell that breaks LOS from every listed threat. Accepts
+    // opts.anchorX/anchorZ (ring center), opts.claimed (points to avoid),
+    // opts.minThreatDistance. Returns {x,z} or null.
     AI.findCover = function (agent, threats, obstacles, nav, opts) {
         if (!threats || threats.length === 0) return null;
         opts = opts || {};
         var ax = agent.x, az = agent.z;
         var cx0 = opts.anchorX !== undefined ? opts.anchorX : ax;
         var cz0 = opts.anchorZ !== undefined ? opts.anchorZ : az;
-        // Wider search if anchored to an ally — the agent may need to
-        // traverse further to reach useful cover near them.
         var rings = opts.anchorX !== undefined
-            ? [1.5, 2.5, 3.5, 5.0]
-            : [2.0, 3.5, 5.0];
+            ? [1.5, 2.5, 3.5, 5.0] : [2.0, 3.5, 5.0];
         var claimed = opts.claimed || null;
+        var minThD2 = opts.minThreatDistance
+            ? opts.minThreatDistance * opts.minThreatDistance : 0;
 
         var best = null, bestScore = -Infinity;
         for (var ri = 0; ri < rings.length; ri++) {
@@ -206,10 +148,6 @@ var AI = {};
                 var cx = clamp(cx0 + Math.cos(ang) * r, -19, 19);
                 var cz = clamp(cz0 + Math.sin(ang) * r, -19, 19);
                 if (!nav.isWalkable(cx, cz)) continue;
-
-                // Reject a candidate that's effectively on top of another
-                // rallier's chosen cover — spreads wounded units around
-                // instead of clumping them.
                 if (claimed) {
                     var tooClose = false;
                     for (var ci = 0; ci < claimed.length; ci++) {
@@ -220,60 +158,35 @@ var AI = {};
                     }
                     if (tooClose) continue;
                 }
-
-                // Must break LOS to EVERY known threat — half-cover (blocked
-                // from one but exposed to another) is a trap.
-                var coversAll = true;
-                var tooCloseToThreat = false;
-                var minThD2 = opts.minThreatDistance
-                    ? opts.minThreatDistance * opts.minThreatDistance
-                    : 0;
+                var coversAll = true, tooCloseToThreat = false;
                 for (var ti = 0; ti < threats.length; ti++) {
                     var th = threats[ti];
                     if (minThD2 > 0) {
                         var tdx = cx - th.x, tdz = cz - th.z;
-                        if (tdx * tdx + tdz * tdz < minThD2) {
-                            tooCloseToThreat = true; break;
-                        }
+                        if (tdx*tdx + tdz*tdz < minThD2) { tooCloseToThreat = true; break; }
                     }
                     if (bro.ai.game.hasLineOfSight(cx, cz, th.x, th.z, obstacles)) {
                         coversAll = false; break;
                     }
                 }
                 if (tooCloseToThreat || !coversAll) continue;
-
-                // Score: short travel from agent dominates; mild pull toward
-                // the anchor point (so ally-anchored searches prefer cells
-                // near that ally without ignoring reachability entirely).
                 var score = -Math.hypot(cx - ax, cz - az);
-                if (opts.anchorX !== undefined) {
-                    score -= 0.4 * Math.hypot(cx - cx0, cz - cz0);
-                }
+                if (opts.anchorX !== undefined) score -= 0.4 * Math.hypot(cx - cx0, cz - cz0);
                 if (score > bestScore) { bestScore = score; best = { x: cx, z: cz }; }
             }
         }
         return best;
     };
 
-    // Per-tick list of cover points already claimed by ralliers this frame.
-    // main.js resets this at the top of each sim step; scriptedTactical
-    // appends its picks so downstream agents fan out.
-    AI.claimedCover = [];
-    AI.resetClaimedCover = function () { AI.claimedCover.length = 0; };
-
-    // Push a candidate move destination away from close teammates so the
-    // firing line doesn't collapse into a single blob. Returns the adjusted
-    // {x, z}. The nudge scales with how close teammates are — harmless at
-    // comfortable spacing, strong when stacked.
     AI.spaceFromTeammates = function (agent, teammates, x, z) {
         var SPACING = 1.4;
         for (var ti = 0; ti < teammates.length; ti++) {
             var tm = teammates[ti];
-            if (tm === agent || !tm.unit.alive) continue;
+            if (tm === agent) continue;
             var ddx = x - tm.x, ddz = z - tm.z;
             var dd = Math.hypot(ddx, ddz);
             if (dd < SPACING && dd > 0.01) {
-                var push = (SPACING - dd);
+                var push = SPACING - dd;
                 x += (ddx / dd) * push;
                 z += (ddz / dd) * push;
             }
@@ -281,18 +194,12 @@ var AI = {};
         return { x: clamp(x, -19, 19), z: clamp(z, -19, 19) };
     };
 
-    // Push a point out of enemy attack range along the net "away from
-    // enemies" vector. Used by the flee branch so wounded units heal from
-    // a position the enemy can't reach, not from two steps inside the
-    // firing line. Iterates a few times since pushing away from one
-    // enemy can bring us closer to another.
     AI.pushOutOfEnemyRange = function (x, z, enemies, slack) {
         slack = slack || 1.15;
         for (var iter = 0; iter < 4; iter++) {
             var worst = null, worstExcess = 0;
             for (var ei = 0; ei < enemies.length; ei++) {
                 var e = enemies[ei];
-                if (!e.unit.alive) continue;
                 var safeR = (e.unit.attackRange || 9) * slack;
                 var dx = x - e.x, dz = z - e.z;
                 var d = Math.hypot(dx, dz);
@@ -307,592 +214,430 @@ var AI = {};
             var d2 = Math.max(0.01, worst.d);
             x += (worst.dx / d2) * worst.push;
             z += (worst.dz / d2) * worst.push;
-            x = clamp(x, -19, 19);
-            z = clamp(z, -19, 19);
+            x = clamp(x, -19, 19); z = clamp(z, -19, 19);
         }
         return { x: x, z: z };
     };
 
-    // Find a walkable point near (x, z), sampling outward in a ring. Returns
-    // null if no walkable cell found within the search radius.
-    AI.findWalkableNear = function (nav, x, z, maxR) {
-        if (nav.isWalkable(x, z)) return { x: x, z: z };
-        var STEP = 0.5;
-        for (var r = STEP; r <= (maxR || 4); r += STEP) {
-            for (var ang = 0; ang < Math.PI * 2; ang += Math.PI / 4) {
-                var nx = x + Math.cos(ang) * r;
-                var nz = z + Math.sin(ang) * r;
-                if (nav.isWalkable(nx, nz)) return { x: nx, z: nz };
-            }
-        }
-        return null;
+    // ───────────────────────────────────────────────────────────────────────
+    // Per-frame shared state + capability registration
+    // ───────────────────────────────────────────────────────────────────────
+    AI.shared = {
+        world: null, nav: null, obstacles: null,
+        teams: [[], []], teamFocus: [null, null], simT: 0, byId: null,
     };
 
-    // Decide the action for one agent given the team's current focus target.
-    // Returns { useAbilityId, abilityTargetId, attackTargetId } + sets nav target.
-    AI.scriptedTactical = function (agent, world, nav, enemies, teammates, focus, obstacles, simT) {
-        var act = { useAbilityId: -1, abilityTargetId: -1, attackTargetId: -1 };
-        var u = agent.unit;
-        var mem = AI.getMem(u.id);
+    // Declarative custom capability for documentation + future-proofing. The
+    // JS binding layer doesn't yet let self.* methods invoke registered caps,
+    // so the actual gun-lag shot is implemented inline in think() below.
+    AI.CAP_AIMED_SHOT = -1;
+    AI.registerCapabilities = function () {
+        if (AI.CAP_AIMED_SHOT < 0) {
+            AI.CAP_AIMED_SHOT = bro.ai.game.registerCapability("aimed_shot", {
+                gate: function () { return true; },
+                start: function () { },
+                advance: function () { return true; },
+            });
+        }
+    };
 
-        // Unstick — if steering nudged us into a padded obstacle cell,
-        // findPath from here returns []. setTarget alone won't help because
-        // the pathfinder refuses to start on a blocked cell, so teleport
-        // the agent to the nearest walkable neighbor (one-frame slide).
+    AI.updateShared = function (state) {
+        AI.resetClaimedCover();
+        AI.shared.world = state.world;
+        AI.shared.nav = state.nav;
+        AI.shared.obstacles = Arena.OBSTACLES;
+        AI.shared.byId = state.byId;
+        AI.shared.simT = state.elapsed;
+        var teams = [[], []];
+        for (var i = 0; i < state.agents.length; i++) {
+            var a = state.agents[i];
+            if (!a.unit.alive) continue;
+            teams[a.unit.teamId].push(a);
+        }
+        AI.shared.teams = teams;
+        AI.shared.teamFocus[0] = AI.chooseTeamFocus(teams[0], teams[1], Arena.OBSTACLES);
+        AI.shared.teamFocus[1] = AI.chooseTeamFocus(teams[1], teams[0], Arena.OBSTACLES);
+    };
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Aim + direct-fire (side effect from think())
+    // ───────────────────────────────────────────────────────────────────────
+    function requestAimTowards(mem, simT, dx, dz) {
+        var yaw = Math.atan2(dx, -dz); // FPS yaw convention (0 = -Z).
+        BotAim.requestAim(mem.aim, simT, yaw, 0);
+    }
+
+    // Cast + seed the JS-side cooldown mirror. Call only after checking
+    // preconditions (cooldown, mana, range, LOS) so the mirror doesn't drift.
+    function doCast(self, mem, slot, tid) {
+        self.cast(slot, tid);
+        var abs = Arena.scenario.abilities;
+        mem.abCd[slot] = (abs[slot] && abs[slot].cooldown) || 1;
+    }
+
+    // Spawn a basic-shot projectile along BotAim.forward if ready. Returns
+    // true if we fired. Kept separate from the per-tick action selection —
+    // firing is a *side effect* of think, running in parallel with movement.
+    function tryAimedShot(agent, mem, target) {
+        if (mem.shootCd > 0) return false;
+        if (!target || !target.unit.alive) return false;
+        var u = agent.unit;
+        var dx = target.x - agent.x, dz = target.z - agent.z;
+        var d = Math.sqrt(dx*dx + dz*dz);
+        if (d > u.attackRange) return false;
+        if (!bro.ai.game.hasLineOfSight(agent.x, agent.z, target.x, target.z, AI.shared.obstacles)) return false;
+        if (!BotAim.canFireAt(mem.aim, agent.x, 0, agent.z, target.x, 0, target.z)) return false;
+
+        var f = BotAim.forward(mem.aim);
+        var PSPEED = 18;
+        AI.shared.world.spawnProjectile({
+            ownerId: u.id, teamId: u.teamId,
+            x: agent.x + f.x * (u.radius + 0.4),
+            z: agent.z + f.z * (u.radius + 0.4),
+            vx: f.x * PSPEED, vz: f.z * PSPEED,
+            speed: PSPEED, radius: 0.22,
+            damage: 9, remainingLife: 1.2,
+            kind: "physical", mode: "single",
+        });
+        mem.shootCd = 1.0 / Math.max(0.1, u.attacksPerSec);
+        return true;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // think(self, world) — called by the AgentBinding at thinkHz
+    // ───────────────────────────────────────────────────────────────────────
+    AI.think = function (self, world) {
+        var agent = self.agent;
+        var u = agent.unit;
+        if (!u.alive) { self.hold(0.5); return; }
+
+        var mem = AI.getMem(u.id);
+        var simT = AI.shared.simT;
+        var prevT = mem.lastThinkT < 0 ? simT : mem.lastThinkT;
+        var dt = Math.max(0.001, Math.min(0.2, simT - prevT));
+        mem.lastThinkT = simT;
+
+        AI.decayThreat(mem, dt);
+        if (mem.shootCd > 0) mem.shootCd -= dt;
+        for (var cd = 0; cd < mem.abCd.length; cd++) {
+            if (mem.abCd[cd] > 0) mem.abCd[cd] -= dt;
+        }
+
+        var myTeam = u.teamId;
+        var teammates = AI.shared.teams[myTeam];
+        var enemies = AI.shared.teams[1 - myTeam];
+        var teamFocus = AI.shared.teamFocus[myTeam];
+        var nav = AI.shared.nav;
+        var obstacles = AI.shared.obstacles;
+
+        // Unstick: if steering nudged us onto a blocked cell, slide to the
+        // nearest walkable neighbor. setTarget alone won't help — pathfinder
+        // refuses to start on a blocked cell.
         if (nav && !nav.isWalkable(agent.x, agent.z)) {
             var free = AI.findWalkableNear(nav, agent.x, agent.z, 4);
-            if (free) {
-                agent.setPosition(free.x, free.z);
-                mem.intent = "UNSTICK";
-                // Fall through — re-plan normally on the next tick.
-            }
+            if (free) agent.setPosition(free.x, free.z);
         }
 
-        // Nearest actual enemy for flee calculations
+        // Nearest live enemy (for flee/threat).
         var closest = null, closestD2 = Infinity;
         for (var i = 0; i < enemies.length; i++) {
-            var en = enemies[i];
-            if (!en.unit.alive) continue;
-            var d2 = dist2(agent.x, agent.z, en.x, en.z);
-            if (d2 < closestD2) { closestD2 = d2; closest = en; }
+            var d2 = dist2(agent.x, agent.z, enemies[i].x, enemies[i].z);
+            if (d2 < closestD2) { closestD2 = d2; closest = enemies[i]; }
         }
 
-        // If there are no live enemies at all, go idle — don't run the
-        // flee/heal branch (that's the "zombie heal" stuck state).
+        // No enemies left — stand down.
         if (!closest) {
-            mem.intent = "idle";
-            mem.targetId = null;
-            agent.clearTarget();
-            return act;
+            mem.intent = "idle"; mem.targetId = null;
+            BotAim.tick(mem.aim, dt);
+            self.hold(0.25);
+            return;
         }
 
-        // Clear the flee destination latch once HP has recovered, so
-        // the next time we drop below threshold we pick a fresh spot
-        // instead of using a stale cached one from two fights ago.
-        if (u.hp / u.maxHp >= 0.45) {
-            mem.fleeX = null;
-            mem.fleeZ = null;
+        // Pick target for shooting + aim.
+        var target = AI.pickTargetFor(agent, enemies, teamFocus, obstacles)
+                   || teamFocus || closest;
+        mem.targetId = target ? target.unit.id : null;
+
+        // Request aim; tick the rotation. Aim is always toward the shot
+        // target so we fire over-the-shoulder when kiting away.
+        if (target) requestAimTowards(mem, simT, target.x - agent.x, target.z - agent.z);
+        BotAim.tick(mem.aim, dt);
+
+        // Side-effect: fire the basic shot if aim+cooldown+LOS align.
+        if (target) tryAimedShot(agent, mem, target);
+
+        var hpFrac = u.hp / u.maxHp;
+
+        // Clear flee latch once HP is comfortable — next drop picks fresh.
+        if (hpFrac >= 0.45) { mem.fleeX = null; mem.fleeZ = null; }
+
+        // ───── FLEE + HEAL when wounded ────────────────────────────────
+        if (hpFrac < 0.35) {
+            return fleeHeal(self, agent, mem, nav, closest, enemies, teammates, obstacles, simT);
         }
 
-        // ── FLEE + HEAL when wounded ──────────────────────────────────
-        // Rally to the healthiest nearby ally while firing back at the
-        // nearest visible threat. The old behavior ran to the corner and
-        // stared at the wall, which was a great way to die alone.
-        if (u.hp / u.maxHp < 0.35) {
-            mem.intent = "FLEE";
-            if (u.mana >= 25) {
-                act.useAbilityId = Arena.AB_HEAL;
-                act.abilityTargetId = u.id;
-                mem.intent = "HEAL";
-            }
-
-            // Pick a rally point — prefer a healthy teammate that's also
-            // ITSELF out of enemy range, so we don't run to an ally who's
-            // in the middle of a firefight and get shot while healing.
-            // Score: HP weighted heavily, distance penalty, big bonus for
-            // "safe" allies (beyond enemy attack range of any living
-            // enemy). Fall back to team centroid if no rally ally exists.
-            var rally = null, rallyScore = -Infinity;
-            var tcx = 0, tcz = 0, tcN = 0;
-            for (var mi = 0; mi < teammates.length; mi++) {
-                var mt = teammates[mi];
-                if (!mt.unit.alive || mt === agent) continue;
-                tcx += mt.x; tcz += mt.z; tcN++;
-                var mHp = mt.unit.hp / mt.unit.maxHp;
-                if (mHp < 0.5) continue;  // no point rallying to another casualty
-                // Closest enemy to THIS candidate ally.
-                var mateNearestEnemy = Infinity;
-                for (var mei = 0; mei < enemies.length; mei++) {
-                    var me2 = enemies[mei];
-                    if (!me2.unit.alive) continue;
-                    var mEd = Math.hypot(me2.x - mt.x, me2.z - mt.z);
-                    if (mEd < mateNearestEnemy) mateNearestEnemy = mEd;
-                }
-                var safeR = (u.attackRange || 9) * 1.1;
-                var safeBonus = (mateNearestEnemy > safeR) ? 60 : 0;
-                var md = Math.hypot(mt.x - agent.x, mt.z - agent.z);
-                var score = mHp * 100 - md + safeBonus;
-                if (score > rallyScore) { rallyScore = score; rally = mt; }
-            }
-            // Latch the flee destination in memory. Recomputing every
-            // tick — which we used to do — made the whole squad chase
-            // the same moving "safe spot" and jitter on top of each
-            // other. We only re-pick when:
-            //   (a) nothing latched yet, OR
-            //   (b) an enemy got too close to our latched spot, OR
-            //   (c) the pick is stale (>3s), so we don't get stranded on
-            //       the wrong side of a shifted battle line.
-            var cachedStillGood = mem.fleeX !== null &&
-                mem.fleeX !== undefined;
-            if (cachedStillGood) {
-                var enemyNearCached = false;
-                for (var ci3 = 0; ci3 < enemies.length; ci3++) {
-                    var en3 = enemies[ci3];
-                    if (!en3.unit.alive) continue;
-                    var dE = Math.hypot(en3.x - mem.fleeX, en3.z - mem.fleeZ);
-                    if (dE < (en3.unit.attackRange || 9)) {
-                        enemyNearCached = true; break;
-                    }
-                }
-                if (enemyNearCached) cachedStillGood = false;
-                if ((simT - (mem.fleePickedT || -99)) > 3.0) cachedStillGood = false;
-            }
-
-            if (cachedStillGood) {
-                // Reuse the latched destination — no recomputation,
-                // no jitter. Still claim the cell so the rest of the
-                // team's picks avoid it.
-                AI.claimedCover.push({ x: mem.fleeX, z: mem.fleeZ });
-                // Fall straight through to the setTarget call below.
-            }
-
-            // Pick a rally destination. Priority:
-            //  1. A cover cell near the healthy ally (ally shielding us,
-            //     geometry blocking the shooter). This prevents the
-            //     "rotating blob around one healthy unit" problem — we
-            //     stop at a tactical standoff instead of colliding with
-            //     the ally.
-            //  2. A free spot offset from the ally opposite the threat.
-            //  3. Team centroid (if no rally ally).
-            //  4. Straight retreat away from the closest enemy.
-            var fx = agent.x, fz = agent.z;
-            var foundDest = false;
-
-            if (cachedStillGood) {
-                fx = mem.fleeX;
-                fz = mem.fleeZ;
-                foundDest = true;
-            }
-
-            if (!foundDest && rally) {
-                // Push the anchor 1.8u past the ally away from the threat
-                // — we want the ally BETWEEN us and the shooter, not
-                // crowding the ally themselves.
-                var thx = closest.x, thz = closest.z;
-                var avx = rally.x - thx, avz = rally.z - thz;
-                var avm = Math.max(0.01, Math.hypot(avx, avz));
-                var anchorX = rally.x + (avx / avm) * 1.8;
-                var anchorZ = rally.z + (avz / avm) * 1.8;
-                var flCover = AI.findCover(agent, [closest], obstacles, nav, {
-                    anchorX: anchorX, anchorZ: anchorZ,
-                    claimed: AI.claimedCover,
-                });
-                if (flCover) {
-                    fx = flCover.x; fz = flCover.z;
-                    AI.claimedCover.push(flCover);
-                    foundDest = true;
-                }
-            }
-
-            if (!foundDest) {
-                // No cover found — pick a fallback offset from the rally
-                // anchor (or centroid, or reverse-from-threat for lone
-                // survivors) that avoids stacking on teammates.
-                var rx, rz;
-                if (rally) {
-                    // Offset opposite the threat, at a standoff distance.
-                    var thx2 = closest.x, thz2 = closest.z;
-                    var avx2 = rally.x - thx2, avz2 = rally.z - thz2;
-                    var avm2 = Math.max(0.01, Math.hypot(avx2, avz2));
-                    rx = rally.x + (avx2 / avm2) * 1.8;
-                    rz = rally.z + (avz2 / avm2) * 1.8;
-                } else if (tcN > 0) {
-                    // All teammates are wounded too — there's no safe
-                    // ally to rally to. Instead of everyone targeting
-                    // the centroid (which is exactly where they already
-                    // are, causing a stack), spread around it at an
-                    // agent-id-derived angle. Golden-angle step gives
-                    // well-distributed slots even with arbitrary ids.
-                    var cx3 = tcx / tcN, cz3 = tcz / tcN;
-                    var slotAng = (u.id * 2.39996) % (Math.PI * 2);
-                    rx = cx3 + Math.cos(slotAng) * 2.5;
-                    rz = cz3 + Math.sin(slotAng) * 2.5;
-                } else {
-                    rx = agent.x + (agent.x - closest.x);
-                    rz = agent.z + (agent.z - closest.z);
-                }
-                // Nudge away from any already-claimed rally points so
-                // the wounded unit behind us picks a different spot.
-                for (var ci2 = 0; ci2 < AI.claimedCover.length; ci2++) {
-                    var cl2 = AI.claimedCover[ci2];
-                    var ddx = rx - cl2.x, ddz = rz - cl2.z;
-                    var dd = Math.hypot(ddx, ddz);
-                    if (dd < 1.2 && dd > 0.01) {
-                        rx += (ddx / dd) * (1.2 - dd);
-                        rz += (ddz / dd) * (1.2 - dd);
-                    }
-                }
-                fx = clamp(rx, -19, 19);
-                fz = clamp(rz, -19, 19);
-                if (nav && !nav.isWalkable(fx, fz)) {
-                    var fw = AI.findWalkableNear(nav, fx, fz, 3);
-                    if (fw) { fx = fw.x; fz = fw.z; }
-                }
-                AI.claimedCover.push({ x: fx, z: fz });
-            }
-            if (!cachedStillGood) {
-                // Final safety pass: shove the destination out of enemy
-                // attack range. Cover might still be within range of a
-                // second shooter we weren't tracking as the primary
-                // threat — we'd rather take one extra step than heal
-                // under fire.
-                var safe = AI.pushOutOfEnemyRange(fx, fz, enemies, 1.15);
-                if (nav && !nav.isWalkable(safe.x, safe.z)) {
-                    var safeW = AI.findWalkableNear(nav, safe.x, safe.z, 3);
-                    if (safeW) { fx = safeW.x; fz = safeW.z; }
-                } else {
-                    fx = safe.x; fz = safe.z;
-                }
-                // Space from teammates so N wounded units don't all pick
-                // the same pushed-out point. Applied once at pick time;
-                // the latch keeps it from drifting on subsequent ticks.
-                var spaced = AI.spaceFromTeammates(agent, teammates, fx, fz);
-                fx = spaced.x; fz = spaced.z;
-                if (nav && !nav.isWalkable(fx, fz)) {
-                    var sw2 = AI.findWalkableNear(nav, fx, fz, 3);
-                    if (sw2) { fx = sw2.x; fz = sw2.z; }
-                }
-                // Latch for future ticks.
-                mem.fleeX = fx;
-                mem.fleeZ = fz;
-                mem.fleePickedT = simT;
-            }
-            agent.setTarget(fx, fz);
-
-            // Fire while retreating — pick the best shot we have right
-            // now, prefer the primary threat, fall back to any visible
-            // enemy in range. Aim latches to the shot target so we're
-            // firing over-the-shoulder instead of facing our escape path.
-            var shootAt = null;
-            var range = u.attackRange;
-            for (var ei = 0; ei < enemies.length; ei++) {
-                var en = enemies[ei];
-                if (!en.unit.alive) continue;
-                var ed = Math.hypot(en.x - agent.x, en.z - agent.z);
-                if (ed > range) continue;
-                if (!bro.ai.game.hasLineOfSight(agent.x, agent.z, en.x, en.z, obstacles)) continue;
-                if (en.unit.id === mem.threatSourceId) { shootAt = en; break; }
-                if (!shootAt) shootAt = en;
-            }
-            if (shootAt) {
-                act.fireAt = shootAt;
-                AI.requestAim(mem, simT, shootAt.x - agent.x, shootAt.z - agent.z);
-            }
-            return act;
-        }
-
-        if (!focus || !focus.unit.alive) {
-            mem.intent = "idle";
-            mem.targetId = null;
-            agent.clearTarget();
-            return act;
-        }
-        mem.targetId = focus.unit.id;
-        // Request aim toward the current focus — actual aim rotates toward
-        // it at aimTurnSpeed; resampled at 15Hz so the gun lags realistically.
-        AI.requestAim(mem, simT, focus.x - agent.x, focus.z - agent.z);
-
-        // ── ALLY HEAL ──────────────────────────────────────────────────
-        // If a nearby teammate is hurt worse than us and we can cast heal,
-        // prioritize them over our own self-heal. Range is 4u (matches
-        // the registered ability range). We pick the most-wounded in range
-        // so the heal goes where it matters most.
-        if (u.mana >= 25) {
-            var bestWoundedAlly = null, bestAllyHp = u.hp / u.maxHp;
+        // ───── HEAL ally ───────────────────────────────────────────────
+        if (u.mana >= 25 && mem.abCd[Arena.AB_HEAL] <= 0) {
+            var wounded = null, worstHp = hpFrac;
             for (var ahi = 0; ahi < teammates.length; ahi++) {
                 var at = teammates[ahi];
-                if (!at.unit.alive || at === agent) continue;
+                if (at === agent) continue;
                 var ahd = Math.hypot(at.x - agent.x, at.z - agent.z);
                 if (ahd > 4) continue;
                 var ahp = at.unit.hp / at.unit.maxHp;
-                if (ahp >= 0.75) continue;  // not worth the mana
-                if (ahp < bestAllyHp) { bestAllyHp = ahp; bestWoundedAlly = at; }
+                if (ahp < 0.75 && ahp < worstHp) { worstHp = ahp; wounded = at; }
             }
-            if (bestWoundedAlly) {
-                act.useAbilityId = Arena.AB_HEAL;
-                act.abilityTargetId = bestWoundedAlly.unit.id;
+            if (wounded) {
                 mem.intent = "HEAL_ALLY";
+                doCast(self, mem, Arena.AB_HEAL, wounded.unit.id);
+                return;
             }
         }
 
-        // ── SEEK COVER when under fire and hurt ─────────────────────────
-        // If we've been hit recently and we're in the "worrying but not
-        // dying" band, try to put an obstacle between us and the shooter
-        // instead of trading shots in the open. This is the key to visibly
-        // tactical behavior — agents actually use the geometry.
+        // ───── SEEK COVER under fire ──────────────────────────────────
         var underFire = (simT - mem.lastHitT) < 2.0 && mem.threat > 8;
-        var hpFrac = u.hp / u.maxHp;
         if (underFire && hpFrac < 0.7) {
-            // Collect known threat positions (primary + any other enemy
-            // that's clearly shooting us in the last second, but we only
-            // record one source at a time — good enough for now).
             var threat = null;
             for (var ti = 0; ti < enemies.length; ti++) {
-                if (enemies[ti].unit.id === mem.threatSourceId &&
-                    enemies[ti].unit.alive) {
-                    threat = enemies[ti]; break;
-                }
+                if (enemies[ti].unit.id === mem.threatSourceId) { threat = enemies[ti]; break; }
             }
             if (threat) {
-                // Only re-plan cover every ~0.4s to avoid path thrash.
-                var needNew = mem.coverX === null ||
-                    (simT - (mem.coverPickedT || -99)) > 0.4 ||
-                    Math.hypot(agent.x - mem.coverX, agent.z - mem.coverZ) < 0.6;
+                var needNew = mem.coverX === null
+                    || (simT - mem.coverPickedT) > 0.4
+                    || Math.hypot(agent.x - mem.coverX, agent.z - mem.coverZ) < 0.6;
                 if (needNew) {
-                    // Team centroid pulls cover choice toward allies so we
-                    // don't retreat in isolation.
-                    var tcx = 0, tcz = 0, nMates = 0;
-                    for (var mi = 0; mi < teammates.length; mi++) {
-                        var mt = teammates[mi];
-                        if (!mt.unit.alive || mt === agent) continue;
-                        tcx += mt.x; tcz += mt.z; nMates++;
-                    }
-                    if (nMates > 0) { tcx /= nMates; tcz /= nMates; }
-                    var cover = AI.findCover(agent, [threat], obstacles, nav, {
-                        claimed: AI.claimedCover,
-                    });
+                    var cover = AI.findCover(agent, [threat], obstacles, nav,
+                        { claimed: AI.claimedCover });
                     if (cover) {
-                        mem.coverX = cover.x;
-                        mem.coverZ = cover.z;
+                        mem.coverX = cover.x; mem.coverZ = cover.z;
                         mem.coverPickedT = simT;
                         AI.claimedCover.push(cover);
                     }
                 }
                 if (mem.coverX !== null) {
-                    agent.setTarget(mem.coverX, mem.coverZ);
                     mem.intent = "COVER";
-                    // Self-heal while relocating / hunkered down.
-                    if (u.mana >= 25 && hpFrac < 0.65) {
-                        act.useAbilityId = Arena.AB_HEAL;
-                        act.abilityTargetId = u.id;
+                    // Self-heal on the way to cover.
+                    if (u.mana >= 25 && hpFrac < 0.65
+                        && mem.abCd[Arena.AB_HEAL] <= 0) {
+                        doCast(self, mem, Arena.AB_HEAL, u.id);
+                        return;
                     }
-                    // Fire from cover if any enemy is in range + LOS.
-                    // Prefer the current focus, fall back to any visible.
-                    var shootAt = null;
-                    if (bro.ai.game.hasLineOfSight(agent.x, agent.z, focus.x, focus.z, obstacles) &&
-                        Math.hypot(focus.x - agent.x, focus.z - agent.z) <= range) {
-                        shootAt = focus;
-                    } else {
-                        for (var ei = 0; ei < enemies.length; ei++) {
-                            var en = enemies[ei];
-                            if (!en.unit.alive) continue;
-                            var ed = Math.hypot(en.x - agent.x, en.z - agent.z);
-                            if (ed > range) continue;
-                            if (bro.ai.game.hasLineOfSight(agent.x, agent.z, en.x, en.z, obstacles)) {
-                                shootAt = en; break;
-                            }
-                        }
-                    }
-                    if (shootAt) {
-                        act.fireAt = shootAt;
-                        AI.requestAim(mem, simT,
-                            shootAt.x - agent.x, shootAt.z - agent.z);
-                    }
-                    return act;
+                    self.moveTo(mem.coverX, mem.coverZ);
+                    return;
                 }
             }
         }
-        // Hysteresis: once HP is healthy and we haven't been shot for a
-        // while, forget the cover point so we re-engage instead of camping.
-        if (hpFrac > 0.85 && (simT - mem.lastHitT) > 2.5) {
-            mem.coverX = null;
+        if (hpFrac > 0.85 && (simT - mem.lastHitT) > 2.5) mem.coverX = null;
+
+        // ───── ABILITIES (offensive) ──────────────────────────────────
+        if (target && u.hp > 0) {
+            var tdx = target.x - agent.x, tdz = target.z - agent.z;
+            var tdist = Math.hypot(tdx, tdz);
+            var tLos = bro.ai.game.hasLineOfSight(agent.x, agent.z, target.x, target.z, obstacles);
+
+            // Grenade — cluster detection around target.
+            if (tLos && u.mana >= 35 && tdist > 3 && tdist < 12
+                && mem.abCd[Arena.AB_GRENADE] <= 0) {
+                var cluster = 0;
+                for (var c = 0; c < enemies.length; c++) {
+                    if (dist2(enemies[c].x, enemies[c].z, target.x, target.z) < 9) cluster++;
+                }
+                if (cluster >= 2) {
+                    mem.intent = "GRENADE";
+                    doCast(self, mem, Arena.AB_GRENADE, target.unit.id);
+                    return;
+                }
+            }
+            // Beam — collinear enemy behind target.
+            if (tLos && u.mana >= 30 && tdist > 2 && tdist < 16
+                && mem.abCd[Arena.AB_BEAM] <= 0) {
+                var mag1 = Math.max(0.01, tdist);
+                for (var b = 0; b < enemies.length; b++) {
+                    var be = enemies[b];
+                    if (be === target) continue;
+                    var bx = be.x - agent.x, bz = be.z - agent.z;
+                    var mag2 = Math.hypot(bx, bz);
+                    if (mag2 < 0.01 || mag2 <= mag1) continue;
+                    var cos = (tdx * bx + tdz * bz) / (mag1 * mag2);
+                    if (cos > 0.97) {
+                        mem.intent = "BEAM";
+                        doCast(self, mem, Arena.AB_BEAM, target.unit.id);
+                        return;
+                    }
+                }
+            }
+            // Fireball — mid-range poke.
+            if (tLos && u.mana >= 20 && tdist > 4 && tdist < 13
+                && mem.abCd[Arena.AB_FIREBALL] <= 0
+                && Math.random() < 0.06) {
+                mem.intent = "FIREBALL";
+                doCast(self, mem, Arena.AB_FIREBALL, target.unit.id);
+                return;
+            }
         }
 
-        var dx = focus.x - agent.x, dz = focus.z - agent.z;
-        var dist = Math.hypot(dx, dz);
+        // ───── FIRING BAND (engage / kite / hold) ─────────────────────
+        if (!target) { mem.intent = "idle"; self.hold(0.2); return; }
+        var dx2 = target.x - agent.x, dz2 = target.z - agent.z;
+        var dist = Math.hypot(dx2, dz2);
         var range = u.attackRange;
         var hasLOS = bro.ai.game.hasLineOfSight(
-            agent.x, agent.z, focus.x, focus.z, obstacles);
+            agent.x, agent.z, target.x, target.z, obstacles);
 
-        // ── ABILITIES ─────────────────────────────────────────────────
-        // Grenade: 2+ enemies tightly clustered near the focus (splash synergy).
-        var cluster = 0;
-        for (var c = 0; c < enemies.length; c++) {
-            var ce = enemies[c];
-            if (!ce.unit.alive) continue;
-            if (dist2(ce.x, ce.z, focus.x, focus.z) < 3 * 3) cluster++;
-        }
-        if (cluster >= 2 && u.mana >= 35 && dist > 3 && dist < 12 && hasLOS) {
-            act.useAbilityId = Arena.AB_GRENADE;
-            act.abilityTargetId = focus.unit.id;
-            mem.intent = "GRENADE";
-        }
-
-        // Beam: a second enemy is roughly collinear behind the focus (pierce 2).
-        if (act.useAbilityId < 0 && u.mana >= 30 && dist > 2 && dist < 16 && hasLOS) {
-            var mag1 = Math.max(0.01, Math.hypot(dx, dz));
-            for (var b = 0; b < enemies.length; b++) {
-                var be = enemies[b];
-                if (be === focus || !be.unit.alive) continue;
-                var bx = be.x - agent.x, bz = be.z - agent.z;
-                var mag2 = Math.hypot(bx, bz);
-                if (mag2 < 0.01) continue;
-                // cosine similarity of the two directions
-                var cos = (dx * bx + dz * bz) / (mag1 * mag2);
-                if (cos > 0.97 && mag2 > mag1) {
-                    act.useAbilityId = Arena.AB_BEAM;
-                    act.abilityTargetId = focus.unit.id;
-                    mem.intent = "BEAM";
-                    break;
-                }
-            }
-        }
-
-        // Fireball: mid-range poke when we have LOS but aren't in melee.
-        if (act.useAbilityId < 0 && u.mana >= 20 && hasLOS &&
-            dist > 4 && dist < 13 && Math.random() < 0.04) {
-            act.useAbilityId = Arena.AB_FIREBALL;
-            act.abilityTargetId = focus.unit.id;
-            mem.intent = "FIREBALL";
-        }
-
-        // ── ROLE-BASED FIRING BAND ──────────────────────────────────
-        // Healthy units push to the mid-range band; wounded units hold at
-        // max range as "support". This creates a visible two-wave front
-        // instead of every agent crowding the same firing arc.
-        //
-        // Front : 0.45–0.85 of range — closes to get kills, absorbs fire.
-        // Support: 0.80–0.98 of range — stays back, plinks from safety.
         var isSupport = hpFrac < 0.75;
         mem.role = isSupport ? "support" : "front";
-        var tooFar, tooNear;
-        if (isSupport) {
-            tooFar  = range * 0.98;
-            tooNear = range * 0.80;
-        } else {
-            tooFar  = range * 0.85;
-            tooNear = range * 0.45;
-        }
+        var tooFar  = isSupport ? range * 0.98 : range * 0.85;
+        var tooNear = isSupport ? range * 0.80 : range * 0.45;
+
         if (!hasLOS) {
             mem.intent = "REPOSITION";
-            var repX = focus.x, repZ = focus.z;
-            if (nav && !nav.isWalkable(repX, repZ)) {
-                var w = AI.findWalkableNear(nav, repX, repZ, 2);
-                if (w) { repX = w.x; repZ = w.z; }
+            var rx = target.x, rz = target.z;
+            if (nav && !nav.isWalkable(rx, rz)) {
+                var w = AI.findWalkableNear(nav, rx, rz, 2);
+                if (w) { rx = w.x; rz = w.z; }
             }
-            var repSp = AI.spaceFromTeammates(agent, teammates, repX, repZ);
-            agent.setTarget(repSp.x, repSp.z);
-        } else if (dist > tooFar) {
+            var rSp = AI.spaceFromTeammates(agent, teammates, rx, rz);
+            self.moveTo(rSp.x, rSp.z); return;
+        }
+        if (dist > tooFar) {
             mem.intent = "ENGAGE";
-            var engSp = AI.spaceFromTeammates(agent, teammates, focus.x, focus.z);
-            agent.setTarget(engSp.x, engSp.z);
-            act.fireAt = focus;
-        } else if (dist < tooNear) {
-            // Too close — back off along the reverse vector, snap to walkable.
+            var eSp = AI.spaceFromTeammates(agent, teammates, target.x, target.z);
+            self.moveTo(eSp.x, eSp.z); return;
+        }
+        if (dist < tooNear) {
             mem.intent = "KITE";
             var n = Math.max(0.01, dist);
-            var bx = agent.x - (dx / n) * 2.0;
-            var bz = agent.z - (dz / n) * 2.0;
-            var kiteSp = AI.spaceFromTeammates(agent, teammates, bx, bz);
-            if (nav && !nav.isWalkable(kiteSp.x, kiteSp.z)) {
-                agent.clearTarget();
+            var bx2 = agent.x - (dx2 / n) * 2.0;
+            var bz2 = agent.z - (dz2 / n) * 2.0;
+            var kSp = AI.spaceFromTeammates(agent, teammates, bx2, bz2);
+            if (nav && !nav.isWalkable(kSp.x, kSp.z)) { self.hold(0.1); return; }
+            self.moveTo(kSp.x, kSp.z); return;
+        }
+        // In band — strafe/hold and keep shooting (side-effect above).
+        mem.intent = "FIRE";
+        if (simT - mem.lastFlip > 0.8) { mem.perpSign = -mem.perpSign; mem.lastFlip = simT; }
+        var norm2 = Math.max(0.01, dist);
+        var sx = agent.x + (-dz2 / norm2) * mem.perpSign * 1.2;
+        var sz = agent.z + ( dx2 / norm2) * mem.perpSign * 1.2;
+        var fSp = AI.spaceFromTeammates(agent, teammates, sx, sz);
+        if (nav && nav.isWalkable(fSp.x, fSp.z)) self.moveTo(fSp.x, fSp.z);
+        else self.hold(0.1);
+    };
+
+    // ───────────────────────────────────────────────────────────────────────
+    // FLEE + HEAL branch — wounded units rally to a healthy ally, self-heal,
+    // and keep firing back on the way. Extracted for readability.
+    // ───────────────────────────────────────────────────────────────────────
+    function fleeHeal(self, agent, mem, nav, closest, enemies, teammates, obstacles, simT) {
+        var u = agent.unit;
+        mem.intent = "FLEE";
+        // Self-heal takes priority over movement if available.
+        if (u.mana >= 25 && mem.abCd[Arena.AB_HEAL] <= 0) {
+            mem.intent = "HEAL";
+            doCast(self, mem, Arena.AB_HEAL, u.id);
+            return;
+        }
+
+        // Pick a rally ally — healthy + out of enemy range preferred.
+        var rally = null, rallyScore = -Infinity, tcx = 0, tcz = 0, tcN = 0;
+        for (var mi = 0; mi < teammates.length; mi++) {
+            var mt = teammates[mi];
+            if (mt === agent) continue;
+            tcx += mt.x; tcz += mt.z; tcN++;
+            var mHp = mt.unit.hp / mt.unit.maxHp;
+            if (mHp < 0.5) continue;
+            var nearestE = Infinity;
+            for (var mei = 0; mei < enemies.length; mei++) {
+                var mEd = Math.hypot(enemies[mei].x - mt.x, enemies[mei].z - mt.z);
+                if (mEd < nearestE) nearestE = mEd;
+            }
+            var safeR = (u.attackRange || 9) * 1.1;
+            var safeBonus = nearestE > safeR ? 60 : 0;
+            var md = Math.hypot(mt.x - agent.x, mt.z - agent.z);
+            var score = mHp * 100 - md + safeBonus;
+            if (score > rallyScore) { rallyScore = score; rally = mt; }
+        }
+
+        // Latch the flee destination so the whole squad doesn't chase a
+        // moving "safe spot" and jitter. Re-pick when enemy closes on it
+        // or after 3s stale.
+        var cachedStillGood = mem.fleeX != null;
+        if (cachedStillGood) {
+            for (var ci3 = 0; ci3 < enemies.length; ci3++) {
+                var dE = Math.hypot(enemies[ci3].x - mem.fleeX, enemies[ci3].z - mem.fleeZ);
+                if (dE < (enemies[ci3].unit.attackRange || 9)) { cachedStillGood = false; break; }
+            }
+            if ((simT - (mem.fleePickedT || -99)) > 3.0) cachedStillGood = false;
+        }
+
+        var fx = agent.x, fz = agent.z, foundDest = false;
+        if (cachedStillGood) {
+            fx = mem.fleeX; fz = mem.fleeZ; foundDest = true;
+            AI.claimedCover.push({ x: fx, z: fz });
+        }
+        if (!foundDest && rally) {
+            // Anchor 1.8u past the ally away from the threat — ally
+            // between us and the shooter.
+            var thx = closest.x, thz = closest.z;
+            var avx = rally.x - thx, avz = rally.z - thz;
+            var avm = Math.max(0.01, Math.hypot(avx, avz));
+            var anchorX = rally.x + (avx / avm) * 1.8;
+            var anchorZ = rally.z + (avz / avm) * 1.8;
+            var flCover = AI.findCover(agent, [closest], obstacles, nav,
+                { anchorX: anchorX, anchorZ: anchorZ, claimed: AI.claimedCover });
+            if (flCover) {
+                fx = flCover.x; fz = flCover.z;
+                AI.claimedCover.push(flCover);
+                foundDest = true;
+            }
+        }
+        if (!foundDest) {
+            var rx, rz;
+            if (rally) {
+                var thx2 = closest.x, thz2 = closest.z;
+                var avx2 = rally.x - thx2, avz2 = rally.z - thz2;
+                var avm2 = Math.max(0.01, Math.hypot(avx2, avz2));
+                rx = rally.x + (avx2 / avm2) * 1.8;
+                rz = rally.z + (avz2 / avm2) * 1.8;
+            } else if (tcN > 0) {
+                var cx3 = tcx / tcN, cz3 = tcz / tcN;
+                var slotAng = (u.id * 2.39996) % (Math.PI * 2);
+                rx = cx3 + Math.cos(slotAng) * 2.5;
+                rz = cz3 + Math.sin(slotAng) * 2.5;
             } else {
-                agent.setTarget(kiteSp.x, kiteSp.z);
+                rx = agent.x + (agent.x - closest.x);
+                rz = agent.z + (agent.z - closest.z);
             }
-            act.fireAt = focus;
-        } else {
-            // In firing band with LOS — hold position and shoot. Occasionally
-            // strafe a step so we're not a stationary target.
-            if (simT - mem.lastFlip > 0.8) {
-                mem.perpSign = -mem.perpSign;
-                mem.lastFlip = simT;
+            for (var ci2 = 0; ci2 < AI.claimedCover.length; ci2++) {
+                var cl2 = AI.claimedCover[ci2];
+                var ddx = rx - cl2.x, ddz = rz - cl2.z;
+                var dd = Math.hypot(ddx, ddz);
+                if (dd < 1.2 && dd > 0.01) {
+                    rx += (ddx / dd) * (1.2 - dd);
+                    rz += (ddz / dd) * (1.2 - dd);
+                }
             }
-            var norm2 = Math.max(0.01, dist);
-            var strafeX = -dz / norm2 * mem.perpSign * 1.2;
-            var strafeZ =  dx / norm2 * mem.perpSign * 1.2;
-            var sx = agent.x + strafeX;
-            var sz = agent.z + strafeZ;
-            var fireSp = AI.spaceFromTeammates(agent, teammates, sx, sz);
-            if (nav && nav.isWalkable(fireSp.x, fireSp.z)) agent.setTarget(fireSp.x, fireSp.z);
-            else agent.clearTarget();
-            mem.intent = "FIRE";
-            act.fireAt = focus;
+            fx = clamp(rx, -19, 19); fz = clamp(rz, -19, 19);
+            if (nav && !nav.isWalkable(fx, fz)) {
+                var fw = AI.findWalkableNear(nav, fx, fz, 3);
+                if (fw) { fx = fw.x; fz = fw.z; }
+            }
+            AI.claimedCover.push({ x: fx, z: fz });
         }
-        return act;
-    };
-
-    // MCTS wrapper — instantiate once per agent to avoid rebuilding the tree.
-    //
-    // The library defaults (random rollout, idle opponent) are a neutral
-    // baseline but unusable for a combat arena: every rollout becomes 6 s
-    // of random flailing against stationary dummies, so all branches score
-    // alike and the tree picks near-randomly. Opt into the aggressive pair
-    // so rollouts actually exercise engagement dynamics.
-    AI.createMcts = function () {
-        return bro.ai.game.createMcts({
-            iterations: 120,
-            budgetMs: 12,
-            rolloutHorizon: 12,
-            simDt: 0.25,
-            actionRepeat: 2,
-            uctC: 1.3,
-            rolloutPolicy: "aggressive",
-            opponentPolicy: "aggressive",
-        });
-    };
-
-    // MoveDir (0..8) → (moveX, moveZ) unit vector.
-    // Convention: 0 stop, 1=N(-Z), 2=NE, 3=E(+X), 4=SE, 5=S(+Z), 6=SW, 7=W(-X), 8=NW.
-    var DIRS = [
-        [0, 0], [0, -1], [0.707, -0.707], [1, 0], [0.707, 0.707],
-        [0, 1], [-0.707, 0.707], [-1, 0], [-0.707, -0.707],
-    ];
-
-    // mctsStep: runs mcts.search, caches the action for N frames.
-    // `cache` is a mutable object held by caller — { action, ttl }.
-    AI.mctsStep = function (agent, world, mcts, cache) {
-        if (!cache.action || cache.ttl <= 0) {
-            cache.action = mcts.search(world, agent);
-            cache.ttl = 15; // re-search every 15 frames (~4 Hz @ 60fps)
+        if (!cachedStillGood) {
+            var safe = AI.pushOutOfEnemyRange(fx, fz, enemies, 1.15);
+            if (nav && !nav.isWalkable(safe.x, safe.z)) {
+                var safeW = AI.findWalkableNear(nav, safe.x, safe.z, 3);
+                if (safeW) { fx = safeW.x; fz = safeW.z; }
+            } else { fx = safe.x; fz = safe.z; }
+            var spaced = AI.spaceFromTeammates(agent, teammates, fx, fz);
+            fx = spaced.x; fz = spaced.z;
+            if (nav && !nav.isWalkable(fx, fz)) {
+                var sw2 = AI.findWalkableNear(nav, fx, fz, 3);
+                if (sw2) { fx = sw2.x; fz = sw2.z; }
+            }
+            mem.fleeX = fx; mem.fleeZ = fz; mem.fleePickedT = simT;
         }
-        cache.ttl--;
-        return cache.action;
-    };
-
-    // Apply an MCTS CombatAction + attack/ability.
-    //
-    // MCTS plans in an aim-relative local frame: "local forward (-Z) points
-    // at the aim target" — its internal mcts::apply enforces this by
-    // snapping Agent::yaw_ to the aim yaw before integrating each decision
-    // step. Replicate that contract here so the real agent's motion matches
-    // what was searched over: aim at the nearest enemy, setYaw to that,
-    // then hand the local-frame dir to applyAction.
-    AI.applyMcts = function (agent, world, ca, dt) {
-        var dir = DIRS[Math.max(0, Math.min(8, ca.moveDir | 0))];
-        agent.clearTarget();
-
-        var enemy = world.nearestEnemy(agent);
-        if (enemy && enemy.unit && enemy.unit.alive) {
-            // FPS yaw convention: yaw=0 faces -Z, so yaw = atan2(dx, -dz).
-            var aimYaw = Math.atan2(enemy.x - agent.x, -(enemy.z - agent.z));
-            agent.setYaw(aimYaw);
-            agent.applyAction({
-                moveX: dir[0], moveZ: dir[1],
-                aimYaw: aimYaw, aimPitch: 0,
-                attackTargetId: -1, useAbilityId: -1,
-            }, dt);
-        } else {
-            // No enemy — just hold.
-            agent.applyAction({
-                moveX: 0, moveZ: 0,
-                aimYaw: 0, aimPitch: 0,
-                attackTargetId: -1, useAbilityId: -1,
-            }, dt);
-        }
-
-        var act = { useAbilityId: -1, abilityTargetId: -1, attackTargetId: -1 };
-        if (!enemy || !enemy.unit.alive) return act;
-        AI.getMem(agent.unit.id).targetId = enemy.unit.id;
-
-        if (ca.attackSlot >= 0) {
-            act.attackTargetId = enemy.unit.id;
-        }
-        if (ca.abilitySlot >= 0) {
-            // Map MCTS ability slot (0..3) to our registered IDs.
-            var slot = Math.max(0, Math.min(3, ca.abilitySlot | 0));
-            act.useAbilityId = slot;
-            act.abilityTargetId = enemy.unit.id;
-        }
-        return act;
-    };
+        self.moveTo(fx, fz);
+    }
 })();
