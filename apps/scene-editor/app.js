@@ -43,11 +43,15 @@ function clearHighlight() {
     }
 }
 
-// Build a highlight scene node from a list of triangle indices into boxMesh.
-// Offsets each vertex along the group's normal to stay above the base mesh.
-function setHighlightTriangles(triIndices, normal) {
+// Build a highlight scene node from a list of triangle indices into the
+// source mesh. Offsets each vertex along the group's normal to stay above
+// the base mesh. `positionsSrc`/`indicesSrc` let push/pull drag overlay the
+// highlight on the working (not-yet-committed) geometry.
+function setHighlightTriangles(triIndices, normal, positionsSrc, indicesSrc) {
     clearHighlight();
     if (!triIndices || triIndices.length === 0) return;
+    const posSrc = positionsSrc || boxPositions;
+    const idxSrc = indicesSrc   || boxIndices;
     const nx = normal[0] * HIGHLIGHT_EPS;
     const ny = normal[1] * HIGHLIGHT_EPS;
     const nz = normal[2] * HIGHLIGHT_EPS;
@@ -58,11 +62,11 @@ function setHighlightTriangles(triIndices, normal) {
     for (let i = 0; i < n; i++) {
         const t = triIndices[i];
         for (let k = 0; k < 3; k++) {
-            const src = boxIndices[t * 3 + k] * 3;
+            const src = idxSrc[t * 3 + k] * 3;
             const dst = (i * 3 + k) * 3;
-            positions[dst + 0] = boxPositions[src + 0] + nx;
-            positions[dst + 1] = boxPositions[src + 1] + ny;
-            positions[dst + 2] = boxPositions[src + 2] + nz;
+            positions[dst + 0] = posSrc[src + 0] + nx;
+            positions[dst + 1] = posSrc[src + 1] + ny;
+            positions[dst + 2] = posSrc[src + 2] + nz;
             normals[dst + 0] = normal[0];
             normals[dst + 1] = normal[1];
             normals[dst + 2] = normal[2];
@@ -188,11 +192,14 @@ let faceGroups = computeFaceGroups(boxPositions, boxIndices);
 // and then push a fresh MeshData back into the scene.
 let editMesh = EditMesh.fromMeshData(boxPositions, boxIndices);
 
-// Rebuild all mesh-derived state after positions have been mutated in place.
-// Indices and normals are stable across push/pull so we don't touch them;
-// callers must update boxPositions before invoking.
+// Rebuild all mesh-derived state after the box buffers have been mutated.
+// Push/pull may flip winding and axis-parallel normals when the drag inverts
+// the geometry, so all three of positions/indices/normals need to flow back
+// into the Mesh object (BVH and face groups are re-derived from them).
 function rebuildMeshState() {
     boxMesh.positions = boxPositions;
+    boxMesh.indices   = boxIndices;
+    if (boxNormals) boxMesh.normals = boxNormals;
     boxBVH     = new MeshBVH(boxMesh);
     faceGroups = computeFaceGroups(boxPositions, boxIndices);
     editMesh   = EditMesh.fromMeshData(boxPositions, boxIndices);
@@ -350,38 +357,104 @@ function rayVsAxisDistance(ray, pivot, axis) {
 const pushpull = {
     active: false,
     groupIdx: -1,
+    faceTriangles: null,     // face-group triangle indices (for drag-time highlight)
     axis: [0, 0, 0],
     pivot: [0, 0, 0],
-    vertexIndices: null,     // Uint32Array
-    vertexStart: null,       // Float32Array, xyz per index (pre-drag snapshot)
-    workingPositions: null,  // Float32Array, scratch buffer reused each move
+    vertexIndices: null,     // Uint32Array (affected vertex indices)
+    vertexStart: null,       // Float32Array, xyz per affected vertex (pre-drag snapshot)
+    workingPositions: null,  // Float32Array, scratch — rebuilt each move
+    workingIndices: null,    // Uint32Array — winding-flipped when inverted
+    workingNormals: null,    // Float32Array — axis-component flipped when inverted
     distance: 0,
+    // Inversion happens once the pushed face moves past the farthest non-affected
+    // vertex along the push axis — i.e. the face has punched through to the
+    // other side. `inversionT` is the drag distance at which that boundary
+    // is crossed; `inverted` tracks whether we've applied the flip.
+    inversionT: 0,
+    inverted: false,
 };
+
+// Reflect a vertex normal across the plane perpendicular to `axis` in place.
+// For axis-aligned normals this just flips the axis-parallel component; for
+// off-axis normals (beveled meshes, smooth shading) it correctly preserves
+// the perpendicular component and flips only the parallel one.
+function flipNormalsAlongAxis(normals, axis) {
+    const ax = axis[0], ay = axis[1], az = axis[2];
+    const n = normals.length / 3;
+    for (let i = 0; i < n; i++) {
+        const ix = i * 3;
+        const nx = normals[ix + 0], ny = normals[ix + 1], nz = normals[ix + 2];
+        const d = nx * ax + ny * ay + nz * az;
+        if (d === 0) continue;
+        const k = 2 * d;
+        normals[ix + 0] = nx - k * ax;
+        normals[ix + 1] = ny - k * ay;
+        normals[ix + 2] = nz - k * az;
+    }
+}
+
+// Reverse winding of every triangle by swapping index 1 and 2. Involutive.
+function flipAllWinding(indices) {
+    const triCount = indices.length / 3;
+    for (let t = 0; t < triCount; t++) {
+        const b = indices[t * 3 + 1];
+        indices[t * 3 + 1] = indices[t * 3 + 2];
+        indices[t * 3 + 2] = b;
+    }
+}
+
+// Drag distance at which the pushed face crosses the farthest non-affected
+// vertex along the axis. Once t < inversionT, the face has punched through
+// the opposite side of the mesh and rendering needs the flip treatment.
+function computeInversionT(axis, pivot, affectedSet) {
+    let m = Infinity;
+    for (let vi = 0; vi < boxPositions.length / 3; vi++) {
+        if (affectedSet.has(vi)) continue;
+        const proj = boxPositions[vi * 3 + 0] * axis[0] +
+                     boxPositions[vi * 3 + 1] * axis[1] +
+                     boxPositions[vi * 3 + 2] * axis[2];
+        if (proj < m) m = proj;
+    }
+    const p0 = pivot[0] * axis[0] + pivot[1] * axis[1] + pivot[2] * axis[2];
+    return m - p0;
+}
 
 function beginPushPull(hit) {
     const gIdx = faceGroups.triToGroup[hit.triangleIndex];
     const g = faceGroups.groups[gIdx];
     const idxs = collectAffectedVertexIndices(gIdx);
     const snap = new Float32Array(idxs.length * 3);
+    const affectedSet = new Set();
     for (let i = 0; i < idxs.length; i++) {
         const vi = idxs[i];
+        affectedSet.add(vi);
         snap[i * 3 + 0] = boxPositions[vi * 3 + 0];
         snap[i * 3 + 1] = boxPositions[vi * 3 + 1];
         snap[i * 3 + 2] = boxPositions[vi * 3 + 2];
     }
     pushpull.active = true;
     pushpull.groupIdx = gIdx;
+    pushpull.faceTriangles = g.tris.slice();
     pushpull.axis = g.normal.slice();
     pushpull.pivot = hit.position.slice();
     pushpull.vertexIndices = idxs;
     pushpull.vertexStart = snap;
     pushpull.workingPositions = new Float32Array(boxPositions.length);
+    pushpull.workingIndices = new Uint32Array(boxIndices);
+    pushpull.workingNormals = boxNormals ? new Float32Array(boxNormals) : null;
     pushpull.distance = 0;
-    clearHighlight();
+    pushpull.inversionT = computeInversionT(pushpull.axis, pushpull.pivot, affectedSet);
+    pushpull.inverted = false;
+    // Seed the highlight on the face we're about to drag.
+    setHighlightTriangles(
+        pushpull.faceTriangles, pushpull.axis,
+        boxPositions, pushpull.workingIndices);
 }
 
-// Apply the current drag distance to the scene node via updateMesh (does not
-// touch boxPositions — that only happens on commit).
+// Apply the current drag distance to the scene node via updateMesh. Does not
+// mutate boxPositions/boxIndices/boxNormals — only the working buffers —
+// until commit bakes them in. Handles the inversion flip when `t` crosses
+// the opposite-side threshold.
 function applyPushPull(t) {
     pushpull.distance = t;
     const work = pushpull.workingPositions;
@@ -397,47 +470,77 @@ function applyPushPull(t) {
         work[vi * 3 + 1] = snap[i * 3 + 1] + ay;
         work[vi * 3 + 2] = snap[i * 3 + 2] + az;
     }
+
+    // Toggle winding + axis-parallel normal sign on inversion boundary crossings.
+    // Each flip is involutive, so togglable back and forth across the boundary
+    // during a single drag without diverging from the source state.
+    const newInverted = t < pushpull.inversionT;
+    if (newInverted !== pushpull.inverted) {
+        flipAllWinding(pushpull.workingIndices);
+        if (pushpull.workingNormals) {
+            flipNormalsAlongAxis(pushpull.workingNormals, pushpull.axis);
+        }
+        pushpull.inverted = newInverted;
+    }
+
     boxNode.updateMesh({
         positions: work,
-        indices: boxIndices,
-        normals: boxNormals,
+        indices:   pushpull.workingIndices,
+        normals:   pushpull.workingNormals || boxNormals,
     });
-    pickInfo.textContent = `push/pull  ${t.toFixed(3)}`;
+
+    // Move the highlight with the face, flipping its outward direction when
+    // the geometry has inverted so it stays on the visible side.
+    const hlNormal = pushpull.inverted
+        ? [-pushpull.axis[0], -pushpull.axis[1], -pushpull.axis[2]]
+        : pushpull.axis;
+    setHighlightTriangles(
+        pushpull.faceTriangles, hlNormal, work, pushpull.workingIndices);
+
+    pickInfo.textContent = `push/pull  ${t.toFixed(3)}` +
+        (pushpull.inverted ? '  [inverted]' : '');
 }
 
 function commitPushPull() {
     if (!pushpull.active) return;
-    // Bake workingPositions into boxPositions; rebuild BVH/faceGroups/editMesh.
+    // Bake working buffers into the canonical box buffers; rebuild downstream.
     boxPositions = new Float32Array(pushpull.workingPositions);
+    boxIndices   = new Uint32Array(pushpull.workingIndices);
+    if (pushpull.workingNormals) {
+        boxNormals = new Float32Array(pushpull.workingNormals);
+    }
     rebuildMeshState();
-    pushpull.active = false;
-    pushpull.vertexIndices = null;
-    pushpull.vertexStart = null;
-    pushpull.workingPositions = null;
-    pickInfo.textContent = `extruded ${pushpull.distance.toFixed(3)}`;
+    pickInfo.textContent =
+        `extruded ${pushpull.distance.toFixed(3)}` +
+        (pushpull.inverted ? '  [inverted through]' : '');
+    clearPushPull();
+    clearHighlight();
 }
 
 function cancelPushPull() {
     if (!pushpull.active) return;
-    // Restore original geometry from the snapshot and push it back to the scene.
-    const idxs = pushpull.vertexIndices;
-    const snap = pushpull.vertexStart;
-    for (let i = 0; i < idxs.length; i++) {
-        const vi = idxs[i];
-        boxPositions[vi * 3 + 0] = snap[i * 3 + 0];
-        boxPositions[vi * 3 + 1] = snap[i * 3 + 1];
-        boxPositions[vi * 3 + 2] = snap[i * 3 + 2];
-    }
+    // Push the pristine boxMesh state back to the scene. workingIndices and
+    // workingNormals may have been flipped by crossing inversion — we don't
+    // need to unflip them here because they're about to be thrown away.
     boxNode.updateMesh({
         positions: boxPositions,
-        indices: boxIndices,
-        normals: boxNormals,
+        indices:   boxIndices,
+        normals:   boxNormals,
     });
+    pickInfo.textContent = 'push/pull cancelled';
+    clearPushPull();
+    clearHighlight();
+}
+
+function clearPushPull() {
     pushpull.active = false;
+    pushpull.faceTriangles = null;
     pushpull.vertexIndices = null;
     pushpull.vertexStart = null;
     pushpull.workingPositions = null;
-    pickInfo.textContent = 'push/pull cancelled';
+    pushpull.workingIndices = null;
+    pushpull.workingNormals = null;
+    pushpull.inverted = false;
 }
 
 // --- Input: right=rotate, middle=pan, wheel=zoom, left=tool ----------------

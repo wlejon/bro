@@ -151,4 +151,83 @@ for (let i = 0; i < before.length; i++) {
 }
 
 screenshot('apps/scene-editor/_pushpull_after.png');
-console.log(`OK — push/pull extrudes (top=+0.5 then +0.75), cancel reverts, BVH + face groups rebuild`);
+
+// --- Inversion: drag past the opposite face -------------------------------
+//
+// After the two extrusions and a cancel, the current state is a clean cube
+// from y=-1 to y=+2.25 (top face at y=2.25). The push axis is +Y so the
+// inversion threshold is (min non-affected axis-proj) - pivot-proj =
+// -1 - 2.25 = -3.25; a drag of -4 clears it.
+const inv_topGroup = E.faceGroups.groups.find(g => g.normal[1] > 0.999);
+assert(inv_topGroup, 'top face group present before inversion test');
+const inv_triIdx = inv_topGroup.tris[0];
+E.beginPushPull({
+    triangleIndex: inv_triIdx,
+    position: triCentroid(inv_triIdx),
+    normal: inv_topGroup.normal.slice(),
+    distance: 0,
+});
+assert(E.pushpull.inversionT < 0, 'inversion threshold is negative (pushing inward)');
+
+// Drag just shy of the threshold — should NOT be inverted yet.
+E.applyPushPull(E.pushpull.inversionT + 0.1);
+assert(!E.pushpull.inverted, 'not inverted before crossing threshold');
+
+// Drag past the threshold.
+E.applyPushPull(E.pushpull.inversionT - 1);
+assert(E.pushpull.inverted, 'inverted after crossing threshold');
+
+// Toggle back and forth — the flip should be involutive and end in the
+// correct state, not drift.
+E.applyPushPull(E.pushpull.inversionT + 0.1);
+assert(!E.pushpull.inverted, 'flip undoes on re-crossing');
+E.applyPushPull(E.pushpull.inversionT - 1);
+assert(E.pushpull.inverted, 're-enters inverted cleanly');
+
+// Commit the inverted state.
+E.commitPushPull();
+assert(E.faceGroups.groups.length === 6,
+    `still 6 face groups after inversion commit (got ${E.faceGroups.groups.length})`);
+
+// Box y-extent: former bottom (unchanged) still at y=-1 is now the top;
+// former top is at y = 2.25 - 4.25 = -2 (pushed through by 4.25 from pivot
+// y=2.25). The net shape is a unit box from y=-2 to y=-1.
+let minY = Infinity, maxY = -Infinity;
+for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
+    const y = E.boxPositions[vi * 3 + 1];
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+}
+assert(Math.abs(minY + 2) < 1e-4, `inverted box min y ≈ -2 (got ${minY})`);
+assert(Math.abs(maxY + 1) < 1e-4, `inverted box max y ≈ -1 (got ${maxY})`);
+
+// A ray from above (well outside the new shape) must hit a face whose
+// outward normal points +Y — the flipped former-bottom is now the top of
+// the box. Without the inversion fix, the BVH still intersects but the hit
+// normal would be -Y (backface winding) and GL culling would hide the face.
+const invHit = E.boxBVH.raycast(E.boxMesh, [0, 5, 0], [0, -1, 0], 0);
+assert(invHit, 'ray from above hits inverted box');
+assert(invHit.normal[1] > 0.999,
+    `top of inverted box points +Y (got normal ${JSON.stringify(invHit.normal)})`);
+
+// Find the face group whose normal is +Y — that's the new top. Its vertex
+// normals in the Mesh should agree (no mid-triangle backface flip).
+const newTop = E.faceGroups.groups.find(g => g.normal[1] > 0.999);
+assert(newTop, 'inverted box has a +Y face group');
+// At least one vertex of that face must have stored normal also ≈ +Y.
+const sampleTriVert = E.boxIndices[newTop.tris[0] * 3 + 0];
+const sampleNY = E.boxNormals[sampleTriVert * 3 + 1];
+assert(sampleNY > 0.999,
+    `stored vertex normal matches face outward (+Y) after inversion (got ${sampleNY})`);
+
+// A side face (normal ≈ +X) should still have +X stored normals — side
+// normals must NOT flip (outward direction of the side is unchanged).
+const sideX = E.faceGroups.groups.find(g => g.normal[0] > 0.999);
+assert(sideX, 'inverted box has a +X side face group');
+const sideVert = E.boxIndices[sideX.tris[0] * 3 + 0];
+const sideNX = E.boxNormals[sideVert * 3 + 0];
+assert(sideNX > 0.999,
+    `side face normals keep their sign after inversion (got +X = ${sideNX})`);
+
+screenshot('apps/scene-editor/_pushpull_inverted.png');
+console.log(`OK — push/pull extrudes, cancels, inverts-through (BVH + normals + winding consistent)`);
