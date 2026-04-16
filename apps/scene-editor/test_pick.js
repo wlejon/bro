@@ -35,5 +35,18 @@ const miss = window.__editor.boxBVH.raycast(
     window.__editor.boxMesh, missRay.origin, missRay.dir, 0);
 assert(!miss, `top-left corner should miss (got ${miss && JSON.stringify(miss)})`);
 
+// Clicking the box should install a highlight overlay node.
+assert(window.__editor.highlightNode, 'highlight node should exist after pick');
+
+// Second click on a miss (top-left) should clear the highlight.
+click(5, 5);
+advanceTime(50);
+assert(!window.__editor.highlightNode, 'highlight should clear on miss');
+
+// Restore a highlight for the final screenshot.
+click(w / 2, h / 2);
+advanceTime(50);
+assert(window.__editor.highlightNode, 'highlight restored on second center click');
+
 screenshot('apps/scene-editor/_after.png');
 console.log(`OK — picked tri ${hit.triangleIndex} at [${p[0].toFixed(3)}, ${p[1].toFixed(3)}, ${p[2].toFixed(3)}]`);

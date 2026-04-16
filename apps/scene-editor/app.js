@@ -15,6 +15,10 @@ const pickInfo = document.getElementById('pick-info');
 const boxMesh = Mesh.box(1, 1, 1);
 const boxBVH  = new MeshBVH(boxMesh);
 
+// Cache flat attribute buffers once — the Mesh getters copy on each call.
+const boxPositions = boxMesh.positions;
+const boxIndices   = boxMesh.indices;
+
 // The scene node sits at identity so world == mesh-local. Picking ignores
 // transforms until we need them — one less thing to get wrong in the spike.
 const boxNode = scene.createMesh({
@@ -22,6 +26,51 @@ const boxNode = scene.createMesh({
     color: '#74b9ff',
     name: 'box',
 });
+
+// --- Highlight overlay ------------------------------------------------------
+//
+// The highlight is a 1-triangle scene node rebuilt on each pick, nudged along
+// the face normal to stay above the underlying box (z-fighting would flicker
+// the selection). Kept as its own node so we never mutate boxMesh.
+
+const HIGHLIGHT_EPS = 0.002;
+let highlightNode = null;
+
+function clearHighlight() {
+    if (highlightNode) {
+        highlightNode.destroy();
+        highlightNode = null;
+    }
+}
+
+function setHighlightTriangle(triIndex, normal) {
+    clearHighlight();
+    const i0 = boxIndices[triIndex * 3 + 0];
+    const i1 = boxIndices[triIndex * 3 + 1];
+    const i2 = boxIndices[triIndex * 3 + 2];
+    const nx = normal[0] * HIGHLIGHT_EPS;
+    const ny = normal[1] * HIGHLIGHT_EPS;
+    const nz = normal[2] * HIGHLIGHT_EPS;
+    const positions = new Float32Array(9);
+    for (let k = 0; k < 3; k++) {
+        const src = [i0, i1, i2][k] * 3;
+        positions[k * 3 + 0] = boxPositions[src + 0] + nx;
+        positions[k * 3 + 1] = boxPositions[src + 1] + ny;
+        positions[k * 3 + 2] = boxPositions[src + 2] + nz;
+    }
+    const normals = new Float32Array([
+        normal[0], normal[1], normal[2],
+        normal[0], normal[1], normal[2],
+        normal[0], normal[1], normal[2],
+    ]);
+    const indices = new Uint32Array([0, 1, 2]);
+    highlightNode = scene.createMesh({
+        positions, normals, indices,
+        color: '#ffa502',
+        emissive: 0.6,
+        name: 'highlight',
+    });
+}
 
 // --- Camera -----------------------------------------------------------------
 
@@ -109,6 +158,8 @@ canvas.addEventListener('mousedown', (e) => {
         const hit = pickAt(e.clientX - r.left, e.clientY - r.top);
         pickInfo.textContent = formatHit(hit);
         window.__lastPick = hit;
+        if (hit) setHighlightTriangle(hit.triangleIndex, hit.normal);
+        else clearHighlight();
     } else if (e.button === 2) {
         rightDown = true;
         e.preventDefault();
@@ -139,4 +190,8 @@ canvas.addEventListener('wheel', (e) => {
 
 // --- Test hook --------------------------------------------------------------
 
-window.__editor = { scene, cam, boxMesh, boxBVH, boxNode, pickAt, screenToRay };
+window.__editor = {
+    scene, cam, boxMesh, boxBVH, boxNode, pickAt, screenToRay,
+    get highlightNode() { return highlightNode; },
+    clearHighlight, setHighlightTriangle,
+};
