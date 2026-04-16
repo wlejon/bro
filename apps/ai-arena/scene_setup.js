@@ -18,6 +18,7 @@ var Scene3D = {};
     Scene3D.obstacles = [];
     Scene3D.units = {};                  // agentId → capsule node
     Scene3D.unitFovs = {};               // agentId → faint per-unit FOV mesh
+    Scene3D.hpBars = {};                 // agentId → { wrap, fill, lastPct }
     Scene3D.projPool = [[], []];         // [team] → sphere nodes (pooled)
     Scene3D.explosionPool = [];          // { node, t, maxT, r } entries
     Scene3D.dmgOverlay = null;           // HTML container for floating #s
@@ -143,6 +144,11 @@ var Scene3D = {};
         destroyList(Scene3D.obstacles);
         destroyMap(Scene3D.units);
         destroyMap(Scene3D.unitFovs);
+        for (var hid in Scene3D.hpBars) {
+            var hb = Scene3D.hpBars[hid];
+            if (hb && hb.wrap && hb.wrap.parentNode) hb.wrap.parentNode.removeChild(hb.wrap);
+        }
+        Scene3D.hpBars = {};
         for (var t = 0; t < Scene3D.projPool.length; t++) {
             destroyList(Scene3D.projPool[t]);
         }
@@ -229,6 +235,14 @@ var Scene3D = {};
                 emissive: 0.15,
                 name: "unit-fov-" + r.id,
             });
+
+            var wrap = document.createElement("div");
+            wrap.className = "hpbar " + (r.teamId === 0 ? "red" : "blue");
+            var fill = document.createElement("div");
+            fill.className = "hpbar-fill";
+            wrap.appendChild(fill);
+            Scene3D.dmgOverlay.appendChild(wrap);
+            Scene3D.hpBars[r.id] = { wrap: wrap, fill: fill, lastPct: -1 };
         }
     };
 
@@ -246,9 +260,46 @@ var Scene3D = {};
         syncProjectiles(state.world.projectiles);
         syncExplosions(dt);
         syncDamageNumbers();
+        syncHpBars(state);
         syncUnitFovs(state);
         syncGizmos(state);
     };
+
+    // Per-unit HP bar above the head. Uses the same project-to-screen trick
+    // as damage numbers — an HTML overlay over the canvas, not a scene node.
+    // Fill color ramps green → yellow → red with declining health.
+    function hpColor(frac) {
+        if (frac >= 0.55) return "#4ae04a";      // green
+        if (frac >= 0.25) return "#e6c64a";      // yellow
+        return "#e74c3c";                         // red
+    }
+    function syncHpBars(state) {
+        for (var i = 0; i < state.agents.length; i++) {
+            var a = state.agents[i];
+            var hb = Scene3D.hpBars[a.unit.id];
+            if (!hb) continue;
+            if (!a.unit.alive) {
+                if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
+                continue;
+            }
+            // Anchor just above capsule top; matches intent label at y=2.8.
+            var sp = Scene3D.projectToScreen(a.x, 2.2, a.z);
+            if (!sp) {
+                if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
+                continue;
+            }
+            hb.wrap.style.display = "block";
+            hb.wrap.style.left = sp.x + "px";
+            hb.wrap.style.top = sp.y + "px";
+            var max = a.unit.maxHp || 1;
+            var pct = Math.max(0, Math.min(1, a.unit.hp / max));
+            if (pct !== hb.lastPct) {
+                hb.fill.style.width = (pct * 100) + "%";
+                hb.fill.style.background = hpColor(pct);
+                hb.lastPct = pct;
+            }
+        }
+    }
 
     // Per-unit faint FOV triangles — one per roster entry, hidden when dead
     // or when the unit is the focused one (the bright gold gizmo covers it).

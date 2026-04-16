@@ -49,6 +49,23 @@ html, body {
     transform: translate(-50%, -50%);
     white-space: nowrap;
 }
+#dmg-overlay .hpbar {
+    position: absolute;
+    width: 32px;
+    height: 4px;
+    background: #000;
+    border: 1px solid rgba(255,255,255,0.35);
+    transform: translate(-50%, -100%);
+    box-shadow: 0 0 2px rgba(0,0,0,0.8);
+}
+#dmg-overlay .hpbar.red  { border-color: rgba(231,76,60,0.85); }
+#dmg-overlay .hpbar.blue { border-color: rgba(52,152,219,0.85); }
+#dmg-overlay .hpbar-fill {
+    height: 100%;
+    width: 100%;
+    background: #4ae04a;
+    transform-origin: left center;
+}
 #log-wrap {
     background: #14171c;
     border: 1px solid #2a2f36;
