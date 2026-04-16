@@ -1,4 +1,5 @@
 #include "layout/el_select.h"
+#include "layout/draw_traversal.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -125,7 +126,19 @@ void ElSelect::draw(render::Renderer* renderer,
 
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
 
+    // Respect CSS `color` for selected-option text and the dropdown arrow,
+    // so dark themes can read the selection. Falls back to black if unset.
     render::Color color = {0, 0, 0, 255};
+    if (elem_) {
+        auto& style = elem_->computedStyle();
+        auto cIt = style.find("color");
+        if (cIt != style.end() && !cIt->second.empty()) {
+            render::Color parsed;
+            if (DrawTraversal::tryParseColor(cIt->second, parsed)) {
+                color = parsed;
+            }
+        }
+    }
     float textY = lm.baselineY(y, h);
 
     renderer_->save();
