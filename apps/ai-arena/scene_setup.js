@@ -43,9 +43,10 @@ var Scene3D = {};
             pivot: [0, 0, 0],
             dist: 58,
             fov: 45,
-            // Pitch the camera down ~48° for a MOBA-ish view — readable now
-            // and friendlier to animated meshes later.
-            rot: quatFromAxisAngle(1, 0, 0, 0.85),
+            // Pitch the camera down ~55° for a MOBA-ish isometric view.
+            // Negative angle around +X tilts camera above the pivot looking
+            // down; positive would flip it under the ground plane.
+            rot: quatFromAxisAngle(1, 0, 0, -0.95),
         });
         Scene3D.applyCamera();
         wireCameraInput(canvas);
