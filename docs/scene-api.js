@@ -52,6 +52,15 @@ class SceneGraph {
 
   /**
    * Create a 2D shape node and add it to the root.
+   *
+   * World-anchored billboards: set `worldAnchor: [x,y,z]` to render the
+   * shape inside the 3D mesh FBO as a camera-facing quad (rect / circle
+   * SDF), depth-tested against 3D geometry. `billboard: "ylock"` keeps
+   * the shape's up axis aligned with world +Y (falls back to full-face
+   * when the camera looks nearly straight up/down). Width/height/radius
+   * are interpreted in world units when `worldAnchor` is set; the 2D
+   * anchorX/anchorY are ignored. Polygon and line shapes are 2D-only.
+   *
    * @param {Object} [opts]
    * @param {string} [opts.shape="rect"] - "rect"|"roundrect"|"circle"|"ellipse"|"polygon"|"line"
    * @param {string} [opts.name]
@@ -64,17 +73,25 @@ class SceneGraph {
    * @param {string} [opts.fill] - CSS color string (default: white)
    * @param {string} [opts.stroke] - CSS color string
    * @param {number} [opts.strokeWidth]
-   * @param {number} [opts.anchorX=0.5] - anchor point X (0-1)
-   * @param {number} [opts.anchorY=0.5] - anchor point Y (0-1)
+   * @param {number} [opts.anchorX=0.5] - anchor point X (0-1, 2D-only)
+   * @param {number} [opts.anchorY=0.5] - anchor point Y (0-1, 2D-only)
    * @param {number} [opts.x=0]
    * @param {number} [opts.y=0]
    * @param {number[]} [opts.points] - flat array of [x,y,...] pairs for polygon shape
+   * @param {number[]} [opts.worldAnchor] - [x,y,z] world position; switches to 3D billboard
+   * @param {string} [opts.billboard="full"] - "full" | "ylock"
    * @returns {SceneNode}
    */
   createShape(opts) {}
 
   /**
    * Create a 2D sprite node and add it to the root.
+   *
+   * World-anchored billboards: same options as createShape. Texture
+   * upload for billboarded sprites is a follow-up — world-anchored
+   * sprites currently render as 1x1 transparent until a texture is
+   * wired in.
+   *
    * @param {Object} [opts]
    * @param {string} [opts.name]
    * @param {string} [opts.src] - image file path
@@ -85,9 +102,48 @@ class SceneGraph {
    * @param {number} [opts.opacity=1.0]
    * @param {number} [opts.anchorX=0.5]
    * @param {number} [opts.anchorY=0.5]
+   * @param {number[]} [opts.worldAnchor] - [x,y,z] world position; switches to 3D billboard
+   * @param {string} [opts.billboard="full"] - "full" | "ylock"
    * @returns {SceneNode}
    */
   createSprite(opts) {}
+
+  /**
+   * Create an HTML-rasterizing scene node and add it to the root.
+   *
+   * The node owns a detached dom::Document with a root <div> that JS can
+   * mutate imperatively via `node.root` (a standard Element wrapper —
+   * setInnerHTML, appendChild, textContent, etc). Mutations flag the
+   * subtree dirty; the engine re-rasterizes via Skia into an off-screen
+   * RGBA buffer and renders as a billboard textured quad through the 3D
+   * mesh FBO, depth-tested against scene geometry.
+   *
+   * Billboarding + worldAnchor behave the same as createShape. Hit
+   * testing for world-space clicks on HtmlNodes is a deliberate
+   * follow-up — they're visual only today.
+   *
+   * Example:
+   *   const label = scene.createHtmlNode({
+   *       width: 240, height: 60,          // CSS pixels (raster surface size)
+   *       pxPerUnit: 120,                  // 120px = 1 world unit → 2.0 × 0.5 units
+   *       worldAnchor: [0, 3, 0],
+   *       billboard: "full",
+   *       html: "<div style='color:#fff;font:14px sans-serif'>Hello</div>",
+   *   });
+   *   label.setHtml("<div style='color:gold'>updated</div>");
+   *   label.root.textContent = "mutated directly";  // also re-rasterizes
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.html] - initial inner HTML of the root div
+   * @param {number} [opts.width=200] - raster surface width in CSS pixels
+   * @param {number} [opts.height=50] - raster surface height in CSS pixels
+   * @param {number} [opts.pxPerUnit=100] - CSS pixels per world unit
+   * @param {number[]} [opts.worldAnchor] - [x,y,z] world position
+   * @param {string} [opts.billboard="full"] - "full" | "ylock"
+   * @param {string} [opts.name]
+   * @returns {SceneNode} - also exposes .root (Element) and .setHtml(str)
+   */
+  createHtmlNode(opts) {}
 
   /**
    * Create a 3D mesh node and add it to the root.
@@ -296,6 +352,42 @@ class SceneNode {
   /** Scale along Z axis (default 1). */
   get scaleZ() {}
   set scaleZ(value) {}
+
+
+  // --- World anchor / billboard (Shape / Sprite / Html) ---------------------
+
+  /**
+   * [x,y,z] world-space anchor, or null if not set. When set, the node
+   * renders as a camera-facing billboard inside the 3D mesh FBO, depth-
+   * tested against 3D geometry, bypassing the 2D canvas path. Assign
+   * null to clear and return to 2D rendering.
+   */
+  get worldAnchor() {}
+  set worldAnchor(xyzOrNull) {}
+
+  /** Billboard mode: "full" (face camera) or "ylock" (face camera with +Y up). */
+  get billboard() {}
+  set billboard(mode) {}
+
+
+  // --- HtmlNode-only --------------------------------------------------------
+
+  /**
+   * Root Element of the HtmlNode's detached DOM subtree. Standard
+   * Element API — mutate via innerHTML, appendChild, textContent, etc.
+   * Every mutation flips the node dirty; re-rasterization happens on
+   * the next frame. Only available on nodes created via createHtmlNode.
+   */
+  get root() {}
+
+  /**
+   * Replace the root's children from an HTML string. Equivalent to
+   * setting `root.innerHTML = html` but clearer for the common case.
+   */
+  setHtml(html) {}
+
+  /** Explicitly mark the HtmlNode dirty (forces a re-raster next frame). */
+  markHtmlDirty() {}
 
 
   // --- Shape Properties (ShapeNode only) ------------------------------------

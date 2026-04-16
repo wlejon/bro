@@ -3,9 +3,8 @@
 // each agent's x/z/yaw and writes it to the matching capsule node. Camera is
 // an orbit rig tilted MOBA-style with right-drag to rotate and wheel to zoom.
 //
-// Phase 1: visuals only. AI still runs through the old loop; Scene3D just
-// mirrors agent state onto scene nodes. Projectiles / FX / gizmos land in
-// later phases.
+// HP bars, intent labels, and floating damage numbers are world-anchored
+// scene nodes (ShapeNode + HtmlNode) — no HTML overlay, no projectToScreen.
 var Scene3D = {};
 (function () {
     "use strict";
@@ -18,14 +17,13 @@ var Scene3D = {};
     Scene3D.obstacles = [];
     Scene3D.units = {};                  // agentId → capsule node
     Scene3D.unitFovs = {};               // agentId → faint per-unit FOV mesh
-    Scene3D.hpBars = {};                 // agentId → { wrap, fill, lastPct }
+    Scene3D.hpBars = {};                 // agentId → { bg, fill, lastFrac, maxHp }
     Scene3D.projPool = [[], []];         // [team] → sphere nodes (pooled)
     Scene3D.explosionPool = [];          // { node, t, maxT, r } entries
-    Scene3D.dmgOverlay = null;           // HTML container for floating #s
-    Scene3D.dmgDivs = [];                // pool of reusable divs
+    Scene3D.dmgPool = [];                // pool of HtmlNode floating-damage nodes
     Scene3D.gizmos = {                   // focused-unit worldspace gizmos
         focusRing: null, rangeRing: null, fovCone: null,
-        targetLine: null, intentDiv: null,
+        targetLine: null, intentLabel: null,
     };
 
     Scene3D.UNIT_Y = 0.9;    // capsule center height (radius + halfHeight)
@@ -35,10 +33,16 @@ var Scene3D = {};
     var WALL_THICK = 0.4;
     var OBSTACLE_H = 1.8;
 
+    // World-space HP bar dimensions. Rendered as billboards (ylock) so they
+    // track the camera horizontally while always staying Y-up. Size is fixed
+    // in world units — perspective handles zoom naturally.
+    var HP_BAR_W = 1.3;
+    var HP_BAR_H = 0.18;
+    var HP_BAR_Y = 2.2;      // a bit above UNIT_Y + halfHeight + radius (1.8)
+
     Scene3D.init = function (canvas) {
         Scene3D.canvas = canvas;
         Scene3D.scene = canvas.getContext("scene");
-        Scene3D.dmgOverlay = document.getElementById("dmg-overlay");
         buildGizmos();
 
         Scene3D.cam = Camera.createOrbit({
@@ -56,8 +60,8 @@ var Scene3D = {};
     };
 
     // Left-click on a unit capsule → focus it. Tolerates small drag (6px).
-    // Uses screen-space nearest-hit against projected unit positions rather
-    // than full ray casting — good enough for capsules at this zoom.
+    // Uses scene.raycast against the capsule meshes so the test works from
+    // any camera angle.
     function wireClickFocus(canvas) {
         var downX = 0, downY = 0, armed = false;
         canvas.addEventListener("mousedown", function (ev) {
@@ -73,11 +77,17 @@ var Scene3D = {};
             var rect = canvas.getBoundingClientRect();
             var cx = ev.clientX - rect.left;
             var cy = ev.clientY - rect.top;
-            var best = null, bestD = 40; // px radius of effective hit
+            // Pick by nearest capsule world-position projected manually —
+            // the engine's raycast would also work but this keeps the radius
+            // tolerance that felt right before.
+            var best = null, bestD = 40;
             for (var i = 0; i < state.agents.length; i++) {
                 var a = state.agents[i];
                 if (!a.unit.alive) continue;
-                var sp = Scene3D.projectToScreen(a.x, Scene3D.UNIT_Y, a.z);
+                var node = Scene3D.units[a.unit.id];
+                if (!node) continue;
+                // Screen-project via the scene's own camera helper.
+                var sp = worldToScreen(a.x, Scene3D.UNIT_Y, a.z);
                 if (!sp) continue;
                 var d = Math.hypot(sp.x - cx, sp.y - cy);
                 if (d < bestD) { bestD = d; best = a; }
@@ -89,8 +99,38 @@ var Scene3D = {};
         });
     }
 
-    // Duplicated from apps/lib/camera.js (not exported there). Small enough
-    // to inline rather than re-export.
+    // Local screen-project helper kept only for click picking. Damage
+    // numbers / HP bars / intent labels no longer need it — they render as
+    // world-anchored scene nodes.
+    function worldToScreen(wx, wy, wz) {
+        var opts = Camera.orbitViewOpts(Scene3D.cam, Scene3D.canvas);
+        var ex = opts.position[0], ey = opts.position[1], ez = opts.position[2];
+        var fx = opts.target[0] - ex, fy = opts.target[1] - ey, fz = opts.target[2] - ez;
+        var fl = Math.hypot(fx, fy, fz) || 1;
+        fx /= fl; fy /= fl; fz /= fl;
+        var up = opts.up;
+        var rx = fy*up[2] - fz*up[1];
+        var ry = fz*up[0] - fx*up[2];
+        var rz = fx*up[1] - fy*up[0];
+        var rl = Math.hypot(rx, ry, rz) || 1;
+        rx /= rl; ry /= rl; rz /= rl;
+        var ux = ry*fz - rz*fy;
+        var uy = rz*fx - rx*fz;
+        var uz = rx*fy - ry*fx;
+        var dx = wx - ex, dy = wy - ey, dz = wz - ez;
+        var xc = rx*dx + ry*dy + rz*dz;
+        var yc = ux*dx + uy*dy + uz*dz;
+        var zc = fx*dx + fy*dy + fz*dz;
+        if (zc <= 0.01) return null;
+        var tanHalf = Math.tan(opts.fov * Math.PI / 180 * 0.5);
+        var aspect = opts.aspect;
+        var ndcX = xc / (zc * aspect * tanHalf);
+        var ndcY = yc / (zc * tanHalf);
+        var w = Scene3D.canvas.clientWidth || Scene3D.canvas.width;
+        var h = Scene3D.canvas.clientHeight || Scene3D.canvas.height;
+        return { x: (ndcX + 1) * 0.5 * w, y: (1 - ndcY) * 0.5 * h };
+    }
+
     function quatFromAxisAngle(ax, ay, az, angle) {
         var s = Math.sin(angle * 0.5), c = Math.cos(angle * 0.5);
         return [ax * s, ay * s, az * s, c];
@@ -146,7 +186,10 @@ var Scene3D = {};
         destroyMap(Scene3D.unitFovs);
         for (var hid in Scene3D.hpBars) {
             var hb = Scene3D.hpBars[hid];
-            if (hb && hb.wrap && hb.wrap.parentNode) hb.wrap.parentNode.removeChild(hb.wrap);
+            if (hb) {
+                if (hb.bg)   hb.bg.destroy();
+                if (hb.fill) hb.fill.destroy();
+            }
         }
         Scene3D.hpBars = {};
         for (var t = 0; t < Scene3D.projPool.length; t++) {
@@ -156,6 +199,10 @@ var Scene3D = {};
             Scene3D.explosionPool[e].node.destroy();
         }
         Scene3D.explosionPool.length = 0;
+        for (var d = 0; d < Scene3D.dmgPool.length; d++) {
+            Scene3D.dmgPool[d].destroy();
+        }
+        Scene3D.dmgPool.length = 0;
     };
 
     Scene3D.build = function (scenario) {
@@ -210,7 +257,8 @@ var Scene3D = {};
         }
 
         // Capsule per roster entry + a faint team-colored FOV cone pinned to
-        // each one. Capsules get replaced with animated meshes later.
+        // each one. HP bar = two stacked world-anchored rects (bg + fill),
+        // ylock-billboard so they face camera but always stay Y-up.
         var fovMesh = buildFovMesh(1.0);
         for (var j = 0; j < scenario.roster.length; j++) {
             var r = scenario.roster[j];
@@ -236,13 +284,28 @@ var Scene3D = {};
                 name: "unit-fov-" + r.id,
             });
 
-            var wrap = document.createElement("div");
-            wrap.className = "hpbar " + (r.teamId === 0 ? "red" : "blue");
-            var fill = document.createElement("div");
-            fill.className = "hpbar-fill";
-            wrap.appendChild(fill);
-            Scene3D.dmgOverlay.appendChild(wrap);
-            Scene3D.hpBars[r.id] = { wrap: wrap, fill: fill, lastPct: -1 };
+            // HP bar: dark team-tinted background rect.
+            var bg = Scene3D.scene.createShape({
+                shape: "rect", width: HP_BAR_W, height: HP_BAR_H,
+                fill: r.teamId === 0 ? "#5a1a14" : "#0e3a5c",
+                worldAnchor: [r.x, HP_BAR_Y, r.z],
+                billboard: "ylock",
+                name: "hp-bg-" + r.id,
+            });
+            var fill = Scene3D.scene.createShape({
+                shape: "rect",
+                width: HP_BAR_W - 0.06, height: HP_BAR_H - 0.04,
+                fill: "#4ae04a",
+                worldAnchor: [r.x, HP_BAR_Y, r.z],
+                billboard: "ylock",
+                name: "hp-fill-" + r.id,
+            });
+            Scene3D.hpBars[r.id] = {
+                bg: bg, fill: fill,
+                lastFrac: -1,
+                maxHp: r.maxHp || 1,
+                baseW: HP_BAR_W - 0.06,
+            };
         }
     };
 
@@ -265,66 +328,42 @@ var Scene3D = {};
         syncGizmos(state);
     };
 
-    // Per-unit HP bar above the head. Uses the same project-to-screen trick
-    // as damage numbers — an HTML overlay over the canvas, not a scene node.
-    // Size and pixel offset both scale inversely with camera distance so the
-    // bar tracks the apparent capsule size whether zoomed in or out.
+    // Per-unit HP bar — now two stacked world-anchored rects above the
+    // capsule. Fill scaleX shrinks with HP fraction (center-to-center, which
+    // looks fine at these sizes). Color ramps green→yellow→red.
     function hpColor(frac) {
-        if (frac >= 0.55) return "#4ae04a";      // green
-        if (frac >= 0.25) return "#e6c64a";      // yellow
-        return "#e74c3c";                         // red
+        if (frac >= 0.55) return "#4ae04a";
+        if (frac >= 0.25) return "#e6c64a";
+        return "#e74c3c";
     }
-    var UNIT_TOP_Y = 1.8;  // capsule center + halfHeight + radius = 0.9+0.5+0.4
-    var BASE_CAM_DIST = 58;
     function syncHpBars(state) {
-        // Zoom-aware size: at default dist we show a 32px bar. Scale is
-        // clamped so extreme zooms don't produce pixel-dust or giant bars.
-        var scale = BASE_CAM_DIST / Math.max(1, Scene3D.cam.dist);
-        if (scale < 0.25) scale = 0.25;
-        if (scale > 1.5)  scale = 1.5;
-        var barW = Math.max(6, Math.round(32 * scale));
-        var barH = Math.max(2, Math.round(4 * scale));
-        var headOffsetPx = Math.max(4, Math.round(10 * scale));
-
         for (var i = 0; i < state.agents.length; i++) {
             var a = state.agents[i];
             var hb = Scene3D.hpBars[a.unit.id];
             if (!hb) continue;
-            if (!a.unit.alive) {
-                if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
-                continue;
-            }
-            // Use the scene node's position — that's the authoritative world
-            // transform the engine actually renders, written by AgentBinding
-            // each tick. Reading a.x/a.z can lag/disagree depending on tick
-            // ordering, which made bars drift off-unit at extreme zooms.
+            var alive = !!a.unit.alive;
+            hb.bg.visible   = alive;
+            hb.fill.visible = alive;
+            if (!alive) continue;
+
+            // Track the authoritative scene node position — matches what the
+            // engine actually renders for the capsule.
             var node = Scene3D.units[a.unit.id];
             var wx = node ? node.x : a.x;
             var wz = node ? node.z : a.z;
-            var sp = Scene3D.projectToScreen(wx, UNIT_TOP_Y, wz);
-            if (!sp || !isFinite(sp.x) || !isFinite(sp.y)) {
-                if (hb.wrap.style.display !== "none") hb.wrap.style.display = "none";
-                continue;
-            }
-            hb.wrap.style.display = "block";
-            // Explicit anchoring: center bar horizontally at sp.x, sit it
-            // just above sp.y by its own height plus a small pixel nudge.
-            hb.wrap.style.left = (sp.x - barW / 2) + "px";
-            hb.wrap.style.top  = (sp.y - barH - headOffsetPx) + "px";
-            hb.wrap.style.width  = barW + "px";
-            hb.wrap.style.height = barH + "px";
-            var max = a.unit.maxHp || 1;
-            var pct = Math.max(0, Math.min(1, a.unit.hp / max));
-            if (pct !== hb.lastPct) {
-                hb.fill.style.width = (pct * 100) + "%";
-                hb.fill.style.background = hpColor(pct);
-                hb.lastPct = pct;
+            hb.bg.worldAnchor   = [wx, HP_BAR_Y, wz];
+            hb.fill.worldAnchor = [wx, HP_BAR_Y + 0.001, wz];
+
+            var max = a.unit.maxHp || hb.maxHp || 1;
+            var frac = Math.max(0, Math.min(1, a.unit.hp / max));
+            if (frac !== hb.lastFrac) {
+                hb.fill.scaleX = Math.max(0.0001, frac);
+                hb.fill.fillColor = hpColor(frac);
+                hb.lastFrac = frac;
             }
         }
     }
 
-    // Per-unit faint FOV triangles — one per roster entry, hidden when dead
-    // or when the unit is the focused one (the bright gold gizmo covers it).
     function syncUnitFovs(state) {
         var focusId = state.focusId;
         for (var i = 0; i < state.agents.length; i++) {
@@ -347,9 +386,6 @@ var Scene3D = {};
     }
 
     // ─── Projectiles ──────────────────────────────────────────────────
-    // One pool per team. Ability projectiles are team-colored too — a
-    // slight readability loss vs. per-kind color but avoids per-projectile
-    // node churn and there's no runtime mesh-color setter today.
     var PROJ_COLORS = [
         [1.00, 0.45, 0.35, 1.0],   // red team
         [0.40, 0.75, 1.00, 1.0],   // blue team
@@ -376,7 +412,6 @@ var Scene3D = {};
             var node = Scene3D.projPool[team][counts[team]];
             node.visible = true;
             node.x = p.x; node.y = 1.1; node.z = p.z;
-            // Grenades / pierces get a bigger reticle so they're legible.
             var s = (p.mode === "aoe") ? 2.5 : (p.mode === "pierce" ? 1.6 : 1.0);
             node.scaleX = s; node.scaleY = s; node.scaleZ = s;
             counts[team]++;
@@ -388,8 +423,6 @@ var Scene3D = {};
     }
 
     // ─── Explosions ───────────────────────────────────────────────────
-    // Each Render.fx.rings entry borrows a sphere node; the node expands +
-    // fades by scaling since emissive/color isn't runtime-mutable.
     function growExplosionPool() {
         var node = Scene3D.scene.createMesh({
             mesh: "sphere", radius: 0.5, segments: 14, rings: 8,
@@ -408,8 +441,6 @@ var Scene3D = {};
         return growExplosionPool();
     }
     function syncExplosions() {
-        // Release any explosion nodes no longer referenced. We re-bind from
-        // Render.fx.rings every frame — simpler than tracking a mapping.
         for (var i = 0; i < Scene3D.explosionPool.length; i++) {
             Scene3D.explosionPool[i].inUse = false;
             Scene3D.explosionPool[i].node.visible = false;
@@ -427,46 +458,54 @@ var Scene3D = {};
         }
     }
 
-    // ─── Damage numbers (HTML overlay) ────────────────────────────────
-    function ensureDmgDiv(i) {
-        while (Scene3D.dmgDivs.length <= i) {
-            var d = document.createElement("div");
-            d.className = "dmg";
-            Scene3D.dmgOverlay.appendChild(d);
-            Scene3D.dmgDivs.push(d);
+    // ─── Floating damage numbers (HtmlNodes, world-anchored) ─────────
+    // One HtmlNode per slot in Render.fx.floats. Styled via inline CSS so
+    // they read as bold white/red/yellow text over the scene. Pool grows
+    // as needed; unused slots get hidden.
+    function makeDmgNode() {
+        var node = Scene3D.scene.createHtmlNode({
+            width: 120, height: 40,
+            pxPerUnit: 90,   // ~1.33 world-units wide
+            billboard: "full",
+            html: "<div></div>",
+            name: "dmg-float",
+        });
+        node.visible = false;
+        return node;
+    }
+    function ensureDmgNode(i) {
+        while (Scene3D.dmgPool.length <= i) {
+            Scene3D.dmgPool.push(makeDmgNode());
         }
-        return Scene3D.dmgDivs[i];
+        return Scene3D.dmgPool[i];
     }
     function syncDamageNumbers() {
         var floats = Render.fx.floats;
         for (var i = 0; i < floats.length; i++) {
             var f = floats[i];
+            var node = ensureDmgNode(i);
             // Float rises over its lifetime.
             var y = 1.8 + f.t * 1.2;
-            var sp = Scene3D.projectToScreen(f.x, y, f.z);
-            var div = ensureDmgDiv(i);
-            if (!sp) { div.style.display = "none"; continue; }
-            div.style.display = "block";
-            div.style.left = sp.x + "px";
-            div.style.top  = sp.y + "px";
-            div.style.color = f.color;
-            div.style.opacity = String(Math.max(0, 1 - f.t));
-            if (div.textContent !== f.text) div.textContent = f.text;
+            node.worldAnchor = [f.x, y, f.z];
+            node.visible = true;
+            // Re-use the same inner div; setHtml re-parses so only touch it
+            // when the text or color actually changes.
+            var opacity = Math.max(0, 1 - f.t).toFixed(2);
+            var html = "<div style=\"font:bold 18px Consolas, monospace; color:" + f.color
+                     + "; text-shadow:0 0 3px #000,0 0 3px #000; text-align:center; opacity:" + opacity + ";\">"
+                     + f.text + "</div>";
+            node.setHtml(html);
         }
-        for (var j = floats.length; j < Scene3D.dmgDivs.length; j++) {
-            Scene3D.dmgDivs[j].style.display = "none";
+        for (var j = floats.length; j < Scene3D.dmgPool.length; j++) {
+            Scene3D.dmgPool[j].visible = false;
         }
     }
 
     // ─── Focused-unit gizmos ──────────────────────────────────────────
-    // One of each; hidden when there's no live focus. Transforms are
-    // rewritten each frame off the focused agent's state.
     var FOV = Math.PI / 2.2;
 
     function buildFovMesh(range) {
         var half = FOV / 2;
-        // Local frame: forward = -Z (FPS convention). Triangle fan is on
-        // XZ plane, apex at origin.
         var sR = Math.sin(+half) * range, cR = -Math.cos(+half) * range;
         var sL = Math.sin(-half) * range, cL = -Math.cos(-half) * range;
         return {
@@ -475,7 +514,6 @@ var Scene3D = {};
                 sR, 0, cR,
                 sL, 0, cL,
             ]),
-            // CCW when viewed from +Y so the +Y normal is the visible face.
             indices: new Uint32Array([0, 1, 2]),
             normals: new Float32Array([0,1,0, 0,1,0, 0,1,0]),
         };
@@ -497,8 +535,6 @@ var Scene3D = {};
             emissive: 0.2,
             name: "gizmo-range",
         });
-        // FOV triangle is built at attackRange=1 then scaled per-frame to
-        // the agent's actual range.
         var mesh = buildFovMesh(1.0);
         g.fovCone = Scene3D.scene.createMesh({
             positions: mesh.positions,
@@ -508,8 +544,6 @@ var Scene3D = {};
             emissive: 0.35,
             name: "gizmo-fov",
         });
-        // A thin unit-length box (halfW=0.5 is default for "box"). We scaleX
-        // to span the A→B distance and rotateY to point.
         g.targetLine = Scene3D.scene.createMesh({
             mesh: "box", halfW: 0.5, halfH: 0.04, halfD: 0.04,
             color: [0.30, 0.86, 0.47, 0.8],
@@ -521,11 +555,16 @@ var Scene3D = {};
         g.fovCone.visible = false;
         g.targetLine.visible = false;
 
-        g.intentDiv = document.createElement("div");
-        g.intentDiv.className = "dmg";
-        g.intentDiv.style.color = "#ffd24a";
-        g.intentDiv.style.display = "none";
-        Scene3D.dmgOverlay.appendChild(g.intentDiv);
+        // Intent label — an HtmlNode billboard (full, not ylock, so it stays
+        // readable from any angle).
+        g.intentLabel = Scene3D.scene.createHtmlNode({
+            width: 180, height: 36,
+            pxPerUnit: 90,
+            billboard: "full",
+            html: "<div></div>",
+            name: "gizmo-intent",
+        });
+        g.intentLabel.visible = false;
     }
 
     function syncGizmos(state) {
@@ -536,25 +575,20 @@ var Scene3D = {};
             g.rangeRing.visible = false;
             g.fovCone.visible = false;
             g.targetLine.visible = false;
-            g.intentDiv.style.display = "none";
+            g.intentLabel.visible = false;
             return;
         }
         var mem = AI.memory[focus.unit.id];
         var range = focus.unit.attackRange || 9;
 
-        // Focus ring at the capsule base. Torus is already generated flat on
-        // XZ with +Y as its central axis, so no rotation needed.
         g.focusRing.visible = true;
         g.focusRing.x = focus.x; g.focusRing.y = 0.02; g.focusRing.z = focus.z;
 
-        // Range ring — torus's majorRadius=1, scale XZ by range.
         g.rangeRing.visible = true;
         g.rangeRing.x = focus.x; g.rangeRing.y = 0.02; g.rangeRing.z = focus.z;
         g.rangeRing.scaleX = range;
         g.rangeRing.scaleZ = range;
 
-        // FOV cone — rotate to match aim (BotAim.forward if available, else
-        // agent yaw). FOV mesh was built for range=1, so scale to actual range.
         g.fovCone.visible = true;
         g.fovCone.x = focus.x; g.fovCone.y = 0.04; g.fovCone.z = focus.z;
         g.fovCone.scaleX = range;
@@ -564,10 +598,8 @@ var Scene3D = {};
             var f = BotAim.forward(mem.aim);
             aimYaw = Math.atan2(f.x, -f.z);
         } else aimYaw = focus.yaw;
-        // Node rotation is CCW around +Y; agent FPS yaw is CW, so negate.
         g.fovCone.rotationY = -aimYaw;
 
-        // Target line — only if we know the current target and it's alive.
         var tid = mem && mem.targetId;
         var tgt = tid != null ? state.byId[tid] : null;
         if (tgt && tgt.unit.alive) {
@@ -576,8 +608,6 @@ var Scene3D = {};
             if (d > 0.05) {
                 var los = bro.ai.game.hasLineOfSight(
                     focus.x, focus.z, tgt.x, tgt.z, Arena.OBSTACLES);
-                // No runtime color setter on meshes — hide line when no LOS
-                // rather than maintaining two nodes.
                 g.targetLine.visible = los;
                 if (los) {
                     g.targetLine.x = (focus.x + tgt.x) / 2;
@@ -589,51 +619,22 @@ var Scene3D = {};
             } else g.targetLine.visible = false;
         } else g.targetLine.visible = false;
 
-        // Intent label — float above capsule.
+        // Intent label as a world-anchored HtmlNode floating above the
+        // focused unit. setHtml re-parses the subtree — only call it when
+        // the intent actually changes so we don't thrash the raster thread.
         if (mem && mem.intent) {
-            var sp = Scene3D.projectToScreen(focus.x, 2.8, focus.z);
-            if (sp) {
-                g.intentDiv.style.display = "block";
-                g.intentDiv.style.left = sp.x + "px";
-                g.intentDiv.style.top = sp.y + "px";
-                g.intentDiv.style.opacity = "1";
-                if (g.intentDiv.textContent !== mem.intent) g.intentDiv.textContent = mem.intent;
-            } else g.intentDiv.style.display = "none";
-        } else g.intentDiv.style.display = "none";
+            g.intentLabel.visible = true;
+            g.intentLabel.worldAnchor = [focus.x, 2.8, focus.z];
+            if (g._lastIntent !== mem.intent) {
+                g.intentLabel.setHtml(
+                    "<div style=\"font:bold 14px Consolas, monospace; color:#ffd24a;"
+                    + " text-shadow:0 0 3px #000,0 0 3px #000; text-align:center;\">"
+                    + mem.intent + "</div>");
+                g._lastIntent = mem.intent;
+            }
+        } else {
+            g.intentLabel.visible = false;
+            g._lastIntent = null;
+        }
     }
-
-    // World (x, y, z) → canvas pixel coords; null if behind camera.
-    Scene3D.projectToScreen = function (wx, wy, wz) {
-        var opts = Camera.orbitViewOpts(Scene3D.cam, Scene3D.canvas);
-        var ex = opts.position[0], ey = opts.position[1], ez = opts.position[2];
-        var fx = opts.target[0] - ex, fy = opts.target[1] - ey, fz = opts.target[2] - ez;
-        var fl = Math.hypot(fx, fy, fz) || 1;
-        fx /= fl; fy /= fl; fz /= fl;
-        var up = opts.up;
-        // right = normalize(cross(forward, up))
-        var rx = fy*up[2] - fz*up[1];
-        var ry = fz*up[0] - fx*up[2];
-        var rz = fx*up[1] - fy*up[0];
-        var rl = Math.hypot(rx, ry, rz) || 1;
-        rx /= rl; ry /= rl; rz /= rl;
-        // trueUp = cross(right, forward)
-        var ux = ry*fz - rz*fy;
-        var uy = rz*fx - rx*fz;
-        var uz = rx*fy - ry*fx;
-        var dx = wx - ex, dy = wy - ey, dz = wz - ez;
-        var xc = rx*dx + ry*dy + rz*dz;
-        var yc = ux*dx + uy*dy + uz*dz;
-        var zc = fx*dx + fy*dy + fz*dz; // positive = in front
-        if (zc <= 0.01) return null;
-        var tanHalf = Math.tan(opts.fov * Math.PI / 180 * 0.5);
-        var aspect = opts.aspect;
-        var ndcX = xc / (zc * aspect * tanHalf);
-        var ndcY = yc / (zc * tanHalf);
-        var w = Scene3D.canvas.clientWidth || Scene3D.canvas.width;
-        var h = Scene3D.canvas.clientHeight || Scene3D.canvas.height;
-        return {
-            x: (ndcX + 1) * 0.5 * w,
-            y: (1 - ndcY) * 0.5 * h,
-        };
-    };
 })();
