@@ -717,25 +717,32 @@ let _outlinerNextAddX = 3;
 function outlinerStartRename(prim, spanEl) {
     spanEl.setAttribute('contenteditable', 'true');
     spanEl.focus();
-    const range = document.createRange();
-    range.selectNodeContents(spanEl);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
+    if (document.createRange && window.getSelection) {
+        const range = document.createRange();
+        range.selectNodeContents(spanEl);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+    let finished = false;
     const commit = (save) => {
+        if (finished) return;
+        finished = true;
         spanEl.removeAttribute('contenteditable');
-        spanEl.onkeydown = null;
-        spanEl.onblur = null;
+        spanEl.removeEventListener('keydown', onKey);
+        spanEl.removeEventListener('blur', onBlur);
         if (!save) { outlinerRender(); return; }
         const name = (spanEl.textContent || '').trim();
         if (name.length) registry.setName(prim.id, name);
         else outlinerRender();
     };
-    spanEl.onblur = () => commit(true);
-    spanEl.onkeydown = (e) => {
+    const onBlur = () => commit(true);
+    const onKey = (e) => {
         if (e.key === 'Enter') { e.preventDefault(); commit(true); }
         else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
     };
+    spanEl.addEventListener('blur', onBlur);
+    spanEl.addEventListener('keydown', onKey);
 }
 
 function outlinerRender() {
@@ -748,7 +755,7 @@ function outlinerRender() {
         if (!p.visible) cls += ' hidden';
         row.className = cls;
         row.dataset.id = String(p.id);
-        row.onclick = () => registry.setActive(p.id);
+        row.addEventListener('click', () => registry.setActive(p.id));
 
         const vis = document.createElement('button');
         vis.className = 'outliner-vis';
@@ -756,27 +763,27 @@ function outlinerRender() {
         // the panel width tight; title gives accessibility text.
         vis.textContent = p.visible ? '\u25CF' : '\u25CB';
         vis.title = p.visible ? 'Hide' : 'Show';
-        vis.onclick = (e) => {
+        vis.addEventListener('click', (e) => {
             e.stopPropagation();
             registry.setVisible(p.id, !p.visible);
-        };
+        });
         row.appendChild(vis);
 
         const name = document.createElement('span');
         name.className = 'outliner-name';
         name.textContent = p.name;
         name.title = 'Double-click to rename';
-        name.ondblclick = (e) => {
+        name.addEventListener('dblclick', (e) => {
             e.stopPropagation();
             outlinerStartRename(p, name);
-        };
+        });
         row.appendChild(name);
 
         const del = document.createElement('button');
         del.className = 'outliner-del';
         del.textContent = '\u00D7';
         del.title = 'Delete';
-        del.onclick = (e) => {
+        del.addEventListener('click', (e) => {
             e.stopPropagation();
             // If the drag was on this primitive, cancel first — otherwise
             // commit would rebuild a destroyed scene node.
@@ -785,7 +792,7 @@ function outlinerRender() {
             }
             if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
             registry.remove(p.id);
-        };
+        });
         row.appendChild(del);
 
         outlinerListEl.appendChild(row);
@@ -812,7 +819,7 @@ function outlinerAddPrimitive(type) {
 if (outlinerAddBtns) {
     for (let i = 0; i < outlinerAddBtns.length; i++) {
         const btn = outlinerAddBtns[i];
-        btn.onclick = () => outlinerAddPrimitive(btn.dataset.type);
+        btn.addEventListener('click', () => outlinerAddPrimitive(btn.dataset.type));
     }
 }
 
