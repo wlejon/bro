@@ -17,6 +17,7 @@ var Scene3D = {};
     Scene3D.walls = [];
     Scene3D.obstacles = [];
     Scene3D.units = {};                  // agentId → capsule node
+    Scene3D.unitFovs = {};               // agentId → faint per-unit FOV mesh
     Scene3D.projPool = [[], []];         // [team] → sphere nodes (pooled)
     Scene3D.explosionPool = [];          // { node, t, maxT, r } entries
     Scene3D.dmgOverlay = null;           // HTML container for floating #s
@@ -50,7 +51,42 @@ var Scene3D = {};
         });
         Scene3D.applyCamera();
         wireCameraInput(canvas);
+        wireClickFocus(canvas);
     };
+
+    // Left-click on a unit capsule → focus it. Tolerates small drag (6px).
+    // Uses screen-space nearest-hit against projected unit positions rather
+    // than full ray casting — good enough for capsules at this zoom.
+    function wireClickFocus(canvas) {
+        var downX = 0, downY = 0, armed = false;
+        canvas.addEventListener("mousedown", function (ev) {
+            if (ev.button !== 0) return;
+            armed = true; downX = ev.clientX; downY = ev.clientY;
+        });
+        canvas.addEventListener("mouseup", function (ev) {
+            if (ev.button !== 0 || !armed) return;
+            armed = false;
+            if (Math.hypot(ev.clientX - downX, ev.clientY - downY) > 6) return;
+            var state = (typeof App !== "undefined") ? App.state : null;
+            if (!state) return;
+            var rect = canvas.getBoundingClientRect();
+            var cx = ev.clientX - rect.left;
+            var cy = ev.clientY - rect.top;
+            var best = null, bestD = 40; // px radius of effective hit
+            for (var i = 0; i < state.agents.length; i++) {
+                var a = state.agents[i];
+                if (!a.unit.alive) continue;
+                var sp = Scene3D.projectToScreen(a.x, Scene3D.UNIT_Y, a.z);
+                if (!sp) continue;
+                var d = Math.hypot(sp.x - cx, sp.y - cy);
+                if (d < bestD) { bestD = d; best = a; }
+            }
+            if (!best) return;
+            state.focusId = best.unit.id;
+            var sel = document.getElementById("sel-focus");
+            if (sel) sel.value = String(best.unit.id);
+        });
+    }
 
     // Duplicated from apps/lib/camera.js (not exported there). Small enough
     // to inline rather than re-export.
@@ -106,6 +142,7 @@ var Scene3D = {};
         destroyList(Scene3D.walls);
         destroyList(Scene3D.obstacles);
         destroyMap(Scene3D.units);
+        destroyMap(Scene3D.unitFovs);
         for (var t = 0; t < Scene3D.projPool.length; t++) {
             destroyList(Scene3D.projPool[t]);
         }
@@ -166,8 +203,9 @@ var Scene3D = {};
             Scene3D.obstacles.push(node);
         }
 
-        // Capsule per roster entry. Colored by team; will be replaced with
-        // animated meshes later. Capsule standing upright on Y axis.
+        // Capsule per roster entry + a faint team-colored FOV cone pinned to
+        // each one. Capsules get replaced with animated meshes later.
+        var fovMesh = buildFovMesh(1.0);
         for (var j = 0; j < scenario.roster.length; j++) {
             var r = scenario.roster[j];
             var c = r.teamId === 0 ? [0.90, 0.30, 0.24, 1.0]
@@ -180,6 +218,17 @@ var Scene3D = {};
                 name: "unit-" + r.id,
             });
             Scene3D.units[r.id] = node2;
+
+            var fovCol = r.teamId === 0 ? [0.95, 0.35, 0.28, 0.10]
+                                        : [0.28, 0.66, 0.95, 0.10];
+            Scene3D.unitFovs[r.id] = Scene3D.scene.createMesh({
+                positions: fovMesh.positions,
+                indices: fovMesh.indices,
+                normals: fovMesh.normals,
+                color: fovCol,
+                emissive: 0.15,
+                name: "unit-fov-" + r.id,
+            });
         }
     };
 
@@ -197,8 +246,32 @@ var Scene3D = {};
         syncProjectiles(state.world.projectiles);
         syncExplosions(dt);
         syncDamageNumbers();
+        syncUnitFovs(state);
         syncGizmos(state);
     };
+
+    // Per-unit faint FOV triangles — one per roster entry, hidden when dead
+    // or when the unit is the focused one (the bright gold gizmo covers it).
+    function syncUnitFovs(state) {
+        var focusId = state.focusId;
+        for (var i = 0; i < state.agents.length; i++) {
+            var a = state.agents[i];
+            var cone = Scene3D.unitFovs[a.unit.id];
+            if (!cone) continue;
+            if (!a.unit.alive || a.unit.id === focusId) { cone.visible = false; continue; }
+            var range = a.unit.attackRange || 9;
+            cone.visible = true;
+            cone.x = a.x; cone.y = 0.03; cone.z = a.z;
+            cone.scaleX = range; cone.scaleZ = range;
+            var mem = AI.memory[a.unit.id];
+            var aimYaw;
+            if (mem && mem.aim) {
+                var f = BotAim.forward(mem.aim);
+                aimYaw = Math.atan2(f.x, -f.z);
+            } else aimYaw = a.yaw;
+            cone.rotationY = -aimYaw;
+        }
+    }
 
     // ─── Projectiles ──────────────────────────────────────────────────
     // One pool per team. Ability projectiles are team-colored too — a
