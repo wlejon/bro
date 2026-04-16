@@ -183,6 +183,9 @@
     //   geo: buildInferenceGeo result,
     //   tol = 12,                   // screen-space pixel tolerance
     //   onFaceHit = null,           // optional BVH hit for on-face fallback
+    //   excludeTypes = null,        // Set/Array of type names to skip
+    //                                // (e.g. ['on-edge'] for push/pull drag,
+    //                                // where edge-projection-along-axis is noisy)
     // }
     //
     // Returns { type, position, color, label, screen, screenDist, priority,
@@ -192,6 +195,13 @@
         const cx = opts.cursorX, cy = opts.cursorY;
         const cam = opts.camOpts, w = opts.width, h = opts.height;
         const geo = opts.geo;
+
+        const exclude = opts.excludeTypes
+            ? (opts.excludeTypes instanceof Set
+                ? opts.excludeTypes
+                : new Set(opts.excludeTypes))
+            : null;
+        function isExcluded(t) { return exclude && exclude.has(t); }
 
         let best = null;
         function consider(cand) {
@@ -206,6 +216,7 @@
         }
 
         // 1) Endpoints.
+        if (!isExcluded('endpoint')) {
         for (let vi = 0; vi < geo.vertCount; vi++) {
             const pos = [
                 geo.positions[vi * 3 + 0],
@@ -224,8 +235,12 @@
                 priority: PRIORITY.endpoint,
             });
         }
+        }
 
         // 2) Midpoints + 3) on-edge.
+        const skipMid  = isExcluded('midpoint');
+        const skipEdge = isExcluded('on-edge');
+        if (!(skipMid && skipEdge))
         for (const e of geo.edges) {
             const a = [
                 geo.positions[e.a * 3 + 0],
@@ -238,44 +253,48 @@
                 geo.positions[e.b * 3 + 2],
             ];
 
-            const mid = [
-                (a[0] + b[0]) * 0.5,
-                (a[1] + b[1]) * 0.5,
-                (a[2] + b[2]) * 0.5,
-            ];
-            const sm = worldToScreen(mid, cam, w, h);
-            if (!sm.behind) {
-                const dmid = Math.hypot(sm.x - cx, sm.y - cy);
-                if (dmid <= tol) {
-                    consider({
-                        type: 'midpoint',
-                        position: mid,
-                        screen: { x: sm.x, y: sm.y },
-                        screenDist: dmid,
-                        priority: PRIORITY.midpoint,
-                        edge: { a, b },
-                    });
+            if (!skipMid) {
+                const mid = [
+                    (a[0] + b[0]) * 0.5,
+                    (a[1] + b[1]) * 0.5,
+                    (a[2] + b[2]) * 0.5,
+                ];
+                const sm = worldToScreen(mid, cam, w, h);
+                if (!sm.behind) {
+                    const dmid = Math.hypot(sm.x - cx, sm.y - cy);
+                    if (dmid <= tol) {
+                        consider({
+                            type: 'midpoint',
+                            position: mid,
+                            screen: { x: sm.x, y: sm.y },
+                            screenDist: dmid,
+                            priority: PRIORITY.midpoint,
+                            edge: { a, b },
+                        });
+                    }
                 }
             }
 
-            const cp = closestPointOnSegmentToRay(a, b, opts.ray);
-            const sp = worldToScreen(cp.point, cam, w, h);
-            if (sp.behind) continue;
-            const dseg = Math.hypot(sp.x - cx, sp.y - cy);
-            if (dseg > tol) continue;
-            consider({
-                type: 'on-edge',
-                position: cp.point,
-                screen: { x: sp.x, y: sp.y },
-                screenDist: dseg,
-                priority: PRIORITY['on-edge'],
-                edge: { a, b },
-                edgeT: cp.t,
-            });
+            if (!skipEdge) {
+                const cp = closestPointOnSegmentToRay(a, b, opts.ray);
+                const sp = worldToScreen(cp.point, cam, w, h);
+                if (sp.behind) continue;
+                const dseg = Math.hypot(sp.x - cx, sp.y - cy);
+                if (dseg > tol) continue;
+                consider({
+                    type: 'on-edge',
+                    position: cp.point,
+                    screen: { x: sp.x, y: sp.y },
+                    screenDist: dseg,
+                    priority: PRIORITY['on-edge'],
+                    edge: { a, b },
+                    edgeT: cp.t,
+                });
+            }
         }
 
         // 4) On-face fallback (only if nothing higher-priority matched).
-        if (!best && opts.onFaceHit) {
+        if (!best && opts.onFaceHit && !isExcluded('on-face')) {
             const sp = worldToScreen(opts.onFaceHit.position, cam, w, h);
             if (!sp.behind) {
                 consider({

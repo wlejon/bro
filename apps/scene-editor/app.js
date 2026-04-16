@@ -554,10 +554,15 @@ function clearPushPull() {
 
 // --- Inference snap marker --------------------------------------------------
 //
-// Resolves the cursor → best snap candidate via Inference.findSnap and renders
-// a small SVG glyph at the snap's screen position. Snap is also surfaced to
-// other tools — push/pull projects it onto the drag axis to lock depth, and
-// hover updates it for visual feedback even when no tool is dragging.
+// Two visual layers per snap:
+//   1. A 2D SVG glyph in screen space (always at the projected pixel).
+//   2. A small persistent 3D scene node at the snap's world position, so the
+//      user reads "you'll land HERE in 3D" — not just "your cursor is near
+//      this thing on screen".
+// Push/pull projects the snap onto the drag axis to lock depth. Hover only
+// surfaces feature snaps (vertex/midpoint/edge); the on-face fallback is
+// suppressed since it would keep the marker visible everywhere on the model
+// and read as flicker rather than a meaningful snap.
 
 const SNAP_SHAPES = {
     'endpoint': '<circle cx="9" cy="9" r="5" fill="#2ecc71" stroke="#fff" stroke-width="1.5"/>',
@@ -566,13 +571,36 @@ const SNAP_SHAPES = {
     'on-face':  '<polygon points="9,3 15,9 9,15 3,9" fill="#3498db" fill-opacity="0.4" stroke="#3498db" stroke-width="1.5"/>',
 };
 
+// 3D snap indicator: one sphere per snap type, pre-created with the type's
+// color (color isn't a settable prop on a SceneNode — only set at createMesh
+// time — so we keep one node per color and toggle visibility instead of
+// recreating). All hidden until the first snap.
+const SNAP_SPHERE_RADIUS = 0.04;
+const snapSphereMesh = Mesh.sphere(SNAP_SPHERE_RADIUS, 12, 8);
+const snapSpheres = {};
+for (const [type, color] of Object.entries(Inference._COLOR)) {
+    const node = scene.createMesh({
+        data: snapSphereMesh,
+        color,
+        emissive: 0.8,
+        name: 'snap-sphere-' + type,
+    });
+    node.visible = false;
+    snapSpheres[type] = node;
+}
+
 let activeSnap = null;
+
+function hideSnapSpheres() {
+    for (const t in snapSpheres) snapSpheres[t].visible = false;
+}
 
 function showSnapMarker(snap) {
     activeSnap = snap;
     if (!snap) {
         snapMarker.style.display = 'none';
         if (snapInfo) snapInfo.textContent = '';
+        hideSnapSpheres();
         return;
     }
     snapMarker.style.display = 'block';
@@ -583,12 +611,27 @@ function showSnapMarker(snap) {
     if (snapInfo) {
         snapInfo.innerHTML = `snap: <b style="color:${snap.color}">${snap.label}</b>`;
     }
+    // Reveal only the matching color sphere at the snap world position.
+    hideSnapSpheres();
+    const sph = snapSpheres[snap.type];
+    if (sph) {
+        sph.x = snap.position[0];
+        sph.y = snap.position[1];
+        sph.z = snap.position[2];
+        sph.visible = true;
+    }
 }
 
-// Look up the best snap for a canvas-relative cursor pixel + ray. Returns
-// either the inference snap (vertex/midpoint/edge) or — failing that — the
-// on-face fallback if `includeFaceFallback` is set.
-function resolveSnap(cx, cy, ray, includeFaceFallback) {
+const PUSHPULL_EXCLUDE = ['on-edge'];
+
+// Look up the best snap for a canvas-relative cursor pixel + ray.
+//   - `includeFaceFallback`: include on-face snap when no feature is in tol.
+//     False by default — only feature snaps are surfaced (avoids the marker
+//     trailing the cursor across the whole model, which reads as jitter).
+//   - `excludeTypes`: hide specific snap types from this lookup. The push/pull
+//     drag passes ['on-edge'] because edge-projection-along-axis flickers
+//     wildly when the cursor moves perpendicular to a long edge.
+function resolveSnap(cx, cy, ray, includeFaceFallback, excludeTypes) {
     const camOpts = Camera.orbitViewOpts(cam, canvas);
     const w = canvas.clientWidth || canvas.width;
     const h = canvas.clientHeight || canvas.height;
@@ -600,6 +643,7 @@ function resolveSnap(cx, cy, ray, includeFaceFallback) {
         camOpts, width: w, height: h,
         geo: inferenceGeo,
         onFaceHit,
+        excludeTypes,
     });
 }
 
@@ -666,10 +710,11 @@ document.addEventListener('mousemove', (e) => {
     const cy = e.clientY - r.top;
     const ray = screenToRay(cx, cy);
     if (pushpull.active) {
-        // Inference takes priority over raw cursor projection: when a vertex,
-        // midpoint, or edge is within tolerance, lock the drag distance so the
-        // pushed face lands coplanar with the snapped feature along the axis.
-        const snap = resolveSnap(cx, cy, ray, false);
+        // Inference takes priority over raw cursor projection when a vertex
+        // or midpoint snaps. on-edge is excluded here: it's noisy under an
+        // axis-constrained drag (the projected closest-point slides along the
+        // edge as the cursor moves perpendicular to the axis, jerking depth).
+        const snap = resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE);
         let dist;
         if (snap) {
             dist = snapAxisDistance(snap, pushpull.pivot, pushpull.axis);
@@ -681,9 +726,10 @@ document.addEventListener('mousemove', (e) => {
         applyPushPull(dist);
         return;
     }
-    // Hover snap: includes on-face fallback so the marker tracks the cursor
-    // anywhere on the model, not just near features.
-    showSnapMarker(resolveSnap(cx, cy, ray, true));
+    // Hover snap: only feature snaps surface. No on-face fallback — that
+    // would keep the marker visible everywhere on the model and read as
+    // jitter rather than a meaningful snap target.
+    showSnapMarker(resolveSnap(cx, cy, ray, false));
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('auxclick',    (e) => { if (e.button === 1) e.preventDefault(); });

@@ -175,6 +175,39 @@ assert(behind.behind, 'point past camera plane is flagged behind');
     assert(snap === null, `top-left corner (no features) → null (got ${snap && snap.type})`);
 }
 
+// --- findSnap: excludeTypes -------------------------------------------------
+//
+// On-edge cursor with on-edge excluded should fall through to no snap (the
+// ray's closest-point on the edge isn't an endpoint or midpoint), proving the
+// filter actually skips the edge-projection path. Used by push/pull drag to
+// suppress the noisy axis-projection of on-edge snaps.
+
+{
+    const along = [1, 1, -0.5];
+    const sp = I.worldToScreen(along, camOpts, W, H);
+    const ray = makeRay(camOpts, W, H, sp.x, sp.y);
+    const snap = I.findSnap({
+        cursorX: sp.x, cursorY: sp.y, ray, camOpts, width: W, height: H, geo,
+        excludeTypes: ['on-edge'],
+    });
+    assert(snap === null,
+        `excluding on-edge drops the on-edge snap (got ${snap && snap.type})`);
+}
+
+// Excluding endpoints lets midpoint take over when both are within tol.
+{
+    const corner = [1, 1, 1];
+    const sp = I.worldToScreen(corner, camOpts, W, H);
+    const ray = makeRay(camOpts, W, H, sp.x, sp.y);
+    const snap = I.findSnap({
+        cursorX: sp.x, cursorY: sp.y, ray, camOpts, width: W, height: H, geo,
+        tol: 200, excludeTypes: ['endpoint'],
+    });
+    assert(snap, 'still some snap candidate within tol=200');
+    assert(snap.type !== 'endpoint',
+        `excludeTypes drops endpoint (got ${snap.type})`);
+}
+
 // --- findSnap: on-face fallback --------------------------------------------
 //
 // No vertex/edge within tol; supplying onFaceHit yields an on-face snap.
