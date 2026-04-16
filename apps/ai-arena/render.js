@@ -1,29 +1,46 @@
-// render.js — 2D canvas drawing of arena, agents, paths, FOV, projectiles, HUDs.
+// render.js — 2D canvas drawing of arena, agents, paths, FOV, projectiles,
+// FX. World→screen uses Config.ARENA_W/H and Arena.BOUNDS so the renderer
+// adapts to any scenario's bounds and canvas dim.
 var Render = {};
 (function () {
     "use strict";
 
-    var W = 700, H = 700;
-
-    // World → screen transform. World is 40x40 centered at origin.
+    // World → screen transform using the active scenario's bounds.
     function w2s(x, z) {
-        var s = W / 40;
-        return { x: (x + 20) * s, y: (z + 20) * s };
+        var B = Arena.BOUNDS;
+        var spanX = B.maxX - B.minX;
+        var spanZ = B.maxZ - B.minZ;
+        return {
+            x: ((x - B.minX) / spanX) * Config.ARENA_W,
+            y: ((z - B.minZ) / spanZ) * Config.ARENA_H,
+        };
     }
     Render.w2s = w2s;
 
+    // px per world unit along the X axis — used for radius scaling in FX.
+    function pxPerUnit() {
+        var B = Arena.BOUNDS;
+        return Config.ARENA_W / (B.maxX - B.minX);
+    }
+
     Render.drawArena = function (ctx) {
+        var W = Config.ARENA_W, H = Config.ARENA_H;
+        var B = Arena.BOUNDS;
         ctx.fillStyle = "#1a1d22";
         ctx.fillRect(0, 0, W, H);
 
-        // Grid — single batched path.
+        // Grid lines every 4 world units.
         ctx.strokeStyle = "#22272e";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        for (var i = 0; i <= 40; i += 4) {
-            var p = w2s(i - 20, -20);
-            ctx.moveTo(p.x, 0); ctx.lineTo(p.x, H);
-            ctx.moveTo(0, p.x); ctx.lineTo(W, p.x);
+        var step = 4;
+        for (var x = Math.ceil(B.minX / step) * step; x <= B.maxX; x += step) {
+            var sx = w2s(x, 0).x;
+            ctx.moveTo(sx, 0); ctx.lineTo(sx, H);
+        }
+        for (var z = Math.ceil(B.minZ / step) * step; z <= B.maxZ; z += step) {
+            var sy = w2s(0, z).y;
+            ctx.moveTo(0, sy); ctx.lineTo(W, sy);
         }
         ctx.stroke();
 
@@ -73,10 +90,9 @@ var Render = {};
                 }
             }
 
-            // FOV cone — use the aim direction we latched toward the current
-            // target, not the velocity yaw (which rotates 90° when strafing
-            // and made the cone visibly "face sideways" while firing).
-            var FOV = Math.PI / 2.2; // ~82 deg
+            // FOV cone — use aim direction, not velocity yaw (which
+            // rotates 90° when strafing and makes the cone face sideways).
+            var FOV = Math.PI / 2.2;
             var RANGE = u.attackRange || 9;
             var memForAim = (typeof AI !== "undefined") ? AI.memory[uId] : null;
             var aimX, aimZ;
@@ -113,8 +129,8 @@ var Render = {};
                 }
             }
 
-            // Target line — only for the focused agent, otherwise the canvas
-            // fills with crisscrossing lines once there are many bots.
+            // Target line — focused agent only, else canvas fills with
+            // crisscrossing lines once there are many bots.
             var mem = (typeof AI !== "undefined") ? AI.memory[uId] : null;
             if (isFocus) {
                 var tgtId = mem && mem.targetId;
@@ -206,8 +222,8 @@ var Render = {};
 
     // Transient FX: explosion rings + floating damage numbers.
     Render.fx = {
-        rings: [], // { x, z, t, maxT, r }
-        floats: [], // { x, z, text, color, t }
+        rings: [],
+        floats: [],
     };
 
     Render.addExplosion = function (x, z, radius) {
@@ -219,23 +235,26 @@ var Render = {};
             color: color || "#ffd24a", t: 0,
         });
     };
+    Render.clearFx = function () {
+        Render.fx.rings.length = 0;
+        Render.fx.floats.length = 0;
+    };
 
     Render.drawFx = function (ctx, dt) {
-        // Rings
+        var ppu = pxPerUnit();
         for (var i = Render.fx.rings.length - 1; i >= 0; i--) {
             var r = Render.fx.rings[i];
             r.t += dt;
             if (r.t >= r.maxT) { Render.fx.rings.splice(i, 1); continue; }
             var frac = r.t / r.maxT;
             var pos = w2s(r.x, r.z);
-            var rr = (r.r * frac) * (W / 40);
+            var rr = (r.r * frac) * ppu;
             ctx.strokeStyle = "rgba(243,156,18," + (1 - frac).toFixed(2) + ")";
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(pos.x, pos.y, rr, 0, Math.PI * 2);
             ctx.stroke();
         }
-        // Floating damage numbers
         ctx.font = "bold 12px Consolas, monospace";
         ctx.textAlign = "center";
         for (var j = Render.fx.floats.length - 1; j >= 0; j--) {
@@ -252,7 +271,6 @@ var Render = {};
         ctx.textAlign = "start";
     };
 
-    // Replay-mode rendering from a ReplayReader frame object.
     Render.drawReplayFrame = function (ctx, frame, focusId) {
         if (!frame) return;
         var agents = frame.agents;

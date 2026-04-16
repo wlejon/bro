@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>AI Arena — brogameagent demo</title>
+    <title>AI Arena - brogameagent demo</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,20 +14,28 @@
                 <div id="log"></div>
             </div>
             <div id="controls">
-                <button id="btn-pause">Pause</button>
-                <button id="btn-rewind">Rewind 2s</button>
-                <button id="btn-record">Record</button>
-                <button id="btn-play">Play</button>
-                <label>Blue AI:
+                <div class="ctrl-group">
+                    <span class="ctrl-label">SIM</span>
+                    <button id="btn-pause">Pause</button>
+                    <button id="btn-rewind">Rewind 2s</button>
+                    <button id="btn-reset">Reset</button>
+                </div>
+                <div class="ctrl-group">
+                    <span class="ctrl-label">REPLAY</span>
+                    <button id="btn-record">Record</button>
+                    <button id="btn-play">Play</button>
+                </div>
+                <div class="ctrl-group">
+                    <span class="ctrl-label">Blue AI</span>
                     <select id="sel-ai">
                         <option value="scripted">Scripted</option>
                         <option value="mcts">MCTS</option>
                     </select>
-                </label>
-                <label>Focus:
+                </div>
+                <div class="ctrl-group">
+                    <span class="ctrl-label">Focus</span>
                     <select id="sel-focus"></select>
-                </label>
-                <button id="btn-reset">Reset</button>
+                </div>
             </div>
         </div>
         <div id="right">
@@ -37,7 +45,7 @@
             </div>
             <div class="panel">
                 <div class="panel-title">MCTS STATS</div>
-                <div id="mcts-stats">—</div>
+                <div id="mcts-stats">--</div>
             </div>
             <div class="panel">
                 <div class="panel-title">OBSERVATION (focused)</div>
@@ -59,10 +67,15 @@
         </div>
     </div>
     <script src="../lib/bot_aim.js"></script>
+    <script src="config.js"></script>
+    <script src="scenarios.js"></script>
     <script src="arena.js"></script>
     <script src="ai.js"></script>
     <script src="render.js"></script>
     <script src="ui.js"></script>
+    <script src="replay.js"></script>
+    <script src="loop.js"></script>
+    <script src="controls.js"></script>
     <script src="main.js"></script>
 </body>
 </html>

@@ -1,4 +1,6 @@
-// ui.js — HUD panel updates: roster, observation bars, action mask, reward chart, log.
+// ui.js — HUD panel updates: roster, observation bars, action mask, reward
+// chart, log. Element creation is split between init() (static panels) and
+// rebuildRoster() (scenario-dependent roster rows + focus options).
 var UI = {};
 (function () {
     "use strict";
@@ -13,6 +15,12 @@ var UI = {};
     UI.obsCtx = null;
     UI.rewardCanvas = null;
     UI.rewardCtx = null;
+    UI.rosterRows = [];
+    UI.MAX_HIST = 200;
+    UI.rewardHistory = { red: [], blue: [] };
+
+    // Number of action-mask cells (contract with bro.ai.game.buildActionMask).
+    var MASK_CELLS = 13;
 
     UI.init = function () {
         UI.rosterEl = document.getElementById("roster");
@@ -26,33 +34,36 @@ var UI = {};
         UI.rewardCanvas = document.getElementById("reward-canvas");
         UI.rewardCtx = UI.rewardCanvas.getContext("2d");
 
-        // Build mask cells
-        UI.maskRowEl.innerHTML = "";
-        for (var i = 0; i < 13; i++) {
+        UI.MAX_HIST = Config.REWARD_HISTORY;
+
+        while (UI.maskRowEl.firstChild) UI.maskRowEl.removeChild(UI.maskRowEl.firstChild);
+        for (var i = 0; i < MASK_CELLS; i++) {
             var d = document.createElement("div");
             d.className = "mask-cell";
             UI.maskRowEl.appendChild(d);
         }
+    };
 
-        // Pre-build roster rows — dynamic create+append on every tick
-        // collapses to one line in htmlayout, so build once and update text.
+    // Build roster rows and focus dropdown from the scenario roster. Called
+    // after every Arena.build so scenarios with different rosters update.
+    UI.rebuildRoster = function (roster) {
+        while (UI.rosterEl.firstChild) UI.rosterEl.removeChild(UI.rosterEl.firstChild);
         UI.rosterRows = [];
-        for (var j = 0; j < Arena.ROSTER.length; j++) {
+        for (var j = 0; j < roster.length; j++) {
             var row = document.createElement("div");
             row.className = "roster-row";
             UI.rosterEl.appendChild(row);
             UI.rosterRows.push(row);
         }
 
-        // Populate the Focus dropdown from the roster.
         var focusSel = document.getElementById("sel-focus");
         while (focusSel.firstChild) focusSel.removeChild(focusSel.firstChild);
-        for (var k = 0; k < Arena.ROSTER.length; k++) {
-            var r = Arena.ROSTER[k];
+        for (var k = 0; k < roster.length; k++) {
+            var r = roster[k];
             var opt = document.createElement("option");
             opt.value = String(r.id);
             opt.textContent = (r.teamId === 0 ? "[R] " : "[B] ") + r.name;
-            if (r.teamId === 1 && k === Arena.ROSTER.length / 2) opt.selected = true;
+            if (r.teamId === 1 && k === roster.length / 2) opt.selected = true;
             focusSel.appendChild(opt);
         }
     };
@@ -80,7 +91,9 @@ var UI = {};
         line.className = cls || "";
         line.textContent = ts + "  " + text;
         UI.logEl.appendChild(line);
-        while (UI.logEl.childNodes.length > 60) UI.logEl.removeChild(UI.logEl.firstChild);
+        while (UI.logEl.childNodes.length > Config.LOG_LINES) {
+            UI.logEl.removeChild(UI.logEl.firstChild);
+        }
         UI.logEl.scrollTop = UI.logEl.scrollHeight;
     };
 
@@ -93,7 +106,6 @@ var UI = {};
         var bw = c.width / n;
         for (var i = 0; i < n; i++) {
             var v = obs[i];
-            // Clamp to [-1..1] for display
             if (v > 1) v = 1; if (v < -1) v = -1;
             var mid = c.height * 0.5;
             var bar = Math.abs(v) * (c.height * 0.48);
@@ -117,9 +129,6 @@ var UI = {};
             cells[i].className = "mask-cell " + (v > 0.5 ? "mask-on" : "mask-off");
         }
     };
-
-    UI.rewardHistory = { red: [], blue: [] };
-    UI.MAX_HIST = 200;
 
     UI.pushReward = function (redDelta, blueDelta) {
         var hr = UI.rewardHistory;
@@ -169,8 +178,8 @@ var UI = {};
     };
 
     UI.updateMctsStats = function (stats, enabled) {
-        if (!enabled) { UI.mctsStatsEl.textContent = "(disabled — Blue = scripted)"; return; }
-        if (!stats) { UI.mctsStatsEl.textContent = "searching…"; return; }
+        if (!enabled) { UI.mctsStatsEl.textContent = "(disabled - Blue = scripted)"; return; }
+        if (!stats) { UI.mctsStatsEl.textContent = "searching..."; return; }
         UI.mctsStatsEl.textContent =
             "iters:      " + stats.iterations + "\n" +
             "tree size:  " + stats.treeSize + "\n" +
