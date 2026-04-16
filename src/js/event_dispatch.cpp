@@ -424,6 +424,10 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         if (!JS_IsUndefined(tgtMap) && retargetedTarget) {
             std::string tgtKey = std::to_string(retargetedTarget->nodeId());
             JSValue tgtElem = JS_GetPropertyStr(ctx, tgtMap, tgtKey.c_str());
+            if (JS_IsUndefined(tgtElem) || JS_IsNull(tgtElem)) {
+                JS_FreeValue(ctx, tgtElem);
+                tgtElem = DomBindings::wrapElement(ctx, retargetedTarget);
+            }
             JS_SetPropertyStr(ctx, jsEvent, "target", tgtElem);
         } else {
             JS_SetPropertyStr(ctx, jsEvent, "target", JS_DupValue(ctx, jsElem));

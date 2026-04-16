@@ -19,13 +19,6 @@ window.views.events = {
             log('addEventListener directly on box');
         });
 
-        el.querySelector('#ev-target-card').addEventListener('click', function(e) {
-            var t = e.target;
-            var label = t ? (t.id || t.tagName) : '?';
-            document.getElementById('ev-target-log').textContent = 'target: ' + label;
-            log('event.target = ' + label);
-        });
-
         el.querySelector('#ev-text-card').addEventListener('click', function() {
             var s = document.getElementById('ev-text-label');
             s.textContent = s.textContent === 'OFF' ? 'ON' : 'OFF';

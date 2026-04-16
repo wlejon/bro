@@ -35,7 +35,7 @@
         <h3>Text toggle</h3>
         <span id="ev-text-label">OFF</span>
     </div>
-    <div class="card" id="ev-target-card">
+    <div class="card" onclick="var t=event.target;document.getElementById('ev-target-log').textContent='target: '+(t.id||t.tagName)">
         <h3>event.target</h3>
         <div class="ev-box" id="ev-target-inner"></div>
         <div id="ev-target-log" style="font-size:10px;color:#94a3b8;margin-top:4px;"></div>
