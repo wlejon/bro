@@ -70,12 +70,9 @@ for (const k of origTris) {
     assert(rtTris.has(k), `round-trip preserves triangle ${k}`);
 }
 
-// --- Icosahedron smoke test -------------------------------------------------
+// --- Icosahedron: simplest closed mesh --------------------------------------
 //
-// Use the icosahedron instead of Mesh.sphere() here: a UV sphere collapses
-// (segments+1) vertices onto each pole, producing degenerate zero-length
-// edges that have no well-defined twin. The icosahedron is a clean closed
-// manifold — 20 tris, 12 verts, 30 edges, every half-edge paired.
+// 20 tris, 12 verts, 30 edges, 60 half-edges. Euler: V - E + F = 2.
 
 const icoMesh = Mesh.icosahedron();
 const emIco   = EditMesh.fromMeshData(icoMesh.positions, icoMesh.indices);
@@ -83,9 +80,23 @@ const valIco  = EditMesh.validate(emIco);
 assert(valIco.ok, `icosahedron validate ok: ${valIco.errors.join('; ')}`);
 assert(valIco.isClosed,
     `icosahedron is closed (boundary=${valIco.boundaryHalfEdges})`);
-// Euler: V - E + F = 2  →  12 - 30 + 20 = 2. 60 half-edges total.
 assert(emIco.halfEdges.length === 60,
     `icosahedron has 60 half-edges (got ${emIco.halfEdges.length})`);
+
+// --- UV sphere: closed with seam duplicates ---------------------------------
+//
+// Historically broken (bromesh's sphere emitted degenerate pole triangles and
+// (segments+1) duplicate pole verts). Now a single-vertex pole with a proper
+// fan of triangles, so the mesh is a clean closed manifold. Seam duplicates
+// remain (s=0 and s=segments at same position, distinct UVs) and close up in
+// the position-based twin pass.
+
+const sphMesh = Mesh.sphere(1, 16, 12);
+const emSph   = EditMesh.fromMeshData(sphMesh.positions, sphMesh.indices);
+const valSph  = EditMesh.validate(emSph);
+assert(valSph.ok, `sphere validate ok: ${valSph.errors.join('; ')}`);
+assert(valSph.isClosed,
+    `sphere is closed (boundary=${valSph.boundaryHalfEdges})`);
 
 // --- Plane smoke test: open boundary ----------------------------------------
 //
@@ -102,5 +113,6 @@ assert(valPlane.boundaryHalfEdges === 4,
     `plane has 4 boundary half-edges (got ${valPlane.boundaryHalfEdges})`);
 
 console.log(`OK — EditMesh round-trips box (${em.vertices.length}v/${em.faces.length}f), ` +
-            `validates icosahedron (${emIco.vertices.length}v/${emIco.faces.length}f) closed, ` +
+            `validates icosahedron (${emIco.vertices.length}v/${emIco.faces.length}f) and ` +
+            `sphere (${emSph.vertices.length}v/${emSph.faces.length}f) as closed, ` +
             `plane (${emPlane.vertices.length}v/${emPlane.faces.length}f) has 4 boundary edges`);
