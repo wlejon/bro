@@ -513,18 +513,31 @@ syncToggleButtons();
 
 // --- Orbit camera input: right=rotate, middle=pan, wheel=zoom ----------------
 
+// Pointer lock hides the cursor and delivers unbounded movementX/Y deltas —
+// that's what lets a drag continue past the window edge. Lock whenever any
+// drag button is held and release when both are up.
+function updatePointerLock() {
+    const want = rightDown || middleDown;
+    const locked = document.pointerLockElement === canvas;
+    if (want && !locked) canvas.requestPointerLock();
+    else if (!want && locked) document.exitPointerLock();
+}
+
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 2) {
         rightDown = true;
         e.preventDefault();
+        updatePointerLock();
     } else if (e.button === 1) {
         middleDown = true;
         e.preventDefault();
+        updatePointerLock();
     }
 });
 document.addEventListener('mouseup', (e) => {
     if (e.button === 2) rightDown  = false;
     if (e.button === 1) middleDown = false;
+    updatePointerLock();
 });
 document.addEventListener('mousemove', (e) => {
     if (rightDown)  Camera.orbitLook(cam, e.movementX, e.movementY);

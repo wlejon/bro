@@ -69,8 +69,9 @@
             yawSpeed:   opts.yawSpeed   != null ? opts.yawSpeed   : 0.005,
             pitchSpeed: opts.pitchSpeed != null ? opts.pitchSpeed : 0.005,
             // Pan scales with `dist` so a drag covers a similar fraction of
-            // the view at any zoom. 0.0025 ≈ 1 pixel per 0.25% of radius.
-            panSpeed:   opts.panSpeed   != null ? opts.panSpeed   : 0.0025,
+            // the view at any zoom. ~0.001 ≈ 1 pixel per 0.1% of radius,
+            // which is close to cursor-follows-content at a 45° FOV.
+            panSpeed:   opts.panSpeed   != null ? opts.panSpeed   : 0.001,
         };
     }
 
