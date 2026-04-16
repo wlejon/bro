@@ -51,73 +51,130 @@
 
     // --- Orbit camera -------------------------------------------------------
     //
-    // Camera sits on a sphere around `target` at radius `dist`. Orientation is
-    // a quaternion so pitch can go fully over the top without gimbal lock.
-    // The forward axis points at the target: position = target + rot*(0,0,dist).
+    // Separates rotation pivot from camera position so panning doesn't shift
+    // what rotation orbits around:
+    //   - `pivot` is the fixed rotation origin (set at load time from the
+    //     model's bbox, for example).
+    //   - `pos` is the absolute camera position.
+    //   - `rot` is the camera orientation (quaternion; gimbal-lock-free).
+    // Mouselook rotates `pos` around `pivot` while preserving the camera's
+    // pivot-local offset. Panning translates `pos` along screen axes without
+    // touching `pivot`.
 
     function createOrbit(opts) {
         opts = opts || {};
-        return {
-            target: opts.target ? opts.target.slice() : [0, 0, 0],
-            dist:   opts.dist   != null ? opts.dist   : 4,
+        const pivot = (opts.pivot || opts.target) ?
+            (opts.pivot || opts.target).slice() : [0, 0, 0];
+        // Slight downward tilt by default — a "look from above" starting pose.
+        const rot = opts.rot ? opts.rot.slice() : quatFromAxis(1, 0, 0, -0.2);
+        const dist = opts.dist != null ? opts.dist : 4;
+        const pos = opts.pos ? opts.pos.slice()
+            : v3add(pivot, quatRotVec(rot, [0, 0, dist]));
+        const cam = {
+            pivot, pos, rot,
             fov:    opts.fov    != null ? opts.fov    : 45,
             near:   opts.near   != null ? opts.near   : 0.1,
             far:    opts.far    != null ? opts.far    : 1000,
-            // Start with a slight downward tilt (look slightly from above).
-            rot:    opts.rot    ? opts.rot.slice()
-                                : quatFromAxis(1, 0, 0, -0.2),
             yawSpeed:   opts.yawSpeed   != null ? opts.yawSpeed   : 0.005,
             pitchSpeed: opts.pitchSpeed != null ? opts.pitchSpeed : 0.005,
             // Pan scales with `dist` so a drag covers a similar fraction of
-            // the view at any zoom. ~0.001 ≈ 1 pixel per 0.1% of radius,
-            // which is close to cursor-follows-content at a 45° FOV.
+            // the view at any zoom. ~0.001 ≈ 1 px per 0.1% of radius,
+            // close to cursor-follows-content at a 45° FOV.
             panSpeed:   opts.panSpeed   != null ? opts.panSpeed   : 0.001,
         };
+        // `dist` = distance from pivot to camera. Read as current radius;
+        // assign to rescale the pivot→pos offset while preserving direction.
+        // The setter lets existing `cam.dist = cam.dist * factor` zoom code
+        // keep working without needing to know about `pos`.
+        Object.defineProperty(cam, 'dist', {
+            enumerable: true,
+            get() {
+                const dx = this.pos[0] - this.pivot[0];
+                const dy = this.pos[1] - this.pivot[1];
+                const dz = this.pos[2] - this.pivot[2];
+                return Math.sqrt(dx*dx + dy*dy + dz*dz);
+            },
+            set(v) {
+                const dx = this.pos[0] - this.pivot[0];
+                const dy = this.pos[1] - this.pivot[1];
+                const dz = this.pos[2] - this.pivot[2];
+                const L = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                if (L < 1e-9) {
+                    const off = quatRotVec(this.rot, [0, 0, v]);
+                    this.pos = [this.pivot[0]+off[0], this.pivot[1]+off[1], this.pivot[2]+off[2]];
+                } else {
+                    const s = v / L;
+                    this.pos = [this.pivot[0]+dx*s, this.pivot[1]+dy*s, this.pivot[2]+dz*s];
+                }
+            },
+        });
+        return cam;
     }
 
-    // Apply mouse-delta pixels to orbit rotation.
-    //   dx > 0 → camera orbits right around the target.
+    // Re-frame the camera around a new pivot at a given radius. Preserves the
+    // current orientation so the view angle is consistent across model loads.
+    function orbitReframe(cam, pivot, dist) {
+        cam.pivot = pivot.slice();
+        const off = quatRotVec(cam.rot, [0, 0, dist]);
+        cam.pos = [pivot[0]+off[0], pivot[1]+off[1], pivot[2]+off[2]];
+    }
+
+    // Apply mouse-delta pixels to orbit rotation around `pivot`.
+    //   dx > 0 → camera orbits right around the pivot.
     //   dy > 0 → camera orbits up (drag down → view from below).
-    // Yaw is applied in world space (around world +Y), so "up" is always up.
-    // Pitch is applied in camera-local space (around camera's right axis), so
-    // pitching continues smoothly regardless of yaw.
+    // Yaw is applied in world space (around world +Y); pitch around the
+    // camera's current right axis. The pivot-local offset is preserved, so
+    // if the user has panned the camera off-axis, rotation still orbits the
+    // original pivot rather than drifting around the panned view center.
     function orbitLook(cam, dx, dy) {
         const yaw   = -dx * cam.yawSpeed;
         const pitch = -dy * cam.pitchSpeed;
-        // world-yaw * rot * local-pitch
         const qy = quatFromAxis(0, 1, 0, yaw);
         const qp = quatFromAxis(1, 0, 0, pitch);
-        cam.rot = quatNorm(quatMul(quatMul(qy, cam.rot), qp));
+        const rotNew = quatNorm(quatMul(quatMul(qy, cam.rot), qp));
+        // Camera's offset from pivot expressed in its local frame is
+        // invariant under pure rotation. Move it from old frame to new one.
+        const ox = cam.pos[0] - cam.pivot[0];
+        const oy = cam.pos[1] - cam.pivot[1];
+        const oz = cam.pos[2] - cam.pivot[2];
+        const rotInv = [-cam.rot[0], -cam.rot[1], -cam.rot[2], cam.rot[3]];
+        const local = quatRotVec(rotInv, [ox, oy, oz]);
+        const off = quatRotVec(rotNew, local);
+        cam.pos = [cam.pivot[0]+off[0], cam.pivot[1]+off[1], cam.pivot[2]+off[2]];
+        cam.rot = rotNew;
     }
 
-    // Pan the orbit target along the camera's screen-space axes. Content
-    // follows the cursor (drag right → scene moves right). Rate scales with
-    // `dist` so panning feels consistent at any zoom level.
+    // Pan the camera along the camera's screen-space axes. Content follows
+    // the cursor (drag right → scene moves right). Rate scales with the
+    // current pivot radius so panning feels consistent across zooms. Pivot
+    // does NOT move — so a later rotate still orbits the original pivot.
     function orbitPan(cam, dx, dy) {
         const right = quatRotVec(cam.rot, [1, 0, 0]);
         const up    = quatRotVec(cam.rot, [0, 1, 0]);
         const k = cam.dist * cam.panSpeed;
-        cam.target[0] += (-dx * right[0] + dy * up[0]) * k;
-        cam.target[1] += (-dx * right[1] + dy * up[1]) * k;
-        cam.target[2] += (-dx * right[2] + dy * up[2]) * k;
+        cam.pos[0] += (-dx * right[0] + dy * up[0]) * k;
+        cam.pos[1] += (-dx * right[1] + dy * up[1]) * k;
+        cam.pos[2] += (-dx * right[2] + dy * up[2]) * k;
     }
 
     function orbitPosition(cam) {
-        // Local camera frame: forward = -Z (looking toward target), so the
-        // camera sits at +Z * dist in local space.
-        return v3add(cam.target, quatRotVec(cam.rot, [0, 0, cam.dist]));
+        return cam.pos.slice();
     }
 
     function orbitUp(cam) {
         return quatRotVec(cam.rot, [0, 1, 0]);
     }
 
+    // View options submitted to scene.setCamera. The look-at target is one
+    // unit along the camera's forward axis — so after panning, the camera
+    // looks straight ahead (not back at the pivot).
     function orbitViewOpts(cam, canvas) {
+        const fwd = quatRotVec(cam.rot, [0, 0, -1]);
         return {
             fov: cam.fov, near: cam.near, far: cam.far,
-            position: orbitPosition(cam),
-            target: cam.target.slice(),
-            up: orbitUp(cam),
+            position: cam.pos.slice(),
+            target: [cam.pos[0]+fwd[0], cam.pos[1]+fwd[1], cam.pos[2]+fwd[2]],
+            up: quatRotVec(cam.rot, [0, 1, 0]),
             aspect: canvas.clientWidth / Math.max(1, canvas.clientHeight),
         };
     }
@@ -235,7 +292,8 @@
         v3add, v3scale,
         quatFromAxis, quatMul, quatNorm, quatRotVec,
         // orbit
-        createOrbit, orbitLook, orbitPan, orbitPosition, orbitUp, orbitViewOpts,
+        createOrbit, orbitReframe, orbitLook, orbitPan,
+        orbitPosition, orbitUp, orbitViewOpts,
         // fly
         createFly, flyLook, flyRoll, flyThrustFromKeys, flyIntegrate,
         flyForward, flyRight, flyUp, flyViewOpts, flyViewOptsQuat,

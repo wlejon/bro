@@ -271,8 +271,7 @@ function loadFile(idx) {
     const cy = (minY + maxY) * 0.5;
     const cz = (minZ + maxZ) * 0.5;
     const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-    cam.target = [cx, cy, cz];
-    cam.dist = Math.max(size * 2.2, 2);
+    Camera.orbitReframe(cam, [cx, cy, cz], Math.max(size * 2.2, 2));
     state.modelSize = size;
 
     // Record basePositions snapshot for skinning restore.
