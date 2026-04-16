@@ -22,13 +22,12 @@ const dirStatus = document.getElementById('dir-status');
 const fileListEl = document.getElementById('file-list');
 
 let state = {
-    mode: 'folder',     // 'folder' (scanned list, [/] navigates) or 'file' (single-file pin, no list)
+    mode: 'folder',     // 'folder' (scanned list) or 'file' (single-file pin, no list)
     dir: '',            // currently-scanned directory (folder mode only)
     files: [],          // absolute paths of .glb/.gltf found in dir (folder mode) or just [loadedPath] (file mode)
     fileIndex: -1,
     loaded: null,       // loaded gltf state (see loadFile)
     nodes: [],          // scene nodes
-    autoOrbit: true,
     paused: false,
     bindPoseOnly: false,
     time: 0,
@@ -448,18 +447,6 @@ function updateBoneNodes() {
 // Camera + loop
 // ---------------------------------------------------------------------------
 
-function updateCamera(dtMs) {
-    // Auto-orbit: yaw the camera slowly around the target. User drags always
-    // win — the delta is tiny per frame, so releasing the mouse resumes
-    // smoothly.
-    if (state.autoOrbit && !rightDown) {
-        // 60 px/sec * yawSpeed 0.005 ≈ 0.3 rad/s, matching the previous
-        // hand-rolled orbit rate (0.005 rad/frame at 60 fps).
-        Camera.orbitLook(cam, 60 * (dtMs * 0.001), 0);
-    }
-    scene.setCamera(Camera.orbitViewOpts(cam, canvas));
-}
-
 let lastT = 0;
 function frame(t) {
     if (!lastT) lastT = t;
@@ -469,59 +456,59 @@ function frame(t) {
     state.time += dt;
     updateAnimation(dt);
     if (state.showBones) updateBoneNodes();
-    updateCamera(dt);
+    scene.setCamera(Camera.orbitViewOpts(cam, canvas));
 
     requestAnimationFrame(frame);
 }
 
 // ---------------------------------------------------------------------------
-// Input
+// UI wiring — playback / view toggles
 // ---------------------------------------------------------------------------
 
-function navigate(delta) {
-    if (state.mode !== 'folder' || state.files.length === 0) return;
-    state.fileIndex = (state.fileIndex + delta + state.files.length) % state.files.length;
-    loadFile(state.fileIndex);
-    renderFileList();
+const pausePlayBtn = document.getElementById('btn-pauseplay');
+const nextAnimBtn  = document.getElementById('btn-next-anim');
+const bindPoseBtn  = document.getElementById('btn-bindpose');
+const bonesBtn     = document.getElementById('btn-bones');
+
+function syncToggleButtons() {
+    pausePlayBtn.textContent = state.paused ? 'Play' : 'Pause';
+    pausePlayBtn.classList.toggle('toggled', state.paused);
+    bindPoseBtn.classList.toggle('toggled', state.bindPoseOnly);
+    bonesBtn.classList.toggle('toggled', state.showBones);
 }
 
-document.addEventListener('keydown', (e) => {
-    const k = e.key;
-    if (k === ']' || k === 'ArrowRight') {
-        navigate(1);
-    } else if (k === '[' || k === 'ArrowLeft') {
-        navigate(-1);
-    } else if (k === ' ') {
-        state.paused = !state.paused;
-        renderInfo();
-    } else if (k === 'a' || k === 'A') {
-        const L = state.loaded;
-        if (L && L.hasAnim) {
-            L.animIdx = (L.animIdx + 1) % L.animations.length;
-            L.animTime = 0;
-            renderInfo();
-        }
-    } else if (k === 'b' || k === 'B') {
-        state.bindPoseOnly = !state.bindPoseOnly;
-        renderInfo();
-    } else if (k === 'r' || k === 'R') {
-        state.autoOrbit = !state.autoOrbit;
-    } else if (k === 'w' || k === 'W') {
-        state.showBones = !state.showBones;
-        if (state.showBones) setupBoneNodes();
-        else clearBoneNodes();
-        renderInfo();
-    } else if (k === 'o' || k === 'O') {
-        openFolderDialog();
-        e.preventDefault();
-    } else if (k === 'f' || k === 'F') {
-        openFileDialog();
-        e.preventDefault();
-    }
+pausePlayBtn.addEventListener('click', () => {
+    state.paused = !state.paused;
+    syncToggleButtons();
+    renderInfo();
+});
+
+nextAnimBtn.addEventListener('click', () => {
+    const L = state.loaded;
+    if (!L || !L.hasAnim) return;
+    L.animIdx = (L.animIdx + 1) % L.animations.length;
+    L.animTime = 0;
+    renderInfo();
+});
+
+bindPoseBtn.addEventListener('click', () => {
+    state.bindPoseOnly = !state.bindPoseOnly;
+    syncToggleButtons();
+    renderInfo();
+});
+
+bonesBtn.addEventListener('click', () => {
+    state.showBones = !state.showBones;
+    if (state.showBones) setupBoneNodes();
+    else clearBoneNodes();
+    syncToggleButtons();
+    renderInfo();
 });
 
 openFolderBtn.addEventListener('click', openFolderDialog);
 openFileBtn.addEventListener('click', openFileDialog);
+
+syncToggleButtons();
 
 // --- Orbit camera input: right-click-drag rotates, wheel zooms ---------------
 

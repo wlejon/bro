@@ -15,17 +15,16 @@
             top: 12px;
             left: 12px;
             background: rgba(0,0,0,0.75);
-            padding: 10px 14px;
+            padding: 8px 12px;
             border-radius: 6px;
             font-size: 12px;
             line-height: 1.5;
             z-index: 10;
-            max-width: 300px;
             pointer-events: none;
         }
-        #hud h2 { font-size: 14px; margin: 0 0 6px 0; color: #7bed9f; }
-        #hud .key { color: #ffa502; font-weight: bold; }
-        #hud .section { margin-top: 6px; color: #74b9ff; font-weight: bold; }
+        #hud h2 { font-size: 14px; margin: 0 0 4px 0; color: #7bed9f; }
+        #hud .hint { color: #bbb; font-size: 11px; }
+        #hud .hint b { color: #ffa502; }
 
         #file-panel {
             position: absolute;
@@ -68,6 +67,30 @@
         }
         #open-file-btn:hover  { background: #444; }
         #open-file-btn:active { background: #222; }
+
+        #controls-row {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 8px;
+        }
+        #controls-row button {
+            flex: 1;
+            color: #ddd;
+            background: #222;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            padding: 5px 0;
+            font-family: inherit;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        #controls-row button:hover { background: #2e2e2e; color: #fff; }
+        #controls-row button.toggled {
+            background: #1a4a8a;
+            border-color: #3a6a9a;
+            color: #fff;
+            font-weight: bold;
+        }
         #dir-status {
             font-size: 10px;
             color: #888;
@@ -143,22 +166,19 @@
     <canvas id="canvas"></canvas>
     <div id="hud">
         <h2>GLB / GLTF Viewer</h2>
-        <div><span class="key">[</span> / <span class="key">]</span> prev / next file</div>
-        <div><span class="key">Space</span> pause/resume animation</div>
-        <div><span class="key">A</span> cycle animations</div>
-        <div><span class="key">B</span> toggle bind pose</div>
-        <div><span class="key">R</span> toggle auto-orbit</div>
-        <div><span class="key">W</span> toggle bone visualization</div>
-        <div><span class="key">O</span> open folder…  &nbsp; <span class="key">F</span> open file…</div>
-        <div class="section">Mouse</div>
-        <div><span class="key">right-drag</span> rotate camera</div>
-        <div><span class="key">wheel</span> zoom</div>
+        <div class="hint"><b>right-drag</b> rotate &nbsp;·&nbsp; <b>wheel</b> zoom</div>
     </div>
     <div id="status">Ready</div>
     <div id="file-panel">
         <div id="open-row">
             <button id="open-folder-btn" type="button">Open Folder…</button>
             <button id="open-file-btn"   type="button">Open File…</button>
+        </div>
+        <div id="controls-row">
+            <button id="btn-pauseplay" type="button">Pause</button>
+            <button id="btn-next-anim" type="button">Next Anim</button>
+            <button id="btn-bindpose"  type="button">Bind Pose</button>
+            <button id="btn-bones"     type="button">Bones</button>
         </div>
         <div id="dir-status"></div>
         <div id="file-list"></div>
