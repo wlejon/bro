@@ -127,6 +127,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
+| `docs/brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals (fetch, crypto, WebSocket, streams, storage, etc.) |
 
 Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system), `docs/inspect.md` (DOM inspector that's very useful in headless), `docs/moba-demo.md` (MOBA architecture).
 
