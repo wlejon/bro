@@ -396,8 +396,20 @@ static JSValue js_createReplayReader(JSContext* ctx, JSValueConst, int, JSValueC
 }
 
 // bro.ai.game.createMcts(config?)
+//
+// Config fields (all optional):
+//   iterations, budgetMs, rolloutHorizon, simDt, actionRepeat, uctC, seed
+//   rolloutPolicy : "random" | "aggressive" — leave unset to use the
+//                   library default (RandomRollout).
+//   opponentPolicy: "idle"   | "aggressive" — leave unset to use the
+//                   library default (idle/no-op).
+//
+// Policy defaults match the C++ defaults (random rollout, idle opponent),
+// which is the right baseline for a generic MCTS. For combat apps the
+// caller should opt into "aggressive" on both so rollouts are informative.
 static JSValue js_createMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* data = new MctsData();
+
     if (argc >= 1 && JS_IsObject(argv[0])) {
         JSValue opts = argv[0];
         auto& cfg = data->mcts.config();
@@ -410,7 +422,40 @@ static JSValue js_createMcts(JSContext* ctx, JSValueConst, int argc, JSValueCons
         c.uct_c            = (float)getDoubleProp(ctx, opts, "uctC", c.uct_c);
         c.seed             = (uint64_t)getDoubleProp(ctx, opts, "seed", (double)c.seed);
         data->mcts.set_config(c);
+
+        JSValue rp = JS_GetPropertyStr(ctx, opts, "rolloutPolicy");
+        if (JS_IsString(rp)) {
+            const char* s = JS_ToCString(ctx, rp);
+            if (s) {
+                std::string kind = s;
+                JS_FreeCString(ctx, s);
+                if (kind == "aggressive") {
+                    data->mcts.set_rollout_policy(
+                        std::make_shared<brogameagent::mcts::AggressiveRollout>());
+                } else if (kind == "random") {
+                    data->mcts.set_rollout_policy(
+                        std::make_shared<brogameagent::mcts::RandomRollout>());
+                }
+            }
+        }
+        JS_FreeValue(ctx, rp);
+
+        JSValue op = JS_GetPropertyStr(ctx, opts, "opponentPolicy");
+        if (JS_IsString(op)) {
+            const char* s = JS_ToCString(ctx, op);
+            if (s) {
+                std::string kind = s;
+                JS_FreeCString(ctx, s);
+                if (kind == "aggressive") {
+                    data->mcts.set_opponent_policy(brogameagent::mcts::policy_aggressive);
+                } else if (kind == "idle") {
+                    data->mcts.set_opponent_policy(brogameagent::mcts::policy_idle);
+                }
+            }
+        }
+        JS_FreeValue(ctx, op);
     }
+
     return qjsbind::wrap<MctsData>(ctx, data);
 }
 
@@ -551,6 +596,8 @@ void AIBindings::install(JSContext* ctx) {
                 [](AgentData* d, double dt) { d->agent.update((float)dt); })
             .method("setPosition",
                 [](AgentData* d, double x, double z) { d->agent.setPosition((float)x, (float)z); })
+            .method("setYaw",
+                [](AgentData* d, double yaw) { d->agent.setYaw((float)yaw); })
             .method("setSpeed",
                 [](AgentData* d, double s) { d->agent.setSpeed((float)s); })
             .method("setRadius",

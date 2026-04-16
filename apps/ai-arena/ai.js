@@ -812,6 +812,12 @@ var AI = {};
     };
 
     // MCTS wrapper — instantiate once per agent to avoid rebuilding the tree.
+    //
+    // The library defaults (random rollout, idle opponent) are a neutral
+    // baseline but unusable for a combat arena: every rollout becomes 6 s
+    // of random flailing against stationary dummies, so all branches score
+    // alike and the tree picks near-randomly. Opt into the aggressive pair
+    // so rollouts actually exercise engagement dynamics.
     AI.createMcts = function () {
         return bro.ai.game.createMcts({
             iterations: 120,
@@ -820,6 +826,8 @@ var AI = {};
             simDt: 0.25,
             actionRepeat: 2,
             uctC: 1.3,
+            rolloutPolicy: "aggressive",
+            opponentPolicy: "aggressive",
         });
     };
 
@@ -841,22 +849,38 @@ var AI = {};
         return cache.action;
     };
 
-    // Apply an MCTS CombatAction + attack/ability on top of scripted movement fallback.
+    // Apply an MCTS CombatAction + attack/ability.
+    //
+    // MCTS plans in an aim-relative local frame: "local forward (-Z) points
+    // at the aim target" — its internal mcts::apply enforces this by
+    // snapping Agent::yaw_ to the aim yaw before integrating each decision
+    // step. Replicate that contract here so the real agent's motion matches
+    // what was searched over: aim at the nearest enemy, setYaw to that,
+    // then hand the local-frame dir to applyAction.
     AI.applyMcts = function (agent, world, ca, dt) {
-        var u = agent.unit;
         var dir = DIRS[Math.max(0, Math.min(8, ca.moveDir | 0))];
-        var speed = u.effectiveMoveSpeed || u.moveSpeed || 5.2;
         agent.clearTarget();
-        agent.applyAction({
-            moveX: dir[0] * speed,
-            moveZ: dir[1] * speed,
-            aimYaw: 0, aimPitch: 0,
-            attackTargetId: -1, useAbilityId: -1,
-        }, dt);
+
+        var enemy = world.nearestEnemy(agent);
+        if (enemy && enemy.unit && enemy.unit.alive) {
+            // FPS yaw convention: yaw=0 faces -Z, so yaw = atan2(dx, -dz).
+            var aimYaw = Math.atan2(enemy.x - agent.x, -(enemy.z - agent.z));
+            agent.setYaw(aimYaw);
+            agent.applyAction({
+                moveX: dir[0], moveZ: dir[1],
+                aimYaw: aimYaw, aimPitch: 0,
+                attackTargetId: -1, useAbilityId: -1,
+            }, dt);
+        } else {
+            // No enemy — just hold.
+            agent.applyAction({
+                moveX: 0, moveZ: 0,
+                aimYaw: 0, aimPitch: 0,
+                attackTargetId: -1, useAbilityId: -1,
+            }, dt);
+        }
 
         var act = { useAbilityId: -1, abilityTargetId: -1, attackTargetId: -1 };
-        // Pick any enemy as target for abilities/attacks
-        var enemy = world.nearestEnemy(agent);
         if (!enemy || !enemy.unit.alive) return act;
         AI.getMem(agent.unit.id).targetId = enemy.unit.id;
 

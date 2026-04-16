@@ -16,14 +16,19 @@
         }
 
         // One MCTS instance per Blue-team agent, with its own action cache.
+        // Stagger the initial TTLs so searches (12 ms budget each) don't all
+        // land on the same frame — otherwise N agents × 12 ms spikes every
+        // 15 frames, starving the render loop.
         var mctsByAgent = {};
+        var mctsCount = 0;
         for (var j = 0; j < built.agents.length; j++) {
             var ag = built.agents[j];
             if (ag.unit.teamId === 1) {
                 mctsByAgent[ag.unit.id] = {
                     mcts: AI.createMcts(),
-                    cache: { action: null, ttl: 0 },
+                    cache: { action: null, ttl: mctsCount % 15 },
                 };
+                mctsCount++;
             }
         }
 
@@ -131,7 +136,16 @@
                 (action.attackTargetId >= 0 ? state.byId[action.attackTargetId] : null) ||
                 myTarget || myFocus;
             if (aimAt && aimAt.unit && aimAt.unit.alive) {
-                AI.requestAim(aimMem, state.elapsed, aimAt.x - a.x, aimAt.z - a.z);
+                var aimDx = aimAt.x - a.x, aimDz = aimAt.z - a.z;
+                AI.requestAim(aimMem, state.elapsed, aimDx, aimDz);
+                // Snap the agent's movement-facing yaw to the aim direction.
+                // Without this, yaw drifts to velocity direction (integrate_
+                // updates it whenever the agent moves), so a strafing bot
+                // ends up oriented sideways to its target. For MCTS this
+                // also matches the frame contract applyMcts set up before
+                // applyAction ran — we re-assert it here after integrate_
+                // has had its say, so the render pass sees aim-facing yaw.
+                a.setYaw(Math.atan2(aimDx, -aimDz));
             }
             BotAim.tick(aimMem.aim, dt);
 
