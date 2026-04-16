@@ -198,6 +198,22 @@ let editMesh = EditMesh.fromMeshData(boxPositions, boxIndices);
 // Re-derived alongside the BVH/face-groups whenever geometry mutates.
 let inferenceGeo = Inference.buildInferenceGeo(boxPositions, boxIndices, faceGroups);
 
+// --- Ground grid + XYZ axes -------------------------------------------------
+//
+// Static visual aid: faint XZ grid + bright RGB axes at y=-1 (where the box's
+// base sits). Single mesh with per-vertex colors → one draw call. Not in
+// boxBVH or inferenceGeo, so it never participates in picking or snapping.
+
+const sceneAxesData = SceneAxes.buildSceneAxes();
+const sceneAxesNode = scene.createMesh({
+    positions: sceneAxesData.positions,
+    normals:   sceneAxesData.normals,
+    colors:    sceneAxesData.colors,
+    indices:   sceneAxesData.indices,
+    emissive:  0.85,    // self-lit so the grid stays bright at any orbit angle
+    name: 'scene-axes',
+});
+
 // Rebuild all mesh-derived state after the box buffers have been mutated.
 // Push/pull may flip winding and axis-parallel normals when the drag inverts
 // the geometry, so all three of positions/indices/normals need to flow back
@@ -754,7 +770,7 @@ document.addEventListener('keydown', (e) => {
 // state after push/pull commits, not the pre-edit binding.
 
 window.__editor = {
-    scene, cam, boxNode, pickAt, screenToRay,
+    scene, cam, boxNode, sceneAxesNode, pickAt, screenToRay,
     get boxMesh()      { return boxMesh; },
     get boxBVH()       { return boxBVH; },
     get boxPositions() { return boxPositions; },
