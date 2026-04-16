@@ -96,11 +96,15 @@
 
     // Nearest-primitive raycast. Returns { primitive, hit } or null.
     // Iterates visible primitives only — hidden primitives don't receive
-    // input (matches their absence from the render).
-    PrimitiveRegistry.prototype.pickAt = function (origin, dir) {
+    // input (matches their absence from the render). `opts.excludeId` skips
+    // a specific primitive (e.g. the Move tool excludes the moving primitive
+    // so the cursor can target geometry under it without self-hitting).
+    PrimitiveRegistry.prototype.pickAt = function (origin, dir, opts) {
+        const excludeId = opts && opts.excludeId;
         let best = null;
         for (const p of this.primitives) {
             if (!p.visible) continue;
+            if (excludeId != null && p.id === excludeId) continue;
             const hit = p.bvh.raycast(p.mesh, origin, dir, 0);
             if (!hit) continue;
             if (!best || hit.distance < best.hit.distance) {
@@ -112,10 +116,14 @@
 
     // All visible-primitive inference geos — used by Inference.findSnap to
     // scan every visible primitive's snap features in one pass.
-    PrimitiveRegistry.prototype.collectInferenceGeos = function () {
+    // `opts.excludeId` filters out a specific primitive (Move tool uses this
+    // so it doesn't snap to the moving primitive's stale pre-drag features).
+    PrimitiveRegistry.prototype.collectInferenceGeos = function (opts) {
+        const excludeId = opts && opts.excludeId;
         const out = [];
         for (const p of this.primitives) {
             if (!p.visible) continue;
+            if (excludeId != null && p.id === excludeId) continue;
             out.push(p.inferenceGeo);
         }
         return out;

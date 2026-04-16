@@ -163,10 +163,24 @@ function screenToRay(px, py) {
     };
 }
 
-// pickAt returns { primitive, hit } or null.
-function pickAt(px, py) {
+// pickAt returns { primitive, hit } or null. `excludeId` skips a primitive
+// (used by Move so the cursor can target geometry behind the moving object).
+function pickAt(px, py, excludeId) {
     const ray = screenToRay(px, py);
-    return registry.pickAt(ray.origin, ray.dir);
+    return registry.pickAt(ray.origin, ray.dir,
+        excludeId != null ? { excludeId } : null);
+}
+
+// Camera forward direction (unit). Used by Move to set the drag plane to a
+// camera-facing plane through the grab pivot, so mouse motion maps 1:1 to
+// world distance at the pivot's depth.
+function cameraForward() {
+    const opts = Camera.orbitViewOpts(cam, canvas);
+    const fx = opts.target[0] - opts.position[0];
+    const fy = opts.target[1] - opts.position[1];
+    const fz = opts.target[2] - opts.position[2];
+    const fl = Math.hypot(fx, fy, fz) || 1;
+    return [fx / fl, fy / fl, fz / fl];
 }
 
 function formatHit(pick) {
@@ -185,7 +199,8 @@ let currentTool = 'select';
 
 function setTool(t) {
     if (t === currentTool) return;
-    if (pushpull.active) cancelPushPull();
+    if (pushpull.active)      cancelPushPull();
+    if (moveToolState.active) cancelMove();
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, false);
@@ -417,6 +432,41 @@ function clearPushPull() {
     activeSnap = null;
 }
 
+// --- Move tool --------------------------------------------------------------
+//
+// Translate a whole primitive. Drag plane is camera-facing through the grab
+// pivot. Inference snaps (excluding the moving primitive) override the plane
+// intersection when present — delta = snapPos - pivot, mirroring SketchUp's
+// "drag from pivot to snap target" behavior.
+
+const moveToolState = MoveTool.createState();
+
+function beginMove(primitive, hit) {
+    if (!primitive || !hit) return;
+    MoveTool.begin(moveToolState, primitive, hit.position, cameraForward());
+    pickInfo.textContent = `move  [${primitive.name}]  0`;
+}
+
+function commitMove() {
+    if (!moveToolState.active) return;
+    const result = MoveTool.commit(moveToolState);
+    if (result) {
+        const d = result.delta;
+        pickInfo.textContent = `moved [${result.primitive.name}] by ` +
+            `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
+    }
+    showSnapMarker(null);
+    clearHighlight();
+}
+
+function cancelMove() {
+    if (!moveToolState.active) return;
+    MoveTool.cancel(moveToolState);
+    pickInfo.textContent = 'move cancelled';
+    showSnapMarker(null);
+    clearHighlight();
+}
+
 // --- Inference snap marker --------------------------------------------------
 
 const SNAP_SHAPES = {
@@ -524,19 +574,23 @@ const PUSHPULL_EXCLUDE = ['on-edge'];
 
 // Resolve the best snap across every visible primitive. The on-face fallback
 // uses registry.pickAt so it hits the nearest primitive under the ray.
-function resolveSnap(cx, cy, ray, includeFaceFallback, excludeTypes) {
+// `excludePrimitiveId` filters both the inference geos and the on-face
+// raycast — Move uses this so the moving primitive can't snap to itself.
+function resolveSnap(cx, cy, ray, includeFaceFallback, excludeTypes, excludePrimitiveId) {
     const camOpts = Camera.orbitViewOpts(cam, canvas);
     const w = canvas.clientWidth || canvas.width;
     const h = canvas.clientHeight || canvas.height;
+    const filterOpt = excludePrimitiveId != null
+        ? { excludeId: excludePrimitiveId } : null;
     let onFaceHit = null;
     if (includeFaceFallback) {
-        const pick = registry.pickAt(ray.origin, ray.dir);
+        const pick = registry.pickAt(ray.origin, ray.dir, filterOpt);
         if (pick) onFaceHit = pick.hit;
     }
     return Inference.findSnap({
         cursorX: cx, cursorY: cy, ray,
         camOpts, width: w, height: h,
-        geos: registry.collectInferenceGeos(),
+        geos: registry.collectInferenceGeos(filterOpt),
         onFaceHit,
         excludeTypes,
     });
@@ -583,6 +637,13 @@ function handleLeftDown(e) {
         } else {
             clearHighlight();
         }
+    } else if (currentTool === 'move') {
+        if (pick) {
+            registry.setActive(pick.primitive.id);
+            beginMove(pick.primitive, pick.hit);
+        } else {
+            clearHighlight();
+        }
     }
 }
 
@@ -606,7 +667,8 @@ canvas.addEventListener('mousedown', (e) => {
     }
 });
 document.addEventListener('mouseup', (e) => {
-    if (e.button === 0 && pushpull.active) commitPushPull();
+    if (e.button === 0 && pushpull.active)      commitPushPull();
+    if (e.button === 0 && moveToolState.active) commitMove();
     if (e.button === 2) rightDown  = false;
     if (e.button === 1) middleDown = false;
     updatePointerLock();
@@ -634,6 +696,27 @@ document.addEventListener('mousemove', (e) => {
             showSnapMarker(null);
         }
         applyPushPull(dist);
+        return;
+    }
+    if (moveToolState.active) {
+        const movingId = moveToolState.primitive.id;
+        const snap = resolveSnap(cx, cy, ray, true, null, movingId);
+        let target;
+        if (snap) {
+            target = snap.position;
+            showSnapMarker(snap);
+        } else {
+            target = MoveTool.rayVsPlane(ray,
+                moveToolState.pivot, moveToolState.planeNormal);
+            showSnapMarker(null);
+            if (!target) return;
+        }
+        const dx = target[0] - moveToolState.pivot[0];
+        const dy = target[1] - moveToolState.pivot[1];
+        const dz = target[2] - moveToolState.pivot[2];
+        MoveTool.applyDelta(moveToolState, dx, dy, dz);
+        pickInfo.textContent = `move  [${moveToolState.primitive.name}]  ` +
+            `[${dx.toFixed(3)}, ${dy.toFixed(3)}, ${dz.toFixed(3)}]`;
         return;
     }
     showSnapMarker(resolveSnap(cx, cy, ray, false));
@@ -690,8 +773,12 @@ document.addEventListener('keydown', (e) => {
     if (handleMeasureBoxKey(e.key)) { e.preventDefault(); return; }
     const k = e.key.toLowerCase();
     if (k === 's') setTool('select');
+    else if (k === 'm') setTool('move');
     else if (k === 'p') setTool('pushpull');
-    else if (k === 'escape') cancelPushPull();
+    else if (k === 'escape') {
+        if (pushpull.active)      cancelPushPull();
+        if (moveToolState.active) cancelMove();
+    }
 });
 
 // --- Outliner panel --------------------------------------------------------
@@ -785,10 +872,13 @@ function outlinerRender() {
         del.title = 'Delete';
         del.addEventListener('click', (e) => {
             e.stopPropagation();
-            // If the drag was on this primitive, cancel first — otherwise
+            // If a drag was on this primitive, cancel first — otherwise
             // commit would rebuild a destroyed scene node.
             if (pushpull.active && pushpull.primitive && pushpull.primitive.id === p.id) {
                 cancelPushPull();
+            }
+            if (moveToolState.active && moveToolState.primitive && moveToolState.primitive.id === p.id) {
+                cancelMove();
             }
             if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
             registry.remove(p.id);
@@ -872,6 +962,16 @@ window.__editor = {
         registry.active.collectAffectedVertexIndices(groupIdx),
     rayVsAxisDistance,
     get pushpull() { return pushpull; },
+
+    // Move tool. beginMove/commitMove/cancelMove wrap the MoveTool module
+    // with camera-derived plane-normal + scene-editor side effects (snap
+    // marker, highlight). applyMoveDelta is a thin pass-through for tests
+    // that bypass cursor resolution.
+    beginMove,
+    applyMoveDelta: (dx, dy, dz) => MoveTool.applyDelta(moveToolState, dx, dy, dz),
+    commitMove, cancelMove,
+    get moveToolState() { return moveToolState; },
+    cameraForward,
 
     // Inference hooks.
     resolveSnap, snapAxisDistance, showSnapMarker,
