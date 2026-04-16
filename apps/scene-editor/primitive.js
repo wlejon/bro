@@ -114,26 +114,15 @@
         return { groups, triToGroup };
     }
 
-    // Translate every position in-place by (tx, ty, tz). Used when adding a
-    // primitive at a non-origin location so BVH + inference positions are in
-    // world space (no per-node transform is applied).
-    function translatePositionsInPlace(positions, tx, ty, tz) {
-        if (tx === 0 && ty === 0 && tz === 0) return;
-        const n = positions.length / 3;
-        for (let i = 0; i < n; i++) {
-            positions[i * 3 + 0] += tx;
-            positions[i * 3 + 1] += ty;
-            positions[i * 3 + 2] += tz;
-        }
-    }
-
     // Construct a Primitive from a Mesh object + metadata. The mesh is
-    // assumed freshly generated and *mutable* — positions are translated in
-    // place to `opts.position`, then the mesh is installed into the scene.
+    // assumed freshly generated and *mutable* — it gets translated by
+    // `opts.position` via bromesh's Mesh.translate (which rewrites the
+    // underlying C++ positions — JS-side mutation of `mesh.positions`
+    // doesn't persist because the getter returns a fresh view each call).
     //
     // opts: {
     //   id, name, color, visible, scene,
-    //   mesh,                     // bromesh Mesh (positions will be translated)
+    //   mesh,                     // bromesh Mesh (translated in place)
     //   position = [0,0,0],       // world-space origin for the new mesh
     //   edgeThickness, edgeColor, // optional edge-mesh tuning
     // }
@@ -158,8 +147,10 @@
         this.edgesNode  = null;
 
         if (opts.mesh) {
-            const pos = opts.position || [0, 0, 0];
-            translatePositionsInPlace(opts.mesh.positions, pos[0], pos[1], pos[2]);
+            const pos = opts.position;
+            if (pos && (pos[0] !== 0 || pos[1] !== 0 || pos[2] !== 0)) {
+                opts.mesh.translate(pos[0], pos[1], pos[2]);
+            }
             this._install(opts.mesh);
         }
     }
