@@ -311,6 +311,11 @@ function beginPushPull(primitive, hit) {
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, true);
     renderMeasureBox();
+    // Seed the working buffers with the pristine geometry at t=0. Without
+    // this, a click-release with zero cursor motion never triggers
+    // applyPushPull, and commitPushPull would bake the zero-filled
+    // workingPositions into the mesh — collapsing the primitive.
+    applyPushPull(0);
 }
 
 function applyPushPull(t) {
@@ -695,7 +700,7 @@ document.addEventListener('keydown', (e) => {
 // visibility / delete / rename. Re-renders whenever the registry changes.
 
 const outlinerListEl = document.getElementById('outliner-list');
-const outlinerAddEl  = document.getElementById('outliner-add');
+const outlinerAddBtns = document.querySelectorAll('.outliner-add-btn');
 
 // Palette for auto-assigned colors on new primitives (wrap-around). The
 // default box uses index 0 — subsequent adds walk the palette.
@@ -787,25 +792,28 @@ function outlinerRender() {
     }
 }
 
-if (outlinerAddEl) {
-    outlinerAddEl.onchange = () => {
-        const type = outlinerAddEl.value;
-        outlinerAddEl.value = '';
-        if (!type) return;
-        const idx = registry.primitives.length;
-        const spec = {
-            type,
-            name: type[0].toUpperCase() + type.slice(1) + ' ' + (idx + 1),
-            color: OUTLINER_COLORS[idx % OUTLINER_COLORS.length],
-            position: [_outlinerNextAddX, 0, 0],
-        };
-        if (type === 'box')      spec.params = { sx: 1, sy: 1, sz: 1 };
-        if (type === 'sphere')   spec.params = { r: 1, seg: 24, rings: 16 };
-        if (type === 'cylinder') spec.params = { r: 0.8, h: 2, seg: 24 };
-        if (type === 'plane')    spec.params = { w: 2, d: 2, sx: 1, sz: 1 };
-        _outlinerNextAddX += 2.5;
-        registry.create(spec);
+function outlinerAddPrimitive(type) {
+    const idx = registry.primitives.length;
+    const spec = {
+        type,
+        name: type[0].toUpperCase() + type.slice(1) + ' ' + (idx + 1),
+        color: OUTLINER_COLORS[idx % OUTLINER_COLORS.length],
+        position: [_outlinerNextAddX, 0, 0],
     };
+    if (type === 'box')      spec.params = { sx: 1, sy: 1, sz: 1 };
+    if (type === 'sphere')   spec.params = { r: 1, seg: 24, rings: 16 };
+    if (type === 'cylinder') spec.params = { r: 0.8, h: 2, seg: 24 };
+    if (type === 'plane')    spec.params = { w: 2, d: 2, sx: 1, sz: 1 };
+    _outlinerNextAddX += 2.5;
+    return registry.create(spec);
+}
+
+// bro's DOM NodeList isn't iterable with for..of — index-based loop.
+if (outlinerAddBtns) {
+    for (let i = 0; i < outlinerAddBtns.length; i++) {
+        const btn = outlinerAddBtns[i];
+        btn.onclick = () => outlinerAddPrimitive(btn.dataset.type);
+    }
 }
 
 registry.onChange = outlinerRender;
