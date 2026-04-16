@@ -1,9 +1,11 @@
 // =============================================================================
-// Scene editor — picking spike.
+// Scene editor — entrypoint.
 //
-// Smallest possible end-to-end slice: orbit around a box, click to pick a
-// triangle via bromesh's BVH. Everything downstream (EditMesh, face groups,
-// tools, inference) builds on the screen→ray→hit pipeline proven here.
+// Orchestrates orbit camera, tool modes, input, and the VCB. Per-object state
+// (mesh, BVH, face groups, inference geo, render + edges nodes) lives on
+// Primitive; the PrimitiveRegistry tracks every editable object and powers
+// pickAt + multi-primitive inference. The app itself is mostly tool modes,
+// event routing, and UI glue.
 // =============================================================================
 
 const canvas     = document.getElementById('canvas');
@@ -13,47 +15,45 @@ const toolName   = document.getElementById('tool-name');
 const snapInfo   = document.getElementById('snap-info');
 const snapMarker = document.getElementById('snap-marker');
 
-// --- Geometry: one box. Picking/edit state is rebuilt whenever the mesh
-// mutates (currently only push/pull). Buffers declared `let` so they can be
-// replaced in place, but the scene node is mutated via node.updateMesh().
+// --- Registry of editable primitives ---------------------------------------
+//
+// The app works entirely through the registry — no hard-coded per-object
+// bindings. The default scene seeds one box (same as the spike) so existing
+// tests and the on-open experience stay identical.
 
-let boxMesh      = Mesh.box(1, 1, 1);
-let boxPositions = boxMesh.positions;
-let boxIndices   = boxMesh.indices;
-let boxNormals   = boxMesh.normals;
-let boxBVH       = new MeshBVH(boxMesh);
+const registry = new PrimitiveRegistry({ scene });
 
-const boxNode = scene.createMesh({
-    data: boxMesh,
+registry.create({
+    type: 'box',
+    name: 'Box',
     color: '#74b9ff',
-    name: 'box',
+    params: { sx: 1, sy: 1, sz: 1 },
 });
 
 // --- Highlight overlay ------------------------------------------------------
 //
-// The highlight is a 1-triangle scene node rebuilt on each pick, nudged along
-// the face normal to stay above the underlying box (z-fighting would flicker
-// the selection). Kept as its own node so we never mutate boxMesh.
+// Shared across primitives (only one drag / selection at a time). The
+// highlight node lives outside any primitive — it's pure UI and rebuilt on
+// every pick.
 
 const HIGHLIGHT_EPS = 0.002;
-let highlightNode = null;
+let highlightNode      = null;
+let highlightPrimitive = null;
 
 function clearHighlight() {
-    if (highlightNode) {
-        highlightNode.destroy();
-        highlightNode = null;
-    }
+    if (highlightNode) { highlightNode.destroy(); highlightNode = null; }
+    highlightPrimitive = null;
 }
 
-// Build a highlight scene node from a list of triangle indices into the
-// source mesh. Offsets each vertex along the group's normal to stay above
-// the base mesh. `positionsSrc`/`indicesSrc` let push/pull drag overlay the
-// highlight on the working (not-yet-committed) geometry.
-function setHighlightTriangles(triIndices, normal, positionsSrc, indicesSrc) {
+// Build a highlight scene node from triangle indices into `primitive`. The
+// overlay is nudged along the group normal to avoid z-fighting. During
+// push/pull, the working (not-yet-committed) buffers can be passed as
+// overrides so the highlight tracks the drag.
+function setHighlightTriangles(primitive, triIndices, normal, positionsSrc, indicesSrc) {
     clearHighlight();
-    if (!triIndices || triIndices.length === 0) return;
-    const posSrc = positionsSrc || boxPositions;
-    const idxSrc = indicesSrc   || boxIndices;
+    if (!primitive || !triIndices || triIndices.length === 0) return;
+    const posSrc = positionsSrc || primitive.positions;
+    const idxSrc = indicesSrc   || primitive.indices;
     const nx = normal[0] * HIGHLIGHT_EPS;
     const ny = normal[1] * HIGHLIGHT_EPS;
     const nz = normal[2] * HIGHLIGHT_EPS;
@@ -83,155 +83,24 @@ function setHighlightTriangles(triIndices, normal, positionsSrc, indicesSrc) {
         emissive: 0.6,
         name: 'highlight',
     });
+    highlightPrimitive = primitive;
 }
 
-// Back-compat: highlight a single triangle.
-function setHighlightTriangle(triIndex, normal) {
-    setHighlightTriangles([triIndex], normal);
+function setHighlightTriangle(primitive, triIndex, normal) {
+    setHighlightTriangles(primitive, [triIndex], normal);
 }
 
-// --- Face groups ------------------------------------------------------------
-//
-// A "face" in SketchUp-speak is a maximal set of coplanar, edge-connected
-// triangles. We detect them once: union-find over triangle pairs that share
-// an edge (by vertex *position*, so hard-edge seams with duplicated indices
-// still merge correctly) and whose normals are parallel within epsilon.
-
-function computeFaceGroups(positions, indices, cosTol = 0.9995) {
-    const triCount = indices.length / 3;
-    const normals = new Float32Array(triCount * 3);
-    for (let t = 0; t < triCount; t++) {
-        const i0 = indices[t * 3 + 0] * 3;
-        const i1 = indices[t * 3 + 1] * 3;
-        const i2 = indices[t * 3 + 2] * 3;
-        const ax = positions[i1 + 0] - positions[i0 + 0];
-        const ay = positions[i1 + 1] - positions[i0 + 1];
-        const az = positions[i1 + 2] - positions[i0 + 2];
-        const bx = positions[i2 + 0] - positions[i0 + 0];
-        const by = positions[i2 + 1] - positions[i0 + 1];
-        const bz = positions[i2 + 2] - positions[i0 + 2];
-        let nx = ay * bz - az * by;
-        let ny = az * bx - ax * bz;
-        let nz = ax * by - ay * bx;
-        const L = Math.hypot(nx, ny, nz) || 1;
-        normals[t * 3 + 0] = nx / L;
-        normals[t * 3 + 1] = ny / L;
-        normals[t * 3 + 2] = nz / L;
-    }
-
-    const parent = new Int32Array(triCount);
-    for (let i = 0; i < triCount; i++) parent[i] = i;
-    function find(x) {
-        while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
-        return x;
-    }
-    function union(a, b) {
-        const ra = find(a), rb = find(b);
-        if (ra !== rb) parent[rb] = ra;
-    }
-
-    // Quantize positions so vertex-index duplicates at hard-edge seams still
-    // match across their shared edge.
-    const Q = 1e5;
-    function posKey(vi) {
-        const p = vi * 3;
-        return Math.round(positions[p] * Q) + ',' +
-               Math.round(positions[p + 1] * Q) + ',' +
-               Math.round(positions[p + 2] * Q);
-    }
-    function edgeKey(a, b) {
-        const ka = posKey(a), kb = posKey(b);
-        return ka < kb ? ka + '|' + kb : kb + '|' + ka;
-    }
-
-    const edgeTris = new Map();
-    for (let t = 0; t < triCount; t++) {
-        for (let e = 0; e < 3; e++) {
-            const ia = indices[t * 3 + e];
-            const ib = indices[t * 3 + ((e + 1) % 3)];
-            const k = edgeKey(ia, ib);
-            const arr = edgeTris.get(k);
-            if (arr) arr.push(t); else edgeTris.set(k, [t]);
-        }
-    }
-
-    for (const tris of edgeTris.values()) {
-        for (let i = 0; i < tris.length; i++) {
-            for (let j = i + 1; j < tris.length; j++) {
-                const a = tris[i], b = tris[j];
-                const dot = normals[a * 3 + 0] * normals[b * 3 + 0] +
-                            normals[a * 3 + 1] * normals[b * 3 + 1] +
-                            normals[a * 3 + 2] * normals[b * 3 + 2];
-                if (dot > cosTol) union(a, b);
-            }
-        }
-    }
-
-    const rootToIdx = new Map();
-    const triToGroup = new Int32Array(triCount);
-    const groups = [];
-    for (let t = 0; t < triCount; t++) {
-        const r = find(t);
-        let gi = rootToIdx.get(r);
-        if (gi === undefined) {
-            gi = groups.length;
-            rootToIdx.set(r, gi);
-            groups.push({
-                tris: [],
-                normal: [normals[r * 3 + 0], normals[r * 3 + 1], normals[r * 3 + 2]],
-            });
-        }
-        triToGroup[t] = gi;
-        groups[gi].tris.push(t);
-    }
-    return { groups, triToGroup };
+function setHighlightFaceGroup(primitive, groupIdx) {
+    if (!primitive) { clearHighlight(); return; }
+    const g = primitive.faceGroups.groups[groupIdx];
+    if (!g) { clearHighlight(); return; }
+    setHighlightTriangles(primitive, g.tris, g.normal);
 }
-
-let faceGroups = computeFaceGroups(boxPositions, boxIndices);
-
-// Live edit-mesh backing the box. Not used for rendering yet — the scene node
-// still renders boxMesh directly — but future editing tools will mutate this
-// and then push a fresh MeshData back into the scene.
-let editMesh = EditMesh.fromMeshData(boxPositions, boxIndices);
-
-// Snap-feature index for the inference engine: deduped vertices + model edges.
-// Re-derived alongside the BVH/face-groups whenever geometry mutates.
-let inferenceGeo = Inference.buildInferenceGeo(boxPositions, boxIndices, faceGroups);
-
-// --- Model edges (silhouette lines) ----------------------------------------
-//
-// Visible crisp edges along every inferenceGeo.edge. Separate scene node,
-// rebuilt whenever geometry changes. Sits outside boxBVH/inferenceGeo so it
-// never participates in picking or snapping. Each edge is a thin 3D prism —
-// simplest path through the GL_CULL_FACE pipeline without needing a line
-// primitive.
-
-const EDGE_THICKNESS = 0.01;
-const EDGE_COLOR     = [0.17, 0.24, 0.31, 1.0];  // dark slate
-let edgesNode = null;
-
-function rebuildEdgesNode() {
-    if (edgesNode) { edgesNode.destroy(); edgesNode = null; }
-    if (!inferenceGeo.edges.length) return;
-    const data = EdgeMesh.buildEdgeMesh(
-        inferenceGeo.positions, inferenceGeo.edges,
-        { thickness: EDGE_THICKNESS, color: EDGE_COLOR });
-    edgesNode = scene.createMesh({
-        positions: data.positions,
-        normals:   data.normals,
-        colors:    data.colors,
-        indices:   data.indices,
-        emissive:  0.4,  // self-lit so edges stay visible against shadowed faces
-        name: 'model-edges',
-    });
-}
-rebuildEdgesNode();
 
 // --- Ground grid + XYZ axes -------------------------------------------------
 //
-// Static visual aid: faint XZ grid + bright RGB axes at y=-1 (where the box's
-// base sits). Single mesh with per-vertex colors → one draw call. Not in
-// boxBVH or inferenceGeo, so it never participates in picking or snapping.
+// Static visual aid; not a primitive, just a single mesh sitting outside the
+// registry so it never participates in picking or snapping.
 
 const sceneAxesData = SceneAxes.buildSceneAxes();
 const sceneAxesNode = scene.createMesh({
@@ -239,30 +108,9 @@ const sceneAxesNode = scene.createMesh({
     normals:   sceneAxesData.normals,
     colors:    sceneAxesData.colors,
     indices:   sceneAxesData.indices,
-    emissive:  0.85,    // self-lit so the grid stays bright at any orbit angle
+    emissive:  0.85,
     name: 'scene-axes',
 });
-
-// Rebuild all mesh-derived state after the box buffers have been mutated.
-// Push/pull may flip winding and axis-parallel normals when the drag inverts
-// the geometry, so all three of positions/indices/normals need to flow back
-// into the Mesh object (BVH and face groups are re-derived from them).
-function rebuildMeshState() {
-    boxMesh.positions = boxPositions;
-    boxMesh.indices   = boxIndices;
-    if (boxNormals) boxMesh.normals = boxNormals;
-    boxBVH       = new MeshBVH(boxMesh);
-    faceGroups   = computeFaceGroups(boxPositions, boxIndices);
-    editMesh     = EditMesh.fromMeshData(boxPositions, boxIndices);
-    inferenceGeo = Inference.buildInferenceGeo(boxPositions, boxIndices, faceGroups);
-    rebuildEdgesNode();
-}
-
-function setHighlightFaceGroup(groupIdx) {
-    const g = faceGroups.groups[groupIdx];
-    if (!g) { clearHighlight(); return; }
-    setHighlightTriangles(g.tris, g.normal);
-}
 
 // --- Camera -----------------------------------------------------------------
 
@@ -284,7 +132,6 @@ function screenToRay(px, py) {
     const tanHalf = Math.tan(opts.fov * Math.PI / 180 * 0.5);
     const aspect  = opts.aspect;
 
-    // Camera basis from position/target/up.
     const fx = opts.target[0] - opts.position[0];
     const fy = opts.target[1] - opts.position[1];
     const fz = opts.target[2] - opts.position[2];
@@ -292,14 +139,12 @@ function screenToRay(px, py) {
     const f  = [fx / fl, fy / fl, fz / fl];
 
     const up = opts.up;
-    // right = normalize(cross(f, up))
     let rx = f[1] * up[2] - f[2] * up[1];
     let ry = f[2] * up[0] - f[0] * up[2];
     let rz = f[0] * up[1] - f[1] * up[0];
     const rl = Math.hypot(rx, ry, rz) || 1;
     rx /= rl; ry /= rl; rz /= rl;
 
-    // trueUp = cross(r, f)
     const ux = ry * f[2] - rz * f[1];
     const uy = rz * f[0] - rx * f[2];
     const uz = rx * f[1] - ry * f[0];
@@ -318,35 +163,29 @@ function screenToRay(px, py) {
     };
 }
 
+// pickAt returns { primitive, hit } or null.
 function pickAt(px, py) {
     const ray = screenToRay(px, py);
-    return boxBVH.raycast(boxMesh, ray.origin, ray.dir, 0);
+    return registry.pickAt(ray.origin, ray.dir);
 }
 
-function formatHit(hit) {
-    if (!hit) return 'no pick';
+function formatHit(pick) {
+    if (!pick) return 'no pick';
+    const hit = pick.hit;
     const p = hit.position;
     const n = hit.normal;
-    return `tri ${hit.triangleIndex}  dist ${hit.distance.toFixed(3)}\n` +
+    return `[${pick.primitive.name}] tri ${hit.triangleIndex}  dist ${hit.distance.toFixed(3)}\n` +
            `pos [${p[0].toFixed(2)}, ${p[1].toFixed(2)}, ${p[2].toFixed(2)}]\n` +
            `nrm [${n[0].toFixed(2)}, ${n[1].toFixed(2)}, ${n[2].toFixed(2)}]`;
 }
 
 // --- Tool modes -------------------------------------------------------------
-//
-// 'select'    — left-click picks a face group and highlights it (original UX).
-// 'pushpull'  — left-drag on a face group extrudes along the face normal.
-//               Drag distance is the closest-point parameter between the
-//               cursor ray and the infinite line through the initial click
-//               along the face normal; no snapping yet.
 
 let currentTool = 'select';
 
 function setTool(t) {
     if (t === currentTool) return;
     if (pushpull.active) cancelPushPull();
-    // Tool switch closes any post-commit VCB window — stale lastOps from
-    // the previous tool shouldn't fire under the new tool.
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, false);
@@ -360,48 +199,10 @@ function setTool(t) {
 
 // --- Push/Pull --------------------------------------------------------------
 
-const POS_QUANT = 1e5;
-function quantizeKey(x, y, z) {
-    return Math.round(x * POS_QUANT) + ',' +
-           Math.round(y * POS_QUANT) + ',' +
-           Math.round(z * POS_QUANT);
-}
-
-// Every MeshData vertex whose quantized position matches a face-group vertex
-// must translate with the face — otherwise hard-edge seams (duplicated
-// indices at the same position across adjacent face groups) would tear. For
-// a cube-top push this picks up 12 indices (4 corners × 3 incident faces)
-// so the 3 touching side faces stretch instead of ripping.
-function collectAffectedVertexIndices(groupIdx) {
-    const tris = faceGroups.groups[groupIdx].tris;
-    const keys = new Set();
-    for (const t of tris) {
-        for (let k = 0; k < 3; k++) {
-            const vi = boxIndices[t * 3 + k];
-            keys.add(quantizeKey(
-                boxPositions[vi * 3 + 0],
-                boxPositions[vi * 3 + 1],
-                boxPositions[vi * 3 + 2]));
-        }
-    }
-    const vertCount = boxPositions.length / 3;
-    const out = [];
-    for (let vi = 0; vi < vertCount; vi++) {
-        const k = quantizeKey(
-            boxPositions[vi * 3 + 0],
-            boxPositions[vi * 3 + 1],
-            boxPositions[vi * 3 + 2]);
-        if (keys.has(k)) out.push(vi);
-    }
-    return Uint32Array.from(out);
-}
-
 // Closest-point parameter along the axis-line passing through `pivot` for a
 // cursor ray. Returns t such that (pivot + t*axis) is the closest point on
-// the axis-line to the ray — this is the push/pull distance that makes the
-// face follow the cursor. Returns 0 if the ray is degenerate (parallel to
-// the axis), which harmlessly freezes the drag until the cursor moves off
-// the axis.
+// the axis-line to the ray. Returns 0 if the ray is parallel to the axis
+// (harmlessly freezes the drag until the cursor moves off-axis).
 function rayVsAxisDistance(ray, pivot, axis) {
     const wx = ray.origin[0] - pivot[0];
     const wy = ray.origin[1] - pivot[1];
@@ -416,28 +217,21 @@ function rayVsAxisDistance(ray, pivot, axis) {
 
 const pushpull = {
     active: false,
+    primitive: null,        // Primitive the drag is bound to
     groupIdx: -1,
-    faceTriangles: null,     // face-group triangle indices (for drag-time highlight)
+    faceTriangles: null,
     axis: [0, 0, 0],
     pivot: [0, 0, 0],
-    vertexIndices: null,     // Uint32Array (affected vertex indices)
-    vertexStart: null,       // Float32Array, xyz per affected vertex (pre-drag snapshot)
-    workingPositions: null,  // Float32Array, scratch — rebuilt each move
-    workingIndices: null,    // Uint32Array — winding-flipped when inverted
-    workingNormals: null,    // Float32Array — axis-component flipped when inverted
+    vertexIndices: null,    // indices into primitive.positions
+    vertexStart: null,      // xyz snapshot of the affected verts pre-drag
+    workingPositions: null, // Float32Array scratch, rebuilt each move
+    workingIndices: null,   // winding-flipped when inverted
+    workingNormals: null,   // axis-component flipped when inverted
     distance: 0,
-    // Inversion happens once the pushed face moves past the farthest non-affected
-    // vertex along the push axis — i.e. the face has punched through to the
-    // other side. `inversionT` is the drag distance at which that boundary
-    // is crossed; `inverted` tracks whether we've applied the flip.
     inversionT: 0,
     inverted: false,
 };
 
-// Reflect a vertex normal across the plane perpendicular to `axis` in place.
-// For axis-aligned normals this just flips the axis-parallel component; for
-// off-axis normals (beveled meshes, smooth shading) it correctly preserves
-// the perpendicular component and flips only the parallel one.
 function flipNormalsAlongAxis(normals, axis) {
     const ax = axis[0], ay = axis[1], az = axis[2];
     const n = normals.length / 3;
@@ -453,7 +247,6 @@ function flipNormalsAlongAxis(normals, axis) {
     }
 }
 
-// Reverse winding of every triangle by swapping index 1 and 2. Involutive.
 function flipAllWinding(indices) {
     const triCount = indices.length / 3;
     for (let t = 0; t < triCount; t++) {
@@ -464,68 +257,68 @@ function flipAllWinding(indices) {
 }
 
 // Drag distance at which the pushed face crosses the farthest non-affected
-// vertex along the axis. Once t < inversionT, the face has punched through
-// the opposite side of the mesh and rendering needs the flip treatment.
-function computeInversionT(axis, pivot, affectedSet) {
+// vertex along the axis — the "push through" threshold.
+function computeInversionT(positions, axis, pivot, affectedSet) {
     let m = Infinity;
-    for (let vi = 0; vi < boxPositions.length / 3; vi++) {
+    const vertCount = positions.length / 3;
+    for (let vi = 0; vi < vertCount; vi++) {
         if (affectedSet.has(vi)) continue;
-        const proj = boxPositions[vi * 3 + 0] * axis[0] +
-                     boxPositions[vi * 3 + 1] * axis[1] +
-                     boxPositions[vi * 3 + 2] * axis[2];
+        const proj = positions[vi * 3 + 0] * axis[0] +
+                     positions[vi * 3 + 1] * axis[1] +
+                     positions[vi * 3 + 2] * axis[2];
         if (proj < m) m = proj;
     }
     const p0 = pivot[0] * axis[0] + pivot[1] * axis[1] + pivot[2] * axis[2];
     return m - p0;
 }
 
-function beginPushPull(hit) {
-    const gIdx = faceGroups.triToGroup[hit.triangleIndex];
-    const g = faceGroups.groups[gIdx];
-    const idxs = collectAffectedVertexIndices(gIdx);
+// Start a push/pull on the given primitive + hit. The primitive reference is
+// captured on the drag state, so a mid-drag active-primitive change (e.g.
+// user clicks a different row in the outliner) doesn't redirect the commit.
+function beginPushPull(primitive, hit) {
+    if (!primitive) return;
+    const gIdx = primitive.faceGroups.triToGroup[hit.triangleIndex];
+    const g = primitive.faceGroups.groups[gIdx];
+    const idxs = primitive.collectAffectedVertexIndices(gIdx);
     const snap = new Float32Array(idxs.length * 3);
     const affectedSet = new Set();
     for (let i = 0; i < idxs.length; i++) {
         const vi = idxs[i];
         affectedSet.add(vi);
-        snap[i * 3 + 0] = boxPositions[vi * 3 + 0];
-        snap[i * 3 + 1] = boxPositions[vi * 3 + 1];
-        snap[i * 3 + 2] = boxPositions[vi * 3 + 2];
+        snap[i * 3 + 0] = primitive.positions[vi * 3 + 0];
+        snap[i * 3 + 1] = primitive.positions[vi * 3 + 1];
+        snap[i * 3 + 2] = primitive.positions[vi * 3 + 2];
     }
     pushpull.active = true;
+    pushpull.primitive = primitive;
     pushpull.groupIdx = gIdx;
     pushpull.faceTriangles = g.tris.slice();
     pushpull.axis = g.normal.slice();
     pushpull.pivot = hit.position.slice();
     pushpull.vertexIndices = idxs;
     pushpull.vertexStart = snap;
-    pushpull.workingPositions = new Float32Array(boxPositions.length);
-    pushpull.workingIndices = new Uint32Array(boxIndices);
-    pushpull.workingNormals = boxNormals ? new Float32Array(boxNormals) : null;
+    pushpull.workingPositions = new Float32Array(primitive.positions.length);
+    pushpull.workingIndices = new Uint32Array(primitive.indices);
+    pushpull.workingNormals = primitive.normals ? new Float32Array(primitive.normals) : null;
     pushpull.distance = 0;
-    pushpull.inversionT = computeInversionT(pushpull.axis, pushpull.pivot, affectedSet);
+    pushpull.inversionT = computeInversionT(
+        primitive.positions, pushpull.axis, pushpull.pivot, affectedSet);
     pushpull.inverted = false;
-    // Seed the highlight on the face we're about to drag.
     setHighlightTriangles(
-        pushpull.faceTriangles, pushpull.axis,
-        boxPositions, pushpull.workingIndices);
-    // Arm the VCB for distance input. Any buffer left from a previous
-    // post-commit window is cleared so the new drag starts with a blank
-    // value — cursor drives until the user types.
+        primitive, pushpull.faceTriangles, pushpull.axis,
+        primitive.positions, pushpull.workingIndices);
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, true);
     renderMeasureBox();
 }
 
-// Apply the current drag distance to the scene node via updateMesh. Does not
-// mutate boxPositions/boxIndices/boxNormals — only the working buffers —
-// until commit bakes them in. Handles the inversion flip when `t` crosses
-// the opposite-side threshold.
 function applyPushPull(t) {
+    if (!pushpull.active) return;
+    const prim = pushpull.primitive;
     pushpull.distance = t;
     const work = pushpull.workingPositions;
-    work.set(boxPositions);
+    work.set(prim.positions);
     const ax = pushpull.axis[0] * t;
     const ay = pushpull.axis[1] * t;
     const az = pushpull.axis[2] * t;
@@ -538,9 +331,6 @@ function applyPushPull(t) {
         work[vi * 3 + 2] = snap[i * 3 + 2] + az;
     }
 
-    // Toggle winding + axis-parallel normal sign on inversion boundary crossings.
-    // Each flip is involutive, so togglable back and forth across the boundary
-    // during a single drag without diverging from the source state.
     const newInverted = t < pushpull.inversionT;
     if (newInverted !== pushpull.inverted) {
         flipAllWinding(pushpull.workingIndices);
@@ -550,19 +340,15 @@ function applyPushPull(t) {
         pushpull.inverted = newInverted;
     }
 
-    boxNode.updateMesh({
-        positions: work,
-        indices:   pushpull.workingIndices,
-        normals:   pushpull.workingNormals || boxNormals,
-    });
+    prim.previewMesh(
+        work, pushpull.workingIndices,
+        pushpull.workingNormals || prim.normals);
 
-    // Move the highlight with the face, flipping its outward direction when
-    // the geometry has inverted so it stays on the visible side.
     const hlNormal = pushpull.inverted
         ? [-pushpull.axis[0], -pushpull.axis[1], -pushpull.axis[2]]
         : pushpull.axis;
     setHighlightTriangles(
-        pushpull.faceTriangles, hlNormal, work, pushpull.workingIndices);
+        prim, pushpull.faceTriangles, hlNormal, work, pushpull.workingIndices);
 
     pickInfo.textContent = `push/pull  ${t.toFixed(3)}` +
         (pushpull.inverted ? '  [inverted]' : '');
@@ -570,32 +356,31 @@ function applyPushPull(t) {
 
 function commitPushPull() {
     if (!pushpull.active) return;
-    // Stash the last-op BEFORE we clear pushpull — we need axis + a stable
-    // face reference point for the post-commit re-extrude path.
+    const prim = pushpull.primitive;
+    // Stash the last-op (including the target primitive id) before pushpull
+    // is cleared — redo needs a stable handle even if the active primitive
+    // changes afterward.
     const lastOp = {
+        primitiveId: prim.id,
         normal: pushpull.axis.slice(),
-        centroid: faceGroupCentroid(pushpull.groupIdx),
+        centroid: prim.faceGroupCentroid(pushpull.groupIdx),
         distance: pushpull.distance,
     };
-    // After the commit the centroid has moved along the axis by `distance`;
-    // bring the saved centroid forward so findFaceGroupByNormal locates the
-    // now-displaced face.
     lastOp.centroid[0] += pushpull.axis[0] * pushpull.distance;
     lastOp.centroid[1] += pushpull.axis[1] * pushpull.distance;
     lastOp.centroid[2] += pushpull.axis[2] * pushpull.distance;
-    // Bake working buffers into the canonical box buffers; rebuild downstream.
-    boxPositions = new Float32Array(pushpull.workingPositions);
-    boxIndices   = new Uint32Array(pushpull.workingIndices);
-    if (pushpull.workingNormals) {
-        boxNormals = new Float32Array(pushpull.workingNormals);
-    }
-    rebuildMeshState();
+
+    const newPositions = new Float32Array(pushpull.workingPositions);
+    const newIndices   = new Uint32Array(pushpull.workingIndices);
+    const newNormals   = pushpull.workingNormals
+        ? new Float32Array(pushpull.workingNormals) : null;
+    prim.updateGeometry(newPositions, newIndices, newNormals);
+
     pickInfo.textContent =
         `extruded ${pushpull.distance.toFixed(3)}` +
         (pushpull.inverted ? '  [inverted through]' : '');
     clearPushPull();
     clearHighlight();
-    // Enter the post-commit VCB window so the user can retype a distance.
     MeasureBox.clear(measureBoxState);
     MeasureBox.setLastOp(measureBoxState, lastOp);
     MeasureBox.setActive(measureBoxState, true);
@@ -604,19 +389,10 @@ function commitPushPull() {
 
 function cancelPushPull() {
     if (!pushpull.active) return;
-    // Push the pristine boxMesh state back to the scene. workingIndices and
-    // workingNormals may have been flipped by crossing inversion — we don't
-    // need to unflip them here because they're about to be thrown away.
-    boxNode.updateMesh({
-        positions: boxPositions,
-        indices:   boxIndices,
-        normals:   boxNormals,
-    });
+    pushpull.primitive.revertMesh();
     pickInfo.textContent = 'push/pull cancelled';
     clearPushPull();
     clearHighlight();
-    // Close VCB entirely — cancel wipes both the drag and any post-commit
-    // repeat window the user may have had open.
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, false);
@@ -625,6 +401,7 @@ function cancelPushPull() {
 
 function clearPushPull() {
     pushpull.active = false;
+    pushpull.primitive = null;
     pushpull.faceTriangles = null;
     pushpull.vertexIndices = null;
     pushpull.vertexStart = null;
@@ -636,16 +413,6 @@ function clearPushPull() {
 }
 
 // --- Inference snap marker --------------------------------------------------
-//
-// Two visual layers per snap:
-//   1. A 2D SVG glyph in screen space (always at the projected pixel).
-//   2. A small persistent 3D scene node at the snap's world position, so the
-//      user reads "you'll land HERE in 3D" — not just "your cursor is near
-//      this thing on screen".
-// Push/pull projects the snap onto the drag axis to lock depth. Hover only
-// surfaces feature snaps (vertex/midpoint/edge); the on-face fallback is
-// suppressed since it would keep the marker visible everywhere on the model
-// and read as flicker rather than a meaningful snap.
 
 const SNAP_SHAPES = {
     'endpoint': '<circle cx="9" cy="9" r="5" fill="#2ecc71" stroke="#fff" stroke-width="1.5"/>',
@@ -654,10 +421,6 @@ const SNAP_SHAPES = {
     'on-face':  '<polygon points="9,3 15,9 9,15 3,9" fill="#3498db" fill-opacity="0.4" stroke="#3498db" stroke-width="1.5"/>',
 };
 
-// 3D snap indicator: one sphere per snap type, pre-created with the type's
-// color (color isn't a settable prop on a SceneNode — only set at createMesh
-// time — so we keep one node per color and toggle visibility instead of
-// recreating). All hidden until the first snap.
 const SNAP_SPHERE_RADIUS = 0.04;
 const snapSphereMesh = Mesh.sphere(SNAP_SPHERE_RADIUS, 12, 8);
 const snapSpheres = {};
@@ -675,12 +438,6 @@ for (const [type, color] of Object.entries(Inference._COLOR)) {
 let activeSnap = null;
 
 // --- Measurement Box (VCB) --------------------------------------------------
-//
-// SketchUp-style precision input: during a push/pull drag, typing digits sets
-// an exact distance that overrides the cursor ray. After commit, the VCB
-// stays active so the user can type a new distance + Enter and re-extrude
-// the same face. A new mouse-drag or tool switch closes the post-commit
-// window.
 
 const measureBoxState = MeasureBox.createState();
 const measureBoxEl    = document.getElementById('measure-box');
@@ -705,54 +462,19 @@ function renderMeasureBox() {
 }
 renderMeasureBox();
 
-// Find the face group whose normal matches `n` within cos tolerance. Used
-// by the post-commit re-apply: after a commit the face-group indices rebuild
-// but a normal-match + proximity-match is stable enough to recover the last
-// pushed face. Takes a reference position so ambiguous cases (two coplanar
-// faces with the same normal) prefer the one closer to where we last pushed.
-function findFaceGroupByNormal(n, ref) {
-    let bestIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < faceGroups.groups.length; i++) {
-        const g = faceGroups.groups[i];
-        const dot = g.normal[0]*n[0] + g.normal[1]*n[1] + g.normal[2]*n[2];
-        if (dot < 0.9995) continue;
-        // Centroid distance to ref (cheap proximity test).
-        const c = faceGroupCentroid(i);
-        const d = Math.hypot(c[0]-ref[0], c[1]-ref[1], c[2]-ref[2]);
-        if (d < bestDist) { bestDist = d; bestIdx = i; }
-    }
-    return bestIdx;
-}
-
-function faceGroupCentroid(gIdx) {
-    const tris = faceGroups.groups[gIdx].tris;
-    let cx = 0, cy = 0, cz = 0, n = 0;
-    for (const t of tris) {
-        for (let k = 0; k < 3; k++) {
-            const vi = boxIndices[t * 3 + k];
-            cx += boxPositions[vi * 3 + 0];
-            cy += boxPositions[vi * 3 + 1];
-            cz += boxPositions[vi * 3 + 2];
-            n++;
-        }
-    }
-    return [cx / n, cy / n, cz / n];
-}
-
-// Re-apply the last committed push/pull at a new distance. Returns true on
-// success. Matching strategy: find the face group whose normal is parallel
-// to the previous push axis and whose centroid is closest to the previous
-// centroid. Robust for simple single-primitive edits; may need refinement
-// once face-group splits (interior edges) come online.
+// Re-apply the last committed push/pull at a new distance on the same
+// primitive it originally ran on. Normal-match + centroid-proximity relocate
+// the pushed face on the post-commit geometry.
 function redoLastPushPull(distance) {
     const op = measureBoxState.lastOp;
     if (!op) return false;
-    const gIdx = findFaceGroupByNormal(op.normal, op.centroid);
+    const prim = registry.getById(op.primitiveId);
+    if (!prim) return false;
+    const gIdx = prim.findFaceGroupByNormal(op.normal, op.centroid);
     if (gIdx < 0) return false;
-    const g = faceGroups.groups[gIdx];
-    const centroid = faceGroupCentroid(gIdx);
-    beginPushPull({
+    const g = prim.faceGroups.groups[gIdx];
+    const centroid = prim.faceGroupCentroid(gIdx);
+    beginPushPull(prim, {
         triangleIndex: g.tris[0],
         position: centroid,
         normal: g.normal.slice(),
@@ -783,7 +505,6 @@ function showSnapMarker(snap) {
     if (snapInfo) {
         snapInfo.innerHTML = `snap: <b style="color:${snap.color}">${snap.label}</b>`;
     }
-    // Reveal only the matching color sphere at the snap world position.
     hideSnapSpheres();
     const sph = snapSpheres[snap.type];
     if (sph) {
@@ -796,32 +517,26 @@ function showSnapMarker(snap) {
 
 const PUSHPULL_EXCLUDE = ['on-edge'];
 
-// Look up the best snap for a canvas-relative cursor pixel + ray.
-//   - `includeFaceFallback`: include on-face snap when no feature is in tol.
-//     False by default — only feature snaps are surfaced (avoids the marker
-//     trailing the cursor across the whole model, which reads as jitter).
-//   - `excludeTypes`: hide specific snap types from this lookup. The push/pull
-//     drag passes ['on-edge'] because edge-projection-along-axis flickers
-//     wildly when the cursor moves perpendicular to a long edge.
+// Resolve the best snap across every visible primitive. The on-face fallback
+// uses registry.pickAt so it hits the nearest primitive under the ray.
 function resolveSnap(cx, cy, ray, includeFaceFallback, excludeTypes) {
     const camOpts = Camera.orbitViewOpts(cam, canvas);
     const w = canvas.clientWidth || canvas.width;
     const h = canvas.clientHeight || canvas.height;
-    const onFaceHit = includeFaceFallback
-        ? boxBVH.raycast(boxMesh, ray.origin, ray.dir, 0)
-        : null;
+    let onFaceHit = null;
+    if (includeFaceFallback) {
+        const pick = registry.pickAt(ray.origin, ray.dir);
+        if (pick) onFaceHit = pick.hit;
+    }
     return Inference.findSnap({
         cursorX: cx, cursorY: cy, ray,
         camOpts, width: w, height: h,
-        geo: inferenceGeo,
+        geos: registry.collectInferenceGeos(),
         onFaceHit,
         excludeTypes,
     });
 }
 
-// Project a snap point onto the push axis line through `pivot`. Returns the
-// scalar drag distance so applyPushPull(t) lands the pushed face coplanar
-// with the snapped feature along the axis.
 function snapAxisDistance(snap, pivot, axis) {
     const dx = snap.position[0] - pivot[0];
     const dy = snap.position[1] - pivot[1];
@@ -843,22 +558,31 @@ function updatePointerLock() {
 
 function handleLeftDown(e) {
     const r = canvas.getBoundingClientRect();
-    const hit = pickAt(e.clientX - r.left, e.clientY - r.top);
-    pickInfo.textContent = formatHit(hit);
-    window.__lastPick = hit;
+    const pick = pickAt(e.clientX - r.left, e.clientY - r.top);
+    pickInfo.textContent = formatHit(pick);
+    // Legacy test hook: keep `__lastPick` in the hit shape (not {primitive,hit}).
+    window.__lastPick = pick && pick.hit;
     if (currentTool === 'select') {
-        if (hit) setHighlightFaceGroup(faceGroups.triToGroup[hit.triangleIndex]);
-        else clearHighlight();
+        if (pick) {
+            registry.setActive(pick.primitive.id);
+            setHighlightFaceGroup(
+                pick.primitive,
+                pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex]);
+        } else {
+            clearHighlight();
+        }
     } else if (currentTool === 'pushpull') {
-        if (hit) beginPushPull(hit);
-        else clearHighlight();
+        if (pick) {
+            registry.setActive(pick.primitive.id);
+            beginPushPull(pick.primitive, pick.hit);
+        } else {
+            clearHighlight();
+        }
     }
 }
 
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 0) {
-        // Starting a new left-click closes any open post-commit VCB window;
-        // the user has moved on to a fresh interaction.
         if (!pushpull.active && measureBoxState.lastOp) {
             MeasureBox.clearLastOp(measureBoxState);
             MeasureBox.clear(measureBoxState);
@@ -890,18 +614,11 @@ document.addEventListener('mousemove', (e) => {
     const cy = e.clientY - r.top;
     const ray = screenToRay(cx, cy);
     if (pushpull.active) {
-        // VCB takes absolute priority — a typed distance pins the preview
-        // regardless of cursor motion. The snap marker still tracks under
-        // the cursor so the user retains spatial context.
         const vcbVal = MeasureBox.parseValue(measureBoxState.buffer);
         if (vcbVal !== null) {
             showSnapMarker(resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE));
             return;
         }
-        // Inference takes priority over raw cursor projection when a vertex
-        // or midpoint snaps. on-edge is excluded here: it's noisy under an
-        // axis-constrained drag (the projected closest-point slides along the
-        // edge as the cursor moves perpendicular to the axis, jerking depth).
         const snap = resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE);
         let dist;
         if (snap) {
@@ -914,9 +631,6 @@ document.addEventListener('mousemove', (e) => {
         applyPushPull(dist);
         return;
     }
-    // Hover snap: only feature snaps surface. No on-face fallback — that
-    // would keep the marker visible everywhere on the model and read as
-    // jitter rather than a meaningful snap target.
     showSnapMarker(resolveSnap(cx, cy, ray, false));
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -927,19 +641,13 @@ canvas.addEventListener('wheel', (e) => {
     applyCamera();
     e.preventDefault();
 });
-// Route a key into the VCB + follow up with the side effect (drag preview,
-// commit, cancel). Returns true if the key was consumed; false lets the
-// global handler fall through to the tool-switch shortcuts.
+
 function handleMeasureBoxKey(key) {
     if (!measureBoxState.active) return false;
     const action = MeasureBox.feedKey(measureBoxState, key);
     if (action === 'ignored') return false;
     if (action === 'append') {
         renderMeasureBox();
-        // Live preview: if the buffer parses to a number and we're mid-drag,
-        // update the geometry immediately. An invalid/empty buffer (e.g. the
-        // user just typed '-' or backspaced to '') keeps the last valid
-        // preview — the cursor doesn't reclaim control until the drag ends.
         if (pushpull.active) {
             const v = MeasureBox.parseValue(measureBoxState.buffer);
             if (v !== null) applyPushPull(v);
@@ -949,14 +657,9 @@ function handleMeasureBoxKey(key) {
     if (action === 'commit') {
         const v = MeasureBox.parseValue(measureBoxState.buffer);
         if (pushpull.active) {
-            // Mid-drag Enter commits at the typed distance.
             applyPushPull(v);
             commitPushPull();
         } else if (measureBoxState.lastOp) {
-            // Post-commit Enter re-runs the last op at the new distance.
-            // Clear buffer first so redoLastPushPull's commit repopulates
-            // lastOp with the fresh geometry — otherwise the buffer would
-            // be replayed on the next Enter.
             MeasureBox.clear(measureBoxState);
             renderMeasureBox();
             redoLastPushPull(v);
@@ -965,8 +668,6 @@ function handleMeasureBoxKey(key) {
     }
     if (action === 'cancel') {
         renderMeasureBox();
-        // Esc wipes the whole interaction: active drag (if any), buffer,
-        // and post-commit window. One key, one predictable outcome.
         if (pushpull.active) {
             cancelPushPull();
         } else {
@@ -980,10 +681,7 @@ function handleMeasureBoxKey(key) {
 }
 
 document.addEventListener('keydown', (e) => {
-    // Ignore keybinds while typing in an input (none today, but future-proof).
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
-    // VCB gets first dibs — when active, digits/./-/Enter/Esc/Backspace flow
-    // into the measurement box and don't fall through to tool shortcuts.
     if (handleMeasureBoxKey(e.key)) { e.preventDefault(); return; }
     const k = e.key.toLowerCase();
     if (k === 's') setTool('select');
@@ -993,33 +691,57 @@ document.addEventListener('keydown', (e) => {
 
 // --- Test hook --------------------------------------------------------------
 //
-// Getters for mutable references so tests always see the current rebuilt
-// state after push/pull commits, not the pre-edit binding.
+// Getters resolve lazily against `registry.active` so tests always see the
+// current rebuilt state after push/pull commits, not a stale pre-edit
+// binding. Legacy positional APIs (beginPushPull(hit), setHighlight...)
+// assume the active primitive to stay compatible with the pre-refactor tests.
 
 window.__editor = {
-    scene, cam, boxNode, sceneAxesNode, pickAt, screenToRay,
-    get boxMesh()      { return boxMesh; },
-    get boxBVH()       { return boxBVH; },
-    get boxPositions() { return boxPositions; },
-    get boxIndices()   { return boxIndices; },
-    get boxNormals()   { return boxNormals; },
-    get faceGroups()   { return faceGroups; },
-    get editMesh()     { return editMesh; },
-    get inferenceGeo() { return inferenceGeo; },
+    scene, cam, sceneAxesNode,
+    registry,
+    pickAt, screenToRay,
+
+    // Active-primitive shortcuts (compat with the single-primitive spike).
+    get boxNode()      { return registry.active && registry.active.meshNode; },
+    get boxMesh()      { return registry.active && registry.active.mesh; },
+    get boxBVH()       { return registry.active && registry.active.bvh; },
+    get boxPositions() { return registry.active && registry.active.positions; },
+    get boxIndices()   { return registry.active && registry.active.indices; },
+    get boxNormals()   { return registry.active && registry.active.normals; },
+    get faceGroups()   { return registry.active && registry.active.faceGroups; },
+    get editMesh()     { return registry.active && registry.active.editMesh; },
+    get inferenceGeo() { return registry.active && registry.active.inferenceGeo; },
+    get edgesNode()    { return registry.active && registry.active.edgesNode; },
     get highlightNode(){ return highlightNode; },
-    get edgesNode()    { return edgesNode; },
     get currentTool()  { return currentTool; },
     get activeSnap()   { return activeSnap; },
-    clearHighlight, setHighlightTriangle, setHighlightTriangles,
-    computeFaceGroups, setHighlightFaceGroup,
+
+    clearHighlight,
+    setHighlightTriangle:  (triIdx, normal) =>
+        setHighlightTriangle(registry.active, triIdx, normal),
+    setHighlightTriangles: (triIdxs, normal, positionsSrc, indicesSrc) =>
+        setHighlightTriangles(registry.active, triIdxs, normal, positionsSrc, indicesSrc),
+    setHighlightFaceGroup: (groupIdx) =>
+        setHighlightFaceGroup(registry.active, groupIdx),
+    computeFaceGroups: Primitive.computeFaceGroups,
     setTool,
-    // Push/Pull programmatic hooks for headless testing.
-    beginPushPull, applyPushPull, commitPushPull, cancelPushPull,
-    collectAffectedVertexIndices, rayVsAxisDistance,
+
+    // Tools — primitive-aware API plus a legacy single-arg shim that assumes
+    // the active primitive.
+    beginPushPull:       (hit) => beginPushPull(registry.active, hit),
+    beginPushPullOn:     (primitive, hit) => beginPushPull(primitive, hit),
+    applyPushPull, commitPushPull, cancelPushPull,
+    collectAffectedVertexIndices: (groupIdx) =>
+        registry.active.collectAffectedVertexIndices(groupIdx),
+    rayVsAxisDistance,
     get pushpull() { return pushpull; },
-    // Inference hooks for headless testing.
+
+    // Inference hooks.
     resolveSnap, snapAxisDistance, showSnapMarker,
-    // Measurement box (VCB) hooks for headless testing.
+
+    // VCB.
     measureBoxState, renderMeasureBox, handleMeasureBoxKey,
-    redoLastPushPull, findFaceGroupByNormal, faceGroupCentroid,
+    redoLastPushPull,
+    findFaceGroupByNormal: (n, ref) => registry.active.findFaceGroupByNormal(n, ref),
+    faceGroupCentroid:     (gIdx)   => registry.active.faceGroupCentroid(gIdx),
 };
