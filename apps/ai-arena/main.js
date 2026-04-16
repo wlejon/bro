@@ -7,7 +7,6 @@ var App = {};
 
     App.state = null;
     App.canvas = null;
-    App.ctx = null;
     App.scenario = null;
 
     App.setScenario = function (scenario) {
@@ -17,6 +16,7 @@ var App = {};
 
     App.rebuild = function () {
         var built = Arena.build(App.scenario);
+        Scene3D.build(App.scenario);
 
         var rewardTrackers = {};
         for (var i = 0; i < built.agents.length; i++) {
@@ -95,7 +95,7 @@ var App = {};
         if (!state) return;
 
         if (state.replayPlaying && state.replayReader) {
-            Replay.drawFrame(state, App.ctx, App.canvas, dt);
+            Replay.drawFrame(state, App.canvas, dt);
             return;
         }
 
@@ -112,14 +112,14 @@ var App = {};
             }
         }
 
-        Loop.frame(state, App.ctx, App.canvas, dt);
+        Loop.frame(state, App.canvas, dt);
     }
 
     App.canvas = document.getElementById("arena");
-    App.ctx = App.canvas.getContext("2d");
     App.scenario = Scenarios.ALL[0];
 
     UI.init();
+    Scene3D.init(App.canvas);
     App.rebuild();
     Controls.bind(App.rebuild);
 

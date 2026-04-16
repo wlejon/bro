@@ -145,12 +145,11 @@ var Loop = {};
     };
 
     // Per-rAF render + throttled HUD updates. Called once per frame.
-    Loop.frame = function (state, ctx, canvas, dt) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        Render.drawArena(ctx);
-        Render.drawProjectiles(ctx, state.world.projectiles);
-        Render.drawAgents(ctx, state.agents, state.focusId);
-        Render.drawFx(ctx, dt);
+    Loop.frame = function (state, canvas, dt) {
+        Scene3D.update(state, dt);
+        // 2D overlays (projectiles, FX, gizmos) still live in Render for now;
+        // Phase 5/6 will migrate them into the 3D scene.
+        Render.tickFx(dt);
 
         state.rosterAccum += dt;
         if (state.rosterAccum >= Config.ROSTER_HZ) {

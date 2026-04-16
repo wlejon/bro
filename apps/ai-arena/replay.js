@@ -5,18 +5,12 @@ var Replay = {};
 (function () {
     "use strict";
 
-    Replay.drawFrame = function (state, ctx, canvas, dt) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        Render.drawArena(ctx);
-        var fc = state.replayReader.frameCount;
-        var f = state.replayReader.frame(state.replayFrame);
-        Render.drawReplayFrame(ctx, f, state.focusId);
-        state.replayElapsed += dt;
-        if (state.replayElapsed > Config.REPLAY_FRAME_DT) {
-            state.replayElapsed = 0;
-            state.replayFrame = (state.replayFrame + 1) % Math.max(1, fc);
-        }
-        UI.setStatus("replay - frame " + state.replayFrame + "/" + fc);
+    // Replay playback paused during the 3D scene migration — the old 2D
+    // renderer is gone and the scene-backed version lands in Phase 5.
+    // Recording still works; only playback is disabled.
+    Replay.drawFrame = function (state, canvas, dt) {
+        UI.setStatus("replay playback disabled during 3D refactor");
+        state.replayPlaying = false;
     };
 
     Replay.toggleRecord = function (state, btn) {
