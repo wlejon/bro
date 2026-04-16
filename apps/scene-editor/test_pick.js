@@ -8,13 +8,17 @@ flush();
 const w = 1920, h = 1080;   // default headless viewport
 screenshot('apps/scene-editor/_before.png');
 
-// Click the center of the screen — camera starts looking at the origin from
-// +Z-ish with a slight downward tilt, so a box at the origin fills the middle.
-click(w / 2, h / 2);
+// Click the box, dodging the translate gizmo. The gizmo anchors at the
+// active primitive's centroid (here, the origin) and extends ~80px arrows
+// along each world axis from screen center; clicking a pixel beyond the
+// arrows but well inside the box's ~326px screen extent reliably reaches
+// the box pick path.
+const PICK_DX = 220, PICK_DY = 100;
+click(w / 2 + PICK_DX, h / 2 + PICK_DY);
 advanceTime(50);
 
 const hit = window.__lastPick;
-assert(hit, 'center-of-screen click must hit the box');
+assert(hit, 'off-center click must hit the box');
 assert(hit.triangleIndex >= 0 && hit.triangleIndex < 12,
     `triangleIndex in range (got ${hit && hit.triangleIndex})`);
 assert(hit.distance > 0, 'hit distance must be positive');
@@ -64,10 +68,10 @@ click(5, 5);
 advanceTime(50);
 assert(!window.__editor.highlightNode, 'highlight should clear on miss');
 
-// Restore a highlight for the final screenshot.
-click(w / 2, h / 2);
+// Restore a highlight for the final screenshot — same off-center pixel.
+click(w / 2 + PICK_DX, h / 2 + PICK_DY);
 advanceTime(50);
-assert(window.__editor.highlightNode, 'highlight restored on second center click');
+assert(window.__editor.highlightNode, 'highlight restored on second box click');
 
 screenshot('apps/scene-editor/_after.png');
 console.log(`OK — picked tri ${hit.triangleIndex} at [${p[0].toFixed(3)}, ${p[1].toFixed(3)}, ${p[2].toFixed(3)}]`);
