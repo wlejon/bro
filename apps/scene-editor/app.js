@@ -198,6 +198,35 @@ let editMesh = EditMesh.fromMeshData(boxPositions, boxIndices);
 // Re-derived alongside the BVH/face-groups whenever geometry mutates.
 let inferenceGeo = Inference.buildInferenceGeo(boxPositions, boxIndices, faceGroups);
 
+// --- Model edges (silhouette lines) ----------------------------------------
+//
+// Visible crisp edges along every inferenceGeo.edge. Separate scene node,
+// rebuilt whenever geometry changes. Sits outside boxBVH/inferenceGeo so it
+// never participates in picking or snapping. Each edge is a thin 3D prism —
+// simplest path through the GL_CULL_FACE pipeline without needing a line
+// primitive.
+
+const EDGE_THICKNESS = 0.01;
+const EDGE_COLOR     = [0.17, 0.24, 0.31, 1.0];  // dark slate
+let edgesNode = null;
+
+function rebuildEdgesNode() {
+    if (edgesNode) { edgesNode.destroy(); edgesNode = null; }
+    if (!inferenceGeo.edges.length) return;
+    const data = EdgeMesh.buildEdgeMesh(
+        inferenceGeo.positions, inferenceGeo.edges,
+        { thickness: EDGE_THICKNESS, color: EDGE_COLOR });
+    edgesNode = scene.createMesh({
+        positions: data.positions,
+        normals:   data.normals,
+        colors:    data.colors,
+        indices:   data.indices,
+        emissive:  0.4,  // self-lit so edges stay visible against shadowed faces
+        name: 'model-edges',
+    });
+}
+rebuildEdgesNode();
+
 // --- Ground grid + XYZ axes -------------------------------------------------
 //
 // Static visual aid: faint XZ grid + bright RGB axes at y=-1 (where the box's
@@ -226,6 +255,7 @@ function rebuildMeshState() {
     faceGroups   = computeFaceGroups(boxPositions, boxIndices);
     editMesh     = EditMesh.fromMeshData(boxPositions, boxIndices);
     inferenceGeo = Inference.buildInferenceGeo(boxPositions, boxIndices, faceGroups);
+    rebuildEdgesNode();
 }
 
 function setHighlightFaceGroup(groupIdx) {
@@ -780,6 +810,7 @@ window.__editor = {
     get editMesh()     { return editMesh; },
     get inferenceGeo() { return inferenceGeo; },
     get highlightNode(){ return highlightNode; },
+    get edgesNode()    { return edgesNode; },
     get currentTool()  { return currentTool; },
     get activeSnap()   { return activeSnap; },
     clearHighlight, setHighlightTriangle, setHighlightTriangles,
