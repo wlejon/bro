@@ -183,6 +183,11 @@ function computeFaceGroups(positions, indices, cosTol = 0.9995) {
 
 const faceGroups = computeFaceGroups(boxPositions, boxIndices);
 
+// Live edit-mesh backing the box. Not used for rendering yet — the scene node
+// still renders boxMesh directly — but future editing tools will mutate this
+// and then push a fresh MeshData back into the scene.
+const editMesh = EditMesh.fromMeshData(boxPositions, boxIndices);
+
 function setHighlightFaceGroup(groupIdx) {
     const g = faceGroups.groups[groupIdx];
     if (!g) { clearHighlight(); return; }
@@ -312,4 +317,5 @@ window.__editor = {
     get highlightNode() { return highlightNode; },
     clearHighlight, setHighlightTriangle, setHighlightTriangles,
     computeFaceGroups, faceGroups, setHighlightFaceGroup,
+    editMesh,
 };
