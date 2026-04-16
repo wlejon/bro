@@ -69,9 +69,6 @@ window.views.webgl = {
     },
     destroy: function() {
         this.running = false;
-        if (this._renderer) {
-            this._renderer.dispose();
-            this._renderer = null;
-        }
+        this._renderer = null;
     }
 };

@@ -20,6 +20,7 @@ window.views.mesh = {
             for (var i = 0; i < sceneNodes.length; i++) sceneNodes[i].destroy();
             sceneNodes = [];
         }
+        self._clearScene = clearScene;
 
         function addMesh(mesh, opts) {
             opts = opts || {};
@@ -169,6 +170,10 @@ window.views.mesh = {
     },
     destroy: function() {
         this.running = false;
+        if (this._clearScene) {
+            this._clearScene();
+            this._clearScene = null;
+        }
         if (this._handler) {
             document.removeEventListener('keydown', this._handler);
             this._handler = null;
