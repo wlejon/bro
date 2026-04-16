@@ -769,6 +769,12 @@ void Engine::exitPointerLock() {
     lockedElement_ = nullptr;
 
     if (window_) {
+        // Warp back to the pre-lock cursor position before releasing
+        // relative mode — per SDL3 docs, this is how you pin the cursor
+        // to a specific location on exit. Without it the OS cursor
+        // reappears wherever SDL last placed it during capture, which
+        // looks like the cursor "jumps" when the user releases the drag.
+        SDL_WarpMouseInWindow(window_->getSDLWindow(), lockedMouseX_, lockedMouseY_);
         SDL_SetWindowRelativeMouseMode(window_->getSDLWindow(), false);
     }
 
