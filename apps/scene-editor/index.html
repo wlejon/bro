@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Scene Editor (spike)</title>
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+        body {
+            background: #1a1a1a;
+            color: #eee;
+            font-family: system-ui, sans-serif;
+        }
+        canvas { display: block; width: 100vw; height: 100vh; background: transparent; }
+        #hud {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            background: rgba(0,0,0,0.75);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            line-height: 1.5;
+            z-index: 10;
+            pointer-events: none;
+            font-family: monospace;
+        }
+        #hud h2 { font-size: 13px; margin: 0 0 4px 0; color: #7bed9f; font-family: system-ui, sans-serif; }
+        #hud .hint { color: #bbb; font-size: 11px; font-family: system-ui, sans-serif; }
+        #hud .hint b { color: #ffa502; }
+        #pick-info {
+            color: #74b9ff;
+            margin-top: 6px;
+            min-height: 1em;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="hud">
+        <h2>Scene Editor — picking spike</h2>
+        <div class="hint"><b>right-drag</b> rotate &nbsp;·&nbsp; <b>middle-drag</b> pan &nbsp;·&nbsp; <b>wheel</b> zoom</div>
+        <div class="hint"><b>left-click</b> pick face</div>
+        <div id="pick-info">no pick</div>
+    </div>
+    <script src="../lib/camera.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
