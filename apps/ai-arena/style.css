@@ -21,13 +21,33 @@ html, body {
     width: 700px;
     flex-shrink: 0;
 }
+#arena-wrap {
+    position: relative;
+    width: 700px;
+    height: 700px;
+    flex-shrink: 0;
+}
 #arena {
     background: #0b0d10;
     border: 1px solid #2a2f36;
     display: block;
     width: 700px;
     height: 700px;
-    flex-shrink: 0;
+}
+#dmg-overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 700px;
+    height: 700px;
+    pointer-events: none;
+    overflow: hidden;
+}
+#dmg-overlay .dmg {
+    position: absolute;
+    font: bold 12px Consolas, monospace;
+    text-shadow: 0 0 3px #000, 0 0 3px #000;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
 }
 #log-wrap {
     background: #14171c;
