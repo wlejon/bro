@@ -1749,7 +1749,18 @@ void Engine::run() {
             physicsWorld_->consumeStep();
         }
 
-        // 1c. Sync scene graph physics nodes (body transforms → node transforms).
+        // 1c. Prune detached scene graphs (elements removed from DOM).
+        sceneGraphs_.erase(
+            std::remove_if(sceneGraphs_.begin(), sceneGraphs_.end(),
+                [](auto& sg) {
+                    if (!sg.element) return false;
+                    auto* n = sg.element;
+                    while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                    return n->tagName() != "html" && n->tagName() != "HTML";
+                }),
+            sceneGraphs_.end());
+
+        // Sync scene graph physics nodes (body transforms → node transforms).
         for (auto& sg : sceneGraphs_) {
             sg.graph->syncPhysics();
         }

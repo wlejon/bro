@@ -95,6 +95,19 @@ void Engine::flush() {
         }
     }
 
+    // Prune detached scene graphs (elements removed from DOM).
+    // Must happen before canvas scene pruning so the scene graph releases
+    // its canvasScene_ pointer before the CanvasScene is destroyed.
+    sceneGraphs_.erase(
+        std::remove_if(sceneGraphs_.begin(), sceneGraphs_.end(),
+            [](auto& sg) {
+                if (!sg.element) return false;
+                auto* n = sg.element;
+                while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                return n->tagName() != "html" && n->tagName() != "HTML";
+            }),
+        sceneGraphs_.end());
+
     // Prune detached canvas scenes (elements removed from DOM)
     for (auto& cs : canvasScenes_) {
         cs->rasterize(gl_.get());  // triggers detached check
