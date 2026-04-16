@@ -43,33 +43,150 @@ function clearHighlight() {
     }
 }
 
-function setHighlightTriangle(triIndex, normal) {
+// Build a highlight scene node from a list of triangle indices into boxMesh.
+// Offsets each vertex along the group's normal to stay above the base mesh.
+function setHighlightTriangles(triIndices, normal) {
     clearHighlight();
-    const i0 = boxIndices[triIndex * 3 + 0];
-    const i1 = boxIndices[triIndex * 3 + 1];
-    const i2 = boxIndices[triIndex * 3 + 2];
+    if (!triIndices || triIndices.length === 0) return;
     const nx = normal[0] * HIGHLIGHT_EPS;
     const ny = normal[1] * HIGHLIGHT_EPS;
     const nz = normal[2] * HIGHLIGHT_EPS;
-    const positions = new Float32Array(9);
-    for (let k = 0; k < 3; k++) {
-        const src = [i0, i1, i2][k] * 3;
-        positions[k * 3 + 0] = boxPositions[src + 0] + nx;
-        positions[k * 3 + 1] = boxPositions[src + 1] + ny;
-        positions[k * 3 + 2] = boxPositions[src + 2] + nz;
+    const n = triIndices.length;
+    const positions = new Float32Array(n * 9);
+    const normals   = new Float32Array(n * 9);
+    const indices   = new Uint32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+        const t = triIndices[i];
+        for (let k = 0; k < 3; k++) {
+            const src = boxIndices[t * 3 + k] * 3;
+            const dst = (i * 3 + k) * 3;
+            positions[dst + 0] = boxPositions[src + 0] + nx;
+            positions[dst + 1] = boxPositions[src + 1] + ny;
+            positions[dst + 2] = boxPositions[src + 2] + nz;
+            normals[dst + 0] = normal[0];
+            normals[dst + 1] = normal[1];
+            normals[dst + 2] = normal[2];
+        }
+        indices[i * 3 + 0] = i * 3 + 0;
+        indices[i * 3 + 1] = i * 3 + 1;
+        indices[i * 3 + 2] = i * 3 + 2;
     }
-    const normals = new Float32Array([
-        normal[0], normal[1], normal[2],
-        normal[0], normal[1], normal[2],
-        normal[0], normal[1], normal[2],
-    ]);
-    const indices = new Uint32Array([0, 1, 2]);
     highlightNode = scene.createMesh({
         positions, normals, indices,
         color: '#ffa502',
         emissive: 0.6,
         name: 'highlight',
     });
+}
+
+// Back-compat: highlight a single triangle.
+function setHighlightTriangle(triIndex, normal) {
+    setHighlightTriangles([triIndex], normal);
+}
+
+// --- Face groups ------------------------------------------------------------
+//
+// A "face" in SketchUp-speak is a maximal set of coplanar, edge-connected
+// triangles. We detect them once: union-find over triangle pairs that share
+// an edge (by vertex *position*, so hard-edge seams with duplicated indices
+// still merge correctly) and whose normals are parallel within epsilon.
+
+function computeFaceGroups(positions, indices, cosTol = 0.9995) {
+    const triCount = indices.length / 3;
+    const normals = new Float32Array(triCount * 3);
+    for (let t = 0; t < triCount; t++) {
+        const i0 = indices[t * 3 + 0] * 3;
+        const i1 = indices[t * 3 + 1] * 3;
+        const i2 = indices[t * 3 + 2] * 3;
+        const ax = positions[i1 + 0] - positions[i0 + 0];
+        const ay = positions[i1 + 1] - positions[i0 + 1];
+        const az = positions[i1 + 2] - positions[i0 + 2];
+        const bx = positions[i2 + 0] - positions[i0 + 0];
+        const by = positions[i2 + 1] - positions[i0 + 1];
+        const bz = positions[i2 + 2] - positions[i0 + 2];
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        const L = Math.hypot(nx, ny, nz) || 1;
+        normals[t * 3 + 0] = nx / L;
+        normals[t * 3 + 1] = ny / L;
+        normals[t * 3 + 2] = nz / L;
+    }
+
+    const parent = new Int32Array(triCount);
+    for (let i = 0; i < triCount; i++) parent[i] = i;
+    function find(x) {
+        while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    }
+    function union(a, b) {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent[rb] = ra;
+    }
+
+    // Quantize positions so vertex-index duplicates at hard-edge seams still
+    // match across their shared edge.
+    const Q = 1e5;
+    function posKey(vi) {
+        const p = vi * 3;
+        return Math.round(positions[p] * Q) + ',' +
+               Math.round(positions[p + 1] * Q) + ',' +
+               Math.round(positions[p + 2] * Q);
+    }
+    function edgeKey(a, b) {
+        const ka = posKey(a), kb = posKey(b);
+        return ka < kb ? ka + '|' + kb : kb + '|' + ka;
+    }
+
+    const edgeTris = new Map();
+    for (let t = 0; t < triCount; t++) {
+        for (let e = 0; e < 3; e++) {
+            const ia = indices[t * 3 + e];
+            const ib = indices[t * 3 + ((e + 1) % 3)];
+            const k = edgeKey(ia, ib);
+            const arr = edgeTris.get(k);
+            if (arr) arr.push(t); else edgeTris.set(k, [t]);
+        }
+    }
+
+    for (const tris of edgeTris.values()) {
+        for (let i = 0; i < tris.length; i++) {
+            for (let j = i + 1; j < tris.length; j++) {
+                const a = tris[i], b = tris[j];
+                const dot = normals[a * 3 + 0] * normals[b * 3 + 0] +
+                            normals[a * 3 + 1] * normals[b * 3 + 1] +
+                            normals[a * 3 + 2] * normals[b * 3 + 2];
+                if (dot > cosTol) union(a, b);
+            }
+        }
+    }
+
+    const rootToIdx = new Map();
+    const triToGroup = new Int32Array(triCount);
+    const groups = [];
+    for (let t = 0; t < triCount; t++) {
+        const r = find(t);
+        let gi = rootToIdx.get(r);
+        if (gi === undefined) {
+            gi = groups.length;
+            rootToIdx.set(r, gi);
+            groups.push({
+                tris: [],
+                normal: [normals[r * 3 + 0], normals[r * 3 + 1], normals[r * 3 + 2]],
+            });
+        }
+        triToGroup[t] = gi;
+        groups[gi].tris.push(t);
+    }
+    return { groups, triToGroup };
+}
+
+const faceGroups = computeFaceGroups(boxPositions, boxIndices);
+
+function setHighlightFaceGroup(groupIdx) {
+    const g = faceGroups.groups[groupIdx];
+    if (!g) { clearHighlight(); return; }
+    setHighlightTriangles(g.tris, g.normal);
 }
 
 // --- Camera -----------------------------------------------------------------
@@ -158,7 +275,7 @@ canvas.addEventListener('mousedown', (e) => {
         const hit = pickAt(e.clientX - r.left, e.clientY - r.top);
         pickInfo.textContent = formatHit(hit);
         window.__lastPick = hit;
-        if (hit) setHighlightTriangle(hit.triangleIndex, hit.normal);
+        if (hit) setHighlightFaceGroup(faceGroups.triToGroup[hit.triangleIndex]);
         else clearHighlight();
     } else if (e.button === 2) {
         rightDown = true;
@@ -193,5 +310,6 @@ canvas.addEventListener('wheel', (e) => {
 window.__editor = {
     scene, cam, boxMesh, boxBVH, boxNode, pickAt, screenToRay,
     get highlightNode() { return highlightNode; },
-    clearHighlight, setHighlightTriangle,
+    clearHighlight, setHighlightTriangle, setHighlightTriangles,
+    computeFaceGroups, faceGroups, setHighlightFaceGroup,
 };

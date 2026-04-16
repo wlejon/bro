@@ -38,6 +38,27 @@ assert(!miss, `top-left corner should miss (got ${miss && JSON.stringify(miss)})
 // Clicking the box should install a highlight overlay node.
 assert(window.__editor.highlightNode, 'highlight node should exist after pick');
 
+// A box has exactly 6 face groups (2 coplanar triangles per side).
+const fg = window.__editor.faceGroups;
+assert(fg.groups.length === 6, `box should have 6 face groups (got ${fg.groups.length})`);
+for (const g of fg.groups) {
+    assert(g.tris.length === 2, `each box face group has 2 tris (got ${g.tris.length})`);
+    const nL = Math.hypot(g.normal[0], g.normal[1], g.normal[2]);
+    assert(Math.abs(nL - 1) < 1e-5, 'face-group normal is unit length');
+}
+// And the triangles of a face group share that group's normal.
+const triNormals = fg.groups.map(g => g.normal);
+// Six axis-aligned faces: normals should be {+X, -X, +Y, -Y, +Z, -Z}.
+const axisHits = new Set();
+for (const n of triNormals) {
+    for (let a = 0; a < 3; a++) {
+        if (Math.abs(n[a]) > 0.999) {
+            axisHits.add((n[a] > 0 ? '+' : '-') + 'XYZ'[a]);
+        }
+    }
+}
+assert(axisHits.size === 6, `all 6 axis directions present (got ${[...axisHits].sort().join(',')})`);
+
 // Second click on a miss (top-left) should clear the highlight.
 click(5, 5);
 advanceTime(50);
