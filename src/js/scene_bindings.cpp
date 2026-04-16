@@ -2,12 +2,15 @@
 #include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/terrain_bindings.h"
+#include "js/dom_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/shape_node.h"
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
+#include "scene/html_node.h"
+#include "dom/element.h"
 #include "physics/physics_world.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
@@ -108,6 +111,64 @@ static bool parseColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& 
     if (str == "brown")   { r=165; g=42;  b=42;  return true; }
     if (str == "pink")    { r=255; g=192; b=203; return true; }
     return false;
+}
+
+// Parse a `worldAnchor: [x, y, z]` or `{x, y, z}` option into a Vec3.
+// Returns true if the option was present (even if partially specified).
+static bool parseWorldAnchor(JSContext* ctx, JSValueConst opts, scene::Vec3& out) {
+    JSValue v = JS_GetPropertyStr(ctx, opts, "worldAnchor");
+    bool found = false;
+    if (JS_IsArray(v)) {
+        found = true;
+        JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
+        JSValue e2 = JS_GetPropertyUint32(ctx, v, 2);
+        double x = 0, y = 0, z = 0;
+        JS_ToFloat64(ctx, &x, e0);
+        JS_ToFloat64(ctx, &y, e1);
+        JS_ToFloat64(ctx, &z, e2);
+        out = {(float)x, (float)y, (float)z};
+        JS_FreeValue(ctx, e0);
+        JS_FreeValue(ctx, e1);
+        JS_FreeValue(ctx, e2);
+    } else if (JS_IsObject(v)) {
+        found = true;
+        double x = 0, y = 0, z = 0;
+        JSValue ex = JS_GetPropertyStr(ctx, v, "x");
+        JSValue ey = JS_GetPropertyStr(ctx, v, "y");
+        JSValue ez = JS_GetPropertyStr(ctx, v, "z");
+        if (!JS_IsUndefined(ex)) JS_ToFloat64(ctx, &x, ex);
+        if (!JS_IsUndefined(ey)) JS_ToFloat64(ctx, &y, ey);
+        if (!JS_IsUndefined(ez)) JS_ToFloat64(ctx, &z, ez);
+        out = {(float)x, (float)y, (float)z};
+        JS_FreeValue(ctx, ex);
+        JS_FreeValue(ctx, ey);
+        JS_FreeValue(ctx, ez);
+    }
+    JS_FreeValue(ctx, v);
+    return found;
+}
+
+// Apply worldAnchor + billboard options to any SceneNode. Safe to call on
+// nodes that don't support billboarding — the fields are harmless.
+static void applyBillboardOpts(JSContext* ctx, JSValueConst opts, scene::SceneNode* node) {
+    if (!node) return;
+
+    scene::Vec3 anchor;
+    if (parseWorldAnchor(ctx, opts, anchor)) {
+        node->setWorldAnchor(anchor);
+    }
+
+    JSValue bbVal = JS_GetPropertyStr(ctx, opts, "billboard");
+    if (JS_IsString(bbVal)) {
+        std::string mode = jsStr(ctx, bbVal);
+        if (mode == "ylock" || mode == "yLock" || mode == "y-lock") {
+            node->setBillboardMode(scene::SceneNode::BillboardMode::YLock);
+        } else {
+            node->setBillboardMode(scene::SceneNode::BillboardMode::Full);
+        }
+    }
+    JS_FreeValue(ctx, bbVal);
 }
 
 static scene::Color parseColorProp(JSContext* ctx, JSValueConst obj, const char* prop) {
@@ -219,6 +280,28 @@ static bool jsReadFloatArray(JSContext* ctx, JSValueConst obj, const char* prop,
                              std::vector<float>& out);
 static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop,
                               std::vector<uint32_t>& out);
+
+// setHtml(htmlString) — HtmlNode only
+static JSValue js_node_setHtml(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || argc < 1) return JS_UNDEFINED;
+    if (w->node->type() != scene::SceneNode::Type::Html)
+        return JS_ThrowTypeError(ctx, "setHtml: node is not an HtmlNode");
+    auto* hn = static_cast<scene::HtmlNode*>(w->node);
+    hn->setHtml(jsStr(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+// markHtmlDirty() — HtmlNode only; force a re-raster on the next frame.
+// Useful after imperative DOM mutation via node.root.
+static JSValue js_node_markHtmlDirty(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node) return JS_UNDEFINED;
+    if (w->node->type() != scene::SceneNode::Type::Html)
+        return JS_ThrowTypeError(ctx, "markHtmlDirty: node is not an HtmlNode");
+    static_cast<scene::HtmlNode*>(w->node)->markHtmlDirty();
+    return JS_UNDEFINED;
+}
 
 // updateMesh(meshOrOpts[, opts])
 static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -442,6 +525,8 @@ static JSValue js_sg_createShape(JSContext* ctx, JSValueConst this_val, int argc
             node->setPoints(pts);
         }
         JS_FreeValue(ctx, ptsVal);
+
+        applyBillboardOpts(ctx, opts, node);
     }
 
     return wrapNode(ctx, node, g);
@@ -497,6 +582,47 @@ static JSValue js_sg_createSprite(JSContext* ctx, JSValueConst this_val, int arg
                 JS_IsUndefined(ayVal) ? 0.5f : (float)jsNum(ctx, ayVal));
         JS_FreeValue(ctx, axVal);
         JS_FreeValue(ctx, ayVal);
+
+        applyBillboardOpts(ctx, opts, node);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// createHtmlNode({html, width, height, pxPerUnit, worldAnchor, billboard, name?})
+static JSValue js_sg_createHtml(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createHtml();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        float w = 200.0f, h = 50.0f;
+        JSValue wVal = JS_GetPropertyStr(ctx, opts, "width");
+        JSValue hVal = JS_GetPropertyStr(ctx, opts, "height");
+        if (!JS_IsUndefined(wVal)) w = (float)jsNum(ctx, wVal);
+        if (!JS_IsUndefined(hVal)) h = (float)jsNum(ctx, hVal);
+        JS_FreeValue(ctx, wVal);
+        JS_FreeValue(ctx, hVal);
+        node->setLayoutSize(w, h);
+
+        JSValue ppuVal = JS_GetPropertyStr(ctx, opts, "pxPerUnit");
+        if (!JS_IsUndefined(ppuVal)) node->setPxPerUnit((float)jsNum(ctx, ppuVal));
+        JS_FreeValue(ctx, ppuVal);
+
+        JSValue htmlVal = JS_GetPropertyStr(ctx, opts, "html");
+        if (JS_IsString(htmlVal)) node->setHtml(jsStr(ctx, htmlVal));
+        JS_FreeValue(ctx, htmlVal);
+
+        applyBillboardOpts(ctx, opts, node);
     }
 
     return wrapNode(ctx, node, g);
@@ -1274,6 +1400,67 @@ void SceneBindings::install(JSContext* ctx) {
             return JS_UNDEFINED;
         })
 
+        // World anchor + billboard (Shape/Sprite/Html only — no-ops elsewhere)
+        .prop("worldAnchor",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node) return JS_UNDEFINED;
+                if (!w->node->hasWorldAnchor()) return JS_NULL;
+                const auto& a = w->node->worldAnchor();
+                JSValue arr = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, a.x));
+                JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, a.y));
+                JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, a.z));
+                return arr;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node) return;
+                if (JS_IsNull(val) || JS_IsUndefined(val)) {
+                    w->node->clearWorldAnchor();
+                    return;
+                }
+                if (JS_IsArray(val)) {
+                    double x = 0, y = 0, z = 0;
+                    JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
+                    JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
+                    JSValue e2 = JS_GetPropertyUint32(ctx, val, 2);
+                    JS_ToFloat64(ctx, &x, e0);
+                    JS_ToFloat64(ctx, &y, e1);
+                    JS_ToFloat64(ctx, &z, e2);
+                    JS_FreeValue(ctx, e0);
+                    JS_FreeValue(ctx, e1);
+                    JS_FreeValue(ctx, e2);
+                    w->node->setWorldAnchor({(float)x, (float)y, (float)z});
+                }
+            })
+        .prop("billboard",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node) return JS_UNDEFINED;
+                return JS_NewString(ctx,
+                    w->node->billboardMode() == scene::SceneNode::BillboardMode::YLock
+                        ? "ylock" : "full");
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node) return;
+                std::string s = jsStr(ctx, val);
+                if (s == "ylock" || s == "yLock" || s == "y-lock") {
+                    w->node->setBillboardMode(scene::SceneNode::BillboardMode::YLock);
+                } else {
+                    w->node->setBillboardMode(scene::SceneNode::BillboardMode::Full);
+                }
+            })
+
+        // HtmlNode: `root` is the detached DOM Element that JS can mutate
+        // imperatively. Mutations automatically mark the DOM dirty; the raster
+        // thread re-rasterizes on the next frame.
+        .get("root", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->node) return JS_UNDEFINED;
+            if (w->node->type() != scene::SceneNode::Type::Html) return JS_UNDEFINED;
+            auto* hn = static_cast<scene::HtmlNode*>(w->node);
+            dom::Element* root = hn->root();
+            if (!root) return JS_NULL;
+            return DomBindings::wrapElement(ctx, root);
+        })
+
         // Complex read-only properties
         .get("children", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_NewArray(ctx);
@@ -1293,6 +1480,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("localToWorld", js_node_localToWorld, 2)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
         .method_raw("updateMesh", js_node_updateMesh, 1)
+        .method_raw("setHtml", js_node_setHtml, 1)
+        .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
         .method_raw("attachAgent", nodeAttachAgent, 3)
         .method_raw("detachAgent", nodeDetachAgent, 0);
 
@@ -1318,6 +1507,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createSprite", js_sg_createSprite, 1)
         .method_raw("createPhysicsNode", js_sg_createPhysicsNode, 1)
         .method_raw("createMesh", js_sg_createMesh, 1)
+        .method_raw("createHtmlNode", js_sg_createHtml, 1)
         .method_raw("createTerrain", js_sg_createTerrain, 1)
         .method_raw("findById", js_sg_findById, 1)
         .method_raw("findByName", js_sg_findByName, 1)

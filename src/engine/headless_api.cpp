@@ -179,6 +179,18 @@ void Engine::advanceTime(double ms) {
             }
         }
 
+        // Headless has no raster thread (the normal code path relies on the
+        // raster loop to materialize HtmlNodes). Run it inline on the main
+        // thread using the main renderer/font manager before scene render.
+        auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+        if (skia) {
+            for (auto& sg : sceneGraphs_) {
+                if (sg.graph) {
+                    sg.graph->materializeHtmlNodes(skia, &fontManager_);
+                }
+            }
+        }
+
         // Auto-render scene graphs after JS execution
         for (auto& sg : sceneGraphs_) {
             sg.graph->render();

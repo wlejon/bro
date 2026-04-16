@@ -1,8 +1,14 @@
 #include "scene/scene_graph.h"
 #include "canvas/canvas_scene.h"
 #include "physics/physics_world.h"
+#include "render/skia_backend.h"
+#include "layout/font_manager.h"
+#include "dom/document.h"
 #include "util/log.h"
 #include "brogameagent/world.h"
+
+#include <algorithm>
+#include <cmath>
 
 namespace bro::scene {
 
@@ -107,6 +113,79 @@ void main() {
 )";
 
 // ---------------------------------------------------------------------------
+// Billboard shader sources — a single camera-facing textured/filled quad.
+// The vertex shader places a unit quad at a world anchor using camera basis
+// vectors supplied by the CPU. Positions are computed in a *camera-relative*
+// frame (anchor - cameraEye), which matches renderMeshNode and avoids float
+// precision loss at large world coordinates.
+// ---------------------------------------------------------------------------
+
+static const char* kBillboardVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec2 aQuad;  // [-1..1] corner
+
+uniform mat4 uVP;            // projection * viewRot (no translation)
+uniform vec3 uAnchorRel;     // worldAnchor - cameraEye
+uniform vec3 uRight;         // billboard right axis, world space
+uniform vec3 uUp;            // billboard up axis, world space
+uniform vec2 uHalfSize;      // world-space half-extents
+
+out vec2 vUV;
+
+void main() {
+    vec3 worldRel = uAnchorRel
+                  + uRight * (aQuad.x * uHalfSize.x)
+                  + uUp    * (aQuad.y * uHalfSize.y);
+    // Flip Y so UV origin is top-left (matches Skia/CSS pixel layout).
+    vUV = vec2(aQuad.x * 0.5 + 0.5, 0.5 - aQuad.y * 0.5);
+    gl_Position = uVP * vec4(worldRel, 1.0);
+}
+)";
+
+static const char* kBillboardFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+
+uniform int uShapeMode;      // 0 = rect, 1 = circle SDF, 2 = textured
+uniform vec4 uColor;         // rect / circle fill, or tint for texture
+uniform vec4 uStroke;
+uniform float uStrokeWidth;  // in UV units (0 = no stroke)
+uniform sampler2D uTex;
+
+out vec4 FragColor;
+
+void main() {
+    if (uShapeMode == 0) {
+        // Rect: solid fill with optional inset stroke.
+        vec4 c = uColor;
+        if (uStrokeWidth > 0.0) {
+            vec2 d = min(vUV, 1.0 - vUV);
+            float border = min(d.x, d.y);
+            if (border < uStrokeWidth) c = uStroke;
+        }
+        if (c.a <= 0.0) discard;
+        // Straight-alpha input — premultiply for "over" blend.
+        FragColor = vec4(c.rgb * c.a, c.a);
+    } else if (uShapeMode == 1) {
+        // Circle SDF centered on UV (0.5, 0.5), radius 0.5.
+        vec2 p = vUV - 0.5;
+        float d = length(p) * 2.0;
+        float aa = fwidth(d);
+        float alpha = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+        if (alpha <= 0.0) discard;
+        float a = uColor.a * alpha;
+        FragColor = vec4(uColor.rgb * a, a);
+    } else {
+        // Textured (premultiplied alpha from Skia surfaces).
+        vec4 tex = texture(uTex, vUV);
+        vec4 c = tex * uColor; // uColor.a tints premultiplied texture
+        if (c.a <= 0.0) discard;
+        FragColor = c;
+    }
+}
+)";
+
+// ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
@@ -124,6 +203,9 @@ SceneGraph::~SceneGraph() {
     // Destroy GL resources
     destroyMeshFBO();
     if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
+    if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
+    if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
+    if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -156,6 +238,13 @@ PhysicsNode* SceneGraph::createPhysicsNode(const std::string& name) {
 
 MeshNode* SceneGraph::createMesh(const std::string& name) {
     auto node = std::make_unique<MeshNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+HtmlNode* SceneGraph::createHtml(const std::string& name) {
+    auto node = std::make_unique<HtmlNode>(name);
     auto* ptr = node.get();
     nodes_[ptr->id()] = std::move(node);
     return ptr;
@@ -424,6 +513,65 @@ void SceneGraph::destroyMeshFBO() {
     meshFBOHeight_ = 0;
 }
 
+void SceneGraph::ensureBillboardPipeline() {
+    if (bbProgram_) return;
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kBillboardVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kBillboardFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    bbProgram_ = glCreateProgram();
+    glAttachShader(bbProgram_, vs);
+    glAttachShader(bbProgram_, fs);
+    glLinkProgram(bbProgram_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint ok = 0;
+    glGetProgramiv(bbProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(bbProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Billboard program link error: %s", log);
+        glDeleteProgram(bbProgram_);
+        bbProgram_ = 0;
+        return;
+    }
+
+    bbUVP_         = glGetUniformLocation(bbProgram_, "uVP");
+    bbUAnchorRel_  = glGetUniformLocation(bbProgram_, "uAnchorRel");
+    bbURight_      = glGetUniformLocation(bbProgram_, "uRight");
+    bbUUp_         = glGetUniformLocation(bbProgram_, "uUp");
+    bbUHalfSize_   = glGetUniformLocation(bbProgram_, "uHalfSize");
+    bbUShapeMode_  = glGetUniformLocation(bbProgram_, "uShapeMode");
+    bbUColor_      = glGetUniformLocation(bbProgram_, "uColor");
+    bbUStroke_     = glGetUniformLocation(bbProgram_, "uStroke");
+    bbUStrokeWidth_ = glGetUniformLocation(bbProgram_, "uStrokeWidth");
+    bbUTex_        = glGetUniformLocation(bbProgram_, "uTex");
+
+    // Two triangles covering [-1,1] on both axes. Shared across every
+    // billboard — only uniforms change per draw.
+    static const float quadVerts[12] = {
+        -1.0f, -1.0f,
+         1.0f, -1.0f,
+         1.0f,  1.0f,
+        -1.0f, -1.0f,
+         1.0f,  1.0f,
+        -1.0f,  1.0f,
+    };
+    glGenVertexArrays(1, &bbVAO_);
+    glGenBuffers(1, &bbVBO_);
+    glBindVertexArray(bbVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, bbVBO_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (void*)0);
+    glBindVertexArray(0);
+}
+
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
@@ -441,62 +589,135 @@ void SceneGraph::render() {
         }
     }
 
-    // Check if we have any mesh nodes to render
+    // Check for 3D content: mesh nodes OR world-anchored Shape/Sprite/Html.
+    // Both render into the mesh FBO (depth-tested against each other) so
+    // they share the same setup path.
     bool hasMeshNodes = false;
+    bool hasBillboardNodes = false;
     for (auto& [id, node] : nodes_) {
-        if (node->type() == SceneNode::Type::Mesh && node->visible()) {
-            hasMeshNodes = true;
-            break;
+        if (!node->visible()) continue;
+        if (node->type() == SceneNode::Type::Mesh) hasMeshNodes = true;
+        else if (node->hasWorldAnchor())           hasBillboardNodes = true;
+        if (hasMeshNodes && hasBillboardNodes) break;
+    }
+
+    // HtmlNodes need a pending-pixel → GL upload before they can be sampled.
+    // Safe to call every frame — the function early-outs when nothing pending.
+    if (hasBillboardNodes) {
+        for (auto& [id, node] : nodes_) {
+            if (node->type() == SceneNode::Type::Html) {
+                static_cast<HtmlNode*>(node.get())->uploadPendingTexture();
+            }
         }
     }
 
-    // Set up 3D pipeline if needed
-    if (hasMeshNodes && canvasWidth_ > 0 && canvasHeight_ > 0) {
+    const bool has3D = (hasMeshNodes || hasBillboardNodes)
+                       && canvasWidth_ > 0 && canvasHeight_ > 0;
+
+    if (has3D) {
         ensureMeshPipeline();
+        if (hasBillboardNodes) ensureBillboardPipeline();
         ensureMeshFBO();
 
-        if (meshProgram_ && meshFBO_) {
-            // Bind FBO and set up GL state for 3D rendering
+        if (meshFBO_) {
             glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
             glViewport(0, 0, meshFBOWidth_, meshFBOHeight_);
-            // Reset GL state that Skia/Ganesh may have changed
+            // Reset state that Ganesh may have changed.
             glDisable(GL_SCISSOR_TEST);
             glDisable(GL_STENCIL_TEST);
             glDisable(GL_BLEND);
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             glDepthMask(GL_TRUE);
 
-            glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // transparent background
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LESS);
-            glEnable(GL_CULL_FACE);
-            glCullFace(GL_BACK);
-
-            glUseProgram(meshProgram_);
-
-            // Set per-frame uniforms
-            Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
-            glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
-            // Camera pos is origin in camera-relative rendering
-            glUniform3f(uCameraPos_, 0.0f, 0.0f, 0.0f);
-            glUniform1f(uFogStart_, fogStart_);
-            glUniform1f(uFogEnd_, fogEnd_);
-            glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
 
             hasMeshContent_ = true;
+
+            // --- Mesh pass --------------------------------------------------
+            if (hasMeshNodes && meshProgram_) {
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_BACK);
+                glUseProgram(meshProgram_);
+
+                Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
+                glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
+                glUniform3f(uCameraPos_, 0.0f, 0.0f, 0.0f);
+                glUniform1f(uFogStart_, fogStart_);
+                glUniform1f(uFogEnd_, fogEnd_);
+                glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
+
+                std::function<void(SceneNode*)> walkMesh = [&](SceneNode* n) {
+                    if (!n->visible()) return;
+                    if (n->type() == SceneNode::Type::Mesh) {
+                        renderMeshNode(static_cast<MeshNode*>(n));
+                    }
+                    for (auto* c : n->children()) walkMesh(c);
+                };
+                walkMesh(root_.get());
+
+                glDisable(GL_CULL_FACE);
+            }
+
+            // --- Billboard pass --------------------------------------------
+            // Depth test on (occluded behind geometry), depth write off (so
+            // multiple billboards don't occlude each other).
+            if (hasBillboardNodes && bbProgram_) {
+                glUseProgram(bbProgram_);
+                glDepthMask(GL_FALSE);
+                glEnable(GL_BLEND);
+                // Premultiplied "over" — matches both our SDF/rect fills (we
+                // premultiply in the fragment shader) and Skia textures (which
+                // produce premultiplied output).
+                glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+                                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+                // View-rotation-only matrix: in camera-relative space the eye
+                // is at origin, so only orientation remains.
+                Mat4 viewRot = viewMatrix_;
+                viewRot.m[3][0] = 0.0f;
+                viewRot.m[3][1] = 0.0f;
+                viewRot.m[3][2] = 0.0f;
+                Mat4 vp = projectionMatrix_ * viewRot;
+                glUniformMatrix4fv(bbUVP_, 1, GL_FALSE, vp.data());
+                glBindVertexArray(bbVAO_);
+
+                std::function<void(SceneNode*)> walkBB = [&](SceneNode* n) {
+                    if (!n->visible()) return;
+                    if (n->hasWorldAnchor()) {
+                        renderBillboardNode(n);
+                    }
+                    for (auto* c : n->children()) walkBB(c);
+                };
+                walkBB(root_.get());
+
+                glBindVertexArray(0);
+                glDisable(GL_BLEND);
+                glDepthMask(GL_TRUE);
+            }
+
+            glUseProgram(0);
+            glDisable(GL_DEPTH_TEST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
     }
 
-    // Depth-first render traversal (handles both 2D and 3D nodes)
-    renderNode(root_.get());
-
-    // Tear down 3D state
-    if (hasMeshContent_) {
-        glUseProgram(0);
-        glDisable(GL_DEPTH_TEST);
-        glDisable(GL_CULL_FACE);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // --- 2D canvas pass ---------------------------------------------------
+    // Render non-world-anchored Shape/Sprite into the 2D overlay layer.
+    // World-anchored nodes already rendered into the FBO above.
+    {
+        std::function<void(SceneNode*)> walk2D = [&](SceneNode* n) {
+            if (!n->visible()) return;
+            if (n->type() != SceneNode::Type::Mesh &&
+                n->type() != SceneNode::Type::Html &&
+                !n->hasWorldAnchor()) {
+                n->onRender(*this);
+            }
+            for (auto* c : n->children()) walk2D(c);
+        };
+        walk2D(root_.get());
     }
 
     // Restore 2D camera
@@ -510,18 +731,9 @@ void SceneGraph::render() {
     }
 }
 
-void SceneGraph::renderNode(SceneNode* node) {
-    if (!node->visible()) return;
-
-    if (node->type() == SceneNode::Type::Mesh && hasMeshContent_) {
-        renderMeshNode(static_cast<MeshNode*>(node));
-    } else {
-        node->onRender(*this);
-    }
-
-    for (auto* child : node->children()) {
-        renderNode(child);
-    }
+void SceneGraph::renderNode(SceneNode* /*node*/) {
+    // Retained for ABI stability but unused now that render() performs
+    // explicit mesh / billboard / 2D passes.
 }
 
 void SceneGraph::renderMeshNode(MeshNode* mesh) {
@@ -594,6 +806,185 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
         glDisable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(0.0f, 0.0f);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Billboard rendering
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Resolve world-space half-extents for a billboard node.
+// ShapeNode uses width/height (or radius for circles), SpriteNode uses
+// width/height, HtmlNode converts its pixel layout size by pxPerUnit. All
+// defaults keep the quad a reasonable size even if the user forgot to set
+// dimensions.
+struct BillboardDraw {
+    int shapeMode = 0;        // 0 rect, 1 circle, 2 textured
+    float halfW = 0.5f;
+    float halfH = 0.5f;
+    float color[4] = {1, 1, 1, 1};
+    float stroke[4] = {0, 0, 0, 0};
+    float strokeWidth = 0.0f;
+    GLuint texture = 0;
+};
+
+static inline void color8(float* out, const Color& c) {
+    out[0] = c.r / 255.0f;
+    out[1] = c.g / 255.0f;
+    out[2] = c.b / 255.0f;
+    out[3] = c.a / 255.0f;
+}
+
+static bool resolveBillboard(SceneNode* node, BillboardDraw& d) {
+    using T = SceneNode::Type;
+    switch (node->type()) {
+    case T::Shape: {
+        auto* s = static_cast<ShapeNode*>(node);
+        const Vec3& scl = node->scale();
+        switch (s->shape()) {
+        case ShapeNode::Shape::Rect:
+        case ShapeNode::Shape::RoundRect:
+            d.shapeMode = 0;
+            d.halfW = 0.5f * s->width()  * scl.x;
+            d.halfH = 0.5f * s->height() * scl.y;
+            break;
+        case ShapeNode::Shape::Circle:
+            d.shapeMode = 1;
+            d.halfW = s->radius() * scl.x;
+            d.halfH = s->radius() * scl.y;
+            break;
+        case ShapeNode::Shape::Ellipse:
+            d.shapeMode = 1;
+            d.halfW = s->radiusX() * scl.x;
+            d.halfH = s->radiusY() * scl.y;
+            break;
+        default:
+            // Polygon / line are 2D-only for world-anchored billboards; fall
+            // back to a solid rect bounded by width/height.
+            d.shapeMode = 0;
+            d.halfW = 0.5f * s->width()  * scl.x;
+            d.halfH = 0.5f * s->height() * scl.y;
+            break;
+        }
+        color8(d.color,  s->fillColor());
+        if (!s->hasFill()) d.color[3] = 0.0f;
+        color8(d.stroke, s->strokeColor());
+        // Map stroke width from world units to UV space (0..1 per half-size).
+        float uvRef = std::max(d.halfW, d.halfH) * 2.0f;
+        d.strokeWidth = (s->hasStroke() && uvRef > 0.0f)
+                      ? (s->strokeWidth() / uvRef)
+                      : 0.0f;
+        return true;
+    }
+    case T::Sprite: {
+        auto* s = static_cast<SpriteNode*>(node);
+        const Vec3& scl = node->scale();
+        d.shapeMode = 2;
+        d.halfW = 0.5f * s->width()  * scl.x;
+        d.halfH = 0.5f * s->height() * scl.y;
+        d.color[0] = d.color[1] = d.color[2] = 1.0f;
+        d.color[3] = s->opacity();
+        // Texture upload for SpriteNode billboards is a deliberate follow-up;
+        // without a texture the shader has nothing to sample, so fade out.
+        d.texture = 0;
+        d.color[3] = 0.0f;
+        return true;
+    }
+    case T::Html: {
+        auto* h = static_cast<HtmlNode*>(node);
+        const Vec3& scl = node->scale();
+        float ppu = h->pxPerUnit();
+        if (ppu <= 0.0f) ppu = 100.0f;
+        d.shapeMode = 2;
+        d.halfW = 0.5f * (h->layoutWidth()  / ppu) * scl.x;
+        d.halfH = 0.5f * (h->layoutHeight() / ppu) * scl.y;
+        d.color[0] = d.color[1] = d.color[2] = 1.0f;
+        d.color[3] = 1.0f;
+        d.texture = h->textureId();
+        if (d.texture == 0) d.color[3] = 0.0f;
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+} // namespace
+
+void SceneGraph::renderBillboardNode(SceneNode* node) {
+    BillboardDraw d;
+    if (!resolveBillboard(node, d)) return;
+    if (d.color[3] <= 0.0f && d.shapeMode != 2) return; // invisible shape
+
+    // Anchor in camera-relative space (same precision trick as mesh path).
+    const Vec3 anchor = node->worldAnchor();
+    const float ax = anchor.x - cameraEye_.x;
+    const float ay = anchor.y - cameraEye_.y;
+    const float az = anchor.z - cameraEye_.z;
+
+    // Camera basis in world space from rows of view matrix (see renderMesh).
+    const Vec3 camRight   {viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
+    const Vec3 camUp      {viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
+    const Vec3 camForward { -viewMatrix_.m[0][2], -viewMatrix_.m[1][2], -viewMatrix_.m[2][2]};
+
+    Vec3 right = camRight;
+    Vec3 up    = camUp;
+
+    if (node->billboardMode() == SceneNode::BillboardMode::YLock) {
+        // Y-lock degenerates when the camera looks nearly straight up/down —
+        // the horizontal right vector collapses. Fall back to full billboard.
+        if (std::fabs(camForward.y) < 0.99f) {
+            up = {0.0f, 1.0f, 0.0f};
+            Vec3 flatRight{camRight.x, 0.0f, camRight.z};
+            float len = flatRight.length();
+            if (len > 1e-5f) {
+                right = flatRight * (1.0f / len);
+            }
+        }
+    }
+
+    glUniform3f(bbUAnchorRel_, ax, ay, az);
+    glUniform3f(bbURight_, right.x, right.y, right.z);
+    glUniform3f(bbUUp_,    up.x,    up.y,    up.z);
+    glUniform2f(bbUHalfSize_, d.halfW, d.halfH);
+    glUniform1i(bbUShapeMode_, d.shapeMode);
+    glUniform4fv(bbUColor_,  1, d.color);
+    glUniform4fv(bbUStroke_, 1, d.stroke);
+    glUniform1f(bbUStrokeWidth_, d.strokeWidth);
+
+    if (d.shapeMode == 2) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, d.texture);
+        glUniform1i(bbUTex_, 0);
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+// ---------------------------------------------------------------------------
+// HtmlNode rasterization (called from the raster thread between frames)
+// ---------------------------------------------------------------------------
+
+void SceneGraph::materializeHtmlNodes(render::SkiaRenderer* rasterRenderer,
+                                      layout::FontManager* rasterFontManager) {
+    if (!rasterRenderer || !rasterFontManager) return;
+    for (auto& [id, node] : nodes_) {
+        if (node->type() != SceneNode::Type::Html) continue;
+        auto* hn = static_cast<HtmlNode*>(node.get());
+        hn->materializePending(rasterRenderer, rasterFontManager);
+    }
+}
+
+bool SceneGraph::hasPendingHtmlWork() const {
+    for (auto& [id, node] : nodes_) {
+        if (node->type() != SceneNode::Type::Html) continue;
+        auto* hn = static_cast<HtmlNode*>(node.get());
+        if (hn->isHtmlDirty()) return true;
+        // doc_ dirty from imperative DOM mutations via node.root.
+        if (hn->document() && hn->document()->isDirty()) return true;
+    }
+    return false;
 }
 
 } // namespace bro::scene

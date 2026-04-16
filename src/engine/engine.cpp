@@ -1471,6 +1471,17 @@ void Engine::rasterThreadFunc() {
         lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
         backBuf.layers.push_back(std::move(lastHtml));
 
+        // Rasterize dirty HtmlNodes into CPU pixel buffers. Main thread picks
+        // them up on its next SceneGraph::render pass and uploads to GL.
+        // Ganesh is not multi-threaded, so this must happen on the raster
+        // thread with the raster-local Skia + font manager.
+        for (auto& sg : sceneGraphs_) {
+            if (sg.graph) {
+                sg.graph->materializeHtmlNodes(rasterRenderer.get(),
+                                               &rasterFontManager);
+            }
+        }
+
         // Flush each pool surface's deferred Ganesh ops
         for (int i = 0; i <= htmlLayerIdx; ++i) {
             if (htmlSurfacePool_[i].surface && rasterRenderer->grContext()) {
@@ -1910,7 +1921,14 @@ void Engine::run() {
         bool layoutSignaled = false;
 
         bool animActive = layoutShared_.animationsActive.load(std::memory_order_relaxed);
-        if (layoutIdle && rasterIdle && document_ && (document_->isDirty() || animActive || !hasRenderedOnce_)) {
+        // Scene-graph HtmlNodes own detached DOM trees that the layout/raster
+        // pipeline doesn't otherwise see. Force a pass whenever any is dirty
+        // so imperative JS edits via node.root actually re-rasterize.
+        bool sceneHtmlDirty = false;
+        for (auto& sg : sceneGraphs_) {
+            if (sg.graph && sg.graph->hasPendingHtmlWork()) { sceneHtmlDirty = true; break; }
+        }
+        if (layoutIdle && rasterIdle && document_ && (document_->isDirty() || animActive || sceneHtmlDirty || !hasRenderedOnce_)) {
             if (document_->isStructureDirty()) {
                 ensureReplacedElements(document_->documentElement());
             }

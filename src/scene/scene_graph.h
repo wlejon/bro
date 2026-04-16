@@ -5,6 +5,7 @@
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
+#include "scene/html_node.h"
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
 
@@ -17,6 +18,8 @@
 
 namespace bro::canvas { class CanvasScene; }
 namespace bro::physics { class PhysicsWorld; }
+namespace bro::render { class SkiaRenderer; }
+namespace bro::layout { class FontManager; }
 namespace brogameagent { class World; }
 
 namespace bro::scene {
@@ -37,6 +40,7 @@ public:
     SpriteNode* createSprite(const std::string& name = "");
     PhysicsNode* createPhysicsNode(const std::string& name = "");
     MeshNode* createMesh(const std::string& name = "");
+    HtmlNode* createHtml(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);
@@ -141,15 +145,31 @@ public:
     float cameraY() const { return cameraY_; }
     float cameraZoom() const { return cameraZoom_; }
 
+    /// Iterate all HtmlNodes and let them run dirty layout/rasterization.
+    /// Intended to run on the raster thread (Ganesh isn't thread-safe, so
+    /// HtmlNode rasterization must happen on the thread that owns the
+    /// SkiaRenderer passed in). Safe to call when main thread is quiescent.
+    void materializeHtmlNodes(render::SkiaRenderer* rasterRenderer,
+                              layout::FontManager* rasterFontManager);
+
+    /// True if any HtmlNode's DOM subtree is dirty and needs re-rasterization
+    /// on the raster thread. Read on main thread to decide whether to signal
+    /// the layout/raster pipeline even when the main document is clean.
+    bool hasPendingHtmlWork() const;
+
 private:
     void renderNode(SceneNode* node);
     void renderMeshNode(MeshNode* mesh);
+    void renderBillboardNode(SceneNode* node);
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
 
     // --- Mesh GL pipeline (lazy init) ---
     void ensureMeshPipeline();
     void ensureMeshFBO();
     void destroyMeshFBO();
+
+    // --- Billboard GL pipeline (lazy init) ---
+    void ensureBillboardPipeline();
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
@@ -202,6 +222,21 @@ private:
     float fogStart_ = 0.0f;
     float fogEnd_ = 0.0f;
     float fogColor_[3] = {0.0f, 0.0f, 0.0f};
+
+    // --- Billboard pipeline (lazy init) ---
+    GLuint bbProgram_ = 0;
+    GLuint bbVAO_ = 0;
+    GLuint bbVBO_ = 0;
+    GLint bbUVP_ = -1;
+    GLint bbUAnchorRel_ = -1;
+    GLint bbURight_ = -1;
+    GLint bbUUp_ = -1;
+    GLint bbUHalfSize_ = -1;
+    GLint bbUShapeMode_ = -1;
+    GLint bbUColor_ = -1;
+    GLint bbUStroke_ = -1;
+    GLint bbUStrokeWidth_ = -1;
+    GLint bbUTex_ = -1;
 };
 
 } // namespace bro::scene

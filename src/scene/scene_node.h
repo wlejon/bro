@@ -296,8 +296,21 @@ public:
     virtual void onRender(class SceneGraph& graph) {}
 
     // --- Type tag for downcasting ---
-    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh };
+    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html };
     virtual Type type() const { return Type::Base; }
+
+    // --- World anchor + billboard (Shape/Sprite/Html) ---
+    // When hasWorldAnchor is true, the node renders as a camera-facing billboard
+    // in the mesh FBO (depth-tested against 3D geometry) instead of the 2D canvas.
+    enum class BillboardMode : uint8_t { Full, YLock };
+
+    bool hasWorldAnchor() const { return hasWorldAnchor_; }
+    const Vec3& worldAnchor() const { return worldAnchor_; }
+    void setWorldAnchor(const Vec3& a) { worldAnchor_ = a; hasWorldAnchor_ = true; }
+    void clearWorldAnchor() { hasWorldAnchor_ = false; }
+
+    BillboardMode billboardMode() const { return billboardMode_; }
+    void setBillboardMode(BillboardMode m) { billboardMode_ = m; }
 
 private:
     void updateLocalMatrix() const;
@@ -318,6 +331,10 @@ private:
     mutable Mat4 worldMatrix_;
     mutable bool localDirty_ = true;
     mutable bool dirty_ = true;
+
+    Vec3 worldAnchor_;
+    bool hasWorldAnchor_ = false;
+    BillboardMode billboardMode_ = BillboardMode::Full;
 
     static uint32_t s_nextId;
 };
