@@ -83,6 +83,89 @@
         }
         #measure-box .hint { color: #888; font-size: 10px; font-family: system-ui, sans-serif; margin-top: 2px; }
         @keyframes vcb-blink { to { visibility: hidden; } }
+
+        /* Outliner: left-side panel with add-dropdown + per-primitive row.
+           Pointer-events on so the dropdown + row clicks work; the canvas
+           beneath the panel doesn't receive picks. */
+        #outliner {
+            position: absolute;
+            left: 12px;
+            bottom: 14px;
+            width: 220px;
+            max-height: 50vh;
+            background: rgba(0, 0, 0, 0.80);
+            color: #eee;
+            border-radius: 6px;
+            padding: 8px;
+            z-index: 12;
+            font-family: system-ui, sans-serif;
+            font-size: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            overflow: hidden;
+        }
+        #outliner .outliner-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #outliner .outliner-title {
+            color: #7bed9f;
+            font-weight: bold;
+            flex: 1;
+        }
+        #outliner-add {
+            background: #2c2c2c;
+            color: #eee;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        #outliner-list {
+            overflow-y: auto;
+            max-height: calc(50vh - 60px);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .outliner-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .outliner-row:hover { background: rgba(255, 255, 255, 0.06); }
+        .outliner-row.active { background: rgba(123, 237, 159, 0.18); }
+        .outliner-row.hidden .outliner-name { color: #777; font-style: italic; }
+        .outliner-vis, .outliner-del {
+            background: transparent;
+            color: #aaa;
+            border: none;
+            cursor: pointer;
+            padding: 0 2px;
+            font-size: 13px;
+            line-height: 1;
+        }
+        .outliner-vis:hover, .outliner-del:hover { color: #fff; }
+        .outliner-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            outline: none;
+        }
+        .outliner-name[contenteditable="true"] {
+            background: #222;
+            padding: 0 4px;
+            border-radius: 2px;
+            outline: 1px solid #7bed9f;
+        }
     </style>
 </head>
 <body>
@@ -98,6 +181,19 @@
     </div>
     <div id="snap-marker"></div>
     <div id="measure-box"></div>
+    <div id="outliner">
+        <div class="outliner-header">
+            <span class="outliner-title">Outliner</span>
+            <select id="outliner-add" title="Add primitive">
+                <option value="">+ Add...</option>
+                <option value="box">Box</option>
+                <option value="sphere">Sphere</option>
+                <option value="cylinder">Cylinder</option>
+                <option value="plane">Plane</option>
+            </select>
+        </div>
+        <div id="outliner-list"></div>
+    </div>
     <script src="../lib/camera.js"></script>
     <script src="edit-mesh.js"></script>
     <script src="inference.js"></script>

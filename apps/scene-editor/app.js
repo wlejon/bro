@@ -689,6 +689,128 @@ document.addEventListener('keydown', (e) => {
     else if (k === 'escape') cancelPushPull();
 });
 
+// --- Outliner panel --------------------------------------------------------
+//
+// Left-bottom DOM panel listing every primitive with add-dropdown + per-row
+// visibility / delete / rename. Re-renders whenever the registry changes.
+
+const outlinerListEl = document.getElementById('outliner-list');
+const outlinerAddEl  = document.getElementById('outliner-add');
+
+// Palette for auto-assigned colors on new primitives (wrap-around). The
+// default box uses index 0 — subsequent adds walk the palette.
+const OUTLINER_COLORS = [
+    '#74b9ff', '#ffa502', '#2ecc71', '#e74c3c',
+    '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22',
+];
+
+// New primitives spawn along +X offset from origin so they don't stack on
+// the default box. Monotonically increasing — deletions don't reclaim slots
+// so the UX is "every add goes to fresh space".
+let _outlinerNextAddX = 3;
+
+function outlinerStartRename(prim, spanEl) {
+    spanEl.setAttribute('contenteditable', 'true');
+    spanEl.focus();
+    const range = document.createRange();
+    range.selectNodeContents(spanEl);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const commit = (save) => {
+        spanEl.removeAttribute('contenteditable');
+        spanEl.onkeydown = null;
+        spanEl.onblur = null;
+        if (!save) { outlinerRender(); return; }
+        const name = (spanEl.textContent || '').trim();
+        if (name.length) registry.setName(prim.id, name);
+        else outlinerRender();
+    };
+    spanEl.onblur = () => commit(true);
+    spanEl.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    };
+}
+
+function outlinerRender() {
+    if (!outlinerListEl) return;
+    outlinerListEl.innerHTML = '';
+    for (const p of registry.primitives) {
+        const row = document.createElement('div');
+        let cls = 'outliner-row';
+        if (p === registry.active) cls += ' active';
+        if (!p.visible) cls += ' hidden';
+        row.className = cls;
+        row.dataset.id = String(p.id);
+        row.onclick = () => registry.setActive(p.id);
+
+        const vis = document.createElement('button');
+        vis.className = 'outliner-vis';
+        // Filled circle = visible; hollow circle = hidden. Glyph-only keeps
+        // the panel width tight; title gives accessibility text.
+        vis.textContent = p.visible ? '\u25CF' : '\u25CB';
+        vis.title = p.visible ? 'Hide' : 'Show';
+        vis.onclick = (e) => {
+            e.stopPropagation();
+            registry.setVisible(p.id, !p.visible);
+        };
+        row.appendChild(vis);
+
+        const name = document.createElement('span');
+        name.className = 'outliner-name';
+        name.textContent = p.name;
+        name.title = 'Double-click to rename';
+        name.ondblclick = (e) => {
+            e.stopPropagation();
+            outlinerStartRename(p, name);
+        };
+        row.appendChild(name);
+
+        const del = document.createElement('button');
+        del.className = 'outliner-del';
+        del.textContent = '\u00D7';
+        del.title = 'Delete';
+        del.onclick = (e) => {
+            e.stopPropagation();
+            // If the drag was on this primitive, cancel first — otherwise
+            // commit would rebuild a destroyed scene node.
+            if (pushpull.active && pushpull.primitive && pushpull.primitive.id === p.id) {
+                cancelPushPull();
+            }
+            if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
+            registry.remove(p.id);
+        };
+        row.appendChild(del);
+
+        outlinerListEl.appendChild(row);
+    }
+}
+
+if (outlinerAddEl) {
+    outlinerAddEl.onchange = () => {
+        const type = outlinerAddEl.value;
+        outlinerAddEl.value = '';
+        if (!type) return;
+        const idx = registry.primitives.length;
+        const spec = {
+            type,
+            name: type[0].toUpperCase() + type.slice(1) + ' ' + (idx + 1),
+            color: OUTLINER_COLORS[idx % OUTLINER_COLORS.length],
+            position: [_outlinerNextAddX, 0, 0],
+        };
+        if (type === 'box')      spec.params = { sx: 1, sy: 1, sz: 1 };
+        if (type === 'sphere')   spec.params = { r: 1, seg: 24, rings: 16 };
+        if (type === 'cylinder') spec.params = { r: 0.8, h: 2, seg: 24 };
+        if (type === 'plane')    spec.params = { w: 2, d: 2, sx: 1, sz: 1 };
+        _outlinerNextAddX += 2.5;
+        registry.create(spec);
+    };
+}
+
+registry.onChange = outlinerRender;
+outlinerRender();
+
 // --- Test hook --------------------------------------------------------------
 //
 // Getters resolve lazily against `registry.active` so tests always see the
@@ -744,4 +866,8 @@ window.__editor = {
     redoLastPushPull,
     findFaceGroupByNormal: (n, ref) => registry.active.findFaceGroupByNormal(n, ref),
     faceGroupCentroid:     (gIdx)   => registry.active.faceGroupCentroid(gIdx),
+
+    // Outliner hooks (UI is in DOM; tests can trigger the internal helpers
+    // without synthesizing events).
+    outlinerRender,
 };
