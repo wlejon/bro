@@ -469,15 +469,14 @@ var Scene3D = {};
         var mem = AI.memory[focus.unit.id];
         var range = focus.unit.attackRange || 9;
 
-        // Focus ring at the capsule base.
+        // Focus ring at the capsule base. Torus is already generated flat on
+        // XZ with +Y as its central axis, so no rotation needed.
         g.focusRing.visible = true;
         g.focusRing.x = focus.x; g.focusRing.y = 0.02; g.focusRing.z = focus.z;
-        g.focusRing.rotationX = Math.PI / 2; // lay flat on XZ
 
         // Range ring — torus's majorRadius=1, scale XZ by range.
         g.rangeRing.visible = true;
         g.rangeRing.x = focus.x; g.rangeRing.y = 0.02; g.rangeRing.z = focus.z;
-        g.rangeRing.rotationX = Math.PI / 2;
         g.rangeRing.scaleX = range;
         g.rangeRing.scaleZ = range;
 

@@ -570,7 +570,25 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
         glPolygonOffset(pf, pu);
     }
 
+    // Alpha blending for translucent meshes (uniform color alpha < 1).
+    // Depth writes are disabled so multiple translucent surfaces don't
+    // occlude each other; opaque meshes still occlude translucent ones via
+    // the unchanged depth test. Separate alpha function ensures the final
+    // FBO stays composable over the 2D backdrop (standard "over" operator).
+    bool translucent = mesh->color()[3] < 1.0f;
+    if (translucent) {
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE,       GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+    }
+
     mesh->onRender(*this);
+
+    if (translucent) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+    }
 
     if (pf != 0.0f || pu != 0.0f) {
         glDisable(GL_POLYGON_OFFSET_FILL);
