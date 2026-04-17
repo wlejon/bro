@@ -1933,12 +1933,19 @@ document.addEventListener('mousemove', (e) => {
         return;
     }
     if (pushpull.active) {
+        // Exclude the pushed primitive from snap resolution — its own
+        // endpoints/midpoints/face are moving targets, not useful snap
+        // references (and visually confusing when the cursor snaps to the
+        // face you're actively dragging). Cross-face-same-primitive snaps
+        // are rare and the simpler "skip the whole primitive" rule reads
+        // as the user expects.
+        const pushId = pushpull.primitive.id;
         const vcbVal = MeasureBox.parseValue(measureBoxState.buffer);
         if (vcbVal !== null) {
-            showSnapMarker(resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE));
+            showSnapMarker(resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE, pushId));
             return;
         }
-        const snap = resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE);
+        const snap = resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE, pushId);
         let dist;
         if (snap) {
             dist = snapAxisDistance(snap, pushpull.pivot, pushpull.axis);
