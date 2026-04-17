@@ -88,15 +88,24 @@ void main() {
     vec3 N = normalize(vNormal);
     vec3 L = normalize(uLightDir);
 
-    // Ambient + diffuse + specular
-    float ambient = 0.15;
-    float diff = max(dot(N, L), 0.0);
+    // Key light + two fills from opposing directions so no side sits
+    // in pure ambient. Fill dirs are orthogonalized against L so they
+    // reliably illuminate whatever L leaves dark.
+    vec3 upRef = abs(L.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 side  = normalize(cross(L, upRef));
+    vec3 F1 = normalize(-L + 0.35 * side);
+    vec3 F2 = normalize(-L - 0.35 * side);
+
+    float ambient = 0.2;
+    float diffKey = max(dot(N, L),  0.0) * 0.55;
+    float diffF1  = max(dot(N, F1), 0.0) * 0.25;
+    float diffF2  = max(dot(N, F2), 0.0) * 0.20;
 
     vec3 V = normalize(uCameraPos - vWorldPos);
     vec3 H = normalize(L + V);
-    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.3;
+    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.25;
 
-    float light = ambient + diff * 0.7 + spec;
+    float light = ambient + diffKey + diffF1 + diffF2 + spec;
     vec3 lit = baseColor * light;
     vec3 color = mix(lit, baseColor, uEmissive);
 

@@ -30,7 +30,7 @@ function setupDefaultScene() {
     registry.create({
         type: 'box',
         name: 'Box',
-        color: '#74b9ff',
+        color: '#b8bcc2',
         params: { sx: 1, sy: 1, sz: 1 },
     });
 }
@@ -2124,10 +2124,7 @@ const outlinerAddBtns = document.querySelectorAll('.outliner-add-btn');
 
 // Palette for auto-assigned colors on new primitives (wrap-around). The
 // default box uses index 0 — subsequent adds walk the palette.
-const OUTLINER_COLORS = [
-    '#74b9ff', '#ffa502', '#2ecc71', '#e74c3c',
-    '#9b59b6', '#f1c40f', '#1abc9c', '#e67e22',
-];
+const OUTLINER_COLORS = ['#b8bcc2'];
 
 // New primitives spawn along +X offset from origin so they don't stack on
 // the default box. Monotonically increasing — deletions don't reclaim slots

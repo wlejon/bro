@@ -204,9 +204,10 @@
         this.inferenceGeo = Inference.buildInferenceGeo(
             this.positions, this.indices, this.faceGroups);
         this.meshNode = this.scene.createMesh({
-            data:  mesh,
-            color: this.color,
-            name:  this.name,
+            data:     mesh,
+            color:    this.color,
+            emissive: 0.85,
+            name:     this.name,
         });
         this.meshNode.visible = this.visible;
         this._rebuildEdges();
