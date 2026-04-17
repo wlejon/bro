@@ -253,11 +253,12 @@ t('second push/pull on the extruded slab extends it further', () => {
 });
 
 // -------------------------------------------------------------------------
-// Face-group preservation: pulling a cylinder facet ADDS bridge groups
-// (no warping = no merging of facets).
+// Face-group preservation: pulling a cylinder facet deforms adjacent faces
+// in place (vertex-substitution surgery). No new bridge groups are added —
+// the neighbour facets tilt to a new plane through the moved edge.
 // -------------------------------------------------------------------------
 
-t('pulling a cylinder facet adds 2 bridge groups (left + right walls)', () => {
+t('pulling a cylinder facet deforms neighbours in place (no new groups)', () => {
     if (E.pushpull && E.pushpull.active) E.cancelPushPull();
     reg.clear();
     h.clear();
@@ -287,8 +288,14 @@ t('pulling a cylinder facet adds 2 bridge groups (left + right walls)', () => {
     E.applyPushPull(0.5);
     E.commitPushPull();
     const afterGroupCount = cyl.faceGroups.groups.length;
-    eq(afterGroupCount, beforeGroupCount + 2,
-       `2 new wall groups added (got ${afterGroupCount - beforeGroupCount} new)`);
+    eq(afterGroupCount, beforeGroupCount,
+       `no new groups (got ${afterGroupCount - beforeGroupCount} new)`);
+    // Manifold preserved — no edges opened up.
+    const em = EditMesh.fromMeshData(cyl.positions, cyl.indices);
+    const val = EditMesh.validate(em);
+    truthy(val.isClosed,
+           'cylinder closed after side pull (boundary=' +
+           val.boundaryHalfEdges + ')');
 });
 
 // -------------------------------------------------------------------------

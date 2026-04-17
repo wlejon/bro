@@ -443,75 +443,6 @@ const pushpull = {
 };
 
 const BRIDGE_MERGE_TOL = 0.9995;   // cos(1.8°): coplanarity test for bridges
-const CAP_PARALLEL_TOL = 0.02;     // |axis·capNormal| below this = cap edge
-
-// Rip out every face tagged `gIdx` from the EditMesh (along with their HEs
-// and any twins pointing into them), then triangulate `polyLoops` (array of
-// closed CCW vertex loops sharing `normal`) and emit fresh faces tagged
-// `gIdx`. Returns true on success, false if triangulation yielded nothing.
-function retriangulateFaceGroup(em, gIdx, polyLoops, normal) {
-    // Flat positions for Mesh.polygon3D — it reuses input 3D verts verbatim
-    // (positions come back in the same order, indices reference into them).
-    // Only the outer loop is supported here; holes would need extra plumbing.
-    const outer = polyLoops[0];
-    const flat = new Array(outer.length * 3);
-    for (let i = 0; i < outer.length; i++) {
-        flat[i * 3 + 0] = outer[i].x;
-        flat[i * 3 + 1] = outer[i].y;
-        flat[i * 3 + 2] = outer[i].z;
-    }
-    let mesh;
-    try {
-        mesh = Mesh.polygon3D(flat, [], normal);
-    } catch (_) { return false; }
-    if (!mesh || !mesh.indices || mesh.indices.length === 0) return false;
-
-    // Remove old faces from the group.
-    const dead = new Set();
-    for (const f of em.faces) if (f.group === gIdx) dead.add(f);
-    em.faces = em.faces.filter(f => !dead.has(f));
-    em.halfEdges = em.halfEdges.filter(he => !dead.has(he.face));
-    // Any surviving HE whose twin pointed into a removed face is now a
-    // mesh-level boundary — clear that twin so rematchTwins can re-pair it.
-    for (const he of em.halfEdges) {
-        if (he.twin && dead.has(he.twin.face)) he.twin = null;
-    }
-
-    // Clone input verts to give this face group its own vertex objects.
-    // Per-vertex normals are written last-write-wins in surgicalPushPull, so
-    // a cap vert shared (by object identity) with a bridge or wall ends up
-    // with whichever group wrote last — causing glaring lighting seams.
-    // Seam-duplicating matches the primitive-builder convention (bromesh
-    // gives every flat face its own rim verts) and keeps the cap's normals
-    // isolated to the cap.
-    const ownVerts = outer.map(v => {
-        const c = { x: v.x, y: v.y, z: v.z, halfEdge: null };
-        em.vertices.push(c);
-        return c;
-    });
-
-    // Emit new faces. Mesh.polygon3D preserves input vert order for simple
-    // polygons, so indices map directly into `outer` (and therefore ownVerts).
-    const idx = mesh.indices;
-    for (let t = 0; t < idx.length; t += 3) {
-        const face = { halfEdge: null, group: gIdx };
-        em.faces.push(face);
-        const hs = [];
-        for (let k = 0; k < 3; k++) {
-            const v = ownVerts[idx[t + k]];
-            if (!v) return false;   // Steiner point — bail out
-            const h = { origin: v, twin: null, next: null, face };
-            em.halfEdges.push(h);
-            hs.push(h);
-        }
-        hs[0].next = hs[1]; hs[1].next = hs[2]; hs[2].next = hs[0];
-        face.halfEdge = hs[0];
-        for (let k = 0; k < 3; k++) {
-            if (!hs[k].origin.halfEdge) hs[k].origin.halfEdge = hs[k];
-        }
-    }
-    return true;
-}
 
 // Build a fresh push/pull surgery output for the snapshotted mesh, displacing
 // the picked face by axis*t. Returns
@@ -523,189 +454,53 @@ function surgicalPushPull(snap, gIdx, axis, t) {
                          snap.indices.length / 3;
 
     const em = EditMesh.fromMeshData(snap.positions, snap.indices, snap.triToGroup);
-    // Snapshot the pushed face's tris (in EditMesh order) so we can find
-    // them again in the output for back-face creation + highlight tracking.
     const movedFaces = [];
     for (let i = 0; i < em.faces.length; i++) {
         if (em.faces[i].group === gIdx) movedFaces.push(em.faces[i]);
     }
 
-    // Classify pushed-face boundary edges BEFORE any mutation. A boundary HE
-    // whose twin lives in a face group whose plane contains the push axis
-    // (|axis · adjN| ≈ 0) is a "cap edge" — the adjacent face should reshape
-    // to follow the moved wall, not get a bridge tacked on. Everything else
-    // is a "side edge" handled by duplicate+bridge (current behavior).
-    const capEdgeHEs = new Set();
-    const capGroupsToRetri = new Set();
     const baseGroupCount = snap.faceGroups.groups.length;
-    if (!isSketchFace) {
-        const preBoundary = EditMesh.findFaceGroupBoundary(em, gIdx);
-        for (const loop of preBoundary) {
-            for (const he of loop) {
-                if (!he.twin) continue;
-                const adjG = he.twin.face.group;
-                if (adjG < 0 || adjG >= baseGroupCount) continue;
-                const adjN = snap.faceGroups.groups[adjG].normal;
-                const d = Math.abs(axis[0]*adjN[0] + axis[1]*adjN[1] + axis[2]*adjN[2]);
-                if (d < CAP_PARALLEL_TOL) {
-                    capEdgeHEs.add(he);
-                    capGroupsToRetri.add(adjG);
-                }
-            }
-        }
-    }
-
-    // Snapshot each affected cap's boundary loop BEFORE duplicateBoundary
-    // severs twins and rewires verts — we need the original vertex objects
-    // to walk the cap's polygon.
-    const capBoundarySnaps = new Map();   // capG -> array of loops (arrays of {a,b} vert pairs)
-    for (const capG of capGroupsToRetri) {
-        const loops = EditMesh.findFaceGroupBoundary(em, capG);
-        const snap2 = loops.map(loop => loop.map(he => ({
-            a: he.origin, b: he.next.origin,
-        })));
-        capBoundarySnaps.set(capG, snap2);
-    }
-
-    const { dupMap, oldBoundary } = EditMesh.duplicateBoundary(em, gIdx, offset);
-
-    // Assign each bridge to either the adjacent face group (if coplanar) or
-    // a fresh group. Track new groups so subsequent commits can preserve
-    // them via triToGroup propagation.
     let nextGroup = baseGroupCount;
-    const newGroupNormals = [];   // normals for any newly-created bridge groups
-    function assignBridgeGroup(rec, bridgeNormal) {
-        if (rec.adjGroup >= 0 && rec.adjGroup < baseGroupCount) {
-            const adjN = snap.faceGroups.groups[rec.adjGroup].normal;
-            const dot = bridgeNormal[0] * adjN[0] +
-                        bridgeNormal[1] * adjN[1] +
-                        bridgeNormal[2] * adjN[2];
-            if (dot > BRIDGE_MERGE_TOL) return rec.adjGroup;
-        }
-        const g = nextGroup++;
-        newGroupNormals[g - baseGroupCount] = bridgeNormal.slice();
-        return g;
-    }
-    // Position-keyed lookups. Primitives like Mesh.box seam-duplicate rim
-    // verts per face (for flat normals), so the cap's boundary vertex object
-    // at (1,1,1) is NOT the same object as the top face's (1,1,1). We match
-    // across faces by quantized position.
-    const posKeyOfVert = EditMesh._posKey;
-    const dupByPos       = new Map();      // pos key → moved dup vert (every boundary vert)
-    const capEdgePairPos = new Set();      // "aPos|bPos" in cap walk direction (= twin of pushed HE)
-    for (const loop of oldBoundary) {
-        for (const rec of loop) {
-            // Every duplicated vert is addressable by its original's position.
-            dupByPos.set(posKeyOfVert(rec.oldA), rec.newA);
-            dupByPos.set(posKeyOfVert(rec.oldB), rec.newB);
-            if (capEdgeHEs.has(rec.he)) {
-                // Pushed HE went oldA→oldB; cap walk traverses twin direction.
-                capEdgePairPos.add(
-                    posKeyOfVert(rec.oldB) + '|' + posKeyOfVert(rec.oldA));
-                continue;    // skip bridge for cap edges
-            }
-            const a = rec.oldA, b = rec.oldB;
-            const ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
-            // Bridge normal = edge × offset (outward when offset displaces
-            // the face away from its interior — convention matches the
-            // CCW-from-+normal triangulation that all our face groups use).
-            let bx = ey * offset[2] - ez * offset[1];
-            let by = ez * offset[0] - ex * offset[2];
-            let bz = ex * offset[1] - ey * offset[0];
-            const bl = Math.hypot(bx, by, bz);
-            if (bl > 1e-10) { bx /= bl; by /= bl; bz /= bl; }
-            const bridgeNormal = [bx, by, bz];
-            const grp = assignBridgeGroup(rec, bridgeNormal);
-            EditMesh.addBridge(em, rec.oldA, rec.oldB, rec.newA, rec.newB, grp);
-        }
-    }
+    const newGroupNormals = [];   // indexed by (g - baseGroupCount)
 
-    // Retriangulate each affected cap. For each vert on the cap's polygon,
-    // if it's a corner shared with the pushed-face cap-edge (i.e. it lives
-    // on at least one cap-edge), swap it for its duplicate — the duplicate
-    // sits at the moved position. Non-shared verts stay put. The resulting
-    // polygon is retriangulated flat and emitted as the cap's new faces.
-    for (const capG of capGroupsToRetri) {
-        const loops = capBoundarySnaps.get(capG);
-        const newPolyLoops = [];
-        for (const loop of loops) {
-            // Walk edges, pushing both endpoints — substituting moved dups
-            // for the cap-edge segment. Consecutive duplicates (by position)
-            // are dedupped, so:
-            //   - a corner adjoined by TWO cap-edges (box-top case, pure-cap
-            //     corner) collapses: the dup from each edge coincides, the
-            //     corner moves.
-            //   - a corner adjoined by ONE cap-edge + ONE non-cap-edge
-            //     (cylinder side-pull case, mixed corner) retains BOTH the
-            //     original and the dup — the polygon gains a detour edge
-            //     (original → dup) that is the bridge's top edge.
-            const verts = [];
-            for (const edge of loop) {
-                const pka = posKeyOfVert(edge.a);
-                const pkb = posKeyOfVert(edge.b);
-                let sa = edge.a, sb = edge.b;
-                if (capEdgePairPos.has(pka + '|' + pkb)) {
-                    const da = dupByPos.get(pka);
-                    const db = dupByPos.get(pkb);
-                    if (da && db) { sa = da; sb = db; }
-                }
-                verts.push(sa, sb);
-            }
-            const dedup = [];
-            for (const v of verts) {
-                if (dedup.length &&
-                    posKeyOfVert(dedup[dedup.length - 1]) === posKeyOfVert(v)) {
-                    continue;
-                }
-                dedup.push(v);
-            }
-            if (dedup.length > 1 &&
-                posKeyOfVert(dedup[0]) === posKeyOfVert(dedup[dedup.length - 1])) {
-                dedup.pop();
-            }
-            if (dedup.length >= 3) newPolyLoops.push(dedup);
-        }
-        if (newPolyLoops.length === 0) continue;
-        const capNormal = snap.faceGroups.groups[capG].normal;
-        const ok = retriangulateFaceGroup(em, capG, newPolyLoops, capNormal);
-        if (!ok) {
-            // Triangulation failed (degenerate polygon): fall back to adding
-            // bridges for the cap edges we skipped above.
-            for (const loop of oldBoundary) {
-                for (const rec of loop) {
-                    if (!capEdgeHEs.has(rec.he)) continue;
-                    const adjG = rec.adjGroup;
-                    if (adjG !== capG) continue;
-                    const a = rec.oldA, b = rec.oldB;
-                    const ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
-                    let bx = ey * offset[2] - ez * offset[1];
-                    let by = ez * offset[0] - ex * offset[2];
-                    let bz = ex * offset[1] - ey * offset[0];
-                    const bl = Math.hypot(bx, by, bz);
-                    if (bl > 1e-10) { bx /= bl; by /= bl; bz /= bl; }
-                    const grp = assignBridgeGroup(rec, [bx, by, bz]);
-                    EditMesh.addBridge(em, rec.oldA, rec.oldB, rec.newA, rec.newB, grp);
-                }
-            }
-        }
-    }
-
-    // Sketch face: add a back face at the original positions so the slab
-    // closes into a manifold. Triangles mirror the moved face's
-    // triangulation but use the ORIGINAL boundary verts (still in dupMap as
-    // keys) with reversed winding.
     if (isSketchFace) {
+        // --- Sketch face (2D polygon, no adjacencies): duplicate + bridge +
+        // back face. The only way to make an open polygon into a closed slab.
+        const { dupMap, oldBoundary } =
+            EditMesh.duplicateBoundary(em, gIdx, offset);
+
+        function assignBridgeGroup(rec, bridgeNormal) {
+            if (rec.adjGroup >= 0 && rec.adjGroup < baseGroupCount) {
+                const adjN = snap.faceGroups.groups[rec.adjGroup].normal;
+                const dot = bridgeNormal[0]*adjN[0] +
+                            bridgeNormal[1]*adjN[1] +
+                            bridgeNormal[2]*adjN[2];
+                if (dot > BRIDGE_MERGE_TOL) return rec.adjGroup;
+            }
+            const g = nextGroup++;
+            newGroupNormals[g - baseGroupCount] = bridgeNormal.slice();
+            return g;
+        }
+        for (const loop of oldBoundary) {
+            for (const rec of loop) {
+                const a = rec.oldA, b = rec.oldB;
+                const ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
+                let bx = ey * offset[2] - ez * offset[1];
+                let by = ez * offset[0] - ex * offset[2];
+                let bz = ex * offset[1] - ey * offset[0];
+                const bl = Math.hypot(bx, by, bz);
+                if (bl > 1e-10) { bx /= bl; by /= bl; bz /= bl; }
+                const grp = assignBridgeGroup(rec, [bx, by, bz]);
+                EditMesh.addBridge(em, rec.oldA, rec.oldB, rec.newA, rec.newB, grp);
+            }
+        }
+        // Back face at original positions (reversed winding) — closes the slab.
         const backGroup = nextGroup++;
         newGroupNormals[backGroup - baseGroupCount] = [
             -axis[0], -axis[1], -axis[2],
         ];
         for (const f of movedFaces) {
             const hes = EditMesh.faceHalfEdges(f);
-            // f's HEs now reference the duplicates (rewired). Map back to
-            // originals by inverse-lookup in dupMap. (Interior verts of a
-            // triangulated polygon are also boundary verts — Manifold's
-            // Triangulate doesn't add Steiner points — so dupMap covers
-            // every vert in the face.)
             const origs = [];
             for (let k = 0; k < 3; k++) {
                 const newV = hes[k].origin;
@@ -713,12 +508,9 @@ function surgicalPushPull(snap, gIdx, axis, t) {
                 for (const [o, n] of dupMap.entries()) {
                     if (n === newV) { oldV = o; break; }
                 }
-                if (!oldV) {
-                    throw new Error('back-face: vert not found in dupMap');
-                }
+                if (!oldV) throw new Error('back-face: vert not found in dupMap');
                 origs.push(oldV);
             }
-            // Reverse winding (origs[0], origs[2], origs[1]) for the back face.
             const bf = { halfEdge: null, group: backGroup };
             em.faces.push(bf);
             const h0 = { origin: origs[0], twin: null, next: null, face: bf };
@@ -727,10 +519,75 @@ function surgicalPushPull(snap, gIdx, axis, t) {
             em.halfEdges.push(h0, h1, h2);
             h0.next = h1; h1.next = h2; h2.next = h0;
             bf.halfEdge = h0;
-            // Refresh outgoing-HE pointers if the originals had no incident HE.
             if (!origs[0].halfEdge) origs[0].halfEdge = h0;
             if (!origs[2].halfEdge) origs[2].halfEdge = h1;
             if (!origs[1].halfEdge) origs[1].halfEdge = h2;
+        }
+    } else {
+        // --- Closed solid: translate in place. Adjacent faces deform via
+        // shared vertex references — stay planar (cap adjacents keep their
+        // plane; side adjacents tilt to a new plane through the moved edge).
+        // No new verts, no new faces, no bridges — manifold is preserved.
+        //
+        // Walking by topology (one-ring via twin.next) rather than by
+        // posKey: Float32 sin(2π) ≈ 1.7e-7 at cylinder seams, so seam-dup
+        // verts aren't posKey-equal post-push. After collecting each topo
+        // ring, we *snap* all members to one canonical new position — this
+        // guarantees the serialized positions round-trip through posKey on
+        // the next fromMeshData without breaking twin pairings.
+        const vertsToMove = new Set();
+        const snapGroups = [];
+        function walkRing(startHE) {
+            const ring = [];
+            let cur = startHE;
+            const seen = new Set();
+            for (let iter = 0; iter < em.halfEdges.length + 1; iter++) {
+                if (seen.has(cur)) break;
+                seen.add(cur);
+                if (!vertsToMove.has(cur.origin)) {
+                    vertsToMove.add(cur.origin);
+                    ring.push(cur.origin);
+                }
+                if (!cur.twin) break;
+                cur = cur.twin.next;
+            }
+            if (ring.length > 1) snapGroups.push(ring);
+        }
+        // Interior verts of the pushed group move with no ring-snapping (they
+        // have no seam dups in other groups by definition). Boundary verts
+        // move via walkRing to sweep up seam dups in adjacent faces.
+        const bdLoops = EditMesh.findFaceGroupBoundary(em, gIdx);
+        const bdOrigins = new Set();
+        for (const loop of bdLoops) {
+            for (const he of loop) {
+                bdOrigins.add(he.origin);
+                bdOrigins.add(he.next.origin);
+            }
+        }
+        for (const f of movedFaces) {
+            const hes = EditMesh.faceHalfEdges(f);
+            for (const he of hes) {
+                if (bdOrigins.has(he.origin)) {
+                    walkRing(he);
+                } else {
+                    vertsToMove.add(he.origin);
+                }
+            }
+        }
+        for (const v of vertsToMove) {
+            v.x += offset[0];
+            v.y += offset[1];
+            v.z += offset[2];
+        }
+        // Snap each ring to a common position (use its first member's post-
+        // move coords as the canonical value). Kills Float32 seam jitter.
+        for (const ring of snapGroups) {
+            const first = ring[0];
+            for (let i = 1; i < ring.length; i++) {
+                ring[i].x = first.x;
+                ring[i].y = first.y;
+                ring[i].z = first.z;
+            }
         }
     }
 
@@ -738,36 +595,52 @@ function surgicalPushPull(snap, gIdx, axis, t) {
 
     const out = EditMesh.toMeshDataWithGroups(em);
 
-    // Per-group flat normals. Vert shared across groups: last-write-wins.
-    // For sharp-edged primitives this matches the bromesh convention where
-    // each face group has its own copy of shared rim verts (we keep those
-    // duplicates intact through surgery), so cross-group bleeding is rare.
-    const normals = new Float32Array(out.positions.length);
+    // Per-group flat normals recomputed from post-surgery geometry. Closed-
+    // solid push may tilt adjacent side faces to a new plane, so the group
+    // normals in `snap.faceGroups` are stale — take each group's normal
+    // from its first triangle's cross product.
+    const pos = out.positions;
+    const idx = out.indices;
+    const seenGroupNormal = new Map();   // groupId → [nx, ny, nz]
     const groupNormalForTri = new Float32Array(out.triToGroup.length * 3);
-    for (let t = 0; t < out.triToGroup.length; t++) {
-        const g = out.triToGroup[t];
-        let nx, ny, nz;
-        if (g < baseGroupCount) {
-            const gn = snap.faceGroups.groups[g].normal;
-            nx = gn[0]; ny = gn[1]; nz = gn[2];
-        } else {
-            const gn = newGroupNormals[g - baseGroupCount];
-            nx = gn[0]; ny = gn[1]; nz = gn[2];
+    for (let tt = 0; tt < out.triToGroup.length; tt++) {
+        const g = out.triToGroup[tt];
+        let gn = seenGroupNormal.get(g);
+        if (!gn) {
+            const i0 = idx[tt*3 + 0] * 3;
+            const i1 = idx[tt*3 + 1] * 3;
+            const i2 = idx[tt*3 + 2] * 3;
+            const ax = pos[i1]   - pos[i0];
+            const ay = pos[i1+1] - pos[i0+1];
+            const az = pos[i1+2] - pos[i0+2];
+            const bx = pos[i2]   - pos[i0];
+            const by = pos[i2+1] - pos[i0+1];
+            const bz = pos[i2+2] - pos[i0+2];
+            let nx = ay*bz - az*by;
+            let ny = az*bx - ax*bz;
+            let nz = ax*by - ay*bx;
+            const L = Math.hypot(nx, ny, nz);
+            if (L > 1e-10) { nx /= L; ny /= L; nz /= L; }
+            else { nx = 0; ny = 1; nz = 0; }
+            gn = [nx, ny, nz];
+            seenGroupNormal.set(g, gn);
         }
-        groupNormalForTri[t * 3 + 0] = nx;
-        groupNormalForTri[t * 3 + 1] = ny;
-        groupNormalForTri[t * 3 + 2] = nz;
+        groupNormalForTri[tt*3 + 0] = gn[0];
+        groupNormalForTri[tt*3 + 1] = gn[1];
+        groupNormalForTri[tt*3 + 2] = gn[2];
+    }
+
+    const normals = new Float32Array(out.positions.length);
+    for (let tt = 0; tt < out.triToGroup.length; tt++) {
+        const gn = seenGroupNormal.get(out.triToGroup[tt]);
         for (let k = 0; k < 3; k++) {
-            const vi = out.indices[t * 3 + k];
-            normals[vi * 3 + 0] = nx;
-            normals[vi * 3 + 1] = ny;
-            normals[vi * 3 + 2] = nz;
+            const vi = idx[tt*3 + k];
+            normals[vi*3 + 0] = gn[0];
+            normals[vi*3 + 1] = gn[1];
+            normals[vi*3 + 2] = gn[2];
         }
     }
 
-    // Find the moved face's tri indices in the output (they may have shifted
-    // because EditMesh appended new faces). The moved tris kept their face
-    // objects; we tagged them in `movedFaces`.
     const movedFaceSet = new Set(movedFaces);
     const faceTris = [];
     for (let i = 0; i < em.faces.length; i++) {
