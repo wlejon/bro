@@ -112,10 +112,15 @@ const sceneAxesNode = scene.createMesh({
     name: 'scene-axes',
 });
 
-// --- Translate gizmo (created early — applyCamera below references it) ----
+// --- Translate gizmo (engine-rendered — bro.gizmo.*) -----------------------
+//
+// Pivot + drag + hit-testing all live in the engine; this file only tells
+// the gizmo *where* to sit (the active primitive's bbox centroid) and what
+// to do with the per-frame world delta (forward to MoveTool.applyDelta for
+// preview + commit via the same pipeline the Move tool uses).
 
-const gizmo = Gizmo.create(scene);
 const GIZMO_TARGET_PX = 80;
+bro.gizmo.configure({ size: GIZMO_TARGET_PX });
 
 // --- Camera -----------------------------------------------------------------
 
@@ -123,9 +128,8 @@ const cam = Camera.createOrbit({ target: [0, 0, 0], dist: 4, fov: 45 });
 
 function applyCamera() {
     scene.setCamera(Camera.orbitViewOpts(cam, canvas));
-    // The gizmo's screen-stable scale depends on camera distance — keep it
-    // in lockstep with every camera update so arrows don't visually grow or
-    // shrink when the user orbits/pans/zooms.
+    // Scale of engine gizmo tracks camera distance automatically; we only
+    // need to keep its pivot in sync with the active primitive.
     updateGizmoForActive();
 }
 applyCamera();
@@ -482,22 +486,20 @@ function cancelMove() {
 
 // --- Translate gizmo --------------------------------------------------------
 //
-// 3 colored arrows anchored at the active primitive's bbox centroid. Clicking
-// an arrow starts an axis-locked move on the active primitive — reuses the
-// MoveTool buffers for preview + commit. Always-on direct manipulation: the
-// gizmo intercepts left-click before the primitive picker, regardless of
-// the current tool mode. (Click between the arrows to fall through to the
-// tool's normal pick.)
-//
-// `gizmo` itself is declared above the camera block so applyCamera()'s
-// initial call chain doesn't trip the const TDZ.
+// The engine (bro.gizmo) renders the arrows, hit-tests the cursor, runs the
+// drag, and fires callbacks we subscribe to below. We only own the app-
+// specific parts: anchoring the pivot to the active primitive's centroid,
+// forwarding per-frame world deltas into MoveTool (which does the mesh
+// preview + commit), and tracking drag state for UI feedback.
 
+// Drag state — begin/translate/end fires from the engine update this block
+// so the rest of the app (mousemove hover branches, toolbar state) can react.
 const gizmoDrag = {
-    active:    false,
-    primitive: null,             // captured at begin — drag stays bound here
-    axis:      [0, 0, 0],        // unit world-axis direction
-    pivot:     [0, 0, 0],        // gizmo origin at drag start
-    refT:      0,                // cursor's axis projection at drag start
+    active:      false,
+    primitive:   null,    // captured at begin — drag stays bound here
+    axis:        [0, 0, 0],
+    pivot:       [0, 0, 0],
+    totalDelta:  [0, 0, 0], // accumulated world-space delta this drag
 };
 
 function primCentroid(prim) {
@@ -513,74 +515,87 @@ function primCentroid(prim) {
     return [(minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5];
 }
 
-// Keep the gizmo anchored to the active primitive's bbox centroid and
-// scaled so arrows stay ~constant pixel size as the camera zooms.
-// Hidden when no primitive is active.
+// Keep the gizmo anchored to the active primitive's bbox centroid. Hidden
+// when no primitive is active. Called from applyCamera + after any edit
+// that changes the active primitive's geometry or selection.
 function updateGizmoForActive() {
-    if (!gizmo) return;                // applyCamera fires once before gizmo exists
     const prim = registry.active;
     if (!prim || !prim.visible) {
-        Gizmo.setVisible(gizmo, false);
+        bro.gizmo.hide();
         return;
     }
     const c = primCentroid(prim);
-    Gizmo.setOrigin(gizmo, c[0], c[1], c[2]);
-    const camOpts = Camera.orbitViewOpts(cam, canvas);
-    const dx = c[0] - camOpts.position[0];
-    const dy = c[1] - camOpts.position[1];
-    const dz = c[2] - camOpts.position[2];
-    const dist = Math.hypot(dx, dy, dz);
-    const h = canvas.clientHeight || canvas.height;
-    Gizmo.setScale(gizmo,
-        Gizmo.screenStableScale(dist, camOpts.fov, h, GIZMO_TARGET_PX));
-    Gizmo.setVisible(gizmo, true);
+    bro.gizmo.setPosition(c[0], c[1], c[2]);
+    bro.gizmo.show();
 }
 
-function beginGizmoDrag(primitive, hit, ray) {
-    if (!primitive || !hit) return;
-    gizmoDrag.active = true;
-    gizmoDrag.primitive = primitive;
-    gizmoDrag.axis[0] = hit.axisDir[0];
-    gizmoDrag.axis[1] = hit.axisDir[1];
-    gizmoDrag.axis[2] = hit.axisDir[2];
-    gizmoDrag.pivot[0] = gizmo.origin[0];
-    gizmoDrag.pivot[1] = gizmo.origin[1];
-    gizmoDrag.pivot[2] = gizmo.origin[2];
-    gizmoDrag.refT = rayVsAxisDistance(ray, gizmoDrag.pivot, gizmoDrag.axis);
-    // Reuse the MoveTool plumbing for preview + commit; the planeNormal arg
-    // is unused on this path because we drive applyDelta directly.
-    MoveTool.begin(moveToolState, primitive,
-        primitive.positions ? gizmoDrag.pivot : [0, 0, 0],
-        gizmoDrag.axis);
-    Gizmo.setHovered(gizmo, hit.axis);
-    pickInfo.textContent = `gizmo  ${hit.axis.toUpperCase()}  [${primitive.name}]  0`;
+function axisLabel(ax) {
+    if (Math.abs(ax[0]) > 0.5) return 'X';
+    if (Math.abs(ax[1]) > 0.5) return 'Y';
+    return 'Z';
 }
 
-function applyGizmoDrag(ray) {
-    if (!gizmoDrag.active) return;
-    const t = rayVsAxisDistance(ray, gizmoDrag.pivot, gizmoDrag.axis);
-    const d = t - gizmoDrag.refT;
-    const ax = gizmoDrag.axis;
-    MoveTool.applyDelta(moveToolState, ax[0] * d, ax[1] * d, ax[2] * d);
-    pickInfo.textContent = `gizmo  ${axisLabel(ax)}  [${gizmoDrag.primitive.name}]  ` +
-        `${d.toFixed(3)}`;
-    return d;
-}
-
-function commitGizmoDrag() {
-    if (!gizmoDrag.active) return;
-    const result = MoveTool.commit(moveToolState);
-    if (result) {
-        const d = result.delta;
-        pickInfo.textContent = `moved [${result.primitive.name}] by ` +
-            `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
-    }
-    gizmoDrag.active = false;
-    gizmoDrag.primitive = null;
-    Gizmo.setHovered(gizmo, null);
-    showSnapMarker(null);
-    updateGizmoForActive();
-}
+// Engine→app handler wiring. The `position` callback fires every frame so
+// the pivot automatically tracks the active primitive — we don't have to
+// call setPosition from the rest of the app any more.
+bro.gizmo.attach({
+    position: () => {
+        const prim = registry.active;
+        if (!prim || !prim.visible) return [0, 0, 0];
+        return primCentroid(prim);
+    },
+    beginDrag: () => {
+        const prim = registry.active;
+        if (!prim) return;
+        const axisName = bro.gizmo.hovered;  // 'x'|'y'|'z' (locked on drag)
+        const axis = axisName === 'x' ? [1, 0, 0]
+                  : axisName === 'y' ? [0, 1, 0]
+                  :                    [0, 0, 1];
+        const c = primCentroid(prim);
+        gizmoDrag.active = true;
+        gizmoDrag.primitive = prim;
+        gizmoDrag.axis[0] = axis[0];
+        gizmoDrag.axis[1] = axis[1];
+        gizmoDrag.axis[2] = axis[2];
+        gizmoDrag.pivot[0] = c[0];
+        gizmoDrag.pivot[1] = c[1];
+        gizmoDrag.pivot[2] = c[2];
+        gizmoDrag.totalDelta[0] = 0;
+        gizmoDrag.totalDelta[1] = 0;
+        gizmoDrag.totalDelta[2] = 0;
+        MoveTool.begin(moveToolState, prim, c, axis);
+        pickInfo.textContent = `gizmo  ${axisName.toUpperCase()}  [${prim.name}]  0`;
+    },
+    translate: (dx, dy, dz) => {
+        if (!gizmoDrag.active) return;
+        gizmoDrag.totalDelta[0] += dx;
+        gizmoDrag.totalDelta[1] += dy;
+        gizmoDrag.totalDelta[2] += dz;
+        MoveTool.applyDelta(moveToolState,
+            gizmoDrag.totalDelta[0],
+            gizmoDrag.totalDelta[1],
+            gizmoDrag.totalDelta[2]);
+        const d = gizmoDrag.totalDelta[0] * gizmoDrag.axis[0]
+                + gizmoDrag.totalDelta[1] * gizmoDrag.axis[1]
+                + gizmoDrag.totalDelta[2] * gizmoDrag.axis[2];
+        pickInfo.textContent =
+            `gizmo  ${axisLabel(gizmoDrag.axis)}  [${gizmoDrag.primitive.name}]  ` +
+            `${d.toFixed(3)}`;
+    },
+    endDrag: () => {
+        if (!gizmoDrag.active) return;
+        const result = MoveTool.commit(moveToolState);
+        if (result) {
+            const d = result.delta;
+            pickInfo.textContent = `moved [${result.primitive.name}] by ` +
+                `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
+        }
+        gizmoDrag.active = false;
+        gizmoDrag.primitive = null;
+        showSnapMarker(null);
+        updateGizmoForActive();
+    },
+});
 
 function cancelGizmoDrag() {
     if (!gizmoDrag.active) return;
@@ -588,15 +603,8 @@ function cancelGizmoDrag() {
     gizmoDrag.active = false;
     gizmoDrag.primitive = null;
     pickInfo.textContent = 'gizmo cancelled';
-    Gizmo.setHovered(gizmo, null);
     showSnapMarker(null);
     updateGizmoForActive();
-}
-
-function axisLabel(ax) {
-    if (Math.abs(ax[0]) > 0.5) return 'X';
-    if (Math.abs(ax[1]) > 0.5) return 'Y';
-    return 'Z';
 }
 
 // --- Inference snap marker --------------------------------------------------
@@ -751,22 +759,11 @@ function handleLeftDown(e) {
     const r = canvas.getBoundingClientRect();
     const cx = e.clientX - r.left;
     const cy = e.clientY - r.top;
-    // Gizmo intercepts ALL tool modes — direct manipulation always wins
-    // when the cursor is on an arrow. Falls through to per-tool picking
-    // when the cursor is between arrows. Refresh the gizmo first so its
-    // anchor + screen-stable scale reflect the current canvas dimensions
-    // (initial scale computed pre-layout uses the canvas backbuffer
-    // default, not clientHeight — refreshing here corrects that on the
-    // first input event).
+    // The engine consumes the mousedown before it reaches us when the
+    // cursor is on a gizmo arrow, so we never get here with a handle hit.
+    // Keep the pivot current so the drag anchors correctly the moment the
+    // user clicks.
     updateGizmoForActive();
-    if (gizmo.visible && registry.active) {
-        const ray = screenToRay(cx, cy);
-        const hit = Gizmo.hitTest(gizmo, ray.origin, ray.dir);
-        if (hit) {
-            beginGizmoDrag(registry.active, hit, ray);
-            return;
-        }
-    }
     const pick = pickAt(cx, cy);
     pickInfo.textContent = formatHit(pick);
     // Legacy test hook: keep `__lastPick` in the hit shape (not {primitive,hit}).
@@ -817,8 +814,9 @@ canvas.addEventListener('mousedown', (e) => {
     }
 });
 document.addEventListener('mouseup', (e) => {
-    if (e.button === 0 && gizmoDrag.active)     commitGizmoDrag();
-    else if (e.button === 0 && pushpull.active) commitPushPull();
+    // Gizmo drag commit is handled by the engine's endDrag callback (see
+    // bro.gizmo.attach) — nothing to do here for the gizmo path.
+    if (e.button === 0 && pushpull.active) commitPushPull();
     else if (e.button === 0 && moveToolState.active) commitMove();
     if (e.button === 2) rightDown  = false;
     if (e.button === 1) middleDown = false;
@@ -831,26 +829,9 @@ document.addEventListener('mousemove', (e) => {
     const cx = e.clientX - r.left;
     const cy = e.clientY - r.top;
     const ray = screenToRay(cx, cy);
-    if (gizmoDrag.active) {
-        const movingId = gizmoDrag.primitive.id;
-        // Snap-along-axis: if the cursor is near a snap feature on another
-        // primitive (or on-face), project the snap onto the drag axis. This
-        // mirrors how push/pull integrates inference snaps.
-        const snap = resolveSnap(cx, cy, ray, true, null, movingId);
-        let d;
-        if (snap) {
-            d = snapAxisDistance(snap, gizmoDrag.pivot, gizmoDrag.axis) - gizmoDrag.refT;
-            const ax = gizmoDrag.axis;
-            MoveTool.applyDelta(moveToolState, ax[0] * d, ax[1] * d, ax[2] * d);
-            showSnapMarker(snap);
-            pickInfo.textContent = `gizmo  ${axisLabel(ax)}  [${gizmoDrag.primitive.name}]  ` +
-                `${d.toFixed(3)}  [snap ${snap.label}]`;
-        } else {
-            d = applyGizmoDrag(ray);
-            showSnapMarker(null);
-        }
-        return;
-    }
+    // Gizmo drag is owned by the engine and consumes mousemove before it
+    // reaches us — the drag logic lives in the `translate` callback in
+    // bro.gizmo.attach above. We never see gizmoDrag.active here.
     if (pushpull.active) {
         const vcbVal = MeasureBox.parseValue(measureBoxState.buffer);
         if (vcbVal !== null) {
@@ -890,15 +871,14 @@ document.addEventListener('mousemove', (e) => {
             `[${dx.toFixed(3)}, ${dy.toFixed(3)}, ${dz.toFixed(3)}]`;
         return;
     }
-    // Hover: highlight a gizmo arrow when the cursor is over it. Refresh
-    // the gizmo before testing so the screen-stable scale reflects the
-    // current canvas dimensions. Suppresses the snap marker on hover so
-    // the two visuals don't fight.
+    // Keep the pivot current so the gizmo tracks geometry edits while
+    // hovering. Hover highlighting is owned by the engine — if an arrow is
+    // under the cursor the engine sets bro.gizmo.hovered and we suppress
+    // the snap marker to avoid a double-highlight.
     updateGizmoForActive();
-    if (gizmo.visible) {
-        const gh = Gizmo.hitTest(gizmo, ray.origin, ray.dir);
-        Gizmo.setHovered(gizmo, gh ? gh.axis : null);
-        if (gh) { showSnapMarker(null); return; }
+    if (bro.gizmo.hovered) {
+        showSnapMarker(null);
+        return;
     }
     showSnapMarker(resolveSnap(cx, cy, ray, false));
 });
@@ -1162,16 +1142,11 @@ window.__editor = {
     get moveToolState() { return moveToolState; },
     cameraForward,
 
-    // Translate gizmo. The gizmo itself is exposed for tests so they can
-    // assert anchor / scale / hover state. beginGizmoDrag/applyGizmoDrag/
-    // commitGizmoDrag give tests the same code path the input handlers use,
-    // bypassing screen-space cursor resolution.
-    gizmo,
+    // Translate gizmo — rendering and drag live in the engine (bro.gizmo.*).
+    // Expose the drag-state mirror + helpers so tests / tooling can still
+    // inspect what the app is doing during a drag.
     primCentroid,
     updateGizmoForActive,
-    beginGizmoDrag,
-    applyGizmoDrag,
-    commitGizmoDrag,
     cancelGizmoDrag,
     get gizmoDrag() { return gizmoDrag; },
 
