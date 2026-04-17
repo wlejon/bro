@@ -362,6 +362,7 @@ function setTool(t) {
     if (rotateToolState && rotateToolState.active) RotateTool.cancel(rotateToolState);
     if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
     if (rectangleToolState.active) cancelRectangle();
+    if (circleToolState.active) cancelCircle();
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, false);
@@ -1043,6 +1044,118 @@ function cancelRectangle() {
     pickInfo.textContent = 'rectangle cancelled';
 }
 
+// --- Circle tool -----------------------------------------------------------
+//
+// Click-center + click-radius. Commit produces a triangulated 32-gon
+// primitive ready for push/pull. VCB single-value input: type "R + Enter"
+// for an exact radius.
+
+const circleToolState = CircleTool.createState();
+let circlePreviewNode = null;
+
+function destroyCirclePreview() {
+    if (circlePreviewNode) { circlePreviewNode.destroy(); circlePreviewNode = null; }
+}
+
+function refreshCirclePreview() {
+    const mesh = CircleTool.buildMesh(circleToolState);
+    if (!mesh) { destroyCirclePreview(); return; }
+    if (!circlePreviewNode) {
+        circlePreviewNode = scene.createMesh({
+            data:  mesh,
+            color: '#ffa502',
+            emissive: 0.35,
+            name:  'circle-preview',
+        });
+    } else {
+        circlePreviewNode.updateMesh({
+            positions: mesh.positions,
+            indices:   mesh.indices,
+            normals:   mesh.normals,
+        });
+    }
+}
+
+function beginCircle(pos, plane) {
+    CircleTool.begin(circleToolState, plane || currentSketchPlane(), pos);
+    pickInfo.textContent = 'circle  [center set — move + click for radius]';
+    MeasureBox.clearLastOp(measureBoxState);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setPairMode(measureBoxState, false);
+    MeasureBox.setActive(measureBoxState, true);
+    renderMeasureBox();
+}
+
+function updateCircleAt(pos) {
+    if (!circleToolState.active) return;
+    CircleTool.update(circleToolState, pos);
+    refreshCirclePreview();
+    pickInfo.textContent =
+        `circle  r = ${CircleTool.radius(circleToolState).toFixed(3)}`;
+}
+
+// Snap the live edge to an exact radius along the cursor's current
+// direction from center — typed-radius respects the cursor bearing.
+function applyCircleRadius(r) {
+    const st = circleToolState;
+    if (!st.active) return false;
+    const c0 = st.center;
+    const c1 = st.edge;
+    const dx = c1[0] - c0[0], dy = c1[1] - c0[1], dz = c1[2] - c0[2];
+    const L = Math.hypot(dx, dy, dz);
+    let ux, uy, uz;
+    if (L > 1e-9) {
+        ux = dx / L; uy = dy / L; uz = dz / L;
+    } else {
+        // Cursor still on the center — pick the plane's u axis as a default
+        // direction so the preview appears on Enter.
+        ux = st.plane.u[0]; uy = st.plane.u[1]; uz = st.plane.u[2];
+    }
+    const rr = Math.abs(r);
+    const newEdge = [c0[0] + ux * rr, c0[1] + uy * rr, c0[2] + uz * rr];
+    CircleTool.update(st, newEdge);
+    refreshCirclePreview();
+    return true;
+}
+
+function commitCircle() {
+    if (!circleToolState.active) return;
+    const mesh = CircleTool.commit(circleToolState);
+    destroyCirclePreview();
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
+    if (!mesh) {
+        pickInfo.textContent = 'circle cancelled (zero radius)';
+        return;
+    }
+    const data = {
+        positions: new Float32Array(mesh.positions),
+        indices:   new Uint32Array(mesh.indices),
+        normals:   new Float32Array(mesh.normals),
+    };
+    const idx = registry.primitives.length;
+    const spec = {
+        name:  'Circle ' + (idx + 1),
+        color: OUTLINER_COLORS[idx % OUTLINER_COLORS.length],
+    };
+    const id = registry.nextId();
+    history.do('Add ' + spec.name,
+        () => { registry.createFromMesh(spec, data, id); },
+        () => { registry.remove(id); });
+    pickInfo.textContent = `added ${spec.name}`;
+}
+
+function cancelCircle() {
+    if (!circleToolState.active) return;
+    CircleTool.cancel(circleToolState);
+    destroyCirclePreview();
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
+    pickInfo.textContent = 'circle cancelled';
+}
+
 // Drag state — begin/translate/rotate/scale/end fires from the engine update
 // this block so the rest of the app (UI, highlight refresh) can react.
 const gizmoDrag = {
@@ -1456,6 +1569,18 @@ function handleLeftDown(e) {
             updateRectangleAt(hit);
             commitRectangle();
         }
+    } else if (currentTool === 'circle') {
+        const plane = circleToolState.active
+            ? circleToolState.plane : resolveSketchPlane(cx, cy);
+        const hit = Sketch.rayToPlane(
+            screenToRay(cx, cy), plane.origin, plane.normal);
+        if (!hit) return;
+        if (!circleToolState.active) {
+            beginCircle(hit, plane);
+        } else {
+            updateCircleAt(hit);
+            commitCircle();
+        }
     }
 }
 
@@ -1501,6 +1626,12 @@ document.addEventListener('mousemove', (e) => {
         const plane = rectangleToolState.plane;
         const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
         if (hit) updateRectangleAt(hit);
+        return;
+    }
+    if (circleToolState.active) {
+        const plane = circleToolState.plane;
+        const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
+        if (hit) updateCircleAt(hit);
         return;
     }
     if (pushpull.active) {
@@ -1574,6 +1705,9 @@ function handleMeasureBoxKey(key) {
         } else if (rectangleToolState.active) {
             const pair = MeasureBox.parseValuePair(measureBoxState.buffer);
             if (pair) applyRectangleDimensions(pair[0], pair[1]);
+        } else if (circleToolState.active) {
+            const r = MeasureBox.parseValue(measureBoxState.buffer);
+            if (r !== null) applyCircleRadius(r);
         }
         return true;
     }
@@ -1587,6 +1721,12 @@ function handleMeasureBoxKey(key) {
             if (pair) {
                 applyRectangleDimensions(pair[0], pair[1]);
                 commitRectangle();
+            }
+        } else if (circleToolState.active) {
+            const r = MeasureBox.parseValue(measureBoxState.buffer);
+            if (r !== null) {
+                applyCircleRadius(r);
+                commitCircle();
             }
         } else if (measureBoxState.lastOp) {
             const v = MeasureBox.parseValue(measureBoxState.buffer);
@@ -1602,6 +1742,8 @@ function handleMeasureBoxKey(key) {
             cancelPushPull();
         } else if (rectangleToolState.active) {
             cancelRectangle();
+        } else if (circleToolState.active) {
+            cancelCircle();
         } else {
             MeasureBox.clearLastOp(measureBoxState);
             MeasureBox.setActive(measureBoxState, false);
@@ -1623,7 +1765,8 @@ document.addEventListener('keydown', (e) => {
     // gesture because a half-finished operation's buffers would confuse
     // history entries and a mid-drag save would capture a preview state.
     if ((e.ctrlKey || e.metaKey) && !gizmoDrag.active && !pushpull.active &&
-        !moveToolState.active && !rectangleToolState.active) {
+        !moveToolState.active && !rectangleToolState.active &&
+        !circleToolState.active) {
         const k = (e.key || '').toLowerCase();
         if (k === 'z' && !e.shiftKey) {
             if (history.canUndo()) history.undo();
@@ -1663,6 +1806,7 @@ document.addEventListener('keydown', (e) => {
         if (rotateToolState && rotateToolState.active) RotateTool.cancel(rotateToolState);
         if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
         if (rectangleToolState.active)             cancelRectangle();
+        if (circleToolState.active)                cancelCircle();
     }
 });
 
@@ -1961,4 +2105,9 @@ window.__editor = {
     beginRectangle, updateRectangleAt, commitRectangle, cancelRectangle,
     applyRectangleDimensions,
     currentSketchPlane, resolveSketchPlane, resolveSketchPlaneFromRay,
+
+    // Circle tool
+    get circleToolState() { return circleToolState; },
+    beginCircle, updateCircleAt, commitCircle, cancelCircle,
+    applyCircleRadius,
 };
