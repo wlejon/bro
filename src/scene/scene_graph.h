@@ -141,6 +141,15 @@ public:
     /// Camera eye position (for lighting calculations).
     const Vec3& cameraEye() const { return cameraEye_; }
 
+    /// Unproject canvas-local pixel coordinates to a world-space ray.
+    /// `localX` / `localY` are in pixels relative to the canvas (top-left
+    /// origin). Returns true on success; false if the camera has not been
+    /// initialised. Uses the current perspective projection's tan(fovY/2)
+    /// and view matrix orientation to build the ray, so it works for both
+    /// setCamera() and setCameraQuat() code paths.
+    bool unprojectLocal(float localX, float localY,
+                        Vec3& outOrigin, Vec3& outDir) const;
+
     /// Set distance fog parameters. start/end in world units, color is RGB [0,1].
     void setFog(float start, float end, float r, float g, float b) {
         fogStart_ = start; fogEnd_ = end;

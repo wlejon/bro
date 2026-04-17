@@ -332,6 +332,13 @@ void Engine::handleMouseDown(float x, float y, int button) {
         return;
     }
 
+    // Engine-level 3D gizmo — sits between modal UI and DOM. Consumes only
+    // when a handle is hit; otherwise falls through to DOM / canvas.
+    if (gizmoHandleMouseDown(x, y, button)) {
+        pressedButtons_ |= domButtonMask(button);
+        return;
+    }
+
     // Update button bitmask (DOM convention: 1=left, 2=right, 4=middle, ...)
     pressedButtons_ |= domButtonMask(button);
 
@@ -444,6 +451,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
     // Forward to system overlay first
     if (systemHandleMouseUp(x, y, button)) {
+        return;
+    }
+
+    // Gizmo consumes mouseUp only when the drag was active.
+    if (gizmoHandleMouseUp(x, y, button)) {
         return;
     }
 
@@ -571,6 +583,14 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // overlay consumes only if mouse is over an overlay element)
     if (isSystemVisible()) {
         systemHandleMouseMove(x, y);
+    }
+
+    // Gizmo mousemove — drives hover state always; consumes only while
+    // actively dragging (returns true in that case).
+    if (gizmoHandleMouseMove(x, y)) {
+        lastMouseX_ = x;
+        lastMouseY_ = y;
+        return;
     }
 
     // Viewport scrollbar drag

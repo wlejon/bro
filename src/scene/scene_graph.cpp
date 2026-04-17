@@ -758,6 +758,32 @@ void SceneGraph::render() {
     }
 }
 
+bool SceneGraph::unprojectLocal(float localX, float localY,
+                                Vec3& outOrigin, Vec3& outDir) const {
+    if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return false;
+    const auto& P = projectionMatrix_;
+    const auto& V = viewMatrix_;
+    float m11 = P.m[1][1];
+    if (!std::isfinite(m11) || m11 <= 0.0f) return false;
+    float tanHalfFov = 1.0f / m11;
+    // View rows (camera basis in world space).
+    // Row 0 = right, row 1 = up, row 2 = -forward (camera looks along -Z).
+    Vec3 right  (V.m[0][0], V.m[1][0], V.m[2][0]);
+    Vec3 up     (V.m[0][1], V.m[1][1], V.m[2][1]);
+    Vec3 forward(-V.m[0][2], -V.m[1][2], -V.m[2][2]);
+
+    float aspect = static_cast<float>(canvasWidth_) / static_cast<float>(canvasHeight_);
+    float nx = (2.0f * localX / static_cast<float>(canvasWidth_)) - 1.0f;
+    float ny = 1.0f - (2.0f * localY / static_cast<float>(canvasHeight_));
+
+    Vec3 dir = forward
+             + right * (nx * aspect * tanHalfFov)
+             + up    * (ny * tanHalfFov);
+    outDir    = dir.normalized();
+    outOrigin = cameraEye_;
+    return true;
+}
+
 void SceneGraph::renderNode(SceneNode* /*node*/) {
     // Retained for ABI stability but unused now that render() performs
     // explicit mesh / billboard / 2D passes.

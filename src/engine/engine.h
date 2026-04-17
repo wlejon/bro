@@ -269,6 +269,17 @@ private:
     InputConfig inputConfig_;
 
     dom::Element* hitTest(float x, float y);
+
+    // Find the scene graph whose canvas element is under (x, y) in screen
+    // coords. Returns nullptr if none. Writes canvas-local coords (top-left
+    // origin) into outLocalX/Y when it returns a graph.
+    scene::SceneGraph* findSceneGraphAt(float x, float y,
+                                        float& outLocalX, float& outLocalY) const;
+
+    bool gizmoHandleMouseDown(float x, float y, int button);
+    bool gizmoHandleMouseMove(float x, float y);
+    bool gizmoHandleMouseUp(float x, float y, int button);
+
     void dispatchEvent(dom::Element* target, dom::Event& event);
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",
