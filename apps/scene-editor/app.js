@@ -443,6 +443,75 @@ const pushpull = {
 };
 
 const BRIDGE_MERGE_TOL = 0.9995;   // cos(1.8°): coplanarity test for bridges
+const CAP_PARALLEL_TOL = 0.02;     // |axis·capNormal| below this = cap edge
+
+// Rip out every face tagged `gIdx` from the EditMesh (along with their HEs
+// and any twins pointing into them), then triangulate `polyLoops` (array of
+// closed CCW vertex loops sharing `normal`) and emit fresh faces tagged
+// `gIdx`. Returns true on success, false if triangulation yielded nothing.
+function retriangulateFaceGroup(em, gIdx, polyLoops, normal) {
+    // Flat positions for Mesh.polygon3D — it reuses input 3D verts verbatim
+    // (positions come back in the same order, indices reference into them).
+    // Only the outer loop is supported here; holes would need extra plumbing.
+    const outer = polyLoops[0];
+    const flat = new Array(outer.length * 3);
+    for (let i = 0; i < outer.length; i++) {
+        flat[i * 3 + 0] = outer[i].x;
+        flat[i * 3 + 1] = outer[i].y;
+        flat[i * 3 + 2] = outer[i].z;
+    }
+    let mesh;
+    try {
+        mesh = Mesh.polygon3D(flat, [], normal);
+    } catch (_) { return false; }
+    if (!mesh || !mesh.indices || mesh.indices.length === 0) return false;
+
+    // Remove old faces from the group.
+    const dead = new Set();
+    for (const f of em.faces) if (f.group === gIdx) dead.add(f);
+    em.faces = em.faces.filter(f => !dead.has(f));
+    em.halfEdges = em.halfEdges.filter(he => !dead.has(he.face));
+    // Any surviving HE whose twin pointed into a removed face is now a
+    // mesh-level boundary — clear that twin so rematchTwins can re-pair it.
+    for (const he of em.halfEdges) {
+        if (he.twin && dead.has(he.twin.face)) he.twin = null;
+    }
+
+    // Clone input verts to give this face group its own vertex objects.
+    // Per-vertex normals are written last-write-wins in surgicalPushPull, so
+    // a cap vert shared (by object identity) with a bridge or wall ends up
+    // with whichever group wrote last — causing glaring lighting seams.
+    // Seam-duplicating matches the primitive-builder convention (bromesh
+    // gives every flat face its own rim verts) and keeps the cap's normals
+    // isolated to the cap.
+    const ownVerts = outer.map(v => {
+        const c = { x: v.x, y: v.y, z: v.z, halfEdge: null };
+        em.vertices.push(c);
+        return c;
+    });
+
+    // Emit new faces. Mesh.polygon3D preserves input vert order for simple
+    // polygons, so indices map directly into `outer` (and therefore ownVerts).
+    const idx = mesh.indices;
+    for (let t = 0; t < idx.length; t += 3) {
+        const face = { halfEdge: null, group: gIdx };
+        em.faces.push(face);
+        const hs = [];
+        for (let k = 0; k < 3; k++) {
+            const v = ownVerts[idx[t + k]];
+            if (!v) return false;   // Steiner point — bail out
+            const h = { origin: v, twin: null, next: null, face };
+            em.halfEdges.push(h);
+            hs.push(h);
+        }
+        hs[0].next = hs[1]; hs[1].next = hs[2]; hs[2].next = hs[0];
+        face.halfEdge = hs[0];
+        for (let k = 0; k < 3; k++) {
+            if (!hs[k].origin.halfEdge) hs[k].origin.halfEdge = hs[k];
+        }
+    }
+    return true;
+}
 
 // Build a fresh push/pull surgery output for the snapshotted mesh, displacing
 // the picked face by axis*t. Returns
@@ -461,12 +530,48 @@ function surgicalPushPull(snap, gIdx, axis, t) {
         if (em.faces[i].group === gIdx) movedFaces.push(em.faces[i]);
     }
 
+    // Classify pushed-face boundary edges BEFORE any mutation. A boundary HE
+    // whose twin lives in a face group whose plane contains the push axis
+    // (|axis · adjN| ≈ 0) is a "cap edge" — the adjacent face should reshape
+    // to follow the moved wall, not get a bridge tacked on. Everything else
+    // is a "side edge" handled by duplicate+bridge (current behavior).
+    const capEdgeHEs = new Set();
+    const capGroupsToRetri = new Set();
+    const baseGroupCount = snap.faceGroups.groups.length;
+    if (!isSketchFace) {
+        const preBoundary = EditMesh.findFaceGroupBoundary(em, gIdx);
+        for (const loop of preBoundary) {
+            for (const he of loop) {
+                if (!he.twin) continue;
+                const adjG = he.twin.face.group;
+                if (adjG < 0 || adjG >= baseGroupCount) continue;
+                const adjN = snap.faceGroups.groups[adjG].normal;
+                const d = Math.abs(axis[0]*adjN[0] + axis[1]*adjN[1] + axis[2]*adjN[2]);
+                if (d < CAP_PARALLEL_TOL) {
+                    capEdgeHEs.add(he);
+                    capGroupsToRetri.add(adjG);
+                }
+            }
+        }
+    }
+
+    // Snapshot each affected cap's boundary loop BEFORE duplicateBoundary
+    // severs twins and rewires verts — we need the original vertex objects
+    // to walk the cap's polygon.
+    const capBoundarySnaps = new Map();   // capG -> array of loops (arrays of {a,b} vert pairs)
+    for (const capG of capGroupsToRetri) {
+        const loops = EditMesh.findFaceGroupBoundary(em, capG);
+        const snap2 = loops.map(loop => loop.map(he => ({
+            a: he.origin, b: he.next.origin,
+        })));
+        capBoundarySnaps.set(capG, snap2);
+    }
+
     const { dupMap, oldBoundary } = EditMesh.duplicateBoundary(em, gIdx, offset);
 
     // Assign each bridge to either the adjacent face group (if coplanar) or
     // a fresh group. Track new groups so subsequent commits can preserve
     // them via triToGroup propagation.
-    const baseGroupCount = snap.faceGroups.groups.length;
     let nextGroup = baseGroupCount;
     const newGroupNormals = [];   // normals for any newly-created bridge groups
     function assignBridgeGroup(rec, bridgeNormal) {
@@ -481,8 +586,24 @@ function surgicalPushPull(snap, gIdx, axis, t) {
         newGroupNormals[g - baseGroupCount] = bridgeNormal.slice();
         return g;
     }
+    // Position-keyed lookups. Primitives like Mesh.box seam-duplicate rim
+    // verts per face (for flat normals), so the cap's boundary vertex object
+    // at (1,1,1) is NOT the same object as the top face's (1,1,1). We match
+    // across faces by quantized position.
+    const posKeyOfVert = EditMesh._posKey;
+    const dupByPos       = new Map();      // pos key → moved dup vert (every boundary vert)
+    const capEdgePairPos = new Set();      // "aPos|bPos" in cap walk direction (= twin of pushed HE)
     for (const loop of oldBoundary) {
         for (const rec of loop) {
+            // Every duplicated vert is addressable by its original's position.
+            dupByPos.set(posKeyOfVert(rec.oldA), rec.newA);
+            dupByPos.set(posKeyOfVert(rec.oldB), rec.newB);
+            if (capEdgeHEs.has(rec.he)) {
+                // Pushed HE went oldA→oldB; cap walk traverses twin direction.
+                capEdgePairPos.add(
+                    posKeyOfVert(rec.oldB) + '|' + posKeyOfVert(rec.oldA));
+                continue;    // skip bridge for cap edges
+            }
             const a = rec.oldA, b = rec.oldB;
             const ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
             // Bridge normal = edge × offset (outward when offset displaces
@@ -496,6 +617,76 @@ function surgicalPushPull(snap, gIdx, axis, t) {
             const bridgeNormal = [bx, by, bz];
             const grp = assignBridgeGroup(rec, bridgeNormal);
             EditMesh.addBridge(em, rec.oldA, rec.oldB, rec.newA, rec.newB, grp);
+        }
+    }
+
+    // Retriangulate each affected cap. For each vert on the cap's polygon,
+    // if it's a corner shared with the pushed-face cap-edge (i.e. it lives
+    // on at least one cap-edge), swap it for its duplicate — the duplicate
+    // sits at the moved position. Non-shared verts stay put. The resulting
+    // polygon is retriangulated flat and emitted as the cap's new faces.
+    for (const capG of capGroupsToRetri) {
+        const loops = capBoundarySnaps.get(capG);
+        const newPolyLoops = [];
+        for (const loop of loops) {
+            // Walk edges, pushing both endpoints — substituting moved dups
+            // for the cap-edge segment. Consecutive duplicates (by position)
+            // are dedupped, so:
+            //   - a corner adjoined by TWO cap-edges (box-top case, pure-cap
+            //     corner) collapses: the dup from each edge coincides, the
+            //     corner moves.
+            //   - a corner adjoined by ONE cap-edge + ONE non-cap-edge
+            //     (cylinder side-pull case, mixed corner) retains BOTH the
+            //     original and the dup — the polygon gains a detour edge
+            //     (original → dup) that is the bridge's top edge.
+            const verts = [];
+            for (const edge of loop) {
+                const pka = posKeyOfVert(edge.a);
+                const pkb = posKeyOfVert(edge.b);
+                let sa = edge.a, sb = edge.b;
+                if (capEdgePairPos.has(pka + '|' + pkb)) {
+                    const da = dupByPos.get(pka);
+                    const db = dupByPos.get(pkb);
+                    if (da && db) { sa = da; sb = db; }
+                }
+                verts.push(sa, sb);
+            }
+            const dedup = [];
+            for (const v of verts) {
+                if (dedup.length &&
+                    posKeyOfVert(dedup[dedup.length - 1]) === posKeyOfVert(v)) {
+                    continue;
+                }
+                dedup.push(v);
+            }
+            if (dedup.length > 1 &&
+                posKeyOfVert(dedup[0]) === posKeyOfVert(dedup[dedup.length - 1])) {
+                dedup.pop();
+            }
+            if (dedup.length >= 3) newPolyLoops.push(dedup);
+        }
+        if (newPolyLoops.length === 0) continue;
+        const capNormal = snap.faceGroups.groups[capG].normal;
+        const ok = retriangulateFaceGroup(em, capG, newPolyLoops, capNormal);
+        if (!ok) {
+            // Triangulation failed (degenerate polygon): fall back to adding
+            // bridges for the cap edges we skipped above.
+            for (const loop of oldBoundary) {
+                for (const rec of loop) {
+                    if (!capEdgeHEs.has(rec.he)) continue;
+                    const adjG = rec.adjGroup;
+                    if (adjG !== capG) continue;
+                    const a = rec.oldA, b = rec.oldB;
+                    const ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
+                    let bx = ey * offset[2] - ez * offset[1];
+                    let by = ez * offset[0] - ex * offset[2];
+                    let bz = ex * offset[1] - ey * offset[0];
+                    const bl = Math.hypot(bx, by, bz);
+                    if (bl > 1e-10) { bx /= bl; by /= bl; bz /= bl; }
+                    const grp = assignBridgeGroup(rec, [bx, by, bz]);
+                    EditMesh.addBridge(em, rec.oldA, rec.oldB, rec.newA, rec.newB, grp);
+                }
+            }
         }
     }
 

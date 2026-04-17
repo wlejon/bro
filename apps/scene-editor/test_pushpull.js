@@ -71,12 +71,12 @@ assert(E.boxPositions.length === 24 * 3,
 E.commitPushPull();
 assert(!E.pushpull.active, 'push/pull inactive after commit');
 
-// Surgery is additive: 4 NEW corner verts at y=1.5 (the duplicates), plus
-// the original top-face verts still at y=1 (now used by the bridges that
-// merged into the side faces).
+// Surgery is additive: top face gets its 4 moved corners at y=1.5, and each
+// retriangulated side wall gets its own pair of seam-duplicate top corners
+// (so per-face normals stay isolated) — 4 + 4*2 = 12 vert indices at y=1.5.
 const newTopCount = vertCountAtY(1.5);
-assert(newTopCount === 4,
-    `4 new top-face corners at y=1.5 (got ${newTopCount})`);
+assert(newTopCount === 12,
+    `top face + 4 side walls each own their y=1.5 corners (got ${newTopCount})`);
 
 // Bottom face unchanged. On a hard-edged box each corner position has 3
 // vertex indices (one per incident face), so 4 corners → 12 indices at y=-1.
@@ -111,8 +111,8 @@ E.applyPushPull(0.75);
 E.commitPushPull();
 
 const topAt225 = vertCountAtY(2.25);
-assert(topAt225 === 4,
-    `after second pull 4 new corners at y=2.25 (got ${topAt225})`);
+assert(topAt225 === 12,
+    `after second pull, top + 4 walls each own their y=2.25 corners (got ${topAt225})`);
 assert(E.faceGroups.groups.length === 6,
     `still 6 face groups (got ${E.faceGroups.groups.length})`);
 

@@ -181,7 +181,7 @@ let b2TopCount = 0;
 for (let vi = 0; vi < box2.positions.length / 3; vi++) {
     if (Math.abs(box2.positions[vi*3 + 1] - 1.5) < 1e-5) b2TopCount++;
 }
-assert(b2TopCount === 4, `box2 has 4 new top verts at y=1.5 (got ${b2TopCount})`);
+assert(b2TopCount === 12, `box2 has 12 top-vert indices at y=1.5 — top face + 4 retriangulated side walls each own their corners (got ${b2TopCount})`);
 
 // defaultBox must be untouched.
 for (let i = 0; i < defBefore.length; i++) {
@@ -203,7 +203,7 @@ b2TopCount = 0;
 for (let vi = 0; vi < box2.positions.length / 3; vi++) {
     if (Math.abs(box2.positions[vi*3 + 1] - 1.75) < 1e-5) b2TopCount++;
 }
-assert(b2TopCount === 4, `box2 top at y=1.75 after redo (got ${b2TopCount}) — surgery adds 4 new corners`);
+assert(b2TopCount === 12, `box2 top at y=1.75 after redo (got ${b2TopCount}) — surgery adds 4 new corners, retri'd walls each own their own`);
 
 // --- Remove a primitive ---------------------------------------------------
 
