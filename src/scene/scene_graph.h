@@ -108,6 +108,15 @@ public:
     using FBOTextureCallback = std::function<void(unsigned int texId)>;
     void setFBOTextureCallback(FBOTextureCallback cb) { fboTexCb_ = std::move(cb); }
 
+    /// Gizmo overlay provider. Invoked during render() after the mesh +
+    /// billboard passes, while the mesh FBO is still bound. Returns a list
+    /// of externally-owned MeshNodes (not part of this graph's node table)
+    /// to draw as screen-overlay gizmo handles. Drawn with depth-test
+    /// disabled so handles always win the depth test — matches DCC tool
+    /// convention (handles remain grabbable even when inside geometry).
+    using GizmoProvider = std::function<std::vector<MeshNode*>(SceneGraph*)>;
+    void setGizmoProvider(GizmoProvider cb) { gizmoProvider_ = std::move(cb); }
+
     // --- Camera ---
 
     /// Set a full 3D camera (perspective projection + lookAt view).
@@ -215,6 +224,7 @@ private:
 
     bool hasMeshContent_ = false;
     FBOTextureCallback fboTexCb_;
+    GizmoProvider gizmoProvider_;
 
     // Distance fog
     float fogStart_ = 0.0f;

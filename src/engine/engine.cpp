@@ -33,6 +33,7 @@
 #include "js/physics_bindings.h"
 #include "js/scene_bindings.h"
 #include "js/crosshair_bindings.h"
+#include "js/gizmo_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
@@ -282,6 +283,11 @@ Engine::Engine(const EngineConfig& config)
     // Crosshair bindings (bro.crosshair.*)
     js::CrosshairBindings::install(jsRuntime_->getContext(), this);
 
+    // Engine gizmo (bro.gizmo.*) — translate arrows for now; rotate + scale
+    // handles + mouse-driven interaction land in later phases.
+    gizmo_ = std::make_unique<GizmoManager>();
+    js::GizmoBindings::install(jsRuntime_->getContext(), this);
+
     // 5. Layout helpers
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
     textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get(), &fontManager_);
@@ -472,6 +478,10 @@ Engine::Engine(const EngineConfig& config)
                             el->setSceneGraphFBOTexture(tex);
                         });
                     }
+                    graphPtr->setGizmoProvider([this](scene::SceneGraph* g) {
+                        return gizmo_ ? gizmo_->meshesForRender(g)
+                                       : std::vector<scene::MeshNode*>{};
+                    });
                     sceneGraphs_.push_back({std::move(graph), el});
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }
@@ -529,6 +539,10 @@ Engine::Engine(const EngineConfig& config)
                             el->setSceneGraphFBOTexture(tex);
                         });
                     }
+                    graphPtr->setGizmoProvider([this](scene::SceneGraph* g) {
+                        return gizmo_ ? gizmo_->meshesForRender(g)
+                                       : std::vector<scene::MeshNode*>{};
+                    });
                     sceneGraphs_.push_back({std::move(graph), el});
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }

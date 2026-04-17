@@ -601,7 +601,13 @@ void SceneGraph::render() {
         if (hasMeshNodes && hasBillboardNodes) break;
     }
 
-    const bool has3D = (hasMeshNodes || hasBillboardNodes)
+    // Resolve the gizmo overlay up-front so it can force the 3D pass even
+    // when the canvas has no other 3D content. Cached and replayed below.
+    std::vector<MeshNode*> gizmoMeshes;
+    if (gizmoProvider_) gizmoMeshes = gizmoProvider_(this);
+    const bool hasGizmo = !gizmoMeshes.empty();
+
+    const bool has3D = (hasMeshNodes || hasBillboardNodes || hasGizmo)
                        && canvasWidth_ > 0 && canvasHeight_ > 0;
 
     if (has3D) {
@@ -686,6 +692,37 @@ void SceneGraph::render() {
                 glBindVertexArray(0);
                 glDisable(GL_BLEND);
                 glDepthMask(GL_TRUE);
+            }
+
+            // --- Gizmo pass ------------------------------------------------
+            // Engine-owned overlay handles (translate arrows today; rotate
+            // rings + scale boxes in later phases). Drawn with depth-test
+            // disabled so handles are always grabbable, even when co-located
+            // with scene geometry. Mesh program + shared uniforms mirror the
+            // mesh pass above.
+            if (hasGizmo && meshProgram_) {
+                {
+                    glEnable(GL_CULL_FACE);
+                    glCullFace(GL_BACK);
+                    glDisable(GL_DEPTH_TEST);
+                    glUseProgram(meshProgram_);
+
+                    Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
+                    glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
+                    glUniform3f(uCameraPos_, 0.0f, 0.0f, 0.0f);
+                    glUniform1f(uFogStart_, 0.0f);
+                    glUniform1f(uFogEnd_, 0.0f);
+                    glUniform3f(uFogColor_, 0.0f, 0.0f, 0.0f);
+
+                    for (MeshNode* mn : gizmoMeshes) {
+                        if (!mn) continue;
+                        renderMeshNode(mn);
+                    }
+
+                    glDisable(GL_CULL_FACE);
+                    glEnable(GL_DEPTH_TEST);
+                    hasMeshContent_ = true;
+                }
             }
 
             glUseProgram(0);

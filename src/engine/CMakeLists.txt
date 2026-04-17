@@ -41,6 +41,7 @@ add_library(bro_engine STATIC
     overlay.cpp
     dropdown_overlay.cpp
     color_picker_overlay.cpp
+    gizmo.cpp
     ${GENERATED_HEADERS}
 )
 target_include_directories(bro_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)

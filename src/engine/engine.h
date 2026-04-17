@@ -2,6 +2,7 @@
 
 #include "engine/app_loader.h"
 #include "engine/css_transitions.h"
+#include "engine/gizmo.h"
 #include "engine/overlay.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
@@ -232,6 +233,11 @@ public:
     CrosshairConfig& crosshair() { return crosshair_; }
     const CrosshairConfig& crosshair() const { return crosshair_; }
 
+    /// Engine-level 3D gizmo (translate arrows in phase 1; rotate + scale
+    /// handles arrive in later phases). Driven from JS via bro.gizmo.*.
+    GizmoManager& gizmo() { return *gizmo_; }
+    const GizmoManager& gizmo() const { return *gizmo_; }
+
     /// Get display mode.
     DisplayMode displayMode() const { return displayMode_; }
 
@@ -398,6 +404,7 @@ private:
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
 
     CrosshairConfig crosshair_;
+    std::unique_ptr<GizmoManager> gizmo_;
     OverlayManager overlayMgr_;
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
