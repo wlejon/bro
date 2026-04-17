@@ -405,7 +405,7 @@ const pushpull = {
     faceTriangles: null,
     axis: [0, 0, 0],
     pivot: [0, 0, 0],
-    vertexIndices: null,    // indices into primitive.positions
+    vertexIndices: null,    // indices into workingPositions
     vertexStart: null,      // xyz snapshot of the affected verts pre-drag
     workingPositions: null, // Float32Array scratch, rebuilt each move
     workingIndices: null,   // winding-flipped when inverted
@@ -413,7 +413,158 @@ const pushpull = {
     distance: 0,
     inversionT: 0,
     inverted: false,
+    // Flat-face extrude (sketch-face → 3D slab). When the picked face group
+    // covers the entire mesh (e.g. rectangle-tool output), we synthesize a
+    // back face + walls up front and drive the drag against that template
+    // instead of the committed primitive buffers.
+    flatExtrude: false,
+    templatePositions: null,
 };
+
+// SketchUp-style first-pull extrusion: detect when the target face group
+// covers the whole mesh (a flat "sketch" face), and build an 8-face slab
+// template (front + back + one wall per boundary edge, all collapsed to
+// zero thickness). The push/pull drag then stretches the front face and
+// its shared-position wall-top verts along the axis, producing a proper
+// 3D solid on commit.
+//
+// Returns { positions, indices, normals, frontVerts } where frontVerts is
+// the Uint32Array of vertex indices that translate with the drag (front
+// face verts + wall top verts). Normals have a sign chosen so the slab is
+// outward-facing once thickness becomes nonzero.
+function buildFlatExtrudeTemplate(positions, indices, normal) {
+    const N = positions.length / 3;
+    const M = indices.length / 3;
+    const nx0 = normal[0], ny0 = normal[1], nz0 = normal[2];
+
+    // Boundary edges: directed edges that appear once (no reverse twin).
+    // For a manifold triangulation of a planar polygon, these form the rim.
+    const dirEdges = new Map();
+    for (let t = 0; t < M; t++) {
+        for (let e = 0; e < 3; e++) {
+            const a = indices[t * 3 + e];
+            const b = indices[t * 3 + ((e + 1) % 3)];
+            dirEdges.set(a + ',' + b, t);
+        }
+    }
+    const boundary = [];
+    for (const key of dirEdges.keys()) {
+        const comma = key.indexOf(',');
+        const a = +key.substring(0, comma);
+        const b = +key.substring(comma + 1);
+        if (!dirEdges.has(b + ',' + a)) boundary.push([a, b]);
+    }
+    const W = boundary.length;
+
+    // Layout:
+    //   [0..N-1]          front-face verts (normal = +normal)
+    //   [N..2N-1]         back-face verts  (normal = -normal, winding reversed)
+    //   [2N + 4w + {0..3}] wall w verts: 0=a_top, 1=b_top, 2=b_bot, 3=a_bot
+    const wallBase = 2 * N;
+    const newN = 2 * N + 4 * W;
+    const newM = 2 * M + 2 * W;
+    const outPos = new Float32Array(newN * 3);
+    const outIdx = new Uint32Array(newM * 3);
+    const outNrm = new Float32Array(newN * 3);
+
+    // Front face
+    for (let i = 0; i < N; i++) {
+        outPos[i * 3 + 0] = positions[i * 3 + 0];
+        outPos[i * 3 + 1] = positions[i * 3 + 1];
+        outPos[i * 3 + 2] = positions[i * 3 + 2];
+        outNrm[i * 3 + 0] = nx0;
+        outNrm[i * 3 + 1] = ny0;
+        outNrm[i * 3 + 2] = nz0;
+    }
+    for (let t = 0; t < M; t++) {
+        outIdx[t * 3 + 0] = indices[t * 3 + 0];
+        outIdx[t * 3 + 1] = indices[t * 3 + 1];
+        outIdx[t * 3 + 2] = indices[t * 3 + 2];
+    }
+
+    // Back face — duplicated positions, opposite normal, reversed winding.
+    for (let i = 0; i < N; i++) {
+        const dst = (N + i) * 3;
+        outPos[dst + 0] = positions[i * 3 + 0];
+        outPos[dst + 1] = positions[i * 3 + 1];
+        outPos[dst + 2] = positions[i * 3 + 2];
+        outNrm[dst + 0] = -nx0;
+        outNrm[dst + 1] = -ny0;
+        outNrm[dst + 2] = -nz0;
+    }
+    for (let t = 0; t < M; t++) {
+        outIdx[(M + t) * 3 + 0] = N + indices[t * 3 + 0];
+        outIdx[(M + t) * 3 + 1] = N + indices[t * 3 + 2];
+        outIdx[(M + t) * 3 + 2] = N + indices[t * 3 + 1];
+    }
+
+    // Walls — one quad per boundary edge a→b. Outward normal = (b-a) × n,
+    // which for a CCW-from-+n polygon points away from the interior.
+    for (let w = 0; w < W; w++) {
+        const a = boundary[w][0];
+        const b = boundary[w][1];
+        const ax = positions[a * 3 + 0];
+        const ay = positions[a * 3 + 1];
+        const az = positions[a * 3 + 2];
+        const bx = positions[b * 3 + 0];
+        const by = positions[b * 3 + 1];
+        const bz = positions[b * 3 + 2];
+        const ex = bx - ax, ey = by - ay, ez = bz - az;
+        // outward = e × n
+        let wnx = ey * nz0 - ez * ny0;
+        let wny = ez * nx0 - ex * nz0;
+        let wnz = ex * ny0 - ey * nx0;
+        const wlen = Math.hypot(wnx, wny, wnz);
+        if (wlen > 1e-10) { wnx /= wlen; wny /= wlen; wnz /= wlen; }
+
+        const base = wallBase + w * 4;
+        // 0 = a_top, 1 = b_top, 2 = b_bot, 3 = a_bot (all coincident at t=0).
+        outPos[(base + 0) * 3 + 0] = ax;
+        outPos[(base + 0) * 3 + 1] = ay;
+        outPos[(base + 0) * 3 + 2] = az;
+        outPos[(base + 1) * 3 + 0] = bx;
+        outPos[(base + 1) * 3 + 1] = by;
+        outPos[(base + 1) * 3 + 2] = bz;
+        outPos[(base + 2) * 3 + 0] = bx;
+        outPos[(base + 2) * 3 + 1] = by;
+        outPos[(base + 2) * 3 + 2] = bz;
+        outPos[(base + 3) * 3 + 0] = ax;
+        outPos[(base + 3) * 3 + 1] = ay;
+        outPos[(base + 3) * 3 + 2] = az;
+        for (let k = 0; k < 4; k++) {
+            outNrm[(base + k) * 3 + 0] = wnx;
+            outNrm[(base + k) * 3 + 1] = wny;
+            outNrm[(base + k) * 3 + 2] = wnz;
+        }
+        // Winding (verified numerically against outward = e × n):
+        //   tri1 = (a_top, a_bot, b_bot)
+        //   tri2 = (a_top, b_bot, b_top)
+        const triBase = (2 * M + w * 2) * 3;
+        outIdx[triBase + 0] = base + 0;
+        outIdx[triBase + 1] = base + 3;
+        outIdx[triBase + 2] = base + 2;
+        outIdx[triBase + 3] = base + 0;
+        outIdx[triBase + 4] = base + 2;
+        outIdx[triBase + 5] = base + 1;
+    }
+
+    // Verts that translate during push/pull: front-face verts + each wall's
+    // two top verts (which share positions with the front face at t=0).
+    const frontVerts = new Uint32Array(N + 2 * W);
+    for (let i = 0; i < N; i++) frontVerts[i] = i;
+    for (let w = 0; w < W; w++) {
+        const base = wallBase + w * 4;
+        frontVerts[N + w * 2 + 0] = base + 0;
+        frontVerts[N + w * 2 + 1] = base + 1;
+    }
+
+    return {
+        positions: outPos,
+        indices:   outIdx,
+        normals:   outNrm,
+        frontVerts,
+    };
+}
 
 function flipNormalsAlongAxis(normals, axis) {
     const ax = axis[0], ay = axis[1], az = axis[2];
@@ -462,35 +613,80 @@ function beginPushPull(primitive, hit) {
     if (!primitive) return;
     const gIdx = primitive.faceGroups.triToGroup[hit.triangleIndex];
     const g = primitive.faceGroups.groups[gIdx];
-    const idxs = primitive.collectAffectedVertexIndices(gIdx);
-    const snap = new Float32Array(idxs.length * 3);
+    const totalTris = primitive.indices.length / 3;
+    // Flat-face case: the picked face group is the entire mesh (a sketch face,
+    // e.g. the rectangle-tool output). Build an extruded template so the drag
+    // produces a 3D slab instead of translating the face.
+    const isFlat = g.tris.length === totalTris;
+
+    let idxs;               // indices into workingPositions
+    let snap;               // starting xyz of those verts
     const affectedSet = new Set();
-    for (let i = 0; i < idxs.length; i++) {
-        const vi = idxs[i];
-        affectedSet.add(vi);
-        snap[i * 3 + 0] = primitive.positions[vi * 3 + 0];
-        snap[i * 3 + 1] = primitive.positions[vi * 3 + 1];
-        snap[i * 3 + 2] = primitive.positions[vi * 3 + 2];
+    let workingPos, workingIdx, workingNrm;
+    let templatePos = null;
+    let faceTris;
+    let invSrc;
+
+    if (isFlat) {
+        const tpl = buildFlatExtrudeTemplate(
+            primitive.positions, primitive.indices, g.normal);
+        templatePos = tpl.positions;
+        workingPos  = new Float32Array(tpl.positions);
+        workingIdx  = new Uint32Array(tpl.indices);
+        workingNrm  = new Float32Array(tpl.normals);
+        idxs = tpl.frontVerts;
+        snap = new Float32Array(idxs.length * 3);
+        for (let i = 0; i < idxs.length; i++) {
+            const vi = idxs[i];
+            affectedSet.add(vi);
+            snap[i * 3 + 0] = templatePos[vi * 3 + 0];
+            snap[i * 3 + 1] = templatePos[vi * 3 + 1];
+            snap[i * 3 + 2] = templatePos[vi * 3 + 2];
+        }
+        // Front-face triangles in the template are the first M, matching the
+        // original triangulation order.
+        const M = totalTris;
+        faceTris = new Array(M);
+        for (let t = 0; t < M; t++) faceTris[t] = t;
+        invSrc = templatePos;
+    } else {
+        idxs = primitive.collectAffectedVertexIndices(gIdx);
+        snap = new Float32Array(idxs.length * 3);
+        for (let i = 0; i < idxs.length; i++) {
+            const vi = idxs[i];
+            affectedSet.add(vi);
+            snap[i * 3 + 0] = primitive.positions[vi * 3 + 0];
+            snap[i * 3 + 1] = primitive.positions[vi * 3 + 1];
+            snap[i * 3 + 2] = primitive.positions[vi * 3 + 2];
+        }
+        workingPos = new Float32Array(primitive.positions.length);
+        workingIdx = new Uint32Array(primitive.indices);
+        workingNrm = primitive.normals ? new Float32Array(primitive.normals) : null;
+        faceTris = g.tris.slice();
+        invSrc = primitive.positions;
     }
+
     pushpull.active = true;
     pushpull.primitive = primitive;
     pushpull.prevMesh = captureMesh(primitive);
     pushpull.groupIdx = gIdx;
-    pushpull.faceTriangles = g.tris.slice();
+    pushpull.faceTriangles = faceTris;
     pushpull.axis = g.normal.slice();
     pushpull.pivot = hit.position.slice();
     pushpull.vertexIndices = idxs;
     pushpull.vertexStart = snap;
-    pushpull.workingPositions = new Float32Array(primitive.positions.length);
-    pushpull.workingIndices = new Uint32Array(primitive.indices);
-    pushpull.workingNormals = primitive.normals ? new Float32Array(primitive.normals) : null;
+    pushpull.workingPositions = workingPos;
+    pushpull.workingIndices = workingIdx;
+    pushpull.workingNormals = workingNrm;
     pushpull.distance = 0;
+    pushpull.flatExtrude = isFlat;
+    pushpull.templatePositions = templatePos;
     pushpull.inversionT = computeInversionT(
-        primitive.positions, pushpull.axis, pushpull.pivot, affectedSet);
+        invSrc, pushpull.axis, pushpull.pivot, affectedSet);
     pushpull.inverted = false;
     setHighlightTriangles(
         primitive, pushpull.faceTriangles, pushpull.axis,
-        primitive.positions, pushpull.workingIndices);
+        workingPos, workingIdx);
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, true);
@@ -507,7 +703,9 @@ function applyPushPull(t) {
     const prim = pushpull.primitive;
     pushpull.distance = t;
     const work = pushpull.workingPositions;
-    work.set(prim.positions);
+    // Reset from the pristine source — template for flat-face extrudes,
+    // committed primitive buffers otherwise.
+    work.set(pushpull.templatePositions || prim.positions);
     const ax = pushpull.axis[0] * t;
     const ay = pushpull.axis[1] * t;
     const az = pushpull.axis[2] * t;
@@ -548,6 +746,20 @@ function commitPushPull() {
     const prim = pushpull.primitive;
     const prevMesh = pushpull.prevMesh;
     const distance = pushpull.distance;
+
+    // Flat extrude at zero distance — don't bake the thickness-0 slab into
+    // the primitive. Revert to the original flat geometry and bail.
+    if (pushpull.flatExtrude && distance === 0) {
+        prim.revertMesh();
+        pickInfo.textContent = 'push/pull cancelled (zero distance)';
+        clearPushPull();
+        clearHighlight();
+        MeasureBox.clearLastOp(measureBoxState);
+        MeasureBox.clear(measureBoxState);
+        MeasureBox.setActive(measureBoxState, false);
+        renderMeasureBox();
+        return;
+    }
     // Stash the last-op (including the target primitive id) before pushpull
     // is cleared — redo needs a stable handle even if the active primitive
     // changes afterward.
@@ -610,6 +822,8 @@ function clearPushPull() {
     pushpull.workingNormals = null;
     pushpull.prevMesh = null;
     pushpull.inverted = false;
+    pushpull.flatExtrude = false;
+    pushpull.templatePositions = null;
     activeSnap = null;
 }
 
