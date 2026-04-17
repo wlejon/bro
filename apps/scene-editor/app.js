@@ -363,6 +363,7 @@ function setTool(t) {
     if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
     if (rectangleToolState.active) cancelRectangle();
     if (circleToolState.active) cancelCircle();
+    if (tapeToolState.active) cancelTape();
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, false);
@@ -1158,6 +1159,40 @@ function cancelCircle() {
     pickInfo.textContent = 'circle cancelled';
 }
 
+// --- Tape measure ----------------------------------------------------------
+//
+// Two-click distance readout via inference snaps. No geometry is produced —
+// the tool just updates the HUD's pick-info field. First click sets the
+// "from" point; the live cursor shows running distance; second click
+// displays the final distance and resets for another measurement.
+
+const tapeToolState = TapeTool.createState();
+
+function beginTape(pos) {
+    TapeTool.begin(tapeToolState, pos);
+    pickInfo.textContent = 'tape  [click second point]';
+}
+
+function updateTapeAt(pos) {
+    if (!tapeToolState.active) return;
+    TapeTool.update(tapeToolState, pos);
+    const d = TapeTool.distance(tapeToolState);
+    pickInfo.textContent = `tape  distance = ${d.toFixed(3)}`;
+}
+
+function commitTape() {
+    if (!tapeToolState.active) return;
+    const d = TapeTool.commit(tapeToolState);
+    pickInfo.textContent = `measured ${d.toFixed(3)}`;
+    return d;
+}
+
+function cancelTape() {
+    if (!tapeToolState.active) return;
+    TapeTool.cancel(tapeToolState);
+    pickInfo.textContent = 'tape cancelled';
+}
+
 // --- Eraser tool -----------------------------------------------------------
 //
 // Click a primitive to delete it. Mirrors the outliner trash-can flow:
@@ -1614,6 +1649,16 @@ function handleLeftDown(e) {
         } else {
             clearHighlight();
         }
+    } else if (currentTool === 'tape') {
+        const ray = screenToRay(cx, cy);
+        const snap = resolveSnap(cx, cy, ray, true);
+        if (!snap) return;    // nothing under the cursor — no-op
+        if (!tapeToolState.active) {
+            beginTape(snap.position);
+        } else {
+            updateTapeAt(snap.position);
+            commitTape();
+        }
     }
 }
 
@@ -1665,6 +1710,16 @@ document.addEventListener('mousemove', (e) => {
         const plane = circleToolState.plane;
         const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
         if (hit) updateCircleAt(hit);
+        return;
+    }
+    if (tapeToolState.active) {
+        const snap = resolveSnap(cx, cy, ray, true);
+        if (snap) {
+            updateTapeAt(snap.position);
+            showSnapMarker(snap);
+        } else {
+            showSnapMarker(null);
+        }
         return;
     }
     if (pushpull.active) {
@@ -1840,6 +1895,7 @@ document.addEventListener('keydown', (e) => {
         if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
         if (rectangleToolState.active)             cancelRectangle();
         if (circleToolState.active)                cancelCircle();
+        if (tapeToolState.active)                  cancelTape();
     }
 });
 
@@ -2131,4 +2187,8 @@ window.__editor = {
 
     // Eraser
     deletePrimitive,
+
+    // Tape measure
+    get tapeToolState() { return tapeToolState; },
+    beginTape, updateTapeAt, commitTape, cancelTape,
 };
