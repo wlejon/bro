@@ -780,7 +780,13 @@ function commitPushPull() {
     const newIndices   = new Uint32Array(pushpull.workingIndices);
     const newNormals   = pushpull.workingNormals
         ? new Float32Array(pushpull.workingNormals) : null;
-    prim.updateGeometry(newPositions, newIndices, newNormals);
+    // Preserve face-group identity across the commit: pulling a facet until
+    // it becomes coplanar with its neighbors should not silently merge
+    // them into one face group. Flat-extrude's tri count differs from the
+    // pre-extrude count so computeFaceGroups falls through to a full
+    // rebuild there — the preserve flag is safe for both paths.
+    prim.updateGeometry(newPositions, newIndices, newNormals,
+                        { preserveFaceGroups: true });
 
     if (distance !== 0 && meshChanged(prevMesh, prim)) {
         const nextMesh = captureMesh(prim);

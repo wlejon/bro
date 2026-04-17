@@ -261,5 +261,49 @@ t('second push/pull on the extruded slab uses the classic path', () => {
 // Wrap-up.
 // -------------------------------------------------------------------------
 
+// -------------------------------------------------------------------------
+// Face-group preservation across commit
+// -------------------------------------------------------------------------
+
+t('pulling a cylinder facet until coplanar keeps facets as separate groups', () => {
+    reg.clear();
+    h.clear();
+    // 12-segment cylinder so the math is easy to reason about; 12 side
+    // facets + top cap + bottom cap = 14 face groups.
+    reg.create({ type: 'cylinder', name: 'cyl',
+                 params: { r: 1, h: 2, seg: 12 } });
+    const cyl = reg.primitives[0];
+    reg.setActive(cyl.id);
+    const beforeGroupCount = cyl.faceGroups.groups.length;
+    assert(beforeGroupCount === 14,
+           `cylinder has 14 face groups (got ${beforeGroupCount})`);
+    // Pick one side facet (first group with a horizontal-ish normal).
+    const sideIdx = cyl.faceGroups.groups.findIndex(g =>
+        Math.abs(g.normal[1]) < 0.01);
+    assert(sideIdx >= 0, 'found a side facet');
+    const sideGroup = cyl.faceGroups.groups[sideIdx];
+    const tri0 = sideGroup.tris[0];
+    // Centroid of that tri.
+    const P = cyl.positions, I = cyl.indices;
+    const c = [0, 0, 0];
+    for (let k = 0; k < 3; k++) {
+        const vi = I[tri0 * 3 + k];
+        c[0] += P[vi * 3 + 0]; c[1] += P[vi * 3 + 1]; c[2] += P[vi * 3 + 2];
+    }
+    c[0] /= 3; c[1] /= 3; c[2] /= 3;
+    E.setTool('pushpull');
+    E.beginPushPull({ triangleIndex: tri0, position: c,
+                      normal: sideGroup.normal.slice(), distance: 0 });
+    // Pull outward enough that adjacent facets' rims move with it — the
+    // exact distance doesn't matter for this assertion; we want to confirm
+    // the commit preserves face-group identity even when geometry moves.
+    E.applyPushPull(0.5);
+    E.commitPushPull();
+    const afterGroupCount = cyl.faceGroups.groups.length;
+    assert(afterGroupCount === beforeGroupCount,
+           `face-group count preserved (before ${beforeGroupCount} → ` +
+           `after ${afterGroupCount})`);
+});
+
 console.log(`\n${tests - failed}/${tests} passed`);
 if (failed > 0) throw new Error(`${failed} test(s) failed`);

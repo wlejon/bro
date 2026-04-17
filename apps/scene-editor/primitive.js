@@ -25,8 +25,17 @@
     // Face groups: maximal sets of coplanar, edge-connected triangles. Unified
     // by vertex *position* (quantized) so hard-edge seams with duplicated
     // indices still merge across the shared edge.
-    function computeFaceGroups(positions, indices, cosTol) {
-        if (cosTol === undefined) cosTol = 0.9995;
+    //
+    // `prior` (optional): a previous { groups, triToGroup } result. When
+    // provided AND the tri count matches, the existing group assignments
+    // are reused — only each group's normal is refreshed from current
+    // positions. This preserves face identity across push/pull commits,
+    // where mutating vertex positions can coincidentally make adjacent
+    // face groups coplanar (e.g. pulling a cylinder facet until it aligns
+    // with its neighbor). Without preservation, those facets would merge
+    // into one face group, silently changing topology.
+    function computeFaceGroups(positions, indices, cosTol, prior) {
+        if (cosTol === undefined || cosTol === null) cosTol = 0.9995;
         const triCount = indices.length / 3;
         const normals = new Float32Array(triCount * 3);
         for (let t = 0; t < triCount; t++) {
@@ -92,6 +101,33 @@
                     if (dot > cosTol) union(a, b);
                 }
             }
+        }
+
+        // Preservation path: prior's tri-count matches → reuse assignments
+        // verbatim, just refresh each group's normal from the representative
+        // triangle's current orientation.
+        if (prior && prior.triToGroup && prior.triToGroup.length === triCount) {
+            const triToGroup = new Int32Array(prior.triToGroup);
+            const groups = prior.groups.map(g => ({
+                tris: [],
+                // Placeholder — overwritten below once we visit a tri in
+                // this group.
+                normal: [g.normal[0], g.normal[1], g.normal[2]],
+            }));
+            const seen = new Uint8Array(groups.length);
+            for (let t = 0; t < triCount; t++) {
+                const gi = triToGroup[t];
+                groups[gi].tris.push(t);
+                if (!seen[gi]) {
+                    groups[gi].normal = [
+                        normals[t * 3 + 0],
+                        normals[t * 3 + 1],
+                        normals[t * 3 + 2],
+                    ];
+                    seen[gi] = 1;
+                }
+            }
+            return { groups, triToGroup };
         }
 
         const rootToIdx = new Map();
@@ -179,7 +215,15 @@
     // Post-mutation rebuild: push/pull commit replaces positions/indices and
     // possibly normals with fresh Float32/Uint32Arrays. All derived state
     // rebuilds; the render node is updated in place (same identity).
-    Primitive.prototype.updateGeometry = function (positions, indices, normals) {
+    //
+    // `opts.preserveFaceGroups` — when true AND the new tri count matches
+    // the old, keep existing face-group assignments (only refresh normals).
+    // Push/pull commit passes this so pulling a cylinder facet until it
+    // aligns with its neighbor doesn't collapse three facets into one
+    // face group. Defaults to false — fresh snapshots (applyMesh from undo,
+    // createFromMesh) rebuild groups from geometry.
+    Primitive.prototype.updateGeometry = function (positions, indices, normals, opts) {
+        const prior = (opts && opts.preserveFaceGroups) ? this.faceGroups : null;
         this.positions = positions;
         this.indices   = indices;
         if (normals) this.normals = normals;
@@ -187,7 +231,7 @@
         this.mesh.indices   = indices;
         if (normals) this.mesh.normals = normals;
         this.bvh          = new MeshBVH(this.mesh);
-        this.faceGroups   = computeFaceGroups(this.positions, this.indices);
+        this.faceGroups   = computeFaceGroups(this.positions, this.indices, undefined, prior);
         this.editMesh     = EditMesh.fromMeshData(this.positions, this.indices);
         this.inferenceGeo = Inference.buildInferenceGeo(
             this.positions, this.indices, this.faceGroups);
