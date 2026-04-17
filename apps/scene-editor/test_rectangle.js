@@ -1,0 +1,189 @@
+// Integration test: rectangle drawing tool + project/history.
+//
+// Run: bro-headless apps/scene-editor apps/scene-editor/test_rectangle.js
+
+'use strict';
+
+const E    = window.__editor;
+const reg  = E.registry;
+const h    = E.history;
+const P    = E.proj;
+
+let tests = 0, failed = 0;
+function t(name, fn) {
+    tests++;
+    try { fn(); console.log('  ok   ' + name); }
+    catch (e) {
+        failed++;
+        console.log('  FAIL ' + name + ': ' + (e && e.message ? e.message : e));
+        if (e && e.stack) console.log(e.stack);
+    }
+}
+function eq(a, b, msg) {
+    const ja = JSON.stringify(a), jb = JSON.stringify(b);
+    if (ja !== jb) throw new Error((msg || 'eq') + ': ' + ja + ' !== ' + jb);
+}
+function near(a, b, eps, msg) {
+    if (Math.abs(a - b) > (eps || 1e-5)) {
+        throw new Error((msg || 'near') + ': ' + a + ' vs ' + b);
+    }
+}
+function truthy(v, msg) { if (!v) throw new Error(msg || 'expected truthy'); }
+function falsy(v, msg)  { if (v)  throw new Error(msg || 'expected falsy'); }
+
+function resetState() {
+    E.setupDefaultScene();
+    h.clear();
+    P.markClean();
+    P._path = null;
+    P._createdAt = null;
+    E.setTool('select');
+}
+
+resetState();
+
+// -------------------------------------------------------------------------
+// Tool lifecycle
+// -------------------------------------------------------------------------
+
+t('tool state starts inactive', () => {
+    resetState();
+    eq(E.rectangleToolState.active, false);
+});
+
+t('setTool(rectangle) makes it active in HUD but the drawing is idle', () => {
+    resetState();
+    E.setTool('rectangle');
+    eq(E.currentTool, 'rectangle');
+    eq(E.rectangleToolState.active, false, 'no drawing state until first click');
+});
+
+t('begin → update → commit produces a new primitive', () => {
+    resetState();
+    E.setTool('rectangle');
+    const before = reg.primitives.length;
+    E.beginRectangle([0, 0, 0]);
+    eq(E.rectangleToolState.active, true);
+    E.updateRectangleAt([2, 0, 3]);
+    E.commitRectangle();
+    eq(E.rectangleToolState.active, false, 'state resets after commit');
+    eq(reg.primitives.length, before + 1, 'one primitive added');
+    const last = reg.primitives[reg.primitives.length - 1];
+    eq(last.name.startsWith('Rectangle'), true);
+    // Face is 2x3 on the XZ plane — bbox check.
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let i = 0; i < last.positions.length; i += 3) {
+        const x = last.positions[i], z = last.positions[i + 2];
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+    }
+    near(maxX - minX, 2, 1e-5, 'width = 2');
+    near(maxZ - minZ, 3, 1e-5, 'depth = 3');
+});
+
+t('commit emits 4 verts, 2 tris (flat quad)', () => {
+    resetState();
+    E.setTool('rectangle');
+    E.beginRectangle([0, 0, 0]);
+    E.updateRectangleAt([1, 0, 1]);
+    E.commitRectangle();
+    const last = reg.primitives[reg.primitives.length - 1];
+    eq(last.positions.length, 12, '4 verts * 3 floats');
+    eq(last.indices.length, 6, '2 tris * 3 indices');
+});
+
+t('cancel aborts without creating a primitive', () => {
+    resetState();
+    const before = reg.primitives.length;
+    E.setTool('rectangle');
+    E.beginRectangle([0, 0, 0]);
+    E.updateRectangleAt([1, 0, 1]);
+    E.cancelRectangle();
+    eq(reg.primitives.length, before, 'no primitive added on cancel');
+    eq(E.rectangleToolState.active, false);
+});
+
+t('zero-area commit discards the preview and adds nothing', () => {
+    resetState();
+    const before = reg.primitives.length;
+    E.setTool('rectangle');
+    E.beginRectangle([1, 0, 1]);
+    E.updateRectangleAt([1, 0, 1]);    // same point → zero area
+    E.commitRectangle();
+    eq(reg.primitives.length, before, 'zero-area commit is a no-op');
+});
+
+// -------------------------------------------------------------------------
+// History integration
+// -------------------------------------------------------------------------
+
+t('commit records one history entry', () => {
+    resetState();
+    E.setTool('rectangle');
+    E.beginRectangle([0, 0, 0]);
+    E.updateRectangleAt([2, 0, 2]);
+    E.commitRectangle();
+    eq(h.size(), 1);
+    truthy(h.canUndo());
+});
+
+t('undo removes the rectangle primitive; redo restores it', () => {
+    resetState();
+    E.setTool('rectangle');
+    E.beginRectangle([0, 0, 0]);
+    E.updateRectangleAt([1, 0, 1]);
+    E.commitRectangle();
+    const last = reg.primitives[reg.primitives.length - 1];
+    const id = last.id;
+    const beforePrims = reg.primitives.length;
+    h.undo();
+    eq(reg.getById(id), null, 'rectangle removed by undo');
+    eq(reg.primitives.length, beforePrims - 1);
+    h.redo();
+    const back = reg.getById(id);
+    truthy(back, 'same id back after redo');
+    eq(back.name.startsWith('Rectangle'), true);
+});
+
+t('dirty flag set after rectangle commit', () => {
+    resetState();
+    eq(P.isDirty(), false);
+    E.setTool('rectangle');
+    E.beginRectangle([0, 0, 0]);
+    E.updateRectangleAt([1, 0, 1]);
+    E.commitRectangle();
+    eq(P.isDirty(), true);
+});
+
+// -------------------------------------------------------------------------
+// Tool switching + cancellation
+// -------------------------------------------------------------------------
+
+t('switching tools mid-draw cancels the preview', () => {
+    resetState();
+    E.setTool('rectangle');
+    E.beginRectangle([0, 0, 0]);
+    E.updateRectangleAt([1, 0, 1]);
+    eq(E.rectangleToolState.active, true);
+    E.setTool('select');
+    eq(E.rectangleToolState.active, false, 'tool switch cancels drawing');
+});
+
+// -------------------------------------------------------------------------
+// Plane basis
+// -------------------------------------------------------------------------
+
+t('currentSketchPlane returns the ground plane', () => {
+    const p = E.currentSketchPlane();
+    eq(p.normal, [0, 1, 0]);
+    eq(p.origin, [0, 0, 0]);
+    truthy(Array.isArray(p.u));
+    truthy(Array.isArray(p.v));
+});
+
+// -------------------------------------------------------------------------
+// End
+// -------------------------------------------------------------------------
+
+console.log(`\n${tests - failed}/${tests} passed`);
+if (failed > 0) throw new Error(`${failed} test(s) failed`);

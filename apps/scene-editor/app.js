@@ -361,6 +361,7 @@ function setTool(t) {
     if (moveToolState.active)   cancelMove();
     if (rotateToolState && rotateToolState.active) RotateTool.cancel(rotateToolState);
     if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
+    if (rectangleToolState.active) cancelRectangle();
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, false);
@@ -674,6 +675,100 @@ function cancelMove() {
 
 const rotateToolState = RotateTool.createState();
 const scaleToolState  = ScaleTool.createState();
+
+// --- Rectangle tool --------------------------------------------------------
+//
+// Click-click drawing: first click anchors corner 0 on the sketch plane,
+// second click commits corner 2 and creates a filled face primitive. The
+// tool module is pure state; preview rendering, input routing, and
+// primitive creation live here in the app.
+
+const rectangleToolState = RectangleTool.createState();
+let rectPreviewNode = null;
+
+// MVP sketch plane: ground (XZ at y=0). Future: resolve from the cursor's
+// hovered face (like SketchUp's inference).
+function currentSketchPlane() {
+    const normal = [0, 1, 0];
+    const { u, v } = Sketch.planeBasis(normal);
+    return { origin: [0, 0, 0], normal, u, v };
+}
+
+function destroyRectPreview() {
+    if (rectPreviewNode) { rectPreviewNode.destroy(); rectPreviewNode = null; }
+}
+
+function refreshRectPreview() {
+    const mesh = RectangleTool.buildMesh(rectangleToolState);
+    if (!mesh) { destroyRectPreview(); return; }
+    if (!rectPreviewNode) {
+        rectPreviewNode = scene.createMesh({
+            data:  mesh,
+            color: '#ffa502',
+            emissive: 0.35,
+            name:  'rect-preview',
+        });
+    } else {
+        rectPreviewNode.updateMesh({
+            positions: mesh.positions,
+            indices:   mesh.indices,
+            normals:   mesh.normals,
+        });
+    }
+}
+
+function beginRectangle(pos) {
+    const plane = currentSketchPlane();
+    RectangleTool.begin(rectangleToolState, plane, pos);
+    pickInfo.textContent = 'rectangle  [corner 1 set — click for corner 2]';
+}
+
+function updateRectangleAt(pos) {
+    if (!rectangleToolState.active) return;
+    RectangleTool.update(rectangleToolState, pos);
+    refreshRectPreview();
+    const sz = RectangleTool.size(rectangleToolState);
+    if (sz) {
+        pickInfo.textContent =
+            `rectangle  ${sz.w.toFixed(3)} × ${sz.h.toFixed(3)}`;
+    }
+}
+
+function commitRectangle() {
+    if (!rectangleToolState.active) return;
+    const mesh = RectangleTool.commit(rectangleToolState);
+    destroyRectPreview();
+    if (!mesh) {
+        pickInfo.textContent = 'rectangle cancelled (zero area)';
+        return;
+    }
+    // Capture buffers as typed arrays so redo can rebuild the primitive
+    // without depending on the JS Mesh wrapper's lifetime.
+    const data = {
+        positions: new Float32Array(mesh.positions),
+        indices:   new Uint32Array(mesh.indices),
+        normals:   new Float32Array(mesh.normals),
+    };
+    const idx = registry.primitives.length;
+    const spec = {
+        name:  'Rectangle ' + (idx + 1),
+        color: OUTLINER_COLORS[idx % OUTLINER_COLORS.length],
+    };
+    const id = registry.nextId();
+    history.do('Add ' + spec.name,
+        () => { registry.createFromMesh(spec, data, id); },
+        () => { registry.remove(id); });
+    pickInfo.textContent = `added ${spec.name}`;
+    // After an add, stay in rectangle mode so the user can draw another —
+    // matches SketchUp's "tool sticks after commit" UX.
+}
+
+function cancelRectangle() {
+    if (!rectangleToolState.active) return;
+    RectangleTool.cancel(rectangleToolState);
+    destroyRectPreview();
+    pickInfo.textContent = 'rectangle cancelled';
+}
 
 // Drag state — begin/translate/rotate/scale/end fires from the engine update
 // this block so the rest of the app (UI, highlight refresh) can react.
@@ -1065,6 +1160,18 @@ function handleLeftDown(e) {
         } else {
             clearHighlight();
         }
+    } else if (currentTool === 'rectangle') {
+        const plane = rectangleToolState.active
+            ? rectangleToolState.plane : currentSketchPlane();
+        const hit = Sketch.rayToPlane(
+            screenToRay(cx, cy), plane.origin, plane.normal);
+        if (!hit) return;
+        if (!rectangleToolState.active) {
+            beginRectangle(hit);
+        } else {
+            updateRectangleAt(hit);
+            commitRectangle();
+        }
     }
 }
 
@@ -1106,6 +1213,12 @@ document.addEventListener('mousemove', (e) => {
     // Gizmo drag is owned by the engine and consumes mousemove before it
     // reaches us — the drag logic lives in the `translate` callback in
     // bro.gizmo.attach above. We never see gizmoDrag.active here.
+    if (rectangleToolState.active) {
+        const plane = rectangleToolState.plane;
+        const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
+        if (hit) updateRectangleAt(hit);
+        return;
+    }
     if (pushpull.active) {
         const vcbVal = MeasureBox.parseValue(measureBoxState.buffer);
         if (vcbVal !== null) {
@@ -1214,7 +1327,7 @@ document.addEventListener('keydown', (e) => {
     // gesture because a half-finished operation's buffers would confuse
     // history entries and a mid-drag save would capture a preview state.
     if ((e.ctrlKey || e.metaKey) && !gizmoDrag.active && !pushpull.active &&
-        !moveToolState.active) {
+        !moveToolState.active && !rectangleToolState.active) {
         const k = (e.key || '').toLowerCase();
         if (k === 'z' && !e.shiftKey) {
             if (history.canUndo()) history.undo();
@@ -1253,6 +1366,7 @@ document.addEventListener('keydown', (e) => {
         if (moveToolState.active)                  cancelMove();
         if (rotateToolState && rotateToolState.active) RotateTool.cancel(rotateToolState);
         if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
+        if (rectangleToolState.active)             cancelRectangle();
     }
 });
 
@@ -1544,4 +1658,10 @@ window.__editor = {
     // are exposed for headless tests that want to round-trip without dialogs.
     proj,
     serializeScene, deserializeScene, setupDefaultScene,
+
+    // Rectangle drawing tool. Expose state + functions so headless tests
+    // can drive a draw cycle without synthesizing mouse events.
+    get rectangleToolState() { return rectangleToolState; },
+    beginRectangle, updateRectangleAt, commitRectangle, cancelRectangle,
+    currentSketchPlane,
 };

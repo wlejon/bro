@@ -90,6 +90,37 @@
         return prim;
     };
 
+    // Build and install a primitive from raw mesh buffers (vs. a
+    // factory spec). Used by drawing tools where the geometry is
+    // synthesized per-stroke and doesn't correspond to a primitive type.
+    // `meshData` may hold Float32Array / Uint32Array or plain arrays —
+    // typed views are materialized here.
+    PrimitiveRegistry.prototype.createFromMesh = function (spec, meshData, id) {
+        const seedMesh = buildMeshFromSpec({ type: 'box', params: { sx: 1, sy: 1, sz: 1 } });
+        const prim = new Primitive({
+            id,
+            name:     spec.name,
+            color:    spec.color,
+            scene:    this.scene,
+            mesh:     seedMesh,
+            position: [0, 0, 0],
+        });
+        const pos = meshData.positions instanceof Float32Array
+            ? meshData.positions : new Float32Array(meshData.positions);
+        const idx = meshData.indices instanceof Uint32Array
+            ? meshData.indices : new Uint32Array(meshData.indices);
+        const nrm = meshData.normals
+            ? (meshData.normals instanceof Float32Array
+                ? meshData.normals : new Float32Array(meshData.normals))
+            : null;
+        prim.updateGeometry(pos, idx, nrm);
+        if (id >= this._nextId) this._nextId = id + 1;
+        this.primitives.push(prim);
+        if (!this.active) this.active = prim;
+        this._emit();
+        return prim;
+    };
+
     // Capture the current state of a primitive in a form suitable for
     // restoreFromSnapshot. Buffers are cloned so later mutations to the live
     // primitive don't bleed into history.
