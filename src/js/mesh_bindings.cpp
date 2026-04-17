@@ -23,6 +23,7 @@
 #include <bromesh/manipulation/remesh.h>
 #include <bromesh/manipulation/repair.h>
 #include <bromesh/manipulation/split_components.h>
+#include <bromesh/manipulation/polygon.h>
 #include <bromesh/manipulation/shrinkwrap.h>
 #include <bromesh/manipulation/skin.h>
 #include <bromesh/optimization/optimize.h>
@@ -274,6 +275,97 @@ static JSValue js_heightmapGrid(JSContext* ctx, JSValueConst, int argc, JSValueC
     JS_ToInt32(ctx, &gh, argv[2]);
     if (argc > 3) JS_ToFloat64(ctx, &cs, argv[3]);
     return wrapMesh(ctx, bromesh::heightmapGrid(heights.data(), gw, gh, (float)cs));
+}
+
+// Accept either a TypedArray (Float32Array, Float64Array) or a plain
+// JS Array of numbers. Plain arrays are the natural shape for hand-
+// written polygon contours in JS code ([x,y,x,y,...]); typed arrays
+// are preferred for larger payloads from a pre-built buffer.
+static bool readFloatLikeVal(JSContext* ctx, JSValueConst v,
+                             std::vector<float>& out) {
+    if (JS_IsArray(v)) {
+        JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lv); JS_FreeValue(ctx, lv);
+        out.clear();
+        out.reserve((size_t)len);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue el = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+            double d = 0;
+            int r = JS_ToFloat64(ctx, &d, el);
+            JS_FreeValue(ctx, el);
+            if (r < 0) return false;
+            out.push_back((float)d);
+        }
+        return true;
+    }
+    return readFloatArrayVal(ctx, v, out);
+}
+
+static JSValue js_triangulatePolygon2D(JSContext* ctx, JSValueConst,
+                                       int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx,
+            "polygon2D requires (outer[, holes[, z]])");
+    }
+    std::vector<float> outer;
+    if (!readFloatLikeVal(ctx, argv[0], outer)) {
+        return JS_ThrowTypeError(ctx, "outer must be Float32Array or number[]");
+    }
+    std::vector<std::vector<float>> holes;
+    if (argc > 1 && JS_IsArray(argv[1])) {
+        JSValue lv = JS_GetPropertyStr(ctx, argv[1], "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lv); JS_FreeValue(ctx, lv);
+        holes.reserve((size_t)len);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue h = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+            std::vector<float> hv;
+            bool ok = readFloatLikeVal(ctx, h, hv);
+            JS_FreeValue(ctx, h);
+            if (!ok) {
+                return JS_ThrowTypeError(ctx,
+                    "each hole must be Float32Array or number[]");
+            }
+            holes.push_back(std::move(hv));
+        }
+    }
+    double z = 0.0;
+    if (argc > 2) JS_ToFloat64(ctx, &z, argv[2]);
+    return wrapMesh(ctx, bromesh::triangulatePolygon2D(outer, holes, (float)z));
+}
+
+static JSValue js_triangulatePolygon3D(JSContext* ctx, JSValueConst,
+                                       int argc, JSValueConst* argv) {
+    if (argc < 3) {
+        return JS_ThrowTypeError(ctx,
+            "polygon3D requires (outer, holes, normal)");
+    }
+    std::vector<float> outer;
+    if (!readFloatLikeVal(ctx, argv[0], outer)) {
+        return JS_ThrowTypeError(ctx, "outer must be Float32Array or number[]");
+    }
+    std::vector<std::vector<float>> holes;
+    if (JS_IsArray(argv[1])) {
+        JSValue lv = JS_GetPropertyStr(ctx, argv[1], "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lv); JS_FreeValue(ctx, lv);
+        holes.reserve((size_t)len);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue h = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+            std::vector<float> hv;
+            bool ok = readFloatLikeVal(ctx, h, hv);
+            JS_FreeValue(ctx, h);
+            if (!ok) {
+                return JS_ThrowTypeError(ctx,
+                    "each hole must be Float32Array or number[]");
+            }
+            holes.push_back(std::move(hv));
+        }
+    }
+    std::vector<float> nvec;
+    if (!readFloatLikeVal(ctx, argv[2], nvec) || nvec.size() < 3) {
+        return JS_ThrowTypeError(ctx, "normal must be [nx, ny, nz]");
+    }
+    const float n[3] = { nvec[0], nvec[1], nvec[2] };
+    return wrapMesh(ctx, bromesh::triangulatePolygon3D(outer, holes, n));
 }
 
 static JSValue js_splitByPlane(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1196,6 +1288,8 @@ void MeshBindings::install(JSContext* ctx) {
         return wrapMesh(ctx, bromesh::computeCreaseNormals(r));
     })
     .static_raw("splitByPlane", js_splitByPlane, 5)
+    .static_raw("polygon2D",    js_triangulatePolygon2D, 3)
+    .static_raw("polygon3D",    js_triangulatePolygon3D, 3)
     .static_method("merge", [](JSContext* ctx, JSValue meshArr) -> JSValue {
         if (!JS_IsArray(meshArr)) return JS_ThrowTypeError(ctx, "merge requires an array of Mesh instances");
         JSValue lenVal = JS_GetPropertyStr(ctx, meshArr, "length");
