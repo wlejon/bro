@@ -289,16 +289,25 @@
     // and rewire the group's existing triangles to reference the duplicates.
     // Returns { dupMap, oldBoundary } where dupMap is a Map<oldVert, newVert>
     // and oldBoundary is an array of loops; each loop is an array of records
-    //   { he, oldA, oldB, newA, newB }
+    //   { he, oldA, oldB, newA, newB, adjGroup }
     // capturing both the original endpoint verts (oldA, oldB) and their
-    // duplicates (newA, newB). The HE's `.origin` after this call points at
-    // newA — addBridge needs oldA/oldB explicitly because they're no longer
-    // recoverable from the HE.
+    // duplicates (newA, newB). adjGroup is the group of the boundary HE's
+    // twin face BEFORE severing (-1 if no twin). The HE's `.origin` after
+    // this call points at newA — addBridge needs oldA/oldB explicitly
+    // because they're no longer recoverable from the HE.
+    //
+    // INTERIOR verts of the face group (those not on the boundary — e.g. the
+    // center vert of a fan-triangulated cylinder cap) are TRANSLATED in
+    // place rather than duplicated. They have no other group referencing
+    // them (otherwise they'd be on a boundary by definition), so moving
+    // them outright keeps the face flat without breaking adjacency.
     //
     // Side effects:
-    //   - new vertices appended to em.vertices at displaced positions
+    //   - new vertices appended to em.vertices at displaced boundary positions
+    //   - interior verts mutated in place (x/y/z += offset)
     //   - each interior HE in the face group gets its origin updated to the
-    //     duplicate
+    //     duplicate (boundary verts) or stays pointing at the (now moved)
+    //     interior vert
     //   - each boundary HE's twin (if any) is severed (twin set to null on
     //     both sides) — bridges will fill that gap
     function duplicateBoundary(em, gIdx, offset) {
@@ -306,13 +315,16 @@
         if (loops.length === 0) {
             throw new Error('duplicateBoundary: face group ' + gIdx + ' has no boundary');
         }
-        // Snapshot loops with original verts before any rewiring.
+        // Snapshot loops with original verts AND adjacent group before any
+        // rewiring or severing. After severing, he.twin is null and the
+        // adjacent group info is lost.
         const annotated = loops.map(loop => loop.map(he => ({
             he,
             oldA: he.origin,
             oldB: he.next.origin,
             newA: null,
             newB: null,
+            adjGroup: he.twin ? he.twin.face.group : -1,
         })));
         const dupMap = new Map();
         for (const loop of annotated) {
@@ -332,14 +344,21 @@
                 rec.newB = dupMap.get(rec.oldB);
             }
         }
-        // Rewire every HE in the group whose origin is a boundary vert to
-        // point to the duplicate. Interior verts (not in dupMap) untouched.
+        // Walk the face group's verts. Boundary verts → rewire to dup.
+        // Interior verts (not in dupMap) → translate in place once each.
+        const interiorMoved = new Set();
         for (const he of em.halfEdges) {
             if (he.face.group !== gIdx) continue;
-            const dup = dupMap.get(he.origin);
+            const v = he.origin;
+            const dup = dupMap.get(v);
             if (dup) {
                 he.origin = dup;
                 if (!dup.halfEdge) dup.halfEdge = he;
+            } else if (!interiorMoved.has(v)) {
+                v.x += offset[0];
+                v.y += offset[1];
+                v.z += offset[2];
+                interiorMoved.add(v);
             }
         }
         // Original boundary verts may have lost their outgoing HE if it was

@@ -384,6 +384,20 @@ function setTool(t) {
 }
 
 // --- Push/Pull --------------------------------------------------------------
+//
+// SketchUp-style: never warps the cap rim. Each drag dup-extrudes the picked
+// face along its normal, building bridge quads for every boundary edge:
+//   - bridges coplanar with an adjacent face merge into that face group
+//     (cap stays flat, side facets stretch — same observed behavior as
+//     SketchUp's "follow the existing surface")
+//   - non-coplanar bridges form new wall face groups
+//   - if the pushed face was the entire mesh (sketch face), a back-face
+//     copy at the original position closes the slab into a manifold
+//
+// The surgery composes EditMesh primitives (findFaceGroupBoundary,
+// duplicateBoundary, addBridge, rematchTwins). Topology is rebuilt from the
+// committed primitive on every applyPushPull tick — no incremental state
+// between frames, so cancel/preview/commit all go through the same path.
 
 // Closest-point parameter along the axis-line passing through `pivot` for a
 // cursor ray. Returns t such that (pivot + t*axis) is the closest point on
@@ -403,301 +417,220 @@ function rayVsAxisDistance(ray, pivot, axis) {
 
 const pushpull = {
     active: false,
-    primitive: null,        // Primitive the drag is bound to
-    groupIdx: -1,
-    faceTriangles: null,
-    axis: [0, 0, 0],
+    primitive: null,          // Primitive the drag is bound to
+    groupIdx: -1,             // group of pushed face in the captured snapshot
+    faceTriangles: null,      // tris in the pushed face group (snapshot indices)
+    axis: [0, 0, 0],          // pushed face's outward normal
     pivot: [0, 0, 0],
-    vertexIndices: null,    // indices into workingPositions
-    vertexStart: null,      // xyz snapshot of the affected verts pre-drag
-    workingPositions: null, // Float32Array scratch, rebuilt each move
-    workingIndices: null,   // winding-flipped when inverted
-    workingNormals: null,   // axis-component flipped when inverted
     distance: 0,
-    inversionT: 0,
-    inverted: false,
-    // Flat-face extrude (sketch-face → 3D slab). When the picked face group
-    // covers the entire mesh (e.g. rectangle-tool output), we synthesize a
-    // back face + walls up front and drive the drag against that template
-    // instead of the committed primitive buffers.
-    flatExtrude: false,
-    templatePositions: null,
+
+    // Captured at beginPushPull, used as the surgery source on every frame.
+    // (Mesh state, group assignment, normals — pristine pre-drag.)
+    snapPositions: null,
+    snapIndices:   null,
+    snapNormals:   null,
+    snapTriToGroup: null,
+    snapFaceGroups: null,
+
+    prevMesh: null,           // captureMesh(primitive) for cancel/undo
+
+    // Cache of the most recent applyPushPull(t) result. commit consumes this.
+    workingPositions: null,
+    workingIndices:   null,
+    workingNormals:   null,
+    workingTriToGroup: null,
+    workingFaceTris:   null,  // pushed face's tri indices in the surgery output
 };
 
-// SketchUp-style first-pull extrusion: detect when the target face group
-// covers the whole mesh (a flat "sketch" face), and build an 8-face slab
-// template (front + back + one wall per boundary edge, all collapsed to
-// zero thickness). The push/pull drag then stretches the front face and
-// its shared-position wall-top verts along the axis, producing a proper
-// 3D solid on commit.
-//
-// Returns { positions, indices, normals, frontVerts } where frontVerts is
-// the Uint32Array of vertex indices that translate with the drag (front
-// face verts + wall top verts). Normals have a sign chosen so the slab is
-// outward-facing once thickness becomes nonzero.
-function buildFlatExtrudeTemplate(positions, indices, normal) {
-    const N = positions.length / 3;
-    const M = indices.length / 3;
-    const nx0 = normal[0], ny0 = normal[1], nz0 = normal[2];
+const BRIDGE_MERGE_TOL = 0.9995;   // cos(1.8°): coplanarity test for bridges
 
-    // Boundary edges: directed edges that appear once (no reverse twin).
-    // For a manifold triangulation of a planar polygon, these form the rim.
-    const dirEdges = new Map();
-    for (let t = 0; t < M; t++) {
-        for (let e = 0; e < 3; e++) {
-            const a = indices[t * 3 + e];
-            const b = indices[t * 3 + ((e + 1) % 3)];
-            dirEdges.set(a + ',' + b, t);
+// Build a fresh push/pull surgery output for the snapshotted mesh, displacing
+// the picked face by axis*t. Returns
+//   { positions, indices, normals, triToGroup, faceTris }
+// where faceTris is the moved face's triangle indices in the new buffer.
+function surgicalPushPull(snap, gIdx, axis, t) {
+    const offset = [axis[0] * t, axis[1] * t, axis[2] * t];
+    const isSketchFace = snap.faceGroups.groups[gIdx].tris.length ===
+                         snap.indices.length / 3;
+
+    const em = EditMesh.fromMeshData(snap.positions, snap.indices, snap.triToGroup);
+    // Snapshot the pushed face's tris (in EditMesh order) so we can find
+    // them again in the output for back-face creation + highlight tracking.
+    const movedFaces = [];
+    for (let i = 0; i < em.faces.length; i++) {
+        if (em.faces[i].group === gIdx) movedFaces.push(em.faces[i]);
+    }
+
+    const { dupMap, oldBoundary } = EditMesh.duplicateBoundary(em, gIdx, offset);
+
+    // Assign each bridge to either the adjacent face group (if coplanar) or
+    // a fresh group. Track new groups so subsequent commits can preserve
+    // them via triToGroup propagation.
+    const baseGroupCount = snap.faceGroups.groups.length;
+    let nextGroup = baseGroupCount;
+    const newGroupNormals = [];   // normals for any newly-created bridge groups
+    function assignBridgeGroup(rec, bridgeNormal) {
+        if (rec.adjGroup >= 0 && rec.adjGroup < baseGroupCount) {
+            const adjN = snap.faceGroups.groups[rec.adjGroup].normal;
+            const dot = bridgeNormal[0] * adjN[0] +
+                        bridgeNormal[1] * adjN[1] +
+                        bridgeNormal[2] * adjN[2];
+            if (dot > BRIDGE_MERGE_TOL) return rec.adjGroup;
+        }
+        const g = nextGroup++;
+        newGroupNormals[g - baseGroupCount] = bridgeNormal.slice();
+        return g;
+    }
+    for (const loop of oldBoundary) {
+        for (const rec of loop) {
+            const a = rec.oldA, b = rec.oldB;
+            const ex = b.x - a.x, ey = b.y - a.y, ez = b.z - a.z;
+            // Bridge normal = edge × offset (outward when offset displaces
+            // the face away from its interior — convention matches the
+            // CCW-from-+normal triangulation that all our face groups use).
+            let bx = ey * offset[2] - ez * offset[1];
+            let by = ez * offset[0] - ex * offset[2];
+            let bz = ex * offset[1] - ey * offset[0];
+            const bl = Math.hypot(bx, by, bz);
+            if (bl > 1e-10) { bx /= bl; by /= bl; bz /= bl; }
+            const bridgeNormal = [bx, by, bz];
+            const grp = assignBridgeGroup(rec, bridgeNormal);
+            EditMesh.addBridge(em, rec.oldA, rec.oldB, rec.newA, rec.newB, grp);
         }
     }
-    const boundary = [];
-    for (const key of dirEdges.keys()) {
-        const comma = key.indexOf(',');
-        const a = +key.substring(0, comma);
-        const b = +key.substring(comma + 1);
-        if (!dirEdges.has(b + ',' + a)) boundary.push([a, b]);
-    }
-    const W = boundary.length;
 
-    // Layout:
-    //   [0..N-1]          front-face verts (normal = +normal)
-    //   [N..2N-1]         back-face verts  (normal = -normal, winding reversed)
-    //   [2N + 4w + {0..3}] wall w verts: 0=a_top, 1=b_top, 2=b_bot, 3=a_bot
-    const wallBase = 2 * N;
-    const newN = 2 * N + 4 * W;
-    const newM = 2 * M + 2 * W;
-    const outPos = new Float32Array(newN * 3);
-    const outIdx = new Uint32Array(newM * 3);
-    const outNrm = new Float32Array(newN * 3);
-
-    // Front face
-    for (let i = 0; i < N; i++) {
-        outPos[i * 3 + 0] = positions[i * 3 + 0];
-        outPos[i * 3 + 1] = positions[i * 3 + 1];
-        outPos[i * 3 + 2] = positions[i * 3 + 2];
-        outNrm[i * 3 + 0] = nx0;
-        outNrm[i * 3 + 1] = ny0;
-        outNrm[i * 3 + 2] = nz0;
-    }
-    for (let t = 0; t < M; t++) {
-        outIdx[t * 3 + 0] = indices[t * 3 + 0];
-        outIdx[t * 3 + 1] = indices[t * 3 + 1];
-        outIdx[t * 3 + 2] = indices[t * 3 + 2];
-    }
-
-    // Back face — duplicated positions, opposite normal, reversed winding.
-    for (let i = 0; i < N; i++) {
-        const dst = (N + i) * 3;
-        outPos[dst + 0] = positions[i * 3 + 0];
-        outPos[dst + 1] = positions[i * 3 + 1];
-        outPos[dst + 2] = positions[i * 3 + 2];
-        outNrm[dst + 0] = -nx0;
-        outNrm[dst + 1] = -ny0;
-        outNrm[dst + 2] = -nz0;
-    }
-    for (let t = 0; t < M; t++) {
-        outIdx[(M + t) * 3 + 0] = N + indices[t * 3 + 0];
-        outIdx[(M + t) * 3 + 1] = N + indices[t * 3 + 2];
-        outIdx[(M + t) * 3 + 2] = N + indices[t * 3 + 1];
-    }
-
-    // Walls — one quad per boundary edge a→b. Outward normal = (b-a) × n,
-    // which for a CCW-from-+n polygon points away from the interior.
-    for (let w = 0; w < W; w++) {
-        const a = boundary[w][0];
-        const b = boundary[w][1];
-        const ax = positions[a * 3 + 0];
-        const ay = positions[a * 3 + 1];
-        const az = positions[a * 3 + 2];
-        const bx = positions[b * 3 + 0];
-        const by = positions[b * 3 + 1];
-        const bz = positions[b * 3 + 2];
-        const ex = bx - ax, ey = by - ay, ez = bz - az;
-        // outward = e × n
-        let wnx = ey * nz0 - ez * ny0;
-        let wny = ez * nx0 - ex * nz0;
-        let wnz = ex * ny0 - ey * nx0;
-        const wlen = Math.hypot(wnx, wny, wnz);
-        if (wlen > 1e-10) { wnx /= wlen; wny /= wlen; wnz /= wlen; }
-
-        const base = wallBase + w * 4;
-        // 0 = a_top, 1 = b_top, 2 = b_bot, 3 = a_bot (all coincident at t=0).
-        outPos[(base + 0) * 3 + 0] = ax;
-        outPos[(base + 0) * 3 + 1] = ay;
-        outPos[(base + 0) * 3 + 2] = az;
-        outPos[(base + 1) * 3 + 0] = bx;
-        outPos[(base + 1) * 3 + 1] = by;
-        outPos[(base + 1) * 3 + 2] = bz;
-        outPos[(base + 2) * 3 + 0] = bx;
-        outPos[(base + 2) * 3 + 1] = by;
-        outPos[(base + 2) * 3 + 2] = bz;
-        outPos[(base + 3) * 3 + 0] = ax;
-        outPos[(base + 3) * 3 + 1] = ay;
-        outPos[(base + 3) * 3 + 2] = az;
-        for (let k = 0; k < 4; k++) {
-            outNrm[(base + k) * 3 + 0] = wnx;
-            outNrm[(base + k) * 3 + 1] = wny;
-            outNrm[(base + k) * 3 + 2] = wnz;
+    // Sketch face: add a back face at the original positions so the slab
+    // closes into a manifold. Triangles mirror the moved face's
+    // triangulation but use the ORIGINAL boundary verts (still in dupMap as
+    // keys) with reversed winding.
+    if (isSketchFace) {
+        const backGroup = nextGroup++;
+        newGroupNormals[backGroup - baseGroupCount] = [
+            -axis[0], -axis[1], -axis[2],
+        ];
+        for (const f of movedFaces) {
+            const hes = EditMesh.faceHalfEdges(f);
+            // f's HEs now reference the duplicates (rewired). Map back to
+            // originals by inverse-lookup in dupMap. (Interior verts of a
+            // triangulated polygon are also boundary verts — Manifold's
+            // Triangulate doesn't add Steiner points — so dupMap covers
+            // every vert in the face.)
+            const origs = [];
+            for (let k = 0; k < 3; k++) {
+                const newV = hes[k].origin;
+                let oldV = null;
+                for (const [o, n] of dupMap.entries()) {
+                    if (n === newV) { oldV = o; break; }
+                }
+                if (!oldV) {
+                    throw new Error('back-face: vert not found in dupMap');
+                }
+                origs.push(oldV);
+            }
+            // Reverse winding (origs[0], origs[2], origs[1]) for the back face.
+            const bf = { halfEdge: null, group: backGroup };
+            em.faces.push(bf);
+            const h0 = { origin: origs[0], twin: null, next: null, face: bf };
+            const h1 = { origin: origs[2], twin: null, next: null, face: bf };
+            const h2 = { origin: origs[1], twin: null, next: null, face: bf };
+            em.halfEdges.push(h0, h1, h2);
+            h0.next = h1; h1.next = h2; h2.next = h0;
+            bf.halfEdge = h0;
+            // Refresh outgoing-HE pointers if the originals had no incident HE.
+            if (!origs[0].halfEdge) origs[0].halfEdge = h0;
+            if (!origs[2].halfEdge) origs[2].halfEdge = h1;
+            if (!origs[1].halfEdge) origs[1].halfEdge = h2;
         }
-        // Winding (verified numerically against outward = e × n):
-        //   tri1 = (a_top, a_bot, b_bot)
-        //   tri2 = (a_top, b_bot, b_top)
-        const triBase = (2 * M + w * 2) * 3;
-        outIdx[triBase + 0] = base + 0;
-        outIdx[triBase + 1] = base + 3;
-        outIdx[triBase + 2] = base + 2;
-        outIdx[triBase + 3] = base + 0;
-        outIdx[triBase + 4] = base + 2;
-        outIdx[triBase + 5] = base + 1;
     }
 
-    // Verts that translate during push/pull: front-face verts + each wall's
-    // two top verts (which share positions with the front face at t=0).
-    const frontVerts = new Uint32Array(N + 2 * W);
-    for (let i = 0; i < N; i++) frontVerts[i] = i;
-    for (let w = 0; w < W; w++) {
-        const base = wallBase + w * 4;
-        frontVerts[N + w * 2 + 0] = base + 0;
-        frontVerts[N + w * 2 + 1] = base + 1;
+    EditMesh.rematchTwins(em);
+
+    const out = EditMesh.toMeshDataWithGroups(em);
+
+    // Per-group flat normals. Vert shared across groups: last-write-wins.
+    // For sharp-edged primitives this matches the bromesh convention where
+    // each face group has its own copy of shared rim verts (we keep those
+    // duplicates intact through surgery), so cross-group bleeding is rare.
+    const normals = new Float32Array(out.positions.length);
+    const groupNormalForTri = new Float32Array(out.triToGroup.length * 3);
+    for (let t = 0; t < out.triToGroup.length; t++) {
+        const g = out.triToGroup[t];
+        let nx, ny, nz;
+        if (g < baseGroupCount) {
+            const gn = snap.faceGroups.groups[g].normal;
+            nx = gn[0]; ny = gn[1]; nz = gn[2];
+        } else {
+            const gn = newGroupNormals[g - baseGroupCount];
+            nx = gn[0]; ny = gn[1]; nz = gn[2];
+        }
+        groupNormalForTri[t * 3 + 0] = nx;
+        groupNormalForTri[t * 3 + 1] = ny;
+        groupNormalForTri[t * 3 + 2] = nz;
+        for (let k = 0; k < 3; k++) {
+            const vi = out.indices[t * 3 + k];
+            normals[vi * 3 + 0] = nx;
+            normals[vi * 3 + 1] = ny;
+            normals[vi * 3 + 2] = nz;
+        }
+    }
+
+    // Find the moved face's tri indices in the output (they may have shifted
+    // because EditMesh appended new faces). The moved tris kept their face
+    // objects; we tagged them in `movedFaces`.
+    const movedFaceSet = new Set(movedFaces);
+    const faceTris = [];
+    for (let i = 0; i < em.faces.length; i++) {
+        if (movedFaceSet.has(em.faces[i])) faceTris.push(i);
     }
 
     return {
-        positions: outPos,
-        indices:   outIdx,
-        normals:   outNrm,
-        frontVerts,
+        positions: out.positions,
+        indices:   out.indices,
+        normals,
+        triToGroup: out.triToGroup,
+        faceTris,
     };
 }
 
-function flipNormalsAlongAxis(normals, axis) {
-    const ax = axis[0], ay = axis[1], az = axis[2];
-    const n = normals.length / 3;
-    for (let i = 0; i < n; i++) {
-        const ix = i * 3;
-        const nx = normals[ix + 0], ny = normals[ix + 1], nz = normals[ix + 2];
-        const d = nx * ax + ny * ay + nz * az;
-        if (d === 0) continue;
-        const k = 2 * d;
-        normals[ix + 0] = nx - k * ax;
-        normals[ix + 1] = ny - k * ay;
-        normals[ix + 2] = nz - k * az;
-    }
-}
-
-function flipAllWinding(indices) {
-    const triCount = indices.length / 3;
-    for (let t = 0; t < triCount; t++) {
-        const b = indices[t * 3 + 1];
-        indices[t * 3 + 1] = indices[t * 3 + 2];
-        indices[t * 3 + 2] = b;
-    }
-}
-
-// Drag distance at which the pushed face crosses the farthest non-affected
-// vertex along the axis — the "push through" threshold.
-function computeInversionT(positions, axis, pivot, affectedSet) {
-    let m = Infinity;
-    const vertCount = positions.length / 3;
-    for (let vi = 0; vi < vertCount; vi++) {
-        if (affectedSet.has(vi)) continue;
-        const proj = positions[vi * 3 + 0] * axis[0] +
-                     positions[vi * 3 + 1] * axis[1] +
-                     positions[vi * 3 + 2] * axis[2];
-        if (proj < m) m = proj;
-    }
-    const p0 = pivot[0] * axis[0] + pivot[1] * axis[1] + pivot[2] * axis[2];
-    return m - p0;
-}
-
-// Start a push/pull on the given primitive + hit. The primitive reference is
-// captured on the drag state, so a mid-drag active-primitive change (e.g.
-// user clicks a different row in the outliner) doesn't redirect the commit.
+// Begin push/pull. Snapshots the primitive's current mesh + face groups so
+// every applyPushPull tick rebuilds from the same source — no incremental
+// state between frames. (The primitive reference is captured on pushpull
+// itself, so a mid-drag active-primitive change in the outliner doesn't
+// redirect the commit.)
 function beginPushPull(primitive, hit) {
     if (!primitive) return;
     const gIdx = primitive.faceGroups.triToGroup[hit.triangleIndex];
     const g = primitive.faceGroups.groups[gIdx];
-    const totalTris = primitive.indices.length / 3;
-    // Flat-face case: the picked face group is the entire mesh (a sketch face,
-    // e.g. the rectangle-tool output). Build an extruded template so the drag
-    // produces a 3D slab instead of translating the face.
-    const isFlat = g.tris.length === totalTris;
-
-    let idxs;               // indices into workingPositions
-    let snap;               // starting xyz of those verts
-    const affectedSet = new Set();
-    let workingPos, workingIdx, workingNrm;
-    let templatePos = null;
-    let faceTris;
-    let invSrc;
-
-    if (isFlat) {
-        const tpl = buildFlatExtrudeTemplate(
-            primitive.positions, primitive.indices, g.normal);
-        templatePos = tpl.positions;
-        workingPos  = new Float32Array(tpl.positions);
-        workingIdx  = new Uint32Array(tpl.indices);
-        workingNrm  = new Float32Array(tpl.normals);
-        idxs = tpl.frontVerts;
-        snap = new Float32Array(idxs.length * 3);
-        for (let i = 0; i < idxs.length; i++) {
-            const vi = idxs[i];
-            affectedSet.add(vi);
-            snap[i * 3 + 0] = templatePos[vi * 3 + 0];
-            snap[i * 3 + 1] = templatePos[vi * 3 + 1];
-            snap[i * 3 + 2] = templatePos[vi * 3 + 2];
-        }
-        // Front-face triangles in the template are the first M, matching the
-        // original triangulation order.
-        const M = totalTris;
-        faceTris = new Array(M);
-        for (let t = 0; t < M; t++) faceTris[t] = t;
-        invSrc = templatePos;
-    } else {
-        idxs = primitive.collectAffectedVertexIndices(gIdx);
-        snap = new Float32Array(idxs.length * 3);
-        for (let i = 0; i < idxs.length; i++) {
-            const vi = idxs[i];
-            affectedSet.add(vi);
-            snap[i * 3 + 0] = primitive.positions[vi * 3 + 0];
-            snap[i * 3 + 1] = primitive.positions[vi * 3 + 1];
-            snap[i * 3 + 2] = primitive.positions[vi * 3 + 2];
-        }
-        workingPos = new Float32Array(primitive.positions.length);
-        workingIdx = new Uint32Array(primitive.indices);
-        workingNrm = primitive.normals ? new Float32Array(primitive.normals) : null;
-        faceTris = g.tris.slice();
-        invSrc = primitive.positions;
-    }
 
     pushpull.active = true;
     pushpull.primitive = primitive;
     pushpull.prevMesh = captureMesh(primitive);
     pushpull.groupIdx = gIdx;
-    pushpull.faceTriangles = faceTris;
     pushpull.axis = g.normal.slice();
     pushpull.pivot = hit.position.slice();
-    pushpull.vertexIndices = idxs;
-    pushpull.vertexStart = snap;
-    pushpull.workingPositions = workingPos;
-    pushpull.workingIndices = workingIdx;
-    pushpull.workingNormals = workingNrm;
     pushpull.distance = 0;
-    pushpull.flatExtrude = isFlat;
-    pushpull.templatePositions = templatePos;
-    pushpull.inversionT = computeInversionT(
-        invSrc, pushpull.axis, pushpull.pivot, affectedSet);
-    pushpull.inverted = false;
-    setHighlightTriangles(
-        primitive, pushpull.faceTriangles, pushpull.axis,
-        workingPos, workingIdx);
+    pushpull.faceTriangles = g.tris.slice();
+
+    pushpull.snapPositions  = new Float32Array(primitive.positions);
+    pushpull.snapIndices    = new Uint32Array(primitive.indices);
+    pushpull.snapNormals    = primitive.normals
+        ? new Float32Array(primitive.normals) : null;
+    pushpull.snapTriToGroup = new Int32Array(primitive.faceGroups.triToGroup);
+    pushpull.snapFaceGroups = primitive.faceGroups;
+
+    pushpull.workingPositions = null;
+    pushpull.workingIndices   = null;
+    pushpull.workingNormals   = null;
+    pushpull.workingTriToGroup = null;
+    pushpull.workingFaceTris  = null;
+
+    setHighlightTriangles(primitive, pushpull.faceTriangles, pushpull.axis);
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, true);
     renderMeasureBox();
-    // Seed the working buffers with the pristine geometry at t=0. Without
-    // this, a click-release with zero cursor motion never triggers
-    // applyPushPull, and commitPushPull would bake the zero-filled
-    // workingPositions into the mesh — collapsing the primitive.
+    // Seed at t=0 so a click-release without drag doesn't leave the working
+    // buffers null at commit time.
     applyPushPull(0);
 }
 
@@ -705,43 +638,26 @@ function applyPushPull(t) {
     if (!pushpull.active) return;
     const prim = pushpull.primitive;
     pushpull.distance = t;
-    const work = pushpull.workingPositions;
-    // Reset from the pristine source — template for flat-face extrudes,
-    // committed primitive buffers otherwise.
-    work.set(pushpull.templatePositions || prim.positions);
-    const ax = pushpull.axis[0] * t;
-    const ay = pushpull.axis[1] * t;
-    const az = pushpull.axis[2] * t;
-    const idxs = pushpull.vertexIndices;
-    const snap = pushpull.vertexStart;
-    for (let i = 0; i < idxs.length; i++) {
-        const vi = idxs[i];
-        work[vi * 3 + 0] = snap[i * 3 + 0] + ax;
-        work[vi * 3 + 1] = snap[i * 3 + 1] + ay;
-        work[vi * 3 + 2] = snap[i * 3 + 2] + az;
-    }
 
-    const newInverted = t < pushpull.inversionT;
-    if (newInverted !== pushpull.inverted) {
-        flipAllWinding(pushpull.workingIndices);
-        if (pushpull.workingNormals) {
-            flipNormalsAlongAxis(pushpull.workingNormals, pushpull.axis);
-        }
-        pushpull.inverted = newInverted;
-    }
+    const snap = {
+        positions:  pushpull.snapPositions,
+        indices:    pushpull.snapIndices,
+        normals:    pushpull.snapNormals,
+        triToGroup: pushpull.snapTriToGroup,
+        faceGroups: pushpull.snapFaceGroups,
+    };
+    const out = surgicalPushPull(snap, pushpull.groupIdx, pushpull.axis, t);
+    pushpull.workingPositions  = out.positions;
+    pushpull.workingIndices    = out.indices;
+    pushpull.workingNormals    = out.normals;
+    pushpull.workingTriToGroup = out.triToGroup;
+    pushpull.workingFaceTris   = out.faceTris;
 
-    prim.previewMesh(
-        work, pushpull.workingIndices,
-        pushpull.workingNormals || prim.normals);
+    prim.previewMesh(out.positions, out.indices, out.normals);
+    setHighlightTriangles(prim, out.faceTris, pushpull.axis,
+                          out.positions, out.indices);
 
-    const hlNormal = pushpull.inverted
-        ? [-pushpull.axis[0], -pushpull.axis[1], -pushpull.axis[2]]
-        : pushpull.axis;
-    setHighlightTriangles(
-        prim, pushpull.faceTriangles, hlNormal, work, pushpull.workingIndices);
-
-    pickInfo.textContent = `push/pull  ${t.toFixed(3)}` +
-        (pushpull.inverted ? '  [inverted]' : '');
+    pickInfo.textContent = `push/pull  ${t.toFixed(3)}`;
 }
 
 function commitPushPull() {
@@ -750,9 +666,10 @@ function commitPushPull() {
     const prevMesh = pushpull.prevMesh;
     const distance = pushpull.distance;
 
-    // Flat extrude at zero distance — don't bake the thickness-0 slab into
-    // the primitive. Revert to the original flat geometry and bail.
-    if (pushpull.flatExtrude && distance === 0) {
+    // Zero distance: no topology change (surgicalPushPull at t=0 yields the
+    // snapshot mesh extended with zero-length bridges + duplicated boundary
+    // verts — degenerate). Revert and bail.
+    if (distance === 0) {
         prim.revertMesh();
         pickInfo.textContent = 'push/pull cancelled (zero distance)';
         clearPushPull();
@@ -763,48 +680,41 @@ function commitPushPull() {
         renderMeasureBox();
         return;
     }
-    // Stash the last-op (including the target primitive id) before pushpull
-    // is cleared — redo needs a stable handle even if the active primitive
-    // changes afterward.
     const lastOp = {
         primitiveId: prim.id,
         normal: pushpull.axis.slice(),
         centroid: prim.faceGroupCentroid(pushpull.groupIdx),
-        distance: pushpull.distance,
+        distance,
     };
-    lastOp.centroid[0] += pushpull.axis[0] * pushpull.distance;
-    lastOp.centroid[1] += pushpull.axis[1] * pushpull.distance;
-    lastOp.centroid[2] += pushpull.axis[2] * pushpull.distance;
+    lastOp.centroid[0] += pushpull.axis[0] * distance;
+    lastOp.centroid[1] += pushpull.axis[1] * distance;
+    lastOp.centroid[2] += pushpull.axis[2] * distance;
 
     const newPositions = new Float32Array(pushpull.workingPositions);
     const newIndices   = new Uint32Array(pushpull.workingIndices);
-    const newNormals   = pushpull.workingNormals
-        ? new Float32Array(pushpull.workingNormals) : null;
-    // Preserve face-group identity across the commit: pulling a facet until
-    // it becomes coplanar with its neighbors should not silently merge
-    // them into one face group. Flat-extrude's tri count differs from the
-    // pre-extrude count so computeFaceGroups falls through to a full
-    // rebuild there — the preserve flag is safe for both paths.
+    const newNormals   = new Float32Array(pushpull.workingNormals);
+    // The surgery output already has correct face-group assignments
+    // (carried via triToGroup). Pass them in via priorTriToGroup so
+    // computeFaceGroups preserves identity instead of re-grouping by
+    // coplanarity (which would re-merge bridge groups with caps if their
+    // normals happen to align after a degenerate edge).
     prim.updateGeometry(newPositions, newIndices, newNormals,
-                        { preserveFaceGroups: true });
+                        { priorTriToGroup: pushpull.workingTriToGroup });
 
-    if (distance !== 0 && meshChanged(prevMesh, prim)) {
+    if (meshChanged(prevMesh, prim)) {
         const nextMesh = captureMesh(prim);
         history.record('Push/pull',
             () => applyMesh(prim, nextMesh),
             () => applyMesh(prim, prevMesh));
     }
 
-    pickInfo.textContent =
-        `extruded ${pushpull.distance.toFixed(3)}` +
-        (pushpull.inverted ? '  [inverted through]' : '');
+    pickInfo.textContent = `extruded ${distance.toFixed(3)}`;
     clearPushPull();
     clearHighlight();
     MeasureBox.clear(measureBoxState);
     MeasureBox.setLastOp(measureBoxState, lastOp);
     MeasureBox.setActive(measureBoxState, true);
     renderMeasureBox();
-    // Centroid moved with the extrusion — re-anchor the gizmo.
     updateGizmoForActive();
 }
 
@@ -824,15 +734,17 @@ function clearPushPull() {
     pushpull.active = false;
     pushpull.primitive = null;
     pushpull.faceTriangles = null;
-    pushpull.vertexIndices = null;
-    pushpull.vertexStart = null;
+    pushpull.snapPositions = null;
+    pushpull.snapIndices = null;
+    pushpull.snapNormals = null;
+    pushpull.snapTriToGroup = null;
+    pushpull.snapFaceGroups = null;
     pushpull.workingPositions = null;
     pushpull.workingIndices = null;
     pushpull.workingNormals = null;
+    pushpull.workingTriToGroup = null;
+    pushpull.workingFaceTris = null;
     pushpull.prevMesh = null;
-    pushpull.inverted = false;
-    pushpull.flatExtrude = false;
-    pushpull.templatePositions = null;
     activeSnap = null;
 }
 

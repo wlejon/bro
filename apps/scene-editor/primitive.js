@@ -212,27 +212,88 @@
         this._rebuildEdges();
     };
 
+    // Build a faceGroups structure {groups, triToGroup} directly from a
+    // caller-supplied triToGroup map + the geometry. Each group's normal
+    // is taken from the first triangle assigned to it. Used by the push/pull
+    // surgery commit, which already knows the correct grouping (bridge tris
+    // explicitly assigned to merge-with-adjacent or new-wall groups) and
+    // doesn't want computeFaceGroups's coplanarity-based re-grouping
+    // overwriting that.
+    function faceGroupsFromTriToGroup(positions, indices, triToGroup) {
+        const triCount = indices.length / 3;
+        if (triToGroup.length !== triCount) {
+            throw new Error('faceGroupsFromTriToGroup: triToGroup length ' +
+                triToGroup.length + ' != triCount ' + triCount);
+        }
+        // Compact group ids in case the caller used sparse ids (surgery's
+        // bridge groups start at baseGroupCount and may skip values if a
+        // bridge merged into an existing group).
+        const idMap = new Map();
+        const newToGroup = new Int32Array(triCount);
+        for (let t = 0; t < triCount; t++) {
+            const g = triToGroup[t];
+            let nid = idMap.get(g);
+            if (nid === undefined) {
+                nid = idMap.size;
+                idMap.set(g, nid);
+            }
+            newToGroup[t] = nid;
+        }
+        const groups = [];
+        for (let i = 0; i < idMap.size; i++) {
+            groups.push({ tris: [], normal: [0, 1, 0] });
+        }
+        const seen = new Uint8Array(groups.length);
+        for (let t = 0; t < triCount; t++) {
+            const gi = newToGroup[t];
+            groups[gi].tris.push(t);
+            if (!seen[gi]) {
+                const i0 = indices[t * 3 + 0] * 3;
+                const i1 = indices[t * 3 + 1] * 3;
+                const i2 = indices[t * 3 + 2] * 3;
+                const ax = positions[i1] - positions[i0];
+                const ay = positions[i1+1] - positions[i0+1];
+                const az = positions[i1+2] - positions[i0+2];
+                const bx = positions[i2] - positions[i0];
+                const by = positions[i2+1] - positions[i0+1];
+                const bz = positions[i2+2] - positions[i0+2];
+                let nx = ay*bz - az*by;
+                let ny = az*bx - ax*bz;
+                let nz = ax*by - ay*bx;
+                const L = Math.hypot(nx, ny, nz) || 1;
+                groups[gi].normal = [nx/L, ny/L, nz/L];
+                seen[gi] = 1;
+            }
+        }
+        return { groups, triToGroup: newToGroup };
+    }
+
     // Post-mutation rebuild: push/pull commit replaces positions/indices and
     // possibly normals with fresh Float32/Uint32Arrays. All derived state
     // rebuilds; the render node is updated in place (same identity).
     //
-    // `opts.preserveFaceGroups` — when true AND the new tri count matches
-    // the old, keep existing face-group assignments (only refresh normals).
-    // Push/pull commit passes this so pulling a cylinder facet until it
-    // aligns with its neighbor doesn't collapse three facets into one
-    // face group. Defaults to false — fresh snapshots (applyMesh from undo,
-    // createFromMesh) rebuild groups from geometry.
+    // `opts.priorTriToGroup` — explicit triToGroup (supplied by surgery).
+    //   Used directly instead of running computeFaceGroups.
+    // `opts.preserveFaceGroups` — keep existing face-group assignments when
+    //   the new tri count matches the old. Used by callers that re-set
+    //   positions on the same topology (legacy compatibility — surgery
+    //   uses priorTriToGroup instead).
     Primitive.prototype.updateGeometry = function (positions, indices, normals, opts) {
-        const prior = (opts && opts.preserveFaceGroups) ? this.faceGroups : null;
         this.positions = positions;
         this.indices   = indices;
         if (normals) this.normals = normals;
         this.mesh.positions = positions;
         this.mesh.indices   = indices;
         if (normals) this.mesh.normals = normals;
-        this.bvh          = new MeshBVH(this.mesh);
-        this.faceGroups   = computeFaceGroups(this.positions, this.indices, undefined, prior);
-        this.editMesh     = EditMesh.fromMeshData(this.positions, this.indices);
+        this.bvh = new MeshBVH(this.mesh);
+        if (opts && opts.priorTriToGroup) {
+            this.faceGroups = faceGroupsFromTriToGroup(
+                positions, indices, opts.priorTriToGroup);
+        } else {
+            const prior = (opts && opts.preserveFaceGroups) ? this.faceGroups : null;
+            this.faceGroups = computeFaceGroups(this.positions, this.indices, undefined, prior);
+        }
+        this.editMesh = EditMesh.fromMeshData(this.positions, this.indices);
         this.inferenceGeo = Inference.buildInferenceGeo(
             this.positions, this.indices, this.faceGroups);
         this.meshNode.updateMesh({
