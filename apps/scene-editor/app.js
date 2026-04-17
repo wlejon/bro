@@ -363,6 +363,7 @@ function setTool(t) {
     if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
     if (rectangleToolState.active) cancelRectangle();
     if (circleToolState.active) cancelCircle();
+    if (lineToolState.active) cancelLine();
     if (tapeToolState.active) cancelTape();
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
@@ -1159,6 +1160,194 @@ function cancelCircle() {
     pickInfo.textContent = 'circle cancelled';
 }
 
+// --- Line tool -------------------------------------------------------------
+//
+// Click-chain polyline. First click locks the sketch plane (face-pick or
+// ground fallback); subsequent clicks extend the polyline on that plane.
+// A click that lands on a prior polyline vertex closes the sub-loop and
+// commits a filled face primitive. Orphan prefix edges are discarded
+// (pure-edge primitives are a future addition — MVP keeps to filled faces).
+//
+// Esc / tool-switch / double-click end the chain without creating anything.
+
+const lineToolState = LineTool.createState();
+let linePreviewNode = null;
+const LINE_PREVIEW_COLOR = [1.0, 0.647, 0.008, 1.0];    // SketchUp orange
+const LINE_PREVIEW_THICKNESS = 0.015;
+// World-space tolerance for "this click closed the loop". Matches the
+// inference snap radius in spirit — the cursor resolves to a plane hit and
+// we ask if that hit is within CLOSE_EPS of any polyline vertex.
+const LINE_CLOSE_EPS = 0.05;
+
+function destroyLinePreview() {
+    if (linePreviewNode) { linePreviewNode.destroy(); linePreviewNode = null; }
+}
+
+function refreshLinePreview() {
+    const st = lineToolState;
+    if (!st.active || st.points.length === 0) {
+        destroyLinePreview();
+        return;
+    }
+    // Assemble positions = committed polyline + preview cursor.
+    const hasPreview = st.preview != null;
+    const vCount = st.points.length + (hasPreview ? 1 : 0);
+    const positions = new Float32Array(vCount * 3);
+    for (let i = 0; i < st.points.length; i++) {
+        positions[i * 3 + 0] = st.points[i][0];
+        positions[i * 3 + 1] = st.points[i][1];
+        positions[i * 3 + 2] = st.points[i][2];
+    }
+    if (hasPreview) {
+        const last = vCount - 1;
+        positions[last * 3 + 0] = st.preview[0];
+        positions[last * 3 + 1] = st.preview[1];
+        positions[last * 3 + 2] = st.preview[2];
+    }
+    // Edges: committed segments (N-1) + one rubber-band from last committed
+    // point to the preview cursor (only when preview differs from the last
+    // committed point).
+    const edges = [];
+    for (let i = 0; i < st.points.length - 1; i++) {
+        edges.push({ a: i, b: i + 1 });
+    }
+    if (hasPreview) {
+        edges.push({ a: st.points.length - 1, b: st.points.length });
+    }
+    if (edges.length === 0) { destroyLinePreview(); return; }
+    const data = EdgeMesh.buildEdgeMesh(positions, edges, {
+        thickness: LINE_PREVIEW_THICKNESS,
+        color:     LINE_PREVIEW_COLOR,
+    });
+    if (!linePreviewNode) {
+        linePreviewNode = scene.createMesh({
+            positions: data.positions,
+            normals:   data.normals,
+            colors:    data.colors,
+            indices:   data.indices,
+            emissive:  0.5,
+            name:      'line-preview',
+        });
+    } else {
+        linePreviewNode.updateMesh({
+            positions: data.positions,
+            normals:   data.normals,
+            colors:    data.colors,
+            indices:   data.indices,
+        });
+    }
+}
+
+// Map a canvas-space click to a plane-locked 3D position, preferring a
+// closure-snap to a polyline vertex when the cursor is near one. Returns
+// { position, closureIndex } or null when the ray doesn't hit the plane.
+function resolveLinePoint(cx, cy) {
+    const st = lineToolState;
+    if (!st.active || !st.plane) return null;
+    const ray = screenToRay(cx, cy);
+    const hit = Sketch.rayToPlane(ray, st.plane.origin, st.plane.normal);
+    if (!hit) return null;
+    const closureIndex = LineTool.findClosureIndex(st, hit, LINE_CLOSE_EPS);
+    if (closureIndex >= 0) {
+        return { position: st.points[closureIndex].slice(), closureIndex };
+    }
+    return { position: hit, closureIndex: -1 };
+}
+
+function beginLine(pos, plane) {
+    LineTool.begin(lineToolState, plane || currentSketchPlane(), pos);
+    refreshLinePreview();
+    pickInfo.textContent = 'line  [click to extend · close to finish]';
+}
+
+function updateLineAt(pos) {
+    if (!lineToolState.active) return;
+    LineTool.update(lineToolState, pos);
+    refreshLinePreview();
+    const closureIdx = LineTool.findClosureIndex(
+        lineToolState, pos, LINE_CLOSE_EPS);
+    if (closureIdx >= 0) {
+        pickInfo.textContent = 'line  [click to close loop ✕]';
+    }
+}
+
+function addLinePoint(pos) {
+    if (!lineToolState.active) return null;
+    // Capture the plane BEFORE the call — LineTool.addPoint clears state on
+    // closure, which would otherwise leave us holding a nulled plane.
+    const plane = lineToolState.plane;
+    const result = LineTool.addPoint(lineToolState, pos, LINE_CLOSE_EPS);
+    if (result.kind === 'closed') {
+        destroyLinePreview();
+        finalizeLineFace(result.polygon, plane);
+        return result;
+    }
+    refreshLinePreview();
+    return result;
+}
+
+// The raw polygon coming out of LineTool is in user-click order. For
+// Mesh.polygon3D to emit front-facing tris toward +plane.normal, the
+// polygon must be CCW in the (u, v) basis. Flip the order if the signed
+// area is negative.
+function finalizeLineFace(polygon, plane) {
+    if (!polygon || polygon.length < 3) {
+        pickInfo.textContent = 'line  (sub-loop too small, discarded)';
+        resetLineChain();
+        return;
+    }
+    const uv = new Array(polygon.length);
+    for (let i = 0; i < polygon.length; i++) {
+        uv[i] = Sketch.project3Dto2D(polygon[i], plane.origin, plane.u, plane.v);
+    }
+    const area = Sketch.polygonArea2D(uv);
+    const ordered = area >= 0 ? polygon : polygon.slice().reverse();
+    const flat = Sketch.flatten3D(ordered);
+    const mesh = Mesh.polygon3D(flat, [], plane.normal);
+    if (!mesh || mesh.vertexCount === 0) {
+        pickInfo.textContent = 'line  (face triangulation failed)';
+        resetLineChain();
+        return;
+    }
+    const data = {
+        positions: new Float32Array(mesh.positions),
+        indices:   new Uint32Array(mesh.indices),
+        normals:   new Float32Array(mesh.normals),
+    };
+    const idx = registry.primitives.length;
+    const spec = {
+        name:  'Polygon ' + (idx + 1),
+        color: OUTLINER_COLORS[idx % OUTLINER_COLORS.length],
+    };
+    const id = registry.nextId();
+    history.do('Add ' + spec.name,
+        () => { registry.createFromMesh(spec, data, id); },
+        () => { registry.remove(id); });
+    pickInfo.textContent = `added ${spec.name}`;
+    resetLineChain();
+}
+
+// End the chain without closing. Orphan edges (if any) are discarded for
+// MVP — they'll land in a pure-edge primitive once that type exists.
+function commitLine() {
+    if (!lineToolState.active) return;
+    LineTool.commit(lineToolState);
+    destroyLinePreview();
+    pickInfo.textContent = 'line chain ended';
+}
+
+function cancelLine() {
+    if (!lineToolState.active) return;
+    LineTool.cancel(lineToolState);
+    destroyLinePreview();
+    pickInfo.textContent = 'line cancelled';
+}
+
+function resetLineChain() {
+    LineTool.cancel(lineToolState);
+    destroyLinePreview();
+}
+
 // --- Tape measure ----------------------------------------------------------
 //
 // Two-click distance readout via inference snaps. No geometry is produced —
@@ -1642,6 +1831,18 @@ function handleLeftDown(e) {
             updateCircleAt(hit);
             commitCircle();
         }
+    } else if (currentTool === 'line') {
+        if (!lineToolState.active) {
+            const plane = resolveSketchPlane(cx, cy);
+            const hit = Sketch.rayToPlane(
+                screenToRay(cx, cy), plane.origin, plane.normal);
+            if (!hit) return;
+            beginLine(hit, plane);
+        } else {
+            const resolved = resolveLinePoint(cx, cy);
+            if (!resolved) return;
+            addLinePoint(resolved.position);
+        }
     } else if (currentTool === 'erase') {
         if (pick) {
             deletePrimitive(pick.primitive);
@@ -1672,6 +1873,10 @@ canvas.addEventListener('mousedown', (e) => {
         }
         handleLeftDown(e);
     } else if (e.button === 2) {
+        // Right-click while drawing a line: end the chain without closing.
+        // Mirrors SketchUp's right-click-to-finish affordance for polyline
+        // tools. Falls through to orbit-drag if the line tool isn't active.
+        if (lineToolState.active) { commitLine(); e.preventDefault(); return; }
         rightDown = true;
         e.preventDefault();
         updatePointerLock();
@@ -1710,6 +1915,11 @@ document.addEventListener('mousemove', (e) => {
         const plane = circleToolState.plane;
         const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
         if (hit) updateCircleAt(hit);
+        return;
+    }
+    if (lineToolState.active) {
+        const resolved = resolveLinePoint(cx, cy);
+        if (resolved) updateLineAt(resolved.position);
         return;
     }
     if (tapeToolState.active) {
@@ -1771,6 +1981,10 @@ document.addEventListener('mousemove', (e) => {
         return;
     }
     showSnapMarker(resolveSnap(cx, cy, ray, false));
+});
+canvas.addEventListener('dblclick', (e) => {
+    // Double-click ends the line chain (SketchUp polyline-finish gesture).
+    if (lineToolState.active) { commitLine(); e.preventDefault(); }
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('auxclick',    (e) => { if (e.button === 1) e.preventDefault(); });
@@ -1854,7 +2068,7 @@ document.addEventListener('keydown', (e) => {
     // history entries and a mid-drag save would capture a preview state.
     if ((e.ctrlKey || e.metaKey) && !gizmoDrag.active && !pushpull.active &&
         !moveToolState.active && !rectangleToolState.active &&
-        !circleToolState.active) {
+        !circleToolState.active && !lineToolState.active) {
         const k = (e.key || '').toLowerCase();
         if (k === 'z' && !e.shiftKey) {
             if (history.canUndo()) history.undo();
@@ -1895,6 +2109,7 @@ document.addEventListener('keydown', (e) => {
         if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
         if (rectangleToolState.active)             cancelRectangle();
         if (circleToolState.active)                cancelCircle();
+        if (lineToolState.active)                  cancelLine();
         if (tapeToolState.active)                  cancelTape();
     }
 });
@@ -2191,4 +2406,9 @@ window.__editor = {
     // Tape measure
     get tapeToolState() { return tapeToolState; },
     beginTape, updateTapeAt, commitTape, cancelTape,
+
+    // Line tool
+    get lineToolState() { return lineToolState; },
+    beginLine, updateLineAt, addLinePoint, commitLine, cancelLine,
+    resolveLinePoint,
 };
