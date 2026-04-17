@@ -1272,40 +1272,92 @@ function addLinePoint(pos) {
 // Mesh.polygon3D to emit front-facing tris toward +plane.normal, the
 // polygon must be CCW in the (u, v) basis. Flip the order if the signed
 // area is negative.
+// Filter out triangles whose 3D area is below SLIVER_AREA_MIN. Ear-clipping
+// on near-collinear input sometimes emits sub-pixel slivers that break
+// coplanarity heuristics downstream. Returns a fresh indices array (never
+// larger than input).
+const SLIVER_AREA_MIN = 1e-10;
+function dropSliverTris(positions, indices) {
+    const out = [];
+    for (let t = 0; t < indices.length; t += 3) {
+        const i0 = indices[t]*3, i1 = indices[t+1]*3, i2 = indices[t+2]*3;
+        const ax = positions[i1]   - positions[i0];
+        const ay = positions[i1+1] - positions[i0+1];
+        const az = positions[i1+2] - positions[i0+2];
+        const bx = positions[i2]   - positions[i0];
+        const by = positions[i2+1] - positions[i0+1];
+        const bz = positions[i2+2] - positions[i0+2];
+        const cx = ay*bz - az*by;
+        const cy = az*bx - ax*bz;
+        const cz = ax*by - ay*bx;
+        const area = 0.5 * Math.sqrt(cx*cx + cy*cy + cz*cz);
+        if (area >= SLIVER_AREA_MIN) {
+            out.push(indices[t], indices[t+1], indices[t+2]);
+        }
+    }
+    return out;
+}
+
 function finalizeLineFace(polygon, plane) {
     if (!polygon || polygon.length < 3) {
         pickInfo.textContent = 'line  (sub-loop too small, discarded)';
         resetLineChain();
         return;
     }
+    // Project to 2D, then split self-intersections (if any) into one or
+    // more simple CCW sub-loops. A figure-8 produces two loops; a simple
+    // polygon produces one. This keeps Line-tool output robust to crossings
+    // without surfacing an error to the user.
     const uv = new Array(polygon.length);
     for (let i = 0; i < polygon.length; i++) {
         uv[i] = Sketch.project3Dto2D(polygon[i], plane.origin, plane.u, plane.v);
     }
-    const area = Sketch.polygonArea2D(uv);
-    const ordered = area >= 0 ? polygon : polygon.slice().reverse();
-    const flat = Sketch.flatten3D(ordered);
-    const mesh = Mesh.polygon3D(flat, [], plane.normal);
-    if (!mesh || mesh.vertexCount === 0) {
-        pickInfo.textContent = 'line  (face triangulation failed)';
+    const subLoops = Sketch.splitSelfIntersectingPolygon(uv);
+    if (subLoops.length === 0) {
+        pickInfo.textContent = 'line  (degenerate polygon, discarded)';
         resetLineChain();
         return;
     }
-    const data = {
-        positions: new Float32Array(mesh.positions),
-        indices:   new Uint32Array(mesh.indices),
-        normals:   new Float32Array(mesh.normals),
-    };
-    const idx = registry.primitives.length;
-    const spec = {
-        name:  'Polygon ' + (idx + 1),
-        color: OUTLINER_COLORS[idx % OUTLINER_COLORS.length],
-    };
-    const id = registry.nextId();
-    history.do('Add ' + spec.name,
-        () => { registry.createFromMesh(spec, data, id); },
-        () => { registry.remove(id); });
-    pickInfo.textContent = `added ${spec.name}`;
+    const createdNames = [];
+    for (const loop2D of subLoops) {
+        // Lift 2D sub-loop back into world space along the plane basis.
+        const loop3D = loop2D.map(p =>
+            [plane.origin[0] + p[0]*plane.u[0] + p[1]*plane.v[0],
+             plane.origin[1] + p[0]*plane.u[1] + p[1]*plane.v[1],
+             plane.origin[2] + p[0]*plane.u[2] + p[1]*plane.v[2]]);
+        const flat = Sketch.flatten3D(loop3D);
+        const mesh = Mesh.polygon3D(flat, [], plane.normal);
+        if (!mesh || mesh.vertexCount === 0) continue;
+        // Drop near-zero-area triangles (sliver triangulations from
+        // near-collinear inputs) — they confuse face-group detection and
+        // produce weird shading artifacts on extrusion.
+        const cleanIdx = dropSliverTris(mesh.positions, mesh.indices);
+        if (cleanIdx.length === 0) continue;
+        const data = {
+            positions: new Float32Array(mesh.positions),
+            indices:   new Uint32Array(cleanIdx),
+            normals:   new Float32Array(mesh.normals),
+        };
+        const slotIdx = registry.primitives.length + createdNames.length;
+        const spec = {
+            name:  'Polygon ' + (slotIdx + 1),
+            color: OUTLINER_COLORS[slotIdx % OUTLINER_COLORS.length],
+        };
+        const id = registry.nextId();
+        history.do('Add ' + spec.name,
+            () => { registry.createFromMesh(spec, data, id); },
+            () => { registry.remove(id); });
+        createdNames.push(spec.name);
+    }
+    if (createdNames.length === 0) {
+        pickInfo.textContent = 'line  (face triangulation failed)';
+    } else if (createdNames.length === 1) {
+        pickInfo.textContent = `added ${createdNames[0]}`;
+    } else {
+        pickInfo.textContent = `added ${createdNames.length} faces (` +
+            `split at ${subLoops.length - 1} crossing` +
+            (subLoops.length - 1 === 1 ? '' : 's') + ')';
+    }
     resetLineChain();
 }
 

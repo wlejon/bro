@@ -297,6 +297,54 @@ t('integration: circlePolyline → Mesh.polygon3D → area ≈ π r²', () => {
 });
 
 // -------------------------------------------------------------------------
+// splitSelfIntersectingPolygon / hasSelfIntersections
+// -------------------------------------------------------------------------
+
+t('hasSelfIntersections: simple polygon = false', () => {
+    if (Sketch.hasSelfIntersections([[0,0],[1,0],[1,1],[0,1]])) {
+        throw new Error('unit square should not self-intersect');
+    }
+});
+
+t('hasSelfIntersections: figure-8 = true', () => {
+    if (!Sketch.hasSelfIntersections([[0,0],[2,2],[2,0],[0,2]])) {
+        throw new Error('figure-8 should self-intersect');
+    }
+});
+
+t('splitSelfIntersectingPolygon: simple polygon → one loop', () => {
+    const loops = Sketch.splitSelfIntersectingPolygon(
+        [[0,0],[1,0],[0.5,1]]);
+    eq(loops.length, 1);
+    eq(loops[0].length, 3);
+});
+
+t('splitSelfIntersectingPolygon: reverses CW input to CCW', () => {
+    const loops = Sketch.splitSelfIntersectingPolygon(
+        [[0,0],[0.5,1],[1,0]]);
+    eq(loops.length, 1);
+    if (Sketch.polygonArea2D(loops[0]) <= 0) {
+        throw new Error('output must be CCW');
+    }
+});
+
+t('splitSelfIntersectingPolygon: figure-8 → two triangles', () => {
+    const loops = Sketch.splitSelfIntersectingPolygon(
+        [[0,0],[2,2],[2,0],[0,2]]);
+    eq(loops.length, 2);
+    for (const l of loops) {
+        eq(l.length, 3);
+        if (Sketch.polygonArea2D(l) <= 0) throw new Error('each loop CCW');
+    }
+});
+
+t('splitSelfIntersectingPolygon: bowtie → two loops', () => {
+    const loops = Sketch.splitSelfIntersectingPolygon(
+        [[0,0],[1,0],[0,1],[1,1]]);
+    eq(loops.length, 2);
+});
+
+// -------------------------------------------------------------------------
 // End
 // -------------------------------------------------------------------------
 

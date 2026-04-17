@@ -257,6 +257,180 @@
         return L;
     }
 
+    // --- Planar self-intersection split -------------------------------------
+    //
+    // Takes a closed 2D polyline as an array of [x, y] points and returns an
+    // array of simple (non-self-intersecting) sub-polygon loops that cover
+    // the same area. Each loop is CCW and ≥3 vertices.
+    //
+    // For a self-intersecting input (figure-8, bowtie), we compute all
+    // pairwise segment intersections, insert them as nodes in a planar
+    // graph, and extract every bounded face using the standard half-edge
+    // face-walk: at each node, outgoing edges are angle-sorted; an incoming
+    // edge's "next-in-face" is the immediately CW-preceding outgoing
+    // neighbour of its reverse.
+    //
+    // For a simple input, the output is `[points]` (one loop, same verts).
+    // Degenerate colinear edges that generate collinear "intersections" are
+    // handled by quantizing node positions.
+    //
+    // This lets Line-drawn polygons containing crossings split into the
+    // natural set of faces a user drew, without surfacing an error.
+    function splitSelfIntersectingPolygon(points) {
+        const n = points.length;
+        if (n < 3) return [];
+        // Fast path: simple polygon — no self-intersections.
+        if (!hasSelfIntersections(points)) {
+            return [polygonArea2D(points) >= 0 ? points.slice() :
+                    points.slice().reverse()];
+        }
+        // Per-segment record with ordered t-values of intersections along it.
+        const segs = [];
+        for (let i = 0; i < n; i++) {
+            segs.push({
+                a: points[i],
+                b: points[(i + 1) % n],
+                splits: [],
+            });
+        }
+        for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+                if (segsAdjacent(i, j, n)) continue;
+                const ix = segIntersect(
+                    segs[i].a, segs[i].b, segs[j].a, segs[j].b);
+                if (ix) {
+                    segs[i].splits.push({ t: ix.ti, pt: ix.pt });
+                    segs[j].splits.push({ t: ix.tj, pt: ix.pt });
+                }
+            }
+        }
+        // Canonical nodes by quantized position.
+        const nodes = [];
+        const nodeByKey = new Map();
+        const Q = 1e5;
+        function nodeOf(pt) {
+            const k = Math.round(pt[0] * Q) + ',' + Math.round(pt[1] * Q);
+            let id = nodeByKey.get(k);
+            if (id == null) {
+                id = nodes.length;
+                nodes.push({ x: pt[0], y: pt[1], out: [] });
+                nodeByKey.set(k, id);
+            }
+            return id;
+        }
+        // Build directed half-edges by walking each segment through its
+        // in-order splits.
+        const halves = [];
+        function addHalves(fromId, toId) {
+            if (fromId === toId) return;
+            const e1 = { from: fromId, to: toId, twin: null, next: null, seen: false };
+            const e2 = { from: toId,  to: fromId, twin: null, next: null, seen: false };
+            e1.twin = e2; e2.twin = e1;
+            halves.push(e1, e2);
+            nodes[fromId].out.push(e1);
+            nodes[toId].out.push(e2);
+        }
+        for (let i = 0; i < n; i++) {
+            const seg = segs[i];
+            seg.splits.sort((a, b) => a.t - b.t);
+            let prev = nodeOf(seg.a);
+            for (const s of seg.splits) {
+                const cur = nodeOf(s.pt);
+                addHalves(prev, cur);
+                prev = cur;
+            }
+            addHalves(prev, nodeOf(seg.b));
+        }
+        // Dedup parallel half-edges (tangential crossings, colinear joins):
+        // keep one per (from, to) pair.
+        for (const node of nodes) {
+            const uniq = new Map();
+            for (const e of node.out) {
+                const k = e.from + '>' + e.to;
+                if (!uniq.has(k)) uniq.set(k, e);
+            }
+            node.out = Array.from(uniq.values());
+        }
+        // Angular sort of outgoing edges at each node.
+        for (const node of nodes) {
+            node.out.sort((a, b) => {
+                const aa = Math.atan2(nodes[a.to].y - node.y,
+                                      nodes[a.to].x - node.x);
+                const bb = Math.atan2(nodes[b.to].y - node.y,
+                                      nodes[b.to].x - node.x);
+                return aa - bb;
+            });
+        }
+        // Face-walk: at `to`, the next-in-face edge is the CW-preceding
+        // outgoing neighbour of the reverse (to→from) edge.
+        for (const e of halves) {
+            const to = nodes[e.to];
+            const idx = to.out.findIndex(x => x.to === e.from);
+            if (idx < 0) continue;
+            const prev = (idx - 1 + to.out.length) % to.out.length;
+            e.next = to.out[prev];
+        }
+        // Collect face cycles.
+        const loops = [];
+        for (const start of halves) {
+            if (start.seen) continue;
+            const loop = [];
+            let cur = start;
+            for (let guard = 0; guard < halves.length + 1; guard++) {
+                if (!cur || cur.seen) break;
+                cur.seen = true;
+                loop.push([nodes[cur.from].x, nodes[cur.from].y]);
+                cur = cur.next;
+                if (cur === start) break;
+            }
+            if (loop.length >= 3) loops.push(loop);
+        }
+        // Keep only bounded (CCW) loops with a meaningful area. The
+        // unbounded "outside" loop comes out CW.
+        const out = [];
+        for (const loop of loops) {
+            const a = polygonArea2D(loop);
+            if (a > 1e-10) out.push(loop);
+        }
+        return out;
+    }
+
+    // Returns { ti, tj, pt } if the open segments (a→b) and (c→d) cross
+    // strictly in their interiors (t values in (ε, 1-ε)). Endpoint-touches
+    // are ignored — those are legitimate polygon corners, not crossings.
+    function segIntersect(a, b, c, d) {
+        const eps = 1e-9;
+        const r0 = b[0] - a[0], r1 = b[1] - a[1];
+        const s0 = d[0] - c[0], s1 = d[1] - c[1];
+        const rxs = r0 * s1 - r1 * s0;
+        if (Math.abs(rxs) < eps) return null;   // parallel or colinear
+        const qp0 = c[0] - a[0], qp1 = c[1] - a[1];
+        const ti = (qp0 * s1 - qp1 * s0) / rxs;
+        const tj = (qp0 * r1 - qp1 * r0) / rxs;
+        if (ti < eps || ti > 1 - eps) return null;
+        if (tj < eps || tj > 1 - eps) return null;
+        return { ti, tj, pt: [a[0] + ti * r0, a[1] + ti * r1] };
+    }
+
+    function segsAdjacent(i, j, n) {
+        return Math.abs(i - j) <= 1 || (i === 0 && j === n - 1) ||
+               (j === 0 && i === n - 1);
+    }
+
+    function hasSelfIntersections(points) {
+        const n = points.length;
+        for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+                if (segsAdjacent(i, j, n)) continue;
+                const ix = segIntersect(
+                    points[i], points[(i + 1) % n],
+                    points[j], points[(j + 1) % n]);
+                if (ix) return true;
+            }
+        }
+        return false;
+    }
+
     // --- Flatten an array of 3D points to a flat array ----------------------
     //
     // Pairs naturally with Mesh.polygon3D which wants a flat [x,y,z,...].
@@ -282,6 +456,8 @@
         rectFromCorners, circlePolyline,
         // measurement
         polygonArea2D, polylineLength3D,
+        // polygon cleanup
+        splitSelfIntersectingPolygon, hasSelfIntersections,
         // helpers
         flatten3D,
     };
