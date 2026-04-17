@@ -42,17 +42,68 @@
     // Convenience wrapper over `new Primitive(...)`; useful for the outliner
     // "add" dropdown.
     PrimitiveRegistry.prototype.create = function (spec) {
+        return this.createWithId(spec, this.nextId());
+    };
+
+    // Build + install with a caller-chosen id. Used by history redo so a
+    // freshly re-added primitive keeps the same id across undo/redo cycles —
+    // external references (measureBox lastOp, etc.) stay valid.
+    PrimitiveRegistry.prototype.createWithId = function (spec, id) {
         const mesh = buildMeshFromSpec(spec);
         const prim = new Primitive({
-            id:       this.nextId(),
+            id,
             name:     spec.name,
             color:    spec.color,
             scene:    this.scene,
             mesh,
             position: spec.position,
         });
+        if (id >= this._nextId) this._nextId = id + 1;
         this.add(prim);
         return prim;
+    };
+
+    // Rebuild a Primitive from a snapshot taken before a destructive
+    // operation (e.g. delete). The snapshot holds raw buffers + metadata;
+    // we seed a fresh Primitive with a disposable mesh, then swap in the
+    // saved geometry via updateGeometry so BVH/face groups/inference all
+    // rebuild correctly. Inserted at the original list index so outliner
+    // order is preserved across undo/redo.
+    PrimitiveRegistry.prototype.restoreFromSnapshot = function (snap) {
+        const mesh = buildMeshFromSpec({ type: 'box', params: { sx: 1, sy: 1, sz: 1 } });
+        const prim = new Primitive({
+            id:       snap.id,
+            name:     snap.name,
+            color:    snap.color,
+            scene:    this.scene,
+            mesh,
+            position: [0, 0, 0],
+        });
+        prim.updateGeometry(snap.positions, snap.indices, snap.normals);
+        prim.setVisible(snap.visible !== false);
+        const idx = Math.max(0, Math.min(snap.index != null ? snap.index : this.primitives.length,
+                                         this.primitives.length));
+        this.primitives.splice(idx, 0, prim);
+        if (!this.active) this.active = prim;
+        if (snap.id >= this._nextId) this._nextId = snap.id + 1;
+        this._emit();
+        return prim;
+    };
+
+    // Capture the current state of a primitive in a form suitable for
+    // restoreFromSnapshot. Buffers are cloned so later mutations to the live
+    // primitive don't bleed into history.
+    PrimitiveRegistry.prototype.snapshotPrimitive = function (prim) {
+        return {
+            id:        prim.id,
+            name:      prim.name,
+            color:     prim.color,
+            visible:   prim.visible,
+            index:     this.primitives.indexOf(prim),
+            positions: new Float32Array(prim.positions),
+            indices:   new Uint32Array(prim.indices),
+            normals:   prim.normals ? new Float32Array(prim.normals) : null,
+        };
     };
 
     PrimitiveRegistry.prototype.remove = function (id) {

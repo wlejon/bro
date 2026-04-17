@@ -243,6 +243,8 @@
         <div class="hint">click a tool above &nbsp;·&nbsp; <b>Esc</b> cancel drag</div>
         <div class="hint">during drag: type <b>distance</b> + <b>Enter</b> for exact</div>
         <div class="hint">tool: <span id="tool-name">select</span></div>
+        <div class="hint"><b>Ctrl+Z</b> undo &nbsp;·&nbsp; <b>Ctrl+Shift+Z</b> / <b>Ctrl+Y</b> redo</div>
+        <div class="hint" id="history-info">history: <span style="color:#777">empty</span></div>
         <div id="pick-info">no pick</div>
         <div id="snap-info"></div>
     </div>
@@ -264,6 +266,7 @@
         </div>
     </div>
     <script src="../lib/camera.js"></script>
+    <script src="../lib/history.js"></script>
     <script src="edit-mesh.js"></script>
     <script src="inference.js"></script>
     <script src="scene-axes.js"></script>

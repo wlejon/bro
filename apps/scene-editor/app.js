@@ -144,6 +144,45 @@ const sceneAxesNode = scene.createMesh({
     name: 'scene-axes',
 });
 
+// --- Undo / redo history ---------------------------------------------------
+//
+// Pure-JS command stack (apps/lib/history.js). Every mutating user action
+// is recorded as one entry: outliner add/delete/rename, move/rotate/scale
+// commit, push-pull commit. Visibility and selection aren't recorded —
+// they're view state, matching SketchUp.
+//
+// Mesh-state edits (move/rotate/scale/pushpull) all resolve to
+//   prev = captureMesh(prim); ... ; next = captureMesh(prim);
+//   history.record(label, () => applyMesh(prim, next),
+//                         () => applyMesh(prim, prev));
+// applyMesh routes through Primitive.updateGeometry so BVH / face groups /
+// inference / edges rebuild from the restored buffers.
+
+const history = new History({ limit: 200 });
+
+function captureMesh(prim) {
+    return {
+        positions: new Float32Array(prim.positions),
+        indices:   new Uint32Array(prim.indices),
+        normals:   prim.normals ? new Float32Array(prim.normals) : null,
+    };
+}
+function applyMesh(prim, snap) {
+    prim.updateGeometry(snap.positions, snap.indices, snap.normals);
+    // Gizmo pivot is recomputed from prim.positions each frame, so it
+    // re-anchors automatically; no explicit refresh needed here.
+}
+// Cheap "did anything change?" check — skips recording no-op drags
+// (zero-distance move, identity rotate/scale, zero push-pull).
+function meshChanged(prev, prim) {
+    if (!prev) return false;
+    if (prev.positions.length !== prim.positions.length) return true;
+    if (prev.indices.length   !== prim.indices.length)   return true;
+    const a = prev.positions, b = prim.positions;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return true;
+    return false;
+}
+
 // --- Translate gizmo (engine-rendered — bro.gizmo.*) -----------------------
 //
 // Pivot + drag + hit-testing all live in the engine; this file only tells
@@ -362,6 +401,7 @@ function beginPushPull(primitive, hit) {
     }
     pushpull.active = true;
     pushpull.primitive = primitive;
+    pushpull.prevMesh = captureMesh(primitive);
     pushpull.groupIdx = gIdx;
     pushpull.faceTriangles = g.tris.slice();
     pushpull.axis = g.normal.slice();
@@ -433,6 +473,8 @@ function applyPushPull(t) {
 function commitPushPull() {
     if (!pushpull.active) return;
     const prim = pushpull.primitive;
+    const prevMesh = pushpull.prevMesh;
+    const distance = pushpull.distance;
     // Stash the last-op (including the target primitive id) before pushpull
     // is cleared — redo needs a stable handle even if the active primitive
     // changes afterward.
@@ -451,6 +493,13 @@ function commitPushPull() {
     const newNormals   = pushpull.workingNormals
         ? new Float32Array(pushpull.workingNormals) : null;
     prim.updateGeometry(newPositions, newIndices, newNormals);
+
+    if (distance !== 0 && meshChanged(prevMesh, prim)) {
+        const nextMesh = captureMesh(prim);
+        history.record('Push/pull',
+            () => applyMesh(prim, nextMesh),
+            () => applyMesh(prim, prevMesh));
+    }
 
     pickInfo.textContent =
         `extruded ${pushpull.distance.toFixed(3)}` +
@@ -486,6 +535,7 @@ function clearPushPull() {
     pushpull.workingPositions = null;
     pushpull.workingIndices = null;
     pushpull.workingNormals = null;
+    pushpull.prevMesh = null;
     pushpull.inverted = false;
     activeSnap = null;
 }
@@ -501,18 +551,28 @@ const moveToolState = MoveTool.createState();
 
 function beginMove(primitive, hit) {
     if (!primitive || !hit) return;
+    moveToolState.prevMesh = captureMesh(primitive);
     MoveTool.begin(moveToolState, primitive, hit.position, cameraForward());
     pickInfo.textContent = `move  [${primitive.name}]  0`;
 }
 
 function commitMove() {
     if (!moveToolState.active) return;
+    const prim = moveToolState.primitive;
+    const prevMesh = moveToolState.prevMesh;
     const result = MoveTool.commit(moveToolState);
     if (result) {
         const d = result.delta;
         pickInfo.textContent = `moved [${result.primitive.name}] by ` +
             `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
+        if (meshChanged(prevMesh, prim)) {
+            const nextMesh = captureMesh(prim);
+            history.record('Move',
+                () => applyMesh(prim, nextMesh),
+                () => applyMesh(prim, prevMesh));
+        }
     }
+    moveToolState.prevMesh = null;
     showSnapMarker(null);
     clearHighlight();
     updateGizmoForActive();
@@ -521,6 +581,7 @@ function commitMove() {
 function cancelMove() {
     if (!moveToolState.active) return;
     MoveTool.cancel(moveToolState);
+    moveToolState.prevMesh = null;
     pickInfo.textContent = 'move cancelled';
     showSnapMarker(null);
     clearHighlight();
@@ -551,6 +612,7 @@ const gizmoDrag = {
     axis:        [0, 0, 0],
     pivot:       [0, 0, 0],
     totalDelta:  [0, 0, 0], // accumulated world-space translate delta
+    prevMesh:    null,      // buffers at begin — captured for undo
 };
 
 function primCentroid(prim) {
@@ -634,6 +696,7 @@ bro.gizmo.attach({
         gizmoDrag.totalDelta[0] = 0;
         gizmoDrag.totalDelta[1] = 0;
         gizmoDrag.totalDelta[2] = 0;
+        gizmoDrag.prevMesh = captureMesh(prim);
         if      (mode === 'translate') MoveTool.begin(moveToolState, prim, c, axis);
         else if (mode === 'rotate')    RotateTool.begin(rotateToolState, prim, c);
         else if (mode === 'scale')     ScaleTool.begin(scaleToolState,  prim, c);
@@ -686,6 +749,7 @@ bro.gizmo.attach({
         if (!gizmoDrag.active) return;
         const movingPrim = gizmoDrag.primitive;
         const mode = gizmoDrag.mode;
+        const prevMesh = gizmoDrag.prevMesh;
         let result = null;
         if      (mode === 'translate') result = MoveTool.commit(moveToolState);
         else if (mode === 'rotate')    result = RotateTool.commit(rotateToolState);
@@ -705,12 +769,23 @@ bro.gizmo.attach({
                 pickInfo.textContent = `scaled [${result.primitive.name}] by ` +
                     `[${s[0].toFixed(3)}, ${s[1].toFixed(3)}, ${s[2].toFixed(3)}]`;
             }
+            if (meshChanged(prevMesh, movingPrim)) {
+                const nextMesh = captureMesh(movingPrim);
+                const label = mode === 'translate' ? 'Move'
+                            : mode === 'rotate'    ? 'Rotate'
+                                                   : 'Scale';
+                const prim = movingPrim;
+                history.record(label,
+                    () => applyMesh(prim, nextMesh),
+                    () => applyMesh(prim, prevMesh));
+            }
         }
         if (movingPrim && highlightPrimitive && highlightPrimitive.id === movingPrim.id) {
             refreshHighlight(movingPrim.positions, movingPrim.indices);
         }
         gizmoDrag.active = false;
         gizmoDrag.primitive = null;
+        gizmoDrag.prevMesh = null;
         showSnapMarker(null);
         updateGizmoForActive();
     },
@@ -728,6 +803,7 @@ function cancelGizmoDrag() {
     }
     gizmoDrag.active = false;
     gizmoDrag.primitive = null;
+    gizmoDrag.prevMesh = null;
     pickInfo.textContent = 'gizmo cancelled';
     showSnapMarker(null);
     updateGizmoForActive();
@@ -1057,7 +1133,28 @@ function handleMeasureBoxKey(key) {
 
 document.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+    // Skip the contenteditable rename field so typed edits don't trigger
+    // app shortcuts mid-rename.
+    if (e.target && e.target.getAttribute &&
+        e.target.getAttribute('contenteditable') === 'true') return;
     if (handleMeasureBoxKey(e.key)) { e.preventDefault(); return; }
+    // Undo / redo. Ctrl+Z / Cmd+Z. Redo is Ctrl+Shift+Z OR Ctrl+Y (Windows
+    // convention). Suppressed while any drag/tool is mid-gesture — a
+    // half-finished operation's buffers would confuse the history entry.
+    if ((e.ctrlKey || e.metaKey) && !gizmoDrag.active && !pushpull.active &&
+        !moveToolState.active) {
+        const k = (e.key || '').toLowerCase();
+        if (k === 'z' && !e.shiftKey) {
+            if (history.canUndo()) history.undo();
+            e.preventDefault();
+            return;
+        }
+        if ((k === 'z' && e.shiftKey) || k === 'y') {
+            if (history.canRedo()) history.redo();
+            e.preventDefault();
+            return;
+        }
+    }
     // Tool selection is driven by the toolbar UI. Only Escape lives as a
     // global shortcut because it's a modal cancel (no tool change).
     if (e.key === 'Escape') {
@@ -1121,8 +1218,11 @@ function outlinerStartRename(prim, spanEl) {
         spanEl.removeEventListener('blur', onBlur);
         if (!save) { outlinerRender(); return; }
         const name = (spanEl.textContent || '').trim();
-        if (name.length) registry.setName(prim.id, name);
-        else outlinerRender();
+        if (!name.length || name === prim.name) { outlinerRender(); return; }
+        const prev = prim.name;
+        history.do('Rename',
+            () => registry.setName(prim.id, name),
+            () => registry.setName(prim.id, prev));
     };
     const onBlur = () => commit(true);
     const onKey = (e) => {
@@ -1185,7 +1285,10 @@ function outlinerRender() {
                 cancelMove();
             }
             if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
-            registry.remove(p.id);
+            const snap = registry.snapshotPrimitive(p);
+            history.do('Delete ' + p.name,
+                () => registry.remove(snap.id),
+                () => registry.restoreFromSnapshot(snap));
         });
         row.appendChild(del);
 
@@ -1206,7 +1309,14 @@ function outlinerAddPrimitive(type) {
     if (type === 'cylinder') spec.params = { r: 0.8, h: 2, seg: 24 };
     if (type === 'plane')    spec.params = { w: 2, d: 2, sx: 1, sz: 1 };
     _outlinerNextAddX += 2.5;
-    return registry.create(spec);
+    // Reserve the id up front so redo-of-add restores the same id and any
+    // external references (lastOp, outliner reveal) stay valid.
+    const id = registry.nextId();
+    let created = null;
+    history.do('Add ' + spec.name,
+        () => { created = registry.createWithId(spec, id); },
+        () => { registry.remove(id); });
+    return created;
 }
 
 // bro's DOM NodeList isn't iterable with for..of — index-based loop.
@@ -1223,6 +1333,26 @@ registry.onChange = function () {
 };
 outlinerRender();
 updateGizmoForActive();
+
+// --- History HUD line -------------------------------------------------------
+
+const historyInfoEl = document.getElementById('history-info');
+function renderHistoryInfo() {
+    if (!historyInfoEl) return;
+    if (!history.canUndo() && !history.canRedo()) {
+        historyInfoEl.innerHTML = 'history: <span style="color:#777">empty</span>';
+        return;
+    }
+    const parts = ['history:'];
+    if (history.canUndo()) {
+        const last = history.entries()[history.size() - 1];
+        parts.push('\u21B6 ' + last.label);
+    }
+    if (history.canRedo()) parts.push('\u21B7');
+    historyInfoEl.textContent = parts.join('  ');
+}
+history.on('change', renderHistoryInfo);
+renderHistoryInfo();
 
 // --- Test hook --------------------------------------------------------------
 //
@@ -1301,4 +1431,9 @@ window.__editor = {
     // Outliner hooks (UI is in DOM; tests can trigger the internal helpers
     // without synthesizing events).
     outlinerRender,
+    outlinerAddPrimitive,
+
+    // Undo / redo.
+    history,
+    captureMesh, applyMesh,
 };
