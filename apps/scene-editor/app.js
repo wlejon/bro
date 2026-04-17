@@ -902,10 +902,11 @@ const rectangleToolState = RectangleTool.createState();
 let rectPreviewNode = null;
 
 // Default sketch plane: the ground (XZ at y=0). Used as the fallback when
-// the cursor isn't hovering any face.
+// the cursor isn't hovering any face. u/v aligned to world X/-Z so typed
+// W,H map cleanly to the world axes.
 function currentSketchPlane() {
     const normal = [0, 1, 0];
-    const { u, v } = Sketch.planeBasis(normal);
+    const { u, v } = Sketch.worldAxisBasis(normal);
     return { origin: [0, 0, 0], normal, u, v };
 }
 
@@ -913,12 +914,13 @@ function currentSketchPlane() {
 // yields the hovered face's plane (anchored at the hit point); a miss
 // yields the default ground plane. Mirrors SketchUp's inference-driven
 // sketch plane — rectangles, circles, etc. draw on whichever face the
-// user clicked.
+// user clicked. Axis-aligned faces get world-aligned u/v; arbitrary
+// orientations fall back to planeBasis.
 function resolveSketchPlaneFromRay(ray) {
     const pick = registry.pickAt(ray.origin, ray.dir);
     if (pick && pick.hit) {
         const normal = pick.hit.normal.slice();
-        const { u, v } = Sketch.planeBasis(normal);
+        const { u, v } = Sketch.worldAxisBasis(normal);
         return { origin: pick.hit.position.slice(), normal, u, v,
                  onPrimitiveId: pick.primitive.id };
     }

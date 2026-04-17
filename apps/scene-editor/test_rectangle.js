@@ -181,6 +181,64 @@ t('currentSketchPlane returns the ground plane', () => {
     truthy(Array.isArray(p.v));
 });
 
+t('ground sketch plane uses world-aligned (+X, -Z) basis', () => {
+    const p = E.currentSketchPlane();
+    eq(p.u, [1, 0, 0], 'u = +X');
+    eq(p.v, [0, 0, -1], 'v = -Z');
+    // u × v = +Y ✓
+    const cross = [
+        p.u[1]*p.v[2] - p.u[2]*p.v[1],
+        p.u[2]*p.v[0] - p.u[0]*p.v[2],
+        p.u[0]*p.v[1] - p.u[1]*p.v[0],
+    ];
+    eq(cross, p.normal, 'u × v = normal');
+});
+
+t('rectangle on ground has bbox aligned to world X/Z axes', () => {
+    resetState();
+    reg.clear();
+    E.setTool('rectangle');
+    E.beginRectangle([0, 0, 0]);
+    E.updateRectangleAt([4, 0, 5]);
+    E.commitRectangle();
+    const r = reg.primitives[reg.primitives.length - 1];
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (let i = 0; i < r.positions.length; i += 3) {
+        minX = Math.min(minX, r.positions[i]);
+        maxX = Math.max(maxX, r.positions[i]);
+        minZ = Math.min(minZ, r.positions[i + 2]);
+        maxZ = Math.max(maxZ, r.positions[i + 2]);
+    }
+    near(maxX - minX, 4, 1e-5, 'X extent = 4');
+    near(maxZ - minZ, 5, 1e-5, 'Z extent = 5');
+});
+
+t('worldAxisBasis gives consistent (u, v, n) for every face of a cube', () => {
+    const cases = [
+        { n: [0, 1, 0],  u: [1, 0, 0],  v: [0, 0, -1] },
+        { n: [0, -1, 0], u: [1, 0, 0],  v: [0, 0, 1]  },
+        { n: [1, 0, 0],  u: [0, 0, 1],  v: [0, -1, 0] },
+        { n: [-1, 0, 0], u: [0, 0, 1],  v: [0, 1, 0]  },
+        { n: [0, 0, 1],  u: [1, 0, 0],  v: [0, 1, 0]  },
+        { n: [0, 0, -1], u: [1, 0, 0],  v: [0, -1, 0] },
+    ];
+    for (const c of cases) {
+        const b = Sketch.worldAxisBasis(c.n);
+        eq(b.u, c.u, 'u for n=' + JSON.stringify(c.n));
+        eq(b.v, c.v, 'v for n=' + JSON.stringify(c.n));
+    }
+});
+
+t('arbitrary normal falls through to planeBasis', () => {
+    // Unit vector that isn't axis-aligned.
+    const L = Math.sqrt(3);
+    const n = [1/L, 1/L, 1/L];
+    const b = Sketch.worldAxisBasis(n);
+    const pb = Sketch.planeBasis(n);
+    eq(b.u, pb.u, 'u matches planeBasis');
+    eq(b.v, pb.v, 'v matches planeBasis');
+});
+
 // -------------------------------------------------------------------------
 // Face-pick sketch plane
 // -------------------------------------------------------------------------

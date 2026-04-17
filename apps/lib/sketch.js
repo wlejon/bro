@@ -92,6 +92,33 @@
         return { u, v };
     }
 
+    // Like planeBasis, but when `n` is aligned with a world axis picks u/v
+    // along the OTHER two world axes (signs chosen so u × v = n). Drawing
+    // tools use this so a rectangle on the ground plane aligns to world
+    // X/Z instead of planeBasis's arbitrary rotation. Non-axis-aligned
+    // normals fall through to planeBasis.
+    //
+    // World-axis cases (signs pre-derived from u × v = n):
+    //   +Y → u=+X, v=-Z      -Y → u=+X, v=+Z
+    //   +X → u=+Z, v=-Y      -X → u=+Z, v=+Y
+    //   +Z → u=+X, v=+Y      -Z → u=+X, v=-Y
+    function worldAxisBasis(n) {
+        const ax = Math.abs(n[0]);
+        const ay = Math.abs(n[1]);
+        const az = Math.abs(n[2]);
+        const eps = 1e-4;
+        if (ay > 1 - eps) {
+            return { u: [1, 0, 0], v: [0, 0, n[1] > 0 ? -1 : 1] };
+        }
+        if (ax > 1 - eps) {
+            return { u: [0, 0, 1], v: [0, n[0] > 0 ? -1 : 1, 0] };
+        }
+        if (az > 1 - eps) {
+            return { u: [1, 0, 0], v: [0, n[2] > 0 ? 1 : -1, 0] };
+        }
+        return planeBasis(n);
+    }
+
     // --- Project / unproject 3D ↔ plane 2D ---------------------------------
     //
     // 3D point `p` ↔ 2D (a, b) in plane basis (u, v) anchored at `origin`.
@@ -248,7 +275,7 @@
         // 3D math
         v3add, v3sub, v3scale, v3dot, v3cross, v3len, v3norm, v3dist,
         // plane / projection
-        rayToPlane, planeBasis, project3Dto2D, unproject2Dto3D,
+        rayToPlane, planeBasis, worldAxisBasis, project3Dto2D, unproject2Dto3D,
         // constraints
         axisLock, pickClosestAxis,
         // shapes
