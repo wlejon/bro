@@ -900,12 +900,32 @@ const scaleToolState  = ScaleTool.createState();
 const rectangleToolState = RectangleTool.createState();
 let rectPreviewNode = null;
 
-// MVP sketch plane: ground (XZ at y=0). Future: resolve from the cursor's
-// hovered face (like SketchUp's inference).
+// Default sketch plane: the ground (XZ at y=0). Used as the fallback when
+// the cursor isn't hovering any face.
 function currentSketchPlane() {
     const normal = [0, 1, 0];
     const { u, v } = Sketch.planeBasis(normal);
     return { origin: [0, 0, 0], normal, u, v };
+}
+
+// Resolve the sketch plane to use given a world-space ray. A raycast hit
+// yields the hovered face's plane (anchored at the hit point); a miss
+// yields the default ground plane. Mirrors SketchUp's inference-driven
+// sketch plane — rectangles, circles, etc. draw on whichever face the
+// user clicked.
+function resolveSketchPlaneFromRay(ray) {
+    const pick = registry.pickAt(ray.origin, ray.dir);
+    if (pick && pick.hit) {
+        const normal = pick.hit.normal.slice();
+        const { u, v } = Sketch.planeBasis(normal);
+        return { origin: pick.hit.position.slice(), normal, u, v,
+                 onPrimitiveId: pick.primitive.id };
+    }
+    return currentSketchPlane();
+}
+
+function resolveSketchPlane(cx, cy) {
+    return resolveSketchPlaneFromRay(screenToRay(cx, cy));
 }
 
 function destroyRectPreview() {
@@ -931,9 +951,8 @@ function refreshRectPreview() {
     }
 }
 
-function beginRectangle(pos) {
-    const plane = currentSketchPlane();
-    RectangleTool.begin(rectangleToolState, plane, pos);
+function beginRectangle(pos, plane) {
+    RectangleTool.begin(rectangleToolState, plane || currentSketchPlane(), pos);
     pickInfo.textContent = 'rectangle  [corner 1 set — click for corner 2]';
 }
 
@@ -1375,13 +1394,17 @@ function handleLeftDown(e) {
             clearHighlight();
         }
     } else if (currentTool === 'rectangle') {
+        // First click: resolve the sketch plane under the cursor (hovered
+        // face, or ground fallback). Subsequent clicks stay locked to the
+        // plane captured at begin — mirrors SketchUp's "you sketched on
+        // this face, stay on this face" behavior.
         const plane = rectangleToolState.active
-            ? rectangleToolState.plane : currentSketchPlane();
+            ? rectangleToolState.plane : resolveSketchPlane(cx, cy);
         const hit = Sketch.rayToPlane(
             screenToRay(cx, cy), plane.origin, plane.normal);
         if (!hit) return;
         if (!rectangleToolState.active) {
-            beginRectangle(hit);
+            beginRectangle(hit, plane);
         } else {
             updateRectangleAt(hit);
             commitRectangle();
@@ -1877,5 +1900,5 @@ window.__editor = {
     // can drive a draw cycle without synthesizing mouse events.
     get rectangleToolState() { return rectangleToolState; },
     beginRectangle, updateRectangleAt, commitRectangle, cancelRectangle,
-    currentSketchPlane,
+    currentSketchPlane, resolveSketchPlane, resolveSketchPlaneFromRay,
 };

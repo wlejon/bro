@@ -182,6 +182,54 @@ t('currentSketchPlane returns the ground plane', () => {
 });
 
 // -------------------------------------------------------------------------
+// Face-pick sketch plane
+// -------------------------------------------------------------------------
+
+t('resolveSketchPlaneFromRay → ground plane when ray misses everything', () => {
+    resetState();
+    reg.clear();    // no primitives at all
+    const ray = { origin: [0, 5, 0], dir: [0, -1, 0] };
+    const plane = E.resolveSketchPlaneFromRay(ray);
+    eq(plane.normal, [0, 1, 0], 'ground fallback');
+    eq(plane.origin, [0, 0, 0]);
+    eq(plane.onPrimitiveId, undefined, 'no onPrimitiveId for ground fallback');
+});
+
+t('resolveSketchPlaneFromRay → hit face plane anchored at hit point', () => {
+    resetState();
+    // Default scene is a unit box at origin. Top face at y=1.
+    const ray = { origin: [0, 5, 0], dir: [0, -1, 0] };
+    const plane = E.resolveSketchPlaneFromRay(ray);
+    near(plane.normal[1], 1, 1e-5, 'top-face normal ≈ +Y');
+    near(plane.origin[1], 1, 1e-5, 'plane anchored at y=1');
+    truthy(plane.onPrimitiveId != null, 'face-pick records onPrimitiveId');
+});
+
+t('rectangle drawn on a top face commits above y=0', () => {
+    resetState();
+    // Use the existing box; the rectangle should sit on its top face (y=1).
+    const box = reg.primitives[0];
+    // Synthesize a face-pick plane at the box's top center.
+    const topPlane = {
+        origin: [0, 1, 0],
+        normal: [0, 1, 0],
+        u: [1, 0, 0],
+        v: [0, 0, 1],
+    };
+    E.setTool('rectangle');
+    // Call the tool directly with a face plane so we don't depend on screen
+    // picking (which requires a rendered frame + resolved camera state).
+    E.beginRectangle([-0.25, 1, -0.25], topPlane);
+    E.updateRectangleAt([0.25, 1, 0.25]);
+    E.commitRectangle();
+    const rect = reg.primitives[reg.primitives.length - 1];
+    for (let i = 0; i < rect.positions.length; i += 3) {
+        near(rect.positions[i + 1], 1, 1e-5,
+             'all rect verts sit on the top face (y=1)');
+    }
+});
+
+// -------------------------------------------------------------------------
 // End
 // -------------------------------------------------------------------------
 
