@@ -23,12 +23,18 @@ const snapMarker = document.getElementById('snap-marker');
 
 const registry = new PrimitiveRegistry({ scene });
 
-registry.create({
-    type: 'box',
-    name: 'Box',
-    color: '#74b9ff',
-    params: { sx: 1, sy: 1, sz: 1 },
-});
+// Default scene factory — called at startup and from project.new() to reset
+// to a blank slate. One box at the origin matches the pre-project behavior.
+function setupDefaultScene() {
+    registry.clear();
+    registry.create({
+        type: 'box',
+        name: 'Box',
+        color: '#74b9ff',
+        params: { sx: 1, sy: 1, sz: 1 },
+    });
+}
+setupDefaultScene();
 
 // --- Highlight overlay ------------------------------------------------------
 //
@@ -182,6 +188,72 @@ function meshChanged(prev, prim) {
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return true;
     return false;
 }
+
+// --- Project: save / load / new (apps/lib/project.js) ----------------------
+//
+// Serialize the registry to a JSON-friendly state. Raw mesh buffers ride as
+// plain arrays — JSON-safe and fast enough for the scene sizes we target.
+// Binary sidecars under `my-scene.bro/assets/` are a future optimization
+// once files grow big enough for embedded arrays to feel slow.
+
+const PROJECT_SCHEMA = 1;
+
+function serializeScene() {
+    return {
+        primitives: registry.primitives.map((p) => ({
+            id:        p.id,
+            name:      p.name,
+            color:     p.color,
+            visible:   p.visible,
+            positions: Array.from(p.positions),
+            indices:   Array.from(p.indices),
+            normals:   p.normals ? Array.from(p.normals) : null,
+        })),
+        activeId:   registry.active ? registry.active.id : null,
+        nextAddX:   _outlinerNextAddX,
+    };
+}
+
+function deserializeScene(data) {
+    registry.clear();
+    clearHighlight();
+    // Blow the id counter back down to 1; each restoreFromSnapshot will
+    // bump it past any restored id.
+    registry._nextId = 1;
+    for (let i = 0; i < data.primitives.length; i++) {
+        const p = data.primitives[i];
+        registry.restoreFromSnapshot({
+            id:        p.id,
+            name:      p.name,
+            color:     p.color,
+            visible:   p.visible,
+            index:     i,
+            positions: new Float32Array(p.positions),
+            indices:   new Uint32Array(p.indices),
+            normals:   p.normals ? new Float32Array(p.normals) : null,
+        });
+    }
+    if (data.activeId != null) {
+        const t = registry.getById(data.activeId);
+        if (t) registry.active = t;
+    }
+    if (typeof data.nextAddX === 'number') _outlinerNextAddX = data.nextAddX;
+    MeasureBox.clearLastOp(measureBoxState);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
+    updateGizmoForActive();
+}
+
+const proj = new Project({
+    app:         'scene-editor',
+    schema:      PROJECT_SCHEMA,
+    serialize:   serializeScene,
+    deserialize: deserializeScene,
+    onNew:       setupDefaultScene,
+    history,
+    // No prompt in headless/MVP — the app stays silent on dirty.
+});
 
 // --- Translate gizmo (engine-rendered — bro.gizmo.*) -----------------------
 //
@@ -1138,9 +1210,9 @@ document.addEventListener('keydown', (e) => {
     if (e.target && e.target.getAttribute &&
         e.target.getAttribute('contenteditable') === 'true') return;
     if (handleMeasureBoxKey(e.key)) { e.preventDefault(); return; }
-    // Undo / redo. Ctrl+Z / Cmd+Z. Redo is Ctrl+Shift+Z OR Ctrl+Y (Windows
-    // convention). Suppressed while any drag/tool is mid-gesture — a
-    // half-finished operation's buffers would confuse the history entry.
+    // Undo / redo / save / open / new. All Ctrl+<key>; suppressed mid-
+    // gesture because a half-finished operation's buffers would confuse
+    // history entries and a mid-drag save would capture a preview state.
     if ((e.ctrlKey || e.metaKey) && !gizmoDrag.active && !pushpull.active &&
         !moveToolState.active) {
         const k = (e.key || '').toLowerCase();
@@ -1151,6 +1223,24 @@ document.addEventListener('keydown', (e) => {
         }
         if ((k === 'z' && e.shiftKey) || k === 'y') {
             if (history.canRedo()) history.redo();
+            e.preventDefault();
+            return;
+        }
+        if (k === 's') {
+            // Ctrl+S: save (falls back to save-as if no path);
+            // Ctrl+Shift+S: always save-as.
+            if (e.shiftKey || !proj.path) proj.saveAs();
+            else                          proj.save();
+            e.preventDefault();
+            return;
+        }
+        if (k === 'o') {
+            proj.open();
+            e.preventDefault();
+            return;
+        }
+        if (k === 'n') {
+            proj.new();
             e.preventDefault();
             return;
         }
@@ -1354,6 +1444,19 @@ function renderHistoryInfo() {
 history.on('change', renderHistoryInfo);
 renderHistoryInfo();
 
+// --- Project title + dirty indicator ---------------------------------------
+
+const projectTitleEl = document.getElementById('project-title');
+function renderProjectTitle() {
+    if (!projectTitleEl) return;
+    const name = proj.name;
+    const dirty = proj.isDirty() ? ' *' : '';
+    projectTitleEl.textContent = name + dirty;
+    projectTitleEl.style.color = proj.isDirty() ? '#ffa502' : '#bbb';
+}
+proj.on('change', renderProjectTitle);
+renderProjectTitle();
+
 // --- Test hook --------------------------------------------------------------
 //
 // Getters resolve lazily against `registry.active` so tests always see the
@@ -1436,4 +1539,9 @@ window.__editor = {
     // Undo / redo.
     history,
     captureMesh, applyMesh,
+
+    // Project: save/load/new. serializeScene/deserializeScene/setupDefaultScene
+    // are exposed for headless tests that want to round-trip without dialogs.
+    proj,
+    serializeScene, deserializeScene, setupDefaultScene,
 };

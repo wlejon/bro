@@ -238,12 +238,12 @@
         <button class="tool-btn" data-tool="pushpull"><span class="tool-icon">&#x21F9;</span>Push/Pull</button>
     </div>
     <div id="hud">
-        <h2>Scene Editor</h2>
+        <h2>Scene Editor <span id="project-title" style="color:#bbb;font-weight:normal;font-size:12px;">Untitled</span></h2>
         <div class="hint"><b>right-drag</b> rotate &nbsp;·&nbsp; <b>middle-drag</b> pan &nbsp;·&nbsp; <b>wheel</b> zoom</div>
         <div class="hint">click a tool above &nbsp;·&nbsp; <b>Esc</b> cancel drag</div>
         <div class="hint">during drag: type <b>distance</b> + <b>Enter</b> for exact</div>
         <div class="hint">tool: <span id="tool-name">select</span></div>
-        <div class="hint"><b>Ctrl+Z</b> undo &nbsp;·&nbsp; <b>Ctrl+Shift+Z</b> / <b>Ctrl+Y</b> redo</div>
+        <div class="hint"><b>Ctrl+Z</b> undo &nbsp;·&nbsp; <b>Ctrl+Shift+Z</b> redo &nbsp;·&nbsp; <b>Ctrl+S</b> save &nbsp;·&nbsp; <b>Ctrl+O</b> open &nbsp;·&nbsp; <b>Ctrl+N</b> new</div>
         <div class="hint" id="history-info">history: <span style="color:#777">empty</span></div>
         <div id="pick-info">no pick</div>
         <div id="snap-info"></div>
@@ -267,6 +267,7 @@
     </div>
     <script src="../lib/camera.js"></script>
     <script src="../lib/history.js"></script>
+    <script src="../lib/project.js"></script>
     <script src="edit-mesh.js"></script>
     <script src="inference.js"></script>
     <script src="scene-axes.js"></script>

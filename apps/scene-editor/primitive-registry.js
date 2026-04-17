@@ -117,6 +117,19 @@
         return true;
     };
 
+    // Destroy every primitive and reset to empty. Used by project load/new
+    // to wipe the scene before deserializing or seeding defaults. Does NOT
+    // reset `_nextId` — callers who want that (e.g. load) set it explicitly
+    // so restored ids don't collide.
+    PrimitiveRegistry.prototype.clear = function () {
+        for (let i = this.primitives.length - 1; i >= 0; i--) {
+            this.primitives[i].destroy();
+        }
+        this.primitives.length = 0;
+        this.active = null;
+        this._emit();
+    };
+
     PrimitiveRegistry.prototype.setActive = function (id) {
         const p = this.primitives.find(x => x.id === id);
         if (!p || this.active === p) return false;
