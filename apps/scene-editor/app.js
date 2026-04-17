@@ -1158,6 +1158,30 @@ function cancelCircle() {
     pickInfo.textContent = 'circle cancelled';
 }
 
+// --- Eraser tool -----------------------------------------------------------
+//
+// Click a primitive to delete it. Mirrors the outliner trash-can flow:
+// snapshot + history, so Ctrl+Z restores. Cancels any drag bound to the
+// target first so commit doesn't rebuild a destroyed scene node.
+
+function deletePrimitive(p) {
+    if (!p) return;
+    if (gizmoDrag.active && gizmoDrag.primitive && gizmoDrag.primitive.id === p.id) {
+        cancelGizmoDrag();
+    }
+    if (pushpull.active && pushpull.primitive && pushpull.primitive.id === p.id) {
+        cancelPushPull();
+    }
+    if (moveToolState.active && moveToolState.primitive && moveToolState.primitive.id === p.id) {
+        cancelMove();
+    }
+    if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
+    const snap = registry.snapshotPrimitive(p);
+    history.do('Delete ' + p.name,
+        () => registry.remove(snap.id),
+        () => registry.restoreFromSnapshot(snap));
+}
+
 // Drag state — begin/translate/rotate/scale/end fires from the engine update
 // this block so the rest of the app (UI, highlight refresh) can react.
 const gizmoDrag = {
@@ -1583,6 +1607,13 @@ function handleLeftDown(e) {
             updateCircleAt(hit);
             commitCircle();
         }
+    } else if (currentTool === 'erase') {
+        if (pick) {
+            deletePrimitive(pick.primitive);
+            pickInfo.textContent = `erased`;
+        } else {
+            clearHighlight();
+        }
     }
 }
 
@@ -1919,22 +1950,7 @@ function outlinerRender() {
         del.title = 'Delete';
         del.addEventListener('click', (e) => {
             e.stopPropagation();
-            // If a drag was on this primitive, cancel first — otherwise
-            // commit would rebuild a destroyed scene node.
-            if (gizmoDrag.active && gizmoDrag.primitive && gizmoDrag.primitive.id === p.id) {
-                cancelGizmoDrag();
-            }
-            if (pushpull.active && pushpull.primitive && pushpull.primitive.id === p.id) {
-                cancelPushPull();
-            }
-            if (moveToolState.active && moveToolState.primitive && moveToolState.primitive.id === p.id) {
-                cancelMove();
-            }
-            if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
-            const snap = registry.snapshotPrimitive(p);
-            history.do('Delete ' + p.name,
-                () => registry.remove(snap.id),
-                () => registry.restoreFromSnapshot(snap));
+            deletePrimitive(p);
         });
         row.appendChild(del);
 
@@ -2112,4 +2128,7 @@ window.__editor = {
     get circleToolState() { return circleToolState; },
     beginCircle, updateCircleAt, commitCircle, cancelCircle,
     applyCircleRadius,
+
+    // Eraser
+    deletePrimitive,
 };
