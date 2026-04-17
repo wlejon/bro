@@ -88,34 +88,60 @@ void RasterRenderer::fillRoundRect(float x, float y, float w, float h, float rx,
 }
 
 void RasterRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, Color c) {
-    if (!canvas_) return;
+    if (!canvas_ || text.empty()) return;
     auto it = fonts_.find(font_handle);
     if (it == fonts_.end()) return;
     SkPaint paint;
     paint.setColor(toSkColor(c));
-    canvas_->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
-                            x, y, *it->second.font, paint);
+    const FontEntry& fe = it->second;
+    auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
+                                      fe.style, fallbackCache_);
+    if (runs.empty()) return;
+    float cursor = x;
+    for (const auto& run : runs) {
+        const char* data = text.data() + run.start;
+        canvas_->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
+                                cursor, y, run.font, paint);
+        cursor += run.font.measureText(data, run.length, SkTextEncoding::kUTF8);
+    }
 }
 
 TextMetrics RasterRenderer::measureText(std::string_view text, uint64_t font_handle) {
     auto it = fonts_.find(font_handle);
     if (it == fonts_.end()) return {};
-    const SkFont& font = *it->second.font;
-    SkRect bounds;
-    float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
+    const FontEntry& fe = it->second;
+    const SkFont& primary = *fe.font;
     SkFontMetrics fm;
-    font.getMetrics(&fm);
-    return { width, bounds.height(), -fm.fAscent, fm.fDescent };
+    primary.getMetrics(&fm);
+    if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent };
+    auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
+                                      fe.style, fallbackCache_);
+    float width = 0.0f;
+    float maxH = 0.0f;
+    for (const auto& run : runs) {
+        const char* data = text.data() + run.start;
+        SkRect b;
+        width += run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &b);
+        if (b.height() > maxH) maxH = b.height();
+    }
+    return { width, maxH, -fm.fAscent, fm.fDescent };
+}
+
+SkFontMgr* RasterRenderer::ensureFontMgr() {
+    if (fontMgr_) return fontMgr_.get();
+#ifdef _WIN32
+    fontMgr_ = SkFontMgr_New_DirectWrite();
+#else
+    fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
+    return fontMgr_.get();
 }
 
 uint64_t RasterRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
     SkFontStyle style(weight, SkFontStyle::kNormal_Width,
                       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
-#ifdef _WIN32
-    sk_sp<SkFontMgr> mgr = SkFontMgr_New_DirectWrite();
-#else
-    sk_sp<SkFontMgr> mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
+    SkFontMgr* mgrRaw = ensureFontMgr();
+    sk_sp<SkFontMgr> mgr(sk_ref_sp(mgrRaw));
 
     // Map CSS generic family names to real font names (must match SkiaRenderer)
     auto resolveGeneric = [](const std::string& name) -> const char* {
@@ -159,7 +185,7 @@ uint64_t RasterRenderer::createFont(std::string_view family, float size, int wei
     auto sk_font = std::make_unique<SkFont>(typeface, size);
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
     uint64_t handle = nextHandle_++;
-    fonts_[handle] = { std::move(typeface), std::move(sk_font) };
+    fonts_[handle] = { std::move(typeface), std::move(sk_font), style };
     return handle;
 }
 

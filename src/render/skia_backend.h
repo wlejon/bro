@@ -12,7 +12,10 @@
 #include <include/core/SkFont.h>
 #include <include/core/SkTypeface.h>
 #include <include/core/SkFontMgr.h>
+#include <include/core/SkFontStyle.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
+
+#include "render/font_fallback.h"
 
 #include <glad/gl.h>
 
@@ -168,9 +171,16 @@ private:
     struct FontEntry {
         sk_sp<SkTypeface> typeface;
         std::unique_ptr<SkFont> font;
+        SkFontStyle style;
     };
     std::unordered_map<uint64_t, FontEntry> fonts_;
     uint64_t next_font_handle_ = 1;
+
+    // Persistent system font manager — shared by createFont and the font-
+    // fallback path so per-glyph matchFamilyStyleCharacter lookups reuse it.
+    sk_sp<SkFontMgr> fontMgr_;
+    FontFallbackCache fallbackCache_;
+    SkFontMgr* ensureFontMgr();
 
     // Custom font typefaces registered via @font-face
     struct CustomFont {

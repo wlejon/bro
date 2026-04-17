@@ -5,10 +5,13 @@
 
 #include <glad/gl.h>
 #include <include/core/SkCanvas.h>
-#include <include/core/SkSurface.h>
 #include <include/core/SkFont.h>
+#include <include/core/SkFontMgr.h>
+#include <include/core/SkFontStyle.h>
+#include <include/core/SkSurface.h>
 #include <include/core/SkTypeface.h>
 
+#include "render/font_fallback.h"
 #include "render/renderer.h"
 
 namespace bro::render { class GLContext; }
@@ -93,9 +96,14 @@ private:
     struct FontEntry {
         sk_sp<SkTypeface> typeface;
         std::unique_ptr<SkFont> font;
+        SkFontStyle style;
     };
     std::unordered_map<uint64_t, FontEntry> fonts_;
     uint64_t nextFontHandle_ = 1;
+
+    sk_sp<SkFontMgr> fontMgr_;
+    FontFallbackCache fallbackCache_;
+    SkFontMgr* ensureFontMgr();
 };
 
 } // namespace bro::render

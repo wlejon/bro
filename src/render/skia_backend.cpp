@@ -111,19 +111,55 @@ void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t fo
 
     SkPaint paint;
     paint.setColor(toSkColor(color));
-    canvas_->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
-                            x, y, *fontIt->second.font, paint);
+
+    // Per-glyph fallback: the primary font may lack coverage for some
+    // codepoints (e.g. &#x2B1A; in plain Arial). Split the string into runs
+    // where each run is fully covered by one typeface, drawing each run
+    // with its own advance.
+    const FontEntry& fe = fontIt->second;
+    auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
+                                      fe.style, fallbackCache_);
+    if (runs.empty()) return;
+    float cursor = x;
+    for (const auto& run : runs) {
+        const char* data = text.data() + run.start;
+        canvas_->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
+                                cursor, y, run.font, paint);
+        cursor += run.font.measureText(data, run.length, SkTextEncoding::kUTF8);
+    }
 }
 
 TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handle) {
     auto it = fonts_.find(font_handle);
     if (it == fonts_.end()) return {};
-    const SkFont& font = *it->second.font;
-    SkRect bounds;
-    float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
+    const FontEntry& fe = it->second;
+    const SkFont& primary = *fe.font;
     SkFontMetrics fm;
-    font.getMetrics(&fm);
-    return { width, bounds.height(), -fm.fAscent, fm.fDescent };
+    primary.getMetrics(&fm);
+    if (text.empty()) {
+        return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent };
+    }
+    auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
+                                      fe.style, fallbackCache_);
+    float width = 0.0f;
+    float maxH = 0.0f;
+    for (const auto& run : runs) {
+        const char* data = text.data() + run.start;
+        SkRect bounds;
+        width += run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &bounds);
+        if (bounds.height() > maxH) maxH = bounds.height();
+    }
+    return { width, maxH, -fm.fAscent, fm.fDescent };
+}
+
+SkFontMgr* SkiaRenderer::ensureFontMgr() {
+    if (fontMgr_) return fontMgr_.get();
+#ifdef _WIN32
+    fontMgr_ = SkFontMgr_New_DirectWrite();
+#else
+    fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
+    return fontMgr_.get();
 }
 
 uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
@@ -131,11 +167,9 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
                       SkFontStyle::kNormal_Width,
                       italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
 
-#ifdef _WIN32
-    sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_DirectWrite();
-#else
-    sk_sp<SkFontMgr> font_mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
+    // Reuse the renderer-wide SkFontMgr so per-glyph fallback (matchFamily-
+    // StyleCharacter in font_fallback.cpp) shares the same system manager.
+    SkFontMgr* font_mgr = ensureFontMgr();
 
     // Map CSS generic family names to real font names
     auto resolveGeneric = [](const std::string& name) -> const char* {
@@ -190,7 +224,7 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
 
     uint64_t handle = next_font_handle_++;
-    fonts_[handle] = FontEntry{std::move(typeface), std::move(sk_font)};
+    fonts_[handle] = FontEntry{std::move(typeface), std::move(sk_font), style};
     return handle;
 }
 
@@ -727,12 +761,38 @@ GLuint SkiaRenderer::renderTextToTexture(std::string_view text,
     // Measure
     auto fit = fonts_.find(font_handle);
     if (fit == fonts_.end()) return 0;
-    const SkFont& font = *fit->second.font;
+    const FontEntry& fe = fit->second;
+    const SkFont& font = *fe.font;
 
-    SkRect bounds;
-    float width = font.measureText(text.data(), text.size(), SkTextEncoding::kUTF8, &bounds);
+    // Split into fallback runs, then measure the union bounds so glyphs
+    // from fallback typefaces (which may have different ascent/descent)
+    // are not clipped.
+    auto runs = splitTextForFallback(text, font, ensureFontMgr(),
+                                      fe.style, fallbackCache_);
+    if (runs.empty()) return 0;
+
+    float width = 0.0f;
+    SkRect unionBounds = SkRect::MakeEmpty();
+    std::vector<float> runWidths;
+    std::vector<SkRect> runBounds;
+    runWidths.reserve(runs.size());
+    runBounds.reserve(runs.size());
+    float cursor = 0.0f;
+    for (const auto& run : runs) {
+        const char* data = text.data() + run.start;
+        SkRect b;
+        float w = run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &b);
+        runWidths.push_back(w);
+        runBounds.push_back(b);
+        // Bounds are relative to drawing origin; translate by cursor for union.
+        SkRect placed = b; placed.offset(cursor, 0);
+        if (unionBounds.isEmpty()) unionBounds = placed;
+        else                       unionBounds.join(placed);
+        cursor += w;
+        width  += w;
+    }
     int tw = (int)std::ceil(width) + 4;
-    int th = (int)std::ceil(bounds.height()) + 4;
+    int th = (int)std::ceil(unionBounds.height()) + 4;
     if (tw <= 0 || th <= 0) return 0;
 
     // Render to a temporary Skia surface
@@ -744,8 +804,16 @@ GLuint SkiaRenderer::renderTextToTexture(std::string_view text,
 
     SkPaint paint;
     paint.setColor(toSkColor(color));
-    c->drawSimpleText(text.data(), text.size(), SkTextEncoding::kUTF8,
-                      -bounds.left() + 1, -bounds.top() + 1, font, paint);
+    cursor = 0.0f;
+    for (std::size_t r = 0; r < runs.size(); ++r) {
+        const auto& run = runs[r];
+        const char* data = text.data() + run.start;
+        c->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
+                          -unionBounds.left() + 1 + cursor,
+                          -unionBounds.top()  + 1,
+                          run.font, paint);
+        cursor += runWidths[r];
+    }
 
     // Create GL texture and upload
     SkPixmap pixmap;
