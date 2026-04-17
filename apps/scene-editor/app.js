@@ -954,6 +954,38 @@ function refreshRectPreview() {
 function beginRectangle(pos, plane) {
     RectangleTool.begin(rectangleToolState, plane || currentSketchPlane(), pos);
     pickInfo.textContent = 'rectangle  [corner 1 set — click for corner 2]';
+    // Arm the VCB in pair mode so the user can type "W,H + Enter" to
+    // finish the rectangle at exact dimensions, SketchUp-style.
+    MeasureBox.clearLastOp(measureBoxState);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setPairMode(measureBoxState, true);
+    MeasureBox.setActive(measureBoxState, true);
+    renderMeasureBox();
+}
+
+// Snap the rectangle's live corner to exact (w, h) in the plane's (u, v)
+// basis. The sign of each dimension follows the cursor's current quadrant
+// so typing "2,3" respects the direction the user dragged toward.
+function applyRectangleDimensions(w, h) {
+    const st = rectangleToolState;
+    if (!st.active) return false;
+    const c0 = st.corner0;
+    const c1 = st.corner1;
+    const { u, v } = st.plane;
+    const du = (c1[0] - c0[0]) * u[0] + (c1[1] - c0[1]) * u[1] + (c1[2] - c0[2]) * u[2];
+    const dv = (c1[0] - c0[0]) * v[0] + (c1[1] - c0[1]) * v[1] + (c1[2] - c0[2]) * v[2];
+    const signU = du < 0 ? -1 : 1;
+    const signV = dv < 0 ? -1 : 1;
+    const newU = signU * Math.abs(w);
+    const newV = signV * Math.abs(h);
+    const newC1 = [
+        c0[0] + newU * u[0] + newV * v[0],
+        c0[1] + newU * u[1] + newV * v[1],
+        c0[2] + newU * u[2] + newV * v[2],
+    ];
+    RectangleTool.update(st, newC1);
+    refreshRectPreview();
+    return true;
 }
 
 function updateRectangleAt(pos) {
@@ -971,6 +1003,10 @@ function commitRectangle() {
     if (!rectangleToolState.active) return;
     const mesh = RectangleTool.commit(rectangleToolState);
     destroyRectPreview();
+    MeasureBox.setPairMode(measureBoxState, false);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
     if (!mesh) {
         pickInfo.textContent = 'rectangle cancelled (zero area)';
         return;
@@ -1000,6 +1036,10 @@ function cancelRectangle() {
     if (!rectangleToolState.active) return;
     RectangleTool.cancel(rectangleToolState);
     destroyRectPreview();
+    MeasureBox.setPairMode(measureBoxState, false);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
     pickInfo.textContent = 'rectangle cancelled';
 }
 
@@ -1248,11 +1288,18 @@ function renderMeasureBox() {
     measureBoxEl.style.display = 'block';
     const buf = measureBoxState.buffer;
     const display = buf.length ? buf : '';
-    const hint = measureBoxState.lastOp && !pushpull.active
-        ? 'Type distance + Enter to re-extrude · Esc to dismiss'
-        : 'Type exact distance + Enter · Esc cancel';
+    const pair = measureBoxState.pairMode;
+    const label = pair ? 'Dimensions' : 'Distance';
+    let hint;
+    if (pair) {
+        hint = 'Type <b>W,H</b> + Enter for exact size · Esc cancel';
+    } else if (measureBoxState.lastOp && !pushpull.active) {
+        hint = 'Type distance + Enter to re-extrude · Esc to dismiss';
+    } else {
+        hint = 'Type exact distance + Enter · Esc cancel';
+    }
     measureBoxEl.innerHTML =
-        '<div class="label">Distance</div>' +
+        '<div class="label">' + label + '</div>' +
         '<div><span class="value">' + (display || '&mdash;') + '</span>' +
         '<span class="caret"></span></div>' +
         '<div class="hint">' + hint + '</div>';
@@ -1524,15 +1571,25 @@ function handleMeasureBoxKey(key) {
         if (pushpull.active) {
             const v = MeasureBox.parseValue(measureBoxState.buffer);
             if (v !== null) applyPushPull(v);
+        } else if (rectangleToolState.active) {
+            const pair = MeasureBox.parseValuePair(measureBoxState.buffer);
+            if (pair) applyRectangleDimensions(pair[0], pair[1]);
         }
         return true;
     }
     if (action === 'commit') {
-        const v = MeasureBox.parseValue(measureBoxState.buffer);
         if (pushpull.active) {
+            const v = MeasureBox.parseValue(measureBoxState.buffer);
             applyPushPull(v);
             commitPushPull();
+        } else if (rectangleToolState.active) {
+            const pair = MeasureBox.parseValuePair(measureBoxState.buffer);
+            if (pair) {
+                applyRectangleDimensions(pair[0], pair[1]);
+                commitRectangle();
+            }
         } else if (measureBoxState.lastOp) {
+            const v = MeasureBox.parseValue(measureBoxState.buffer);
             MeasureBox.clear(measureBoxState);
             renderMeasureBox();
             redoLastPushPull(v);
@@ -1543,6 +1600,8 @@ function handleMeasureBoxKey(key) {
         renderMeasureBox();
         if (pushpull.active) {
             cancelPushPull();
+        } else if (rectangleToolState.active) {
+            cancelRectangle();
         } else {
             MeasureBox.clearLastOp(measureBoxState);
             MeasureBox.setActive(measureBoxState, false);
@@ -1900,5 +1959,6 @@ window.__editor = {
     // can drive a draw cycle without synthesizing mouse events.
     get rectangleToolState() { return rectangleToolState; },
     beginRectangle, updateRectangleAt, commitRectangle, cancelRectangle,
+    applyRectangleDimensions,
     currentSketchPlane, resolveSketchPlane, resolveSketchPlaneFromRay,
 };
