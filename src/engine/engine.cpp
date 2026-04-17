@@ -1197,6 +1197,12 @@ Engine::~Engine() {
     if (jsRuntime_) {
         js::DomBindings::cleanupRuntime(jsRuntime_->getRuntime());
     }
+    // Release JS function references stored in the gizmo callbacks before
+    // tearing down the runtime — gizmo_ is a member that outlives this
+    // destructor body in default member-destruction order, so its dtor
+    // would otherwise see a dead JSContext (and the runtime would abort
+    // with a leak-detected assertion before reaching that point).
+    if (gizmo_) gizmo_->clearCallbacks();
     // Destroy JS runtime BEFORE document — JS_FreeRuntime() runs GC finalizers
     // that dereference Element pointers, so elements must still be alive.
     // Audio engine must also outlive JS runtime because VoiceAllocator/MidiInput

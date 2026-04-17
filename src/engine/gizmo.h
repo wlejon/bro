@@ -170,6 +170,12 @@ public:
 
     void setCallback(int slot, JSValue fn);
 
+    /// Free all stored JS callback values. Must be called before the
+    /// JS runtime is destroyed; the engine invokes this during shutdown
+    /// because the GizmoManager itself outlives the runtime in member-
+    /// destruction order.
+    void clearCallbacks();
+
     // Slot IDs — mirrored in gizmo_bindings.cpp.
     enum CallbackSlot : int {
         CB_Position    = 0,   // () -> [x,y,z]           - called each frame to read pivot

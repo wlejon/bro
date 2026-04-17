@@ -30,11 +30,18 @@ GizmoManager::GizmoManager() {
 }
 
 GizmoManager::~GizmoManager() {
-    if (callbacksInited_ && jsCtx_) {
-        for (int i = 0; i < CB_COUNT; ++i) {
-            if (!JS_IsUndefined(callbacks_[i])) JS_FreeValue(jsCtx_, callbacks_[i]);
+    clearCallbacks();
+}
+
+void GizmoManager::clearCallbacks() {
+    if (!callbacksInited_ || !jsCtx_) return;
+    for (int i = 0; i < CB_COUNT; ++i) {
+        if (!JS_IsUndefined(callbacks_[i])) {
+            JS_FreeValue(jsCtx_, callbacks_[i]);
+            callbacks_[i] = JS_UNDEFINED;
         }
     }
+    jsCtx_ = nullptr;
 }
 
 void GizmoManager::setPosition(float x, float y, float z) {
