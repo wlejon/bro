@@ -1390,9 +1390,59 @@ function cancelTape() {
 
 // --- Eraser tool -----------------------------------------------------------
 //
-// Click a primitive to delete it. Mirrors the outliner trash-can flow:
-// snapshot + history, so Ctrl+Z restores. Cancels any drag bound to the
-// target first so commit doesn't rebuild a destroyed scene node.
+// Click a FACE (not a primitive) to remove it. If that was the only face of
+// the primitive, the whole primitive goes — so erasing a ground rectangle
+// still works as "delete this shape." The outliner's trash-can button keeps
+// doing whole-primitive delete. Edge-level erasing would require picking
+// edges (not wired today — the BVH only sees face triangles) so this MVP
+// stops at face granularity.
+
+// Erase the face group at `groupIdx` on `primitive`. If it's the last
+// face, fall through to whole-primitive delete. Undo restores the prior
+// geometry; face groups recompute from scratch on both legs.
+function eraseFace(primitive, groupIdx) {
+    if (!primitive || !primitive.faceGroups) return;
+    const group = primitive.faceGroups.groups[groupIdx];
+    if (!group) return;
+    if (primitive.faceGroups.groups.length === 1) {
+        // Erasing the only face is effectively deleting the shape.
+        deletePrimitive(primitive);
+        return;
+    }
+    // Snapshot for undo — positions/normals are preserved even though some
+    // vertex indices may become orphaned by the index filter. Orphaned
+    // vertices are cheap memory-wise and harmless for BVH / inference (both
+    // only see indices that still reference them).
+    const prevPos = new Float32Array(primitive.positions);
+    const prevIdx = new Uint32Array(primitive.indices);
+    const prevNrm = primitive.normals ? new Float32Array(primitive.normals) : null;
+    const droppedTris = new Set(group.tris);
+    const newTriCount = (primitive.indices.length / 3) - droppedTris.size;
+    const newIdx = new Uint32Array(newTriCount * 3);
+    let dst = 0;
+    const triCount = primitive.indices.length / 3;
+    for (let t = 0; t < triCount; t++) {
+        if (droppedTris.has(t)) continue;
+        newIdx[dst * 3 + 0] = primitive.indices[t * 3 + 0];
+        newIdx[dst * 3 + 1] = primitive.indices[t * 3 + 1];
+        newIdx[dst * 3 + 2] = primitive.indices[t * 3 + 2];
+        dst++;
+    }
+    const newPos = new Float32Array(primitive.positions);
+    const newNrm = primitive.normals ? new Float32Array(primitive.normals) : null;
+    // If the erase left a drag bound to this primitive, cancel it — stale
+    // face-group indices would otherwise point into freed tris.
+    if (pushpull.active && pushpull.primitive && pushpull.primitive.id === primitive.id) {
+        cancelPushPull();
+    }
+    if (moveToolState.active && moveToolState.primitive && moveToolState.primitive.id === primitive.id) {
+        cancelMove();
+    }
+    if (highlightPrimitive && highlightPrimitive.id === primitive.id) clearHighlight();
+    history.do('Erase face on ' + primitive.name,
+        () => primitive.updateGeometry(newPos, newIdx, newNrm),
+        () => primitive.updateGeometry(prevPos, prevIdx, prevNrm));
+}
 
 function deletePrimitive(p) {
     if (!p) return;
@@ -1851,8 +1901,9 @@ function handleLeftDown(e) {
         }
     } else if (currentTool === 'erase') {
         if (pick) {
-            deletePrimitive(pick.primitive);
-            pickInfo.textContent = `erased`;
+            const gIdx = pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex];
+            eraseFace(pick.primitive, gIdx);
+            pickInfo.textContent = 'erased face';
         } else {
             clearHighlight();
         }
@@ -1935,6 +1986,17 @@ document.addEventListener('mousemove', (e) => {
             showSnapMarker(snap);
         } else {
             showSnapMarker(null);
+        }
+        return;
+    }
+    if (currentTool === 'erase') {
+        // Hover preview: highlight the face group the click would erase.
+        const pick = pickAt(cx, cy);
+        if (pick) {
+            const gIdx = pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex];
+            setHighlightFaceGroup(pick.primitive, gIdx);
+        } else {
+            clearHighlight();
         }
         return;
     }
@@ -2414,7 +2476,7 @@ window.__editor = {
     applyCircleRadius,
 
     // Eraser
-    deletePrimitive,
+    deletePrimitive, eraseFace,
 
     // Tape measure
     get tapeToolState() { return tapeToolState; },
