@@ -39,10 +39,18 @@ registry.create({
 const HIGHLIGHT_EPS = 0.002;
 let highlightNode      = null;
 let highlightPrimitive = null;
+// Last setHighlightTriangles inputs — used by refreshHighlight() to rebuild
+// the overlay against an updated positions buffer (e.g. during a move-gizmo
+// drag, where the primitive's preview positions change every frame but the
+// picked tri indices and face normal are stable).
+let highlightTris      = null;
+let highlightNormal    = null;
 
 function clearHighlight() {
     if (highlightNode) { highlightNode.destroy(); highlightNode = null; }
     highlightPrimitive = null;
+    highlightTris = null;
+    highlightNormal = null;
 }
 
 // Build a highlight scene node from triangle indices into `primitive`. The
@@ -84,6 +92,18 @@ function setHighlightTriangles(primitive, triIndices, normal, positionsSrc, indi
         name: 'highlight',
     });
     highlightPrimitive = primitive;
+    highlightTris      = triIndices;
+    highlightNormal    = normal;
+}
+
+// Rebuild the current highlight against a different positions buffer, keeping
+// the picked tri indices + face normal. No-op if there's no active highlight.
+function refreshHighlight(positionsSrc, indicesSrc) {
+    if (!highlightPrimitive || !highlightTris || !highlightNormal) return;
+    const prim = highlightPrimitive;
+    const tris = highlightTris;
+    const normal = highlightNormal;
+    setHighlightTriangles(prim, tris, normal, positionsSrc, indicesSrc);
 }
 
 function setHighlightTriangle(primitive, triIndex, normal) {
@@ -96,6 +116,18 @@ function setHighlightFaceGroup(primitive, groupIdx) {
     if (!g) { clearHighlight(); return; }
     setHighlightTriangles(primitive, g.tris, g.normal);
 }
+
+// --- Tool state (CURRENT_TOOL_DECL) ----------------------------------------
+//
+// Declared early because applyCamera() fires during script init and reaches
+// updateGizmoForActive(), which needs currentTool + GIZMO_TOOLS.
+
+let currentTool = 'select';
+
+// Which tools drive the engine gizmo, and which mode they map to. 'select'
+// and 'pushpull' deliberately hide the gizmo so picking doesn't compete
+// with handle hits.
+const GIZMO_TOOLS = { move: 'translate', rotate: 'rotate', scale: 'scale' };
 
 // --- Ground grid + XYZ axes -------------------------------------------------
 //
@@ -208,13 +240,16 @@ function formatHit(pick) {
 
 // --- Tool modes -------------------------------------------------------------
 
-let currentTool = 'select';
+// Tool state is declared near the top (see CURRENT_TOOL_DECL) so
+// applyCamera() → updateGizmoForActive() can read it during script init.
 
 function setTool(t) {
     if (t === currentTool) return;
-    if (gizmoDrag.active)     cancelGizmoDrag();
-    if (pushpull.active)      cancelPushPull();
-    if (moveToolState.active) cancelMove();
+    if (gizmoDrag.active)       cancelGizmoDrag();
+    if (pushpull.active)        cancelPushPull();
+    if (moveToolState.active)   cancelMove();
+    if (rotateToolState && rotateToolState.active) RotateTool.cancel(rotateToolState);
+    if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
     MeasureBox.setActive(measureBoxState, false);
@@ -224,6 +259,13 @@ function setTool(t) {
     clearHighlight();
     showSnapMarker(null);
     pickInfo.textContent = 'no pick';
+    // Toolbar visual state. Indexed loop — NodeList isn't iterable here.
+    const btns = document.querySelectorAll('.tool-btn');
+    for (let i = 0; i < btns.length; i++) {
+        btns[i].classList.toggle('active', btns[i].getAttribute('data-tool') === t);
+    }
+    // Switch gizmo mode / visibility for the new tool.
+    updateGizmoForActive();
 }
 
 // --- Push/Pull --------------------------------------------------------------
@@ -484,22 +526,31 @@ function cancelMove() {
     clearHighlight();
 }
 
-// --- Translate gizmo --------------------------------------------------------
+// --- Gizmo (translate / rotate / scale) -------------------------------------
 //
-// The engine (bro.gizmo) renders the arrows, hit-tests the cursor, runs the
-// drag, and fires callbacks we subscribe to below. We only own the app-
-// specific parts: anchoring the pivot to the active primitive's centroid,
-// forwarding per-frame world deltas into MoveTool (which does the mesh
-// preview + commit), and tracking drag state for UI feedback.
+// The engine (bro.gizmo) renders the handles (arrows / rings / scale boxes),
+// hit-tests the cursor, runs the drag, and fires per-frame delta callbacks.
+// We own: anchoring the pivot to the active primitive's centroid, dispatching
+// those deltas to MoveTool / RotateTool / ScaleTool for mesh preview + commit,
+// and tracking drag state for UI feedback.
+//
+// The gizmo mode follows the current tool — setTool('move'|'rotate'|'scale')
+// flips the engine-side mode. For the 'select' and 'pushpull' tools the gizmo
+// stays hidden (picking competes with handles, and push/pull has its own
+// per-face pivot).
 
-// Drag state — begin/translate/end fires from the engine update this block
-// so the rest of the app (mousemove hover branches, toolbar state) can react.
+const rotateToolState = RotateTool.createState();
+const scaleToolState  = ScaleTool.createState();
+
+// Drag state — begin/translate/rotate/scale/end fires from the engine update
+// this block so the rest of the app (UI, highlight refresh) can react.
 const gizmoDrag = {
     active:      false,
+    mode:        'translate',  // 'translate'|'rotate'|'scale'
     primitive:   null,    // captured at begin — drag stays bound here
     axis:        [0, 0, 0],
     pivot:       [0, 0, 0],
-    totalDelta:  [0, 0, 0], // accumulated world-space delta this drag
+    totalDelta:  [0, 0, 0], // accumulated world-space translate delta
 };
 
 function primCentroid(prim) {
@@ -516,14 +567,16 @@ function primCentroid(prim) {
 }
 
 // Keep the gizmo anchored to the active primitive's bbox centroid. Hidden
-// when no primitive is active. Called from applyCamera + after any edit
-// that changes the active primitive's geometry or selection.
+// when no primitive is active OR the current tool doesn't use the gizmo.
+// Called from applyCamera + after any edit that changes the active primitive.
 function updateGizmoForActive() {
     const prim = registry.active;
-    if (!prim || !prim.visible) {
+    const mode = GIZMO_TOOLS[currentTool];
+    if (!prim || !prim.visible || !mode) {
         bro.gizmo.hide();
         return;
     }
+    bro.gizmo.setMode(mode);
     const c = primCentroid(prim);
     bro.gizmo.setPosition(c[0], c[1], c[2]);
     bro.gizmo.show();
@@ -542,17 +595,35 @@ bro.gizmo.attach({
     position: () => {
         const prim = registry.active;
         if (!prim || !prim.visible) return [0, 0, 0];
-        return primCentroid(prim);
+        const c = primCentroid(prim);
+        // During a translate drag, prim.positions hasn't been mutated yet
+        // (previewMesh only updates the rendered buffers), so add the
+        // accumulated delta so the gizmo follows the moving geometry —
+        // standard DCC behavior (Blender / Maya / Unity / SketchUp).
+        //
+        // Rotate / scale preserve the centroid (rotate is rigid; scale is
+        // anchored at the centroid), so the raw centroid is already correct
+        // for those modes.
+        if (gizmoDrag.active && gizmoDrag.mode === 'translate' &&
+            gizmoDrag.primitive && gizmoDrag.primitive.id === prim.id) {
+            c[0] += gizmoDrag.totalDelta[0];
+            c[1] += gizmoDrag.totalDelta[1];
+            c[2] += gizmoDrag.totalDelta[2];
+        }
+        return c;
     },
     beginDrag: () => {
         const prim = registry.active;
         if (!prim) return;
-        const axisName = bro.gizmo.hovered;  // 'x'|'y'|'z' (locked on drag)
+        const mode = GIZMO_TOOLS[currentTool] || 'translate';
+        const axisName = bro.gizmo.hovered;  // 'x'|'y'|'z'|'center' (locked on drag)
         const axis = axisName === 'x' ? [1, 0, 0]
                   : axisName === 'y' ? [0, 1, 0]
-                  :                    [0, 0, 1];
+                  : axisName === 'z' ? [0, 0, 1]
+                  :                    [0, 0, 0];
         const c = primCentroid(prim);
         gizmoDrag.active = true;
+        gizmoDrag.mode = mode;
         gizmoDrag.primitive = prim;
         gizmoDrag.axis[0] = axis[0];
         gizmoDrag.axis[1] = axis[1];
@@ -563,11 +634,14 @@ bro.gizmo.attach({
         gizmoDrag.totalDelta[0] = 0;
         gizmoDrag.totalDelta[1] = 0;
         gizmoDrag.totalDelta[2] = 0;
-        MoveTool.begin(moveToolState, prim, c, axis);
-        pickInfo.textContent = `gizmo  ${axisName.toUpperCase()}  [${prim.name}]  0`;
+        if      (mode === 'translate') MoveTool.begin(moveToolState, prim, c, axis);
+        else if (mode === 'rotate')    RotateTool.begin(rotateToolState, prim, c);
+        else if (mode === 'scale')     ScaleTool.begin(scaleToolState,  prim, c);
+        pickInfo.textContent =
+            `gizmo  ${mode}  ${axisName ? axisName.toUpperCase() : ''}  [${prim.name}]`;
     },
     translate: (dx, dy, dz) => {
-        if (!gizmoDrag.active) return;
+        if (!gizmoDrag.active || gizmoDrag.mode !== 'translate') return;
         gizmoDrag.totalDelta[0] += dx;
         gizmoDrag.totalDelta[1] += dy;
         gizmoDrag.totalDelta[2] += dz;
@@ -575,6 +649,9 @@ bro.gizmo.attach({
             gizmoDrag.totalDelta[0],
             gizmoDrag.totalDelta[1],
             gizmoDrag.totalDelta[2]);
+        if (highlightPrimitive && highlightPrimitive.id === gizmoDrag.primitive.id) {
+            refreshHighlight(moveToolState.workingPositions);
+        }
         const d = gizmoDrag.totalDelta[0] * gizmoDrag.axis[0]
                 + gizmoDrag.totalDelta[1] * gizmoDrag.axis[1]
                 + gizmoDrag.totalDelta[2] * gizmoDrag.axis[2];
@@ -582,13 +659,55 @@ bro.gizmo.attach({
             `gizmo  ${axisLabel(gizmoDrag.axis)}  [${gizmoDrag.primitive.name}]  ` +
             `${d.toFixed(3)}`;
     },
+    rotate: (qx, qy, qz, qw) => {
+        if (!gizmoDrag.active || gizmoDrag.mode !== 'rotate') return;
+        RotateTool.applyDelta(rotateToolState, qx, qy, qz, qw);
+        if (highlightPrimitive && highlightPrimitive.id === gizmoDrag.primitive.id) {
+            refreshHighlight(rotateToolState.workingPositions);
+        }
+        const q = rotateToolState.accumQ;
+        const ang = 2 * Math.acos(Math.min(1, Math.abs(q[3])));
+        pickInfo.textContent =
+            `gizmo  rotate  [${gizmoDrag.primitive.name}]  ` +
+            `${(ang * 180 / Math.PI).toFixed(1)}\u00B0`;
+    },
+    scale: (sx, sy, sz) => {
+        if (!gizmoDrag.active || gizmoDrag.mode !== 'scale') return;
+        ScaleTool.applyDelta(scaleToolState, sx, sy, sz);
+        if (highlightPrimitive && highlightPrimitive.id === gizmoDrag.primitive.id) {
+            refreshHighlight(scaleToolState.workingPositions);
+        }
+        const a = scaleToolState.accumScale;
+        pickInfo.textContent =
+            `gizmo  scale  [${gizmoDrag.primitive.name}]  ` +
+            `[${a[0].toFixed(3)}, ${a[1].toFixed(3)}, ${a[2].toFixed(3)}]`;
+    },
     endDrag: () => {
         if (!gizmoDrag.active) return;
-        const result = MoveTool.commit(moveToolState);
+        const movingPrim = gizmoDrag.primitive;
+        const mode = gizmoDrag.mode;
+        let result = null;
+        if      (mode === 'translate') result = MoveTool.commit(moveToolState);
+        else if (mode === 'rotate')    result = RotateTool.commit(rotateToolState);
+        else if (mode === 'scale')     result = ScaleTool.commit(scaleToolState);
         if (result) {
-            const d = result.delta;
-            pickInfo.textContent = `moved [${result.primitive.name}] by ` +
-                `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
+            if (mode === 'translate') {
+                const d = result.delta;
+                pickInfo.textContent = `moved [${result.primitive.name}] by ` +
+                    `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
+            } else if (mode === 'rotate') {
+                const q = result.quat;
+                const ang = 2 * Math.acos(Math.min(1, Math.abs(q[3])));
+                pickInfo.textContent = `rotated [${result.primitive.name}] by ` +
+                    `${(ang * 180 / Math.PI).toFixed(1)}\u00B0`;
+            } else if (mode === 'scale') {
+                const s = result.scale;
+                pickInfo.textContent = `scaled [${result.primitive.name}] by ` +
+                    `[${s[0].toFixed(3)}, ${s[1].toFixed(3)}, ${s[2].toFixed(3)}]`;
+            }
+        }
+        if (movingPrim && highlightPrimitive && highlightPrimitive.id === movingPrim.id) {
+            refreshHighlight(movingPrim.positions, movingPrim.indices);
         }
         gizmoDrag.active = false;
         gizmoDrag.primitive = null;
@@ -599,7 +718,14 @@ bro.gizmo.attach({
 
 function cancelGizmoDrag() {
     if (!gizmoDrag.active) return;
-    MoveTool.cancel(moveToolState);
+    const movingPrim = gizmoDrag.primitive;
+    const mode = gizmoDrag.mode;
+    if      (mode === 'translate') MoveTool.cancel(moveToolState);
+    else if (mode === 'rotate')    RotateTool.cancel(rotateToolState);
+    else if (mode === 'scale')     ScaleTool.cancel(scaleToolState);
+    if (movingPrim && highlightPrimitive && highlightPrimitive.id === movingPrim.id) {
+        refreshHighlight(movingPrim.positions, movingPrim.indices);
+    }
     gizmoDrag.active = false;
     gizmoDrag.primitive = null;
     pickInfo.textContent = 'gizmo cancelled';
@@ -932,16 +1058,29 @@ function handleMeasureBoxKey(key) {
 document.addEventListener('keydown', (e) => {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
     if (handleMeasureBoxKey(e.key)) { e.preventDefault(); return; }
-    const k = e.key.toLowerCase();
-    if (k === 's') setTool('select');
-    else if (k === 'm') setTool('move');
-    else if (k === 'p') setTool('pushpull');
-    else if (k === 'escape') {
-        if (gizmoDrag.active)     cancelGizmoDrag();
-        if (pushpull.active)      cancelPushPull();
-        if (moveToolState.active) cancelMove();
+    // Tool selection is driven by the toolbar UI. Only Escape lives as a
+    // global shortcut because it's a modal cancel (no tool change).
+    if (e.key === 'Escape') {
+        if (gizmoDrag.active)                      cancelGizmoDrag();
+        if (pushpull.active)                       cancelPushPull();
+        if (moveToolState.active)                  cancelMove();
+        if (rotateToolState && rotateToolState.active) RotateTool.cancel(rotateToolState);
+        if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
     }
 });
+
+// Toolbar — tool selection is DOM-driven; the handler funnels everything
+// through setTool() which keeps gizmo mode, active-button state, and the
+// HUD label in sync. Indexed loop because bro's NodeList isn't iterable
+// (same pattern as the outliner below).
+const toolButtons = document.querySelectorAll('.tool-btn');
+for (let i = 0; i < toolButtons.length; i++) {
+    const btn = toolButtons[i];
+    btn.addEventListener('click', () => {
+        const t = btn.getAttribute('data-tool');
+        if (t) setTool(t);
+    });
+}
 
 // --- Outliner panel --------------------------------------------------------
 //

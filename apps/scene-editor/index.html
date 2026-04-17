@@ -180,14 +180,67 @@
             border-radius: 2px;
             outline: 1px solid #7bed9f;
         }
+
+        /* Toolbar: top-center horizontal button strip for tool selection. */
+        #toolbar {
+            position: absolute;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 4px;
+            background: rgba(0, 0, 0, 0.80);
+            padding: 6px;
+            border-radius: 8px;
+            z-index: 14;
+            font-family: system-ui, sans-serif;
+        }
+        .tool-btn {
+            background: #2c2c2c;
+            color: #ddd;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 6px 14px;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.12s, border-color 0.12s, color 0.12s;
+        }
+        .tool-btn:hover { background: #3a3a3a; border-color: #666; color: #fff; }
+        .tool-btn.active {
+            background: #ffa502;
+            color: #1a1a1a;
+            border-color: #ffa502;
+            font-weight: 600;
+        }
+        .tool-btn .tool-icon {
+            font-size: 14px;
+            line-height: 1;
+            display: inline-block;
+        }
+        .tool-btn .tool-key {
+            font-size: 10px;
+            opacity: 0.55;
+            margin-left: 2px;
+        }
+        .tool-btn.active .tool-key { opacity: 0.7; }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
+    <div id="toolbar">
+        <button class="tool-btn active" data-tool="select"><span class="tool-icon">&#x2B1A;</span>Select</button>
+        <button class="tool-btn" data-tool="move"><span class="tool-icon">&#x271B;</span>Move</button>
+        <button class="tool-btn" data-tool="rotate"><span class="tool-icon">&#x21BB;</span>Rotate</button>
+        <button class="tool-btn" data-tool="scale"><span class="tool-icon">&#x2922;</span>Scale</button>
+        <button class="tool-btn" data-tool="pushpull"><span class="tool-icon">&#x21F9;</span>Push/Pull</button>
+    </div>
     <div id="hud">
         <h2>Scene Editor</h2>
         <div class="hint"><b>right-drag</b> rotate &nbsp;·&nbsp; <b>middle-drag</b> pan &nbsp;·&nbsp; <b>wheel</b> zoom</div>
-        <div class="hint"><b>S</b> select &nbsp;·&nbsp; <b>M</b> move &nbsp;·&nbsp; <b>P</b> push/pull &nbsp;·&nbsp; <b>Esc</b> cancel</div>
+        <div class="hint">click a tool above &nbsp;·&nbsp; <b>Esc</b> cancel drag</div>
         <div class="hint">during drag: type <b>distance</b> + <b>Enter</b> for exact</div>
         <div class="hint">tool: <span id="tool-name">select</span></div>
         <div id="pick-info">no pick</div>
@@ -219,6 +272,8 @@
     <script src="primitive.js"></script>
     <script src="primitive-registry.js"></script>
     <script src="move-tool.js"></script>
+    <script src="rotate-tool.js"></script>
+    <script src="scale-tool.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
