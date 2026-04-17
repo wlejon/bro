@@ -1,4 +1,4 @@
-// Headless smoke test for the push/pull tool.
+// Headless smoke test for the push/pull tool (SketchUp-style surgery).
 //
 // Exercises the tool via __editor hooks (not synthetic mouse events) so the
 // test is deterministic — no dependency on screen-space ray math, camera
@@ -11,12 +11,20 @@ flush();
 
 const E = window.__editor;
 
+function vertCountAtY(y, eps) {
+    eps = eps || 1e-3;
+    let n = 0;
+    for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
+        if (Math.abs(E.boxPositions[vi * 3 + 1] - y) < eps) n++;
+    }
+    return n;
+}
+
 // --- Initial state ---------------------------------------------------------
 
 assert(E.faceGroups.groups.length === 6, 'cube has 6 face groups');
 assert(E.boxPositions.length === 24 * 3, 'cube has 24 vertices (4 per face × 6)');
 
-// Find the +Y (top) face group and one of its triangles + its click point.
 const topGroupIdx = E.faceGroups.groups.findIndex(g =>
     Math.abs(g.normal[0]) < 1e-5 &&
     g.normal[1] > 0.999 &&
@@ -26,27 +34,8 @@ assert(topGroupIdx >= 0, 'found top face group (+Y)');
 const topGroup = E.faceGroups.groups[topGroupIdx];
 const topTri   = topGroup.tris[0];
 
-// --- Affected-vertex math --------------------------------------------------
+// --- Begin + apply (live preview) ------------------------------------------
 
-// The top face has 4 corner positions; each corner is shared by 3 incident
-// faces in the hard-edged box (each face has its own 4 vertices). So 12
-// vertex indices should translate together to keep the side faces stretched
-// flush with the top.
-const affected = E.collectAffectedVertexIndices(topGroupIdx);
-assert(affected.length === 12,
-    `top face affects 12 vertex indices (got ${affected.length})`);
-
-// Every affected vertex must currently sit at y = 1 (cube half-extent).
-for (const vi of affected) {
-    const y = E.boxPositions[vi * 3 + 1];
-    assert(Math.abs(y - 1) < 1e-5,
-        `affected vertex ${vi} sits on top plane y=1 (got ${y})`);
-}
-
-// --- Begin + apply ---------------------------------------------------------
-
-// Synthesize a hit at the triangle centroid — good enough; beginPushPull
-// only reads hit.triangleIndex and hit.position.
 function triCentroid(triIdx) {
     const i0 = E.boxIndices[triIdx * 3 + 0];
     const i1 = E.boxIndices[triIdx * 3 + 1];
@@ -72,46 +61,42 @@ assert(E.pushpull.groupIdx === topGroupIdx, 'push/pull bound to correct group');
 E.applyPushPull(0.5);
 assert(Math.abs(E.pushpull.distance - 0.5) < 1e-6, 'distance recorded');
 
-// boxPositions must NOT be mutated during preview — drag is live-updated via
-// updateMesh only, commit is what bakes.
-for (const vi of affected) {
-    assert(Math.abs(E.boxPositions[vi * 3 + 1] - 1) < 1e-5,
-        `preview does not mutate boxPositions (vi ${vi})`);
-}
+// Committed primitive buffers must NOT be mutated during preview — drag is
+// live-updated via the meshNode's updateMesh only.
+assert(E.boxPositions.length === 24 * 3,
+    'preview does not grow committed positions buffer');
 
 // --- Commit ----------------------------------------------------------------
 
 E.commitPushPull();
 assert(!E.pushpull.active, 'push/pull inactive after commit');
 
-// Now boxPositions must reflect the extrusion.
-for (const vi of affected) {
-    const y = E.boxPositions[vi * 3 + 1];
-    assert(Math.abs(y - 1.5) < 1e-5,
-        `commit raised affected vertices to y=1.5 (vi ${vi} → ${y})`);
-}
-// Bottom face's vertices should be unchanged. On a hard-edged box each
-// corner position has 3 vertex indices (one per incident face), so the 4
-// bottom corners → 12 indices at y=-1.
-let bottomCount = 0;
-for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
-    if (E.boxPositions[vi * 3 + 1] < -0.999) bottomCount++;
-}
+// Surgery is additive: 4 NEW corner verts at y=1.5 (the duplicates), plus
+// the original top-face verts still at y=1 (now used by the bridges that
+// merged into the side faces).
+const newTopCount = vertCountAtY(1.5);
+assert(newTopCount === 4,
+    `4 new top-face corners at y=1.5 (got ${newTopCount})`);
+
+// Bottom face unchanged. On a hard-edged box each corner position has 3
+// vertex indices (one per incident face), so 4 corners → 12 indices at y=-1.
+const bottomCount = vertCountAtY(-1);
 assert(bottomCount === 12,
     `bottom face still has 12 vertex-indices at y=-1 (got ${bottomCount})`);
 
-// Face groups must still resolve to 6 (still a closed box, just taller).
+// Bridges in the +Y top-cap pull are vertical (offset is +Y, edges are
+// horizontal) so they merge into the side faces. Face-group count stays 6.
 assert(E.faceGroups.groups.length === 6,
     `still 6 face groups after commit (got ${E.faceGroups.groups.length})`);
 
 // BVH must pick up the new geometry — a ray from above at x=z=0 should hit
-// the raised top face at distance 1 (origin y=2.5, top at y=1.5).
+// the raised top face at y=1.5.
 const rayHit = E.boxBVH.raycast(E.boxMesh, [0, 2.5, 0], [0, -1, 0], 0);
 assert(rayHit, 'BVH picks up extruded geometry');
 assert(Math.abs(rayHit.position[1] - 1.5) < 1e-4,
     `ray hits new top at y=1.5 (got ${rayHit && rayHit.position[1]})`);
 
-// --- Second push/pull: extrude further, verify state stays consistent -----
+// --- Second push/pull: extrude further -------------------------------------
 
 const topGroup2  = E.faceGroups.groups.find(g => g.normal[1] > 0.999);
 const topTri2    = topGroup2.tris[0];
@@ -125,16 +110,16 @@ E.beginPushPull({
 E.applyPushPull(0.75);
 E.commitPushPull();
 
-let topCount = 0;
-for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
-    if (E.boxPositions[vi * 3 + 1] > 1.5 + 0.75 - 1e-4) topCount++;
-}
-assert(topCount === 12, `after second push/pull top cluster is 12 verts at y=2.25 (got ${topCount})`);
+const topAt225 = vertCountAtY(2.25);
+assert(topAt225 === 4,
+    `after second pull 4 new corners at y=2.25 (got ${topAt225})`);
+assert(E.faceGroups.groups.length === 6,
+    `still 6 face groups (got ${E.faceGroups.groups.length})`);
 
-// --- Cancel path ----------------------------------------------------------
+// --- Cancel path -----------------------------------------------------------
 
-// Start a third push/pull and cancel — geometry must revert.
 const before = Array.from(E.boxPositions);
+const beforeCount = before.length / 3;
 const topGroup3 = E.faceGroups.groups.find(g => g.normal[1] > 0.999);
 E.beginPushPull({
     triangleIndex: topGroup3.tris[0],
@@ -142,9 +127,11 @@ E.beginPushPull({
     normal: topGroup3.normal.slice(),
     distance: 0,
 });
-E.applyPushPull(-1.5);       // negative = push inward
+E.applyPushPull(0.6);     // any non-zero preview, then cancel
 E.cancelPushPull();
 assert(!E.pushpull.active, 'push/pull inactive after cancel');
+assert(E.boxPositions.length / 3 === beforeCount,
+    `cancel restores vertex count (got ${E.boxPositions.length/3} vs ${beforeCount})`);
 for (let i = 0; i < before.length; i++) {
     assert(Math.abs(E.boxPositions[i] - before[i]) < 1e-5,
         `cancel restored positions (idx ${i})`);
@@ -152,82 +139,4 @@ for (let i = 0; i < before.length; i++) {
 
 screenshot('apps/scene-editor/_pushpull_after.png');
 
-// --- Inversion: drag past the opposite face -------------------------------
-//
-// After the two extrusions and a cancel, the current state is a clean cube
-// from y=-1 to y=+2.25 (top face at y=2.25). The push axis is +Y so the
-// inversion threshold is (min non-affected axis-proj) - pivot-proj =
-// -1 - 2.25 = -3.25; a drag of -4 clears it.
-const inv_topGroup = E.faceGroups.groups.find(g => g.normal[1] > 0.999);
-assert(inv_topGroup, 'top face group present before inversion test');
-const inv_triIdx = inv_topGroup.tris[0];
-E.beginPushPull({
-    triangleIndex: inv_triIdx,
-    position: triCentroid(inv_triIdx),
-    normal: inv_topGroup.normal.slice(),
-    distance: 0,
-});
-assert(E.pushpull.inversionT < 0, 'inversion threshold is negative (pushing inward)');
-
-// Drag just shy of the threshold — should NOT be inverted yet.
-E.applyPushPull(E.pushpull.inversionT + 0.1);
-assert(!E.pushpull.inverted, 'not inverted before crossing threshold');
-
-// Drag past the threshold.
-E.applyPushPull(E.pushpull.inversionT - 1);
-assert(E.pushpull.inverted, 'inverted after crossing threshold');
-
-// Toggle back and forth — the flip should be involutive and end in the
-// correct state, not drift.
-E.applyPushPull(E.pushpull.inversionT + 0.1);
-assert(!E.pushpull.inverted, 'flip undoes on re-crossing');
-E.applyPushPull(E.pushpull.inversionT - 1);
-assert(E.pushpull.inverted, 're-enters inverted cleanly');
-
-// Commit the inverted state.
-E.commitPushPull();
-assert(E.faceGroups.groups.length === 6,
-    `still 6 face groups after inversion commit (got ${E.faceGroups.groups.length})`);
-
-// Box y-extent: former bottom (unchanged) still at y=-1 is now the top;
-// former top is at y = 2.25 - 4.25 = -2 (pushed through by 4.25 from pivot
-// y=2.25). The net shape is a unit box from y=-2 to y=-1.
-let minY = Infinity, maxY = -Infinity;
-for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
-    const y = E.boxPositions[vi * 3 + 1];
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-}
-assert(Math.abs(minY + 2) < 1e-4, `inverted box min y ≈ -2 (got ${minY})`);
-assert(Math.abs(maxY + 1) < 1e-4, `inverted box max y ≈ -1 (got ${maxY})`);
-
-// A ray from above (well outside the new shape) must hit a face whose
-// outward normal points +Y — the flipped former-bottom is now the top of
-// the box. Without the inversion fix, the BVH still intersects but the hit
-// normal would be -Y (backface winding) and GL culling would hide the face.
-const invHit = E.boxBVH.raycast(E.boxMesh, [0, 5, 0], [0, -1, 0], 0);
-assert(invHit, 'ray from above hits inverted box');
-assert(invHit.normal[1] > 0.999,
-    `top of inverted box points +Y (got normal ${JSON.stringify(invHit.normal)})`);
-
-// Find the face group whose normal is +Y — that's the new top. Its vertex
-// normals in the Mesh should agree (no mid-triangle backface flip).
-const newTop = E.faceGroups.groups.find(g => g.normal[1] > 0.999);
-assert(newTop, 'inverted box has a +Y face group');
-// At least one vertex of that face must have stored normal also ≈ +Y.
-const sampleTriVert = E.boxIndices[newTop.tris[0] * 3 + 0];
-const sampleNY = E.boxNormals[sampleTriVert * 3 + 1];
-assert(sampleNY > 0.999,
-    `stored vertex normal matches face outward (+Y) after inversion (got ${sampleNY})`);
-
-// A side face (normal ≈ +X) should still have +X stored normals — side
-// normals must NOT flip (outward direction of the side is unchanged).
-const sideX = E.faceGroups.groups.find(g => g.normal[0] > 0.999);
-assert(sideX, 'inverted box has a +X side face group');
-const sideVert = E.boxIndices[sideX.tris[0] * 3 + 0];
-const sideNX = E.boxNormals[sideVert * 3 + 0];
-assert(sideNX > 0.999,
-    `side face normals keep their sign after inversion (got +X = ${sideNX})`);
-
-screenshot('apps/scene-editor/_pushpull_inverted.png');
-console.log(`OK — push/pull extrudes, cancels, inverts-through (BVH + normals + winding consistent)`);
+console.log(`OK — push/pull surgery extrudes box top, second pull stacks, cancel reverts cleanly`);

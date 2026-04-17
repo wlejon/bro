@@ -303,15 +303,19 @@
     };
 
     // Overlay a fresh working-preview mesh during drag without mutating
-    // canonical buffers. Caller still holds the working buffers.
+    // canonical buffers. Caller still holds the working buffers. No-op if
+    // the primitive was destroyed mid-drag (meshNode null).
     Primitive.prototype.previewMesh = function (positions, indices, normals) {
+        if (!this.meshNode) return;
         this.meshNode.updateMesh({
             positions, indices, normals: normals || this.normals,
         });
     };
 
     // Roll the render node back to the canonical buffers (push/pull cancel).
+    // No-op if the primitive was destroyed mid-drag.
     Primitive.prototype.revertMesh = function () {
+        if (!this.meshNode) return;
         this.meshNode.updateMesh({
             positions: this.positions,
             indices:   this.indices,

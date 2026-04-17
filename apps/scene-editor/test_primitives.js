@@ -174,12 +174,14 @@ assert(E.pushpull.primitive === box2, 'drag bound to box2 (not default)');
 E.applyPushPull(0.5);
 E.commitPushPull();
 
-// box2's top vertices must have moved to y=1.5.
+// SketchUp-style surgery duplicates the 4 top corners at the new height
+// rather than warping the originals. Original top verts at y=1 still exist
+// (now part of the extended side faces).
 let b2TopCount = 0;
 for (let vi = 0; vi < box2.positions.length / 3; vi++) {
     if (Math.abs(box2.positions[vi*3 + 1] - 1.5) < 1e-5) b2TopCount++;
 }
-assert(b2TopCount === 12, `box2 has 12 top verts at y=1.5 (got ${b2TopCount})`);
+assert(b2TopCount === 4, `box2 has 4 new top verts at y=1.5 (got ${b2TopCount})`);
 
 // defaultBox must be untouched.
 for (let i = 0; i < defBefore.length; i++) {
@@ -201,7 +203,7 @@ b2TopCount = 0;
 for (let vi = 0; vi < box2.positions.length / 3; vi++) {
     if (Math.abs(box2.positions[vi*3 + 1] - 1.75) < 1e-5) b2TopCount++;
 }
-assert(b2TopCount === 12, `box2 top at y=1.75 after redo (got ${b2TopCount})`);
+assert(b2TopCount === 4, `box2 top at y=1.75 after redo (got ${b2TopCount}) — surgery adds 4 new corners`);
 
 // --- Remove a primitive ---------------------------------------------------
 

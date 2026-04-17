@@ -163,9 +163,13 @@ E.commitPushPull();
 assert(E.edgesNode, 'edges node re-created after push/pull commit');
 assert(E.edgesNode !== before, 'edges node identity replaced on rebuild');
 
-// After a simple +Y extrusion the cube is still a 12-edge box.
-assert(E.inferenceGeo.edges.length === 12,
-    `post-commit cube still has 12 edges (got ${E.inferenceGeo.edges.length})`);
+// After a +Y extrusion via SketchUp-style surgery the cube has 16 model
+// edges: 4 new top + 4 bottom + 4 vertical (lower segment, between
+// original side groups) + 4 vertical (upper bridge segment, between the
+// extended side groups). The original top edges merge into the side
+// groups' interior (same group on both sides) and aren't rendered.
+assert(E.inferenceGeo.edges.length === 16,
+    `post-commit pulled-cube has 16 edges (got ${E.inferenceGeo.edges.length})`);
 
 screenshot('apps/scene-editor/_edges_after.png');
 console.log(`OK — EdgeMesh: orthoBasis ⟂, prism winding outward, diagonal edges supported; ` +

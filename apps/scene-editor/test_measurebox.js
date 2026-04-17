@@ -107,12 +107,13 @@ assert(Math.abs(E.pushpull.distance - 2) < 1e-6,
 assert(E.handleMeasureBoxKey('Enter'), 'Enter consumed');
 assert(!E.pushpull.active, 'drag ended after commit');
 
-// Top vertices now at y=3 (1 + 2).
+// SketchUp-style surgery dups 4 corner verts at the new top (y=3); the
+// originals at y=1 stay (now interior to the extended side faces).
 let topCount = 0;
 for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
     if (Math.abs(E.boxPositions[vi * 3 + 1] - 3) < 1e-5) topCount++;
 }
-assert(topCount === 12, `12 top verts at y=3 after exact-2 extrusion (got ${topCount})`);
+assert(topCount === 4, `4 new top verts at y=3 after exact-2 extrusion (got ${topCount})`);
 
 // Post-commit window is still active; lastOp is stashed.
 assert(E.measureBoxState.active, 'VCB stays active post-commit (re-apply window)');
@@ -133,7 +134,7 @@ topCount = 0;
 for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
     if (Math.abs(E.boxPositions[vi * 3 + 1] - 4.5) < 1e-5) topCount++;
 }
-assert(topCount === 12, `12 top verts at y=4.5 after re-apply (got ${topCount})`);
+assert(topCount === 4, `4 new top verts at y=4.5 after re-apply (got ${topCount})`);
 
 // Post-re-apply: VCB still active with fresh lastOp for chaining.
 assert(E.measureBoxState.active, 'VCB still active after re-apply');
@@ -169,12 +170,12 @@ assert(E.handleMeasureBoxKey('1'));
 assert(E.handleMeasureBoxKey('Enter'));
 assert(!E.pushpull.active, 'negative distance committed');
 
-// Negative extrusion: top verts moved to y = 4.5 - 1 = 3.5.
+// Negative extrusion: dups 4 corner verts at y = 4.5 - 1 = 3.5.
 topCount = 0;
 for (let vi = 0; vi < E.boxPositions.length / 3; vi++) {
     if (Math.abs(E.boxPositions[vi * 3 + 1] - 3.5) < 1e-5) topCount++;
 }
-assert(topCount === 12, `12 top verts at y=3.5 after -1 (got ${topCount})`);
+assert(topCount === 4, `4 new top verts at y=3.5 after -1 (got ${topCount})`);
 
 // --- Escape during drag cancels ---------------------------------------------
 
