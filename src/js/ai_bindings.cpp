@@ -583,7 +583,8 @@ parseHeroEvaluator(JSContext* ctx, JSValueConst opts) {
 static std::shared_ptr<brogameagent::mcts::ITeamEvaluator>
 parseTeamEvaluator(JSContext* ctx, JSValueConst opts) {
     std::string kind = readStringProp(ctx, opts, "evaluator");
-    if (kind == "teamHpDelta") return std::make_shared<brogameagent::mcts::TeamHpDeltaEvaluator>();
+    if (kind == "teamHpDelta")    return std::make_shared<brogameagent::mcts::TeamHpDeltaEvaluator>();
+    if (kind == "teamAdvantage")  return std::make_shared<brogameagent::mcts::TeamAdvantageEvaluator>();
     return nullptr;
 }
 

@@ -36,7 +36,7 @@ var Groups = {};
             },
             rolloutPolicy: "aggressive",
             opponentPolicy: "aggressive",
-            evaluator: "teamHpDelta",
+            evaluator: "teamAdvantage",
         });
     }
 
