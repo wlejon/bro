@@ -162,7 +162,7 @@ h1 {
         panel.style.setProperty('height', (CARD_H - HEADER_H) + 'px');
     }
     positionPanel();
-    window.addEventListener('resize', positionPanel);
+    window.__onResize = positionPanel;
 
     var sliders = [
         { key: 'audio.masterVolume', track: 'master-track', fill: 'master-fill', val: 'master-val' },

@@ -165,7 +165,7 @@ h2 {
         panel.style.setProperty('height', (CARD_H - HEADER_H) + 'px');
     }
     positionPanel();
-    window.addEventListener('resize', positionPanel);
+    window.__onResize = positionPanel;
 
     var scrollTrack = document.getElementById('scroll-track');
     var scrollFill = document.getElementById('scroll-fill');

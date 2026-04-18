@@ -144,7 +144,7 @@ select {
         panel.style.setProperty('height', (CARD_H - HEADER_H) + 'px');
     }
     positionPanel();
-    window.addEventListener('resize', positionPanel);
+    window.__onResize = positionPanel;
 
     var resSelect = document.getElementById('resolution');
     var fullscreenCb = document.getElementById('fullscreen-cb');

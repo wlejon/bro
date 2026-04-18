@@ -246,7 +246,7 @@ h1 { margin: 0 0 20px 0; font-size: 16px; color: #e0e0e0; }
         panel.style.setProperty('height', (CARD_H - HEADER_H) + 'px');
     }
     positionPanel();
-    window.addEventListener('resize', positionPanel);
+    window.__onResize = positionPanel;
 
     var sel = document.getElementById('difficulty');
     sel.value = bro.settings.get('game.difficulty') || 'normal';

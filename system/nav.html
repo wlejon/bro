@@ -173,7 +173,7 @@ html, body {
     buildTabs();
     window.__onPanelsReady = buildTabs;
 
-    window.addEventListener('resize', positionCard);
+    window.__onResize = positionCard;
 })();
 </script>
 </body>

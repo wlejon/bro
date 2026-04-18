@@ -654,6 +654,25 @@ void Engine::resizeSystemPanels(int w, int h) {
             doc.document->resolveStyles();
             doc.document->performLayout(static_cast<float>(w), static_cast<float>(h), textMetrics);
         }
+        // Fire __onResize on the panel's JS context so scripts can reposition
+        // JS-sized elements (e.g. preferences modal card, content panels).
+        if (doc.jsCtx) {
+            JSContext* ctx = doc.jsCtx;
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue fn = JS_GetPropertyStr(ctx, global, "__onResize");
+            if (JS_IsFunction(ctx, fn)) {
+                JSValue r = JS_Call(ctx, fn, global, 0, nullptr);
+                if (JS_IsException(r)) {
+                    JSValue ex = JS_GetException(ctx);
+                    const char* s = JS_ToCString(ctx, ex);
+                    if (s) { LOG_ERROR("__onResize: %s", s); JS_FreeCString(ctx, s); }
+                    JS_FreeValue(ctx, ex);
+                }
+                JS_FreeValue(ctx, r);
+            }
+            JS_FreeValue(ctx, fn);
+            JS_FreeValue(ctx, global);
+        }
     }
 }
 
