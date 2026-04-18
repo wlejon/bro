@@ -5,6 +5,7 @@
 #include "engine/gizmo.h"
 #include "engine/menu_bar.h"
 #include "engine/overlay.h"
+#include "engine/replaced_elements.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
 #include "layout/draw_traversal.h"
@@ -325,6 +326,7 @@ private:
         std::unique_ptr<layout::FontManager> fontManager;
         std::unique_ptr<dom::Document> document;
         JSValue broPerfObj = JS_UNDEFINED;
+        MouseDispatchState mouseState;  // per-doc click/dblclick tracking
     };
 
     void initSystemPanels();
@@ -493,16 +495,12 @@ private:
     float lockedMouseX_ = 0.0f;
     float lockedMouseY_ = 0.0f;
 
-    // Double-click detection
-    double lastClickTimeMs_ = 0.0;
-    float lastClickX_ = 0.0f;
-    float lastClickY_ = 0.0f;
-    int clickCount_ = 0;
-    dom::Element* lastClickTarget_ = nullptr;
+    // Per-document mouse dispatch state for the app doc (mousedown target +
+    // rolling click/dblclick tracking). System docs carry their own instance.
+    MouseDispatchState appMouseState_;
 
     // Mouse button state for buttons bitmask
     int pressedButtons_ = 0;
-    dom::Element* mouseDownTarget_ = nullptr;
 
     // Viewport scrolling
     float scrollY_ = 0.0f;

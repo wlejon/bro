@@ -24,6 +24,7 @@
 
 #include "api/api.h"
 #include "util/log.h"
+#include "util/time.h"
 
 #include <filesystem>
 #include <regex>
@@ -713,7 +714,9 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
         }
     }
 
-    // Hit-test panels in reverse (last rendered = on top)
+    // Hit-test panels in reverse (last rendered = on top).
+    // Shared dispatcher does focus + mousedown with the same semantics as the
+    // app doc path (see replaced_elements.cpp).
     for (int i = static_cast<int>(systemDocs_.size()) - 1; i >= 0; i--) {
         auto& doc = systemDocs_[i];
         if (!isSystemDocVisible(doc)) continue;
@@ -724,20 +727,14 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
                                &overlayMgr_, OverlayContext::System,
                                viewportWidth_, viewportHeight_};
 
-            auto* prevActive = doc.document->activeElement();
-            doc.document->setActiveElement(target);
-            if (target != prevActive) {
-                bro::engine::dispatchFocusEvents(cctx, prevActive, target);
-            }
-
-            focusNewControl(cctx, target, x, y);
-
             dom::MouseEvent evt("mousedown");
             evt.setClientX(static_cast<double>(x));
             evt.setClientY(static_cast<double>(y));
             evt.setButton(button);
-            js::dispatchDomEvent(doc.jsCtx, target, evt);
-            systemDirty_ = true;
+            evt.setIsTrusted(true);
+            applyMouseOffset(evt, target);
+
+            dispatchDocMousePress(cctx, doc.mouseState, target, evt, x, y);
             return true;
         }
     }
@@ -756,35 +753,40 @@ bool Engine::systemHandleMouseUp(float x, float y, int button) {
         auto& doc = systemDocs_[i];
         if (!isSystemDocVisible(doc)) continue;
         dom::Element* target = systemHitTest(doc, x, y);
+
+        // Dispatch mouseup + click (if target matches mousedown target) using
+        // the shared per-doc helper — same DOM semantics as the app path, so
+        // stale mousedowns (e.g. overlay-consumed press) no longer produce
+        // phantom clicks on rows beneath a just-dismissed dropdown.
         if (target) {
+            ControlContext cctx{doc.document.get(), doc.jsCtx,
+                               systemRenderer_.get(), window_.get(), &systemDirty_,
+                               &overlayMgr_, OverlayContext::System,
+                               viewportWidth_, viewportHeight_};
+
             dom::MouseEvent upEvt("mouseup");
             upEvt.setClientX(static_cast<double>(x));
             upEvt.setClientY(static_cast<double>(y));
             upEvt.setButton(button);
-            js::dispatchDomEvent(doc.jsCtx, target, upEvt);
+            upEvt.setIsTrusted(true);
+            applyMouseOffset(upEvt, target);
 
-            dom::MouseEvent clickEvt("click");
-            clickEvt.setClientX(static_cast<double>(x));
-            clickEvt.setClientY(static_cast<double>(y));
-            clickEvt.setButton(button);
-            js::dispatchDomEvent(doc.jsCtx, target, clickEvt);
+            dispatchDocMouseRelease(cctx, doc.mouseState, target, upEvt,
+                                    x, y, button, 0, 0, 0, 0, x, y,
+                                    util::currentTimeMs(),
+                                    inputConfig_.doubleClickThresholdMs,
+                                    inputConfig_.doubleClickDistancePx);
 
-            // End range slider dragging
+            // End range slider dragging (system-specific control state).
             if (doc.document) {
                 auto* activeEl = doc.document->activeElement();
                 auto* input = getElInput(activeEl);
                 if (input && input->isDragging()) {
                     input->setDragging(false);
-                    ControlContext cctx{doc.document.get(), doc.jsCtx,
-                                       systemRenderer_.get(), window_.get(), &systemDirty_,
-                                       &overlayMgr_, OverlayContext::System,
-                                       viewportWidth_, viewportHeight_};
                     dom::Event changeEvt("change");
                     dispatchControlEvent(cctx, activeEl, changeEvt);
                 }
             }
-
-            systemDirty_ = true;
             return true;
         }
     }

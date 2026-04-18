@@ -50,6 +50,56 @@ enum class ClickDisposition {
     Consumed,       // click was consumed (e.g. dropdown option selected)
 };
 
+// ---------------------------------------------------------------------------
+// Per-document mouse dispatch state
+// ---------------------------------------------------------------------------
+
+/// Bookkeeping for a single document's mouse event stream: tracks the
+/// mousedown target (so click only fires on matching mouseup) and rolling
+/// double-click / contextmenu state. One instance per document participating
+/// in input (one for the app doc, one per system panel doc).
+struct MouseDispatchState {
+    dom::Element* mouseDownTarget = nullptr;
+    dom::Element* lastClickTarget = nullptr;
+    double lastClickTimeMs = 0.0;
+    float lastClickX = 0.0f;
+    float lastClickY = 0.0f;
+    int clickCount = 0;
+};
+
+/// Populate event.offsetX/Y as clientX/Y relative to the element's padding
+/// edge (DOM spec). Walks up the layout tree adjusting for scroll.
+void applyMouseOffset(dom::MouseEvent& evt, dom::Element* target);
+
+/// Dispatch mousedown to `target` with full focus-transition semantics
+/// (unfocusPreviousControl → setActiveElement + focus events → focusNewControl
+/// → mousedown). Updates state.mouseDownTarget. Returns true if the press was
+/// consumed by unfocusPreviousControl and callers should stop further work.
+/// Caller populates `evt`'s coordinates/button fields before calling.
+bool dispatchDocMousePress(
+    const ControlContext& ctx,
+    MouseDispatchState& state,
+    dom::Element* target,
+    dom::MouseEvent& evt,
+    float focusX, float focusY);
+
+/// Dispatch mouseup to `target` and, if it matches state.mouseDownTarget,
+/// follow up with click / dblclick / contextmenu per DOM semantics. Clears
+/// state.mouseDownTarget. Uses provided thresholds for double-click detection.
+/// Caller populates `upEvt` coords/button; coords are reused for follow-ups.
+void dispatchDocMouseRelease(
+    const ControlContext& ctx,
+    MouseDispatchState& state,
+    dom::Element* target,
+    dom::MouseEvent& upEvt,
+    float clientX, float clientY,
+    int button, int buttons, int mod,
+    float movementX, float movementY,
+    float pageX, float pageY,
+    double nowMs,
+    double dblThresholdMs,
+    float dblDistPx);
+
 /// Unfocus the previously-active replaced element control (unfocus inputs
 /// and textareas). Dropdowns and color pickers now live in the overlay
 /// manager, which handles click-outside dismissal itself.

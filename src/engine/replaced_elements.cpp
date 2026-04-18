@@ -380,4 +380,129 @@ void focusNewControl(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Per-document mouse press/release dispatch
+// ---------------------------------------------------------------------------
+
+void applyMouseOffset(dom::MouseEvent& evt, dom::Element* target) {
+    if (!target) return;
+    auto& box = target->layoutBox();
+    float absX = box.contentRect.x;
+    float absY = box.contentRect.y;
+    for (auto* lp = target->layoutParent(); lp; lp = lp->layoutParent()) {
+        auto& pb = lp->layoutBox();
+        absX += pb.contentRect.x;
+        absY += pb.contentRect.y;
+        absY -= lp->scrollTopValue();
+    }
+    evt.setOffsetX(evt.clientX() - static_cast<double>(absX));
+    evt.setOffsetY(evt.clientY() - static_cast<double>(absY));
+}
+
+bool dispatchDocMousePress(
+    const ControlContext& ctx,
+    MouseDispatchState& state,
+    dom::Element* target,
+    dom::MouseEvent& evt,
+    float focusX, float focusY) {
+
+    if (!ctx.document) { state.mouseDownTarget = nullptr; return false; }
+    if (!target) { state.mouseDownTarget = nullptr; return false; }
+
+    auto* prevActive = ctx.document->activeElement();
+
+    // Give the previously-active control a chance to consume (e.g. dropdown
+    // option selection). If consumed, still fire mousedown and bail — caller
+    // should not treat the press as normal activation.
+    auto disp = unfocusPreviousControl(ctx, prevActive);
+    if (disp == ClickDisposition::Consumed) {
+        js::dispatchDomEvent(ctx.jsCtx, target, evt);
+        state.mouseDownTarget = target;
+        if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+        return true;
+    }
+
+    ctx.document->setActiveElement(target);
+    if (target != prevActive) {
+        dispatchFocusEvents(ctx, prevActive, target);
+    }
+
+    focusNewControl(ctx, target, focusX, focusY);
+
+    js::dispatchDomEvent(ctx.jsCtx, target, evt);
+    state.mouseDownTarget = target;
+    if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+    return false;
+}
+
+void dispatchDocMouseRelease(
+    const ControlContext& ctx,
+    MouseDispatchState& state,
+    dom::Element* target,
+    dom::MouseEvent& upEvt,
+    float clientX, float clientY,
+    int button, int buttons, int mod,
+    float movementX, float movementY,
+    float pageX, float pageY,
+    double nowMs,
+    double dblThresholdMs,
+    float dblDistPx) {
+
+    if (target && ctx.jsCtx) {
+        js::dispatchDomEvent(ctx.jsCtx, target, upEvt);
+    }
+
+    // Click fires only when mouseup lands on the same element as mousedown.
+    bool sameTarget = (target && target == state.mouseDownTarget);
+    if (sameTarget) {
+        // Rolling double-click detection.
+        if (state.lastClickTarget == target &&
+            (nowMs - state.lastClickTimeMs) < dblThresholdMs &&
+            std::fabs(clientX - state.lastClickX) < dblDistPx &&
+            std::fabs(clientY - state.lastClickY) < dblDistPx) {
+            state.clickCount++;
+        } else {
+            state.clickCount = 1;
+        }
+        state.lastClickTimeMs = nowMs;
+        state.lastClickX = clientX;
+        state.lastClickY = clientY;
+        state.lastClickTarget = target;
+
+        auto populate = [&](dom::MouseEvent& e) {
+            e.setClientX(clientX); e.setClientY(clientY);
+            e.setScreenX(clientX); e.setScreenY(clientY);
+            e.setPageX(pageX);     e.setPageY(pageY);
+            e.setMovementX(movementX); e.setMovementY(movementY);
+            e.setButton(button); e.setButtons(buttons);
+            e.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+            e.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+            e.setAltKey((mod & SDL_KMOD_ALT) != 0);
+            e.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+            e.setIsTrusted(true);
+        };
+
+        dom::MouseEvent clickEvt("click");
+        populate(clickEvt);
+        clickEvt.setDetail(state.clickCount);
+        js::dispatchDomEvent(ctx.jsCtx, target, clickEvt);
+
+        if (state.clickCount == 2) {
+            dom::MouseEvent dblEvt("dblclick", true, true);
+            populate(dblEvt);
+            dblEvt.setDetail(2);
+            js::dispatchDomEvent(ctx.jsCtx, target, dblEvt);
+        }
+
+        if (button == 2) {
+            dom::MouseEvent ctxEvt("contextmenu", true, true);
+            populate(ctxEvt);
+            js::dispatchDomEvent(ctx.jsCtx, target, ctxEvt);
+        }
+    }
+
+    state.mouseDownTarget = nullptr;
+    if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+}
+
 } // namespace bro::engine

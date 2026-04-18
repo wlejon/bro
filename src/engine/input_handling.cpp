@@ -120,21 +120,8 @@ static dom::KeyboardEvent makeKeyboardEvent(const char* type,
     return evt;
 }
 
-// Compute element-relative offset coordinates (per spec: relative to padding edge)
-static void computeOffset(dom::MouseEvent& evt, dom::Element* target) {
-    if (!target) return;
-    auto& box = target->layoutBox();
-    float absX = box.contentRect.x;
-    float absY = box.contentRect.y;
-    for (auto* lp = target->layoutParent(); lp; lp = lp->layoutParent()) {
-        auto& pb = lp->layoutBox();
-        absX += pb.contentRect.x;
-        absY += pb.contentRect.y;
-        absY -= lp->scrollTopValue();
-    }
-    evt.setOffsetX(evt.clientX() - static_cast<double>(absX));
-    evt.setOffsetY(evt.clientY() - static_cast<double>(absY));
-}
+// Element-relative offset coords live in replaced_elements.cpp as
+// applyMouseOffset — shared by app and system paths.
 
 // Convert SDL3 mouse button id (1=left, 2=middle, 3=right, 4=X1, 5=X2)
 // into the DOM MouseEvent.button index (0=left, 1=middle, 2=right, 3=back, 4=forward).
@@ -403,37 +390,14 @@ void Engine::handleMouseDown(float x, float y, int button) {
                           x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
 
         dom::Element* target = hitTest(docX, docY);
-        mouseDownTarget_ = target;
-        if (target) {
-            // Track focus change
-            auto* prevActive = document_->activeElement();
+        if (target) applyMouseOffset(evt, target);
 
-            // Unfocus previous controls and check if click was consumed
-            ControlContext cctx{document_.get(), jsRuntime_->getContext(),
-                               renderer_.get(), window_.get(), &uiDirty_,
-                               &overlayMgr_, OverlayContext::App,
-                               viewportWidth_, viewportHeight_};
-            auto disp = unfocusPreviousControl(cctx, prevActive);
-            if (disp == ClickDisposition::Consumed) {
-                computeOffset(evt, target);
-                dispatchEvent(target, evt);
-                jsRuntime_->executePendingJobs();
-                return;
-            }
-
-            // Set new active element and dispatch focus events
-            document_->setActiveElement(target);
-            if (target != prevActive) {
-                bro::engine::dispatchFocusEvents(cctx, prevActive, target);
-            }
-            jsRuntime_->executePendingJobs();
-
-            // Focus/activate the newly-clicked control
-            focusNewControl(cctx, target, x, docY);
-
-            computeOffset(evt, target);
-            dispatchEvent(target, evt);
-        }
+        ControlContext cctx{document_.get(), jsRuntime_->getContext(),
+                           renderer_.get(), window_.get(), &uiDirty_,
+                           &overlayMgr_, OverlayContext::App,
+                           viewportWidth_, viewportHeight_};
+        dispatchDocMousePress(cctx, appMouseState_, target, evt, x, docY);
+        jsRuntime_->executePendingJobs();
     }
 }
 
@@ -490,64 +454,27 @@ void Engine::handleMouseUp(float x, float y, int button) {
     if (document_) {
         dom::Element* target = hitTest(docX, docY);
         int mod = safeGetModState(window_.get());
+        float ct = static_cast<float>(contentTop());
+        float movX = x - lastMouseX_;
+        float movY = y - lastMouseY_;
+        float clientY = y - ct;
+        float pageY = clientY + scrollY_;
 
-        // Dispatch mouseup event
-        {
-            dom::MouseEvent upEvt("mouseup");
-            populateMouseEvent(upEvt, x, y, button, pressedButtons_,
-                              x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
-            if (target) {
-                computeOffset(upEvt, target);
-                dispatchEvent(target, upEvt);
-            }
-        }
+        dom::MouseEvent upEvt("mouseup");
+        populateMouseEvent(upEvt, x, y, button, pressedButtons_,
+                          movX, movY, scrollY_, mod, ct);
+        if (target) applyMouseOffset(upEvt, target);
 
-        // Dispatch click event (only if mouseup is on the same element as mousedown)
-        if (target && target == mouseDownTarget_) {
-            // Double-click detection (thresholds from config)
-            double now = util::currentTimeMs();
-
-            if (lastClickTarget_ == target &&
-                (now - lastClickTimeMs_) < inputConfig_.doubleClickThresholdMs &&
-                std::abs(x - lastClickX_) < inputConfig_.doubleClickDistancePx &&
-                std::abs(y - lastClickY_) < inputConfig_.doubleClickDistancePx) {
-                clickCount_++;
-            } else {
-                clickCount_ = 1;
-            }
-            lastClickTimeMs_ = now;
-            lastClickX_ = x;
-            lastClickY_ = y;
-            lastClickTarget_ = target;
-
-            dom::MouseEvent clickEvt("click");
-            populateMouseEvent(clickEvt, x, y, button, pressedButtons_,
-                              x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
-            clickEvt.setDetail(clickCount_);
-            computeOffset(clickEvt, target);
-            dispatchEvent(target, clickEvt);
-
-            // Dispatch dblclick on second click
-            if (clickCount_ == 2) {
-                dom::MouseEvent dblEvt("dblclick", true, true);
-                populateMouseEvent(dblEvt, x, y, button, pressedButtons_,
-                                  x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
-                dblEvt.setDetail(2);
-                computeOffset(dblEvt, target);
-                dispatchEvent(target, dblEvt);
-            }
-
-            // Dispatch contextmenu on right-click
-            if (button == 2) {
-                dom::MouseEvent ctxEvt("contextmenu", true, true);
-                populateMouseEvent(ctxEvt, x, y, button, pressedButtons_,
-                                  x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
-                computeOffset(ctxEvt, target);
-                dispatchEvent(target, ctxEvt);
-            }
-        }
-
-        mouseDownTarget_ = nullptr;
+        ControlContext cctx{document_.get(), jsRuntime_->getContext(),
+                           renderer_.get(), window_.get(), &uiDirty_,
+                           &overlayMgr_, OverlayContext::App,
+                           viewportWidth_, viewportHeight_};
+        dispatchDocMouseRelease(cctx, appMouseState_, target, upEvt,
+                                x, clientY, button, pressedButtons_, mod,
+                                movX, movY, x, pageY,
+                                util::currentTimeMs(),
+                                inputConfig_.doubleClickThresholdMs,
+                                inputConfig_.doubleClickDistancePx);
         if (jsRuntime_) jsRuntime_->executePendingJobs();
     }
 }
@@ -565,7 +492,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, lockedMouseX_, lockedMouseY_, -1,
                                pressedButtons_, xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-            computeOffset(moveEvt, lockedElement_);
+            applyMouseOffset(moveEvt, lockedElement_);
             dispatchEvent(lockedElement_, moveEvt);
             if (jsRuntime_) jsRuntime_->executePendingJobs();
         }
@@ -706,7 +633,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 populateMouseEvent(outEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 outEvt.setRelatedTarget(target);
-                computeOffset(outEvt, hoveredElement_);
+                applyMouseOffset(outEvt, hoveredElement_);
                 dispatchEvent(hoveredElement_, outEvt);
             }
 
@@ -716,7 +643,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 populateMouseEvent(leaveEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 leaveEvt.setRelatedTarget(target);
-                computeOffset(leaveEvt, hoveredElement_);
+                applyMouseOffset(leaveEvt, hoveredElement_);
                 dispatchEvent(hoveredElement_, leaveEvt);
             }
 
@@ -726,7 +653,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 populateMouseEvent(overEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 overEvt.setRelatedTarget(hoveredElement_);
-                computeOffset(overEvt, target);
+                applyMouseOffset(overEvt, target);
                 dispatchEvent(target, overEvt);
             }
 
@@ -736,7 +663,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 populateMouseEvent(enterEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 enterEvt.setRelatedTarget(hoveredElement_);
-                computeOffset(enterEvt, target);
+                applyMouseOffset(enterEvt, target);
                 dispatchEvent(target, enterEvt);
             }
 
@@ -753,7 +680,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
                               xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-            computeOffset(moveEvt, target);
+            applyMouseOffset(moveEvt, target);
             dispatchEvent(target, moveEvt);
         }
 
@@ -1179,7 +1106,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         wheelEvt.setDeltaY(static_cast<double>(-dy * inputConfig_.scrollSpeed));
         wheelEvt.setDeltaZ(0.0);
         wheelEvt.setDeltaMode(dom::WheelEvent::DOM_DELTA_PIXEL);
-        computeOffset(wheelEvt, target);
+        applyMouseOffset(wheelEvt, target);
         dispatchEvent(target, wheelEvt);
 
         // If JS called preventDefault(), don't do default scrolling
