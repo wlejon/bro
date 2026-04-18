@@ -5,6 +5,7 @@
 #include "layout/el_svg.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
+#include "css/transform.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -23,219 +24,8 @@
 
 namespace bro::layout {
 
-// ---------------------------------------------------------------------------
-// CSS Transform parsing → 2D affine matrix [a b c d e f]
-// Supports: translate, translateX, translateY, scale, scaleX, scaleY,
-//           rotate, skewX, skewY, matrix
-// ---------------------------------------------------------------------------
-struct AffineMatrix {
-    float a = 1, b = 0, c = 0, d = 1, e = 0, f = 0;
-
-    // Multiply this * rhs (post-multiply)
-    AffineMatrix operator*(const AffineMatrix& r) const {
-        return {
-            a * r.a + c * r.b,
-            b * r.a + d * r.b,
-            a * r.c + c * r.d,
-            b * r.c + d * r.d,
-            a * r.e + c * r.f + e,
-            b * r.e + d * r.f + f
-        };
-    }
-
-    bool isIdentity() const {
-        return a == 1 && b == 0 && c == 0 && d == 1 && e == 0 && f == 0;
-    }
-
-    // Invert (returns false if singular)
-    bool invert(AffineMatrix& out) const {
-        float det = a * d - b * c;
-        if (std::abs(det) < 1e-9f) return false;
-        float invDet = 1.0f / det;
-        out.a =  d * invDet;
-        out.b = -b * invDet;
-        out.c = -c * invDet;
-        out.d =  a * invDet;
-        out.e = (c * f - d * e) * invDet;
-        out.f = (b * e - a * f) * invDet;
-        return true;
-    }
-};
-
-// Parse a single float from a position in a string, advancing pos past it.
-static float parseNextFloat(const std::string& s, size_t& pos) {
-    while (pos < s.size() && (s[pos] == ' ' || s[pos] == ',' || s[pos] == '\t'))
-        ++pos;
-    char* end = nullptr;
-    float v = std::strtof(s.c_str() + pos, &end);
-    pos = static_cast<size_t>(end - s.c_str());
-    // Skip optional units (px, deg, rad, turn, %)
-    while (pos < s.size() && std::isalpha(static_cast<unsigned char>(s[pos])))
-        ++pos;
-    if (pos < s.size() && s[pos] == '%') ++pos;
-    return v;
-}
-
-// Convert an angle value to radians. Supports deg (default), rad, turn, grad.
-static float parseAngleRad(const std::string& s, size_t& pos) {
-    while (pos < s.size() && (s[pos] == ' ' || s[pos] == ','))
-        ++pos;
-    char* end = nullptr;
-    float v = std::strtof(s.c_str() + pos, &end);
-    size_t unitStart = static_cast<size_t>(end - s.c_str());
-    std::string unit;
-    size_t u = unitStart;
-    while (u < s.size() && std::isalpha(static_cast<unsigned char>(s[u])))
-        unit += s[u++];
-    pos = u;
-    if (unit == "rad") return v;
-    if (unit == "turn") return v * 2.0f * 3.14159265f;
-    if (unit == "grad") return v * 3.14159265f / 200.0f;
-    return v * 3.14159265f / 180.0f; // deg (default)
-}
-
-// Parse CSS transform string into a combined 2D affine matrix.
-// ref is the element's border box size (for percentage-based translate).
-static AffineMatrix parseTransform(const std::string& val, float refW, float refH) {
-    AffineMatrix result;
-    size_t pos = 0;
-    while (pos < val.size()) {
-        // Skip whitespace
-        while (pos < val.size() && (val[pos] == ' ' || val[pos] == '\t'))
-            ++pos;
-        if (pos >= val.size()) break;
-
-        // Find function name
-        size_t nameStart = pos;
-        while (pos < val.size() && val[pos] != '(' && val[pos] != ' ')
-            ++pos;
-        std::string func = val.substr(nameStart, pos - nameStart);
-        if (pos >= val.size() || val[pos] != '(') break;
-        ++pos; // skip '('
-
-        AffineMatrix m;
-        if (func == "translate") {
-            float tx = parseNextFloat(val, pos);
-            float ty = 0;
-            // Check for second argument
-            size_t saved = pos;
-            while (saved < val.size() && (val[saved] == ' ' || val[saved] == ','))
-                ++saved;
-            if (saved < val.size() && val[saved] != ')')
-                ty = parseNextFloat(val, pos);
-            m.e = tx; m.f = ty;
-        } else if (func == "translateX") {
-            m.e = parseNextFloat(val, pos);
-        } else if (func == "translateY") {
-            m.f = parseNextFloat(val, pos);
-        } else if (func == "scale") {
-            float sx = parseNextFloat(val, pos);
-            float sy = sx;
-            size_t saved = pos;
-            while (saved < val.size() && (val[saved] == ' ' || val[saved] == ','))
-                ++saved;
-            if (saved < val.size() && val[saved] != ')')
-                sy = parseNextFloat(val, pos);
-            m.a = sx; m.d = sy;
-        } else if (func == "scaleX") {
-            m.a = parseNextFloat(val, pos);
-        } else if (func == "scaleY") {
-            m.d = parseNextFloat(val, pos);
-        } else if (func == "rotate") {
-            float rad = parseAngleRad(val, pos);
-            float cosA = std::cos(rad), sinA = std::sin(rad);
-            m.a = cosA; m.c = -sinA;
-            m.b = sinA; m.d =  cosA;
-        } else if (func == "skewX") {
-            float rad = parseAngleRad(val, pos);
-            m.c = std::tan(rad);
-        } else if (func == "skewY") {
-            float rad = parseAngleRad(val, pos);
-            m.b = std::tan(rad);
-        } else if (func == "skew") {
-            float radX = parseAngleRad(val, pos);
-            float radY = 0;
-            size_t saved = pos;
-            while (saved < val.size() && (val[saved] == ' ' || val[saved] == ','))
-                ++saved;
-            if (saved < val.size() && val[saved] != ')')
-                radY = parseAngleRad(val, pos);
-            m.c = std::tan(radX);
-            m.b = std::tan(radY);
-        } else if (func == "matrix") {
-            m.a = parseNextFloat(val, pos);
-            m.b = parseNextFloat(val, pos);
-            m.c = parseNextFloat(val, pos);
-            m.d = parseNextFloat(val, pos);
-            m.e = parseNextFloat(val, pos);
-            m.f = parseNextFloat(val, pos);
-        } else {
-            // Unknown function — skip to closing paren
-        }
-
-        // Skip to closing paren
-        while (pos < val.size() && val[pos] != ')')
-            ++pos;
-        if (pos < val.size()) ++pos; // skip ')'
-
-        result = result * m;
-    }
-    return result;
-}
-
-// Parse transform-origin into pixel offsets relative to border box top-left.
-static void parseTransformOrigin(const htmlayout::css::ComputedStyle& style,
-                                  float bw, float bh,
-                                  float& ox, float& oy) {
-    ox = bw * 0.5f;
-    oy = bh * 0.5f;
-    auto it = style.find("transform-origin");
-    if (it == style.end() || it->second.empty()) return;
-
-    const std::string& val = it->second;
-    size_t pos = 0;
-
-    // Parse X
-    while (pos < val.size() && val[pos] == ' ') ++pos;
-    if (pos < val.size()) {
-        if (val.compare(pos, 4, "left") == 0) { ox = 0; pos += 4; }
-        else if (val.compare(pos, 5, "right") == 0) { ox = bw; pos += 5; }
-        else if (val.compare(pos, 6, "center") == 0) { ox = bw * 0.5f; pos += 6; }
-        else {
-            char* end = nullptr;
-            float v = std::strtof(val.c_str() + pos, &end);
-            if (end != val.c_str() + pos) {
-                size_t upos = static_cast<size_t>(end - val.c_str());
-                if (upos < val.size() && val[upos] == '%')
-                    ox = v * bw / 100.0f;
-                else
-                    ox = v;
-                pos = upos;
-                while (pos < val.size() && (std::isalpha(static_cast<unsigned char>(val[pos])) || val[pos] == '%'))
-                    ++pos;
-            }
-        }
-    }
-
-    // Parse Y
-    while (pos < val.size() && (val[pos] == ' ' || val[pos] == ',')) ++pos;
-    if (pos < val.size()) {
-        if (val.compare(pos, 3, "top") == 0) { oy = 0; }
-        else if (val.compare(pos, 6, "bottom") == 0) { oy = bh; }
-        else if (val.compare(pos, 6, "center") == 0) { oy = bh * 0.5f; }
-        else {
-            char* end = nullptr;
-            float v = std::strtof(val.c_str() + pos, &end);
-            if (end != val.c_str() + pos) {
-                size_t upos = static_cast<size_t>(end - val.c_str());
-                if (upos < val.size() && val[upos] == '%')
-                    oy = v * bh / 100.0f;
-                else
-                    oy = v;
-            }
-        }
-    }
-}
+// CSS transform and transform-origin parsing live in htmlayout
+// (htmlayout::css::parseTransform, parseTransformOrigin, Matrix2D).
 
 // ---------------------------------------------------------------------------
 // CSS filter parsing → Skia SkImageFilter chain
@@ -516,11 +306,15 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     {
         auto trIt = style.find("transform");
         if (trIt != style.end() && !trIt->second.empty() && trIt->second != "none") {
-            AffineMatrix mat = parseTransform(trIt->second, bw, bh);
+            auto mat = htmlayout::css::parseTransform(trIt->second, bw, bh);
             if (!mat.isIdentity()) {
                 hasTransform = true;
                 float ox, oy;
-                parseTransformOrigin(style, bw, bh, ox, oy);
+                auto toIt = style.find("transform-origin");
+                std::string_view originVal =
+                    (toIt != style.end()) ? std::string_view(toIt->second)
+                                          : std::string_view();
+                htmlayout::css::parseTransformOrigin(originVal, bw, bh, ox, oy);
                 // Apply: translate to origin, concat matrix, translate back
                 renderer_->save();
                 renderer_->translate(bx + ox, by + oy);

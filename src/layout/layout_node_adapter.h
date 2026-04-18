@@ -68,6 +68,13 @@ public:
         return empty;
     }
 
+    // bro::dom::Element only tracks vertical scroll today (scrollTop_).
+    // scrollLeftPx() returns 0 until horizontal scrolling is supported.
+    float scrollLeftPx() const override { return 0.0f; }
+    float scrollTopPx() const override {
+        return elem_ ? elem_->scrollTopValue() : 0.0f;
+    }
+
     bool intrinsicSize(float& w, float& h, float maxWidth) const override {
         if (!elem_) return false;
         if (auto* ctrl = elem_->inputControl()) {
