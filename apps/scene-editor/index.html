@@ -180,6 +180,29 @@
             border-radius: 2px;
             outline: 1px solid #7bed9f;
         }
+        .outliner-twist {
+            background: transparent;
+            color: #aaa;
+            border: none;
+            cursor: pointer;
+            padding: 0;
+            font-size: 9px;
+            width: 12px;
+            line-height: 1;
+        }
+        .outliner-kind {
+            font-size: 10px;
+            color: #666;
+            padding: 0 3px;
+        }
+        .outliner-row.context-edit { outline: 1px solid #ffa502; }
+        #context-breadcrumb {
+            font-size: 10px;
+            color: #ffa502;
+            margin-bottom: 2px;
+            min-height: 1em;
+            font-family: monospace;
+        }
 
         /* Toolbar: top-center horizontal button strip for tool selection. */
         #toolbar {
@@ -241,6 +264,10 @@
         <button class="tool-btn" data-tool="circle"><span class="tool-icon">&#x25CB;</span>Circle</button>
         <button class="tool-btn" data-tool="erase"><span class="tool-icon">&#x2716;</span>Erase</button>
         <button class="tool-btn" data-tool="tape"><span class="tool-icon">&#x21D4;</span>Tape</button>
+        <span style="width:1px;background:#444;margin:0 4px;"></span>
+        <button class="tool-btn" data-action="group" title="Group selection (Ctrl+G)"><span class="tool-icon">&#x29C9;</span>Group</button>
+        <button class="tool-btn" data-action="ungroup" title="Ungroup (Ctrl+Shift+G)"><span class="tool-icon">&#x29C8;</span>Ungroup</button>
+        <button class="tool-btn" data-action="make-component" title="Make Component">&#x29BF;Component</button>
     </div>
     <div id="hud">
         <h2>Scene Editor <span id="project-title" style="color:#bbb;font-weight:normal;font-size:12px;">Untitled</span></h2>
@@ -265,15 +292,18 @@
             <button class="outliner-add-btn" data-type="cylinder">+ Cyl</button>
             <button class="outliner-add-btn" data-type="plane">+ Plane</button>
         </div>
+        <div id="context-breadcrumb"></div>
         <div id="outliner-list"></div>
         <div class="outliner-hint">
-            click row: activate &nbsp;·&nbsp; <b>&#x25CF;</b>: toggle visibility &nbsp;·&nbsp; <b>&times;</b>: delete &nbsp;·&nbsp; dblclick name to rename
+            click row: activate &nbsp;·&nbsp; <b>&#x25CF;</b>: toggle visibility &nbsp;·&nbsp; <b>&times;</b>: delete &nbsp;·&nbsp; dblclick name to rename &nbsp;·&nbsp; dblclick group: enter
         </div>
     </div>
     <script src="../lib/camera.js"></script>
     <script src="../lib/history.js"></script>
     <script src="../lib/project.js"></script>
     <script src="../lib/sketch.js"></script>
+    <script src="mat4.js"></script>
+    <script src="scene-object.js"></script>
     <script src="edit-mesh.js"></script>
     <script src="inference.js"></script>
     <script src="scene-axes.js"></script>

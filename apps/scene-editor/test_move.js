@@ -1,12 +1,15 @@
-// Headless test for the Move tool.
+// Headless test for the Move tool (TRS-based).
 //
-// Drives MoveTool through __editor hooks (no synthetic mouse). Verifies:
-//   - basic translate: positions shift by delta on commit, normals/indices
-//     untouched, BVH + face groups + inference geo all rebuild
-//   - canonical positions are NOT mutated mid-drag (preview only)
-//   - cancel restores positions exactly
-//   - non-target primitives are completely untouched
-//   - move targets the drag's primitive, not registry.active
+// Since Primitive is now a SceneObject with a local-space mesh + TRS, the
+// Move tool mutates the target's `translation` — not its vertex buffer.
+// This test verifies:
+//   - begin/commit updates translation by the applied delta
+//   - local-space positions are untouched across a move
+//   - world-space raycast (raycastWorld) follows the moved primitive
+//   - world-space inference geo follows the move (cache invalidation)
+//   - cancel rolls translation back exactly
+//   - drag is bound to its primitive, not registry.active
+//   - click-release with no motion is a no-op
 //   - registry exclusion: pickAt + collectInferenceGeos respect excludeId
 //   - delete-during-drag cancels safely
 //   - chained moves compose
@@ -18,8 +21,6 @@ flush();
 
 const E = window.__editor;
 const reg = E.registry;
-
-// --- Setup: default Box at origin + Box 2 at +X ----------------------------
 
 const box1 = reg.primitives[0];
 assert(box1.name === 'Box', 'default box present');
@@ -34,165 +35,149 @@ const box2 = reg.create({
 assert(reg.primitives.length === 2, 'two primitives');
 assert(reg.active === box1, 'default box active');
 
-// Helper: synthesize a hit at the centroid of box's +Y face (any face works
-// for Move since the pivot is just a reference point). Mirrors test_pushpull.
+// Synthesize a world-space hit at the centroid of the +Y face.
 function topHitFor(prim) {
     const top = prim.faceGroups.groups.find(g => g.normal[1] > 0.999);
     const tri = top.tris[0];
     const I = prim.indices, P = prim.positions;
     const i0 = I[tri*3], i1 = I[tri*3+1], i2 = I[tri*3+2];
-    const c = [
+    const cLocal = [
         (P[i0*3]   + P[i1*3]   + P[i2*3])   / 3,
         (P[i0*3+1] + P[i1*3+1] + P[i2*3+1]) / 3,
         (P[i0*3+2] + P[i1*3+2] + P[i2*3+2]) / 3,
     ];
-    return { triangleIndex: tri, position: c, normal: top.normal.slice(), distance: 0 };
+    const cWorld = prim.localToWorldPoint(cLocal);
+    const nWorld = prim.localToWorldNormal(top.normal);
+    return { triangleIndex: tri, position: cWorld, normal: nWorld, distance: 0,
+             _localPosition: cLocal, _localNormal: top.normal.slice() };
 }
 
-// --- Begin + apply (canonical positions stay clean) ------------------------
+// --- Begin + apply (local positions stay clean; translation moves) ---------
 
-const box2Before = Array.from(box2.positions);
-const box1Before = Array.from(box1.positions);
-const box2NormalsBefore = Array.from(box2.normals);
-const box2IndicesBefore = Array.from(box2.indices);
+const box2PositionsBefore = Array.from(box2.positions);
+const box2TranslationBefore = box2.translation.slice();
+const box1TranslationBefore = box1.translation.slice();
 
 E.beginMove(box2, topHitFor(box2));
 assert(E.moveToolState.active, 'move active after begin');
-assert(E.moveToolState.primitive === box2, 'drag bound to box2');
+assert(E.moveToolState.object === box2, 'drag bound to box2');
 
-// Mid-drag: previewMesh updates render node, canonical buffers untouched.
 E.applyMoveDelta(2, 0.5, -1);
-for (let i = 0; i < box2Before.length; i++) {
-    assert(Math.abs(box2.positions[i] - box2Before[i]) < 1e-5,
-        `preview does not mutate canonical positions (idx ${i})`);
+// Local positions untouched — only translation changed.
+for (let i = 0; i < box2PositionsBefore.length; i++) {
+    assert(box2.positions[i] === box2PositionsBefore[i],
+        `local positions unchanged during move (idx ${i})`);
 }
-
-// --- Commit ----------------------------------------------------------------
+assert(Math.abs(box2.translation[0] - (box2TranslationBefore[0] + 2)) < 1e-5,
+    'mid-drag translation.x += 2');
+assert(Math.abs(box2.translation[1] - (box2TranslationBefore[1] + 0.5)) < 1e-5,
+    'mid-drag translation.y += 0.5');
+assert(Math.abs(box2.translation[2] - (box2TranslationBefore[2] - 1)) < 1e-5,
+    'mid-drag translation.z -= 1');
 
 E.commitMove();
 assert(!E.moveToolState.active, 'move inactive after commit');
 
-// Every vertex shifted by the delta.
-for (let i = 0; i < box2Before.length; i += 3) {
-    assert(Math.abs(box2.positions[i    ] - (box2Before[i    ] + 2 )) < 1e-5,
-        `vertex ${i/3} x shifted by 2`);
-    assert(Math.abs(box2.positions[i + 1] - (box2Before[i + 1] + 0.5)) < 1e-5,
-        `vertex ${i/3} y shifted by 0.5`);
-    assert(Math.abs(box2.positions[i + 2] - (box2Before[i + 2] - 1 )) < 1e-5,
-        `vertex ${i/3} z shifted by -1`);
+// Local buffers remain identical after commit.
+for (let i = 0; i < box2PositionsBefore.length; i++) {
+    assert(box2.positions[i] === box2PositionsBefore[i],
+        `post-commit local positions unchanged (idx ${i})`);
 }
-
-// Translation preserves indices and normals exactly.
-assert(box2.indices.length === box2IndicesBefore.length, 'indices length unchanged');
-for (let i = 0; i < box2IndicesBefore.length; i++) {
-    assert(box2.indices[i] === box2IndicesBefore[i],
-        `index ${i} unchanged`);
-}
-assert(box2.normals.length === box2NormalsBefore.length, 'normals length unchanged');
-for (let i = 0; i < box2NormalsBefore.length; i++) {
-    assert(Math.abs(box2.normals[i] - box2NormalsBefore[i]) < 1e-5,
-        `normal ${i} unchanged after translate`);
-}
+// Translation persists post-commit.
+assert(Math.abs(box2.translation[0] - (box2TranslationBefore[0] + 2)) < 1e-5,
+    'post-commit translation.x = start + 2');
 
 // Box1 untouched.
-for (let i = 0; i < box1Before.length; i++) {
-    assert(Math.abs(box1.positions[i] - box1Before[i]) < 1e-5,
-        `non-target box1 unchanged (idx ${i})`);
+for (let i = 0; i < 3; i++) {
+    assert(box1.translation[i] === box1TranslationBefore[i],
+        `box1 translation unchanged (axis ${i})`);
+}
+assert(box2.faceGroups.groups.length === 6, 'box2 still 6 face groups');
+
+// World-space raycast follows the new position (box2 now at (5, 0.5, -1);
+// box half-extent = 1, so the +Y face sits at world y = 1.5).
+{
+    const hit = box2.raycastWorld([5, 5, -1], [0, -1, 0], 0);
+    assert(hit, 'world raycast at new box2 center hits');
+    assert(Math.abs(hit.position[1] - 1.5) < 1e-4,
+        `hit y ≈ 1.5 at +Y face top (got ${hit.position[1]})`);
+}
+// And no longer at the original location.
+{
+    const hit = box2.raycastWorld([3, 0, 5], [0, 0, -1], 0);
+    assert(!hit, 'world raycast at original location misses');
 }
 
-// Face groups still 6 (no topology change).
-assert(box2.faceGroups.groups.length === 6,
-    `box2 still 6 face groups after move (got ${box2.faceGroups.groups.length})`);
-
-// BVH rebuilt — raycast at the new center hits.
+// World-space inference geo reflects the new position (cache invalidation).
 {
-    const hit = box2.bvh.raycast(box2.mesh, [5, 0.5, -1], [0, 0, -1], 0);
-    assert(hit, 'BVH rebuilt: raycast at new box2 center hits');
-    assert(Math.abs(hit.position[0] - 5) < 1e-4,
-        `BVH hit x ≈ 5 at new box2 location (got ${hit.position[0]})`);
-}
-// And no longer hits the original location.
-{
-    const hit = box2.bvh.raycast(box2.mesh, [3, 0, 5], [0, 0, -1], 0);
-    assert(!hit, 'BVH rebuilt: original location no longer hit');
-}
-
-// Inference geo rebuilt to the new positions — every endpoint must be at
-// shifted coordinates. Sample one corner: (3+1)+2 = 6 in x.
-{
-    const geo = box2.inferenceGeo;
+    const wg = box2.getWorldInferenceGeo();
     let foundShifted = false;
-    for (let vi = 0; vi < geo.vertCount; vi++) {
-        const x = geo.positions[vi * 3 + 0];
+    for (let vi = 0; vi < wg.vertCount; vi++) {
+        const x = wg.positions[vi * 3 + 0];
+        // box2 is now at (5, 0.5, -1); its +X corners are at x=6.
         if (Math.abs(x - 6) < 1e-4) { foundShifted = true; break; }
     }
-    assert(foundShifted, 'inference geo has an endpoint at the new box2 +X corner');
+    assert(foundShifted, 'world inference geo has endpoint at new +X corner (x=6)');
 }
 
-// --- Cancel rolls back exactly ---------------------------------------------
+// --- Cancel rolls translation back exactly ---------------------------------
 
-const beforeCancel = Array.from(box2.positions);
+const transBeforeCancel = box2.translation.slice();
 E.beginMove(box2, topHitFor(box2));
-E.applyMoveDelta(10, 10, 10);          // anywhere
+E.applyMoveDelta(10, 10, 10);
 E.cancelMove();
 assert(!E.moveToolState.active, 'move inactive after cancel');
-for (let i = 0; i < beforeCancel.length; i++) {
-    assert(Math.abs(box2.positions[i] - beforeCancel[i]) < 1e-5,
-        `cancel restores positions (idx ${i})`);
+for (let i = 0; i < 3; i++) {
+    assert(Math.abs(box2.translation[i] - transBeforeCancel[i]) < 1e-5,
+        `cancel restores translation (axis ${i})`);
 }
 
 // --- Move targets the drag's primitive, not registry.active ----------------
 
 reg.setActive(box1.id);
 assert(reg.active === box1, 'box1 active going in');
-const box1BeforeMove2 = Array.from(box1.positions);
+const box1TransBefore2 = box1.translation.slice();
 
 E.beginMove(box2, topHitFor(box2));
-assert(E.moveToolState.primitive === box2, 'drag bound to box2 even though box1 active');
+assert(E.moveToolState.object === box2, 'drag bound to box2 even though box1 active');
 E.applyMoveDelta(0, 0, 1);
 E.commitMove();
 
-// box1 still untouched.
-for (let i = 0; i < box1BeforeMove2.length; i++) {
-    assert(Math.abs(box1.positions[i] - box1BeforeMove2[i]) < 1e-5,
-        `box1 unchanged when move targeted box2 (idx ${i})`);
+for (let i = 0; i < 3; i++) {
+    assert(box1.translation[i] === box1TransBefore2[i],
+        `box1 translation unchanged when move targeted box2 (axis ${i})`);
 }
 
-// --- Click-release with no motion is a safe no-op (no collapse) ------------
+// --- Click-release with no motion is a safe no-op --------------------------
 
-const beforeNoMotion = Array.from(box2.positions);
+const transNoMotion = box2.translation.slice();
 E.beginMove(box2, topHitFor(box2));
-// Skip applyMoveDelta entirely — the seed at begin should have left the
-// working buffer at start positions.
 E.commitMove();
-for (let i = 0; i < beforeNoMotion.length; i++) {
-    assert(Math.abs(box2.positions[i] - beforeNoMotion[i]) < 1e-5,
-        `click-release with no motion is a no-op (idx ${i})`);
+for (let i = 0; i < 3; i++) {
+    assert(Math.abs(box2.translation[i] - transNoMotion[i]) < 1e-5,
+        `no-motion commit is no-op (axis ${i})`);
 }
 
 // --- Registry exclusion: pickAt + collectInferenceGeos respect excludeId ---
 
 {
-    // Without exclusion: pickAt at box2's center hits box2.
-    const pickAll = reg.pickAt([5, 0.5, 0], [0, 0, -1]);  // box2 currently at x≈5,z≈0
+    // box2 is currently at (5, 0.5, 0) [after chained earlier deltas].
+    // Aim straight down at that spot.
+    const cx = box2.translation[0], cy = box2.translation[1] + 5, cz = box2.translation[2];
+    const pickAll = reg.pickAt([cx, cy, cz], [0, -1, 0]);
     assert(pickAll && pickAll.primitive === box2, 'control: pickAt hits box2');
 
-    // With exclusion: pickAt should miss box2 and return null (no other geometry there).
-    const pickEx = reg.pickAt([5, 0.5, 0], [0, 0, -1], { excludeId: box2.id });
+    const pickEx = reg.pickAt([cx, cy, cz], [0, -1, 0], { excludeId: box2.id });
     assert(!pickEx, 'pickAt with excludeId=box2 misses box2');
 
-    // collectInferenceGeos drops the excluded primitive.
     const geosAll = reg.collectInferenceGeos();
     const geosEx  = reg.collectInferenceGeos({ excludeId: box2.id });
-    assert(geosAll.length === 2, 'all geos returns 2 (box1 + box2)');
+    assert(geosAll.length === 2, 'all geos returns 2');
     assert(geosEx.length === 1,  'excludeId=box2 returns 1 geo');
-    assert(geosEx[0] === box1.inferenceGeo, 'remaining geo is box1');
+    assert(geosEx[0]._owner === box1, 'remaining geo is box1');
 }
 
 // --- Delete-during-drag cancels and doesn't crash --------------------------
-//
-// Outliner delete path calls cancelMove before remove when the drag targets
-// the deleted primitive. Test the cancel + remove sequence directly.
 
 const ghost = reg.create({
     type: 'box',
@@ -202,36 +187,30 @@ const ghost = reg.create({
     params: { sx: 1, sy: 1, sz: 1 },
 });
 E.beginMove(ghost, topHitFor(ghost));
-assert(E.moveToolState.active && E.moveToolState.primitive === ghost,
+assert(E.moveToolState.active && E.moveToolState.object === ghost,
     'move active on ghost');
-// Mirror the outliner path: cancel before destroying so commit on a freed
-// scene node doesn't fire later.
 E.cancelMove();
 reg.remove(ghost.id);
 assert(!E.moveToolState.active, 'move inactive after cancel+remove');
 assert(!reg.getById(ghost.id), 'ghost removed');
 
-// --- Chained moves compose -------------------------------------------------
+// --- Chained moves compose on translation ----------------------------------
 
-const box2Pre = Array.from(box2.positions);
+const transPre = box2.translation.slice();
 E.beginMove(box2, topHitFor(box2));
 E.applyMoveDelta(1, 0, 0);
 E.commitMove();
 E.beginMove(box2, topHitFor(box2));
 E.applyMoveDelta(0, 1, 0);
 E.commitMove();
-for (let i = 0; i < box2Pre.length; i += 3) {
-    assert(Math.abs(box2.positions[i    ] - (box2Pre[i    ] + 1)) < 1e-5,
-        `chained move x shift (vert ${i/3})`);
-    assert(Math.abs(box2.positions[i + 1] - (box2Pre[i + 1] + 1)) < 1e-5,
-        `chained move y shift (vert ${i/3})`);
-}
-
-// --- Cleanup so the GUI starts in a sensible state -------------------------
+assert(Math.abs(box2.translation[0] - (transPre[0] + 1)) < 1e-5,
+    'chained move translation.x += 1');
+assert(Math.abs(box2.translation[1] - (transPre[1] + 1)) < 1e-5,
+    'chained move translation.y += 1');
 
 reg.remove(box2.id);
 
-console.log(`OK — move: translates positions, preserves indices/normals, ` +
-            `BVH+groups+inference rebuild, cancel rolls back, non-target ` +
-            `untouched, drag-targets-its-primitive, exclusion options work, ` +
+console.log(`OK — move: translation-based (no vertex mutation), world ` +
+            `raycast + inference follow the move, cancel restores, ` +
+            `drag-targets-its-object, exclusion options work, ` +
             `cancel-then-remove safe, chained moves compose`);

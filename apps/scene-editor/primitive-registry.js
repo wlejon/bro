@@ -1,109 +1,132 @@
 // =============================================================================
-// PrimitiveRegistry — owns every Primitive in the scene editor and provides
-// selection + lookup + picking across them.
+// SceneRegistry — owns the scene-editor's SceneObject tree.
 //
-// The app queries the registry for:
-//   - active primitive (target of new tool operations by default)
-//   - pickAt(origin, dir): nearest visible-primitive hit under a world ray
-//   - the list of primitives (for outliner rendering + multi-primitive
-//     inference)
+// The registry holds one `root` Group; every Primitive, nested Group, and
+// ComponentInstance lives somewhere under it. For picking + inference the
+// registry flattens the tree to the list of visible leaves (primitives +
+// shadow primitives inside component instances) and runs world-space
+// queries against them.
 //
-// Registry mutations (add/remove/setActive/setVisible/setName) invoke the
-// onChange listener so UI layers like the outliner can refresh without
-// polling. Inference/edges rebuild remain the responsibility of the
-// individual Primitive — the registry only tracks composition.
+// Back-compat: the `primitives` property still returns the flat list of
+// top-level-or-nested Primitive objects (DEPTH-FIRST) so pre-refactor code
+// and tests that iterate `registry.primitives` keep working.
 // =============================================================================
 
 (function (global) {
     'use strict';
 
-    function PrimitiveRegistry(opts) {
-        this.scene = opts.scene;
-        this.primitives = [];
+    function SceneRegistry(opts) {
+        this.scene  = opts.scene;
+        this.root   = new Group({ id: 0, name: '<root>' });
+        this.root._registry = this;
         this.active = null;
         this._nextId = 1;
         this.onChange = null;
+
+        // Edit context: the innermost Group whose children the user is
+        // currently editing. Tools operate on primitives inside this context;
+        // picking returns the outermost object-within-context for a clicked
+        // leaf (SketchUp "enter group to edit its geometry" semantics).
+        this.editContext = this.root;
+
+        // Component definitions — shared subtrees referenced by
+        // ComponentInstance objects. Not placed in the world tree.
+        this.components = [];
     }
 
-    PrimitiveRegistry.prototype.nextId = function () {
+    SceneRegistry.prototype.nextId = function () {
         return this._nextId++;
     };
 
-    PrimitiveRegistry.prototype.add = function (primitive) {
-        this.primitives.push(primitive);
+    // Flat depth-first list of every Primitive in the tree. Rebuilt on each
+    // read (cheap for our sizes); cache later if it becomes a hot path.
+    Object.defineProperty(SceneRegistry.prototype, 'primitives', {
+        get() {
+            const out = [];
+            this.root.traverse(n => { if (n.kind === 'primitive') out.push(n); });
+            return out;
+        },
+    });
+
+    // Every top-level SceneObject directly under the root. Drives the
+    // outliner tree.
+    SceneRegistry.prototype.topLevel = function () {
+        return this.root.children.slice();
+    };
+
+    // --- Primitive add helpers -------------------------------------------
+
+    SceneRegistry.prototype.add = function (primitive, parent) {
+        (parent || this.editContext || this.root).addChild(primitive);
         if (!this.active) this.active = primitive;
         this._emit();
         return primitive;
     };
 
-    // Build + install one Primitive from a mesh-factory spec:
-    //   { type: 'box'|'sphere'|'cylinder'|'plane', params, position, color,
-    //     name }
-    // Convenience wrapper over `new Primitive(...)`; useful for the outliner
-    // "add" dropdown.
-    PrimitiveRegistry.prototype.create = function (spec) {
+    SceneRegistry.prototype.create = function (spec) {
         return this.createWithId(spec, this.nextId());
     };
 
-    // Build + install with a caller-chosen id. Used by history redo so a
-    // freshly re-added primitive keeps the same id across undo/redo cycles —
-    // external references (measureBox lastOp, etc.) stay valid.
-    PrimitiveRegistry.prototype.createWithId = function (spec, id) {
+    SceneRegistry.prototype.createWithId = function (spec, id) {
         const mesh = buildMeshFromSpec(spec);
         const prim = new Primitive({
             id,
-            name:     spec.name,
-            color:    spec.color,
-            scene:    this.scene,
+            name:        spec.name,
+            color:       spec.color,
+            scene:       this.scene,
             mesh,
-            position: spec.position,
+            translation: spec.position || spec.translation,
+            rotation:    spec.rotation,
+            scale:       spec.scale,
         });
         if (id >= this._nextId) this._nextId = id + 1;
-        this.add(prim);
+        this.add(prim, spec.parent);
         return prim;
     };
 
-    // Rebuild a Primitive from a snapshot taken before a destructive
-    // operation (e.g. delete). The snapshot holds raw buffers + metadata;
-    // we seed a fresh Primitive with a disposable mesh, then swap in the
-    // saved geometry via updateGeometry so BVH/face groups/inference all
-    // rebuild correctly. Inserted at the original list index so outliner
-    // order is preserved across undo/redo.
-    PrimitiveRegistry.prototype.restoreFromSnapshot = function (snap) {
+    // Rebuild a Primitive from a snapshot. Restores mesh buffers + TRS.
+    SceneRegistry.prototype.restoreFromSnapshot = function (snap) {
         const mesh = buildMeshFromSpec({ type: 'box', params: { sx: 1, sy: 1, sz: 1 } });
         const prim = new Primitive({
-            id:       snap.id,
-            name:     snap.name,
-            color:    snap.color,
-            scene:    this.scene,
+            id:    snap.id,
+            name:  snap.name,
+            color: snap.color,
+            scene: this.scene,
             mesh,
-            position: [0, 0, 0],
         });
         prim.updateGeometry(snap.positions, snap.indices, snap.normals);
+        if (snap.translation) prim.setTranslation(snap.translation);
+        if (snap.rotation)    prim.setRotation(snap.rotation);
+        if (snap.scale)       prim.setScale(snap.scale);
         prim.setVisible(snap.visible !== false);
-        const idx = Math.max(0, Math.min(snap.index != null ? snap.index : this.primitives.length,
-                                         this.primitives.length));
-        this.primitives.splice(idx, 0, prim);
+        const parent = (snap.parentId != null ? this._findById(snap.parentId) : null)
+                       || this.root;
+        const idx = snap.index != null
+            ? Math.max(0, Math.min(snap.index, parent.children.length))
+            : parent.children.length;
+        parent.children.splice(idx, 0, prim);
+        prim.parent = parent;
+        prim._invalidateWorld();
         if (!this.active) this.active = prim;
         if (snap.id >= this._nextId) this._nextId = snap.id + 1;
         this._emit();
         return prim;
     };
 
-    // Build and install a primitive from raw mesh buffers (vs. a
-    // factory spec). Used by drawing tools where the geometry is
-    // synthesized per-stroke and doesn't correspond to a primitive type.
-    // `meshData` may hold Float32Array / Uint32Array or plain arrays —
-    // typed views are materialized here.
-    PrimitiveRegistry.prototype.createFromMesh = function (spec, meshData, id) {
-        const seedMesh = buildMeshFromSpec({ type: 'box', params: { sx: 1, sy: 1, sz: 1 } });
+    // Build from raw mesh buffers (used by drawing tools).
+    //   spec: { name, color, parent?, translation?, rotation?, scale? }
+    //   meshData: { positions, indices, normals? }  (LOCAL-space)
+    SceneRegistry.prototype.createFromMesh = function (spec, meshData, id) {
+        const seed = buildMeshFromSpec({ type: 'box', params: { sx: 1, sy: 1, sz: 1 } });
         const prim = new Primitive({
             id,
-            name:     spec.name,
-            color:    spec.color,
-            scene:    this.scene,
-            mesh:     seedMesh,
-            position: [0, 0, 0],
+            name:        spec.name,
+            color:       spec.color,
+            scene:       this.scene,
+            mesh:        seed,
+            translation: spec.translation || spec.position,
+            rotation:    spec.rotation,
+            scale:       spec.scale,
         });
         const pos = meshData.positions instanceof Float32Array
             ? meshData.positions : new Float32Array(meshData.positions);
@@ -115,120 +138,244 @@
             : null;
         prim.updateGeometry(pos, idx, nrm);
         if (id >= this._nextId) this._nextId = id + 1;
-        this.primitives.push(prim);
+        (spec.parent || this.editContext || this.root).addChild(prim);
         if (!this.active) this.active = prim;
         this._emit();
         return prim;
     };
 
-    // Capture the current state of a primitive in a form suitable for
-    // restoreFromSnapshot. Buffers are cloned so later mutations to the live
-    // primitive don't bleed into history.
-    PrimitiveRegistry.prototype.snapshotPrimitive = function (prim) {
+    // Capture a SceneObject subtree for history/undo. Recursive — a Group
+    // snapshot contains snapshots for every child.
+    SceneRegistry.prototype.snapshotPrimitive = function (prim) {
         return {
-            id:        prim.id,
-            name:      prim.name,
-            color:     prim.color,
-            visible:   prim.visible,
-            index:     this.primitives.indexOf(prim),
-            positions: new Float32Array(prim.positions),
-            indices:   new Uint32Array(prim.indices),
-            normals:   prim.normals ? new Float32Array(prim.normals) : null,
+            kind:        'primitive',
+            id:          prim.id,
+            name:        prim.name,
+            color:       prim.color,
+            visible:     prim.visible,
+            parentId:    prim.parent && prim.parent !== this.root ? prim.parent.id : null,
+            index:       prim.parent ? prim.parent.children.indexOf(prim) : -1,
+            translation: prim.translation.slice(),
+            rotation:    prim.rotation.slice(),
+            scale:       prim.scale.slice(),
+            positions:   new Float32Array(prim.positions),
+            indices:     new Uint32Array(prim.indices),
+            normals:     prim.normals ? new Float32Array(prim.normals) : null,
         };
     };
 
-    PrimitiveRegistry.prototype.remove = function (id) {
-        const idx = this.primitives.findIndex(p => p.id === id);
-        if (idx < 0) return false;
-        const p = this.primitives[idx];
-        p.destroy();
-        this.primitives.splice(idx, 1);
-        if (this.active === p) this.active = this.primitives[0] || null;
-        this._emit();
-        return true;
-    };
-
-    // Destroy every primitive and reset to empty. Used by project load/new
-    // to wipe the scene before deserializing or seeding defaults. Does NOT
-    // reset `_nextId` — callers who want that (e.g. load) set it explicitly
-    // so restored ids don't collide.
-    PrimitiveRegistry.prototype.clear = function () {
-        for (let i = this.primitives.length - 1; i >= 0; i--) {
-            this.primitives[i].destroy();
+    SceneRegistry.prototype.remove = function (id) {
+        const obj = this._findById(id);
+        if (!obj) return false;
+        if (obj.destroy) obj.destroy();
+        if (this.active === obj) {
+            const rest = this.primitives;
+            this.active = rest[0] || null;
         }
-        this.primitives.length = 0;
+        this._emit();
+        return true;
+    };
+
+    // Destroy every child of root. Does NOT reset _nextId — the project
+    // loader bumps it explicitly after restoring so ids don't collide.
+    SceneRegistry.prototype.clear = function () {
+        for (let i = this.root.children.length - 1; i >= 0; i--) {
+            const c = this.root.children[i];
+            if (c.destroy) c.destroy();
+        }
+        this.root.children.length = 0;
         this.active = null;
+        this.editContext = this.root;
+        this.components = [];
         this._emit();
     };
 
-    PrimitiveRegistry.prototype.setActive = function (id) {
-        const p = this.primitives.find(x => x.id === id);
-        if (!p || this.active === p) return false;
-        this.active = p;
-        this._emit();
-        return true;
-    };
-
-    PrimitiveRegistry.prototype.setVisible = function (id, v) {
-        const p = this.primitives.find(x => x.id === id);
-        if (!p) return false;
-        p.setVisible(v);
+    SceneRegistry.prototype.setActive = function (id) {
+        const obj = this._findById(id);
+        if (!obj || this.active === obj) return false;
+        this.active = obj;
         this._emit();
         return true;
     };
 
-    PrimitiveRegistry.prototype.setName = function (id, name) {
-        const p = this.primitives.find(x => x.id === id);
-        if (!p) return false;
-        p.setName(name);
+    SceneRegistry.prototype.setVisible = function (id, v) {
+        const obj = this._findById(id);
+        if (!obj) return false;
+        obj.setVisible(v);
         this._emit();
         return true;
     };
 
-    PrimitiveRegistry.prototype.getById = function (id) {
-        return this.primitives.find(x => x.id === id) || null;
+    SceneRegistry.prototype.setName = function (id, name) {
+        const obj = this._findById(id);
+        if (!obj) return false;
+        obj.setName(name);
+        this._emit();
+        return true;
     };
 
-    // Nearest-primitive raycast. Returns { primitive, hit } or null.
-    // Iterates visible primitives only — hidden primitives don't receive
-    // input (matches their absence from the render). `opts.excludeId` skips
-    // a specific primitive (e.g. the Move tool excludes the moving primitive
-    // so the cursor can target geometry under it without self-hitting).
-    PrimitiveRegistry.prototype.pickAt = function (origin, dir, opts) {
+    SceneRegistry.prototype.getById = function (id) {
+        return this._findById(id);
+    };
+
+    SceneRegistry.prototype._findById = function (id) {
+        let found = null;
+        this.root.traverse(n => { if (!found && n.id === id) found = n; });
+        return found;
+    };
+
+    // Nearest-primitive world-space raycast. Walks visible leaves under the
+    // root (not just the edit context — picking sees everything but results
+    // are promoted to the outermost object within the current edit context).
+    SceneRegistry.prototype.pickAt = function (origin, dir, opts) {
         const excludeId = opts && opts.excludeId;
         let best = null;
-        for (const p of this.primitives) {
-            if (!p.visible) continue;
-            if (excludeId != null && p.id === excludeId) continue;
-            const hit = p.bvh.raycast(p.mesh, origin, dir, 0);
-            if (!hit) continue;
+        const self = this;
+        this.root.traverseLeaves(function (leaf) {
+            if (!leaf.isEffectivelyVisible()) return;
+            if (excludeId != null && leaf.id === excludeId) return;
+            if (leaf.kind !== 'primitive' && leaf.kind !== 'component-instance') return;
+            // Component instances have no geometry themselves — their mirror
+            // primitives are the actual leaves; traverseLeaves already yields
+            // those (they have kind==='primitive').
+            const hit = leaf.raycastWorld(origin, dir, 0);
+            if (!hit) return;
             if (!best || hit.distance < best.hit.distance) {
-                best = { primitive: p, hit };
+                best = { primitive: leaf, hit };
             }
-        }
+        });
+        if (!best) return null;
+        // Promote to outermost object inside the current edit context.
+        const outer = best.primitive.ancestorInContext(this.editContext);
+        best.object = outer;
         return best;
     };
 
-    // All visible-primitive inference geos — used by Inference.findSnap to
-    // scan every visible primitive's snap features in one pass.
-    // `opts.excludeId` filters out a specific primitive (Move tool uses this
-    // so it doesn't snap to the moving primitive's stale pre-drag features).
-    PrimitiveRegistry.prototype.collectInferenceGeos = function (opts) {
+    // Every visible leaf's world-space inference geo. Used by Inference.findSnap.
+    SceneRegistry.prototype.collectInferenceGeos = function (opts) {
         const excludeId = opts && opts.excludeId;
         const out = [];
-        for (const p of this.primitives) {
-            if (!p.visible) continue;
-            if (excludeId != null && p.id === excludeId) continue;
-            out.push(p.inferenceGeo);
-        }
+        this.root.traverseLeaves(function (leaf) {
+            if (!leaf.isEffectivelyVisible()) return;
+            if (excludeId != null && leaf.id === excludeId) return;
+            if (leaf.kind !== 'primitive') return;
+            out.push(leaf.getWorldInferenceGeo());
+        });
         return out;
     };
 
-    PrimitiveRegistry.prototype._emit = function () {
+    // --- Group / ungroup --------------------------------------------------
+
+    // Wrap the given objects in a new Group parented where they currently
+    // live (uses the first object's parent). World transforms preserved.
+    // Returns the new Group.
+    SceneRegistry.prototype.createGroup = function (members, opts) {
+        if (!members || members.length === 0) return null;
+        const parent = members[0].parent || this.editContext || this.root;
+        const group = new Group({
+            id:   this.nextId(),
+            name: (opts && opts.name) || 'Group',
+        });
+        parent.addChild(group);
+        for (const m of members) m.reparentPreservingWorld(group);
+        this.active = group;
+        this._emit();
+        return group;
+    };
+
+    // Unwrap a Group: move each child up to the group's parent preserving
+    // world transform, then destroy the Group.
+    SceneRegistry.prototype.explodeGroup = function (group) {
+        if (!group || group.kind !== 'group' || group === this.root) return false;
+        const parent = group.parent || this.root;
+        const freed = group.children.slice();
+        for (const c of freed) c.reparentPreservingWorld(parent);
+        if (group.destroy) group.destroy();
+        if (this.active === group) this.active = freed[0] || null;
+        this._emit();
+        return true;
+    };
+
+    // Make a ComponentDefinition from a selection or existing Group. The
+    // selected subtree is moved into the definition (re-parented under the
+    // definition root), then one ComponentInstance is placed at the original
+    // location pointing at the definition.
+    SceneRegistry.prototype.makeComponent = function (members, opts) {
+        if (!members || members.length === 0) return null;
+        const parent = members[0].parent || this.editContext || this.root;
+        const def = new ComponentDefinition({
+            id:   this.nextId(),
+            name: (opts && opts.name) || 'Component',
+        });
+        for (const m of members) m.reparentPreservingWorld(def.root);
+        this.components.push(def);
+        const inst = new ComponentInstance({
+            id:         this.nextId(),
+            name:       def.name,
+            scene:      this.scene,
+            definition: def,
+        });
+        parent.addChild(inst);
+        this.active = inst;
+        this._emit();
+        return { definition: def, instance: inst };
+    };
+
+    // Insert another instance of an existing definition at `translation`.
+    SceneRegistry.prototype.insertComponent = function (def, opts) {
+        opts = opts || {};
+        const inst = new ComponentInstance({
+            id:          this.nextId(),
+            name:        def.name,
+            scene:       this.scene,
+            definition:  def,
+            translation: opts.translation,
+            rotation:    opts.rotation,
+            scale:       opts.scale,
+        });
+        (opts.parent || this.editContext || this.root).addChild(inst);
+        this.active = inst;
+        this._emit();
+        return inst;
+    };
+
+    // --- Edit context ----------------------------------------------------
+
+    SceneRegistry.prototype.enterContext = function (obj) {
+        if (obj.kind === 'group') {
+            this.editContext = obj;
+        } else if (obj.kind === 'component-instance') {
+            // Editing an instance opens its definition's root.
+            this.editContext = obj.definition.root;
+            this.editContext._editingInstance = obj;
+        } else {
+            return false;
+        }
+        this._emit();
+        return true;
+    };
+
+    SceneRegistry.prototype.exitContext = function () {
+        if (this.editContext === this.root) return false;
+        // If we're editing a component definition, jump back to its instance's
+        // parent context. Otherwise just walk up.
+        if (this.editContext._editingInstance) {
+            const inst = this.editContext._editingInstance;
+            this.editContext._editingInstance = null;
+            inst.definition.markDefinitionDirty();
+            this.editContext = inst.parent || this.root;
+        } else {
+            this.editContext = this.editContext.parent || this.root;
+        }
+        this._emit();
+        return true;
+    };
+
+    SceneRegistry.prototype._emit = function () {
         if (this.onChange) this.onChange();
     };
 
-    // --- Mesh-from-spec factory --------------------------------------------
+    // --- Mesh-from-spec factory ------------------------------------------
 
     function buildMeshFromSpec(spec) {
         const type = spec.type;
@@ -245,10 +392,13 @@
         if (type === 'plane') {
             return Mesh.plane(p.w || 2, p.d || 2, p.sx || 1, p.sz || 1);
         }
-        throw new Error('PrimitiveRegistry.create: unknown spec.type "' + type + '"');
+        throw new Error('SceneRegistry.create: unknown spec.type "' + type + '"');
     }
 
-    global.PrimitiveRegistry = PrimitiveRegistry;
+    global.SceneRegistry     = SceneRegistry;
+    // Back-compat alias.
+    global.PrimitiveRegistry = SceneRegistry;
+    global.SceneRegistry.buildMeshFromSpec = buildMeshFromSpec;
     global.PrimitiveRegistry.buildMeshFromSpec = buildMeshFromSpec;
 
 })(typeof globalThis !== 'undefined' ? globalThis : this);

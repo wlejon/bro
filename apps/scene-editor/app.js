@@ -21,7 +21,7 @@ const snapMarker = document.getElementById('snap-marker');
 // bindings. The default scene seeds one box (same as the spike) so existing
 // tests and the on-open experience stay identical.
 
-const registry = new PrimitiveRegistry({ scene });
+const registry = new SceneRegistry({ scene });
 
 // Default scene factory — called at startup and from project.new() to reset
 // to a blank slate. One box at the origin matches the pre-project behavior.
@@ -57,6 +57,19 @@ function clearHighlight() {
     highlightPrimitive = null;
     highlightTris = null;
     highlightNormal = null;
+}
+
+// Copy a Primitive's composed world-transform onto an arbitrary scene node.
+// Used for overlays (highlight, edges) that carry the primitive's local-
+// space geometry but need to render under the same transform.
+function applyPrimitiveTransformToNode(node, prim) {
+    if (!node || !prim) return;
+    const w = prim.getWorldMatrix();
+    const dec = Mat4Lib.decomposeTRS(w);
+    const eul = Mat4Lib.quatToEuler(dec.rotation);
+    node.x = dec.translation[0]; node.y = dec.translation[1]; node.z = dec.translation[2];
+    node.rotationX = eul[0]; node.rotationY = eul[1]; node.rotationZ = eul[2];
+    node.scaleX = dec.scale[0]; node.scaleY = dec.scale[1]; node.scaleZ = dec.scale[2];
 }
 
 // Build a highlight scene node from triangle indices into `primitive`. The
@@ -97,19 +110,26 @@ function setHighlightTriangles(primitive, triIndices, normal, positionsSrc, indi
         emissive: 0.6,
         name: 'highlight',
     });
+    applyPrimitiveTransformToNode(highlightNode, primitive);
     highlightPrimitive = primitive;
     highlightTris      = triIndices;
     highlightNormal    = normal;
 }
 
-// Rebuild the current highlight against a different positions buffer, keeping
-// the picked tri indices + face normal. No-op if there's no active highlight.
+// Refresh the highlight. With `positionsSrc` supplied, rebuild the triangles
+// from the given local buffers (push/pull surgery path — the tri set shifts
+// around as the mesh mutates). Without, just re-sync the overlay node's
+// transform to the primitive's current TRS — used by move/rotate/scale, which
+// don't change the local triangle set, only the composed world transform.
 function refreshHighlight(positionsSrc, indicesSrc) {
     if (!highlightPrimitive || !highlightTris || !highlightNormal) return;
-    const prim = highlightPrimitive;
-    const tris = highlightTris;
-    const normal = highlightNormal;
-    setHighlightTriangles(prim, tris, normal, positionsSrc, indicesSrc);
+    if (positionsSrc) {
+        setHighlightTriangles(
+            highlightPrimitive, highlightTris, highlightNormal,
+            positionsSrc, indicesSrc);
+    } else if (highlightNode) {
+        applyPrimitiveTransformToNode(highlightNode, highlightPrimitive);
+    }
 }
 
 function setHighlightTriangle(primitive, triIndex, normal) {
@@ -166,26 +186,64 @@ const sceneAxesNode = scene.createMesh({
 
 const history = new History({ limit: 200 });
 
+// Lightweight TRS capture for pure-transform history (move/rotate/scale).
+// Works on any SceneObject — groups, primitives, component instances.
+function captureTransform(obj) {
+    return {
+        translation: obj.translation.slice(),
+        rotation:    obj.rotation.slice(),
+        scale:       obj.scale.slice(),
+    };
+}
+function applyTransform(obj, snap) {
+    obj.setTRS(snap.translation, snap.rotation, snap.scale);
+}
+function transformChanged(prev, obj) {
+    if (!prev) return false;
+    for (let i = 0; i < 3; i++) {
+        if (prev.translation[i] !== obj.translation[i]) return true;
+        if (prev.scale[i]       !== obj.scale[i])       return true;
+    }
+    for (let i = 0; i < 4; i++) {
+        if (prev.rotation[i] !== obj.rotation[i]) return true;
+    }
+    return false;
+}
+
 function captureMesh(prim) {
     return {
-        positions: new Float32Array(prim.positions),
-        indices:   new Uint32Array(prim.indices),
-        normals:   prim.normals ? new Float32Array(prim.normals) : null,
+        positions:   new Float32Array(prim.positions),
+        indices:     new Uint32Array(prim.indices),
+        normals:     prim.normals ? new Float32Array(prim.normals) : null,
+        translation: prim.translation.slice(),
+        rotation:    prim.rotation.slice(),
+        scale:       prim.scale.slice(),
     };
 }
 function applyMesh(prim, snap) {
+    // Only rebuild topology if buffer identity changed. Move/rotate/scale
+    // snapshots have buffers === the previous step's buffers (we reference-
+    // clone Float32/Uint32 copies on capture), so we always go through
+    // updateGeometry. updateGeometry rebuilds BVH + face groups + edit mesh
+    // + inference; the transform is applied separately to the node.
     prim.updateGeometry(snap.positions, snap.indices, snap.normals);
-    // Gizmo pivot is recomputed from prim.positions each frame, so it
-    // re-anchors automatically; no explicit refresh needed here.
+    prim.setTRS(snap.translation, snap.rotation, snap.scale);
 }
-// Cheap "did anything change?" check — skips recording no-op drags
-// (zero-distance move, identity rotate/scale, zero push-pull).
+// "Did anything visible change?" — buffers OR transform. Skips recording no-
+// op drags (zero-distance move, identity rotate/scale, zero push-pull).
 function meshChanged(prev, prim) {
     if (!prev) return false;
     if (prev.positions.length !== prim.positions.length) return true;
     if (prev.indices.length   !== prim.indices.length)   return true;
     const a = prev.positions, b = prim.positions;
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return true;
+    for (let i = 0; i < 3; i++) {
+        if (prev.translation[i] !== prim.translation[i]) return true;
+        if (prev.scale[i]       !== prim.scale[i])       return true;
+    }
+    for (let i = 0; i < 4; i++) {
+        if (prev.rotation[i] !== prim.rotation[i]) return true;
+    }
     return false;
 }
 
@@ -196,43 +254,148 @@ function meshChanged(prev, prim) {
 // Binary sidecars under `my-scene.bro/assets/` are a future optimization
 // once files grow big enough for embedded arrays to feel slow.
 
-const PROJECT_SCHEMA = 1;
+// Schema 2: full SceneObject tree (TRS + kind + children); replaces schema 1's
+// flat primitive list. No legacy migration path — this branch isn't shipped
+// yet.
+const PROJECT_SCHEMA = 2;
+
+function _serializeNode(n) {
+    const base = {
+        id:          n.id,
+        name:        n.name,
+        visible:     n.visible,
+        kind:        n.kind,
+        translation: Array.from(n.translation),
+        rotation:    Array.from(n.rotation),
+        scale:       Array.from(n.scale),
+    };
+    if (n.kind === 'primitive') {
+        base.color     = n.color;
+        base.positions = Array.from(n.positions);
+        base.indices   = Array.from(n.indices);
+        base.normals   = n.normals ? Array.from(n.normals) : null;
+    } else if (n.kind === 'component-instance') {
+        base.definitionId = n.definition ? n.definition.id : null;
+    } else {
+        base.children = n.children.map(_serializeNode);
+    }
+    return base;
+}
+
+function _serializeComponent(def) {
+    return {
+        id:   def.id,
+        name: def.name,
+        // The component's root is a Group whose children form the shared
+        // subtree; serialize as a synthetic node tree.
+        root: _serializeNode(def.root),
+    };
+}
 
 function serializeScene() {
+    const tree = { children: registry.root.children.map(_serializeNode) };
+    // Also project a flat `primitives` array — depth-first over all
+    // primitive leaves in the tree. Convenience for tests + tooling that
+    // iterates primitives without walking the hierarchy. The canonical
+    // structure is still `tree`.
+    const flat = [];
+    (function walk(node) {
+        if (node.kind === 'primitive') flat.push(node);
+        else if (node.children) node.children.forEach(walk);
+    })(tree);
     return {
-        primitives: registry.primitives.map((p) => ({
-            id:        p.id,
-            name:      p.name,
-            color:     p.color,
-            visible:   p.visible,
-            positions: Array.from(p.positions),
-            indices:   Array.from(p.indices),
-            normals:   p.normals ? Array.from(p.normals) : null,
-        })),
+        components: registry.components.map(_serializeComponent),
+        tree,
+        primitives: flat,
         activeId:   registry.active ? registry.active.id : null,
         nextAddX:   _outlinerNextAddX,
     };
 }
 
+function _deserializeNodeInto(parent, data, componentsById) {
+    if (data.kind === 'primitive') {
+        // Tree is loaded top-down; attach directly to the already-constructed
+        // parent instead of routing through restoreFromSnapshot's id-based
+        // parent resolution (descendants' ids aren't known yet at top).
+        const seed = SceneRegistry.buildMeshFromSpec(
+            { type: 'box', params: { sx: 1, sy: 1, sz: 1 } });
+        const prim = new Primitive({
+            id:          data.id,
+            name:        data.name,
+            color:       data.color,
+            scene:       registry.scene,
+            mesh:        seed,
+            translation: data.translation,
+            rotation:    data.rotation,
+            scale:       data.scale,
+        });
+        prim.updateGeometry(
+            new Float32Array(data.positions),
+            new Uint32Array(data.indices),
+            data.normals ? new Float32Array(data.normals) : null);
+        prim.setVisible(data.visible !== false);
+        parent.addChild(prim);
+        if (data.id >= registry._nextId) registry._nextId = data.id + 1;
+        return prim;
+    }
+    if (data.kind === 'component-instance') {
+        const def = componentsById.get(data.definitionId);
+        if (!def) return null;
+        const inst = new ComponentInstance({
+            id:          data.id,
+            name:        data.name,
+            scene:       registry.scene,
+            definition:  def,
+            translation: data.translation,
+            rotation:    data.rotation,
+            scale:       data.scale,
+            visible:     data.visible,
+        });
+        parent.addChild(inst);
+        if (data.id >= registry._nextId) registry._nextId = data.id + 1;
+        return inst;
+    }
+    // Group (or the synthetic root wrapper).
+    const g = new Group({
+        id:          data.id,
+        name:        data.name,
+        visible:     data.visible,
+        translation: data.translation,
+        rotation:    data.rotation,
+        scale:       data.scale,
+    });
+    parent.addChild(g);
+    if (data.id >= registry._nextId) registry._nextId = data.id + 1;
+    if (data.children) {
+        for (const c of data.children) _deserializeNodeInto(g, c, componentsById);
+    }
+    return g;
+}
+
 function deserializeScene(data) {
     registry.clear();
     clearHighlight();
-    // Blow the id counter back down to 1; each restoreFromSnapshot will
-    // bump it past any restored id.
     registry._nextId = 1;
-    for (let i = 0; i < data.primitives.length; i++) {
-        const p = data.primitives[i];
-        registry.restoreFromSnapshot({
-            id:        p.id,
-            name:      p.name,
-            color:     p.color,
-            visible:   p.visible,
-            index:     i,
-            positions: new Float32Array(p.positions),
-            indices:   new Uint32Array(p.indices),
-            normals:   p.normals ? new Float32Array(p.normals) : null,
-        });
+
+    // Components first — instances reference them by id.
+    const componentsById = new Map();
+    if (data.components) {
+        for (const cd of data.components) {
+            const def = new ComponentDefinition({ id: cd.id, name: cd.name });
+            if (cd.id >= registry._nextId) registry._nextId = cd.id + 1;
+            // Populate definition.root's children from serialized children.
+            if (cd.root && cd.root.children) {
+                for (const c of cd.root.children) _deserializeNodeInto(def.root, c, componentsById);
+            }
+            registry.components.push(def);
+            componentsById.set(def.id, def);
+        }
     }
+
+    if (data.tree && data.tree.children) {
+        for (const c of data.tree.children) _deserializeNodeInto(registry.root, c, componentsById);
+    }
+
     if (data.activeId != null) {
         const t = registry.getById(data.activeId);
         if (t) registry.active = t;
@@ -278,6 +441,22 @@ function applyCamera() {
 applyCamera();
 
 // --- Screen → world ray -----------------------------------------------------
+
+// Transform a world-space ray into a primitive's LOCAL frame. Direction is
+// re-normalized so the local ray is unit-length; any non-uniform scale in
+// the primitive's transform is absorbed into a `worldPerLocal` factor so
+// callers can map local t-values back to world distance if they need to.
+function worldRayToLocal(ray, prim) {
+    const inv = prim.getWorldInverse();
+    const o = Mat4Lib.transformPoint(inv, ray.origin);
+    const d = Mat4Lib.transformDir(inv, ray.dir);
+    const L = Math.hypot(d[0], d[1], d[2]) || 1;
+    return {
+        origin: o,
+        dir:    [d[0]/L, d[1]/L, d[2]/L],
+        worldPerLocal: L,
+    };
+}
 
 function screenToRay(px, py) {
     const opts = Camera.orbitViewOpts(cam, canvas);
@@ -658,9 +837,9 @@ function surgicalPushPull(snap, gIdx, axis, t) {
 
 // Begin push/pull. Snapshots the primitive's current mesh + face groups so
 // every applyPushPull tick rebuilds from the same source — no incremental
-// state between frames. (The primitive reference is captured on pushpull
-// itself, so a mid-drag active-primitive change in the outliner doesn't
-// redirect the commit.)
+// state between frames. Axis and pivot are stored in the primitive's LOCAL
+// space (surgery mutates local positions); each frame converts the world
+// ray / snap position into local before running the distance math.
 function beginPushPull(primitive, hit) {
     if (!primitive) return;
     const gIdx = primitive.faceGroups.triToGroup[hit.triangleIndex];
@@ -670,8 +849,12 @@ function beginPushPull(primitive, hit) {
     pushpull.primitive = primitive;
     pushpull.prevMesh = captureMesh(primitive);
     pushpull.groupIdx = gIdx;
+    // g.normal is local. hit._localPosition is the raycast hit expressed
+    // in primitive-local space (populated by Primitive.raycastWorld).
     pushpull.axis = g.normal.slice();
-    pushpull.pivot = hit.position.slice();
+    pushpull.pivot = hit._localPosition
+        ? hit._localPosition.slice()
+        : primitive.worldToLocalPoint(hit.position);
     pushpull.distance = 0;
     pushpull.faceTriangles = g.tris.slice();
 
@@ -688,6 +871,9 @@ function beginPushPull(primitive, hit) {
     pushpull.workingTriToGroup = null;
     pushpull.workingFaceTris  = null;
 
+    // Highlight overlay is rendered through the primitive's scene node, so
+    // it already inherits the primitive's transform — use LOCAL axis +
+    // LOCAL positions.
     setHighlightTriangles(primitive, pushpull.faceTriangles, pushpull.axis);
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
@@ -744,15 +930,19 @@ function commitPushPull() {
         renderMeasureBox();
         return;
     }
+    // lastOp is stored in WORLD space (the redo handler receives a world
+    // reference normal + centroid and asks the primitive to re-locate the
+    // face group). pushpull.axis is local, so transform it out to world.
+    const worldAxis = prim.localToWorldNormal(pushpull.axis);
     const lastOp = {
         primitiveId: prim.id,
-        normal: pushpull.axis.slice(),
-        centroid: prim.faceGroupCentroid(pushpull.groupIdx),
+        normal:      worldAxis,
+        centroid:    prim.faceGroupCentroid(pushpull.groupIdx),
         distance,
     };
-    lastOp.centroid[0] += pushpull.axis[0] * distance;
-    lastOp.centroid[1] += pushpull.axis[1] * distance;
-    lastOp.centroid[2] += pushpull.axis[2] * distance;
+    lastOp.centroid[0] += worldAxis[0] * distance;
+    lastOp.centroid[1] += worldAxis[1] * distance;
+    lastOp.centroid[2] += worldAxis[2] * distance;
 
     const newPositions = new Float32Array(pushpull.workingPositions);
     const newIndices   = new Uint32Array(pushpull.workingIndices);
@@ -822,30 +1012,32 @@ function clearPushPull() {
 
 const moveToolState = MoveTool.createState();
 
-function beginMove(primitive, hit) {
-    if (!primitive || !hit) return;
-    moveToolState.prevMesh = captureMesh(primitive);
-    MoveTool.begin(moveToolState, primitive, hit.position, cameraForward());
-    pickInfo.textContent = `move  [${primitive.name}]  0`;
+function beginMove(object, hit) {
+    if (!object || !hit) return;
+    // Pure-transform move — snapshot TRS only, not mesh buffers. Move tool
+    // operates on any SceneObject (primitive, group, component instance).
+    moveToolState.prevTransform = captureTransform(object);
+    MoveTool.begin(moveToolState, object, hit.position, cameraForward());
+    pickInfo.textContent = `move  [${object.name}]  0`;
 }
 
 function commitMove() {
     if (!moveToolState.active) return;
-    const prim = moveToolState.primitive;
-    const prevMesh = moveToolState.prevMesh;
+    const obj = moveToolState.object;
+    const prevT = moveToolState.prevTransform;
     const result = MoveTool.commit(moveToolState);
     if (result) {
         const d = result.delta;
-        pickInfo.textContent = `moved [${result.primitive.name}] by ` +
+        pickInfo.textContent = `moved [${result.object.name}] by ` +
             `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
-        if (meshChanged(prevMesh, prim)) {
-            const nextMesh = captureMesh(prim);
+        if (transformChanged(prevT, obj)) {
+            const nextT = captureTransform(obj);
             history.record('Move',
-                () => applyMesh(prim, nextMesh),
-                () => applyMesh(prim, prevMesh));
+                () => applyTransform(obj, nextT),
+                () => applyTransform(obj, prevT));
         }
     }
-    moveToolState.prevMesh = null;
+    moveToolState.prevTransform = null;
     showSnapMarker(null);
     clearHighlight();
     updateGizmoForActive();
@@ -854,7 +1046,7 @@ function commitMove() {
 function cancelMove() {
     if (!moveToolState.active) return;
     MoveTool.cancel(moveToolState);
-    moveToolState.prevMesh = null;
+    moveToolState.prevTransform = null;
     pickInfo.textContent = 'move cancelled';
     showSnapMarker(null);
     clearHighlight();
@@ -1464,7 +1656,7 @@ function eraseFace(primitive, groupIdx) {
     if (pushpull.active && pushpull.primitive && pushpull.primitive.id === primitive.id) {
         cancelPushPull();
     }
-    if (moveToolState.active && moveToolState.primitive && moveToolState.primitive.id === primitive.id) {
+    if (moveToolState.active && moveToolState.object && moveToolState.object.id === primitive.id) {
         cancelMove();
     }
     if (highlightPrimitive && highlightPrimitive.id === primitive.id) clearHighlight();
@@ -1481,7 +1673,7 @@ function deletePrimitive(p) {
     if (pushpull.active && pushpull.primitive && pushpull.primitive.id === p.id) {
         cancelPushPull();
     }
-    if (moveToolState.active && moveToolState.primitive && moveToolState.primitive.id === p.id) {
+    if (moveToolState.active && moveToolState.object && moveToolState.object.id === p.id) {
         cancelMove();
     }
     if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
@@ -1496,24 +1688,32 @@ function deletePrimitive(p) {
 const gizmoDrag = {
     active:      false,
     mode:        'translate',  // 'translate'|'rotate'|'scale'
-    primitive:   null,    // captured at begin — drag stays bound here
+    primitive:   null,    // back-compat alias for `object`; captured at begin
+    object:      null,    // any SceneObject: primitive, group, or instance
     axis:        [0, 0, 0],
     pivot:       [0, 0, 0],
     totalDelta:  [0, 0, 0], // accumulated world-space translate delta
-    prevMesh:    null,      // buffers at begin — captured for undo
+    prevTransform: null,    // TRS at drag start — used for undo
 };
 
-function primCentroid(prim) {
-    const P = prim.positions;
-    let minX =  Infinity, minY =  Infinity, minZ =  Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-    for (let i = 0; i < P.length; i += 3) {
-        const x = P[i], y = P[i + 1], z = P[i + 2];
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-        if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+// World-space bbox centroid. Primitive now stores local-space positions —
+// Primitive.worldCentroid() composes through the transform chain. For
+// non-primitive SceneObjects (groups, component instances) we walk the
+// subtree's primitive leaves and average their world centroids.
+function primCentroid(obj) {
+    if (!obj) return [0, 0, 0];
+    if (obj.worldCentroid) return obj.worldCentroid();
+    // Group / component-instance: average of descendant-primitive centroids.
+    let sx = 0, sy = 0, sz = 0, n = 0;
+    obj.traverseLeaves(function (leaf) {
+        if (!leaf.worldCentroid) return;
+        const c = leaf.worldCentroid();
+        sx += c[0]; sy += c[1]; sz += c[2]; n++;
+    });
+    if (n === 0) {
+        return [obj.translation[0], obj.translation[1], obj.translation[2]];
     }
-    return [(minX + maxX) * 0.5, (minY + maxY) * 0.5, (minZ + maxZ) * 0.5];
+    return [sx / n, sy / n, sz / n];
 }
 
 // Keep the gizmo anchored to the active primitive's bbox centroid. Hidden
@@ -1545,36 +1745,27 @@ bro.gizmo.attach({
     position: () => {
         const prim = registry.active;
         if (!prim || !prim.visible) return [0, 0, 0];
-        const c = primCentroid(prim);
-        // During a translate drag, prim.positions hasn't been mutated yet
-        // (previewMesh only updates the rendered buffers), so add the
-        // accumulated delta so the gizmo follows the moving geometry —
-        // standard DCC behavior (Blender / Maya / Unity / SketchUp).
-        //
-        // Rotate / scale preserve the centroid (rotate is rigid; scale is
-        // anchored at the centroid), so the raw centroid is already correct
-        // for those modes.
-        if (gizmoDrag.active && gizmoDrag.mode === 'translate' &&
-            gizmoDrag.primitive && gizmoDrag.primitive.id === prim.id) {
-            c[0] += gizmoDrag.totalDelta[0];
-            c[1] += gizmoDrag.totalDelta[1];
-            c[2] += gizmoDrag.totalDelta[2];
-        }
-        return c;
+        // With TRS-based tools, transforms mutate the SceneObject directly,
+        // so the composed world centroid already reflects the drag state —
+        // no manual totalDelta fixup needed (move/rotate/scale all route
+        // through setTranslation/setRotation/setScale which invalidate the
+        // world matrix).
+        return primCentroid(prim);
     },
     beginDrag: () => {
-        const prim = registry.active;
-        if (!prim) return;
+        const obj = registry.active;
+        if (!obj) return;
         const mode = GIZMO_TOOLS[currentTool] || 'translate';
-        const axisName = bro.gizmo.hovered;  // 'x'|'y'|'z'|'center' (locked on drag)
+        const axisName = bro.gizmo.hovered;
         const axis = axisName === 'x' ? [1, 0, 0]
                   : axisName === 'y' ? [0, 1, 0]
                   : axisName === 'z' ? [0, 0, 1]
                   :                    [0, 0, 0];
-        const c = primCentroid(prim);
+        const c = primCentroid(obj);
         gizmoDrag.active = true;
         gizmoDrag.mode = mode;
-        gizmoDrag.primitive = prim;
+        gizmoDrag.primitive = obj;   // back-compat alias
+        gizmoDrag.object    = obj;
         gizmoDrag.axis[0] = axis[0];
         gizmoDrag.axis[1] = axis[1];
         gizmoDrag.axis[2] = axis[2];
@@ -1584,12 +1775,12 @@ bro.gizmo.attach({
         gizmoDrag.totalDelta[0] = 0;
         gizmoDrag.totalDelta[1] = 0;
         gizmoDrag.totalDelta[2] = 0;
-        gizmoDrag.prevMesh = captureMesh(prim);
-        if      (mode === 'translate') MoveTool.begin(moveToolState, prim, c, axis);
-        else if (mode === 'rotate')    RotateTool.begin(rotateToolState, prim, c);
-        else if (mode === 'scale')     ScaleTool.begin(scaleToolState,  prim, c);
+        gizmoDrag.prevTransform = captureTransform(obj);
+        if      (mode === 'translate') MoveTool.begin(moveToolState, obj, c, axis);
+        else if (mode === 'rotate')    RotateTool.begin(rotateToolState, obj, c);
+        else if (mode === 'scale')     ScaleTool.begin(scaleToolState,  obj, c);
         pickInfo.textContent =
-            `gizmo  ${mode}  ${axisName ? axisName.toUpperCase() : ''}  [${prim.name}]`;
+            `gizmo  ${mode}  ${axisName ? axisName.toUpperCase() : ''}  [${obj.name}]`;
     },
     translate: (dx, dy, dz) => {
         if (!gizmoDrag.active || gizmoDrag.mode !== 'translate') return;
@@ -1601,7 +1792,7 @@ bro.gizmo.attach({
             gizmoDrag.totalDelta[1],
             gizmoDrag.totalDelta[2]);
         if (highlightPrimitive && highlightPrimitive.id === gizmoDrag.primitive.id) {
-            refreshHighlight(moveToolState.workingPositions);
+            refreshHighlight();
         }
         const d = gizmoDrag.totalDelta[0] * gizmoDrag.axis[0]
                 + gizmoDrag.totalDelta[1] * gizmoDrag.axis[1]
@@ -1614,7 +1805,7 @@ bro.gizmo.attach({
         if (!gizmoDrag.active || gizmoDrag.mode !== 'rotate') return;
         RotateTool.applyDelta(rotateToolState, qx, qy, qz, qw);
         if (highlightPrimitive && highlightPrimitive.id === gizmoDrag.primitive.id) {
-            refreshHighlight(rotateToolState.workingPositions);
+            refreshHighlight();
         }
         const q = rotateToolState.accumQ;
         const ang = 2 * Math.acos(Math.min(1, Math.abs(q[3])));
@@ -1626,7 +1817,7 @@ bro.gizmo.attach({
         if (!gizmoDrag.active || gizmoDrag.mode !== 'scale') return;
         ScaleTool.applyDelta(scaleToolState, sx, sy, sz);
         if (highlightPrimitive && highlightPrimitive.id === gizmoDrag.primitive.id) {
-            refreshHighlight(scaleToolState.workingPositions);
+            refreshHighlight();
         }
         const a = scaleToolState.accumScale;
         pickInfo.textContent =
@@ -1635,9 +1826,9 @@ bro.gizmo.attach({
     },
     endDrag: () => {
         if (!gizmoDrag.active) return;
-        const movingPrim = gizmoDrag.primitive;
+        const obj = gizmoDrag.object;
         const mode = gizmoDrag.mode;
-        const prevMesh = gizmoDrag.prevMesh;
+        const prevT = gizmoDrag.prevTransform;
         let result = null;
         if      (mode === 'translate') result = MoveTool.commit(moveToolState);
         else if (mode === 'rotate')    result = RotateTool.commit(rotateToolState);
@@ -1645,35 +1836,36 @@ bro.gizmo.attach({
         if (result) {
             if (mode === 'translate') {
                 const d = result.delta;
-                pickInfo.textContent = `moved [${result.primitive.name}] by ` +
+                pickInfo.textContent = `moved [${obj.name}] by ` +
                     `[${d[0].toFixed(3)}, ${d[1].toFixed(3)}, ${d[2].toFixed(3)}]`;
             } else if (mode === 'rotate') {
                 const q = result.quat;
                 const ang = 2 * Math.acos(Math.min(1, Math.abs(q[3])));
-                pickInfo.textContent = `rotated [${result.primitive.name}] by ` +
+                pickInfo.textContent = `rotated [${obj.name}] by ` +
                     `${(ang * 180 / Math.PI).toFixed(1)}\u00B0`;
             } else if (mode === 'scale') {
                 const s = result.scale;
-                pickInfo.textContent = `scaled [${result.primitive.name}] by ` +
+                pickInfo.textContent = `scaled [${obj.name}] by ` +
                     `[${s[0].toFixed(3)}, ${s[1].toFixed(3)}, ${s[2].toFixed(3)}]`;
             }
-            if (meshChanged(prevMesh, movingPrim)) {
-                const nextMesh = captureMesh(movingPrim);
+            if (transformChanged(prevT, obj)) {
+                const nextT = captureTransform(obj);
                 const label = mode === 'translate' ? 'Move'
                             : mode === 'rotate'    ? 'Rotate'
                                                    : 'Scale';
-                const prim = movingPrim;
                 history.record(label,
-                    () => applyMesh(prim, nextMesh),
-                    () => applyMesh(prim, prevMesh));
+                    () => applyTransform(obj, nextT),
+                    () => applyTransform(obj, prevT));
             }
         }
-        if (movingPrim && highlightPrimitive && highlightPrimitive.id === movingPrim.id) {
-            refreshHighlight(movingPrim.positions, movingPrim.indices);
+        if (obj && obj.kind === 'primitive' && highlightPrimitive &&
+            highlightPrimitive.id === obj.id) {
+            refreshHighlight();
         }
         gizmoDrag.active = false;
         gizmoDrag.primitive = null;
-        gizmoDrag.prevMesh = null;
+        gizmoDrag.object    = null;
+        gizmoDrag.prevTransform = null;
         showSnapMarker(null);
         updateGizmoForActive();
     },
@@ -1681,17 +1873,19 @@ bro.gizmo.attach({
 
 function cancelGizmoDrag() {
     if (!gizmoDrag.active) return;
-    const movingPrim = gizmoDrag.primitive;
+    const obj = gizmoDrag.object;
     const mode = gizmoDrag.mode;
     if      (mode === 'translate') MoveTool.cancel(moveToolState);
     else if (mode === 'rotate')    RotateTool.cancel(rotateToolState);
     else if (mode === 'scale')     ScaleTool.cancel(scaleToolState);
-    if (movingPrim && highlightPrimitive && highlightPrimitive.id === movingPrim.id) {
-        refreshHighlight(movingPrim.positions, movingPrim.indices);
+    if (obj && obj.kind === 'primitive' && highlightPrimitive &&
+        highlightPrimitive.id === obj.id) {
+        refreshHighlight();
     }
     gizmoDrag.active = false;
     gizmoDrag.primitive = null;
-    gizmoDrag.prevMesh = null;
+    gizmoDrag.object    = null;
+    gizmoDrag.prevTransform = null;
     pickInfo.textContent = 'gizmo cancelled';
     showSnapMarker(null);
     updateGizmoForActive();
@@ -1867,7 +2061,12 @@ function handleLeftDown(e) {
     window.__lastPick = pick && pick.hit;
     if (currentTool === 'select') {
         if (pick) {
-            registry.setActive(pick.primitive.id);
+            // pick.object is the outermost SceneObject within the current
+            // edit context (a group / component-instance wrapping the clicked
+            // primitive, or the primitive itself if it's at context level).
+            // Highlight still shows the INNERmost face group — feedback stays
+            // pointed at the actual clicked face.
+            registry.setActive(pick.object.id);
             setHighlightFaceGroup(
                 pick.primitive,
                 pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex]);
@@ -1876,15 +2075,18 @@ function handleLeftDown(e) {
         }
     } else if (currentTool === 'pushpull') {
         if (pick) {
-            registry.setActive(pick.primitive.id);
+            // Push/pull always edits primitive-level geometry, so we operate
+            // on the innermost leaf even when it's wrapped in a group —
+            // SketchUp enters the group implicitly for this kind of edit.
+            registry.setActive(pick.object.id);
             beginPushPull(pick.primitive, pick.hit);
         } else {
             clearHighlight();
         }
     } else if (currentTool === 'move') {
         if (pick) {
-            registry.setActive(pick.primitive.id);
-            beginMove(pick.primitive, pick.hit);
+            registry.setActive(pick.object.id);
+            beginMove(pick.object, pick.hit);
         } else {
             clearHighlight();
         }
@@ -2030,32 +2232,34 @@ document.addEventListener('mousemove', (e) => {
         return;
     }
     if (pushpull.active) {
-        // Exclude the pushed primitive from snap resolution — its own
-        // endpoints/midpoints/face are moving targets, not useful snap
-        // references (and visually confusing when the cursor snaps to the
-        // face you're actively dragging). Cross-face-same-primitive snaps
-        // are rare and the simpler "skip the whole primitive" rule reads
-        // as the user expects.
-        const pushId = pushpull.primitive.id;
+        // Pushpull state (axis, pivot) is in the primitive's LOCAL frame;
+        // surgery operates on local positions. Transform the world ray and
+        // any inference snap into the same local frame before running the
+        // distance math, so the result `t` directly feeds surgery.
+        const pushPrim = pushpull.primitive;
+        const pushId = pushPrim.id;
         const vcbVal = MeasureBox.parseValue(measureBoxState.buffer);
         if (vcbVal !== null) {
             showSnapMarker(resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE, pushId));
             return;
         }
         const snap = resolveSnap(cx, cy, ray, false, PUSHPULL_EXCLUDE, pushId);
+        const localRay = worldRayToLocal(ray, pushPrim);
         let dist;
         if (snap) {
-            dist = snapAxisDistance(snap, pushpull.pivot, pushpull.axis);
+            const localSnapPos = pushPrim.worldToLocalPoint(snap.position);
+            dist = snapAxisDistance({ position: localSnapPos },
+                                    pushpull.pivot, pushpull.axis);
             showSnapMarker(snap);
         } else {
-            dist = rayVsAxisDistance(ray, pushpull.pivot, pushpull.axis);
+            dist = rayVsAxisDistance(localRay, pushpull.pivot, pushpull.axis);
             showSnapMarker(null);
         }
         applyPushPull(dist);
         return;
     }
     if (moveToolState.active) {
-        const movingId = moveToolState.primitive.id;
+        const movingId = moveToolState.object.id;
         const snap = resolveSnap(cx, cy, ray, true, null, movingId);
         let target;
         if (snap) {
@@ -2071,7 +2275,7 @@ document.addEventListener('mousemove', (e) => {
         const dy = target[1] - moveToolState.pivot[1];
         const dz = target[2] - moveToolState.pivot[2];
         MoveTool.applyDelta(moveToolState, dx, dy, dz);
-        pickInfo.textContent = `move  [${moveToolState.primitive.name}]  ` +
+        pickInfo.textContent = `move  [${moveToolState.object.name}]  ` +
             `[${dx.toFixed(3)}, ${dy.toFixed(3)}, ${dz.toFixed(3)}]`;
         return;
     }
@@ -2088,7 +2292,18 @@ document.addEventListener('mousemove', (e) => {
 });
 canvas.addEventListener('dblclick', (e) => {
     // Double-click ends the line chain (SketchUp polyline-finish gesture).
-    if (lineToolState.active) { commitLine(); e.preventDefault(); }
+    if (lineToolState.active) { commitLine(); e.preventDefault(); return; }
+    // Otherwise: if we double-clicked a group (or component instance),
+    // enter its edit context — SketchUp-style "drill into group".
+    const r = canvas.getBoundingClientRect();
+    const pick = pickAt(e.clientX - r.left, e.clientY - r.top);
+    if (pick && pick.object &&
+        (pick.object.kind === 'group' || pick.object.kind === 'component-instance') &&
+        pick.object !== registry.editContext) {
+        registry.enterContext(pick.object);
+        pickInfo.textContent = 'entered ' + pick.object.name;
+        e.preventDefault();
+    }
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('auxclick',    (e) => { if (e.button === 1) e.preventDefault(); });
@@ -2202,19 +2417,37 @@ document.addEventListener('keydown', (e) => {
             e.preventDefault();
             return;
         }
+        if (k === 'g' && !e.shiftKey) {
+            groupSelection();
+            e.preventDefault();
+            return;
+        }
+        if (k === 'g' && e.shiftKey) {
+            ungroupSelection();
+            e.preventDefault();
+            return;
+        }
     }
     // Tool selection is driven by the toolbar UI. Only Escape lives as a
     // global shortcut because it's a modal cancel (no tool change).
     if (e.key === 'Escape') {
-        if (gizmoDrag.active)                      cancelGizmoDrag();
-        if (pushpull.active)                       cancelPushPull();
-        if (moveToolState.active)                  cancelMove();
-        if (rotateToolState && rotateToolState.active) RotateTool.cancel(rotateToolState);
-        if (scaleToolState  && scaleToolState.active)  ScaleTool.cancel(scaleToolState);
-        if (rectangleToolState.active)             cancelRectangle();
-        if (circleToolState.active)                cancelCircle();
-        if (lineToolState.active)                  cancelLine();
-        if (tapeToolState.active)                  cancelTape();
+        // A modal gesture takes priority — cancel it. Only if no gesture is
+        // active AND we're inside a group/component edit context, Escape
+        // exits one level of context (SketchUp "pop out" gesture).
+        let cancelled = false;
+        if (gizmoDrag.active)                           { cancelGizmoDrag(); cancelled = true; }
+        if (pushpull.active)                            { cancelPushPull(); cancelled = true; }
+        if (moveToolState.active)                       { cancelMove(); cancelled = true; }
+        if (rotateToolState && rotateToolState.active)  { RotateTool.cancel(rotateToolState); cancelled = true; }
+        if (scaleToolState  && scaleToolState.active)   { ScaleTool.cancel(scaleToolState); cancelled = true; }
+        if (rectangleToolState.active)                  { cancelRectangle(); cancelled = true; }
+        if (circleToolState.active)                     { cancelCircle(); cancelled = true; }
+        if (lineToolState.active)                       { cancelLine(); cancelled = true; }
+        if (tapeToolState.active)                       { cancelTape(); cancelled = true; }
+        if (!cancelled && registry.editContext !== registry.root) {
+            registry.exitContext();
+            pickInfo.textContent = 'exited context';
+        }
     }
 });
 
@@ -2227,8 +2460,107 @@ for (let i = 0; i < toolButtons.length; i++) {
     const btn = toolButtons[i];
     btn.addEventListener('click', () => {
         const t = btn.getAttribute('data-tool');
-        if (t) setTool(t);
+        if (t) { setTool(t); return; }
+        const a = btn.getAttribute('data-action');
+        if (a === 'group')          groupSelection();
+        else if (a === 'ungroup')   ungroupSelection();
+        else if (a === 'make-component') makeComponentFromSelection();
     });
+}
+
+// --- Group / Ungroup / Make Component ---------------------------------------
+//
+// Operate on the current active selection. MVP has single-select; multi-
+// select is a Phase-2-later follow-up. Group wraps the active object in a new
+// Group; ungroup unwraps an active Group; make-component turns the active
+// object into a ComponentDefinition + a single ComponentInstance at the same
+// spot.
+
+function groupSelection() {
+    if (!registry.active) {
+        pickInfo.textContent = 'group: nothing selected';
+        return;
+    }
+    const members = [registry.active];
+    const prev = members.map(m => ({ obj: m, parent: m.parent,
+                                     index: m.parent.children.indexOf(m),
+                                     t: m.translation.slice(),
+                                     r: m.rotation.slice(),
+                                     s: m.scale.slice() }));
+    let created = null;
+    history.do('Group',
+        () => { created = registry.createGroup(members, { name: 'Group' }); },
+        () => {
+            // Undo: explode the group, then restore each member's original
+            // parent + index + TRS (createGroup used reparentPreservingWorld,
+            // which rewrote local TRS for the new parent frame).
+            if (created) registry.explodeGroup(created);
+            for (const p of prev) {
+                if (p.obj.parent !== p.parent) p.parent.addChild(p.obj);
+                p.obj.setTRS(p.t, p.r, p.s);
+            }
+            created = null;
+        });
+    updateGizmoForActive();
+}
+
+function ungroupSelection() {
+    const target = registry.active;
+    if (!target || target.kind !== 'group') {
+        pickInfo.textContent = 'ungroup: no group selected';
+        return;
+    }
+    const parent = target.parent;
+    const index  = parent.children.indexOf(target);
+    const members = target.children.slice();
+    // Capture each child's pre-ungroup local TRS so redo can recreate the
+    // exact group membership + transform.
+    const before = members.map(m => ({ obj: m, t: m.translation.slice(),
+                                       r: m.rotation.slice(),
+                                       s: m.scale.slice() }));
+    const groupTRS = { t: target.translation.slice(),
+                       r: target.rotation.slice(),
+                       s: target.scale.slice() };
+    const groupId = target.id;
+    const groupName = target.name;
+    history.do('Ungroup',
+        () => {
+            registry.explodeGroup(registry.getById(groupId));
+        },
+        () => {
+            // Redo-undo: rebuild the group and re-parent members. Uses
+            // createGroup which relocates via reparentPreservingWorld, then
+            // restores each child's pre-ungroup local TRS explicitly.
+            const g = new Group({ id: groupId, name: groupName,
+                                  translation: groupTRS.t,
+                                  rotation:    groupTRS.r,
+                                  scale:       groupTRS.s });
+            parent.children.splice(index, 0, g);
+            g.parent = parent;
+            for (const rec of before) {
+                if (rec.obj.parent) rec.obj.parent.removeChild(rec.obj);
+                g.addChild(rec.obj);
+                rec.obj.setTRS(rec.t, rec.r, rec.s);
+            }
+            g._invalidateWorld();
+            registry.active = g;
+            registry._emit();
+        });
+    updateGizmoForActive();
+}
+
+function makeComponentFromSelection() {
+    if (!registry.active) {
+        pickInfo.textContent = 'make-component: nothing selected';
+        return;
+    }
+    // For MVP, go through registry.makeComponent directly without history.
+    // Component creation + un-creation round-trip is invasive (move subtree
+    // into definition / back) — supporting undo here requires the same
+    // scaffolding as Group and is left as a follow-up.
+    const r = registry.makeComponent([registry.active], { name: 'Component' });
+    if (r) pickInfo.textContent = 'made component';
+    updateGizmoForActive();
 }
 
 // --- Outliner panel --------------------------------------------------------
@@ -2282,51 +2614,111 @@ function outlinerStartRename(prim, spanEl) {
     spanEl.addEventListener('keydown', onKey);
 }
 
+// Collapsed-state bookkeeping for the tree. Keyed by object id so state
+// survives structural re-renders. A group defaults to expanded.
+const _outlinerCollapsed = new Set();
+
 function outlinerRender() {
     if (!outlinerListEl) return;
     outlinerListEl.innerHTML = '';
-    for (const p of registry.primitives) {
-        const row = document.createElement('div');
-        let cls = 'outliner-row';
-        if (p === registry.active) cls += ' active';
-        if (!p.visible) cls += ' hidden';
-        row.className = cls;
-        row.dataset.id = String(p.id);
-        row.addEventListener('click', () => registry.setActive(p.id));
+    _renderBreadcrumb();
+    for (const child of registry.root.children) {
+        _outlinerRenderNode(child, 0);
+    }
+}
 
-        const vis = document.createElement('button');
-        vis.className = 'outliner-vis';
-        // Filled circle = visible; hollow circle = hidden. Glyph-only keeps
-        // the panel width tight; title gives accessibility text.
-        vis.textContent = p.visible ? '\u25CF' : '\u25CB';
-        vis.title = p.visible ? 'Hide' : 'Show';
-        vis.addEventListener('click', (e) => {
-            e.stopPropagation();
-            registry.setVisible(p.id, !p.visible);
-        });
-        row.appendChild(vis);
+function _renderBreadcrumb() {
+    const el = document.getElementById('context-breadcrumb');
+    if (!el) return;
+    if (registry.editContext === registry.root) { el.textContent = ''; return; }
+    const chain = [];
+    let n = registry.editContext;
+    while (n && n !== registry.root) { chain.unshift(n); n = n.parent; }
+    el.textContent = 'editing: ' + chain.map(o => o.name).join(' › ') +
+        '  [Esc to exit]';
+}
 
-        const name = document.createElement('span');
-        name.className = 'outliner-name';
-        name.textContent = p.name;
-        name.title = 'Double-click to rename';
-        name.addEventListener('dblclick', (e) => {
-            e.stopPropagation();
-            outlinerStartRename(p, name);
-        });
-        row.appendChild(name);
+function _outlinerRenderNode(obj, depth) {
+    const row = document.createElement('div');
+    let cls = 'outliner-row';
+    if (obj === registry.active) cls += ' active';
+    if (!obj.visible) cls += ' hidden';
+    if (obj === registry.editContext) cls += ' context-edit';
+    row.className = cls;
+    row.dataset.id = String(obj.id);
+    row.style.paddingLeft = (6 + depth * 14) + 'px';
+    row.addEventListener('click', () => registry.setActive(obj.id));
 
-        const del = document.createElement('button');
-        del.className = 'outliner-del';
-        del.textContent = '\u00D7';
-        del.title = 'Delete';
-        del.addEventListener('click', (e) => {
-            e.stopPropagation();
-            deletePrimitive(p);
-        });
-        row.appendChild(del);
+    const hasChildren = obj.kind === 'group' && obj.children.length > 0;
+    const twist = document.createElement('button');
+    twist.className = 'outliner-twist';
+    twist.textContent = hasChildren
+        ? (_outlinerCollapsed.has(obj.id) ? '\u25B6' : '\u25BC')
+        : '\u00A0';
+    twist.disabled = !hasChildren;
+    twist.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!hasChildren) return;
+        if (_outlinerCollapsed.has(obj.id)) _outlinerCollapsed.delete(obj.id);
+        else _outlinerCollapsed.add(obj.id);
+        outlinerRender();
+    });
+    row.appendChild(twist);
 
-        outlinerListEl.appendChild(row);
+    const vis = document.createElement('button');
+    vis.className = 'outliner-vis';
+    vis.textContent = obj.visible ? '\u25CF' : '\u25CB';
+    vis.title = obj.visible ? 'Hide' : 'Show';
+    vis.addEventListener('click', (e) => {
+        e.stopPropagation();
+        registry.setVisible(obj.id, !obj.visible);
+    });
+    row.appendChild(vis);
+
+    const kind = document.createElement('span');
+    kind.className = 'outliner-kind';
+    kind.textContent = obj.kind === 'group'              ? '[G]'
+                     : obj.kind === 'component-instance' ? '[C]'
+                                                          : '   ';
+    row.appendChild(kind);
+
+    const name = document.createElement('span');
+    name.className = 'outliner-name';
+    name.textContent = obj.name;
+    name.title = 'Double-click to rename (or enter group/component)';
+    name.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        // Groups + component instances: dblclick enters edit context.
+        // Primitives: dblclick renames.
+        if (obj.kind === 'group' || obj.kind === 'component-instance') {
+            registry.enterContext(obj);
+            pickInfo.textContent = 'entered ' + obj.name;
+        } else {
+            outlinerStartRename(obj, name);
+        }
+    });
+    row.appendChild(name);
+
+    const del = document.createElement('button');
+    del.className = 'outliner-del';
+    del.textContent = '\u00D7';
+    del.title = 'Delete';
+    del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (obj.kind === 'primitive') deletePrimitive(obj);
+        else {
+            // Group / component instance: destroy without history (full-
+            // subtree undo support is a Phase-6 follow-up).
+            if (obj.destroy) obj.destroy();
+            registry._emit();
+        }
+    });
+    row.appendChild(del);
+
+    outlinerListEl.appendChild(row);
+
+    if (obj.kind === 'group' && !_outlinerCollapsed.has(obj.id)) {
+        for (const c of obj.children) _outlinerRenderNode(c, depth + 1);
     }
 }
 

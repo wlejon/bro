@@ -36,19 +36,25 @@ const box2 = reg.create({
 assert(reg.primitives.length === 2, 'two primitives after add');
 assert(reg.active === defaultBox, 'adding does not steal active');
 
-// Positions are baked into world space (no node transform). Verify box2's
-// vertices are actually at x ∈ [2, 4] after the +3 translation.
+// Positions are LOCAL-space; the +3 offset lives on box2.translation and
+// composes through box2.getWorldMatrix(). Verify world-space extents come
+// out as x ∈ [2, 4].
+assert(Math.abs(box2.translation[0] - 3) < 1e-5,
+    `box2 translation.x ≈ 3 (got ${box2.translation[0]})`);
 let minX = Infinity, maxX = -Infinity;
 for (let i = 0; i < box2.positions.length; i += 3) {
-    if (box2.positions[i] < minX) minX = box2.positions[i];
-    if (box2.positions[i] > maxX) maxX = box2.positions[i];
+    const wp = box2.localToWorldPoint([box2.positions[i], box2.positions[i+1], box2.positions[i+2]]);
+    if (wp[0] < minX) minX = wp[0];
+    if (wp[0] > maxX) maxX = wp[0];
 }
-assert(Math.abs(minX - 2) < 1e-5, `box2 minX ≈ 2 (got ${minX})`);
-assert(Math.abs(maxX - 4) < 1e-5, `box2 maxX ≈ 4 (got ${maxX})`);
+assert(Math.abs(minX - 2) < 1e-5, `box2 world minX ≈ 2 (got ${minX})`);
+assert(Math.abs(maxX - 4) < 1e-5, `box2 world maxX ≈ 4 (got ${maxX})`);
 
-// BVH reflects the translated positions.
-const hit2 = box2.bvh.raycast(box2.mesh, [3, 0, 5], [0, 0, -1], 0);
-assert(hit2, 'box2 BVH hits ray aimed at its center');
+// The local BVH is identity-mesh only; world-space raycasts go through
+// Primitive.raycastWorld which transforms ray into local before casting
+// and returns the hit point in world.
+const hit2 = box2.raycastWorld([3, 0, 5], [0, 0, -1], 0);
+assert(hit2, 'box2 world raycast hits ray aimed at its center');
 assert(Math.abs(hit2.position[0] - 3) < 1e-4,
     `box2 hit x ≈ 3 (got ${hit2 && hit2.position[0]})`);
 
@@ -112,7 +118,10 @@ assert(!box2.visible, 'box2 hidden after setVisible(false)');
 {
     const geos = reg.collectInferenceGeos();
     assert(geos.length === 1, `hidden primitive excluded from inference (got ${geos.length} geos)`);
-    assert(geos[0] === defaultBox.inferenceGeo, 'remaining geo is default box');
+    // collectInferenceGeos now yields WORLD-space feature sets derived from
+    // each visible primitive's local features. The returned object carries
+    // its source primitive via `_owner` — identity-compare through that.
+    assert(geos[0]._owner === defaultBox, 'remaining geo is default box');
 }
 reg.setVisible(box2.id, true);
 assert(box2.visible, 'box2 visible again');
