@@ -12,11 +12,12 @@ Note from the co-pilot: i am a career programmer but this and its sister reposit
 - **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
 - **broaudio** — Real-time audio engine: synthesis (oscillators, wavetable, noise), effects (filters, delay, reverb), spatial audio, MIDI input, and mixing bus architecture. See [broaudio](https://github.com/wlejon/broaudio).
 - **bromesh** — Mesh generation (primitives, isosurface, voxel), manipulation (subdivision, simplification, CSG), analysis (raycasting, collision), baking, optimization, and I/O (OBJ, glTF, STL, PLY, FBX, VOX). See [bromesh](https://github.com/wlejon/bromesh).
+- **brogameagent** — Game AI: navmesh generation, A* pathfinding, steering behaviors, and perception. Exposed to JS as `bro.ai.game.*`. See [brogameagent](https://github.com/wlejon/brogameagent).
 - **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
-- **Skia** — 2D rasterization (text, paths, images, gradients). GPU-accelerated via Ganesh GL backend, with CPU raster fallback.
-- **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU.
+- **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs.
+- **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU (D3D12 on Windows). The Skia-rasterized UI texture and the 3D scene layer are composited together through SDL_GPU pipelines.
 
-Also uses **glad** (OpenGL 3.3 Core loader), **stb_image** (image loading/writing), and **FastNoise2** (SIMD noise generation, via brokit).
+Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg — powers the `bro.net` game networking API), **glad** (OpenGL 3.3 Core loader), **stb_image** (image loading/writing), and **FastNoise2** (SIMD noise generation, via brokit).
 
 C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
@@ -33,6 +34,8 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 - 3D scene graph with mesh rendering, cameras (perspective/orthographic), transforms, and terrain
 - Mesh generation and manipulation: primitives, CSG, isosurface extraction, simplification, raycasting (bromesh)
 - Rigid body physics with contact detection (Jolt)
+- Game AI: navmesh, pathfinding, steering, perception (brogameagent, via `bro.ai.game`)
+- Game networking: host/connect/send/broadcast over GNS (`bro.net`)
 - Procedural noise generation (FastNoise2)
 - Web Workers
 - Form controls (`<input>`, `<textarea>`, `<select>` with text editing, cursor, focus, tab navigation)
@@ -48,13 +51,17 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 **Windows:**
 - **MSVC** (Visual Studio 2022+) — MinGW is not supported
 - **CMake** 3.24+
+- **vcpkg** (for GameNetworkingSockets — e.g. `D:/vcpkg`, with `VCPKG_ROOT` set or passed via `-DCMAKE_TOOLCHAIN_FILE`)
 - **Skia** pre-built libraries in `third_party/skia/`
+- Sibling repos cloned next to `bro/` (see [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)) — `qjsbind`, `bromesh`, and `brogameagent` have no submodule fallback and must be present at `../<name>`
 
 **Linux (Debian/Ubuntu):**
 - **GCC 12+** or **Clang 15+**
 - **CMake** 3.24+
 - System packages: `build-essential cmake libfreetype-dev libfontconfig-dev libgl-dev libjpeg-dev libpng-dev libwebp-dev`
+- **vcpkg** (for GameNetworkingSockets)
 - **Skia** pre-built library (see below)
+- Sibling repos as above
 
 ### Setup
 
@@ -105,10 +112,10 @@ On Windows this uses the Visual Studio multi-config generator. On Linux it defau
 
 ```bash
 # Windows
-./build/src/Debug/bro.exe apps/dashboard
+./build/src/Debug/bro.exe apps/example
 
 # Linux
-./build/src/bro apps/dashboard
+./build/src/bro apps/example
 ```
 
 Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a window.
@@ -119,16 +126,16 @@ Headless mode runs the full engine pipeline (GPU rendering, real fonts, WebGL) w
 
 ```bash
 # Interactive JS REPL
-bro-headless apps/dashboard
+bro-headless apps/example
 
 # Run a JS script file
-bro-headless apps/dashboard test.js
+bro-headless apps/example test.js
 
 # Inline JS expressions
-bro-headless apps/dashboard -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+bro-headless apps/example -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
 
 # CPU-only mode (no GPU/WebGL — for CI without a GPU)
-bro-headless --no-gpu apps/dashboard
+bro-headless --no-gpu apps/example
 ```
 
 On Linux without a display server, use `--no-gpu` or set `SDL_VIDEODRIVER=dummy`.

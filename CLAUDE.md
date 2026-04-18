@@ -17,29 +17,29 @@ cmake --build build --config Release
 
 **Windows** (Visual Studio multi-config generator, do not use MinGW):
 ```bash
-./build/src/Debug/bro.exe apps/dashboard
-./build/src/headless/Debug/bro-headless.exe apps/dashboard
+./build/src/Debug/bro.exe apps/example
+./build/src/headless/Debug/bro-headless.exe apps/example
 ```
 
 **Linux** (single-config, executables have no .exe suffix or config subdirectory):
 ```bash
-./build/src/bro apps/dashboard
-./build/src/headless/bro-headless apps/dashboard
+./build/src/bro apps/example
+./build/src/headless/bro-headless apps/example
 ```
 
 **Common headless invocations** (paths differ per platform as above):
 ```bash
 # Interactive JS REPL (GPU — default)
-bro-headless apps/dashboard
+bro-headless apps/example
 
 # JS script file
-bro-headless apps/dashboard test.js
+bro-headless apps/example test.js
 
 # Inline JS expression
-bro-headless apps/dashboard -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+bro-headless apps/example -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
 
 # CPU-only, no GPU/WebGL
-bro-headless --no-gpu apps/dashboard
+bro-headless --no-gpu apps/example
 ```
 
 Submodules must be initialized: `git submodule update --init`
