@@ -7,6 +7,8 @@ window.views.mesh = {
         self.running = true;
 
         var canvas = el.querySelector('#mesh-canvas');
+        canvas.width = canvas.clientWidth || 1024;
+        canvas.height = canvas.clientHeight || 768;
         var scene = canvas.getContext('scene');
         var info = el.querySelector('#mesh-info');
         var paused = false;

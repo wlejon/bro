@@ -14,15 +14,19 @@ window.views.webgl = {
         var self = this;
         var fs = require('fs');
         var canvas = el.querySelector('#wgl-canvas');
+        var w = canvas.clientWidth || 1024;
+        var h = canvas.clientHeight || 768;
+        canvas.width = w;
+        canvas.height = h;
 
         var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
-        renderer.setSize(canvas.width, canvas.height);
+        renderer.setSize(w, h, false);
         self._renderer = renderer;
 
         var scene = new THREE.Scene();
         scene.background = new THREE.Color(0.1, 0.1, 0.15);
 
-        var camera = new THREE.PerspectiveCamera(60, canvas.width / canvas.height, 0.1, 100);
+        var camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 100);
         camera.position.set(0, 1.5, 2.0);
         camera.lookAt(0, 0, 0);
 
