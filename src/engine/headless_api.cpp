@@ -65,7 +65,8 @@ void Engine::flush() {
         }
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
         document_->resolveStyles();
-        document_->clearStructureDirty();
+        // performLayout() rebuilds the persistent layout tree when
+        // structureDirty_ is set and clears the flag itself.
         document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
         document_->clearDirty();
 

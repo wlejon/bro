@@ -15,7 +15,7 @@
 #include <vector>
 #include <functional>
 
-namespace bro::layout { class FontManager; }
+namespace bro::layout { class FontManager; class LayoutNodeAdapter; }
 namespace bro::render { class Renderer; }
 namespace bro::engine { class TransitionManager; class AnimationManager; }
 
@@ -90,6 +90,11 @@ public:
     void performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics);
     void performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics);
 
+    // Persistent layout-node tree. Rebuilt when structureDirty_ is set (DOM
+    // mutations, shadow/slot changes, display toggles); reused across layouts
+    // when only styles/sizes change. Hit testing walks this tree directly.
+    layout::LayoutNodeAdapter* layoutRoot() const { return layoutRoot_.get(); }
+
     // ID map management (called by elements when id attribute changes)
     void registerElementId(const std::string& id, Element* elem);
     void unregisterElementId(const std::string& id);
@@ -145,6 +150,9 @@ private:
     std::string basePath_;
     std::unordered_map<std::string, Element*> idMap_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;
+
+    // Persistent layout tree (see layoutRoot()).
+    std::unique_ptr<layout::LayoutNodeAdapter> layoutRoot_;
 
     // CSS cascade
     htmlayout::css::Cascade cascade_;

@@ -4,7 +4,8 @@
 #include "engine/engine.h"
 #include "engine/default_styles.h"
 #include "engine/app_loader.h"
-#include "engine/hit_testing.h"
+#include "layout/box.h"
+#include "layout/layout_node_adapter.h"
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 #include "render/cpu_raster_renderer.h"
@@ -455,9 +456,10 @@ void Engine::renderSystemPanels() {
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
         if (doc.document->isDirty()) {
-            doc.document->clearStructureDirty();
             layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
             doc.document->resolveStyles();
+            // performLayout() rebuilds the persistent layout tree when
+            // structureDirty_ is set and clears the flag itself.
             doc.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
             doc.document->clearDirty();
         }
@@ -503,7 +505,10 @@ void Engine::resizeSystemPanels(int w, int h) {
 
 dom::Element* Engine::systemHitTest(SystemDocument& doc, float x, float y) {
     if (!doc.document || !doc.document->documentElement()) return nullptr;
-    auto* hit = hitTestElement(doc.document->documentElement(), x, y, 0.0f, 0.0f);
+    auto* root = doc.document->layoutRoot();
+    if (!root) return nullptr;
+    auto* node = htmlayout::layout::hitTest(root, x, y);
+    auto* hit = layout::LayoutNodeAdapter::elementFor(node);
     if (!hit) return nullptr;
     if (hit == doc.document->documentElement()) return nullptr;
     auto& tag = hit->tagName();

@@ -24,6 +24,9 @@ void Document::parse(const std::string& html, const std::string& authorCss,
     documentElement_ = nullptr;
     body_ = nullptr;
     idMap_.clear();
+    // LayoutRoot points into ownedNodes_ via raw Element*; clear it first so
+    // we don't hold dangling pointers when ownedNodes_ drops its unique_ptrs.
+    layoutRoot_.reset();
     ownedNodes_.clear();
     cascade_.clear();
 
@@ -292,17 +295,23 @@ void Document::resolveStylesRecursive(Element* elem,
 
 void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics) {
     if (!documentElement_) return;
-    auto layoutTree = layout::LayoutNodeAdapter::buildTree(documentElement_);
-    htmlayout::layout::layoutTree(layoutTree.get(), viewportWidth, metrics);
-    layoutTree->syncBoxToElement();
+    if (!layoutRoot_ || structureDirty_) {
+        layoutRoot_ = layout::LayoutNodeAdapter::buildTree(documentElement_);
+        structureDirty_ = false;
+    }
+    htmlayout::layout::layoutTree(layoutRoot_.get(), viewportWidth, metrics);
+    layoutRoot_->syncBoxToElement();
 }
 
 void Document::performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics) {
     if (!documentElement_) return;
-    auto layoutTree = layout::LayoutNodeAdapter::buildTree(documentElement_);
+    if (!layoutRoot_ || structureDirty_) {
+        layoutRoot_ = layout::LayoutNodeAdapter::buildTree(documentElement_);
+        structureDirty_ = false;
+    }
     htmlayout::layout::Viewport vp{viewportWidth, viewportHeight};
-    htmlayout::layout::layoutTree(layoutTree.get(), vp, metrics);
-    layoutTree->syncBoxToElement();
+    htmlayout::layout::layoutTree(layoutRoot_.get(), vp, metrics);
+    layoutRoot_->syncBoxToElement();
 }
 
 // ---------------------------------------------------------------------------

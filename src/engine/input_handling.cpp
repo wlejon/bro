@@ -2,7 +2,6 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
-#include "engine/hit_testing.h"
 #include "engine/key_mapping.h"
 #include "engine/overflow.h"
 #include "engine/overlay.h"

@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "engine/key_mapping.h"
-#include "engine/hit_testing.h"
+#include "layout/box.h"
+#include "layout/layout_node_adapter.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
 #include "render/cpu_raster_renderer.h"
@@ -1287,7 +1288,8 @@ void Engine::layoutThreadFunc() {
             if (animActive) {
                 document_->markDirty();
             }
-            document_->clearStructureDirty();
+            // performLayout() rebuilds the persistent layout tree when
+            // structureDirty_ is set and clears the flag itself.
             document_->performLayout(static_cast<float>(vpW),
                                      static_cast<float>(vpH),
                                      layoutTextMetrics);
@@ -2333,8 +2335,14 @@ dom::Element* Engine::hitTest(float x, float y) {
     if (!document_ || !document_->documentElement())
         return document_ ? document_->body() : nullptr;
 
-    auto* hit = hitTestElement(document_->documentElement(), x, y, 0.0f, 0.0f);
-    return hit ? hit : document_->body();
+    auto* root = document_->layoutRoot();
+    if (!root) return document_->body();
+    auto* node = htmlayout::layout::hitTest(root, x, y);
+    auto* hit = layout::LayoutNodeAdapter::elementFor(node);
+    // The <html> element fills the viewport — stray clicks outside any
+    // laid-out content should still resolve to the document element.
+    if (!hit) return document_->documentElement();
+    return hit;
 }
 
 // ---------------------------------------------------------------------------

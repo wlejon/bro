@@ -32,7 +32,6 @@ add_library(bro_engine STATIC
     headless_api.cpp
     key_mapping.cpp
     overflow.cpp
-    hit_testing.cpp
     scrollbar.cpp
     app_loader.cpp
     replaced_elements.cpp

@@ -23,12 +23,11 @@ class LayoutNodeAdapter;
 // After layoutTree(), each adapter's box is written back to the underlying Element.
 class LayoutNodeAdapter : public htmlayout::layout::LayoutNode {
 public:
-    // Construct for an element node
+    // Construct for an element node. The box is written entirely by layout;
+    // no need to seed it from the element (the tree is persistent across
+    // layouts, and hit testing reads box after layout has populated it).
     explicit LayoutNodeAdapter(dom::Element* elem)
-        : elem_(elem), textNode_(nullptr) {
-        // Copy the element's stored layout box so hit testing works
-        box = elem->layoutBox();
-    }
+        : elem_(elem), textNode_(nullptr) {}
 
     // Construct for a text node
     explicit LayoutNodeAdapter(dom::TextNode* text, dom::Element* parentElem)
@@ -114,6 +113,14 @@ public:
         for (auto& child : children_) {
             child->syncBoxToElement();
         }
+    }
+
+    // Map a layout-tree node back to its backing DOM element. All nodes in
+    // the tree are LayoutNodeAdapter instances (bro is the sole LayoutNode
+    // instantiator), so a static_cast is safe.
+    static dom::Element* elementFor(htmlayout::layout::LayoutNode* node) {
+        if (!node) return nullptr;
+        return static_cast<LayoutNodeAdapter*>(node)->element();
     }
 
     // Build a layout tree from a DOM element tree.
