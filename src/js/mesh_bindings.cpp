@@ -24,6 +24,7 @@
 #include <bromesh/manipulation/repair.h>
 #include <bromesh/manipulation/split_components.h>
 #include <bromesh/manipulation/polygon.h>
+#include <bromesh/manipulation/poly_mesh.h>
 #include <bromesh/manipulation/shrinkwrap.h>
 #include <bromesh/manipulation/skin.h>
 #include <bromesh/optimization/optimize.h>
@@ -1528,6 +1529,249 @@ void MeshBindings::install(JSContext* ctx) {
         if (!readUint8ArrayVal(ctx, bytesVal, bytes)) return JS_ThrowTypeError(ctx, "expected Uint8Array");
         auto pm = bromesh::deserializeProgressiveMesh(bytes.data(), bytes.size());
         return qjsbind::wrap<PMW>(ctx, new PMW{std::make_unique<bromesh::ProgressiveMesh>(std::move(pm))});
+    })
+    ;
+
+    // =======================================================================
+    // PolyMesh — half-edge over N-gon faces. Edit topology that survives
+    // arbitrary triangulation choices; the render mesh is .tessellate()'d on
+    // demand. See bromesh/manipulation/poly_mesh.h.
+    // =======================================================================
+    struct PMeshWrapper {
+        std::unique_ptr<bromesh::PolyMesh> pm;
+    };
+    using PolyMW = PMeshWrapper;
+
+    qjsbind::Class<PolyMW>(ctx, "PolyMesh")
+    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> PolyMW* {
+        // Empty mesh by default; the static factories build populated ones.
+        (void)ctx; (void)argc; (void)argv;
+        return new PolyMW{std::make_unique<bromesh::PolyMesh>()};
+    })
+
+    .static_raw("fromMeshData",
+        [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+            if (argc < 2) return JS_ThrowTypeError(ctx,
+                "fromMeshData(positions, indices[, triToGroup])");
+            std::vector<float> positions;
+            std::vector<uint32_t> indices;
+            std::vector<int32_t> triToGroup;
+            if (!readFloatArrayVal(ctx, argv[0], positions))
+                return JS_ThrowTypeError(ctx, "positions must be Float32Array");
+            if (!readUint32ArrayVal(ctx, argv[1], indices))
+                return JS_ThrowTypeError(ctx, "indices must be Uint32Array");
+            if (argc > 2 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2])) {
+                std::vector<uint32_t> tmp;
+                if (readUint32ArrayVal(ctx, argv[2], tmp)) {
+                    triToGroup.assign(tmp.begin(), tmp.end());
+                } else {
+                    // Allow Int32Array via reinterpretation through Uint32 reader.
+                    // (readUint32ArrayVal also matches that storage class.)
+                }
+            }
+            auto pm = std::make_unique<bromesh::PolyMesh>(
+                bromesh::PolyMesh::fromMeshData(positions, indices, triToGroup));
+            return qjsbind::wrap<PolyMW>(ctx, new PolyMW{std::move(pm)});
+        }, 3)
+
+    .static_raw("fromPolygon",
+        [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+            if (argc < 2) return JS_ThrowTypeError(ctx,
+                "fromPolygon(positionsXYZ, normal[, group])");
+            std::vector<float> positions;
+            std::vector<float> nvec;
+            if (!readFloatArrayVal(ctx, argv[0], positions))
+                return JS_ThrowTypeError(ctx, "positions must be Float32Array");
+            if (!readFloatLikeVal(ctx, argv[1], nvec) || nvec.size() < 3)
+                return JS_ThrowTypeError(ctx, "normal must be [nx, ny, nz]");
+            int32_t group = 0;
+            if (argc > 2) { int32_t g; JS_ToInt32(ctx, &g, argv[2]); group = g; }
+            const float n[3] = { nvec[0], nvec[1], nvec[2] };
+            auto pm = std::make_unique<bromesh::PolyMesh>(
+                bromesh::PolyMesh::fromPolygon(positions, n, group));
+            return qjsbind::wrap<PolyMW>(ctx, new PolyMW{std::move(pm)});
+        }, 3)
+
+    // ── Inspection ──────────────────────────────────────────────────────
+    .get("vertexCount",   [](PolyMW* w) { return (int)(w->pm ? w->pm->vertexCount() : 0); })
+    .get("halfEdgeCount", [](PolyMW* w) { return (int)(w->pm ? w->pm->halfEdgeCount() : 0); })
+    .get("faceCount",     [](PolyMW* w) { return (int)(w->pm ? w->pm->faceCount() : 0); })
+
+    .method("faceVertexCount", [](PolyMW* w, int faceIdx) {
+        return w->pm ? w->pm->faceVertexCount(faceIdx) : 0;
+    })
+
+    .method("faceVertices", [](PolyMW* w, JSContext* ctx, int faceIdx) -> JSValue {
+        if (!w->pm) return JS_NewArray(ctx);
+        auto vs = w->pm->faceVertices(faceIdx);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < vs.size(); ++i)
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, vs[i]));
+        return arr;
+    })
+
+    .method("getVertex", [](PolyMW* w, JSContext* ctx, int vi) -> JSValue {
+        if (!w->pm) return JS_NULL;
+        float p[3]; w->pm->getVertex(vi, p);
+        JSValue arr = JS_NewArray(ctx);
+        for (int i = 0; i < 3; ++i)
+            JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, p[i]));
+        return arr;
+    })
+
+    .method("computeFaceNormal", [](PolyMW* w, JSContext* ctx, int faceIdx) -> JSValue {
+        if (!w->pm) return JS_NULL;
+        float n[3]; w->pm->computeFaceNormal(faceIdx, n);
+        JSValue arr = JS_NewArray(ctx);
+        for (int i = 0; i < 3; ++i)
+            JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, n[i]));
+        return arr;
+    })
+
+    .method("faceGroup", [](PolyMW* w, int faceIdx) -> int {
+        if (!w->pm || faceIdx < 0 || faceIdx >= (int)w->pm->faceCount()) return -1;
+        return w->pm->faces()[faceIdx].group;
+    })
+
+    .method("setFaceGroup", [](PolyMW* w, int faceIdx, int group) {
+        if (!w->pm || faceIdx < 0 || faceIdx >= (int)w->pm->faceCount()) return;
+        // Direct const_cast: faces() returns const ref but we know the
+        // wrapper owns the mesh and JS can mutate.
+        const_cast<bromesh::PolyMesh::Face&>(w->pm->faces()[faceIdx]).group = group;
+    })
+
+    .method("facesInGroup", [](PolyMW* w, JSContext* ctx, int groupId) -> JSValue {
+        if (!w->pm) return JS_NewArray(ctx);
+        auto fs = w->pm->facesInGroup(groupId);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < fs.size(); ++i)
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, fs[i]));
+        return arr;
+    })
+
+    // ── Tessellation ────────────────────────────────────────────────────
+    .method("tessellate", [](PolyMW* w, JSContext* ctx) -> JSValue {
+        if (!w->pm) return JS_NULL;
+        auto t = w->pm->tessellate();
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "positions", makeFloat32Array(ctx, t.positions));
+        JS_SetPropertyStr(ctx, obj, "normals",   makeFloat32Array(ctx, t.normals));
+        JS_SetPropertyStr(ctx, obj, "indices",   makeUint32Array(ctx, t.indices));
+        // triToFace + triToGroup as Int32-typed arrays via Uint32 storage
+        // (downstream JS just reads them as numeric arrays).
+        std::vector<uint32_t> ttf(t.triToFace.begin(),  t.triToFace.end());
+        std::vector<uint32_t> ttg(t.triToGroup.begin(), t.triToGroup.end());
+        JS_SetPropertyStr(ctx, obj, "triToFace",  makeUint32Array(ctx, ttf));
+        JS_SetPropertyStr(ctx, obj, "triToGroup", makeUint32Array(ctx, ttg));
+        return obj;
+    })
+
+    // ── Validation ──────────────────────────────────────────────────────
+    .method("validate", [](PolyMW* w, JSContext* ctx) -> JSValue {
+        if (!w->pm) return JS_NULL;
+        auto v = w->pm->validate();
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "valid",              JS_NewBool(ctx, v.valid));
+        JS_SetPropertyStr(ctx, obj, "isClosed",           JS_NewBool(ctx, v.isClosed));
+        JS_SetPropertyStr(ctx, obj, "boundaryHalfEdges",  JS_NewInt32(ctx, v.boundaryHalfEdges));
+        JSValue errArr = JS_NewArray(ctx);
+        for (size_t i = 0; i < v.errors.size(); ++i) {
+            JS_SetPropertyUint32(ctx, errArr, (uint32_t)i,
+                JS_NewString(ctx, v.errors[i].c_str()));
+        }
+        JS_SetPropertyStr(ctx, obj, "errors", errArr);
+        return obj;
+    })
+
+    // ── Mutation ────────────────────────────────────────────────────────
+    .method("addVertex", [](PolyMW* w, double x, double y, double z) -> int {
+        if (!w->pm) return -1;
+        return w->pm->addVertex((float)x, (float)y, (float)z);
+    })
+
+    .method("addFace", [](PolyMW* w, JSContext* ctx, JSValue vertsArr,
+                          std::optional<int> group) -> int {
+        if (!w->pm) return -1;
+        if (!JS_IsArray(vertsArr)) {
+            JS_ThrowTypeError(ctx, "addFace expects an array of vertex indices");
+            return -1;
+        }
+        JSValue lv = JS_GetPropertyStr(ctx, vertsArr, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lv); JS_FreeValue(ctx, lv);
+        std::vector<int32_t> vs;
+        vs.reserve((size_t)len);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, vertsArr, (uint32_t)i);
+            int32_t v; JS_ToInt32(ctx, &v, e); JS_FreeValue(ctx, e);
+            vs.push_back(v);
+        }
+        return w->pm->addFace(vs, group.value_or(-1));
+    })
+
+    .method("translateVertex", [](PolyMW* w, JSContext* ctx, int vi, JSValue offsetArr) {
+        if (!w->pm) return;
+        float o[3]; readVec3(ctx, offsetArr, o);
+        w->pm->translateVertex(vi, o);
+    })
+
+    .method("translateFace", [](PolyMW* w, JSContext* ctx, int faceIdx, JSValue offsetArr) {
+        if (!w->pm) return;
+        float o[3]; readVec3(ctx, offsetArr, o);
+        w->pm->translateFace(faceIdx, o);
+    })
+
+    .method("translateFaceWithRing", [](PolyMW* w, JSContext* ctx, int faceIdx, JSValue offsetArr) {
+        if (!w->pm) return;
+        float o[3]; readVec3(ctx, offsetArr, o);
+        w->pm->translateFaceWithRing(faceIdx, o);
+    })
+
+    .method("extrudeFace", [](PolyMW* w, JSContext* ctx, int faceIdx,
+                              JSValue offsetArr,
+                              std::optional<bool> withBack,
+                              std::optional<int> bridgeGroup,
+                              std::optional<int> backGroup) -> JSValue {
+        if (!w->pm) return JS_NULL;
+        float o[3]; readVec3(ctx, offsetArr, o);
+        auto r = w->pm->extrudeFace(faceIdx, o,
+            withBack.value_or(true),
+            bridgeGroup.value_or(-1),
+            backGroup.value_or(-1));
+        JSValue obj = JS_NewObject(ctx);
+        std::vector<uint32_t> dv(r.dupVerts.begin(),     r.dupVerts.end());
+        std::vector<uint32_t> bf(r.bridgeFaces.begin(),  r.bridgeFaces.end());
+        std::vector<uint32_t> bg(r.bridgeAdjGroup.begin(), r.bridgeAdjGroup.end());
+        JS_SetPropertyStr(ctx, obj, "dupVerts",       makeUint32Array(ctx, dv));
+        JS_SetPropertyStr(ctx, obj, "bridgeFaces",    makeUint32Array(ctx, bf));
+        JS_SetPropertyStr(ctx, obj, "bridgeAdjGroup", makeUint32Array(ctx, bg));
+        JS_SetPropertyStr(ctx, obj, "backFace",       JS_NewInt32(ctx, r.backFace));
+        return obj;
+    })
+
+    .method("rematchTwins", [](PolyMW* w) {
+        if (w->pm) w->pm->rematchTwins();
+    })
+
+    .method("mergeFacesByGroup", [](PolyMW* w) {
+        if (w->pm) w->pm->mergeFacesByGroup();
+    })
+
+    .method("compact", [](PolyMW* w) {
+        if (w->pm) w->pm->compact();
+    })
+
+    .method("findGroupBoundary", [](PolyMW* w, JSContext* ctx, int groupId) -> JSValue {
+        if (!w->pm) return JS_NewArray(ctx);
+        auto loops = w->pm->findGroupBoundary(groupId);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < loops.size(); ++i) {
+            JSValue inner = JS_NewArray(ctx);
+            for (size_t j = 0; j < loops[i].size(); ++j) {
+                JS_SetPropertyUint32(ctx, inner, (uint32_t)j, JS_NewInt32(ctx, loops[i][j]));
+            }
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, inner);
+        }
+        return arr;
     })
     ;
 }
