@@ -51,6 +51,7 @@ add_library(bro_js STATIC
     server_bindings.cpp
     crosshair_bindings.cpp
     gizmo_bindings.cpp
+    menu_bindings.cpp
     ai_bindings.cpp
     ai_binding_integration.cpp
     headless_bindings.cpp

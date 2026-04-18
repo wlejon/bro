@@ -3,6 +3,7 @@
 #include "engine/app_loader.h"
 #include "engine/css_transitions.h"
 #include "engine/gizmo.h"
+#include "engine/menu_bar.h"
 #include "engine/overlay.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
@@ -238,6 +239,15 @@ public:
     GizmoManager& gizmo() { return *gizmo_; }
     const GizmoManager& gizmo() const { return *gizmo_; }
 
+    /// Standard app menu bar (rendered by system/menu.html, driven via bro.menu.*).
+    MenuBar& menuBar() { return menuBar_; }
+    const MenuBar& menuBar() const { return menuBar_; }
+    /// Dispatch a menu action: engine-handled IDs (__system.*) first, else app JS.
+    void triggerMenuAction(const std::string& id);
+    /// Invoked after bro.menu mutations — forces re-render and calls
+    /// window.__onMenuChanged() in the menu panel's JS context.
+    void onMenuChanged();
+
     /// Get display mode.
     DisplayMode displayMode() const { return displayMode_; }
 
@@ -415,6 +425,7 @@ private:
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
 
     CrosshairConfig crosshair_;
+    MenuBar menuBar_;
     std::unique_ptr<GizmoManager> gizmo_;
     OverlayManager overlayMgr_;
     std::unique_ptr<Settings> settings_;

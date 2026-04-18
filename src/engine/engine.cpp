@@ -34,6 +34,7 @@
 #include "js/physics_bindings.h"
 #include "js/scene_bindings.h"
 #include "js/crosshair_bindings.h"
+#include "js/menu_bindings.h"
 #include "js/gizmo_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/rigging_bindings.h"
@@ -113,7 +114,9 @@ Engine::Engine(const EngineConfig& config)
 
     // Define engine-level actions (lowest priority — apps can override)
     settings_->defineEngineAction("system_toggle_perf", {"F8"});
-    settings_->defineEngineAction("system_toggle_settings", {"Escape"});
+    // Settings overlay is reached via the File/Edit menu by default; ESC is
+    // no longer reserved. Users may rebind this action from settings.
+    settings_->defineEngineAction("system_toggle_settings", {});
 
     settings_->applyAppOverrides(config.graphics, config.input);
 
@@ -283,6 +286,26 @@ Engine::Engine(const EngineConfig& config)
 
     // Crosshair bindings (bro.crosshair.*)
     js::CrosshairBindings::install(jsRuntime_->getContext(), this);
+
+    // Menu bar bindings (bro.menu.*) + default menu tree.
+    js::MenuBindings::install(jsRuntime_->getContext(), this);
+    {
+        MenuBar::Item file;
+        file.id = "file"; file.label = "File";
+        MenuBar::Item quit;
+        quit.id = "__system.quit"; quit.label = "Quit"; quit.accel = "Ctrl+Q";
+        file.children.push_back(std::move(quit));
+
+        MenuBar::Item edit;
+        edit.id = "edit"; edit.label = "Edit";
+        MenuBar::Item prefs;
+        prefs.id = "__system.preferences"; prefs.label = "Preferences...";
+        edit.children.push_back(std::move(prefs));
+
+        menuBar_.roots.push_back(std::move(file));
+        menuBar_.roots.push_back(std::move(edit));
+        menuBar_.dirty = true;
+    }
 
     // Engine gizmo (bro.gizmo.*) — translate arrows for now; rotate + scale
     // handles + mouse-driven interaction land in later phases.
@@ -1102,6 +1125,9 @@ Engine::~Engine() {
         SDL_GL_DestroyContext(rasterGLContext_);
         rasterGLContext_ = nullptr;
     }
+
+    // Release menu handler JS references before the runtime tears down.
+    menuBar_.releaseHandlers();
 
     // Clear terrain managers before destroying scene graphs — their destructors
     // call SceneGraph::destroyNode(), which crashes if the graph is already gone.

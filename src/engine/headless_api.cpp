@@ -59,6 +59,22 @@ void Engine::flush() {
             document_->markDirty();
         }
     }
+    // Re-layout any dirty system panel docs so subsequent hit-tests see the
+    // current DOM state (click() fires events which can mutate system panel
+    // DOM — e.g. bro.menu dropdowns — and we need layout fresh before the
+    // next click tests against it).
+    if (systemRenderer_) {
+        for (auto& sdoc : systemDocs_) {
+            if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
+            if (!sdoc.document->isDirty()) continue;
+            layout::SkiaTextMetrics sysMetrics(systemRenderer_.get(), sdoc.fontManager.get());
+            sdoc.document->resolveStyles();
+            sdoc.document->performLayout(static_cast<float>(viewportWidth_), sysMetrics);
+            sdoc.document->clearDirty();
+            systemDirty_ = true;
+        }
+    }
+
     if (document_ && document_->isDirty()) {
         if (document_->isStructureDirty()) {
             ensureReplacedElements(document_->documentElement());

@@ -150,6 +150,9 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         } else if (fullRel == "nav") {
             doc.tabLabel = "";
             doc.group = "nav";
+        } else if (fullRel == "menu") {
+            doc.tabLabel = "";
+            doc.group = "menu";
         } else if (fullRel.rfind("settings/", 0) == 0) {
             doc.group = "settings";
             std::string leaf = stem;
@@ -340,9 +343,94 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_NewString(cx, self->systemActivePanel_.c_str());
         }, 0, 0, 1, &ptrVal));
 
+    // __bro.getMenu() — returns the menu tree as a parsed JS array.
+    JS_SetPropertyStr(ctx, bro, "getMenu",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self) return JS_NewArray(cx);
+            std::string json = self->menuBar().toJSON();
+            return JS_ParseJSON(cx, json.c_str(), json.size(), "<menu>");
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.menuClick(id) — dispatch menu action.
+    JS_SetPropertyStr(ctx, bro, "menuClick",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_UNDEFINED;
+            const char* id = JS_ToCString(cx, argv[0]);
+            if (!id) return JS_UNDEFINED;
+            self->triggerMenuAction(id);
+            JS_FreeCString(cx, id);
+            return JS_UNDEFINED;
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.toggleSettings() — open/close settings overlay.
+    JS_SetPropertyStr(ctx, bro, "toggleSettings",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (self) self->toggleSystemSettings();
+            return JS_UNDEFINED;
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.isSettingsVisible()
+    JS_SetPropertyStr(ctx, bro, "isSettingsVisible",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            return JS_NewBool(cx, self && self->isSystemVisible());
+        }, 0, 0, 1, &ptrVal));
+
     JS_SetPropertyStr(ctx, global, "__bro", bro);
     doc.broPerfObj = JS_DupValue(ctx, perf);
     JS_FreeValue(ctx, global);
+}
+
+// ---------------------------------------------------------------------------
+// Menu actions + re-render notification
+// ---------------------------------------------------------------------------
+
+void Engine::triggerMenuAction(const std::string& id) {
+    if (id == "__system.preferences") { toggleSystemSettings(); return; }
+    if (id == "__system.quit") { running_ = false; return; }
+    menuBar_.triggerHandler(id);
+}
+
+void Engine::onMenuChanged() {
+    systemDirty_ = true;
+    for (auto& doc : systemDocs_) {
+        if (doc.group != "menu" || !doc.jsCtx) continue;
+        JSContext* ctx = doc.jsCtx;
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue fn = JS_GetPropertyStr(ctx, global, "__onMenuChanged");
+        if (JS_IsFunction(ctx, fn)) {
+            JSValue result = JS_Call(ctx, fn, global, 0, nullptr);
+            if (JS_IsException(result)) {
+                JSValue ex = JS_GetException(ctx);
+                const char* s = JS_ToCString(ctx, ex);
+                if (s) { LOG_ERROR("__onMenuChanged: %s", s); JS_FreeCString(ctx, s); }
+                JS_FreeValue(ctx, ex);
+            }
+            JS_FreeValue(ctx, result);
+        }
+        JS_FreeValue(ctx, fn);
+        JS_FreeValue(ctx, global);
+    }
+    menuBar_.dirty = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,11 +441,12 @@ bool Engine::isSystemDocVisible(const SystemDocument& doc) const {
     if (doc.group == "perf") return systemPerfVisible_;
     if (doc.group == "nav") return systemSettingsVisible_;
     if (doc.group == "settings") return systemSettingsVisible_ && doc.active;
+    if (doc.group == "menu") return menuBar_.visible;
     return false;
 }
 
 bool Engine::isSystemVisible() const {
-    return systemPerfVisible_ || systemSettingsVisible_;
+    return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible;
 }
 
 void Engine::toggleSystemPerf() {
