@@ -222,6 +222,99 @@
         return out;
     }
 
+    // --- Arc polyline (2-point + bulge) -------------------------------------
+    //
+    // SketchUp's classic Arc tool: two endpoints + a bulge offset that
+    // determines the arc's radius and sweep. `bulgePoint` is any point near
+    // the arc (the 3rd click); only its perpendicular distance from the chord
+    // matters. Returns `segments + 1` points sampled along the arc, ordered
+    // start → end. Returns null when degenerate (zero chord, zero bulge).
+    //
+    //   start, end   — chord endpoints (3D, on the sketch plane)
+    //   bulgePoint   — any 3D point; signed perpendicular distance from the
+    //                  chord midpoint defines the arc height
+    //   normal       — sketch-plane normal (unit)
+    //   segments     — number of straight sub-segments (default 16)
+    //
+    // Geometry: with chord length L and bulge height h,
+    //   r = (h² + (L/2)²) / (2|h|)        (signed: bulge direction preserved)
+    //   sweep = 2·asin( (L/2) / r )
+    //   center = midpoint − sign(h) · (r − |h|) · chordPerp
+    function arcPolyline(start, end, bulgePoint, normal, segments) {
+        if (segments == null) segments = 16;
+        const cx = end[0] - start[0];
+        const cy = end[1] - start[1];
+        const cz = end[2] - start[2];
+        const L  = Math.sqrt(cx*cx + cy*cy + cz*cz);
+        if (L < 1e-9) return null;
+        const chord = [cx / L, cy / L, cz / L];
+        const n = v3norm(normal);
+        // Raw perpendicular to chord, in the sketch plane (normal × chord).
+        let perp = v3cross(n, chord);
+        if (v3len(perp) < 1e-9) return null;
+        perp = v3norm(perp);
+        const mid = [
+            (start[0] + end[0]) * 0.5,
+            (start[1] + end[1]) * 0.5,
+            (start[2] + end[2]) * 0.5,
+        ];
+        // Signed bulge distance from mid along raw perp.
+        const dx = bulgePoint[0] - mid[0];
+        const dy = bulgePoint[1] - mid[1];
+        const dz = bulgePoint[2] - mid[2];
+        let h = dx * perp[0] + dy * perp[1] + dz * perp[2];
+        if (Math.abs(h) < 1e-9) {
+            // No bulge: return the straight chord as 2 points.
+            return [start.slice(), end.slice()];
+        }
+        // Flip perp so it points TOWARD the bulge — h becomes positive and the
+        // rest of the math doesn't have to track the sign.
+        if (h < 0) {
+            perp = [-perp[0], -perp[1], -perp[2]];
+            h = -h;
+        }
+        const r = (h * h + (L * 0.5) * (L * 0.5)) / (2 * h);
+        // Minor arc: center on the OPPOSITE side of the chord from the bulge
+        // (cdist > 0). Major arc (h > L/2): center crosses to the bulge side
+        // (cdist < 0) so the chord subtends >π at the centre.
+        const cdist = r - h;
+        const center = [
+            mid[0] - cdist * perp[0],
+            mid[1] - cdist * perp[1],
+            mid[2] - cdist * perp[2],
+        ];
+        // Basis at the centre: radial-to-start + tangent. The raw tangent
+        // (n × radial) is one of two perpendicular candidates; pick the one
+        // with positive chord-direction component so dir=+1 always advances
+        // start → end on the minor arc, and dir=-1 on the major arc.
+        const rx = (start[0] - center[0]) / r;
+        const ry = (start[1] - center[1]) / r;
+        const rz = (start[2] - center[2]) / r;
+        let tan = v3cross(n, [rx, ry, rz]);
+        const tanDotChord = tan[0]*chord[0] + tan[1]*chord[1] + tan[2]*chord[2];
+        if (tanDotChord < 0) tan = [-tan[0], -tan[1], -tan[2]];
+        // Minor-arc sweep: 2·asin((L/2)/r). Major arc adds the rest of the
+        // circle, and reverses the initial tangent direction so the sweep
+        // wraps the long way around.
+        const halfChord = Math.min(L * 0.5 / r, 1);
+        const minor = 2 * Math.asin(halfChord);
+        const major = h > L * 0.5;
+        const total = major ? (2 * Math.PI - minor) : minor;
+        const dir   = major ? -1 : 1;
+        const out = new Array(segments + 1);
+        for (let i = 0; i <= segments; i++) {
+            const a = (total * i) / segments * dir;
+            const ca = Math.cos(a);
+            const sa = Math.sin(a);
+            out[i] = [
+                center[0] + r * (ca * rx + sa * tan[0]),
+                center[1] + r * (ca * ry + sa * tan[1]),
+                center[2] + r * (ca * rz + sa * tan[2]),
+            ];
+        }
+        return out;
+    }
+
     // --- Polygon area (2D, shoelace) ----------------------------------------
     //
     // Accepts either an array of [x, y] pairs or a flat [x,y,x,y,...]
@@ -453,7 +546,7 @@
         // constraints
         axisLock, pickClosestAxis,
         // shapes
-        rectFromCorners, circlePolyline,
+        rectFromCorners, circlePolyline, arcPolyline,
         // measurement
         polygonArea2D, polylineLength3D,
         // polygon cleanup

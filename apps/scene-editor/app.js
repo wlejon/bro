@@ -543,6 +543,7 @@ function setTool(t) {
     if (rectangleToolState.active) cancelRectangle();
     if (circleToolState.active) cancelCircle();
     if (lineToolState.active) cancelLine();
+    if (arcToolState && ArcTool.active(arcToolState)) cancelArc();
     if (tapeToolState.active) cancelTape();
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
@@ -1612,6 +1613,97 @@ function resetLineChain() {
     destroyLinePreview();
 }
 
+// --- Arc tool --------------------------------------------------------------
+//
+// SketchUp-classic 2-point + bulge arc. Three clicks: start, end, bulge.
+// Output is an open polyline persisted as an EdgePrimitive (orphan edges).
+// Inference snaps work on every click so an arc can chain off existing
+// vertices/midpoints/edges. The sketch plane is captured on the first click
+// (face-pick or ground fallback) and stays locked for clicks 2 and 3.
+
+const arcToolState = ArcTool.createState();
+let arcPreviewNode = null;
+
+function destroyArcPreview() {
+    if (arcPreviewNode) { arcPreviewNode.destroy(); arcPreviewNode = null; }
+}
+
+// Build a thin-prism edge mesh from the current preview polyline. We re-use
+// EdgeMesh so the preview matches the persisted EdgePrimitive's appearance.
+function refreshArcPreview() {
+    const poly = ArcTool.buildPolyline(arcToolState);
+    if (!poly || poly.length < 2) { destroyArcPreview(); return; }
+    const positions = new Float32Array(poly.length * 3);
+    for (let i = 0; i < poly.length; i++) {
+        positions[i*3]   = poly[i][0];
+        positions[i*3+1] = poly[i][1];
+        positions[i*3+2] = poly[i][2];
+    }
+    const edges = [];
+    for (let i = 0; i < poly.length - 1; i++) edges.push({ a: i, b: i + 1 });
+    const data = EdgeMesh.buildEdgeMesh(positions, edges, {
+        thickness: 0.014,
+        color:     [1.0, 0.65, 0.01, 1.0],
+    });
+    if (!arcPreviewNode) {
+        arcPreviewNode = scene.createMesh({
+            positions: data.positions,
+            normals:   data.normals,
+            colors:    data.colors,
+            indices:   data.indices,
+            emissive:  0.6,
+            name:      'arc-preview',
+        });
+    } else {
+        arcPreviewNode.updateMesh({
+            positions: data.positions,
+            normals:   data.normals,
+            colors:    data.colors,
+            indices:   data.indices,
+        });
+    }
+}
+
+function beginArc(pos, plane) {
+    ArcTool.begin(arcToolState, plane || currentSketchPlane(), pos);
+    refreshArcPreview();
+    pickInfo.textContent = 'arc  [click endpoint]';
+}
+
+function updateArcAt(pos) {
+    if (!ArcTool.active(arcToolState)) return;
+    ArcTool.update(arcToolState, pos);
+    refreshArcPreview();
+}
+
+// Click 2: lock the chord endpoint. Returns true if accepted.
+function setArcEnd(pos) {
+    const ok = ArcTool.setEnd(arcToolState, pos, 1e-4);
+    if (ok) {
+        refreshArcPreview();
+        pickInfo.textContent = 'arc  [click bulge point]';
+    }
+    return ok;
+}
+
+function commitArc() {
+    if (!ArcTool.active(arcToolState)) return;
+    const poly = ArcTool.commit(arcToolState);
+    destroyArcPreview();
+    if (!poly || poly.length < 2) {
+        pickInfo.textContent = 'arc cancelled (degenerate)';
+        return;
+    }
+    persistOrphanEdges(poly, 'Arc');
+}
+
+function cancelArc() {
+    if (!ArcTool.active(arcToolState)) return;
+    ArcTool.cancel(arcToolState);
+    destroyArcPreview();
+    pickInfo.textContent = 'arc cancelled';
+}
+
 // --- Tape measure ----------------------------------------------------------
 //
 // Two-click distance readout via inference snaps. No geometry is produced —
@@ -2162,6 +2254,28 @@ function handleLeftDown(e) {
             updateCircleAt(hit);
             commitCircle();
         }
+    } else if (currentTool === 'arc') {
+        // Stage 1 (idle): plane resolved from face-pick / ground; first click
+        // begins. Stage 2 (await-end): same locked plane, second click sets
+        // the chord. Stage 3 (await-bulge): third click commits.
+        if (!ArcTool.active(arcToolState)) {
+            const plane = resolveSketchPlane(cx, cy);
+            const hit = Sketch.rayToPlane(
+                screenToRay(cx, cy), plane.origin, plane.normal);
+            if (!hit) return;
+            beginArc(hit, plane);
+            return;
+        }
+        const plane = arcToolState.plane;
+        const hit = Sketch.rayToPlane(
+            screenToRay(cx, cy), plane.origin, plane.normal);
+        if (!hit) return;
+        if (arcToolState.stage === 'await-end') {
+            setArcEnd(hit);
+        } else if (arcToolState.stage === 'await-bulge') {
+            ArcTool.update(arcToolState, hit);
+            commitArc();
+        }
     } else if (currentTool === 'line') {
         if (!lineToolState.active) {
             const plane = resolveSketchPlane(cx, cy);
@@ -2252,6 +2366,12 @@ document.addEventListener('mousemove', (e) => {
     if (lineToolState.active) {
         const resolved = resolveLinePoint(cx, cy);
         if (resolved) updateLineAt(resolved.position);
+        return;
+    }
+    if (ArcTool.active(arcToolState)) {
+        const plane = arcToolState.plane;
+        const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
+        if (hit) updateArcAt(hit);
         return;
     }
     if (tapeToolState.active) {
@@ -2431,7 +2551,8 @@ document.addEventListener('keydown', (e) => {
     // history entries and a mid-drag save would capture a preview state.
     if ((e.ctrlKey || e.metaKey) && !gizmoDrag.active && !pushpull.active &&
         !moveToolState.active && !rectangleToolState.active &&
-        !circleToolState.active && !lineToolState.active) {
+        !circleToolState.active && !lineToolState.active &&
+        !ArcTool.active(arcToolState)) {
         const k = (e.key || '').toLowerCase();
         if (k === 'z' && !e.shiftKey) {
             if (history.canUndo()) history.undo();
@@ -2487,6 +2608,7 @@ document.addEventListener('keydown', (e) => {
         if (rectangleToolState.active)                  { cancelRectangle(); cancelled = true; }
         if (circleToolState.active)                     { cancelCircle(); cancelled = true; }
         if (lineToolState.active)                       { cancelLine(); cancelled = true; }
+        if (ArcTool.active(arcToolState))               { cancelArc(); cancelled = true; }
         if (tapeToolState.active)                       { cancelTape(); cancelled = true; }
         if (!cancelled && registry.editContext !== registry.root) {
             registry.exitContext();
@@ -2950,6 +3072,10 @@ window.__editor = {
     beginLine, updateLineAt, addLinePoint, commitLine, cancelLine,
     resolveLinePoint,
 
-    // Free-floating edges (orphan polylines, arc-tool output later).
+    // Free-floating edges (orphan polylines, arc-tool output).
     persistOrphanEdges,
+
+    // Arc tool. 3-click 2-point + bulge; output is an EdgePrimitive.
+    get arcToolState() { return arcToolState; },
+    beginArc, updateArcAt, setArcEnd, commitArc, cancelArc,
 };
