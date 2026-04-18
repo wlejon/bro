@@ -312,3 +312,78 @@ minionNode.detachAgent();
 // A tower ({capabilities:["basic_attack","hold"]}) has no .moveTo / .laneWalk;
 // attempting to call them throws. A think() that falls through without
 // picking an action defaults to .hold().
+
+
+// -----------------------------------------------------------------------------
+// MCTS planners
+// -----------------------------------------------------------------------------
+//
+// Five flavors, all sharing the same MctsConfig:
+//
+//   createMcts(cfg)           — single agent vs scripted opponents
+//   createDecoupledMcts(cfg)  — simultaneous-move 1v1 (both sides searched)
+//   createTeamMcts(cfg)       — cooperative N-hero joint planner
+//   createTacticMcts(cfg)     — coarse team-tactic planner (Hold / FocusLowestHp / ...)
+//   createLayeredPlanner({ tactic, fine })
+//                             — TacticMcts over TeamMcts with a tactic-match prior
+//
+// MctsConfig fields (all optional):
+//   iterations, budgetMs, rolloutHorizon, simDt, actionRepeat, uctC, seed,
+//   pwAlpha                        — progressive widening α (0 disables)
+//   priorC                         — PUCT weight (0 ⇒ plain UCT with uctC)
+//   tacticWindowDecisions          — LayeredPlanner / TacticMcts only
+//   rolloutPolicy : "random" | "aggressive"
+//   opponentPolicy: "idle"   | "aggressive"    (Mcts / TeamMcts / Tactic / Layered)
+//   prior         : "uniform" | "attackBias" | "tacticMatch"
+//                   (tacticMatch reads `tactic`, `tacticMatchWeight`,
+//                    `tacticOtherWeight`)
+//   evaluator     : "hpDelta"      (Mcts / DecoupledMcts)
+//                 | "teamHpDelta"  (TeamMcts / TacticMcts / LayeredPlanner)
+//
+// A CombatAction is { moveDir, attackSlot, abilitySlot }.
+// A Tactic is { kind: "Hold" | "FocusLowestHp" | "Scatter" | "Retreat" }.
+// Move direction ints are exposed at bro.ai.game.MOVE_DIR, tactic strings at
+// bro.ai.game.TACTIC.
+
+// Single-agent: one hero vs scripted rest
+const mcts = bro.ai.game.createMcts({
+    iterations: 800, budgetMs: 10, rolloutHorizon: 24,
+    rolloutPolicy: "aggressive", opponentPolicy: "aggressive",
+    prior: "attackBias", evaluator: "hpDelta",
+});
+const action = mcts.search(world, hero);
+mcts.advanceRoot(action);
+console.log(mcts.lastStats); // { iterations, bestVisits, elapsedMs, reusedRoot, ... }
+
+// Decoupled 1v1: both sides searched simultaneously (no opponentPolicy)
+const duel = bro.ai.game.createDecoupledMcts({ iterations: 1500, prior: "attackBias" });
+const joint1v1 = duel.search(world, hero, opp); // { hero: CombatAction, opp: CombatAction }
+duel.advanceRoot(joint1v1.hero, joint1v1.opp);
+
+// Cooperative team: one planner, joint action per hero
+const team = bro.ai.game.createTeamMcts({
+    iterations: 1200, rolloutHorizon: 20,
+    rolloutPolicy: "aggressive", opponentPolicy: "aggressive",
+    evaluator: "teamHpDelta",
+});
+const perHero = team.search(world, heroes); // [CombatAction, ...]  (length = heroes.length)
+team.advanceRoot(perHero);
+
+// Hierarchical: tactic every N windows + fine per-hero every call
+const planner = bro.ai.game.createLayeredPlanner({
+    tactic: { iterations: 300, budgetMs: 4, tacticWindowDecisions: 4, actionRepeat: 4 },
+    fine:   { iterations: 600, budgetMs: 6, actionRepeat: 4, priorC: 2.0 },
+    rolloutPolicy: "aggressive",
+    opponentPolicy: "aggressive",
+    evaluator: "teamHpDelta",
+});
+const groupActions = planner.decide(world, heroes); // [CombatAction, ...]
+console.log(planner.committedTactic.kind);          // "FocusLowestHp", etc.
+console.log(planner.windowsUntilReplan);
+console.log(planner.lastStats.fineStats.iterations);
+
+// Helpers for custom planners / UI debug:
+const legalA = bro.ai.game.legalActions(hero, world);     // [CombatAction, ...]
+const legalT = bro.ai.game.legalTactics(world, heroes);   // [Tactic, ...]
+const concrete = bro.ai.game.tacticToAction(              // Tactic → CombatAction
+    { kind: bro.ai.game.TACTIC.FocusLowestHp }, hero, world);

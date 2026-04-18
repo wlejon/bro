@@ -55,6 +55,22 @@ struct MctsData {
     brogameagent::mcts::Mcts mcts;
 };
 
+struct DecoupledMctsData {
+    brogameagent::mcts::DecoupledMcts mcts;
+};
+
+struct TeamMctsData {
+    brogameagent::mcts::TeamMcts mcts;
+};
+
+struct TacticMctsData {
+    brogameagent::mcts::TacticMcts mcts;
+};
+
+struct LayeredPlannerData {
+    brogameagent::mcts::LayeredPlanner planner;
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -395,68 +411,313 @@ static JSValue js_createReplayReader(JSContext* ctx, JSValueConst, int, JSValueC
     return qjsbind::wrap<ReplayReaderData>(ctx, new ReplayReaderData());
 }
 
+// ─── MCTS shared parse/marshal helpers ─────────────────────────────────────
+
+static brogameagent::mcts::MctsConfig parseMctsConfig(JSContext* ctx, JSValueConst opts) {
+    brogameagent::mcts::MctsConfig c{};
+    c.iterations              = getInt32Prop(ctx, opts, "iterations", c.iterations);
+    c.budget_ms               = getInt32Prop(ctx, opts, "budgetMs", c.budget_ms);
+    c.rollout_horizon         = getInt32Prop(ctx, opts, "rolloutHorizon", c.rollout_horizon);
+    c.sim_dt                  = (float)getDoubleProp(ctx, opts, "simDt", c.sim_dt);
+    c.action_repeat           = getInt32Prop(ctx, opts, "actionRepeat", c.action_repeat);
+    c.uct_c                   = (float)getDoubleProp(ctx, opts, "uctC", c.uct_c);
+    c.seed                    = (uint64_t)getDoubleProp(ctx, opts, "seed", (double)c.seed);
+    c.tactic_window_decisions = getInt32Prop(ctx, opts, "tacticWindowDecisions", c.tactic_window_decisions);
+    c.pw_alpha                = (float)getDoubleProp(ctx, opts, "pwAlpha", c.pw_alpha);
+    c.prior_c                 = (float)getDoubleProp(ctx, opts, "priorC", c.prior_c);
+    return c;
+}
+
+static std::string readStringProp(JSContext* ctx, JSValueConst obj, const char* key) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    std::string out;
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { out = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
+static std::shared_ptr<brogameagent::mcts::IRolloutPolicy>
+parseRolloutPolicy(JSContext* ctx, JSValueConst opts) {
+    std::string kind = readStringProp(ctx, opts, "rolloutPolicy");
+    if (kind == "aggressive") return std::make_shared<brogameagent::mcts::AggressiveRollout>();
+    if (kind == "random")     return std::make_shared<brogameagent::mcts::RandomRollout>();
+    return nullptr;
+}
+
+static brogameagent::mcts::OpponentPolicy
+parseOpponentPolicy(JSContext* ctx, JSValueConst opts) {
+    std::string kind = readStringProp(ctx, opts, "opponentPolicy");
+    if (kind == "aggressive") return brogameagent::mcts::policy_aggressive;
+    if (kind == "idle")       return brogameagent::mcts::policy_idle;
+    return {};
+}
+
+static brogameagent::mcts::TacticKind parseTacticKindStr(const std::string& s) {
+    if (s == "FocusLowestHp") return brogameagent::mcts::TacticKind::FocusLowestHp;
+    if (s == "Scatter")       return brogameagent::mcts::TacticKind::Scatter;
+    if (s == "Retreat")       return brogameagent::mcts::TacticKind::Retreat;
+    return brogameagent::mcts::TacticKind::Hold;
+}
+
+static const char* tacticKindStr(brogameagent::mcts::TacticKind k) {
+    switch (k) {
+        case brogameagent::mcts::TacticKind::FocusLowestHp: return "FocusLowestHp";
+        case brogameagent::mcts::TacticKind::Scatter:       return "Scatter";
+        case brogameagent::mcts::TacticKind::Retreat:       return "Retreat";
+        default:                                            return "Hold";
+    }
+}
+
+// Accept either { kind: "Hold" } or the bare string "Hold".
+static brogameagent::mcts::Tactic parseTactic(JSContext* ctx, JSValueConst v) {
+    brogameagent::mcts::Tactic t{};
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { t.kind = parseTacticKindStr(s); JS_FreeCString(ctx, s); }
+    } else if (JS_IsObject(v)) {
+        std::string k = readStringProp(ctx, v, "kind");
+        t.kind = parseTacticKindStr(k);
+    }
+    return t;
+}
+
+static JSValue makeTactic(JSContext* ctx, const brogameagent::mcts::Tactic& t) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "kind", JS_NewString(ctx, tacticKindStr(t.kind)));
+    return obj;
+}
+
+static brogameagent::mcts::CombatAction parseCombatAction(JSContext* ctx, JSValueConst obj) {
+    brogameagent::mcts::CombatAction a;
+    a.move_dir     = (brogameagent::mcts::MoveDir)getInt32Prop(ctx, obj, "moveDir", 0);
+    a.attack_slot  = (int8_t)getInt32Prop(ctx, obj, "attackSlot", -1);
+    a.ability_slot = (int8_t)getInt32Prop(ctx, obj, "abilitySlot", -1);
+    return a;
+}
+
+static JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "moveDir",     JS_NewInt32(ctx, (int)a.move_dir));
+    JS_SetPropertyStr(ctx, obj, "attackSlot",  JS_NewInt32(ctx, (int)a.attack_slot));
+    JS_SetPropertyStr(ctx, obj, "abilitySlot", JS_NewInt32(ctx, (int)a.ability_slot));
+    return obj;
+}
+
+static JSValue makeSearchStats(JSContext* ctx, const brogameagent::mcts::SearchStats& s) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "iterations",   JS_NewInt32(ctx, s.iterations));
+    JS_SetPropertyStr(ctx, obj, "rootChildren", JS_NewInt32(ctx, s.root_children));
+    JS_SetPropertyStr(ctx, obj, "treeSize",     JS_NewInt32(ctx, s.tree_size));
+    JS_SetPropertyStr(ctx, obj, "bestMean",     JS_NewFloat64(ctx, s.best_mean));
+    JS_SetPropertyStr(ctx, obj, "bestVisits",   JS_NewInt32(ctx, s.best_visits));
+    JS_SetPropertyStr(ctx, obj, "elapsedMs",    JS_NewInt32(ctx, s.elapsed_ms));
+    JS_SetPropertyStr(ctx, obj, "reusedRoot",   JS_NewBool(ctx, s.reused_root));
+    return obj;
+}
+
+static std::vector<brogameagent::Agent*>
+parseHeroesArray(JSContext* ctx, JSValueConst arr) {
+    std::vector<brogameagent::Agent*> out;
+    if (!JS_IsArray(arr)) return out;
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    int32_t len = 0;
+    JS_ToInt32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    out.reserve(len);
+    for (int32_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, arr, i);
+        auto* ad = qjsbind::unwrap<AgentData>(ctx, v);
+        if (ad) out.push_back(&ad->agent);
+        JS_FreeValue(ctx, v);
+    }
+    return out;
+}
+
+static std::vector<brogameagent::mcts::CombatAction>
+parseCombatActionArray(JSContext* ctx, JSValueConst arr) {
+    std::vector<brogameagent::mcts::CombatAction> out;
+    if (!JS_IsArray(arr)) return out;
+    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    int32_t len = 0;
+    JS_ToInt32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    out.reserve(len);
+    for (int32_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, arr, i);
+        out.push_back(parseCombatAction(ctx, v));
+        JS_FreeValue(ctx, v);
+    }
+    return out;
+}
+
+// Build an IPrior from opts.prior string (+ optional TacticPrior knobs).
+// Recognized values: "uniform", "attackBias", "tacticMatch".
+static std::shared_ptr<brogameagent::mcts::IPrior>
+parsePrior(JSContext* ctx, JSValueConst opts) {
+    std::string kind = readStringProp(ctx, opts, "prior");
+    if (kind.empty()) return nullptr;
+    if (kind == "uniform")    return std::make_shared<brogameagent::mcts::UniformPrior>();
+    if (kind == "attackBias") return std::make_shared<brogameagent::mcts::AttackBiasPrior>();
+    if (kind == "tacticMatch") {
+        auto tp = std::make_shared<brogameagent::mcts::TacticPrior>();
+        JSValue tv = JS_GetPropertyStr(ctx, opts, "tactic");
+        if (!JS_IsUndefined(tv) && !JS_IsNull(tv)) tp->set_tactic(parseTactic(ctx, tv));
+        JS_FreeValue(ctx, tv);
+        tp->set_match_weight((float)getDoubleProp(ctx, opts, "tacticMatchWeight", 8.0));
+        tp->set_other_weight((float)getDoubleProp(ctx, opts, "tacticOtherWeight", 1.0));
+        return tp;
+    }
+    return nullptr;
+}
+
+static std::shared_ptr<brogameagent::mcts::IEvaluator>
+parseHeroEvaluator(JSContext* ctx, JSValueConst opts) {
+    std::string kind = readStringProp(ctx, opts, "evaluator");
+    if (kind == "hpDelta") return std::make_shared<brogameagent::mcts::HpDeltaEvaluator>();
+    return nullptr;
+}
+
+static std::shared_ptr<brogameagent::mcts::ITeamEvaluator>
+parseTeamEvaluator(JSContext* ctx, JSValueConst opts) {
+    std::string kind = readStringProp(ctx, opts, "evaluator");
+    if (kind == "teamHpDelta") return std::make_shared<brogameagent::mcts::TeamHpDeltaEvaluator>();
+    return nullptr;
+}
+
 // bro.ai.game.createMcts(config?)
 //
 // Config fields (all optional):
-//   iterations, budgetMs, rolloutHorizon, simDt, actionRepeat, uctC, seed
-//   rolloutPolicy : "random" | "aggressive" — leave unset to use the
-//                   library default (RandomRollout).
-//   opponentPolicy: "idle"   | "aggressive" — leave unset to use the
-//                   library default (idle/no-op).
-//
-// Policy defaults match the C++ defaults (random rollout, idle opponent),
-// which is the right baseline for a generic MCTS. For combat apps the
-// caller should opt into "aggressive" on both so rollouts are informative.
+//   iterations, budgetMs, rolloutHorizon, simDt, actionRepeat, uctC, seed,
+//   pwAlpha, priorC
+//   rolloutPolicy : "random" | "aggressive"
+//   opponentPolicy: "idle"   | "aggressive"
+//   prior         : "uniform" | "attackBias" | "tacticMatch"
+//                   (tacticMatch also reads `tactic`, `tacticMatchWeight`,
+//                    `tacticOtherWeight`)
+//   evaluator     : "hpDelta"
 static JSValue js_createMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* data = new MctsData();
-
     if (argc >= 1 && JS_IsObject(argv[0])) {
         JSValue opts = argv[0];
-        auto& cfg = data->mcts.config();
-        brogameagent::mcts::MctsConfig c = cfg;
-        c.iterations      = getInt32Prop(ctx, opts, "iterations", c.iterations);
-        c.budget_ms        = getInt32Prop(ctx, opts, "budgetMs", c.budget_ms);
-        c.rollout_horizon  = getInt32Prop(ctx, opts, "rolloutHorizon", c.rollout_horizon);
-        c.sim_dt           = (float)getDoubleProp(ctx, opts, "simDt", c.sim_dt);
-        c.action_repeat    = getInt32Prop(ctx, opts, "actionRepeat", c.action_repeat);
-        c.uct_c            = (float)getDoubleProp(ctx, opts, "uctC", c.uct_c);
-        c.seed             = (uint64_t)getDoubleProp(ctx, opts, "seed", (double)c.seed);
-        data->mcts.set_config(c);
-
-        JSValue rp = JS_GetPropertyStr(ctx, opts, "rolloutPolicy");
-        if (JS_IsString(rp)) {
-            const char* s = JS_ToCString(ctx, rp);
-            if (s) {
-                std::string kind = s;
-                JS_FreeCString(ctx, s);
-                if (kind == "aggressive") {
-                    data->mcts.set_rollout_policy(
-                        std::make_shared<brogameagent::mcts::AggressiveRollout>());
-                } else if (kind == "random") {
-                    data->mcts.set_rollout_policy(
-                        std::make_shared<brogameagent::mcts::RandomRollout>());
-                }
-            }
-        }
-        JS_FreeValue(ctx, rp);
-
-        JSValue op = JS_GetPropertyStr(ctx, opts, "opponentPolicy");
-        if (JS_IsString(op)) {
-            const char* s = JS_ToCString(ctx, op);
-            if (s) {
-                std::string kind = s;
-                JS_FreeCString(ctx, s);
-                if (kind == "aggressive") {
-                    data->mcts.set_opponent_policy(brogameagent::mcts::policy_aggressive);
-                } else if (kind == "idle") {
-                    data->mcts.set_opponent_policy(brogameagent::mcts::policy_idle);
-                }
-            }
-        }
-        JS_FreeValue(ctx, op);
+        data->mcts.set_config(parseMctsConfig(ctx, opts));
+        if (auto p = parseRolloutPolicy(ctx, opts))   data->mcts.set_rollout_policy(std::move(p));
+        if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
+        if (auto pr = parsePrior(ctx, opts))          data->mcts.set_prior(std::move(pr));
+        if (auto ev = parseHeroEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
     }
-
     return qjsbind::wrap<MctsData>(ctx, data);
+}
+
+// bro.ai.game.createDecoupledMcts(config?)
+// Same config surface as createMcts, minus opponentPolicy (both sides are
+// searched). Evaluator is hero-scoped (IEvaluator).
+static JSValue js_createDecoupledMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* data = new DecoupledMctsData();
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        JSValue opts = argv[0];
+        data->mcts.set_config(parseMctsConfig(ctx, opts));
+        if (auto p = parseRolloutPolicy(ctx, opts))  data->mcts.set_rollout_policy(std::move(p));
+        if (auto pr = parsePrior(ctx, opts))         data->mcts.set_prior(std::move(pr));
+        if (auto ev = parseHeroEvaluator(ctx, opts)) data->mcts.set_evaluator(std::move(ev));
+    }
+    return qjsbind::wrap<DecoupledMctsData>(ctx, data);
+}
+
+// bro.ai.game.createTeamMcts(config?)
+// Cooperative multi-agent MCTS. Evaluator is team-scoped (ITeamEvaluator).
+static JSValue js_createTeamMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* data = new TeamMctsData();
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        JSValue opts = argv[0];
+        data->mcts.set_config(parseMctsConfig(ctx, opts));
+        if (auto p = parseRolloutPolicy(ctx, opts))   data->mcts.set_rollout_policy(std::move(p));
+        if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
+        if (auto pr = parsePrior(ctx, opts))          data->mcts.set_prior(std::move(pr));
+        if (auto ev = parseTeamEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+    }
+    return qjsbind::wrap<TeamMctsData>(ctx, data);
+}
+
+// bro.ai.game.createTacticMcts(config?)
+// Coarse team-tactic planner. Team-scoped evaluator.
+static JSValue js_createTacticMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* data = new TacticMctsData();
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        JSValue opts = argv[0];
+        data->mcts.set_config(parseMctsConfig(ctx, opts));
+        if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
+        if (auto ev = parseTeamEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+    }
+    return qjsbind::wrap<TacticMctsData>(ctx, data);
+}
+
+// bro.ai.game.createLayeredPlanner({ tactic?, fine? })
+// tactic / fine are MctsConfig objects (same fields as createMcts).
+// Top-level opts may also carry rolloutPolicy, opponentPolicy, evaluator
+// (team-scoped) — these are shared across both layers.
+static JSValue js_createLayeredPlanner(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* data = new LayeredPlannerData();
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        JSValue opts = argv[0];
+        brogameagent::mcts::LayeredPlanner::Config cfg{};
+
+        JSValue tc = JS_GetPropertyStr(ctx, opts, "tactic");
+        if (JS_IsObject(tc)) cfg.tactic_cfg = parseMctsConfig(ctx, tc);
+        JS_FreeValue(ctx, tc);
+
+        JSValue fc = JS_GetPropertyStr(ctx, opts, "fine");
+        if (JS_IsObject(fc)) cfg.fine_cfg = parseMctsConfig(ctx, fc);
+        JS_FreeValue(ctx, fc);
+
+        data->planner.set_config(cfg);
+
+        if (auto p = parseRolloutPolicy(ctx, opts))   data->planner.set_rollout_policy(std::move(p));
+        if (auto op = parseOpponentPolicy(ctx, opts)) data->planner.set_opponent_policy(std::move(op));
+        if (auto ev = parseTeamEvaluator(ctx, opts))  data->planner.set_team_evaluator(std::move(ev));
+    }
+    return qjsbind::wrap<LayeredPlannerData>(ctx, data);
+}
+
+// bro.ai.game.legalActions(agent, world) → [CombatAction]
+static JSValue js_legalActions(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "legalActions(agent, world)");
+    auto* ad = qjsbind::unwrap<AgentData>(ctx, argv[0]);
+    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[1]);
+    if (!ad || !wd) return JS_ThrowTypeError(ctx, "invalid agent or world");
+    auto acts = brogameagent::mcts::legal_actions(ad->agent, wd->world);
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < acts.size(); i++) {
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeCombatAction(ctx, acts[i]));
+    }
+    return arr;
+}
+
+// bro.ai.game.legalTactics(world, heroes[]) → [{kind}]
+static JSValue js_legalTactics(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "legalTactics(world, heroes)");
+    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+    if (!wd) return JS_ThrowTypeError(ctx, "invalid world");
+    auto heroes = parseHeroesArray(ctx, argv[1]);
+    auto tactics = brogameagent::mcts::legal_tactics(heroes, wd->world);
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < tactics.size(); i++) {
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeTactic(ctx, tactics[i]));
+    }
+    return arr;
+}
+
+// bro.ai.game.tacticToAction(tactic, hero, world) → CombatAction
+static JSValue js_tacticToAction(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "tacticToAction(tactic, hero, world)");
+    auto t = parseTactic(ctx, argv[0]);
+    auto* ad = qjsbind::unwrap<AgentData>(ctx, argv[1]);
+    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[2]);
+    if (!ad || !wd) return JS_ThrowTypeError(ctx, "invalid hero or world");
+    auto a = brogameagent::mcts::tactic_to_action(t, ad->agent, wd->world);
+    return makeCombatAction(ctx, a);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1331,14 +1592,148 @@ void AIBindings::install(JSContext* ctx) {
                 [](MctsData* d) { d->mcts.reset_tree(); })
             .get("lastStats",
                 [](MctsData* d, JSContext* ctx) -> JSValue {
-                    const auto& s = d->mcts.last_stats();
+                    return makeSearchStats(ctx, d->mcts.last_stats());
+                });
+    }
+
+    // ─── DecoupledMcts class ───────────────────────────────────────────
+    {
+        qjsbind::Class<DecoupledMctsData>(ctx, "AIDecoupledMcts", qjsbind::NoGlobal)
+            .method_raw("search",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<DecoupledMctsData>(ctx, this_val);
+                    if (!md || argc < 3) return JS_ThrowTypeError(ctx, "search(world, hero, opp)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    auto* hd = qjsbind::unwrap<AgentData>(ctx, argv[1]);
+                    auto* od = qjsbind::unwrap<AgentData>(ctx, argv[2]);
+                    if (!wd || !hd || !od) return JS_ThrowTypeError(ctx, "invalid world/hero/opp");
+                    auto joint = md->mcts.search(wd->world, hd->agent, od->agent);
                     JSValue obj = JS_NewObject(ctx);
-                    JS_SetPropertyStr(ctx, obj, "iterations", JS_NewInt32(ctx, s.iterations));
-                    JS_SetPropertyStr(ctx, obj, "rootChildren", JS_NewInt32(ctx, s.root_children));
-                    JS_SetPropertyStr(ctx, obj, "treeSize", JS_NewInt32(ctx, s.tree_size));
-                    JS_SetPropertyStr(ctx, obj, "bestMean", JS_NewFloat64(ctx, s.best_mean));
-                    JS_SetPropertyStr(ctx, obj, "bestVisits", JS_NewInt32(ctx, s.best_visits));
-                    JS_SetPropertyStr(ctx, obj, "elapsedMs", JS_NewInt32(ctx, s.elapsed_ms));
+                    JS_SetPropertyStr(ctx, obj, "hero", makeCombatAction(ctx, joint.hero));
+                    JS_SetPropertyStr(ctx, obj, "opp",  makeCombatAction(ctx, joint.opp));
+                    return obj;
+                }, 3)
+            .method_raw("advanceRoot",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<DecoupledMctsData>(ctx, this_val);
+                    if (!md || argc < 2) return JS_UNDEFINED;
+                    md->mcts.advance_root(parseCombatAction(ctx, argv[0]),
+                                          parseCombatAction(ctx, argv[1]));
+                    return JS_UNDEFINED;
+                }, 2)
+            .method("resetTree",
+                [](DecoupledMctsData* d) { d->mcts.reset_tree(); })
+            .get("lastStats",
+                [](DecoupledMctsData* d, JSContext* ctx) -> JSValue {
+                    return makeSearchStats(ctx, d->mcts.last_stats());
+                });
+    }
+
+    // ─── TeamMcts class ────────────────────────────────────────────────
+    {
+        qjsbind::Class<TeamMctsData>(ctx, "AITeamMcts", qjsbind::NoGlobal)
+            .method_raw("search",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<TeamMctsData>(ctx, this_val);
+                    if (!md || argc < 2) return JS_ThrowTypeError(ctx, "search(world, heroes)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    if (!wd) return JS_ThrowTypeError(ctx, "invalid world");
+                    auto heroes = parseHeroesArray(ctx, argv[1]);
+                    auto joint = md->mcts.search(wd->world, heroes);
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < joint.per_hero.size(); i++) {
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i,
+                            makeCombatAction(ctx, joint.per_hero[i]));
+                    }
+                    return arr;
+                }, 2)
+            .method_raw("advanceRoot",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<TeamMctsData>(ctx, this_val);
+                    if (!md || argc < 1) return JS_UNDEFINED;
+                    brogameagent::mcts::TeamMcts::JointAction j;
+                    j.per_hero = parseCombatActionArray(ctx, argv[0]);
+                    md->mcts.advance_root(j);
+                    return JS_UNDEFINED;
+                }, 1)
+            .method("resetTree",
+                [](TeamMctsData* d) { d->mcts.reset_tree(); })
+            .get("lastStats",
+                [](TeamMctsData* d, JSContext* ctx) -> JSValue {
+                    return makeSearchStats(ctx, d->mcts.last_stats());
+                });
+    }
+
+    // ─── TacticMcts class ──────────────────────────────────────────────
+    {
+        qjsbind::Class<TacticMctsData>(ctx, "AITacticMcts", qjsbind::NoGlobal)
+            .method_raw("search",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<TacticMctsData>(ctx, this_val);
+                    if (!md || argc < 2) return JS_ThrowTypeError(ctx, "search(world, heroes)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    if (!wd) return JS_ThrowTypeError(ctx, "invalid world");
+                    auto heroes = parseHeroesArray(ctx, argv[1]);
+                    auto t = md->mcts.search(wd->world, heroes);
+                    return makeTactic(ctx, t);
+                }, 2)
+            .method_raw("advanceRoot",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<TacticMctsData>(ctx, this_val);
+                    if (!md || argc < 1) return JS_UNDEFINED;
+                    md->mcts.advance_root(parseTactic(ctx, argv[0]));
+                    return JS_UNDEFINED;
+                }, 1)
+            .method("resetTree",
+                [](TacticMctsData* d) { d->mcts.reset_tree(); })
+            .get("lastStats",
+                [](TacticMctsData* d, JSContext* ctx) -> JSValue {
+                    return makeSearchStats(ctx, d->mcts.last_stats());
+                });
+    }
+
+    // ─── LayeredPlanner class ──────────────────────────────────────────
+    {
+        qjsbind::Class<LayeredPlannerData>(ctx, "AILayeredPlanner", qjsbind::NoGlobal)
+            .method_raw("decide",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* pd = qjsbind::unwrap<LayeredPlannerData>(ctx, this_val);
+                    if (!pd || argc < 2) return JS_ThrowTypeError(ctx, "decide(world, heroes)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    if (!wd) return JS_ThrowTypeError(ctx, "invalid world");
+                    auto heroes = parseHeroesArray(ctx, argv[1]);
+                    auto joint = pd->planner.decide(wd->world, heroes);
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < joint.per_hero.size(); i++) {
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i,
+                            makeCombatAction(ctx, joint.per_hero[i]));
+                    }
+                    return arr;
+                }, 2)
+            .method("reset",
+                [](LayeredPlannerData* d) { d->planner.reset(); })
+            .get("committedTactic",
+                [](LayeredPlannerData* d, JSContext* ctx) -> JSValue {
+                    return makeTactic(ctx, d->planner.committed_tactic());
+                })
+            .get("windowsUntilReplan",
+                [](LayeredPlannerData* d) -> int {
+                    return d->planner.windows_until_replan();
+                })
+            .get("lastStats",
+                [](LayeredPlannerData* d, JSContext* ctx) -> JSValue {
+                    const auto& s = d->planner.last_stats();
+                    JSValue obj = JS_NewObject(ctx);
+                    JS_SetPropertyStr(ctx, obj, "committedTactic",
+                        makeTactic(ctx, s.committed_tactic));
+                    JS_SetPropertyStr(ctx, obj, "windowsUntilReplan",
+                        JS_NewInt32(ctx, s.windows_until_replan));
+                    JS_SetPropertyStr(ctx, obj, "replannedThisCall",
+                        JS_NewBool(ctx, s.replanned_this_call));
+                    JS_SetPropertyStr(ctx, obj, "tacticStats",
+                        makeSearchStats(ctx, s.tactic_stats));
+                    JS_SetPropertyStr(ctx, obj, "fineStats",
+                        makeSearchStats(ctx, s.fine_stats));
                     return obj;
                 });
     }
@@ -1403,6 +1798,20 @@ void AIBindings::install(JSContext* ctx) {
     // MCTS
     JS_SetPropertyStr(ctx, gameObj, "createMcts",
         JS_NewCFunction(ctx, js_createMcts, "createMcts", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createDecoupledMcts",
+        JS_NewCFunction(ctx, js_createDecoupledMcts, "createDecoupledMcts", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createTeamMcts",
+        JS_NewCFunction(ctx, js_createTeamMcts, "createTeamMcts", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createTacticMcts",
+        JS_NewCFunction(ctx, js_createTacticMcts, "createTacticMcts", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createLayeredPlanner",
+        JS_NewCFunction(ctx, js_createLayeredPlanner, "createLayeredPlanner", 1));
+    JS_SetPropertyStr(ctx, gameObj, "legalActions",
+        JS_NewCFunction(ctx, js_legalActions, "legalActions", 2));
+    JS_SetPropertyStr(ctx, gameObj, "legalTactics",
+        JS_NewCFunction(ctx, js_legalTactics, "legalTactics", 2));
+    JS_SetPropertyStr(ctx, gameObj, "tacticToAction",
+        JS_NewCFunction(ctx, js_tacticToAction, "tacticToAction", 3));
 
     // Capabilities (JS-authored capability registration)
     installRegisterCapability(ctx, gameObj);
@@ -1471,6 +1880,33 @@ void AIBindings::install(JSContext* ctx) {
         JS_NewInt32(ctx, brogameagent::action_mask::TOTAL));
     JS_SetPropertyStr(ctx, gameObj, "N_ENEMY_SLOTS",
         JS_NewInt32(ctx, brogameagent::action_mask::N_ENEMY_SLOTS));
+
+    // Tactic kind string constants — passed to createLayeredPlanner priors,
+    // TacticMcts.advanceRoot, tacticToAction, etc.
+    {
+        JSValue t = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, t, "Hold",          JS_NewString(ctx, "Hold"));
+        JS_SetPropertyStr(ctx, t, "FocusLowestHp", JS_NewString(ctx, "FocusLowestHp"));
+        JS_SetPropertyStr(ctx, t, "Scatter",       JS_NewString(ctx, "Scatter"));
+        JS_SetPropertyStr(ctx, t, "Retreat",       JS_NewString(ctx, "Retreat"));
+        JS_SetPropertyStr(ctx, gameObj, "TACTIC", t);
+    }
+
+    // Move direction integer constants — match CombatAction.move_dir values
+    // returned by search() and accepted by advanceRoot().
+    {
+        JSValue m = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, m, "Hold", JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::Hold));
+        JS_SetPropertyStr(ctx, m, "N",    JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::N));
+        JS_SetPropertyStr(ctx, m, "NE",   JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::NE));
+        JS_SetPropertyStr(ctx, m, "E",    JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::E));
+        JS_SetPropertyStr(ctx, m, "SE",   JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::SE));
+        JS_SetPropertyStr(ctx, m, "S",    JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::S));
+        JS_SetPropertyStr(ctx, m, "SW",   JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::SW));
+        JS_SetPropertyStr(ctx, m, "W",    JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::W));
+        JS_SetPropertyStr(ctx, m, "NW",   JS_NewInt32(ctx, (int)brogameagent::mcts::MoveDir::NW));
+        JS_SetPropertyStr(ctx, gameObj, "MOVE_DIR", m);
+    }
 
     JS_SetPropertyStr(ctx, aiObj, "game", gameObj);
     JS_FreeValue(ctx, aiObj);
