@@ -194,6 +194,73 @@ User settings are stored in `.bro_settings.json` next to the executable. The fil
 
 This file is engine-global (shared across all apps). It is written automatically on every `bro.settings.set()` or `bro.settings.rebindAction()` call. It is read at engine startup.
 
+## Preferences modal
+
+The engine ships a standard Preferences dialog reachable via **Edit → Preferences** or however the app rebinds `system_toggle_settings`. It's a modal: backdrop click or **ESC** dismisses it.
+
+Default panels are `Graphics`, `Audio`, and `Input`, covering the keys in the tables above. Apps extend the dialog by dropping HTML files into `apps/<app>/system/settings/`. The engine scans that directory at startup and the nav auto-populates tabs from whatever it finds — no registration step.
+
+### Adding an app panel
+
+Create `apps/<app>/system/settings/gameplay.html`:
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+<title>Gameplay</title>
+<style>
+html, body { margin: 0; padding: 0; background: transparent;
+             font-family: Consolas, monospace; font-size: 12px; color: #e0e0e0; }
+#panel { position: absolute; background: #1a1a1a; padding: 24px 28px; box-sizing: border-box; }
+h1 { margin: 0 0 20px 0; font-size: 16px; color: #e0e0e0; }
+.row { margin-bottom: 14px; }
+.label { display: inline-block; width: 140px; color: #999; }
+</style>
+</head>
+<body>
+<div id="panel">
+    <h1>Gameplay</h1>
+    <div class="row"><span class="label">Difficulty</span>
+        <select id="difficulty">
+            <option value="easy">Easy</option>
+            <option value="normal">Normal</option>
+            <option value="hard">Hard</option>
+        </select>
+    </div>
+</div>
+
+<script>
+(function() {
+    // Card layout constants — match system/nav.html so the panel lines up
+    // with the modal's content region.
+    var CARD_W = 720, CARD_H = 520, SIDEBAR_W = 180, HEADER_H = 44;
+    var panel = document.getElementById('panel');
+    function positionPanel() {
+        var vp = __bro.getViewport();
+        var cl = Math.max(0, Math.floor((vp.width - CARD_W) / 2));
+        var ct = Math.max(0, Math.floor((vp.height - CARD_H) / 2));
+        panel.style.setProperty('left', (cl + SIDEBAR_W) + 'px');
+        panel.style.setProperty('top', (ct + HEADER_H) + 'px');
+        panel.style.setProperty('width', (CARD_W - SIDEBAR_W) + 'px');
+        panel.style.setProperty('height', (CARD_H - HEADER_H) + 'px');
+    }
+    positionPanel();
+    window.addEventListener('resize', positionPanel);
+
+    var sel = document.getElementById('difficulty');
+    sel.value = bro.settings.get('game.difficulty') || 'normal';
+    sel.addEventListener('change', function() {
+        bro.settings.set('game.difficulty', sel.value);
+    });
+})();
+</script>
+</body>
+</html>
+```
+
+The tab label comes from the `<title>` element; the file's stem (`gameplay`) becomes the panel id. Use `bro.settings.set(...)` for any key — custom app keys are persisted to `.bro_settings.json` alongside engine keys and survive restarts.
+
 ## bro.json integration
 
 Settings from `bro.json` flow into the app override layer. These keys are supported:

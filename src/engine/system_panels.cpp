@@ -109,6 +109,28 @@ void Engine::loadSystemPanels(const std::string& systemDir) {
     }
 
     LOG_INFO("System panels: loaded %zu panel(s)", systemDocs_.size());
+
+    // All panels are in systemDocs_ — fire __onPanelsReady on each so scripts
+    // that query the panel list (e.g. the preferences nav building tabs) see
+    // the full set rather than only the panels loaded before them.
+    for (auto& doc : systemDocs_) {
+        if (!doc.jsCtx) continue;
+        JSContext* ctx = doc.jsCtx;
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue fn = JS_GetPropertyStr(ctx, global, "__onPanelsReady");
+        if (JS_IsFunction(ctx, fn)) {
+            JSValue r = JS_Call(ctx, fn, global, 0, nullptr);
+            if (JS_IsException(r)) {
+                JSValue ex = JS_GetException(ctx);
+                const char* s = JS_ToCString(ctx, ex);
+                if (s) { LOG_ERROR("__onPanelsReady: %s", s); JS_FreeCString(ctx, s); }
+                JS_FreeValue(ctx, ex);
+            }
+            JS_FreeValue(ctx, r);
+        }
+        JS_FreeValue(ctx, fn);
+        JS_FreeValue(ctx, global);
+    }
 }
 
 void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& relPath) {
@@ -210,7 +232,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         {
             layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
             doc.document->resolveStyles();
-            doc.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
+            doc.document->performLayout(static_cast<float>(viewportWidth_),
+                                        static_cast<float>(viewportHeight_), textMetrics);
         }
 
         LOG_INFO("System panels: loaded panel '%s'", doc.name.c_str());
@@ -249,7 +272,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         {
             layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
             doc.document->resolveStyles();
-            doc.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
+            doc.document->performLayout(static_cast<float>(viewportWidth_),
+                                        static_cast<float>(viewportHeight_), textMetrics);
         }
 
         // Move into vector, then create DrawTraversal pointing to stable fontManager
@@ -393,6 +417,45 @@ void Engine::installBroObject(SystemDocument& doc) {
             JS_ToInt64(cx, &p, fdata[0]);
             auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
             return JS_NewBool(cx, self && self->isSystemVisible());
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.getSettingsPanels() — enumerate settings panels as [{name, label}].
+    // Used by the preferences nav to build tabs dynamically; apps add a panel
+    // by dropping HTML at apps/<name>/system/settings/<panel>.html.
+    JS_SetPropertyStr(ctx, bro, "getSettingsPanels",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            JSValue arr = JS_NewArray(cx);
+            if (!self) return arr;
+            uint32_t idx = 0;
+            for (auto& d : self->systemDocs_) {
+                if (d.group != "settings") continue;
+                JSValue item = JS_NewObject(cx);
+                JS_SetPropertyStr(cx, item, "name", JS_NewString(cx, d.name.c_str()));
+                JS_SetPropertyStr(cx, item, "label", JS_NewString(cx, d.tabLabel.c_str()));
+                JS_SetPropertyUint32(cx, arr, idx++, item);
+            }
+            return arr;
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.getViewport() — current viewport metrics for panels to size with.
+    JS_SetPropertyStr(ctx, bro, "getViewport",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            JSValue o = JS_NewObject(cx);
+            if (!self) return o;
+            JS_SetPropertyStr(cx, o, "width", JS_NewInt32(cx, self->viewportWidth()));
+            JS_SetPropertyStr(cx, o, "height", JS_NewInt32(cx, self->viewportHeight()));
+            JS_SetPropertyStr(cx, o, "contentTop", JS_NewInt32(cx, self->contentTop()));
+            return o;
         }, 0, 0, 1, &ptrVal));
 
     JS_SetPropertyStr(ctx, global, "__bro", bro);
@@ -551,9 +614,11 @@ void Engine::renderSystemPanels() {
         if (doc.document->isDirty()) {
             layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
             doc.document->resolveStyles();
-            // performLayout() rebuilds the persistent layout tree when
-            // structureDirty_ is set and clears the flag itself.
-            doc.document->performLayout(static_cast<float>(viewportWidth_), textMetrics);
+            // Pass both dims so height:100% / viewport-relative CSS resolves
+            // (the preferences modal relies on a full-viewport backdrop).
+            doc.document->performLayout(static_cast<float>(viewportWidth_),
+                                        static_cast<float>(viewportHeight_),
+                                        textMetrics);
             doc.document->clearDirty();
         }
     }
@@ -587,7 +652,7 @@ void Engine::resizeSystemPanels(int w, int h) {
         if (doc.document) {
             layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
             doc.document->resolveStyles();
-            doc.document->performLayout(static_cast<float>(w), textMetrics);
+            doc.document->performLayout(static_cast<float>(w), static_cast<float>(h), textMetrics);
         }
     }
 }

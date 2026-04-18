@@ -853,6 +853,14 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
+    // ESC closes the preferences modal (if open). Matches platform convention
+    // for modal dialogs and frees apps to use ESC freely when it's closed.
+    if (keycode == SDLK_ESCAPE && !repeat && systemSettingsVisible_) {
+        toggleSystemSettings();
+        uiDirty_ = true;
+        return;
+    }
+
     // Check for system actions via the settings action binding system
     if (!repeat && settings_) {
         std::string webKey = sdlKeycodeToWebKey(keycode, mod);

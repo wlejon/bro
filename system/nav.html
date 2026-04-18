@@ -11,65 +11,169 @@ html, body {
     color: #e0e0e0;
 }
 
-#nav-bar {
+/* Full-viewport dim. Click dismisses the modal. Size set by JS because
+   htmlayout's absolute-position height:100% doesn't always resolve here. */
+#backdrop {
     position: absolute;
-    top: 28px;  /* sits below the app menu bar (system/menu.html) */
+    top: 0;
+    left: 0;
+    background: rgba(0, 0, 0, 160);
+}
+
+/* Centered card. Positioned by JS to keep the layout math in one place
+   (panels fit into the content region on the right of the sidebar). */
+#card {
+    position: absolute;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 180);
+}
+
+#header {
+    position: absolute;
+    top: 0;
     left: 0;
     width: 100%;
-    height: 28px;
-    background: rgba(0, 0, 0, 230);
+    height: 44px;
+    background: #202020;
     border-bottom: 1px solid #333;
-    padding: 0 8px;
+}
+
+#title {
+    position: absolute;
+    top: 14px;
+    left: 18px;
+    font-size: 14px;
+    font-weight: bold;
+    color: #e0e0e0;
+}
+
+#close {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 44px;
+    height: 44px;
+    text-align: center;
+    line-height: 44px;
+    font-size: 18px;
+    cursor: pointer;
+    color: #999;
+}
+
+#close:hover {
+    color: #fff;
+    background: #2a2a2a;
+}
+
+#sidebar {
+    position: absolute;
+    top: 44px;
+    left: 0;
+    width: 180px;
+    height: 476px;
+    background: #181818;
+    border-right: 1px solid #2a2a2a;
+    padding: 8px 0;
 }
 
 .tab {
-    display: inline-block;
-    padding: 6px 14px;
+    padding: 9px 18px;
     cursor: pointer;
-    color: #888;
+    color: #999;
+    border-left: 2px solid transparent;
+}
+
+.tab:hover {
+    background: #202020;
+    color: #ccc;
 }
 
 .tab.active {
     color: #64dc64;
+    background: #222222;
+    border-left-color: #64dc64;
 }
 </style>
 </head>
 <body>
-<div id="nav-bar">
-    <div class="tab active" id="tab-graphics" data-panel="settings/graphics">Graphics</div>
-    <div class="tab" id="tab-audio" data-panel="settings/audio">Audio</div>
-    <div class="tab" id="tab-input" data-panel="settings/input">Input</div>
+<div id="backdrop"></div>
+<div id="card">
+    <div id="header">
+        <span id="title">Preferences</span>
+        <span id="close">×</span>
+    </div>
+    <div id="sidebar"></div>
 </div>
 
 <script>
 (function() {
-    var tabs = [
-        document.getElementById('tab-graphics'),
-        document.getElementById('tab-audio'),
-        document.getElementById('tab-input')
-    ];
+    // --- Layout constants (mirrored by each settings panel) ---
+    var CARD_W = 720, CARD_H = 520, SIDEBAR_W = 180, HEADER_H = 44;
 
-    function updateActive() {
+    var card = document.getElementById('card');
+    var sidebar = document.getElementById('sidebar');
+    var closeBtn = document.getElementById('close');
+    var backdrop = document.getElementById('backdrop');
+
+    function positionCard() {
+        var vp = __bro.getViewport();
+        backdrop.style.setProperty('width', vp.width + 'px');
+        backdrop.style.setProperty('height', vp.height + 'px');
+
+        var left = Math.max(0, Math.floor((vp.width - CARD_W) / 2));
+        var top = Math.max(0, Math.floor((vp.height - CARD_H) / 2));
+        card.style.setProperty('left', left + 'px');
+        card.style.setProperty('top', top + 'px');
+        card.style.setProperty('width', CARD_W + 'px');
+        card.style.setProperty('height', CARD_H + 'px');
+    }
+
+    function buildTabs() {
+        var panels = __bro.getSettingsPanels();
+        sidebar.innerHTML = '';
+        for (var i = 0; i < panels.length; i++) {
+            var t = document.createElement('div');
+            t.className = 'tab';
+            t.textContent = panels[i].label || panels[i].name;
+            t.setAttribute('data-panel', panels[i].name);
+            (function(name) {
+                t.addEventListener('click', function() {
+                    __bro.showPanel(name);
+                    refreshActive();
+                });
+            })(panels[i].name);
+            sidebar.appendChild(t);
+        }
+        refreshActive();
+    }
+
+    function refreshActive() {
         var active = __bro.getActivePanel();
+        var tabs = sidebar.children;
         for (var i = 0; i < tabs.length; i++) {
-            if (!tabs[i]) continue;
-            var panel = tabs[i].getAttribute('data-panel');
-            if (panel === active) {
-                tabs[i].className = 'tab active';
-            } else {
-                tabs[i].className = 'tab';
-            }
+            var p = tabs[i].getAttribute('data-panel');
+            tabs[i].className = (p === active) ? 'tab active' : 'tab';
         }
     }
 
-    for (var i = 0; i < tabs.length; i++) {
-        if (!tabs[i]) continue;
-        tabs[i].addEventListener('click', function(e) {
-            var name = this.getAttribute('data-panel');
-            __bro.showPanel(name);
-            updateActive();
-        });
-    }
+    closeBtn.addEventListener('click', function() {
+        __bro.toggleSettings();
+    });
+
+    // Click on backdrop (but not the card) dismisses the modal.
+    backdrop.addEventListener('click', function() {
+        __bro.toggleSettings();
+    });
+
+    positionCard();
+    // Panels may not all be loaded yet — engine fires __onPanelsReady after
+    // every system panel is registered. Build tabs there. (Also build now in
+    // case a panel we care about loaded before us; harmless if empty.)
+    buildTabs();
+    window.__onPanelsReady = buildTabs;
+
+    window.addEventListener('resize', positionCard);
 })();
 </script>
 </body>

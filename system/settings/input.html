@@ -13,39 +13,46 @@ html, body {
 
 #panel {
     position: absolute;
-    top: 64px;
-    left: 8px;
-    width: 340px;
-    background: rgba(0, 0, 0, 224);
-    border: 1px solid #333;
-    padding: 14px;
+    background: #1a1a1a;
+    padding: 24px 28px;
+    box-sizing: border-box;
+}
+
+h1 {
+    margin: 0 0 20px 0;
+    font-size: 16px;
+    font-weight: bold;
+    color: #e0e0e0;
 }
 
 h2 {
-    margin: 0 0 12px 0;
-    font-size: 13px;
-    color: #f0c040;
+    margin: 18px 0 10px 0;
+    font-size: 12px;
+    color: #888;
     font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
 }
 
 .slider-row {
-    margin-bottom: 12px;
-    height: 16px;
+    margin-bottom: 14px;
+    height: 20px;
 }
 
 .label {
     display: inline-block;
-    width: 110px;
+    width: 140px;
     color: #999;
     vertical-align: middle;
+    line-height: 20px;
 }
 
 .slider-track {
     display: inline-block;
-    width: 140px;
+    width: 200px;
     height: 10px;
-    background: #1a1a1a;
-    border: 1px solid #333;
+    background: #111111;
+    border: 1px solid #2a2a2a;
     vertical-align: middle;
     cursor: pointer;
 }
@@ -59,33 +66,27 @@ h2 {
 
 .slider-value {
     display: inline-block;
-    width: 50px;
+    width: 60px;
     text-align: right;
     color: #ccc;
-    margin-left: 8px;
+    margin-left: 10px;
     vertical-align: middle;
+    line-height: 20px;
 }
 
-.divider {
-    border-top: 1px solid #333;
-    margin: 12px 0;
-}
-
-h3 {
-    margin: 0 0 8px 0;
-    font-size: 12px;
-    color: #bbb;
-    font-weight: normal;
+#actions-list {
+    max-height: 160px;
+    overflow-y: auto;
 }
 
 .action-row {
-    margin-bottom: 6px;
-    padding: 3px 0;
+    padding: 4px 0;
+    height: 18px;
 }
 
 .action-name {
     display: inline-block;
-    width: 130px;
+    width: 140px;
     color: #ccc;
 }
 
@@ -96,29 +97,38 @@ h3 {
 
 .no-actions {
     color: #666;
-    margin-bottom: 8px;
+    padding: 4px 0;
+}
+
+.footer {
+    position: absolute;
+    left: 28px;
+    right: 28px;
+    bottom: 20px;
+    border-top: 1px solid #2a2a2a;
+    padding-top: 14px;
 }
 
 .btn {
     display: inline-block;
-    padding: 4px 12px;
-    background: #2a2a2a;
-    border: 1px solid #444;
+    padding: 6px 14px;
+    background: #222222;
+    border: 1px solid #3a3a3a;
     color: #ccc;
     cursor: pointer;
     font-family: Consolas, monospace;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .btn:hover {
-    background: #3a3a3a;
-    border-color: #666;
+    background: #2a2a2a;
+    border-color: #555;
 }
 </style>
 </head>
 <body>
 <div id="panel">
-    <h2>Input</h2>
+    <h1>Input</h1>
 
     <div class="slider-row">
         <span class="label">Scroll Speed</span>
@@ -127,23 +137,36 @@ h3 {
     </div>
 
     <div class="slider-row">
-        <span class="label">Dbl-Click (ms)</span>
+        <span class="label">Double-Click (ms)</span>
         <span class="slider-track" id="dblclick-track"><span class="slider-fill" id="dblclick-fill"></span></span>
         <span class="slider-value" id="dblclick-val">500</span>
     </div>
 
-    <div class="divider"></div>
-
-    <h3>Action Bindings</h3>
+    <h2>Action Bindings</h2>
     <div id="actions-list"></div>
 
-    <div class="divider"></div>
-
-    <span class="btn" id="reset-btn">Reset to Defaults</span>
+    <div class="footer">
+        <span class="btn" id="reset-btn">Reset to Defaults</span>
+    </div>
 </div>
 
 <script>
 (function() {
+    var CARD_W = 720, CARD_H = 520, SIDEBAR_W = 180, HEADER_H = 44;
+
+    var panel = document.getElementById('panel');
+    function positionPanel() {
+        var vp = __bro.getViewport();
+        var cl = Math.max(0, Math.floor((vp.width - CARD_W) / 2));
+        var ct = Math.max(0, Math.floor((vp.height - CARD_H) / 2));
+        panel.style.setProperty('left', (cl + SIDEBAR_W) + 'px');
+        panel.style.setProperty('top', (ct + HEADER_H) + 'px');
+        panel.style.setProperty('width', (CARD_W - SIDEBAR_W) + 'px');
+        panel.style.setProperty('height', (CARD_H - HEADER_H) + 'px');
+    }
+    positionPanel();
+    window.addEventListener('resize', positionPanel);
+
     var scrollTrack = document.getElementById('scroll-track');
     var scrollFill = document.getElementById('scroll-fill');
     var scrollVal = document.getElementById('scroll-val');
@@ -202,8 +225,7 @@ h3 {
         var rect = scrollTrack.getBoundingClientRect();
         var pct = (e.clientX - rect.left) / rect.width;
         pct = Math.max(0, Math.min(1, pct));
-        var val = scrollMin + pct * (scrollMax - scrollMin);
-        bro.settings.set('input.scrollSpeed', val);
+        bro.settings.set('input.scrollSpeed', scrollMin + pct * (scrollMax - scrollMin));
         load();
     });
 
@@ -211,8 +233,7 @@ h3 {
         var rect = dblclickTrack.getBoundingClientRect();
         var pct = (e.clientX - rect.left) / rect.width;
         pct = Math.max(0, Math.min(1, pct));
-        var val = dblMin + pct * (dblMax - dblMin);
-        bro.settings.set('input.doubleClickThresholdMs', val);
+        bro.settings.set('input.doubleClickThresholdMs', dblMin + pct * (dblMax - dblMin));
         load();
     });
 
