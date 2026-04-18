@@ -763,7 +763,8 @@ function commitPushPull() {
     // coplanarity (which would re-merge bridge groups with caps if their
     // normals happen to align after a degenerate edge).
     prim.updateGeometry(newPositions, newIndices, newNormals,
-                        { priorTriToGroup: pushpull.workingTriToGroup });
+                        { priorTriToGroup: pushpull.workingTriToGroup,
+                          cleanRender: true });
 
     if (meshChanged(prevMesh, prim)) {
         const nextMesh = captureMesh(prim);

@@ -193,6 +193,14 @@
 
     // First-time install: wires up the render node, BVH, face groups, edit
     // mesh, inference geo, and edges overlay.
+    //
+    // The PolyMesh (N-gon edit topology) is built alongside the render mesh
+    // from the initial primitive's tessellation. Initial primitives (box,
+    // cylinder, sphere…) already have clean tessellations, so we don't
+    // re-tessellate here — the render mesh is kept verbatim. updateGeometry
+    // performs the PolyMesh round-trip so post-surgery render meshes get
+    // re-tessellated cleanly (fixes long fan-diagonal edges across concave
+    // caps after side push/pull).
     Primitive.prototype._install = function (mesh) {
         this.mesh      = mesh;
         this.positions = mesh.positions;
@@ -201,6 +209,10 @@
         this.bvh       = new MeshBVH(mesh);
         this.faceGroups   = computeFaceGroups(this.positions, this.indices);
         this.editMesh     = EditMesh.fromMeshData(this.positions, this.indices);
+        this.polyMesh     = _buildPolyMesh(this.positions, this.indices,
+                                            this.faceGroups.triToGroup);
+        this.triToFace    = _buildTriToFace(this.polyMesh,
+                                            this.indices, this.faceGroups.triToGroup);
         this.inferenceGeo = Inference.buildInferenceGeo(
             this.positions, this.indices, this.faceGroups);
         this.meshNode = this.scene.createMesh({
@@ -212,6 +224,44 @@
         this.meshNode.visible = this.visible;
         this._rebuildEdges();
     };
+
+    // Build a PolyMesh from a triangle mesh + per-tri group map.
+    // mergeFacesByGroup() collapses each connected coplanar group into a
+    // single N-gon face — this is what makes face semantics survive
+    // arbitrary triangulation choices.
+    function _buildPolyMesh(positions, indices, triToGroup) {
+        if (typeof PolyMesh !== 'function') return null;
+        const ttg = (triToGroup instanceof Uint32Array) ? triToGroup
+                  : (triToGroup ? new Uint32Array(triToGroup) : null);
+        const pm = ttg
+            ? PolyMesh.fromMeshData(positions, indices, ttg)
+            : PolyMesh.fromMeshData(positions, indices);
+        pm.mergeFacesByGroup();
+        return pm;
+    }
+
+    // Best-effort triToFace: when the initial render mesh is kept verbatim
+    // (not re-tessellated through PolyMesh), the only way to map a render
+    // tri back to an N-gon face is via the group it belongs to. After
+    // mergeFacesByGroup collapses each group's tris into one face per
+    // connected component, faces are listed in the same order as the
+    // groups they came from — so triToGroup → faceIndex is just an inverse
+    // lookup of the face's group tag.
+    function _buildTriToFace(polyMesh, indices, triToGroup) {
+        if (!polyMesh || !triToGroup) return null;
+        const groupToFace = new Map();
+        for (let f = 0; f < polyMesh.faceCount; f++) {
+            const g = polyMesh.faceGroup(f);
+            if (!groupToFace.has(g)) groupToFace.set(g, f);
+        }
+        const out = new Int32Array(indices.length / 3);
+        for (let t = 0; t < out.length; t++) {
+            const g = triToGroup[t];
+            const f = groupToFace.get(g);
+            out[t] = (f === undefined) ? -1 : f;
+        }
+        return out;
+    }
 
     // Build a faceGroups structure {groups, triToGroup} directly from a
     // caller-supplied triToGroup map + the geometry. Each group's normal
@@ -280,25 +330,61 @@
     //   positions on the same topology (legacy compatibility — surgery
     //   uses priorTriToGroup instead).
     Primitive.prototype.updateGeometry = function (positions, indices, normals, opts) {
-        this.positions = positions;
-        this.indices   = indices;
-        if (normals) this.normals = normals;
-        this.mesh.positions = positions;
-        this.mesh.indices   = indices;
-        if (normals) this.mesh.normals = normals;
-        this.bvh = new MeshBVH(this.mesh);
+        // Step 1: derive the post-mutation face-group assignment. Surgery
+        // supplies it explicitly via priorTriToGroup; otherwise re-cluster.
+        let triToGroup;
         if (opts && opts.priorTriToGroup) {
-            this.faceGroups = faceGroupsFromTriToGroup(
-                positions, indices, opts.priorTriToGroup);
+            // Compact ids to keep PolyMesh group ids dense (matches
+            // faceGroupsFromTriToGroup's compaction).
+            const fg = faceGroupsFromTriToGroup(positions, indices, opts.priorTriToGroup);
+            triToGroup = fg.triToGroup;
         } else {
             const prior = (opts && opts.preserveFaceGroups) ? this.faceGroups : null;
-            this.faceGroups = computeFaceGroups(this.positions, this.indices, undefined, prior);
+            const fg = computeFaceGroups(positions, indices, undefined, prior);
+            triToGroup = fg.triToGroup;
         }
+
+        // Step 2: PolyMesh round-trip — lift the new tri mesh to N-gon
+        // faces by group, then re-tessellate. Opt-in via opts.cleanRender:
+        // surgery commits set this so concave-cap fan diagonals get
+        // re-triangulated cleanly. Move/undo/redo leave the render layout
+        // untouched (those don't change topology, only vertex positions).
+        const polyMesh = _buildPolyMesh(positions, indices, triToGroup);
+        let renderPositions = positions;
+        let renderIndices   = indices;
+        let renderNormals   = normals || this.normals;
+        let triToFace       = null;
+        let renderTriToGroup = triToGroup;
+
+        if (polyMesh && opts && opts.cleanRender) {
+            const tess = polyMesh.tessellate();
+            renderPositions  = tess.positions;
+            renderIndices    = tess.indices;
+            renderNormals    = tess.normals;
+            triToFace        = tess.triToFace;
+            renderTriToGroup = tess.triToGroup;
+        } else if (polyMesh) {
+            triToFace = _buildTriToFace(polyMesh, indices, triToGroup);
+        }
+
+        // Step 3: store on primitive + push to render.
+        this.positions = renderPositions;
+        this.indices   = renderIndices;
+        this.normals   = renderNormals;
+        this.mesh.positions = renderPositions;
+        this.mesh.indices   = renderIndices;
+        this.mesh.normals   = renderNormals;
+        this.bvh = new MeshBVH(this.mesh);
+        this.faceGroups = faceGroupsFromTriToGroup(renderPositions, renderIndices,
+                                                    renderTriToGroup);
+        this.polyMesh   = polyMesh;
+        this.triToFace  = triToFace;
         this.editMesh = EditMesh.fromMeshData(this.positions, this.indices);
         this.inferenceGeo = Inference.buildInferenceGeo(
             this.positions, this.indices, this.faceGroups);
         this.meshNode.updateMesh({
-            positions, indices, normals: this.normals,
+            positions: this.positions, indices: this.indices,
+            normals:   this.normals,
         });
         this._rebuildEdges();
     };
