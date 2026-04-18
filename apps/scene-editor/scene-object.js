@@ -182,7 +182,9 @@
     // shadow primitives that mirror its definition). Used by picking +
     // inference to flatten the tree into the set of geometry it can hit.
     SceneObject.prototype.traverseLeaves = function (fn) {
-        if (this.kind === 'primitive') { fn(this); return; }
+        if (this.kind === 'primitive' || this.kind === 'edge-primitive') {
+            fn(this); return;
+        }
         for (const c of this.children) c.traverseLeaves(fn);
     };
 

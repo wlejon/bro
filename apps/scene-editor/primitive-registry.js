@@ -144,6 +144,75 @@
         return prim;
     };
 
+    // Build an edge-only primitive from raw vertex + edge data.
+    //   spec: { name, color?, parent?, translation?, rotation?, scale? }
+    //   data: { positions: Float32Array|Array,
+    //           edges: [{a,b}]|[[a,b]]|flat indices }
+    SceneRegistry.prototype.createEdgePrimitive = function (spec, data, id) {
+        if (id == null) id = this.nextId();
+        const prim = new EdgePrimitive({
+            id,
+            name:        spec.name,
+            color:       spec.color,
+            scene:       this.scene,
+            positions:   data.positions,
+            edges:       data.edges,
+            translation: spec.translation || spec.position,
+            rotation:    spec.rotation,
+            scale:       spec.scale,
+        });
+        if (id >= this._nextId) this._nextId = id + 1;
+        (spec.parent || this.editContext || this.root).addChild(prim);
+        if (!this.active) this.active = prim;
+        this._emit();
+        return prim;
+    };
+
+    SceneRegistry.prototype.snapshotEdgePrimitive = function (prim) {
+        return {
+            kind:        'edge-primitive',
+            id:          prim.id,
+            name:        prim.name,
+            color:       prim.color,
+            visible:     prim.visible,
+            parentId:    prim.parent && prim.parent !== this.root ? prim.parent.id : null,
+            index:       prim.parent ? prim.parent.children.indexOf(prim) : -1,
+            translation: prim.translation.slice(),
+            rotation:    prim.rotation.slice(),
+            scale:       prim.scale.slice(),
+            positions:   new Float32Array(prim.positions),
+            edges:       prim.edges.map(e => ({ a: e.a, b: e.b })),
+        };
+    };
+
+    // Restore an edge primitive from a snapshot (history undo of delete).
+    SceneRegistry.prototype.restoreEdgePrimitiveFromSnapshot = function (snap) {
+        const prim = new EdgePrimitive({
+            id:        snap.id,
+            name:      snap.name,
+            color:     snap.color,
+            scene:     this.scene,
+            positions: snap.positions,
+            edges:     snap.edges,
+        });
+        if (snap.translation) prim.setTranslation(snap.translation);
+        if (snap.rotation)    prim.setRotation(snap.rotation);
+        if (snap.scale)       prim.setScale(snap.scale);
+        prim.setVisible(snap.visible !== false);
+        const parent = (snap.parentId != null ? this._findById(snap.parentId) : null)
+                       || this.root;
+        const idx = snap.index != null
+            ? Math.max(0, Math.min(snap.index, parent.children.length))
+            : parent.children.length;
+        parent.children.splice(idx, 0, prim);
+        prim.parent = parent;
+        prim._invalidateWorld();
+        if (!this.active) this.active = prim;
+        if (snap.id >= this._nextId) this._nextId = snap.id + 1;
+        this._emit();
+        return prim;
+    };
+
     // Capture a SceneObject subtree for history/undo. Recursive — a Group
     // snapshot contains snapshots for every child.
     SceneRegistry.prototype.snapshotPrimitive = function (prim) {
@@ -237,7 +306,9 @@
             if (leaf.kind !== 'primitive' && leaf.kind !== 'component-instance') return;
             // Component instances have no geometry themselves — their mirror
             // primitives are the actual leaves; traverseLeaves already yields
-            // those (they have kind==='primitive').
+            // those (they have kind==='primitive'). Edge-only primitives
+            // surface from traverseLeaves but skip raycast picking — they're
+            // selected via the outliner.
             const hit = leaf.raycastWorld(origin, dir, 0);
             if (!hit) return;
             if (!best || hit.distance < best.hit.distance) {
@@ -258,7 +329,7 @@
         this.root.traverseLeaves(function (leaf) {
             if (!leaf.isEffectivelyVisible()) return;
             if (excludeId != null && leaf.id === excludeId) return;
-            if (leaf.kind !== 'primitive') return;
+            if (leaf.kind !== 'primitive' && leaf.kind !== 'edge-primitive') return;
             out.push(leaf.getWorldInferenceGeo());
         });
         return out;

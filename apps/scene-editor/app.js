@@ -1455,6 +1455,11 @@ function addLinePoint(pos) {
     if (result.kind === 'closed') {
         destroyLinePreview();
         finalizeLineFace(result.polygon, plane);
+        // Orphan prefix (the dangling tail before the closure point) becomes
+        // a free-standing edge primitive instead of being discarded.
+        if (result.orphan && result.orphan.length >= 2) {
+            persistOrphanEdges(result.orphan, 'Polyline');
+        }
         return result;
     }
     refreshLinePreview();
@@ -1554,13 +1559,45 @@ function finalizeLineFace(polygon, plane) {
     resetLineChain();
 }
 
-// End the chain without closing. Orphan edges (if any) are discarded for
-// MVP — they'll land in a pure-edge primitive once that type exists.
+// End the chain without closing. Any pending polyline (>=2 points) becomes
+// a free-standing EdgePrimitive so the user keeps what they drew.
 function commitLine() {
     if (!lineToolState.active) return;
+    const orphan = lineToolState.points.slice();
     LineTool.commit(lineToolState);
     destroyLinePreview();
-    pickInfo.textContent = 'line chain ended';
+    persistOrphanEdges(orphan, 'Polyline');
+}
+
+// Build an EdgePrimitive from a 3D polyline (open). Wraps creation in a
+// history command so undo removes it. No-op for <2 points.
+function persistOrphanEdges(polyline, baseName) {
+    if (!polyline || polyline.length < 2) {
+        pickInfo.textContent = 'line chain ended';
+        return;
+    }
+    const positions = new Float32Array(polyline.length * 3);
+    for (let i = 0; i < polyline.length; i++) {
+        positions[i*3]   = polyline[i][0];
+        positions[i*3+1] = polyline[i][1];
+        positions[i*3+2] = polyline[i][2];
+    }
+    const edges = [];
+    for (let i = 0; i < polyline.length - 1; i++) {
+        edges.push({ a: i, b: i + 1 });
+    }
+    const slotIdx = registry.primitives.length +
+        registry.root.children.filter(c => c.kind === 'edge-primitive').length;
+    const spec = {
+        name:  (baseName || 'Edges') + ' ' + (slotIdx + 1),
+        color: OUTLINER_COLORS[slotIdx % OUTLINER_COLORS.length],
+    };
+    const id = registry.nextId();
+    history.do('Add ' + spec.name,
+        () => { registry.createEdgePrimitive(spec, { positions, edges }, id); },
+        () => { registry.remove(id); });
+    pickInfo.textContent = 'added ' + spec.name +
+        ' (' + edges.length + ' edge' + (edges.length === 1 ? '' : 's') + ')';
 }
 
 function cancelLine() {
@@ -1677,6 +1714,13 @@ function deletePrimitive(p) {
         cancelMove();
     }
     if (highlightPrimitive && highlightPrimitive.id === p.id) clearHighlight();
+    if (p.kind === 'edge-primitive') {
+        const snap = registry.snapshotEdgePrimitive(p);
+        history.do('Delete ' + p.name,
+            () => registry.remove(snap.id),
+            () => registry.restoreEdgePrimitiveFromSnapshot(snap));
+        return;
+    }
     const snap = registry.snapshotPrimitive(p);
     history.do('Delete ' + p.name,
         () => registry.remove(snap.id),
@@ -2679,6 +2723,7 @@ function _outlinerRenderNode(obj, depth) {
     kind.className = 'outliner-kind';
     kind.textContent = obj.kind === 'group'              ? '[G]'
                      : obj.kind === 'component-instance' ? '[C]'
+                     : obj.kind === 'edge-primitive'     ? '[E]'
                                                           : '   ';
     row.appendChild(kind);
 
@@ -2705,7 +2750,7 @@ function _outlinerRenderNode(obj, depth) {
     del.title = 'Delete';
     del.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (obj.kind === 'primitive') deletePrimitive(obj);
+        if (obj.kind === 'primitive' || obj.kind === 'edge-primitive') deletePrimitive(obj);
         else {
             // Group / component instance: destroy without history (full-
             // subtree undo support is a Phase-6 follow-up).
@@ -2904,4 +2949,7 @@ window.__editor = {
     get lineToolState() { return lineToolState; },
     beginLine, updateLineAt, addLinePoint, commitLine, cancelLine,
     resolveLinePoint,
+
+    // Free-floating edges (orphan polylines, arc-tool output later).
+    persistOrphanEdges,
 };
