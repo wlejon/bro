@@ -24,9 +24,11 @@ class DrawTraversal {
 public:
     DrawTraversal(render::Renderer* renderer, FontManager* fontManager);
 
-    // Draw the full document tree
+    // Draw the full document tree. `viewportTop` is the Y position in the
+    // output surface where the content area begins (0 for apps without a
+    // reserved top inset).
     void draw(dom::Element* root, float scrollX, float scrollY,
-              int viewportW, int viewportH);
+              int viewportW, int viewportH, int viewportTop = 0);
 
     // Draw a single element and its subtree (used for overlays)
     void drawElement(dom::Element* elem, float offsetX, float offsetY);
@@ -47,8 +49,12 @@ public:
                                                    float x, float y, float w, float h)>;
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
 
-    // Viewport
-    void setViewport(int w, int h) { viewportW_ = w; viewportH_ = h; }
+    // Viewport. `top` is the Y position in the output surface where the
+    // content area begins — used for the html/body background paint rect so
+    // engine-reserved insets (e.g. menu bar) aren't painted over.
+    void setViewport(int w, int h, int top = 0) {
+        viewportW_ = w; viewportH_ = h; viewportTop_ = top;
+    }
 
     // Access font manager (for replaced elements that need text measurement)
     FontManager* fontManager() { return fontManager_; }
@@ -76,6 +82,7 @@ private:
     std::string basePath_;
     int viewportW_ = 0;
     int viewportH_ = 0;
+    int viewportTop_ = 0;
 
     std::unordered_map<std::string, CachedImage> imageCache_;
     LayerBreakCallback layerBreakCb_;

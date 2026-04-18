@@ -220,10 +220,11 @@ DrawTraversal::DrawTraversal(render::Renderer* renderer, FontManager* fontManage
     : renderer_(renderer), fontManager_(fontManager) {}
 
 void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
-                         int viewportW, int viewportH) {
+                         int viewportW, int viewportH, int viewportTop) {
     if (!root || !renderer_) return;
     viewportW_ = viewportW;
     viewportH_ = viewportH;
+    viewportTop_ = viewportTop;
     drawElement(root, scrollX, scrollY);
 }
 
@@ -415,11 +416,12 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             }
         }
 
-        // For html/body elements, background covers the entire viewport (CSS2.1 spec)
+        // For html/body elements, background covers the entire viewport (CSS2.1 spec).
+        // viewportTop_ offsets for engine-reserved insets (e.g. menu bar).
         std::string tag = elem->tagName();
         if ((tag == "html" || tag == "HTML" || tag == "body" || tag == "BODY") &&
             viewportW_ > 0 && viewportH_ > 0) {
-            drawBackground(elem, 0, 0,
+            drawBackground(elem, 0, static_cast<float>(viewportTop_),
                            static_cast<float>(viewportW_), static_cast<float>(viewportH_));
         } else {
             drawBackground(elem, bx, by, bw, bh);

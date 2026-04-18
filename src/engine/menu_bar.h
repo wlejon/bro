@@ -31,6 +31,8 @@ public:
     };
 
     bool visible = true;
+    // Height in CSS pixels. Must match #menu-bar height in system/menu.html.
+    int height = 28;
     std::vector<Item> roots;
 
     // Mutations — all set dirty = true.

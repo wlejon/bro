@@ -412,6 +412,10 @@ void Engine::triggerMenuAction(const std::string& id) {
 
 void Engine::onMenuChanged() {
     systemDirty_ = true;
+    // Visibility may have flipped — the app doc's usable height depends on
+    // contentTop(). Re-run the resize path so innerHeight, layout, scroll
+    // clamp, and the resize event all update in lockstep.
+    handleResize(viewportWidth_, viewportHeight_);
     for (auto& doc : systemDocs_) {
         if (doc.group != "menu" || !doc.jsCtx) continue;
         JSContext* ctx = doc.jsCtx;

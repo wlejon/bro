@@ -83,7 +83,8 @@ void Engine::flush() {
         document_->resolveStyles();
         // performLayout() rebuilds the persistent layout tree when
         // structureDirty_ is set and clears the flag itself.
-        document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
+        document_->performLayout(static_cast<float>(viewportWidth_),
+                                 static_cast<float>(contentHeight()), *textMetrics_);
         document_->clearDirty();
 
         // Notify ResizeObserver / IntersectionObserver after layout
@@ -280,7 +281,9 @@ bool Engine::screenshot(const std::string& path) {
         // 1. Rasterize HTML/CSS UI to Skia surface
         renderer_->beginFrame(w, h);
         if (document_->documentElement()) {
-            drawTraversal_->draw(document_->documentElement(), 0, 0, w, h);
+            drawTraversal_->draw(document_->documentElement(),
+                                 0, static_cast<float>(contentTop()),
+                                 w, contentHeight(), contentTop());
         }
         overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
         renderer_->endFrame();
@@ -500,7 +503,9 @@ bool Engine::screenshot(const std::string& path) {
     }
 
     // Render HTML/CSS overlay on top
-    drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
+    drawTraversal_->draw(document_->documentElement(),
+                         0, static_cast<float>(contentTop()),
+                         viewportWidth_, contentHeight(), contentTop());
 
     // Render system panels on top of everything
     if (isSystemVisible()) {
@@ -548,7 +553,9 @@ std::vector<uint8_t> Engine::capturePixels() {
 
         renderer_->beginFrame(w, h);
         if (document_->documentElement())
-            drawTraversal_->draw(document_->documentElement(), 0, 0, w, h);
+            drawTraversal_->draw(document_->documentElement(),
+                                 0, static_cast<float>(contentTop()),
+                                 w, contentHeight(), contentTop());
         renderer_->endFrame();
         skia->uploadToGPU();
 
@@ -750,7 +757,9 @@ std::vector<uint8_t> Engine::capturePixels() {
         }
     }
 
-    drawTraversal_->draw(document_->documentElement(), 0, 0, viewportWidth_, viewportHeight_);
+    drawTraversal_->draw(document_->documentElement(),
+                         0, static_cast<float>(contentTop()),
+                         viewportWidth_, contentHeight(), contentTop());
 
     overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
 

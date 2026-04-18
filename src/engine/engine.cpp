@@ -334,7 +334,7 @@ Engine::Engine(const EngineConfig& config)
 
     // Set the base path so relative paths work.
     drawTraversal_->setBasePath(manifest_.basePath);
-    drawTraversal_->setViewport(viewportWidth_, viewportHeight_);
+    drawTraversal_->setViewport(viewportWidth_, contentHeight(), contentTop());
 
     // Load user stylesheets separately from UA defaults.
     // UA defaults use UserAgent origin (lowest priority) so any author
@@ -373,7 +373,7 @@ Engine::Engine(const EngineConfig& config)
     }
 
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
-    js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, viewportHeight_);
+    js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, contentHeight());
 
     // 9x. Native file dialogs (modal to our SDL window).
     //      Pass a tick callback so JS timers keep running while dialog is open.
@@ -661,7 +661,8 @@ Engine::Engine(const EngineConfig& config)
         animationManager_.setKeyframes(&document_->cascade().keyframes());
         document_->setAnimationManager(&animationManager_);
         document_->resolveStyles();
-        document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
+        document_->performLayout(static_cast<float>(viewportWidth_),
+                                 static_cast<float>(contentHeight()), *textMetrics_);
         flush();
     }
 }
@@ -1316,8 +1317,9 @@ void Engine::layoutThreadFunc() {
             }
             // performLayout() rebuilds the persistent layout tree when
             // structureDirty_ is set and clears the flag itself.
+            int insetTop = layoutShared_.insetTop.load(std::memory_order_relaxed);
             document_->performLayout(static_cast<float>(vpW),
-                                     static_cast<float>(vpH),
+                                     static_cast<float>(vpH - insetTop),
                                      layoutTextMetrics);
             document_->clearDirty();
         }
@@ -1385,6 +1387,8 @@ void Engine::rasterThreadFunc() {
         // Read snapshot values from main thread
         int vpW = rasterShared_.vpWidth.load(std::memory_order_relaxed);
         int vpH = rasterShared_.vpHeight.load(std::memory_order_relaxed);
+        int insetTop = rasterShared_.insetTop.load(std::memory_order_relaxed);
+        int contentH = vpH - insetTop;
         float scrollY = std::bit_cast<float>(
             rasterShared_.scrollYBits.load(std::memory_order_relaxed));
 
@@ -1449,23 +1453,27 @@ void Engine::rasterThreadFunc() {
         // Switch to pool surface for HTML layer 0
         auto origSurface = rasterRenderer->switchSurface(htmlSurfacePool_[0].surface);
 
-        // Draw traversal — reads layout boxes and computed styles (read-only)
+        // Draw traversal — reads layout boxes and computed styles (read-only).
+        // App content is translated down by insetTop so the top strip is
+        // reserved for the engine-owned menu bar.
         if (document_ && document_->documentElement()) {
-            rasterDrawTraversal->draw(document_->documentElement(), 0, -scrollY,
-                                      vpW, vpH);
+            rasterDrawTraversal->draw(document_->documentElement(),
+                                      0, static_cast<float>(insetTop) - scrollY,
+                                      vpW, contentH, insetTop);
         }
 
         // Draw the active app-context overlay (dropdown / color picker / etc.)
         // on top of all elements.
         overlayMgr_.drawIfContext(OverlayContext::App, rasterRenderer.get());
 
-        // Draw viewport scrollbar
+        // Draw viewport scrollbar in the content area below the menu bar
         {
-            float vh = static_cast<float>(vpH);
+            float ct = static_cast<float>(insetTop);
+            float vh = static_cast<float>(contentH);
             auto& vs = viewportScrollbar_.style();
             auto m = viewportScrollbar_.layout(
                 static_cast<float>(vpW) - vs.width - vs.margin,
-                0.0f, vh, documentHeight_, vh, scrollY);
+                ct, vh, documentHeight_, vh, scrollY);
             viewportScrollbar_.draw(rasterRenderer.get(), m);
         }
 
@@ -1509,7 +1517,8 @@ void Engine::rasterThreadFunc() {
                     drawElemScrollbars(child, childOffsetX, childOffsetY);
                 });
             };
-            drawElemScrollbars(document_->documentElement(), 0.0f, -scrollY);
+            drawElemScrollbars(document_->documentElement(),
+                               0.0f, static_cast<float>(insetTop) - scrollY);
         }
 
         // Capture the last HTML layer
@@ -1716,7 +1725,8 @@ void Engine::run() {
         animationManager_.setKeyframes(&document_->cascade().keyframes());
         document_->setAnimationManager(&animationManager_);
         document_->resolveStyles();
-        document_->performLayout(static_cast<float>(viewportWidth_), static_cast<float>(viewportHeight_), *textMetrics_);
+        document_->performLayout(static_cast<float>(viewportWidth_),
+                                 static_cast<float>(contentHeight()), *textMetrics_);
         if (document_->documentElement()) {
             auto& box = document_->documentElement()->layoutBox();
             documentHeight_ = box.marginBox().height;
@@ -1981,6 +1991,7 @@ void Engine::run() {
             }
             layoutShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
             layoutShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
+            layoutShared_.insetTop.store(contentTop(), std::memory_order_relaxed);
             layoutShared_.hoveredElement.store(hoveredElement_, std::memory_order_relaxed);
             layoutShared_.state.store(kLayoutDomStable, std::memory_order_release);
             layoutShared_.state.notify_one();
@@ -2191,6 +2202,7 @@ void Engine::run() {
                 if (rasterIdle && !uiThrottled) {
                     rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                     rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
+                    rasterShared_.insetTop.store(contentTop(), std::memory_order_relaxed);
                     rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),
                                                      std::memory_order_relaxed);
                     rasterShared_.state.store(kRasterDomStable, std::memory_order_release);
@@ -2293,21 +2305,22 @@ void Engine::handleResize(int w, int h) {
     viewportHeight_ = h;
     uiDirty_ = true;
     hasRenderedOnce_ = false;
-    drawTraversal_->setViewport(w, h);
+    drawTraversal_->setViewport(w, contentHeight(), contentTop());
     // WebGL canvases resize based on element layout, not viewport — handled per-frame
     {
         resizeSystemPanels(w, h);
     }
+    int ch = contentHeight();
     if (document_) {
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
         document_->resolveStyles();
-        document_->performLayout(static_cast<float>(w), static_cast<float>(h), *textMetrics_);
+        document_->performLayout(static_cast<float>(w), static_cast<float>(ch), *textMetrics_);
         if (document_->documentElement()) {
             auto& box = document_->documentElement()->layoutBox();
             documentHeight_ = box.marginBox().height;
         }
         // Clamp scroll after resize
-        float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(h));
+        float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(ch));
         scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
     }
 
@@ -2316,15 +2329,16 @@ void Engine::handleResize(int w, int h) {
         JSContext* ctx = jsRuntime_->getContext();
         JSValue global = JS_GetGlobalObject(ctx);
 
-        // Update innerWidth / innerHeight
+        // Update innerWidth / innerHeight (innerHeight excludes the menu inset
+        // so apps see a web-like viewport that matches their layout area).
         JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, w));
-        JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, h));
+        JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, ch));
 
         // Update canvas element width/height attributes via JS
         JSValue fn = JS_Eval(ctx, js_canvas_resize, strlen(js_canvas_resize),
                              "<resize>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsFunction(ctx, fn)) {
-            JSValue args[2] = { JS_NewInt32(ctx, w), JS_NewInt32(ctx, h) };
+            JSValue args[2] = { JS_NewInt32(ctx, w), JS_NewInt32(ctx, ch) };
             JSValue ret = JS_Call(ctx, fn, global, 2, args);
             JS_FreeValue(ctx, ret);
             JS_FreeValue(ctx, args[0]);

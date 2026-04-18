@@ -163,17 +163,21 @@ static int domButtonMask(int domButton) {
     }
 }
 
-// Build a MouseEvent with standard fields populated
+// Build a MouseEvent with standard fields populated.
+// `x, y` are screen-space; `contentTop` is the engine-reserved top inset
+// (menu bar) so clientY/pageY are reported in the web-standard content space.
 static void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
                                int button, int buttons,
                                float movementX, float movementY,
-                               float scrollY, int mod) {
+                               float scrollY, int mod,
+                               float contentTop = 0.0f) {
+    float cy = y - contentTop;
     evt.setClientX(static_cast<double>(x));
-    evt.setClientY(static_cast<double>(y));
+    evt.setClientY(static_cast<double>(cy));
     evt.setScreenX(static_cast<double>(x));
     evt.setScreenY(static_cast<double>(y));
     evt.setPageX(static_cast<double>(x));
-    evt.setPageY(static_cast<double>(y + scrollY));
+    evt.setPageY(static_cast<double>(cy + scrollY));
     evt.setMovementX(static_cast<double>(movementX));
     evt.setMovementY(static_cast<double>(movementY));
     evt.setButton(button);
@@ -309,7 +313,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
     // docX, docY = document space (for hit testing into the scrolled document).
     // IMPORTANT: overlay positions (lastDrawPos, color picker, select dropdown)
     // are in screen space — always use x/y when comparing, never docX/docY.
-    float docX = x, docY = y + scrollY_;
+    float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
     // Convert SDL button id to DOM convention up front so every downstream
@@ -343,13 +347,14 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
     // --- Scrollbar interaction (before DOM hit testing) ---
 
-    // Check viewport scrollbar
+    // Check viewport scrollbar (sits in the content area, below the menu bar)
     {
-        float vh = static_cast<float>(viewportHeight_);
+        float ct = static_cast<float>(contentTop());
+        float vh = static_cast<float>(contentHeight());
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
             static_cast<float>(viewportWidth_) - vs.width - vs.margin,
-            0.0f, vh, documentHeight_, vh, scrollY_);
+            ct, vh, documentHeight_, vh, scrollY_);
         if (viewportScrollbar_.hitTest(x, y, m)) {
             if (viewportScrollbar_.thumbHitTest(x, y, m)) {
                 viewportScrollbar_.beginDrag(y, m);
@@ -395,7 +400,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         dom::MouseEvent evt("mousedown");
         int mod = safeGetModState(window_.get());
         populateMouseEvent(evt, x, y, button, pressedButtons_,
-                          x - lastMouseX_, y - lastMouseY_, scrollY_, mod);
+                          x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
 
         dom::Element* target = hitTest(docX, docY);
         mouseDownTarget_ = target;
@@ -434,7 +439,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
 void Engine::handleMouseUp(float x, float y, int button) {
     // x, y = screen space. docX, docY = document space (see handleMouseDown).
-    float docX = x, docY = y + scrollY_;
+    float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
     // Match handleMouseDown: SDL -> DOM button index.
@@ -490,7 +495,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         {
             dom::MouseEvent upEvt("mouseup");
             populateMouseEvent(upEvt, x, y, button, pressedButtons_,
-                              x - lastMouseX_, y - lastMouseY_, scrollY_, mod);
+                              x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
             if (target) {
                 computeOffset(upEvt, target);
                 dispatchEvent(target, upEvt);
@@ -517,7 +522,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
             dom::MouseEvent clickEvt("click");
             populateMouseEvent(clickEvt, x, y, button, pressedButtons_,
-                              x - lastMouseX_, y - lastMouseY_, scrollY_, mod);
+                              x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
             clickEvt.setDetail(clickCount_);
             computeOffset(clickEvt, target);
             dispatchEvent(target, clickEvt);
@@ -526,7 +531,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
             if (clickCount_ == 2) {
                 dom::MouseEvent dblEvt("dblclick", true, true);
                 populateMouseEvent(dblEvt, x, y, button, pressedButtons_,
-                                  x - lastMouseX_, y - lastMouseY_, scrollY_, mod);
+                                  x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
                 dblEvt.setDetail(2);
                 computeOffset(dblEvt, target);
                 dispatchEvent(target, dblEvt);
@@ -536,7 +541,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
             if (button == 2) {
                 dom::MouseEvent ctxEvt("contextmenu", true, true);
                 populateMouseEvent(ctxEvt, x, y, button, pressedButtons_,
-                                  x - lastMouseX_, y - lastMouseY_, scrollY_, mod);
+                                  x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
                 computeOffset(ctxEvt, target);
                 dispatchEvent(target, ctxEvt);
             }
@@ -559,7 +564,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             int mod = safeGetModState(window_.get());
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, lockedMouseX_, lockedMouseY_, -1,
-                               pressedButtons_, xrel, yrel, scrollY_, mod);
+                               pressedButtons_, xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
             computeOffset(moveEvt, lockedElement_);
             dispatchEvent(lockedElement_, moveEvt);
             if (jsRuntime_) jsRuntime_->executePendingJobs();
@@ -568,7 +573,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     }
 
     // x, y = screen space. docX, docY = document space (see handleMouseDown).
-    float docX = x, docY = y + scrollY_;
+    float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
 
     // Overlay manager sees mousemove first. While an overlay is active,
     // DOM hover is suppressed entirely — otherwise hovering elements under
@@ -594,11 +599,12 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     // Viewport scrollbar drag
     if (viewportScrollbar_.isDragging()) {
-        float vh = static_cast<float>(viewportHeight_);
+        float ct = static_cast<float>(contentTop());
+        float vh = static_cast<float>(contentHeight());
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
             static_cast<float>(viewportWidth_) - vs.width - vs.margin,
-            0.0f, vh, documentHeight_, vh, scrollY_);
+            ct, vh, documentHeight_, vh, scrollY_);
         float maxScroll = std::max(0.0f, documentHeight_ - vh);
         scrollY_ = std::clamp(
             viewportScrollbar_.updateDrag(y, documentHeight_, vh, m),
@@ -634,11 +640,12 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     // Viewport scrollbar hover
     {
-        float vh = static_cast<float>(viewportHeight_);
+        float ct = static_cast<float>(contentTop());
+        float vh = static_cast<float>(contentHeight());
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
             static_cast<float>(viewportWidth_) - vs.width - vs.margin,
-            0.0f, vh, documentHeight_, vh, scrollY_);
+            ct, vh, documentHeight_, vh, scrollY_);
         bool wasHovered = viewportScrollbar_.isHovered();
         viewportScrollbar_.setHovered(viewportScrollbar_.thumbHitTest(x, y, m));
         if (wasHovered != viewportScrollbar_.isHovered()) uiDirty_ = true;
@@ -697,7 +704,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             if (hoveredElement_) {
                 dom::MouseEvent outEvt("mouseout", true, true);
                 populateMouseEvent(outEvt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod);
+                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 outEvt.setRelatedTarget(target);
                 computeOffset(outEvt, hoveredElement_);
                 dispatchEvent(hoveredElement_, outEvt);
@@ -707,7 +714,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             if (hoveredElement_) {
                 dom::MouseEvent leaveEvt("mouseleave", false, false);
                 populateMouseEvent(leaveEvt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod);
+                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 leaveEvt.setRelatedTarget(target);
                 computeOffset(leaveEvt, hoveredElement_);
                 dispatchEvent(hoveredElement_, leaveEvt);
@@ -717,7 +724,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             if (target) {
                 dom::MouseEvent overEvt("mouseover", true, true);
                 populateMouseEvent(overEvt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod);
+                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 overEvt.setRelatedTarget(hoveredElement_);
                 computeOffset(overEvt, target);
                 dispatchEvent(target, overEvt);
@@ -727,7 +734,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             if (target) {
                 dom::MouseEvent enterEvt("mouseenter", false, false);
                 populateMouseEvent(enterEvt, x, y, -1, pressedButtons_,
-                                  xrel, yrel, scrollY_, mod);
+                                  xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 enterEvt.setRelatedTarget(hoveredElement_);
                 computeOffset(enterEvt, target);
                 dispatchEvent(target, enterEvt);
@@ -745,7 +752,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             int mod = safeGetModState(window_.get());
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
-                              xrel, yrel, scrollY_, mod);
+                              xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
             computeOffset(moveEvt, target);
             dispatchEvent(target, moveEvt);
         }
@@ -1150,7 +1157,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         return;
     }
 
-    float docX = x, docY = y + scrollY_;
+    float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     dom::Element* target = hitTest(docX, docY);
 
     // Dispatch wheel event to JS
@@ -1158,7 +1165,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         dom::WheelEvent wheelEvt("wheel", true, true);
         int mod = safeGetModState(window_.get());
         populateMouseEvent(wheelEvt, x, y, -1, pressedButtons_,
-                          x - lastMouseX_, y - lastMouseY_, scrollY_, mod);
+                          x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
         // SDL gives scroll amounts in lines; convert to pixels for DOM_DELTA_PIXEL
         wheelEvt.setDeltaX(static_cast<double>(-dx * inputConfig_.scrollSpeed));
         wheelEvt.setDeltaY(static_cast<double>(-dy * inputConfig_.scrollSpeed));
@@ -1223,7 +1230,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     }
 
     // Viewport scrolling
-    float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(viewportHeight_));
+    float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(contentHeight()));
     float prevScroll = scrollY_;
     scrollY_ = std::clamp(scrollY_ - dy * inputConfig_.scrollSpeed, 0.0f, maxScroll);
     if (scrollY_ != prevScroll) {
@@ -1245,7 +1252,7 @@ void Engine::handleDropFile(const std::string& path, float x, float y) {
     // Use provided coordinates, fall back to last mouse position
     float dropX = (x >= 0) ? x : lastMouseX_;
     float dropY = (y >= 0) ? y : lastMouseY_;
-    float docX = dropX, docY = dropY + scrollY_;
+    float docX = dropX, docY = dropY - static_cast<float>(contentTop()) + scrollY_;
     dom::Element* target = hitTest(docX, docY);
     if (!target) target = document_->body();
     if (!target) return;
@@ -1272,7 +1279,7 @@ void Engine::handleDropText(const std::string& text, float x, float y) {
 
     float dropX = (x >= 0) ? x : lastMouseX_;
     float dropY = (y >= 0) ? y : lastMouseY_;
-    float docX = dropX, docY = dropY + scrollY_;
+    float docX = dropX, docY = dropY - static_cast<float>(contentTop()) + scrollY_;
     dom::Element* target = hitTest(docX, docY);
     if (!target) target = document_->body();
     if (!target) return;

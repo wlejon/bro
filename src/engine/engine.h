@@ -255,6 +255,13 @@ public:
     int viewportWidth() const { return viewportWidth_; }
     int viewportHeight() const { return viewportHeight_; }
 
+    /// Top inset reserved for the standard menu bar (0 when hidden).
+    /// The app document lays out into (viewportWidth, viewportHeight - contentTop())
+    /// and is drawn translated down by this amount; system panels outside the
+    /// menu (e.g. nav/settings) read it to position themselves below the bar.
+    int contentTop() const { return menuBar_.visible ? menuBar_.height : 0; }
+    int contentHeight() const { return viewportHeight_ - contentTop(); }
+
     /// Get virtual time (headless mode).
     double virtualTime() const { return virtualTime_; }
 
@@ -393,6 +400,7 @@ private:
         std::atomic<uintptr_t> fenceSync{0};      // GLsync handle
         std::atomic<int> vpWidth{0};
         std::atomic<int> vpHeight{0};
+        std::atomic<int> insetTop{0};               // top inset reserved for menu bar
         std::atomic<uint32_t> scrollYBits{0};      // float via bit_cast
         std::atomic<int> frontBuffer{0};            // 0 or 1
     };
@@ -405,6 +413,7 @@ private:
         std::atomic<uint32_t> state{kLayoutIdle};
         std::atomic<int> vpWidth{0};
         std::atomic<int> vpHeight{0};
+        std::atomic<int> insetTop{0};
         std::atomic<bool> animationsActive{false};
         std::atomic<dom::Element*> hoveredElement{nullptr};
     };
