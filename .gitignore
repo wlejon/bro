@@ -5,6 +5,7 @@ out/
 cmake-build-*/
 
 /node_modules/
+.shots
 
 # IDE
 .vs/
