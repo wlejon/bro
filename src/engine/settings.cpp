@@ -109,30 +109,14 @@ Settings::Settings(const std::string& persistPath)
 }
 
 void Settings::applyAppOverrides(const GraphicsConfig& gfx, const InputConfig& inp) {
-    // Only mark fields as present if they differ from engine defaults,
-    // since bro.json values flow through GraphicsConfig/InputConfig which
-    // use the same defaults. We check each field individually.
-    GraphicsSettings gfxDef;
-    if (gfx.width != gfxDef.width) {
-        appOverrides_.graphics.width = gfx.width;
-        appPresence_.insert("graphics.width");
-    }
-    if (gfx.height != gfxDef.height) {
-        appOverrides_.graphics.height = gfx.height;
-        appPresence_.insert("graphics.height");
-    }
-    if (gfx.vsync != gfxDef.vsync) {
-        appOverrides_.graphics.vsync = gfx.vsync;
-        appPresence_.insert("graphics.vsync");
-    }
-    if (gfx.resizable != gfxDef.resizable) {
-        appOverrides_.graphics.resizable = gfx.resizable;
-        appPresence_.insert("graphics.resizable");
-    }
-    if (gfx.maxFrameIntervalMs != gfxDef.maxFrameIntervalMs) {
-        appOverrides_.graphics.maxFrameIntervalMs = gfx.maxFrameIntervalMs;
-        appPresence_.insert("graphics.maxFrameIntervalMs");
-    }
+    // Graphics fields from bro.json are treated as engine-layer defaults only,
+    // so user selections in the settings UI always win and "Reset to Defaults"
+    // returns to the app's preferred values.
+    defaults_.graphics.width = gfx.width;
+    defaults_.graphics.height = gfx.height;
+    defaults_.graphics.vsync = gfx.vsync;
+    defaults_.graphics.resizable = gfx.resizable;
+    defaults_.graphics.maxFrameIntervalMs = gfx.maxFrameIntervalMs;
 
     InputSettings inpDef;
     if (inp.scrollSpeed != inpDef.scrollSpeed) {
@@ -410,18 +394,10 @@ void Settings::resolveGraphics() {
     auto& r = resolved_.graphics;
     r = defaults_.graphics; // start from defaults
 
-    if (appPresence_.count("graphics.width")) r.width = appOverrides_.graphics.width;
-    if (appPresence_.count("graphics.height")) r.height = appOverrides_.graphics.height;
-    if (appPresence_.count("graphics.fullscreen")) r.fullscreen = appOverrides_.graphics.fullscreen;
-    if (appPresence_.count("graphics.vsync")) r.vsync = appOverrides_.graphics.vsync;
-    if (appPresence_.count("graphics.resizable")) r.resizable = appOverrides_.graphics.resizable;
-    if (appPresence_.count("graphics.maxFrameIntervalMs")) r.maxFrameIntervalMs = appOverrides_.graphics.maxFrameIntervalMs;
-
-    // Width/height are per-app — user overrides only apply if the app didn't set them
-    if (userPresence_.count("graphics.width") && !appPresence_.count("graphics.width"))
-        r.width = userOverrides_.graphics.width;
-    if (userPresence_.count("graphics.height") && !appPresence_.count("graphics.height"))
-        r.height = userOverrides_.graphics.height;
+    // Graphics has no app-override layer: bro.json values land in defaults_
+    // (see applyAppOverrides), so user prefs always win when present.
+    if (userPresence_.count("graphics.width")) r.width = userOverrides_.graphics.width;
+    if (userPresence_.count("graphics.height")) r.height = userOverrides_.graphics.height;
     if (userPresence_.count("graphics.fullscreen")) r.fullscreen = userOverrides_.graphics.fullscreen;
     if (userPresence_.count("graphics.vsync")) r.vsync = userOverrides_.graphics.vsync;
     if (userPresence_.count("graphics.resizable")) r.resizable = userOverrides_.graphics.resizable;

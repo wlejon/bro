@@ -343,6 +343,43 @@ static JSValue js_settings_getActions(JSContext* ctx, JSValueConst, int, JSValue
 }
 
 // ---------------------------------------------------------------------------
+// bro.settings.getDefaults(category?)
+// Returns the engine/app default values (bro.json layer), independent of
+// user overrides. Useful for surfacing the "app preferred" resolution.
+// ---------------------------------------------------------------------------
+
+static JSValue js_settings_getDefaults(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* state = getState(ctx);
+    if (!state || !state->settings) return JS_UNDEFINED;
+
+    std::string category;
+    if (argc >= 1 && JS_IsString(argv[0]))
+        category = jsStr(ctx, argv[0]);
+
+    auto addGraphics = [&](JSValue obj) {
+        auto& g = state->settings->graphicsDefaults();
+        JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, g.width));
+        JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, g.height));
+        JS_SetPropertyStr(ctx, obj, "fullscreen", JS_NewBool(ctx, g.fullscreen));
+        JS_SetPropertyStr(ctx, obj, "vsync", JS_NewBool(ctx, g.vsync));
+        JS_SetPropertyStr(ctx, obj, "resizable", JS_NewBool(ctx, g.resizable));
+        JS_SetPropertyStr(ctx, obj, "maxFrameIntervalMs", JS_NewFloat64(ctx, g.maxFrameIntervalMs));
+    };
+
+    if (category == "graphics") {
+        JSValue obj = JS_NewObject(ctx);
+        addGraphics(obj);
+        return obj;
+    }
+
+    JSValue root = JS_NewObject(ctx);
+    JSValue gObj = JS_NewObject(ctx);
+    addGraphics(gObj);
+    JS_SetPropertyStr(ctx, root, "graphics", gObj);
+    return root;
+}
+
+// ---------------------------------------------------------------------------
 // bro.settings.getDisplayModes()
 // ---------------------------------------------------------------------------
 
@@ -381,6 +418,7 @@ static const JSCFunctionListEntry js_settings_funcs[] = {
     JS_CFUNC_DEF("getKeyAction", 1, js_settings_getKeyAction),
     JS_CFUNC_DEF("getActions", 0, js_settings_getActions),
     JS_CFUNC_DEF("getDisplayModes", 0, js_settings_getDisplayModes),
+    JS_CFUNC_DEF("getDefaults", 0, js_settings_getDefaults),
 };
 
 // ---------------------------------------------------------------------------

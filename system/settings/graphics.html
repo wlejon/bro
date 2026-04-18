@@ -154,15 +154,44 @@ select {
     var fpsCap = document.getElementById('fps-cap');
     var resetBtn = document.getElementById('reset-btn');
 
+    // Curated resolutions: a few common 16:9 and 16:10 sizes, filtered to
+    // what the current display actually supports, plus the app's bro.json
+    // default (so "Reset to Defaults" round-trips cleanly). Users who want
+    // something else can just drag the window edge.
+    var CURATED = [
+        [1280, 720], [1600, 900], [1920, 1080], [2560, 1440], [3840, 2160],
+        [1440, 900], [1680, 1050], [1920, 1200], [2560, 1600]
+    ];
+    var supported = {};
     var modes = bro.settings.getDisplayModes();
-    var seen = {};
     for (var i = 0; i < modes.length; i++) {
-        var key = modes[i].width + 'x' + modes[i].height;
-        if (seen[key]) continue;
-        seen[key] = true;
+        supported[modes[i].width + 'x' + modes[i].height] = true;
+    }
+
+    var defaults = bro.settings.getDefaults('graphics');
+    var defaultKey = defaults.width + 'x' + defaults.height;
+
+    var keys = [];
+    var seen = {};
+    function addKey(k) {
+        if (seen[k]) return;
+        seen[k] = true;
+        keys.push(k);
+    }
+    addKey(defaultKey);
+    for (var i = 0; i < CURATED.length; i++) {
+        var k = CURATED[i][0] + 'x' + CURATED[i][1];
+        if (supported[k]) addKey(k);
+    }
+    keys.sort(function(a, b) {
+        var pa = a.split('x'), pb = b.split('x');
+        return (parseInt(pa[0]) * parseInt(pa[1])) - (parseInt(pb[0]) * parseInt(pb[1]));
+    });
+
+    for (var i = 0; i < keys.length; i++) {
         var opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = key;
+        opt.value = keys[i];
+        opt.textContent = keys[i] + (keys[i] === defaultKey ? ' (default)' : '');
         resSelect.appendChild(opt);
     }
 
@@ -183,7 +212,21 @@ select {
 
     function load() {
         var all = bro.settings.getAll();
-        resSelect.value = all.graphics.width + 'x' + all.graphics.height;
+        var curKey = all.graphics.width + 'x' + all.graphics.height;
+
+        // If the window was manually resized to something not in the curated
+        // list, surface a transient "current" option so the dropdown reflects
+        // reality instead of silently snapping to the first entry.
+        var customOpt = resSelect.querySelector('option[data-custom="1"]');
+        if (customOpt) customOpt.remove();
+        if (!seen[curKey]) {
+            var opt = document.createElement('option');
+            opt.value = curKey;
+            opt.textContent = curKey + ' (current)';
+            opt.setAttribute('data-custom', '1');
+            resSelect.insertBefore(opt, resSelect.firstChild);
+        }
+        resSelect.value = curKey;
 
         if (all.graphics.fullscreen) {
             fullscreenCb.textContent = 'x';

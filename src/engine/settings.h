@@ -68,6 +68,7 @@ public:
     // --- Resolved (final) values ---
     const SettingsData& current() const { return resolved_; }
     const GraphicsSettings& graphics() const { return resolved_.graphics; }
+    const GraphicsSettings& graphicsDefaults() const { return defaults_.graphics; }
     const AudioSettings& audio() const { return resolved_.audio; }
     const InputSettings& input() const { return resolved_.input; }
 
