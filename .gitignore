@@ -38,3 +38,6 @@ build.bat
 
 # app runtime
 .storage.json
+
+# Test scratch dir (rigging glTF round-trip etc.)
+tests/tmp/

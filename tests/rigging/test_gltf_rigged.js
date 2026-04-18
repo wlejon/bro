@@ -1,7 +1,12 @@
 // Rigged glTF round-trip — autoRig a procedural mesh, save with skin +
 // skeleton + animation, reload, and verify the rigging payload survives.
 
-const tmpPath = 'rigged_test.gltf';
+const fs = require('fs');
+const tmpDir   = 'tests/tmp';
+const tmpPath  = tmpDir + '/rigged_test.gltf';
+if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+try {
 
 // Build a minimal rigged scene from a capsule.
 const mesh = Mesh.capsule(0.3, 1.0, 16, 8);
@@ -53,7 +58,7 @@ assert(Math.abs(scene.animations[0].duration - 1.0) < 1e-3, 'animation duration 
 
 // Unskinned save still works (no opts arg).
 {
-    const plainPath = 'unskinned_test.gltf';
+    const plainPath = tmpDir + '/unskinned_test.gltf';
     const okPlain = mesh.saveGLTF(plainPath);
     assert(okPlain === true, 'unskinned saveGLTF still works');
     const reloaded = Mesh.loadGLTF(plainPath);
@@ -63,3 +68,12 @@ assert(Math.abs(scene.animations[0].duration - 1.0) < 1e-3, 'animation duration 
 }
 
 console.log('PASS test_gltf_rigged');
+
+} finally {
+    // Always clean up — leftover files in repo root were getting picked up
+    // by `git add -A`. The tmp dir is gitignored so the dir itself can stay.
+    for (const name of ['rigged_test.gltf', 'unskinned_test.gltf']) {
+        const p = tmpDir + '/' + name;
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+    }
+}
