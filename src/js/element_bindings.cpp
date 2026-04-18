@@ -185,7 +185,13 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
         el->childNodes().clear();
         for (auto* child : oldKids) {
             if (child->nodeType() == bro::dom::NodeType::Element) {
-                invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+                // Detach without nuking the JS wrapper — JS may still hold a
+                // reference and re-insert this element (e.g. jQuery's
+                // buildFragment uses textContent="" to clear a temp and then
+                // reparents the children). Just unregister the id so the
+                // detached subtree doesn't match document.getElementById.
+                auto* elChild = static_cast<bro::dom::Element*>(child);
+                if (doc && !elChild->id().empty()) doc->unregisterElementId(elChild->id());
             } else {
                 if (doc) doc->freeNode(child);
             }
@@ -258,10 +264,10 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
         el->childNodes().clear();
         for (auto* child : oldKids) {
             if (child->nodeType() == bro::dom::NodeType::Element) {
-                // Element children are kept alive for JS GC, but we must
-                // invalidate their wrappers and unregister ids so they
-                // don't appear in document lookups while detached.
-                invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+                // Detach without nuking the JS wrapper — see matching note
+                // in js_element_set_textContent above.
+                auto* elChild = static_cast<bro::dom::Element*>(child);
+                if (doc && !elChild->id().empty()) doc->unregisterElementId(elChild->id());
             } else {
                 if (doc) doc->freeNode(child);
             }
@@ -470,6 +476,10 @@ static JSValue js_element_get_nodeType(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    // Document fragments created via document.createDocumentFragment() are
+    // modeled as Elements with a reserved tag name. Report the spec nodeType
+    // so JS code (jQuery's parseHTML / buildFragment, etc.) can distinguish.
+    if (el->tagName() == "#DOCUMENT-FRAGMENT") return JS_NewInt32(ctx, 11);
     return JS_NewInt32(ctx, static_cast<int32_t>(el->nodeType()));
 }
 
