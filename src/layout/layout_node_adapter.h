@@ -118,9 +118,15 @@ public:
     // Map a layout-tree node back to its backing DOM element. All nodes in
     // the tree are LayoutNodeAdapter instances (bro is the sole LayoutNode
     // instantiator), so a static_cast is safe.
+    //
+    // For text-node adapters, returns the parent element — text nodes aren't
+    // event targets in the DOM model, so a hit on a text run resolves to the
+    // containing element (matches browser elementFromPoint semantics).
     static dom::Element* elementFor(htmlayout::layout::LayoutNode* node) {
         if (!node) return nullptr;
-        return static_cast<LayoutNodeAdapter*>(node)->element();
+        auto* a = static_cast<LayoutNodeAdapter*>(node);
+        if (a->elem_) return a->elem_;
+        return a->parentElem_;
     }
 
     // Build a layout tree from a DOM element tree.
