@@ -45,27 +45,6 @@ JSValue wrapShadowRoot(JSContext* ctx, bro::dom::ShadowRoot* sr) {
 // Complex methods requiring raw signatures
 // ---------------------------------------------------------------------------
 
-static void upgradeShadowChildren(JSContext* ctx, bro::dom::Node* node) {
-    if (!node) return;
-    for (auto* child : node->childNodes()) {
-        if (child->nodeType() == bro::dom::NodeType::Element) {
-            auto* elem = static_cast<bro::dom::Element*>(child);
-            std::string tag = elem->tagName();
-            std::string lower = tag;
-            for (auto& c : lower)
-                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            if (lower.find('-') != std::string::npos) {
-                JSValue upgraded = createCustomElement(ctx, elem, lower);
-                if (!JS_IsException(upgraded) && !JS_IsUndefined(upgraded)) {
-                    JS_FreeValue(ctx, upgraded);
-                }
-            }
-            if (!elem->hasShadow()) {
-                upgradeShadowChildren(ctx, child);
-            }
-        }
-    }
-}
 
 static JSValue js_shadowroot_set_innerHTML(JSContext* ctx, JSValueConst this_val,
                                            int /*argc*/, JSValueConst* argv) {
@@ -83,7 +62,7 @@ static JSValue js_shadowroot_set_innerHTML(JSContext* ctx, JSValueConst this_val
     auto* doc = getDocumentForCtx(ctx);
     sr->setInnerHTML(html, doc);
 
-    upgradeShadowChildren(ctx, sr);
+    upgradeCustomElementsInSubtree(ctx, sr);
 
     // Capture new children
     JSValue addedArr = JS_NewArray(ctx);

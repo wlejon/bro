@@ -281,6 +281,7 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
             JS_SetPropertyUint32(ctx, ihRemovedArr, ihRmIdx++, wrapAnyNode(ctx, child));
         }
         el->setInnerHTML(jsToStdString(ctx, val));
+        upgradeCustomElementsInSubtree(ctx, el);
         JSValue ihAddedArr = JS_NewArray(ctx);
         uint32_t ihAddIdx = 0;
         for (auto* child : el->childNodes()) {
@@ -292,6 +293,7 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(ctx, ihRemovedArr);
     } else {
         el->setInnerHTML(jsToStdString(ctx, val));
+        upgradeCustomElementsInSubtree(ctx, el);
     }
     return JS_UNDEFINED;
 }

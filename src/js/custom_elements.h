@@ -25,6 +25,14 @@ JSValue createCustomElement(JSContext* ctx, void* elemPtr, const std::string& ta
 /// to the registered class. Returns true if upgraded.
 bool upgradeCustomElementPrototype(JSContext* ctx, JSValue wrapper, const std::string& tagName);
 
+/// Walk the children of `node` and run the custom-element constructor on any
+/// element whose tag is a registered custom element. Used after HTML parsing
+/// (innerHTML setter, ShadowRoot innerHTML) to upgrade elements produced by
+/// the parser, since buildTreeFromGumbo only creates plain C++ elements.
+/// Elements that already have a shadow root are not descended into — their
+/// shadow contents were populated by the constructor itself.
+void upgradeCustomElementsInSubtree(JSContext* ctx, void* nodePtr);
+
 /// Fire connectedCallback on element (and custom-element descendants).
 void fireConnectedCallback(JSContext* ctx, JSValue elementWrapper);
 

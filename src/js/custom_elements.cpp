@@ -1,6 +1,7 @@
 #include "js/custom_elements.h"
 #include "js/dom_bindings.h"
 #include "dom/element.h"
+#include "dom/node.h"
 #include "dom/document.h"
 #include "util/log.h"
 
@@ -347,6 +348,44 @@ JSValue createCustomElement(JSContext* ctx, void* elemPtr, const std::string& ta
     s_constructingElem = nullptr;
 
     return result;
+}
+
+void upgradeCustomElementsInSubtree(JSContext* ctx, void* nodePtr) {
+    auto* node = static_cast<bro::dom::Node*>(nodePtr);
+    if (!node) return;
+    auto* reg = getReg(ctx);
+    if (!reg) return;
+
+    for (auto* child : node->childNodes()) {
+        if (child->nodeType() != bro::dom::NodeType::Element) continue;
+        auto* elem = static_cast<bro::dom::Element*>(child);
+
+        // A custom element name must contain a hyphen — cheap pre-filter
+        // before the registry lookup.
+        const std::string& tag = elem->tagName();
+        bool hasHyphen = false;
+        for (char c : tag) { if (c == '-') { hasHyphen = true; break; } }
+
+        bool upgraded = false;
+        if (hasHyphen) {
+            std::string lower = toLower(tag);
+            if (reg->defs.find(lower) != reg->defs.end()) {
+                JSValue result = createCustomElement(ctx, elem, lower);
+                if (!JS_IsException(result) && !JS_IsUndefined(result)) {
+                    JS_FreeValue(ctx, result);
+                    upgraded = true;
+                }
+            }
+        }
+
+        // If the element has its own shadow (populated by its constructor),
+        // don't recurse into its light-DOM children here — but there shouldn't
+        // be any at this point since the parser already placed them. Still,
+        // we want to upgrade any nested customs inside plain descendants.
+        if (!upgraded || !elem->hasShadow()) {
+            upgradeCustomElementsInSubtree(ctx, elem);
+        }
+    }
 }
 
 bool upgradeCustomElementPrototype(JSContext* ctx, JSValue wrapper, const std::string& tagName) {
