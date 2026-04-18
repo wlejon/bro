@@ -2,12 +2,15 @@
     // document.implementation.createHTMLDocument
     document.implementation = {
         createHTMLDocument: function(title) {
+            var head = document.createElement('head');
             var body = document.createElement('body');
             var html = document.createElement('html');
+            html.appendChild(head);
             html.appendChild(body);
             return {
                 nodeType: 9,
                 documentElement: html,
+                head: head,
                 body: body,
                 createElement: function(tag) { return document.createElement(tag); },
                 createElementNS: function(ns, tag) { return document.createElementNS(ns, tag); },
@@ -16,6 +19,10 @@
             };
         }
     };
+
+    // document.location alias (jQuery reads this)
+    if (typeof document.location === 'undefined' && typeof window !== 'undefined')
+        try { document.location = window.location; } catch(e) {}
 
     // Array.from polyfill (QuickJS may not have it)
     if (!Array.from) {

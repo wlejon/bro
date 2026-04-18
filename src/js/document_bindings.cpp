@@ -221,6 +221,11 @@ void installDocumentBindings(JSContext* ctx) {
             return c ? wrapAnyNode(cx, c) : JS_NULL;
         })
         .method("createDocumentFragment", [](Doc* d, JSContext* cx) -> JSValue {
+            // bro::dom::DocumentFragment extends Node, not Element, so the
+            // generic node wrapper lacks appendChild / innerHTML / etc. that
+            // callers expect. Fall back to an Element with a reserved tag
+            // and patch its nodeType to 11 (DOCUMENT_FRAGMENT_NODE) in JS —
+            // see element_bindings.cpp js_element_get_nodeType.
             auto* el = d->createElement("#DOCUMENT-FRAGMENT");
             return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
         })
