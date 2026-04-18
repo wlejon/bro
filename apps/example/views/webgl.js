@@ -8,14 +8,27 @@ window.views.webgl = {
             var src = require('fs').readFileSync('lib/three.min.js', 'utf-8');
             (0, eval)(src);
         }
-        this._setup(el);
+        // Defer setup until after first layout so canvas clientWidth/Height
+        // reflects the CSS-stretched size rather than the 300x150 default.
+        var self = this;
+        requestAnimationFrame(function() { if (self.running) self._setup(el); });
     },
     _setup: function(el) {
         var self = this;
         var fs = require('fs');
         var canvas = el.querySelector('#wgl-canvas');
-        var w = canvas.clientWidth || 1024;
-        var h = canvas.clientHeight || 768;
+        if (!canvas) return;
+
+        function measure() {
+            var r = canvas.getBoundingClientRect();
+            return { w: Math.floor(r.width) || 0, h: Math.floor(r.height) || 0 };
+        }
+
+        var m = measure();
+        // Layout may not have run yet for a freshly-parsed canvas; fall back
+        // to a sensible default and fix up on the next frame.
+        var w = m.w || 1024;
+        var h = m.h || 768;
         canvas.width = w;
         canvas.height = h;
 
@@ -65,6 +78,16 @@ window.views.webgl = {
         var clock = new THREE.Clock();
         function render() {
             if (!self.running) return;
+            // Re-measure each frame in case layout produced a different size
+            // than we had at construction (common right after innerHTML swap).
+            var cur = measure();
+            if (cur.w > 0 && cur.h > 0 && (cur.w !== canvas.width || cur.h !== canvas.height)) {
+                canvas.width = cur.w;
+                canvas.height = cur.h;
+                renderer.setSize(cur.w, cur.h, false);
+                camera.aspect = cur.w / cur.h;
+                camera.updateProjectionMatrix();
+            }
             material.uniforms.uTime.value = clock.getElapsedTime() * 0.5;
             renderer.render(scene, camera);
             requestAnimationFrame(render);
