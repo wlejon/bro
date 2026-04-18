@@ -1876,6 +1876,115 @@ function cancelOffset() {
     pickInfo.textContent = 'offset cancelled';
 }
 
+// --- Follow-me tool --------------------------------------------------------
+//
+// Sweep a profile face along a path. UX:
+//   1. The active selection (set via outliner) must be an EdgePrimitive
+//      that holds the path polyline.
+//   2. With the Follow-Me tool, click a face on any primitive to use as
+//      the profile.
+// The tool sweeps immediately and creates a new triangulated primitive.
+// Source profile and path are left intact.
+
+const followMeToolState = FollowMeTool.createState();
+
+// Convert an EdgePrimitive into an ordered 3D world-space polyline. The
+// edges array might be in any order; we walk from a degree-1 vertex (or
+// any if the polyline is a closed loop) and chain via shared endpoints.
+// Returns null when the edge set isn't a single simple polyline.
+function edgePrimitiveToPath(edgePrim) {
+    if (!edgePrim || edgePrim.kind !== 'edge-primitive') return null;
+    const adj = new Map();    // vert idx → [other vert idx, ...]
+    const N = edgePrim.positions.length / 3;
+    for (const e of edgePrim.edges) {
+        if (!adj.has(e.a)) adj.set(e.a, []);
+        if (!adj.has(e.b)) adj.set(e.b, []);
+        adj.get(e.a).push(e.b);
+        adj.get(e.b).push(e.a);
+    }
+    // Pick a start: a degree-1 vertex if any (open polyline), else any.
+    let start = -1;
+    for (const [v, ns] of adj) {
+        if (ns.length === 1) { start = v; break; }
+    }
+    if (start < 0) {
+        const first = adj.keys().next();
+        if (first.done) return null;
+        start = first.value;
+    }
+    // Walk.
+    const orderLocal = [];
+    const visited = new Set();
+    let cur = start;
+    let prev = -1;
+    while (cur != null && !visited.has(cur)) {
+        visited.add(cur);
+        orderLocal.push(cur);
+        const ns = adj.get(cur);
+        let next = null;
+        for (const v of ns) {
+            if (v !== prev && !visited.has(v)) { next = v; break; }
+        }
+        prev = cur;
+        cur  = next;
+    }
+    if (orderLocal.length < 2) return null;
+    // Local → world.
+    const w = edgePrim.getWorldMatrix();
+    return orderLocal.map(idx => Mat4Lib.transformPoint(w, [
+        edgePrim.positions[idx*3],
+        edgePrim.positions[idx*3 + 1],
+        edgePrim.positions[idx*3 + 2],
+    ]));
+}
+
+// Run a follow-me with the given (face primitive, group idx, edge primitive
+// path). Wraps creation in a history command. Returns the new primitive
+// id or null.
+function runFollowMe(profilePrim, profileGroup, pathEdgePrim) {
+    const loopWorld = faceGroupBoundaryWorld(profilePrim, profileGroup);
+    if (!loopWorld) {
+        pickInfo.textContent = 'follow-me: profile face boundary unsupported';
+        return null;
+    }
+    const localN = profilePrim.faceGroups.groups[profileGroup].normal;
+    const worldN = profilePrim.localToWorldNormal(localN);
+    const path   = edgePrimitiveToPath(pathEdgePrim);
+    if (!path || path.length < 2) {
+        pickInfo.textContent = 'follow-me: path must be a simple polyline';
+        return null;
+    }
+    FollowMeTool.beginWithProfile(
+        followMeToolState, profilePrim, profileGroup, loopWorld, worldN);
+    const mesh = FollowMeTool.commitWithPath(followMeToolState, path);
+    if (!mesh) {
+        pickInfo.textContent = 'follow-me: sweep failed';
+        return null;
+    }
+    const data = {
+        positions: mesh.positions,
+        indices:   mesh.indices,
+        normals:   mesh.normals,
+    };
+    const slotIdx = registry.primitives.length;
+    const spec = {
+        name:  'Sweep ' + (slotIdx + 1),
+        color: OUTLINER_COLORS[slotIdx % OUTLINER_COLORS.length],
+    };
+    const id = registry.nextId();
+    history.do('Add ' + spec.name,
+        () => { registry.createFromMesh(spec, data, id); },
+        () => { registry.remove(id); });
+    pickInfo.textContent = `added ${spec.name}`;
+    return id;
+}
+
+function cancelFollowMe() {
+    if (!FollowMeTool.active(followMeToolState)) return;
+    FollowMeTool.cancel(followMeToolState);
+    pickInfo.textContent = 'follow-me cancelled';
+}
+
 // --- Tape measure ----------------------------------------------------------
 //
 // Two-click distance readout via inference snaps. No geometry is produced —
@@ -2460,6 +2569,21 @@ function handleLeftDown(e) {
             if (!resolved) return;
             addLinePoint(resolved.position);
         }
+    } else if (currentTool === 'followme') {
+        // Profile = clicked face. Path = currently-active EdgePrimitive
+        // (selected via the outliner before invoking the tool).
+        if (!pick) {
+            pickInfo.textContent = 'follow-me: click a face to use as profile';
+            return;
+        }
+        const path = registry.active;
+        if (!path || path.kind !== 'edge-primitive') {
+            pickInfo.textContent = 'follow-me: select an edge primitive in ' +
+                'the outliner first to use as the path';
+            return;
+        }
+        const gIdx = pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex];
+        runFollowMe(pick.primitive, gIdx, path);
     } else if (currentTool === 'offset') {
         // Stage 1: face under cursor → start offset on that face group.
         // Stage 2: cursor in plane → click commits.
@@ -2566,7 +2690,7 @@ document.addEventListener('mousemove', (e) => {
         if (hit) updateOffsetAt(hit);
         return;
     }
-    if (currentTool === 'offset') {
+    if (currentTool === 'offset' || currentTool === 'followme') {
         // Hover preview: highlight the candidate face group.
         const pick = pickAt(cx, cy);
         if (pick) {
@@ -3299,4 +3423,8 @@ window.__editor = {
     get offsetToolState() { return offsetToolState; },
     beginOffset, updateOffsetAt, applyOffsetDistance, commitOffset, cancelOffset,
     faceGroupBoundaryWorld,
+
+    // Follow-me. Active EdgePrimitive = path; click face to commit sweep.
+    get followMeToolState() { return followMeToolState; },
+    runFollowMe, edgePrimitiveToPath, cancelFollowMe,
 };

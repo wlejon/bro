@@ -315,6 +315,160 @@
         return out;
     }
 
+    // --- Sweep profile along path (Follow-Me) -------------------------------
+    //
+    // Sweep a planar polygon `profile3D` along `pathPts`, producing a
+    // triangulated tube. At each path vertex the profile is oriented
+    // perpendicular to the path: the bisector of incoming and outgoing
+    // segments at interior vertices, the segment direction itself at the
+    // endpoints. Rotation is propagated via min-rotation between successive
+    // ring directions to avoid twist.
+    //
+    //   profile3D     — closed CCW polygon (viewed from +profileNormal),
+    //                   array of [x,y,z]; need not be centered.
+    //   profileNormal — unit normal of the profile plane.
+    //   pathPts       — array of [x,y,z], length >= 2.
+    //
+    // Returns { positions: Float32Array, indices: Uint32Array,
+    //          normals: Float32Array } or null when the inputs are
+    // degenerate. Cap faces are NOT emitted — caller can triangulate
+    // profile separately if needed.
+    function sweepProfile(profile3D, profileNormal, pathPts) {
+        const N = profile3D.length;
+        const K = pathPts.length;
+        if (N < 3 || K < 2) return null;
+        const pn = v3norm(profileNormal);
+        // Centre the profile so rotation is around its centroid.
+        let cx = 0, cy = 0, cz = 0;
+        for (const p of profile3D) { cx += p[0]; cy += p[1]; cz += p[2]; }
+        cx /= N; cy /= N; cz /= N;
+        const centered = profile3D.map(p => [p[0]-cx, p[1]-cy, p[2]-cz]);
+        // Initial alignment: profile normal → first-segment direction.
+        const fwd0 = v3norm(v3sub(pathPts[1], pathPts[0]));
+        if (v3len(fwd0) < 1e-9) return null;
+        let oriented = _rotateAll(centered, _rotBetween(pn, fwd0));
+        let prevDir = fwd0;
+        // First ring at pathPts[0].
+        const rings = [];
+        rings.push(oriented.map(p => [
+            p[0] + pathPts[0][0], p[1] + pathPts[0][1], p[2] + pathPts[0][2]]));
+        // Subsequent rings.
+        for (let i = 1; i < K; i++) {
+            const seg = v3norm(v3sub(pathPts[i], pathPts[i-1]));
+            if (v3len(seg) < 1e-9) return null;
+            // Interior: bisector of incoming + outgoing. Endpoint: segment
+            // itself. Bisector for path corners gives a clean miter quad.
+            let ringDir = seg;
+            if (i < K - 1) {
+                const next = v3norm(v3sub(pathPts[i+1], pathPts[i]));
+                const bx = seg[0] + next[0];
+                const by = seg[1] + next[1];
+                const bz = seg[2] + next[2];
+                const bl = Math.sqrt(bx*bx + by*by + bz*bz);
+                if (bl > 1e-9) ringDir = [bx/bl, by/bl, bz/bl];
+            }
+            const Rstep = _rotBetween(prevDir, ringDir);
+            oriented = _rotateAll(oriented, Rstep);
+            rings.push(oriented.map(p => [
+                p[0] + pathPts[i][0],
+                p[1] + pathPts[i][1],
+                p[2] + pathPts[i][2]]));
+            prevDir = ringDir;
+        }
+        // Stitch quads between consecutive rings → 2 tris per quad.
+        const positions = new Float32Array(K * N * 3);
+        for (let i = 0; i < K; i++) {
+            for (let j = 0; j < N; j++) {
+                const k = (i * N + j) * 3;
+                positions[k]     = rings[i][j][0];
+                positions[k + 1] = rings[i][j][1];
+                positions[k + 2] = rings[i][j][2];
+            }
+        }
+        const indices = new Uint32Array((K - 1) * N * 6);
+        let w = 0;
+        for (let i = 0; i < K - 1; i++) {
+            for (let j = 0; j < N; j++) {
+                const jn = (j + 1) % N;
+                const a = i * N + j;
+                const b = i * N + jn;
+                const c = (i + 1) * N + j;
+                const d = (i + 1) * N + jn;
+                // Wind so cross((b-a), (c-a)) faces OUT of the tube. For a CCW
+                // profile (viewed from +pn) and forward = pn-aligned at start,
+                // the order (a, c, d) + (a, d, b) gives outward.
+                indices[w++] = a; indices[w++] = c; indices[w++] = d;
+                indices[w++] = a; indices[w++] = d; indices[w++] = b;
+            }
+        }
+        // Per-vertex face normals (averaged over the two adjacent faces in
+        // the same ring slot — good enough for shading without per-tri
+        // duplication).
+        const normals = _computeAveragedNormals(positions, indices);
+        return { positions, indices, normals };
+    }
+
+    // Rotation matrix (3x3 row-major) that takes unit vector `a` to unit `b`.
+    // Special-cases the parallel and antiparallel limits so Rodrigues never
+    // divides by zero. Antiparallel uses an arbitrary perpendicular axis.
+    function _rotBetween(a, b) {
+        const dot = a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+        if (dot > 1 - 1e-9) {
+            return [1,0,0, 0,1,0, 0,0,1];
+        }
+        if (dot < -1 + 1e-9) {
+            // 180°: pick any axis perpendicular to a.
+            const ax = Math.abs(a[0]) < 0.9 ? [1,0,0] : [0,1,0];
+            const k = v3norm(v3cross(a, ax));
+            return _rodrigues(k, Math.PI);
+        }
+        const k = v3norm(v3cross(a, b));
+        const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+        return _rodrigues(k, angle);
+    }
+
+    function _rodrigues(k, angle) {
+        const c = Math.cos(angle), s = Math.sin(angle), C = 1 - c;
+        const x = k[0], y = k[1], z = k[2];
+        return [
+            c + x*x*C,     x*y*C - z*s,   x*z*C + y*s,
+            y*x*C + z*s,   c + y*y*C,     y*z*C - x*s,
+            z*x*C - y*s,   z*y*C + x*s,   c + z*z*C,
+        ];
+    }
+
+    function _rotateAll(pts, R) {
+        return pts.map(p => [
+            R[0]*p[0] + R[1]*p[1] + R[2]*p[2],
+            R[3]*p[0] + R[4]*p[1] + R[5]*p[2],
+            R[6]*p[0] + R[7]*p[1] + R[8]*p[2],
+        ]);
+    }
+
+    function _computeAveragedNormals(positions, indices) {
+        const out = new Float32Array(positions.length);
+        for (let t = 0; t < indices.length; t += 3) {
+            const i0 = indices[t]*3, i1 = indices[t+1]*3, i2 = indices[t+2]*3;
+            const ax = positions[i1]   - positions[i0];
+            const ay = positions[i1+1] - positions[i0+1];
+            const az = positions[i1+2] - positions[i0+2];
+            const bx = positions[i2]   - positions[i0];
+            const by = positions[i2+1] - positions[i0+1];
+            const bz = positions[i2+2] - positions[i0+2];
+            const nx = ay*bz - az*by;
+            const ny = az*bx - ax*bz;
+            const nz = ax*by - ay*bx;
+            out[i0]+=nx; out[i0+1]+=ny; out[i0+2]+=nz;
+            out[i1]+=nx; out[i1+1]+=ny; out[i1+2]+=nz;
+            out[i2]+=nx; out[i2+1]+=ny; out[i2+2]+=nz;
+        }
+        for (let i = 0; i < out.length; i += 3) {
+            const L = Math.hypot(out[i], out[i+1], out[i+2]);
+            if (L > 1e-12) { out[i] /= L; out[i+1] /= L; out[i+2] /= L; }
+        }
+        return out;
+    }
+
     // --- Polygon offset (2D, per-edge parallel) -----------------------------
     //
     // Inset/expand a simple closed polygon by `distance`. Sign convention for
@@ -636,6 +790,8 @@
         rectFromCorners, circlePolyline, arcPolyline,
         // 2D polygon ops
         offsetPolygon2D,
+        // 3D sweep
+        sweepProfile,
         // measurement
         polygonArea2D, polylineLength3D,
         // polygon cleanup
