@@ -134,8 +134,20 @@ var Groups = {};
             var g = state.groups[a.unit.teamId];
             if (!g) continue;
             var action = g.lastActions[a.unit.id];
-            if (!action) continue;
-            bro.ai.game.applyCombatAction(a, world, action, dt);
+            if (action) bro.ai.game.applyCombatAction(a, world, action, dt);
+            // With the AgentBinding detached, nothing else writes the scene
+            // node's transform from agent state — mirror position + facing
+            // here so the capsule visually follows applyCombatAction.
+            var node = Scene3D.units[a.unit.id];
+            if (node) {
+                node.x = a.x;
+                node.y = Scene3D.UNIT_Y;
+                node.z = a.z;
+                // Match what AgentBinding does for scripted units:
+                // brogameagent uses FPS yaw (0 = -Z, +clockwise from above);
+                // OpenGL rotationY is CCW from above, so negate.
+                node.rotationY = -a.yaw;
+            }
         }
     };
 
