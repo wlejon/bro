@@ -95,6 +95,13 @@ var App = {};
         Render.clearFx();
         UI.rebuildRoster(Arena.ROSTER);
         Controls.syncFromDom(App.state);
+        // Re-apply the current MCTS mode after every rebuild — new agents
+        // came up with default bindings attached, so mcts mode needs to
+        // detach them and init a fresh LayeredPlanner.
+        if (App.state.blueAi === "mcts") {
+            Groups.ensure(App.state, 1);
+            Groups.applyModeForTeam(App.state, 1, "mcts");
+        }
         UI.rewardHistory = { red: [], blue: [] };
         UI.log("arena built - " + built.agents.length + " agents (" +
                App.scenario.name + ")", "");
@@ -126,16 +133,15 @@ var App = {};
             state.elapsed += dt;
             state.simSteps = Math.round(state.elapsed / Config.SIM_STEP);
 
-            // Group planners (MCTS) run before bindings so their freshly
-            // cached CombatActions are visible to the same-frame think()s.
+            // MCTS mode: blue bindings are detached (see Controls handler).
+            // Planner tick decides at 4 Hz; drive applies the cached
+            // CombatAction every frame via mcts::apply — same code path the
+            // rollout uses, so the plan executes identically to what was
+            // searched.
             if (state.blueAi === "mcts") {
                 Groups.ensure(state, 1);
                 Groups.tick(state, dt);
-            } else if (state.groups && state.groups[1]) {
-                // Blue flipped back to scripted — drop the tree so a later
-                // re-enable starts fresh rather than replaying a stale plan.
-                Groups.reset(state);
-                state.lastMctsStats = null;
+                Groups.drive(state, dt);
             }
         }
 

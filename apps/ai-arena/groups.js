@@ -24,13 +24,15 @@ var Groups = {};
 
     function mkPlanner() {
         return bro.ai.game.createLayeredPlanner({
+            // Horizons intentionally long — Retreat only looks free at short
+            // horizons; at 2–4 s of sim the pin-against-wall death shows up.
             tactic: {
-                iterations: 240, budgetMs: 6, rolloutHorizon: 12,
+                iterations: 400, budgetMs: 20, rolloutHorizon: 60,
                 actionRepeat: 4, tacticWindowDecisions: 3,
             },
             fine: {
-                iterations: 480, budgetMs: 8, rolloutHorizon: 10,
-                actionRepeat: 4, priorC: 2.0,
+                iterations: 1200, budgetMs: 30, rolloutHorizon: 40,
+                actionRepeat: 4, priorC: 2.0, pwAlpha: 0.65,
             },
             rolloutPolicy: "aggressive",
             opponentPolicy: "aggressive",
@@ -117,28 +119,63 @@ var Groups = {};
         return state.groups[teamId].lastActions[agentId] || null;
     };
 
-    // MoveDir → world-space unit vector in the agent's aim frame.
-    //   N (forward) = toward aim target = (sin(yaw), -cos(yaw))
-    //   E (right)   = forward rotated 90° CW = (-fz, fx)
-    // Any fixed aim direction stays coherent across a decision window; the
-    // aim_yaw reset inside mcts::apply keeps the policy/integrator frames
-    // aligned, so what the planner sees in rollout matches what we compute
-    // here at apply time.
-    var S = Math.SQRT1_2;
-    Groups.moveDirVector = function (moveDir, yaw) {
-        if (moveDir === 0) return { x: 0, z: 0 };
-        var fx = Math.sin(yaw), fz = -Math.cos(yaw);
-        var rx = -fz, rz = fx;
-        switch (moveDir) {
-            case 1: return { x: fx,         z: fz };          // N
-            case 2: return { x: fx*S+rx*S,  z: fz*S+rz*S };   // NE
-            case 3: return { x: rx,         z: rz };          // E
-            case 4: return { x: -fx*S+rx*S, z: -fz*S+rz*S };  // SE
-            case 5: return { x: -fx,        z: -fz };         // S
-            case 6: return { x: -fx*S-rx*S, z: -fz*S-rz*S };  // SW
-            case 7: return { x: -rx,        z: -rz };         // W
-            case 8: return { x: fx*S-rx*S,  z: fz*S-rz*S };   // NW
+    // Drive every MCTS-controlled agent through the exact same mcts::apply
+    // path used by rollouts: motion + auto-attack (hitscan via resolveAttack)
+    // + ability dispatch, all in one native call. Called once per rAF frame
+    // with the real delta; the cached CombatAction is replayed across frames
+    // until the planner emits a new one (matches the rollout's
+    // "hold action across action_repeat ticks" semantics).
+    Groups.drive = function (state, dt) {
+        if (!state.groups) return;
+        var world = state.world;
+        for (var i = 0; i < state.agents.length; i++) {
+            var a = state.agents[i];
+            if (!a.unit.alive) continue;
+            var g = state.groups[a.unit.teamId];
+            if (!g) continue;
+            var action = g.lastActions[a.unit.id];
+            if (!action) continue;
+            bro.ai.game.applyCombatAction(a, world, action, dt);
         }
-        return { x: 0, z: 0 };
+    };
+
+    // ── Binding toggle ────────────────────────────────────────────────
+    // MCTS-controlled agents must have their scene-side AgentBinding detached
+    // so the capability layer (setTarget/path-following inside world.tick)
+    // doesn't fight the applyCombatAction integration we do each frame.
+    // Flipping back to scripted re-attaches with the original think config.
+    var DEFAULT_CAPS = ["move_to", "cast_ability", "flee", "hold", "aimed_shot"];
+
+    function attachScripted(state, agent) {
+        var node = Scene3D.units[agent.unit.id];
+        if (!node) return;
+        try { node.detachAgent(); } catch (e) {}
+        node.attachAgent(state.world, agent, {
+            capabilities: DEFAULT_CAPS,
+            thinkHz: 30,
+            faceMovement: true,
+            yOffset: Scene3D.UNIT_Y,
+            think: AI.think,
+        });
+    }
+
+    function detachAgentSafe(agent) {
+        var node = Scene3D.units[agent.unit.id];
+        if (!node) return;
+        try { node.detachAgent(); } catch (e) {}
+        // Clear any pending scripted seek so world.tick's update() is a
+        // true no-op for this agent — applyCombatAction owns motion now.
+        try { agent.clearTarget(); } catch (e) {}
+    }
+
+    // Apply the current mode to a team. "mcts" detaches bindings; any other
+    // value (scripted) re-attaches them. Idempotent.
+    Groups.applyModeForTeam = function (state, teamId, mode) {
+        for (var i = 0; i < state.agents.length; i++) {
+            var a = state.agents[i];
+            if (a.unit.teamId !== teamId) continue;
+            if (mode === "mcts") detachAgentSafe(a);
+            else                 attachScripted(state, a);
+        }
     };
 })();

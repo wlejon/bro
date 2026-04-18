@@ -709,6 +709,26 @@ static JSValue js_legalTactics(JSContext* ctx, JSValueConst, int argc, JSValueCo
     return arr;
 }
 
+// bro.ai.game.applyCombatAction(agent, world, action, dt)
+//
+// Drives one agent through mcts::apply — the exact code path rollouts use.
+// Caller is responsible for projectile stepping (handled by the scene's
+// auto-ticker calling world.tick each frame). Meant to be called once per
+// rAF frame with the real dt; the cached CombatAction is replayed until
+// the planner emits a new one.
+static JSValue js_applyCombatAction(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 4) return JS_ThrowTypeError(ctx, "applyCombatAction(agent, world, action, dt)");
+    auto* ad = qjsbind::unwrap<AgentData>(ctx, argv[0]);
+    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[1]);
+    if (!ad || !wd) return JS_ThrowTypeError(ctx, "invalid agent or world");
+    if (!JS_IsObject(argv[2])) return JS_ThrowTypeError(ctx, "action must be an object");
+    double dt = 0;
+    JS_ToFloat64(ctx, &dt, argv[3]);
+    auto action = parseCombatAction(ctx, argv[2]);
+    brogameagent::mcts::apply(ad->agent, wd->world, action, (float)dt);
+    return JS_UNDEFINED;
+}
+
 // bro.ai.game.tacticToAction(tactic, hero, world) → CombatAction
 static JSValue js_tacticToAction(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "tacticToAction(tactic, hero, world)");
@@ -1812,6 +1832,8 @@ void AIBindings::install(JSContext* ctx) {
         JS_NewCFunction(ctx, js_legalTactics, "legalTactics", 2));
     JS_SetPropertyStr(ctx, gameObj, "tacticToAction",
         JS_NewCFunction(ctx, js_tacticToAction, "tacticToAction", 3));
+    JS_SetPropertyStr(ctx, gameObj, "applyCombatAction",
+        JS_NewCFunction(ctx, js_applyCombatAction, "applyCombatAction", 4));
 
     // Capabilities (JS-authored capability registration)
     installRegisterCapability(ctx, gameObj);

@@ -34,8 +34,20 @@ var Controls = {};
         });
 
         // Event-driven: update state once on change rather than polling
-        // the DOM every rAF frame.
-        selAi.addEventListener("change", function () { App.state.blueAi = selAi.value; });
+        // the DOM every rAF frame. MCTS mode detaches blue bindings so the
+        // capability layer can't fight Groups.drive → mcts::apply; scripted
+        // mode re-attaches them with the default capability set + AI.think.
+        selAi.addEventListener("change", function () {
+            App.state.blueAi = selAi.value;
+            if (selAi.value === "mcts") {
+                Groups.ensure(App.state, 1);
+                Groups.applyModeForTeam(App.state, 1, "mcts");
+            } else {
+                Groups.applyModeForTeam(App.state, 1, "scripted");
+                Groups.reset(App.state);
+                App.state.lastMctsStats = null;
+            }
+        });
         selFocus.addEventListener("change", function () { App.state.focusId = +selFocus.value; });
     };
 
