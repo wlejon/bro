@@ -179,13 +179,14 @@ var UI = {};
 
     UI.updateMctsStats = function (stats, enabled) {
         if (!enabled) {
-            UI.mctsStatsEl.textContent = "(disabled — group MCTS pending)";
+            UI.mctsStatsEl.textContent = "(scripted — flip Blue AI to MCTS)";
             return;
         }
         if (!stats) { UI.mctsStatsEl.textContent = "searching..."; return; }
         UI.mctsStatsEl.textContent =
-            "iters:      " + stats.iterations + "\n" +
-            "tree size:  " + stats.treeSize + "\n" +
+            "tactic:     " + stats.tactic + (stats.replanned ? " *" : "") + "\n" +
+            "replan in:  " + stats.windowsUntilReplan + " windows\n" +
+            "fine iters: " + stats.iterations + "\n" +
             "bestMean:   " + (stats.bestMean || 0).toFixed(3) + "\n" +
             "bestVisits: " + stats.bestVisits + "\n" +
             "elapsed:    " + stats.elapsedMs + "ms";

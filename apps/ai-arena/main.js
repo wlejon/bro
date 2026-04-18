@@ -62,6 +62,7 @@ var App = {};
         };
 
         AI.memory = {};
+        Groups.reset(App.state);
 
         // Ensure shared state is populated before the first think() fires —
         // attachAIWorld/attachAgent immediately schedule a tick.
@@ -124,6 +125,18 @@ var App = {};
             // timestamps.
             state.elapsed += dt;
             state.simSteps = Math.round(state.elapsed / Config.SIM_STEP);
+
+            // Group planners (MCTS) run before bindings so their freshly
+            // cached CombatActions are visible to the same-frame think()s.
+            if (state.blueAi === "mcts") {
+                Groups.ensure(state, 1);
+                Groups.tick(state, dt);
+            } else if (state.groups && state.groups[1]) {
+                // Blue flipped back to scripted — drop the tree so a later
+                // re-enable starts fresh rather than replaying a stale plan.
+                Groups.reset(state);
+                state.lastMctsStats = null;
+            }
         }
 
         Loop.frame(state, App.canvas, dt);

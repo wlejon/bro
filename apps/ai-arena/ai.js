@@ -304,6 +304,89 @@ var AI = {};
     }
 
     // ───────────────────────────────────────────────────────────────────────
+    // MCTS-group think — replays the last cached CombatAction from the
+    // agent's group planner. Movement + aim + basic-shot side effect mirror
+    // the scripted path (same BotAim/projectile plumbing), so we can A/B
+    // one team against the other and reuse the existing capability rig.
+    // ───────────────────────────────────────────────────────────────────────
+    function mctsThink(self, world, mem, dt, simT) {
+        var agent = self.agent;
+        var u = agent.unit;
+
+        var action = Groups.actionFor(App.state, u.teamId, u.id);
+
+        // Pick an aim target independent of the planner's attack_slot:
+        // keep the agent facing the nearest LOS enemy so basic shots stay
+        // meaningful even during Hold/Retreat moves.
+        var enemies = AI.shared.teams[1 - u.teamId];
+        var obstacles = AI.shared.obstacles;
+        var aimTarget = AI.pickTargetFor(agent, enemies, AI.shared.teamFocus[u.teamId], obstacles);
+        if (aimTarget) {
+            requestAimTowards(mem, simT, aimTarget.x - agent.x, aimTarget.z - agent.z);
+        }
+        BotAim.tick(mem.aim, dt);
+
+        // No plan yet (first frame before the planner has fired) — hold,
+        // but keep the shot side effect so we still trade damage.
+        if (!action) {
+            if (aimTarget) tryAimedShot(agent, mem, aimTarget);
+            mem.intent = "WAIT";
+            self.hold(0.1);
+            return;
+        }
+
+        mem.intent = "MCTS:" + (action.moveDir | 0);
+
+        // Basic shot side effect — the planner's attack_slot says "I'd like
+        // to auto-attack now", but BotAim/range/LOS still gate the actual
+        // projectile spawn (same gating the scripted path uses).
+        if (action.attackSlot >= 0 && aimTarget) {
+            tryAimedShot(agent, mem, aimTarget);
+        }
+
+        // Ability cast — resolve slot to a target. For AB_HEAL (ally-
+        // targeting) pick the most wounded nearby teammate (or self); for
+        // damage abilities use the aim target.
+        if (action.abilitySlot >= 0 && u.mana > 0) {
+            var slot = action.abilitySlot;
+            if (mem.abCd[slot] <= 0) {
+                if (slot === Arena.AB_HEAL) {
+                    var worstFrac = u.hp / u.maxHp, worstAlly = agent;
+                    var teammates = AI.shared.teams[u.teamId];
+                    for (var ti = 0; ti < teammates.length; ti++) {
+                        var tm = teammates[ti];
+                        var f = tm.unit.hp / tm.unit.maxHp;
+                        if (f < worstFrac && Math.hypot(tm.x - agent.x, tm.z - agent.z) < 6) {
+                            worstFrac = f; worstAlly = tm;
+                        }
+                    }
+                    doCast(self, mem, slot, worstAlly.unit.id);
+                    return;
+                } else if (aimTarget) {
+                    doCast(self, mem, slot, aimTarget.unit.id);
+                    return;
+                }
+            }
+        }
+
+        // Movement — project a waypoint along the aim-local compass dir.
+        if (action.moveDir === 0) {
+            self.hold(0.1);
+            return;
+        }
+        var yaw = agent.aimYaw;
+        var v = Groups.moveDirVector(action.moveDir, yaw);
+        var tx = clamp(agent.x + v.x * Groups.STEP, -19, 19);
+        var tz = clamp(agent.z + v.z * Groups.STEP, -19, 19);
+        var nav = AI.shared.nav;
+        if (nav && !nav.isWalkable(tx, tz)) {
+            var free = AI.findWalkableNear(nav, tx, tz, 2.5);
+            if (free) { tx = free.x; tz = free.z; } else { self.hold(0.1); return; }
+        }
+        self.moveTo(tx, tz);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
     // think(self, world) — called by the AgentBinding at thinkHz
     // ───────────────────────────────────────────────────────────────────────
     AI.think = function (self, world) {
@@ -321,6 +404,13 @@ var AI = {};
         if (mem.shootCd > 0) mem.shootCd -= dt;
         for (var cd = 0; cd < mem.abCd.length; cd++) {
             if (mem.abCd[cd] > 0) mem.abCd[cd] -= dt;
+        }
+
+        // Per-team planner toggle. Only blue has a UI switch today; red is
+        // always scripted so the planner can be A/B tested.
+        if (u.teamId === 1 && App.state && App.state.blueAi === "mcts") {
+            mctsThink(self, world, mem, dt, simT);
+            return;
         }
 
         var myTeam = u.teamId;
