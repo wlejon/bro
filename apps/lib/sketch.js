@@ -315,6 +315,93 @@
         return out;
     }
 
+    // --- Polygon offset (2D, per-edge parallel) -----------------------------
+    //
+    // Inset/expand a simple closed polygon by `distance`. Sign convention for
+    // a CCW polygon: positive = outward (expand), negative = inward (inset).
+    // Sign reverses for a CW input. Returns null when the offset collapses
+    // the polygon (a typical inset failure mode).
+    //
+    // Algorithm: translate each edge along its outward unit normal by
+    // `distance`, then intersect each pair of adjacent translated edges to
+    // get the new vertex. Reasonable for convex polygons and simple concave
+    // shapes; pathological self-intersections from large insets are not
+    // detected (caller should sanity-check with polygonArea2D).
+    //
+    //   loop2D — array of [x, y]; CCW for positive=outward.
+    function offsetPolygon2D(loop2D, distance) {
+        const n = loop2D.length;
+        if (n < 3 || distance === 0) return loop2D.map(p => p.slice());
+        // Detect winding so the sign convention works regardless of input.
+        const ccw = polygonArea2D(loop2D) >= 0;
+        const sgn = ccw ? 1 : -1;
+        // Per-edge unit normal (pointing OUT of the polygon for CCW input).
+        const normals = new Array(n);
+        for (let i = 0; i < n; i++) {
+            const a = loop2D[i];
+            const b = loop2D[(i + 1) % n];
+            const ex = b[0] - a[0];
+            const ey = b[1] - a[1];
+            const L = Math.hypot(ex, ey);
+            if (L < 1e-12) return null;
+            // Right-hand 90° rotation gives the outward normal for CCW.
+            normals[i] = [sgn * ey / L, -sgn * ex / L];
+        }
+        // For each polygon vertex i, intersect translated edge (i-1) with
+        // translated edge (i). The translated edges are parallel to the
+        // originals; closed-form intersection avoids parameter-clipping
+        // issues at sharp angles.
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) {
+            const ip = (i + n - 1) % n;
+            const a0 = loop2D[ip];
+            const b0 = loop2D[i];
+            const a1 = loop2D[i];
+            const b1 = loop2D[(i + 1) % n];
+            const np = normals[ip];
+            const nn = normals[i];
+            // Translated endpoints.
+            const A0 = [a0[0] + distance * np[0], a0[1] + distance * np[1]];
+            const B0 = [b0[0] + distance * np[0], b0[1] + distance * np[1]];
+            const A1 = [a1[0] + distance * nn[0], a1[1] + distance * nn[1]];
+            const B1 = [b1[0] + distance * nn[0], b1[1] + distance * nn[1]];
+            const ix = lineIntersect(A0, B0, A1, B1);
+            if (ix) {
+                out[i] = ix;
+                continue;
+            }
+            // Parallel translated edges (collinear neighbours): the new
+            // vertex sits at the shared endpoint translated along its normal.
+            out[i] = [b0[0] + distance * np[0], b0[1] + distance * np[1]];
+        }
+        // Collapse check. An inset that crosses the medial axis flips one or
+        // more edges relative to the original loop — even though the overall
+        // signed area stays positive (the polygon just becomes a smaller,
+        // re-CCW'd copy of itself). Detect by per-edge direction sign vs the
+        // original edge.
+        for (let i = 0; i < n; i++) {
+            const a0 = loop2D[i], b0 = loop2D[(i + 1) % n];
+            const a1 = out[i],    b1 = out[(i + 1) % n];
+            const ox = b0[0] - a0[0], oy = b0[1] - a0[1];
+            const nx = b1[0] - a1[0], ny = b1[1] - a1[1];
+            if (ox * nx + oy * ny < 0) return null;
+        }
+        const newArea = polygonArea2D(out);
+        if (sgn * newArea <= 1e-12) return null;
+        return out;
+    }
+
+    // Infinite-line intersection. Returns [x, y] or null when parallel.
+    function lineIntersect(p0, p1, p2, p3) {
+        const r0 = p1[0] - p0[0], r1 = p1[1] - p0[1];
+        const s0 = p3[0] - p2[0], s1 = p3[1] - p2[1];
+        const rxs = r0 * s1 - r1 * s0;
+        if (Math.abs(rxs) < 1e-12) return null;
+        const qp0 = p2[0] - p0[0], qp1 = p2[1] - p0[1];
+        const t = (qp0 * s1 - qp1 * s0) / rxs;
+        return [p0[0] + t * r0, p0[1] + t * r1];
+    }
+
     // --- Polygon area (2D, shoelace) ----------------------------------------
     //
     // Accepts either an array of [x, y] pairs or a flat [x,y,x,y,...]
@@ -547,6 +634,8 @@
         axisLock, pickClosestAxis,
         // shapes
         rectFromCorners, circlePolyline, arcPolyline,
+        // 2D polygon ops
+        offsetPolygon2D,
         // measurement
         polygonArea2D, polylineLength3D,
         // polygon cleanup

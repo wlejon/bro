@@ -544,6 +544,7 @@ function setTool(t) {
     if (circleToolState.active) cancelCircle();
     if (lineToolState.active) cancelLine();
     if (arcToolState && ArcTool.active(arcToolState)) cancelArc();
+    if (offsetToolState && OffsetTool.active(offsetToolState)) cancelOffset();
     if (tapeToolState.active) cancelTape();
     MeasureBox.clearLastOp(measureBoxState);
     MeasureBox.clear(measureBoxState);
@@ -1704,6 +1705,177 @@ function cancelArc() {
     pickInfo.textContent = 'arc cancelled';
 }
 
+// --- Offset tool -----------------------------------------------------------
+//
+// Pick a face → drag → produce a new face primitive coplanar with the source,
+// inset (negative distance) or expanded (positive). The source face is left
+// intact for the MVP — proper "inset ring + retriangulate the source"
+// behaviour is a TODO that needs PolyMesh face splitting.
+
+const offsetToolState = OffsetTool.createState();
+let offsetPreviewNode = null;
+
+function destroyOffsetPreview() {
+    if (offsetPreviewNode) { offsetPreviewNode.destroy(); offsetPreviewNode = null; }
+}
+
+// Extract the world-space boundary loop of a face group via EditMesh. Returns
+// an array of [x,y,z] in CCW order around the face (inherited from the
+// half-edge winding), or null when the face has multiple boundary loops
+// (holes — not supported by the offset MVP).
+function faceGroupBoundaryWorld(prim, gIdx) {
+    // The primitive's cached editMesh has no group tags (face.group === -1
+    // throughout) — push/pull rebuilds its own group-tagged EditMesh per
+    // operation. Mirror that pattern for offset.
+    const em = EditMesh.fromMeshData(
+        prim.positions, prim.indices, prim.faceGroups.triToGroup);
+    const loops = EditMesh.findFaceGroupBoundary(em, gIdx);
+    if (!loops || loops.length !== 1) return null;
+    const loop = loops[0];
+    if (loop.length < 3) return null;
+    const w = prim.getWorldMatrix();
+    return loop.map(he => {
+        const local = [he.origin.x, he.origin.y, he.origin.z];
+        return Mat4Lib.transformPoint(w, local);
+    });
+}
+
+// Build the in-plane 2D basis for a face group, anchored at the loop's
+// first vertex so loop coordinates start at (0, 0).
+function planeForFaceGroup(prim, gIdx, loopWorld) {
+    const groups = prim.faceGroups.groups;
+    const localN = groups[gIdx].normal;
+    const worldN = prim.localToWorldNormal(localN);
+    const wn = Sketch.v3norm(worldN);
+    const basis = Sketch.worldAxisBasis(wn);
+    return {
+        origin: loopWorld[0].slice(),
+        normal: wn,
+        u:      basis.u,
+        v:      basis.v,
+    };
+}
+
+function refreshOffsetPreview() {
+    const loop = OffsetTool.buildOffsetLoop(offsetToolState);
+    if (!loop || loop.length < 3) { destroyOffsetPreview(); return; }
+    // Build a thin closed polyline preview using EdgeMesh, so the preview
+    // doesn't z-fight with the source face.
+    const positions = new Float32Array(loop.length * 3);
+    for (let i = 0; i < loop.length; i++) {
+        positions[i*3]   = loop[i][0];
+        positions[i*3+1] = loop[i][1];
+        positions[i*3+2] = loop[i][2];
+    }
+    const edges = [];
+    for (let i = 0; i < loop.length; i++) {
+        edges.push({ a: i, b: (i + 1) % loop.length });
+    }
+    const data = EdgeMesh.buildEdgeMesh(positions, edges, {
+        thickness: 0.014,
+        color:     [1.0, 0.65, 0.01, 1.0],
+    });
+    if (!offsetPreviewNode) {
+        offsetPreviewNode = scene.createMesh({
+            positions: data.positions,
+            normals:   data.normals,
+            colors:    data.colors,
+            indices:   data.indices,
+            emissive:  0.6,
+            name:      'offset-preview',
+        });
+    } else {
+        offsetPreviewNode.updateMesh({
+            positions: data.positions,
+            normals:   data.normals,
+            colors:    data.colors,
+            indices:   data.indices,
+        });
+    }
+}
+
+// Begin offset on a primitive's face group. `clickPos` is the world-space
+// pick point on the face. Returns true if started, false if the face has
+// holes or is otherwise unsupported.
+function beginOffset(prim, gIdx, clickPos) {
+    const loop = faceGroupBoundaryWorld(prim, gIdx);
+    if (!loop) {
+        pickInfo.textContent = 'offset: face boundary unsupported (multi-loop?)';
+        return false;
+    }
+    const plane = planeForFaceGroup(prim, gIdx, loop);
+    OffsetTool.begin(offsetToolState, prim, gIdx, loop, plane, clickPos);
+    refreshOffsetPreview();
+    pickInfo.textContent = 'offset  [drag for distance · click to commit · Esc cancel]';
+    MeasureBox.clearLastOp(measureBoxState);
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setPairMode(measureBoxState, false);
+    MeasureBox.setActive(measureBoxState, true);
+    renderMeasureBox();
+    return true;
+}
+
+function updateOffsetAt(cursorWorld) {
+    if (!OffsetTool.active(offsetToolState)) return;
+    OffsetTool.updateFromCursor(offsetToolState, cursorWorld);
+    refreshOffsetPreview();
+    pickInfo.textContent =
+        `offset  d = ${offsetToolState.distance.toFixed(3)}`;
+}
+
+function applyOffsetDistance(d) {
+    if (!OffsetTool.active(offsetToolState)) return false;
+    OffsetTool.setDistance(offsetToolState, d);
+    refreshOffsetPreview();
+    return true;
+}
+
+function commitOffset() {
+    if (!OffsetTool.active(offsetToolState)) return;
+    const sourcePrim = offsetToolState.primitive;
+    const planeNormal = offsetToolState.plane.normal.slice();
+    const loop3D = OffsetTool.commit(offsetToolState);
+    destroyOffsetPreview();
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
+    if (!loop3D || loop3D.length < 3) {
+        pickInfo.textContent = 'offset cancelled (collapsed or zero distance)';
+        return;
+    }
+    const flat = Sketch.flatten3D(loop3D);
+    const mesh = Mesh.polygon3D(flat, [], planeNormal);
+    if (!mesh || mesh.vertexCount === 0) {
+        pickInfo.textContent = 'offset failed (triangulation empty)';
+        return;
+    }
+    const data = {
+        positions: new Float32Array(mesh.positions),
+        indices:   new Uint32Array(mesh.indices),
+        normals:   new Float32Array(mesh.normals),
+    };
+    const slotIdx = registry.primitives.length;
+    const spec = {
+        name:  'Offset ' + (slotIdx + 1),
+        color: OUTLINER_COLORS[slotIdx % OUTLINER_COLORS.length],
+    };
+    const id = registry.nextId();
+    history.do('Add ' + spec.name,
+        () => { registry.createFromMesh(spec, data, id); },
+        () => { registry.remove(id); });
+    pickInfo.textContent = `added ${spec.name}`;
+}
+
+function cancelOffset() {
+    if (!OffsetTool.active(offsetToolState)) return;
+    OffsetTool.cancel(offsetToolState);
+    destroyOffsetPreview();
+    MeasureBox.clear(measureBoxState);
+    MeasureBox.setActive(measureBoxState, false);
+    renderMeasureBox();
+    pickInfo.textContent = 'offset cancelled';
+}
+
 // --- Tape measure ----------------------------------------------------------
 //
 // Two-click distance readout via inference snaps. No geometry is produced —
@@ -2288,6 +2460,20 @@ function handleLeftDown(e) {
             if (!resolved) return;
             addLinePoint(resolved.position);
         }
+    } else if (currentTool === 'offset') {
+        // Stage 1: face under cursor → start offset on that face group.
+        // Stage 2: cursor in plane → click commits.
+        if (!OffsetTool.active(offsetToolState)) {
+            if (!pick) return;
+            const gIdx = pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex];
+            beginOffset(pick.primitive, gIdx, pick.hit.position);
+        } else {
+            const plane = offsetToolState.plane;
+            const hit = Sketch.rayToPlane(
+                screenToRay(cx, cy), plane.origin, plane.normal);
+            if (hit) updateOffsetAt(hit);
+            commitOffset();
+        }
     } else if (currentTool === 'erase') {
         if (pick) {
             const gIdx = pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex];
@@ -2372,6 +2558,23 @@ document.addEventListener('mousemove', (e) => {
         const plane = arcToolState.plane;
         const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
         if (hit) updateArcAt(hit);
+        return;
+    }
+    if (OffsetTool.active(offsetToolState)) {
+        const plane = offsetToolState.plane;
+        const hit = Sketch.rayToPlane(ray, plane.origin, plane.normal);
+        if (hit) updateOffsetAt(hit);
+        return;
+    }
+    if (currentTool === 'offset') {
+        // Hover preview: highlight the candidate face group.
+        const pick = pickAt(cx, cy);
+        if (pick) {
+            const gIdx = pick.primitive.faceGroups.triToGroup[pick.hit.triangleIndex];
+            setHighlightFaceGroup(pick.primitive, gIdx);
+        } else {
+            clearHighlight();
+        }
         return;
     }
     if (tapeToolState.active) {
@@ -2493,6 +2696,9 @@ function handleMeasureBoxKey(key) {
         } else if (circleToolState.active) {
             const r = MeasureBox.parseValue(measureBoxState.buffer);
             if (r !== null) applyCircleRadius(r);
+        } else if (OffsetTool.active(offsetToolState)) {
+            const d = MeasureBox.parseValue(measureBoxState.buffer);
+            if (d !== null) applyOffsetDistance(d);
         }
         return true;
     }
@@ -2513,6 +2719,12 @@ function handleMeasureBoxKey(key) {
                 applyCircleRadius(r);
                 commitCircle();
             }
+        } else if (OffsetTool.active(offsetToolState)) {
+            const d = MeasureBox.parseValue(measureBoxState.buffer);
+            if (d !== null) {
+                applyOffsetDistance(d);
+                commitOffset();
+            }
         } else if (measureBoxState.lastOp) {
             const v = MeasureBox.parseValue(measureBoxState.buffer);
             MeasureBox.clear(measureBoxState);
@@ -2529,6 +2741,8 @@ function handleMeasureBoxKey(key) {
             cancelRectangle();
         } else if (circleToolState.active) {
             cancelCircle();
+        } else if (OffsetTool.active(offsetToolState)) {
+            cancelOffset();
         } else {
             MeasureBox.clearLastOp(measureBoxState);
             MeasureBox.setActive(measureBoxState, false);
@@ -2552,7 +2766,8 @@ document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && !gizmoDrag.active && !pushpull.active &&
         !moveToolState.active && !rectangleToolState.active &&
         !circleToolState.active && !lineToolState.active &&
-        !ArcTool.active(arcToolState)) {
+        !ArcTool.active(arcToolState) &&
+        !OffsetTool.active(offsetToolState)) {
         const k = (e.key || '').toLowerCase();
         if (k === 'z' && !e.shiftKey) {
             if (history.canUndo()) history.undo();
@@ -2609,6 +2824,7 @@ document.addEventListener('keydown', (e) => {
         if (circleToolState.active)                     { cancelCircle(); cancelled = true; }
         if (lineToolState.active)                       { cancelLine(); cancelled = true; }
         if (ArcTool.active(arcToolState))               { cancelArc(); cancelled = true; }
+        if (OffsetTool.active(offsetToolState))         { cancelOffset(); cancelled = true; }
         if (tapeToolState.active)                       { cancelTape(); cancelled = true; }
         if (!cancelled && registry.editContext !== registry.root) {
             registry.exitContext();
@@ -3078,4 +3294,9 @@ window.__editor = {
     // Arc tool. 3-click 2-point + bulge; output is an EdgePrimitive.
     get arcToolState() { return arcToolState; },
     beginArc, updateArcAt, setArcEnd, commitArc, cancelArc,
+
+    // Offset tool. Pick a face, drag, commit a coplanar offset polygon.
+    get offsetToolState() { return offsetToolState; },
+    beginOffset, updateOffsetAt, applyOffsetDistance, commitOffset, cancelOffset,
+    faceGroupBoundaryWorld,
 };
