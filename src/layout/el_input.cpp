@@ -246,7 +246,25 @@ void ElInput::getContentSize(float& w, float& h, float maxWidth) {
     if (t == InputType::Checkbox || t == InputType::Radio) { w = 13; h = 13; return; }
     if (t == InputType::Range) { w = 160; h = 20; return; }
     if (t == InputType::Color) { w = 44; h = 24; return; }
-    if (isButtonType(nullptr)) { w = 80; h = 20; return; }
+    if (isButtonType(nullptr)) {
+        // Button-type inputs render the `value` attribute as their label.
+        // Measure the label so the box is large enough — otherwise padding
+        // + borders swamp the 80px default and the text gets clipped.
+        float labelW = 0.f;
+        if (elem_ && renderer_) {
+            std::string val = elem_->getAttribute("value");
+            if (!val.empty()) {
+                auto fh = getFontHandle();
+                if (fh) {
+                    auto tm = renderer_->measureText(val, fh);
+                    labelW = tm.width;
+                }
+            }
+        }
+        w = std::max(80.0f, std::ceil(labelW));
+        h = 20;
+        return;
+    }
     w = (maxWidth > 0 && maxWidth < 200) ? maxWidth : 173;
     h = 20;
 }
