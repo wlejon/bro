@@ -304,10 +304,9 @@ var AI = {};
     }
 
     // ───────────────────────────────────────────────────────────────────────
-    // think(self, world) — called by the AgentBinding at thinkHz. MCTS-
-    // controlled agents have their bindings detached by Groups.applyModeForTeam
-    // and are driven by Groups.drive → mcts::apply each rAF frame, so this
-    // function is only invoked for scripted-mode agents.
+    // think(self, world) — called by the AgentBinding at thinkHz. This is
+    // the scripted algorithm; other algorithms live in their own think
+    // functions (see apps/ai-arena/agents/).
     // ───────────────────────────────────────────────────────────────────────
     AI.think = function (self, world) {
         var agent = self.agent;

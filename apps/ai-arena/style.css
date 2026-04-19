@@ -115,7 +115,7 @@ button.active { background: #3c5a8a; border-color: #4c7abf; }
 .roster-red { background: #e74c3c; }
 .roster-blue { background: #3498db; }
 .roster-dead { opacity: 0.35; text-decoration: line-through; }
-#mcts-stats { font-size: 11px; line-height: 15px; white-space: pre; }
+#agent-stats { font-size: 11px; line-height: 15px; white-space: pre; }
 #mask-row {
     display: grid;
     grid-template-columns: repeat(13, 1fr);

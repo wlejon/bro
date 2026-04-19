@@ -8,7 +8,7 @@ var UI = {};
     UI.rosterEl = null;
     UI.logEl = null;
     UI.maskRowEl = null;
-    UI.mctsStatsEl = null;
+    UI.agentStatsEl = null;
     UI.statusEl = null;
     UI.rewardNumsEl = null;
     UI.obsCanvas = null;
@@ -26,7 +26,7 @@ var UI = {};
         UI.rosterEl = document.getElementById("roster");
         UI.logEl = document.getElementById("log");
         UI.maskRowEl = document.getElementById("mask-row");
-        UI.mctsStatsEl = document.getElementById("mcts-stats");
+        UI.agentStatsEl = document.getElementById("agent-stats");
         UI.statusEl = document.getElementById("status");
         UI.rewardNumsEl = document.getElementById("reward-nums");
         UI.obsCanvas = document.getElementById("obs-canvas");
@@ -177,19 +177,23 @@ var UI = {};
         UI.rewardNumsEl.textContent = "Red " + r.toFixed(1) + " / Blue " + b.toFixed(1);
     };
 
-    UI.updateMctsStats = function (stats, enabled) {
-        if (!enabled) {
-            UI.mctsStatsEl.textContent = "(scripted — flip Blue AI to MCTS)";
+    // Generic agent-stats panel. Agents that have a team-level planner
+    // (portfolio search, influence maps, etc) publish stats into
+    // state.agentStats and those are rendered here. Key/value pairs are
+    // agent-defined; render verbatim.
+    UI.updateAgentStats = function (stats) {
+        if (!stats) {
+            UI.agentStatsEl.textContent = "(no planner active)";
             return;
         }
-        if (!stats) { UI.mctsStatsEl.textContent = "searching..."; return; }
-        UI.mctsStatsEl.textContent =
-            "tactic:     " + stats.tactic + (stats.replanned ? " *" : "") + "\n" +
-            "replan in:  " + stats.windowsUntilReplan + " windows\n" +
-            "fine iters: " + stats.iterations + "\n" +
-            "bestMean:   " + (stats.bestMean || 0).toFixed(3) + "\n" +
-            "bestVisits: " + stats.bestVisits + "\n" +
-            "elapsed:    " + stats.elapsedMs + "ms";
+        var lines = [];
+        if (stats.label) lines.push(stats.label);
+        for (var k in stats) {
+            if (!Object.prototype.hasOwnProperty.call(stats, k)) continue;
+            if (k === "label") continue;
+            lines.push(k.padEnd(12) + String(stats[k]));
+        }
+        UI.agentStatsEl.textContent = lines.join("\n");
     };
 
     UI.setStatus = function (text) {

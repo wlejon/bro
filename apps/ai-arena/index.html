@@ -28,10 +28,15 @@
                     <button id="btn-play">Play</button>
                 </div>
                 <div class="ctrl-group">
-                    <span class="ctrl-label">Blue AI</span>
-                    <select id="sel-ai">
+                    <span class="ctrl-label">Red AI</span>
+                    <select id="sel-red-ai">
                         <option value="scripted">Scripted</option>
-                        <option value="mcts">MCTS (group)</option>
+                    </select>
+                </div>
+                <div class="ctrl-group">
+                    <span class="ctrl-label">Blue AI</span>
+                    <select id="sel-blue-ai">
+                        <option value="scripted">Scripted</option>
                     </select>
                 </div>
                 <div class="ctrl-group">
@@ -46,8 +51,8 @@
                 <div id="roster"></div>
             </div>
             <div class="panel">
-                <div class="panel-title">MCTS STATS</div>
-                <div id="mcts-stats">--</div>
+                <div class="panel-title">AGENT STATS</div>
+                <div id="agent-stats">--</div>
             </div>
             <div class="panel">
                 <div class="panel-title">OBSERVATION (focused)</div>
@@ -73,7 +78,6 @@
     <script src="config.js"></script>
     <script src="scenarios.js"></script>
     <script src="arena.js"></script>
-    <script src="groups.js"></script>
     <script src="ai.js"></script>
     <script src="render.js"></script>
     <script src="scene_setup.js"></script>

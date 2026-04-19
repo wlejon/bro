@@ -11,7 +11,8 @@ var Controls = {};
         var btnRecord = document.getElementById("btn-record");
         var btnPlay   = document.getElementById("btn-play");
         var btnReset  = document.getElementById("btn-reset");
-        var selAi     = document.getElementById("sel-ai");
+        var selRed    = document.getElementById("sel-red-ai");
+        var selBlue   = document.getElementById("sel-blue-ai");
         var selFocus  = document.getElementById("sel-focus");
 
         btnPause.addEventListener("click", function () {
@@ -33,28 +34,19 @@ var Controls = {};
             btnRecord.classList.remove("active");
         });
 
-        // Event-driven: update state once on change rather than polling
-        // the DOM every rAF frame. MCTS mode detaches blue bindings so the
-        // capability layer can't fight Groups.drive → mcts::apply; scripted
-        // mode re-attaches them with the default capability set + AI.think.
-        selAi.addEventListener("change", function () {
-            App.state.blueAi = selAi.value;
-            if (selAi.value === "mcts") {
-                Groups.ensure(App.state, 1);
-                Groups.applyModeForTeam(App.state, 1, "mcts");
-            } else {
-                Groups.applyModeForTeam(App.state, 1, "scripted");
-                Groups.reset(App.state);
-                App.state.lastMctsStats = null;
-            }
-        });
+        selRed.addEventListener("change",  function () { App.state.redAi  = selRed.value;  });
+        selBlue.addEventListener("change", function () { App.state.blueAi = selBlue.value; });
         selFocus.addEventListener("change", function () { App.state.focusId = +selFocus.value; });
     };
 
     // Seed state from the current selector values. Called after rebuild
     // since the focus dropdown was just regenerated for the new roster.
     Controls.syncFromDom = function (state) {
-        state.blueAi = document.getElementById("sel-ai").value;
-        state.focusId = +document.getElementById("sel-focus").value;
+        var r = document.getElementById("sel-red-ai");
+        var b = document.getElementById("sel-blue-ai");
+        var f = document.getElementById("sel-focus");
+        if (r && r.value) state.redAi  = r.value;
+        if (b && b.value) state.blueAi = b.value;
+        if (f && f.value) state.focusId = +f.value;
     };
 })();

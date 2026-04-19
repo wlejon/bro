@@ -1,19 +1,18 @@
-// headless_eval.js — run N matches of MCTS (blue) vs scripted (red) inside
-// the live ai-arena app, headless. Used to iterate on LayeredPlanner tuning
-// until MCTS wins 100%. Invoke via:
+// headless_eval.js — Run N matches and tally winrate. Reads sel-red-ai /
+// sel-blue-ai for algorithm selection; defaults to scripted-vs-scripted
+// baseline. Invoke via:
 //   bro-headless apps/ai-arena apps/ai-arena/headless_eval.js
+//   bro-headless apps/ai-arena apps/ai-arena/headless_eval.js -e "EVAL_BLUE='portfolio'"
 //
-// Reads (and mutates) the globals the app installs: App, Scenarios, Groups.
-//
-// Method: for each match, force blueAi=mcts, tick virtual time up to
-// MATCH_SECONDS; stop early once one team is fully dead. Score = team with
-// survivors. Draw counts as a loss for MCTS (we want 100%).
+// Score = team with survivors. Timeout falls back to surviving HP.
 
 "use strict";
 
-var MATCH_SECONDS = 45;          // cap per match
-var NUM_MATCHES   = 10;          // baseline run length
-var TICK_MS       = 500;         // virtual-time chunk per inner loop
+var MATCH_SECONDS = typeof EVAL_SECONDS === "number" ? EVAL_SECONDS : 45;
+var NUM_MATCHES   = typeof EVAL_MATCHES === "number" ? EVAL_MATCHES : 6;
+var TICK_MS       = 500;
+var RED_AI        = typeof EVAL_RED  === "string" ? EVAL_RED  : "scripted";
+var BLUE_AI       = typeof EVAL_BLUE === "string" ? EVAL_BLUE : "scripted";
 
 function teamAlive(state, teamId) {
     var n = 0;
@@ -34,14 +33,11 @@ function totalHp(state, teamId) {
 }
 
 function runMatch(matchIdx) {
-    // Cycle scenarios for variety.
     var scn = Scenarios.ALL[matchIdx % Scenarios.ALL.length];
     App.setScenario(scn);
 
-    // Force blue (team 1) onto MCTS — same hook Controls.change runs.
-    App.state.blueAi = "mcts";
-    Groups.ensure(App.state, 1);
-    Groups.applyModeForTeam(App.state, 1, "mcts");
+    App.state.redAi  = RED_AI;
+    App.state.blueAi = BLUE_AI;
 
     var t0 = Date.now();
     var winner = -1;
@@ -55,12 +51,10 @@ function runMatch(matchIdx) {
         if (blueN === 0) { winner = 0; break; }
     }
     if (winner < 0) {
-        // Timeout — assign win by higher surviving HP; tie counts as draw.
         var rh = totalHp(App.state, 0), bh = totalHp(App.state, 1);
         if (bh > rh * 1.05) winner = 1;
         else if (rh > bh * 1.05) winner = 0;
     }
-    var wallMs = Date.now() - t0;
     return {
         scenario: scn.name, winner: winner,
         redAlive: teamAlive(App.state, 0),
@@ -68,30 +62,30 @@ function runMatch(matchIdx) {
         redHp: totalHp(App.state, 0),
         blueHp: totalHp(App.state, 1),
         elapsed: App.state.elapsed.toFixed(1),
-        wallMs: wallMs,
+        wallMs: Date.now() - t0,
     };
 }
 
-console.log("==== headless MCTS eval ====");
+console.log("==== headless eval: red=" + RED_AI + " vs blue=" + BLUE_AI + " ====");
 console.log("matches=" + NUM_MATCHES + " matchSeconds=" + MATCH_SECONDS);
 
 var results = [];
-var mctsWins = 0, scriptedWins = 0, draws = 0;
+var redWins = 0, blueWins = 0, draws = 0;
 for (var m = 0; m < NUM_MATCHES; m++) {
     var r = runMatch(m);
     results.push(r);
-    if (r.winner === 1) mctsWins++;
-    else if (r.winner === 0) scriptedWins++;
+    if (r.winner === 1) blueWins++;
+    else if (r.winner === 0) redWins++;
     else draws++;
     console.log("[" + (m+1) + "/" + NUM_MATCHES + "] " + r.scenario +
-        "  winner=" + (r.winner === 1 ? "MCTS" : r.winner === 0 ? "SCRIPTED" : "DRAW") +
+        "  winner=" + (r.winner === 1 ? "BLUE" : r.winner === 0 ? "RED" : "DRAW") +
         "  red=" + r.redAlive + "(" + r.redHp.toFixed(0) + "hp)" +
         "  blue=" + r.blueAlive + "(" + r.blueHp.toFixed(0) + "hp)" +
         "  t=" + r.elapsed + "s  wall=" + r.wallMs + "ms");
 }
 
 console.log("==== summary ====");
-console.log("MCTS:     " + mctsWins + "/" + NUM_MATCHES);
-console.log("SCRIPTED: " + scriptedWins + "/" + NUM_MATCHES);
-console.log("DRAW:     " + draws + "/" + NUM_MATCHES);
-console.log("win rate: " + (100 * mctsWins / NUM_MATCHES).toFixed(1) + "%");
+console.log("BLUE (" + BLUE_AI + "): " + blueWins + "/" + NUM_MATCHES);
+console.log("RED  (" + RED_AI  + "): " + redWins  + "/" + NUM_MATCHES);
+console.log("DRAW: " + draws + "/" + NUM_MATCHES);
+console.log("blue win rate: " + (100 * blueWins / NUM_MATCHES).toFixed(1) + "%");

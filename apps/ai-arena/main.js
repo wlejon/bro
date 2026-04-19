@@ -1,7 +1,11 @@
 // main.js — Bootstrap. Scene graph drives the sim via attachAIWorld, each
 // capsule node owns an agent binding whose think() is AI.think. The rAF
-// loop is thin now: refresh shared AI state each frame, then pump HUD
-// updates and drain damage events post-tick.
+// loop is thin: refresh shared AI state each frame, then pump HUD updates
+// and drain damage events post-tick.
+//
+// Multi-algorithm note: the Red AI / Blue AI selectors pick which think()
+// runs for each team's units. Commit 2 will introduce a registry with
+// multiple algorithms; for now both teams share AI.think (scripted).
 var App = {};
 (function () {
     "use strict";
@@ -16,7 +20,6 @@ var App = {};
     };
 
     App.rebuild = function () {
-        // Detach any bindings/ticker from the previous world before destroying it.
         if (App.state && App.state.world) {
             Scene3D.scene.detachAIWorld();
             for (var di = 0; di < App.state.agents.length; di++) {
@@ -42,6 +45,7 @@ var App = {};
             rewards: rewardTrackers,
             snapshots: [],
             snapshotAccum: 0,
+            redAi: "scripted",
             blueAi: "scripted",
             paused: false,
             focusId: -1,
@@ -58,26 +62,20 @@ var App = {};
             replayFrame: 0,
             replayPlaying: false,
             replayElapsed: 0,
-            lastMctsStats: null,
+            agentStats: null,
         };
 
         AI.memory = {};
-        Groups.reset(App.state);
 
         // Ensure shared state is populated before the first think() fires —
         // attachAIWorld/attachAgent immediately schedule a tick.
         AI.updateShared(App.state);
 
-        // Auto-tick the world off the scene frame update (replaces the
-        // manual accumulator + Loop.simStep from pre-refactor).
         Scene3D.scene.attachAIWorld(built.world, {
             stepHz: 60, maxStepsPerFrame: Config.MAX_STEPS_PER_FRAME,
         });
 
         // Bind each unit capsule to its agent with the scripted think().
-        // Capabilities:
-        //   move_to / cast_ability / flee / hold — built-ins used by think()
-        //   aimed_shot — declarative custom cap (see ai.js note)
         var CAPS = ["move_to", "cast_ability", "flee", "hold", "aimed_shot"];
         for (var j = 0; j < built.agents.length; j++) {
             var ag = built.agents[j];
@@ -95,13 +93,6 @@ var App = {};
         Render.clearFx();
         UI.rebuildRoster(Arena.ROSTER);
         Controls.syncFromDom(App.state);
-        // Re-apply the current MCTS mode after every rebuild — new agents
-        // came up with default bindings attached, so mcts mode needs to
-        // detach them and init a fresh LayeredPlanner.
-        if (App.state.blueAi === "mcts") {
-            Groups.ensure(App.state, 1);
-            Groups.applyModeForTeam(App.state, 1, "mcts");
-        }
         UI.rewardHistory = { red: [], blue: [] };
         UI.log("arena built - " + built.agents.length + " agents (" +
                App.scenario.name + ")", "");
@@ -124,25 +115,9 @@ var App = {};
         }
 
         if (!state.paused) {
-            // Refresh shared AI state (team focus, teammate/enemy rosters,
-            // claimed cover) before bindings fire think() during this frame.
             AI.updateShared(state);
-            // Elapsed time advances even though the scene ticks the world;
-            // we use it for HUD labels, snapshot intervals, and AI memory
-            // timestamps.
             state.elapsed += dt;
             state.simSteps = Math.round(state.elapsed / Config.SIM_STEP);
-
-            // MCTS mode: blue bindings are detached (see Controls handler).
-            // Planner tick decides at 4 Hz; drive applies the cached
-            // CombatAction every frame via mcts::apply — same code path the
-            // rollout uses, so the plan executes identically to what was
-            // searched.
-            if (state.blueAi === "mcts") {
-                Groups.ensure(state, 1);
-                Groups.tick(state, dt);
-                Groups.drive(state, dt);
-            }
         }
 
         Loop.frame(state, App.canvas, dt);
