@@ -86,7 +86,7 @@ var App = {};
                 thinkHz: 30,
                 faceMovement: true,
                 yOffset: Scene3D.UNIT_Y,
-                think: AI.think,
+                think: Agents.thinkFor,
             });
         }
 
@@ -116,6 +116,9 @@ var App = {};
 
         if (!state.paused) {
             AI.updateShared(state);
+            // Team-level planners (portfolio search, influence maps) run
+            // before per-agent think fires inside the scene AI tick.
+            Agents.tickTeams(state, dt);
             state.elapsed += dt;
             state.simSteps = Math.round(state.elapsed / Config.SIM_STEP);
         }
@@ -129,6 +132,7 @@ var App = {};
     UI.init();
     Scene3D.init(App.canvas);
     AI.registerCapabilities();
+    Controls.populateSelectors("scripted", "scripted");
     App.rebuild();
     Controls.bind(App.rebuild);
 

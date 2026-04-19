@@ -102,7 +102,7 @@ var Loop = {};
         state.statusAccum += dt;
         if (state.statusAccum >= Config.STATUS_HZ) {
             state.statusAccum = 0;
-            UI.updateAgentStats(state.agentStats);
+            UI.updateAgentStats(Agents.collectStats(state));
             if (state.paused) UI.setStatus("paused");
             else if (state.recording) UI.setStatus("recording  " + state.recorder.frameCount + " frames");
             else UI.setStatus("running  t=" + state.elapsed.toFixed(1) + "s  steps=" + state.simSteps);

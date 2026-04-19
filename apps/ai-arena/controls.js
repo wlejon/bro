@@ -5,6 +5,25 @@ var Controls = {};
 (function () {
     "use strict";
 
+    // Populate the Red/Blue AI selectors from the Agents registry.
+    // Called once at startup; selector options persist across rebuilds.
+    Controls.populateSelectors = function (defaultRed, defaultBlue) {
+        var selRed  = document.getElementById("sel-red-ai");
+        var selBlue = document.getElementById("sel-blue-ai");
+        var defs = Agents.all();
+        [selRed, selBlue].forEach(function (sel) {
+            while (sel.firstChild) sel.removeChild(sel.firstChild);
+            for (var i = 0; i < defs.length; i++) {
+                var opt = document.createElement("option");
+                opt.value = defs[i].id;
+                opt.textContent = defs[i].label;
+                sel.appendChild(opt);
+            }
+        });
+        if (defaultRed)  selRed.value  = defaultRed;
+        if (defaultBlue) selBlue.value = defaultBlue;
+    };
+
     Controls.bind = function (onReset) {
         var btnPause  = document.getElementById("btn-pause");
         var btnRewind = document.getElementById("btn-rewind");
