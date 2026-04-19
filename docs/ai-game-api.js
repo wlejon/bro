@@ -471,3 +471,44 @@ const teamOpt = bro.ai.game.createTeamOptionMcts({
     opponentPolicy: "scripted",
 });
 const chosenTeam = teamOpt.search(world, heroes);  // option name or null
+
+
+// ─── Commander (role-based hierarchical team planner) ────────────────────
+//
+// Assigns heroes to roles (lead / flank / support / etc.); each role owns
+// an option set and optional per-role evaluator. Per-hero OptionMcts runs
+// within the role's option space — no joint-action combinatorial search.
+// Role re-assignment fires every `replanEveryWindows` decide() calls, or
+// whenever the team composition changes.
+//
+// This is the "group thinking" primitive. Use it when joint-space search
+// (TeamMcts / TeamOptionMcts) is too wide at your iteration budget.
+
+const leadOpts    = [peekAndShoot, hold];
+const supportOpts = [retreat, hold];
+const cmdr = bro.ai.game.createCommander({
+    replanEveryWindows: 3,
+    roleCfg: { iterations: 80, rolloutHorizon: 3, optionMaxWindows: 4, useLeafValue: true },
+    opponentPolicy: "scripted",
+    evaluator: "hpDelta",                  // default for roles without their own
+    roles: [
+        { name: "lead",    options: leadOpts },
+        { name: "support", options: supportOpts,
+          evaluator: (worldView, heroId) => {
+              // Support values ally HP preservation over damage dealt.
+              const me = worldView.agents.find(a => a.id === heroId);
+              if (!me) return 0;
+              const allies = worldView.agents.filter(a => a.teamId === me.teamId && a.alive);
+              const avg = allies.reduce((s, a) => s + a.hp / a.maxHp, 0) / Math.max(1, allies.length);
+              return avg * 2 - 1;
+          } },
+    ],
+    // Optional custom assigner. Default is round-robin by hero index.
+    assign: (heroes, world) => heroes.map((h, i) => h.hp < h.maxHp * 0.4 ? 1 : 0),
+});
+
+const groupActions2 = cmdr.decide(world, heroes); // [CombatAction, ...]
+console.log(cmdr.currentAssignments);             // [0, 1, 0, ...] role indices
+console.log(cmdr.committedOption(0));             // "peekAndShoot" | null
+console.log(cmdr.windowsUntilReplan);
+console.log(cmdr.roles);                          // [{name, optionCount}, ...]

@@ -92,6 +92,14 @@ struct TeamOptionMctsData {
     std::vector<std::shared_ptr<brogameagent::mcts::TeamOption>> options;
 };
 
+struct CommanderData {
+    brogameagent::mcts::Commander commander;
+    // Keep per-role shared_ptrs alive independent of the C++ Commander's
+    // internal role list — defence-in-depth against option lifetime bugs
+    // when JS-authored options hold JSValue refs.
+    std::vector<std::shared_ptr<brogameagent::mcts::Option>> option_refs;
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -798,6 +806,48 @@ private:
     JSValue should_term_;
 };
 
+// JS-authored Commander role-assignment callback. Signature:
+//   assign(heroesView[], worldView) -> number[] of role indices
+class JsAssigner {
+public:
+    JsAssigner(JSContext* ctx, JSValue fn)
+        : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
+    ~JsAssigner() { JS_FreeValue(ctx_, fn_); }
+
+    std::vector<int> operator()(const std::vector<brogameagent::Agent*>& heroes,
+                                 const brogameagent::World& world) const {
+        JSValue hv = JS_NewArray(ctx_);
+        for (uint32_t i = 0; i < heroes.size(); i++) {
+            if (heroes[i]) JS_SetPropertyUint32(ctx_, hv, i, buildAgentFields(ctx_, *heroes[i]));
+            else           JS_SetPropertyUint32(ctx_, hv, i, JS_NULL);
+        }
+        JSValue wv = buildWorldView(ctx_, world);
+        JSValue args[2] = { hv, wv };
+        JSValue r = JS_Call(ctx_, fn_, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ctx_, hv); JS_FreeValue(ctx_, wv);
+
+        std::vector<int> out(heroes.size(), 0);
+        if (!JS_IsException(r) && JS_IsArray(r)) {
+            JSValue lenVal = JS_GetPropertyStr(ctx_, r, "length");
+            int32_t len = 0; JS_ToInt32(ctx_, &len, lenVal);
+            JS_FreeValue(ctx_, lenVal);
+            int n = std::min(len, (int)heroes.size());
+            for (int i = 0; i < n; i++) {
+                JSValue v = JS_GetPropertyUint32(ctx_, r, i);
+                int32_t idx = 0; JS_ToInt32(ctx_, &idx, v);
+                JS_FreeValue(ctx_, v);
+                out[i] = idx;
+            }
+        }
+        JS_FreeValue(ctx_, r);
+        return out;
+    }
+
+private:
+    JSContext* ctx_;
+    JSValue fn_;
+};
+
 } // namespace
 
 static std::shared_ptr<brogameagent::mcts::IRolloutPolicy>
@@ -1222,6 +1272,70 @@ static JSValue js_createTeamOptionMcts(JSContext* ctx, JSValueConst, int argc, J
         }
     }
     return qjsbind::wrap<TeamOptionMctsData>(ctx, data);
+}
+
+// bro.ai.game.createCommander({
+//   roles: [ { name, options: [Option...], evaluator? }, ... ],
+//   replanEveryWindows?: number,
+//   roleCfg?: MctsConfig,                 // applied to every per-hero OptionMcts
+//   evaluator?: ... | function,           // default hero-scoped evaluator
+//   opponentPolicy?: "scripted" | ...,
+//   assign?: function(heroesView, worldView) => number[] of role indices
+// })
+static JSValue js_createCommander(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* data = new CommanderData();
+    if (argc < 1 || !JS_IsObject(argv[0])) {
+        return qjsbind::wrap<CommanderData>(ctx, data);
+    }
+    JSValue opts = argv[0];
+
+    brogameagent::mcts::Commander::Config cfg{};
+    JSValue rc = JS_GetPropertyStr(ctx, opts, "roleCfg");
+    if (JS_IsObject(rc)) cfg.role_cfg = parseMctsConfig(ctx, rc);
+    JS_FreeValue(ctx, rc);
+    cfg.replan_every_windows = getInt32Prop(ctx, opts, "replanEveryWindows",
+                                             cfg.replan_every_windows);
+    data->commander.set_config(cfg);
+
+    if (auto op = parseOpponentPolicy(ctx, opts)) data->commander.set_opponent_policy(std::move(op));
+    if (auto ev = parseHeroEvaluator(ctx, opts))  data->commander.set_default_evaluator(std::move(ev));
+
+    // Roles array.
+    JSValue rolesArr = JS_GetPropertyStr(ctx, opts, "roles");
+    if (JS_IsArray(rolesArr)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, rolesArr, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue r = JS_GetPropertyUint32(ctx, rolesArr, i);
+            if (JS_IsObject(r)) {
+                std::string name = readStringProp(ctx, r, "name");
+                auto opts_vec = parseOptionArray<OptionData, brogameagent::mcts::Option>(ctx, r);
+                auto role_eval = parseHeroEvaluator(ctx, r);
+                for (auto& sp : opts_vec) data->option_refs.push_back(sp);
+                data->commander.add_role(std::move(name), std::move(opts_vec),
+                                          std::move(role_eval));
+            }
+            JS_FreeValue(ctx, r);
+        }
+    }
+    JS_FreeValue(ctx, rolesArr);
+
+    // Optional JS assigner. Stored via shared_ptr so the Commander's
+    // std::function captures ownership and the JSValue lives as long as
+    // the Commander does.
+    JSValue assignFn = JS_GetPropertyStr(ctx, opts, "assign");
+    if (JS_IsFunction(ctx, assignFn)) {
+        auto sp = std::make_shared<JsAssigner>(ctx, assignFn);
+        data->commander.set_assigner(
+            [sp](const std::vector<brogameagent::Agent*>& heroes,
+                 const brogameagent::World& world) {
+                return (*sp)(heroes, world);
+            });
+    }
+    JS_FreeValue(ctx, assignFn);
+
+    return qjsbind::wrap<CommanderData>(ctx, data);
 }
 
 // bro.ai.game.legalActions(agent, world) → [CombatAction]
@@ -2433,6 +2547,59 @@ void AIBindings::install(JSContext* ctx) {
                 });
     }
 
+    // ─── Commander class ──────────────────────────────────────────────
+    {
+        qjsbind::Class<CommanderData>(ctx, "AICommander", qjsbind::NoGlobal)
+            .method_raw("decide",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* cd = qjsbind::unwrap<CommanderData>(ctx, this_val);
+                    if (!cd || argc < 2) return JS_ThrowTypeError(ctx, "decide(world, heroes)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    if (!wd) return JS_ThrowTypeError(ctx, "invalid world");
+                    auto heroes = parseHeroesArray(ctx, argv[1]);
+                    auto acts = cd->commander.decide(wd->world, heroes);
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < acts.size(); i++) {
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeCombatAction(ctx, acts[i]));
+                    }
+                    return arr;
+                }, 2)
+            .method("reset",
+                [](CommanderData* d) { d->commander.reset(); })
+            .method_raw("committedOption",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* cd = qjsbind::unwrap<CommanderData>(ctx, this_val);
+                    if (!cd || argc < 1) return JS_NULL;
+                    int32_t idx = 0; JS_ToInt32(ctx, &idx, argv[0]);
+                    std::string n = cd->commander.committed_option_for_hero((size_t)idx);
+                    return n.empty() ? JS_NULL : JS_NewString(ctx, n.c_str());
+                }, 1)
+            .get("currentAssignments",
+                [](CommanderData* d, JSContext* ctx) -> JSValue {
+                    const auto& a = d->commander.current_assignments();
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < a.size(); i++) {
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, a[i]));
+                    }
+                    return arr;
+                })
+            .get("windowsUntilReplan",
+                [](CommanderData* d) -> int { return d->commander.windows_until_replan(); })
+            .get("roles",
+                [](CommanderData* d, JSContext* ctx) -> JSValue {
+                    const auto& roles = d->commander.roles();
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < roles.size(); i++) {
+                        JSValue o = JS_NewObject(ctx);
+                        JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, roles[i].name.c_str()));
+                        JS_SetPropertyStr(ctx, o, "optionCount",
+                                          JS_NewInt32(ctx, (int)roles[i].options.size()));
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+                    }
+                    return arr;
+                });
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // Build namespace: bro.ai.game
     // ═══════════════════════════════════════════════════════════════════
@@ -2509,6 +2676,8 @@ void AIBindings::install(JSContext* ctx) {
         JS_NewCFunction(ctx, js_createOptionMcts, "createOptionMcts", 1));
     JS_SetPropertyStr(ctx, gameObj, "createTeamOptionMcts",
         JS_NewCFunction(ctx, js_createTeamOptionMcts, "createTeamOptionMcts", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createCommander",
+        JS_NewCFunction(ctx, js_createCommander, "createCommander", 1));
     JS_SetPropertyStr(ctx, gameObj, "legalActions",
         JS_NewCFunction(ctx, js_legalActions, "legalActions", 2));
     JS_SetPropertyStr(ctx, gameObj, "legalTactics",
