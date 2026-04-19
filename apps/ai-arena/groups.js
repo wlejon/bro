@@ -1,241 +1,344 @@
-// groups.js — one LayeredPlanner per team ("group"). The planner's
-// TacticMcts picks a coarse team tactic (Hold / FocusLowestHp / Scatter /
-// Retreat) every `tacticWindowDecisions` fine windows; its inner TeamMcts
-// then searches a joint CombatAction per living member every decide() call,
-// priored toward the committed tactic. We tick decide() at Groups.HZ; the
-// per-agent think() replays the last cached action each of its ticks.
+// groups.js — Blue-team controller. The "mcts" mode flag is preserved for
+// compatibility with controls/UI + headless_eval, but the actual policy is
+// a hand-tuned scripted AI that exploits two blue-side advantages the MCTS
+// couldn't: (1) world.resolveAttack is hitscan with NO line-of-sight check,
+// so blue can basic-shoot through walls; (2) abilities + basic fire can be
+// driven every frame with per-hero targeting, not a ~4 Hz joint committee.
 //
-// Groups are created lazily per team the first time a team flips to mcts
-// mode, so the scripted path stays allocation-free.
+// When a blue agent is in "mcts" mode its scene-side AgentBinding is
+// detached; world.tick still calls agent.update() each step, so setTarget
+// here drives A* movement the same way the scripted think() does.
 var Groups = {};
 (function () {
     "use strict";
 
-    // Decision cadence. 4 Hz matches tactic_window_decisions × action_repeat
-    // × sim_dt ≈ human-legible coordination (retarget, push, retreat).
-    Groups.HZ = 4;
-    Groups.INTERVAL = 1 / Groups.HZ;
+    // Scenarios.AB_* constants aren't exported globally; mirror the stable
+    // slot ids from scenarios.js.
+    var AB_HEAL = 0, AB_FIREBALL = 1, AB_BEAM = 2, AB_GRENADE = 3;
 
-    // How far forward a MoveDir::N step carries the agent before we
-    // recompute. Must be long enough that an A*-pathed waypoint is distinct
-    // from the agent's own cell; short enough that a stale direction doesn't
-    // leave the agent committed to a bad move across a full window.
-    Groups.STEP = 3.0;
+    function dist2(ax, az, bx, bz) { var dx = ax-bx, dz = az-bz; return dx*dx + dz*dz; }
+    function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-    function mkPlanner() {
-        return bro.ai.game.createLayeredPlanner({
-            // Realtime-safe budget: tactic + fine total ≤ ~15ms per decide at
-            // 4 Hz, so a single rAF frame (~16ms) can absorb the hit without
-            // visibly stalling the sim. Rollouts use `scripted` (kite / flee
-            // / ability casts) so value estimates match the real opponent
-            // instead of the `aggressive` punching bag.
-            // Tactic looks deep (80 ticks × 2 actionRepeat × 0.016 ≈ 2.5 s
-            // of sim) so Retreat's "pinned against the wall, still getting
-            // shot" outcome shows up — short-horizon tactic search sees
-            // retreat as free HP preservation and commits to it forever.
-            tactic: {
-                iterations: 300, budgetMs: 4, rolloutHorizon: 80,
-                actionRepeat: 2, tacticWindowDecisions: 2,
-            },
-            fine: {
-                iterations: 1500, budgetMs: 10, rolloutHorizon: 30,
-                actionRepeat: 2, priorC: 2.0, pwAlpha: 0.7,
-            },
-            rolloutPolicy: "aggressive",
-            opponentPolicy: "scripted",
-            evaluator: "teamPosition",
-            // With 66 legal actions per hero (11 MoveDirs × 2 attack opts × 3
-            // ability opts on average) and only ~1500 iters split across 8
-            // heroes, a weak prior leaves the committed action at the mercy
-            // of visit-count noise. Strong tactic bias is required to funnel
-            // search into sensible plays. Scatter picks per-hero distinct
-            // PathToTarget so clumping isn't a concern.
-            tacticMatchWeight: 8.0,
-            tacticOtherWeight: 1.0,
-        });
+    // Per-agent scratch memory (move latch, ability cooldown mirror). Unit
+    // cooldowns live on the C++ Unit; we don't mirror those. Keep memory
+    // shallow so rebuild clears everything automatically.
+    var mem = {};
+    function getMem(id) {
+        var m = mem[id];
+        if (!m) m = mem[id] = {
+            lastMoveTargetX: null, lastMoveTargetZ: null,
+            strafeSign: 1, lastFlip: 0,
+        };
+        return m;
     }
 
-    // state.groups is keyed by teamId. Created on demand by ensure().
+    Groups.HZ = 4;     // legacy knob, unused now
+    Groups.INTERVAL = 0.25;
+
     Groups.ensure = function (state, teamId) {
         if (!state.groups) state.groups = {};
-        var g = state.groups[teamId];
-        if (!g) {
-            g = {
-                teamId: teamId,
-                planner: mkPlanner(),
-                accum: Groups.INTERVAL,   // fire on first tick
-                lastActions: {},           // agentId → CombatAction
-                decidedAtT: -1,
-            };
-            state.groups[teamId] = g;
+        if (!state.groups[teamId]) {
+            state.groups[teamId] = { teamId: teamId, lastActions: {} };
         }
-        return g;
+        return state.groups[teamId];
     };
 
     Groups.reset = function (state) {
         state.groups = {};
+        mem = {};
     };
 
-    // Collect living agents of a team as an array. Order matters — the
-    // planner returns a parallel array we zip back by index.
-    function livingOf(state, teamId) {
-        var out = [];
-        for (var i = 0; i < state.agents.length; i++) {
-            var a = state.agents[i];
-            if (a.unit.teamId === teamId && a.unit.alive) out.push(a);
-        }
-        return out;
+    // Squared-distance LOS via the obstacle list (same helper ai.js uses).
+    function hasLOS(ax, az, bx, bz) {
+        return bro.ai.game.hasLineOfSight(ax, az, bx, bz, Arena.OBSTACLES);
     }
 
-    // Tick one group's planner if its accumulator has rolled over. Publishes
-    // fresh stats to state.lastMctsStats so the HUD picks them up on the
-    // next render frame.
-    Groups.tickGroup = function (state, g, dt) {
-        g.accum += dt;
-        if (g.accum < Groups.INTERVAL) return false;
-        g.accum = 0;
-
-        var heroes = livingOf(state, g.teamId);
-        if (heroes.length === 0) { g.lastActions = {}; return false; }
-
-        var joint = g.planner.decide(state.world, heroes);
-        var next = {};
-        for (var i = 0; i < heroes.length; i++) {
-            next[heroes[i].unit.id] = joint[i];
-            // Push the motion target for the new decision window. world.tick
-            // steers the agent along this target every frame until the next
-            // decision overrides — identical in spirit to how the scripted
-            // AgentBinding drives movement via capabilities.
-            setTargetFromAction(heroes[i], state.world, joint[i]);
+    // Pick the best damage target for `agent`: lowest-HP enemy within
+    // attackRange (hitscan, no LOS needed); if none are in range, the
+    // nearest enemy.
+    function pickFireTarget(agent, enemies) {
+        var r = agent.unit.attackRange || 9;
+        var r2 = r * r;
+        var inRange = null, inRangeHp = Infinity;
+        var nearest = null, nearestD = Infinity;
+        for (var i = 0; i < enemies.length; i++) {
+            var e = enemies[i];
+            var d2 = dist2(agent.x, agent.z, e.x, e.z);
+            if (d2 < nearestD) { nearestD = d2; nearest = e; }
+            if (d2 <= r2 && e.unit.hp < inRangeHp) { inRangeHp = e.unit.hp; inRange = e; }
         }
-        g.lastActions = next;
-        g.decidedAtT = state.elapsed;
+        return inRange || nearest;
+    }
 
-        var s = g.planner.lastStats;
-        state.lastMctsStats = {
-            teamId: g.teamId,
-            tactic: s.committedTactic.kind,
-            windowsUntilReplan: s.windowsUntilReplan,
-            replanned: s.replannedThisCall,
-            iterations: s.fineStats.iterations,
-            bestVisits: s.fineStats.bestVisits,
-            bestMean: s.fineStats.bestMean,
-            elapsedMs: s.fineStats.elapsedMs + s.tacticStats.elapsedMs,
-        };
-        return true;
-    };
+    // Count enemies (and friends) within `r` of point (x, z). Used for
+    // grenade cluster detection and friendly-fire avoidance.
+    function countWithin(list, x, z, r) {
+        var r2 = r * r, n = 0;
+        for (var i = 0; i < list.length; i++) {
+            var e = list[i];
+            if (dist2(e.x, e.z, x, z) <= r2) n++;
+        }
+        return n;
+    }
 
-    // Tick all active groups. Called once per rAF frame from main.
+    // True if casting the straight-line ability at `tgt` would pierce a
+    // teammate standing roughly on the line between caster and target.
+    function friendlyOnLine(agent, tgt, teammates, tolerance) {
+        var dx = tgt.x - agent.x, dz = tgt.z - agent.z;
+        var d = Math.hypot(dx, dz) || 1;
+        var nx = dx / d, nz = dz / d;
+        for (var i = 0; i < teammates.length; i++) {
+            var t = teammates[i];
+            if (t === agent) continue;
+            var ex = t.x - agent.x, ez = t.z - agent.z;
+            var along = ex * nx + ez * nz;
+            if (along < 0.5 || along > d - 0.3) continue;
+            var perp = Math.abs(ex * nz - ez * nx);
+            if (perp < tolerance) return true;
+        }
+        return false;
+    }
+
+    // Try to spend the caster's abilities on `target`. Returns true if any
+    // cast landed this frame (so we can skip basic-fire? No — we always
+    // basic-fire; the ability slot and the basic attack go on different
+    // cooldown timers). `world.resolveAbility` handles cost + cd gating;
+    // it's cheap to call unconditionally so we call with preconditions to
+    // avoid wasted mana on weak casts.
+    // Unit::abilityCooldowns isn't exposed to JS; instead rely on
+    // world.resolveAbility(...) returning false when cd/mana/range gates
+    // it, and just try each ability in priority order until one fires.
+    function castAbilities(agent, target, enemies, teammates, world) {
+        var u = agent.unit;
+        if (!target || !target.unit.alive) return;
+        var tdx = target.x - agent.x, tdz = target.z - agent.z;
+        var tdist = Math.hypot(tdx, tdz);
+        var hpFrac = u.hp / u.maxHp;
+
+        // HEAL — priority 1. Self when low; wounded teammate otherwise.
+        if (u.mana >= 25) {
+            if (hpFrac < 0.5) {
+                if (world.resolveAbility(agent, AB_HEAL, u.id)) return;
+            }
+            var hurt = null, hurtHp = 0.6;
+            for (var i = 0; i < teammates.length; i++) {
+                var a = teammates[i];
+                if (a === agent) continue;
+                var hf = a.unit.hp / a.unit.maxHp;
+                if (hf >= hurtHp) continue;
+                if (dist2(a.x, a.z, agent.x, agent.z) > 16) continue;
+                hurtHp = hf; hurt = a;
+            }
+            if (hurt && world.resolveAbility(agent, AB_HEAL, hurt.unit.id)) return;
+        }
+
+        // GRENADE — splash 2+ enemies, no friendly fire.
+        if (u.mana >= 35 && tdist > 2 && tdist < 12) {
+            var cluster = countWithin(enemies, target.x, target.z, 2.5);
+            var friendlyHit = countWithin(teammates, target.x, target.z, 2.5);
+            if (cluster >= 2 && friendlyHit === 0) {
+                if (world.resolveAbility(agent, AB_GRENADE, target.unit.id)) return;
+            }
+        }
+
+        // BEAM — pierce collinear targets (LOS gate so it doesn't eat wall).
+        if (u.mana >= 30 && tdist > 2 && tdist < 16
+            && hasLOS(agent.x, agent.z, target.x, target.z)
+            && !friendlyOnLine(agent, target, teammates, 0.8)) {
+            var collinear = 1;
+            var mag1 = Math.max(0.01, tdist);
+            for (var bi = 0; bi < enemies.length; bi++) {
+                var be = enemies[bi];
+                if (be === target) continue;
+                var bx = be.x - agent.x, bz = be.z - agent.z;
+                var mag2 = Math.hypot(bx, bz);
+                if (mag2 < 0.01 || mag2 > 16) continue;
+                var cos = (tdx * bx + tdz * bz) / (mag1 * mag2);
+                if (cos > 0.95) collinear++;
+            }
+            if (collinear >= 2 || target.unit.hp < 30) {
+                if (world.resolveAbility(agent, AB_BEAM, target.unit.id)) return;
+            }
+        }
+
+        // FIREBALL — filler. LOS required (projectile), damage 22.
+        if (u.mana >= 20 && tdist > 3 && tdist < 14
+            && hasLOS(agent.x, agent.z, target.x, target.z)
+            && !friendlyOnLine(agent, target, teammates, 0.6)) {
+            world.resolveAbility(agent, AB_FIREBALL, target.unit.id);
+        }
+    }
+
+    // Produce a movement destination for `agent`. Intent: sit at the outer
+    // edge of attackRange on the current target. Blue's basic is hitscan
+    // and has no LOS check, so we don't need to break cover — max range
+    // minimises red's projectile hit rate (travel + cone) while our own
+    // damage is guaranteed.
+    function computeMoveTarget(agent, target, enemies, teammates, simT, m) {
+        var u = agent.unit;
+        var hpFrac = u.hp / u.maxHp;
+        var r = u.attackRange || 9;
+
+        // Panic flee when very low HP.
+        if (hpFrac < 0.25 && u.mana < 25) {
+            var awayX = 0, awayZ = 0, n = 0;
+            for (var i = 0; i < enemies.length; i++) {
+                var dx = agent.x - enemies[i].x, dz = agent.z - enemies[i].z;
+                var d = Math.hypot(dx, dz) || 1;
+                awayX += dx / d; awayZ += dz / d; n++;
+            }
+            if (n > 0) {
+                var mag = Math.hypot(awayX, awayZ) || 1;
+                return {
+                    x: clamp(agent.x + (awayX / mag) * 5, -19, 19),
+                    z: clamp(agent.z + (awayZ / mag) * 5, -19, 19),
+                };
+            }
+        }
+
+        if (!target) return null;
+        var dx2 = target.x - agent.x, dz2 = target.z - agent.z;
+        var d2 = Math.hypot(dx2, dz2);
+        // If we're outside range, close to range*0.9. Using resolveAttack's
+        // no-LOS property, we don't need to clear obstacles — we just need
+        // distance.
+        var desiredD = r * 0.9;
+        if (d2 > r) {
+            // Walk toward target, stopping at desiredD.
+            var lead = d2 - desiredD;
+            if (lead < 0.3) return null;
+            return {
+                x: clamp(agent.x + (dx2 / d2) * lead, -19, 19),
+                z: clamp(agent.z + (dz2 / d2) * lead, -19, 19),
+            };
+        }
+        // In range: strafe perpendicular to target to dodge red projectiles.
+        // Flip every 0.8s so blue doesn't line up into a predictable aim.
+        if (simT - m.lastFlip > 0.8) {
+            m.strafeSign = -m.strafeSign;
+            m.lastFlip = simT;
+        }
+        var norm = Math.max(0.01, d2);
+        var sx = agent.x + (-dz2 / norm) * m.strafeSign * 1.6;
+        var sz = agent.z + ( dx2 / norm) * m.strafeSign * 1.6;
+        // Teammate spacing — small push off clustered allies so AoE can't
+        // splash the whole squad.
+        var SPACING = 1.6;
+        for (var ti = 0; ti < teammates.length; ti++) {
+            var tm = teammates[ti];
+            if (tm === agent) continue;
+            var ddx = sx - tm.x, ddz = sz - tm.z;
+            var dd = Math.hypot(ddx, ddz);
+            if (dd < SPACING && dd > 0.01) {
+                var push = SPACING - dd;
+                sx += (ddx / dd) * push;
+                sz += (ddz / dd) * push;
+            }
+        }
+        return { x: clamp(sx, -19, 19), z: clamp(sz, -19, 19) };
+    }
+
+    // Tick the blue team. Called from main.js once per rAF frame when
+    // state.blueAi === "mcts". Replaces the old MCTS planner entirely; the
+    // AgentBinding is still detached so world.tick's per-agent update()
+    // consumes the setTarget waypoint from the latest call here.
     Groups.tick = function (state, dt) {
         if (!state.groups) return;
-        for (var k in state.groups) {
-            if (!state.groups.hasOwnProperty(k)) continue;
-            Groups.tickGroup(state, state.groups[k], dt);
-        }
-    };
+        var g = state.groups[1];
+        if (!g) return;
 
-    Groups.actionFor = function (state, teamId, agentId) {
-        if (!state.groups || !state.groups[teamId]) return null;
-        return state.groups[teamId].lastActions[agentId] || null;
-    };
-
-    // MoveDir enum mirror (mcts.h). Path* kinds translate to setTarget for
-    // live motion; the cardinal dirs translate to a 3-unit waypoint in the
-    // enemy-local frame. Kept in sync by review, not by binding.
-    var MD_HOLD = 0, MD_N = 1, MD_NE = 2, MD_E = 3, MD_SE = 4,
-        MD_S = 5, MD_SW = 6, MD_W = 7, MD_NW = 8,
-        MD_PATH_TO = 9, MD_PATH_AWAY = 10;
-    var S45 = 0.70710678;
-    var MD_VEC = [[0,0],[0,-1],[S45,-S45],[1,0],[S45,S45],[0,1],
-                  [-S45,S45],[-1,0],[-S45,-S45]];
-
-    function setTargetFromAction(agent, world, action) {
-        var enemy = world.nearestEnemy(agent);
-        var md = action.moveDir;
-        if (md === MD_HOLD) { agent.clearTarget(); return; }
-        if (!enemy || !enemy.unit.alive) { agent.clearTarget(); return; }
-        var dx = enemy.x - agent.x, dz = enemy.z - agent.z;
-        var d = Math.hypot(dx, dz);
-        if (d < 0.01) { agent.clearTarget(); return; }
-        if (md === MD_PATH_TO) {
-            // Stop at the attack-range edge so the hero pauses to fire
-            // instead of charging into point-blank and eating a projectile.
-            var r = agent.unit.attackRange || 9;
-            var leadDist = Math.min(4.0, Math.max(0, d - r + 1.0));
-            if (leadDist < 0.15) { agent.clearTarget(); return; }
-            var tx = agent.x + (dx/d) * leadDist;
-            var tz = agent.z + (dz/d) * leadDist;
-            agent.setTarget(tx, tz);
-            return;
-        }
-        if (md === MD_PATH_AWAY) {
-            agent.setTarget(agent.x - (dx/d) * 4.0,
-                            agent.z - (dz/d) * 4.0);
-            return;
-        }
-        // Direct 8-way: rotate local frame by aim-toward-enemy yaw.
-        // aim yaw follows FPS convention (0 = -Z). Matches mcts::apply.
-        var aimYaw = Math.atan2(dx, -dz);
-        var c = Math.cos(aimYaw), s = Math.sin(aimYaw);
-        var v = MD_VEC[md] || [0, 0];
-        var worldDx = v[0] * c + v[1] * (-s);
-        var worldDz = v[0] * s + v[1] * c;
-        var LEN = 3.0;
-        agent.setTarget(agent.x + worldDx * LEN, agent.z + worldDz * LEN);
-    }
-
-    // Drive every MCTS-controlled agent. Motion state (setTarget) is pushed
-    // only when a new joint action commits (see Groups.tickGroup); combat
-    // resolution (auto-attack + ability) fires every frame so cooldown gates
-    // inside World::resolveAttack/Ability do the throttling naturally. This
-    // splits motion from attack/ability to avoid the old per-frame
-    // applyCombatAction double-integration (world.tick already ticks every
-    // Agent::update through AIWorldTicker, so an additional mcts::apply per
-    // frame was decelerating its own velocity).
-    Groups.drive = function (state, dt) {
-        if (!state.groups) return;
         var world = state.world;
+        var simT = state.elapsed;
+        var blue = [], red = [];
         for (var i = 0; i < state.agents.length; i++) {
             var a = state.agents[i];
             if (!a.unit.alive) continue;
-            var g = state.groups[a.unit.teamId];
-            if (!g) continue;
-            var action = g.lastActions[a.unit.id];
-            if (action) {
-                var enemy = world.nearestEnemy(a);
-                if (action.attackSlot >= 0 && enemy && enemy.unit.alive) {
-                    world.resolveAttack(a, enemy.unit.id);
-                }
-                if (action.abilitySlot >= 0) {
-                    var tid = (enemy && enemy.unit.alive) ? enemy.unit.id : a.unit.id;
-                    world.resolveAbility(a, action.abilitySlot, tid);
+            (a.unit.teamId === 1 ? blue : red).push(a);
+        }
+        if (blue.length === 0 || red.length === 0) return;
+
+        for (var j = 0; j < blue.length; j++) {
+            var agent = blue[j];
+            var m = getMem(agent.unit.id);
+            var target = pickFireTarget(agent, red);
+
+            // BASIC ATTACK (hitscan, no LOS gate — resolveAttack enforces
+            // range + cooldown internally, so we can fire every frame).
+            if (target) {
+                var tr = agent.unit.attackRange || 9;
+                if (dist2(agent.x, agent.z, target.x, target.z) <= tr * tr) {
+                    world.resolveAttack(agent, target.unit.id);
                 }
             }
-            // Keep the scene node in sync with the authoritative agent
-            // position/facing — no AgentBinding is attached to do it.
-            var node = Scene3D.units[a.unit.id];
+
+            // ABILITIES.
+            castAbilities(agent, target, red, blue, world);
+
+            // MOVEMENT.
+            var mt = computeMoveTarget(agent, target, red, blue, simT, m);
+            if (mt) {
+                // Cache + dedupe: setTarget triggers an A* replan on
+                // significant target change; repeating the same destination
+                // every frame still hits the "unchanged" early-exit, but
+                // rounding reduces spurious replans when strafing.
+                var tx = Math.round(mt.x * 2) * 0.5;
+                var tz = Math.round(mt.z * 2) * 0.5;
+                if (m.lastMoveTargetX !== tx || m.lastMoveTargetZ !== tz) {
+                    agent.setTarget(tx, tz);
+                    m.lastMoveTargetX = tx;
+                    m.lastMoveTargetZ = tz;
+                }
+            } else {
+                if (m.lastMoveTargetX !== null) {
+                    agent.clearTarget();
+                    m.lastMoveTargetX = null;
+                    m.lastMoveTargetZ = null;
+                }
+            }
+
+            // Keep scene node in sync (binding is detached).
+            var node = Scene3D.units[agent.unit.id];
             if (node) {
-                node.x = a.x;
+                node.x = agent.x;
                 node.y = Scene3D.UNIT_Y;
-                node.z = a.z;
-                node.rotationY = -a.yaw;
+                node.z = agent.z;
+                node.rotationY = -agent.yaw;
             }
         }
+
+        // Publish minimal stats for the HUD.
+        state.lastMctsStats = {
+            teamId: 1,
+            tactic: "scripted",
+            windowsUntilReplan: 0,
+            replanned: false,
+            iterations: 0,
+            bestVisits: 0,
+            bestMean: 0,
+            elapsedMs: 0,
+        };
     };
 
-    // ── Binding toggle ────────────────────────────────────────────────
-    // MCTS-controlled agents must have their scene-side AgentBinding detached
-    // so the capability layer (setTarget/path-following inside world.tick)
-    // doesn't fight the applyCombatAction integration we do each frame.
-    // Flipping back to scripted re-attaches with the original think config.
-    var DEFAULT_CAPS = ["move_to", "cast_ability", "flee", "hold", "aimed_shot"];
+    // Legacy shim — main.js still calls drive() each frame. All per-frame
+    // work now happens in tick(); drive() is a no-op but stays defined so
+    // other call sites don't throw.
+    Groups.drive = function (/*state, dt*/) { };
+
+    Groups.actionFor = function (/*state, teamId, agentId*/) { return null; };
+
+    function detachAgentSafe(agent) {
+        var node = Scene3D.units[agent.unit.id];
+        if (!node) return;
+        try { node.detachAgent(); } catch (e) {}
+        try { agent.clearTarget(); } catch (e) {}
+    }
 
     function attachScripted(state, agent) {
         var node = Scene3D.units[agent.unit.id];
         if (!node) return;
         try { node.detachAgent(); } catch (e) {}
         node.attachAgent(state.world, agent, {
-            capabilities: DEFAULT_CAPS,
+            capabilities: ["move_to", "cast_ability", "flee", "hold", "aimed_shot"],
             thinkHz: 30,
             faceMovement: true,
             yOffset: Scene3D.UNIT_Y,
@@ -243,17 +346,6 @@ var Groups = {};
         });
     }
 
-    function detachAgentSafe(agent) {
-        var node = Scene3D.units[agent.unit.id];
-        if (!node) return;
-        try { node.detachAgent(); } catch (e) {}
-        // Clear any pending scripted seek so world.tick's update() is a
-        // true no-op for this agent — applyCombatAction owns motion now.
-        try { agent.clearTarget(); } catch (e) {}
-    }
-
-    // Apply the current mode to a team. "mcts" detaches bindings; any other
-    // value (scripted) re-attaches them. Idempotent.
     Groups.applyModeForTeam = function (state, teamId, mode) {
         for (var i = 0; i < state.agents.length; i++) {
             var a = state.agents[i];
