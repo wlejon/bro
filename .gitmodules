@@ -16,3 +16,12 @@
 [submodule "third_party/jolt"]
 	path = third_party/jolt
 	url = https://github.com/jrouwe/JoltPhysics.git
+[submodule "third_party/qjsbind"]
+	path = third_party/qjsbind
+	url = https://github.com/wlejon/qjsbind.git
+[submodule "third_party/bromesh"]
+	path = third_party/bromesh
+	url = https://github.com/wlejon/bromesh.git
+[submodule "third_party/brogameagent"]
+	path = third_party/brogameagent
+	url = https://github.com/wlejon/brogameagent.git
