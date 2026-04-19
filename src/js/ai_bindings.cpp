@@ -71,6 +71,27 @@ struct LayeredPlannerData {
     brogameagent::mcts::LayeredPlanner planner;
 };
 
+struct OptionData {
+    std::shared_ptr<brogameagent::mcts::Option> option;
+};
+
+struct TeamOptionData {
+    std::shared_ptr<brogameagent::mcts::TeamOption> option;
+};
+
+struct OptionMctsData {
+    brogameagent::mcts::OptionMcts mcts;
+    // Retain shared_ptrs so JS-authored options live as long as the engine
+    // even if the JS wrapper is collected. set_options() on the C++ engine
+    // stores the same shared_ptrs but this is a defence-in-depth anchor.
+    std::vector<std::shared_ptr<brogameagent::mcts::Option>> options;
+};
+
+struct TeamOptionMctsData {
+    brogameagent::mcts::TeamOptionMcts mcts;
+    std::vector<std::shared_ptr<brogameagent::mcts::TeamOption>> options;
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
@@ -478,6 +499,8 @@ static JSValue buildWorldView(JSContext* ctx, const brogameagent::World& world) 
 // wrappers below (parsing/emitting CombatAction objects to/from JS).
 static brogameagent::mcts::CombatAction parseCombatAction(JSContext* ctx, JSValueConst obj);
 static JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a);
+static std::vector<brogameagent::mcts::CombatAction>
+parseCombatActionArray(JSContext* ctx, JSValueConst arr);
 
 // ─── JS-callback policy/prior/evaluator wrappers ──────────────────────────
 //
@@ -621,6 +644,158 @@ public:
 private:
     JSContext* ctx_;
     JSValue    fn_;
+};
+
+// JS-authored single-hero Option. Holds refs to three JS callables +
+// a constant name. JS signatures:
+//   canInitiate     : (selfView, worldView) -> boolean
+//   step            : (selfView, worldView, ticksInOption) -> CombatAction
+//   shouldTerminate : (selfView, worldView, ticksInOption) -> boolean
+class JsOption : public brogameagent::mcts::Option {
+public:
+    JsOption(JSContext* ctx, std::string name,
+             JSValue canInit, JSValue step, JSValue shouldTerm)
+        : ctx_(ctx), name_(std::move(name)),
+          can_init_(JS_DupValue(ctx, canInit)),
+          step_(JS_DupValue(ctx, step)),
+          should_term_(JS_DupValue(ctx, shouldTerm)) {}
+    ~JsOption() override {
+        JS_FreeValue(ctx_, can_init_);
+        JS_FreeValue(ctx_, step_);
+        JS_FreeValue(ctx_, should_term_);
+    }
+    const std::string& name() const override { return name_; }
+
+    bool can_initiate(const brogameagent::Agent& self,
+                       const brogameagent::World& world) const override {
+        JSValue sv = buildAgentFields(ctx_, self);
+        JSValue wv = buildWorldView(ctx_, world);
+        JSValue args[2] = { sv, wv };
+        JSValue r = JS_Call(ctx_, can_init_, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ctx_, sv); JS_FreeValue(ctx_, wv);
+        bool ok = false;
+        if (!JS_IsException(r)) ok = JS_ToBool(ctx_, r) > 0;
+        JS_FreeValue(ctx_, r);
+        return ok;
+    }
+
+    brogameagent::mcts::CombatAction step(
+        brogameagent::Agent& self, brogameagent::World& world,
+        int ticks_in_option) const override {
+        JSValue sv = buildAgentFields(ctx_, self);
+        JSValue wv = buildWorldView(ctx_, world);
+        JSValue tv = JS_NewInt32(ctx_, ticks_in_option);
+        JSValue args[3] = { sv, wv, tv };
+        JSValue r = JS_Call(ctx_, step_, JS_UNDEFINED, 3, args);
+        JS_FreeValue(ctx_, sv); JS_FreeValue(ctx_, wv); JS_FreeValue(ctx_, tv);
+        brogameagent::mcts::CombatAction a{};
+        if (!JS_IsException(r) && JS_IsObject(r)) a = parseCombatAction(ctx_, r);
+        JS_FreeValue(ctx_, r);
+        return a;
+    }
+
+    bool should_terminate(const brogameagent::Agent& self,
+                           const brogameagent::World& world,
+                           int ticks_in_option) const override {
+        JSValue sv = buildAgentFields(ctx_, self);
+        JSValue wv = buildWorldView(ctx_, world);
+        JSValue tv = JS_NewInt32(ctx_, ticks_in_option);
+        JSValue args[3] = { sv, wv, tv };
+        JSValue r = JS_Call(ctx_, should_term_, JS_UNDEFINED, 3, args);
+        JS_FreeValue(ctx_, sv); JS_FreeValue(ctx_, wv); JS_FreeValue(ctx_, tv);
+        bool ok = false;
+        if (!JS_IsException(r)) ok = JS_ToBool(ctx_, r) > 0;
+        JS_FreeValue(ctx_, r);
+        return ok;
+    }
+
+private:
+    JSContext* ctx_;
+    std::string name_;
+    JSValue can_init_;
+    JSValue step_;
+    JSValue should_term_;
+};
+
+// JS-authored team option. Signatures are analogous to JsOption but the
+// hero arg becomes an array and step returns an array of CombatActions.
+class JsTeamOption : public brogameagent::mcts::TeamOption {
+public:
+    JsTeamOption(JSContext* ctx, std::string name,
+                 JSValue canInit, JSValue step, JSValue shouldTerm)
+        : ctx_(ctx), name_(std::move(name)),
+          can_init_(JS_DupValue(ctx, canInit)),
+          step_(JS_DupValue(ctx, step)),
+          should_term_(JS_DupValue(ctx, shouldTerm)) {}
+    ~JsTeamOption() override {
+        JS_FreeValue(ctx_, can_init_);
+        JS_FreeValue(ctx_, step_);
+        JS_FreeValue(ctx_, should_term_);
+    }
+    const std::string& name() const override { return name_; }
+
+    JSValue heroesView(const std::vector<brogameagent::Agent*>& heroes) const {
+        JSValue arr = JS_NewArray(ctx_);
+        for (uint32_t i = 0; i < heroes.size(); i++) {
+            if (heroes[i]) JS_SetPropertyUint32(ctx_, arr, i, buildAgentFields(ctx_, *heroes[i]));
+            else           JS_SetPropertyUint32(ctx_, arr, i, JS_NULL);
+        }
+        return arr;
+    }
+
+    bool can_initiate(const std::vector<brogameagent::Agent*>& heroes,
+                       const brogameagent::World& world) const override {
+        JSValue hv = heroesView(heroes);
+        JSValue wv = buildWorldView(ctx_, world);
+        JSValue args[2] = { hv, wv };
+        JSValue r = JS_Call(ctx_, can_init_, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ctx_, hv); JS_FreeValue(ctx_, wv);
+        bool ok = false;
+        if (!JS_IsException(r)) ok = JS_ToBool(ctx_, r) > 0;
+        JS_FreeValue(ctx_, r);
+        return ok;
+    }
+
+    std::vector<brogameagent::mcts::CombatAction> step(
+        const std::vector<brogameagent::Agent*>& heroes,
+        brogameagent::World& world,
+        int ticks_in_option) const override {
+        JSValue hv = heroesView(heroes);
+        JSValue wv = buildWorldView(ctx_, world);
+        JSValue tv = JS_NewInt32(ctx_, ticks_in_option);
+        JSValue args[3] = { hv, wv, tv };
+        JSValue r = JS_Call(ctx_, step_, JS_UNDEFINED, 3, args);
+        JS_FreeValue(ctx_, hv); JS_FreeValue(ctx_, wv); JS_FreeValue(ctx_, tv);
+        std::vector<brogameagent::mcts::CombatAction> out(heroes.size());
+        if (!JS_IsException(r) && JS_IsArray(r)) {
+            out = parseCombatActionArray(ctx_, r);
+            if (out.size() != heroes.size()) out.resize(heroes.size());
+        }
+        JS_FreeValue(ctx_, r);
+        return out;
+    }
+
+    bool should_terminate(const std::vector<brogameagent::Agent*>& heroes,
+                           const brogameagent::World& world,
+                           int ticks_in_option) const override {
+        JSValue hv = heroesView(heroes);
+        JSValue wv = buildWorldView(ctx_, world);
+        JSValue tv = JS_NewInt32(ctx_, ticks_in_option);
+        JSValue args[3] = { hv, wv, tv };
+        JSValue r = JS_Call(ctx_, should_term_, JS_UNDEFINED, 3, args);
+        JS_FreeValue(ctx_, hv); JS_FreeValue(ctx_, wv); JS_FreeValue(ctx_, tv);
+        bool ok = false;
+        if (!JS_IsException(r)) ok = JS_ToBool(ctx_, r) > 0;
+        JS_FreeValue(ctx_, r);
+        return ok;
+    }
+
+private:
+    JSContext* ctx_;
+    std::string name_;
+    JSValue can_init_;
+    JSValue step_;
+    JSValue should_term_;
 };
 
 } // namespace
@@ -933,6 +1108,120 @@ static JSValue js_createLayeredPlanner(JSContext* ctx, JSValueConst, int argc, J
         if (auto ev = parseTeamEvaluator(ctx, opts))  data->planner.set_team_evaluator(std::move(ev));
     }
     return qjsbind::wrap<LayeredPlannerData>(ctx, data);
+}
+
+// bro.ai.game.createOption({ name, canInitiate, step, shouldTerminate })
+// Returns an OptionData handle usable in createOptionMcts({ options: [...] }).
+// All three callbacks are required; name is required and must be unique
+// within an option set (advanceRoot matches by name).
+static JSValue js_createOption(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0])) {
+        return JS_ThrowTypeError(ctx, "createOption(spec)");
+    }
+    std::string name = readStringProp(ctx, argv[0], "name");
+    if (name.empty()) return JS_ThrowTypeError(ctx, "createOption: name required");
+
+    JSValue ci = JS_GetPropertyStr(ctx, argv[0], "canInitiate");
+    JSValue st = JS_GetPropertyStr(ctx, argv[0], "step");
+    JSValue te = JS_GetPropertyStr(ctx, argv[0], "shouldTerminate");
+    auto guard = [&](const char* m) {
+        JS_FreeValue(ctx, ci); JS_FreeValue(ctx, st); JS_FreeValue(ctx, te);
+        return JS_ThrowTypeError(ctx, "%s", m);
+    };
+    if (!JS_IsFunction(ctx, ci)) return guard("createOption: canInitiate must be a function");
+    if (!JS_IsFunction(ctx, st)) return guard("createOption: step must be a function");
+    if (!JS_IsFunction(ctx, te)) return guard("createOption: shouldTerminate must be a function");
+
+    auto* d = new OptionData();
+    d->option = std::make_shared<JsOption>(ctx, std::move(name), ci, st, te);
+    JS_FreeValue(ctx, ci); JS_FreeValue(ctx, st); JS_FreeValue(ctx, te);
+    return qjsbind::wrap<OptionData>(ctx, d);
+}
+
+// bro.ai.game.createTeamOption({ name, canInitiate, step, shouldTerminate })
+// Like createOption but callbacks receive (heroesView, worldView, ticks).
+// step returns an array of CombatAction (one per hero, same order).
+static JSValue js_createTeamOption(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0])) {
+        return JS_ThrowTypeError(ctx, "createTeamOption(spec)");
+    }
+    std::string name = readStringProp(ctx, argv[0], "name");
+    if (name.empty()) return JS_ThrowTypeError(ctx, "createTeamOption: name required");
+
+    JSValue ci = JS_GetPropertyStr(ctx, argv[0], "canInitiate");
+    JSValue st = JS_GetPropertyStr(ctx, argv[0], "step");
+    JSValue te = JS_GetPropertyStr(ctx, argv[0], "shouldTerminate");
+    auto guard = [&](const char* m) {
+        JS_FreeValue(ctx, ci); JS_FreeValue(ctx, st); JS_FreeValue(ctx, te);
+        return JS_ThrowTypeError(ctx, "%s", m);
+    };
+    if (!JS_IsFunction(ctx, ci)) return guard("createTeamOption: canInitiate must be a function");
+    if (!JS_IsFunction(ctx, st)) return guard("createTeamOption: step must be a function");
+    if (!JS_IsFunction(ctx, te)) return guard("createTeamOption: shouldTerminate must be a function");
+
+    auto* d = new TeamOptionData();
+    d->option = std::make_shared<JsTeamOption>(ctx, std::move(name), ci, st, te);
+    JS_FreeValue(ctx, ci); JS_FreeValue(ctx, st); JS_FreeValue(ctx, te);
+    return qjsbind::wrap<TeamOptionData>(ctx, d);
+}
+
+// Parse opts.options as an array of OptionData / TeamOptionData wrappers.
+template <typename TData, typename TOption>
+static std::vector<std::shared_ptr<TOption>>
+parseOptionArray(JSContext* ctx, JSValueConst opts) {
+    std::vector<std::shared_ptr<TOption>> out;
+    JSValue arr = JS_GetPropertyStr(ctx, opts, "options");
+    if (JS_IsArray(arr)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        out.reserve(len);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue v = JS_GetPropertyUint32(ctx, arr, i);
+            auto* od = qjsbind::unwrap<TData>(ctx, v);
+            if (od && od->option) out.push_back(od->option);
+            JS_FreeValue(ctx, v);
+        }
+    }
+    JS_FreeValue(ctx, arr);
+    return out;
+}
+
+// bro.ai.game.createOptionMcts({ options: [Option...], ... })
+// Config fields: everything from createMcts plus `options` and
+// `optionMaxWindows`. Evaluator is hero-scoped.
+static JSValue js_createOptionMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* data = new OptionMctsData();
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        JSValue opts = argv[0];
+        data->mcts.set_config(parseMctsConfig(ctx, opts));
+        if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
+        if (auto ev = parseHeroEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+        data->options = parseOptionArray<OptionData, brogameagent::mcts::Option>(ctx, opts);
+        if (!data->options.empty()) {
+            auto copy = data->options;
+            data->mcts.set_options(std::move(copy));
+        }
+    }
+    return qjsbind::wrap<OptionMctsData>(ctx, data);
+}
+
+// bro.ai.game.createTeamOptionMcts({ options: [TeamOption...], ... })
+// Team-scoped evaluator.
+static JSValue js_createTeamOptionMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* data = new TeamOptionMctsData();
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        JSValue opts = argv[0];
+        data->mcts.set_config(parseMctsConfig(ctx, opts));
+        if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
+        if (auto ev = parseTeamEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+        data->options = parseOptionArray<TeamOptionData, brogameagent::mcts::TeamOption>(ctx, opts);
+        if (!data->options.empty()) {
+            auto copy = data->options;
+            data->mcts.set_options(std::move(copy));
+        }
+    }
+    return qjsbind::wrap<TeamOptionMctsData>(ctx, data);
 }
 
 // bro.ai.game.legalActions(agent, world) → [CombatAction]
@@ -2012,6 +2301,138 @@ void AIBindings::install(JSContext* ctx) {
                 });
     }
 
+    // ─── Option class (handle for JS-authored options) ─────────────────
+    {
+        qjsbind::Class<OptionData>(ctx, "AIOption", qjsbind::NoGlobal)
+            .get("name",
+                [](OptionData* d, JSContext* ctx) -> JSValue {
+                    if (!d->option) return JS_NULL;
+                    return JS_NewString(ctx, d->option->name().c_str());
+                });
+    }
+
+    // ─── TeamOption class ─────────────────────────────────────────────
+    {
+        qjsbind::Class<TeamOptionData>(ctx, "AITeamOption", qjsbind::NoGlobal)
+            .get("name",
+                [](TeamOptionData* d, JSContext* ctx) -> JSValue {
+                    if (!d->option) return JS_NULL;
+                    return JS_NewString(ctx, d->option->name().c_str());
+                });
+    }
+
+    // ─── OptionMcts class ─────────────────────────────────────────────
+    {
+        qjsbind::Class<OptionMctsData>(ctx, "AIOptionMcts", qjsbind::NoGlobal)
+            .method_raw("search",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<OptionMctsData>(ctx, this_val);
+                    if (!md || argc < 2) return JS_ThrowTypeError(ctx, "search(world, hero)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    auto* ad = qjsbind::unwrap<AgentData>(ctx, argv[1]);
+                    if (!wd || !ad) return JS_ThrowTypeError(ctx, "invalid world/hero");
+                    const auto* opt = md->mcts.search(wd->world, ad->agent);
+                    return opt ? JS_NewString(ctx, opt->name().c_str()) : JS_NULL;
+                }, 2)
+            .method_raw("advanceRoot",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<OptionMctsData>(ctx, this_val);
+                    if (!md || argc < 1 || !JS_IsString(argv[0])) {
+                        if (md) md->mcts.reset_tree();
+                        return JS_UNDEFINED;
+                    }
+                    const char* s = JS_ToCString(ctx, argv[0]);
+                    std::string target = s ? s : "";
+                    if (s) JS_FreeCString(ctx, s);
+                    const brogameagent::mcts::Option* match = nullptr;
+                    for (const auto& sp : md->options) {
+                        if (sp && sp->name() == target) { match = sp.get(); break; }
+                    }
+                    md->mcts.advance_root(match);
+                    return JS_UNDEFINED;
+                }, 1)
+            .method_raw("executeOption",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<OptionMctsData>(ctx, this_val);
+                    if (!md || argc < 3) return JS_ThrowTypeError(ctx, "executeOption(world, hero, name)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    auto* ad = qjsbind::unwrap<AgentData>(ctx, argv[1]);
+                    if (!wd || !ad) return JS_ThrowTypeError(ctx, "invalid world/hero");
+                    const char* s = JS_ToCString(ctx, argv[2]);
+                    std::string target = s ? s : "";
+                    if (s) JS_FreeCString(ctx, s);
+                    for (const auto& sp : md->options) {
+                        if (sp && sp->name() == target) {
+                            int w = md->mcts.execute_option(wd->world, ad->agent, *sp);
+                            return JS_NewInt32(ctx, w);
+                        }
+                    }
+                    return JS_NewInt32(ctx, 0);
+                }, 3)
+            .method("resetTree",
+                [](OptionMctsData* d) { d->mcts.reset_tree(); })
+            .get("lastStats",
+                [](OptionMctsData* d, JSContext* ctx) -> JSValue {
+                    return makeSearchStats(ctx, d->mcts.last_stats());
+                });
+    }
+
+    // ─── TeamOptionMcts class ─────────────────────────────────────────
+    {
+        qjsbind::Class<TeamOptionMctsData>(ctx, "AITeamOptionMcts", qjsbind::NoGlobal)
+            .method_raw("search",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<TeamOptionMctsData>(ctx, this_val);
+                    if (!md || argc < 2) return JS_ThrowTypeError(ctx, "search(world, heroes)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    if (!wd) return JS_ThrowTypeError(ctx, "invalid world");
+                    auto heroes = parseHeroesArray(ctx, argv[1]);
+                    const auto* opt = md->mcts.search(wd->world, heroes);
+                    return opt ? JS_NewString(ctx, opt->name().c_str()) : JS_NULL;
+                }, 2)
+            .method_raw("advanceRoot",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<TeamOptionMctsData>(ctx, this_val);
+                    if (!md || argc < 1 || !JS_IsString(argv[0])) {
+                        if (md) md->mcts.reset_tree();
+                        return JS_UNDEFINED;
+                    }
+                    const char* s = JS_ToCString(ctx, argv[0]);
+                    std::string target = s ? s : "";
+                    if (s) JS_FreeCString(ctx, s);
+                    const brogameagent::mcts::TeamOption* match = nullptr;
+                    for (const auto& sp : md->options) {
+                        if (sp && sp->name() == target) { match = sp.get(); break; }
+                    }
+                    md->mcts.advance_root(match);
+                    return JS_UNDEFINED;
+                }, 1)
+            .method_raw("executeOption",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* md = qjsbind::unwrap<TeamOptionMctsData>(ctx, this_val);
+                    if (!md || argc < 3) return JS_ThrowTypeError(ctx, "executeOption(world, heroes, name)");
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, argv[0]);
+                    if (!wd) return JS_ThrowTypeError(ctx, "invalid world");
+                    auto heroes = parseHeroesArray(ctx, argv[1]);
+                    const char* s = JS_ToCString(ctx, argv[2]);
+                    std::string target = s ? s : "";
+                    if (s) JS_FreeCString(ctx, s);
+                    for (const auto& sp : md->options) {
+                        if (sp && sp->name() == target) {
+                            int w = md->mcts.execute_option(wd->world, heroes, *sp);
+                            return JS_NewInt32(ctx, w);
+                        }
+                    }
+                    return JS_NewInt32(ctx, 0);
+                }, 3)
+            .method("resetTree",
+                [](TeamOptionMctsData* d) { d->mcts.reset_tree(); })
+            .get("lastStats",
+                [](TeamOptionMctsData* d, JSContext* ctx) -> JSValue {
+                    return makeSearchStats(ctx, d->mcts.last_stats());
+                });
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     // Build namespace: bro.ai.game
     // ═══════════════════════════════════════════════════════════════════
@@ -2080,6 +2501,14 @@ void AIBindings::install(JSContext* ctx) {
         JS_NewCFunction(ctx, js_createTacticMcts, "createTacticMcts", 1));
     JS_SetPropertyStr(ctx, gameObj, "createLayeredPlanner",
         JS_NewCFunction(ctx, js_createLayeredPlanner, "createLayeredPlanner", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createOption",
+        JS_NewCFunction(ctx, js_createOption, "createOption", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createTeamOption",
+        JS_NewCFunction(ctx, js_createTeamOption, "createTeamOption", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createOptionMcts",
+        JS_NewCFunction(ctx, js_createOptionMcts, "createOptionMcts", 1));
+    JS_SetPropertyStr(ctx, gameObj, "createTeamOptionMcts",
+        JS_NewCFunction(ctx, js_createTeamOptionMcts, "createTeamOptionMcts", 1));
     JS_SetPropertyStr(ctx, gameObj, "legalActions",
         JS_NewCFunction(ctx, js_legalActions, "legalActions", 2));
     JS_SetPropertyStr(ctx, gameObj, "legalTactics",

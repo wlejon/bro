@@ -318,7 +318,7 @@ minionNode.detachAgent();
 // MCTS planners
 // -----------------------------------------------------------------------------
 //
-// Five flavors, all sharing the same MctsConfig:
+// Seven flavors, all sharing the same MctsConfig:
 //
 //   createMcts(cfg)           — single agent vs scripted opponents
 //   createDecoupledMcts(cfg)  — simultaneous-move 1v1 (both sides searched)
@@ -326,19 +326,36 @@ minionNode.detachAgent();
 //   createTacticMcts(cfg)     — coarse team-tactic planner (Hold / FocusLowestHp / ...)
 //   createLayeredPlanner({ tactic, fine })
 //                             — TacticMcts over TeamMcts with a tactic-match prior
+//   createOptionMcts(cfg)     — search over caller-authored single-hero Options
+//                               (temporally-extended macro-actions)
+//   createTeamOptionMcts(cfg) — team-scoped option search
 //
 // MctsConfig fields (all optional):
 //   iterations, budgetMs, rolloutHorizon, simDt, actionRepeat, uctC, seed,
 //   pwAlpha                        — progressive widening α (0 disables)
 //   priorC                         — PUCT weight (0 ⇒ plain UCT with uctC)
 //   tacticWindowDecisions          — LayeredPlanner / TacticMcts only
-//   rolloutPolicy : "random" | "aggressive"
-//   opponentPolicy: "idle"   | "aggressive"    (Mcts / TeamMcts / Tactic / Layered)
+//   optionMaxWindows               — OptionMcts / TeamOptionMcts only; cap
+//                                    on in-tree option execution length
+//   useLeafValue                   — skip rollout entirely and return the
+//                                    evaluator's value at the expand site.
+//                                    Pair with a strong heuristic/learned
+//                                    evaluator to decouple depth from cost.
+//   rolloutPolicy : "random" | "aggressive" | "scripted"
+//                 | function(selfView, worldView) => CombatAction
+//   opponentPolicy: "idle"   | "aggressive" | "scripted"
 //   prior         : "uniform" | "attackBias" | "tacticMatch"
+//                 | function(selfView, worldView, actions[]) => weights[]
 //                   (tacticMatch reads `tactic`, `tacticMatchWeight`,
 //                    `tacticOtherWeight`)
-//   evaluator     : "hpDelta"      (Mcts / DecoupledMcts)
-//                 | "teamHpDelta"  (TeamMcts / TacticMcts / LayeredPlanner)
+//   evaluator     : "hpDelta"      (hero-scoped)
+//                 | "teamHpDelta" | "teamAdvantage" | "teamPosition"  (team)
+//                 | function(worldView, heroId|teamId) => number in [-1, 1]
+//
+// JS callbacks receive plain-object views:
+//   selfView/agentView : { id, teamId, x, z, yaw, hp, maxHp, alive, attackRange }
+//   worldView          : { agents: [agentView, ...] }
+// Rollout/prior run many times per search; prefer C++ presets for hot paths.
 //
 // A CombatAction is { moveDir, attackSlot, abilitySlot }.
 // A Tactic is { kind: "Hold" | "FocusLowestHp" | "Scatter" | "Retreat" }.
@@ -387,3 +404,70 @@ const legalA = bro.ai.game.legalActions(hero, world);     // [CombatAction, ...]
 const legalT = bro.ai.game.legalTactics(world, heroes);   // [Tactic, ...]
 const concrete = bro.ai.game.tacticToAction(              // Tactic → CombatAction
     { kind: bro.ai.game.TACTIC.FocusLowestHp }, hero, world);
+
+
+// ─── Options (temporally-extended macro-actions) ──────────────────────────
+//
+// An Option is a policy with initiation + termination predicates. OptionMcts
+// plans at the granularity of options rather than per-tick CombatActions —
+// branching collapses from ~18 to the size of the option set, and each tree
+// edge covers many windows, so the effective horizon multiplies by option
+// length. The right tool for multi-tick maneuvers (peek/shoot, retreat to
+// cover, flank) that plain search can't plan cheaply at realtime budgets.
+
+// Author a single-hero option. All three callbacks run synchronously inside
+// MCTS search — keep them allocation-light.
+const peekAndShoot = bro.ai.game.createOption({
+    name: "peekAndShoot",
+    canInitiate:     (self, world) =>
+        world.agents.some(a => a.alive && a.teamId !== self.teamId
+                               && Math.hypot(a.x - self.x, a.z - self.z) < 12),
+    step:            (self, world, ticks) => {
+        const enemy = world.agents.find(a => a.alive && a.teamId !== self.teamId);
+        return { moveDir: ticks < 2 ? 3 /*E*/ : 7 /*W*/,
+                 attackSlot: enemy ? 0 : -1, abilitySlot: -1 };
+    },
+    shouldTerminate: (self, world, ticks) => ticks >= 4 || self.hp < self.maxHp * 0.3,
+});
+const retreat = bro.ai.game.createOption({
+    name: "retreatToCover",
+    canInitiate:     (self) => self.hp < self.maxHp * 0.5,
+    step:            ()     => ({ moveDir: 10 /*PathAway*/, attackSlot: -1, abilitySlot: -1 }),
+    shouldTerminate: (self, _w, ticks) => ticks >= 5 || self.hp > self.maxHp * 0.8,
+});
+const hold = bro.ai.game.createOption({
+    name: "hold",
+    canInitiate:     ()     => true,
+    step:            ()     => ({ moveDir: 0, attackSlot: 0, abilitySlot: -1 }),
+    shouldTerminate: (_s, _w, ticks) => ticks >= 2,
+});
+
+const opt = bro.ai.game.createOptionMcts({
+    iterations: 80, rolloutHorizon: 3, optionMaxWindows: 6,
+    options: [peekAndShoot, retreat, hold],
+    opponentPolicy: "scripted",
+    evaluator: "hpDelta",
+    useLeafValue: true,                 // skip random rollouts; use eval at leaf
+});
+const chosen = opt.search(world, hero); // "peekAndShoot" | "retreatToCover" | "hold" | null
+if (chosen) {
+    opt.executeOption(world, hero, chosen);  // advance the live world
+    opt.advanceRoot(chosen);                  // reuse tree next call
+}
+
+// Team variant — callbacks receive heroesView[] and step returns a
+// CombatAction[] (one per hero, in order).
+const teamPush = bro.ai.game.createTeamOption({
+    name: "push",
+    canInitiate: (heroes, world) =>
+        world.agents.some(a => a.alive && heroes[0] && a.teamId !== heroes[0].teamId),
+    step: (heroes) => heroes.map(() => ({ moveDir: 9 /*PathToTarget*/, attackSlot: 0, abilitySlot: -1 })),
+    shouldTerminate: (_h, _w, ticks) => ticks >= 4,
+});
+const teamOpt = bro.ai.game.createTeamOptionMcts({
+    iterations: 60, optionMaxWindows: 4,
+    options: [teamPush],
+    evaluator: "teamAdvantage",
+    opponentPolicy: "scripted",
+});
+const chosenTeam = teamOpt.search(world, heroes);  // option name or null
