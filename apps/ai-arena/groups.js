@@ -245,6 +245,74 @@ var Groups = {};
         }
     }
 
+    // Incoming-projectile dodge. A live red projectile whose closest-point-
+    // of-approach is inside (agent.radius + proj.radius + margin) within the
+    // next DODGE_LOOKAHEAD seconds is a threat. Returns a dodge destination
+    // perpendicular to the worst threat's velocity, on the side the agent is
+    // already on (so we step further from the line, not across it). Also
+    // returns null if no threat — caller falls through to regular movement.
+    // Tuned so the dodge fires only on genuinely imminent hits: a 0.25 s
+    // lookahead catches projectiles ~4.5 u out at basic-shot speed (18 u/s)
+    // and ~2.5 u out at grenade speed (10). Any larger and blue jitters
+    // sideways on every shot and never settles its aim cone long enough
+    // to fire back. Small step (1.2 u) keeps us inside attack range so we
+    // don't stop shooting while dodging.
+    // Slow projectiles reward a larger lookahead — grenade at 10 u/s
+    // takes 0.6 s to cover 6 u, plenty of time for 5.2 u/s steering to
+    // step ~2 u perpendicular and clear.
+    var DODGE_LOOKAHEAD = 0.6;
+    var DODGE_MARGIN    = 0.2;
+    var DODGE_STEP      = 2.0;
+    function dodgeTarget(agent, projectiles) {
+        if (!projectiles || projectiles.length === 0) return null;
+        var u = agent.unit;
+        var myTeam = u.teamId;
+        var rad = u.radius || 0.4;
+        var bestT = DODGE_LOOKAHEAD, worst = null;
+        for (var i = 0; i < projectiles.length; i++) {
+            var p = projectiles[i];
+            if (!p.alive) continue;
+            if (p.teamId === myTeam) continue;
+            // Dodge slow heavy projectiles only. Fireball (speed 14, dmg 22)
+            // and grenade (speed 10, dmg 28) are slow enough that blue's
+            // 5.2 u/s steering can actually clear their path. Basic (18)
+            // and beam (22) arrive too fast — dodging them breaks aim for
+            // less damage avoided than we take by not firing back.
+            if ((p.damage || 0) < 14) continue;
+            var vmag2 = p.vx * p.vx + p.vz * p.vz;
+            if (vmag2 > 225) continue;   // speed > 15 u/s → skip
+
+            if (vmag2 < 1e-4) continue;
+            // Time to closest point of approach: t = ((me - p) · v)/|v|².
+            // Positive t means the projectile is still approaching; past
+            // t=lookahead we have time to reconsider on a later frame.
+            var rx = agent.x - p.x, rz = agent.z - p.z;
+            var t = (rx * p.vx + rz * p.vz) / vmag2;
+            if (t < 0 || t > bestT) continue;
+            var cpaX = p.x + p.vx * t, cpaZ = p.z + p.vz * t;
+            var dx = agent.x - cpaX, dz = agent.z - cpaZ;
+            var miss = Math.hypot(dx, dz);
+            var hitR = rad + (p.radius || 0.22) + DODGE_MARGIN;
+            if (miss > hitR) continue;
+            // Sooner + closer-to-hit is worse; break ties by earliest t.
+            bestT = t;
+            worst = { p: p, t: t, miss: miss, vmag: Math.sqrt(vmag2) };
+        }
+        if (!worst) return null;
+        // Step perpendicular to the projectile's velocity, away from its
+        // path. Cross product sign picks "left" vs "right" of the line.
+        var p2 = worst.p;
+        var vx = p2.vx / worst.vmag, vz = p2.vz / worst.vmag;
+        var rxn = agent.x - p2.x, rzn = agent.z - p2.z;
+        var cross = rxn * vz - rzn * vx;      // >0 means agent is on +perp side
+        var side = cross >= 0 ? 1 : -1;
+        var perpX = -vz * side, perpZ = vx * side;
+        return {
+            x: clamp(agent.x + perpX * DODGE_STEP, -19, 19),
+            z: clamp(agent.z + perpZ * DODGE_STEP, -19, 19),
+        };
+    }
+
     // Spacing beats AoE: red's grenade splashRadius is 2.5 and beam pierces
     // collinear targets, so anything under ~3 makes us share damage. Push
     // the destination off any teammate inside SPACING.
@@ -273,7 +341,8 @@ var Groups = {};
     // Basics + abilities fire off LOS; closing inside range buys no extra
     // damage (1.4/s cap), so we sit at the outer edge to minimise red's
     // projectile hit rate (longer travel → larger lead error).
-    function computeMoveTarget(agent, target, enemies, teammates, nav, simT, m) {
+    function computeMoveTarget(agent, target, enemies, teammates, nav, projectiles, simT, m) {
+
         var u = agent.unit;
         var hpFrac = u.hp / u.maxHp;
         var r = u.attackRange || 9;
@@ -400,6 +469,9 @@ var Groups = {};
         if (blue.length === 0 || red.length === 0) return;
 
         var teamFocus = chooseTeamFocus(blue, red);
+        // Snapshot the projectile array once per frame — the getter copies
+        // from the C++ world each access, so reuse across heroes.
+        var projectiles = world.projectiles;
 
         for (var j = 0; j < blue.length; j++) {
             var agent = blue[j];
@@ -425,7 +497,21 @@ var Groups = {};
             castAbilities(agent, target, red, blue, world);
 
             // MOVEMENT.
-            var mt = computeMoveTarget(agent, target, red, blue, state.nav, simT, m);
+            var mt = computeMoveTarget(agent, target, red, blue, state.nav, projectiles, simT, m);
+            // Dodge as an additive nudge: don't abandon cover/range logic,
+            // just bias the committed destination sideways when a slow
+            // heavy projectile (fireball/grenade) is threatening.
+            var dodge = dodgeTarget(agent, projectiles);
+            if (dodge) {
+                if (!mt) mt = dodge;
+                else {
+                    var dx = dodge.x - agent.x, dz = dodge.z - agent.z;
+                    mt = spaceOut(agent,
+                        clamp(mt.x + dx * 0.8, -19, 19),
+                        clamp(mt.z + dz * 0.8, -19, 19),
+                        blue);
+                }
+            }
             if (mt) {
                 // Cache + dedupe: setTarget triggers an A* replan on
                 // significant target change; repeating the same destination
@@ -475,6 +561,15 @@ var Groups = {};
     Groups.drive = function (/*state, dt*/) { };
 
     Groups.actionFor = function (/*state, teamId, agentId*/) { return null; };
+
+    // Exposed so the FOV-cone renderer (scene_setup.js) can read blue's
+    // aim orientation. ai.js units store their aim in AI.memory; blue
+    // units store theirs here since their bindings are detached and
+    // AI.think never runs for them.
+    Groups.aimFor = function (agentId) {
+        var m = mem[agentId];
+        return (m && m.aim) ? m.aim : null;
+    };
 
     function detachAgentSafe(agent) {
         var node = Scene3D.units[agent.unit.id];

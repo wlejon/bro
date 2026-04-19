@@ -375,10 +375,14 @@ var Scene3D = {};
             cone.visible = true;
             cone.x = a.x; cone.y = 0.03; cone.z = a.z;
             cone.scaleX = range; cone.scaleZ = range;
-            var mem = AI.memory[a.unit.id];
+            var aim = Groups.aimFor(a.unit.id);
+            if (!aim) {
+                var mem = AI.memory[a.unit.id];
+                aim = mem ? mem.aim : null;
+            }
             var aimYaw;
-            if (mem && mem.aim) {
-                var f = BotAim.forward(mem.aim);
+            if (aim) {
+                var f = BotAim.forward(aim);
                 aimYaw = Math.atan2(f.x, -f.z);
             } else aimYaw = a.yaw;
             cone.rotationY = -aimYaw;
@@ -593,9 +597,10 @@ var Scene3D = {};
         g.fovCone.x = focus.x; g.fovCone.y = 0.04; g.fovCone.z = focus.z;
         g.fovCone.scaleX = range;
         g.fovCone.scaleZ = range;
+        var focusAim = Groups.aimFor(focus.unit.id) || (mem ? mem.aim : null);
         var aimYaw;
-        if (mem && mem.aim) {
-            var f = BotAim.forward(mem.aim);
+        if (focusAim) {
+            var f = BotAim.forward(focusAim);
             aimYaw = Math.atan2(f.x, -f.z);
         } else aimYaw = focus.yaw;
         g.fovCone.rotationY = -aimYaw;
