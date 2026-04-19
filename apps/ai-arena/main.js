@@ -1,11 +1,12 @@
 // main.js — Bootstrap. Scene graph drives the sim via attachAIWorld, each
-// capsule node owns an agent binding whose think() is AI.think. The rAF
-// loop is thin: refresh shared AI state each frame, then pump HUD updates
-// and drain damage events post-tick.
+// capsule node owns an agent binding that dispatches to the registered
+// agent (Agents.thinkFor) per tick; the agent then issues a plan into
+// Bot's queue and calls Bot.tick for execution. The rAF loop is thin:
+// refresh shared AI state each frame, then pump HUD updates and drain
+// damage events post-tick.
 //
-// Multi-algorithm note: the Red AI / Blue AI selectors pick which think()
-// runs for each team's units. Commit 2 will introduce a registry with
-// multiple algorithms; for now both teams share AI.think (scripted).
+// The Red AI / Blue AI selectors pick which registered agent runs for
+// each team's units — see agents/registry.js.
 var App = {};
 (function () {
     "use strict";
@@ -131,7 +132,6 @@ var App = {};
 
     UI.init();
     Scene3D.init(App.canvas);
-    AI.registerCapabilities();
     Controls.populateSelectors("scripted", "scripted");
     App.rebuild();
     Controls.bind(App.rebuild);

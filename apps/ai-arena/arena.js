@@ -96,24 +96,36 @@ var Arena = {};
         });
     }
 
-    // Basic shot: uses the caster's BotAim forward (set each think tick by
-    // ai.js). Cooldown comes from the ability spec; range gating is applied
-    // by the caster's think() before the cast is chosen.
+    // Basic shot: fires along a snapshot-safe direction so MCTS rollouts
+    // produce the same projectile physics as live play. Direction priority:
+    //   1. targetId (if valid) — aim directly at that unit.
+    //   2. caster.aimYaw (world-state, snapshotted with the Agent).
+    // Intentionally avoids any JS-side BotAim / AI.memory lookup so the fn
+    // is equally correct when invoked from live `self.cast` AND from
+    // `mcts::apply` inside the search tree's cloned world. BotAim remains
+    // the reflex-robot's turn-rate governor, writing its filtered yaw back
+    // to agent.aimYaw each tick — that keeps live firing feel unchanged
+    // while making the ability snapshot-safe.
     function registerBasicShotAbility(world, ab) {
         var p = ab.projectile;
         world.registerAbility(ab.id, {
             cooldown: ab.cooldown, manaCost: ab.manaCost, range: ab.range,
-            fn: function (caster, w /*, targetId*/) {
-                var mem = AI.getMem(caster.unit.id);
-                var f = BotAim.forward(mem.aim);
+            fn: function (caster, w, targetId) {
+                var yaw = caster.aimYaw || 0;
+                if (targetId !== undefined && targetId >= 0) {
+                    var t = w.findById(targetId);
+                    if (t) yaw = Math.atan2(t.x - caster.x, -(t.z - caster.z));
+                }
+                var fx =  Math.sin(yaw);
+                var fz = -Math.cos(yaw);
                 var u = caster.unit;
                 w.spawnProjectile({
                     ownerId: u.id,
                     teamId:  u.teamId,
-                    x: caster.x + f.x * (u.radius + 0.4),
-                    z: caster.z + f.z * (u.radius + 0.4),
-                    vx: f.x * p.speed,
-                    vz: f.z * p.speed,
+                    x: caster.x + fx * (u.radius + 0.4),
+                    z: caster.z + fz * (u.radius + 0.4),
+                    vx: fx * p.speed,
+                    vz: fz * p.speed,
                     speed:  p.speed,
                     radius: p.radius,
                     damage: p.damage,

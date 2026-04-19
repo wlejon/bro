@@ -444,7 +444,7 @@
         // Low HP → scripted's flee/rally path is already well-tuned.
         if (hpFrac < PEEK_HP_FLOOR) {
             m.lastMoveX = null; m.lastMoveZ = null;
-            AI.think(self, world);
+            Agents.get("scripted").think(self, world);
             return;
         }
 
@@ -456,7 +456,7 @@
         }
         if (!target || !m.fire || !m.cover) {
             m.lastMoveX = null; m.lastMoveZ = null;
-            AI.think(self, world);
+            Agents.get("scripted").think(self, world);
             return;
         }
         // Fire cell LOS might be stale if target moved since planning.
@@ -465,7 +465,7 @@
         // plan tick find a better cell.
         if (!hasLOS(m.fire.x, m.fire.z, target.x, target.z)) {
             m.lastMoveX = null; m.lastMoveZ = null;
-            AI.think(self, world);
+            Agents.get("scripted").think(self, world);
             return;
         }
 

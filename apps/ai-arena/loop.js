@@ -1,6 +1,7 @@
 // loop.js — per-rAF HUD pump + event drain. The sim is auto-ticked by
 // Scene3D.scene.attachAIWorld, and each unit's decision loop runs inside
-// its AgentBinding via AI.think. Everything here runs on the render frame.
+// its AgentBinding via the registered agent's think() (which routes
+// execution through Bot.tick). Everything here runs on the render frame.
 var Loop = {};
 (function () {
     "use strict";

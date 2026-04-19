@@ -126,41 +126,101 @@
     // rAF frame in teamTick and cache the result; per-agent think then
     // just applies the precomputed action for that hero.
 
-    var frameActionsByTeam = {};
-
     function teamTick(appState, teamId) {
         var t = initTeam(teamId);
         var teamHeroes = (AI.shared.teams[teamId] || []).filter(function (h) {
             return h && h.unit && h.unit.alive;
         });
         if (!teamHeroes.length) {
-            frameActionsByTeam[teamId] = {};
+            t.lastHeroes = [];
             return;
         }
 
         // Pass bound Agents to decide (which expects brogameagent Agent*).
-        // AI.shared.teams[teamId] items ARE the bound agents — same objects
-        // returned from bro.ai.game.createAgent in arena.js.
-        var actions = t.commander.decide(AI.shared.world, teamHeroes);
-        var byId = {};
-        for (var i = 0; i < teamHeroes.length; i++) {
-            byId[teamHeroes[i].unit.id] = actions[i];
-        }
-        frameActionsByTeam[teamId] = byId;
+        // We don't actually use the returned actions — execution goes
+        // through Bot.tick via per-hero think. But decide() still needs to
+        // run each frame so the Commander advances option commitments and
+        // re-plans roles on schedule. Cache the hero ordering so think()
+        // can map heroId → committedOption(idx).
+        t.commander.decide(AI.shared.world, teamHeroes);
+        t.lastHeroes = teamHeroes.slice();
     }
+
+    // Per-hero tracking: last simT (for Bot dt) and last option the
+    // commander committed us to (so we know when to replace the queue).
+    var heroMem = {};
+
+    // Natural duration per option. Same table as options_mcts; the
+    // commander replans internally so we don't need exact numbers —
+    // the queue gets replaced whenever Commander swings to a new
+    // option. We just want each push big enough that a short tick
+    // doesn't expire it immediately.
+    var OPTION_DURATION = {
+        holdAndFire: 0.8, advanceToRange: 1.4, retreatBack: 1.4,
+        focusWeakest: 1.1, strafeFire: 1.1, selfHeal: 0.5,
+        pokeFireball: 0.4, grenadeCluster: 0.4,
+    };
+    function durationFor(name) { return OPTION_DURATION[name] || 0.8; }
 
     function think(self, world) {
         var u = self.agent.unit;
         if (!u.alive) { self.hold(0.5); return; }
-        var frame = frameActionsByTeam[u.teamId];
-        var action = frame ? frame[u.id] : null;
-        if (!action) {
-            // Commander hasn't planned yet this frame (first call / late
-            // registration). Safe fallback.
-            AI.think(self, world);
-            return;
+
+        var teamState = state && state[u.teamId];
+        var name = teamState ? committedOptionName(teamState, u.id) : null;
+
+        var hm = heroMem[u.id] || (heroMem[u.id] = { lastT: -1, lastOption: null });
+
+        // Queue maintenance: when Commander swings to a new option (or
+        // assigns one after a re-plan), drop whatever the robot was doing
+        // and install the new intent. Otherwise the queue keeps running —
+        // Bot.tick handles per-frame execution autonomously.
+        if (name && name !== hm.lastOption) {
+            Bot.replace(self, [{
+                cmd: OptionsShared.robotCommandFor(name),
+                duration: durationFor(name),
+            }]);
+            hm.lastOption = name;
+        } else if (!name && Bot.queueLength(self) === 0) {
+            // Commander hasn't assigned anyone yet (first frame) — let the
+            // robot's default engage command apply until Commander catches up.
+            hm.lastOption = null;
         }
-        OptionsShared.applyCombatAction(self, world, action);
+
+        var simT = AI.shared.simT;
+        var prevT = hm.lastT < 0 ? simT : hm.lastT;
+        var dt = Math.max(0.001, Math.min(0.2, simT - prevT));
+        hm.lastT = simT;
+
+        Bot.tick(self, dt);
+    }
+
+    // Look up the Commander's currently-committed option name for a given
+    // hero id. Commander exposes committed_option_for_hero(idx); we need
+    // the assignment vector to map heroId → idx.
+    function committedOptionName(teamState, heroId) {
+        var c = teamState.commander;
+        if (!c || typeof c.committedOption !== "function") return null;
+        // Commander.decide was called with teamHeroes at index time; match
+        // our hero to that same ordering.
+        var heroes = teamState.lastHeroes || [];
+        for (var i = 0; i < heroes.length; i++) {
+            if (heroes[i] && heroes[i].unit && heroes[i].unit.id === heroId) {
+                var name = c.committedOption(i);
+                return name || null;
+            }
+        }
+        return null;
+    }
+
+    function heroTeam(heroId) {
+        var teams = AI.shared.teams || [[], []];
+        for (var t = 0; t < teams.length; t++) {
+            for (var i = 0; i < teams[t].length; i++) {
+                if (teams[t][i].unit.id === heroId) return t;
+            }
+        }
+        return 0;
     }
 
     Agents.register({
@@ -168,7 +228,7 @@
         label: "Options-Commander (roles)",
         reset: function () {
             state = null;
-            frameActionsByTeam = {};
+            heroMem = {};
         },
         teamTick: teamTick,
         think: think,

@@ -31,7 +31,7 @@
             actionRepeat:     2,
             optionMaxWindows: 6,
             useLeafValue:     true,
-            seed:             0xAICAFE,
+            seed:             128,
             opponentPolicy:   "scripted",
             evaluator:        "hpDelta",
         };
@@ -52,47 +52,91 @@
         return m;
     }
 
+    // Rough duration of each option in game seconds. Approximates the
+    // max_windows × window_dt the option would consume inside MCTS if it
+    // ran to its natural termination cap. Used to size queue entries so
+    // the robot keeps executing an option for its intended lifetime
+    // without the planner re-firing search every tick.
+    // Kept short so MCTS re-votes often. Longer durations = less search,
+    // which matters more than the planning-horizon advantage when the
+    // per-search iteration budget is only ~80. If the search budget
+    // grows (deeper trees, parallel search), raise these toward each
+    // option's natural terminator (max 3–5 windows ≈ 1 s).
+    var OPTION_DURATION = {
+        holdAndFire:    0.4,
+        advanceToRange: 0.6,
+        retreatBack:    0.6,
+        focusWeakest:   0.5,
+        strafeFire:     0.5,
+        selfHeal:       0.3,
+        pokeFireball:   0.3,
+        grenadeCluster: 0.3,
+    };
+    function durationFor(name) { return OPTION_DURATION[name] || 0.8; }
+
     function think(self, world) {
         ensureOptions();
         var agent = self.agent;
         var u = agent.unit;
         if (!u.alive) { self.hold(0.5); return; }
 
-        var mem = memByHero[u.id] || (memByHero[u.id] = { option: null, ticks: 0 });
+        var mem = memByHero[u.id] || (memByHero[u.id] = { lastThinkT: -1 });
         var mcts = mctsFor(u.id);
 
-        var selfView  = OptionsShared.viewAgent(agent);
-        var worldView = OptionsShared.viewWorld();
+        // dt for Bot.tick (BotAim / cd decay / queue bookkeeping).
+        var simT = AI.shared.simT;
+        var prevT = mem.lastThinkT < 0 ? simT : mem.lastThinkT;
+        var dt = Math.max(0.001, Math.min(0.2, simT - prevT));
+        mem.lastThinkT = simT;
 
-        // Continue current option if its termination predicate is still
-        // false. This keeps options committed for their natural lifetime
-        // — the whole reason search is rare.
-        var spec = mem.option ? built.specs[mem.option] : null;
-        var terminated = !spec
-            || spec.shouldTerminate(selfView, worldView, mem.ticks)
-            || mem.ticks >= cfg().optionMaxWindows;
+        // Preempt: if the currently-committed option's should_terminate
+        // now fires (HP dropped, target lost, drifted out of the kite
+        // band…), drop the queue so we re-search this tick. Without this
+        // the robot would keep executing stale plans for up to
+        // durationFor(option) seconds — fine for planning horizon but
+        // bad for reactivity.
+        if (mem.committed) {
+            var spec = built.specs[mem.committed];
+            if (spec) {
+                var sv = OptionsShared.viewAgent(agent);
+                var wv = OptionsShared.viewWorld();
+                // Use elapsed-in-option as a window count approximation.
+                if (spec.shouldTerminate(sv, wv, mem.ticksInOption || 0)) {
+                    Bot.clear(self);
+                    mem.committed = null;
+                }
+            }
+        }
+        mem.ticksInOption = (mem.ticksInOption || 0) + 1;
 
-        if (terminated) {
+        // Plan: when the queue is empty, run MCTS to pick the next option
+        // and push it as a single-entry plan with its natural duration.
+        // The robot then executes autonomously for that duration (or
+        // until preempted above). This is the "plan, then execute" split
+        // — the planner isn't reacting every tick, it's voting on what
+        // the robot does next.
+        if (Bot.queueLength(self) === 0) {
             var chosen = mcts.search(world, agent);
             if (chosen) {
                 mcts.advanceRoot(chosen);
-                mem.option = chosen;
-                mem.ticks = 0;
-                spec = built.specs[chosen];
+                Bot.push(self, OptionsShared.robotCommandFor(chosen),
+                    durationFor(chosen));
+                mem.committed = chosen;
+                mem.ticksInOption = 0;
             } else {
-                // No option can_initiate here — fall back to scripted.
-                mem.option = null;
-                mem.ticks = 0;
-                AI.think(self, world);
-                return;
+                mem.committed = null;
             }
+            // Else: no option can_initiate — leave queue empty, robot
+            // uses defaultCommand for this tick; we'll retry next tick.
         }
 
-        // Steady-state: just step the committed option.
-        var action = spec.step(selfView, worldView, mem.ticks);
-        OptionsShared.applyCombatAction(self, world, action);
-        mem.ticks++;
+        Bot.tick(self, dt);
     }
+
+    // Book-keeping hook: when a match resets, stats still want per-hero
+    // commitment counts. We derive from Bot.current(self) now, but the
+    // registered stats() runs at team level — easier to keep a mem field.
+    // (Left as a TODO; stats still reads memByHero below.)
 
     Agents.register({
         id: "options_mcts",
@@ -108,7 +152,7 @@
             // debug signal when tuning.
             var counts = {};
             for (var id in memByHero) {
-                var n = memByHero[id].option || "(none)";
+                var n = memByHero[id].committed || "(none)";
                 counts[n] = (counts[n] || 0) + 1;
             }
             var out = { label: "options_mcts" };

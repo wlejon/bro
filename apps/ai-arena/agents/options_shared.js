@@ -1,24 +1,23 @@
 // agents/options_shared.js — Shared helpers for options-based agents.
 //
-// Live agents run inside the ai-arena think() loop with access to the
-// bound C++ Agent/World objects. Tactical options, by contrast, are
-// evaluated by the C++ OptionMcts simulation and receive plain-object
-// views built by the bindings. To run the same options live (translate
-// the chosen option's step() into self.moveTo / self.cast), we need to
-// build equivalent views in JS from the bound objects, and we need a
-// translator that maps CombatAction back to self.* calls.
+// Two surfaces here:
 //
-// Both files below — options_mcts.js and options_commander.js — use
-// these helpers. Keep this file free of Agents.register so load order
-// doesn't matter.
+//   1. View builders (viewAgent, viewWorld). Used when a planner wants to
+//      hand plain-object snapshots to JS callbacks from the C++ MCTS/Option
+//      sim path — mirrors the shape of the bindings-built views so options
+//      authored in tactical_options.js see the same data whether they run
+//      inside the sim or inside a live think tick.
+//
+//   2. robotCommandFor(optionName, agent) — translates a chosen option name
+//      into a Bot command. The live planners (options_mcts, options_commander)
+//      drive execution through the shared reflex robot rather than queuing
+//      raw CombatActions. Firing is then automatic (the robot's side-effect
+//      projectile spawn runs every tick regardless of option), fixing the
+//      15× basic-fire deficit that options had vs scripted.
 
 var OptionsShared = (function () {
     "use strict";
 
-    // Build a plain-object view of one bound Agent, matching the shape
-    // the C++ bindings expose to option callbacks (buildAgentFields in
-    // ai_bindings.cpp). Unit accessors come from the UnitData class
-    // registered by the bindings (abilitySlot/cooldown via getter methods).
     function viewAgent(a) {
         if (!a) return null;
         var u = a.unit;
@@ -40,9 +39,6 @@ var OptionsShared = (function () {
         };
     }
 
-    // Build a world view from AI.shared.teams (populated each frame by
-    // the scripted AI's think-prelude). Using AI.shared means we don't
-    // need a bound-World iterator — both teams' Agents are reachable.
     function viewWorld() {
         var arr = [];
         var teams = AI.shared.teams || [[], []];
@@ -56,118 +52,126 @@ var OptionsShared = (function () {
         return { agents: arr };
     }
 
-    // MoveDir values — must match mcts.h MoveDir enum.
-    var MOVE = TacticalOptions.MOVE;
+    // ── Option → Robot command ──────────────────────────────────────────
+    //
+    // Ability slot assumptions (match Scenarios.AB_*):
+    //   0 = heal (self-target)
+    //   1 = fireball (projectile)
+    //   2 = beam (pierce)
+    //   3 = grenade (aoe)
+    //   4 = basic shot (projectile, fires along BotAim each tick)
+    //
+    // Robot fires basic shots as a side-effect whenever aim+LOS+cd align,
+    // so option commands never set `fireBasic: false` — even "heal" keeps
+    // putting out damage when the opportunity arises. Ability slots are
+    // autocast by the robot when `allowAbilities[slot]` is present + gates
+    // pass.
+    //
+    // Movement `kiteBand` tuned to scripted's ratios: retreatBack uses the
+    // engage/support mul pair so heroes don't loiter in range; advance
+    // closes to the scripted "engage" band (0.85× range); strafe stays
+    // within (0.45, 0.85).
 
-    // Translate a CombatAction emitted by an option's step() into
-    // self.moveTo / self.cast / self.hold calls. attackSlot references
-    // enemy-slot-by-proximity ordering (same ordering slotForEnemy used).
-    function applyCombatAction(self, world, action) {
-        var a = self.agent;
-        var u = a.unit;
+    var COMMAND_BUILDERS = {
+        holdAndFire: function () {
+            return {
+                target: { policy: "focus", requireLOS: true },
+                fireBasic: true,
+                move: { mode: "hold" },
+            };
+        },
 
-        // Compute ordered living enemies (matches the view's slot
-        // allocation). Used both for resolving attackSlot targets and
-        // for directional moves that depend on the target's position.
-        var myTeam = u.teamId;
-        var livingEnemies = [];
-        var teams = AI.shared.teams || [[], []];
-        var enemyTeam = teams[1 - myTeam] || [];
-        for (var i = 0; i < enemyTeam.length; i++) {
-            var e = enemyTeam[i];
-            if (e && e.unit && e.unit.alive) livingEnemies.push(e);
-        }
-        livingEnemies.sort(function (e1, e2) {
-            var d1 = (e1.x - a.x) * (e1.x - a.x) + (e1.z - a.z) * (e1.z - a.z);
-            var d2 = (e2.x - a.x) * (e2.x - a.x) + (e2.z - a.z) * (e2.z - a.z);
-            return d1 - d2;
-        });
-        var target = (action.attackSlot >= 0 && livingEnemies[action.attackSlot]) || null;
+        advanceToRange: function () {
+            return {
+                target: { policy: "focus", requireLOS: false },
+                fireBasic: true,                 // keep firing while advancing
+                move: { mode: "advance", kiteBand: [0.45, 0.85], space: true },
+            };
+        },
 
-        // ── Aim update (critical) ──────────────────────────────────────
-        // The BASIC ability (slot 4, ai-arena default) fires along
-        // BotAim.forward(mem.aim). If we never init/tick BotAim the
-        // forward vector is uninitialised and every basic shot fires
-        // into the void. Mirror the scripted AI's per-tick pattern:
-        // requestAim toward whatever target the action references
-        // (falling back to nearest enemy) and tick BotAim with the
-        // real frame delta so rotation keeps up.
-        var mem = (typeof AI !== "undefined" && AI.getMem) ? AI.getMem(u.id) : null;
-        if (mem && mem.aim) {
-            var simT = (AI.shared && AI.shared.simT) || 0;
-            if (mem._optLastT === undefined) mem._optLastT = simT;
-            var dt = Math.max(0.001, Math.min(0.2, simT - mem._optLastT));
-            mem._optLastT = simT;
+        retreatBack: function () {
+            return {
+                target: { policy: "nearest", requireLOS: false },
+                fireBasic: true,                 // over-the-shoulder shots
+                allowAbilities: {
+                    0: { target: "self", minMana: 25, maxHpFrac: 0.55 },
+                },
+                move: { mode: "coverFrom", space: true },
+            };
+        },
 
-            var aimTarget = target || livingEnemies[0];
-            if (aimTarget) {
-                var adx = aimTarget.x - a.x, adz = aimTarget.z - a.z;
-                var yaw = Math.atan2(adx, -adz);       // FPS yaw: 0 = -Z.
-                BotAim.requestAim(mem.aim, simT, yaw, 0);
-            }
-            BotAim.tick(mem.aim, dt);
-        }
+        focusWeakest: function () {
+            return {
+                target: { policy: "weakest", requireLOS: true },
+                fireBasic: true,
+                move: { mode: "strafe", kiteBand: [0.4, 0.85], space: true },
+            };
+        },
 
-        // Ability casts first so in-flight projectiles get queued before
-        // movement commits this tick's destination.
-        if (action.abilitySlot >= 0 && typeof self.cast === "function") {
-            // Convention: slot 0 is heal (self-target); slot 4 (default)
-            // is the basic shot which fires along BotAim.forward; others
-            // (fireball/beam/grenade) are enemy-targeted casts.
-            var healSlot  = 0;
-            var basicSlot = 4;
-            if (action.abilitySlot === healSlot) {
-                self.cast(action.abilitySlot, u.id);
-            } else if (action.abilitySlot === basicSlot) {
-                // Basic ignores targetId at the resolver — it reads
-                // mem.aim. Gate on aim cone so we don't burn cooldown
-                // firing at the sky while still rotating.
-                var aligned = true;
-                if (target && mem && mem.aim && typeof BotAim.canFireAt === "function") {
-                    aligned = BotAim.canFireAt(
-                        mem.aim, a.x, 0, a.z, target.x, 0, target.z);
-                }
-                if (aligned && target) self.cast(action.abilitySlot, target.unit.id);
-            } else if (target) {
-                self.cast(action.abilitySlot, target.unit.id);
-            }
-        }
+        strafeFire: function () {
+            return {
+                target: { policy: "nearest", requireLOS: true },
+                fireBasic: true,
+                move: { mode: "strafe", kiteBand: [0.45, 0.85], space: true },
+            };
+        },
 
-        // Movement.
-        var rStep = u.attackRange || 8;
-        switch (action.moveDir) {
-            case MOVE.HOLD:
-                if (typeof self.hold === "function") self.hold(0.2);
-                break;
-            case MOVE.N:  self.moveTo(a.x,              a.z - rStep);         break;
-            case MOVE.NE: self.moveTo(a.x + rStep*0.7,  a.z - rStep*0.7);     break;
-            case MOVE.E:  self.moveTo(a.x + rStep,      a.z);                 break;
-            case MOVE.SE: self.moveTo(a.x + rStep*0.7,  a.z + rStep*0.7);     break;
-            case MOVE.S:  self.moveTo(a.x,              a.z + rStep);         break;
-            case MOVE.SW: self.moveTo(a.x - rStep*0.7,  a.z + rStep*0.7);     break;
-            case MOVE.W:  self.moveTo(a.x - rStep,      a.z);                 break;
-            case MOVE.NW: self.moveTo(a.x - rStep*0.7,  a.z - rStep*0.7);     break;
-            case MOVE.PATH_TO_TARGET:
-                if (target) self.moveTo(target.x, target.z);
-                else if (typeof self.hold === "function") self.hold(0.1);
-                break;
-            case MOVE.PATH_AWAY: {
-                var threat = livingEnemies[0];
-                if (threat) {
-                    var dx = a.x - threat.x, dz = a.z - threat.z;
-                    var m = Math.sqrt(dx * dx + dz * dz) || 1;
-                    self.moveTo(a.x + dx / m * rStep, a.z + dz / m * rStep);
-                } else if (typeof self.hold === "function") self.hold(0.1);
-                break;
-            }
-            default:
-                if (typeof self.hold === "function") self.hold(0.1);
-        }
+        selfHeal: function () {
+            return {
+                target: { policy: "nearest", requireLOS: false },
+                fireBasic: true,
+                allowAbilities: {
+                    0: { target: "self", minMana: 25 },
+                },
+                move: { mode: "coverFrom", space: true },
+            };
+        },
+
+        pokeFireball: function () {
+            return {
+                target: { policy: "focus", requireLOS: true },
+                fireBasic: true,
+                allowAbilities: {
+                    1: { target: "focus", minMana: 20 },
+                },
+                move: { mode: "hold" },
+            };
+        },
+
+        grenadeCluster: function () {
+            return {
+                target: { policy: "focus", requireLOS: true },
+                fireBasic: true,
+                allowAbilities: {
+                    3: { target: "cluster", minMana: 35,
+                         clusterRadius: 2.5, minCluster: 2 },
+                },
+                move: { mode: "hold" },
+            };
+        },
+    };
+
+    function robotCommandFor(optionName) {
+        var builder = COMMAND_BUILDERS[optionName];
+        if (!builder) return defaultCommand();
+        return builder();
+    }
+
+    // Fallback when no option matches (e.g. search returns null because no
+    // option can_initiate). Matches scripted's default engage behavior:
+    // pick nearest with LOS, fire, strafe in range, advance if out.
+    function defaultCommand() {
+        return {
+            target: { policy: "nearest", requireLOS: true },
+            fireBasic: true,
+            move: { mode: "advance", kiteBand: [0.45, 0.85], space: true },
+        };
     }
 
     return {
         viewAgent: viewAgent,
         viewWorld: viewWorld,
-        applyCombatAction: applyCombatAction,
+        robotCommandFor: robotCommandFor,
+        defaultCommand: defaultCommand,
     };
 })();

@@ -195,7 +195,7 @@ var TacticalOptions = (function () {
                 var e = nearest(self, enemies);
                 var slot = e ? slotForEnemy(self, enemies, e.id) : -1;
                 return { moveDir: MOVE.HOLD,
-                         attackSlot: slot,
+                         attackSlot: -1,
                          abilitySlot: abilityReady(self, C.basicSlot) ? C.basicSlot : -1 };
             },
             shouldTerminate: function (self, world, ticks) {
@@ -221,7 +221,7 @@ var TacticalOptions = (function () {
                 var enemies = livingEnemies(self, world);
                 var e = nearest(self, enemies);
                 var slot = e ? slotForEnemy(self, enemies, e.id) : 0;
-                return { moveDir: MOVE.PATH_TO_TARGET, attackSlot: slot, abilitySlot: -1 };
+                return { moveDir: MOVE.PATH_TO_TARGET, attackSlot: -1, abilitySlot: -1 };
             },
             shouldTerminate: function (self, world, ticks) {
                 if (ticks >= 5) return true;
@@ -285,7 +285,7 @@ var TacticalOptions = (function () {
                 var inRange = dist2(self, w) <= self.attackRange * self.attackRange;
                 return {
                     moveDir: inRange ? MOVE.HOLD : compassToward(self, w),
-                    attackSlot: slot,
+                    attackSlot: -1,
                     abilitySlot: (inRange && abilityReady(self, C.basicSlot)) ? C.basicSlot : -1,
                 };
             },
@@ -317,7 +317,7 @@ var TacticalOptions = (function () {
                 // Strafe E for ticks 0,1, then W for 2,3, etc.
                 var dir = (Math.floor(ticks / 2) % 2 === 0) ? MOVE.E : MOVE.W;
                 return {
-                    moveDir: dir, attackSlot: slot,
+                    moveDir: dir, attackSlot: -1,
                     abilitySlot: abilityReady(self, C.basicSlot) ? C.basicSlot : -1,
                 };
             },
@@ -382,7 +382,7 @@ var TacticalOptions = (function () {
                 var e = nearest(self, enemies);
                 var slot = e ? slotForEnemy(self, enemies, e.id) : 0;
                 return {
-                    moveDir: MOVE.HOLD, attackSlot: slot,
+                    moveDir: MOVE.HOLD, attackSlot: -1,
                     abilitySlot: ticks === 0 && abilityReady(self, C.fireballSlot)
                         ? C.fireballSlot : -1,
                 };
@@ -419,7 +419,7 @@ var TacticalOptions = (function () {
                 if (!best) return { moveDir: MOVE.HOLD, attackSlot: -1, abilitySlot: -1 };
                 var slot = slotForEnemy(self, enemies, best.id);
                 return {
-                    moveDir: MOVE.HOLD, attackSlot: slot,
+                    moveDir: MOVE.HOLD, attackSlot: -1,
                     abilitySlot: ticks === 0 && abilityReady(self, C.grenadeSlot)
                         ? C.grenadeSlot : -1,
                 };

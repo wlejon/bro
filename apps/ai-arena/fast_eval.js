@@ -4,8 +4,8 @@
 // paced by the render loop (≈1x real-time even under advanceTime). That
 // makes 30-match evals prohibitive.
 //
-// This script re-uses the live JS modules (Arena.build, AI.think, the
-// Agents registry) but never attaches to the scene. A tight while-loop
+// This script re-uses the live JS modules (Arena.build, the Agents
+// registry, Bot) but never attaches to the scene. A tight while-loop
 // calls the active agent's think() and then world.tick() directly, so
 // matches run at pure JS speed.
 //
@@ -132,9 +132,9 @@ function runMatch(matchIdx) {
                 Agents.thinkFor(capturingSelf(a), world);
             }
             // Apply captured commands. Basic-shot projectiles were already
-            // spawned as side effects inside think (tryAimedShot); that's
-            // inherent to the current scripted policy. The two-phase gate
-            // here controls only the capability-level moves/casts.
+            // spawned as side effects inside Bot.tick; that's inherent to
+            // the reflex-robot's firing model. The two-phase gate here
+            // controls only the capability-level moves/casts.
             for (var q = 0; q < pending.length; q++) {
                 var op = pending[q];
                 if (!op.a.unit.alive) continue;
