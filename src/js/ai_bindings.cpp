@@ -471,21 +471,37 @@ static std::string readStringProp(JSContext* ctx, JSValueConst obj, const char* 
 }
 
 // Build a plain-object view of one agent's commonly-needed fields. Used by
-// JS rollout/prior/evaluator callbacks so the callback doesn't need access
-// to the C++ Agent wrapper (which would require a reverse lookup from
-// Agent* to JSValue). O(1) per call.
+// JS rollout/prior/evaluator/option callbacks so the callback doesn't need
+// access to the C++ Agent wrapper (which would require a reverse lookup
+// from Agent* to JSValue). O(1) per call — keep view minimal.
 static JSValue buildAgentFields(JSContext* ctx, const brogameagent::Agent& a) {
     const auto& u = a.unit();
     JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "id",          JS_NewInt32(ctx, u.id));
-    JS_SetPropertyStr(ctx, o, "teamId",      JS_NewInt32(ctx, u.teamId));
-    JS_SetPropertyStr(ctx, o, "x",           JS_NewFloat64(ctx, a.x()));
-    JS_SetPropertyStr(ctx, o, "z",           JS_NewFloat64(ctx, a.z()));
-    JS_SetPropertyStr(ctx, o, "yaw",         JS_NewFloat64(ctx, a.yaw()));
-    JS_SetPropertyStr(ctx, o, "hp",          JS_NewFloat64(ctx, u.hp));
-    JS_SetPropertyStr(ctx, o, "maxHp",       JS_NewFloat64(ctx, u.maxHp));
-    JS_SetPropertyStr(ctx, o, "alive",       JS_NewBool(ctx, u.alive()));
-    JS_SetPropertyStr(ctx, o, "attackRange", JS_NewFloat64(ctx, u.attackRange));
+    JS_SetPropertyStr(ctx, o, "id",             JS_NewInt32(ctx, u.id));
+    JS_SetPropertyStr(ctx, o, "teamId",         JS_NewInt32(ctx, u.teamId));
+    JS_SetPropertyStr(ctx, o, "x",              JS_NewFloat64(ctx, a.x()));
+    JS_SetPropertyStr(ctx, o, "z",              JS_NewFloat64(ctx, a.z()));
+    JS_SetPropertyStr(ctx, o, "yaw",            JS_NewFloat64(ctx, a.yaw()));
+    JS_SetPropertyStr(ctx, o, "hp",             JS_NewFloat64(ctx, u.hp));
+    JS_SetPropertyStr(ctx, o, "maxHp",          JS_NewFloat64(ctx, u.maxHp));
+    JS_SetPropertyStr(ctx, o, "alive",          JS_NewBool(ctx, u.alive()));
+    JS_SetPropertyStr(ctx, o, "attackRange",    JS_NewFloat64(ctx, u.attackRange));
+    JS_SetPropertyStr(ctx, o, "attackCooldown", JS_NewFloat64(ctx, u.attackCooldown));
+    JS_SetPropertyStr(ctx, o, "mana",           JS_NewFloat64(ctx, u.mana));
+    JS_SetPropertyStr(ctx, o, "maxMana",        JS_NewFloat64(ctx, u.maxMana));
+
+    // Ability cooldowns — one entry per populated slot (abilitySlot >= 0).
+    // Callers read ability[i].cooldown; unpopulated slots are omitted so
+    // slot indices still match the original array layout when present.
+    JSValue ab = JS_NewArray(ctx);
+    for (int i = 0; i < brogameagent::Unit::MAX_ABILITIES; i++) {
+        JSValue slot = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, slot, "abilityId", JS_NewInt32(ctx, u.abilitySlot[i]));
+        JS_SetPropertyStr(ctx, slot, "cooldown",
+                           JS_NewFloat64(ctx, u.abilityCooldowns[i]));
+        JS_SetPropertyUint32(ctx, ab, (uint32_t)i, slot);
+    }
+    JS_SetPropertyStr(ctx, o, "abilities", ab);
     return o;
 }
 
