@@ -607,7 +607,37 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    el->setAttribute("value", jsToStdString(ctx, val));
+    std::string s = jsToStdString(ctx, val);
+    // For <select>, sync the selection with the new value. We do BOTH:
+    //   1. Stamp the `selected` attribute on the matching <option> (and
+    //      clear it from siblings). This is what initSelectedIndex reads
+    //      when the SelectControl is lazily created during the first
+    //      layout pass — required because callers commonly run
+    //      `select.value = "..."` at script-load time, before any render
+    //      has triggered ElSelect construction.
+    //   2. If the SelectControl already exists, also update its
+    //      selectedIndex directly so the displayed selection moves
+    //      immediately without waiting for a re-layout.
+    if (el->tagName() == "SELECT" || el->tagName() == "select") {
+        int matchIdx = -1, idx = 0;
+        for (auto* child : el->children()) {
+            if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
+            std::string ov = child->getAttribute("value");
+            if (ov.empty()) ov = child->textContent();
+            if (matchIdx < 0 && ov == s) {
+                matchIdx = idx;
+                child->setAttribute("selected", "");
+            } else if (child->hasAttribute("selected")) {
+                child->removeAttribute("selected");
+            }
+            ++idx;
+        }
+        if (auto* sel = el->selectControl(); sel && matchIdx >= 0) {
+            sel->setSelectedIndex(matchIdx);
+        }
+        return JS_UNDEFINED;
+    }
+    el->setAttribute("value", s);
     return JS_UNDEFINED;
 }
 

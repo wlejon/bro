@@ -55,6 +55,15 @@ var Scene3D = {};
             rot: quatFromAxisAngle(1, 0, 0, -0.95),
         });
         Scene3D.applyCamera();
+        // First applyCamera() above runs before htmlayout has computed the
+        // canvas's box, so clientWidth/Height fall back to the canvas
+        // intrinsic 300×150 default (see element_bindings.cpp clientWidth
+        // → js_element_get_width). That bakes aspect=2.0 into the camera
+        // and the scene renders stretched until the next user input fires
+        // applyCamera again. Re-apply after the first frame (layout done)
+        // and on every window resize.
+        requestAnimationFrame(Scene3D.applyCamera);
+        window.addEventListener("resize", Scene3D.applyCamera);
         wireCameraInput(canvas);
         wireClickFocus(canvas);
     };
