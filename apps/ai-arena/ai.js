@@ -227,6 +227,23 @@ var AI = {};
         teams: [[], []], teamFocus: [null, null], simT: 0, byId: null,
     };
 
+    // Per-team "mood" tunings consumed by think(). Portfolio search writes
+    // these before a rollout / committed think to steer scripted behavior
+    // toward a candidate tactic. Missing team → DEFAULT_TUNING used.
+    AI.DEFAULT_TUNING = {
+        fleeHpFrac: 0.35,
+        engageDistMul: 0.85,
+        kiteDistMul: 0.45,
+        supportEngageDistMul: 0.98,
+        supportKiteDistMul: 0.80,
+        manaReserveHeal: 25,      // min mana before trying HEAL
+        fireballMinHp: 0.85,      // own-HP threshold to spend mana on fillers
+    };
+    AI.tuningByTeam = [null, null];
+    AI.tuningFor = function (teamId) {
+        return AI.tuningByTeam[teamId] || AI.DEFAULT_TUNING;
+    };
+
     // Declarative custom capability for documentation + future-proofing. The
     // JS binding layer doesn't yet let self.* methods invoke registered caps,
     // so the actual gun-lag shot is implemented inline in think() below.
@@ -369,17 +386,18 @@ var AI = {};
         if (target) tryAimedShot(agent, mem, target);
 
         var hpFrac = u.hp / u.maxHp;
+        var tuning = AI.tuningFor(u.teamId);
 
         // Clear flee latch once HP is comfortable — next drop picks fresh.
-        if (hpFrac >= 0.45) { mem.fleeX = null; mem.fleeZ = null; }
+        if (hpFrac >= tuning.fleeHpFrac + 0.1) { mem.fleeX = null; mem.fleeZ = null; }
 
         // ───── FLEE + HEAL when wounded ────────────────────────────────
-        if (hpFrac < 0.35) {
+        if (hpFrac < tuning.fleeHpFrac) {
             return fleeHeal(self, agent, mem, nav, closest, enemies, teammates, obstacles, simT);
         }
 
         // ───── HEAL ally ───────────────────────────────────────────────
-        if (u.mana >= 25 && mem.abCd[Arena.AB_HEAL] <= 0) {
+        if (u.mana >= tuning.manaReserveHeal && mem.abCd[Arena.AB_HEAL] <= 0) {
             var wounded = null, worstHp = hpFrac;
             for (var ahi = 0; ahi < teammates.length; ahi++) {
                 var at = teammates[ahi];
@@ -468,9 +486,11 @@ var AI = {};
                     }
                 }
             }
-            // Fireball — mid-range poke.
+            // Fireball — mid-range poke. Gated on tuning-specified HP
+            // comfort so aggro scripts spam while defensive/kite hold mana.
             if (tLos && u.mana >= 20 && tdist > 4 && tdist < 13
                 && mem.abCd[Arena.AB_FIREBALL] <= 0
+                && hpFrac >= tuning.fireballMinHp
                 && Math.random() < 0.06) {
                 mem.intent = "FIREBALL";
                 doCast(self, mem, Arena.AB_FIREBALL, target.unit.id);
@@ -488,8 +508,8 @@ var AI = {};
 
         var isSupport = hpFrac < 0.75;
         mem.role = isSupport ? "support" : "front";
-        var tooFar  = isSupport ? range * 0.98 : range * 0.85;
-        var tooNear = isSupport ? range * 0.80 : range * 0.45;
+        var tooFar  = range * (isSupport ? tuning.supportEngageDistMul : tuning.engageDistMul);
+        var tooNear = range * (isSupport ? tuning.supportKiteDistMul   : tuning.kiteDistMul);
 
         if (!hasLOS) {
             mem.intent = "REPOSITION";
