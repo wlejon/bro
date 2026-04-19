@@ -26,12 +26,12 @@
     var PLAN_HZ        = 4;      // 4 Hz per-agent position refresh
     var PLAN_INTERVAL  = 1 / PLAN_HZ;
     var NUM_ANGLES     = 12;     // candidates per ring
-    var RINGS          = [1.5, 3.0, 4.5];
-    var BLEND_WEIGHT   = 0.55;   // blend toward influence cell; 0 = pure scripted, 1 = pure influence
+    var RINGS          = [1.5, 3.0];
+    var BLEND_WEIGHT   = 0.35;   // nudge toward influence cell; scripted keeps tactical context
 
     var W_THR          = 1.0;
-    var W_SUP          = 0.6;
-    var W_OFF          = 2.2;
+    var W_SUP          = 0.5;
+    var W_OFF          = 2.0;
     var THR_SCALE      = 6.0;    // threat radius (meters)
     var SUP_SCALE      = 5.0;
     var OFF_SCALE      = 5.0;
@@ -57,15 +57,20 @@
             var atten = Math.exp(-d / THR_SCALE);
             threat += unitDps(e.unit) * atten;
 
+            // Offense: prefer cells near the OUTER edge of our attack
+            // range over point-blank — minimises opponent lead-aim,
+            // matches scripted's range*0.85 stand-off. Closer than
+            // range*0.6 is discounted because it's dodging territory
+            // where the scripted kite rule also wants to back off.
             if (d <= range + 0.5) {
-                offense += unitDps(agent.unit) * Math.exp(-d / OFF_SCALE);
-                // Bonus for keeping the team focus in range — promotes
-                // whoever is shooting the priority target, implicitly
-                // coordinates focus fire.
+                var standoff = 1 - Math.abs(d - range * 0.85) / Math.max(0.1, range * 0.5);
+                if (standoff < 0) standoff = 0;
+                var bonus = unitDps(agent.unit) * standoff;
                 if (AI.shared && AI.shared.teamFocus) {
                     var tf = AI.shared.teamFocus[agent.unit.teamId];
-                    if (tf && tf.unit.id === e.unit.id) offense *= 1.35;
+                    if (tf && tf.unit.id === e.unit.id) bonus *= 1.35;
                 }
+                offense += bonus;
             }
         }
 
@@ -110,11 +115,17 @@
         return best;
     }
 
-    // Per-agent scratch: cached influence destination, refresh timer.
+    // Per-agent scratch: cached influence destination, refresh timer,
+    // last committed (rounded, deduped) move target so repeated moveTo
+    // calls with near-identical coordinates don't trigger an A* replan
+    // every 30 Hz tick.
     var mem = {};
     function getIMem(id) {
         var m = mem[id];
-        if (!m) m = mem[id] = { destX: null, destZ: null, lastPlanT: -99, lastStats: null };
+        if (!m) m = mem[id] = {
+            destX: null, destZ: null, lastPlanT: -99,
+            lastMoveX: null, lastMoveZ: null,
+        };
         return m;
     }
 
@@ -123,20 +134,28 @@
     var teamStats = {};
 
     // Wrap `self` so moveTo calls blend the scripted destination with
-    // the influence destination. self.cast / self.hold / self.flee pass
-    // through unchanged so abilities and strafe-holds still fire.
-    function wrapSelf(self, inf) {
+    // the influence destination and dedupe. setTarget is expensive (A*
+    // replan); firing it every 30 Hz tick with near-identical blended
+    // coords produces a jittering path that costs more than it buys.
+    function wrapSelf(self, inf, im) {
         if (!inf) return self;
         return {
             agent: self.agent,
             moveTo: function (x, z) {
                 var bx = x * (1 - BLEND_WEIGHT) + inf.x * BLEND_WEIGHT;
                 var bz = z * (1 - BLEND_WEIGHT) + inf.z * BLEND_WEIGHT;
-                self.moveTo(bx, bz);
+                // Round to 0.5m grid + dedupe — match the pattern the
+                // old groups.js blue used to avoid A* thrash.
+                var tx = Math.round(bx * 2) * 0.5;
+                var tz = Math.round(bz * 2) * 0.5;
+                if (tx === im.lastMoveX && tz === im.lastMoveZ) return;
+                im.lastMoveX = tx; im.lastMoveZ = tz;
+                self.moveTo(tx, tz);
             },
             flee: function (x, z) {
                 // Flee path uses its own cover-aware selection; don't blend.
-                self.flee ? self.flee(x, z) : self.moveTo(x, z);
+                im.lastMoveX = null; im.lastMoveZ = null;
+                (self.flee || self.moveTo).call(self, x, z);
             },
             cast: function (slot, tid) { self.cast(slot, tid); },
             hold: function (dt)        { self.hold(dt); },
@@ -146,6 +165,8 @@
     Agents.register({
         id: "influence",
         label: "Influence maps",
+
+        reset: function () { mem = {}; teamStats = {}; },
 
         teamTick: function (state, teamId, dt) {
             // Recompute per-agent influence destinations at PLAN_HZ.
@@ -180,9 +201,9 @@
 
         think: function (self, world) {
             var id = self.agent.unit.id;
-            var im = mem[id];
-            var inf = (im && im.destX !== null) ? { x: im.destX, z: im.destZ } : null;
-            AI.think(wrapSelf(self, inf), world);
+            var im = getIMem(id);
+            var inf = im.destX !== null ? { x: im.destX, z: im.destZ } : null;
+            AI.think(wrapSelf(self, inf, im), world);
         },
 
         stats: function (state, teamId) {

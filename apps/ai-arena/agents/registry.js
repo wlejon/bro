@@ -62,6 +62,16 @@ var Agents = {};
         }
     };
 
+    // Reset any closure-held state across all agents. Called between
+    // matches in fast_eval so stale per-agent memories (influence dest
+    // caches, portfolio planner commits, etc.) don't leak into the next
+    // match's early ticks.
+    Agents.resetAll = function () {
+        for (var i = 0; i < ordered.length; i++) {
+            if (ordered[i].reset) ordered[i].reset();
+        }
+    };
+
     // Collect stats from whichever team's agent opts in. Blue takes
     // priority (since most planners will be blue during A/B); red falls
     // through if blue's agent doesn't expose stats.

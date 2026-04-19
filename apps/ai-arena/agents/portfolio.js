@@ -66,10 +66,13 @@
             manaReserveHeal: 55, fireballMinHp: 1.10,  // never spend on fireball
         },
     };
-    var SCRIPT_IDS = ["default", "aggro", "kite", "defensive", "burst"];
+    // Three scripts instead of five: the others differ only marginally
+    // from these three and compete for the same compute budget. Scripts
+    // should be maximally-different tactics, not knob-tweaks.
+    var SCRIPT_IDS = ["default", "aggro", "kite"];
 
-    var PLAN_INTERVAL = 0.5;     // seconds between plan refreshes
-    var ROLLOUT_STEPS = 48;      // * ROLLOUT_DT = 1.0s rollout horizon
+    var PLAN_INTERVAL = 1.5;     // replan every 1.5 sim-seconds
+    var ROLLOUT_STEPS = 20;      // * ROLLOUT_DT = 0.42s horizon
     var ROLLOUT_DT = 1 / 48;     // 48 Hz — coarser than 60 Hz sim for speed
 
     // Per-team planner state. Keyed by teamId so red + blue could both run
@@ -187,6 +190,8 @@
     Agents.register({
         id: "portfolio",
         label: "Portfolio (rollout)",
+
+        reset: function () { planners = {}; },
 
         teamTick: function (state, teamId, dt) {
             var p = planners[teamId] || (planners[teamId] = newPlanner());
