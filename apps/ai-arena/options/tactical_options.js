@@ -163,13 +163,27 @@ var TacticalOptions = (function () {
             clusterMinEnemies:cfg.clusterMinEnemies!== undefined ? cfg.clusterMinEnemies: 2,
         };
 
+        // specs[name] keeps JS-callable copies of each option's predicates
+        // so the live agent can call step() directly (to translate to
+        // self.moveTo/self.cast) without going back through the C++
+        // OptionMcts simulation path.
+        var specs = {};
+        function def(name, spec) {
+            specs[name] = spec;
+            return bro.ai.game.createOption({
+                name: name,
+                canInitiate: spec.canInitiate,
+                step: spec.step,
+                shouldTerminate: spec.shouldTerminate,
+            });
+        }
+
         // 1) holdAndFire ─────────────────────────────────────────────────
         // Stand still and attack the nearest visible enemy. The anchor
         // option: every tactical plan collapses into "hold + shoot" at
         // some point. Short duration (~3 windows) so it re-evaluates
         // often and exits if the enemy moves out of range.
-        var holdAndFire = bro.ai.game.createOption({
-            name: "holdAndFire",
+        var holdAndFire = def("holdAndFire", {
             canInitiate: function (self, world) {
                 var enemies = livingEnemies(self, world);
                 var e = nearest(self, enemies);
@@ -197,8 +211,7 @@ var TacticalOptions = (function () {
         // Uses PathToTarget so obstacles are avoided via the nav grid.
         // Terminates on range reached OR a clearer engagement (low HP,
         // lost all enemies) so the next option can take over.
-        var advanceToRange = bro.ai.game.createOption({
-            name: "advanceToRange",
+        var advanceToRange = def("advanceToRange", {
             canInitiate: function (self, world) {
                 var e = nearest(self, livingEnemies(self, world));
                 if (!e) return false;
@@ -223,8 +236,7 @@ var TacticalOptions = (function () {
         // Path away from the nearest enemy. Runs until we're well out of
         // their attack range OR we've regained HP. The heal decision is
         // separate (selfHeal) — retreat just buys distance.
-        var retreatBack = bro.ai.game.createOption({
-            name: "retreatBack",
+        var retreatBack = def("retreatBack", {
             canInitiate: function (self, world) {
                 if (!livingEnemies(self, world).length) return false;
                 if (hpFrac(self) < C.lowHpFrac) return true;
@@ -252,8 +264,7 @@ var TacticalOptions = (function () {
         // to slot 0"), fire when in range. Highest-value option when an
         // enemy is near death — scripted AI encodes this as FIRING_BAND
         // with target-latch via threatWeighted pick.
-        var focusWeakest = bro.ai.game.createOption({
-            name: "focusWeakest",
+        var focusWeakest = def("focusWeakest", {
             canInitiate: function (self, world) {
                 var enemies = livingEnemies(self, world);
                 var w = weakest(enemies);
@@ -290,8 +301,7 @@ var TacticalOptions = (function () {
         // 2 ticks to make us a harder target. Matches scripted FIRE state
         // strafe behaviour (flip_every = 0.8s ≈ 2 windows). The target is
         // the nearest enemy; attackSlot tracks proximity order.
-        var strafeFire = bro.ai.game.createOption({
-            name: "strafeFire",
+        var strafeFire = def("strafeFire", {
             canInitiate: function (self, world) {
                 var e = nearest(self, livingEnemies(self, world));
                 if (!e) return false;
@@ -327,8 +337,7 @@ var TacticalOptions = (function () {
         // HP fraction + mana + cooldown. Terminates as soon as the heal
         // fires OR we've topped up — never holds the window to full
         // charge, that's what retreatBack is for.
-        var selfHeal = bro.ai.game.createOption({
-            name: "selfHeal",
+        var selfHeal = def("selfHeal", {
             canInitiate: function (self) {
                 return hpFrac(self) < C.lowHpFrac
                     && manaOk(self, C.healMinMana)
@@ -358,8 +367,7 @@ var TacticalOptions = (function () {
         // Stand off at fireball range and chip. Requires HP high (we're
         // not under pressure) and a target in the poke band. Single-cast
         // option — fires once and terminates.
-        var pokeFireball = bro.ai.game.createOption({
-            name: "pokeFireball",
+        var pokeFireball = def("pokeFireball", {
             canInitiate: function (self, world) {
                 if (hpFrac(self) < 0.6) return false;
                 if (!manaOk(self, C.fireballMana)) return false;
@@ -386,8 +394,7 @@ var TacticalOptions = (function () {
         // When ≥2 enemies are close to each other AND a target enemy is in
         // range, throw the grenade. Mirrors scripted GRENADE intent: only
         // worth the mana when it can hit multiple units.
-        var grenadeCluster = bro.ai.game.createOption({
-            name: "grenadeCluster",
+        var grenadeCluster = def("grenadeCluster", {
             canInitiate: function (self, world) {
                 if (!manaOk(self, C.grenadeMana)) return false;
                 if (!abilityReady(self, C.grenadeSlot)) return false;
@@ -420,10 +427,17 @@ var TacticalOptions = (function () {
             shouldTerminate: function (_self, _world, ticks) { return ticks >= 1; },
         });
 
-        return [
+        var handles = [
             holdAndFire, advanceToRange, retreatBack, focusWeakest,
             strafeFire, selfHeal, pokeFireball, grenadeCluster,
         ];
+        // Ordered name list mirrors handles; caller needs both to iterate
+        // deterministically and to look up step fns by name.
+        var order = [
+            "holdAndFire", "advanceToRange", "retreatBack", "focusWeakest",
+            "strafeFire", "selfHeal", "pokeFireball", "grenadeCluster",
+        ];
+        return { handles: handles, specs: specs, order: order, config: C };
     }
 
     return { build: build, MOVE: MOVE };

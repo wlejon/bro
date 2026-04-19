@@ -1532,6 +1532,12 @@ void AIBindings::install(JSContext* ctx) {
                     if (slot < 0 || slot >= brogameagent::Unit::MAX_ABILITIES) return -1;
                     return d->agentRef->unit().abilitySlot[slot];
                 })
+            .method("getAbilityCooldown",
+                [](UnitData* d, int slot) -> double {
+                    if (!d->agentRef) return 0.0;
+                    if (slot < 0 || slot >= brogameagent::Unit::MAX_ABILITIES) return 0.0;
+                    return d->agentRef->unit().abilityCooldowns[slot];
+                })
             .method("takeDamage",
                 [](UnitData* d, double amount, std::string kind) -> double {
                     if (!d->agentRef) return 0;
