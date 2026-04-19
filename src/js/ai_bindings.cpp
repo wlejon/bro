@@ -443,6 +443,7 @@ static std::shared_ptr<brogameagent::mcts::IRolloutPolicy>
 parseRolloutPolicy(JSContext* ctx, JSValueConst opts) {
     std::string kind = readStringProp(ctx, opts, "rolloutPolicy");
     if (kind == "aggressive") return std::make_shared<brogameagent::mcts::AggressiveRollout>();
+    if (kind == "scripted")   return std::make_shared<brogameagent::mcts::ScriptedRollout>();
     if (kind == "random")     return std::make_shared<brogameagent::mcts::RandomRollout>();
     return nullptr;
 }
@@ -451,6 +452,7 @@ static brogameagent::mcts::OpponentPolicy
 parseOpponentPolicy(JSContext* ctx, JSValueConst opts) {
     std::string kind = readStringProp(ctx, opts, "opponentPolicy");
     if (kind == "aggressive") return brogameagent::mcts::policy_aggressive;
+    if (kind == "scripted")   return brogameagent::mcts::policy_scripted;
     if (kind == "idle")       return brogameagent::mcts::policy_idle;
     return {};
 }
@@ -585,6 +587,7 @@ parseTeamEvaluator(JSContext* ctx, JSValueConst opts) {
     std::string kind = readStringProp(ctx, opts, "evaluator");
     if (kind == "teamHpDelta")    return std::make_shared<brogameagent::mcts::TeamHpDeltaEvaluator>();
     if (kind == "teamAdvantage")  return std::make_shared<brogameagent::mcts::TeamAdvantageEvaluator>();
+    if (kind == "teamPosition")   return std::make_shared<brogameagent::mcts::TeamPositionEvaluator>();
     return nullptr;
 }
 
@@ -672,6 +675,21 @@ static JSValue js_createLayeredPlanner(JSContext* ctx, JSValueConst, int argc, J
         JSValue fc = JS_GetPropertyStr(ctx, opts, "fine");
         if (JS_IsObject(fc)) cfg.fine_cfg = parseMctsConfig(ctx, fc);
         JS_FreeValue(ctx, fc);
+
+        // Optional TacticPrior weight tuning. Lower match/other ratio lets
+        // the fine per-hero search deviate from the committed tactic.
+        JSValue tmw = JS_GetPropertyStr(ctx, opts, "tacticMatchWeight");
+        if (JS_IsNumber(tmw)) {
+            double v = 8.0; JS_ToFloat64(ctx, &v, tmw);
+            cfg.tactic_match_weight = (float)v;
+        }
+        JS_FreeValue(ctx, tmw);
+        JSValue tow = JS_GetPropertyStr(ctx, opts, "tacticOtherWeight");
+        if (JS_IsNumber(tow)) {
+            double v = 1.0; JS_ToFloat64(ctx, &v, tow);
+            cfg.tactic_other_weight = (float)v;
+        }
+        JS_FreeValue(ctx, tow);
 
         data->planner.set_config(cfg);
 

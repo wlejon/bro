@@ -24,19 +24,34 @@ var Groups = {};
 
     function mkPlanner() {
         return bro.ai.game.createLayeredPlanner({
-            // Horizons intentionally long — Retreat only looks free at short
-            // horizons; at 2–4 s of sim the pin-against-wall death shows up.
+            // Realtime-safe budget: tactic + fine total ≤ ~15ms per decide at
+            // 4 Hz, so a single rAF frame (~16ms) can absorb the hit without
+            // visibly stalling the sim. Rollouts use `scripted` (kite / flee
+            // / ability casts) so value estimates match the real opponent
+            // instead of the `aggressive` punching bag.
+            // Tactic looks deep (80 ticks × 2 actionRepeat × 0.016 ≈ 2.5 s
+            // of sim) so Retreat's "pinned against the wall, still getting
+            // shot" outcome shows up — short-horizon tactic search sees
+            // retreat as free HP preservation and commits to it forever.
             tactic: {
-                iterations: 400, budgetMs: 20, rolloutHorizon: 60,
-                actionRepeat: 4, tacticWindowDecisions: 3,
+                iterations: 300, budgetMs: 4, rolloutHorizon: 80,
+                actionRepeat: 2, tacticWindowDecisions: 2,
             },
             fine: {
-                iterations: 1200, budgetMs: 30, rolloutHorizon: 40,
-                actionRepeat: 4, priorC: 2.0, pwAlpha: 0.65,
+                iterations: 1500, budgetMs: 10, rolloutHorizon: 30,
+                actionRepeat: 2, priorC: 2.0, pwAlpha: 0.7,
             },
             rolloutPolicy: "aggressive",
-            opponentPolicy: "aggressive",
-            evaluator: "teamAdvantage",
+            opponentPolicy: "scripted",
+            evaluator: "teamPosition",
+            // With 66 legal actions per hero (11 MoveDirs × 2 attack opts × 3
+            // ability opts on average) and only ~1500 iters split across 8
+            // heroes, a weak prior leaves the committed action at the mercy
+            // of visit-count noise. Strong tactic bias is required to funnel
+            // search into sensible plays. Scatter picks per-hero distinct
+            // PathToTarget so clumping isn't a concern.
+            tacticMatchWeight: 8.0,
+            tacticOtherWeight: 1.0,
         });
     }
 
@@ -87,6 +102,11 @@ var Groups = {};
         var next = {};
         for (var i = 0; i < heroes.length; i++) {
             next[heroes[i].unit.id] = joint[i];
+            // Push the motion target for the new decision window. world.tick
+            // steers the agent along this target every frame until the next
+            // decision overrides — identical in spirit to how the scripted
+            // AgentBinding drives movement via capabilities.
+            setTargetFromAction(heroes[i], state.world, joint[i]);
         }
         g.lastActions = next;
         g.decidedAtT = state.elapsed;
@@ -119,12 +139,59 @@ var Groups = {};
         return state.groups[teamId].lastActions[agentId] || null;
     };
 
-    // Drive every MCTS-controlled agent through the exact same mcts::apply
-    // path used by rollouts: motion + auto-attack (hitscan via resolveAttack)
-    // + ability dispatch, all in one native call. Called once per rAF frame
-    // with the real delta; the cached CombatAction is replayed across frames
-    // until the planner emits a new one (matches the rollout's
-    // "hold action across action_repeat ticks" semantics).
+    // MoveDir enum mirror (mcts.h). Path* kinds translate to setTarget for
+    // live motion; the cardinal dirs translate to a 3-unit waypoint in the
+    // enemy-local frame. Kept in sync by review, not by binding.
+    var MD_HOLD = 0, MD_N = 1, MD_NE = 2, MD_E = 3, MD_SE = 4,
+        MD_S = 5, MD_SW = 6, MD_W = 7, MD_NW = 8,
+        MD_PATH_TO = 9, MD_PATH_AWAY = 10;
+    var S45 = 0.70710678;
+    var MD_VEC = [[0,0],[0,-1],[S45,-S45],[1,0],[S45,S45],[0,1],
+                  [-S45,S45],[-1,0],[-S45,-S45]];
+
+    function setTargetFromAction(agent, world, action) {
+        var enemy = world.nearestEnemy(agent);
+        var md = action.moveDir;
+        if (md === MD_HOLD) { agent.clearTarget(); return; }
+        if (!enemy || !enemy.unit.alive) { agent.clearTarget(); return; }
+        var dx = enemy.x - agent.x, dz = enemy.z - agent.z;
+        var d = Math.hypot(dx, dz);
+        if (d < 0.01) { agent.clearTarget(); return; }
+        if (md === MD_PATH_TO) {
+            // Stop at the attack-range edge so the hero pauses to fire
+            // instead of charging into point-blank and eating a projectile.
+            var r = agent.unit.attackRange || 9;
+            var leadDist = Math.min(4.0, Math.max(0, d - r + 1.0));
+            if (leadDist < 0.15) { agent.clearTarget(); return; }
+            var tx = agent.x + (dx/d) * leadDist;
+            var tz = agent.z + (dz/d) * leadDist;
+            agent.setTarget(tx, tz);
+            return;
+        }
+        if (md === MD_PATH_AWAY) {
+            agent.setTarget(agent.x - (dx/d) * 4.0,
+                            agent.z - (dz/d) * 4.0);
+            return;
+        }
+        // Direct 8-way: rotate local frame by aim-toward-enemy yaw.
+        // aim yaw follows FPS convention (0 = -Z). Matches mcts::apply.
+        var aimYaw = Math.atan2(dx, -dz);
+        var c = Math.cos(aimYaw), s = Math.sin(aimYaw);
+        var v = MD_VEC[md] || [0, 0];
+        var worldDx = v[0] * c + v[1] * (-s);
+        var worldDz = v[0] * s + v[1] * c;
+        var LEN = 3.0;
+        agent.setTarget(agent.x + worldDx * LEN, agent.z + worldDz * LEN);
+    }
+
+    // Drive every MCTS-controlled agent. Motion state (setTarget) is pushed
+    // only when a new joint action commits (see Groups.tickGroup); combat
+    // resolution (auto-attack + ability) fires every frame so cooldown gates
+    // inside World::resolveAttack/Ability do the throttling naturally. This
+    // splits motion from attack/ability to avoid the old per-frame
+    // applyCombatAction double-integration (world.tick already ticks every
+    // Agent::update through AIWorldTicker, so an additional mcts::apply per
+    // frame was decelerating its own velocity).
     Groups.drive = function (state, dt) {
         if (!state.groups) return;
         var world = state.world;
@@ -134,18 +201,23 @@ var Groups = {};
             var g = state.groups[a.unit.teamId];
             if (!g) continue;
             var action = g.lastActions[a.unit.id];
-            if (action) bro.ai.game.applyCombatAction(a, world, action, dt);
-            // With the AgentBinding detached, nothing else writes the scene
-            // node's transform from agent state — mirror position + facing
-            // here so the capsule visually follows applyCombatAction.
+            if (action) {
+                var enemy = world.nearestEnemy(a);
+                if (action.attackSlot >= 0 && enemy && enemy.unit.alive) {
+                    world.resolveAttack(a, enemy.unit.id);
+                }
+                if (action.abilitySlot >= 0) {
+                    var tid = (enemy && enemy.unit.alive) ? enemy.unit.id : a.unit.id;
+                    world.resolveAbility(a, action.abilitySlot, tid);
+                }
+            }
+            // Keep the scene node in sync with the authoritative agent
+            // position/facing — no AgentBinding is attached to do it.
             var node = Scene3D.units[a.unit.id];
             if (node) {
                 node.x = a.x;
                 node.y = Scene3D.UNIT_Y;
                 node.z = a.z;
-                // Match what AgentBinding does for scripted units:
-                // brogameagent uses FPS yaw (0 = -Z, +clockwise from above);
-                // OpenGL rotationY is CCW from above, so negate.
                 node.rotationY = -a.yaw;
             }
         }
