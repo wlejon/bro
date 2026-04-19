@@ -84,19 +84,53 @@ var OptionsShared = (function () {
         });
         var target = (action.attackSlot >= 0 && livingEnemies[action.attackSlot]) || null;
 
+        // ── Aim update (critical) ──────────────────────────────────────
+        // The BASIC ability (slot 4, ai-arena default) fires along
+        // BotAim.forward(mem.aim). If we never init/tick BotAim the
+        // forward vector is uninitialised and every basic shot fires
+        // into the void. Mirror the scripted AI's per-tick pattern:
+        // requestAim toward whatever target the action references
+        // (falling back to nearest enemy) and tick BotAim with the
+        // real frame delta so rotation keeps up.
+        var mem = (typeof AI !== "undefined" && AI.getMem) ? AI.getMem(u.id) : null;
+        if (mem && mem.aim) {
+            var simT = (AI.shared && AI.shared.simT) || 0;
+            if (mem._optLastT === undefined) mem._optLastT = simT;
+            var dt = Math.max(0.001, Math.min(0.2, simT - mem._optLastT));
+            mem._optLastT = simT;
+
+            var aimTarget = target || livingEnemies[0];
+            if (aimTarget) {
+                var adx = aimTarget.x - a.x, adz = aimTarget.z - a.z;
+                var yaw = Math.atan2(adx, -adz);       // FPS yaw: 0 = -Z.
+                BotAim.requestAim(mem.aim, simT, yaw, 0);
+            }
+            BotAim.tick(mem.aim, dt);
+        }
+
         // Ability casts first so in-flight projectiles get queued before
         // movement commits this tick's destination.
         if (action.abilitySlot >= 0 && typeof self.cast === "function") {
-            // Convention: slot 0 is heal (self-target); others are enemy-targeted.
-            // Mirrors scenarios.js AB_* layout — options default to the same map.
-            var healSlot = 0;
+            // Convention: slot 0 is heal (self-target); slot 4 (default)
+            // is the basic shot which fires along BotAim.forward; others
+            // (fireball/beam/grenade) are enemy-targeted casts.
+            var healSlot  = 0;
+            var basicSlot = 4;
             if (action.abilitySlot === healSlot) {
                 self.cast(action.abilitySlot, u.id);
+            } else if (action.abilitySlot === basicSlot) {
+                // Basic ignores targetId at the resolver — it reads
+                // mem.aim. Gate on aim cone so we don't burn cooldown
+                // firing at the sky while still rotating.
+                var aligned = true;
+                if (target && mem && mem.aim && typeof BotAim.canFireAt === "function") {
+                    aligned = BotAim.canFireAt(
+                        mem.aim, a.x, 0, a.z, target.x, 0, target.z);
+                }
+                if (aligned && target) self.cast(action.abilitySlot, target.unit.id);
             } else if (target) {
                 self.cast(action.abilitySlot, target.unit.id);
             }
-            // If no valid target for a non-heal ability, skip the cast —
-            // don't waste the cooldown.
         }
 
         // Movement.
