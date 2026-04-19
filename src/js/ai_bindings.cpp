@@ -425,6 +425,8 @@ static brogameagent::mcts::MctsConfig parseMctsConfig(JSContext* ctx, JSValueCon
     c.tactic_window_decisions = getInt32Prop(ctx, opts, "tacticWindowDecisions", c.tactic_window_decisions);
     c.pw_alpha                = (float)getDoubleProp(ctx, opts, "pwAlpha", c.pw_alpha);
     c.prior_c                 = (float)getDoubleProp(ctx, opts, "priorC", c.prior_c);
+    c.option_max_windows      = getInt32Prop(ctx, opts, "optionMaxWindows", c.option_max_windows);
+    c.use_leaf_value          = getBoolProp(ctx, opts, "useLeafValue", c.use_leaf_value);
     return c;
 }
 
@@ -439,9 +441,204 @@ static std::string readStringProp(JSContext* ctx, JSValueConst obj, const char* 
     return out;
 }
 
+// Build a plain-object view of one agent's commonly-needed fields. Used by
+// JS rollout/prior/evaluator callbacks so the callback doesn't need access
+// to the C++ Agent wrapper (which would require a reverse lookup from
+// Agent* to JSValue). O(1) per call.
+static JSValue buildAgentFields(JSContext* ctx, const brogameagent::Agent& a) {
+    const auto& u = a.unit();
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "id",          JS_NewInt32(ctx, u.id));
+    JS_SetPropertyStr(ctx, o, "teamId",      JS_NewInt32(ctx, u.teamId));
+    JS_SetPropertyStr(ctx, o, "x",           JS_NewFloat64(ctx, a.x()));
+    JS_SetPropertyStr(ctx, o, "z",           JS_NewFloat64(ctx, a.z()));
+    JS_SetPropertyStr(ctx, o, "yaw",         JS_NewFloat64(ctx, a.yaw()));
+    JS_SetPropertyStr(ctx, o, "hp",          JS_NewFloat64(ctx, u.hp));
+    JS_SetPropertyStr(ctx, o, "maxHp",       JS_NewFloat64(ctx, u.maxHp));
+    JS_SetPropertyStr(ctx, o, "alive",       JS_NewBool(ctx, u.alive()));
+    JS_SetPropertyStr(ctx, o, "attackRange", JS_NewFloat64(ctx, u.attackRange));
+    return o;
+}
+
+// Build a world view: array of agent fields. JS can filter by teamId /
+// alive itself. O(N) per call — keep JS callbacks cheap or use C++ presets.
+static JSValue buildWorldView(JSContext* ctx, const brogameagent::World& world) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t idx = 0;
+    for (brogameagent::Agent* a : world.agents()) {
+        if (!a) continue;
+        JS_SetPropertyUint32(ctx, arr, idx++, buildAgentFields(ctx, *a));
+    }
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "agents", arr);
+    return o;
+}
+
+// Forward decls — defined later in the file, referenced by the JS-callback
+// wrappers below (parsing/emitting CombatAction objects to/from JS).
+static brogameagent::mcts::CombatAction parseCombatAction(JSContext* ctx, JSValueConst obj);
+static JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a);
+
+// ─── JS-callback policy/prior/evaluator wrappers ──────────────────────────
+//
+// Allow JS authors to pass a function in place of the string presets. The
+// wrappers hold a reference to the callback (ref-counted via JS_DupValue)
+// and release it in their destructor. MCTS calls these on its thread of
+// control; QuickJS contexts are single-threaded so the JS callback runs
+// synchronously on the caller's thread — no locking needed.
+//
+// Performance note: each call allocates a small JS view object. Rollout
+// runs many times per search, so a JS rollout is materially slower than
+// the C++ "random" / "aggressive" / "scripted" presets. Prefer presets for
+// hot paths; use JS callbacks when decision logic is easier in JS (e.g.
+// reusing a scripted agent's policy).
+
+namespace {
+
+class JsRolloutPolicy : public brogameagent::mcts::IRolloutPolicy {
+public:
+    JsRolloutPolicy(JSContext* ctx, JSValue fn)
+        : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
+    ~JsRolloutPolicy() override { JS_FreeValue(ctx_, fn_); }
+
+    brogameagent::mcts::CombatAction choose(
+        brogameagent::Agent& self, brogameagent::World& world) const override {
+        JSValue selfV  = buildAgentFields(ctx_, self);
+        JSValue worldV = buildWorldView(ctx_, world);
+        JSValue args[2] = { selfV, worldV };
+        JSValue res = JS_Call(ctx_, fn_, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ctx_, selfV);
+        JS_FreeValue(ctx_, worldV);
+        brogameagent::mcts::CombatAction a{};
+        if (!JS_IsException(res) && JS_IsObject(res)) {
+            a = parseCombatAction(ctx_, res);
+        }
+        JS_FreeValue(ctx_, res);
+        return a;
+    }
+
+private:
+    JSContext* ctx_;
+    JSValue    fn_;
+};
+
+class JsPrior : public brogameagent::mcts::IPrior {
+public:
+    JsPrior(JSContext* ctx, JSValue fn)
+        : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
+    ~JsPrior() override { JS_FreeValue(ctx_, fn_); }
+
+    std::vector<float> score(
+        const brogameagent::Agent& self, const brogameagent::World& world,
+        const std::vector<brogameagent::mcts::CombatAction>& actions) const override {
+
+        JSValue selfV  = buildAgentFields(ctx_, self);
+        JSValue worldV = buildWorldView(ctx_, world);
+        JSValue actsV  = JS_NewArray(ctx_);
+        for (uint32_t i = 0; i < actions.size(); i++) {
+            JS_SetPropertyUint32(ctx_, actsV, i, makeCombatAction(ctx_, actions[i]));
+        }
+        JSValue args[3] = { selfV, worldV, actsV };
+        JSValue res = JS_Call(ctx_, fn_, JS_UNDEFINED, 3, args);
+        JS_FreeValue(ctx_, selfV);
+        JS_FreeValue(ctx_, worldV);
+        JS_FreeValue(ctx_, actsV);
+
+        std::vector<float> weights(actions.size(), 1.0f);
+        if (!JS_IsException(res) && JS_IsArray(res)) {
+            JSValue lenVal = JS_GetPropertyStr(ctx_, res, "length");
+            int32_t len = 0; JS_ToInt32(ctx_, &len, lenVal);
+            JS_FreeValue(ctx_, lenVal);
+            int n = std::min(len, (int)actions.size());
+            for (int i = 0; i < n; i++) {
+                JSValue v = JS_GetPropertyUint32(ctx_, res, i);
+                double d = 0.0;
+                JS_ToFloat64(ctx_, &d, v);
+                JS_FreeValue(ctx_, v);
+                weights[i] = (float)std::max(0.0, d);
+            }
+        }
+        JS_FreeValue(ctx_, res);
+        return weights;
+    }
+
+private:
+    JSContext* ctx_;
+    JSValue    fn_;
+};
+
+class JsEvaluator : public brogameagent::mcts::IEvaluator {
+public:
+    JsEvaluator(JSContext* ctx, JSValue fn)
+        : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
+    ~JsEvaluator() override { JS_FreeValue(ctx_, fn_); }
+
+    float evaluate(const brogameagent::World& world, int heroId) const override {
+        JSValue worldV = buildWorldView(ctx_, world);
+        JSValue idV    = JS_NewInt32(ctx_, heroId);
+        JSValue args[2] = { worldV, idV };
+        JSValue res = JS_Call(ctx_, fn_, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ctx_, worldV);
+        JS_FreeValue(ctx_, idV);
+        float v = 0.0f;
+        if (!JS_IsException(res)) {
+            double d = 0.0;
+            JS_ToFloat64(ctx_, &d, res);
+            v = (float)std::clamp(d, -1.0, 1.0);
+        }
+        JS_FreeValue(ctx_, res);
+        return v;
+    }
+
+private:
+    JSContext* ctx_;
+    JSValue    fn_;
+};
+
+class JsTeamEvaluator : public brogameagent::mcts::ITeamEvaluator {
+public:
+    JsTeamEvaluator(JSContext* ctx, JSValue fn)
+        : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
+    ~JsTeamEvaluator() override { JS_FreeValue(ctx_, fn_); }
+
+    float evaluate(const brogameagent::World& world, int teamId) const override {
+        JSValue worldV = buildWorldView(ctx_, world);
+        JSValue idV    = JS_NewInt32(ctx_, teamId);
+        JSValue args[2] = { worldV, idV };
+        JSValue res = JS_Call(ctx_, fn_, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ctx_, worldV);
+        JS_FreeValue(ctx_, idV);
+        float v = 0.0f;
+        if (!JS_IsException(res)) {
+            double d = 0.0;
+            JS_ToFloat64(ctx_, &d, res);
+            v = (float)std::clamp(d, -1.0, 1.0);
+        }
+        JS_FreeValue(ctx_, res);
+        return v;
+    }
+
+private:
+    JSContext* ctx_;
+    JSValue    fn_;
+};
+
+} // namespace
+
 static std::shared_ptr<brogameagent::mcts::IRolloutPolicy>
 parseRolloutPolicy(JSContext* ctx, JSValueConst opts) {
-    std::string kind = readStringProp(ctx, opts, "rolloutPolicy");
+    JSValue v = JS_GetPropertyStr(ctx, opts, "rolloutPolicy");
+    if (JS_IsFunction(ctx, v)) {
+        auto p = std::make_shared<JsRolloutPolicy>(ctx, v);
+        JS_FreeValue(ctx, v);
+        return p;
+    }
+    std::string kind;
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { kind = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, v);
     if (kind == "aggressive") return std::make_shared<brogameagent::mcts::AggressiveRollout>();
     if (kind == "scripted")   return std::make_shared<brogameagent::mcts::ScriptedRollout>();
     if (kind == "random")     return std::make_shared<brogameagent::mcts::RandomRollout>();
@@ -555,11 +752,23 @@ parseCombatActionArray(JSContext* ctx, JSValueConst arr) {
     return out;
 }
 
-// Build an IPrior from opts.prior string (+ optional TacticPrior knobs).
-// Recognized values: "uniform", "attackBias", "tacticMatch".
+// Build an IPrior from opts.prior. Accepts either a string preset —
+// "uniform", "attackBias", "tacticMatch" — or a JS function
+// `(selfView, worldView, actions) -> weights[]`.
 static std::shared_ptr<brogameagent::mcts::IPrior>
 parsePrior(JSContext* ctx, JSValueConst opts) {
-    std::string kind = readStringProp(ctx, opts, "prior");
+    JSValue pv = JS_GetPropertyStr(ctx, opts, "prior");
+    if (JS_IsFunction(ctx, pv)) {
+        auto p = std::make_shared<JsPrior>(ctx, pv);
+        JS_FreeValue(ctx, pv);
+        return p;
+    }
+    std::string kind;
+    if (JS_IsString(pv)) {
+        const char* s = JS_ToCString(ctx, pv);
+        if (s) { kind = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, pv);
     if (kind.empty()) return nullptr;
     if (kind == "uniform")    return std::make_shared<brogameagent::mcts::UniformPrior>();
     if (kind == "attackBias") return std::make_shared<brogameagent::mcts::AttackBiasPrior>();
@@ -575,16 +784,42 @@ parsePrior(JSContext* ctx, JSValueConst opts) {
     return nullptr;
 }
 
+// Hero-scoped evaluator. Accepts "hpDelta" string or a function
+// `(worldView, heroId) -> number in [-1, 1]`.
 static std::shared_ptr<brogameagent::mcts::IEvaluator>
 parseHeroEvaluator(JSContext* ctx, JSValueConst opts) {
-    std::string kind = readStringProp(ctx, opts, "evaluator");
+    JSValue v = JS_GetPropertyStr(ctx, opts, "evaluator");
+    if (JS_IsFunction(ctx, v)) {
+        auto e = std::make_shared<JsEvaluator>(ctx, v);
+        JS_FreeValue(ctx, v);
+        return e;
+    }
+    std::string kind;
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { kind = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, v);
     if (kind == "hpDelta") return std::make_shared<brogameagent::mcts::HpDeltaEvaluator>();
     return nullptr;
 }
 
+// Team-scoped evaluator. Accepts "teamHpDelta"/"teamAdvantage"/"teamPosition"
+// or a function `(worldView, teamId) -> number in [-1, 1]`.
 static std::shared_ptr<brogameagent::mcts::ITeamEvaluator>
 parseTeamEvaluator(JSContext* ctx, JSValueConst opts) {
-    std::string kind = readStringProp(ctx, opts, "evaluator");
+    JSValue v = JS_GetPropertyStr(ctx, opts, "evaluator");
+    if (JS_IsFunction(ctx, v)) {
+        auto e = std::make_shared<JsTeamEvaluator>(ctx, v);
+        JS_FreeValue(ctx, v);
+        return e;
+    }
+    std::string kind;
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { kind = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, v);
     if (kind == "teamHpDelta")    return std::make_shared<brogameagent::mcts::TeamHpDeltaEvaluator>();
     if (kind == "teamAdvantage")  return std::make_shared<brogameagent::mcts::TeamAdvantageEvaluator>();
     if (kind == "teamPosition")   return std::make_shared<brogameagent::mcts::TeamPositionEvaluator>();
