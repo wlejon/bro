@@ -245,74 +245,6 @@ var Groups = {};
         }
     }
 
-    // Incoming-projectile dodge. A live red projectile whose closest-point-
-    // of-approach is inside (agent.radius + proj.radius + margin) within the
-    // next DODGE_LOOKAHEAD seconds is a threat. Returns a dodge destination
-    // perpendicular to the worst threat's velocity, on the side the agent is
-    // already on (so we step further from the line, not across it). Also
-    // returns null if no threat — caller falls through to regular movement.
-    // Tuned so the dodge fires only on genuinely imminent hits: a 0.25 s
-    // lookahead catches projectiles ~4.5 u out at basic-shot speed (18 u/s)
-    // and ~2.5 u out at grenade speed (10). Any larger and blue jitters
-    // sideways on every shot and never settles its aim cone long enough
-    // to fire back. Small step (1.2 u) keeps us inside attack range so we
-    // don't stop shooting while dodging.
-    // Slow projectiles reward a larger lookahead — grenade at 10 u/s
-    // takes 0.6 s to cover 6 u, plenty of time for 5.2 u/s steering to
-    // step ~2 u perpendicular and clear.
-    var DODGE_LOOKAHEAD = 0.6;
-    var DODGE_MARGIN    = 0.2;
-    var DODGE_STEP      = 2.0;
-    function dodgeTarget(agent, projectiles) {
-        if (!projectiles || projectiles.length === 0) return null;
-        var u = agent.unit;
-        var myTeam = u.teamId;
-        var rad = u.radius || 0.4;
-        var bestT = DODGE_LOOKAHEAD, worst = null;
-        for (var i = 0; i < projectiles.length; i++) {
-            var p = projectiles[i];
-            if (!p.alive) continue;
-            if (p.teamId === myTeam) continue;
-            // Dodge slow heavy projectiles only. Fireball (speed 14, dmg 22)
-            // and grenade (speed 10, dmg 28) are slow enough that blue's
-            // 5.2 u/s steering can actually clear their path. Basic (18)
-            // and beam (22) arrive too fast — dodging them breaks aim for
-            // less damage avoided than we take by not firing back.
-            if ((p.damage || 0) < 14) continue;
-            var vmag2 = p.vx * p.vx + p.vz * p.vz;
-            if (vmag2 > 225) continue;   // speed > 15 u/s → skip
-
-            if (vmag2 < 1e-4) continue;
-            // Time to closest point of approach: t = ((me - p) · v)/|v|².
-            // Positive t means the projectile is still approaching; past
-            // t=lookahead we have time to reconsider on a later frame.
-            var rx = agent.x - p.x, rz = agent.z - p.z;
-            var t = (rx * p.vx + rz * p.vz) / vmag2;
-            if (t < 0 || t > bestT) continue;
-            var cpaX = p.x + p.vx * t, cpaZ = p.z + p.vz * t;
-            var dx = agent.x - cpaX, dz = agent.z - cpaZ;
-            var miss = Math.hypot(dx, dz);
-            var hitR = rad + (p.radius || 0.22) + DODGE_MARGIN;
-            if (miss > hitR) continue;
-            // Sooner + closer-to-hit is worse; break ties by earliest t.
-            bestT = t;
-            worst = { p: p, t: t, miss: miss, vmag: Math.sqrt(vmag2) };
-        }
-        if (!worst) return null;
-        // Step perpendicular to the projectile's velocity, away from its
-        // path. Cross product sign picks "left" vs "right" of the line.
-        var p2 = worst.p;
-        var vx = p2.vx / worst.vmag, vz = p2.vz / worst.vmag;
-        var rxn = agent.x - p2.x, rzn = agent.z - p2.z;
-        var cross = rxn * vz - rzn * vx;      // >0 means agent is on +perp side
-        var side = cross >= 0 ? 1 : -1;
-        var perpX = -vz * side, perpZ = vx * side;
-        return {
-            x: clamp(agent.x + perpX * DODGE_STEP, -19, 19),
-            z: clamp(agent.z + perpZ * DODGE_STEP, -19, 19),
-        };
-    }
-
     // Spacing beats AoE: red's grenade splashRadius is 2.5 and beam pierces
     // collinear targets, so anything under ~3 makes us share damage. Push
     // the destination off any teammate inside SPACING.
@@ -341,7 +273,10 @@ var Groups = {};
     // Basics + abilities fire off LOS; closing inside range buys no extra
     // damage (1.4/s cap), so we sit at the outer edge to minimise red's
     // projectile hit rate (longer travel → larger lead error).
-    function computeMoveTarget(agent, target, enemies, teammates, nav, projectiles, simT, m) {
+    // Returns { x, z, mode } where mode is one of "retreat" / "cover" /
+    // "advance" / "strafe" / "idle". The caller uses mode to decide
+    // whether it's safe to layer dodge motion on top.
+    function computeMoveTarget(agent, target, enemies, teammates, nav, simT, m) {
 
         var u = agent.unit;
         var hpFrac = u.hp / u.maxHp;
@@ -349,9 +284,12 @@ var Groups = {};
 
         var memShared = AI.getMem(u.id);  // shared with ai.js threat tracker
         var threatSrc = null;
+        // Lower threat threshold (was >6): any recent damage source is
+        // worth breaking LOS from. Even a single incoming basic means
+        // red has a firing line; taking cover resets their aim cycle.
         if (memShared.threatSourceId >= 0
-            && (simT - memShared.lastHitT) < 2.0
-            && memShared.threat > 6) {
+            && (simT - memShared.lastHitT) < 2.5
+            && memShared.threat > 1) {
             for (var ti = 0; ti < enemies.length; ti++) {
                 if (enemies[ti].unit.id === memShared.threatSourceId) {
                     threatSrc = enemies[ti]; break;
@@ -359,9 +297,11 @@ var Groups = {};
             }
         }
 
-        // 1) Flee-rally when wounded: same pattern ai.js uses — move behind
-        // a healthy teammate relative to nearest threat, anchor cover there.
-        if (hpFrac < 0.35 && enemies.length > 0) {
+        // 1) Flee-rally when wounded. Bumped from 0.35 → 0.45: trade HP
+        // for position earlier so we can heal behind cover instead of
+        // outtrading from 30%. Too eager a threshold (0.55+) starts
+        // bleeding DPS uptime; 0.45 strikes the balance.
+        if (hpFrac < 0.45 && enemies.length > 0) {
             var nearest = null, nearestD = Infinity;
             for (var e = 0; e < enemies.length; e++) {
                 var ed = dist2(agent.x, agent.z, enemies[e].x, enemies[e].z);
@@ -377,7 +317,6 @@ var Groups = {};
                 if (score > rallyScore) { rallyScore = score; rally = mt; }
             }
             if (rally && nearest) {
-                // Anchor ~1.8u past the ally away from the threat.
                 var avx = rally.x - nearest.x, avz = rally.z - nearest.z;
                 var avm = Math.max(0.01, Math.hypot(avx, avz));
                 var anchorX = rally.x + (avx / avm) * 1.8;
@@ -386,21 +325,25 @@ var Groups = {};
                     { anchorX: anchorX, anchorZ: anchorZ, claimed: AI.claimedCover });
                 if (rc) {
                     AI.claimedCover.push(rc);
-                    return spaceOut(agent, rc.x, rc.z, teammates);
+                    var rcSp = spaceOut(agent, rc.x, rc.z, teammates);
+                    rcSp.mode = "retreat"; return rcSp;
                 }
-                return spaceOut(agent, anchorX, anchorZ, teammates);
+                var rcA = spaceOut(agent, anchorX, anchorZ, teammates);
+                rcA.mode = "retreat"; return rcA;
             }
-            // Last-resort: direct flee from nearest threat.
             if (nearest) {
                 var fx = agent.x + (agent.x - nearest.x) * 0.5;
                 var fz = agent.z + (agent.z - nearest.z) * 0.5;
-                return spaceOut(agent, clamp(fx, -19, 19), clamp(fz, -19, 19), teammates);
+                var fSp = spaceOut(agent, clamp(fx, -19, 19), clamp(fz, -19, 19), teammates);
+                fSp.mode = "retreat"; return fSp;
             }
         }
 
-        // 2) Seek cover — use ai.js's findCover helper so the same
-        // ring-search algorithm that keeps red alive keeps blue alive.
-        if (threatSrc && hpFrac < 0.85) {
+        // Seek cover AT ANY HP when actively being shot at. The old 0.85
+        // threshold let full-HP blues stand and trade; now threat triggers
+        // cover regardless of HP. Blue out-trades red in the long run
+        // because mana discipline + heal economy, not toe-to-toe DPS.
+        if (threatSrc) {
             var needFresh = m.coverX === null
                 || (simT - m.coverPickedT) > 0.5
                 || Math.hypot(agent.x - m.coverX, agent.z - m.coverZ) < 0.7;
@@ -414,19 +357,18 @@ var Groups = {};
                 }
             }
             if (m.coverX !== null) {
-                return spaceOut(agent, m.coverX, m.coverZ, teammates);
+                var cSp = spaceOut(agent, m.coverX, m.coverZ, teammates);
+                cSp.mode = "cover"; return cSp;
             }
-            // No cover found: open up distance from the shooter (projectile
-            // hit rate falls off hard with distance × aim-lag).
             var tvx = agent.x - threatSrc.x, tvz = agent.z - threatSrc.z;
             var tvm = Math.hypot(tvx, tvz) || 1;
             var rx = clamp(agent.x + (tvx / tvm) * 3.5, -19, 19);
             var rz = clamp(agent.z + (tvz / tvm) * 3.5, -19, 19);
-            return spaceOut(agent, rx, rz, teammates);
+            var rSp = spaceOut(agent, rx, rz, teammates);
+            rSp.mode = "cover"; return rSp;
         }
         if (!threatSrc && hpFrac > 0.85) { m.coverX = null; }
 
-        // 3) Hold at max range on target; strafe in-band.
         if (!target) return null;
         var dx2 = target.x - agent.x, dz2 = target.z - agent.z;
         var d2 = Math.hypot(dx2, dz2);
@@ -436,9 +378,9 @@ var Groups = {};
             if (lead < 0.3) return null;
             var tx = clamp(agent.x + (dx2 / d2) * lead, -19, 19);
             var tz = clamp(agent.z + (dz2 / d2) * lead, -19, 19);
-            return spaceOut(agent, tx, tz, teammates);
+            var aSp = spaceOut(agent, tx, tz, teammates);
+            aSp.mode = "advance"; return aSp;
         }
-        // In band — strafe perpendicular, flip every 0.8s.
         if (simT - m.lastFlip > 0.8) {
             m.strafeSign = -m.strafeSign;
             m.lastFlip = simT;
@@ -446,7 +388,8 @@ var Groups = {};
         var norm = Math.max(0.01, d2);
         var sx = agent.x + (-dz2 / norm) * m.strafeSign * 1.4;
         var sz = agent.z + ( dx2 / norm) * m.strafeSign * 1.4;
-        return spaceOut(agent, sx, sz, teammates);
+        var strSp = spaceOut(agent, sx, sz, teammates);
+        strSp.mode = "strafe"; return strSp;
     }
 
     // Tick the blue team. Called from main.js once per rAF frame when
@@ -469,9 +412,6 @@ var Groups = {};
         if (blue.length === 0 || red.length === 0) return;
 
         var teamFocus = chooseTeamFocus(blue, red);
-        // Snapshot the projectile array once per frame — the getter copies
-        // from the C++ world each access, so reuse across heroes.
-        var projectiles = world.projectiles;
 
         for (var j = 0; j < blue.length; j++) {
             var agent = blue[j];
@@ -497,21 +437,16 @@ var Groups = {};
             castAbilities(agent, target, red, blue, world);
 
             // MOVEMENT.
-            var mt = computeMoveTarget(agent, target, red, blue, state.nav, projectiles, simT, m);
-            // Dodge as an additive nudge: don't abandon cover/range logic,
-            // just bias the committed destination sideways when a slow
-            // heavy projectile (fireball/grenade) is threatening.
-            var dodge = dodgeTarget(agent, projectiles);
-            if (dodge) {
-                if (!mt) mt = dodge;
-                else {
-                    var dx = dodge.x - agent.x, dz = dodge.z - agent.z;
-                    mt = spaceOut(agent,
-                        clamp(mt.x + dx * 0.8, -19, 19),
-                        clamp(mt.z + dz * 0.8, -19, 19),
-                        blue);
-                }
-            }
+            var mt = computeMoveTarget(agent, target, red, blue, state.nav, simT, m);
+
+
+            // Zig-zag on top of retreat / cover moves. Blue isn't firing
+            // during those anyway (either out of LOS behind cover, or
+            // running the other way), so sidestepping is free HP. During
+            // advance / strafe-in-range the agent is holding aim on the
+            // target; a dodge there breaks the aim cone and costs more
+            // DPS than it saves. User's insight: "in retreat, zig-zagging
+            // would save them" — the gate enforces exactly that.
             if (mt) {
                 // Cache + dedupe: setTarget triggers an A* replan on
                 // significant target change; repeating the same destination
