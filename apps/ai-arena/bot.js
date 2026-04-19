@@ -136,7 +136,11 @@ var Bot = (function () {
         if (!mem.aim) return;
         var simT = ctx.simT;
 
-        if (target) {
+        // Free-look yaw overrides target-based aim. Used by the random
+        // agent to scan the arena independently of any enemy target.
+        if (cmd.lookYaw !== undefined && cmd.lookYaw !== null) {
+            BotAim.requestAim(mem.aim, simT, cmd.lookYaw, 0);
+        } else if (target) {
             var dx = target.x - agent.x, dz = target.z - agent.z;
             var yaw = Math.atan2(dx, -dz);
             BotAim.requestAim(mem.aim, simT, yaw, 0);
@@ -353,62 +357,185 @@ var Bot = (function () {
         return null;
     }
 
-    // ── Command queue ────────────────────────────────────────────────────
+    // ── Per-channel command queues ───────────────────────────────────────
     //
-    // Queue entries: { cmd, remaining }. `remaining` is game-seconds left
-    // before the entry expires and the robot pops it. Entries with
-    // duration <= 0 are "instant" (consumed after one tick regardless).
+    // The robot exposes four INDEPENDENT queues — move, aim, fire, cast —
+    // each holding up to MAX_QUEUE entries. Channels advance on their own
+    // clocks: a 2-second "advance" move can run alongside a sequence of
+    // 0.3-second look-yaw scans and a steady "fire when aligned" policy,
+    // because they live in separate queues. This lets the random agent
+    // (and future planners) compose look + walk + shoot the way a real
+    // controller would — three independent thumb/finger streams, not one
+    // bundled command.
     //
-    // push:     append to end (after existing queue runs out).
-    // replace:  clear + install a new plan.
-    // clear:    drop everything; next tick uses defaultCommand.
-    // current:  peek the active entry (or null).
+    // Entry shape per channel: { partial, remaining }. partial is the
+    // channel-specific slice of the bundled cmd schema:
     //
-    // A small queue (1–3 entries) is the sweet spot — longer plans get
-    // stale fast in a combat game where the world changes every second.
-    // MCTS-style planners typically push 1 entry (the top-visit option) per
-    // replan; reactive planners push 1 short-duration entry per tick,
-    // effectively overwriting.
+    //   move.partial  = { mode, x, z, fromId, kiteBand, space, ... }
+    //   aim.partial   = { policy, id, maxRange, requireLOS } | { lookYaw }
+    //   fire.partial  = boolean | { enabled }
+    //   cast.partial  = { [slot]: { gate, target, minMana, ... }, ... }
+    //
+    // Per tick we pull the head of each queue, decrement its `remaining`,
+    // pop on expiry, then synthesize one bundled cmd and feed it through
+    // the existing handleAim/handleMove/maybeCast paths — which already
+    // do aim+fire as side effects alongside the single move-or-cast pick.
+    //
+    // The legacy bundled API (Bot.push/replace with `{cmd, duration}`)
+    // still works: it fans the cmd out into all four channels with the
+    // same duration. Existing planners (scripted, options_mcts,
+    // options_commander) keep working unchanged.
 
-    var DEFAULT_DURATION = 0.2;   // short reactive duration when caller omits one
+    var DEFAULT_DURATION = 0.2;
+    var MAX_QUEUE = 10;
+    var CHANNELS = ["move", "aim", "fire", "cast"];
 
-    function queueOf(agent) {
+    function queuesOf(agent) {
         var mem = AI.getMem(agent.unit.id);
-        if (!mem.botQueue) mem.botQueue = [];
-        return mem.botQueue;
+        if (!mem.botChannels) {
+            mem.botChannels = { move: [], aim: [], fire: [], cast: [] };
+        }
+        return mem.botChannels;
     }
 
-    function push(self, cmd, durationSec) {
-        var q = queueOf(self.agent);
-        q.push({ cmd: cmd, remaining: durationSec !== undefined
+    function partialFromCmd(cmd, channel) {
+        if (!cmd) return null;
+        if (channel === "move") return cmd.move || null;
+        if (channel === "aim") {
+            if (cmd.lookYaw !== undefined) return { lookYaw: cmd.lookYaw };
+            return cmd.target || null;
+        }
+        if (channel === "fire") {
+            if (cmd.fireBasic === undefined) return null;
+            return !!cmd.fireBasic;
+        }
+        if (channel === "cast") return cmd.allowAbilities || null;
+        return null;
+    }
+
+    function pushChannel(self, channel, partial, durationSec) {
+        var q = queuesOf(self.agent)[channel];
+        if (!q) return;
+        if (q.length >= MAX_QUEUE) q.shift();   // newest wins when saturated
+        q.push({ partial: partial, remaining: durationSec !== undefined
             ? durationSec : DEFAULT_DURATION });
     }
 
-    function replace(self, plan) {
-        var q = queueOf(self.agent);
+    function replaceChannel(self, channel, entries) {
+        var q = queuesOf(self.agent)[channel];
+        if (!q) return;
         q.length = 0;
-        if (!plan) return;
-        if (!Array.isArray(plan)) plan = [plan];
-        for (var i = 0; i < plan.length; i++) {
-            var e = plan[i];
-            if (e && e.cmd) {
-                q.push({ cmd: e.cmd, remaining: e.duration !== undefined
+        if (!entries) return;
+        if (!Array.isArray(entries)) entries = [entries];
+        for (var i = 0; i < entries.length && q.length < MAX_QUEUE; i++) {
+            var e = entries[i];
+            if (e && Object.prototype.hasOwnProperty.call(e, "partial")) {
+                q.push({ partial: e.partial, remaining: e.duration !== undefined
                     ? e.duration : DEFAULT_DURATION });
-            } else if (e) {
-                // Raw command — use default duration.
-                q.push({ cmd: e, remaining: DEFAULT_DURATION });
+            } else {
+                q.push({ partial: e, remaining: DEFAULT_DURATION });
             }
         }
     }
 
-    function clear(self) { queueOf(self.agent).length = 0; }
-
-    function current(self) {
-        var q = queueOf(self.agent);
-        return q.length > 0 ? q[0].cmd : null;
+    function clearChannel(self, channel) {
+        var q = queuesOf(self.agent)[channel];
+        if (q) q.length = 0;
     }
 
-    function queueLength(self) { return queueOf(self.agent).length; }
+    function channelLength(self, channel) {
+        var q = queuesOf(self.agent)[channel];
+        return q ? q.length : 0;
+    }
+
+    // Legacy bundled API — fans a cmd out across all four channels.
+    function push(self, cmd, durationSec) {
+        for (var i = 0; i < CHANNELS.length; i++) {
+            var ch = CHANNELS[i];
+            var p = partialFromCmd(cmd, ch);
+            if (p !== null) pushChannel(self, ch, p, durationSec);
+        }
+    }
+
+    function replace(self, plan) {
+        // Clear all channels, then re-queue from the bundled plan.
+        for (var c = 0; c < CHANNELS.length; c++) clearChannel(self, CHANNELS[c]);
+        if (!plan) return;
+        if (!Array.isArray(plan)) plan = [plan];
+        for (var i = 0; i < plan.length; i++) {
+            var e = plan[i];
+            var cmd = (e && e.cmd) ? e.cmd : e;
+            var dur = (e && e.duration !== undefined) ? e.duration : DEFAULT_DURATION;
+            for (var j = 0; j < CHANNELS.length; j++) {
+                var ch = CHANNELS[j];
+                var p = partialFromCmd(cmd, ch);
+                if (p !== null) pushChannel(self, ch, p, dur);
+            }
+        }
+    }
+
+    function clear(self) {
+        for (var i = 0; i < CHANNELS.length; i++) clearChannel(self, CHANNELS[i]);
+    }
+
+    function advanceChannelHead(q, dt) {
+        while (q.length > 0) {
+            q[0].remaining -= dt;
+            if (q[0].remaining > 0) return q[0].partial;
+            q.shift();
+        }
+        return null;
+    }
+
+    // Synthesize the active bundled cmd by polling each channel head.
+    // Falls back to defaultCommand for any channel whose queue is empty
+    // so the robot stays useful when an agent under-queues.
+    function activeCommand(agent, dt) {
+        var qs = queuesOf(agent);
+        var def = defaultCommand();
+        var move = advanceChannelHead(qs.move, dt);
+        var aim  = advanceChannelHead(qs.aim,  dt);
+        var fire = advanceChannelHead(qs.fire, dt);
+        var cast = advanceChannelHead(qs.cast, dt);
+        var cmd = {
+            move: move || def.move,
+            target: def.target,
+            fireBasic: fire !== null ? !!(fire.enabled !== undefined ? fire.enabled : fire) : def.fireBasic,
+            allowAbilities: cast || undefined,
+        };
+        if (aim) {
+            if (aim.lookYaw !== undefined) cmd.lookYaw = aim.lookYaw;
+            else cmd.target = aim;
+        }
+        return cmd;
+    }
+
+    function current(self) {
+        // Peek without advancing — useful for debug/UI.
+        var qs = queuesOf(self.agent);
+        var def = defaultCommand();
+        var moveP = qs.move[0] ? qs.move[0].partial : def.move;
+        var aimP  = qs.aim[0]  ? qs.aim[0].partial  : null;
+        var fireP = qs.fire[0] ? qs.fire[0].partial : def.fireBasic;
+        var castP = qs.cast[0] ? qs.cast[0].partial : undefined;
+        var cmd = {
+            move: moveP,
+            target: def.target,
+            fireBasic: !!(fireP && fireP.enabled !== undefined ? fireP.enabled : fireP),
+            allowAbilities: castP,
+        };
+        if (aimP) {
+            if (aimP.lookYaw !== undefined) cmd.lookYaw = aimP.lookYaw;
+            else cmd.target = aimP;
+        }
+        return cmd;
+    }
+
+    function queueLength(self) {
+        // Legacy: report the longest of the four channels.
+        var qs = queuesOf(self.agent);
+        return Math.max(qs.move.length, qs.aim.length, qs.fire.length, qs.cast.length);
+    }
 
     // Fallback when no command is queued. Matches scripted's default
     // engage behavior — nearest + LOS, fire, close to kite band, strafe.
@@ -418,18 +545,6 @@ var Bot = (function () {
             fireBasic: true,
             move: { mode: "advance", kiteBand: [0.45, 0.85], space: true },
         };
-    }
-
-    // Advance queue bookkeeping: decrement head entry's remaining time,
-    // pop if expired. Caller passes dt in game seconds (AI.shared.simT
-    // delta). Returns the active command after bookkeeping.
-    function advanceQueue(q, dt) {
-        while (q.length > 0) {
-            q[0].remaining -= dt;
-            if (q[0].remaining > 0) return q[0].cmd;
-            q.shift();     // expired — try next entry
-        }
-        return null;
     }
 
     // ── Public entry point ───────────────────────────────────────────────
@@ -445,8 +560,7 @@ var Bot = (function () {
         if (!u.alive) { self.hold(0.5); return; }
         var mem = AI.getMem(u.id);
 
-        var q = queueOf(agent);
-        var cmd = advanceQueue(q, dt) || defaultCommand();
+        var cmd = activeCommand(agent, dt);
 
         // Build a per-tick context from AI.shared so the robot doesn't need
         // the planner to wire up every field.
@@ -496,5 +610,14 @@ var Bot = (function () {
         queueLength: queueLength,
         defaultCommand: defaultCommand,
         pickTarget: pickTarget,  // exposed for planners that want to reuse
+        // Per-channel API — preferred for agents that want independent
+        // streams (move/aim/fire/cast). See queueOf for raw queue access.
+        pushChannel: pushChannel,
+        replaceChannel: replaceChannel,
+        clearChannel: clearChannel,
+        channelLength: channelLength,
+        queuesOf: queuesOf,
+        CHANNELS: CHANNELS,
+        MAX_QUEUE: MAX_QUEUE,
     };
 })();
