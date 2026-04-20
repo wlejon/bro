@@ -237,6 +237,12 @@ public:
         h = static_cast<float>(surfHeight_);
     }
 
+    /// Flush any pending deferred commands onto the backing SkSurface.
+    /// Used by the system-panel layer-break callback, which snapshots this
+    /// surface and blits it straight onto the enclosing panel's target Skia
+    /// canvas (no GL upload). Safe no-op if there are no pending commands.
+    void flush() { flushCommands(); }
+
     /// Mark the canvas as dirty (needing re-rasterization).
     void markDirty() { dirty_ = true; }
     bool isDirty() const { return dirty_; }

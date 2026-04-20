@@ -26,7 +26,7 @@
 typedef struct SDL_GLContextState* SDL_GLContext;
 
 namespace bro::layout { struct KeyHandleResult; }
-namespace bro::render { class GLContext; class RasterRenderer; class CPURasterRenderer; }
+namespace bro::render { class GLContext; class RasterRenderer; }
 namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
@@ -41,7 +41,7 @@ namespace bro::platform {
 namespace bro::render { class Renderer; }
 namespace bro::js { class Runtime; class Timers; }
 namespace bro::dom { class Document; class Element; class Event; }
-namespace bro::layout { class DrawTraversal; }
+namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }
 
 namespace bro::engine {
 
@@ -315,6 +315,10 @@ private:
     void ensureReplacedElements(dom::Element* elem);
 
     // --- System panel management (implementation in system_panels.cpp) ---
+    // System panels are ordinary HTML documents rendered through the same
+    // layout/raster pipeline as the app document. They share the engine's
+    // fontManager_ + textMetrics_ for layout, and in windowed mode the raster
+    // thread draws each visible panel into its own GPU surface.
     struct SystemDocument {
         std::string name;
         std::string tabLabel;
@@ -322,11 +326,11 @@ private:
         bool active = true;
         JSContext* jsCtx = nullptr;
         std::unique_ptr<js::Timers> timers;
-        std::unique_ptr<layout::DrawTraversal> drawTraversal;
-        std::unique_ptr<layout::FontManager> fontManager;
         std::unique_ptr<dom::Document> document;
         JSValue broPerfObj = JS_UNDEFINED;
         MouseDispatchState mouseState;  // per-doc click/dblclick tracking
+        // 2D canvas contexts owned by this panel (inline-blit at layer break).
+        std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
     };
 
     void initSystemPanels();
@@ -342,7 +346,9 @@ private:
     void tickSystemPanels(double nowMs);
     void updateSystemPerf(double fps, double frameTime, double js, double layout,
                           double raster, double gpu, double draw, int vpW, int vpH);
-    void renderSystemPanels();
+    void layoutSystemPanels(layout::SkiaTextMetrics& metrics);
+    void drawSystemPanels(render::Renderer* renderer,
+                          layout::DrawTraversal& traversal);
     void resizeSystemPanels(int w, int h);
     dom::Element* systemHitTest(SystemDocument& doc, float x, float y);
     bool systemHandleMouseDown(float x, float y, int button);
@@ -424,8 +430,12 @@ private:
 
     // Double-buffered layer lists for lock-free handoff.
     // Raster thread writes to back buffer, main reads front buffer.
+    // `appLayers` are composited first (with crosshair drawn between app and
+    // system), then `systemLayers` on top so menu bar / preferences / splash
+    // sit above app content + crosshair.
     struct LayerBuffer {
-        std::vector<UILayer> layers;
+        std::vector<UILayer> appLayers;
+        std::vector<UILayer> systemLayers;
     };
     LayerBuffer layerBuffers_[2];
 
@@ -434,6 +444,11 @@ private:
     // are shared across GL contexts for compositing on the main thread.
     std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_;
     int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
+    // Parallel pool, one entry per visible system panel per frame. Separate
+    // from htmlSurfacePool_ so app layer-break sizing can't invalidate panel
+    // surfaces mid-frame.
+    std::vector<render::SkiaRenderer::GPUSurface> systemSurfacePool_;
+    int systemSurfacePoolW_ = 0, systemSurfacePoolH_ = 0;
 
     CrosshairConfig crosshair_;
     MenuBar menuBar_;
@@ -453,9 +468,11 @@ private:
     double lastFrameTimeMs_ = 0.0; // wall-clock time of previous frame's start (for syncAgents dt)
     // System panels (settings, perf, nav)
     std::vector<SystemDocument> systemDocs_;
-    std::unique_ptr<render::CPURasterRenderer> systemRenderer_;
     bool systemPerfVisible_ = false;
     bool systemSettingsVisible_ = false;
+    bool splashVisible_ = false;
+    bool splashDismissTriggered_ = false;
+    double splashStartMs_ = 0.0;
     bool systemDirty_ = true;
     bool systemMouseConsumed_ = false;
     std::string systemActivePanel_;

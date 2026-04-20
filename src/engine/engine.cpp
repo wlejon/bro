@@ -4,7 +4,6 @@
 #include "layout/layout_node_adapter.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
-#include "render/cpu_raster_renderer.h"
 
 #include <fstream>
 
@@ -654,6 +653,23 @@ Engine::Engine(const EngineConfig& config)
     //     Shares the JS runtime — each panel gets its own JSContext.
     initSystemPanels();
 
+    // 12b. Enable the startup splash. It renders above the app canvas and
+    //      menu bar until its own JS finishes the swirl-away animation (or a
+    //      hard timeout in tickSystemPanels fires). Enabled in both windowed
+    //      and headless modes — headless uses virtual time, so `advanceTime()`
+    //      drives the splash forward just like any other timer.
+    if (displayMode_ != DisplayMode::Server) {
+        for (auto& d : systemDocs_) {
+            if (d.group == "splash") {
+                splashVisible_ = true;
+                splashStartMs_ = (displayMode_ == DisplayMode::Headless)
+                    ? virtualTime_
+                    : util::currentTimeMs();
+                break;
+            }
+        }
+    }
+
     // Load @font-face custom fonts from the cascade
     loadCustomFonts();
 
@@ -1216,8 +1232,10 @@ Engine::~Engine() {
         auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
         if (skia) {
             for (auto& ps : htmlSurfacePool_) skia->destroyGPUSurface(ps);
+            for (auto& ps : systemSurfacePool_) skia->destroyGPUSurface(ps);
         }
         htmlSurfacePool_.clear();
+        systemSurfacePool_.clear();
     }
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
     if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }
@@ -1399,7 +1417,8 @@ void Engine::rasterThreadFunc() {
         // Determine which layer buffer to write to (back buffer)
         int backIdx = 1 - rasterShared_.frontBuffer.load(std::memory_order_relaxed);
         auto& backBuf = layerBuffers_[backIdx];
-        backBuf.layers.clear();
+        backBuf.appLayers.clear();
+        backBuf.systemLayers.clear();
 
         // Reset Ganesh GL state tracking for this frame
         rasterRenderer->grContext()->resetContext();
@@ -1432,7 +1451,7 @@ void Engine::rasterThreadFunc() {
                 UILayer htmlLayer;
                 htmlLayer.type = UILayer::HTML;
                 htmlLayer.texture = htmlSurfacePool_[prevIdx].texture;
-                backBuf.layers.push_back(std::move(htmlLayer));
+                backBuf.appLayers.push_back(std::move(htmlLayer));
 
                 UILayer canvasLayer;
                 canvasLayer.type = UILayer::Canvas;
@@ -1440,7 +1459,7 @@ void Engine::rasterThreadFunc() {
                 canvasLayer.texture = directTexture;  // non-zero for WebGL
                 canvasLayer.cx = x; canvasLayer.cy = y;
                 canvasLayer.cw = w; canvasLayer.ch = h;
-                backBuf.layers.push_back(std::move(canvasLayer));
+                backBuf.appLayers.push_back(std::move(canvasLayer));
             });
 
         // Begin frame
@@ -1530,7 +1549,7 @@ void Engine::rasterThreadFunc() {
         UILayer lastHtml;
         lastHtml.type = UILayer::HTML;
         lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
-        backBuf.layers.push_back(std::move(lastHtml));
+        backBuf.appLayers.push_back(std::move(lastHtml));
 
         // Flush each pool surface's deferred Ganesh ops
         for (int i = 0; i <= htmlLayerIdx; ++i) {
@@ -1538,9 +1557,79 @@ void Engine::rasterThreadFunc() {
                 rasterRenderer->grContext()->flush(htmlSurfacePool_[i].surface.get());
             }
         }
-        rasterRenderer->endFrame();
-
         rasterDrawTraversal->setLayerBreakCallback(nullptr);
+
+        // --- System panels ---
+        // Lay out and draw each visible system panel into its own GPU-backed
+        // Skia surface. These composite on top of the crosshair on the main
+        // thread via backBuf.systemLayers. Layout runs here on the raster
+        // thread too — safe because system DOM mutations happen on the main
+        // thread during the JS phase, before we're signaled.
+        if (isSystemVisible()) {
+            // Resize system surface pool on viewport change
+            if (systemSurfacePoolW_ != vpW || systemSurfacePoolH_ != vpH) {
+                for (auto& ps : systemSurfacePool_) {
+                    rasterRenderer->destroyGPUSurface(ps);
+                }
+                systemSurfacePool_.clear();
+                systemSurfacePoolW_ = vpW;
+                systemSurfacePoolH_ = vpH;
+            }
+
+            layout::SkiaTextMetrics sysMetrics(rasterRenderer.get(),
+                                               &rasterFontManager);
+            layoutSystemPanels(sysMetrics);
+
+            size_t panelIdx = 0;
+            for (auto& sdoc : systemDocs_) {
+                if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
+
+                while (panelIdx >= systemSurfacePool_.size()) {
+                    systemSurfacePool_.push_back(
+                        rasterRenderer->createGPUSurface(vpW, vpH));
+                }
+                rasterRenderer->rewrapGPUSurface(systemSurfacePool_[panelIdx], vpW, vpH);
+                rasterRenderer->switchSurface(systemSurfacePool_[panelIdx].surface);
+
+                // Install inline canvas blit callback per panel (splash's
+                // matrix canvas relies on this).
+                rasterDrawTraversal->setLayerBreakCallback(
+                    [&rasterRenderer](canvas::CanvasScene* scene, unsigned int,
+                                      float x, float y, float w, float h) {
+                        if (!scene || w <= 0 || h <= 0) return;
+                        scene->flush();
+                        auto* src = scene->surface();
+                        if (!src) return;
+                        auto img = src->makeImageSnapshot();
+                        if (!img) return;
+                        auto* c = rasterRenderer->getCanvas();
+                        if (!c) return;
+                        SkRect dst = SkRect::MakeXYWH(x, y, w, h);
+                        c->drawImageRect(img, dst,
+                            SkSamplingOptions(SkFilterMode::kLinear));
+                        scene->clearDirty();
+                    });
+                rasterDrawTraversal->setBasePath(sdoc.document->basePath());
+                rasterDrawTraversal->draw(sdoc.document->documentElement(),
+                                          0, 0, vpW, vpH);
+                rasterDrawTraversal->setLayerBreakCallback(nullptr);
+
+                UILayer panelLayer;
+                panelLayer.type = UILayer::HTML;
+                panelLayer.texture = systemSurfacePool_[panelIdx].texture;
+                backBuf.systemLayers.push_back(std::move(panelLayer));
+
+                if (rasterRenderer->grContext()) {
+                    rasterRenderer->grContext()->flush(
+                        systemSurfacePool_[panelIdx].surface.get());
+                }
+                panelIdx++;
+            }
+            rasterRenderer->switchSurface(origSurface);
+            systemDirty_ = false;
+        }
+
+        rasterRenderer->endFrame();
 
         // GL fence sync — ensures all GPU commands complete before main thread
         // samples the textures for compositing.
@@ -1569,6 +1658,10 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->destroyGPUSurface(ps);
     }
     htmlSurfacePool_.clear();
+    for (auto& ps : systemSurfacePool_) {
+        rasterRenderer->destroyGPUSurface(ps);
+    }
+    systemSurfacePool_.clear();
     // SkiaRenderer destructor handles GrContext cleanup
     rasterRenderer.reset();
     SDL_GL_MakeCurrent(window_->getSDLWindow(), nullptr);
@@ -1593,6 +1686,10 @@ void Engine::run() {
         // Without this, virtualTime_ (set early in the constructor) lags behind
         // the wall clock by the time system panels and fonts finish loading.
         virtualTime_ = util::currentTimeMs();
+        // Splash elapsed is measured against virtualTime_, so rebase its start
+        // too — otherwise elapsed would count the constructor time and the
+        // splash would auto-dismiss partway through the first advanceTime().
+        if (splashVisible_) splashStartMs_ = virtualTime_;
         timers_->tick(virtualTime_);
         return;
     }
@@ -2013,7 +2110,7 @@ void Engine::run() {
         //     Done every frame since canvases animate independently of HTML layout.
         double tRaster = util::currentTimeMs();
         int front = rasterShared_.frontBuffer.load(std::memory_order_acquire);
-        auto& frontLayers = layerBuffers_[front].layers;
+        auto& frontLayers = layerBuffers_[front].appLayers;
         for (auto& layer : frontLayers) {
             if (layer.type == UILayer::Canvas && layer.canvasScene) {
                 layer.canvasScene->prepareAndSignal();
@@ -2062,60 +2159,19 @@ void Engine::run() {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // 5f. Composite UI layers in DOM order
+        // 5f. Composite app UI layers in DOM order
         //     HTML layers (cached textures from raster thread) interleaved with
         //     canvas layers (freshly rasterized on main thread).
-        compositeLayers(layerBuffers_[front].layers);
+        compositeLayers(layerBuffers_[front].appLayers);
 
         // 5g. Tick + draw crosshair overlay (runs at full frame rate, after app content)
         crosshair_.tick(static_cast<float>(totalFrameMs_ * 0.001));
         drawCrosshairGL();
 
-        // 5h. Render pass 3: composite system panels (premultiplied alpha)
-        if (isSystemVisible()) {
-            renderSystemPanels();
-
-            // Ganesh may have changed GL state — restore what we need
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glViewport(0, 0, viewportWidth_, viewportHeight_);
-
-            GLuint sysTex = systemRenderer_ ? systemRenderer_->getTexture() : 0;
-            if (sysTex) {
-                float w = (float)viewportWidth_, h = (float)viewportHeight_;
-                render::TextureVertex quad[6] = {
-                    {0, 0, 0, 0}, {w, 0, 1, 0}, {w, h, 1, 1},
-                    {0, 0, 0, 0}, {w, h, 1, 1}, {0, h, 0, 1},
-                };
-
-                glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
-                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-
-                glBindVertexArray(uiQuadVAO_);
-                glEnableVertexAttribArray(0);
-                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE,
-                                      sizeof(render::TextureVertex), (void*)0);
-                glEnableVertexAttribArray(1);
-                glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
-                                      sizeof(render::TextureVertex),
-                                      (void*)offsetof(render::TextureVertex, u));
-
-                glUseProgram(gl_->textureProgram());
-                float viewport[2] = {w, h};
-                glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
-                glUniform1i(gl_->textureSamplerLoc(), 0);
-
-                glDisable(GL_DEPTH_TEST);
-                glDisable(GL_CULL_FACE);
-                glDisable(GL_SCISSOR_TEST);
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, sysTex);
-
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-            }
-        }
+        // 5h. Composite system panel layers (menu bar / preferences / splash)
+        //     on top of crosshair. Each entry is a GPU-backed Skia surface
+        //     produced by the raster thread — same pipeline as app layers.
+        compositeLayers(layerBuffers_[front].systemLayers);
 
         // Restore WebGL shadow state so apps with internal caches (three.js)
         // see the same GL state they left on the previous frame.

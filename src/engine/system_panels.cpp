@@ -8,7 +8,7 @@
 #include "layout/layout_node_adapter.h"
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
-#include "render/cpu_raster_renderer.h"
+#include "render/renderer.h"
 #include "render/gl_context.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
@@ -18,14 +18,23 @@
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
+#include "js/canvas_bindings.h"
+#include "js/image_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/settings_bindings.h"
+#include "canvas/canvas_scene.h"
 #include "platform/sdl_window.h"
+
+#include <include/core/SkCanvas.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkSamplingOptions.h>
+#include <include/core/SkSurface.h>
 
 #include "api/api.h"
 #include "util/log.h"
 #include "util/time.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <regex>
 
@@ -42,14 +51,17 @@ namespace bro::engine {
 // ---------------------------------------------------------------------------
 
 void Engine::initSystemPanels() {
-    systemRenderer_ = std::make_unique<render::CPURasterRenderer>(gl_.get());
-
     // Load app-specific system panels first (app dir takes priority)
     std::string appSystemDir = manifest_.basePath + "/system";
     loadSystemPanels(appSystemDir);
 
     // Load global system panels, skipping any already provided by the app
     loadSystemPanels("system");
+
+    // Move the splash panel to the end so it renders on top of everything
+    // (menu bar included) and receives hit-tests first during startup.
+    std::stable_partition(systemDocs_.begin(), systemDocs_.end(),
+        [](const SystemDocument& d) { return d.group != "splash"; });
 }
 
 void Engine::destroySystemPanels() {
@@ -69,7 +81,6 @@ void Engine::destroySystemPanels() {
         }
 
         doc.document.reset();
-        doc.drawTraversal.reset();
 
         if (doc.jsCtx) {
             JS_FreeContext(doc.jsCtx);
@@ -77,7 +88,6 @@ void Engine::destroySystemPanels() {
         }
     }
     systemDocs_.clear();
-    systemRenderer_.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -163,7 +173,6 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         if (html.empty()) continue;
 
         SystemDocument doc;
-        doc.fontManager = std::make_unique<layout::FontManager>();
         doc.name = fullRel;
 
         // Assign tab label and group based on panel path
@@ -176,6 +185,9 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         } else if (fullRel == "menu") {
             doc.tabLabel = "";
             doc.group = "menu";
+        } else if (fullRel == "splash") {
+            doc.tabLabel = "";
+            doc.group = "splash";
         } else if (fullRel.rfind("settings/", 0) == 0) {
             doc.group = "settings";
             std::string leaf = stem;
@@ -226,18 +238,71 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
             js::SettingsBindings::install(doc.jsCtx, settings_.get(), window_.get());
         }
 
+        // Install Canvas 2D bindings on this panel's context. The getContext
+        // factory is registered after the doc is pushed into systemDocs_ below,
+        // so the factory can own the created CanvasScenes per-panel.
+        js::CanvasBindings::install(doc.jsCtx);
+        js::ImageBindings::install(doc.jsCtx, savedBasePath);
+
         // Install __bro perf/nav object
         installBroObject(doc);
 
-        // Initial layout
-        {
-            layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
-            doc.document->resolveStyles();
-            doc.document->performLayout(static_cast<float>(viewportWidth_),
-                                        static_cast<float>(viewportHeight_), textMetrics);
-        }
+        // Initial layout — shared engine text metrics (same renderer/fontManager
+        // as the app document; system panels are just additional documents).
+        doc.document->resolveStyles();
+        doc.document->performLayout(static_cast<float>(viewportWidth_),
+                                    static_cast<float>(viewportHeight_),
+                                    *textMetrics_);
 
         LOG_INFO("System panels: loaded panel '%s'", doc.name.c_str());
+
+        // Push into the vector *before* executing scripts so the canvas
+        // getContext factory can resolve this panel's SystemDocument slot by
+        // index and park CanvasScenes in `doc.canvasScenes`.
+        systemDocs_.push_back(std::move(doc));
+        size_t docIdx = systemDocs_.size() - 1;
+        auto& liveDoc = systemDocs_[docIdx];
+
+        // Canvas getContext factory — captures `this` + the panel's index so
+        // it finds the right doc even if the vector reallocates as later
+        // panels load. Only 2D is wired; WebGL/scene need GL compositing and
+        // are not supported in system panels.
+        js::DomBindings::setGetContextFactory(liveDoc.jsCtx,
+            [this, docIdx](JSContext* fctx, dom::Element* el,
+                           const std::string& type) -> JSValue {
+                if (type != "2d") return JS_NULL;
+                if (docIdx >= systemDocs_.size()) return JS_NULL;
+                auto& d = systemDocs_[docIdx];
+                auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+                scene->init(nullptr);
+                if (el) {
+                    scene->setLayoutCallback(
+                        [](void* ud, float& ox, float& oy, float& ow, float& oh) {
+                            auto* elem = static_cast<dom::Element*>(ud);
+                            if (!elem->parentNode()) { ox = oy = ow = oh = 0; return; }
+                            auto& box = elem->layoutBox();
+                            ox = box.contentRect.x;
+                            oy = box.contentRect.y;
+                            for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
+                                auto& pb = lp->layoutBox();
+                                ox += pb.contentRect.x;
+                                oy += pb.contentRect.y;
+                                oy -= lp->scrollTopValue();
+                            }
+                            ow = box.contentRect.width;
+                            oh = box.contentRect.height;
+                        }, el);
+                    scene->setDetachedCallback([](void* ud) -> bool {
+                        auto* n = static_cast<dom::Element*>(ud);
+                        while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                        return n->tagName() != "html" && n->tagName() != "HTML";
+                    }, el);
+                }
+                auto* ptr = scene.get();
+                if (el) el->setCanvasScene(ptr);
+                d.canvasScenes.push_back(std::move(scene));
+                return js::CanvasBindings::wrapContext2D(fctx, ptr);
+            });
 
         // Extract and execute inline scripts
         {
@@ -248,42 +313,36 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
             for (auto it = begin; it != end; ++it) {
                 std::string code = (*it)[1].str();
                 if (!code.empty()) {
-                    std::string filename = "<system/" + doc.name + ">";
-                    JSValue result = JS_Eval(doc.jsCtx, code.c_str(), code.size(),
+                    std::string filename = "<system/" + liveDoc.name + ">";
+                    JSValue result = JS_Eval(liveDoc.jsCtx, code.c_str(), code.size(),
                                              filename.c_str(), JS_EVAL_TYPE_GLOBAL);
                     if (JS_IsException(result)) {
-                        JSValue ex = JS_GetException(doc.jsCtx);
-                        const char* str = JS_ToCString(doc.jsCtx, ex);
+                        JSValue ex = JS_GetException(liveDoc.jsCtx);
+                        const char* str = JS_ToCString(liveDoc.jsCtx, ex);
                         if (str) {
                             LOG_ERROR("System panel JS error in '%s': %s",
-                                      doc.name.c_str(), str);
-                            JS_FreeCString(doc.jsCtx, str);
+                                      liveDoc.name.c_str(), str);
+                            JS_FreeCString(liveDoc.jsCtx, str);
                         }
-                        JS_FreeValue(doc.jsCtx, ex);
+                        JS_FreeValue(liveDoc.jsCtx, ex);
                     }
-                    JS_FreeValue(doc.jsCtx, result);
+                    JS_FreeValue(liveDoc.jsCtx, result);
                 }
             }
         }
 
         // Initialize replaced elements after scripts
-        bro::engine::ensureReplacedElements(doc.document->documentElement(), systemRenderer_.get());
+        bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
+                                            renderer_.get());
 
         // Re-layout after scripts may have modified the DOM
-        {
-            layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
-            doc.document->resolveStyles();
-            doc.document->performLayout(static_cast<float>(viewportWidth_),
-                                        static_cast<float>(viewportHeight_), textMetrics);
-        }
-
-        // Move into vector, then create DrawTraversal pointing to stable fontManager
-        systemDocs_.push_back(std::move(doc));
-        auto& finalDoc = systemDocs_.back();
-        finalDoc.drawTraversal = std::make_unique<layout::DrawTraversal>(
-            systemRenderer_.get(), finalDoc.fontManager.get());
-        finalDoc.drawTraversal->setBasePath(savedBasePath);
-        finalDoc.drawTraversal->setViewport(viewportWidth_, viewportHeight_);
+        liveDoc.document->resolveStyles();
+        liveDoc.document->performLayout(static_cast<float>(viewportWidth_),
+                                        static_cast<float>(viewportHeight_),
+                                        *textMetrics_);
+        // Stash base path on the document so drawSystemPanels can forward it
+        // to the shared DrawTraversal (for image URL resolution).
+        liveDoc.document->setBasePath(savedBasePath);
     }
 }
 
@@ -459,6 +518,22 @@ void Engine::installBroObject(SystemDocument& doc) {
             return o;
         }, 0, 0, 1, &ptrVal));
 
+    // __bro.dismissSplash() — called by system/splash.html after its swirl-away
+    // animation finishes. Hides the splash panel so the app canvas is revealed.
+    JS_SetPropertyStr(ctx, bro, "dismissSplash",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (self && self->splashVisible_) {
+                self->splashVisible_ = false;
+                self->systemDirty_ = true;
+            }
+            return JS_UNDEFINED;
+        }, 0, 0, 1, &ptrVal));
+
     JS_SetPropertyStr(ctx, global, "__bro", bro);
     doc.broPerfObj = JS_DupValue(ctx, perf);
     JS_FreeValue(ctx, global);
@@ -510,11 +585,12 @@ bool Engine::isSystemDocVisible(const SystemDocument& doc) const {
     if (doc.group == "nav") return systemSettingsVisible_;
     if (doc.group == "settings") return systemSettingsVisible_ && doc.active;
     if (doc.group == "menu") return menuBar_.visible;
+    if (doc.group == "splash") return splashVisible_;
     return false;
 }
 
 bool Engine::isSystemVisible() const {
-    return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible;
+    return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible || splashVisible_;
 }
 
 void Engine::toggleSystemPerf() {
@@ -556,6 +632,41 @@ void Engine::showSystemPanel(const std::string& name) {
 // ---------------------------------------------------------------------------
 
 void Engine::tickSystemPanels(double nowMs) {
+    // Splash lifecycle: after a minimum display time, tell the splash panel
+    // to play its swirl-away animation. The panel's JS calls __bro.dismissSplash()
+    // when the animation finishes. A hard fallback force-hides the splash if
+    // something goes wrong so a broken splash never wedges the app.
+    if (splashVisible_) {
+        constexpr double kMinDisplayMs = 1800.0;
+        constexpr double kHardTimeoutMs = 4500.0;
+        double elapsed = nowMs - splashStartMs_;
+        if (!splashDismissTriggered_ && elapsed >= kMinDisplayMs) {
+            splashDismissTriggered_ = true;
+            for (auto& doc : systemDocs_) {
+                if (doc.group != "splash" || !doc.jsCtx) continue;
+                JSContext* ctx = doc.jsCtx;
+                JSValue global = JS_GetGlobalObject(ctx);
+                JSValue fn = JS_GetPropertyStr(ctx, global, "__onDismiss");
+                if (JS_IsFunction(ctx, fn)) {
+                    JSValue r = JS_Call(ctx, fn, global, 0, nullptr);
+                    if (JS_IsException(r)) {
+                        JSValue ex = JS_GetException(ctx);
+                        const char* s = JS_ToCString(ctx, ex);
+                        if (s) { LOG_ERROR("splash __onDismiss: %s", s); JS_FreeCString(ctx, s); }
+                        JS_FreeValue(ctx, ex);
+                    }
+                    JS_FreeValue(ctx, r);
+                }
+                JS_FreeValue(ctx, fn);
+                JS_FreeValue(ctx, global);
+            }
+        }
+        if (elapsed >= kHardTimeoutMs) {
+            splashVisible_ = false;
+            systemDirty_ = true;
+        }
+    }
+
     if (!isSystemVisible()) return;
 
     for (auto& doc : systemDocs_) {
@@ -603,40 +714,61 @@ void Engine::updateSystemPerf(double fps, double frameTime, double js, double la
 }
 
 // ---------------------------------------------------------------------------
-// Rendering
+// Layout + draw helpers used by both the raster thread (windowed) and main
+// thread (headless). These route system panels through the same rendering
+// pipeline as the app document — there is no separate system renderer.
 // ---------------------------------------------------------------------------
 
-void Engine::renderSystemPanels() {
-    if (!isSystemVisible() || !systemRenderer_ || !systemDirty_) return;
-
-    // Re-layout dirty visible panels
+void Engine::layoutSystemPanels(layout::SkiaTextMetrics& metrics) {
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
-        if (doc.document->isDirty()) {
-            layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
-            doc.document->resolveStyles();
-            // Pass both dims so height:100% / viewport-relative CSS resolves
-            // (the preferences modal relies on a full-viewport backdrop).
-            doc.document->performLayout(static_cast<float>(viewportWidth_),
-                                        static_cast<float>(viewportHeight_),
-                                        textMetrics);
-            doc.document->clearDirty();
-        }
+        if (!doc.document->isDirty()) continue;
+        doc.document->resolveStyles();
+        // Pass both dims so height:100% / viewport-relative CSS resolves (the
+        // preferences modal relies on a full-viewport backdrop).
+        doc.document->performLayout(static_cast<float>(viewportWidth_),
+                                    static_cast<float>(viewportHeight_),
+                                    metrics);
+        doc.document->clearDirty();
     }
+}
 
-    systemRenderer_->beginFrame(viewportWidth_, viewportHeight_);
+void Engine::drawSystemPanels(render::Renderer* renderer,
+                              layout::DrawTraversal& traversal) {
+    if (!renderer || !isSystemVisible()) return;
+
+    // System panels want 2D canvas children composited inline (the canvas
+    // is the panel). Install a layer-break callback that blits the canvas
+    // surface straight onto the current target Skia canvas — no separate
+    // GPU texture layer for system canvases.
+    traversal.setLayerBreakCallback(
+        [renderer](canvas::CanvasScene* scene, unsigned int /*tex*/,
+                   float x, float y, float w, float h) {
+            if (!scene || !renderer) return;
+            if (w <= 0 || h <= 0) return;
+            scene->flush();
+            auto* src = scene->surface();
+            if (!src) return;
+            auto img = src->makeImageSnapshot();
+            if (!img) return;
+            auto* c = renderer->getCanvas();
+            if (!c) return;
+            SkRect dst = SkRect::MakeXYWH(x, y, w, h);
+            c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
+            scene->clearDirty();
+        });
 
     for (auto& doc : systemDocs_) {
-        if (!isSystemDocVisible(doc) || !doc.document || !doc.drawTraversal) continue;
-        doc.drawTraversal->draw(doc.document->documentElement(), 0, 0,
-                                viewportWidth_, viewportHeight_);
+        if (!isSystemDocVisible(doc) || !doc.document) continue;
+        traversal.setBasePath(doc.document->basePath());
+        traversal.draw(doc.document->documentElement(), 0, 0,
+                       viewportWidth_, viewportHeight_);
     }
 
-    // Draw the active system-context overlay (if any) on top of panels.
-    overlayMgr_.drawIfContext(OverlayContext::System, systemRenderer_.get());
+    // System-context overlay (if any) on top of panels.
+    overlayMgr_.drawIfContext(OverlayContext::System, renderer);
 
-    systemRenderer_->endFrame();
-    systemRenderer_->uploadToGPU();
+    traversal.setLayerBreakCallback(nullptr);
     systemDirty_ = false;
 }
 
@@ -647,13 +779,11 @@ void Engine::renderSystemPanels() {
 void Engine::resizeSystemPanels(int w, int h) {
     systemDirty_ = true;
     for (auto& doc : systemDocs_) {
-        if (doc.drawTraversal) {
-            doc.drawTraversal->setViewport(w, h);
-        }
         if (doc.document) {
-            layout::SkiaTextMetrics textMetrics(systemRenderer_.get(), doc.fontManager.get());
             doc.document->resolveStyles();
-            doc.document->performLayout(static_cast<float>(w), static_cast<float>(h), textMetrics);
+            doc.document->performLayout(static_cast<float>(w),
+                                        static_cast<float>(h),
+                                        *textMetrics_);
         }
         // Fire __onResize on the panel's JS context so scripts can reposition
         // JS-sized elements (e.g. preferences modal card, content panels).
@@ -702,7 +832,7 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
         ControlContext cctx{doc.document.get(), doc.jsCtx,
-                           systemRenderer_.get(), window_.get(), &systemDirty_,
+                           renderer_.get(), window_.get(), &systemDirty_,
                            &overlayMgr_, OverlayContext::System,
                            viewportWidth_, viewportHeight_};
         auto* prevActive = doc.document->activeElement();
@@ -723,7 +853,7 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
         dom::Element* target = systemHitTest(doc, x, y);
         if (target) {
             ControlContext cctx{doc.document.get(), doc.jsCtx,
-                               systemRenderer_.get(), window_.get(), &systemDirty_,
+                               renderer_.get(), window_.get(), &systemDirty_,
                                &overlayMgr_, OverlayContext::System,
                                viewportWidth_, viewportHeight_};
 
@@ -760,7 +890,7 @@ bool Engine::systemHandleMouseUp(float x, float y, int button) {
         // phantom clicks on rows beneath a just-dismissed dropdown.
         if (target) {
             ControlContext cctx{doc.document.get(), doc.jsCtx,
-                               systemRenderer_.get(), window_.get(), &systemDirty_,
+                               renderer_.get(), window_.get(), &systemDirty_,
                                &overlayMgr_, OverlayContext::System,
                                viewportWidth_, viewportHeight_};
 

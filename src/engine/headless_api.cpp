@@ -2,7 +2,6 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
-#include "render/cpu_raster_renderer.h"
 
 #include "observer_check.js.h"
 
@@ -64,14 +63,14 @@ void Engine::flush() {
     // current DOM state (click() fires events which can mutate system panel
     // DOM — e.g. bro.menu dropdowns — and we need layout fresh before the
     // next click tests against it).
-    if (systemRenderer_) {
+    if (textMetrics_) {
+        bool anyDirty = false;
         for (auto& sdoc : systemDocs_) {
             if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
-            if (!sdoc.document->isDirty()) continue;
-            layout::SkiaTextMetrics sysMetrics(systemRenderer_.get(), sdoc.fontManager.get());
-            sdoc.document->resolveStyles();
-            sdoc.document->performLayout(static_cast<float>(viewportWidth_), sysMetrics);
-            sdoc.document->clearDirty();
+            if (sdoc.document->isDirty()) { anyDirty = true; break; }
+        }
+        if (anyDirty) {
+            layoutSystemPanels(*textMetrics_);
             systemDirty_ = true;
         }
     }
@@ -181,6 +180,10 @@ void Engine::advanceTime(double ms) {
         js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
 
+        // Tick system panels so splash lifecycle (min-display + dismiss)
+        // advances with virtual time.
+        tickSystemPanels(virtualTime_);
+
         // Poll network (drain subscriber's event queue, fire JS callbacks)
         if (netService_) {
             js::NetBindings::poll(jsRuntime_->getContext());
@@ -287,6 +290,12 @@ bool Engine::screenshot(const std::string& path) {
                                  w, contentHeight(), contentTop());
         }
         overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
+        // System panels (menu bar / splash / preferences) on top of the app UI.
+        if (isSystemVisible()) {
+            tickSystemPanels(virtualTime_);
+            layoutSystemPanels(*textMetrics_);
+            drawSystemPanels(renderer_.get(), *drawTraversal_);
+        }
         renderer_->endFrame();
         skia->uploadToGPU();
 
@@ -508,26 +517,15 @@ bool Engine::screenshot(const std::string& path) {
                          0, static_cast<float>(contentTop()),
                          viewportWidth_, contentHeight(), contentTop());
 
-    // Render system panels on top of everything
-    if (isSystemVisible()) {
-        tickSystemPanels(virtualTime_);
-        renderSystemPanels();
-
-        if (systemRenderer_ && systemRenderer_->surface()) {
-            auto* appCanvas = renderer_->getCanvas();
-            if (appCanvas) {
-                sk_sp<SkImage> sysImage = systemRenderer_->surface()->makeImageSnapshot();
-                if (sysImage) {
-                    SkPaint paint;
-                    paint.setBlendMode(SkBlendMode::kSrcOver);
-                    appCanvas->drawImage(sysImage, 0, 0, SkSamplingOptions(), &paint);
-                }
-            }
-        }
-    }
-
     // Draw crosshair on the Skia surface
     drawCrosshairSkia(renderer_->getCanvas());
+
+    // System panels on top of the app content and crosshair
+    if (isSystemVisible()) {
+        tickSystemPanels(virtualTime_);
+        layoutSystemPanels(*textMetrics_);
+        drawSystemPanels(renderer_.get(), *drawTraversal_);
+    }
 
     renderer_->endFrame();
 
@@ -557,6 +555,11 @@ std::vector<uint8_t> Engine::capturePixels() {
             drawTraversal_->draw(document_->documentElement(),
                                  0, static_cast<float>(contentTop()),
                                  w, contentHeight(), contentTop());
+        if (isSystemVisible()) {
+            tickSystemPanels(virtualTime_);
+            layoutSystemPanels(*textMetrics_);
+            drawSystemPanels(renderer_.get(), *drawTraversal_);
+        }
         renderer_->endFrame();
         skia->uploadToGPU();
 
@@ -764,24 +767,14 @@ std::vector<uint8_t> Engine::capturePixels() {
 
     overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
 
-    if (isSystemVisible()) {
-        tickSystemPanels(virtualTime_);
-        renderSystemPanels();
-        if (systemRenderer_ && systemRenderer_->surface()) {
-            auto* appCanvas = renderer_->getCanvas();
-            if (appCanvas) {
-                sk_sp<SkImage> sysImage = systemRenderer_->surface()->makeImageSnapshot();
-                if (sysImage) {
-                    SkPaint paint;
-                    paint.setBlendMode(SkBlendMode::kSrcOver);
-                    appCanvas->drawImage(sysImage, 0, 0, SkSamplingOptions(), &paint);
-                }
-            }
-        }
-    }
-
     // Draw crosshair on the Skia surface
     drawCrosshairSkia(renderer_->getCanvas());
+
+    if (isSystemVisible()) {
+        tickSystemPanels(virtualTime_);
+        layoutSystemPanels(*textMetrics_);
+        drawSystemPanels(renderer_.get(), *drawTraversal_);
+    }
 
     renderer_->endFrame();
     return renderer_->capturePixels();
