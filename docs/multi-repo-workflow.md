@@ -1,15 +1,15 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on six sibling libraries. Each has a standalone repo at `../<name>`. Three of them (the oldest) also have a git submodule fallback; the newer libraries require the standalone repo to be present.
+bro depends on six sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
-| **qjsbind** | `../qjsbind` | — (standalone required) |
+| **qjsbind** | `../qjsbind` | `third_party/qjsbind` |
 | **brokit** | `../brokit` | `third_party/brokit` |
 | **htmlayout** | `../htmlayout` | `third_party/htmlayout` |
 | **broaudio** | `../broaudio` | `third_party/broaudio` |
-| **bromesh** | `../bromesh` | — (standalone required) |
-| **brogameagent** | `../brogameagent` | — (standalone required) |
+| **bromesh** | `../bromesh` | `third_party/bromesh` |
+| **brogameagent** | `../brogameagent` | `third_party/brogameagent` |
 
 ## Directory Layout
 
@@ -17,15 +17,18 @@ bro depends on six sibling libraries. Each has a standalone repo at `../<name>`.
 D:/projects/
 ├── bro/                          # main project
 │   └── third_party/
+│       ├── qjsbind/              # submodule (CI / fallback)
 │       ├── brokit/               # submodule (CI / fallback)
 │       ├── htmlayout/            # submodule (CI / fallback)
-│       └── broaudio/             # submodule (CI / fallback)
-├── qjsbind/                      # standalone repo (required)
+│       ├── broaudio/             # submodule (CI / fallback)
+│       ├── bromesh/              # submodule (CI / fallback)
+│       └── brogameagent/         # submodule (CI / fallback)
+├── qjsbind/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
 ├── htmlayout/                    # standalone repo (preferred for dev)
 ├── broaudio/                     # standalone repo (preferred for dev)
-├── bromesh/                      # standalone repo (required)
-└── brogameagent/                 # standalone repo (required)
+├── bromesh/                      # standalone repo (preferred for dev)
+└── brogameagent/                 # standalone repo (preferred for dev)
 ```
 
 ## How It Works
@@ -34,7 +37,7 @@ bro's CMake auto-detects standalone repos at `../<name>`. If found, it builds fr
 
 - **Edit once** — only touch files in the standalone repo
 - **One build** — `cmake --build build` in bro compiles every sibling from its standalone source
-- Submodules are only used when standalone repos aren't present (CI, fresh clones) — and only for brokit, htmlayout, and broaudio. bromesh, brogameagent, and qjsbind have no submodule copy in `third_party/`, so a standalone clone at `../<name>` is mandatory.
+- Submodules are only used when standalone repos aren't present (CI, fresh clones)
 
 The detection pattern in `third_party/CMakeLists.txt`:
 ```cmake
@@ -46,7 +49,7 @@ else()
 endif()
 ```
 
-The same pattern is used for htmlayout, broaudio, bromesh, brogameagent, and qjsbind. For the three libraries without a submodule fallback, the `else` branch would fail to configure if the standalone repo is missing.
+The same pattern is used for qjsbind, htmlayout, broaudio, bromesh, and brogameagent.
 
 ## Day-to-Day Development
 
@@ -85,9 +88,9 @@ git add src/api/new_api.cpp
 git commit -m "Add new API"
 ```
 
-### 4. Sync submodule and commit bro (only for brokit / htmlayout / broaudio)
+### 4. Sync submodule and commit bro
 
-For the three libraries with a submodule fallback, update the submodule pointer so CI and fresh clones pick up the change:
+Update the submodule pointer so CI and fresh clones pick up the change:
 
 ```bash
 cd D:/projects/bro/third_party/brokit
@@ -99,9 +102,7 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `htmlayout` and `broaudio`.
-
-For **bromesh**, **brogameagent**, and **qjsbind** there is no submodule to bump — downstream consumers are expected to clone the standalone repo directly.
+Same shape for `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, and `brogameagent`.
 
 ## Overriding Paths
 
@@ -117,10 +118,9 @@ cmake -B build \
     -DBROGAMEAGENT_DIR=/path/to/brogameagent
 ```
 
-For the three libraries with a submodule, setting the `*_DIR` to a nonexistent path forces the submodule:
+Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
 
 ```bash
-cmake -B build -DBROKIT_DIR=none -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none
+cmake -B build -DQJSBIND_DIR=none -DBROKIT_DIR=none -DHTMLAYOUT_DIR=none \
+               -DBROAUDIO_DIR=none -DBROMESH_DIR=none -DBROGAMEAGENT_DIR=none
 ```
-
-This trick does **not** work for bromesh, brogameagent, or qjsbind — the configure step will fail if their standalone repo is missing.
