@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Mesh Viewer — GLB/GLTF</title>
+    <title>Mesh Viewer</title>
     <style>
         html, body { margin: 0; padding: 0; height: 100%; }
         body {
@@ -9,42 +9,82 @@
             color: #eee;
             font-family: system-ui, sans-serif;
             overflow: hidden;
+            user-select: none;
         }
-        #hud {
+
+        canvas#canvas { display: block; width: 100vw; height: 100vh; background: transparent; }
+
+        /* --- Status toast (top, centered) --- */
+        #status {
             position: absolute;
             top: 12px;
-            left: 12px;
-            background: rgba(0,0,0,0.75);
-            padding: 8px 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.78);
+            padding: 6px 14px;
             border-radius: 6px;
             font-size: 12px;
-            line-height: 1.5;
-            z-index: 10;
+            z-index: 30;
+            color: #7bed9f;
+            max-width: 50vw;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
             pointer-events: none;
         }
-        #hud h2 { font-size: 14px; margin: 0 0 4px 0; color: #7bed9f; }
-        #hud .hint { color: #bbb; font-size: 11px; }
-        #hud .hint b { color: #ffa502; }
+        #status.warn  { color: #ffa502; }
+        #status.error { color: #ff6b6b; }
 
-        #file-panel {
+        /* --- Help hint (bottom-center) --- */
+        #help {
             position: absolute;
-            top: 12px;
-            right: 12px;
-            width: 340px;
-            max-height: calc(100vh - 24px);
-            display: flex;
-            flex-direction: column;
-            background: rgba(0,0,0,0.80);
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: #666;
+            z-index: 5;
+            pointer-events: none;
+        }
+        #help b { color: #999; }
+
+        /* --- Drag overlay --- */
+        #drop-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(15, 50, 100, 0.45);
+            border: 3px dashed #74b9ff;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            font-size: 22px;
+            color: #fff;
+            pointer-events: none;
+        }
+        #drop-overlay.show { display: flex; }
+
+        /* --- Generic panel chrome --- */
+        .panel {
+            position: absolute;
+            background: rgba(0,0,0,0.82);
             border-radius: 6px;
-            padding: 10px;
+            padding: 8px;
             font-size: 12px;
             z-index: 10;
-        }
-        #open-row {
             display: flex;
-            gap: 6px;
-            margin-bottom: 8px;
+            flex-direction: column;
         }
+
+        /* --- Right panel: file browser --- */
+        #file-panel {
+            top: 12px;
+            right: 12px;
+            width: 320px;
+            max-height: calc(100vh - 24px);
+        }
+
+        #open-row { display: flex; gap: 6px; margin-bottom: 8px; }
         #open-row button {
             flex: 1;
             color: #fff;
@@ -68,38 +108,15 @@
         #open-file-btn:hover  { background: #444; }
         #open-file-btn:active { background: #222; }
 
-        #controls-row {
-            display: flex;
-            gap: 4px;
-            margin-bottom: 8px;
-        }
-        #controls-row button {
-            flex: 1;
-            color: #ddd;
-            background: #222;
-            border: 1px solid #3a3a3a;
-            border-radius: 4px;
-            padding: 5px 0;
-            font-family: inherit;
-            font-size: 11px;
-            cursor: pointer;
-        }
-        #controls-row button:hover { background: #2e2e2e; color: #fff; }
-        #controls-row button.toggled {
-            background: #1a4a8a;
-            border-color: #3a6a9a;
-            color: #fff;
-            font-weight: bold;
-        }
         #dir-status {
             font-size: 10px;
             color: #888;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             font-family: monospace;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            direction: rtl;  /* show the tail of long paths */
+            direction: rtl;
             text-align: left;
         }
         #file-list {
@@ -108,6 +125,7 @@
             min-height: 0;
             border-top: 1px solid #222;
             padding-top: 4px;
+            max-height: 280px;
         }
         .file-item {
             padding: 4px 6px;
@@ -129,61 +147,343 @@
             font-style: italic;
         }
 
-        #status {
-            position: absolute;
+        /* --- Left panel: ops --- */
+        #ops-panel {
             top: 12px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0,0,0,0.75);
-            padding: 8px 14px;
-            border-radius: 6px;
-            font-size: 13px;
-            z-index: 10;
-            color: #7bed9f;
-            max-width: 50vw;
+            left: 12px;
+            width: 280px;
+            max-height: calc(100vh - 24px);
+            overflow-y: auto;
+            padding: 6px;
+        }
+        #ops-panel.hidden { display: none; }
+
+        .section {
+            margin-bottom: 4px;
+            border: 1px solid #1a1a1a;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.4);
+        }
+        .section > summary {
+            padding: 5px 8px;
+            cursor: pointer;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #74b9ff;
+            font-weight: bold;
+            user-select: none;
+            list-style: none;
+        }
+        .section > summary::-webkit-details-marker { display: none; }
+        .section > summary::before {
+            content: '▸ ';
+            color: #555;
+            font-size: 10px;
+        }
+        .section[open] > summary::before { content: '▾ '; }
+        .section > summary:hover { background: rgba(116, 185, 255, 0.08); }
+        .section .body {
+            padding: 6px 8px 8px 8px;
+            border-top: 1px solid #1a1a1a;
+        }
+
+        /* Stats body */
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            font-family: monospace;
+            line-height: 1.5;
+            color: #bbb;
+        }
+        .stat-row .key { color: #777; }
+        .stat-row .val { color: #ddd; }
+        .stat-row.bad .val { color: #ff6b6b; }
+        .stat-row.ok  .val { color: #7bed9f; }
+
+        /* Generic controls */
+        .row {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 4px;
+        }
+        .row .grow { flex: 1; }
+        button.opbtn {
+            background: #1c1c1c;
+            color: #ddd;
+            border: 1px solid #2c2c2c;
+            border-radius: 3px;
+            padding: 4px 6px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            flex: 1;
+        }
+        button.opbtn:hover { background: #2a2a2a; color: #fff; }
+        button.opbtn.toggled {
+            background: #1a4a8a;
+            border-color: #3a6a9a;
+            color: #fff;
+        }
+        button.opbtn:disabled {
+            background: #111;
+            color: #444;
+            border-color: #222;
+            cursor: not-allowed;
+        }
+        button.opbtn.danger {
+            background: #4a1a1a;
+            border-color: #6a2a2a;
+            color: #ffb;
+        }
+        button.opbtn.danger:hover { background: #6a2a2a; }
+
+        label.field {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: #aaa;
+            margin-bottom: 4px;
+        }
+        label.field span.lbl { min-width: 56px; color: #888; }
+        label.field input[type=number],
+        label.field input[type=text] {
+            background: #111;
+            color: #ddd;
+            border: 1px solid #2c2c2c;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font-size: 11px;
+            font-family: monospace;
+            flex: 1;
+            width: 0;
+        }
+        label.field input[type=range] { flex: 1; }
+        label.field .num {
+            min-width: 52px;
+            font-family: monospace;
+            text-align: right;
+            color: #ddd;
+            font-size: 11px;
+        }
+        select.field {
+            width: 100%;
+            background: #111;
+            color: #ddd;
+            border: 1px solid #2c2c2c;
+            border-radius: 3px;
+            padding: 3px;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        .help-text {
+            font-size: 10px;
+            color: #666;
+            margin: 4px 0 2px 0;
+            font-style: italic;
+        }
+
+        /* Animations row in rig section */
+        .anim-list {
+            max-height: 120px;
+            overflow-y: auto;
+            border: 1px solid #1a1a1a;
+            border-radius: 3px;
+            margin-bottom: 4px;
+        }
+        .anim-item {
+            padding: 3px 6px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: monospace;
+            color: #bbb;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        #info {
+        .anim-item:hover { background: rgba(116, 185, 255, 0.08); color: #fff; }
+        .anim-item.active { background: #2a4a6a; color: #fff; font-weight: bold; }
+        .anim-item.blend  { background: #4a2a6a; color: #fff; }
+
+        /* UV inset */
+        #uv-inset {
             position: absolute;
-            bottom: 12px;
-            left: 12px;
-            right: 364px;
-            background: rgba(0,0,0,0.75);
-            padding: 8px 14px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-family: monospace;
-            z-index: 10;
-            white-space: pre;
-            overflow: hidden;
+            top: 12px;
+            right: 344px;
+            width: 220px;
+            height: 220px;
+            background: rgba(0,0,0,0.85);
+            border: 1px solid #2a2a2a;
+            border-radius: 4px;
+            display: none;
+            z-index: 9;
+            padding: 4px;
         }
-        canvas { display: block; width: 100vw; height: 100vh; background: transparent; }
+        #uv-inset.show { display: block; }
+        #uv-inset .label {
+            position: absolute;
+            top: 4px;
+            left: 6px;
+            font-size: 10px;
+            color: #888;
+            font-family: monospace;
+            pointer-events: none;
+        }
+        #uv-inset canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background: #050505;
+        }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
-    <div id="hud">
-        <h2>GLB / GLTF Viewer</h2>
-        <div class="hint"><b>right-drag</b> rotate &nbsp;·&nbsp; <b>middle-drag</b> pan &nbsp;·&nbsp; <b>wheel</b> zoom</div>
-    </div>
+
     <div id="status">Ready</div>
-    <div id="file-panel">
+
+    <!-- Drag-drop overlay -->
+    <div id="drop-overlay">Drop GLB / GLTF / OBJ / PLY / STL</div>
+
+    <!-- Left: ops panel -->
+    <div id="ops-panel" class="panel">
+        <details class="section" open>
+            <summary>Stats</summary>
+            <div class="body" id="stats-body">
+                <div class="stat-row"><span class="key">file</span>     <span class="val" id="st-file">—</span></div>
+                <div class="stat-row"><span class="key">meshes</span>   <span class="val" id="st-meshes">0</span></div>
+                <div class="stat-row"><span class="key">verts</span>    <span class="val" id="st-verts">0</span></div>
+                <div class="stat-row"><span class="key">tris</span>     <span class="val" id="st-tris">0</span></div>
+                <div class="stat-row"><span class="key">bbox</span>     <span class="val" id="st-bbox">—</span></div>
+                <div class="stat-row" id="st-row-manifold"><span class="key">manifold</span> <span class="val" id="st-manifold">—</span></div>
+                <div class="stat-row"><span class="key">volume</span>   <span class="val" id="st-volume">—</span></div>
+                <div class="stat-row" id="st-row-selfx"><span class="key">self-int</span>   <span class="val" id="st-selfx">—</span></div>
+                <div class="stat-row"><span class="key">UVs</span>      <span class="val" id="st-uvs">—</span></div>
+                <div class="stat-row"><span class="key">colors</span>   <span class="val" id="st-colors">—</span></div>
+            </div>
+        </details>
+
+        <details class="section" open>
+            <summary>View</summary>
+            <div class="body">
+                <label class="field"><span class="lbl">color</span>
+                    <select class="field" id="view-mode">
+                        <option value="original">original</option>
+                        <option value="normals">normals</option>
+                        <option value="curvature">curvature</option>
+                        <option value="ao">ambient occlusion</option>
+                        <option value="thickness">thickness</option>
+                    </select>
+                </label>
+                <div class="row">
+                    <button class="opbtn" id="view-hull">Convex hull</button>
+                    <button class="opbtn" id="view-selfx">Self-int</button>
+                </div>
+                <div class="row">
+                    <button class="opbtn" id="view-uv">UV inset</button>
+                    <button class="opbtn" id="view-bones">Bones</button>
+                </div>
+            </div>
+        </details>
+
+        <details class="section">
+            <summary>Modify</summary>
+            <div class="body">
+                <div class="help-text">Modifying breaks skinning — animation pauses until Reset.</div>
+                <div class="row">
+                    <button class="opbtn" id="mod-sub-loop">Subdiv L</button>
+                    <button class="opbtn" id="mod-sub-cc">Subdiv CC</button>
+                    <button class="opbtn" id="mod-sub-mid">Subdiv M</button>
+                </div>
+                <div class="row">
+                    <button class="opbtn" id="mod-smooth-lap">Smooth Lap</button>
+                    <button class="opbtn" id="mod-smooth-tau">Smooth Taubin</button>
+                </div>
+                <label class="field"><span class="lbl">edge len</span>
+                    <input type="number" id="mod-remesh-len" value="0.05" min="0.001" step="0.005">
+                </label>
+                <div class="row">
+                    <button class="opbtn" id="mod-remesh">Remesh isotropic</button>
+                </div>
+                <label class="field"><span class="lbl">simplify</span>
+                    <input type="range" id="mod-simplify-range" min="0.05" max="1.0" step="0.01" value="1.0">
+                    <span class="num" id="mod-simplify-num">100%</span>
+                </label>
+                <div class="row">
+                    <button class="opbtn" id="mod-unwrap">UV unwrap</button>
+                    <button class="opbtn danger" id="mod-reset">Reset</button>
+                </div>
+            </div>
+        </details>
+
+        <details class="section">
+            <summary>LOD</summary>
+            <div class="body">
+                <div class="help-text">ProgressiveMesh — drag to view LODs without rebuilding.</div>
+                <label class="field"><span class="lbl">level</span>
+                    <input type="range" id="lod-range" min="0.05" max="1.0" step="0.01" value="1.0" disabled>
+                    <span class="num" id="lod-num">—</span>
+                </label>
+                <div class="row">
+                    <button class="opbtn" id="lod-build">Build LOD chain</button>
+                    <button class="opbtn" id="lod-clear">Clear</button>
+                </div>
+            </div>
+        </details>
+
+        <details class="section" id="rig-section" style="display: none;">
+            <summary>Rig</summary>
+            <div class="body">
+                <div class="row">
+                    <button class="opbtn" id="rig-pause">Pause</button>
+                    <button class="opbtn" id="rig-bind">Bind pose</button>
+                </div>
+                <div class="help-text">Click to play. Shift-click to blend two animations.</div>
+                <div class="anim-list" id="anim-list"></div>
+                <label class="field" id="blend-row" style="display:none;"><span class="lbl">blend</span>
+                    <input type="range" id="blend-range" min="0" max="1" step="0.01" value="0.5">
+                    <span class="num" id="blend-num">0.50</span>
+                </label>
+            </div>
+        </details>
+
+        <details class="section">
+            <summary>Export</summary>
+            <div class="body">
+                <div class="help-text">Saves the currently displayed (modified) mesh.</div>
+                <div class="row">
+                    <button class="opbtn" id="exp-glb">GLB</button>
+                    <button class="opbtn" id="exp-obj">OBJ</button>
+                    <button class="opbtn" id="exp-ply">PLY</button>
+                    <button class="opbtn" id="exp-stl">STL</button>
+                </div>
+            </div>
+        </details>
+    </div>
+
+    <!-- Right: file browser -->
+    <div id="file-panel" class="panel">
         <div id="open-row">
             <button id="open-folder-btn" type="button">Open Folder…</button>
             <button id="open-file-btn"   type="button">Open File…</button>
         </div>
-        <div id="controls-row">
-            <button id="btn-pauseplay" type="button">Pause</button>
-            <button id="btn-next-anim" type="button">Next Anim</button>
-            <button id="btn-bindpose"  type="button">Bind Pose</button>
-            <button id="btn-bones"     type="button">Bones</button>
-        </div>
         <div id="dir-status"></div>
         <div id="file-list"></div>
     </div>
-    <div id="info"></div>
+
+    <!-- UV inset (top-right, left of file panel) -->
+    <div id="uv-inset">
+        <div class="label">UV layout</div>
+        <canvas id="uv-canvas" width="220" height="220"></canvas>
+    </div>
+
+    <!-- Help hint -->
+    <div id="help">
+        <b>right-drag</b> rotate · <b>middle-drag</b> pan · <b>wheel</b> zoom · <b>H</b> hide panel · <b>O</b> open folder · <b>F</b> open file
+    </div>
+
     <script src="../lib/camera.js"></script>
     <script src="app.js"></script>
 </body>
