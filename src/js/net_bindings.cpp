@@ -1,5 +1,5 @@
 #include "js/net_bindings.h"
-#include "net/network_manager.h"
+#include "net/net_service.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -7,34 +7,40 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 namespace bro::js {
 
 // ---------------------------------------------------------------------------
-// Globals
+// Per-JSContext state
 // ---------------------------------------------------------------------------
+struct NetCtxState {
+    net::NetService* service = nullptr;
+    net::NetSubscriber* subscriber = nullptr;
+    JSContext* ctx = nullptr;
 
-static net::NetworkManager* s_mgr = nullptr;
+    JSValue onConnect = JS_UNDEFINED;
+    JSValue onDisconnect = JS_UNDEFINED;
+    JSValue onMessage = JS_UNDEFINED;
 
-// Per-connection JS callback objects: { onmessage, ondisconnect }
-// Stored as DupValue'd JSValues keyed by connection handle.
-struct JSConnectionCallbacks {
-    JSValue onmessage = JS_UNDEFINED;    // function(data: ArrayBuffer)
-    JSValue ondisconnect = JS_UNDEFINED; // function(reason: number)
+    bool hosting = false;
+    bool hostPending = false;
+
+    // Connections we've seen a Connected event for — tracked here since the
+    // service thread no longer maintains a per-ctx connection list we can
+    // query. Used by bro.net.connections() and bro.net.isHosting().
+    std::unordered_map<uint32_t, bool> connections;
 };
-static std::unordered_map<HSteamNetConnection, JSConnectionCallbacks> s_connCallbacks;
-static JSContext* s_ctx = nullptr;
 
-// Host-level callbacks
-static JSValue s_onConnect = JS_UNDEFINED;    // function(connId: number)
-static JSValue s_onDisconnect = JS_UNDEFINED; // function(connId: number, reason: number)
-static JSValue s_onMessage = JS_UNDEFINED;    // function(connId: number, data: ArrayBuffer)
+static std::unordered_map<JSContext*, NetCtxState> s_states;
+
+static NetCtxState* getState(JSContext* ctx) {
+    auto it = s_states.find(ctx);
+    return (it == s_states.end()) ? nullptr : &it->second;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
 static std::string jsToString(JSContext* ctx, JSValueConst val) {
     const char* s = JS_ToCString(ctx, val);
     if (!s) return "";
@@ -45,52 +51,42 @@ static std::string jsToString(JSContext* ctx, JSValueConst val) {
 
 // ---------------------------------------------------------------------------
 // bro.net.init() → boolean
+//
+// Retained for backwards compatibility with existing apps; the service is
+// already initialized before bindings are installed, so this is a no-op
+// success.
 // ---------------------------------------------------------------------------
-
 static JSValue js_net_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    if (!s_mgr) return JS_FALSE;
-    return JS_NewBool(ctx, s_mgr->init());
+    return JS_NewBool(ctx, getState(ctx) != nullptr);
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.host(port) → boolean
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_host(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_mgr || !s_mgr->isInitialized()) {
-        return JS_ThrowInternalError(ctx, "Network not initialized — call bro.net.init() first");
-    }
+    auto* s = getState(ctx);
+    if (!s) return JS_ThrowInternalError(ctx, "bro.net not initialized");
     if (argc < 1) return JS_ThrowTypeError(ctx, "host() requires a port number");
 
     int32_t port = 0;
     JS_ToInt32(ctx, &port, argv[0]);
     if (port < 1 || port > 65535) return JS_ThrowRangeError(ctx, "port must be 1..65535");
 
-    return JS_NewBool(ctx, s_mgr->host(static_cast<uint16_t>(port)));
+    s->hostPending = true;
+    s->subscriber->host(static_cast<uint16_t>(port));
+    return JS_TRUE;
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.connect(address) → boolean
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_connect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_mgr || !s_mgr->isInitialized()) {
-        return JS_ThrowInternalError(ctx, "Network not initialized — call bro.net.init() first");
-    }
+    auto* s = getState(ctx);
+    if (!s) return JS_ThrowInternalError(ctx, "bro.net not initialized");
     if (argc < 1) return JS_ThrowTypeError(ctx, "connect() requires an address string");
 
     std::string addr = jsToString(ctx, argv[0]);
-    return JS_NewBool(ctx, s_mgr->connect(addr));
+    s->subscriber->connect(addr);
+    return JS_TRUE;
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.send(connId, data, reliable?) → boolean
-//   data: ArrayBuffer or string
-//   reliable: boolean (default true)
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_send(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_mgr || argc < 2) return JS_FALSE;
+    auto* s = getState(ctx);
+    if (!s || argc < 2) return JS_FALSE;
 
     uint32_t conn = 0;
     JS_ToUint32(ctx, &conn, argv[0]);
@@ -98,56 +94,43 @@ static JSValue js_net_send(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     bool reliable = true;
     if (argc >= 3) reliable = JS_ToBool(ctx, argv[2]);
 
-    // Check if data is a string or ArrayBuffer
     if (JS_IsString(argv[1])) {
         std::string str = jsToString(ctx, argv[1]);
-        return JS_NewBool(ctx, s_mgr->send(
-            static_cast<HSteamNetConnection>(conn),
-            str.data(), static_cast<uint32_t>(str.size()), reliable));
+        s->subscriber->send(conn, str.data(), static_cast<uint32_t>(str.size()), reliable);
+        return JS_TRUE;
     }
 
-    // ArrayBuffer
     size_t size = 0;
     uint8_t* buf = JS_GetArrayBuffer(ctx, &size, argv[1]);
     if (!buf) {
-        // Try typed array / DataView
         size_t offset, blen;
         JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[1], &offset, &blen, nullptr);
         if (!JS_IsException(abuf)) {
             buf = JS_GetArrayBuffer(ctx, &size, abuf);
             JS_FreeValue(ctx, abuf);
-            if (buf) {
-                buf += offset;
-                size = blen;
-            }
+            if (buf) { buf += offset; size = blen; }
         } else {
             JS_FreeValue(ctx, abuf);
             return JS_ThrowTypeError(ctx, "send() data must be a string, ArrayBuffer, or TypedArray");
         }
     }
-
     if (!buf) return JS_FALSE;
-    return JS_NewBool(ctx, s_mgr->send(
-        static_cast<HSteamNetConnection>(conn),
-        buf, static_cast<uint32_t>(size), reliable));
+    s->subscriber->send(conn, buf, static_cast<uint32_t>(size), reliable);
+    return JS_TRUE;
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.broadcast(data, reliable?) → undefined
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_broadcast(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_mgr || argc < 1) return JS_UNDEFINED;
+    auto* s = getState(ctx);
+    if (!s || argc < 1) return JS_UNDEFINED;
 
     bool reliable = true;
     if (argc >= 2) reliable = JS_ToBool(ctx, argv[1]);
 
     if (JS_IsString(argv[0])) {
         std::string str = jsToString(ctx, argv[0]);
-        s_mgr->broadcast(str.data(), static_cast<uint32_t>(str.size()), reliable);
+        s->subscriber->broadcast(str.data(), static_cast<uint32_t>(str.size()), reliable);
         return JS_UNDEFINED;
     }
-
     size_t size = 0;
     uint8_t* buf = JS_GetArrayBuffer(ctx, &size, argv[0]);
     if (!buf) {
@@ -156,69 +139,47 @@ static JSValue js_net_broadcast(JSContext* ctx, JSValueConst, int argc, JSValueC
         if (!JS_IsException(abuf)) {
             buf = JS_GetArrayBuffer(ctx, &size, abuf);
             JS_FreeValue(ctx, abuf);
-            if (buf) {
-                buf += offset;
-                size = blen;
-            }
+            if (buf) { buf += offset; size = blen; }
         } else {
             JS_FreeValue(ctx, abuf);
         }
     }
-
-    if (buf) {
-        s_mgr->broadcast(buf, static_cast<uint32_t>(size), reliable);
-    }
+    if (buf) s->subscriber->broadcast(buf, static_cast<uint32_t>(size), reliable);
     return JS_UNDEFINED;
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.disconnect(connId, reason?) → undefined
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_disconnect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_mgr || argc < 1) return JS_UNDEFINED;
+    auto* s = getState(ctx);
+    if (!s || argc < 1) return JS_UNDEFINED;
 
     uint32_t conn = 0;
     JS_ToUint32(ctx, &conn, argv[0]);
-
     int reason = 0;
     if (argc >= 2) JS_ToInt32(ctx, &reason, argv[1]);
 
-    s_mgr->disconnect(static_cast<HSteamNetConnection>(conn), reason);
-
-    // Clean up per-connection JS callbacks
-    auto it = s_connCallbacks.find(static_cast<HSteamNetConnection>(conn));
-    if (it != s_connCallbacks.end()) {
-        JS_FreeValue(ctx, it->second.onmessage);
-        JS_FreeValue(ctx, it->second.ondisconnect);
-        s_connCallbacks.erase(it);
-    }
-
+    s->subscriber->disconnect(conn, reason);
+    s->connections.erase(conn);
     return JS_UNDEFINED;
 }
-
-// ---------------------------------------------------------------------------
-// bro.net.close() → undefined   (close listen socket / stop hosting)
-// ---------------------------------------------------------------------------
 
 static JSValue js_net_close(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    if (s_mgr) s_mgr->closeHost();
+    auto* s = getState(ctx);
+    if (!s) return JS_UNDEFINED;
+    s->subscriber->closeHost();
+    s->hosting = false;
+    s->connections.clear();
     return JS_UNDEFINED;
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.stats(connId) → { ping, packetLoss, bytesSent, bytesRecv } | null
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_stats(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_mgr || argc < 1) return JS_NULL;
+    auto* s = getState(ctx);
+    if (!s || argc < 1) return JS_NULL;
 
     uint32_t conn = 0;
     JS_ToUint32(ctx, &conn, argv[0]);
 
     net::ConnectionStats stats;
-    if (!s_mgr->getConnectionStats(static_cast<HSteamNetConnection>(conn), stats))
-        return JS_NULL;
+    if (!s->subscriber->getConnectionStats(conn, stats)) return JS_NULL;
 
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "ping", JS_NewFloat64(ctx, stats.ping));
@@ -228,65 +189,46 @@ static JSValue js_net_stats(JSContext* ctx, JSValueConst, int argc, JSValueConst
     return obj;
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.connections() → [connId, ...]
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_connections(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    if (!s_mgr) return JS_NewArray(ctx);
-
-    auto conns = s_mgr->connections();
+    auto* s = getState(ctx);
     JSValue arr = JS_NewArray(ctx);
-    for (size_t i = 0; i < conns.size(); ++i) {
-        JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i),
-                             JS_NewUint32(ctx, static_cast<uint32_t>(conns[i])));
+    if (!s) return arr;
+    uint32_t i = 0;
+    for (auto& [conn, _] : s->connections) {
+        JS_SetPropertyUint32(ctx, arr, i++, JS_NewUint32(ctx, conn));
     }
     return arr;
 }
 
-// ---------------------------------------------------------------------------
-// bro.net.isHosting() → boolean
-// ---------------------------------------------------------------------------
-
 static JSValue js_net_isHosting(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_NewBool(ctx, s_mgr && s_mgr->isHosting());
+    auto* s = getState(ctx);
+    return JS_NewBool(ctx, s && s->hosting);
 }
 
 // ---------------------------------------------------------------------------
-// Callback properties: bro.net.onconnect, onmessage, ondisconnect
+// Callback property accessors — straightforward get/set of stored JSValues.
 // ---------------------------------------------------------------------------
+#define CB_ACCESSORS(name, field)                                              \
+    static JSValue js_net_get_##name(JSContext* ctx, JSValueConst, int, JSValueConst*) { \
+        auto* s = getState(ctx);                                               \
+        return s ? JS_DupValue(ctx, s->field) : JS_UNDEFINED;                  \
+    }                                                                          \
+    static JSValue js_net_set_##name(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) { \
+        auto* s = getState(ctx);                                               \
+        if (!s) return JS_UNDEFINED;                                           \
+        JS_FreeValue(ctx, s->field);                                           \
+        s->field = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;      \
+        return JS_UNDEFINED;                                                   \
+    }
 
-static JSValue js_net_get_onconnect(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_DupValue(ctx, s_onConnect);
-}
-static JSValue js_net_set_onconnect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    JS_FreeValue(ctx, s_onConnect);
-    s_onConnect = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
-    return JS_UNDEFINED;
-}
-
-static JSValue js_net_get_ondisconnect(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_DupValue(ctx, s_onDisconnect);
-}
-static JSValue js_net_set_ondisconnect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    JS_FreeValue(ctx, s_onDisconnect);
-    s_onDisconnect = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
-    return JS_UNDEFINED;
-}
-
-static JSValue js_net_get_onmessage(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_DupValue(ctx, s_onMessage);
-}
-static JSValue js_net_set_onmessage(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    JS_FreeValue(ctx, s_onMessage);
-    s_onMessage = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
-    return JS_UNDEFINED;
-}
+CB_ACCESSORS(onconnect, onConnect)
+CB_ACCESSORS(ondisconnect, onDisconnect)
+CB_ACCESSORS(onmessage, onMessage)
+#undef CB_ACCESSORS
 
 // ---------------------------------------------------------------------------
 // Function list for bro.net namespace
 // ---------------------------------------------------------------------------
-
 static const JSCFunctionListEntry js_net_funcs[] = {
     JS_CFUNC_DEF("init", 0, js_net_init),
     JS_CFUNC_DEF("host", 1, js_net_host),
@@ -301,60 +243,69 @@ static const JSCFunctionListEntry js_net_funcs[] = {
 };
 
 // ---------------------------------------------------------------------------
-// Install / Cleanup
+// Install / Cleanup / Poll
 // ---------------------------------------------------------------------------
+void NetBindings::install(JSContext* ctx, net::NetService* service) {
+    NetCtxState state;
+    state.service = service;
+    state.ctx = ctx;
+    state.subscriber = service->createSubscriber();
 
-void NetBindings::install(JSContext* ctx, net::NetworkManager* mgr) {
-    s_mgr = mgr;
-    s_ctx = ctx;
-
-    // Wire C++ callbacks → JS callbacks
-    mgr->onConnect = [](HSteamNetConnection conn) {
-        if (!s_ctx || JS_IsUndefined(s_onConnect)) return;
-        JSValue arg = JS_NewUint32(s_ctx, static_cast<uint32_t>(conn));
-        JSValue ret = JS_Call(s_ctx, s_onConnect, JS_UNDEFINED, 1, &arg);
-        JS_FreeValue(s_ctx, ret);
-        JS_FreeValue(s_ctx, arg);
+    // Wire subscriber callbacks → JS callbacks on this context.
+    // These fire synchronously during poll() on this context's thread.
+    state.subscriber->onHostResult = [ctx](bool success) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        s->hostPending = false;
+        s->hosting = success;
     };
-
-    mgr->onDisconnect = [](HSteamNetConnection conn, int reason) {
-        if (!s_ctx) return;
-        // Fire global ondisconnect
-        if (!JS_IsUndefined(s_onDisconnect)) {
+    state.subscriber->onConnectResult = [](bool) {
+        // Initiation ack only — app listens for onConnect for the actual link.
+    };
+    state.subscriber->onConnect = [ctx](uint32_t conn) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        s->connections[conn] = true;
+        if (!JS_IsUndefined(s->onConnect) && !JS_IsNull(s->onConnect)) {
+            JSValue arg = JS_NewUint32(ctx, conn);
+            JSValue ret = JS_Call(ctx, s->onConnect, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+        }
+    };
+    state.subscriber->onDisconnect = [ctx](uint32_t conn, int reason) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        s->connections.erase(conn);
+        if (!JS_IsUndefined(s->onDisconnect) && !JS_IsNull(s->onDisconnect)) {
             JSValue args[2] = {
-                JS_NewUint32(s_ctx, static_cast<uint32_t>(conn)),
-                JS_NewInt32(s_ctx, reason)
+                JS_NewUint32(ctx, conn),
+                JS_NewInt32(ctx, reason),
             };
-            JSValue ret = JS_Call(s_ctx, s_onDisconnect, JS_UNDEFINED, 2, args);
-            JS_FreeValue(s_ctx, ret);
-            JS_FreeValue(s_ctx, args[0]);
-            JS_FreeValue(s_ctx, args[1]);
-        }
-        // Clean up per-connection callbacks
-        auto it = s_connCallbacks.find(conn);
-        if (it != s_connCallbacks.end()) {
-            JS_FreeValue(s_ctx, it->second.onmessage);
-            JS_FreeValue(s_ctx, it->second.ondisconnect);
-            s_connCallbacks.erase(it);
+            JSValue ret = JS_Call(ctx, s->onDisconnect, JS_UNDEFINED, 2, args);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, args[0]);
+            JS_FreeValue(ctx, args[1]);
         }
     };
-
-    mgr->onMessage = [](net::NetworkMessage&& msg) {
-        if (!s_ctx || JS_IsUndefined(s_onMessage)) return;
-
-        // Create an ArrayBuffer from the message data
-        JSValue ab = JS_NewArrayBufferCopy(s_ctx, msg.data.data(), msg.data.size());
+    state.subscriber->onMessage = [ctx](net::NetworkMessage&& msg) {
+        auto* s = getState(ctx);
+        if (!s) return;
+        if (JS_IsUndefined(s->onMessage) || JS_IsNull(s->onMessage)) return;
+        JSValue ab = JS_NewArrayBufferCopy(ctx, msg.data.data(), msg.data.size());
         JSValue args[2] = {
-            JS_NewUint32(s_ctx, static_cast<uint32_t>(msg.connection)),
+            JS_NewUint32(ctx, msg.connection),
             ab
         };
-        JSValue ret = JS_Call(s_ctx, s_onMessage, JS_UNDEFINED, 2, args);
-        JS_FreeValue(s_ctx, ret);
-        JS_FreeValue(s_ctx, args[0]);
-        JS_FreeValue(s_ctx, args[1]);
+        JSValue ret = JS_Call(ctx, s->onMessage, JS_UNDEFINED, 2, args);
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, args[0]);
+        JS_FreeValue(ctx, args[1]);
     };
 
-    // Create bro.net object using qjsbind::Global for bro, then attach net
+    s_states[ctx] = std::move(state);
+
+    // Build bro.net namespace.
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
     if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
@@ -363,32 +314,29 @@ void NetBindings::install(JSContext* ctx, net::NetworkManager* mgr) {
     }
 
     JSValue netObj = JS_NewObject(ctx);
-
-    // Methods via function list
     JS_SetPropertyFunctionList(ctx, netObj, js_net_funcs,
                                sizeof(js_net_funcs) / sizeof(js_net_funcs[0]));
 
-    // Callback properties via getter/setter
-    JSAtom onconnectAtom = JS_NewAtom(ctx, "onconnect");
-    JS_DefinePropertyGetSet(ctx, netObj, onconnectAtom,
+    JSAtom aConnect = JS_NewAtom(ctx, "onconnect");
+    JS_DefinePropertyGetSet(ctx, netObj, aConnect,
         JS_NewCFunction(ctx, js_net_get_onconnect, "get onconnect", 0),
         JS_NewCFunction(ctx, js_net_set_onconnect, "set onconnect", 1),
         JS_PROP_CONFIGURABLE);
-    JS_FreeAtom(ctx, onconnectAtom);
+    JS_FreeAtom(ctx, aConnect);
 
-    JSAtom ondisconnectAtom = JS_NewAtom(ctx, "ondisconnect");
-    JS_DefinePropertyGetSet(ctx, netObj, ondisconnectAtom,
+    JSAtom aDisconnect = JS_NewAtom(ctx, "ondisconnect");
+    JS_DefinePropertyGetSet(ctx, netObj, aDisconnect,
         JS_NewCFunction(ctx, js_net_get_ondisconnect, "get ondisconnect", 0),
         JS_NewCFunction(ctx, js_net_set_ondisconnect, "set ondisconnect", 1),
         JS_PROP_CONFIGURABLE);
-    JS_FreeAtom(ctx, ondisconnectAtom);
+    JS_FreeAtom(ctx, aDisconnect);
 
-    JSAtom onmessageAtom = JS_NewAtom(ctx, "onmessage");
-    JS_DefinePropertyGetSet(ctx, netObj, onmessageAtom,
+    JSAtom aMessage = JS_NewAtom(ctx, "onmessage");
+    JS_DefinePropertyGetSet(ctx, netObj, aMessage,
         JS_NewCFunction(ctx, js_net_get_onmessage, "get onmessage", 0),
         JS_NewCFunction(ctx, js_net_set_onmessage, "set onmessage", 1),
         JS_PROP_CONFIGURABLE);
-    JS_FreeAtom(ctx, onmessageAtom);
+    JS_FreeAtom(ctx, aMessage);
 
     JS_SetPropertyStr(ctx, broObj, "net", netObj);
     JS_FreeValue(ctx, broObj);
@@ -396,22 +344,32 @@ void NetBindings::install(JSContext* ctx, net::NetworkManager* mgr) {
 }
 
 void NetBindings::cleanup(JSContext* ctx) {
-    // Free JS callback references
+    auto it = s_states.find(ctx);
+    if (it == s_states.end()) return;
+
+    auto& s = it->second;
+    // Drop JS refs (the service's callbacks reference this state but we'll
+    // clear them below; if a late event slips through getState() it returns
+    // nullptr so the lambda body is a no-op).
     if (ctx) {
-        JS_FreeValue(ctx, s_onConnect);
-        JS_FreeValue(ctx, s_onDisconnect);
-        JS_FreeValue(ctx, s_onMessage);
-        for (auto& [conn, cbs] : s_connCallbacks) {
-            JS_FreeValue(ctx, cbs.onmessage);
-            JS_FreeValue(ctx, cbs.ondisconnect);
-        }
+        JS_FreeValue(ctx, s.onConnect);
+        JS_FreeValue(ctx, s.onDisconnect);
+        JS_FreeValue(ctx, s.onMessage);
     }
-    s_onConnect = JS_UNDEFINED;
-    s_onDisconnect = JS_UNDEFINED;
-    s_onMessage = JS_UNDEFINED;
-    s_connCallbacks.clear();
-    s_ctx = nullptr;
-    s_mgr = nullptr;
+
+    // Detach the subscriber. The service thread will close any sockets it
+    // owns and free the subscriber asynchronously.
+    if (s.service && s.subscriber) {
+        s.service->destroySubscriber(s.subscriber);
+    }
+
+    s_states.erase(it);
+}
+
+void NetBindings::poll(JSContext* ctx) {
+    auto* s = getState(ctx);
+    if (!s || !s->subscriber) return;
+    s->subscriber->poll();
 }
 
 } // namespace bro::js

@@ -30,7 +30,7 @@ namespace bro::render { class GLContext; class RasterRenderer; class CPURasterRe
 namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
-namespace bro::net { class NetworkManager; }
+namespace bro::net { class NetService; }
 namespace bro::scene { class SceneGraph; }
 namespace bro::canvas { class CanvasScene; }
 
@@ -442,7 +442,7 @@ private:
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
-    std::unique_ptr<net::NetworkManager> networkManager_;
+    std::unique_ptr<net::NetService> netService_;
     struct SceneGraphEntry {
         std::unique_ptr<scene::SceneGraph> graph;
         dom::Element* element = nullptr;  // non-owning

@@ -15,6 +15,8 @@
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/worker.h"
+#include "js/net_bindings.h"
+#include "net/net_service.h"
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -26,7 +28,6 @@
 #include "webgl/webgl2_context.h"
 
 #include <broaudio/engine.h>
-#include "net/network_manager.h"
 
 #include <stb_image_write.h>
 
@@ -180,9 +181,9 @@ void Engine::advanceTime(double ms) {
         js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
 
-        // Poll network (drain incoming messages, fire JS callbacks)
-        if (networkManager_ && networkManager_->isInitialized()) {
-            networkManager_->poll();
+        // Poll network (drain subscriber's event queue, fire JS callbacks)
+        if (netService_) {
+            js::NetBindings::poll(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
         }
 

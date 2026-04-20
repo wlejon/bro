@@ -44,7 +44,7 @@
 #include "js/server_bindings.h"
 
 #include "physics/physics_world.h"
-#include "net/network_manager.h"
+#include "net/net_service.h"
 #include "scene/scene_graph.h"
 #include "api/api.h"
 #include "runtime/runtime.h"
@@ -176,9 +176,15 @@ Engine::Engine(const EngineConfig& config)
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());
 
-    // Network manager + bindings (all modes)
-    networkManager_ = std::make_unique<net::NetworkManager>();
-    js::NetBindings::install(jsRuntime_->getContext(), networkManager_.get());
+    // Network service + bindings (all modes). NetService owns GNS on its own
+    // thread; bindings hold a per-context subscriber that polls each frame.
+    netService_ = std::make_unique<net::NetService>();
+    js::NetBindings::install(jsRuntime_->getContext(), netService_.get());
+
+    // bro.server.* (all modes) — in windowed mode this lets the process host
+    // an in-process server script (e.g. the launcher running apps/fps/server.js).
+    serverStartTime_ = util::currentTimeMs();
+    js::ServerBindings::install(jsRuntime_->getContext(), this);
 
     // === Server mode: lightweight init — no rendering, DOM, or audio ===
 
@@ -197,9 +203,6 @@ Engine::Engine(const EngineConfig& config)
 
         // Worker bindings
         js::installWorkerBindings(jsRuntime_->getContext(), config.appDir);
-
-        // Server-specific JS API (bro.server.*)
-        js::ServerBindings::install(jsRuntime_->getContext(), this);
 
         LOG_INFO("Server mode initialized (no rendering, no DOM, no audio)");
         return;
@@ -1597,7 +1600,6 @@ void Engine::run() {
     // Server mode: tick loop driven by real wall-clock time.
     if (displayMode_ == DisplayMode::Server) {
         running_ = true;
-        serverStartTime_ = util::currentTimeMs();
         LOG_INFO("[server] Running at %.0f ticks/sec", serverTickRate_);
 
         while (running_ && !serverStopRequested_ && !bro::util::interrupted()) {
@@ -1638,9 +1640,9 @@ void Engine::run() {
             js::tickWorkers(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
 
-            // 6. Poll network
-            if (networkManager_ && networkManager_->isInitialized()) {
-                networkManager_->poll();
+            // 6. Poll network (drain subscriber's event queue, fire JS callbacks)
+            if (netService_) {
+                js::NetBindings::poll(jsRuntime_->getContext());
                 jsRuntime_->executePendingJobs();
             }
 
@@ -1909,9 +1911,9 @@ void Engine::run() {
         js::tickWorkers(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
 
-        // 3b3. Poll network (drain incoming messages, fire JS callbacks)
-        if (networkManager_ && networkManager_->isInitialized()) {
-            networkManager_->poll();
+        // 3b3. Poll network (drain subscriber's event queue, fire JS callbacks)
+        if (netService_) {
+            js::NetBindings::poll(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
         }
 
