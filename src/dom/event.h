@@ -245,6 +245,14 @@ private:
     std::string pseudoElement_;
 };
 
+// A single entry on ClipboardEvent.clipboardData. Bytes are populated for
+// binary items (image/png, image/bmp, …); text is populated for string items.
+struct ClipboardItem {
+    std::string mime;
+    std::vector<uint8_t> bytes;
+    std::string text;
+};
+
 class ClipboardEvent : public Event {
 public:
     ClipboardEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
@@ -253,8 +261,12 @@ public:
     const std::string& clipboardText() const { return clipboardText_; }
     void setClipboardText(const std::string& v) { clipboardText_ = v; }
 
+    const std::vector<ClipboardItem>& items() const { return items_; }
+    void addItem(ClipboardItem item) { items_.push_back(std::move(item)); }
+
 private:
     std::string clipboardText_;
+    std::vector<ClipboardItem> items_;
 };
 
 class DragEvent : public MouseEvent {

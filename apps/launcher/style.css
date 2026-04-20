@@ -48,6 +48,13 @@ header h1 {
     border: 1px solid #2a2e34;
     border-radius: 12px;
     color: #cfd3d9;
+    cursor: pointer;
+}
+
+.running-pill.selected {
+    border-color: #3b7dd8;
+    background: #1e2633;
+    color: #e6eefc;
 }
 
 .running-pill .dot {

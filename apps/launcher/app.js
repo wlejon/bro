@@ -61,13 +61,25 @@ function loadApps() {
 
 const running = new Map();
 
+// The app that pasted images will overwrite the thumbnail for. Set to the
+// most recently launched app, or whichever pill the user clicks.
+let pasteTargetDir = null;
+
+function setPasteTarget(dir) {
+    pasteTargetDir = running.has(dir) ? dir : null;
+    updateRunningStrip();
+}
+
 function updateRunningStrip() {
     const strip = document.getElementById('running-strip');
     strip.innerHTML = '';
     for (const [dir, entry] of running) {
         const pill = document.createElement('div');
         pill.className = 'running-pill';
+        if (dir === pasteTargetDir) pill.classList.add('selected');
+        pill.title = 'Click to target Ctrl+V thumbnail update';
         pill.innerHTML = `<span class="dot"></span><span>${entry.app.title}</span>`;
+        pill.addEventListener('click', () => setPasteTarget(dir));
         const close = document.createElement('button');
         close.textContent = '×';
         close.title = 'Stop';
@@ -124,14 +136,18 @@ function launchApp(app, tile) {
     }
 
     running.set(app.dir, { app, client: clientProc, server: serverProc, tile });
+    pasteTargetDir = app.dir;
     updateRunningStrip();
-    setStatus(`${app.title} running (pid ${clientProc.pid}).`);
+    setStatus(`${app.title} running (pid ${clientProc.pid}). Ctrl+V to paste a new thumbnail.`);
 
     clientProc.on('exit', (code) => {
         const entry = running.get(app.dir);
         if (!entry) return;
         if (entry.server) entry.server.kill();
         running.delete(app.dir);
+        if (pasteTargetDir === app.dir) {
+            pasteTargetDir = running.keys().next().value || null;
+        }
         tile.classList.remove('launching');
         updateRunningStrip();
         setStatus(`${app.title} exited (code ${code}).`);
@@ -197,6 +213,65 @@ function render() {
 
     setStatus(`${apps.length} apps · ${EXE_DIR}`);
 }
+
+// ─── Paste-to-update-thumbnail ─────────────────────────────────────────────
+// Ctrl+V from an external screenshot (Snip & Sketch on Windows, ⌘⇧4 on mac)
+// overwrites the thumbnail for the currently-targeted app.
+
+async function writeThumbnailFromClipboard(e) {
+    if (!pasteTargetDir) {
+        setStatus('Paste ignored: no app targeted. Launch one or click its running pill.');
+        return;
+    }
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    let file = null;
+    // Prefer PNG; BMP is accepted but clipboard-as-BMP is an edge case.
+    for (const it of items) {
+        if (it.kind === 'file' && it.type === 'image/png') { file = it.getAsFile(); break; }
+    }
+    if (!file) {
+        for (const it of items) {
+            if (it.kind === 'file' && it.type === 'image/bmp') { file = it.getAsFile(); break; }
+        }
+    }
+    if (!file) {
+        setStatus('Paste ignored: clipboard has no image.');
+        return;
+    }
+
+    const dir = pasteTargetDir;
+    const ext = file.type === 'image/png' ? 'png' : 'bmp';
+    const outPath = path.join(APPS_ROOT, 'launcher', 'thumbnails', dir + '.' + ext);
+
+    const buf = new Uint8Array(await file.arrayBuffer());
+    fs.writeFileSync(outPath, buf);
+
+    // Bust the CSS background-image cache for just this tile by writing an
+    // inline style on the thumb div with a timestamped URL.
+    const entry = running.get(dir);
+    const thumb = entry && entry.tile.querySelector('.thumb');
+    const stamp = Date.now();
+    const relUrl = 'thumbnails/' + dir + '.' + ext + '?v=' + stamp;
+    if (thumb) {
+        thumb.style.backgroundImage = 'url(' + relUrl + ')';
+        thumb.textContent = '';
+    }
+    // Also update any non-running tile for this dir.
+    const allTiles = document.querySelectorAll('.thumb[data-app="' + dir + '"]');
+    for (const t of allTiles) {
+        t.style.backgroundImage = 'url(' + relUrl + ')';
+        t.textContent = '';
+    }
+    setStatus(`Updated thumbnail for ${entry ? entry.app.title : dir} (${buf.length} bytes).`);
+    e.preventDefault();
+}
+
+document.addEventListener('paste', (e) => {
+    writeThumbnailFromClipboard(e).catch(err => {
+        console.error('paste failed:', err);
+        setStatus('Paste failed: ' + err.message);
+    });
+});
 
 window.addEventListener('beforeunload', () => {
     for (const entry of running.values()) {

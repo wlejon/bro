@@ -835,6 +835,21 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
             dom::ClipboardEvent pasteEvt("paste", true, true);
             pasteEvt.setClipboardText(text);
+            if (!text.empty()) {
+                pasteEvt.addItem({"text/plain", {}, text});
+            }
+            // Pull any image formats the system has. SDL3 normalizes CF_DIB/CF_DIBV5
+            // to "image/bmp" and the Windows CF_PNG format to "image/png" for us.
+            for (const char* mime : {"image/png", "image/bmp", "image/jpeg"}) {
+                if (!SDL_HasClipboardData(mime)) continue;
+                size_t n = 0;
+                void* p = SDL_GetClipboardData(mime, &n);
+                if (p && n > 0) {
+                    auto* bp = static_cast<const uint8_t*>(p);
+                    pasteEvt.addItem({mime, std::vector<uint8_t>(bp, bp + n), ""});
+                }
+                if (p) SDL_free(p);
+            }
             pasteEvt.setIsTrusted(true);
             dispatchEvent(target, pasteEvt);
 
@@ -1247,6 +1262,9 @@ void Engine::simulatePaste(const std::string& text) {
 
     dom::ClipboardEvent pasteEvt("paste", true, true);
     pasteEvt.setClipboardText(text);
+    if (!text.empty()) {
+        pasteEvt.addItem({"text/plain", {}, text});
+    }
     pasteEvt.setIsTrusted(true);
     dispatchEvent(target, pasteEvt);
 

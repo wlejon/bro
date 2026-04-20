@@ -266,20 +266,20 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
                           JS_NewString(ctx, animEvt->pseudoElement().c_str()));
     }
 
-    // ClipboardEvent — clipboardData with getData/setData
+    // ClipboardEvent — clipboardData shaped like the web's DataTransfer:
+    //   .getData("text/plain")         existing text path
+    //   .setData(type, data)           existing write-back path
+    //   .items[i]                      {kind, type, getAsFile(), getAsString(cb)}
+    //   .files[i]                      File objects (from brokit's Blob/File) for binary items
     auto* clipEvt = dynamic_cast<bro::dom::ClipboardEvent*>(&event);
     if (clipEvt) {
         JSValue dt = JS_NewObject(ctx);
         std::string text = clipEvt->clipboardText();
-        // Store the text in a closure for getData
         JS_SetPropertyStr(ctx, dt, "_text", JS_NewString(ctx, text.c_str()));
-        // getData(type) — returns text for "text/plain" or "text"
         JS_SetPropertyStr(ctx, dt, "getData", JS_NewCFunction2(ctx,
             [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
-                JSValue t = JS_GetPropertyStr(c, this_val, "_text");
-                return t;
+                return JS_GetPropertyStr(c, this_val, "_text");
             }, "getData", 1, JS_CFUNC_generic, 0));
-        // setData(type, data) — stash for reading back
         JS_SetPropertyStr(ctx, dt, "setData", JS_NewCFunction2(ctx,
             [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                 if (argc >= 2) {
@@ -287,6 +287,89 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
                 }
                 return JS_UNDEFINED;
             }, "setData", 2, JS_CFUNC_generic, 0));
+
+        // Build items[] and files[]. File objects come from brokit's globalThis.File
+        // so they carry real byte buffers with arrayBuffer()/text()/slice().
+        JSValue itemsArr = JS_NewArray(ctx);
+        JSValue filesArr = JS_NewArray(ctx);
+        uint32_t itemIdx = 0, fileIdx = 0;
+
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue fileCtor = JS_GetPropertyStr(ctx, global, "File");
+        JSValue u8Ctor = JS_GetPropertyStr(ctx, global, "Uint8Array");
+        bool haveFile = JS_IsConstructor(ctx, fileCtor) && JS_IsConstructor(ctx, u8Ctor);
+
+        for (const auto& it : clipEvt->items()) {
+            JSValue itemObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, itemObj, "type",
+                              JS_NewString(ctx, it.mime.c_str()));
+
+            if (!it.bytes.empty() && haveFile) {
+                JS_SetPropertyStr(ctx, itemObj, "kind", JS_NewString(ctx, "file"));
+
+                // new Uint8Array(new ArrayBuffer(<bytes>))
+                JSValue ab = JS_NewArrayBufferCopy(ctx, it.bytes.data(), it.bytes.size());
+                JSValue u8 = JS_CallConstructor(ctx, u8Ctor, 1, &ab);
+                JS_FreeValue(ctx, ab);
+
+                // new File([u8], name, {type})
+                JSValue parts = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, parts, 0, u8);  // transfers u8
+                JSValue opts = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, opts, "type", JS_NewString(ctx, it.mime.c_str()));
+
+                std::string name = "clipboard";
+                if (it.mime == "image/png") name += ".png";
+                else if (it.mime == "image/bmp") name += ".bmp";
+                else if (it.mime == "image/jpeg") name += ".jpg";
+                JSValue nameVal = JS_NewString(ctx, name.c_str());
+
+                JSValueConst fileArgs[3] = {parts, nameVal, opts};
+                JSValue file = JS_CallConstructor(ctx, fileCtor, 3, fileArgs);
+                JS_FreeValue(ctx, parts);
+                JS_FreeValue(ctx, nameVal);
+                JS_FreeValue(ctx, opts);
+
+                // Stash on item for getAsFile(); also push into files[].
+                JS_SetPropertyStr(ctx, itemObj, "_file", JS_DupValue(ctx, file));
+                JS_SetPropertyUint32(ctx, filesArr, fileIdx++, file);
+
+                JS_SetPropertyStr(ctx, itemObj, "getAsFile", JS_NewCFunction(ctx,
+                    [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                        return JS_GetPropertyStr(c, this_val, "_file");
+                    }, "getAsFile", 0));
+                JS_SetPropertyStr(ctx, itemObj, "getAsString", JS_NewCFunction(ctx,
+                    [](JSContext*, JSValueConst, int, JSValueConst*) -> JSValue {
+                        return JS_UNDEFINED;  // spec: no-op for file items
+                    }, "getAsString", 1));
+            } else {
+                JS_SetPropertyStr(ctx, itemObj, "kind", JS_NewString(ctx, "string"));
+                JS_SetPropertyStr(ctx, itemObj, "_text",
+                                  JS_NewString(ctx, it.text.c_str()));
+                JS_SetPropertyStr(ctx, itemObj, "getAsString", JS_NewCFunction(ctx,
+                    [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                        if (argc >= 1 && JS_IsFunction(c, argv[0])) {
+                            JSValue t = JS_GetPropertyStr(c, this_val, "_text");
+                            JSValue r = JS_Call(c, argv[0], JS_UNDEFINED, 1, &t);
+                            JS_FreeValue(c, r);
+                            JS_FreeValue(c, t);
+                        }
+                        return JS_UNDEFINED;
+                    }, "getAsString", 1));
+                JS_SetPropertyStr(ctx, itemObj, "getAsFile", JS_NewCFunction(ctx,
+                    [](JSContext*, JSValueConst, int, JSValueConst*) -> JSValue {
+                        return JS_NULL;
+                    }, "getAsFile", 0));
+            }
+            JS_SetPropertyUint32(ctx, itemsArr, itemIdx++, itemObj);
+        }
+
+        JS_FreeValue(ctx, fileCtor);
+        JS_FreeValue(ctx, u8Ctor);
+        JS_FreeValue(ctx, global);
+
+        JS_SetPropertyStr(ctx, dt, "items", itemsArr);
+        JS_SetPropertyStr(ctx, dt, "files", filesArr);
         JS_SetPropertyStr(ctx, jsEvent, "clipboardData", dt);
     }
 
