@@ -185,6 +185,59 @@ const canSee = bro.ai.game.hasLineOfSight(
  */
 const aim2 = bro.ai.game.computeAim(0, 1.6, 0, 10, 1.6, -5);
 
+/**
+ * Lead a moving target with a finite-speed projectile. Solves for the future
+ * intercept point and returns the aim angles to that point, plus a `valid`
+ * flag (false if no real intercept exists, e.g. target outrunning projectile)
+ * and the predicted time-of-flight.
+ *
+ * @param {number} fromX  @param {number} fromY  @param {number} fromZ
+ * @param {number} targetX @param {number} targetY @param {number} targetZ
+ * @param {number} targetVX @param {number} targetVY @param {number} targetVZ
+ * @param {number} projectileSpeed
+ * @returns {{ yaw: number, pitch: number, valid: boolean, timeToHit: number }}
+ */
+const lead = bro.ai.game.computeLeadAim(
+    0, 1.6, 0,             // shooter
+    10, 1.6, -5,           // target pos
+    -2, 0, 1,              // target velocity
+    40);                   // projectile speed
+if (lead.valid) bot.fire(lead.yaw, lead.pitch);
+
+
+// -----------------------------------------------------------------------------
+// bro.ai.game.steer.* — pure-function steering primitives
+// -----------------------------------------------------------------------------
+//
+// Stateless 2D steering kernels. Each returns a desired-velocity direction
+// `{fx, fz}` (NOT normalized) — the caller integrates it into actual motion
+// (multiply by speed * dt, clamp, blend, etc.). Use these inside custom
+// think() callbacks or scripted policies when Agent's built-in path-following
+// isn't the right behavior. All positions and velocities are XZ-plane.
+
+/** Move directly toward `target` at full desired speed.
+ *  @returns {{fx: number, fz: number}} */
+const s1 = bro.ai.game.steer.seek(selfX, selfZ, targetX, targetZ);
+
+/** Seek with deceleration once within `slowingRadius` of `target`. Used
+ *  by Agent for the final waypoint so it doesn't overshoot.
+ *  @param {number} slowingRadius */
+const s2 = bro.ai.game.steer.arrive(selfX, selfZ, targetX, targetZ, 1.5);
+
+/** Move directly away from a threat point. */
+const s3 = bro.ai.game.steer.flee(selfX, selfZ, threatX, threatZ);
+
+/** Lead a moving target — seeks the predicted future position assuming
+ *  constant target velocity. `selfSpeed` sets the lookahead horizon.
+ *  @param {number} targetVX @param {number} targetVZ @param {number} selfSpeed */
+const s4 = bro.ai.game.steer.pursue(
+    selfX, selfZ, targetX, targetZ, targetVX, targetVZ, selfSpeed);
+
+/** Inverse of pursue — flee from the threat's predicted future position.
+ *  @param {number} threatVX @param {number} threatVZ @param {number} selfSpeed */
+const s5 = bro.ai.game.steer.evade(
+    selfX, selfZ, threatX, threatZ, threatVX, threatVZ, selfSpeed);
+
 
 // -----------------------------------------------------------------------------
 // Capability / policy / AgentBinding — scene-driven AI
@@ -512,3 +565,169 @@ console.log(cmdr.currentAssignments);             // [0, 1, 0, ...] role indices
 console.log(cmdr.committedOption(0));             // "peekAndShoot" | null
 console.log(cmdr.windowsUntilReplan);
 console.log(cmdr.roles);                          // [{name, optionCount}, ...]
+
+
+// -----------------------------------------------------------------------------
+// NN training: observation, action mask, reward tracker
+// -----------------------------------------------------------------------------
+//
+// The pieces a learned policy needs at every tick: an ego-centric float
+// observation, a validity mask over the discrete action heads, and a per-
+// agent reward delta. All three are zero-allocation on the C++ side and
+// hand back typed arrays / plain objects to JS.
+
+/**
+ * Build the ego-centric observation vector for `agent`. Layout (constants
+ * exposed as `bro.ai.game.OBS_TOTAL`):
+ *   self block    (14 floats: hp, mana, attack/ability cooldowns, speed,
+ *                  sin/cos(aim - yaw))
+ *   enemy block   (5 nearest enemies × 6 floats: valid, relX, relZ, dist,
+ *                  hp%, inAttackRange)
+ *   ally block    (4 nearest allies × 5 floats: valid, relX, relZ, dist, hp%)
+ * Positions are in agent's local frame, normalized by OBS_RANGE (50 units).
+ *
+ * @param {AIAgent} agent
+ * @param {AIWorld} world
+ * @returns {Float32Array} length = bro.ai.game.OBS_TOTAL
+ */
+const obs = bro.ai.game.buildObservation(focusAgent, world);
+UI.drawObservation(obs);
+
+/**
+ * Build the legal-action mask for `agent`. Use to renormalize a policy
+ * softmax over only currently-valid choices.
+ *
+ * Layout (`bro.ai.game.MASK_TOTAL` floats, 1.0 = legal, 0.0 = illegal):
+ *   [0 .. N_ENEMY_SLOTS)   "attack enemy in slot k" — slot k matches the
+ *                          k-th enemy in the observation (nearest-first).
+ *                          `enemyIds[k]` is the underlying Unit::id (or -1).
+ *   [N_ENEMY_SLOTS ..)     "cast ability slot s" — bound + cooldown ready
+ *                          + mana sufficient (range not checked).
+ *
+ * @param {AIAgent} agent
+ * @param {AIWorld} world
+ * @returns {{ mask: Float32Array, enemyIds: Int32Array }}
+ */
+const am = bro.ai.game.buildActionMask(focusAgent, world);
+const legalAttacks = am.enemyIds.filter((id, k) => id >= 0 && am.mask[k] > 0);
+
+/**
+ * Per-agent reward-delta accumulator. Captures the agent's baseline at
+ * construction; each `consume()` call returns the delta since the previous
+ * call and re-latches. Reads `world.events()` — do not call
+ * `world.clearEvents()` in between consume() calls.
+ *
+ * @param {AIAgent} agent
+ * @param {AIWorld} world
+ * @returns {RewardTracker}
+ */
+const tracker = bro.ai.game.createRewardTracker(agent, world);
+
+/** @returns {{damageDealt, damageTaken, kills, deaths, distanceTravelled}} */
+const d = tracker.consume(agent, world);
+const r = d.damageDealt - d.damageTaken + d.kills * 20 - d.deaths * 20;
+
+/** Re-latch the baseline (e.g. start of a new episode). */
+tracker.reset(agent, world);
+
+
+// -----------------------------------------------------------------------------
+// Headless training harness: bro.ai.game.createSimulation(world)
+// -----------------------------------------------------------------------------
+//
+// Fixed-dt rollout driver for offline NN training and offscreen sims. Wraps
+// brogameagent::Simulation. Per step(dt): registered policies fire, results
+// are applied via World::applyAction, then World::tick advances scripted
+// agents and projectiles. Agents WITHOUT a registered policy keep their
+// scripted behaviour (lane walk, basic attack, etc.).
+//
+// The simulation does not own the world; the caller controls lifetime.
+
+/**
+ * @param {AIWorld} world
+ * @returns {Simulation}
+ */
+const sim = bro.ai.game.createSimulation(world);
+
+/**
+ * Register a policy for one agent. Called every step with the agent and a
+ * world view; must return an AgentAction
+ *   { moveX, moveZ, aimYaw, aimPitch, attackTargetId, abilitySlot, abilityTargetId }.
+ *
+ * @param {number} agentId  - Unit::id of the controlled agent
+ * @param {function(agent, world): AgentAction} policy
+ */
+sim.addPolicy(heroAgent.unit.id, function (self, w) {
+    const obs  = bro.ai.game.buildObservation(self, w);
+    const mask = bro.ai.game.buildActionMask(self, w);
+    return myPolicy.forward(obs, mask);   // your NN inference
+});
+
+/** Stop driving this agent — it falls back to scripted World::tick. */
+sim.removePolicy(heroAgent.unit.id);
+
+/** One fixed-dt step. */
+sim.step(1 / 60);
+
+/** Convenience: call step(dt) `n` times. Headless training inner loop. */
+sim.runSteps(1 / 60, 600);          // 10 sim-seconds at 60Hz
+
+sim.steps;                          // total steps taken (read-only)
+sim.elapsed;                        // total sim seconds (read-only)
+sim.resetCounters();                // does NOT reset world state
+
+
+// -----------------------------------------------------------------------------
+// Replay I/O: createRecorder() / createReplayReader()
+// -----------------------------------------------------------------------------
+//
+// Streaming binary format (.bgar). Recorder writes per-frame agent state +
+// damage events + a frame index appended on close() so any frame can be
+// random-accessed. ReplayReader opens a finished file and exposes per-frame
+// snapshots, per-agent trajectories, and a damage summary.
+
+/** @returns {Recorder} */
+const rec = bro.ai.game.createRecorder();
+
+/**
+ * Open a file for writing. `dt` is recorded in the header for playback.
+ * @param {string} path
+ * @param {number} episodeId
+ * @param {number} seed
+ * @param {number} dt
+ * @returns {boolean} false on I/O error
+ */
+rec.open(path, 1, Date.now(), 1 / 60);
+rec.isOpen;                                       // true
+
+/** Write the static roster (one entry per agent). Call once before frames.
+ *  @param {AIWorld} world */
+rec.writeRoster(world);
+
+/** Capture one frame: agents, projectiles, and the slice of world.events()
+ *  that arrived since the last recordFrame. Do NOT call world.clearEvents()
+ *  between recordFrame calls or that window's events are lost.
+ *  @param {number} stepIdx @param {number} elapsed @param {AIWorld} world */
+rec.recordFrame(state.steps, state.elapsed, world);
+
+rec.frameCount;                                    // frames written so far
+rec.close();                                       // appends index + footer
+
+/** @returns {ReplayReader} */
+const rr = bro.ai.game.createReplayReader();
+if (!rr.open(path)) UI.log("open failed: " + rr.errorMessage);
+rr.frameCount;                                     // total frames
+
+/** Random-access one frame.
+ *  @returns {{ stepIdx, elapsed,
+ *              agents: [{id, x, z, hp, mana, yaw, alive}, ...],
+ *              events: [{attackerId, targetId, amount, killed}, ...] }} */
+const f = rr.frame(0);
+
+/** Full XZ trajectory for one agent across the replay.
+ *  @returns {[{stepIdx, elapsed, x, z, hp, alive}, ...]} */
+const traj = rr.trajectory(heroAgent.unit.id);
+
+/** Aggregate damage / hits / kills per (attacker, target) pair.
+ *  @returns {[{attackerId, targetId, totalDamage, hits, kills}, ...]} */
+const dmg = rr.damageSummary();

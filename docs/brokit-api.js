@@ -15,8 +15,9 @@
 //     fetch, URL, URLSearchParams, crypto, WebSocket, EventSource,
 //     TextEncoder, TextDecoder, ReadableStream, WritableStream,
 //     Blob, FormData, AbortController, EventTarget, MessageChannel,
-//     localStorage, sessionStorage, indexedDB, navigator, console,
-//     setTimeout, setInterval, structuredClone, atob, btoa, etc.
+//     TreeWalker, NodeFilter, localStorage, sessionStorage, indexedDB,
+//     navigator, console, setTimeout, setInterval, structuredClone,
+//     atob, btoa, process, FastNoise, etc.
 //
 // All APIs are installed by brokit::api::installAll(ctx) before any user JS
 // runs. require() maps module names to their __brokit_* globals.
@@ -152,13 +153,49 @@ cp.spawnSync(command, args?, options?);            // → { stdout, stderr, stat
 // -----------------------------------------------------------------------------
 
 fetch(url, options?);    // → Promise<Response>
-// options: { method, headers, body, signal }
-// Response: { ok, status, statusText, headers, text(), json(), arrayBuffer(), blob() }
+// options:
+//   method   — 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | ...   (default 'GET')
+//   headers  — plain object { 'Content-Type': 'application/json', ... } or Headers
+//   body     — string, ArrayBuffer, or TypedArray (Blob/FormData not yet supported)
+// Note: brokit's fetch does NOT yet implement signal/AbortSignal, keepalive, redirect,
+// credentials, mode, cache, referrer, or integrity. Pass only the keys above.
+//
+// Response: {
+//   ok, status, statusText, url,
+//   headers,                  // Headers object (get/has/forEach)
+//   body,                     // ReadableStream — pull chunks for streaming
+//   bodyUsed,                 // becomes true after text()/json()/arrayBuffer()/blob()
+//   text()       → Promise<string>,
+//   json()       → Promise<any>,
+//   arrayBuffer()→ Promise<ArrayBuffer>,
+//   blob()       → Promise<Blob>,
+//   clone()      → Response,
+// }
+// file:// and data: URLs are also supported (no network).
+
+// Example — POST JSON
+const res = await fetch('https://api.example.com/users', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ name: 'jonny' }),
+});
+if (!res.ok) throw new Error(res.statusText);
+const user = await res.json();
+
+// Example — stream a large response
+const r = await fetch('https://example.com/big.bin');
+const reader = r.body.getReader();
+let total = 0;
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  total += value.byteLength;
+}
 
 // Supporting classes:
-new Headers(init?);
-new Request(url, options?);
-new Response(body?, options?);
+new Headers(init?);            // init: object, array of [k,v] pairs, or another Headers
+new Request(url, options?);    // same options shape as fetch()
+new Response(body?, options?); // options: { status, statusText, headers }
 
 
 // -----------------------------------------------------------------------------
@@ -252,9 +289,24 @@ es.removeEventListener(type, listener);
 // Blob
 // -----------------------------------------------------------------------------
 
-new Blob(parts?, options?);              // options: { type }
-// Properties: size, type
-// Methods: text(), arrayBuffer(), slice(start?, end?, type?), stream()
+new Blob(parts?, options?);              // parts: array of (string | ArrayBuffer | TypedArray | Blob)
+                                         // options: { type }   — MIME type string
+// Properties:
+//   size                                  // total byte length
+//   type                                  // MIME type (lowercase, '' if unset)
+// Methods:
+//   text()             → Promise<string>            // UTF-8 decode
+//   arrayBuffer()      → Promise<ArrayBuffer>       // raw bytes copy
+//   slice(start?, end?, contentType?) → Blob        // byte range; contentType overrides .type
+// Note: brokit Blob does NOT implement .stream() — use arrayBuffer() and wrap manually
+// in a ReadableStream if you need a stream.
+
+// Example
+const b = new Blob(['hello, ', 'world'], { type: 'text/plain' });
+b.size;                       // 12
+b.type;                       // 'text/plain'
+await b.text();               // 'hello, world'
+const tail = b.slice(7);      // Blob of 'world'
 
 
 // -----------------------------------------------------------------------------
@@ -345,11 +397,25 @@ clearInterval(id);
 // -----------------------------------------------------------------------------
 // process (global)
 // -----------------------------------------------------------------------------
+//
+// Minimal Node-compatible process global. Available everywhere — no require().
 
-process.platform;        // 'win32' | 'linux' | 'darwin'
-process.cwd();
-process.exit(code?);
-process.env;             // Proxy — reads/writes/deletes environment variables
+process.platform;        // 'win32' | 'linux' | 'darwin' (or 'unknown')
+process.cwd();           // → string, current working directory
+process.exit(code?);     // terminates the process; default code 0
+process.env;             // Proxy — string-keyed environment variables
+                         //   read:    process.env.PATH       → string | undefined
+                         //   write:   process.env.FOO = 'x'  // updates real env (setenv)
+                         //   delete:  delete process.env.FOO
+                         //   has:     'FOO' in process.env
+
+// Example
+if (process.platform === 'win32') {
+  console.log('home:', process.env.USERPROFILE);
+} else {
+  console.log('home:', process.env.HOME);
+}
+if (!process.env.API_KEY) process.exit(1);
 
 
 // -----------------------------------------------------------------------------
@@ -364,6 +430,47 @@ navigator.onLine;
 
 
 // -----------------------------------------------------------------------------
+// TreeWalker / NodeFilter
+// -----------------------------------------------------------------------------
+//
+// DOM TreeWalker, implemented in JS over standard Node properties
+// (childNodes, parentNode, nodeType). Works on bro's DOM and on any tree
+// that exposes those members. Also installed as document.createTreeWalker
+// when a document object is present.
+
+new TreeWalker(root, whatToShow?, filter?);
+// whatToShow: bitmask of NodeFilter.SHOW_* (default SHOW_ALL)
+// filter:     function(node) → NodeFilter.FILTER_*  (or { acceptNode: fn })
+//
+// Properties:
+//   root, whatToShow, filter, currentNode
+// Navigation methods (each returns the new currentNode, or null):
+//   parentNode(), firstChild(), lastChild(),
+//   nextSibling(), previousSibling(),
+//   nextNode(), previousNode()
+
+NodeFilter.SHOW_ALL;          // 0xFFFFFFFF
+NodeFilter.SHOW_ELEMENT;      // 0x1
+NodeFilter.SHOW_TEXT;         // 0x4
+NodeFilter.SHOW_COMMENT;      // 0x80
+// (also SHOW_ATTRIBUTE, SHOW_CDATA_SECTION, SHOW_PROCESSING_INSTRUCTION,
+//  SHOW_DOCUMENT, SHOW_DOCUMENT_TYPE, SHOW_DOCUMENT_FRAGMENT, ...)
+NodeFilter.FILTER_ACCEPT;     // 1 — yield this node
+NodeFilter.FILTER_REJECT;     // 2 — skip node and its subtree
+NodeFilter.FILTER_SKIP;       // 3 — skip node, but recurse into children
+
+// Example — collect every <a> under document.body
+const walker = new TreeWalker(
+  document.body,
+  NodeFilter.SHOW_ELEMENT,
+  (n) => n.tagName === 'A' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+);
+const links = [];
+let node;
+while ((node = walker.nextNode())) links.push(node);
+
+
+// -----------------------------------------------------------------------------
 // Other globals
 // -----------------------------------------------------------------------------
 
@@ -371,3 +478,105 @@ structuredClone(value);
 atob(base64);                            // base64 → binary string
 btoa(string);                            // binary string → base64
 queueMicrotask(callback);
+
+
+// -----------------------------------------------------------------------------
+// FastNoise (global) — FastNoise2 SIMD noise
+// -----------------------------------------------------------------------------
+//
+// Metadata-driven binding to FastNoise2. Build a node graph (generators +
+// modifiers + blends), then sample it — single points, dense 2D/3D grids,
+// or seamless tileable 2D. Every node type registered with FastNoise2 is
+// available via FastNoise.create(name); a few common ones also have named
+// shortcuts on the FastNoise constructor.
+
+// ── Construction ──
+
+new FastNoise(encodedNodeTree);          // from a FastNoise2 node-tree string
+                                         // (the format the FastNoise2 NoiseTool exports)
+FastNoise.create(typeName);              // → FastNoise instance
+                                         // typeName is any node from FastNoise.types()
+
+// Convenience factories (equivalent to FastNoise.create('<Name>')):
+FastNoise.Simplex();
+FastNoise.SuperSimplex();
+FastNoise.Perlin();
+FastNoise.Value();
+FastNoise.CellularValue();
+FastNoise.CellularDistance();
+FastNoise.CellularLookup();
+FastNoise.FractalFBm();
+FastNoise.FractalRidged();
+FastNoise.DomainWarpGradient();
+
+// Discovery
+FastNoise.types();                       // → [{ name, groups }, ...] every registered type
+                                         // (Simplex, Perlin, FractalFBm, FractalRidged,
+                                         //  DomainWarp*, Add/Subtract/Multiply/Divide,
+                                         //  Min/Max/MinSmooth/MaxSmooth, Fade, Remap,
+                                         //  Terrace, Constant, Checkerboard, SineWave,
+                                         //  Cellular*, GeneratorCache, SeedOffset, ...)
+
+// ── Sampling ──
+
+noise.genSingle2D(x, y, seed);                                  // → number
+noise.genSingle3D(x, y, z, seed);                               // → number
+noise.genUniformGrid2D(xOffset, yOffset, xSize, ySize,
+                       frequency, seed);                        // → Float32Array(xSize*ySize)
+noise.genUniformGrid3D(xOff, yOff, zOff, xSize, ySize, zSize,
+                       frequency, seed);                        // → Float32Array(xSize*ySize*zSize)
+noise.genUniformGrid3DInto(dest,                                // pre-allocated Float32Array
+                           xOff, yOff, zOff,
+                           xSize, ySize, zSize,
+                           frequency, seed);                    // → undefined (writes in place)
+noise.genTileable2D(xSize, ySize, frequency, seed);             // → Float32Array, seamless wrap
+
+// ── Configuration (metadata-driven) ──
+//
+// FastNoise2 nodes have three kinds of members:
+//   - Variables  — named scalars (float, int, or enum). Enums accept the int
+//                  index or the enum name string ("Manhattan", "Euclidean", ...)
+//   - Nodes      — typed source connections (e.g. FractalFBm's "Source")
+//   - Hybrids    — accept either a float OR a node (e.g. FractalFBm's "Gain")
+
+noise.set(name, value);                   // assigns by member name
+noise.getMembers();                       // → { type, variables, nodes, hybrids }
+                                          //   variables[i]: { name, type, enumValues? }
+
+// Per-dimension members ("Multiplier X", "Multiplier Y", ...) are addressed
+// by appending the dimension letter: noise.set('Multiplier Y', 2.0).
+
+// Example — programmatic terrain heightmap (apps/terrain uses this pattern)
+const fbm = FastNoise.create('FractalFBm');
+fbm.set('Source', FastNoise.create('Simplex'));
+fbm.set('Octaves', 5);
+fbm.set('Lacunarity', 2.0);
+fbm.set('Gain', 0.5);
+const heightmap = fbm.genUniformGrid2D(0, 0, 512, 512, 0.005, 1337);
+// heightmap is a Float32Array(512*512), row-major
+
+// Example — blend two fractals with a Fade node
+const base = FastNoise.create('FractalFBm');
+base.set('Source', FastNoise.create('Simplex'));
+base.set('Octaves', 4);
+const ridges = FastNoise.create('FractalRidged');
+ridges.set('Source', FastNoise.create('Simplex'));
+ridges.set('Octaves', 3);
+const blend = FastNoise.create('Fade');
+blend.set('A', base);
+blend.set('B', ridges);
+blend.set('Fade', 0.4);
+const map = blend.genUniformGrid2D(0, 0, 256, 256, 0.01, 1337);
+
+// Example — voxel density field, reusing one buffer per chunk
+const dest = new Float32Array(32 * 32 * 32);
+const vox = FastNoise.create('FractalRidged');
+vox.set('Source', FastNoise.create('Perlin'));
+vox.set('Octaves', 4);
+vox.genUniformGrid3DInto(dest, chunkX*32, chunkY*32, chunkZ*32,
+                         32, 32, 32, 0.05, 42);
+
+// Example — load a graph designed in the FastNoise2 NoiseTool
+const ENCODED = 'EwAAAIA/AAAAAAAAAEAAAACAQAAAACEABA==';
+const designed = new FastNoise(ENCODED);
+const v = designed.genSingle2D(10, 20, 1337);

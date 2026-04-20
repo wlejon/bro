@@ -237,6 +237,33 @@ class SceneGraph {
   findByName(name) {}
 
 
+  /**
+   * Cast a ray against all visible 3D mesh nodes in the scene and return the
+   * closest hit, or null. Each MeshNode is tested in its local space using
+   * the node's pre-built BVH; the ray is transformed by the node's TRS.
+   * Non-mesh nodes (shapes, sprites, html, physics nodes) are ignored.
+   *
+   * Direction need not be unit length — it is normalized internally.
+   * `maxDistance` is in world units; pass 0 (or omit) for unlimited range.
+   *
+   * Example (terrain block picker — aim a ray straight down from above
+   * the chunk to find the surface column):
+   *   const hit = scene.raycast([cx, chunkH + 20, cz], [0, -1, 0], 200);
+   *   if (hit) {
+   *       console.log("hit", hit.node.name, "at", hit.position,
+   *                   "normal", hit.normal, "dist", hit.distance);
+   *   }
+   *
+   * @param {number[]} origin - [x, y, z] world-space ray origin
+   * @param {number[]} direction - [x, y, z] (normalized internally)
+   * @param {number} [maxDistance=0] - 0 = unlimited
+   * @returns {?{ hit: true, distance: number, position: number[],
+   *              point: number[], normal: number[], node: SceneNode }}
+   *          `position` and `point` are duplicate aliases (world-space).
+   */
+  raycast(origin, direction, maxDistance) {}
+
+
   // --- Lifecycle ------------------------------------------------------------
 
   /**

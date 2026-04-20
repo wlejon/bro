@@ -9,6 +9,10 @@
 //                      analysis. Also: applySkinning, applyMorphTarget.
 //   MeshBVH          — bounding-volume hierarchy for accelerated ray queries.
 //   ProgressiveMesh  — pre-computed edge-collapse sequence for streaming LOD.
+//   PolyMesh         — half-edge mesh over N-gon faces with face groups.
+//                      Edit topology (extrude, translate, merge by group)
+//                      independent of triangulation; tessellate() on demand
+//                      to produce a render-ready triangle mesh.
 //
 //   Skeleton         — bones + sockets + bindPose.
 //   Pose             — flat array of local TRS per bone (stride 10).
@@ -351,7 +355,7 @@ class Mesh {
   /** Load a Wavefront OBJ file. @returns {Mesh} */
   static loadOBJ(path) {}
 
-  /** Load an FBX file. @returns {Mesh[]} */
+  /** Load an FBX file. Read-only — there is no saveFBX. @returns {Mesh[]} */
   static loadFBX(path) {}
 
   /** Load a PLY file. @returns {Mesh} */
@@ -361,7 +365,9 @@ class Mesh {
   static loadSTL(path) {}
 
   /**
-   * Load a MagicaVoxel VOX file.
+   * Load a MagicaVoxel VOX file. Read-only — there is no saveVOX.
+   * Pair with `Mesh.greedyMesh(voxels, sizeX, sizeY, sizeZ, 1, palette)` or
+   * `new VoxelChunk(...)` + `setData(voxels)` to build geometry.
    * @returns {{ sizeX: number, sizeY: number, sizeZ: number,
    *             voxels: Uint8Array, palette: Float32Array }}
    */
@@ -853,6 +859,174 @@ class ProgressiveMesh {
    * @returns {ProgressiveMesh}
    */
   static deserialize(bytes) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// PolyMesh
+// -----------------------------------------------------------------------------
+// Half-edge mesh over N-gon (not necessarily triangular) faces, with per-face
+// integer "group" tags. Use this when you want to edit topology — extrude a
+// face, translate a face and have its surrounding ring follow, merge coplanar
+// faces by group — that survives arbitrary triangulation choices. The render
+// mesh is produced on demand via tessellate().
+//
+// Typical flow (face-group editing in scene-editor):
+//   const pm = PolyMesh.fromMeshData(positions, indices, triToGroup);
+//   const ring = pm.extrudeFace(faceIdx, [0, 0.5, 0]);    // pull a face up
+//   pm.translateFaceWithRing(faceIdx, [0.1, 0, 0]);       // nudge with neighbors
+//   pm.mergeFacesByGroup();                               // collapse coplanar
+//   const tess = pm.tessellate();
+//   // tess: { positions, normals, indices, triToFace, triToGroup }
+//
+// Conventions
+//   Face indices are stable until compact() is called.
+//   group = -1 typically means "unassigned" / inherits from neighbor.
+//   Vertex/face/half-edge accessors clamp to the mesh's current size; out-of
+//   -range queries return -1 / [] / null without throwing.
+
+class PolyMesh {
+
+  /** Construct an empty PolyMesh. Use the static factories for populated meshes. */
+  constructor() {}
+
+  // --- Static factories -----------------------------------------------------
+
+  /**
+   * Build from a triangle mesh, optionally with a per-triangle group tag.
+   * Coplanar adjacent triangles sharing a group can be merged into N-gons
+   * later via mergeFacesByGroup().
+   * @param {Float32Array} positions - xyz, stride 3
+   * @param {Uint32Array}  indices   - triangle indices
+   * @param {Uint32Array|Int32Array} [triToGroup] - one group id per triangle
+   * @returns {PolyMesh}
+   */
+  static fromMeshData(positions, indices, triToGroup) {}
+
+  /**
+   * Build a single N-gon face from an ordered ring of vertex positions.
+   * @param {Float32Array} positions - xyz, stride 3, in winding order
+   * @param {number[]} normal        - [nx, ny, nz] face normal (orientation hint)
+   * @param {number} [group=0]       - face group tag
+   * @returns {PolyMesh}
+   */
+  static fromPolygon(positions, normal, group) {}
+
+
+  // --- Counts ---------------------------------------------------------------
+
+  /** @returns {number} */ get vertexCount() {}
+  /** @returns {number} */ get halfEdgeCount() {}
+  /** @returns {number} */ get faceCount() {}
+
+
+  // --- Inspection -----------------------------------------------------------
+
+  /** @param {number} faceIdx @returns {number} ring length (3+) */
+  faceVertexCount(faceIdx) {}
+
+  /** @param {number} faceIdx @returns {number[]} ordered vertex indices */
+  faceVertices(faceIdx) {}
+
+  /** @param {number} vertexIdx @returns {?number[]} [x, y, z] */
+  getVertex(vertexIdx) {}
+
+  /** Newell's-method face normal. @returns {?number[]} [nx, ny, nz] */
+  computeFaceNormal(faceIdx) {}
+
+  /** @returns {number} group id, or -1 if face out of range */
+  faceGroup(faceIdx) {}
+
+  /** Set a face's group tag (mutates in place). */
+  setFaceGroup(faceIdx, group) {}
+
+  /** @param {number} groupId @returns {number[]} face indices in that group */
+  facesInGroup(groupId) {}
+
+
+  // --- Tessellation ---------------------------------------------------------
+
+  /**
+   * Triangulate every face into a render-ready buffer. Smooth normals and
+   * back-pointers from each triangle to its source face / group are emitted.
+   * @returns {{ positions: Float32Array, normals: Float32Array,
+   *             indices: Uint32Array,
+   *             triToFace: Uint32Array, triToGroup: Uint32Array }}
+   */
+  tessellate() {}
+
+
+  // --- Validation -----------------------------------------------------------
+
+  /**
+   * Check half-edge invariants (twin pairing, face cycles, etc.).
+   * @returns {{ valid: boolean, isClosed: boolean,
+   *             boundaryHalfEdges: number, errors: string[] }}
+   */
+  validate() {}
+
+
+  // --- Mutation -------------------------------------------------------------
+
+  /** Append a new vertex; returns its index. */
+  addVertex(x, y, z) {}
+
+  /**
+   * Add a face from an ordered ring of existing vertex indices.
+   * @param {number[]} verts
+   * @param {number} [group=-1]
+   * @returns {number} new face index, or -1 on failure
+   */
+  addFace(verts, group) {}
+
+  /** Translate a single vertex by [dx, dy, dz]. */
+  translateVertex(vertexIdx, offset) {}
+
+  /** Translate every vertex of a face by [dx, dy, dz]. */
+  translateFace(faceIdx, offset) {}
+
+  /**
+   * Translate a face and the one-ring of vertices around it. Useful for
+   * "soft-pull" handle dragging in editors.
+   */
+  translateFaceWithRing(faceIdx, offset) {}
+
+  /**
+   * Push a face out along an offset, optionally bridging the gap with side
+   * faces (and capping the back). Vertices on the moving rim are duplicated
+   * so neighbors are not disturbed.
+   * @param {number} faceIdx
+   * @param {number[]} offset           - [dx, dy, dz]
+   * @param {boolean} [withBack=true]   - cap the back so the result stays closed
+   * @param {number}  [bridgeGroup=-1]  - group id for newly created side faces
+   * @param {number}  [backGroup=-1]    - group id for the back cap
+   * @returns {{ dupVerts: Uint32Array, bridgeFaces: Uint32Array,
+   *             bridgeAdjGroup: Uint32Array, backFace: number }}
+   */
+  extrudeFace(faceIdx, offset, withBack, bridgeGroup, backGroup) {}
+
+  /** Re-pair half-edge twins after structural edits (no-op if already paired). */
+  rematchTwins() {}
+
+  /**
+   * Merge adjacent coplanar faces that share a group id into single N-gons.
+   * Run after extrudeFace + setFaceGroup edits to clean up topology.
+   */
+  mergeFacesByGroup() {}
+
+  /** Drop dead vertices/edges/faces and renumber indices. Call sparingly. */
+  compact() {}
+
+
+  // --- Boundaries -----------------------------------------------------------
+
+  /**
+   * Extract the boundary loop(s) of a face group as ordered vertex rings.
+   * @param {number} groupId
+   * @returns {number[][]} one inner array per loop (multiple if the group is
+   *                       not simply connected)
+   */
+  findGroupBoundary(groupId) {}
 }
 
 
