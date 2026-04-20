@@ -63,6 +63,14 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 - **Skia** pre-built library (see below)
 - Sibling repos as above
 
+**macOS (12+, arm64 or x86_64):**
+- **Xcode Command Line Tools** (`xcode-select --install`) — Apple clang 17+
+- **CMake** 3.24+, **Ninja** (`brew install cmake ninja`)
+- **bash 4+** for `tests/run_tests.sh` (`brew install bash`) — the system bash 3.2 lacks `mapfile`
+- **vcpkg** (for GameNetworkingSockets)
+- **Skia** pre-built library (see below)
+- Sibling repos as above
+
 ### Setup
 
 ```bash
@@ -89,6 +97,16 @@ cd third_party/skia
 ./build_skia_linux.sh all       # Both
 ```
 
+On macOS, an equivalent script is provided — Skia is built with CoreText as
+the font backend (freetype/fontconfig disabled):
+
+```bash
+cd third_party/skia
+./build_skia_mac.sh             # Release only
+./build_skia_mac.sh Debug       # Debug only
+./build_skia_mac.sh all         # Both
+```
+
 On Windows, build Skia separately with `gn`/`ninja` and place `skia.lib` in the same location.
 
 ### Build
@@ -104,7 +122,7 @@ cmake --build build --config Debug
 cmake --build build --config Release
 ```
 
-On Windows this uses the Visual Studio multi-config generator. On Linux it defaults to Unix Makefiles (single-config; set `CMAKE_BUILD_TYPE` at configure time or use `-G Ninja`).
+On Windows this uses the Visual Studio multi-config generator. On Linux and macOS it defaults to a single-config generator; set `CMAKE_BUILD_TYPE` at configure time or pass `-G Ninja`.
 
 ## Usage
 
@@ -114,7 +132,7 @@ On Windows this uses the Visual Studio multi-config generator. On Linux it defau
 # Windows
 ./build/src/Debug/bro.exe apps/example
 
-# Linux
+# Linux / macOS
 ./build/src/bro apps/example
 ```
 

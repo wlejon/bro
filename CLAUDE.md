@@ -21,7 +21,7 @@ cmake --build build --config Release
 ./build/src/headless/Debug/bro-headless.exe apps/example
 ```
 
-**Linux** (single-config, executables have no .exe suffix or config subdirectory):
+**Linux / macOS** (single-config, executables have no .exe suffix or config subdirectory):
 ```bash
 ./build/src/bro apps/example
 ./build/src/headless/bro-headless apps/example
@@ -44,7 +44,9 @@ bro-headless --no-gpu apps/example
 
 Submodules must be initialized: `git submodule update --init`
 
-Skia is a pre-built dependency. On Linux, run `third_party/skia/build_skia_linux.sh` to build and install it. On Windows, build Skia separately and place `skia.lib` in `third_party/skia/lib/{Debug,Release}/`.
+Skia is a pre-built dependency. On Linux, run `third_party/skia/build_skia_linux.sh`; on macOS, run `third_party/skia/build_skia_mac.sh` (uses CoreText, freetype/fontconfig off). On Windows, build Skia separately and place `skia.lib` in `third_party/skia/lib/{Debug,Release}/`.
+
+On macOS, `tests/run_tests.sh` uses `mapfile` and needs bash 4+ (`brew install bash` → `/opt/homebrew/bin/bash tests/run_tests.sh`); the system `/bin/bash` is 3.2.
 
 ## Architecture
 
