@@ -267,10 +267,12 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
         if (!s) return;
         s->connections[conn] = true;
         if (!JS_IsUndefined(s->onConnect) && !JS_IsNull(s->onConnect)) {
+            JSValue func = JS_DupValue(ctx, s->onConnect);
             JSValue arg = JS_NewUint32(ctx, conn);
-            JSValue ret = JS_Call(ctx, s->onConnect, JS_UNDEFINED, 1, &arg);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
             JS_FreeValue(ctx, ret);
             JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
         }
     };
     state.subscriber->onDisconnect = [ctx](uint32_t conn, int reason) {
@@ -278,29 +280,33 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
         if (!s) return;
         s->connections.erase(conn);
         if (!JS_IsUndefined(s->onDisconnect) && !JS_IsNull(s->onDisconnect)) {
+            JSValue func = JS_DupValue(ctx, s->onDisconnect);
             JSValue args[2] = {
                 JS_NewUint32(ctx, conn),
                 JS_NewInt32(ctx, reason),
             };
-            JSValue ret = JS_Call(ctx, s->onDisconnect, JS_UNDEFINED, 2, args);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, args);
             JS_FreeValue(ctx, ret);
             JS_FreeValue(ctx, args[0]);
             JS_FreeValue(ctx, args[1]);
+            JS_FreeValue(ctx, func);
         }
     };
     state.subscriber->onMessage = [ctx](net::NetworkMessage&& msg) {
         auto* s = getState(ctx);
         if (!s) return;
         if (JS_IsUndefined(s->onMessage) || JS_IsNull(s->onMessage)) return;
+        JSValue func = JS_DupValue(ctx, s->onMessage);
         JSValue ab = JS_NewArrayBufferCopy(ctx, msg.data.data(), msg.data.size());
         JSValue args[2] = {
             JS_NewUint32(ctx, msg.connection),
             ab
         };
-        JSValue ret = JS_Call(ctx, s->onMessage, JS_UNDEFINED, 2, args);
+        JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, args);
         JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, args[0]);
         JS_FreeValue(ctx, args[1]);
+        JS_FreeValue(ctx, func);
     };
 
     s_states[ctx] = std::move(state);

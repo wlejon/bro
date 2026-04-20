@@ -110,23 +110,30 @@ void Timers::tick(double currentTimeMs)
         if (it == timers_.end())
             continue;
 
-        TimerEntry& entry = it->second;
-        JSContext* ctx = entry.ctx;
+        // Copy everything we need out of the map before calling JS.
+        // The callback may clear itself or add/remove other timers,
+        // which could invalidate the map iterators or the entry reference.
+        JSContext* ctx = it->second.ctx;
+        JSValue callback = JS_DupValue(ctx, it->second.callback);
+        bool repeating = it->second.repeating;
+        double intervalMs = it->second.intervalMs;
 
-        JSValue ret = JS_Call(ctx, entry.callback, JS_UNDEFINED, 0, nullptr);
+        JSValue ret = JS_Call(ctx, callback, JS_UNDEFINED, 0, nullptr);
         if (Runtime::checkException(ctx, ret)) {
             // Exception already logged
         } else {
             JS_FreeValue(ctx, ret);
         }
 
-        // Re-lookup – callback may have cleared itself
+        JS_FreeValue(ctx, callback);
+
+        // Re-lookup – callback may have cleared itself or the context might have been shut down.
         it = timers_.find(id);
         if (it == timers_.end())
             continue;
 
-        if (it->second.repeating) {
-            it->second.nextFireTime = currentTimeMs + it->second.intervalMs;
+        if (repeating) {
+            it->second.nextFireTime = currentTimeMs + intervalMs;
         } else {
             JS_FreeValue(ctx, it->second.callback);
             timers_.erase(it);

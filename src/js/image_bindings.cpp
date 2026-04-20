@@ -73,8 +73,10 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
 
     // Fire onload callback if set
     if (JS_IsFunction(ctx, img->onload)) {
-        JSValue ret = JS_Call(ctx, img->onload, this_val, 0, nullptr);
+        JSValue func = JS_DupValue(ctx, img->onload);
+        JSValue ret = JS_Call(ctx, func, this_val, 0, nullptr);
         JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, func);
     }
     return JS_UNDEFINED;
 }
