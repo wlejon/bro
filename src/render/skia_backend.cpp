@@ -28,6 +28,8 @@
 #include <include/core/SkBlurTypes.h>
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
+#elif defined(__APPLE__)
+#include <include/ports/SkFontMgr_mac_ct.h>
 #else
 #include <include/ports/SkFontMgr_fontconfig.h>
 #include <include/ports/SkFontScanner_FreeType.h>
@@ -156,6 +158,8 @@ SkFontMgr* SkiaRenderer::ensureFontMgr() {
     if (fontMgr_) return fontMgr_.get();
 #ifdef _WIN32
     fontMgr_ = SkFontMgr_New_DirectWrite();
+#elif defined(__APPLE__)
+    fontMgr_ = SkFontMgr_New_CoreText(nullptr);
 #else
     fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #endif
@@ -459,6 +463,8 @@ bool SkiaRenderer::registerCustomFont(const std::string& family,
         // Try with platform font manager
 #ifdef _WIN32
         auto mgr = SkFontMgr_New_DirectWrite();
+#elif defined(__APPLE__)
+        auto mgr = SkFontMgr_New_CoreText(nullptr);
 #else
         auto mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #endif

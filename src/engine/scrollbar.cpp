@@ -5,6 +5,7 @@
 
 namespace bro::engine {
 
+Scrollbar::Scrollbar() : Scrollbar(Style{}) {}
 Scrollbar::Scrollbar(Style style) : style_(style) {}
 
 ScrollbarMetrics Scrollbar::layout(float trackX, float trackY, float trackH,

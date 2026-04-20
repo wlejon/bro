@@ -42,6 +42,17 @@ endif()
 # Skia headers use #include <include/core/...> so the include root is the parent
 target_include_directories(skia INTERFACE "${CMAKE_CURRENT_LIST_DIR}/src")
 
+# On macOS, Skia uses CoreText / CoreGraphics for fonts and system image codecs.
+if(APPLE)
+    target_link_libraries(skia INTERFACE
+        "-framework CoreText"
+        "-framework CoreGraphics"
+        "-framework CoreFoundation"
+        "-framework CoreServices"
+        "-framework AppKit"
+    )
+endif()
+
 # On Linux, Skia is built with FreeType + fontconfig — propagate those deps
 if(UNIX AND NOT APPLE)
     find_package(PkgConfig REQUIRED)

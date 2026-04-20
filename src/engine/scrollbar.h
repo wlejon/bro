@@ -26,7 +26,8 @@ public:
         render::Color thumbDragColor{255, 255, 255, 200};
     };
 
-    explicit Scrollbar(Style style = {});
+    Scrollbar();
+    explicit Scrollbar(Style style);
 
     /// Compute scrollbar geometry from content/view dimensions.
     /// trackX, trackY: top-left of the scrollbar track in screen space.

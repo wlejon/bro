@@ -15,6 +15,11 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 if(MSVC)
     add_compile_options(/MP /permissive- /utf-8)
+else()
+    # Embedded JS bundles contain UTF-8 bytes > 127; require unsigned char
+    # so string literals don't trip narrowing-conversion errors on platforms
+    # where `char` is signed (Apple clang).
+    add_compile_options(-funsigned-char)
 endif()
 
 add_subdirectory(third_party)

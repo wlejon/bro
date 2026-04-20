@@ -10,6 +10,8 @@
 
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
+#elif defined(__APPLE__)
+#include <include/ports/SkFontMgr_mac_ct.h>
 #else
 #include <include/ports/SkFontMgr_fontconfig.h>
 #include <include/ports/SkFontScanner_FreeType.h>
@@ -21,6 +23,8 @@ static sk_sp<SkFontMgr> getFontMgr() {
     static sk_sp<SkFontMgr> mgr =
 #ifdef _WIN32
         SkFontMgr_New_DirectWrite();
+#elif defined(__APPLE__)
+        SkFontMgr_New_CoreText(nullptr);
 #else
         SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #endif

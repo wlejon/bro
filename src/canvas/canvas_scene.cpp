@@ -25,6 +25,8 @@
 
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
+#elif defined(__APPLE__)
+#include <include/ports/SkFontMgr_mac_ct.h>
 #else
 #include <include/ports/SkFontMgr_fontconfig.h>
 #endif
@@ -568,6 +570,8 @@ void CanvasScene::applyFont() {
 
 #ifdef _WIN32
     auto mgr = SkFontMgr_New_DirectWrite();
+#elif defined(__APPLE__)
+    auto mgr = SkFontMgr_New_CoreText(nullptr);
 #else
     auto mgr = SkFontMgr_New_FontConfig(nullptr);
 #endif
@@ -581,6 +585,13 @@ void CanvasScene::applyFont() {
         if (name == "cursive")     return "Comic Sans MS";
         if (name == "fantasy")     return "Impact";
         if (name == "system-ui")   return "Segoe UI";
+#elif defined(__APPLE__)
+        if (name == "sans-serif")  return "Helvetica";
+        if (name == "serif")       return "Times";
+        if (name == "monospace")   return "Menlo";
+        if (name == "cursive")     return "Apple Chancery";
+        if (name == "fantasy")     return "Papyrus";
+        if (name == "system-ui")   return "-apple-system";
 #else
         if (name == "sans-serif")  return "Liberation Sans";
         if (name == "serif")       return "Liberation Serif";
