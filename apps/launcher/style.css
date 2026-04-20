@@ -112,6 +112,7 @@ main {
     background-color: #0b0d10;
     background-size: cover;
     background-position: center;
+    background-repeat: no-repeat;
     border-bottom: 1px solid #23272d;
     display: flex;
     align-items: center;

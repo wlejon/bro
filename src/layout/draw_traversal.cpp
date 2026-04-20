@@ -1125,17 +1125,23 @@ uint64_t DrawTraversal::getFontHandle(dom::Element* elem) {
 void DrawTraversal::loadImage(const std::string& url, const std::string& basePath) {
     if (imageCache_.count(url)) return;
 
+    // Strip URL query/fragment so `thumbnails/foo.png?v=12345` (standard
+    // cache-bust) resolves to the file on disk.
+    std::string cleanUrl = url;
+    auto qPos = cleanUrl.find_first_of("?#");
+    if (qPos != std::string::npos) cleanUrl.resize(qPos);
+
     std::string path;
-    if (url.size() >= 2 && url[1] == ':') {
-        path = url;
-    } else if (!url.empty() && (url[0] == '/' || url[0] == '\\')) {
-        path = url;
+    if (cleanUrl.size() >= 2 && cleanUrl[1] == ':') {
+        path = cleanUrl;
+    } else if (!cleanUrl.empty() && (cleanUrl[0] == '/' || cleanUrl[0] == '\\')) {
+        path = cleanUrl;
     } else if (!basePath.empty()) {
         path = basePath;
         if (path.back() != '/' && path.back() != '\\') path += '/';
-        path += url;
+        path += cleanUrl;
     } else {
-        path = url;
+        path = cleanUrl;
     }
 
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);

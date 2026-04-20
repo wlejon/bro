@@ -256,9 +256,11 @@ async function writeThumbnailFromClipboard(e) {
         thumb.style.backgroundImage = 'url(' + relUrl + ')';
         thumb.textContent = '';
     }
-    // Also update any non-running tile for this dir.
+    // Also update any non-running tile for this dir. (NodeList is not
+    // iterable in bro yet — use indexed access.)
     const allTiles = document.querySelectorAll('.thumb[data-app="' + dir + '"]');
-    for (const t of allTiles) {
+    for (let i = 0; i < allTiles.length; i++) {
+        const t = allTiles[i];
         t.style.backgroundImage = 'url(' + relUrl + ')';
         t.textContent = '';
     }
