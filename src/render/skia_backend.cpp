@@ -2,6 +2,7 @@
 #include "render/gl_context.h"
 #include "util/log.h"
 
+#include <stb_image.h>
 #include <stb_image_write.h>
 
 #include <cstring>
@@ -497,12 +498,36 @@ void SkiaRenderer::concat(float a, float b, float c, float d, float e, float f) 
 
 void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h) {
     if (!canvas_) return;
+
+    // Try Skia's built-in codecs first (fast path when available).
     sk_sp<SkData> sk_data = SkData::MakeWithoutCopy(data, len);
     auto codec = SkCodec::MakeFromData(sk_data);
-    if (!codec) return;
-    auto [image, result] = codec->getImage();
-    if (!image) return;
-    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+    if (codec) {
+        auto [image, result] = codec->getImage();
+        if (image) {
+            canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+            return;
+        }
+    }
+
+    // Fallback: decode via stb_image. Our Skia build may not link PNG/JPEG codecs.
+    int iw = 0, ih = 0, comp = 0;
+    unsigned char* pixels = stbi_load_from_memory(
+        static_cast<const stbi_uc*>(data), static_cast<int>(len), &iw, &ih, &comp, 4);
+    if (!pixels) { LOG_WARN("drawImage: decode failed (len=%zu)", len); return; }
+
+    SkImageInfo info = SkImageInfo::Make(iw, ih, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    SkBitmap bmp;
+    if (bmp.installPixels(info, pixels, iw * 4,
+            [](void* px, void*) { stbi_image_free(px); }, nullptr)) {
+        bmp.setImmutable();
+        auto image = bmp.asImage();
+        if (image) {
+            canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+            return;
+        }
+    }
+    stbi_image_free(pixels);
 }
 
 void SkiaRenderer::setClip(float x, float y, float w, float h) {

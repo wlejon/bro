@@ -1,0 +1,13 @@
+{
+    "apps": [
+        { "dir": "tetris" },
+        { "dir": "fps", "server": { "script": "server.js" } },
+        { "dir": "synth" },
+        { "dir": "ai-arena" },
+        { "dir": "terrain" },
+        { "dir": "mesh-viewer" },
+        { "dir": "scene-editor" },
+        { "dir": "spatial-audio" },
+        { "dir": "example" }
+    ]
+}

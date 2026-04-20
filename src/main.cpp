@@ -190,6 +190,15 @@ int main(int argc, char* argv[]) {
     std::string settingsDir = exeDir();
     config.settingsPath = settingsDir + "/.bro_settings.json";
 
+    // Expose exe directory to JS (process.env.BRO_EXE_DIR) so apps like the
+    // launcher can locate sibling executables (bro, bro-headless, bro-server).
+    // Windows uses _putenv_s so the CRT's getenv() reflects the change.
+#ifdef _WIN32
+    _putenv_s("BRO_EXE_DIR", settingsDir.c_str());
+#else
+    setenv("BRO_EXE_DIR", settingsDir.c_str(), 1);
+#endif
+
     if (argc >= 2) {
         // Explicit app directory argument
         config.appDir = argv[1];

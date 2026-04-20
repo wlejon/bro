@@ -208,7 +208,15 @@ int main(int argc, char* argv[]) {
     try {
         bro::engine::EngineConfig config;
         config.appDir = appDir;
-        config.settingsPath = exeDir() + "/.bro_settings.json";
+        std::string settingsDir = exeDir();
+        config.settingsPath = settingsDir + "/.bro_settings.json";
+
+        // Expose exe directory to JS (process.env.BRO_EXE_DIR).
+#ifdef _WIN32
+        _putenv_s("BRO_EXE_DIR", settingsDir.c_str());
+#else
+        setenv("BRO_EXE_DIR", settingsDir.c_str(), 1);
+#endif
         config.displayMode = bro::engine::DisplayMode::Headless;
         config.graphics.width = width;
         config.graphics.height = height;

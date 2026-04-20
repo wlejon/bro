@@ -1489,6 +1489,10 @@ void Engine::rasterThreadFunc() {
         // App content is translated down by insetTop so the top strip is
         // reserved for the engine-owned menu bar.
         if (document_ && document_->documentElement()) {
+            // Resolve app-relative background-image URLs against the app dir.
+            // (System panels below set their own basePath; we re-establish this
+            // each frame because that call mutates shared state.)
+            rasterDrawTraversal->setBasePath(document_->basePath());
             rasterDrawTraversal->draw(document_->documentElement(),
                                       0, static_cast<float>(insetTop) - scrollY,
                                       vpW, contentH, insetTop);

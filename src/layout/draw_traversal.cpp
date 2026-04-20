@@ -1141,6 +1141,7 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) {
         LOG_WARN("loadImage: failed to open '%s'", path.c_str());
+        imageCache_[url] = CachedImage{};  // negative-cache so we don't re-warn each frame
         return;
     }
     auto fileSize = ifs.tellg();
