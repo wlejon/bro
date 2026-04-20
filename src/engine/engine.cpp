@@ -725,12 +725,14 @@ void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
         // In windowed GPU mode, each canvas gets its own thread with a shared
         // GL context + GrDirectContext for parallel rasterization.
         if (displayMode_ == DisplayMode::Windowed && window_) {
-            // Release the main GL context so the worker thread can briefly
-            // borrow it to create a sharing context, then reclaim it once the
-            // worker signals ready.
-            window_->releaseGLContext();
-            scene->startThread(window_->getSDLWindow(), window_->getGLContext());
-            window_->reclaimGLContext();
+            // Context creation on the main thread (macOS/AppKit requirement);
+            // startThread() blocks until the worker has MakeCurrent'd it, so
+            // the next createSharedContext call cannot overlap with a worker's
+            // wgl*Context call (Windows/NVIDIA requirement).
+            auto ctx = window_->createSharedContext();
+            if (ctx) {
+                scene->startThread(ctx, window_->getSDLWindow());
+            }
         } else {
             // Headless / CPU fallback: use renderer's GrContext directly
             auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
@@ -1372,21 +1374,11 @@ void Engine::layoutThreadFunc() {
 // ---------------------------------------------------------------------------
 
 void Engine::rasterThreadFunc() {
-    // Borrow main GL context to create our own sharing context on THIS thread.
-    // Main thread is parked in run() waiting on rasterReady_, so there is no
-    // concurrent wgl*Context driver activity.
-    SDL_Window* win = window_->getSDLWindow();
-    SDL_GL_MakeCurrent(win, window_->getGLContext());
-    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-    rasterGLContext_ = SDL_GL_CreateContext(win);
-    if (!rasterGLContext_) {
-        LOG_ERROR("Raster thread: failed to create GL context: %s", SDL_GetError());
-        SDL_GL_MakeCurrent(win, nullptr);
-        rasterReady_.store(true, std::memory_order_release);
-        rasterReady_.notify_one();
-        return;
-    }
-    // SDL_GL_CreateContext leaves rasterGLContext_ current on this thread.
+    // Main thread has already created rasterGLContext_ (macOS/AppKit
+    // requirement); we only MakeCurrent it here, which is a thread-local
+    // GL operation. Main is parked in run() on rasterReady_ so no other
+    // wgl*Context call can overlap with this one (Windows/NVIDIA requirement).
+    SDL_GL_MakeCurrent(window_->getSDLWindow(), rasterGLContext_);
     rasterReady_.store(true, std::memory_order_release);
     rasterReady_.notify_one();
 
@@ -1859,27 +1851,30 @@ void Engine::run() {
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
 
     // Start canvas threads for any existing canvas scenes that weren't
-    // threaded at addCanvasScene time. Each worker creates its own shared
-    // context on its thread; we release/reclaim the main context around each.
+    // threaded at addCanvasScene time. Main thread creates each shared
+    // context; startThread blocks until the worker MakeCurrents it.
     for (auto& cs : canvasScenes_) {
         if (cs && !cs->isThreaded()) {
-            window_->releaseGLContext();
-            cs->startThread(window_->getSDLWindow(), window_->getGLContext());
-            window_->reclaimGLContext();
+            auto ctx = window_->createSharedContext();
+            if (ctx) cs->startThread(ctx, window_->getSDLWindow());
         }
     }
+
+    // Raster thread: create its shared GL context on the main thread
+    // (macOS/AppKit requirement), then block until the worker has
+    // MakeCurrent'd it so no later wgl*Context call can overlap.
+    rasterGLContext_ = window_->createSharedContext();
+    if (!rasterGLContext_) {
+        LOG_ERROR("Failed to create shared GL context for raster thread");
+        return;
+    }
+    rasterReady_.store(false, std::memory_order_relaxed);
 
     // Launch layout thread (style resolution + layout computation)
     layoutThread_ = std::thread(&Engine::layoutThreadFunc, this);
 
-    // Launch raster thread. The worker creates its own shared GL context
-    // (borrowing the main context briefly) to keep all wgl*Context calls on
-    // one thread at a time.
-    rasterReady_.store(false, std::memory_order_relaxed);
-    window_->releaseGLContext();
     rasterThread_ = std::thread(&Engine::rasterThreadFunc, this);
     rasterReady_.wait(false, std::memory_order_acquire);
-    window_->reclaimGLContext();
 
     // Event watcher keeps JS timers alive during Windows' modal move/resize loop.
     SDL_AddEventWatch(modalEventWatcher, this);

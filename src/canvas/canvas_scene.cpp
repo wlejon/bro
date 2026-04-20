@@ -88,21 +88,19 @@ void CanvasScene::cleanup() {
 // Threading
 // ---------------------------------------------------------------------------
 
-void CanvasScene::startThread(SDL_Window* win, SDL_GLContext mainCtx) {
-    if (threaded_ || !win || !mainCtx) return;
+void CanvasScene::startThread(SDL_GLContext glCtx, SDL_Window* win) {
+    if (threaded_ || !glCtx || !win) return;
+    canvasGLContext_ = glCtx;
     threaded_ = true;
     canvasShared_.state.store(kCanvasIdle, std::memory_order_relaxed);
     canvasReady_.store(false, std::memory_order_relaxed);
 
-    // The attribute is read by SDL_GL_CreateContext on the worker thread
-    // (it's a global on SDL's side), so set it before launching.
-    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+    canvasThread_ = std::thread(&CanvasScene::canvasThreadFunc, this, win);
 
-    canvasThread_ = std::thread(&CanvasScene::canvasThreadFunc, this, win, mainCtx);
-
-    // Block main thread until the worker has finished context creation and
-    // released the main GL context. After this returns, canvasGLContext_ is
-    // owned by the worker and the main context is no longer current anywhere.
+    // Block until the worker has completed SDL_GL_MakeCurrent on its context.
+    // This is the serialization Windows/NVIDIA drivers need (no concurrent
+    // wgl*Context calls against the same HDC) and costs nothing on other
+    // platforms. It is NOT a mutex — just a one-shot atomic handshake.
     canvasReady_.wait(false, std::memory_order_acquire);
 }
 
@@ -121,25 +119,17 @@ void CanvasScene::stopThread() {
     threaded_ = false;
 }
 
-void CanvasScene::canvasThreadFunc(SDL_Window* win, SDL_GLContext mainCtx) {
-    // Borrow the main GL context (the main thread has released it) so that
-    // SDL_GL_CreateContext with SDL_GL_SHARE_WITH_CURRENT_CONTEXT=1 sees a
-    // current context to share resources with. Immediately after creating the
-    // worker's own context, signal the main thread so it can reclaim its
-    // context. All wgl*Context* calls in this sequence execute on this
-    // worker thread — the main thread is parked in startThread() waiting for
-    // canvasReady_, so there is no cross-thread driver contention.
-    SDL_GL_MakeCurrent(win, mainCtx);
-    canvasGLContext_ = SDL_GL_CreateContext(win);
-    if (!canvasGLContext_) {
-        LOG_ERROR("Canvas thread: failed to create GL context: %s", SDL_GetError());
-        SDL_GL_MakeCurrent(win, nullptr);
-        canvasReady_.store(true, std::memory_order_release);
-        canvasReady_.notify_one();
-        return;
-    }
-    // SDL_GL_CreateContext leaves the new context current on this thread.
-    // Main thread may now reclaim mainCtx safely.
+void CanvasScene::canvasThreadFunc(SDL_Window* win) {
+    // The context was created by the main thread (required on macOS where
+    // SDL_GL_CreateContext calls AppKit). Here we only make it current on
+    // this worker thread — a thread-local GL operation on every platform.
+    SDL_GL_MakeCurrent(win, canvasGLContext_);
+
+    // Signal main before doing anything more so it can proceed to the next
+    // canvas. After this point the main thread may call SDL_GL_CreateContext
+    // again for another canvas; that's safe because our MakeCurrent has
+    // completed and Skia's per-thread GL state tracking only touches our
+    // own context from here on.
     canvasReady_.store(true, std::memory_order_release);
     canvasReady_.notify_one();
 

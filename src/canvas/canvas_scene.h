@@ -97,12 +97,15 @@ public:
 
     // --- Threading (windowed GPU mode) ---
 
-    /// Start a dedicated canvas thread. The worker thread creates its own
-    /// shared GL context (borrowing the main context briefly). The caller
-    /// (main thread) must have released its GL context via
-    /// Window::releaseGLContext() before calling this and reclaim it after
-    /// startThread returns.
-    void startThread(SDL_Window* win, SDL_GLContext mainCtx);
+    /// Start a dedicated canvas thread using the given shared GL context.
+    /// The context must be created on the main thread (via
+    /// Window::createSharedContext()) — macOS requires SDL_GL_CreateContext
+    /// on the main thread because the Cocoa backend calls AppKit during
+    /// context creation. startThread() blocks the caller until the worker
+    /// has completed SDL_GL_MakeCurrent on the given context, so subsequent
+    /// SDL_GL_CreateContext calls on the main thread never overlap with a
+    /// worker's wgl*Context calls (Windows/NVIDIA requirement).
+    void startThread(SDL_GLContext glCtx, SDL_Window* win);
 
     /// Stop the canvas thread and destroy the GL context.
     void stopThread();
@@ -266,7 +269,7 @@ public:
 
 private:
     /// Canvas thread entry point.
-    void canvasThreadFunc(SDL_Window* win, SDL_GLContext mainCtx);
+    void canvasThreadFunc(SDL_Window* win);
 
     /// Replay all deferred commands onto the Skia canvas.
     void flushCommands();

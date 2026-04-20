@@ -34,15 +34,14 @@ public:
     void setTitle(const std::string& title);
     void swapWindow();
 
-    /// Release the main GL context from the calling (main) thread so another
-    /// thread can temporarily make it current to create a context that shares
-    /// resources with it. Call reclaimGLContext() once the other thread has
-    /// finished creating + switching to its own context.
-    void releaseGLContext();
-
-    /// Re-bind the main GL context on the calling (main) thread. Counterpart
-    /// to releaseGLContext().
-    void reclaimGLContext();
+    /// Create a second GL context that shares resources with the main
+    /// context. Must be called on the main thread (macOS SDL_GL_CreateContext
+    /// calls AppKit and will deadlock if invoked from a worker while the
+    /// main thread is blocked). The returned context is current on the
+    /// calling thread when this returns; the main context is restored
+    /// before the function exits. The caller owns the returned context
+    /// and must destroy it with SDL_GL_DestroyContext.
+    SDL_GLContext createSharedContext();
 
     // --- Runtime settings ---
 
