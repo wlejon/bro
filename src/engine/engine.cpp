@@ -725,10 +725,12 @@ void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
         // In windowed GPU mode, each canvas gets its own thread with a shared
         // GL context + GrDirectContext for parallel rasterization.
         if (displayMode_ == DisplayMode::Windowed && window_) {
-            auto ctx = window_->createSharedContext();
-            if (ctx) {
-                scene->startThread(ctx, window_->getSDLWindow());
-            }
+            // Release the main GL context so the worker thread can briefly
+            // borrow it to create a sharing context, then reclaim it once the
+            // worker signals ready.
+            window_->releaseGLContext();
+            scene->startThread(window_->getSDLWindow(), window_->getGLContext());
+            window_->reclaimGLContext();
         } else {
             // Headless / CPU fallback: use renderer's GrContext directly
             auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
@@ -1370,8 +1372,23 @@ void Engine::layoutThreadFunc() {
 // ---------------------------------------------------------------------------
 
 void Engine::rasterThreadFunc() {
-    // Make the shared GL context current on this thread
-    SDL_GL_MakeCurrent(window_->getSDLWindow(), rasterGLContext_);
+    // Borrow main GL context to create our own sharing context on THIS thread.
+    // Main thread is parked in run() waiting on rasterReady_, so there is no
+    // concurrent wgl*Context driver activity.
+    SDL_Window* win = window_->getSDLWindow();
+    SDL_GL_MakeCurrent(win, window_->getGLContext());
+    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+    rasterGLContext_ = SDL_GL_CreateContext(win);
+    if (!rasterGLContext_) {
+        LOG_ERROR("Raster thread: failed to create GL context: %s", SDL_GetError());
+        SDL_GL_MakeCurrent(win, nullptr);
+        rasterReady_.store(true, std::memory_order_release);
+        rasterReady_.notify_one();
+        return;
+    }
+    // SDL_GL_CreateContext leaves rasterGLContext_ current on this thread.
+    rasterReady_.store(true, std::memory_order_release);
+    rasterReady_.notify_one();
 
     // Create a raster-thread-local SkiaRenderer (creates its own GrDirectContext
     // internally — each thread needs its own since Skia GPU contexts aren't thread-safe).
@@ -1841,27 +1858,28 @@ void Engine::run() {
 
     auto* skia = static_cast<render::SkiaRenderer*>(renderer_.get());
 
-    // --- Raster thread setup ---
-    // Create a shared GL context for the raster thread (textures shared, FBOs per-context).
-    rasterGLContext_ = window_->createSharedContext();
-    if (!rasterGLContext_) {
-        LOG_ERROR("Failed to create shared GL context for raster thread");
-        return;
-    }
-
-    // Start canvas threads for any existing canvas scenes
+    // Start canvas threads for any existing canvas scenes that weren't
+    // threaded at addCanvasScene time. Each worker creates its own shared
+    // context on its thread; we release/reclaim the main context around each.
     for (auto& cs : canvasScenes_) {
         if (cs && !cs->isThreaded()) {
-            auto ctx = window_->createSharedContext();
-            if (ctx) cs->startThread(ctx, window_->getSDLWindow());
+            window_->releaseGLContext();
+            cs->startThread(window_->getSDLWindow(), window_->getGLContext());
+            window_->reclaimGLContext();
         }
     }
 
     // Launch layout thread (style resolution + layout computation)
     layoutThread_ = std::thread(&Engine::layoutThreadFunc, this);
 
-    // Launch raster thread
+    // Launch raster thread. The worker creates its own shared GL context
+    // (borrowing the main context briefly) to keep all wgl*Context calls on
+    // one thread at a time.
+    rasterReady_.store(false, std::memory_order_relaxed);
+    window_->releaseGLContext();
     rasterThread_ = std::thread(&Engine::rasterThreadFunc, this);
+    rasterReady_.wait(false, std::memory_order_acquire);
+    window_->reclaimGLContext();
 
     // Event watcher keeps JS timers alive during Windows' modal move/resize loop.
     SDL_AddEventWatch(modalEventWatcher, this);

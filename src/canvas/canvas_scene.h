@@ -97,9 +97,12 @@ public:
 
     // --- Threading (windowed GPU mode) ---
 
-    /// Start a dedicated canvas thread with the given shared GL context.
-    /// Called from the main thread after createSharedContext().
-    void startThread(SDL_GLContext glCtx, SDL_Window* win);
+    /// Start a dedicated canvas thread. The worker thread creates its own
+    /// shared GL context (borrowing the main context briefly). The caller
+    /// (main thread) must have released its GL context via
+    /// Window::releaseGLContext() before calling this and reclaim it after
+    /// startThread returns.
+    void startThread(SDL_Window* win, SDL_GLContext mainCtx);
 
     /// Stop the canvas thread and destroy the GL context.
     void stopThread();
@@ -263,7 +266,7 @@ public:
 
 private:
     /// Canvas thread entry point.
-    void canvasThreadFunc(SDL_Window* win);
+    void canvasThreadFunc(SDL_Window* win, SDL_GLContext mainCtx);
 
     /// Replay all deferred commands onto the Skia canvas.
     void flushCommands();
@@ -359,6 +362,7 @@ private:
         std::atomic<int> canvasHeight{0};
     };
     CanvasShared canvasShared_;
+    std::atomic<bool> canvasReady_{false};
     std::thread canvasThread_;
     SDL_GLContext canvasGLContext_ = nullptr;
     sk_sp<GrDirectContext> threadGrContext_;

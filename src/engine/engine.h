@@ -418,6 +418,7 @@ private:
         std::atomic<int> frontBuffer{0};            // 0 or 1
     };
     RasterShared rasterShared_;
+    std::atomic<bool> rasterReady_{false};
     std::thread rasterThread_;
     SDL_GLContext rasterGLContext_ = nullptr;
 

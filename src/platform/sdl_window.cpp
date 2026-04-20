@@ -143,16 +143,19 @@ std::vector<DisplayModeInfo> Window::getDisplayModes() const {
     return result;
 }
 
-SDL_GLContext Window::createSharedContext() {
-    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-    SDL_GLContext shared = SDL_GL_CreateContext(m_window);
-    if (!shared) {
-        LOG_ERROR("Failed to create shared GL context: %s", SDL_GetError());
-        return nullptr;
-    }
-    // Restore main context as current on this thread
+void Window::releaseGLContext() {
+    // Detach the main GL context from this (main) thread. A worker thread can
+    // then SDL_GL_MakeCurrent the same context, call SDL_GL_CreateContext with
+    // SDL_GL_SHARE_WITH_CURRENT_CONTEXT to produce its own sharing context,
+    // and switch to that. Doing creation + MakeCurrent entirely on the worker
+    // side avoids the NVIDIA-Windows driver crash triggered by concurrent
+    // wglCreateContext (main thread) + wglMakeCurrent (worker thread) against
+    // the same HDC.
+    SDL_GL_MakeCurrent(m_window, nullptr);
+}
+
+void Window::reclaimGLContext() {
     SDL_GL_MakeCurrent(m_window, m_glContext);
-    return shared;
 }
 
 } // namespace bro::platform

@@ -34,9 +34,15 @@ public:
     void setTitle(const std::string& title);
     void swapWindow();
 
-    /// Create a second GL context that shares textures with the main context.
-    /// The caller owns the returned context and must destroy it with SDL_GL_DestroyContext.
-    SDL_GLContext createSharedContext();
+    /// Release the main GL context from the calling (main) thread so another
+    /// thread can temporarily make it current to create a context that shares
+    /// resources with it. Call reclaimGLContext() once the other thread has
+    /// finished creating + switching to its own context.
+    void releaseGLContext();
+
+    /// Re-bind the main GL context on the calling (main) thread. Counterpart
+    /// to releaseGLContext().
+    void reclaimGLContext();
 
     // --- Runtime settings ---
 

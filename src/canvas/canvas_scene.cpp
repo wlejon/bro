@@ -88,12 +88,22 @@ void CanvasScene::cleanup() {
 // Threading
 // ---------------------------------------------------------------------------
 
-void CanvasScene::startThread(SDL_GLContext glCtx, SDL_Window* win) {
-    if (threaded_ || !glCtx || !win) return;
-    canvasGLContext_ = glCtx;
+void CanvasScene::startThread(SDL_Window* win, SDL_GLContext mainCtx) {
+    if (threaded_ || !win || !mainCtx) return;
     threaded_ = true;
     canvasShared_.state.store(kCanvasIdle, std::memory_order_relaxed);
-    canvasThread_ = std::thread(&CanvasScene::canvasThreadFunc, this, win);
+    canvasReady_.store(false, std::memory_order_relaxed);
+
+    // The attribute is read by SDL_GL_CreateContext on the worker thread
+    // (it's a global on SDL's side), so set it before launching.
+    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+
+    canvasThread_ = std::thread(&CanvasScene::canvasThreadFunc, this, win, mainCtx);
+
+    // Block main thread until the worker has finished context creation and
+    // released the main GL context. After this returns, canvasGLContext_ is
+    // owned by the worker and the main context is no longer current anywhere.
+    canvasReady_.wait(false, std::memory_order_acquire);
 }
 
 void CanvasScene::stopThread() {
@@ -111,8 +121,27 @@ void CanvasScene::stopThread() {
     threaded_ = false;
 }
 
-void CanvasScene::canvasThreadFunc(SDL_Window* win) {
-    SDL_GL_MakeCurrent(win, canvasGLContext_);
+void CanvasScene::canvasThreadFunc(SDL_Window* win, SDL_GLContext mainCtx) {
+    // Borrow the main GL context (the main thread has released it) so that
+    // SDL_GL_CreateContext with SDL_GL_SHARE_WITH_CURRENT_CONTEXT=1 sees a
+    // current context to share resources with. Immediately after creating the
+    // worker's own context, signal the main thread so it can reclaim its
+    // context. All wgl*Context* calls in this sequence execute on this
+    // worker thread — the main thread is parked in startThread() waiting for
+    // canvasReady_, so there is no cross-thread driver contention.
+    SDL_GL_MakeCurrent(win, mainCtx);
+    canvasGLContext_ = SDL_GL_CreateContext(win);
+    if (!canvasGLContext_) {
+        LOG_ERROR("Canvas thread: failed to create GL context: %s", SDL_GetError());
+        SDL_GL_MakeCurrent(win, nullptr);
+        canvasReady_.store(true, std::memory_order_release);
+        canvasReady_.notify_one();
+        return;
+    }
+    // SDL_GL_CreateContext leaves the new context current on this thread.
+    // Main thread may now reclaim mainCtx safely.
+    canvasReady_.store(true, std::memory_order_release);
+    canvasReady_.notify_one();
 
     threadGrContext_ = render::SkiaRenderer::createGrContext();
     if (!threadGrContext_) {
