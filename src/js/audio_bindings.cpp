@@ -181,7 +181,11 @@ struct VoiceAllocatorData {
 
     ~VoiceAllocatorData() {
         allocator->setVoiceSetup(nullptr);
-        // Note: RT-level free happens via destructor registered below
+        if (ctx) {
+            JSRuntime* rt = JS_GetRuntime(ctx);
+            if (!JS_IsUndefined(voiceSetupCallback)) JS_FreeValueRT(rt, voiceSetupCallback);
+            if (!JS_IsUndefined(lambdaCbRef))         JS_FreeValueRT(rt, lambdaCbRef);
+        }
     }
 };
 
@@ -199,7 +203,11 @@ struct MidiInputData {
 
     ~MidiInputData() {
         if (midi) midi->close();
-        // Note: JS value cleanup happens via custom destructor registered below
+        if (ctx) {
+            JSRuntime* rt = JS_GetRuntime(ctx);
+            if (!JS_IsUndefined(pitchBendCallback)) JS_FreeValueRT(rt, pitchBendCallback);
+            if (!JS_IsUndefined(rawCallback))       JS_FreeValueRT(rt, rawCallback);
+        }
     }
 };
 
@@ -210,7 +218,13 @@ struct SequenceData {
 
     ~SequenceData() {
         seq->clearAutomationLanes();
-        // Note: JS value cleanup happens via custom destructor registered below
+        if (ctx) {
+            JSRuntime* rt = JS_GetRuntime(ctx);
+            for (JSValue v : automationCallbacks) {
+                if (!JS_IsUndefined(v)) JS_FreeValueRT(rt, v);
+            }
+            automationCallbacks.clear();
+        }
     }
 };
 
@@ -1423,6 +1437,10 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
     // --- VoiceAllocator ---
     {
         qjsbind::Class<VoiceAllocatorData>(ctx, "VoiceAllocator")
+            .gc_mark([](VoiceAllocatorData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                JS_MarkValue(rt, d->voiceSetupCallback, mark);
+                JS_MarkValue(rt, d->lambdaCbRef, mark);
+            })
             .method_raw("noteOn", js_va_noteOn, 2)
             .method_raw("noteOff", js_va_noteOff, 1)
             .method_raw("allNotesOff", js_va_allNotesOff, 0)
@@ -1470,6 +1488,10 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
     // --- MidiInput ---
     {
         qjsbind::Class<MidiInputData>(ctx, "MidiInput")
+            .gc_mark([](MidiInputData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                JS_MarkValue(rt, d->pitchBendCallback, mark);
+                JS_MarkValue(rt, d->rawCallback, mark);
+            })
             .method_raw("availablePorts", js_midi_availablePorts, 0)
             .method("open",
                 [](MidiInputData* d, int port) -> bool { return d->midi->open(port); })
@@ -1487,6 +1509,9 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
     // --- Sequence ---
     {
         qjsbind::Class<SequenceData>(ctx, "Sequence")
+            .gc_mark([](SequenceData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                for (JSValue v : d->automationCallbacks) JS_MarkValue(rt, v, mark);
+            })
             .method("setBPM",
                 [](SequenceData* d, double v) {
                     if (s_audioEngine)
