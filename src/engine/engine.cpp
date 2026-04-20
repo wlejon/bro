@@ -1597,7 +1597,13 @@ void Engine::rasterThreadFunc() {
                     [&rasterRenderer](canvas::CanvasScene* scene, unsigned int,
                                       float x, float y, float w, float h) {
                         if (!scene || w <= 0 || h <= 0) return;
-                        scene->flush();
+                        // Bind the scene to the raster thread's Ganesh context
+                        // so ensureSurface takes the GPU path (Skia renders
+                        // directly onto a GL-backed surface, and snapshot+blit
+                        // onto the panel surface is GPU→GPU — no CPU upload).
+                        // setGrContext is idempotent on unchanged context.
+                        scene->setGrContext(rasterRenderer->grContext());
+                        scene->flushStaged();
                         auto* src = scene->surface();
                         if (!src) return;
                         auto img = src->makeImageSnapshot();
@@ -1977,6 +1983,11 @@ void Engine::run() {
 
         // 2c. Tick system panel timers
         tickSystemPanels(now);
+        // System panels (splash animation, menu, perf, settings) now share the
+        // raster thread, which is signaled via uiDirty_. Their own DOM edits
+        // never touch the app document, so propagate systemDirty_ so the
+        // raster thread actually gets kicked each frame the splash animates.
+        if (systemDirty_) uiDirty_ = true;
 
         // 3. Bind WebGL FBO before JS callbacks (so gl.bindFramebuffer(null) targets canvas)
         //    Also resize WebGL FBO to match element layout if needed.
@@ -2263,6 +2274,7 @@ void Engine::run() {
                 rasterIdle = (rasterShared_.state.load(std::memory_order_acquire) == kRasterIdle);
                 bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
                 if (rasterIdle && !uiThrottled) {
+                    stageSystemPanelCanvases();
                     rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                     rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
                     rasterShared_.insetTop.store(contentTop(), std::memory_order_relaxed);
@@ -2279,6 +2291,7 @@ void Engine::run() {
             // No layout this frame — signal raster directly if dirty.
             bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
             if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
+                stageSystemPanelCanvases();
                 rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                 rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
                 rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),

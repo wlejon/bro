@@ -238,10 +238,20 @@ public:
     }
 
     /// Flush any pending deferred commands onto the backing SkSurface.
-    /// Used by the system-panel layer-break callback, which snapshots this
-    /// surface and blits it straight onto the enclosing panel's target Skia
-    /// canvas (no GL upload). Safe no-op if there are no pending commands.
+    /// Used by the main-thread system-panel layer-break callback (headless),
+    /// which snapshots this surface and blits it straight onto the enclosing
+    /// panel's target Skia canvas. Safe no-op if there are no pending commands.
     void flush() { flushCommands(); }
+
+    /// Main thread: move recorded commands into the staged buffer so the raster
+    /// thread can replay them via flushStaged(). Used by non-threaded scenes
+    /// (system panels) to avoid racing on commands_ while JS is still running.
+    /// Must only be called when the raster thread is idle.
+    void stageCommandsForRaster();
+
+    /// Raster thread: replay staged commands onto the backing SkSurface.
+    /// Counterpart to stageCommandsForRaster(). Safe no-op if nothing staged.
+    void flushStaged() { flushStagedCommands(); }
 
     /// Mark the canvas as dirty (needing re-rasterization).
     void markDirty() { dirty_ = true; }

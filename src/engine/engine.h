@@ -349,6 +349,11 @@ private:
     void layoutSystemPanels(layout::SkiaTextMetrics& metrics);
     void drawSystemPanels(render::Renderer* renderer,
                           layout::DrawTraversal& traversal);
+    /// Main thread: swap each visible system-panel CanvasScene's recorded
+    /// commands into its staged buffer, so the raster thread can replay them
+    /// without racing with JS that keeps pushing new commands. Must be called
+    /// only when the raster thread is idle.
+    void stageSystemPanelCanvases();
     void resizeSystemPanels(int w, int h);
     dom::Element* systemHitTest(SystemDocument& doc, float x, float y);
     bool systemHandleMouseDown(float x, float y, int button);
@@ -473,6 +478,7 @@ private:
     bool splashVisible_ = false;
     bool splashDismissTriggered_ = false;
     double splashStartMs_ = 0.0;
+    double lastSystemRafMs_ = 0.0;
     bool systemDirty_ = true;
     bool systemMouseConsumed_ = false;
     std::string systemActivePanel_;

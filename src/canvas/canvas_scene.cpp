@@ -276,6 +276,18 @@ void CanvasScene::flushSync() {
     }
 }
 
+void CanvasScene::stageCommandsForRaster() {
+    if (commands_.empty()) return;
+    if (stagedCommands_.empty()) {
+        std::swap(commands_, stagedCommands_);
+    } else {
+        stagedCommands_.insert(stagedCommands_.end(),
+            std::make_move_iterator(commands_.begin()),
+            std::make_move_iterator(commands_.end()));
+        commands_.clear();
+    }
+}
+
 void CanvasScene::flushStagedCommands() {
     if (stagedCommands_.empty()) return;
 

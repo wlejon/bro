@@ -9,7 +9,9 @@
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 #include "render/renderer.h"
+#include "render/skia_backend.h"
 #include "render/gl_context.h"
+#include <include/gpu/ganesh/GrDirectContext.h>
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "dom/document.h"
@@ -669,10 +671,18 @@ void Engine::tickSystemPanels(double nowMs) {
 
     if (!isSystemVisible()) return;
 
+    // Throttle rAF firing to the engine's UI render cadence. The main loop
+    // can iterate much faster than the render pipeline actually produces
+    // frames, and firing rAF every iteration just wastes JS work (the extra
+    // canvas commands would be staged but never displayed at a different
+    // rate than the raster thread can emit frames).
+    bool fireRaf = (nowMs - lastSystemRafMs_) >= uiFrameIntervalMs_;
+    if (fireRaf) lastSystemRafMs_ = nowMs;
+
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.timers) continue;
         doc.timers->tick(nowMs);
-        doc.timers->fireAnimationFrames(nowMs);
+        if (fireRaf) doc.timers->fireAnimationFrames(nowMs);
     }
 
     for (auto& doc : systemDocs_) {
@@ -719,6 +729,16 @@ void Engine::updateSystemPerf(double fps, double frameTime, double js, double la
 // pipeline as the app document — there is no separate system renderer.
 // ---------------------------------------------------------------------------
 
+void Engine::stageSystemPanelCanvases() {
+    if (!isSystemVisible()) return;
+    for (auto& doc : systemDocs_) {
+        if (!isSystemDocVisible(doc)) continue;
+        for (auto& scene : doc.canvasScenes) {
+            if (scene) scene->stageCommandsForRaster();
+        }
+    }
+}
+
 void Engine::layoutSystemPanels(layout::SkiaTextMetrics& metrics) {
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
@@ -741,11 +761,18 @@ void Engine::drawSystemPanels(render::Renderer* renderer,
     // is the panel). Install a layer-break callback that blits the canvas
     // surface straight onto the current target Skia canvas — no separate
     // GPU texture layer for system canvases.
+    // If the renderer is a GPU-backed SkiaRenderer, route system-panel
+    // canvases through its GrDirectContext so they render on the GPU (same
+    // reasoning as the windowed raster-thread callback in engine.cpp).
+    auto* skiaRenderer = dynamic_cast<render::SkiaRenderer*>(renderer);
+    GrDirectContext* panelGr = skiaRenderer ? skiaRenderer->grContext() : nullptr;
+
     traversal.setLayerBreakCallback(
-        [renderer](canvas::CanvasScene* scene, unsigned int /*tex*/,
+        [renderer, panelGr](canvas::CanvasScene* scene, unsigned int /*tex*/,
                    float x, float y, float w, float h) {
             if (!scene || !renderer) return;
             if (w <= 0 || h <= 0) return;
+            if (panelGr) scene->setGrContext(panelGr);
             scene->flush();
             auto* src = scene->surface();
             if (!src) return;
