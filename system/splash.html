@@ -210,7 +210,10 @@ html, body {
     var t0 = -1;
     var tPrev = -1;
     var dismissAt = 0;
-    var DISMISS_MS = 620;
+    var DISMISS_MS = 500;
+    var TEXT_FADE_MS = 250;
+    var BG_FADE_DELAY_MS = 125;
+    var BG_FADE_MS = 375;
 
     window.__onDismiss = function() {
         dismissAt = -1;   // stamp on next rAF which has the engine clock
@@ -246,23 +249,14 @@ html, body {
         var idleScanBottom = -80 + idlePos * (vh + 120);
 
         if (dismissAt > 0) {
-            var d = Math.min(1, (now - dismissAt) / DISMISS_MS);
-            if (d < 0.25) {
-                // Phase 1: pull the beam upward from wherever idle left it.
-                var u = d / 0.25;
-                scanBottom = idleScanBottom + (-80 - idleScanBottom) * (u * (2 - u));
-            } else {
-                // Phase 2: accelerate down past the bottom — the final reveal.
-                var v = (d - 0.25) / 0.75;
-                var e = v * v;
-                scanBottom = -80 + e * (vh + 200);
-            }
-            var fadeStart = vh * 0.10;
-            var fadeEnd = vh * 0.35;
-            textOp = 1 - Math.max(0, Math.min(1, (scanBottom - fadeStart) / (fadeEnd - fadeStart)));
-            stageOp = 1 - Math.max(0, (d - 0.6) / 0.4);
+            // No more scan reveal on dismiss — just hold the beam where idle
+            // left it and fade the text, then the background.
+            scanBottom = idleScanBottom;
+            var dms = now - dismissAt;
+            textOp = 1 - Math.max(0, Math.min(1, dms / TEXT_FADE_MS));
+            stageOp = 1 - Math.max(0, Math.min(1, (dms - BG_FADE_DELAY_MS) / BG_FADE_MS));
 
-            if (d >= 1) {
+            if (dms >= DISMISS_MS) {
                 if (typeof __bro !== 'undefined' && __bro.dismissSplash) {
                     __bro.dismissSplash();
                 }
@@ -275,6 +269,7 @@ html, body {
         drawFrame(dt, vw, vh, scanBottom);
         stage.style.opacity = stageOp.toFixed(3);
         scan.style.top = (scanBottom - 1).toFixed(1) + 'px';
+        scan.style.opacity = stageOp.toFixed(3);
 
         if (dismissAt <= 0) {
             cursor.style.opacity = (Math.floor(t * 2) % 2 === 0) ? '1' : '0';
