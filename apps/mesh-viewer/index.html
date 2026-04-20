@@ -17,16 +17,16 @@
         /* --- Status toast (top, centered) --- */
         #status {
             position: absolute;
-            top: 12px;
+            top: 8px;
             left: 50%;
             transform: translateX(-50%);
             background: rgba(0,0,0,0.78);
-            padding: 6px 14px;
+            padding: 5px 12px;
             border-radius: 6px;
             font-size: 12px;
             z-index: 30;
             color: #7bed9f;
-            max-width: 50vw;
+            max-width: 60vw;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -34,6 +34,10 @@
         }
         #status.warn  { color: #ffa502; }
         #status.error { color: #ff6b6b; }
+        #status.busy  { color: #74b9ff; }
+        #status.busy::before {
+            content: '⏳ ';
+        }
 
         /* --- Help hint (bottom-center) --- */
         #help {
@@ -64,6 +68,10 @@
         }
         #drop-overlay.show { display: flex; }
 
+        /* --- Busy overlay (non-blocking; dimmed panels indicate "computing") --- */
+        body.busy #ops-panel { opacity: 0.55; pointer-events: none; }
+        body.busy #file-list { opacity: 0.55; pointer-events: none; }
+
         /* --- Generic panel chrome --- */
         .panel {
             position: absolute;
@@ -78,35 +86,11 @@
 
         /* --- Right panel: file browser --- */
         #file-panel {
-            top: 12px;
+            top: 40px;
             right: 12px;
-            width: 320px;
-            max-height: calc(100vh - 24px);
+            width: 340px;
+            max-height: calc(100vh - 52px);
         }
-
-        #open-row { display: flex; gap: 6px; margin-bottom: 8px; }
-        #open-row button {
-            flex: 1;
-            color: #fff;
-            border-radius: 4px;
-            padding: 6px 10px;
-            font-family: inherit;
-            font-size: 12px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        #open-folder-btn {
-            background: #2a4a6a;
-            border: 1px solid #3a6a9a;
-        }
-        #open-folder-btn:hover  { background: #3a6a9a; }
-        #open-folder-btn:active { background: #1a3a5a; }
-        #open-file-btn {
-            background: #333;
-            border: 1px solid #555;
-        }
-        #open-file-btn:hover  { background: #444; }
-        #open-file-btn:active { background: #222; }
 
         #dir-status {
             font-size: 10px;
@@ -125,9 +109,11 @@
             min-height: 0;
             border-top: 1px solid #222;
             padding-top: 4px;
-            max-height: 280px;
         }
         .file-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
             padding: 4px 6px;
             cursor: pointer;
             border-radius: 3px;
@@ -136,11 +122,22 @@
             color: #ccc;
             white-space: nowrap;
             overflow: hidden;
-            text-overflow: ellipsis;
         }
         .file-item:hover { background: rgba(116, 185, 255, 0.15); color: #fff; }
         .file-item.selected { background: #2a4a6a; color: #fff; font-weight: bold; }
-        .file-item .dim { color: #666; margin-right: 4px; }
+        .file-item .dim {
+            color: #666;
+            flex: 0 0 auto;
+            min-width: 22px;
+            text-align: right;
+        }
+        .file-item .nm {
+            flex: 1 1 auto;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
         #file-list .empty {
             color: #888;
             padding: 8px;
@@ -149,10 +146,10 @@
 
         /* --- Left panel: ops --- */
         #ops-panel {
-            top: 12px;
+            top: 40px;
             left: 12px;
-            width: 280px;
-            max-height: calc(100vh - 24px);
+            width: 260px;
+            max-height: calc(100vh - 52px);
             overflow-y: auto;
             padding: 6px;
         }
@@ -194,13 +191,24 @@
             justify-content: space-between;
             font-size: 11px;
             font-family: monospace;
-            line-height: 1.5;
+            line-height: 1.6;
             color: #bbb;
+            white-space: nowrap;
+            overflow: hidden;
         }
-        .stat-row .key { color: #777; }
-        .stat-row .val { color: #ddd; }
+        .stat-row .key { color: #777; flex: 0 0 auto; }
+        .stat-row .val {
+            color: #ddd;
+            flex: 1 1 auto;
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-left: 8px;
+            min-width: 0;
+        }
         .stat-row.bad .val { color: #ff6b6b; }
         .stat-row.ok  .val { color: #7bed9f; }
+        .stat-row.muted .val { color: #666; font-style: italic; }
 
         /* Generic controls */
         .row {
@@ -219,6 +227,7 @@
             font-family: inherit;
             cursor: pointer;
             flex: 1;
+            white-space: nowrap;
         }
         button.opbtn:hover { background: #2a2a2a; color: #fff; }
         button.opbtn.toggled {
@@ -237,7 +246,7 @@
             border-color: #6a2a2a;
             color: #ffb;
         }
-        button.opbtn.danger:hover { background: #6a2a2a; }
+        button.opbtn.danger:hover:not(:disabled) { background: #6a2a2a; }
 
         label.field {
             display: flex;
@@ -248,8 +257,7 @@
             margin-bottom: 4px;
         }
         label.field span.lbl { min-width: 56px; color: #888; }
-        label.field input[type=number],
-        label.field input[type=text] {
+        label.field input[type=number] {
             background: #111;
             color: #ddd;
             border: 1px solid #2c2c2c;
@@ -283,6 +291,7 @@
             color: #666;
             margin: 4px 0 2px 0;
             font-style: italic;
+            white-space: normal;
         }
 
         /* Animations row in rig section */
@@ -310,10 +319,10 @@
         /* UV inset */
         #uv-inset {
             position: absolute;
-            top: 12px;
-            right: 344px;
-            width: 220px;
-            height: 220px;
+            top: 40px;
+            right: 364px;
+            width: 200px;
+            height: 200px;
             background: rgba(0,0,0,0.85);
             border: 1px solid #2a2a2a;
             border-radius: 4px;
@@ -352,16 +361,18 @@
         <details class="section" open>
             <summary>Stats</summary>
             <div class="body" id="stats-body">
-                <div class="stat-row"><span class="key">file</span>     <span class="val" id="st-file">—</span></div>
                 <div class="stat-row"><span class="key">meshes</span>   <span class="val" id="st-meshes">0</span></div>
                 <div class="stat-row"><span class="key">verts</span>    <span class="val" id="st-verts">0</span></div>
                 <div class="stat-row"><span class="key">tris</span>     <span class="val" id="st-tris">0</span></div>
                 <div class="stat-row"><span class="key">bbox</span>     <span class="val" id="st-bbox">—</span></div>
+                <div class="stat-row"><span class="key">UVs</span>      <span class="val" id="st-uvs">—</span></div>
+                <div class="stat-row"><span class="key">colors</span>   <span class="val" id="st-colors">—</span></div>
                 <div class="stat-row" id="st-row-manifold"><span class="key">manifold</span> <span class="val" id="st-manifold">—</span></div>
                 <div class="stat-row"><span class="key">volume</span>   <span class="val" id="st-volume">—</span></div>
                 <div class="stat-row" id="st-row-selfx"><span class="key">self-int</span>   <span class="val" id="st-selfx">—</span></div>
-                <div class="stat-row"><span class="key">UVs</span>      <span class="val" id="st-uvs">—</span></div>
-                <div class="stat-row"><span class="key">colors</span>   <span class="val" id="st-colors">—</span></div>
+                <div class="row" style="margin-top: 6px;">
+                    <button class="opbtn" id="stats-run">Run checks</button>
+                </div>
             </div>
         </details>
 
@@ -448,40 +459,23 @@
                 </label>
             </div>
         </details>
-
-        <details class="section">
-            <summary>Export</summary>
-            <div class="body">
-                <div class="help-text">Saves the currently displayed (modified) mesh.</div>
-                <div class="row">
-                    <button class="opbtn" id="exp-glb">GLB</button>
-                    <button class="opbtn" id="exp-obj">OBJ</button>
-                    <button class="opbtn" id="exp-ply">PLY</button>
-                    <button class="opbtn" id="exp-stl">STL</button>
-                </div>
-            </div>
-        </details>
     </div>
 
     <!-- Right: file browser -->
     <div id="file-panel" class="panel">
-        <div id="open-row">
-            <button id="open-folder-btn" type="button">Open Folder…</button>
-            <button id="open-file-btn"   type="button">Open File…</button>
-        </div>
         <div id="dir-status"></div>
         <div id="file-list"></div>
     </div>
 
-    <!-- UV inset (top-right, left of file panel) -->
+    <!-- UV inset -->
     <div id="uv-inset">
         <div class="label">UV layout</div>
-        <canvas id="uv-canvas" width="220" height="220"></canvas>
+        <canvas id="uv-canvas" width="200" height="200"></canvas>
     </div>
 
     <!-- Help hint -->
     <div id="help">
-        <b>right-drag</b> rotate · <b>middle-drag</b> pan · <b>wheel</b> zoom · <b>H</b> hide panel · <b>O</b> open folder · <b>F</b> open file
+        <b>right-drag</b> rotate · <b>middle-drag</b> pan · <b>wheel</b> zoom · <b>H</b> hide panel · File menu for open / save
     </div>
 
     <script src="../lib/camera.js"></script>

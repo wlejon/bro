@@ -1,10 +1,7 @@
 // =============================================================================
-// Mesh viewer + workbench — load .glb/.gltf/.obj/.ply/.stl, inspect, modify,
-// generate LODs, bake AO/curvature/thickness into vertex colors, build collision
-// hulls, export. CPU-skinned animation playback for rigged glTF.
-//
-// Modify ops replace each mesh's "work" copy. Animation pauses while modified
-// (skinning needs the original topology). Reset restores the load-time state.
+// Mesh viewer + workbench. Heavy bromesh ops run in a worker; the main thread
+// only handles rendering, skinning, and UI. Stats checks are on-demand to keep
+// file loads instant.
 // =============================================================================
 
 const fs   = require('fs');
@@ -26,31 +23,28 @@ const statusEl  = document.getElementById('status');
 
 const opsPanel  = document.getElementById('ops-panel');
 const dropOverlay = document.getElementById('drop-overlay');
-const helpEl    = document.getElementById('help');
 
-const dirStatus     = document.getElementById('dir-status');
-const fileListEl    = document.getElementById('file-list');
-const openFolderBtn = document.getElementById('open-folder-btn');
-const openFileBtn   = document.getElementById('open-file-btn');
+const dirStatus = document.getElementById('dir-status');
+const fileListEl = document.getElementById('file-list');
 
 // stats
 const $st = {
-    file:     document.getElementById('st-file'),
     meshes:   document.getElementById('st-meshes'),
     verts:    document.getElementById('st-verts'),
     tris:     document.getElementById('st-tris'),
     bbox:     document.getElementById('st-bbox'),
+    uvs:      document.getElementById('st-uvs'),
+    colors:   document.getElementById('st-colors'),
     manifold: document.getElementById('st-manifold'),
     rowMan:   document.getElementById('st-row-manifold'),
     volume:   document.getElementById('st-volume'),
     selfx:    document.getElementById('st-selfx'),
     rowSelfx: document.getElementById('st-row-selfx'),
-    uvs:      document.getElementById('st-uvs'),
-    colors:   document.getElementById('st-colors'),
+    runBtn:   document.getElementById('stats-run'),
 };
 
 // view
-const viewModeSel = document.getElementById('view-mode');
+const viewModeSel  = document.getElementById('view-mode');
 const viewHullBtn  = document.getElementById('view-hull');
 const viewSelfxBtn = document.getElementById('view-selfx');
 const viewUVBtn    = document.getElementById('view-uv');
@@ -84,12 +78,6 @@ const blendRow    = document.getElementById('blend-row');
 const blendRange  = document.getElementById('blend-range');
 const blendNum    = document.getElementById('blend-num');
 
-// export
-const expGlbBtn = document.getElementById('exp-glb');
-const expObjBtn = document.getElementById('exp-obj');
-const expPlyBtn = document.getElementById('exp-ply');
-const expStlBtn = document.getElementById('exp-stl');
-
 // uv inset
 const uvInset    = document.getElementById('uv-inset');
 const uvCanvas   = document.getElementById('uv-canvas');
@@ -100,45 +88,109 @@ const uvCtx      = uvCanvas.getContext('2d');
 // ---------------------------------------------------------------------------
 
 let state = {
-    mode: 'folder',
     dir: '',
     files: [],
     fileIndex: -1,
-    loaded: null,           // { path, name, gltf, items[], skeleton, skin, animations, ... }
+    loaded: null,
     paused: false,
     bindPoseOnly: false,
     panelHidden: false,
 
-    view: {
-        color:  'original',
-        hull:   false,
-        selfx:  false,
-        uv:     false,
-        bones:  false,
-    },
+    view:    { color: 'original', hull: false, selfx: false, uv: false, bones: false },
     modify:  { dirty: false },
-    lod:     { ratio: 1.0, built: false },
+    lod:     { ratio: 1.0, built: false, encoded: null, originalTris: 0 },
     rig:     { active: -1, blend: -1, blendW: 0.5 },
     boneNodes: [],
+
+    busy: false,
 };
 
-// loaded.items[i] : {
-//     bind:      Mesh,         // original geometry, never mutated
-//     basePositions, baseNormals, baseColors,  // snapshots from bind
-//     work:      Mesh,         // currently displayed; mutated by bake/modify
-//     node:      SceneNode,    // main render node
-//     hullNode:  SceneNode?,   // convex-hull overlay (lazy)
-//     selfxNode: SceneNode?,   // self-intersection highlight (lazy)
-//     progressive: ProgressiveMesh?,  // built lazily for LOD
-// }
-
 // ---------------------------------------------------------------------------
-// Camera
+// Mesh worker — promise-returning op dispatcher
 // ---------------------------------------------------------------------------
 
-const cam = Camera.createOrbit({ target: [0, 0, 0], dist: 6, fov: 45 });
-let rightDown  = false;
-let middleDown = false;
+const worker = new Worker('mesh-worker.js');
+let nextJobId = 1;
+const pending = new Map();    // id → { resolve, reject, label }
+
+worker.onmessage = (e) => {
+    const { id, ok, result, error } = e.data;
+    const job = pending.get(id);
+    if (!job) return;
+    pending.delete(id);
+    if (ok) job.resolve(result);
+    else    job.reject(new Error(error || 'worker op failed'));
+};
+
+// Serialize a Mesh to plain typed arrays for the worker. Always copies — the
+// main thread keeps its mesh intact.
+function meshToData(m) {
+    const out = {
+        positions: new Float32Array(m.positions),
+        indices:   new Uint32Array(m.indices),
+    };
+    if (m.hasNormals) out.normals = new Float32Array(m.normals);
+    if (m.hasUVs)     out.uvs     = new Float32Array(m.uvs);
+    if (m.hasColors)  out.colors  = new Float32Array(m.colors);
+    return out;
+}
+
+// Reverse: rebuild a Mesh from worker reply data.
+function meshFromData(d) {
+    const opts = { positions: d.positions, indices: d.indices };
+    if (d.normals) opts.normals = d.normals;
+    if (d.uvs)     opts.uvs     = d.uvs;
+    if (d.colors)  opts.colors  = d.colors;
+    return new Mesh(opts);
+}
+
+function transferList(d) {
+    const list = [d.positions.buffer, d.indices.buffer];
+    if (d.normals) list.push(d.normals.buffer);
+    if (d.uvs)     list.push(d.uvs.buffer);
+    if (d.colors)  list.push(d.colors.buffer);
+    return list;
+}
+
+function postOp(op, mesh, params) {
+    const id = nextJobId++;
+    const data = mesh ? meshToData(mesh) : null;
+    return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        const transfers = data ? transferList(data) : [];
+        worker.postMessage({ id, op, mesh: data, params: params || {} }, transfers);
+    });
+}
+
+// Run an op against every item's work mesh in turn, applying `apply(item, result)`
+// for each. Manages busy state, status message, and timing.
+async function runForEach(label, op, perItemParams, apply) {
+    if (!state.loaded) return;
+    if (state.busy) { setStatus('busy — wait for current op', 'warn'); return; }
+    setBusy(true, label);
+    const t0 = performance.now();
+    try {
+        const items = state.loaded.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items.length > 1) setStatus(label + ' (' + (i+1) + '/' + items.length + ') …', 'busy');
+            const params = (typeof perItemParams === 'function') ? perItemParams(items[i], i) : perItemParams;
+            const result = await postOp(op, items[i].work, params);
+            apply(items[i], result);
+        }
+        setStatus(label + ' · ' + (performance.now() - t0).toFixed(0) + ' ms');
+    } catch (e) {
+        setStatus(label + ' failed: ' + e.message, 'error');
+    } finally {
+        setBusy(false);
+    }
+}
+
+function setBusy(on, label) {
+    state.busy = on;
+    document.body.classList.toggle('busy', on);
+    if (on && label) setStatus(label + ' …', 'busy');
+    syncControls();
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -163,10 +215,7 @@ function fmtNum(n) {
     return n.toFixed(Math.abs(n) < 10 ? 3 : 2);
 }
 
-function fmtVec3(v) {
-    if (!v) return '—';
-    return v.map(x => x.toFixed(2)).join(', ');
-}
+function fmtVec3(v) { return v ? v.map(x => x.toFixed(2)).join(', ') : '—'; }
 
 function clearNodes() {
     if (!state.loaded) return;
@@ -177,6 +226,7 @@ function clearNodes() {
     }
     clearBoneNodes();
     state.loaded = null;
+    syncMenuExportEnabled();
 }
 
 function clearBoneNodes() {
@@ -191,18 +241,12 @@ function clearBoneNodes() {
 function loadAnyMesh(filePath) {
     const ext = fileExt(filePath);
     if (ext === '.glb' || ext === '.gltf') return Mesh.loadGLTF(filePath);
-    // OBJ/PLY/STL: synthesize a minimal "gltf-like" struct so the rest of the
-    // pipeline doesn't care about the source format.
     let m;
     if      (ext === '.obj') m = Mesh.loadOBJ(filePath);
     else if (ext === '.ply') m = Mesh.loadPLY(filePath);
     else if (ext === '.stl') m = Mesh.loadSTL(filePath);
     else throw new Error('Unsupported extension: ' + ext);
-    return {
-        meshes: [m],
-        skins: [], skeletons: [], animations: [],
-        materials: [], images: [], meshMaterial: [],
-    };
+    return { meshes: [m], skins: [], skeletons: [], animations: [], materials: [], images: [], meshMaterial: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -247,10 +291,12 @@ function renderFileList() {
         num.className = 'dim';
         num.textContent = (i + 1).toString().padStart(2, ' ');
         const name = document.createElement('span');
-        name.textContent = ' ' + fileName(state.files[i]);
+        name.className = 'nm';
+        name.textContent = fileName(state.files[i]);
         item.appendChild(num);
         item.appendChild(name);
         item.addEventListener('click', () => {
+            if (state.busy) { setStatus('busy — wait for current op', 'warn'); return; }
             state.fileIndex = i;
             loadFile(i);
             renderFileList();
@@ -263,7 +309,7 @@ function renderFileList() {
 
 function setDirectory(dir, opts) {
     opts = opts || {};
-    const autoload = opts.autoload !== false;
+    const autoload = opts.autoload === true;
     const selectedPath = opts.selectedPath || null;
     const normalized = path.normalize(dir).replace(/\\/g, '/');
     const res = scanDir(normalized);
@@ -299,7 +345,7 @@ function setDirectory(dir, opts) {
         const found = state.files.indexOf(normSel);
         if (found >= 0) targetIdx = found;
     }
-    state.fileIndex = targetIdx;
+    state.fileIndex = autoload ? targetIdx : -1;
     renderFileList();
     if (autoload) loadFile(targetIdx);
 }
@@ -310,7 +356,6 @@ function openFolderDialog() {
     }
     const picked = showOpenFolderDialog(state.dir || null);
     if (!picked || picked.length === 0) return;
-    state.mode = 'folder';
     setDirectory(picked[0].replace(/\\/g, '/'));
 }
 
@@ -324,7 +369,6 @@ function openFileDialog() {
 }
 
 function loadStandalonePath(p) {
-    state.mode = 'file';
     state.dir = '';
     state.files = [p];
     state.fileIndex = 0;
@@ -362,7 +406,6 @@ function loadFile(idx) {
     const hasSkel = gltf.skeletons  && gltf.skeletons.length  > 0 && gltf.skeletons[0].boneCount > 0;
     const hasAnim = gltf.animations && gltf.animations.length > 0;
 
-    // Frame camera on combined bbox.
     let lo = [ Infinity,  Infinity,  Infinity];
     let hi = [-Infinity, -Infinity, -Infinity];
     for (const m of meshes) {
@@ -373,7 +416,6 @@ function loadFile(idx) {
     const size = Math.max(hi[0]-lo[0], hi[1]-lo[1], hi[2]-lo[2]) || 1;
     Camera.orbitReframe(cam, center, Math.max(size * 2.2, 2));
 
-    // Per-mesh items.
     const materials = gltf.materials || [];
     const images    = gltf.images    || [];
     const meshMat   = gltf.meshMaterial || [];
@@ -381,8 +423,6 @@ function loadFile(idx) {
     for (let i = 0; i < meshes.length; i++) {
         const bind = meshes[i];
         if (!bind.hasNormals) bind.computeNormals();
-        // bind is the pristine source — never mutated. work is a mutable
-        // clone that ops/baking/skinning operate on.
         const work = bind.clone();
 
         const opts = { data: work, name: 'mesh-' + i };
@@ -401,11 +441,10 @@ function loadFile(idx) {
             bind, work,
             basePositions: new Float32Array(bind.positions),
             baseNormals:   bind.hasNormals ? new Float32Array(bind.normals) : null,
-            baseColors:    bind.hasColors ? new Float32Array(bind.colors) : null,
+            baseColors:    bind.hasColors  ? new Float32Array(bind.colors)  : null,
             node: scene.createMesh(opts),
             hullNode: null,
             selfxNode: null,
-            progressive: null,
         });
     }
 
@@ -419,8 +458,7 @@ function loadFile(idx) {
     };
 
     state.modify.dirty = false;
-    state.lod.built = false;
-    state.lod.ratio = 1.0;
+    state.lod = { ratio: 1.0, built: false, encoded: null, originalTris: 0 };
 
     if (hasAnim) state.rig.active = 0;
     state.rig.blend = -1;
@@ -430,13 +468,15 @@ function loadFile(idx) {
     renderRigUI();
     renderStats();
     syncControls();
+    syncMenuExportEnabled();
+    renderFileList();
 
-    setStatus('[' + (idx+1) + '/' + state.files.length + '] ' + name);
+    setStatus(name + ' · ' + items.length + ' mesh' + (items.length === 1 ? '' : 'es'));
 }
 
 function resetUIState() {
     state.view = { color: 'original', hull: false, selfx: false, uv: false, bones: false };
-    state.lod = { ratio: 1.0, built: false };
+    state.lod = { ratio: 1.0, built: false, encoded: null, originalTris: 0 };
     state.rig.active = -1;
     state.rig.blend = -1;
     viewModeSel.value = 'original';
@@ -454,23 +494,23 @@ function resetUIState() {
 
 function renderStats() {
     const L = state.loaded;
+
     if (!L) {
-        $st.file.textContent = '—';
         $st.meshes.textContent = '0';
         $st.verts.textContent = '0';
         $st.tris.textContent = '0';
         $st.bbox.textContent = '—';
+        $st.uvs.textContent = '—';
+        $st.colors.textContent = '—';
         $st.manifold.textContent = '—';
         $st.volume.textContent = '—';
         $st.selfx.textContent = '—';
-        $st.uvs.textContent = '—';
-        $st.colors.textContent = '—';
-        $st.rowMan.classList.remove('ok', 'bad');
-        $st.rowSelfx.classList.remove('ok', 'bad');
+        $st.rowMan.classList.remove('ok', 'bad', 'muted');
+        $st.rowSelfx.classList.remove('ok', 'bad', 'muted');
+        $st.runBtn.disabled = true;
         return;
     }
 
-    $st.file.textContent = L.name;
     $st.meshes.textContent = L.items.length;
 
     let totalV = 0, totalT = 0;
@@ -488,149 +528,160 @@ function renderStats() {
     }
     $st.verts.textContent = fmtNum(totalV);
     $st.tris.textContent  = fmtNum(totalT);
-    const ext = [hi[0]-lo[0], hi[1]-lo[1], hi[2]-lo[2]];
-    $st.bbox.textContent = fmtVec3(ext);
+    $st.bbox.textContent  = fmtVec3([hi[0]-lo[0], hi[1]-lo[1], hi[2]-lo[2]]);
+    $st.uvs.textContent    = hasUVs   ? 'yes' : 'no';
+    $st.colors.textContent = hasColors ? 'yes' : 'no';
 
-    // Manifold / volume / self-int — only for single-mesh files, and skipped
-    // automatically on heavy meshes (self-int is O(tris²) without acceleration
-    // and would freeze the UI on >50k tri meshes). Click the overlay buttons
-    // to compute on demand.
-    const HEAVY_TRI = 50000;
-    if (L.items.length === 1 && totalT <= HEAVY_TRI) {
-        const w = L.items[0].work;
-        let manifold = false;
-        try { manifold = w.isManifold(); } catch (e) {}
-        $st.manifold.textContent = manifold ? 'yes' : 'no';
-        $st.rowMan.classList.toggle('ok',  manifold);
-        $st.rowMan.classList.toggle('bad', !manifold);
+    // Heavy checks aren't run on load (single big mesh would freeze the
+    // worker). They reset to "—" and the user clicks "Run checks".
+    $st.manifold.textContent = '—';
+    $st.volume.textContent = '—';
+    $st.selfx.textContent = '—';
+    $st.rowMan.classList.remove('ok', 'bad', 'muted');
+    $st.rowSelfx.classList.remove('ok', 'bad', 'muted');
 
-        try { $st.volume.textContent = manifold ? fmtNum(w.computeVolume()) : 'n/a'; }
-        catch (e) { $st.volume.textContent = '—'; }
-
-        try {
-            const sx = w.findSelfIntersections();
-            const cnt = sx ? sx.length : 0;
-            $st.selfx.textContent = cnt === 0 ? 'none' : (cnt + ' pair' + (cnt === 1 ? '' : 's'));
-            $st.rowSelfx.classList.toggle('ok',  cnt === 0);
-            $st.rowSelfx.classList.toggle('bad', cnt > 0);
-        } catch (e) { $st.selfx.textContent = '—'; }
-    } else if (L.items.length === 1) {
-        $st.manifold.textContent = 'skipped';
-        $st.volume.textContent   = 'skipped';
-        $st.selfx.textContent    = 'skipped (>50k tris)';
-        $st.rowMan.classList.remove('ok', 'bad');
-        $st.rowSelfx.classList.remove('ok', 'bad');
-    } else {
+    $st.runBtn.disabled = (L.items.length !== 1);
+    if (L.items.length !== 1) {
         $st.manifold.textContent = '(' + L.items.length + ' meshes)';
         $st.volume.textContent = '—';
         $st.selfx.textContent = '—';
-        $st.rowMan.classList.remove('ok', 'bad');
-        $st.rowSelfx.classList.remove('ok', 'bad');
+        $st.rowMan.classList.add('muted');
+        $st.rowSelfx.classList.add('muted');
     }
+}
 
-    $st.uvs.textContent    = hasUVs ? 'yes' : 'no';
-    $st.colors.textContent = hasColors ? 'yes' : 'no';
+async function runStatsChecks() {
+    const L = state.loaded;
+    if (!L || L.items.length !== 1 || state.busy) return;
+    setBusy(true, 'Running checks');
+    try {
+        const w = L.items[0].work;
+        // Manifold + volume in one trip.
+        $st.manifold.textContent = '…';
+        $st.volume.textContent = '…';
+        const r1 = await postOp('isManifold', w, {});
+        $st.manifold.textContent = r1.manifold ? 'yes' : 'no';
+        $st.rowMan.classList.toggle('ok',  r1.manifold);
+        $st.rowMan.classList.toggle('bad', !r1.manifold);
+        $st.volume.textContent = (r1.volume !== null) ? fmtNum(r1.volume) : 'n/a';
+
+        // Self-int check — can be very slow on dense meshes.
+        $st.selfx.textContent = 'computing …';
+        const r2 = await postOp('selfInt', w, {});
+        const cnt = r2.pairs ? r2.pairs.length : 0;
+        $st.selfx.textContent = cnt === 0 ? 'none' : (cnt + ' pair' + (cnt === 1 ? '' : 's'));
+        $st.rowSelfx.classList.toggle('ok',  cnt === 0);
+        $st.rowSelfx.classList.toggle('bad', cnt > 0);
+        setStatus('Checks done');
+    } catch (e) {
+        setStatus('Checks failed: ' + e.message, 'error');
+    } finally {
+        setBusy(false);
+    }
 }
 
 // ---------------------------------------------------------------------------
 // View — color modes (vertex colors)
 // ---------------------------------------------------------------------------
 
-// Replace the work mesh's colors based on the chosen mode and push to the
-// scene node. View mode bakes are non-destructive to topology — only colors
-// change — so they're safe even when "modify" hasn't been touched.
-function applyColorMode(mode) {
+async function applyColorMode(mode) {
     state.view.color = mode;
     const L = state.loaded;
     if (!L) return;
 
-    for (const it of L.items) {
-        const w = it.work;
-        if (mode === 'original') {
-            if (it.baseColors) w.colors = new Float32Array(it.baseColors);
-            else { try { w.colors = new Float32Array(0); } catch (e) {} }
-        } else {
-            try {
-                if      (mode === 'normals')   colorByNormals(w);
-                else if (mode === 'curvature') w.bakeCurvature(1.0);
-                else if (mode === 'ao')        w.bakeAmbientOcclusion(64, 0);
-                else if (mode === 'thickness') w.bakeThickness(32, 0);
-            } catch (e) {
-                setStatus(mode + ' bake failed: ' + e.message, 'error');
-                continue;
-            }
+    if (mode === 'original') {
+        for (const it of L.items) {
+            if (it.baseColors) it.work.colors = new Float32Array(it.baseColors);
+            else { try { it.work.colors = new Float32Array(0); } catch (e) {} }
+            it.node.updateMesh(it.work);
         }
-        it.node.updateMesh(w);
+        return;
     }
-    if (mode !== 'original') setStatus('Baked: ' + mode);
-}
 
-function colorByNormals(mesh) {
-    if (!mesh.hasNormals) mesh.computeNormals();
-    const n = mesh.normals;
-    const nv = mesh.vertexCount;
-    const c = new Float32Array(nv * 4);
-    for (let i = 0; i < nv; i++) {
-        c[i*4 + 0] = n[i*3 + 0] * 0.5 + 0.5;
-        c[i*4 + 1] = n[i*3 + 1] * 0.5 + 0.5;
-        c[i*4 + 2] = n[i*3 + 2] * 0.5 + 0.5;
-        c[i*4 + 3] = 1.0;
+    if (mode === 'normals') {
+        // JS-only and cheap — no worker needed.
+        for (const it of L.items) {
+            const w = it.work;
+            if (!w.hasNormals) w.computeNormals();
+            const n = w.normals;
+            const nv = w.vertexCount;
+            const c = new Float32Array(nv * 4);
+            for (let i = 0; i < nv; i++) {
+                c[i*4 + 0] = n[i*3 + 0] * 0.5 + 0.5;
+                c[i*4 + 1] = n[i*3 + 1] * 0.5 + 0.5;
+                c[i*4 + 2] = n[i*3 + 2] * 0.5 + 0.5;
+                c[i*4 + 3] = 1.0;
+            }
+            w.colors = c;
+            it.node.updateMesh(w);
+        }
+        return;
     }
-    mesh.colors = c;
+
+    // AO / curvature / thickness — worker.
+    const opMap = { ao: 'bakeAO', curvature: 'bakeCurv', thickness: 'bakeThick' };
+    const labelMap = { ao: 'Baking AO', curvature: 'Baking curvature', thickness: 'Baking thickness' };
+    await runForEach(labelMap[mode], opMap[mode], {}, (it, result) => {
+        // Worker returned a Mesh; we want its colors+normals applied to our work mesh.
+        if (result.mesh.colors)  it.work.colors  = result.mesh.colors;
+        if (result.mesh.normals) it.work.normals = result.mesh.normals;
+        it.node.updateMesh(it.work);
+    });
 }
 
 // ---------------------------------------------------------------------------
 // View — convex hull overlay
 // ---------------------------------------------------------------------------
 
-function setHullVisible(on) {
+async function setHullVisible(on) {
     state.view.hull = on;
     const L = state.loaded;
-    if (!L) return;
-    for (const it of L.items) {
-        if (on) {
-            if (!it.hullNode) {
-                let hull;
-                try { hull = it.work.convexHull(); }
-                catch (e) { setStatus('Hull failed: ' + e.message, 'error'); state.view.hull = false; return; }
-                it.hullNode = scene.createMesh({
-                    data: hull,
-                    color: [1.0, 0.85, 0.2, 1.0],
-                    emissive: 0.6,
-                    name: 'hull-' + it.node.name,
-                });
-                // Sit just outside the source so it's visible.
-                it.hullNode.scaleX = it.hullNode.scaleY = it.hullNode.scaleZ = 1.01;
-            } else {
-                it.hullNode.visible = true;
-            }
-        } else if (it.hullNode) {
-            it.hullNode.visible = false;
-        }
+    if (!L) { syncControls(); return; }
+    if (!on) {
+        for (const it of L.items) if (it.hullNode) it.hullNode.visible = false;
+        syncControls();
+        return;
     }
+    // Build hulls (lazy).
+    const needBuild = L.items.some(it => !it.hullNode);
+    if (needBuild) {
+        await runForEach('Convex hull', 'convexHull', {}, (it, result) => {
+            const hull = meshFromData(result.mesh);
+            if (it.hullNode) it.hullNode.destroy();
+            it.hullNode = scene.createMesh({
+                data: hull,
+                color: [1.0, 0.85, 0.2, 1.0],
+                emissive: 0.6,
+                name: 'hull-' + it.node.name,
+            });
+            it.hullNode.scaleX = it.hullNode.scaleY = it.hullNode.scaleZ = 1.01;
+        });
+    } else {
+        for (const it of L.items) if (it.hullNode) it.hullNode.visible = true;
+    }
+    syncControls();
 }
 
 // ---------------------------------------------------------------------------
-// View — self-intersection highlight (overlay sub-mesh of the bad triangles)
+// View — self-intersection highlight
 // ---------------------------------------------------------------------------
 
-function setSelfxVisible(on) {
+async function setSelfxVisible(on) {
     state.view.selfx = on;
     const L = state.loaded;
-    if (!L) return;
+    if (!L) { syncControls(); return; }
     for (const it of L.items) {
         if (it.selfxNode) { it.selfxNode.destroy(); it.selfxNode = null; }
-        if (!on) continue;
-        let pairs;
-        try { pairs = it.work.findSelfIntersections(); }
-        catch (e) { setStatus('Self-int failed: ' + e.message, 'error'); state.view.selfx = false; return; }
-        if (!pairs || pairs.length === 0) continue;
+    }
+    if (!on) { syncControls(); return; }
 
+    await runForEach('Self-intersect', 'selfInt', {}, (it, result) => {
+        const pairs = result.pairs || [];
+        if (pairs.length === 0) return;
         const srcPos = it.work.positions;
         const srcIdx = it.work.indices;
         const triSet = new Set();
         for (const p of pairs) { triSet.add(p.triA); triSet.add(p.triB); }
-
         const tris = [...triSet];
         const newIdx = new Uint32Array(tris.length * 3);
         for (let i = 0; i < tris.length; i++) {
@@ -647,7 +698,8 @@ function setSelfxVisible(on) {
             depthBias: [-1, -1000],
             name: 'selfx-' + it.node.name,
         });
-    }
+    });
+    syncControls();
 }
 
 // ---------------------------------------------------------------------------
@@ -658,10 +710,7 @@ function drawUVInset() {
     const W = uvCanvas.width, H = uvCanvas.height;
     uvCtx.fillStyle = '#050505';
     uvCtx.fillRect(0, 0, W, H);
-
     if (!state.view.uv || !state.loaded) return;
-
-    // Frame around [0,1]x[0,1]
     uvCtx.strokeStyle = '#222';
     uvCtx.lineWidth = 1;
     uvCtx.strokeRect(0.5, 0.5, W - 1, H - 1);
@@ -681,10 +730,9 @@ function drawUVInset() {
         uvCtx.beginPath();
         for (let t = 0; t < tris; t++) {
             const a = idx[t*3], b = idx[t*3 + 1], c = idx[t*3 + 2];
-            // V flipped (image coords)
-            const ax = uv[a*2] * W,         ay = (1 - uv[a*2 + 1]) * H;
-            const bx = uv[b*2] * W,         by = (1 - uv[b*2 + 1]) * H;
-            const cx = uv[c*2] * W,         cy = (1 - uv[c*2 + 1]) * H;
+            const ax = uv[a*2] * W, ay = (1 - uv[a*2 + 1]) * H;
+            const bx = uv[b*2] * W, by = (1 - uv[b*2 + 1]) * H;
+            const cx = uv[c*2] * W, cy = (1 - uv[c*2 + 1]) * H;
             uvCtx.moveTo(ax, ay); uvCtx.lineTo(bx, by);
             uvCtx.lineTo(cx, cy); uvCtx.lineTo(ax, ay);
         }
@@ -704,76 +752,53 @@ function setUVVisible(on) {
     state.view.uv = on;
     uvInset.classList.toggle('show', on);
     if (on) drawUVInset();
+    syncControls();
 }
 
 // ---------------------------------------------------------------------------
-// Modify ops — replace work mesh in place
+// Modify ops
 // ---------------------------------------------------------------------------
 
-// Apply `op(mesh)` to every mesh's work copy. `op` may mutate or return a new
-// Mesh. After application, drops skinning/animation (modified topology no
-// longer matches the skin) and refreshes downstream visuals.
-function applyMeshOp(label, op) {
+async function runModify(label, op, params) {
     const L = state.loaded;
     if (!L) return;
-    setStatus(label + ' …');
-    const t0 = performance.now();
-    try {
-        for (const it of L.items) {
-            const result = op(it.work);
-            if (result && result !== it.work) it.work = result;
-            // Bake operations etc. left work mesh's colors set; keep view mode
-            // selection stable by clearing colors when topology changed.
-            if (state.view.color === 'original' && it.baseColors && it.work.vertexCount === it.bind.vertexCount) {
-                // If verts still match bind, restore base colors.
-                it.work.colors = new Float32Array(it.baseColors);
-            } else if (state.view.color === 'original') {
-                try { it.work.colors = new Float32Array(0); } catch (e) {}
-            }
-            it.node.updateMesh(it.work);
-            // Invalidate per-mesh derived nodes / structures.
-            if (it.hullNode)  { it.hullNode.destroy();  it.hullNode = null; }
-            if (it.selfxNode) { it.selfxNode.destroy(); it.selfxNode = null; }
-            it.progressive = null;
-        }
-    } catch (e) {
-        setStatus(label + ' failed: ' + e.message, 'error');
-        return;
-    }
+    await runForEach(label, op, params, (it, result) => {
+        it.work = meshFromData(result.mesh);
+        it.node.updateMesh(it.work);
+        if (it.hullNode)  { it.hullNode.destroy();  it.hullNode = null; }
+        if (it.selfxNode) { it.selfxNode.destroy(); it.selfxNode = null; }
+    });
     state.modify.dirty = true;
-    state.lod.built = false;
-    state.lod.ratio = 1.0;
+    state.lod = { ratio: 1.0, built: false, encoded: null, originalTris: 0 };
     lodRange.value = 1.0;
     lodRange.disabled = true;
     lodNum.textContent = '—';
 
-    // Re-apply view modes that depend on the new geometry.
-    if (state.view.color !== 'original') applyColorMode(state.view.color);
-    if (state.view.hull)  setHullVisible(true);
-    if (state.view.selfx) setSelfxVisible(true);
+    // Re-apply view layers that depend on the new geometry.
+    if (state.view.color !== 'original' && state.view.color !== 'normals') {
+        await applyColorMode(state.view.color);
+    } else {
+        await applyColorMode(state.view.color);
+    }
+    if (state.view.hull)  await setHullVisible(true);
+    if (state.view.selfx) await setSelfxVisible(true);
     if (state.view.uv)    drawUVInset();
 
     renderStats();
     syncControls();
-    const dt = (performance.now() - t0).toFixed(0);
-    setStatus(label + ' · ' + dt + ' ms');
 }
 
 function resetMods() {
     const L = state.loaded;
     if (!L) return;
     for (const it of L.items) {
-        // Topology may have changed (subdivide/simplify/remesh), so positions
-        // snapshots no longer match — rebuild work from the pristine bind.
         it.work = it.bind.clone();
         it.node.updateMesh(it.work);
         if (it.hullNode)  { it.hullNode.destroy();  it.hullNode = null; }
         if (it.selfxNode) { it.selfxNode.destroy(); it.selfxNode = null; }
-        it.progressive = null;
     }
     state.modify.dirty = false;
-    state.lod.built = false;
-    state.lod.ratio = 1.0;
+    state.lod = { ratio: 1.0, built: false, encoded: null, originalTris: 0 };
     lodRange.value = 1.0;
     lodRange.disabled = true;
     lodNum.textContent = '—';
@@ -787,55 +812,71 @@ function resetMods() {
 }
 
 // ---------------------------------------------------------------------------
-// LOD (ProgressiveMesh)
+// LOD
 // ---------------------------------------------------------------------------
 
-function buildLODChain() {
+async function buildLODChain() {
     const L = state.loaded;
     if (!L) return;
-    setStatus('Building LOD chain …');
-    const t0 = performance.now();
-    try {
-        for (const it of L.items) it.progressive = new ProgressiveMesh(it.work);
-    } catch (e) {
-        setStatus('LOD build failed: ' + e.message, 'error');
+    // Only single-mesh files get the LOD slider — multi-mesh would need
+    // synchronized chains and the UI surface isn't worth it yet.
+    if (L.items.length !== 1) {
+        setStatus('LOD chain: single-mesh files only', 'warn');
         return;
     }
-    state.lod.built = true;
-    state.lod.ratio = 1.0;
-    lodRange.value = 1.0;
-    lodRange.disabled = false;
-    lodNum.textContent = '100%';
-    setStatus('LOD chain built · ' + (performance.now() - t0).toFixed(0) + ' ms');
+    setBusy(true, 'Building LOD chain');
+    try {
+        const it = L.items[0];
+        const result = await postOp('lodBuild', it.work, {});
+        state.lod.encoded = result.encoded;
+        state.lod.built = true;
+        state.lod.ratio = 1.0;
+        state.lod.originalTris = it.work.triangleCount;
+        lodRange.value = 1.0;
+        lodRange.disabled = false;
+        lodNum.textContent = '100%';
+        setStatus('LOD chain built');
+    } catch (e) {
+        setStatus('LOD build failed: ' + e.message, 'error');
+    } finally {
+        setBusy(false);
+    }
 }
 
-function applyLOD(ratio) {
+let lodPending = null;
+async function applyLOD(ratio) {
     const L = state.loaded;
-    if (!L || !state.lod.built) return;
+    if (!L || !state.lod.built || !state.lod.encoded) return;
     state.lod.ratio = ratio;
     lodNum.textContent = (ratio * 100).toFixed(0) + '%';
-    let totalT = 0;
-    for (const it of L.items) {
-        if (!it.progressive) continue;
-        const lod = it.progressive.atRatio(ratio);
-        it.node.updateMesh(lod);
-        totalT += lod.triangleCount;
+    // Coalesce slider drag — only run latest request.
+    if (lodPending) { lodPending = ratio; return; }
+    lodPending = ratio;
+    while (lodPending !== null) {
+        const r = lodPending;
+        try {
+            const result = await postOp('lodAt', null, { encoded: state.lod.encoded, ratio: r });
+            const lod = meshFromData(result.mesh);
+            L.items[0].node.updateMesh(lod);
+            setStatus('LOD ' + (r*100).toFixed(0) + '% · ' + fmtNum(lod.triangleCount) + ' tris');
+        } catch (e) {
+            setStatus('LOD failed: ' + e.message, 'error');
+            break;
+        }
+        // If another value was set during the await, loop and apply it too.
+        if (lodPending === r) lodPending = null;
     }
-    // Don't replace it.work — LOD is preview-only. Reset on Reset/Modify.
-    setStatus('LOD ' + (ratio*100).toFixed(0) + '% · ' + fmtNum(totalT) + ' tris');
 }
 
 function clearLOD() {
     const L = state.loaded;
     if (!L) return;
-    for (const it of L.items) it.progressive = null;
-    state.lod.built = false;
-    state.lod.ratio = 1.0;
+    state.lod = { ratio: 1.0, built: false, encoded: null, originalTris: 0 };
     lodRange.value = 1.0;
     lodRange.disabled = true;
     lodNum.textContent = '—';
-    // Re-push the work mesh so the node returns to current state.
     for (const it of L.items) it.node.updateMesh(it.work);
+    syncControls();
 }
 
 // ---------------------------------------------------------------------------
@@ -894,7 +935,7 @@ function currentPose(L) {
 function updateAnimation(dtMs) {
     const L = state.loaded;
     if (!L || !L.hasSkin || !L.hasSkel) return;
-    if (state.modify.dirty || state.lod.built) return;     // topology mismatch — don't skin
+    if (state.modify.dirty || state.lod.built) return;
 
     if (!state.paused && !state.bindPoseOnly) animTime += dtMs * 0.001;
 
@@ -904,12 +945,8 @@ function updateAnimation(dtMs) {
     for (let i = 0; i < L.items.length; i++) {
         const it = L.items[i];
         if (it.work.vertexCount !== L.skin.vertexCount) continue;
-
-        // applySkinning mutates positions in place — restore the bind snapshot
-        // first so frames don't compound.
         it.work.positions = new Float32Array(it.basePositions);
         if (it.baseNormals) it.work.normals = new Float32Array(it.baseNormals);
-
         try { it.work.applySkinning(L.skin, mats); }
         catch (e) {}
         it.work.computeNormals();
@@ -953,20 +990,16 @@ function renderRigUI() {
         });
         animListEl.appendChild(el);
     }
-    const showBlend = state.rig.blend >= 0;
-    blendRow.style.display = showBlend ? '' : 'none';
+    blendRow.style.display = state.rig.blend >= 0 ? '' : 'none';
 }
 
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
 
-// Save the currently displayed (work) mesh state to disk. For multi-mesh
-// glTF, glTF re-export bundles all of them; OBJ/PLY/STL save only the first
-// mesh (the formats don't natively cluster multiple meshes the same way).
 function exportMesh(format) {
     const L = state.loaded;
-    if (!L) return;
+    if (!L) { setStatus('Nothing loaded', 'warn'); return; }
     if (typeof showSaveFileDialog !== 'function') {
         setStatus('Native save dialog unavailable', 'error'); return;
     }
@@ -982,15 +1015,9 @@ function exportMesh(format) {
         const m = L.items[0].work;
         let ok;
         if (format === 'glb' || format === 'gltf') {
-            // For glTF, prefer skinned save when we still have the skeleton/skin
-            // and topology is intact; otherwise fall back to plain mesh save.
             const canSkin = !state.modify.dirty && !state.lod.built && L.hasSkel && L.hasSkin;
             if (canSkin) {
-                ok = m.saveGLTF(out, {
-                    skin: L.skin,
-                    skeleton: L.skeleton,
-                    animations: L.animations,
-                });
+                ok = m.saveGLTF(out, { skin: L.skin, skeleton: L.skeleton, animations: L.animations });
             } else {
                 ok = m.saveGLTF(out);
             }
@@ -1018,20 +1045,69 @@ function syncControls() {
     viewUVBtn   .classList.toggle('toggled', state.view.uv);
     viewBonesBtn.classList.toggle('toggled', state.view.bones);
 
-    modResetBtn.disabled = !state.modify.dirty && !state.lod.built;
-    lodBuildBtn.disabled = state.lod.built;
+    modResetBtn.disabled = state.busy || (!state.modify.dirty && !state.lod.built);
+    lodBuildBtn.disabled = state.busy || state.lod.built || !state.loaded || (state.loaded && state.loaded.items.length !== 1);
     lodClearBtn.disabled = !state.lod.built;
-
-    const have = !!state.loaded;
-    expGlbBtn.disabled = !have;
-    expObjBtn.disabled = !have;
-    expPlyBtn.disabled = !have;
-    expStlBtn.disabled = !have;
+    $st.runBtn.disabled = state.busy || !state.loaded || (state.loaded && state.loaded.items.length !== 1);
 }
 
 // ---------------------------------------------------------------------------
-// Main loop
+// Menu bar
 // ---------------------------------------------------------------------------
+
+function setupMenu() {
+    if (typeof bro === 'undefined' || !bro.menu) return;
+    bro.menu.set([
+        { id: 'file', label: 'File', items: [
+            { id: 'file.openFolder', label: 'Open Folder...', accel: 'Ctrl+O' },
+            { id: 'file.openFile',   label: 'Open File...',   accel: 'Ctrl+F' },
+            { separator: true },
+            { id: 'file.exportGlb', label: 'Save As GLB...', enabled: false },
+            { id: 'file.exportObj', label: 'Save As OBJ...', enabled: false },
+            { id: 'file.exportPly', label: 'Save As PLY...', enabled: false },
+            { id: 'file.exportStl', label: 'Save As STL...', enabled: false },
+            { separator: true },
+            { id: '__system.quit', label: 'Quit', accel: 'Ctrl+Q' },
+        ]},
+        { id: 'view', label: 'View', items: [
+            { id: 'view.togglePanel', label: 'Hide Ops Panel', accel: 'H' },
+            { separator: true },
+            { id: '__system.preferences', label: 'Preferences...' },
+        ]},
+    ]);
+    bro.menu.on('file.openFolder', openFolderDialog);
+    bro.menu.on('file.openFile',   openFileDialog);
+    bro.menu.on('file.exportGlb',  () => exportMesh('glb'));
+    bro.menu.on('file.exportObj',  () => exportMesh('obj'));
+    bro.menu.on('file.exportPly',  () => exportMesh('ply'));
+    bro.menu.on('file.exportStl',  () => exportMesh('stl'));
+    bro.menu.on('view.togglePanel', () => togglePanel());
+}
+
+function togglePanel() {
+    state.panelHidden = !state.panelHidden;
+    opsPanel.classList.toggle('hidden', state.panelHidden);
+    if (bro && bro.menu && bro.menu.updateItem) {
+        bro.menu.updateItem('view.togglePanel', { label: state.panelHidden ? 'Show Ops Panel' : 'Hide Ops Panel' });
+    }
+}
+
+function syncMenuExportEnabled() {
+    if (typeof bro === 'undefined' || !bro.menu || !bro.menu.updateItem) return;
+    const have = !!state.loaded;
+    bro.menu.updateItem('file.exportGlb', { enabled: have });
+    bro.menu.updateItem('file.exportObj', { enabled: have });
+    bro.menu.updateItem('file.exportPly', { enabled: have });
+    bro.menu.updateItem('file.exportStl', { enabled: have });
+}
+
+// ---------------------------------------------------------------------------
+// Camera + main loop
+// ---------------------------------------------------------------------------
+
+const cam = Camera.createOrbit({ target: [0, 0, 0], dist: 6, fov: 45 });
+let rightDown  = false;
+let middleDown = false;
 
 let lastT = 0;
 function frame(t) {
@@ -1044,32 +1120,32 @@ function frame(t) {
 }
 
 // ---------------------------------------------------------------------------
-// UI wiring
+// UI wiring — buttons and inputs
 // ---------------------------------------------------------------------------
-
-openFolderBtn.addEventListener('click', openFolderDialog);
-openFileBtn  .addEventListener('click', openFileDialog);
 
 // View
 viewModeSel.addEventListener('change', () => applyColorMode(viewModeSel.value));
-viewHullBtn .addEventListener('click', () => { setHullVisible(!state.view.hull);    syncControls(); });
-viewSelfxBtn.addEventListener('click', () => { setSelfxVisible(!state.view.selfx);  syncControls(); });
-viewUVBtn   .addEventListener('click', () => { setUVVisible(!state.view.uv);        syncControls(); });
+viewHullBtn .addEventListener('click', () => setHullVisible(!state.view.hull));
+viewSelfxBtn.addEventListener('click', () => setSelfxVisible(!state.view.selfx));
+viewUVBtn   .addEventListener('click', () => setUVVisible(!state.view.uv));
 viewBonesBtn.addEventListener('click', () => {
     state.view.bones = !state.view.bones;
     if (state.view.bones) setupBoneNodes(); else clearBoneNodes();
     syncControls();
 });
 
+// Stats
+$st.runBtn.addEventListener('click', runStatsChecks);
+
 // Modify
-modSubLoopBtn.addEventListener('click', () => applyMeshOp('Subdivide Loop',         m => m.subdivideLoop(1)));
-modSubCCBtn  .addEventListener('click', () => applyMeshOp('Subdivide Catmull-Clark', m => m.subdivideCatmullClark(1)));
-modSubMidBtn .addEventListener('click', () => applyMeshOp('Subdivide Midpoint',     m => m.subdivideMidpoint(1)));
-modSmoothLapBtn.addEventListener('click', () => applyMeshOp('Smooth Laplacian', m => m.smoothLaplacian(0.5, 5)));
-modSmoothTauBtn.addEventListener('click', () => applyMeshOp('Smooth Taubin',    m => m.smoothTaubin(0.5, -0.53, 10)));
+modSubLoopBtn.addEventListener('click', () => runModify('Subdivide Loop',         'subdivideLoop', { iters: 1 }));
+modSubCCBtn  .addEventListener('click', () => runModify('Subdivide Catmull-Clark', 'subdivideCC',  { iters: 1 }));
+modSubMidBtn .addEventListener('click', () => runModify('Subdivide Midpoint',     'subdivideMid',  { iters: 1 }));
+modSmoothLapBtn.addEventListener('click', () => runModify('Smooth Laplacian', 'smoothLap', { lambda: 0.5, iters: 5 }));
+modSmoothTauBtn.addEventListener('click', () => runModify('Smooth Taubin',    'smoothTau', { lambda: 0.5, mu: -0.53, iters: 10 }));
 modRemeshBtn .addEventListener('click', () => {
     const len = parseFloat(modRemeshLenIn.value) || 0.05;
-    applyMeshOp('Remesh @' + len, m => m.remeshIsotropic(len, 3));
+    runModify('Remesh @' + len, 'remesh', { edgeLen: len, iters: 3 });
 });
 modSimplifyRng.addEventListener('input', () => {
     const r = parseFloat(modSimplifyRng.value);
@@ -1078,18 +1154,15 @@ modSimplifyRng.addEventListener('input', () => {
 modSimplifyRng.addEventListener('change', () => {
     const r = parseFloat(modSimplifyRng.value);
     if (r >= 0.999) return;
-    applyMeshOp('Simplify ' + (r*100).toFixed(0) + '%', m => m.simplify(r, 0.01));
+    runModify('Simplify ' + (r*100).toFixed(0) + '%', 'simplify', { ratio: r, error: 0.01 });
 });
-modUnwrapBtn.addEventListener('click', () => applyMeshOp('UV unwrap', m => { m.unwrapUVs(); return m; }));
+modUnwrapBtn.addEventListener('click', () => runModify('UV unwrap', 'unwrap', {}));
 modResetBtn .addEventListener('click', resetMods);
 
 // LOD
 lodBuildBtn.addEventListener('click', buildLODChain);
 lodClearBtn.addEventListener('click', clearLOD);
-lodRange.addEventListener('input', () => {
-    const r = parseFloat(lodRange.value);
-    applyLOD(r);
-});
+lodRange.addEventListener('input', () => applyLOD(parseFloat(lodRange.value)));
 
 // Rig
 rigPauseBtn.addEventListener('click', () => { state.paused = !state.paused; syncControls(); });
@@ -1099,22 +1172,11 @@ blendRange .addEventListener('input', () => {
     blendNum.textContent = state.rig.blendW.toFixed(2);
 });
 
-// Export
-expGlbBtn.addEventListener('click', () => exportMesh('glb'));
-expObjBtn.addEventListener('click', () => exportMesh('obj'));
-expPlyBtn.addEventListener('click', () => exportMesh('ply'));
-expStlBtn.addEventListener('click', () => exportMesh('stl'));
-
-// Hide panel
+// Keyboard
 window.addEventListener('keydown', (e) => {
-    // Ignore typing in inputs.
     const tag = e.target && e.target.tagName;
     if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (e.key === 'h' || e.key === 'H') {
-        state.panelHidden = !state.panelHidden;
-        opsPanel.classList.toggle('hidden', state.panelHidden);
-    } else if (e.key === 'o' || e.key === 'O') openFolderDialog();
-    else if (e.key === 'f' || e.key === 'F') openFileDialog();
+    if (e.key === 'h' || e.key === 'H') togglePanel();
     else if (e.key === ' ') { state.paused = !state.paused; syncControls(); e.preventDefault(); }
 });
 
@@ -1134,17 +1196,13 @@ canvas.addEventListener('drop', (e) => {
     loadStandalonePath(p);
 });
 
-// ---------------------------------------------------------------------------
-// Camera input — right=rotate, middle=pan, wheel=zoom
-// ---------------------------------------------------------------------------
-
+// Camera input
 function updatePointerLock() {
     const want = rightDown || middleDown;
     const locked = document.pointerLockElement === canvas;
     if (want && !locked) canvas.requestPointerLock();
     else if (!want && locked) document.exitPointerLock();
 }
-
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 2)      { rightDown  = true; e.preventDefault(); updatePointerLock(); }
     else if (e.button === 1) { middleDown = true; e.preventDefault(); updatePointerLock(); }
@@ -1169,17 +1227,17 @@ canvas.addEventListener('wheel', (e) => {
 // Go
 // ---------------------------------------------------------------------------
 
+setupMenu();
 renderStats();
 syncControls();
+
 const initialDir = pickInitialDir();
 if (initialDir) {
-    state.mode = 'folder';
-    // Show the folder contents but don't auto-load — saves startup time on
-    // large meshes and lets the user pick which file to inspect.
     setDirectory(initialDir, { autoload: false });
     setStatus('Ready');
 } else {
-    dirStatus.textContent = 'Open Folder… (O) or Open File… (F).';
+    dirStatus.textContent = 'File → Open Folder... or Open File...';
     setStatus('Ready');
 }
+
 requestAnimationFrame(frame);
