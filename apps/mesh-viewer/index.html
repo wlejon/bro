@@ -85,10 +85,14 @@
         }
 
         /* --- Right panel: file browser --- */
+        /* width hugs content so long filenames don't get truncated; capped at
+           half the viewport so it can't eat the canvas. */
         #file-panel {
             top: 40px;
             right: 12px;
-            width: 340px;
+            width: max-content;
+            min-width: 320px;
+            max-width: 50vw;
             max-height: calc(100vh - 52px);
         }
 
@@ -125,6 +129,11 @@
         }
         .file-item:hover { background: rgba(116, 185, 255, 0.15); color: #fff; }
         .file-item.selected { background: #2a4a6a; color: #fff; font-weight: bold; }
+        /* Engine hit-tests the immediate element under the cursor, so hovering
+           text inside a row would lose the row's :hover state. Make children
+           transparent to events so the row always wins. Same pattern used in
+           other apps. */
+        .file-item .dim, .file-item .nm { pointer-events: none; }
         .file-item .dim {
             color: #666;
             flex: 0 0 auto;
@@ -134,9 +143,6 @@
         .file-item .nm {
             flex: 1 1 auto;
             min-width: 0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
         }
         #file-list .empty {
             color: #888;
@@ -196,7 +202,7 @@
             white-space: nowrap;
             overflow: hidden;
         }
-        .stat-row .key { color: #777; flex: 0 0 auto; }
+        .stat-row .key { color: #777; flex: 0 0 auto; pointer-events: none; }
         .stat-row .val {
             color: #ddd;
             flex: 1 1 auto;
@@ -205,6 +211,7 @@
             text-overflow: ellipsis;
             margin-left: 8px;
             min-width: 0;
+            pointer-events: none;
         }
         .stat-row.bad .val { color: #ff6b6b; }
         .stat-row.ok  .val { color: #7bed9f; }
@@ -475,7 +482,7 @@
 
     <!-- Help hint -->
     <div id="help">
-        <b>right-drag</b> rotate · <b>middle-drag</b> pan · <b>wheel</b> zoom · <b>H</b> hide panel · File menu for open / save
+        <b>right-drag</b> rotate · <b>middle-drag</b> pan · <b>wheel</b> zoom · <b>H</b> hide panel
     </div>
 
     <script src="../lib/camera.js"></script>
