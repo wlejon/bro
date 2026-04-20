@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "js/headless_bindings.h"
 #include "js/runtime.h"
+#include "util/interrupt.h"
 #include "util/log.h"
 
 #include <cstdlib>
@@ -141,6 +142,8 @@ static void runRepl(JSContext* ctx, bro::js::Runtime* rt,
 // ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
+    bro::util::installSignalHandler();
+
     bool showHelp = false;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)

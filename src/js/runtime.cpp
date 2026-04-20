@@ -1,4 +1,5 @@
 #include "js/runtime.h"
+#include "util/interrupt.h"
 #include "util/log.h"
 
 #include <fstream>
@@ -83,6 +84,10 @@ Runtime::Runtime()
     // Set reasonable limits
     JS_SetMemoryLimit(rt_, 256 * 1024 * 1024); // 256 MB
     JS_SetMaxStackSize(rt_, 8 * 1024 * 1024);    // 8 MB stack (Vue template compiler recurses deeply)
+
+    // Break out of long-running JS on Ctrl+C (covers main thread + each Worker,
+    // since workers construct their own Runtime on their thread).
+    bro::util::installJsInterruptHandler(rt_);
 
     ctx_ = JS_NewContext(rt_);
     if (!ctx_) {

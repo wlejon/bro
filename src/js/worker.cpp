@@ -3,6 +3,7 @@
 #include "js/message_serializer.h"
 #include "js/runtime.h"
 #include "js/timers.h"
+#include "util/interrupt.h"
 #include "util/log.h"
 #include "util/time.h"
 
@@ -199,6 +200,11 @@ void Worker::threadFunc()
 
     // --- 7. Event loop ---
     while (!terminated_.load(std::memory_order_acquire)) {
+        // Process-wide Ctrl+C: interrupts any JS currently running via the
+        // QuickJS interrupt handler; here we also exit the loop so workers
+        // idling between messages shut down.
+        if (bro::util::interrupted())
+            break;
         bool didWork = false;
 
         // Process incoming messages (main → worker)

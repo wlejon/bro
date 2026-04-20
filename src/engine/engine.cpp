@@ -68,6 +68,7 @@
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
 #include "engine/default_styles.h"
+#include "util/interrupt.h"
 #include "util/log.h"
 #include "util/time.h"
 
@@ -1599,7 +1600,7 @@ void Engine::run() {
         serverStartTime_ = util::currentTimeMs();
         LOG_INFO("[server] Running at %.0f ticks/sec", serverTickRate_);
 
-        while (running_ && !serverStopRequested_) {
+        while (running_ && !serverStopRequested_ && !bro::util::interrupted()) {
             double tickStart = util::currentTimeMs();
             double tickIntervalMs = 1000.0 / serverTickRate_;
 
@@ -1761,6 +1762,10 @@ void Engine::run() {
     SDL_AddEventWatch(modalEventWatcher, this);
 
     while (running_) {
+        if (bro::util::interrupted()) {
+            running_ = false;
+            break;
+        }
         double frameStart = util::currentTimeMs();
 
         // 0. Ensure layout thread is not running before we process events.

@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "util/interrupt.h"
 #include "util/log.h"
 #include <cstring>
 #include <fstream>
@@ -180,6 +181,8 @@ int main(int argc, char* argv[]) {
         printUsage();
         return 0;
     }
+
+    bro::util::installSignalHandler();
 
     bro::engine::EngineConfig config;
 
