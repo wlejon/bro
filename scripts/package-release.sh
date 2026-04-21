@@ -108,16 +108,25 @@ JSON
 
 # --- README + LICENSE -----------------------------------------------------
 cp LICENSE "$OUT_DIR/"
-cat > "$OUT_DIR/README.txt" <<EOF
+if [[ "$PLATFORM" == "macos" ]]; then
+    cat > "$OUT_DIR/README.txt" <<EOF
 Bro ${VERSION} (${PLATFORM}-${ARCH})
 
 Run:
-  ./bro${EXE}              # opens the launcher
-  ./bro${EXE} apps/tetris  # runs a specific app
-  ./bro-headless${EXE} apps/example test.js
-
-Source: https://github.com/jonnybro/bro
+  open Bro.app                              # launcher (double-clickable)
+  Bro.app/Contents/MacOS/bro apps/tetris    # specific app from terminal
+  ./bro-headless apps/example test.js       # CLI, headless mode
 EOF
+else
+    cat > "$OUT_DIR/README.txt" <<EOF
+Bro ${VERSION} (${PLATFORM}-${ARCH})
+
+Run:
+  ./bro${EXE}                    # opens the launcher
+  ./bro${EXE} apps/tetris        # runs a specific app
+  ./bro-headless${EXE} apps/example test.js
+EOF
+fi
 
 # --- system/ (global system panels: splash, menu, nav, perf, settings) ---
 # Resolved by the engine as a relative path from cwd, which is the release
