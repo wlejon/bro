@@ -33,6 +33,8 @@ Bro is the middle path. HTML/CSS/JS is the UI layer — so agents stay productiv
 bro apps/hello
 ```
 
+see apps/ for more examples 
+
 ## What you get
 
 **Web platform** — HTML5 parsing, CSS (flexbox, gradients, border radius, overflow/scroll), SVG, Canvas 2D, WebGL 2.0, Web Components with Shadow DOM, Web Workers, Fetch, localStorage, form controls with real text editing. threejs, jQuery, work.
@@ -69,7 +71,7 @@ See `apps/` for runnable examples:
 
 Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), **glad** (OpenGL 3.3 Core loader), **stb_image**, and **FastNoise2** (via brokit).
 
-C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
+C++20. `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
 ## Building
 
@@ -98,7 +100,9 @@ bro-headless apps/example -e "document.querySelector('#btn').click()"
 bro-headless --no-gpu apps/example                          # CPU-only (CI)
 ```
 
-On Linux without a display server, use `--no-gpu` or set `SDL_VIDEODRIVER=dummy`. Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`.
+On Linux without a display server, use `--no-gpu`. 
+
+Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`.
 
 See [docs/headless.md](docs/headless.md) for full documentation.
 
