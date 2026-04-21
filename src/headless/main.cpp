@@ -19,6 +19,10 @@
 #define fileno _fileno
 #else
 #include <unistd.h>
+#include <climits>
+#endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
 #endif
 
 extern "C" {
@@ -32,6 +36,14 @@ static std::string exeDir() {
     char buf[260];
     DWORD len = GetModuleFileNameA(nullptr, buf, 260);
     if (len > 0 && len < 260) path = std::string(buf, len);
+#elif defined(__APPLE__)
+    char buf[PATH_MAX];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0) {
+        char resolved[PATH_MAX];
+        if (realpath(buf, resolved)) path = resolved;
+        else path = buf;
+    }
 #else
     char buf[4096];
     ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
