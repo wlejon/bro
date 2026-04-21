@@ -116,6 +116,18 @@ Run:
   open Bro.app                              # launcher (double-clickable)
   Bro.app/Contents/MacOS/bro apps/tetris    # specific app from terminal
   ./bro-headless apps/example test.js       # CLI, headless mode
+
+Unsigned build
+--------------
+This bundle isn't codesigned or notarized, so macOS Gatekeeper will
+quarantine it after download. If you see "Bro.app is damaged" or
+"cannot be opened because the developer cannot be verified":
+
+  right-click Bro.app -> Open  (one-time bypass)
+
+or strip the quarantine flag:
+
+  xattr -dr com.apple.quarantine Bro.app
 EOF
 else
     cat > "$OUT_DIR/README.txt" <<EOF
@@ -215,11 +227,25 @@ if [[ "$PLATFORM" == "macos" ]]; then
 PLIST
 fi
 
+# --- Archive --------------------------------------------------------------
+# macOS: ditto preserves extended attributes, resource forks, and symlinks
+# inside .app bundles — `zip -r` can corrupt those. Elsewhere, plain zip.
+ARCHIVE="dist/${OUT_NAME}.zip"
+rm -f "$ARCHIVE"
+echo ""
+echo ">>> Archiving $ARCHIVE"
+if [[ "$PLATFORM" == "macos" ]]; then
+    (cd dist && ditto -c -k --keepParent "$OUT_NAME" "${OUT_NAME}.zip")
+else
+    (cd dist && zip -rq "${OUT_NAME}.zip" "$OUT_NAME")
+fi
+
 # --- Report ---------------------------------------------------------------
 echo ""
 echo "Staged: $OUT_DIR"
 if command -v du >/dev/null 2>&1; then
-    du -sh "$OUT_DIR" | awk '{print "Size:  " $1}'
+    du -sh "$OUT_DIR" | awk '{print "Staged size:  " $1}'
+    du -sh "$ARCHIVE" | awk '{print "Archive size: " $1}'
 fi
 echo ""
 echo "Next: verify by running"
@@ -229,5 +255,5 @@ if [[ "$PLATFORM" == "macos" ]]; then
 else
     echo "  (cd $OUT_DIR && ./bro$EXE)"
 fi
-echo "then zip:"
-echo "  (cd dist && zip -r $OUT_NAME.zip $OUT_NAME)"
+echo ""
+echo "Upload $ARCHIVE to your GitHub release."
