@@ -11,3 +11,4 @@ else()
 endif()
 
 target_link_libraries(bro_platform PUBLIC bro_util glad)
+target_link_libraries(bro_platform PRIVATE stb_image)

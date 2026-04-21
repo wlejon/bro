@@ -221,6 +221,13 @@ Engine::Engine(const EngineConfig& config)
             static_cast<uint32_t>(gfx.height), hidden,
             gfx.resizable, gfx.vsync);
 
+        // Taskbar / Alt-Tab icon. Shipped with system/ alongside the binary
+        // (scripts/package-release.sh copies the whole system/ tree). Skip in
+        // headless where the window is hidden anyway.
+        if (!hidden) {
+            window_->setIcon("system/icon.png");
+        }
+
         // GL context (shader programs + helpers)
         gl_ = std::make_unique<render::GLContext>(*window_);
 

@@ -60,6 +60,11 @@ public:
     /// Enumerate available fullscreen display modes.
     std::vector<DisplayModeInfo> getDisplayModes() const;
 
+    /// Set the window icon from a PNG file (taskbar / Alt-Tab / title bar).
+    /// Silently no-ops if the file is missing or malformed — a missing icon
+    /// should never stop the app from starting.
+    void setIcon(const std::string& pngPath);
+
 private:
     SDL_Window* m_window = nullptr;
     SDL_GLContext m_glContext = nullptr;

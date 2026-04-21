@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+/* Renders the "b" glyph from the splash wordmark as a 256x256 app icon.
+   Regenerate with:
+     bro-headless --width 384 --height 384 scripts/make_icon \
+         -e "bro.menu.set([])" -e "advanceTime(3000)" \
+         -e "screenshot('system/icon.png', '#icon')"
+   The viewport is larger than the icon so the engine's menu-bar strip and
+   splash do not land inside the cropped region. #icon is the crop target. */
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #050a07;
+    font-family: Consolas, monospace;
+    overflow: hidden;
+}
+
+#icon {
+    position: absolute;
+    left: 64px;
+    top: 64px;
+    width: 256px;
+    height: 256px;
+    background: #050a07;
+    text-align: center;
+    font-size: 220px;
+    font-weight: bold;
+    color: #7cff5c;
+    text-shadow:
+        0 0 10px #7cff5c,
+        0 0 28px #3fa832,
+        0 0 50px #1e5a18;
+    line-height: 256px;
+}
+</style>
+</head>
+<body>
+<div id="icon">b</div>
+</body>
+</html>
