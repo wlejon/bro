@@ -55,6 +55,16 @@ public:
     /// Check if the worker thread is still alive.
     bool isAlive() const { return alive_.load(std::memory_order_acquire); }
 
+    /// Tick rate in Hz — drives the worker's idle sleep and rate-limits
+    /// the loop iteration. Exposed through bro.server.tickrate inside the
+    /// worker script. Safe to read/write across threads.
+    void setTickRate(double hz);
+    double tickRate() const { return tickRate_.load(std::memory_order_relaxed); }
+
+    /// Seconds since the worker thread started executing its script.
+    /// Returns 0 before the thread reaches its main loop.
+    double uptimeSec() const;
+
     /// The JS Worker object on the main thread (DupValue'd).
     /// Set by the bindings after construction.
     JSValue jsObject = JS_UNDEFINED;
@@ -81,6 +91,13 @@ private:
     std::atomic<uint32_t> wakeup_{0};
     std::atomic<bool> terminated_{false};
     std::atomic<bool> alive_{false};
+
+    // Event loop rate limit. Default 1000 Hz matches the legacy 1ms idle
+    // sleep, so existing compute-heavy workers (no tickrate set) are not
+    // slowed down.
+    std::atomic<double> tickRate_{1000.0};
+    // Worker-thread-only: set at the top of threadFunc, read by uptimeSec().
+    std::atomic<double> startTimeMs_{0.0};
 };
 
 // ---------------------------------------------------------------------------

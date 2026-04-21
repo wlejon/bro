@@ -3,6 +3,7 @@
 #include "js/message_serializer.h"
 #include "js/net_bindings.h"
 #include "js/runtime.h"
+#include "js/server_bindings.h"
 #include "js/timers.h"
 #include "util/interrupt.h"
 #include "util/log.h"
@@ -38,6 +39,20 @@ Worker::Worker(const std::string& scriptPath, const std::string& basePath,
 Worker::~Worker()
 {
     terminate();
+}
+
+void Worker::setTickRate(double hz)
+{
+    if (hz < 1.0) hz = 1.0;
+    if (hz > 1000.0) hz = 1000.0;
+    tickRate_.store(hz, std::memory_order_relaxed);
+}
+
+double Worker::uptimeSec() const
+{
+    double start = startTimeMs_.load(std::memory_order_relaxed);
+    if (start <= 0.0) return 0.0;
+    return (util::currentTimeMs() - start) / 1000.0;
 }
 
 void Worker::start()
@@ -180,6 +195,12 @@ void Worker::threadFunc()
         NetBindings::install(ctx, netService_);
     }
 
+    // --- 3d. Install bro.server bindings scoped to this worker. Exposes
+    // tickrate (rate-limits our event loop), uptime (seconds since this
+    // thread started), and stop() (terminates this worker). ---
+    startTimeMs_.store(util::currentTimeMs(), std::memory_order_relaxed);
+    ServerBindings::installWorker(ctx, this);
+
     // --- 4. Store context data for C callbacks ---
     WorkerCtxData wcd;
     wcd.worker = this;
@@ -215,13 +236,14 @@ void Worker::threadFunc()
         // idling between messages shut down.
         if (bro::util::interrupted())
             break;
-        bool didWork = false;
+
+        double tickStart = util::currentTimeMs();
+        double intervalMs = 1000.0 / tickRate_.load(std::memory_order_relaxed);
 
         // Process incoming messages (main → worker)
         while (Message* msg = toWorker_.pop()) {
             JSValue data = deserializeMessage(ctx, *msg);
             delete msg;
-            didWork = true;
 
             if (JS_IsException(data)) {
                 Runtime::checkException(ctx, data);
@@ -282,15 +304,23 @@ void Worker::threadFunc()
             runtime->executePendingJobs();
         }
 
-        // If no immediate work, sleep briefly to avoid busy-spinning.
-        // 1ms gives good timer precision without burning CPU.
-        if (!didWork) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // Rate-limit to the configured tick rate. At the default 1000 Hz
+        // this sleeps ~1ms when idle (matching legacy behavior); at 60 Hz
+        // it yields ~16ms, dramatically reducing CPU for server workers.
+        // When the iteration itself takes longer than the interval (heavy
+        // compute, message burst), sleepMs <= 0 and the loop spins on —
+        // same as bro-server's server-mode loop.
+        double elapsed = util::currentTimeMs() - tickStart;
+        double sleepMs = intervalMs - elapsed;
+        if (sleepMs > 0.5) {
+            std::this_thread::sleep_for(
+                std::chrono::microseconds(static_cast<int64_t>(sleepMs * 1000.0)));
         }
     }
 
     // --- 8. Cleanup ---
     timers->clearAll(ctx);
+    ServerBindings::cleanup(ctx);
     if (netService_) {
         NetBindings::cleanup(ctx);
     }
