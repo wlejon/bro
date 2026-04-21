@@ -179,7 +179,7 @@ function pickLightAt(clientX, clientY) {
     return hit ? hit.node : null;
 }
 
-canvas.addEventListener('pointerdown', (ev) => {
+canvas.addEventListener('mousedown', (ev) => {
     // Let the gizmo consume clicks on its handles first (it hit-tests
     // before any other listener via the engine routing layer). If the
     // click wasn't on a handle, try selecting a light.
