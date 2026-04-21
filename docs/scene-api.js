@@ -203,6 +203,10 @@ class SceneGraph {
    * Perspective mode (default):
    *   { fov=60, near=0.1, far=1000, aspect, position: [x,y,z], target: [x,y,z], up?: [x,y,z] }
    *
+   * Quaternion orientation (avoids target+up precision loss for 6DOF / FPS cameras):
+   *   { fov=60, near=0.1, far=1000, aspect, position: [x,y,z], quaternion: [x,y,z,w] }
+   *   Camera local -Z is forward. If `quaternion` is set, target/up/mode are ignored.
+   *
    * Orthographic mode:
    *   { mode: "orthographic", size=10, near=0.1, far=1000, aspect, position, target, up }
    *
@@ -216,8 +220,39 @@ class SceneGraph {
    * @param {number[]} [opts.position=[0,5,-10]] - camera position [x, y, z]
    * @param {number[]} [opts.target=[0,0,0]] - look-at target [x, y, z]
    * @param {number[]} [opts.up=[0,1,0]] - up vector [x, y, z]
+   * @param {number[]} [opts.quaternion] - [x,y,z,w] camera orientation (overrides target/up/mode)
    */
   setCamera(opts) {}
+
+  /**
+   * Set exponential distance fog. Fragments beyond `end` are fully fogged to
+   * `color`; closer than `start` are unaffected. Set start=end=0 to disable.
+   *
+   * @param {Object} opts
+   * @param {number} [opts.start=0] - fog start distance (world units)
+   * @param {number} [opts.end=0]   - fog end distance (world units)
+   * @param {number[]} [opts.color=[0,0,0]] - [r,g,b] in 0-1
+   */
+  setFog(opts) {}
+
+  /** Read-only view matrix as 16-element column-major array. */
+  get viewMatrix() {}
+
+  /** Read-only projection matrix as 16-element column-major array. */
+  get projectionMatrix() {}
+
+  /** Read-only camera world position as [x,y,z]. */
+  get cameraEye() {}
+
+  /**
+   * Unproject canvas-local pixel coordinates to a world-space ray.
+   * `x`/`y` are in CSS pixels relative to the canvas (top-left origin).
+   *
+   * @param {number} x
+   * @param {number} y
+   * @returns {?{ origin: number[], dir: number[] }} null if camera uninitialised
+   */
+  unprojectLocal(x, y) {}
 
 
   // --- Queries --------------------------------------------------------------
@@ -336,6 +371,15 @@ class SceneNode {
   /** Whether this node is visible. */
   get visible() {}
   set visible(value) {}
+
+  /** Parent SceneNode, or null if this is the root or a detached node. */
+  get parent() {}
+
+  /** Read-only array of child SceneNodes (snapshot; mutate via add()/remove()). */
+  get children() {}
+
+  /** Number of direct children. */
+  get childCount() {}
 
 
   // --- Transform (all node types) -------------------------------------------
@@ -475,6 +519,24 @@ class SceneNode {
 
   /** Destroy this node (removes from parent and scene). */
   destroy() {}
+
+  /**
+   * Replace the mesh on a MeshNode in place (keeps transform, color, etc).
+   * Accepts the same `data`/`mesh`/`positions+indices` forms as createMesh.
+   * No-op on non-mesh nodes.
+   * @param {Object|Mesh} meshOrOpts
+   */
+  updateMesh(meshOrOpts) {}
+
+
+  // --- MeshNode-only --------------------------------------------------------
+
+  /**
+   * Fragments closer than this distance are discarded (GL-side clip).
+   * Used to hide coarse LOD terrain where finer LODs are loaded. 0 disables.
+   */
+  get nearClipDist() {}
+  set nearClipDist(value) {}
 
 
   // --- Coordinate Conversion ------------------------------------------------

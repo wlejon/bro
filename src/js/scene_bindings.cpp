@@ -1201,6 +1201,46 @@ static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
+// unprojectLocal(x, y) → { origin:[x,y,z], dir:[x,y,z] } | null
+static JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 2) return JS_NULL;
+    double x = 0, y = 0;
+    JS_ToFloat64(ctx, &x, argv[0]);
+    JS_ToFloat64(ctx, &y, argv[1]);
+    scene::Vec3 origin, dir;
+    if (!g->unprojectLocal((float)x, (float)y, origin, dir)) return JS_NULL;
+    JSValue out = JS_NewObject(ctx);
+    JSValue oArr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, oArr, 0, JS_NewFloat64(ctx, origin.x));
+    JS_SetPropertyUint32(ctx, oArr, 1, JS_NewFloat64(ctx, origin.y));
+    JS_SetPropertyUint32(ctx, oArr, 2, JS_NewFloat64(ctx, origin.z));
+    JSValue dArr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, dArr, 0, JS_NewFloat64(ctx, dir.x));
+    JS_SetPropertyUint32(ctx, dArr, 1, JS_NewFloat64(ctx, dir.y));
+    JS_SetPropertyUint32(ctx, dArr, 2, JS_NewFloat64(ctx, dir.z));
+    JS_SetPropertyStr(ctx, out, "origin", oArr);
+    JS_SetPropertyStr(ctx, out, "dir", dArr);
+    return out;
+}
+
+static JSValue mat4ToJSArray(JSContext* ctx, const scene::Mat4& mat) {
+    JSValue arr = JS_NewArray(ctx);
+    int idx = 0;
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            JS_SetPropertyUint32(ctx, arr, idx++, JS_NewFloat64(ctx, mat.m[c][r]));
+    return arr;
+}
+
+static JSValue vec3ToJSArray(JSContext* ctx, const scene::Vec3& v) {
+    JSValue arr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, v.x));
+    JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, v.y));
+    JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, v.z));
+    return arr;
+}
+
 // createTerrain(opts) → Terrain
 static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -1461,6 +1501,22 @@ void SceneBindings::install(JSContext* ctx) {
             return DomBindings::wrapElement(ctx, root);
         })
 
+        .get("parent", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->node) return JS_NULL;
+            auto* p = w->node->parent();
+            return p ? wrapNode(ctx, p, w->graph) : JS_NULL;
+        })
+        .prop("nearClipDist",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->nearClipDist());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node)->setNearClipDist((float)val);
+            })
+
         // Complex read-only properties
         .get("children", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_NewArray(ctx);
@@ -1516,6 +1572,19 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setFog", js_sg_setFog, 1)
         .method_raw("syncPhysics", js_sg_syncPhysics, 0)
         .method_raw("raycast", js_sg_raycast, 2)
+        .method_raw("unprojectLocal", js_sg_unprojectLocal, 2)
+        .get("viewMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->graph) return JS_NULL;
+            return mat4ToJSArray(ctx, w->graph->viewMatrix());
+        })
+        .get("projectionMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->graph) return JS_NULL;
+            return mat4ToJSArray(ctx, w->graph->projectionMatrix());
+        })
+        .get("cameraEye", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->graph) return JS_NULL;
+            return vec3ToJSArray(ctx, w->graph->cameraEye());
+        })
         .method_raw("attachAIWorld", graphAttachAIWorld, 2)
         .method_raw("detachAIWorld", graphDetachAIWorld, 0);
 }
