@@ -6,6 +6,7 @@ add_library(bro_scene STATIC
     physics_node.cpp
     mesh_node.cpp
     html_node.cpp
+    light_node.cpp
     terrain_manager.cpp
     agent_binding.cpp
     ai_world_ticker.cpp

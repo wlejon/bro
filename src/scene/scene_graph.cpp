@@ -16,6 +16,9 @@ namespace bro::scene {
 // Mesh shader sources (GLSL 330 core)
 // ---------------------------------------------------------------------------
 
+// vWorldPos is in camera-relative space (uModel has eye pre-subtracted).
+// That keeps precision at planet scale and means uCameraPos == 0, which
+// simplifies the view-vector math in the fragment shader.
 static const char* kMeshVertSrc = R"(
 #version 330 core
 layout(location = 0) in vec3 aPos;
@@ -26,7 +29,6 @@ layout(location = 3) in vec4 aColor;
 uniform mat4 uMVP;
 uniform mat4 uModel;
 uniform int uUseVertexColor;
-uniform vec3 uCameraPos;
 
 out vec3 vWorldPos;
 out vec3 vNormal;
@@ -40,35 +42,96 @@ void main() {
     vNormal = mat3(uModel) * aNormal;
     vUV = aUV;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
-    vCamDist = length(worldPos.xyz - uCameraPos);
+    vCamDist = length(worldPos.xyz);
     gl_Position = uMVP * vec4(aPos, 1.0);
 }
 )";
 
+// Fragment shader: Cook-Torrance PBR, forward multi-light.
+//   D = GGX (Trowbridge-Reitz), F = Schlick, G = Smith height-correlated.
+// All positions/directions are camera-relative; uCameraPos is implicitly
+// the origin, so V = normalize(-vWorldPos).
+//
+// Light array uniforms are parallel arrays (not a struct) so drivers with
+// poor struct-array layout don't punt them to slow paths. Types:
+//   0 = directional, 1 = point, 2 = spot.
+// Range uses the Epic/Frostbite smooth window:
+//   win = pow(saturate(1 - (d/range)^4), 2) / (d^2 + 1)
+// Spot cone:
+//   cos falloff between outerCos (=0) and innerCos (=1), smoothstep.
 static const char* kMeshFragSrc = R"(
 #version 330 core
-in vec3 vWorldPos;
+#define MAX_LIGHTS 32
+
+in vec3 vWorldPos;   // camera-relative
 in vec3 vNormal;
 in vec2 vUV;
 in vec4 vColor;
 in float vCamDist;
 
-uniform vec4 uColor;
-uniform vec3 uLightDir;
-uniform vec3 uCameraPos;
-uniform float uEmissive;
+uniform vec4 uColor;           // baseColor RGBA (alpha = mesh transparency)
+uniform float uEmissive;       // scalar emissive multiplier (0 = off)
+uniform vec3 uEmissiveColor;   // per-mesh emissive tint (linear RGB)
+uniform float uMetallic;
+uniform float uRoughness;
 uniform int uUseVertexColor;
 uniform int uUseTexture;
 uniform sampler2D uBaseColorTex;
+
 uniform float uFogStart;
 uniform float uFogEnd;
 uniform vec3 uFogColor;
 uniform float uNearClip;
 
+uniform vec3 uAmbient;         // flat ambient (placeholder for IBL)
+
+uniform int uLightCount;
+uniform int   uLightType[MAX_LIGHTS];
+uniform vec3  uLightPos[MAX_LIGHTS];      // camera-relative world position
+uniform vec3  uLightDir[MAX_LIGHTS];      // unit direction (dir/spot)
+uniform vec3  uLightColor[MAX_LIGHTS];    // linear RGB
+uniform float uLightIntensity[MAX_LIGHTS];
+uniform float uLightRange[MAX_LIGHTS];
+uniform vec2  uLightSpotCos[MAX_LIGHTS];  // .x = cos(innerAngle), .y = cos(outerAngle)
+
 out vec4 FragColor;
 
+const float PI = 3.14159265359;
+
+float distributionGGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / max(PI * denom * denom, 1e-7);
+}
+
+float geometrySchlickGGX(float NdotV, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotV / (NdotV * (1.0 - k) + k);
+}
+
+float geometrySmith(float NdotV, float NdotL, float roughness) {
+    return geometrySchlickGGX(NdotV, roughness)
+         * geometrySchlickGGX(NdotL, roughness);
+}
+
+vec3 fresnelSchlick(float cosTheta, vec3 F0) {
+    float f = pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+    return F0 + (1.0 - F0) * f;
+}
+
+// Smooth distance window (Epic/Frostbite). Vanishes past `range`.
+float distanceAttenuation(float dist, float range) {
+    if (range <= 0.0) return 1.0;
+    float t = dist / range;
+    float t4 = t * t * t * t;
+    float win = clamp(1.0 - t4, 0.0, 1.0);
+    win = win * win;
+    return win / (dist * dist + 1.0);
+}
+
 void main() {
-    // Discard fragments within finer LOD coverage
     if (uNearClip > 0.0 && vCamDist < uNearClip) discard;
 
     vec3 baseColor;
@@ -86,38 +149,116 @@ void main() {
     }
 
     vec3 N = normalize(vNormal);
-    vec3 L = normalize(uLightDir);
+    vec3 V = normalize(-vWorldPos);              // eye at origin (cam-relative)
+    float NdotV = max(dot(N, V), 1e-4);
 
-    // Key light + two fills from opposing directions so no side sits
-    // in pure ambient. Fill dirs are orthogonalized against L so they
-    // reliably illuminate whatever L leaves dark.
-    vec3 upRef = abs(L.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-    vec3 side  = normalize(cross(L, upRef));
-    vec3 F1 = normalize(-L + 0.35 * side);
-    vec3 F2 = normalize(-L - 0.35 * side);
+    float rough = clamp(uRoughness, 0.04, 1.0);  // floor to avoid spec singularity
+    vec3 F0 = mix(vec3(0.04), baseColor, uMetallic);
 
-    float ambient = 0.2;
-    float diffKey = max(dot(N, L),  0.0) * 0.55;
-    float diffF1  = max(dot(N, F1), 0.0) * 0.25;
-    float diffF2  = max(dot(N, F2), 0.0) * 0.20;
+    vec3 Lo = vec3(0.0);
+    for (int i = 0; i < uLightCount && i < MAX_LIGHTS; ++i) {
+        int t = uLightType[i];
+        vec3 L;
+        float atten = 1.0;
 
-    vec3 V = normalize(uCameraPos - vWorldPos);
-    vec3 H = normalize(L + V);
-    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.25;
+        if (t == 0) {
+            // Directional: uLightDir points FROM light TO scene; invert for L.
+            L = normalize(-uLightDir[i]);
+        } else {
+            vec3 toLight = uLightPos[i] - vWorldPos;
+            float d = length(toLight);
+            if (d < 1e-4) continue;
+            L = toLight / d;
+            atten = distanceAttenuation(d, uLightRange[i]);
+            if (t == 2) {
+                // Spot cone falloff.
+                vec3 spotDir = normalize(-uLightDir[i]);  // points AT light
+                float c = dot(-L, uLightDir[i] / max(length(uLightDir[i]), 1e-4));
+                float innerC = uLightSpotCos[i].x;
+                float outerC = uLightSpotCos[i].y;
+                float coneT = clamp((c - outerC) / max(innerC - outerC, 1e-4), 0.0, 1.0);
+                atten *= coneT * coneT * (3.0 - 2.0 * coneT);
+            }
+            if (atten <= 0.0) continue;
+        }
 
-    float light = ambient + diffKey + diffF1 + diffF2 + spec;
-    vec3 lit = baseColor * light;
-    vec3 color = mix(lit, baseColor, uEmissive);
+        vec3 H = normalize(V + L);
+        float NdotL = max(dot(N, L), 0.0);
+        if (NdotL <= 0.0) continue;
+        float NdotH = max(dot(N, H), 0.0);
+        float VdotH = max(dot(V, H), 0.0);
 
-    // Distance fog — fade to sky color at far boundary
+        float D = distributionGGX(NdotH, rough);
+        float G = geometrySmith(NdotV, NdotL, rough);
+        vec3  F = fresnelSchlick(VdotH, F0);
+
+        vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
+        vec3 kD = (vec3(1.0) - F) * (1.0 - uMetallic);
+        vec3 diffuse = kD * baseColor / PI;
+
+        vec3 radiance = uLightColor[i] * uLightIntensity[i] * atten;
+        Lo += (diffuse + specular) * radiance * NdotL;
+    }
+
+    vec3 ambient = uAmbient * baseColor * (1.0 - uMetallic);
+    vec3 emissive = uEmissiveColor * uEmissive;
+    vec3 color = Lo + ambient + emissive;
+
+    // Distance fog (applied in linear space; tonemap runs after)
     if (uFogEnd > 0.0) {
         float fogFactor = clamp((vCamDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
-        fogFactor = fogFactor * fogFactor; // smooth quadratic ramp
+        fogFactor = fogFactor * fogFactor;
         color = mix(color, uFogColor, fogFactor);
         baseAlpha = mix(baseAlpha, 0.0, fogFactor);
     }
 
     FragColor = vec4(color, baseAlpha);
+}
+)";
+
+// -----------------------------------------------------------------------------
+// Tonemap pass: HDR float mesh FBO -> LDR RGBA8 output texture.
+// -----------------------------------------------------------------------------
+
+static const char* kTonemapVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec2 aPos;
+out vec2 vUV;
+void main() {
+    vUV = aPos * 0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+static const char* kTonemapFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+uniform float uExposure;
+uniform float uGamma;
+uniform int   uMode;   // 0 = linear clamp, 1 = Reinhard, 2 = ACES
+out vec4 FragColor;
+
+// ACES approximation by Krzysztof Narkowicz.
+vec3 aces(vec3 x) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+void main() {
+    vec4 src = texture(uTex, vUV);
+    vec3 c = src.rgb * uExposure;
+    if (uMode == 2)      c = aces(c);
+    else if (uMode == 1) c = c / (c + vec3(1.0));
+    else                 c = clamp(c, 0.0, 1.0);
+    if (uGamma > 0.0 && uGamma != 1.0) {
+        c = pow(c, vec3(1.0 / uGamma));
+    }
+    FragColor = vec4(c, src.a);
 }
 )";
 
@@ -211,10 +352,14 @@ SceneGraph::~SceneGraph() {
 
     // Destroy GL resources
     destroyMeshFBO();
+    destroyTonemapFBO();
     if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
     if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
     if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
+    if (tonemapProgram_) { glDeleteProgram(tonemapProgram_); tonemapProgram_ = 0; }
+    if (tonemapVBO_) { glDeleteBuffers(1, &tonemapVBO_); tonemapVBO_ = 0; }
+    if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -254,6 +399,13 @@ MeshNode* SceneGraph::createMesh(const std::string& name) {
 
 HtmlNode* SceneGraph::createHtml(const std::string& name) {
     auto node = std::make_unique<HtmlNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+LightNode* SceneGraph::createLight(const std::string& name) {
+    auto node = std::make_unique<LightNode>(name);
     auto* ptr = node.get();
     nodes_[ptr->id()] = std::move(node);
     return ptr;
@@ -465,9 +617,10 @@ void SceneGraph::ensureMeshPipeline() {
         uMVP_ = glGetUniformLocation(meshProgram_, "uMVP");
         uModel_ = glGetUniformLocation(meshProgram_, "uModel");
         uColor_ = glGetUniformLocation(meshProgram_, "uColor");
-        uLightDir_ = glGetUniformLocation(meshProgram_, "uLightDir");
-        uCameraPos_ = glGetUniformLocation(meshProgram_, "uCameraPos");
         uEmissive_ = glGetUniformLocation(meshProgram_, "uEmissive");
+        uEmissiveColor_ = glGetUniformLocation(meshProgram_, "uEmissiveColor");
+        uMetallic_ = glGetUniformLocation(meshProgram_, "uMetallic");
+        uRoughness_ = glGetUniformLocation(meshProgram_, "uRoughness");
         uUseVertexColor_ = glGetUniformLocation(meshProgram_, "uUseVertexColor");
         uUseTexture_     = glGetUniformLocation(meshProgram_, "uUseTexture");
         uBaseColorTex_   = glGetUniformLocation(meshProgram_, "uBaseColorTex");
@@ -475,6 +628,18 @@ void SceneGraph::ensureMeshPipeline() {
         uFogEnd_ = glGetUniformLocation(meshProgram_, "uFogEnd");
         uFogColor_ = glGetUniformLocation(meshProgram_, "uFogColor");
         uNearClip_ = glGetUniformLocation(meshProgram_, "uNearClip");
+        uAmbient_ = glGetUniformLocation(meshProgram_, "uAmbient");
+        uLightCount_ = glGetUniformLocation(meshProgram_, "uLightCount");
+        uLightType_ = glGetUniformLocation(meshProgram_, "uLightType");
+        uLightPos_ = glGetUniformLocation(meshProgram_, "uLightPos");
+        uLightDirArr_ = glGetUniformLocation(meshProgram_, "uLightDir");
+        uLightColor_ = glGetUniformLocation(meshProgram_, "uLightColor");
+        uLightIntensity_ = glGetUniformLocation(meshProgram_, "uLightIntensity");
+        uLightRange_ = glGetUniformLocation(meshProgram_, "uLightRange");
+        uLightSpotCos_ = glGetUniformLocation(meshProgram_, "uLightSpotCos");
+        // Legacy — no longer declared in the shader, fine if -1.
+        uLightDir_ = -1;
+        uCameraPos_ = -1;
     }
 }
 
@@ -490,11 +655,13 @@ void SceneGraph::ensureMeshFBO() {
     glGenFramebuffers(1, &meshFBO_);
     glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
 
-    // Color attachment (RGBA8)
+    // HDR color attachment — RGBA16F so lighting can exceed 1.0 before
+    // tonemap. The LDR output texture consumed by the compositor is a
+    // separate RGBA8 texture owned by the tonemap FBO.
     glGenTextures(1, &meshColorTex_);
     glBindTexture(GL_TEXTURE_2D, meshColorTex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, meshFBOWidth_, meshFBOHeight_, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, meshFBOWidth_, meshFBOHeight_, 0,
+                 GL_RGBA, GL_HALF_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, meshColorTex_, 0);
@@ -582,6 +749,192 @@ void SceneGraph::ensureBillboardPipeline() {
 }
 
 // ---------------------------------------------------------------------------
+// Tonemap pipeline + FBO
+// ---------------------------------------------------------------------------
+
+void SceneGraph::ensureTonemapPipeline() {
+    if (tonemapProgram_) return;
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kTonemapVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kTonemapFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    tonemapProgram_ = glCreateProgram();
+    glAttachShader(tonemapProgram_, vs);
+    glAttachShader(tonemapProgram_, fs);
+    glLinkProgram(tonemapProgram_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint ok = 0;
+    glGetProgramiv(tonemapProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(tonemapProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Tonemap program link error: %s", log);
+        glDeleteProgram(tonemapProgram_);
+        tonemapProgram_ = 0;
+        return;
+    }
+
+    tmUTex_      = glGetUniformLocation(tonemapProgram_, "uTex");
+    tmUExposure_ = glGetUniformLocation(tonemapProgram_, "uExposure");
+    tmUGamma_    = glGetUniformLocation(tonemapProgram_, "uGamma");
+    tmUMode_     = glGetUniformLocation(tonemapProgram_, "uMode");
+
+    static const float quadVerts[12] = {
+        -1.0f, -1.0f,  1.0f, -1.0f,  1.0f,  1.0f,
+        -1.0f, -1.0f,  1.0f,  1.0f, -1.0f,  1.0f,
+    };
+    glGenVertexArrays(1, &tonemapVAO_);
+    glGenBuffers(1, &tonemapVBO_);
+    glBindVertexArray(tonemapVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, tonemapVBO_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (void*)0);
+    glBindVertexArray(0);
+}
+
+void SceneGraph::ensureTonemapFBO() {
+    if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return;
+    if (tonemapFBO_ && tonemapFBOWidth_ == canvasWidth_
+                   && tonemapFBOHeight_ == canvasHeight_) return;
+
+    destroyTonemapFBO();
+
+    tonemapFBOWidth_  = canvasWidth_;
+    tonemapFBOHeight_ = canvasHeight_;
+
+    glGenFramebuffers(1, &tonemapFBO_);
+    glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
+
+    glGenTextures(1, &tonemapColorTex_);
+    glBindTexture(GL_TEXTURE_2D, tonemapColorTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tonemapFBOWidth_, tonemapFBOHeight_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           tonemapColorTex_, 0);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOG_ERROR("Tonemap FBO incomplete: 0x%x", status);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneGraph::destroyTonemapFBO() {
+    if (tonemapColorTex_) { glDeleteTextures(1, &tonemapColorTex_); tonemapColorTex_ = 0; }
+    if (tonemapFBO_)      { glDeleteFramebuffers(1, &tonemapFBO_); tonemapFBO_ = 0; }
+    tonemapFBOWidth_ = 0;
+    tonemapFBOHeight_ = 0;
+}
+
+void SceneGraph::runTonemapPass() {
+    ensureTonemapPipeline();
+    ensureTonemapFBO();
+    if (!tonemapProgram_ || !tonemapFBO_) return;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
+    glViewport(0, 0, tonemapFBOWidth_, tonemapFBOHeight_);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    glUseProgram(tonemapProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
+    glUniform1i(tmUTex_, 0);
+    glUniform1f(tmUExposure_, exposure_);
+    glUniform1f(tmUGamma_, gamma_);
+    glUniform1i(tmUMode_, static_cast<int>(toneMap_));
+
+    glBindVertexArray(tonemapVAO_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Light collection + upload
+// ---------------------------------------------------------------------------
+
+void SceneGraph::collectLights(std::vector<LightNode*>& out) const {
+    out.clear();
+    for (auto& [id, node] : nodes_) {
+        if (!node->visible()) continue;
+        if (node->type() != SceneNode::Type::Light) continue;
+        // Include only nodes actually attached to the tree (parent chain ends
+        // at root_). Detached lights created but never added shouldn't light.
+        SceneNode* p = node.get();
+        while (p && p->parent()) p = p->parent();
+        if (p != root_.get()) continue;
+        out.push_back(static_cast<LightNode*>(node.get()));
+        if (out.size() >= 32) break;
+    }
+}
+
+void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
+    const int count = std::min((int)lights.size(), 32);
+    glUniform1i(uLightCount_, count);
+    if (count == 0) return;
+
+    int   type[32];
+    float pos[32 * 3];
+    float dir[32 * 3];
+    float col[32 * 3];
+    float intensity[32];
+    float range[32];
+    float spotCos[32 * 2];
+
+    for (int i = 0; i < count; ++i) {
+        LightNode* L = lights[i];
+        type[i] = static_cast<int>(L->kind());
+
+        // Light world position (column-major translation column), then
+        // made camera-relative to match vWorldPos in the fragment shader.
+        const Mat4& M = L->worldMatrix();
+        Vec3 rel { M.m[3][0] - cameraEye_.x,
+                   M.m[3][1] - cameraEye_.y,
+                   M.m[3][2] - cameraEye_.z };
+
+        Vec3 d = L->direction();
+        float dlen = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
+        if (dlen > 1e-6f) { d.x /= dlen; d.y /= dlen; d.z /= dlen; }
+
+        pos[i*3+0] = rel.x; pos[i*3+1] = rel.y; pos[i*3+2] = rel.z;
+        dir[i*3+0] = d.x;   dir[i*3+1] = d.y;   dir[i*3+2] = d.z;
+
+        const Vec3& c = L->color();
+        col[i*3+0] = c.x; col[i*3+1] = c.y; col[i*3+2] = c.z;
+
+        intensity[i] = L->intensity();
+        range[i]     = L->range();
+
+        // Pre-compute spot cos-angles (shader compares cos directly).
+        spotCos[i*2+0] = std::cos(L->innerAngle());
+        spotCos[i*2+1] = std::cos(L->outerAngle());
+    }
+
+    glUniform1iv(uLightType_, count, type);
+    glUniform3fv(uLightPos_, count, pos);
+    glUniform3fv(uLightDirArr_, count, dir);
+    glUniform3fv(uLightColor_, count, col);
+    glUniform1fv(uLightIntensity_, count, intensity);
+    glUniform1fv(uLightRange_, count, range);
+    glUniform2fv(uLightSpotCos_, count, spotCos);
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -641,18 +994,32 @@ void SceneGraph::render() {
 
             hasMeshContent_ = true;
 
+            // Collect lights once per frame — reused for mesh + gizmo passes.
+            std::vector<LightNode*> lights;
+            collectLights(lights);
+            // If the user hasn't added any lights, fall back to a single
+            // implicit directional "sun" so the scene isn't pitch-black.
+            // This keeps createMesh-and-go behavior intact.
+            static LightNode implicitSun;
+            implicitSun.setKind(LightNode::Kind::Directional);
+            implicitSun.setDirection(Vec3(-0.3f, -1.0f, -0.5f).normalized());
+            implicitSun.setColor(1.0f, 0.98f, 0.95f);
+            implicitSun.setIntensity(3.0f);
+            std::vector<LightNode*> fallback;
+            if (lights.empty()) { fallback.push_back(&implicitSun); }
+            const auto& activeLights = lights.empty() ? fallback : lights;
+
             // --- Mesh pass --------------------------------------------------
             if (hasMeshNodes && meshProgram_) {
                 glEnable(GL_CULL_FACE);
                 glCullFace(GL_BACK);
                 glUseProgram(meshProgram_);
 
-                Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
-                glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
-                glUniform3f(uCameraPos_, 0.0f, 0.0f, 0.0f);
                 glUniform1f(uFogStart_, fogStart_);
                 glUniform1f(uFogEnd_, fogEnd_);
                 glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
+                glUniform3f(uAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+                uploadLights(activeLights);
 
                 std::function<void(SceneNode*)> walkMesh = [&](SceneNode* n) {
                     if (!n->visible()) return;
@@ -716,12 +1083,11 @@ void SceneGraph::render() {
                     glDisable(GL_DEPTH_TEST);
                     glUseProgram(meshProgram_);
 
-                    Vec3 lightDir = Vec3(0.3f, 1.0f, 0.5f).normalized();
-                    glUniform3f(uLightDir_, lightDir.x, lightDir.y, lightDir.z);
-                    glUniform3f(uCameraPos_, 0.0f, 0.0f, 0.0f);
                     glUniform1f(uFogStart_, 0.0f);
                     glUniform1f(uFogEnd_, 0.0f);
                     glUniform3f(uFogColor_, 0.0f, 0.0f, 0.0f);
+                    glUniform3f(uAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+                    uploadLights(activeLights);
 
                     for (MeshNode* mn : gizmoMeshes) {
                         if (!mn) continue;
@@ -737,6 +1103,11 @@ void SceneGraph::render() {
             glUseProgram(0);
             glDisable(GL_DEPTH_TEST);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            // --- Tonemap pass ----------------------------------------------
+            // HDR mesh FBO -> LDR output texture. The compositor reads the
+            // LDR texture; the HDR texture is internal.
+            runTonemapPass();
         }
     }
 
@@ -761,9 +1132,11 @@ void SceneGraph::render() {
         canvasScene_->restore();
     }
 
-    // Notify the DOM element of the current FBO texture for compositing
+    // Notify the DOM element of the current FBO texture for compositing.
+    // We hand over the tonemapped LDR texture; if tonemap hasn't run (no
+    // 3D content this frame) we pass 0 to clear.
     if (fboTexCb_) {
-        fboTexCb_(hasMeshContent_ ? meshColorTex_ : 0);
+        fboTexCb_(hasMeshContent_ ? tonemapColorTex_ : 0);
     }
 }
 
@@ -819,6 +1192,9 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniformMatrix4fv(uModel_, 1, GL_FALSE, model.data());
     glUniform4fv(uColor_, 1, mesh->color());
     glUniform1f(uEmissive_, mesh->emissive());
+    glUniform3fv(uEmissiveColor_, 1, mesh->emissiveColor());
+    glUniform1f(uMetallic_, mesh->metallic());
+    glUniform1f(uRoughness_, mesh->roughness());
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
     glUniform1f(uNearClip_, mesh->nearClipDist());
 

@@ -6,6 +6,7 @@
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
 #include "scene/html_node.h"
+#include "scene/light_node.h"
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
 
@@ -41,6 +42,7 @@ public:
     PhysicsNode* createPhysicsNode(const std::string& name = "");
     MeshNode* createMesh(const std::string& name = "");
     HtmlNode* createHtml(const std::string& name = "");
+    LightNode* createLight(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);
@@ -156,6 +158,26 @@ public:
         fogColor_[0] = r; fogColor_[1] = g; fogColor_[2] = b;
     }
 
+    /// Tone mapping mode applied when composing the HDR mesh FBO to the
+    /// caller-facing LDR texture. ACES matches modern filmic defaults;
+    /// Reinhard is a cheaper fallback; Linear is raw clamp to 0-1.
+    enum class ToneMap : uint8_t { Linear, Reinhard, ACES };
+
+    /// Configure tonemap + exposure. Exposure is a pre-tonemap multiplier
+    /// (1.0 = neutral, 2.0 = +1 stop). `gamma` is the post-tonemap output
+    /// gamma; pass 1.0 to leave linear output (default 2.2 for sRGB).
+    void setToneMap(ToneMap mode, float exposure = 1.0f, float gamma = 2.2f) {
+        toneMap_ = mode; exposure_ = exposure; gamma_ = gamma;
+    }
+    ToneMap toneMap() const { return toneMap_; }
+    float exposure() const { return exposure_; }
+
+    /// Ambient fill added to every fragment after per-light contributions
+    /// (a placeholder until IBL lands). RGB in linear 0-1.
+    void setAmbient(float r, float g, float b) {
+        ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
+    }
+
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);
     void setCameraZoom(float z);
@@ -186,6 +208,16 @@ private:
 
     // --- Billboard GL pipeline (lazy init) ---
     void ensureBillboardPipeline();
+
+    // --- Tonemap pipeline (lazy init) ---
+    void ensureTonemapPipeline();
+    void ensureTonemapFBO();
+    void destroyTonemapFBO();
+    void runTonemapPass();
+
+    // --- Light collection (rebuilt per frame) ---
+    void collectLights(std::vector<LightNode*>& out) const;
+    void uploadLights(const std::vector<LightNode*>& lights);
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
@@ -224,6 +256,18 @@ private:
     GLint uFogEnd_ = -1;
     GLint uFogColor_ = -1;
     GLint uNearClip_ = -1;
+    GLint uMetallic_ = -1;
+    GLint uRoughness_ = -1;
+    GLint uEmissiveColor_ = -1;
+    GLint uAmbient_ = -1;
+    GLint uLightCount_ = -1;
+    GLint uLightType_ = -1;
+    GLint uLightPos_ = -1;
+    GLint uLightDirArr_ = -1;
+    GLint uLightColor_ = -1;
+    GLint uLightIntensity_ = -1;
+    GLint uLightRange_ = -1;
+    GLint uLightSpotCos_ = -1;
 
     // Mesh FBO
     GLuint meshFBO_ = 0;
@@ -239,6 +283,26 @@ private:
     float fogStart_ = 0.0f;
     float fogEnd_ = 0.0f;
     float fogColor_[3] = {0.0f, 0.0f, 0.0f};
+
+    // Tonemap + exposure
+    ToneMap toneMap_ = ToneMap::ACES;
+    float exposure_ = 1.0f;
+    float gamma_ = 2.2f;
+    float ambientColor_[3] = {0.03f, 0.03f, 0.03f};
+
+    // Tonemap FBO (LDR output, consumed by the compositor)
+    GLuint tonemapFBO_ = 0;
+    GLuint tonemapColorTex_ = 0;
+    int tonemapFBOWidth_ = 0, tonemapFBOHeight_ = 0;
+
+    // Tonemap program
+    GLuint tonemapProgram_ = 0;
+    GLuint tonemapVAO_ = 0;
+    GLuint tonemapVBO_ = 0;
+    GLint tmUTex_ = -1;
+    GLint tmUExposure_ = -1;
+    GLint tmUGamma_ = -1;
+    GLint tmUMode_ = -1;
 
     // --- Billboard pipeline (lazy init) ---
     GLuint bbProgram_ = 0;

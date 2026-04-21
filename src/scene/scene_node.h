@@ -296,7 +296,7 @@ public:
     virtual void onRender(class SceneGraph& graph) {}
 
     // --- Type tag for downcasting ---
-    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html };
+    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light };
     virtual Type type() const { return Type::Base; }
 
     // --- World anchor + billboard (Shape/Sprite/Html) ---

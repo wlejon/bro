@@ -60,6 +60,25 @@ public:
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
 
+    // --- PBR material ---
+    // baseColor is the existing color_[4] (RGB used as linear albedo, A as
+    // mesh transparency). metallic/roughness follow the glTF convention:
+    //   metallic 0 = dielectric (plastic/wood/skin), 1 = metal.
+    //   roughness 0 = mirror, 1 = fully diffuse.
+    // emissiveColor is a separate linear-RGB tint multiplied by the scalar
+    // `emissive` intensity; set both to get self-lit surfaces.
+
+    void setMetallic(float m) { metallic_ = m; }
+    float metallic() const { return metallic_; }
+
+    void setRoughness(float r) { roughness_ = r; }
+    float roughness() const { return roughness_; }
+
+    void setEmissiveColor(float r, float g, float b) {
+        emissiveColor_[0] = r; emissiveColor_[1] = g; emissiveColor_[2] = b;
+    }
+    const float* emissiveColor() const { return emissiveColor_; }
+
     /// Polygon offset (forwarded to glPolygonOffset before drawing this mesh).
     /// Negative `units` pulls the surface forward in the depth buffer, useful
     /// for layering co-located meshes (e.g. high-detail LOD meshes that should
@@ -111,6 +130,9 @@ private:
     bool hasVertexColors_ = false;
     float color_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float emissive_ = 0.0f;
+    float emissiveColor_[3] = {1.0f, 1.0f, 1.0f};
+    float metallic_ = 0.0f;
+    float roughness_ = 0.7f;
 
     // Polygon offset (per-mesh depth bias for layered LOD meshes)
     float depthBiasFactor_ = 0.0f;
