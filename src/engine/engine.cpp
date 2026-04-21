@@ -609,9 +609,16 @@ Engine::Engine(const EngineConfig& config)
     {
         JSContext* ctx = jsRuntime_->getContext();
         JSValue global = JS_GetGlobalObject(ctx);
+        // Fire DOMContentLoaded on documentElement so document.addEventListener
+        // callers (the standard web idiom) receive it via bubbling.
+        if (auto* root = document_ ? document_->documentElement() : nullptr) {
+            bro::dom::Event dclDom("DOMContentLoaded", /*bubbles=*/true, /*cancelable=*/false);
+            js::dispatchDomEvent(ctx, root, dclDom);
+        }
+
         JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
         if (JS_IsFunction(ctx, dispatch)) {
-            // DOMContentLoaded
+            // DOMContentLoaded (window-level listeners)
             JSValue dclType = JS_NewString(ctx, "DOMContentLoaded");
             JSValue dclEvt = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, dclEvt, "type", JS_NewString(ctx, "DOMContentLoaded"));

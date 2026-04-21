@@ -13,6 +13,7 @@
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkMaskFilter.h>
+#include <include/effects/SkDashPathEffect.h>
 #include <include/core/SkBlendMode.h>
 #include <include/core/SkBlurTypes.h>
 #include <include/core/SkPathBuilder.h>
@@ -669,8 +670,33 @@ SkPaint CanvasScene::makeStrokePaint() const {
     SkPaint p = state_.strokePaint;
     p.setAlphaf(p.getAlphaf() * state_.globalAlphaVal);
     p.setBlendMode(blendModeFromOp(state_.compositeOp));
+    if (!state_.lineDash.empty()) {
+        // HTML5 spec: odd-length segment arrays are doubled.
+        std::vector<float> segs = state_.lineDash;
+        if (segs.size() % 2 == 1) segs.insert(segs.end(), state_.lineDash.begin(), state_.lineDash.end());
+        p.setPathEffect(SkDashPathEffect::Make(
+            SkSpan<const SkScalar>(segs.data(), segs.size()),
+            state_.lineDashOffset));
+    }
     return p;
 }
+
+void CanvasScene::setLineDash(const std::vector<float>& segments) {
+    state_.lineDash.clear();
+    state_.lineDash.reserve(segments.size());
+    for (float v : segments) {
+        if (!(v >= 0) || !std::isfinite(v)) { state_.lineDash.clear(); return; }
+        state_.lineDash.push_back(v);
+    }
+}
+
+const std::vector<float>& CanvasScene::lineDash() const { return state_.lineDash; }
+
+void CanvasScene::setLineDashOffset(float off) {
+    if (std::isfinite(off)) state_.lineDashOffset = off;
+}
+
+float CanvasScene::lineDashOffset() const { return state_.lineDashOffset; }
 
 void CanvasScene::applyShadow(SkPaint& paint) const {
     if (shadowA_ > 0 && (shadowBlur_ > 0 || shadowOffsetX_ != 0 || shadowOffsetY_ != 0)) {

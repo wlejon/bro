@@ -33,10 +33,25 @@
         };
     }
 
-    // NodeList.prototype.forEach
-    if (typeof NodeList !== 'undefined' && !NodeList.prototype.forEach) {
-        NodeList.prototype.forEach = Array.prototype.forEach;
-    }
+    // NodeList.prototype.forEach — NodeList is registered as a non-global
+    // class in bro, so grab its prototype via an instance.
+    try {
+        var _nl = document.querySelectorAll('*');
+        var _nlProto = _nl && Object.getPrototypeOf(_nl);
+        if (_nlProto && !_nlProto.forEach) {
+            _nlProto.forEach = function(cb, thisArg) {
+                for (var i = 0, n = this.length; i < n; i++) cb.call(thisArg, this[i], i, this);
+            };
+        }
+        if (_nlProto && !_nlProto[Symbol.iterator]) {
+            _nlProto[Symbol.iterator] = function() {
+                var self = this, i = 0;
+                return { next: function() {
+                    return i < self.length ? { value: self[i++], done: false } : { value: undefined, done: true };
+                }};
+            };
+        }
+    } catch(e) {}
 
     // Stub DOM type constructors needed by Vue and other frameworks
     if (typeof Element === 'undefined')

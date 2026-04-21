@@ -193,6 +193,7 @@ void installDocumentBindings(JSContext* ctx) {
         })
         .get("nodeType", [](Doc*) -> int { return 9; })
         .get("nodeName", [](Doc*) -> std::string { return "#document"; })
+        .get("readyState", [](Doc*) -> std::string { return "complete"; })
         .get("defaultView", [](Doc*, JSContext* cx) -> JSValue {
             return JS_GetGlobalObject(cx);
         })

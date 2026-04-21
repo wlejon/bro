@@ -27,7 +27,7 @@ head, title, meta, link, style, script, noscript {
 
 body, div, p, section, article, nav, aside, header, footer, main,
 figure, figcaption, blockquote, fieldset, form, details, summary,
-address, hgroup, search, dl, dt, dd, dialog {
+address, hgroup, search, dl, dt, dd, dialog, canvas {
     display: block;
 }
 

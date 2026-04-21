@@ -175,6 +175,43 @@ static JSValue js_createImageData(JSContext* ctx, JSValueConst this_val,
     return obj;
 }
 
+static JSValue js_setLineDash(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    std::vector<float> segs;
+    if (JS_IsArray(argv[0])) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+        uint32_t len = 0;
+        JS_ToUint32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        segs.reserve(len);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue v = JS_GetPropertyUint32(ctx, argv[0], i);
+            double d = 0;
+            JS_ToFloat64(ctx, &d, v);
+            JS_FreeValue(ctx, v);
+            segs.push_back(static_cast<float>(d));
+        }
+    }
+    sc->setLineDash(segs);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_getLineDash(JSContext* ctx, JSValueConst this_val,
+                              int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_NewArray(ctx);
+    const auto& d = sc->lineDash();
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < d.size(); ++i) {
+        JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), JS_NewFloat64(ctx, d[i]));
+    }
+    return arr;
+}
+
 static JSValue js_measureText(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<CW>(ctx, this_val);
@@ -543,7 +580,12 @@ void CanvasBindings::install(JSContext* ctx) {
             .method_raw("getImageData", js_getImageData, 4)
             .method_raw("putImageData", js_putImageData, 3)
             .method_raw("createImageData", js_createImageData, 2)
-            .method_raw("measureText", js_measureText, 1);
+            .method_raw("measureText", js_measureText, 1)
+            .method_raw("setLineDash", js_setLineDash, 1)
+            .method_raw("getLineDash", js_getLineDash, 0)
+            .prop("lineDashOffset",
+                [](CW* w) -> double { return w->scene ? w->scene->lineDashOffset() : 0; },
+                [](CW* w, double v) { if (w->scene) w->scene->setLineDashOffset((float)v); });
     }
     // Class destructor has run — proto is now registered. Add raw string-enum properties.
     JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<CW>());

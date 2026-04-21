@@ -175,6 +175,11 @@ public:
     void setImageSmoothingEnabled(bool v);
     bool imageSmoothingEnabled() const { return imageSmoothingEnabled_; }
 
+    void setLineDash(const std::vector<float>& segments);
+    const std::vector<float>& lineDash() const;
+    void setLineDashOffset(float off);
+    float lineDashOffset() const;
+
     // --- Drawing methods ---
 
     void fillRect(float x, float y, float w, float h);
@@ -328,6 +333,8 @@ private:
         uint8_t shadowR = 0, shadowG = 0, shadowB = 0, shadowA = 0;
         float shadowOX = 0, shadowOY = 0;
         bool imgSmooth = true;
+        std::vector<float> lineDash;
+        float lineDashOffset = 0;
     };
 
     State state_;
