@@ -201,7 +201,8 @@ Engine::Engine(const EngineConfig& config)
         brokit::api::addFsBasePath(jsRuntime_->getContext(), config.appDir);
 
         // Worker bindings
-        js::installWorkerBindings(jsRuntime_->getContext(), config.appDir);
+        js::installWorkerBindings(jsRuntime_->getContext(), config.appDir,
+                                  netService_.get());
 
         LOG_INFO("Server mode initialized (no rendering, no DOM, no audio)");
         return;
@@ -578,7 +579,8 @@ Engine::Engine(const EngineConfig& config)
     }
 
     // 9d. Install Worker bindings
-    js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath);
+    js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath,
+                              netService_.get());
 
     // 10. Load and execute scripts (external + inline, in document order)
     for (auto& script : manifest_.scripts) {

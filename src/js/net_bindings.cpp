@@ -12,6 +12,11 @@ namespace bro::js {
 
 // ---------------------------------------------------------------------------
 // Per-JSContext state
+//
+// Stored thread-local because each JSContext lives on exactly one thread
+// (engine main thread or one worker thread). Using a static map keyed on
+// JSContext* would race on concurrent worker installs — unordered_map
+// rehash is not safe across threads.
 // ---------------------------------------------------------------------------
 struct NetCtxState {
     net::NetService* service = nullptr;
@@ -31,11 +36,10 @@ struct NetCtxState {
     std::unordered_map<uint32_t, bool> connections;
 };
 
-static std::unordered_map<JSContext*, NetCtxState> s_states;
+static thread_local NetCtxState* s_state = nullptr;
 
-static NetCtxState* getState(JSContext* ctx) {
-    auto it = s_states.find(ctx);
-    return (it == s_states.end()) ? nullptr : &it->second;
+static NetCtxState* getState(JSContext* /*ctx*/) {
+    return s_state;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,23 +250,28 @@ static const JSCFunctionListEntry js_net_funcs[] = {
 // Install / Cleanup / Poll
 // ---------------------------------------------------------------------------
 void NetBindings::install(JSContext* ctx, net::NetService* service) {
-    NetCtxState state;
-    state.service = service;
-    state.ctx = ctx;
-    state.subscriber = service->createSubscriber();
+    if (s_state) {
+        LOG_WARN("[net] NetBindings::install called twice on the same thread");
+        return;
+    }
+    auto* state = new NetCtxState();
+    state->service = service;
+    state->ctx = ctx;
+    state->subscriber = service->createSubscriber();
+    s_state = state;
 
     // Wire subscriber callbacks → JS callbacks on this context.
     // These fire synchronously during poll() on this context's thread.
-    state.subscriber->onHostResult = [ctx](bool success) {
+    state->subscriber->onHostResult = [ctx](bool success) {
         auto* s = getState(ctx);
         if (!s) return;
         s->hostPending = false;
         s->hosting = success;
     };
-    state.subscriber->onConnectResult = [](bool) {
+    state->subscriber->onConnectResult = [](bool) {
         // Initiation ack only — app listens for onConnect for the actual link.
     };
-    state.subscriber->onConnect = [ctx](uint32_t conn) {
+    state->subscriber->onConnect = [ctx](uint32_t conn) {
         auto* s = getState(ctx);
         if (!s) return;
         s->connections[conn] = true;
@@ -275,7 +284,7 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
             JS_FreeValue(ctx, func);
         }
     };
-    state.subscriber->onDisconnect = [ctx](uint32_t conn, int reason) {
+    state->subscriber->onDisconnect = [ctx](uint32_t conn, int reason) {
         auto* s = getState(ctx);
         if (!s) return;
         s->connections.erase(conn);
@@ -292,7 +301,7 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
             JS_FreeValue(ctx, func);
         }
     };
-    state.subscriber->onMessage = [ctx](net::NetworkMessage&& msg) {
+    state->subscriber->onMessage = [ctx](net::NetworkMessage&& msg) {
         auto* s = getState(ctx);
         if (!s) return;
         if (JS_IsUndefined(s->onMessage) || JS_IsNull(s->onMessage)) return;
@@ -308,8 +317,6 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
         JS_FreeValue(ctx, args[1]);
         JS_FreeValue(ctx, func);
     };
-
-    s_states[ctx] = std::move(state);
 
     // Build bro.net namespace.
     JSValue global = JS_GetGlobalObject(ctx);
@@ -350,26 +357,26 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
 }
 
 void NetBindings::cleanup(JSContext* ctx) {
-    auto it = s_states.find(ctx);
-    if (it == s_states.end()) return;
+    NetCtxState* s = s_state;
+    if (!s) return;
 
-    auto& s = it->second;
-    // Drop JS refs (the service's callbacks reference this state but we'll
-    // clear them below; if a late event slips through getState() it returns
-    // nullptr so the lambda body is a no-op).
+    // Null out thread-local first so any late callback (however unlikely —
+    // subscriber->poll() is single-threaded with us) becomes a no-op.
+    s_state = nullptr;
+
     if (ctx) {
-        JS_FreeValue(ctx, s.onConnect);
-        JS_FreeValue(ctx, s.onDisconnect);
-        JS_FreeValue(ctx, s.onMessage);
+        JS_FreeValue(ctx, s->onConnect);
+        JS_FreeValue(ctx, s->onDisconnect);
+        JS_FreeValue(ctx, s->onMessage);
     }
 
     // Detach the subscriber. The service thread will close any sockets it
     // owns and free the subscriber asynchronously.
-    if (s.service && s.subscriber) {
-        s.service->destroySubscriber(s.subscriber);
+    if (s->service && s->subscriber) {
+        s->service->destroySubscriber(s->subscriber);
     }
 
-    s_states.erase(it);
+    delete s;
 }
 
 void NetBindings::poll(JSContext* ctx) {

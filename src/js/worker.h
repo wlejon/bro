@@ -11,6 +11,8 @@ extern "C" {
 #include "quickjs.h"
 }
 
+namespace bro::net { class NetService; }
+
 namespace bro::js {
 
 class Runtime;
@@ -23,7 +25,10 @@ class Timers;
 class Worker {
 public:
     /// Create a worker. scriptPath is resolved relative to basePath.
-    Worker(const std::string& scriptPath, const std::string& basePath);
+    /// If netService is non-null, the worker installs bro.net bindings
+    /// against it (own subscriber, polled on the worker's event loop).
+    Worker(const std::string& scriptPath, const std::string& basePath,
+           net::NetService* netService);
     ~Worker();
 
     // Non-copyable, non-movable
@@ -65,6 +70,7 @@ private:
 
     std::string scriptPath_;
     std::string basePath_;
+    net::NetService* netService_ = nullptr;
     std::thread thread_;
 
     // Lock-free message queues (SPSC ring buffers)
@@ -82,9 +88,11 @@ private:
 // ---------------------------------------------------------------------------
 
 /// Install the Worker constructor on the global object.
-/// engine is stored for worker lifecycle management.
+/// If netService is non-null, workers created from this context will have
+/// bro.net bindings installed on their JS context.
 /// Must be called after brokit APIs are installed.
-void installWorkerBindings(JSContext* ctx, const std::string& appBasePath);
+void installWorkerBindings(JSContext* ctx, const std::string& appBasePath,
+                           net::NetService* netService);
 
 /// Clean up worker bindings state for a context (call before freeing context).
 void cleanupWorkerBindings(JSContext* ctx);

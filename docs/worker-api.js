@@ -152,7 +152,14 @@ class WorkerGlobalScope {
   //   fs.readFile(), fs.writeFile(), ...
   //   noise (Perlin/simplex)
   //
-  // NOT available: window, document, DOM, canvas, scene, Worker (no nesting)
+  // Engine APIs available in workers:
+  //   Mesh (bromesh geometry)
+  //   bro.net.*  — own subscriber against the shared NetService: host(),
+  //                connect(), send(), broadcast(), onconnect, ondisconnect,
+  //                onmessage. Safe to host a server entirely inside a worker.
+  //
+  // NOT available: window, document, DOM, canvas, scene, Worker (no nesting),
+  //                bro.server (process-scoped), bro.ai, bro.physics, bro.audio
 }
 
 

@@ -1,6 +1,7 @@
 #include "js/worker.h"
 #include "js/mesh_bindings.h"
 #include "js/message_serializer.h"
+#include "js/net_bindings.h"
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "util/interrupt.h"
@@ -26,9 +27,11 @@ namespace bro::js {
 // Worker implementation
 // ============================================================================
 
-Worker::Worker(const std::string& scriptPath, const std::string& basePath)
+Worker::Worker(const std::string& scriptPath, const std::string& basePath,
+               net::NetService* netService)
     : scriptPath_(scriptPath)
     , basePath_(basePath)
+    , netService_(netService)
 {
 }
 
@@ -170,6 +173,13 @@ void Worker::threadFunc()
     // --- 3b. Install Mesh class (for marching cubes / mesh generation in workers) ---
     MeshBindings::install(ctx);
 
+    // --- 3c. Install bro.net bindings (own subscriber against shared
+    // NetService). The service is thread-safe by design — commands/events
+    // are routed through lock-free per-subscriber queues. ---
+    if (netService_) {
+        NetBindings::install(ctx, netService_);
+    }
+
     // --- 4. Store context data for C callbacks ---
     WorkerCtxData wcd;
     wcd.worker = this;
@@ -265,6 +275,13 @@ void Worker::threadFunc()
         JS_FreeValue(ctx, tickFn);
         JS_FreeValue(ctx, g);
 
+        // Drain this subscriber's network events — fires JS onconnect /
+        // ondisconnect / onmessage callbacks on this worker thread.
+        if (netService_) {
+            NetBindings::poll(ctx);
+            runtime->executePendingJobs();
+        }
+
         // If no immediate work, sleep briefly to avoid busy-spinning.
         // 1ms gives good timer precision without burning CPU.
         if (!didWork) {
@@ -274,6 +291,9 @@ void Worker::threadFunc()
 
     // --- 8. Cleanup ---
     timers->clearAll(ctx);
+    if (netService_) {
+        NetBindings::cleanup(ctx);
+    }
     MeshBindings::cleanup(ctx);
     JS_SetContextOpaque(ctx, nullptr);
 
@@ -297,10 +317,12 @@ struct WorkerOpaque {
     Worker* worker = nullptr;
 };
 
-// Per-context state: base path for resolving worker scripts
+// Per-context state: base path for resolving worker scripts, and the
+// NetService pointer that spawned workers should bind to.
 struct WorkerBindingsState {
     std::string basePath;
     std::vector<Worker*> workers;  // all workers created from this context
+    net::NetService* netService = nullptr;
 };
 
 static std::unordered_map<JSContext*, WorkerBindingsState> s_workerState;
@@ -335,7 +357,7 @@ static JSValue js_worker_ctor(JSContext* ctx, JSValueConst new_target,
     JS_FreeCString(ctx, path);
 
     // Create C++ Worker
-    auto* worker = new Worker(scriptPath, it->second.basePath);
+    auto* worker = new Worker(scriptPath, it->second.basePath, it->second.netService);
     it->second.workers.push_back(worker);
 
     // Create JS object
@@ -384,7 +406,8 @@ static JSValue js_worker_terminate(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-void installWorkerBindings(JSContext* ctx, const std::string& appBasePath)
+void installWorkerBindings(JSContext* ctx, const std::string& appBasePath,
+                           net::NetService* netService)
 {
     // Register class and prototype via qjsbind (NoGlobal — we set a custom constructor below)
     qjsbind::Class<WorkerOpaque>(ctx, "Worker", qjsbind::NoGlobal,
@@ -404,7 +427,7 @@ void installWorkerBindings(JSContext* ctx, const std::string& appBasePath)
     JS_FreeValue(ctx, global);
 
     // Per-context state
-    s_workerState[ctx] = WorkerBindingsState{appBasePath, {}};
+    s_workerState[ctx] = WorkerBindingsState{appBasePath, {}, netService};
 }
 
 void cleanupWorkerBindings(JSContext* ctx)
