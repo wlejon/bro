@@ -1531,6 +1531,67 @@ void SceneBindings::install(JSContext* ctx) {
             })
 
         // LightNode properties — no-op on non-light nodes.
+        .prop("direction",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light)
+                    return JS_UNDEFINED;
+                const auto& d = static_cast<scene::LightNode*>(w->node)->direction();
+                JSValue arr = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, d.x));
+                JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, d.y));
+                JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, d.z));
+                return arr;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light) return;
+                if (!JS_IsArray(val)) return;
+                double x = 0, y = -1, z = 0;
+                JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
+                JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
+                JSValue e2 = JS_GetPropertyUint32(ctx, val, 2);
+                JS_ToFloat64(ctx, &x, e0);
+                JS_ToFloat64(ctx, &y, e1);
+                JS_ToFloat64(ctx, &z, e2);
+                static_cast<scene::LightNode*>(w->node)->setDirection(
+                    {(float)x, (float)y, (float)z});
+                JS_FreeValue(ctx, e0);
+                JS_FreeValue(ctx, e1);
+                JS_FreeValue(ctx, e2);
+            })
+        .prop("color",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node) return JS_UNDEFINED;
+                if (w->node->type() == scene::SceneNode::Type::Light) {
+                    const auto& c = static_cast<scene::LightNode*>(w->node)->color();
+                    JSValue arr = JS_NewArray(ctx);
+                    JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, c.x));
+                    JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, c.y));
+                    JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, c.z));
+                    return arr;
+                }
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light) return;
+                auto* L = static_cast<scene::LightNode*>(w->node);
+                if (JS_IsString(val)) {
+                    uint8_t r, g, b, a;
+                    if (parseColor(jsStr(ctx, val), r, g, b, a))
+                        L->setColor(r/255.0f, g/255.0f, b/255.0f);
+                } else if (JS_IsArray(val)) {
+                    double cr = 1, cg = 1, cb = 1;
+                    JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
+                    JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
+                    JSValue e2 = JS_GetPropertyUint32(ctx, val, 2);
+                    JS_ToFloat64(ctx, &cr, e0);
+                    JS_ToFloat64(ctx, &cg, e1);
+                    JS_ToFloat64(ctx, &cb, e2);
+                    L->setColor((float)cr, (float)cg, (float)cb);
+                    JS_FreeValue(ctx, e0);
+                    JS_FreeValue(ctx, e1);
+                    JS_FreeValue(ctx, e2);
+                }
+            })
         .prop("intensity",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)

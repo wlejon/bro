@@ -175,7 +175,11 @@ class SceneGraph {
    * @param {number} [opts.ry=0] - rotation Y in degrees
    * @param {number} [opts.rz=0] - rotation Z in degrees
    * @param {string|number[]} [opts.color] - CSS color string or [r,g,b] / [r,g,b,a] (0-1 range)
+   * @param {number} [opts.metallic=0] - PBR metallic (0 = dielectric, 1 = metal)
+   * @param {number} [opts.roughness=0.7] - PBR roughness (0 = mirror, 1 = diffuse)
    * @param {number} [opts.emissive=0] - emissive intensity (0 = none, >0 = self-lit)
+   * @param {string|number[]} [opts.emissiveColor] - emissive tint (defaults to baseColor)
+   * @param {Object} [opts.material] - {metallic, roughness} nested form
    * @param {Float32Array} [opts.positions] - raw vertex positions (xyz, stride 3)
    * @param {Float32Array} [opts.normals] - raw vertex normals (xyz, stride 3)
    * @param {Uint32Array} [opts.indices] - raw triangle indices
@@ -223,6 +227,41 @@ class SceneGraph {
    * @param {number[]} [opts.quaternion] - [x,y,z,w] camera orientation (overrides target/up/mode)
    */
   setCamera(opts) {}
+
+  /**
+   * Create a dynamic light and add it to the root. Up to 32 visible lights
+   * participate in shading per frame. See docs/lighting-api.js for detail.
+   *
+   * @param {Object} opts
+   * @param {string} [opts.type="directional"] - "directional"|"point"|"spot"
+   * @param {number[]} [opts.position=[0,0,0]] - world position (point/spot)
+   * @param {number[]} [opts.direction=[0,-1,0]] - world direction (dir/spot)
+   * @param {string|number[]} [opts.color=[1,1,1]] - linear RGB or CSS string
+   * @param {number} [opts.intensity=1.0]
+   * @param {number} [opts.range=10] - distance cutoff (point/spot)
+   * @param {number} [opts.innerAngle=0.35] - spot full-bright half-angle (radians)
+   * @param {number} [opts.outerAngle=0.52] - spot falloff half-angle (radians)
+   * @param {string} [opts.name]
+   * @returns {SceneNode} LightNode
+   */
+  createLight(opts) {}
+
+  /**
+   * Configure HDR tonemap + exposure applied to the mesh FBO before it is
+   * composited onto the 2D backdrop.
+   *
+   * @param {Object} opts
+   * @param {string} [opts.mode="aces"] - "aces"|"reinhard"|"linear"
+   * @param {number} [opts.exposure=1.0] - pre-tonemap multiplier
+   * @param {number} [opts.gamma=2.2]    - post-tonemap output gamma
+   */
+  setToneMap(opts) {}
+
+  /**
+   * Flat ambient fill added to every fragment (placeholder for IBL).
+   * @param {number[]} rgb - linear RGB [r,g,b]
+   */
+  setAmbient(rgb) {}
 
   /**
    * Set exponential distance fog. Fragments beyond `end` are fully fogged to
@@ -537,6 +576,45 @@ class SceneNode {
    */
   get nearClipDist() {}
   set nearClipDist(value) {}
+
+  /** PBR metallic factor (MeshNode only). 0 = dielectric, 1 = metal. */
+  get metallic() {}
+  set metallic(value) {}
+
+  /** PBR roughness factor (MeshNode only). 0 = mirror, 1 = diffuse. */
+  get roughness() {}
+  set roughness(value) {}
+
+  /** Emissive intensity scalar (MeshNode only). */
+  get emissive() {}
+  set emissive(value) {}
+
+
+  // --- LightNode-only -------------------------------------------------------
+
+  /** [x,y,z] direction vector (directional/spot lights). */
+  get direction() {}
+  set direction(xyz) {}
+
+  /** [r,g,b] linear color (LightNode only; on other nodes returns undefined). */
+  get color() {}
+  set color(rgbOrCssString) {}
+
+  /** Radiance multiplier. */
+  get intensity() {}
+  set intensity(value) {}
+
+  /** Distance cutoff for point/spot lights. */
+  get range() {}
+  set range(value) {}
+
+  /** Spot inner cone half-angle in radians. */
+  get innerAngle() {}
+  set innerAngle(radians) {}
+
+  /** Spot outer cone half-angle in radians. */
+  get outerAngle() {}
+  set outerAngle(radians) {}
 
 
   // --- Coordinate Conversion ------------------------------------------------

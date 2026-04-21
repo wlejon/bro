@@ -125,6 +125,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/mesh-api.js` | `bro.mesh` — primitives, CSG, simplification, UV, import/export |
 | `docs/noise-api.js` | `bro.noise` — FastNoise2 SIMD noise generation |
 | `docs/scene-api.js` | `bro.scene` — 3D scene graph, shapes, sprites, meshes, physics nodes |
+| `docs/lighting-api.js` | PBR lighting — LightNode (dir/point/spot), materials, tonemap, ambient |
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/worker-api.js` | `Worker` — web worker threads |
