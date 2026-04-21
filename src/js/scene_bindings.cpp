@@ -10,6 +10,7 @@
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
 #include "scene/html_node.h"
+#include "scene/light_node.h"
 #include "dom/element.h"
 #include "physics/physics_world.h"
 #include "canvas/canvas_scene.h"
@@ -786,9 +787,50 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, colorVal);
 
-        // Emissive
+        // Emissive intensity (scalar multiplier against emissiveColor)
         double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
         node->setEmissive((float)emissive);
+
+        // Emissive color (defaults to baseColor if unspecified — mimics
+        // glTF "emissiveFactor applied to base" for single-field ergonomics).
+        JSValue emColVal = JS_GetPropertyStr(ctx, opts, "emissiveColor");
+        if (JS_IsString(emColVal)) {
+            uint8_t er, eg, eb, ea;
+            if (parseColor(jsStr(ctx, emColVal), er, eg, eb, ea))
+                node->setEmissiveColor(er/255.0f, eg/255.0f, eb/255.0f);
+        } else if (JS_IsArray(emColVal)) {
+            double er = 1, eg = 1, eb = 1;
+            JSValue e0 = JS_GetPropertyUint32(ctx, emColVal, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, emColVal, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, emColVal, 2);
+            JS_ToFloat64(ctx, &er, e0);
+            JS_ToFloat64(ctx, &eg, e1);
+            JS_ToFloat64(ctx, &eb, e2);
+            node->setEmissiveColor((float)er, (float)eg, (float)eb);
+            JS_FreeValue(ctx, e0);
+            JS_FreeValue(ctx, e1);
+            JS_FreeValue(ctx, e2);
+        } else if (emissive > 0.0) {
+            // Default: reuse baseColor so `{color:'#ff0', emissive:2}` glows yellow.
+            const float* c = node->color();
+            node->setEmissiveColor(c[0], c[1], c[2]);
+        }
+        JS_FreeValue(ctx, emColVal);
+
+        // PBR material params (glTF metallic/roughness workflow).
+        JSValue matVal = JS_GetPropertyStr(ctx, opts, "material");
+        auto applyMat = [&](JSValueConst obj) {
+            JSValue mv = JS_GetPropertyStr(ctx, obj, "metallic");
+            if (!JS_IsUndefined(mv)) node->setMetallic((float)jsNum(ctx, mv));
+            JS_FreeValue(ctx, mv);
+            JSValue rv = JS_GetPropertyStr(ctx, obj, "roughness");
+            if (!JS_IsUndefined(rv)) node->setRoughness((float)jsNum(ctx, rv));
+            JS_FreeValue(ctx, rv);
+        };
+        if (JS_IsObject(matVal)) applyMat(matVal);
+        // Flat shortcuts: {metallic:0.9, roughness:0.2}
+        applyMat(opts);
+        JS_FreeValue(ctx, matVal);
 
         // Depth bias
         JSValue dbVal = JS_GetPropertyStr(ctx, opts, "depthBias");
@@ -1188,6 +1230,140 @@ static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_UNDEFINED;
 }
 
+// createLight({ type, position, direction, color, intensity, range,
+//               innerAngle, outerAngle, name }) → LightNode
+static JSValue js_sg_createLight(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createLight();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        std::string kindStr = jsGetStr(ctx, opts, "type", "directional");
+        if      (kindStr == "point")       node->setKind(scene::LightNode::Kind::Point);
+        else if (kindStr == "spot")        node->setKind(scene::LightNode::Kind::Spot);
+        else                               node->setKind(scene::LightNode::Kind::Directional);
+
+        // Position lives on the scene node transform (so lights follow
+        // parents, gizmos, agents, etc. — same semantics as meshes).
+        JSValue posVal = JS_GetPropertyStr(ctx, opts, "position");
+        if (JS_IsArray(posVal)) {
+            double px = 0, py = 0, pz = 0;
+            JSValue e0 = JS_GetPropertyUint32(ctx, posVal, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, posVal, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, posVal, 2);
+            JS_ToFloat64(ctx, &px, e0);
+            JS_ToFloat64(ctx, &py, e1);
+            JS_ToFloat64(ctx, &pz, e2);
+            node->setPosition((float)px, (float)py, (float)pz);
+            JS_FreeValue(ctx, e0);
+            JS_FreeValue(ctx, e1);
+            JS_FreeValue(ctx, e2);
+        }
+        JS_FreeValue(ctx, posVal);
+
+        JSValue dirVal = JS_GetPropertyStr(ctx, opts, "direction");
+        if (JS_IsArray(dirVal)) {
+            double dx = 0, dy = -1, dz = 0;
+            JSValue e0 = JS_GetPropertyUint32(ctx, dirVal, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, dirVal, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, dirVal, 2);
+            JS_ToFloat64(ctx, &dx, e0);
+            JS_ToFloat64(ctx, &dy, e1);
+            JS_ToFloat64(ctx, &dz, e2);
+            node->setDirection({(float)dx, (float)dy, (float)dz});
+            JS_FreeValue(ctx, e0);
+            JS_FreeValue(ctx, e1);
+            JS_FreeValue(ctx, e2);
+        }
+        JS_FreeValue(ctx, dirVal);
+
+        JSValue colVal = JS_GetPropertyStr(ctx, opts, "color");
+        if (JS_IsString(colVal)) {
+            uint8_t cr, cg, cb, ca;
+            if (parseColor(jsStr(ctx, colVal), cr, cg, cb, ca))
+                node->setColor(cr / 255.0f, cg / 255.0f, cb / 255.0f);
+        } else if (JS_IsArray(colVal)) {
+            double cr = 1, cg = 1, cb = 1;
+            JSValue e0 = JS_GetPropertyUint32(ctx, colVal, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, colVal, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, colVal, 2);
+            JS_ToFloat64(ctx, &cr, e0);
+            JS_ToFloat64(ctx, &cg, e1);
+            JS_ToFloat64(ctx, &cb, e2);
+            node->setColor((float)cr, (float)cg, (float)cb);
+            JS_FreeValue(ctx, e0);
+            JS_FreeValue(ctx, e1);
+            JS_FreeValue(ctx, e2);
+        }
+        JS_FreeValue(ctx, colVal);
+
+        JSValue iVal = JS_GetPropertyStr(ctx, opts, "intensity");
+        if (!JS_IsUndefined(iVal)) node->setIntensity((float)jsNum(ctx, iVal));
+        JS_FreeValue(ctx, iVal);
+
+        JSValue rVal = JS_GetPropertyStr(ctx, opts, "range");
+        if (!JS_IsUndefined(rVal)) node->setRange((float)jsNum(ctx, rVal));
+        JS_FreeValue(ctx, rVal);
+
+        JSValue iaVal = JS_GetPropertyStr(ctx, opts, "innerAngle");
+        if (!JS_IsUndefined(iaVal)) node->setInnerAngle((float)jsNum(ctx, iaVal));
+        JS_FreeValue(ctx, iaVal);
+
+        JSValue oaVal = JS_GetPropertyStr(ctx, opts, "outerAngle");
+        if (!JS_IsUndefined(oaVal)) node->setOuterAngle((float)jsNum(ctx, oaVal));
+        JS_FreeValue(ctx, oaVal);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// setToneMap({ mode:"aces"|"reinhard"|"linear", exposure, gamma })
+static JSValue js_sg_setToneMap(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+    JSValueConst opts = argv[0];
+    std::string modeStr = jsGetStr(ctx, opts, "mode", "aces");
+    scene::SceneGraph::ToneMap mode = scene::SceneGraph::ToneMap::ACES;
+    if (modeStr == "linear")        mode = scene::SceneGraph::ToneMap::Linear;
+    else if (modeStr == "reinhard") mode = scene::SceneGraph::ToneMap::Reinhard;
+    double exposure = jsGetProp(ctx, opts, "exposure", 1.0);
+    double gamma    = jsGetProp(ctx, opts, "gamma", 2.2);
+    g->setToneMap(mode, (float)exposure, (float)gamma);
+    return JS_UNDEFINED;
+}
+
+// setAmbient({ color:[r,g,b] }) or setAmbient([r,g,b])
+static JSValue js_sg_setAmbient(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1) return JS_UNDEFINED;
+    scene::Vec3 c{0.03f, 0.03f, 0.03f};
+    if (JS_IsObject(argv[0]) && !JS_IsArray(argv[0])) {
+        c = jsGetVec3(ctx, argv[0], "color", 0.03f, 0.03f, 0.03f);
+    } else if (JS_IsArray(argv[0])) {
+        double r = 0, gg = 0, b = 0;
+        JSValue e0 = JS_GetPropertyUint32(ctx, argv[0], 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, argv[0], 1);
+        JSValue e2 = JS_GetPropertyUint32(ctx, argv[0], 2);
+        JS_ToFloat64(ctx, &r, e0);
+        JS_ToFloat64(ctx, &gg, e1);
+        JS_ToFloat64(ctx, &b, e2);
+        c = {(float)r, (float)gg, (float)b};
+        JS_FreeValue(ctx, e0);
+        JS_FreeValue(ctx, e1);
+        JS_FreeValue(ctx, e2);
+    }
+    g->setAmbient(c.x, c.y, c.z);
+    return JS_UNDEFINED;
+}
+
 // setFog({start, end, color})
 static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -1321,6 +1497,80 @@ void SceneBindings::install(JSContext* ctx) {
         .prop("scaleZ",
             [](NodeWrapper* w) -> double { return w->node ? w->node->scale().z : 1; },
             [](NodeWrapper* w, double val) { if (w->node) w->node->setScale(w->node->scale().x, w->node->scale().y, (float)val); })
+
+        // Mesh material (PBR) — no-op on non-mesh nodes.
+        .prop("metallic",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->metallic());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node)->setMetallic((float)val);
+            })
+        .prop("roughness",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->roughness());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node)->setRoughness((float)val);
+            })
+        .prop("emissive",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->emissive());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node)->setEmissive((float)val);
+            })
+
+        // LightNode properties — no-op on non-light nodes.
+        .prop("intensity",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->intensity());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setIntensity((float)val);
+            })
+        .prop("range",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->range());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setRange((float)val);
+            })
+        .prop("innerAngle",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->innerAngle());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setInnerAngle((float)val);
+            })
+        .prop("outerAngle",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->outerAngle());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setOuterAngle((float)val);
+            })
 
         // Shape properties (silently return undefined / no-op for non-shape nodes)
         .prop("width",
@@ -1564,6 +1814,9 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createPhysicsNode", js_sg_createPhysicsNode, 1)
         .method_raw("createMesh", js_sg_createMesh, 1)
         .method_raw("createHtmlNode", js_sg_createHtml, 1)
+        .method_raw("createLight", js_sg_createLight, 1)
+        .method_raw("setToneMap", js_sg_setToneMap, 1)
+        .method_raw("setAmbient", js_sg_setAmbient, 1)
         .method_raw("createTerrain", js_sg_createTerrain, 1)
         .method_raw("findById", js_sg_findById, 1)
         .method_raw("findByName", js_sg_findByName, 1)
