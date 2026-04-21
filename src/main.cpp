@@ -8,12 +8,34 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <cstdio>
+#include <io.h>
+#include <fcntl.h>
 #else
 #include <unistd.h>
 #include <climits>
 #endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#endif
+
+#ifdef _WIN32
+// bro.exe is linked as /SUBSYSTEM:WINDOWS so double-clicking it doesn't pop a
+// console. When launched from a terminal, attach to the parent's console and
+// reopen stdio so printf/fprintf still reach the user.
+//
+// Caveat: cmd.exe/PowerShell don't wait for GUI-subsystem processes, so the
+// prompt returns immediately and later output interleaves with the next
+// command. Users who care should invoke via `start /wait bro.exe ...`.
+static void attachParentConsole() {
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+    FILE* dummy;
+    freopen_s(&dummy, "CONOUT$", "w", stdout);
+    freopen_s(&dummy, "CONOUT$", "w", stderr);
+    freopen_s(&dummy, "CONIN$",  "r", stdin);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+}
 #endif
 
 // Get the directory containing the current executable.
@@ -188,6 +210,10 @@ static void printUsage() {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    attachParentConsole();
+#endif
+
     if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         printUsage();
         return 0;

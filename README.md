@@ -57,7 +57,6 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 - **CMake** 3.24+
 - **vcpkg** (for GameNetworkingSockets — e.g. `D:/vcpkg`, with `VCPKG_ROOT` set or passed via `-DCMAKE_TOOLCHAIN_FILE`)
 - **Skia** pre-built libraries in `third_party/skia/`
-- Sibling repos cloned next to `bro/` (see [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md)) — `qjsbind`, `bromesh`, and `brogameagent` have no submodule fallback and must be present at `../<name>`
 
 **Linux (Debian/Ubuntu):**
 - **GCC 12+** or **Clang 15+**
@@ -65,7 +64,6 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 - System packages: `build-essential cmake libfreetype-dev libfontconfig-dev libgl-dev libjpeg-dev libpng-dev libwebp-dev`
 - **vcpkg** (for GameNetworkingSockets)
 - **Skia** pre-built library (see below)
-- Sibling repos as above
 
 **macOS (12+, arm64 or x86_64):**
 - **Xcode Command Line Tools** (`xcode-select --install`) — Apple clang 17+
@@ -73,7 +71,6 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 - **bash 4+** for `tests/run_tests.sh` (`brew install bash`) — the system bash 3.2 lacks `mapfile`
 - **vcpkg** (for GameNetworkingSockets)
 - **Skia** pre-built library (see below)
-- Sibling repos as above
 
 ### Setup
 
