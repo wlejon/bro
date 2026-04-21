@@ -20,6 +20,21 @@
 .thumb[data-app="missile-command"] {
   background-image: url(thumbnails/missile-command.png);
 }
+.thumb[data-app="invaders"] {
+  background-image: url(thumbnails/invaders.png);
+}
+.thumb[data-app="hopper"] {
+  background-image: url(thumbnails/hopper.png);
+}
+.thumb[data-app="touchdown"] {
+  background-image: url(thumbnails/touchdown.png);
+}
+.thumb[data-app="2048"] {
+  background-image: url(thumbnails/2048.png);
+}
+.thumb[data-app="echo"] {
+  background-image: url(thumbnails/echo.png);
+}
 .thumb[data-app="fps"] {
   background-image: url(thumbnails/fps.png);
 }

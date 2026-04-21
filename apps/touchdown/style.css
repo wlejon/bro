@@ -1,0 +1,162 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #000000;
+    overflow: hidden;
+}
+
+canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* --- HUD (top) --- */
+#hud {
+    position: absolute;
+    top: 16px;
+    left: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    pointer-events: none;
+}
+
+.hud-row {
+    font-family: Consolas, monospace;
+    font-size: 16px;
+    color: #ffffff;
+}
+
+.hud-label {
+    color: #888;
+    margin-right: 8px;
+}
+
+.hud-value {
+    color: #ffffff;
+    font-weight: bold;
+}
+
+/* --- Telemetry (top-left corner) --- */
+#telemetry {
+    position: absolute;
+    top: 52px;
+    left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    pointer-events: none;
+}
+
+.tel-row {
+    font-family: Consolas, monospace;
+    font-size: 14px;
+    color: #aaaaaa;
+}
+
+.tel-label {
+    color: #666;
+    margin-right: 8px;
+    display: inline-block;
+    width: 42px;
+}
+
+.tel-value {
+    color: #dddddd;
+}
+
+/* --- Overlay --- */
+#overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.85);
+    text-align: center;
+    padding-top: 100px;
+    overflow-y: auto;
+}
+
+.screen { display: none; }
+
+.overlay-title {
+    font-family: Consolas, monospace;
+    font-size: 56px;
+    font-weight: bold;
+    color: #ffffff;
+    letter-spacing: 8px;
+    margin-bottom: 24px;
+    width: 100%;
+}
+
+.overlay-sub {
+    font-family: Consolas, monospace;
+    font-size: 14px;
+    color: #aaa;
+    margin-bottom: 16px;
+    width: 100%;
+    line-height: 1.6;
+}
+
+.overlay-sub p { margin: 10px 0; }
+.overlay-sub strong { color: #ffffff; }
+
+.overlay-hint {
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #444;
+    margin-top: 24px;
+    width: 100%;
+}
+
+.menu-items { margin-bottom: 10px; }
+
+.menu-item {
+    font-family: Consolas, monospace;
+    font-size: 20px;
+    color: #666;
+    padding: 8px 20px;
+    margin-bottom: 4px;
+    width: 100%;
+    cursor: pointer;
+    letter-spacing: 2px;
+}
+
+.menu-item:hover {
+    color: #ccc;
+    background-color: rgba(255,255,255,0.05);
+}
+
+.menu-item.selected {
+    color: #ffffff;
+    background-color: rgba(255,255,255,0.1);
+}
+
+.stats-block {
+    font-family: Consolas, monospace;
+    font-size: 16px;
+    color: #ccc;
+    white-space: pre;
+    text-align: center;
+    line-height: 1.6;
+    margin-bottom: 20px;
+}
+
+.htp-body {
+    text-align: center;
+    max-width: 560px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.htp-body pre {
+    font-family: Consolas, monospace;
+    font-size: 14px;
+    color: #ccc;
+    text-align: left;
+    display: inline-block;
+    margin-top: 8px;
+}

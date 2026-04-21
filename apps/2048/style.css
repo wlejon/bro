@@ -1,0 +1,254 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #faf8ef;
+    overflow: hidden;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    width: 100%;
+    height: 100%;
+}
+
+/* --- Game root / board --- */
+#game-root {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.title-banner {
+    position: absolute;
+    top: 28px;
+    left: 40px;
+    font-size: 48px;
+    font-weight: bold;
+    color: #776e65;
+}
+
+/* Board: fixed-size square, centered below HUD */
+#board {
+    position: absolute;
+    left: 50%;
+    top: 140px;
+    width: 480px;
+    height: 480px;
+    margin-left: -240px;
+    background-color: #bbada0;
+    border-radius: 8px;
+    padding: 10px;
+    box-sizing: border-box;
+}
+
+/* The 4x4 empty cell backdrop */
+.cells {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 460px;
+    height: 460px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-rows: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.cell {
+    background-color: #cdc1b4;
+    border-radius: 6px;
+}
+
+/* Tiles layer: absolute positioning inside #board */
+#tiles {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 460px;
+    height: 460px;
+    pointer-events: none;
+}
+
+/* Tile metrics:
+   cell slot size = 107.5px, gap = 10px.
+   tile position (r,c) => translate(c*117.5, r*117.5) */
+.tile {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 107.5px;
+    height: 107.5px;
+    transition: transform 110ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    will-change: transform;
+}
+
+.tile-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 48px;
+    background-color: #eee4da;
+    color: #776e65;
+}
+
+.tile-2    .tile-inner { background-color: #eee4da; color: #776e65; }
+.tile-4    .tile-inner { background-color: #ede0c8; color: #776e65; }
+.tile-8    .tile-inner { background-color: #f2b179; color: #f9f6f2; }
+.tile-16   .tile-inner { background-color: #f59563; color: #f9f6f2; }
+.tile-32   .tile-inner { background-color: #f67c5f; color: #f9f6f2; }
+.tile-64   .tile-inner { background-color: #f65e3b; color: #f9f6f2; }
+.tile-128  .tile-inner { background-color: #edcf72; color: #f9f6f2; font-size: 40px; }
+.tile-256  .tile-inner { background-color: #edcc61; color: #f9f6f2; font-size: 40px; }
+.tile-512  .tile-inner { background-color: #edc850; color: #f9f6f2; font-size: 40px; }
+.tile-1024 .tile-inner { background-color: #edc53f; color: #f9f6f2; font-size: 32px; }
+.tile-2048 .tile-inner { background-color: #edc22e; color: #f9f6f2; font-size: 32px; }
+.tile-super .tile-inner { background-color: #3c3a32; color: #f9f6f2; font-size: 28px; }
+
+.tile-new .tile-inner {
+    animation: tile-pop-in 180ms ease-out;
+}
+
+.tile-merged .tile-inner {
+    animation: tile-merge-pop 180ms ease-out;
+}
+
+@keyframes tile-pop-in {
+    0%   { transform: scale(0); }
+    60%  { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+@keyframes tile-merge-pop {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.18); }
+    100% { transform: scale(1); }
+}
+
+/* --- HUD (during gameplay) --- */
+#hud {
+    position: absolute;
+    top: 20px;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.score-box {
+    display: inline-block;
+    background-color: #bbada0;
+    color: #fff;
+    padding: 8px 20px;
+    margin: 0 6px;
+    border-radius: 6px;
+    min-width: 80px;
+    text-align: center;
+}
+
+.score-label {
+    font-size: 11px;
+    font-weight: bold;
+    color: #eee4da;
+    letter-spacing: 1px;
+}
+
+.score-value {
+    font-size: 22px;
+    font-weight: bold;
+    color: #fff;
+}
+
+.hud-hint {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #8f7a66;
+}
+
+/* --- Overlay --- */
+#overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(250,248,239,0.94);
+    text-align: center;
+    padding-top: 100px;
+    overflow-y: auto;
+    z-index: 20;
+}
+
+.screen { display: none; }
+
+.overlay-title {
+    font-size: 72px;
+    font-weight: bold;
+    color: #776e65;
+    margin-bottom: 24px;
+    width: 100%;
+}
+
+.win-title {
+    color: #edc22e;
+}
+
+.overlay-sub {
+    font-size: 15px;
+    color: #776e65;
+    margin-bottom: 20px;
+    width: 100%;
+    line-height: 1.6;
+}
+
+.overlay-sub p {
+    margin: 8px 0;
+}
+
+.overlay-sub strong {
+    color: #f65e3b;
+}
+
+.overlay-hint {
+    font-size: 12px;
+    color: #bbada0;
+    margin-top: 20px;
+    width: 100%;
+}
+
+.credits-sub {
+    color: #bbada0;
+    font-size: 11px;
+    margin-top: 28px;
+    width: 100%;
+}
+
+/* --- Menu items --- */
+.menu-items {
+    margin-bottom: 10px;
+}
+
+.menu-item {
+    font-size: 18px;
+    font-weight: bold;
+    color: #bbada0;
+    padding: 10px 20px;
+    margin: 4px auto;
+    width: 200px;
+    cursor: pointer;
+    border-radius: 4px;
+    background-color: transparent;
+}
+
+.menu-item:hover {
+    color: #8f7a66;
+    background-color: rgba(187,173,160,0.15);
+}
+
+.menu-item.selected {
+    color: #f9f6f2;
+    background-color: #8f7a66;
+}

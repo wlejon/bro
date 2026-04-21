@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>2048</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-root" style="display:none">
+        <div class="title-banner">2048</div>
+        <div id="board">
+            <div class="cells">
+                <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+                <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+                <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+                <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+            </div>
+            <div id="tiles"></div>
+        </div>
+    </div>
+
+    <div id="hud" style="display:none">
+        <div class="score-box">
+            <div class="score-label">SCORE</div>
+            <div id="hud-score" class="score-value">0</div>
+        </div>
+        <div class="score-box">
+            <div class="score-label">BEST</div>
+            <div id="hud-best" class="score-value">0</div>
+        </div>
+        <div class="hud-hint">Arrow keys or WASD to slide. U to undo. R to restart.</div>
+    </div>
+
+    <div id="overlay">
+        <!-- TITLE -->
+        <div id="screen-title" class="screen" style="display:block">
+            <div class="overlay-title">2048</div>
+            <div class="overlay-sub">
+                <p>Join the tiles, get to <strong>2048</strong>!</p>
+                <p>Slide tiles with arrow keys or WASD.<br>
+                Matching tiles merge and double in value.</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="play">PLAY</div>
+                <div class="menu-item" data-action="howtoplay">HOW TO PLAY</div>
+            </div>
+            <div class="overlay-hint">Enter or click to select</div>
+            <div class="credits-sub">Inspired by 2048 by Gabriele Cirulli (MIT licensed)</div>
+        </div>
+
+        <!-- HOW TO PLAY -->
+        <div id="screen-howtoplay" class="screen">
+            <div class="overlay-title">HOW TO PLAY</div>
+            <div class="overlay-sub">
+                <p>Slide all tiles in a direction using<br>
+                <strong>arrow keys</strong> or <strong>WASD</strong>.</p>
+                <p>When two tiles of the same number touch,<br>
+                they <strong>merge</strong> into one tile with double the value.</p>
+                <p>You score points equal to the merged value.</p>
+                <p>Reach the <strong>2048</strong> tile to win!<br>
+                Keep playing for a higher score if you like.</p>
+                <p>Press <strong>U</strong> to undo one move.<br>
+                Press <strong>R</strong> to restart. <strong>Esc</strong> to menu.</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- GAME OVER -->
+        <div id="screen-gameover" class="screen">
+            <div class="overlay-title">GAME OVER</div>
+            <div class="overlay-sub" id="gameover-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="restart">PLAY AGAIN</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+
+        <!-- WIN -->
+        <div id="screen-win" class="screen">
+            <div class="overlay-title win-title">YOU WIN!</div>
+            <div class="overlay-sub">
+                <p>You built a <strong>2048</strong> tile!</p>
+                <p id="win-stats"></p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="keepplaying">KEEP PLAYING</div>
+                <div class="menu-item" data-action="restart">NEW GAME</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
