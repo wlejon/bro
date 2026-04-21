@@ -1,4 +1,5 @@
 #include "js/worker.h"
+#include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/message_serializer.h"
 #include "js/net_bindings.h"
@@ -188,6 +189,10 @@ void Worker::threadFunc()
     // --- 3b. Install Mesh class (for marching cubes / mesh generation in workers) ---
     MeshBindings::install(ctx);
 
+    // --- 3b'. Install bro.ai.game (navmesh, pathfinding, LOS, steering).
+    // No engine dependency; all state lives on JS-owned wrapper objects. ---
+    AIBindings::install(ctx);
+
     // --- 3c. Install bro.net bindings (own subscriber against shared
     // NetService). The service is thread-safe by design — commands/events
     // are routed through lock-free per-subscriber queues. ---
@@ -324,6 +329,7 @@ void Worker::threadFunc()
     if (netService_) {
         NetBindings::cleanup(ctx);
     }
+    AIBindings::cleanup(ctx);
     MeshBindings::cleanup(ctx);
     JS_SetContextOpaque(ctx, nullptr);
 

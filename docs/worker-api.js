@@ -154,12 +154,19 @@ class WorkerGlobalScope {
   //
   // Engine APIs available in workers:
   //   Mesh (bromesh geometry)
-  //   bro.net.*  — own subscriber against the shared NetService: host(),
-  //                connect(), send(), broadcast(), onconnect, ondisconnect,
-  //                onmessage. Safe to host a server entirely inside a worker.
+  //   bro.net.*     — own subscriber against the shared NetService: host(),
+  //                   connect(), send(), broadcast(), onconnect, ondisconnect,
+  //                   onmessage. Safe to host a server entirely inside a
+  //                   worker.
+  //   bro.server.*  — worker-scoped: tickrate (this worker's event-loop
+  //                   rate), uptime (seconds since this worker started),
+  //                   stop() (terminate this worker).
+  //   bro.ai.game.* — navmesh, pathfinding, LOS, steering — same API as
+  //                   the main thread. All state lives on JS objects, so
+  //                   worker and main contexts have independent worlds.
   //
   // NOT available: window, document, DOM, canvas, scene, Worker (no nesting),
-  //                bro.server (process-scoped), bro.ai, bro.physics, bro.audio
+  //                bro.physics, bro.audio
 }
 
 
