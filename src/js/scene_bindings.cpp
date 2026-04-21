@@ -1032,6 +1032,7 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
 
     float closestDist = (maxDist > 0.0) ? (float)maxDist : 1e30f;
     scene::MeshNode* closestNode = nullptr;
+    scene::LightNode* closestLight = nullptr;
     bromesh::RayHit closestHit;
     scene::Vec3 closestWorldPoint;
     scene::Vec3 closestWorldNormal;
@@ -1108,12 +1109,41 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
 
         closestDist = worldDist;
         closestNode = mn;
+        closestLight = nullptr;
         closestHit = hit;
         closestWorldPoint = worldHit;
         closestWorldNormal = worldNormal;
     });
 
-    if (!closestNode) return JS_NULL;
+    // Light marker icons are also pickable when showLightIcons is on —
+    // treat each as a world-space sphere at the node position matching
+    // the largest icon half-extent (directional icon = 0.30). Keeps
+    // selection forgiving without needing screen-space math.
+    if (g->showLightIcons()) {
+        const float lightRadius = 0.32f;
+        g->root()->traverse([&](scene::SceneNode* node) {
+            if (!node || node->type() != scene::SceneNode::Type::Light) return;
+            if (!node->visible()) return;
+            const scene::Mat4& M = node->worldMatrix();
+            scene::Vec3 c{M.m[3][0], M.m[3][1], M.m[3][2]};
+            scene::Vec3 oc = origin - c;
+            float b = oc.dot(dir);
+            float disc = b * b - oc.dot(oc) + lightRadius * lightRadius;
+            if (disc < 0.0f) return;
+            float sq = std::sqrt(disc);
+            float t = -b - sq;
+            if (t < 0.0f) t = -b + sq;   // origin inside — hit far face
+            if (t < 0.0f || t >= closestDist) return;
+
+            closestDist = t;
+            closestLight = static_cast<scene::LightNode*>(node);
+            closestNode = nullptr;
+            closestWorldPoint = origin + dir * t;
+            closestWorldNormal = (closestWorldPoint - c).normalized();
+        });
+    }
+
+    if (!closestNode && !closestLight) return JS_NULL;
 
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "hit", JS_TRUE);
@@ -1136,7 +1166,10 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_SetPropertyUint32(ctx, normal, 2, JS_NewFloat64(ctx, closestWorldNormal.z));
     JS_SetPropertyStr(ctx, out, "normal", normal);
 
-    JS_SetPropertyStr(ctx, out, "node", wrapNode(ctx, closestNode, g));
+    scene::SceneNode* hitNode = closestNode
+        ? static_cast<scene::SceneNode*>(closestNode)
+        : static_cast<scene::SceneNode*>(closestLight);
+    JS_SetPropertyStr(ctx, out, "node", wrapNode(ctx, hitNode, g));
 
     return out;
 }
@@ -1867,6 +1900,9 @@ void SceneBindings::install(JSContext* ctx) {
         .prop("cameraZoom",
             [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->cameraZoom() : 1; },
             [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setCameraZoom((float)val); })
+        .prop("showLightIcons",
+            [](GraphWrapper* w) -> bool { return w && w->graph ? w->graph->showLightIcons() : false; },
+            [](GraphWrapper* w, bool val) { if (w && w->graph) w->graph->setShowLightIcons(val); })
 
         // Methods (all raw — complex arg handling)
         .method_raw("createNode", js_sg_createNode, 1)

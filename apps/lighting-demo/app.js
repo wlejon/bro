@@ -8,6 +8,7 @@ scene.setCamera({
 });
 scene.setAmbient([0.03, 0.03, 0.035]);
 scene.setToneMap({ mode: 'aces', exposure: 1.0 });
+scene.showLightIcons = true;
 
 // Ground plane — rough dielectric, neutral gray.
 scene.createMesh({
@@ -72,8 +73,9 @@ scene.createMesh({
 // Directional "sun" — the primary key light.
 const sun = scene.createLight({
     type: 'directional',
-    direction: [-0.4, -1.0, -0.3],
-    color: [1.0, 0.98, 0.92],
+    position: [-4, 4.5, 2],          // purely cosmetic; directional lights
+    direction: [-0.4, -1.0, -0.3],   // are infinite-distance, position only
+    color: [1.0, 0.98, 0.92],        // affects icon placement
     intensity: 3.0,
     name: 'sun',
 });
@@ -113,6 +115,96 @@ const spot = scene.createLight({
     outerAngle: 0.45,
 });
 
+// --- Selection + gizmo -----------------------------------------------------
+// Click a light icon → attach bro.gizmo to that node. Directional lights
+// use rotate mode (direction vector); point/spot use translate (position).
+let selected = null;     // SceneNode or null
+let selKind  = null;     // "directional" | "point" | "spot" | null
+const selInfo = document.getElementById('selInfo');
+
+function describe(node, kind) {
+    if (!node) return 'Click a light icon to select.';
+    const n = node.name || `light #${node.id}`;
+    return `Selected: ${n} (${kind}) — drag gizmo handles to move.`;
+}
+
+function attachGizmoFor(node, kind) {
+    selected = node;
+    selKind  = kind;
+    selInfo.textContent = describe(node, kind);
+
+    if (!node) { bro.gizmo.detach(); return; }
+
+    if (kind === 'directional') {
+        // Represent direction as a rotation: treat the node's scene transform
+        // as the source of truth. We update `direction` from the node's local
+        // rotation each frame (applied to -Y = default "down" direction).
+        bro.gizmo.setMode('rotate');
+        bro.gizmo.attach({
+            position:    () => [node.x, node.y, node.z],
+            orientation: () => [0, 0, 0, 1],   // identity; rotate in world space
+            rotate: (qx, qy, qz, qw) => {
+                // Rotate the current direction vector by the quaternion delta.
+                const d = node.direction;
+                // q * (0,d) * q^-1 — quaternion rotation of vec3 d
+                const ix =  qw*d[0] + qy*d[2] - qz*d[1];
+                const iy =  qw*d[1] + qz*d[0] - qx*d[2];
+                const iz =  qw*d[2] + qx*d[1] - qy*d[0];
+                const iw = -qx*d[0] - qy*d[1] - qz*d[2];
+                node.direction = [
+                    ix*qw + iw*(-qx) + iy*(-qz) - iz*(-qy),
+                    iy*qw + iw*(-qy) + iz*(-qx) - ix*(-qz),
+                    iz*qw + iw*(-qz) + ix*(-qy) - iy*(-qx),
+                ];
+            },
+        });
+    } else {
+        bro.gizmo.setMode('translate');
+        bro.gizmo.attach({
+            position: () => [node.x, node.y, node.z],
+            translate: (dx, dy, dz) => {
+                node.x += dx; node.y += dy; node.z += dz;
+            },
+        });
+    }
+}
+
+function pickLightAt(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const lx = clientX - rect.left;
+    const ly = clientY - rect.top;
+    const ray = scene.unprojectLocal(lx, ly);
+    if (!ray) return null;
+    const hit = scene.raycast(ray.origin, ray.dir, 100);
+    return hit ? hit.node : null;
+}
+
+canvas.addEventListener('pointerdown', (ev) => {
+    // Let the gizmo consume clicks on its handles first (it hit-tests
+    // before any other listener via the engine routing layer). If the
+    // click wasn't on a handle, try selecting a light.
+    if (bro.gizmo.dragging) return;
+    const node = pickLightAt(ev.clientX, ev.clientY);
+    if (!node) {
+        if (selected) attachGizmoFor(null);
+        return;
+    }
+    // Only lights are interesting for this demo; ignore mesh hits.
+    // type discriminator: lights expose `intensity`, meshes don't.
+    if (typeof node.intensity !== 'number') return;
+    // Figure out which light was hit by identity match.
+    let kind = null;
+    if (node === sun) kind = 'directional';
+    else if (node === p1 || node === p2 || node === p3) kind = 'point';
+    else if (node === spot) kind = 'spot';
+    else kind = 'point';
+    attachGizmoFor(node, kind);
+});
+
+document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') attachGizmoFor(null);
+});
+
 // --- HUD wiring ------------------------------------------------------------
 const modeSel = document.getElementById('mode');
 const exposureIn = document.getElementById('exposure');
@@ -139,27 +231,36 @@ function applyAmbient() {
     scene.setAmbient([a, a, a]);
     ambientVal.textContent = a.toFixed(3);
 }
+const showIconsIn = document.getElementById('showIcons');
+const animateIn = document.getElementById('animate');
 modeSel.addEventListener('change', applyToneMap);
 exposureIn.addEventListener('input', applyToneMap);
 sunIn.addEventListener('input', applySun);
 ambientIn.addEventListener('input', applyAmbient);
+showIconsIn.addEventListener('change', () => {
+    scene.showLightIcons = showIconsIn.checked;
+    if (!showIconsIn.checked) attachGizmoFor(null);
+});
 
 // --- Animation loop --------------------------------------------------------
+// Animation pauses whenever a light is selected so the gizmo can
+// actually drag it somewhere; resumes when deselected.
 let t0 = performance.now();
 function frame() {
-    const t = (performance.now() - t0) / 1000.0;
-    const r = 2.5;
-    p1.x = Math.cos(t * 0.9) * r;
-    p1.z = Math.sin(t * 0.9) * r;
-    p2.x = Math.cos(t * 0.9 + Math.PI * 2/3) * r;
-    p2.z = Math.sin(t * 0.9 + Math.PI * 2/3) * r;
-    p3.x = Math.cos(t * 0.9 + Math.PI * 4/3) * r;
-    p3.z = Math.sin(t * 0.9 + Math.PI * 4/3) * r;
-
-    // Spot sweeps across the scene.
-    const sx = Math.sin(t * 0.4) * 3.0;
-    spot.x = sx;
-    spot.direction = [-sx * 0.15, -1, 0];
+    const animate = animateIn.checked && !selected;
+    if (animate) {
+        const t = (performance.now() - t0) / 1000.0;
+        const r = 2.5;
+        p1.x = Math.cos(t * 0.9) * r;
+        p1.z = Math.sin(t * 0.9) * r;
+        p2.x = Math.cos(t * 0.9 + Math.PI * 2/3) * r;
+        p2.z = Math.sin(t * 0.9 + Math.PI * 2/3) * r;
+        p3.x = Math.cos(t * 0.9 + Math.PI * 4/3) * r;
+        p3.z = Math.sin(t * 0.9 + Math.PI * 4/3) * r;
+        const sx = Math.sin(t * 0.4) * 3.0;
+        spot.x = sx;
+        spot.direction = [-sx * 0.15, -1, 0];
+    }
 
     requestAnimationFrame(frame);
 }

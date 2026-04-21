@@ -140,6 +140,41 @@ scene.setAmbient([0.03, 0.03, 0.035]);
 
 
 // -----------------------------------------------------------------------------
+// Editor affordances — light icons + click-to-select
+// -----------------------------------------------------------------------------
+//
+// `scene.showLightIcons = true` enables two behaviors in tandem:
+//   1. Each LightNode draws a small kind-specific ringed-disc marker
+//      billboard at its world position (directional = large white-ringed
+//      disc, point = small colored dot, spot = heavy colored ring).
+//      Markers depth-test against geometry, so they occlude correctly.
+//   2. `scene.raycast(origin, dir)` also hits those icons as tiny
+//      world-space spheres (~0.32 units). Hits return the LightNode as
+//      `hit.node` — the same shape mesh hits return. Mesh vs light is
+//      disambiguated by `node.type` (or quacking — lights have
+//      `intensity`, meshes don't).
+//
+// Standard click-to-select pattern:
+//
+//   scene.showLightIcons = true;
+//   canvas.addEventListener('pointerdown', ev => {
+//       if (bro.gizmo.dragging) return;   // gizmo handles take priority
+//       const r = canvas.getBoundingClientRect();
+//       const ray = scene.unprojectLocal(ev.clientX - r.left,
+//                                        ev.clientY - r.top);
+//       const hit = scene.raycast(ray.origin, ray.dir, 100);
+//       if (hit && typeof hit.node.intensity === 'number') {
+//           attachGizmoToLight(hit.node);
+//       }
+//   });
+//
+// For directional lights, translate gizmos are meaningless (position
+// doesn't affect shading). Use rotate mode and apply the quaternion delta
+// to `node.direction`; for point/spot use translate and bump node.x/y/z.
+// See apps/lighting-demo/app.js for a full implementation.
+
+
+// -----------------------------------------------------------------------------
 // Performance notes
 // -----------------------------------------------------------------------------
 //

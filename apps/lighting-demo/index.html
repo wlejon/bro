@@ -40,11 +40,16 @@
             <span class="v" id="sunVal">3.0</span></label>
         <label>Ambient: <input id="ambient" type="range" min="0" max="0.2" step="0.005" value="0.03">
             <span class="v" id="ambientVal">0.03</span></label>
+        <label><input type="checkbox" id="showIcons" checked> Show light icons</label>
+        <label><input type="checkbox" id="animate" checked> Animate lights</label>
+        <div id="selInfo" style="margin-top:6px; color:#fd9; font-size:11px; min-height:16px;">
+            Click a light icon to select.
+        </div>
         <div style="margin-top:8px; color:#888; font-size:11px;">
-            Left row: roughness sweep (dielectric).<br>
-            Right row: roughness sweep (metal).<br>
-            Red/green/blue point lights orbit center.<br>
-            Yellow spot light from above, sweeping.
+            Front row: dielectric, roughness sweep.<br>
+            Back row: metal, roughness sweep.<br>
+            Click light icons to select + gizmo.<br>
+            Directional uses rotate mode, point/spot translate.
         </div>
     </div>
     <script src="app.js"></script>

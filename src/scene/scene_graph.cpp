@@ -296,7 +296,7 @@ static const char* kBillboardFragSrc = R"(
 #version 330 core
 in vec2 vUV;
 
-uniform int uShapeMode;      // 0 = rect, 1 = circle SDF, 2 = textured
+uniform int uShapeMode;      // 0 = rect, 1 = circle SDF, 2 = textured, 3 = ringed disc
 uniform vec4 uColor;         // rect / circle fill, or tint for texture
 uniform vec4 uStroke;
 uniform float uStrokeWidth;  // in UV units (0 = no stroke)
@@ -325,6 +325,20 @@ void main() {
         if (alpha <= 0.0) discard;
         float a = uColor.a * alpha;
         FragColor = vec4(uColor.rgb * a, a);
+    } else if (uShapeMode == 3) {
+        // Filled disc with a ring border. uStrokeWidth is ring thickness as
+        // a fraction of the radius (0.2 = outer 20% is ring). Used for
+        // engine-drawn gizmo/editor icons (e.g. light markers).
+        vec2 p = vUV - 0.5;
+        float d = length(p) * 2.0;
+        float aa = fwidth(d);
+        float alpha = 1.0 - smoothstep(1.0 - aa, 1.0, d);
+        if (alpha <= 0.0) discard;
+        float inner = 1.0 - clamp(uStrokeWidth, 0.0, 1.0);
+        float ringT = smoothstep(inner - aa, inner + aa, d);
+        vec4 c = mix(uColor, uStroke, ringT);
+        float a = c.a * alpha;
+        FragColor = vec4(c.rgb * a, a);
     } else {
         // Textured (premultiplied alpha from Skia surfaces).
         vec4 tex = texture(uTex, vUV);
@@ -956,11 +970,13 @@ void SceneGraph::render() {
     // they share the same setup path.
     bool hasMeshNodes = false;
     bool hasBillboardNodes = false;
+    bool hasLightIcons = false;
     for (auto& [id, node] : nodes_) {
         if (!node->visible()) continue;
         if (node->type() == SceneNode::Type::Mesh) hasMeshNodes = true;
         else if (node->hasWorldAnchor())           hasBillboardNodes = true;
-        if (hasMeshNodes && hasBillboardNodes) break;
+        else if (showLightIcons_ && node->type() == SceneNode::Type::Light) hasLightIcons = true;
+        if (hasMeshNodes && hasBillboardNodes && hasLightIcons) break;
     }
 
     // Resolve the gizmo overlay up-front so it can force the 3D pass even
@@ -969,12 +985,12 @@ void SceneGraph::render() {
     if (gizmoProvider_) gizmoMeshes = gizmoProvider_(this);
     const bool hasGizmo = !gizmoMeshes.empty();
 
-    const bool has3D = (hasMeshNodes || hasBillboardNodes || hasGizmo)
+    const bool has3D = (hasMeshNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
                        && canvasWidth_ > 0 && canvasHeight_ > 0;
 
     if (has3D) {
         ensureMeshPipeline();
-        if (hasBillboardNodes) ensureBillboardPipeline();
+        if (hasBillboardNodes || hasLightIcons) ensureBillboardPipeline();
         ensureMeshFBO();
 
         if (meshFBO_) {
@@ -1036,7 +1052,7 @@ void SceneGraph::render() {
             // --- Billboard pass --------------------------------------------
             // Depth test on (occluded behind geometry), depth write off (so
             // multiple billboards don't occlude each other).
-            if (hasBillboardNodes && bbProgram_) {
+            if ((hasBillboardNodes || hasLightIcons) && bbProgram_) {
                 glUseProgram(bbProgram_);
                 glDepthMask(GL_FALSE);
                 glEnable(GL_BLEND);
@@ -1064,6 +1080,16 @@ void SceneGraph::render() {
                     for (auto* c : n->children()) walkBB(c);
                 };
                 walkBB(root_.get());
+
+                // Light marker icons (editor affordance). Drawn in the same
+                // pass so they occlude correctly against geometry.
+                if (hasLightIcons) {
+                    for (auto& [id, node] : nodes_) {
+                        if (!node->visible()) continue;
+                        if (node->type() != SceneNode::Type::Light) continue;
+                        renderLightIcon(static_cast<LightNode*>(node.get()));
+                    }
+                }
 
                 glBindVertexArray(0);
                 glDisable(GL_BLEND);
@@ -1396,6 +1422,69 @@ void SceneGraph::renderBillboardNode(SceneNode* node) {
         glBindTexture(GL_TEXTURE_2D, d.texture);
         glUniform1i(bbUTex_, 0);
     }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+// Kind-specific visual tuning so all three light types are visually
+// distinguishable when overlapping in screen space.
+//   Directional: larger disc with a thick white ring (sun-like).
+//   Point:       medium disc with a faint outer ring.
+//   Spot:        small disc with a heavy colored ring (cone-ish).
+void SceneGraph::renderLightIcon(LightNode* light) {
+    if (!light) return;
+
+    const Mat4& M = light->worldMatrix();
+    const float ax = M.m[3][0] - cameraEye_.x;
+    const float ay = M.m[3][1] - cameraEye_.y;
+    const float az = M.m[3][2] - cameraEye_.z;
+
+    // Full-billboard (camera-facing) — icons always face the camera.
+    const Vec3 camRight{viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
+    const Vec3 camUp   {viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
+
+    const Vec3& lc = light->color();
+    // Keep icon visible even for lights with very dark configured colors.
+    const float lum = 0.299f * lc.x + 0.587f * lc.y + 0.114f * lc.z;
+    const float lift = lum < 0.2f ? 0.2f : 0.0f;
+    float core[4] = { lc.x + lift, lc.y + lift, lc.z + lift, 1.0f };
+
+    float ring[4];
+    float half, strokeT;
+
+    switch (light->kind()) {
+    case LightNode::Kind::Directional:
+        half = 0.30f;
+        strokeT = 0.18f;
+        ring[0] = ring[1] = ring[2] = 1.0f; ring[3] = 1.0f;
+        break;
+    case LightNode::Kind::Point:
+        half = 0.22f;
+        strokeT = 0.12f;
+        ring[0] = core[0] * 0.5f;
+        ring[1] = core[1] * 0.5f;
+        ring[2] = core[2] * 0.5f;
+        ring[3] = 1.0f;
+        break;
+    case LightNode::Kind::Spot:
+    default:
+        half = 0.22f;
+        strokeT = 0.28f;
+        ring[0] = std::min(core[0] * 0.8f, 1.0f);
+        ring[1] = std::min(core[1] * 0.8f, 1.0f);
+        ring[2] = std::min(core[2] * 0.8f, 1.0f);
+        ring[3] = 1.0f;
+        break;
+    }
+
+    glUniform3f(bbUAnchorRel_, ax, ay, az);
+    glUniform3f(bbURight_, camRight.x, camRight.y, camRight.z);
+    glUniform3f(bbUUp_,    camUp.x,    camUp.y,    camUp.z);
+    glUniform2f(bbUHalfSize_, half, half);
+    glUniform1i(bbUShapeMode_, 3);  // ringed disc
+    glUniform4fv(bbUColor_,  1, core);
+    glUniform4fv(bbUStroke_, 1, ring);
+    glUniform1f(bbUStrokeWidth_, strokeT);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }

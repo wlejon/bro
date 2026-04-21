@@ -40,6 +40,15 @@ class SceneGraph {
   get cameraZoom() {}
   set cameraZoom(value) {}
 
+  /**
+   * Render a kind-specific marker billboard at each LightNode's world
+   * position, and include lights in `raycast()` results (as a small
+   * world-space sphere). Intended for editor affordances and click-to-
+   * select workflows. Off by default.
+   */
+  get showLightIcons() {}
+  set showLightIcons(on) {}
+
 
   // --- Node Creation --------------------------------------------------------
 

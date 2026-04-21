@@ -178,6 +178,13 @@ public:
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }
 
+    /// Editor affordance: when true, every LightNode renders a small
+    /// kind-specific marker billboard at its world position (visible in
+    /// the 3D FBO, depth-tested against geometry). Also makes lights
+    /// pickable via `raycast()`: hits return the LightNode as `hit.node`.
+    void setShowLightIcons(bool on) { showLightIcons_ = on; }
+    bool showLightIcons() const { return showLightIcons_; }
+
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);
     void setCameraZoom(float z);
@@ -218,6 +225,10 @@ private:
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
     void uploadLights(const std::vector<LightNode*>& lights);
+
+    // Render a ringed-disc billboard for one light. Used by the editor-
+    // affordance pass gated on showLightIcons_.
+    void renderLightIcon(LightNode* light);
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
@@ -289,6 +300,10 @@ private:
     float exposure_ = 1.0f;
     float gamma_ = 2.2f;
     float ambientColor_[3] = {0.03f, 0.03f, 0.03f};
+
+    // Editor affordance: render a marker icon per LightNode and include
+    // them in raycast results.
+    bool showLightIcons_ = false;
 
     // Tonemap FBO (LDR output, consumed by the compositor)
     GLuint tonemapFBO_ = 0;
