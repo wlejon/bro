@@ -4,22 +4,9 @@ A lightweight desktop application runtime that runs HTML/CSS/JS apps as native w
 
 Note from the co-pilot: i am a career programmer but this and its sister repositories are vibe coded. use at your own risk. 
 
-## Architecture
+## Launcher
 
-- **QuickJS** — JavaScript engine (ES2020+).
-- **qjsbind** — Header-only C++20 binding library for exposing C++ classes/functions to QuickJS with automatic type conversion. See [qjsbind](https://github.com/wlejon/qjsbind).
-- **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
-- **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
-- **broaudio** — Real-time audio engine: synthesis (oscillators, wavetable, noise), effects (filters, delay, reverb), spatial audio, MIDI input, and mixing bus architecture. See [broaudio](https://github.com/wlejon/broaudio).
-- **bromesh** — Mesh generation (primitives, isosurface, voxel), manipulation (subdivision, simplification, CSG), analysis (raycasting, collision), baking, optimization, and I/O (OBJ, glTF, STL, PLY, FBX, VOX). See [bromesh](https://github.com/wlejon/bromesh).
-- **brogameagent** — Game AI: navmesh generation, A* pathfinding, steering behaviors, and perception. Exposed to JS as `bro.ai.game.*`. See [brogameagent](https://github.com/wlejon/brogameagent).
-- **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
-- **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs.
-- **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU (D3D12 on Windows). The Skia-rasterized UI texture and the 3D scene layer are composited together through SDL_GPU pipelines.
-
-Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg — powers the `bro.net` game networking API), **glad** (OpenGL 3.3 Core loader), **stb_image** (image loading/writing), and **FastNoise2** (SIMD noise generation, via brokit).
-
-C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
+![launcher](docs/launcher.png)
 
 ## Features
 
@@ -43,6 +30,23 @@ C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripti
 - Fetch API, localStorage/sessionStorage
 - jQuery and Vue 3 compatibility
 - Headless mode for deterministic testing with virtual time
+
+## Architecture
+
+- **QuickJS** — JavaScript engine (ES2020+).
+- **qjsbind** — Header-only C++20 binding library for exposing C++ classes/functions to QuickJS with automatic type conversion. See [qjsbind](https://github.com/wlejon/qjsbind).
+- **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
+- **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
+- **broaudio** — Real-time audio engine: synthesis (oscillators, wavetable, noise), effects (filters, delay, reverb), spatial audio, MIDI input, and mixing bus architecture. See [broaudio](https://github.com/wlejon/broaudio).
+- **bromesh** — Mesh generation (primitives, isosurface, voxel), manipulation (subdivision, simplification, CSG), analysis (raycasting, collision), baking, optimization, and I/O (OBJ, glTF, STL, PLY, FBX, VOX). See [bromesh](https://github.com/wlejon/bromesh).
+- **brogameagent** — Game AI: navmesh generation, A* pathfinding, steering behaviors, and perception. Exposed to JS as `bro.ai.game.*`. See [brogameagent](https://github.com/wlejon/brogameagent).
+- **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
+- **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs.
+- **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU (D3D12 on Windows). The Skia-rasterized UI texture and the 3D scene layer are composited together through SDL_GPU pipelines.
+
+Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg — powers the `bro.net` game networking API), **glad** (OpenGL 3.3 Core loader), **stb_image** (image loading/writing), and **FastNoise2** (SIMD noise generation, via brokit).
+
+C++20. Two executables: `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
 ## Building
 
