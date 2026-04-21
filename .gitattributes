@@ -1,0 +1,6 @@
+# Shell scripts and Linux config must stay LF so they work inside
+# Docker/WSL/Linux even when checked out on Windows.
+*.sh        text eol=lf
+Dockerfile* text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf

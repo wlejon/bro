@@ -236,8 +236,15 @@ echo ""
 echo ">>> Archiving $ARCHIVE"
 if [[ "$PLATFORM" == "macos" ]]; then
     (cd dist && ditto -c -k --keepParent "$OUT_NAME" "${OUT_NAME}.zip")
-else
+elif command -v zip >/dev/null 2>&1; then
     (cd dist && zip -rq "${OUT_NAME}.zip" "$OUT_NAME")
+elif command -v powershell.exe >/dev/null 2>&1; then
+    # Git-Bash on Windows typically has no `zip`; fall back to PowerShell.
+    powershell.exe -NoProfile -Command \
+        "Compress-Archive -Path 'dist/$OUT_NAME' -DestinationPath 'dist/${OUT_NAME}.zip' -Force"
+else
+    echo "error: no zip or powershell available to archive" >&2
+    exit 1
 fi
 
 # --- Report ---------------------------------------------------------------

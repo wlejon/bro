@@ -71,16 +71,48 @@ build_config() {
     echo "=== Installed libskia.a to $dest ==="
 }
 
-# Clone Skia source if not present
-if [ ! -d "$SKIA_SRC" ]; then
+# Clone Skia source if not present. Check for a tracked file rather than the
+# directory itself — Docker bind mounts / named volumes create an empty dir
+# that would otherwise fool the check. Clone-in-place (git init + fetch) so
+# the existing mount point is reused without the "destination not empty" error.
+if [ ! -f "$SKIA_SRC/BUILD.gn" ]; then
     echo "=== Cloning Skia source ==="
-    git clone https://skia.googlesource.com/skia.git "$SKIA_SRC"
+    mkdir -p "$SKIA_SRC"
+    cd "$SKIA_SRC"
+    if [ ! -d .git ]; then
+        git init -q
+        git remote add origin https://skia.googlesource.com/skia.git 2>/dev/null || true
+    fi
+    git fetch --depth 1 origin main
+    git checkout -f FETCH_HEAD
+    cd - >/dev/null
 fi
 
-# Sync dependencies
+# Sync dependencies. git-sync-deps fires ~40 parallel fetches at
+# googlesource.com, which rate-limits aggressively. Force HTTP/1.1 + big
+# post buffer, patch the script to serialize fetches, and retry with
+# exponential backoff on transient transport errors.
 echo "=== Syncing Skia dependencies ==="
 cd "$SKIA_SRC"
-python3 tools/git-sync-deps
+git config --global http.version HTTP/1.1
+git config --global http.postBuffer 524288000
+
+# Replace the multithread() call with a serial loop so fetches go one at a
+# time. Idempotent: only patches if the original form is still there.
+if grep -q 'multithread(git_checkout_to_directory, list_of_arg_lists)' tools/git-sync-deps; then
+    sed -i 's|multithread(git_checkout_to_directory, list_of_arg_lists)|[git_checkout_to_directory(*a) for a in list_of_arg_lists]|' tools/git-sync-deps
+fi
+
+delay=10
+for attempt in 1 2 3 4 5; do
+    if python3 tools/git-sync-deps; then
+        break
+    fi
+    echo "=== git-sync-deps attempt $attempt failed; sleeping ${delay}s ==="
+    sleep "$delay"
+    delay=$((delay * 2))
+done
+python3 tools/git-sync-deps  # final check — fails build if still broken
 
 if [ "$CONFIG" = "all" ]; then
     build_config Release

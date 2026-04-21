@@ -1,0 +1,38 @@
+FROM ubuntu:22.04
+
+# Reproducible Linux build environment for Bro.
+# Base: Ubuntu 22.04 (glibc 2.35) — widest practical compatibility floor that
+# can still host a modern C++20 toolchain for Skia.
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Core tools + Ubuntu toolchain PPA (gcc-13 / libstdc++-13 — Skia's bleeding
+# edge uses std::ranges features that libstdc++-12 doesn't fully implement).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates gnupg curl \
+    && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        build-essential gcc-13 g++-13 \
+        cmake ninja-build clang lld \
+        git python3 python3-pip \
+        zip unzip tar pkg-config \
+        libfreetype-dev libfontconfig-dev libgl-dev \
+        libjpeg-dev libpng-dev libwebp-dev libexpat1-dev \
+        autoconf automake libtool \
+    && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100 \
+    && rm -rf /var/lib/apt/lists/*
+
+# vcpkg + pre-build GameNetworkingSockets so every container run doesn't pay
+# the ~10 min cost. Binary cache kept in the image layer.
+ENV VCPKG_ROOT=/opt/vcpkg
+ENV VCPKG_DEFAULT_BINARY_CACHE=/opt/vcpkg-cache
+RUN git clone --depth 1 https://github.com/microsoft/vcpkg /opt/vcpkg \
+    && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics \
+    && mkdir -p /opt/vcpkg-cache \
+    && /opt/vcpkg/vcpkg install gamenetworkingsockets --triplet x64-linux
+
+ENV PATH=/opt/vcpkg:$PATH
+WORKDIR /work/bro
+
+CMD ["bash"]
