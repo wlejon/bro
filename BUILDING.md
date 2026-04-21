@@ -1,0 +1,76 @@
+# Building Bro
+
+## Prerequisites
+
+**Windows:**
+- **MSVC** (Visual Studio 2022+) — MinGW is not supported
+- **CMake** 3.24+
+- **vcpkg** (for GameNetworkingSockets — e.g. `D:/vcpkg`, with `VCPKG_ROOT` set or passed via `-DCMAKE_TOOLCHAIN_FILE`)
+- **Skia** pre-built libraries in `third_party/skia/`
+
+**Linux (Debian/Ubuntu):**
+- **GCC 12+** or **Clang 15+**
+- **CMake** 3.24+
+- System packages: `build-essential cmake libfreetype-dev libfontconfig-dev libgl-dev libjpeg-dev libpng-dev libwebp-dev`
+- **vcpkg** (for GameNetworkingSockets)
+- **Skia** pre-built library (see below)
+
+**macOS (12+, arm64 or x86_64):**
+- **Xcode Command Line Tools** (`xcode-select --install`) — Apple clang 17+
+- **CMake** 3.24+, **Ninja** (`brew install cmake ninja`)
+- **bash 4+** for `tests/run_tests.sh` (`brew install bash`) — the system bash 3.2 lacks `mapfile`
+- **vcpkg** (for GameNetworkingSockets)
+- **Skia** pre-built library (see below)
+
+## Setup
+
+```bash
+git clone --recursive https://github.com/wlejon/bro
+cd bro
+```
+
+## Building Skia
+
+Skia is a pre-built dependency — it is not built automatically by CMake. Place the built library in `third_party/skia/lib/{Debug,Release}/`.
+
+On Linux, a build script is provided:
+
+```bash
+# Install prerequisites (Debian/Ubuntu)
+sudo apt install build-essential clang python3 ninja-build \
+                 libfreetype-dev libfontconfig-dev libgl-dev \
+                 libjpeg-dev libpng-dev libwebp-dev
+
+# Build Skia (clones source, syncs deps, builds, and installs libskia.a)
+cd third_party/skia
+./build_skia_linux.sh           # Release only
+./build_skia_linux.sh Debug     # Debug only
+./build_skia_linux.sh all       # Both
+```
+
+On macOS, an equivalent script is provided — Skia is built with CoreText as
+the font backend (freetype/fontconfig disabled):
+
+```bash
+cd third_party/skia
+./build_skia_mac.sh             # Release only
+./build_skia_mac.sh Debug       # Debug only
+./build_skia_mac.sh all         # Both
+```
+
+On Windows, build Skia separately with `gn`/`ninja` and place `skia.lib` in the same location.
+
+## Build
+
+```bash
+# Configure
+cmake -B build
+
+# Debug build
+cmake --build build --config Debug
+
+# Release build
+cmake --build build --config Release
+```
+
+On Windows this uses the Visual Studio multi-config generator. On Linux and macOS it defaults to a single-config generator; set `CMAKE_BUILD_TYPE` at configure time or pass `-G Ninja`.
