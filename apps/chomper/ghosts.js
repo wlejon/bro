@@ -297,10 +297,10 @@ P.Ghosts = {
 
     init: function() {
         this.list = [
-            new P.Ghost("blinky", "#ff0000", P.Maze.COLS - 2, 1, "chase", 0),
-            new P.Ghost("pinky",  "#ffb8ff", 1,               1, "ahead", 2000),
-            new P.Ghost("inky",   "#00ffff", P.Maze.COLS - 2, P.Maze.ROWS - 2, "random", 5000),
-            new P.Ghost("clyde",  "#ffb852", 1,               P.Maze.ROWS - 2, "mixed", 8000)
+            new P.Ghost("scarlet", "#ff0000", P.Maze.COLS - 2, 1, "chase", 0),
+            new P.Ghost("rose",    "#ffb8ff", 1,               1, "ahead", 2000),
+            new P.Ghost("azure",   "#00ffff", P.Maze.COLS - 2, P.Maze.ROWS - 2, "random", 5000),
+            new P.Ghost("amber",   "#ffb852", 1,               P.Maze.ROWS - 2, "mixed", 8000)
         ];
     },
 

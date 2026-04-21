@@ -2,8 +2,8 @@
    Add an entry here when you add a new app, and drop the PNG in thumbnails/.
    You can also Ctrl+V a screenshot while an app is running in the launcher
    to overwrite the PNG in place. */
-.thumb[data-app="tetris"] {
-  background-image: url(thumbnails/tetris.png);
+.thumb[data-app="blockfall"] {
+  background-image: url(thumbnails/blockfall.png);
 }
 .thumb[data-app="snake"] {
   background-image: url(thumbnails/snake.png);
@@ -14,8 +14,8 @@
 .thumb[data-app="asteroids"] {
   background-image: url(thumbnails/asteroids.png);
 }
-.thumb[data-app="pacman"] {
-  background-image: url(thumbnails/pacman.png);
+.thumb[data-app="chomper"] {
+  background-image: url(thumbnails/chomper.png);
 }
 .thumb[data-app="missile-command"] {
   background-image: url(thumbnails/missile-command.png);

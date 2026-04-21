@@ -228,7 +228,7 @@ T.Board = {
         // SFX + effects
         if (cleared.length === 4) {
             T.Audio.sfxTetris();
-            T.FX.showText("TETRIS!");
+            T.FX.showText("QUAD!");
             T.FX.shake(300, 8);
         } else if (cleared.length === 3) {
             T.Audio.sfxClear3();

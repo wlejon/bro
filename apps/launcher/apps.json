@@ -1,10 +1,10 @@
 {
     "apps": [
-        { "dir": "tetris" },
+        { "dir": "blockfall" },
         { "dir": "snake" },
         { "dir": "breakout" },
         { "dir": "asteroids" },
-        { "dir": "pacman" },
+        { "dir": "chomper" },
         { "dir": "missile-command" },
         { "dir": "fps", "server": { "script": "server.js" } },
         { "dir": "synth" },
