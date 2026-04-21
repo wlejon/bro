@@ -11,7 +11,11 @@
 namespace bro::js {
 
 // ---------------------------------------------------------------------------
-// Helpers – store / retrieve the Timers* via JS context opaque
+// Helpers – store / retrieve the Timers* via JS context opaque.
+//
+// Per-context (not per-thread) because system panels run multiple JS
+// contexts on the engine main thread. Any other consumer on the same
+// context must cooperate (e.g. Worker stores its own state elsewhere).
 // ---------------------------------------------------------------------------
 
 static Timers* getTimers(JSContext* ctx)

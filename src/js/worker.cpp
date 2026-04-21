@@ -132,16 +132,19 @@ void Worker::drainMessages(JSContext* mainCtx)
 // Worker thread — self-contained event loop
 // ---------------------------------------------------------------------------
 
-/// Stored in the worker JSContext's opaque to access the Worker from C callbacks.
+/// Per-worker-thread handle. Stored in a thread_local (not the JSContext
+/// opaque slot — that belongs to Timers, and each worker thread only ever
+/// runs one JSContext, so a thread-local is unambiguous).
 struct WorkerCtxData {
     Worker* worker = nullptr;
     Timers* timers = nullptr;
 };
+static thread_local WorkerCtxData* s_wcd = nullptr;
 
 static JSValue js_worker_self_postMessage(JSContext* ctx, JSValueConst /*this_val*/,
                                           int argc, JSValueConst* argv)
 {
-    auto* wcd = static_cast<WorkerCtxData*>(JS_GetContextOpaque(ctx));
+    auto* wcd = s_wcd;
     if (!wcd || !wcd->worker) return JS_UNDEFINED;
 
     JSValue value = argc > 0 ? argv[0] : JS_UNDEFINED;
@@ -159,12 +162,11 @@ static JSValue js_worker_self_postMessage(JSContext* ctx, JSValueConst /*this_va
     return JS_UNDEFINED;
 }
 
-static JSValue js_worker_self_close(JSContext* ctx, JSValueConst /*this_val*/,
+static JSValue js_worker_self_close(JSContext* /*ctx*/, JSValueConst /*this_val*/,
                                     int /*argc*/, JSValueConst* /*argv*/)
 {
-    auto* wcd = static_cast<WorkerCtxData*>(JS_GetContextOpaque(ctx));
-    if (wcd && wcd->worker)
-        wcd->worker->requestClose();
+    if (s_wcd && s_wcd->worker)
+        s_wcd->worker->requestClose();
     return JS_UNDEFINED;
 }
 
@@ -206,11 +208,13 @@ void Worker::threadFunc()
     startTimeMs_.store(util::currentTimeMs(), std::memory_order_relaxed);
     ServerBindings::installWorker(ctx, this);
 
-    // --- 4. Store context data for C callbacks ---
+    // --- 4. Store context data for C callbacks via thread-local. The
+    // JSContext opaque slot belongs to Timers on this context and must
+    // not be overwritten. ---
     WorkerCtxData wcd;
     wcd.worker = this;
     wcd.timers = timers.get();
-    JS_SetContextOpaque(ctx, &wcd);
+    s_wcd = &wcd;
 
     // --- 5. Install worker globals: self, postMessage, close, onmessage ---
     JSValue global = JS_GetGlobalObject(ctx);
@@ -331,6 +335,7 @@ void Worker::threadFunc()
     }
     AIBindings::cleanup(ctx);
     MeshBindings::cleanup(ctx);
+    s_wcd = nullptr;
     JS_SetContextOpaque(ctx, nullptr);
 
     // Drain microtasks and run GC to break reference cycles (e.g. the
