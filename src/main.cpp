@@ -247,8 +247,14 @@ int main(int argc, char* argv[]) {
             config.appDir = argv[1]; // preserve explicit appDir over bro.json "app" field
         }
     } else {
-        // No arguments — try to auto-detect app from exe directory
+        // No arguments — auto-detect app from exe directory.
+        // Also chdir there so that relative paths in bro.json ("app": "apps/…")
+        // and engine-relative resolution (system/ panels, etc.) work when the
+        // binary is launched from Finder / the macOS .app bundle (cwd = "/").
         std::string dir = exeDir();
+#ifndef _WIN32
+        if (!dir.empty() && dir != ".") chdir(dir.c_str());
+#endif
         std::string configPath = dir + "/bro.json";
 
         if (fileExists(configPath)) {

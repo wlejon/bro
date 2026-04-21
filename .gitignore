@@ -1,12 +1,14 @@
 # Build
 build/
 build-debug/
+Build-release/
 out/
 cmake-build-*/
 
 /node_modules/
 .shots
 /dist/
+
 
 # IDE
 .vs/

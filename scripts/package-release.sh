@@ -45,16 +45,25 @@ case "$(uname -m)" in
     *)                  ARCH="$(uname -m)" ;;
 esac
 
-# On Windows (multi-config), binaries live in <build>/src/<Config>/.
-# On mac/linux (single-config), they live in <build>/src/.
-if [[ "$PLATFORM" == "win" ]]; then
-    BIN_DIR="$BUILD_DIR/src/$CONFIG"
-else
-    BIN_DIR="$BUILD_DIR/src"
-fi
+# Each target lives in its own subdirectory (src/, src/headless/, src/server/).
+# On Windows (multi-config), the config suffix is appended to each.
+# Resolve per-binary paths via a helper.
+bin_path() {
+    local target="$1"
+    local subdir="$2"
+    if [[ "$PLATFORM" == "win" ]]; then
+        echo "$BUILD_DIR/src/$subdir$CONFIG/$target$EXE"
+    else
+        echo "$BUILD_DIR/src/$subdir$target$EXE"
+    fi
+}
 
-if [[ ! -x "$BIN_DIR/bro$EXE" ]]; then
-    echo "error: $BIN_DIR/bro$EXE not found. Build first:" >&2
+BRO_EXE="$(bin_path bro '')"
+BRO_HEADLESS_EXE="$(bin_path bro-headless 'headless/')"
+BRO_SERVER_EXE="$(bin_path bro-server 'server/')"
+
+if [[ ! -x "$BRO_EXE" ]]; then
+    echo "error: $BRO_EXE not found. Build first:" >&2
     echo "  cmake --build $BUILD_DIR --config $CONFIG" >&2
     exit 1
 fi
@@ -67,15 +76,23 @@ rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/apps"
 
 # --- Executables -----------------------------------------------------------
-for exe in bro bro-headless bro-server; do
-    cp "$BIN_DIR/$exe$EXE" "$OUT_DIR/"
+for src in "$BRO_EXE" "$BRO_HEADLESS_EXE" "$BRO_SERVER_EXE"; do
+    if [[ -x "$src" ]]; then
+        cp "$src" "$OUT_DIR/"
+    else
+        echo "warning: $src not found, skipping" >&2
+    fi
 done
 
 # --- Shared libraries next to exes ----------------------------------------
 # Windows: *.dll copied by CMake next to the exe. Mac/Linux: any *.dylib/*.so.
+# Search all three bin dirs since each target has its own output directory.
 shopt -s nullglob
-for lib in $BIN_DIR/$LIB_GLOB; do
-    cp -a "$lib" "$OUT_DIR/"
+for bin in "$BRO_EXE" "$BRO_HEADLESS_EXE" "$BRO_SERVER_EXE"; do
+    bin_dir="$(dirname "$bin")"
+    for lib in $bin_dir/$LIB_GLOB; do
+        cp -a "$lib" "$OUT_DIR/"
+    done
 done
 shopt -u nullglob
 
@@ -148,6 +165,47 @@ for app in "${APPS[@]}"; do
     fi
 done
 
+# --- macOS .app bundle ----------------------------------------------------
+# Finder launches a Mach-O binary in Terminal; wrap everything in a bundle so
+# double-click opens the app with no terminal window. Binary + apps + system
+# all live under Contents/MacOS so main.cpp's chdir(exeDir()) picks them up.
+if [[ "$PLATFORM" == "macos" ]]; then
+    APP="$OUT_DIR/Bro.app"
+    rm -rf "$APP"
+    mkdir -p "$APP/Contents/MacOS"
+    # Move the GUI binary and its runtime data into the bundle. Keep the CLI
+    # tools (bro-headless, bro-server) alongside Bro.app so users can invoke
+    # them from a terminal without reaching into the bundle.
+    CLI_KEEP=(bro-headless bro-server README.txt LICENSE)
+    for item in "$OUT_DIR"/*; do
+        name="$(basename "$item")"
+        [[ "$name" == "Bro.app" ]] && continue
+        keep=0
+        for k in "${CLI_KEEP[@]}"; do [[ "$name" == "$k" ]] && keep=1 && break; done
+        [[ $keep -eq 1 ]] && continue
+        mv "$item" "$APP/Contents/MacOS/"
+    done
+    cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>        <string>bro</string>
+    <key>CFBundleIdentifier</key>        <string>io.novahorizons.bro</string>
+    <key>CFBundleName</key>              <string>Bro</string>
+    <key>CFBundleDisplayName</key>       <string>Bro</string>
+    <key>CFBundleVersion</key>           <string>${VERSION}</string>
+    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>CFBundlePackageType</key>       <string>APPL</string>
+    <key>CFBundleSignature</key>         <string>????</string>
+    <key>LSMinimumSystemVersion</key>    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>   <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+</dict>
+</plist>
+PLIST
+fi
+
 # --- Report ---------------------------------------------------------------
 echo ""
 echo "Staged: $OUT_DIR"
@@ -156,6 +214,11 @@ if command -v du >/dev/null 2>&1; then
 fi
 echo ""
 echo "Next: verify by running"
-echo "  (cd $OUT_DIR && ./bro$EXE)"
+if [[ "$PLATFORM" == "macos" ]]; then
+    echo "  open $OUT_DIR/Bro.app"
+    echo "  $OUT_DIR/bro-headless apps/example   # CLI tools stay outside the bundle"
+else
+    echo "  (cd $OUT_DIR && ./bro$EXE)"
+fi
 echo "then zip:"
 echo "  (cd dist && zip -r $OUT_NAME.zip $OUT_NAME)"

@@ -30,9 +30,13 @@ build_config() {
     local is_official="true"
     local extra_cflags=""
 
+    # Keep is_official_build=false in both configs — the "official" build
+    # path skips the include wiring for bundled externals like libwebp, which
+    # breaks compilation of SkWebpCodec. "is_debug" already selects the
+    # optimization level and assertion visibility we care about.
+    is_official="false"
     if [ "$config" = "Debug" ]; then
         is_debug="true"
-        is_official="false"
         extra_cflags='extra_cflags=["-g"]'
     else
         extra_cflags='extra_cflags=["-DNDEBUG"]'
