@@ -962,6 +962,30 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     if (allWhitespace) return;
 
     auto& style = parent->computedStyle();
+
+    // Collapse whitespace to match the CSS white-space property that the layout
+    // measured. Without this, raw newlines/tabs render as tofu glyphs and the
+    // drawn width drifts from the measured width.
+    {
+        auto wsIt = style.find("white-space");
+        std::string ws = (wsIt != style.end()) ? wsIt->second : std::string("normal");
+        if (ws != "pre" && ws != "pre-wrap" && ws != "pre-line") {
+            std::string collapsed;
+            collapsed.reserve(text.size());
+            bool lastSpace = false;
+            for (char c : text) {
+                if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                    if (!lastSpace) collapsed += ' ';
+                    lastSpace = true;
+                } else {
+                    collapsed += c;
+                    lastSpace = false;
+                }
+            }
+            text = std::move(collapsed);
+            if (text.empty()) return;
+        }
+    }
     uint64_t fontHandle = getFontHandle(parent);
     if (!fontHandle) return;
 
