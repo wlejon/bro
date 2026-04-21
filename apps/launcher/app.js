@@ -1,6 +1,7 @@
 // Bro launcher — grid of installed apps. Clicking a tile spawns a detached
-// bro child process. Apps that declare a server entry in apps.json also spawn
-// a bro-server child; the server is killed when the client process exits.
+// bro child process. Apps that declare a server entry in apps.json have
+// their server script run in-process as a Worker; the worker is terminated
+// when the client process exits.
 
 const fs = require('fs');
 const path = require('path');
@@ -12,7 +13,6 @@ const EXE_SUFFIX = IS_WIN ? '.exe' : '';
 // BRO_EXE_DIR is set by bro/main.cpp before the engine starts.
 const EXE_DIR = process.env.BRO_EXE_DIR || process.cwd();
 const BRO = path.join(EXE_DIR, 'bro' + EXE_SUFFIX);
-const BRO_SERVER = path.join(EXE_DIR, 'bro-server' + EXE_SUFFIX);
 
 // Locate the apps directory. In release, apps/ sits next to bro.exe. In dev
 // (running `bro apps/launcher` from the project root), it's under cwd.
@@ -106,18 +106,21 @@ function launchApp(app, tile) {
     tile.classList.add('launching');
     setStatus(`Launching ${app.title}…`);
 
-    let serverProc = null;
+    // Host the app's server (if declared) in a Worker inside this launcher
+    // process. Uses the worker-scoped bro.net / bro.server / bro.ai.game
+    // bindings — same JS surface the old bro-server subprocess exposed.
+    let serverWorker = null;
     if (app.server) {
         try {
-            serverProc = cp.spawn(BRO_SERVER, [app.appPath, app.server.script], {
-                cwd: SPAWN_CWD,
-            });
-            serverProc.on('exit', () => {
-                const entry = running.get(app.dir);
-                if (entry && entry.server === serverProc) entry.server = null;
-            });
+            const serverScript = path.join(app.appPath, app.server.script);
+            serverWorker = new Worker(serverScript);
+            serverWorker.onmessage = (e) => {
+                // Server scripts don't normally postMessage back, but surface
+                // anything that arrives so debugging isn't opaque.
+                console.log(`[${app.dir} server]`, e.data);
+            };
         } catch (e) {
-            console.error('server spawn failed:', e);
+            console.error('server worker failed:', e);
             setStatus(`Server failed for ${app.title}: ${e.message}`);
             tile.classList.remove('launching');
             return;
@@ -130,12 +133,12 @@ function launchApp(app, tile) {
     } catch (e) {
         console.error('client spawn failed:', e);
         setStatus(`Failed to launch ${app.title}: ${e.message}`);
-        if (serverProc) serverProc.kill();
+        if (serverWorker) serverWorker.terminate();
         tile.classList.remove('launching');
         return;
     }
 
-    running.set(app.dir, { app, client: clientProc, server: serverProc, tile });
+    running.set(app.dir, { app, client: clientProc, server: serverWorker, tile });
     pasteTargetDir = app.dir;
     updateRunningStrip();
     setStatus(`${app.title} running (pid ${clientProc.pid}). Ctrl+V to paste a new thumbnail.`);
@@ -143,7 +146,7 @@ function launchApp(app, tile) {
     clientProc.on('exit', (code) => {
         const entry = running.get(app.dir);
         if (!entry) return;
-        if (entry.server) entry.server.kill();
+        if (entry.server) entry.server.terminate();
         running.delete(app.dir);
         if (pasteTargetDir === app.dir) {
             pasteTargetDir = running.keys().next().value || null;
@@ -277,7 +280,7 @@ document.addEventListener('paste', (e) => {
 
 window.addEventListener('beforeunload', () => {
     for (const entry of running.values()) {
-        if (entry.server) entry.server.kill();
+        if (entry.server) entry.server.terminate();
     }
 });
 
