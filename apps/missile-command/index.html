@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Missile Command</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" style="display:none">
+        <div class="hud-row">
+            <span class="hud-label">SCORE</span>
+            <span id="hud-score" class="hud-value">0</span>
+        </div>
+        <div class="hud-row">
+            <span class="hud-label">WAVE</span>
+            <span id="hud-wave" class="hud-value">1</span>
+        </div>
+        <div class="hud-row">
+            <span class="hud-label">HI</span>
+            <span id="hud-hi" class="hud-value">0</span>
+        </div>
+    </div>
+
+    <div id="overlay">
+        <div id="screen-title" class="screen">
+            <div class="overlay-title">MISSILE COMMAND</div>
+            <div class="overlay-sub">Defend your cities!</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="play">PLAY</div>
+                <div class="menu-item" data-action="howto">HOW TO PLAY</div>
+            </div>
+            <div class="overlay-hint">Arrow keys / Enter &middot; or click</div>
+            <div id="hi-display">HIGH SCORE: <span id="title-hi">0</span></div>
+        </div>
+
+        <div id="screen-howto" class="screen">
+            <div class="overlay-title">HOW TO PLAY</div>
+            <div class="overlay-sub htp-body">
+                <p>Enemy ICBMs are falling on your six cities.</p>
+                <p>Aim with the <strong>mouse</strong>, <strong>click</strong> to launch a counter-missile from the nearest silo.</p>
+                <p>Its warhead detonates at your cursor &mdash; explosions destroy any enemy caught inside, and can chain.</p>
+                <p>Each silo has <strong>10 missiles per wave</strong>. Lose a silo if it's struck.</p>
+                <p>Game over when all cities are gone. Bonus at wave end for surviving cities and unused ammo.</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <div id="screen-wavecomplete" class="screen">
+            <div class="overlay-title">WAVE COMPLETE</div>
+            <div class="overlay-sub" id="wave-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="continue">CONTINUE</div>
+            </div>
+        </div>
+
+        <div id="screen-gameover" class="screen">
+            <div class="overlay-title">THE END</div>
+            <div class="overlay-sub" id="gameover-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="restart">PLAY AGAIN</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

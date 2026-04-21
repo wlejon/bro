@@ -1,0 +1,137 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #000;
+    overflow: hidden;
+    font-family: Consolas, "Courier New", monospace;
+    color: #ffd27a;
+}
+
+canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+}
+
+/* HUD */
+#hud {
+    position: absolute;
+    top: 10px;
+    left: 0;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    pointer-events: none;
+    text-shadow: 0 0 6px #ff8000;
+}
+
+.hud-row {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+}
+
+.hud-label {
+    font-size: 14px;
+    color: #ff8000;
+    letter-spacing: 2px;
+}
+
+.hud-value {
+    font-size: 22px;
+    font-weight: bold;
+    color: #ffef7a;
+}
+
+/* Overlay */
+#overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.82);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+}
+
+.screen {
+    display: none;
+    text-align: center;
+    padding: 20px 40px;
+}
+
+.screen.active {
+    display: block;
+}
+
+.overlay-title {
+    font-size: 52px;
+    font-weight: bold;
+    color: #ff3030;
+    letter-spacing: 6px;
+    text-shadow: 0 0 12px #ff3030, 0 0 24px #800000;
+    margin-bottom: 14px;
+}
+
+.overlay-sub {
+    color: #ffd27a;
+    font-size: 16px;
+    line-height: 1.6;
+    margin-bottom: 22px;
+    max-width: 560px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.htp-body p {
+    margin: 10px 0;
+}
+
+.overlay-hint {
+    margin-top: 22px;
+    font-size: 12px;
+    color: #777;
+    letter-spacing: 1px;
+}
+
+.menu-items {
+    margin: 10px auto;
+}
+
+.menu-item {
+    font-size: 22px;
+    color: #aaa;
+    padding: 6px 16px;
+    margin: 4px;
+    cursor: pointer;
+    letter-spacing: 3px;
+}
+
+.menu-item.selected {
+    color: #ffef7a;
+    text-shadow: 0 0 8px #ff8000;
+}
+
+.menu-item.selected::before {
+    content: "> ";
+}
+.menu-item.selected::after {
+    content: " <";
+}
+
+#hi-display {
+    margin-top: 24px;
+    color: #ff8000;
+    font-size: 14px;
+    letter-spacing: 2px;
+}
+
+#title-hi {
+    color: #ffef7a;
+    font-weight: bold;
+}

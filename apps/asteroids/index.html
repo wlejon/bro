@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Asteroids</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" style="display:none">
+        <div class="hud-row">
+            <span class="hud-label">SCORE</span>
+            <span id="hud-score" class="hud-value">0</span>
+        </div>
+        <div class="hud-row">
+            <span class="hud-label">HI</span>
+            <span id="hud-hi" class="hud-value">0</span>
+        </div>
+        <div class="hud-row">
+            <span class="hud-label">WAVE</span>
+            <span id="hud-wave" class="hud-value">1</span>
+        </div>
+        <div class="hud-row">
+            <span class="hud-label">LIVES</span>
+            <span id="hud-lives" class="hud-value">3</span>
+        </div>
+    </div>
+
+    <div id="overlay">
+        <!-- TITLE -->
+        <div id="screen-title" class="screen">
+            <div class="overlay-title">ASTEROIDS</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="play">PLAY</div>
+                <div class="menu-item" data-action="howtoplay">HOW TO PLAY</div>
+                <div class="menu-item" data-action="quit">QUIT</div>
+            </div>
+            <div class="overlay-hint">Arrow keys to navigate, Enter to select</div>
+        </div>
+
+        <!-- HOW TO PLAY -->
+        <div id="screen-howtoplay" class="screen">
+            <div class="overlay-title">HOW TO PLAY</div>
+            <div class="overlay-sub htp-body">
+                <p>Survive the asteroid field. Shoot rocks to break them down.</p>
+                <p>Large rocks split into two medium. Medium split into two small.<br>
+                Small rocks shatter into nothing.</p>
+                <p><strong>Controls</strong></p>
+                <pre>Left / Right  Rotate ship
+Up            Thrust
+Space         Fire
+Esc           Pause</pre>
+                <p><strong>Scoring</strong><br>
+                Large = 20  ·  Medium = 50  ·  Small = 100</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- PAUSE -->
+        <div id="screen-pause" class="screen">
+            <div class="overlay-title">PAUSED</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="resume">RESUME</div>
+                <div class="menu-item" data-action="restart">RESTART</div>
+                <div class="menu-item" data-action="quit">QUIT TO MENU</div>
+            </div>
+        </div>
+
+        <!-- GAME OVER -->
+        <div id="screen-gameover" class="screen">
+            <div class="overlay-title">GAME OVER</div>
+            <div class="overlay-sub stats-block" id="gameover-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="restart">PLAY AGAIN</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="storage.js"></script>
+    <script src="audio.js"></script>
+    <script src="particles.js"></script>
+    <script src="game.js"></script>
+    <script src="screens.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
