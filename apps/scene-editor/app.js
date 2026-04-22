@@ -166,7 +166,7 @@ const sceneAxesNode = scene.createMesh({
     normals:   sceneAxesData.normals,
     colors:    sceneAxesData.colors,
     indices:   sceneAxesData.indices,
-    emissive:  0.85,
+    unlit:     true,
     name: 'scene-axes',
 });
 

@@ -271,6 +271,7 @@ private:
     GLint uRoughness_ = -1;
     GLint uEmissiveColor_ = -1;
     GLint uAmbient_ = -1;
+    GLint uUnlit_ = -1;
     GLint uLightCount_ = -1;
     GLint uLightType_ = -1;
     GLint uLightPos_ = -1;

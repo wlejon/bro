@@ -60,10 +60,8 @@ void GizmoManager::setHovered(GizmoAxis axis) {
         if (hovered_ == axisId || (isDragging() && dragAxis_ == axisId)) {
             n->setColor(config_.colorHover[0], config_.colorHover[1],
                         config_.colorHover[2], config_.colorHover[3]);
-            n->setEmissive(config_.emissiveHover);
         } else {
             n->setColor(base[0], base[1], base[2], base[3]);
-            n->setEmissive(config_.emissive);
         }
     };
     apply(arrowX_.get(), config_.colorX, GizmoAxis::X);
@@ -338,9 +336,9 @@ void GizmoManager::ensureTranslateMeshes() {
     arrowX_->setColor(config_.colorX[0], config_.colorX[1], config_.colorX[2], config_.colorX[3]);
     arrowY_->setColor(config_.colorY[0], config_.colorY[1], config_.colorY[2], config_.colorY[3]);
     arrowZ_->setColor(config_.colorZ[0], config_.colorZ[1], config_.colorZ[2], config_.colorZ[3]);
-    arrowX_->setEmissive(config_.emissive);
-    arrowY_->setEmissive(config_.emissive);
-    arrowZ_->setEmissive(config_.emissive);
+    arrowX_->setUnlit(true);
+    arrowY_->setUnlit(true);
+    arrowZ_->setUnlit(true);
     arrowsBuilt_ = true;
 }
 
@@ -357,9 +355,9 @@ void GizmoManager::ensureRotateMeshes() {
     ringX_->setColor(config_.colorX[0], config_.colorX[1], config_.colorX[2], config_.colorX[3]);
     ringY_->setColor(config_.colorY[0], config_.colorY[1], config_.colorY[2], config_.colorY[3]);
     ringZ_->setColor(config_.colorZ[0], config_.colorZ[1], config_.colorZ[2], config_.colorZ[3]);
-    ringX_->setEmissive(config_.emissive);
-    ringY_->setEmissive(config_.emissive);
-    ringZ_->setEmissive(config_.emissive);
+    ringX_->setUnlit(true);
+    ringY_->setUnlit(true);
+    ringZ_->setUnlit(true);
     ringsBuilt_ = true;
 }
 
@@ -377,9 +375,9 @@ void GizmoManager::ensureScaleMeshes() {
     scaleX_->setColor(config_.colorX[0], config_.colorX[1], config_.colorX[2], config_.colorX[3]);
     scaleY_->setColor(config_.colorY[0], config_.colorY[1], config_.colorY[2], config_.colorY[3]);
     scaleZ_->setColor(config_.colorZ[0], config_.colorZ[1], config_.colorZ[2], config_.colorZ[3]);
-    scaleX_->setEmissive(config_.emissive);
-    scaleY_->setEmissive(config_.emissive);
-    scaleZ_->setEmissive(config_.emissive);
+    scaleX_->setUnlit(true);
+    scaleY_->setUnlit(true);
+    scaleZ_->setUnlit(true);
 
     // Uniform center cube (white).
     bromesh::MeshData cube;
@@ -388,7 +386,7 @@ void GizmoManager::ensureScaleMeshes() {
     scaleCenter_ = std::make_unique<MeshNode>("gizmo-scale-center");
     scaleCenter_->setMesh(cube);
     scaleCenter_->setColor(0.9f, 0.9f, 0.9f, 1.0f);
-    scaleCenter_->setEmissive(config_.emissive);
+    scaleCenter_->setUnlit(true);
 
     scaleBuilt_ = true;
 }

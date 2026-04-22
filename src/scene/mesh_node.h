@@ -60,6 +60,14 @@ public:
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
 
+    /// Unlit mode: skip lighting (no light loop, no ambient, no PBR BRDF).
+    /// Output is baseColor + emissiveColor*emissive (fog/nearClip still apply).
+    /// Used for overlay meshes that shouldn't receive scene lighting — e.g.
+    /// editor gizmo handles — so their appearance is independent of the
+    /// lighting rig the app has set up.
+    void setUnlit(bool u) { unlit_ = u; }
+    bool unlit() const { return unlit_; }
+
     // --- PBR material ---
     // baseColor is the existing color_[4] (RGB used as linear albedo, A as
     // mesh transparency). metallic/roughness follow the glTF convention:
@@ -133,6 +141,7 @@ private:
     float emissiveColor_[3] = {1.0f, 1.0f, 1.0f};
     float metallic_ = 0.0f;
     float roughness_ = 0.7f;
+    bool  unlit_ = false;
 
     // Polygon offset (per-mesh depth bias for layered LOD meshes)
     float depthBiasFactor_ = 0.0f;

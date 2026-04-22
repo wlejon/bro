@@ -84,6 +84,7 @@ uniform vec3 uFogColor;
 uniform float uNearClip;
 
 uniform vec3 uAmbient;         // flat ambient (placeholder for IBL)
+uniform int uUnlit;            // 1 = skip lighting, output baseColor + emissive
 
 uniform int uLightCount;
 uniform int   uLightType[MAX_LIGHTS];
@@ -146,6 +147,18 @@ void main() {
     } else {
         baseColor = uColor.rgb;
         baseAlpha = uColor.a;
+    }
+
+    if (uUnlit == 1) {
+        vec3 color = baseColor;
+        if (uFogEnd > 0.0) {
+            float fogFactor = clamp((vCamDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
+            fogFactor = fogFactor * fogFactor;
+            color = mix(color, uFogColor, fogFactor);
+            baseAlpha = mix(baseAlpha, 0.0, fogFactor);
+        }
+        FragColor = vec4(color, baseAlpha);
+        return;
     }
 
     vec3 N = normalize(vNormal);
@@ -643,6 +656,7 @@ void SceneGraph::ensureMeshPipeline() {
         uFogColor_ = glGetUniformLocation(meshProgram_, "uFogColor");
         uNearClip_ = glGetUniformLocation(meshProgram_, "uNearClip");
         uAmbient_ = glGetUniformLocation(meshProgram_, "uAmbient");
+        uUnlit_   = glGetUniformLocation(meshProgram_, "uUnlit");
         uLightCount_ = glGetUniformLocation(meshProgram_, "uLightCount");
         uLightType_ = glGetUniformLocation(meshProgram_, "uLightType");
         uLightPos_ = glGetUniformLocation(meshProgram_, "uLightPos");
@@ -837,6 +851,13 @@ void SceneGraph::ensureTonemapFBO() {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            tonemapColorTex_, 0);
 
+    // Reuse the mesh FBO's depth-stencil RBO so the post-tonemap unlit overlay
+    // pass can depth-test against the scene geometry that was rendered there.
+    if (meshDepthRBO_) {
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                                  GL_RENDERBUFFER, meshDepthRBO_);
+    }
+
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         LOG_ERROR("Tonemap FBO incomplete: 0x%x", status);
@@ -1026,6 +1047,10 @@ void SceneGraph::render() {
             const auto& activeLights = lights.empty() ? fallback : lights;
 
             // --- Mesh pass --------------------------------------------------
+            // Lit meshes render to the HDR FBO (pass through tonemap). Unlit
+            // meshes are deferred to a post-tonemap overlay pass so their
+            // authored colors aren't desaturated by ACES.
+            std::vector<MeshNode*> unlitMeshes;
             if (hasMeshNodes && meshProgram_) {
                 glEnable(GL_CULL_FACE);
                 glCullFace(GL_BACK);
@@ -1040,7 +1065,9 @@ void SceneGraph::render() {
                 std::function<void(SceneNode*)> walkMesh = [&](SceneNode* n) {
                     if (!n->visible()) return;
                     if (n->type() == SceneNode::Type::Mesh) {
-                        renderMeshNode(static_cast<MeshNode*>(n));
+                        auto* m = static_cast<MeshNode*>(n);
+                        if (m->unlit()) unlitMeshes.push_back(m);
+                        else            renderMeshNode(m);
                     }
                     for (auto* c : n->children()) walkMesh(c);
                 };
@@ -1096,36 +1123,6 @@ void SceneGraph::render() {
                 glDepthMask(GL_TRUE);
             }
 
-            // --- Gizmo pass ------------------------------------------------
-            // Engine-owned overlay handles (translate arrows today; rotate
-            // rings + scale boxes in later phases). Drawn with depth-test
-            // disabled so handles are always grabbable, even when co-located
-            // with scene geometry. Mesh program + shared uniforms mirror the
-            // mesh pass above.
-            if (hasGizmo && meshProgram_) {
-                {
-                    glEnable(GL_CULL_FACE);
-                    glCullFace(GL_BACK);
-                    glDisable(GL_DEPTH_TEST);
-                    glUseProgram(meshProgram_);
-
-                    glUniform1f(uFogStart_, 0.0f);
-                    glUniform1f(uFogEnd_, 0.0f);
-                    glUniform3f(uFogColor_, 0.0f, 0.0f, 0.0f);
-                    glUniform3f(uAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
-                    uploadLights(activeLights);
-
-                    for (MeshNode* mn : gizmoMeshes) {
-                        if (!mn) continue;
-                        renderMeshNode(mn);
-                    }
-
-                    glDisable(GL_CULL_FACE);
-                    glEnable(GL_DEPTH_TEST);
-                    hasMeshContent_ = true;
-                }
-            }
-
             glUseProgram(0);
             glDisable(GL_DEPTH_TEST);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1134,6 +1131,55 @@ void SceneGraph::render() {
             // HDR mesh FBO -> LDR output texture. The compositor reads the
             // LDR texture; the HDR texture is internal.
             runTonemapPass();
+
+            // --- Post-tonemap unlit overlay --------------------------------
+            // Unlit meshes (scene-editor axes, engine gizmo) render directly
+            // into the LDR tonemap target so their authored colors aren't
+            // desaturated by ACES. Shares the mesh FBO's depth buffer so they
+            // still occlude against scene geometry. Gizmo handles disable
+            // depth test to stay always-on-top.
+            const bool hasOverlay = !unlitMeshes.empty() || hasGizmo;
+            if (hasOverlay && tonemapFBO_ && meshProgram_) {
+                glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
+                glViewport(0, 0, tonemapFBOWidth_, tonemapFBOHeight_);
+                glEnable(GL_DEPTH_TEST);
+                glDepthFunc(GL_LESS);
+                glDepthMask(GL_FALSE);                  // scene depth stays intact
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_BACK);
+                glEnable(GL_BLEND);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                glUseProgram(meshProgram_);
+                glUniform1f(uFogStart_, 0.0f);
+                glUniform1f(uFogEnd_, 0.0f);
+                glUniform3f(uFogColor_, 0.0f, 0.0f, 0.0f);
+                glUniform3f(uAmbient_, 0.0f, 0.0f, 0.0f);
+                // uUnlit is set per-mesh by renderMeshNode; still need light
+                // uniforms uploaded (shader accesses count even if unused).
+                uploadLights(activeLights);
+
+                for (MeshNode* mn : unlitMeshes) {
+                    renderMeshNode(mn);
+                }
+
+                if (hasGizmo) {
+                    glDisable(GL_DEPTH_TEST);
+                    for (MeshNode* mn : gizmoMeshes) {
+                        if (!mn) continue;
+                        renderMeshNode(mn);
+                    }
+                    glEnable(GL_DEPTH_TEST);
+                    hasMeshContent_ = true;
+                }
+
+                glDisable(GL_BLEND);
+                glDisable(GL_CULL_FACE);
+                glDepthMask(GL_TRUE);
+                glDisable(GL_DEPTH_TEST);
+                glUseProgram(0);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            }
         }
     }
 
@@ -1221,6 +1267,7 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniform3fv(uEmissiveColor_, 1, mesh->emissiveColor());
     glUniform1f(uMetallic_, mesh->metallic());
     glUniform1f(uRoughness_, mesh->roughness());
+    if (uUnlit_ >= 0) glUniform1i(uUnlit_, mesh->unlit() ? 1 : 0);
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
     glUniform1f(uNearClip_, mesh->nearClipDist());
 

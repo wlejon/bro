@@ -832,6 +832,13 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         applyMat(opts);
         JS_FreeValue(ctx, matVal);
 
+        // Unlit flag — skip lighting for this mesh (output baseColor only).
+        JSValue unlitVal = JS_GetPropertyStr(ctx, opts, "unlit");
+        if (!JS_IsUndefined(unlitVal)) {
+            node->setUnlit(JS_ToBool(ctx, unlitVal) == 1);
+        }
+        JS_FreeValue(ctx, unlitVal);
+
         // Depth bias
         JSValue dbVal = JS_GetPropertyStr(ctx, opts, "depthBias");
         if (!JS_IsUndefined(dbVal)) {
