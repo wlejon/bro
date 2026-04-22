@@ -1445,7 +1445,36 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
                 shadowTileCount_++;
             }
         }
-        // Spot/Point handled in follow-up commits.
+        else if (L->kind() == LightNode::Kind::Spot) {
+            // Spot light shadow = perspective projection from the light's
+            // position along its direction. FOV = 2 * outerAngle so the
+            // shadow frustum exactly covers the cone the FS computes
+            // attenuation for. Range determines the far plane.
+            Vec3 d = L->direction();
+            float dlen = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
+            if (dlen < 1e-6f) continue;
+            d.x /= dlen; d.y /= dlen; d.z /= dlen;
+
+            const Mat4& M = L->worldMatrix();
+            Vec3 eye{M.m[3][0], M.m[3][1], M.m[3][2]};
+            Vec3 target{eye.x + d.x, eye.y + d.y, eye.z + d.z};
+            Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
+
+            float far  = std::max(L->range(), 0.5f);
+            float near = std::max(0.1f, far * 0.005f);
+            float fov  = 2.0f * std::max(L->outerAngle(), 0.05f);
+            // Cap aperture below 180 deg so the perspective matrix stays sane.
+            if (fov > 3.10f) fov = 3.10f;
+
+            Mat4 view = Mat4::lookAt(eye, target, up);
+            Mat4 proj = Mat4::perspective(fov, 1.0f, near, far);
+            Mat4 projView = proj * view;
+            bakeTile(shadowTileCount_, projView, L);
+            lightShadowSlot_[i] = shadowTileCount_;
+            lightShadowSlotCount_[i] = 1;
+            shadowTileCount_++;
+        }
+        // Point cube shadows handled in a follow-up commit.
     }
 }
 
