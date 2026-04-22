@@ -445,11 +445,16 @@ private:
     void renderSkyboxPass();
     void ensureIrradiancePipeline();
     bool runIrradianceConvolution();
+    void ensurePrefilterPipeline();
+    bool runPrefilterConvolution();
 
     GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped
     int    envCubemapSize_ = 0;
     GLuint envIrradianceCube_ = 0;   // 32² RGBA16F cube, cosine-convolved diffuse
     int    envIrradianceSize_ = 32;
+    GLuint envPrefilterCube_ = 0;    // 128² RGBA16F cube, GGX-prefilter per mip
+    int    envPrefilterSize_ = 128;
+    int    envPrefilterMips_ = 5;    // mip 0..4 → roughness 0.0, 0.25, 0.5, 0.75, 1.0
     std::string envPath_;
     float  envIntensity_ = 1.0f;
     float  envRotation_ = 0.0f;
@@ -466,6 +471,13 @@ private:
     GLuint irrConvProgram_ = 0;
     GLint  irrCvUEnv_ = -1;
     GLint  irrCvUFace_ = -1;
+
+    // GGX prefilter (lazy init, reuses envConvert FBO/VAO)
+    GLuint prefilterProgram_ = 0;
+    GLint  pfUEnv_ = -1;
+    GLint  pfUFace_ = -1;
+    GLint  pfURoughness_ = -1;
+    GLint  pfUEnvSize_ = -1;
 
     // Skybox draw pipeline (lazy init)
     GLuint skyboxProgram_ = 0;

@@ -530,6 +530,113 @@ void main() {
 )";
 
 // ---------------------------------------------------------------------------
+// GGX prefilter: builds the specular IBL mip chain. Mip k holds the env
+// convolved with a GGX lobe at roughness = k / (mipCount - 1). At runtime
+// the PBR shader does `prefilter(R, roughness * lastMip)` and combines
+// with the BRDF LUT (the split-sum approximation of Karis 2013).
+//
+// Per-fragment: importance-sample the GGX distribution with a Hammersley
+// sequence, accumulate weighted env samples along the reflected directions.
+// The `uEnvSize` uniform feeds Krivanek's mip-bias trick so very few-sample
+// fragments don't fireflyrate from sparse high-frequency taps.
+// ---------------------------------------------------------------------------
+
+static const char* kPrefilterFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+
+uniform samplerCube uEnv;
+uniform int   uFace;
+uniform float uRoughness;
+uniform float uEnvSize;     // resolution of mip 0 of uEnv (e.g. 512)
+
+const float PI = 3.14159265358979;
+
+vec3 cubeDir(int face, vec2 uv) {
+    if (face == 0) return normalize(vec3( 1.0, -uv.y, -uv.x));
+    if (face == 1) return normalize(vec3(-1.0, -uv.y,  uv.x));
+    if (face == 2) return normalize(vec3( uv.x,  1.0,  uv.y));
+    if (face == 3) return normalize(vec3( uv.x, -1.0, -uv.y));
+    if (face == 4) return normalize(vec3( uv.x, -uv.y,  1.0));
+    return            normalize(vec3(-uv.x, -uv.y, -1.0));
+}
+
+// Van der Corput sequence (radical-inverse base 2).
+float radicalInverse_VdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+vec2 hammersley(uint i, uint N) {
+    return vec2(float(i) / float(N), radicalInverse_VdC(i));
+}
+
+vec3 importanceSampleGGX(vec2 Xi, vec3 N, float roughness) {
+    float a = roughness * roughness;
+    float phi = 2.0 * PI * Xi.x;
+    float cosTheta = sqrt((1.0 - Xi.y) / (1.0 + (a * a - 1.0) * Xi.y));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    vec3 H = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+
+    vec3 up        = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent   = normalize(cross(up, N));
+    vec3 bitangent = cross(N, tangent);
+    return normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+
+float distributionGGX(vec3 N, vec3 H, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    float denom = NdotH2 * (a2 - 1.0) + 1.0;
+    return a2 / (PI * denom * denom);
+}
+
+void main() {
+    vec2 uv = vUV * 2.0 - 1.0;
+    vec3 N = cubeDir(uFace, uv);
+    // Split-sum approximation: V = R = N. Mostly correct for diffuse-ish
+    // angles; the BRDF LUT corrects the rest at runtime.
+    vec3 R = N;
+    vec3 V = R;
+
+    const uint SAMPLE_COUNT = 1024u;
+    float totalWeight = 0.0;
+    vec3  prefiltered = vec3(0.0);
+    for (uint i = 0u; i < SAMPLE_COUNT; ++i) {
+        vec2 Xi = hammersley(i, SAMPLE_COUNT);
+        vec3 H  = importanceSampleGGX(Xi, N, uRoughness);
+        vec3 L  = normalize(2.0 * dot(V, H) * H - V);
+        float NdotL = max(dot(N, L), 0.0);
+        if (NdotL > 0.0) {
+            // Krivanek mip bias: sample from a higher mip when the GGX pdf
+            // is low for this tap, eliminating bright firefly samples.
+            float D     = distributionGGX(N, H, uRoughness);
+            float NdotH = max(dot(N, H), 0.0);
+            float HdotV = max(dot(H, V), 0.0);
+            float pdf   = (D * NdotH / (4.0 * HdotV)) + 1e-4;
+
+            float saTexel  = 4.0 * PI / (6.0 * uEnvSize * uEnvSize);
+            float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf + 1e-4);
+            float mipLevel = uRoughness == 0.0 ? 0.0
+                           : 0.5 * log2(saSample / saTexel);
+
+            prefiltered += textureLod(uEnv, L, mipLevel).rgb * NdotL;
+            totalWeight += NdotL;
+        }
+    }
+    prefiltered /= totalWeight;
+    FragColor = vec4(prefiltered, 1.0);
+}
+)";
+
+// ---------------------------------------------------------------------------
 // Skybox: render the IBL cubemap as the scene background. Reconstructs a
 // world-space view direction from NDC + camera FOV/aspect (no matrix
 // inverse needed — the view rotation transposed = view→world for the
@@ -714,6 +821,7 @@ SceneGraph::~SceneGraph() {
     if (skyboxVBO_) { glDeleteBuffers(1, &skyboxVBO_); skyboxVBO_ = 0; }
     if (skyboxVAO_) { glDeleteVertexArrays(1, &skyboxVAO_); skyboxVAO_ = 0; }
     if (irrConvProgram_) { glDeleteProgram(irrConvProgram_); irrConvProgram_ = 0; }
+    if (prefilterProgram_) { glDeleteProgram(prefilterProgram_); prefilterProgram_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -1406,22 +1514,28 @@ bool SceneGraph::loadEnvironment(const std::string& hdrPath) {
 
     envPath_ = hdrPath;
 
-    // Convolve diffuse irradiance from the freshly populated cubemap. This
-    // is the slow step (≈100M texture samples) but it's a one-shot per HDR
-    // load; the rendering loop only ever samples the resulting 32² cube.
+    // Build the IBL precomputed maps from the freshly populated env cube.
+    // Both are slow (~100M+ texture taps each) but one-shot per HDR load;
+    // the runtime loop only samples the small results.
     if (!runIrradianceConvolution()) {
         LOG_WARN("Loaded environment '%s' but irradiance convolution failed",
                  hdrPath.c_str());
     }
+    if (!runPrefilterConvolution()) {
+        LOG_WARN("Loaded environment '%s' but prefilter convolution failed",
+                 hdrPath.c_str());
+    }
 
-    LOG_INFO("Loaded HDR environment '%s' (%dx%d → cube %d², irradiance %d²)",
-             hdrPath.c_str(), w, h, faceSize, envIrradianceSize_);
+    LOG_INFO("Loaded HDR environment '%s' (%dx%d → cube %d², irradiance %d², prefilter %d² × %d mips)",
+             hdrPath.c_str(), w, h, faceSize, envIrradianceSize_,
+             envPrefilterSize_, envPrefilterMips_);
     return true;
 }
 
 void SceneGraph::clearEnvironment() {
     if (envCubemap_) { glDeleteTextures(1, &envCubemap_); envCubemap_ = 0; }
     if (envIrradianceCube_) { glDeleteTextures(1, &envIrradianceCube_); envIrradianceCube_ = 0; }
+    if (envPrefilterCube_) { glDeleteTextures(1, &envPrefilterCube_); envPrefilterCube_ = 0; }
     envCubemapSize_ = 0;
     envPath_.clear();
 }
@@ -1609,6 +1723,112 @@ void SceneGraph::renderSkyboxPass() {
     // Re-enable depth write/test for the geometry passes that follow.
     glDepthMask(GL_TRUE);
     glEnable(GL_DEPTH_TEST);
+}
+
+void SceneGraph::ensurePrefilterPipeline() {
+    if (prefilterProgram_) return;
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kEnvConvertVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kPrefilterFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    prefilterProgram_ = glCreateProgram();
+    glAttachShader(prefilterProgram_, vs);
+    glAttachShader(prefilterProgram_, fs);
+    glLinkProgram(prefilterProgram_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint ok = 0;
+    glGetProgramiv(prefilterProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(prefilterProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Prefilter program link error: %s", log);
+        glDeleteProgram(prefilterProgram_);
+        prefilterProgram_ = 0;
+        return;
+    }
+    pfUEnv_       = glGetUniformLocation(prefilterProgram_, "uEnv");
+    pfUFace_      = glGetUniformLocation(prefilterProgram_, "uFace");
+    pfURoughness_ = glGetUniformLocation(prefilterProgram_, "uRoughness");
+    pfUEnvSize_   = glGetUniformLocation(prefilterProgram_, "uEnvSize");
+}
+
+bool SceneGraph::runPrefilterConvolution() {
+    if (!envCubemap_) return false;
+    ensureEnvConvertPipeline();
+    ensurePrefilterPipeline();
+    if (!prefilterProgram_ || !envConvertFBO_) return false;
+
+    if (!envPrefilterCube_) {
+        glGenTextures(1, &envPrefilterCube_);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, envPrefilterCube_);
+        for (int f = 0; f < 6; ++f) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA16F,
+                         envPrefilterSize_, envPrefilterSize_, 0,
+                         GL_RGBA, GL_FLOAT, nullptr);
+        }
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // Allocate the mip storage upfront so per-mip FBO attachment works.
+        glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+    }
+
+    GLint prevFBO = 0, prevViewport[4] = {};
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, envConvertFBO_);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    glUseProgram(prefilterProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, envCubemap_);
+    glUniform1i(pfUEnv_, 0);
+    glUniform1f(pfUEnvSize_, (float)envCubemapSize_);
+    glBindVertexArray(envConvertVAO_);
+
+    bool ok = true;
+    for (int mip = 0; mip < envPrefilterMips_ && ok; ++mip) {
+        int mipSize = envPrefilterSize_ >> mip;
+        if (mipSize < 1) mipSize = 1;
+        float roughness = (envPrefilterMips_ <= 1)
+                          ? 0.0f
+                          : (float)mip / (float)(envPrefilterMips_ - 1);
+        glViewport(0, 0, mipSize, mipSize);
+        glUniform1f(pfURoughness_, roughness);
+
+        for (int face = 0; face < 6; ++face) {
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                   GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+                                   envPrefilterCube_, mip);
+            GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (status != GL_FRAMEBUFFER_COMPLETE) {
+                LOG_ERROR("Prefilter FBO incomplete (mip %d face %d): 0x%x",
+                          mip, face, status);
+                ok = false;
+                break;
+            }
+            glUniform1i(pfUFace_, face);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+    }
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
