@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -167,6 +168,9 @@ static bool parseConfig(const std::string& path, bro::engine::EngineConfig& conf
     int resizable = getBool("resizable");
     if (resizable >= 0) config.graphics.resizable = (resizable == 1);
 
+    int splash = getBool("splash");
+    if (splash >= 0) config.showSplash = (splash == 1);
+
     float maxFps = getFloat("maxFps", 0);
     if (maxFps > 0) config.graphics.maxFrameIntervalMs = 1000.0 / maxFps;
 
@@ -201,8 +205,12 @@ static void printUsage() {
         "bro.json format:\n"
         "  {\"app\": \".\", \"title\": \"My App\", \"width\": 1200, \"height\": 800}\n"
         "\n"
+        "CLI flags:\n"
+        "  --no-splash / --splash  Disable or force the startup splash screen.\n"
+        "\n"
         "Additional bro.json options:\n"
         "  vsync (bool), resizable (bool), maxFps (number),\n"
+        "  splash (bool, default true),\n"
         "  scrollSpeed (number), doubleClickThreshold (ms),\n"
         "  doubleClickDistance (px)\n"
         "\n"
@@ -223,6 +231,17 @@ int main(int argc, char* argv[]) {
 
     bro::engine::EngineConfig config;
 
+    // CLI flags parsed up-front (so bro.json values can still override on
+    // purpose, and --no-splash wins as a final override applied after).
+    bool cliNoSplash = false;
+    bool cliSplash   = false;
+    std::vector<const char*> posArgs;
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--no-splash") == 0)     cliNoSplash = true;
+        else if (strcmp(argv[i], "--splash") == 0)   cliSplash   = true;
+        else posArgs.push_back(argv[i]);
+    }
+
     // Settings persist next to the executable
     std::string settingsDir = exeDir();
     config.settingsPath = settingsDir + "/.bro_settings.json";
@@ -236,15 +255,15 @@ int main(int argc, char* argv[]) {
     setenv("BRO_EXE_DIR", settingsDir.c_str(), 1);
 #endif
 
-    if (argc >= 2) {
+    if (!posArgs.empty()) {
         // Explicit app directory argument
-        config.appDir = argv[1];
+        config.appDir = posArgs[0];
 
         // Load bro.json from the app directory if present
         std::string appConfig = config.appDir + "/bro.json";
         if (fileExists(appConfig)) {
             parseConfig(appConfig, config);
-            config.appDir = argv[1]; // preserve explicit appDir over bro.json "app" field
+            config.appDir = posArgs[0]; // preserve explicit appDir over bro.json "app" field
         }
     } else {
         // No arguments — auto-detect app from exe directory.
@@ -272,6 +291,10 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
+
+    // CLI splash overrides — applied last so they win over bro.json.
+    if (cliNoSplash) config.showSplash = false;
+    if (cliSplash)   config.showSplash = true;
 
     try {
         bro::engine::Engine engine(config);

@@ -177,6 +177,8 @@ int main(int argc, char* argv[]) {
             "  --no-gpu              Disable GPU rendering (CPU-only, no WebGL)\n"
             "  --width N             Viewport width (default: 1920)\n"
             "  --height N            Viewport height (default: 1080)\n"
+            "  --splash              Show the startup splash (off by default in headless)\n"
+            "  --no-splash           Explicitly disable the splash\n"
             "\n"
             "Headless globals:\n"
             "  screenshot(path [, selector])  Render to PNG (optionally cropped to element)\n"
@@ -190,6 +192,10 @@ int main(int argc, char* argv[]) {
     bool useGPU = true;
     int width = 1920;
     int height = 1080;
+    // Splash defaults off in headless — the splash canvas animation leaks
+    // into early screenshots (matrix glyphs at top of frame). Opt-in via
+    // --splash if you specifically want to exercise the splash lifecycle.
+    int cliSplash = -1;   // -1 unset, 0 off, 1 on
     std::string appDir;
     std::string scriptPath;
     std::vector<std::string> inlineExprs;
@@ -201,6 +207,10 @@ int main(int argc, char* argv[]) {
             width = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
             height = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--splash") == 0) {
+            cliSplash = 1;
+        } else if (strcmp(argv[i], "--no-splash") == 0) {
+            cliSplash = 0;
         } else if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
             inlineExprs.push_back(argv[++i]);
         } else if (appDir.empty()) {
@@ -233,6 +243,9 @@ int main(int argc, char* argv[]) {
         config.graphics.width = width;
         config.graphics.height = height;
         config.graphics.useGPU = useGPU;
+        // Headless: splash defaults off; --splash opts in, --no-splash is
+        // explicit-off (kept for symmetry with windowed bro).
+        config.showSplash = (cliSplash == 1);
 
         auto* engine = new bro::engine::Engine(config);
         engine->run();  // initial layout, returns immediately in headless

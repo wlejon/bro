@@ -109,6 +109,8 @@ Engine::Engine(const EngineConfig& config)
     , elementScrollbar_(config.elementScrollbar)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
 
+    splashEnabled_ = config.showSplash;
+
     // === Settings system ===
     settings_ = std::make_unique<Settings>(config.settingsPath);
 
@@ -674,7 +676,7 @@ Engine::Engine(const EngineConfig& config)
     //      hard timeout in tickSystemPanels fires). Enabled in both windowed
     //      and headless modes — headless uses virtual time, so `advanceTime()`
     //      drives the splash forward just like any other timer.
-    if (displayMode_ != DisplayMode::Server) {
+    if (displayMode_ != DisplayMode::Server && splashEnabled_) {
         for (auto& d : systemDocs_) {
             if (d.group == "splash") {
                 splashVisible_ = true;

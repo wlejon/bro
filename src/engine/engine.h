@@ -120,6 +120,12 @@ struct EngineConfig {
     std::string title;   // window title override (empty = use <title> from HTML)
     std::string settingsPath; // path to .bro_settings.json (empty = auto-detect)
     DisplayMode displayMode = DisplayMode::Windowed;
+    /// Show the startup splash screen (system/splash.html). Defaults to true
+    /// for windowed, false for headless (splash is visual-only and its matrix
+    /// animation leaks into early-frame screenshots if not given enough time
+    /// to dismiss). Can be overridden per-app via bro.json `"splash": false`
+    /// or the `--no-splash` / `--splash` CLI flags.
+    bool showSplash = true;
     GraphicsConfig graphics;
     InputConfig input;
     Scrollbar::Style viewportScrollbar;    // default Scrollbar::Style
@@ -477,6 +483,7 @@ private:
     bool systemPerfVisible_ = false;
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;
+    bool splashEnabled_ = true;   // from EngineConfig::showSplash
     bool splashDismissTriggered_ = false;
     double splashStartMs_ = 0.0;
     double lastSystemRafMs_ = 0.0;
