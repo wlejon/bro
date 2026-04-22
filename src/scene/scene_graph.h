@@ -198,6 +198,29 @@ public:
     void setShowLightIcons(bool on) { showLightIcons_ = on; }
     bool showLightIcons() const { return showLightIcons_; }
 
+    // --- IBL environment ---
+
+    /// Load an HDR equirectangular image (.hdr) and convert it to a 512²
+    /// cubemap that backs both skybox rendering and IBL precompute
+    /// (irradiance + prefilter, added in later passes). Returns true on
+    /// success; on failure the previous environment is kept. Pass an empty
+    /// path to clear. Must be called on the GL thread (JS bindings already
+    /// satisfy this).
+    bool loadEnvironment(const std::string& hdrPath);
+    void clearEnvironment();
+    bool hasEnvironment() const { return envCubemap_ != 0; }
+    const std::string& environmentPath() const { return envPath_; }
+
+    /// Multiplier applied to all IBL contributions (skybox + irradiance +
+    /// prefilter). 1.0 = neutral. Tune independently of sun intensity.
+    void  setEnvironmentIntensity(float i) { envIntensity_ = (i < 0.0f) ? 0.0f : i; }
+    float environmentIntensity() const { return envIntensity_; }
+
+    /// Y-axis rotation of the environment in radians. Useful for aligning
+    /// the visible sun in the HDR with the engine's directional sun light.
+    void  setEnvironmentRotation(float r) { envRotation_ = r; }
+    float environmentRotation() const { return envRotation_; }
+
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);
     void setCameraZoom(float z);
@@ -414,6 +437,24 @@ private:
     GLint uLightCascadeSplit_ = -1;
     GLint uShadowAtlasTexel_ = -1;
     GLint uShadowPCFTaps_ = -1;
+
+    // --- IBL environment ---
+    void ensureEnvConvertPipeline();
+    bool runEquirectToCubemap(GLuint equirectTex, GLuint cubemap, int faceSize);
+
+    GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped
+    int    envCubemapSize_ = 0;
+    std::string envPath_;
+    float  envIntensity_ = 1.0f;
+    float  envRotation_ = 0.0f;
+
+    // Equirect→cubemap converter (lazy init)
+    GLuint envConvertProgram_ = 0;
+    GLuint envConvertVAO_ = 0;
+    GLuint envConvertVBO_ = 0;
+    GLuint envConvertFBO_ = 0;
+    GLint  envCvUFace_ = -1;
+    GLint  envCvUEquirect_ = -1;
 
     // --- Billboard pipeline (lazy init) ---
     GLuint bbProgram_ = 0;

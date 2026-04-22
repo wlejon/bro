@@ -7,6 +7,8 @@
 #include "util/log.h"
 #include "brogameagent/world.h"
 
+#include <stb_image.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -418,6 +420,56 @@ void main() {
 )";
 
 // ---------------------------------------------------------------------------
+// Equirectangular HDR → cubemap conversion. One vertex shader (NDC quad),
+// one fragment shader that's invoked once per cube face. uFace selects the
+// face mapping; gl_FragCoord drives the [-1,1] surface coords.
+// ---------------------------------------------------------------------------
+
+static const char* kEnvConvertVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec2 aPos;
+out vec2 vUV;
+void main() {
+    vUV = aPos * 0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+static const char* kEnvConvertFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+
+uniform sampler2D uEquirect;
+uniform int       uFace;       // 0..5 = +X -X +Y -Y +Z -Z
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717958;
+
+// Cubemap face → world-space direction. Standard GL cube convention.
+// uv is in [-1,1] (centre of face = 0,0).
+vec3 cubeDir(int face, vec2 uv) {
+    if (face == 0) return normalize(vec3( 1.0, -uv.y, -uv.x));  // +X
+    if (face == 1) return normalize(vec3(-1.0, -uv.y,  uv.x));  // -X
+    if (face == 2) return normalize(vec3( uv.x,  1.0,  uv.y));  // +Y
+    if (face == 3) return normalize(vec3( uv.x, -1.0, -uv.y));  // -Y
+    if (face == 4) return normalize(vec3( uv.x, -uv.y,  1.0));  // +Z
+    return            normalize(vec3(-uv.x, -uv.y, -1.0));      // -Z
+}
+
+void main() {
+    vec2 uv = vUV * 2.0 - 1.0;
+    vec3 d  = cubeDir(uFace, uv);
+    float phi   = atan(d.z, d.x);
+    float theta = asin(clamp(d.y, -1.0, 1.0));
+    // HDRIs from stb_image are uploaded top-down (row 0 = north pole),
+    // so the +Y direction must read v=0. Hence 0.5 - theta/PI.
+    vec2 eq = vec2(phi / TWO_PI + 0.5, 0.5 - theta / PI);
+    FragColor = vec4(texture(uEquirect, eq).rgb, 1.0);
+}
+)";
+
+// ---------------------------------------------------------------------------
 // Shadow caster shader — depth-only. Used to render every shadow-casting
 // MeshNode into one tile of the shadow atlas per shadow-casting light. The
 // CPU pre-bakes uMVP = lightProj * lightView * meshWorldModel; no other
@@ -552,6 +604,11 @@ SceneGraph::~SceneGraph() {
     if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
+    clearEnvironment();
+    if (envConvertProgram_) { glDeleteProgram(envConvertProgram_); envConvertProgram_ = 0; }
+    if (envConvertVBO_) { glDeleteBuffers(1, &envConvertVBO_); envConvertVBO_ = 0; }
+    if (envConvertVAO_) { glDeleteVertexArrays(1, &envConvertVAO_); envConvertVAO_ = 0; }
+    if (envConvertFBO_) { glDeleteFramebuffers(1, &envConvertFBO_); envConvertFBO_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -1077,6 +1134,181 @@ void SceneGraph::runTonemapPass() {
     glBindVertexArray(0);
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ---------------------------------------------------------------------------
+// IBL: HDR equirect → cubemap conversion. The cubemap produced here is the
+// raw radiance source; later passes (irradiance convolution, prefiltered
+// specular) consume it to populate the IBL data the PBR shader samples.
+// ---------------------------------------------------------------------------
+
+void SceneGraph::ensureEnvConvertPipeline() {
+    if (envConvertProgram_) return;
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kEnvConvertVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kEnvConvertFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    envConvertProgram_ = glCreateProgram();
+    glAttachShader(envConvertProgram_, vs);
+    glAttachShader(envConvertProgram_, fs);
+    glLinkProgram(envConvertProgram_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint ok = 0;
+    glGetProgramiv(envConvertProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(envConvertProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Env convert program link error: %s", log);
+        glDeleteProgram(envConvertProgram_);
+        envConvertProgram_ = 0;
+        return;
+    }
+    envCvUFace_     = glGetUniformLocation(envConvertProgram_, "uFace");
+    envCvUEquirect_ = glGetUniformLocation(envConvertProgram_, "uEquirect");
+
+    static const float quadVerts[12] = {
+        -1.0f, -1.0f,  1.0f, -1.0f,  1.0f,  1.0f,
+        -1.0f, -1.0f,  1.0f,  1.0f, -1.0f,  1.0f,
+    };
+    glGenVertexArrays(1, &envConvertVAO_);
+    glGenBuffers(1, &envConvertVBO_);
+    glBindVertexArray(envConvertVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, envConvertVBO_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (void*)0);
+    glBindVertexArray(0);
+
+    glGenFramebuffers(1, &envConvertFBO_);
+}
+
+bool SceneGraph::runEquirectToCubemap(GLuint equirectTex, GLuint cubemap, int faceSize) {
+    ensureEnvConvertPipeline();
+    if (!envConvertProgram_ || !envConvertFBO_) return false;
+
+    // Save state we touch so the caller's render flow isn't disturbed.
+    GLint prevFBO = 0, prevViewport[4] = {};
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, envConvertFBO_);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, faceSize, faceSize);
+
+    glUseProgram(envConvertProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, equirectTex);
+    glUniform1i(envCvUEquirect_, 0);
+    glBindVertexArray(envConvertVAO_);
+
+    bool ok = true;
+    for (int face = 0; face < 6; ++face) {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("Env convert FBO incomplete on face %d: 0x%x", face, status);
+            ok = false;
+            break;
+        }
+        glUniform1i(envCvUFace_, face);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    return ok;
+}
+
+bool SceneGraph::loadEnvironment(const std::string& hdrPath) {
+    if (hdrPath.empty()) {
+        clearEnvironment();
+        return true;
+    }
+
+    int w = 0, h = 0, ch = 0;
+    // stbi_loadf returns top-down float RGB(A); the convert shader's UV
+    // mapping (`0.5 - theta/PI`) is paired with this orientation.
+    float* data = stbi_loadf(hdrPath.c_str(), &w, &h, &ch, 3);
+    if (!data) {
+        LOG_ERROR("loadEnvironment: stbi_loadf failed for '%s': %s",
+                  hdrPath.c_str(), stbi_failure_reason());
+        return false;
+    }
+
+    // Upload the equirect as a temp 2D float texture.
+    GLuint equirectTex = 0;
+    glGenTextures(1, &equirectTex);
+    glBindTexture(GL_TEXTURE_2D, equirectTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0, GL_RGB, GL_FLOAT, data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    stbi_image_free(data);
+
+    // (Re)allocate the destination cubemap. 512² is enough for a sharp
+    // skybox; prefilter mips will be derived from this in a later pass so
+    // we allocate the full mip chain upfront.
+    const int faceSize = 512;
+    if (envCubemap_ && envCubemapSize_ != faceSize) {
+        glDeleteTextures(1, &envCubemap_);
+        envCubemap_ = 0;
+    }
+    if (!envCubemap_) {
+        glGenTextures(1, &envCubemap_);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, envCubemap_);
+        for (int f = 0; f < 6; ++f) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA16F,
+                         faceSize, faceSize, 0, GL_RGBA, GL_FLOAT, nullptr);
+        }
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        envCubemapSize_ = faceSize;
+    }
+
+    bool ok = runEquirectToCubemap(equirectTex, envCubemap_, faceSize);
+    glDeleteTextures(1, &equirectTex);
+    if (!ok) {
+        // Don't keep a half-baked cubemap.
+        glDeleteTextures(1, &envCubemap_);
+        envCubemap_ = 0;
+        envCubemapSize_ = 0;
+        envPath_.clear();
+        return false;
+    }
+
+    // Generate mips so trilinear sampling at low LOD looks clean (and so
+    // the prefilter pass has somewhere to write its roughness chain).
+    glBindTexture(GL_TEXTURE_CUBE_MAP, envCubemap_);
+    glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+
+    envPath_ = hdrPath;
+    LOG_INFO("Loaded HDR environment '%s' (%dx%d → cube %d²)",
+             hdrPath.c_str(), w, h, faceSize);
+    return true;
+}
+
+void SceneGraph::clearEnvironment() {
+    if (envCubemap_) { glDeleteTextures(1, &envCubemap_); envCubemap_ = 0; }
+    envCubemapSize_ = 0;
+    envPath_.clear();
 }
 
 // ---------------------------------------------------------------------------
