@@ -19,9 +19,10 @@ body {
 header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 18px 28px 12px;
+    gap: 16px;
+    padding: 12px 20px;
     border-bottom: 1px solid #1c1f24;
+    flex-shrink: 0;
 }
 
 header h1 {
@@ -31,6 +32,25 @@ header h1 {
     letter-spacing: 0.5px;
     color: #f4f5f7;
 }
+
+#filter {
+    background: #16191e;
+    border: 1px solid #2a2e34;
+    border-radius: 6px;
+    color: #e6e8ec;
+    font-size: 13px;
+    padding: 6px 10px;
+    width: 240px;
+    outline: none;
+    font-family: inherit;
+}
+
+#filter:focus {
+    border-color: #3b7dd8;
+    background: #191d24;
+}
+
+#filter::placeholder { color: #6a6f77; }
 
 #running-strip {
     display: flex;
@@ -78,12 +98,21 @@ header h1 {
 
 main {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding: 20px 28px;
+    overflow-x: hidden;
+    padding: 16px 20px;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
     align-content: start;
+}
+
+.empty {
+    grid-column: 1 / -1;
+    color: #8a8f97;
+    padding: 20px;
+    text-align: center;
 }
 
 .tile {
@@ -108,7 +137,7 @@ main {
 }
 
 .tile .thumb {
-    height: 160px;
+    height: 140px;
     background-color: #0b0d10;
     background-size: cover;
     background-position: center;

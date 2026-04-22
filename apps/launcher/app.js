@@ -167,15 +167,31 @@ function stopApp(dir) {
 
 // ─── UI ────────────────────────────────────────────────────────────────────
 
+let ALL_APPS = [];
+let filterText = '';
+
+function matchesFilter(app, q) {
+    if (!q) return true;
+    const s = q.toLowerCase();
+    return app.title.toLowerCase().includes(s) ||
+           app.dir.toLowerCase().includes(s);
+}
+
 function render() {
     const grid = document.getElementById('grid');
     grid.innerHTML = '';
 
-    const apps = loadApps();
+    if (!ALL_APPS.length) ALL_APPS = loadApps();
+    const apps = ALL_APPS.filter(a => matchesFilter(a, filterText));
 
     // Per-tile background-image rules live in thumbnails.css.
+    if (ALL_APPS.length === 0) {
+        grid.innerHTML = '<div class="empty">No apps found.</div>';
+        return;
+    }
     if (apps.length === 0) {
-        grid.innerHTML = '<div style="color:#8a8f97">No apps found.</div>';
+        grid.innerHTML = `<div class="empty">No apps match "${escapeHtml(filterText)}".</div>`;
+        setStatus(`0 / ${ALL_APPS.length} apps`);
         return;
     }
 
@@ -213,7 +229,14 @@ function render() {
         grid.appendChild(tile);
     }
 
-    setStatus(`${apps.length} apps · ${EXE_DIR}`);
+    setStatus(filterText
+        ? `${apps.length} / ${ALL_APPS.length} apps`
+        : `${ALL_APPS.length} apps · ${EXE_DIR}`);
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g,
+        c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 // ─── Paste-to-update-thumbnail ─────────────────────────────────────────────
@@ -282,5 +305,20 @@ window.addEventListener('beforeunload', () => {
         if (entry.server) entry.server.terminate();
     }
 });
+
+const filterInput = document.getElementById('filter');
+if (filterInput) {
+    filterInput.addEventListener('input', () => {
+        filterText = filterInput.value.trim();
+        render();
+    });
+    filterInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && filterInput.value) {
+            filterInput.value = '';
+            filterText = '';
+            render();
+        }
+    });
+}
 
 render();
