@@ -1,4 +1,4 @@
-// app.js — Entry point: canvas, event binding, main loop
+// app.js — Entry point: canvas, input wiring, main loop
 (function() {
 "use strict";
 
@@ -8,43 +8,44 @@ var ctx = canvas.getContext("2d");
 function getW() { return ctx.canvasWidth || canvas.width || 900; }
 function getH() { return ctx.canvasHeight || canvas.height || 800; }
 
-var lastFrameTime = 0;
-
 T.Storage.load();
 T.Audio.init();
+
+Input.init([
+    { name: "left",    label: "Rotate Left",  defaults: ["a", "ArrowLeft"] },
+    { name: "right",   label: "Rotate Right", defaults: ["d", "ArrowRight"] },
+    { name: "thrust",  label: "Thrust",       defaults: ["w", "ArrowUp", " "] },
+    { name: "up",      label: "Menu Up",      defaults: ["ArrowUp"] },
+    { name: "down",    label: "Menu Down",    defaults: ["ArrowDown"] },
+    { name: "confirm", label: "Confirm",      defaults: ["Enter"] },
+    { name: "pause",   label: "Pause",        defaults: ["Escape", "p"] },
+]);
+Input.attach(window);
+
 T.Screens.init(getW(), getH());
 
-document.body.addEventListener("keydown", function(e) {
-    if (e.repeat) {
-        var n = T.Screens.getName();
-        if (n === "playing") return;
+// Route rising-edge actions into the screen manager as DOM key strings
+// — T.Screens.menuNav uses "ArrowUp"/"ArrowDown"/"Enter"/"Escape".
+Input.onAction(function(action, phase) {
+    if (phase !== "down" || !action) return;
+    var name = T.Screens.getName();
+    if (name === "playing") {
+        if (action === "pause") T.Screens.keydown("Escape", getW(), getH());
+        return;
     }
-    T.Screens.keydown(e.key, getW(), getH());
+    if (action === "up")        T.Screens.keydown("ArrowUp",   getW(), getH());
+    else if (action === "down") T.Screens.keydown("ArrowDown", getW(), getH());
+    else if (action === "confirm") T.Screens.keydown("Enter",  getW(), getH());
+    else if (action === "pause")   T.Screens.keydown("Escape", getW(), getH());
 });
-
-document.body.addEventListener("keyup", function(e) {
-    T.Screens.keyup(e.key);
-});
-
-function gameLoop(timestamp) {
-    requestAnimationFrame(gameLoop);
-
-    var dt = timestamp - lastFrameTime;
-    lastFrameTime = timestamp;
-    if (dt > 100) dt = 100;
-    if (dt < 0) dt = 0;
-
-    var W = getW(), H = getH();
-
-    T.Screens.update(dt, W, H);
-
-    ctx.clearRect(0, 0, W, H);
-    T.Screens.draw(ctx, W, H);
-}
 
 T.Screens.switchTo("title");
-lastFrameTime = performance.now();
-requestAnimationFrame(gameLoop);
-
-console.log("Touchdown loaded!");
+GameLoop.create({
+    tick: function(dt) { T.Screens.update(dt, getW(), getH()); },
+    draw: function() {
+        var W = getW(), H = getH();
+        ctx.clearRect(0, 0, W, H);
+        T.Screens.draw(ctx, W, H);
+    },
+}).start();
 })();

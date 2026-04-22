@@ -30,15 +30,28 @@ var screenName = "title";
 var tileEls = {};
 
 // --- Persistence ---
+var store = Storage.create("2048");
 function loadBest() {
-    try {
-        var v = localStorage.getItem("2048_best");
-        state.best = v ? parseInt(v, 10) || 0 : 0;
-    } catch (e) { state.best = 0; }
+    store.load({ best: 0 });
+    state.best = store.get("best") || 0;
 }
 function saveBest() {
-    try { localStorage.setItem("2048_best", String(state.best)); } catch (e) {}
+    store.set("best", state.best);
+    store.save();
 }
+
+// --- Input ---
+Input.init([
+    { name: "up",      label: "Up",      defaults: ["w", "ArrowUp"] },
+    { name: "down",    label: "Down",    defaults: ["s", "ArrowDown"] },
+    { name: "left",    label: "Left",    defaults: ["a", "ArrowLeft"] },
+    { name: "right",   label: "Right",   defaults: ["d", "ArrowRight"] },
+    { name: "undo",    label: "Undo",    defaults: ["u"] },
+    { name: "restart", label: "Restart", defaults: ["r"] },
+    { name: "pause",   label: "Menu",    defaults: ["Escape"] },
+    { name: "confirm", label: "Confirm", defaults: ["Enter", " "] },
+]);
+Input.attach(window);
 
 // --- Grid helpers ---
 function emptyGrid() {
@@ -421,27 +434,27 @@ function doMenuAction(action) {
 }
 
 // --- Input ---
-function onKeyDown(e) {
-    var k = e.key;
+Input.onAction(function(action, phase) {
+    if (phase !== "down" || !action) return;
     if (screenName === "playing") {
-        if (k === "ArrowLeft" || k === "a" || k === "A") { tryMove("left"); e.preventDefault(); }
-        else if (k === "ArrowRight" || k === "d" || k === "D") { tryMove("right"); e.preventDefault(); }
-        else if (k === "ArrowUp" || k === "w" || k === "W") { tryMove("up"); e.preventDefault(); }
-        else if (k === "ArrowDown" || k === "s" || k === "S") { tryMove("down"); e.preventDefault(); }
-        else if (k === "u" || k === "U") { undo(); }
-        else if (k === "r" || k === "R") { newGame(); }
-        else if (k === "Escape") { showScreen("title"); }
+        if (action === "left")       tryMove("left");
+        else if (action === "right") tryMove("right");
+        else if (action === "up")    tryMove("up");
+        else if (action === "down")  tryMove("down");
+        else if (action === "undo")    undo();
+        else if (action === "restart") newGame();
+        else if (action === "pause")   showScreen("title");
     } else {
-        if (k === "ArrowUp" || k === "w" || k === "W") menuNav(-1);
-        else if (k === "ArrowDown" || k === "s" || k === "S") menuNav(1);
-        else if (k === "Enter" || k === " ") menuActivate();
-        else if (k === "Escape") {
+        if (action === "up")   menuNav(-1);
+        else if (action === "down") menuNav(1);
+        else if (action === "confirm") menuActivate();
+        else if (action === "pause") {
             if (screenName === "howtoplay" || screenName === "gameover" || screenName === "win") {
                 showScreen("title");
             }
         }
     }
-}
+});
 
 function onClick(e) {
     var target = e.target;
@@ -461,7 +474,6 @@ function onClick(e) {
     }
 }
 
-document.body.addEventListener("keydown", onKeyDown);
 document.body.addEventListener("click", onClick);
 
 // --- Start ---

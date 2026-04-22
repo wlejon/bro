@@ -239,7 +239,6 @@ T.Screens = (function() {
                 switchTo("paused");
                 return;
             }
-            T.Game.keydown(key);
         } else if (currentName === "paused") {
             if (key === "Escape") {
                 T.Game.setPaused(false);
@@ -280,11 +279,7 @@ T.Screens = (function() {
         }
     }
 
-    function keyup(key) {
-        if (currentName === "playing") {
-            T.Game.keyup(key);
-        }
-    }
+    function keyup(key) { /* handled by lib/input sampling */ }
 
     function update(dt, W, H) {
         if (currentName === "title" || currentName === "howtoplay") {

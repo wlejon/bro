@@ -95,16 +95,9 @@ E.playWrongTone = function() {
 
 // ---------------- Storage ----------------
 
-E.loadBest = function() {
-    try {
-        var v = localStorage.getItem("echo_best");
-        this.best = v ? parseInt(v, 10) || 0 : 0;
-    } catch(e) { this.best = 0; }
-};
-
-E.saveBest = function() {
-    try { localStorage.setItem("echo_best", String(this.best)); } catch(e) {}
-};
+E._store = Storage.create("echo");
+E.loadBest = function() { this._store.load({ best: 0 }); this.best = this._store.get("best") || 0; };
+E.saveBest = function() { this._store.set("best", this.best); this._store.save(); };
 
 // ---------------- Geometry ----------------
 
@@ -342,6 +335,15 @@ E.goToTitle = function() {
 E.setupInput = function() {
     var self = this;
 
+    Input.init([
+        { name: "pad0",  label: "Pad 1 (Red)",    defaults: ["1", "q"] },
+        { name: "pad1",  label: "Pad 2 (Green)",  defaults: ["2", "w"] },
+        { name: "pad2",  label: "Pad 3 (Yellow)", defaults: ["3", "a"] },
+        { name: "pad3",  label: "Pad 4 (Blue)",   defaults: ["4", "s"] },
+        { name: "pause", label: "Quit to Title",  defaults: ["Escape"] },
+    ]);
+    Input.attach(window);
+
     this.canvas.addEventListener("mousedown", function(ev) {
         var rect = self.canvas.getBoundingClientRect();
         var mx = ev.clientX - rect.left;
@@ -353,24 +355,20 @@ E.setupInput = function() {
         }
     });
 
-    document.addEventListener("keydown", function(ev) {
-        var key = ev.key;
+    Input.onAction(function(action, phase) {
+        if (phase !== "down" || !action) return;
         if (self.state === E.STATE_INPUT) {
-            var map = { "1": 0, "q": 0, "Q": 0, "2": 1, "w": 1, "W": 1,
-                        "3": 2, "a": 2, "A": 2, "4": 3, "s": 3, "S": 3 };
-            if (map[key] !== undefined) {
-                self.handlePlayerPress(map[key]);
-                return;
-            }
+            if (action === "pad0") { self.handlePlayerPress(0); return; }
+            if (action === "pad1") { self.handlePlayerPress(1); return; }
+            if (action === "pad2") { self.handlePlayerPress(2); return; }
+            if (action === "pad3") { self.handlePlayerPress(3); return; }
         }
-        if (key === "Escape") {
-            if (self.state === E.STATE_INPUT || self.state === E.STATE_WATCH) {
-                self.goToTitle();
-            }
+        if (action === "pause" &&
+            (self.state === E.STATE_INPUT || self.state === E.STATE_WATCH)) {
+            self.goToTitle();
         }
     });
 
-    // menu items
     var items = document.querySelectorAll(".menu-item");
     for (var i = 0; i < items.length; i++) {
         items[i].addEventListener("click", function(ev) {

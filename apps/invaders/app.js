@@ -9,51 +9,34 @@ function getW() { return ctx.canvasWidth || canvas.width || 800; }
 function getH() { return ctx.canvasHeight || canvas.height || 800; }
 
 // ---------- Storage ----------
-var HS_KEY = "invaders_highscore";
-function loadHighScore() {
-    try { var v = localStorage.getItem(HS_KEY); if (v) return parseInt(v, 10) || 0; } catch(e) {}
-    return 0;
-}
-function saveHighScore(v) {
-    try { localStorage.setItem(HS_KEY, String(v)); } catch(e) {}
-}
+var store = Storage.create("invaders");
+function loadHighScore() { store.load({ highScore: 0 }); return store.get("highScore") || 0; }
+function saveHighScore(v) { store.set("highScore", v); store.save(); }
 
 // ---------- Audio ----------
 var Audio = {
-    ctx: null,
-    init: function() {
-        try { this.ctx = new AudioContext(); } catch(e) { this.ctx = null; }
-    },
-    tone: function(freq, dur, type, vol) {
-        if (!this.ctx) return;
-        try {
-            var id = this.ctx.createVoice();
-            this.ctx.setVoiceWaveform(id, type || "square");
-            this.ctx.setVoiceFrequency(id, freq);
-            this.ctx.setVoiceGain(id, (vol || 0.5) * 12);
-            this.ctx.setVoiceAttack(id, 0.002);
-            this.ctx.setVoiceDecay(id, dur * 0.7);
-            this.ctx.setVoiceSustain(id, 0);
-            this.ctx.setVoiceRelease(id, 0.02);
-            var t = this.ctx.currentTime;
-            this.ctx.startVoice(id, t);
-            this.ctx.stopVoice(id, t + dur);
-        } catch(e) {}
-    },
-    shoot: function() { this.tone(880, 0.08, "square", 0.4); },
-    hit:   function() { this.tone(200, 0.12, "sawtooth", 0.6); },
-    kill:  function() { this.tone(120, 0.18, "sawtooth", 0.7); },
-    step:  function(n) { this.tone(90 + (n % 4) * 30, 0.08, "triangle", 0.5); },
-    ufo:   function() { this.tone(660, 0.15, "square", 0.5); },
-    die:   function() {
-        var self = this;
-        self.tone(300, 0.2, "sawtooth", 0.6);
-        setTimeout(function(){ self.tone(200, 0.25, "sawtooth", 0.6); }, 180);
-        setTimeout(function(){ self.tone(100, 0.35, "sawtooth", 0.6); }, 380);
-    },
-    menuMove: function() { this.tone(440, 0.03, "sine", 0.3); },
-    menuSelect: function() { this.tone(660, 0.07, "square", 0.4); }
+    init: function() { SFX.init(); },
+    shoot:      function() { SFX.tone(880, 0.08, "square", 0.4); },
+    hit:        function() { SFX.tone(200, 0.12, "sawtooth", 0.6); },
+    kill:       function() { SFX.tone(120, 0.18, "sawtooth", 0.7); },
+    step:       function(n) { SFX.tone(90 + (n % 4) * 30, 0.08, "triangle", 0.5); },
+    ufo:        function() { SFX.tone(660, 0.15, "square", 0.5); },
+    die:        function() { SFX.sequence([[300,0.2,"sawtooth",0.6],[200,0.25,"sawtooth",0.6],[100,0.35,"sawtooth",0.6]]); },
+    menuMove:   function() { SFX.tone(440, 0.03, "sine", 0.3); },
+    menuSelect: function() { SFX.tone(660, 0.07, "square", 0.4); }
 };
+
+// ---------- Input ----------
+Input.init([
+    { name: "left",    label: "Left",    defaults: ["a", "ArrowLeft"] },
+    { name: "right",   label: "Right",   defaults: ["d", "ArrowRight"] },
+    { name: "primary", label: "Fire",    defaults: [" ", "Mouse0"] },
+    { name: "up",      label: "Menu Up", defaults: ["w", "ArrowUp"] },
+    { name: "down",    label: "Menu Dn", defaults: ["s", "ArrowDown"] },
+    { name: "confirm", label: "Confirm", defaults: ["Enter"] },
+    { name: "pause",   label: "Menu",    defaults: ["Escape"] },
+]);
+Input.attach(window);
 
 // ---------- Game constants ----------
 var ROWS = 5;
@@ -101,8 +84,7 @@ var state = {
     stars: [],
     waveStart: 0,
     menuIndex: 0,
-    activeScreen: "title",
-    keys: {}
+    activeScreen: "title"
 };
 
 // ---------- Stars (bg) ----------
@@ -456,39 +438,32 @@ function goToTitle() {
     showOverlay("title");
 }
 
-// ---------- Input ----------
-document.body.addEventListener("keydown", function(e) {
-    var key = e.key;
-    if (state.mode === "title" || state.mode === "gameover" || state.mode === "howtoplay" ||
-        (state.activeScreen && document.getElementById("overlay").style.display !== "none")) {
-        // Menu nav
-        var overlay = document.getElementById("overlay");
-        if (overlay && overlay.style.display !== "none") {
-            if (e.repeat) return;
-            if (key === "ArrowUp") {
-                var items = getMenuItems();
-                state.menuIndex = (state.menuIndex - 1 + items.length) % items.length;
-                updateSelection(); Audio.menuMove(); return;
-            }
-            if (key === "ArrowDown") {
-                var items2 = getMenuItems();
-                state.menuIndex = (state.menuIndex + 1) % items2.length;
-                updateSelection(); Audio.menuMove(); return;
-            }
-            if (key === "Enter" || key === " ") { activateMenuItem(); return; }
-            if (key === "Escape") { goToTitle(); return; }
-            return;
+// ---------- Input routing ----------
+Input.onAction(function(action, phase) {
+    if (!action) return;
+    var overlay = document.getElementById("overlay");
+    var overlayOpen = overlay && overlay.style.display !== "none";
+    if (overlayOpen) {
+        if (phase !== "down") return;
+        if (action === "up") {
+            var items = getMenuItems();
+            state.menuIndex = (state.menuIndex - 1 + items.length) % items.length;
+            updateSelection(); Audio.menuMove();
+        } else if (action === "down") {
+            var items2 = getMenuItems();
+            state.menuIndex = (state.menuIndex + 1) % items2.length;
+            updateSelection(); Audio.menuMove();
+        } else if (action === "confirm") {
+            activateMenuItem();
+        } else if (action === "pause") {
+            goToTitle();
         }
+        return;
     }
-    if (state.mode === "playing") {
-        state.keys[key] = true;
-        if ((key === " " || key === "Spacebar") && !e.repeat) fireBullet();
-        if (key === "Escape") goToTitle();
+    if (state.mode === "playing" && phase === "down") {
+        if (action === "primary") fireBullet();
+        else if (action === "pause") goToTitle();
     }
-});
-
-document.body.addEventListener("keyup", function(e) {
-    state.keys[e.key] = false;
 });
 
 function fireBullet() {
@@ -537,12 +512,8 @@ function update(dt, W, H) {
 
     // Player movement
     var pSpeed = PLAYER_SPEED;
-    if (state.keys["ArrowLeft"] || state.keys["a"] || state.keys["A"]) {
-        state.player.x -= pSpeed * dt / 1000;
-    }
-    if (state.keys["ArrowRight"] || state.keys["d"] || state.keys["D"]) {
-        state.player.x += pSpeed * dt / 1000;
-    }
+    if (Input.down("left"))  state.player.x -= pSpeed * dt / 1000;
+    if (Input.down("right")) state.player.x += pSpeed * dt / 1000;
     if (state.player.x < 20) state.player.x = 20;
     if (state.player.x + PLAYER_W > W - 20) state.player.x = W - 20 - PLAYER_W;
 
@@ -841,27 +812,19 @@ function draw(ctx, W, H) {
     drawParticles(ctx);
 }
 
-// ---------- Main loop ----------
-var lastFrame = 0;
-function loop(timestamp) {
-    requestAnimationFrame(loop);
-    var dt = timestamp - lastFrame;
-    lastFrame = timestamp;
-    if (dt > 100) dt = 100;
-    if (dt < 0) dt = 0;
-    var W = getW(), H = getH();
-    update(dt, W, H);
-    ctx.clearRect(0, 0, W, H);
-    draw(ctx, W, H);
-}
-
 // ---------- Boot ----------
 Audio.init();
 initStars(getW(), getH());
 updateHUD();
 showOverlay("title");
-lastFrame = performance.now();
-requestAnimationFrame(loop);
+GameLoop.create({
+    tick: function(dt) { update(dt, getW(), getH()); },
+    draw: function() {
+        var W = getW(), H = getH();
+        ctx.clearRect(0, 0, W, H);
+        draw(ctx, W, H);
+    },
+}).start();
 
 console.log("Invaders loaded!");
 })();

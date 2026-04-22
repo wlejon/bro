@@ -37,73 +37,25 @@ var ROUND_TIME_MS = 60 * 1000;
 // Audio (broaudio)
 // =========================================================================
 var Audio = {
-    ctx: null,
-    sfxBus: -1,
-    init: function() {
-        try { this.ctx = new AudioContext(); } catch(e) { this.ctx = null; return; }
-        try {
-            this.sfxBus = this.ctx.createBus();
-            this.ctx.setBusGain(this.sfxBus, 0.7);
-        } catch(e) { this.sfxBus = -1; }
-    },
-    tone: function(freq, dur, type, vol) {
-        if (!this.ctx) return;
-        try {
-            var id = this.ctx.createVoice();
-            this.ctx.setVoiceWaveform(id, type || "square");
-            this.ctx.setVoiceFrequency(id, freq);
-            this.ctx.setVoiceGain(id, (vol === undefined ? 0.6 : vol) * 15.0);
-            this.ctx.setVoiceAttack(id, 0.003);
-            this.ctx.setVoiceDecay(id, dur * 0.8);
-            this.ctx.setVoiceSustain(id, 0.0);
-            this.ctx.setVoiceRelease(id, 0.02);
-            if (this.sfxBus !== -1) this.ctx.setVoiceBus(id, this.sfxBus);
-            var t = this.ctx.currentTime;
-            this.ctx.startVoice(id, t);
-            this.ctx.stopVoice(id, t + dur);
-        } catch(e) {}
-    },
-    hop: function() { this.tone(520, 0.06, "square", 0.5); },
-    squish: function() {
-        this.tone(180, 0.2, "sawtooth", 0.7);
-        var self = this;
-        setTimeout(function(){ self.tone(100, 0.3, "sawtooth", 0.7); }, 120);
-    },
-    drown: function() {
-        this.tone(300, 0.15, "triangle", 0.6);
-        var self = this;
-        setTimeout(function(){ self.tone(150, 0.3, "triangle", 0.6); }, 130);
-    },
-    pad: function() {
-        this.tone(660, 0.1, "square", 0.7);
-        var self = this;
-        setTimeout(function(){ self.tone(880, 0.15, "square", 0.8); }, 90);
-    },
-    win: function() {
-        var self = this;
-        this.tone(523, 0.1, "square", 0.7);
-        setTimeout(function(){ self.tone(659, 0.1, "square", 0.7); }, 100);
-        setTimeout(function(){ self.tone(784, 0.1, "square", 0.7); }, 200);
-        setTimeout(function(){ self.tone(1047, 0.2, "square", 0.8); }, 300);
-    },
-    menu: function() { this.tone(400, 0.03, "sine", 0.3); },
-    select: function() { this.tone(600, 0.08, "square", 0.4); }
+    init:   function() { SFX.init(); },
+    hop:    function() { SFX.tone(520, 0.06, "square", 0.5); },
+    squish: function() { SFX.sequence([[180,0.2,"sawtooth",0.7],[100,0.3,"sawtooth",0.7]]); },
+    drown:  function() { SFX.sequence([[300,0.15,"triangle",0.6],[150,0.3,"triangle",0.6]]); },
+    pad:    function() { SFX.sequence([[660,0.1,"square",0.7],[880,0.15,"square",0.8]]); },
+    win:    function() { SFX.sequence([[523,0.1,"square",0.7],[659,0.1,"square",0.7],[784,0.1,"square",0.7],[1047,0.2,"square",0.8]]); },
+    menu:   function() { SFX.tone(400, 0.03, "sine", 0.3); },
+    select: function() { SFX.tone(600, 0.08, "square", 0.4); }
 };
 
 // =========================================================================
-// Storage
+// Storage (namespaced localStorage via lib/storage)
 // =========================================================================
-var Storage = {
-    highScore: 0,
-    load: function() {
-        try {
-            var s = localStorage.getItem("hopper_hi");
-            if (s) this.highScore = parseInt(s, 10) || 0;
-        } catch(e) {}
-    },
-    save: function() {
-        try { localStorage.setItem("hopper_hi", String(this.highScore)); } catch(e) {}
-    }
+var _hopperStore = Storage.create("hopper");
+var Store = {
+    get highScore() { return _hopperStore.get("highScore") || 0; },
+    set highScore(v) { _hopperStore.set("highScore", v); },
+    load: function() { _hopperStore.load({ highScore: 0 }); },
+    save: function() { _hopperStore.save(); },
 };
 
 // =========================================================================
@@ -354,18 +306,18 @@ function handleGoalReached() {
         // Score: pad bonus + time bonus fraction
         var timeBonus = Math.floor(Game.timeLeft / 100);
         Game.score += 50 + timeBonus;
-        if (Game.score > Storage.highScore) {
-            Storage.highScore = Game.score;
-            Storage.save();
+        if (Game.score > Store.highScore) {
+            Store.highScore = Game.score;
+            Store.save();
         }
         Audio.pad();
         if (Game.padsFilled >= Game.pads.length) {
             // Round complete
             Audio.win();
             Game.score += 500; // round bonus
-            if (Game.score > Storage.highScore) {
-                Storage.highScore = Game.score;
-                Storage.save();
+            if (Game.score > Store.highScore) {
+                Store.highScore = Game.score;
+                Store.save();
             }
             showCenterText("ROUND CLEAR!", 1500);
             Game.respawnPlayer(false);
@@ -402,7 +354,7 @@ function showCenterText(txt, ms) {
 function updateHUD() {
     var el;
     el = document.getElementById("hud-score"); if (el) el.textContent = String(Game.score);
-    el = document.getElementById("hud-hi"); if (el) el.textContent = String(Storage.highScore);
+    el = document.getElementById("hud-hi"); if (el) el.textContent = String(Store.highScore);
     el = document.getElementById("hud-lives"); if (el) el.textContent = String(Game.lives);
     el = document.getElementById("hud-time"); if (el) el.textContent = String(Math.ceil(Game.timeLeft / 1000));
     el = document.getElementById("hud-pads"); if (el) el.textContent = Game.padsFilled + "/" + Game.pads.length;
@@ -428,9 +380,9 @@ function hop(dx, dy) {
         Game.maxRowReached = nr;
         Game.score += 10;
     }
-    if (Game.score > Storage.highScore) {
-        Storage.highScore = Game.score;
-        Storage.save();
+    if (Game.score > Store.highScore) {
+        Store.highScore = Game.score;
+        Store.save();
     }
 }
 
@@ -642,11 +594,11 @@ var Screens = (function() {
                 lines.push("Score: " + Game.score);
                 lines.push("Level: " + Game.level);
                 lines.push("Pads: " + Game.padsFilled + "/" + Game.pads.length);
-                if (Game.score >= Storage.highScore && Game.score > 0) {
+                if (Game.score >= Store.highScore && Game.score > 0) {
                     lines.push("");
                     lines.push("\u2605 NEW HIGH SCORE \u2605");
                 } else {
-                    lines.push("Best: " + Storage.highScore);
+                    lines.push("Best: " + Store.highScore);
                 }
                 statsEl.textContent = lines.join("\n");
             }
@@ -656,6 +608,8 @@ var Screens = (function() {
         }
     }
 
+    // keydown accepts DOM key strings — the app maps lib/input actions to
+    // ArrowUp/ArrowDown/ArrowLeft/ArrowRight/Enter/Escape before calling.
     function keydown(key) {
         if (current === "title") {
             menuNav("title", key, function(idx) {
@@ -736,40 +690,46 @@ var Screens = (function() {
 // Main loop
 // =========================================================================
 Audio.init();
-Storage.load();
+Store.load();
+
+Input.init([
+    { name: "up",      label: "Hop Up",    defaults: ["w", "ArrowUp"] },
+    { name: "down",    label: "Hop Down",  defaults: ["s", "ArrowDown"] },
+    { name: "left",    label: "Hop Left",  defaults: ["a", "ArrowLeft"] },
+    { name: "right",   label: "Hop Right", defaults: ["d", "ArrowRight"] },
+    { name: "confirm", label: "Confirm",   defaults: ["Enter", " "] },
+    { name: "pause",   label: "Menu",      defaults: ["Escape"] },
+]);
+Input.attach(window);
+
 Screens.init();
 
-document.body.addEventListener("keydown", function(e) {
-    if (e.repeat && Screens.getName() === "playing") return;
-    Screens.keydown(e.key);
+Input.onAction(function(action, phase) {
+    if (phase !== "down" || !action) return;
+    if (action === "up")         Screens.keydown("ArrowUp");
+    else if (action === "down")  Screens.keydown("ArrowDown");
+    else if (action === "left")  Screens.keydown("ArrowLeft");
+    else if (action === "right") Screens.keydown("ArrowRight");
+    else if (action === "confirm") Screens.keydown("Enter");
+    else if (action === "pause")   Screens.keydown("Escape");
 });
 
-var lastFrameTime = performance.now();
-function gameLoop(timestamp) {
-    requestAnimationFrame(gameLoop);
-    var dt = timestamp - lastFrameTime;
-    lastFrameTime = timestamp;
-    if (dt > 100) dt = 100;
-    if (dt < 0) dt = 0;
-
-    var W = getW(), H = getH();
-    recalcLayout(W, H);
-
-    if (Screens.getName() === "playing") {
-        update(dt);
-    }
-
-    if (Screens.getName() === "playing" || Screens.getName() === "gameover") {
-        draw(W, H);
-    } else {
-        ctx.fillStyle = "#06060a";
-        ctx.fillRect(0, 0, W, H);
-    }
-}
-
 Screens.switchTo("title");
-lastFrameTime = performance.now();
-requestAnimationFrame(gameLoop);
-
+GameLoop.create({
+    tick: function(dt) {
+        var W = getW(), H = getH();
+        recalcLayout(W, H);
+        if (Screens.getName() === "playing") update(dt);
+    },
+    draw: function() {
+        var W = getW(), H = getH();
+        if (Screens.getName() === "playing" || Screens.getName() === "gameover") {
+            draw(W, H);
+        } else {
+            ctx.fillStyle = "#06060a";
+            ctx.fillRect(0, 0, W, H);
+        }
+    },
+}).start();
 console.log("Hopper loaded");
 })();

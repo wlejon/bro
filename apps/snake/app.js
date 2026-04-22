@@ -2,87 +2,51 @@
 (function() {
 "use strict";
 
-// ---------- Storage ----------
-var Storage = {
-    highScore: 0,
-    load: function() {
-        try {
-            var s = localStorage.getItem("snake_highscore");
-            if (s !== null) this.highScore = parseInt(s, 10) || 0;
-        } catch(e) {}
-    },
-    save: function() {
-        try { localStorage.setItem("snake_highscore", String(this.highScore)); } catch(e) {}
-    }
-};
-Storage.load();
+SFX.init();
+const store = Storage.create("snake");
+store.load({ highScore: 0 });
 
-// ---------- Audio (optional, minimal) ----------
-var Audio = {
-    ctx: null,
-    init: function() {
-        try { this.ctx = new AudioContext(); } catch(e) { this.ctx = null; }
-    },
-    tone: function(freq, duration, type, vol) {
-        if (!this.ctx) return;
-        try {
-            var id = this.ctx.createVoice();
-            this.ctx.setVoiceWaveform(id, type || "square");
-            this.ctx.setVoiceFrequency(id, freq);
-            this.ctx.setVoiceGain(id, (vol || 0.5) * 12.0);
-            this.ctx.setVoiceAttack(id, 0.003);
-            this.ctx.setVoiceDecay(id, duration * 0.8);
-            this.ctx.setVoiceSustain(id, 0.0);
-            this.ctx.setVoiceRelease(id, 0.03);
-            var t = this.ctx.currentTime;
-            this.ctx.startVoice(id, t);
-            this.ctx.stopVoice(id, t + duration);
-        } catch(e) {}
-    },
-    sfxEat:    function() { this.tone(660, 0.08, "square", 0.6); },
-    sfxDie:    function() {
-        var a = this;
-        a.tone(300, 0.15, "sawtooth", 0.5);
-        setTimeout(function(){ a.tone(200, 0.2, "sawtooth", 0.5); }, 140);
-        setTimeout(function(){ a.tone(120, 0.3, "sawtooth", 0.5); }, 300);
-    },
-    sfxMenu:   function() { this.tone(440, 0.04, "sine", 0.3); },
-    sfxSelect: function() { this.tone(660, 0.07, "square", 0.4); }
+Input.init([
+    { name: "up",      label: "Up",      defaults: ["w", "ArrowUp"] },
+    { name: "down",    label: "Down",    defaults: ["s", "ArrowDown"] },
+    { name: "left",    label: "Left",    defaults: ["a", "ArrowLeft"] },
+    { name: "right",   label: "Right",   defaults: ["d", "ArrowRight"] },
+    { name: "pause",   label: "Pause",   defaults: ["Escape", "p"] },
+    { name: "confirm", label: "Confirm", defaults: ["Enter", " "] },
+]);
+Input.attach(window);
+
+// ---------- SFX ----------
+const sfx = {
+    eat:    () => SFX.tone(660, 0.08, "square", 0.6),
+    die:    () => { SFX.sequence([[300,0.15,"sawtooth",0.5],[200,0.2,"sawtooth",0.5],[120,0.3,"sawtooth",0.5]]); },
+    menu:   () => SFX.tone(440, 0.04, "sine", 0.3),
+    select: () => SFX.tone(660, 0.07, "square", 0.4),
 };
-Audio.init();
 
 // ---------- Canvas ----------
-var canvas = document.getElementById("game");
-var ctx = canvas.getContext("2d");
-var getW = function() { return ctx.canvasWidth || canvas.width || 800; };
-var getH = function() { return ctx.canvasHeight || canvas.height || 700; };
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const getW = () => ctx.canvasWidth || canvas.width || 800;
+const getH = () => ctx.canvasHeight || canvas.height || 700;
 
-// ---------- Game constants ----------
-var COLS = 28;
-var ROWS = 22;
-var TICK_MIN = 55;   // ms per step at max speed
-var TICK_MAX = 140;  // ms per step at start
+// ---------- Constants ----------
+const COLS = 28, ROWS = 22;
+const TICK_MIN = 55, TICK_MAX = 140;
 
 // ---------- Game state ----------
-var game = null;
+let game = null;
 
 function createGame() {
-    var g = {
+    const g = {
         grid: { cols: COLS, rows: ROWS },
-        snake: [],           // array of {x,y}; index 0 is head
-        dir: { x: 1, y: 0 },
-        nextDir: { x: 1, y: 0 },
-        food: { x: 0, y: 0 },
-        growPending: 0,
-        score: 0,
-        stepInterval: TICK_MAX,
-        stepTimer: 0,
-        alive: true,
-        flashTimer: 0
+        snake: [], dir: { x: 1, y: 0 }, nextDir: { x: 1, y: 0 },
+        food: { x: 0, y: 0 }, growPending: 0, score: 0,
+        stepInterval: TICK_MAX, stepTimer: 0,
+        alive: true, flashTimer: 0,
     };
-    var cx = Math.floor(COLS / 2);
-    var cy = Math.floor(ROWS / 2);
-    g.snake.push({ x: cx,     y: cy });
+    const cx = Math.floor(COLS / 2), cy = Math.floor(ROWS / 2);
+    g.snake.push({ x: cx, y: cy });
     g.snake.push({ x: cx - 1, y: cy });
     g.snake.push({ x: cx - 2, y: cy });
     placeFood(g);
@@ -90,168 +54,118 @@ function createGame() {
 }
 
 function placeFood(g) {
-    // Pick random empty cell
-    for (var tries = 0; tries < 500; tries++) {
-        var x = Math.floor(Math.random() * g.grid.cols);
-        var y = Math.floor(Math.random() * g.grid.rows);
-        var onSnake = false;
-        for (var i = 0; i < g.snake.length; i++) {
-            if (g.snake[i].x === x && g.snake[i].y === y) { onSnake = true; break; }
-        }
+    for (let tries = 0; tries < 500; tries++) {
+        const x = Math.floor(Math.random() * g.grid.cols);
+        const y = Math.floor(Math.random() * g.grid.rows);
+        let onSnake = false;
+        for (const s of g.snake) if (s.x === x && s.y === y) { onSnake = true; break; }
         if (!onSnake) { g.food.x = x; g.food.y = y; return; }
     }
 }
 
 function stepGame(g) {
     if (!g.alive) return;
-
-    // Commit queued direction (prevent instant reverse into self)
     if (!(g.nextDir.x === -g.dir.x && g.nextDir.y === -g.dir.y)) {
-        g.dir.x = g.nextDir.x;
-        g.dir.y = g.nextDir.y;
+        g.dir.x = g.nextDir.x; g.dir.y = g.nextDir.y;
     }
-
-    var head = g.snake[0];
-    var nx = head.x + g.dir.x;
-    var ny = head.y + g.dir.y;
-
-    // Wall collision
-    if (nx < 0 || ny < 0 || nx >= g.grid.cols || ny >= g.grid.rows) {
-        die(g);
-        return;
-    }
-
-    // Self collision (ignore tail if it's moving out of the way and we're not growing)
-    var tailIdx = g.snake.length - 1;
-    for (var i = 0; i < g.snake.length; i++) {
+    const head = g.snake[0];
+    const nx = head.x + g.dir.x, ny = head.y + g.dir.y;
+    if (nx < 0 || ny < 0 || nx >= g.grid.cols || ny >= g.grid.rows) { die(g); return; }
+    const tailIdx = g.snake.length - 1;
+    for (let i = 0; i < g.snake.length; i++) {
         if (i === tailIdx && g.growPending === 0) continue;
-        if (g.snake[i].x === nx && g.snake[i].y === ny) {
-            die(g);
-            return;
-        }
+        if (g.snake[i].x === nx && g.snake[i].y === ny) { die(g); return; }
     }
-
-    // Move: prepend new head
     g.snake.unshift({ x: nx, y: ny });
-
-    // Food?
     if (nx === g.food.x && ny === g.food.y) {
         g.score += 10;
         g.growPending += 1;
-        // Speed up: interpolate from TICK_MAX toward TICK_MIN based on length
-        var len = g.snake.length;
-        var t = Math.min(1, (len - 3) / 40);
+        const t = Math.min(1, (g.snake.length - 3) / 40);
         g.stepInterval = TICK_MAX + (TICK_MIN - TICK_MAX) * t;
-        Audio.sfxEat();
+        sfx.eat();
         placeFood(g);
         updateHUD(g);
         g.flashTimer = 120;
     }
-
-    // Consume grow or pop tail
-    if (g.growPending > 0) {
-        g.growPending -= 1;
-    } else {
-        g.snake.pop();
-    }
+    if (g.growPending > 0) g.growPending -= 1;
+    else g.snake.pop();
 }
 
 function die(g) {
     g.alive = false;
-    Audio.sfxDie();
-    if (g.score > Storage.highScore) {
-        Storage.highScore = g.score;
-        Storage.save();
+    sfx.die();
+    if (g.score > store.get("highScore")) {
+        store.set("highScore", g.score);
+        store.save();
     }
-    Screens.switchTo("gameover");
+    screens.switchTo("gameover");
 }
 
 // ---------- Rendering ----------
 function computeBoard(W, H) {
-    var margin = 40;
-    var availW = W - margin * 2;
-    var availH = H - margin * 2;
-    var cell = Math.floor(Math.min(availW / COLS, availH / ROWS));
+    const margin = 40;
+    const availW = W - margin * 2, availH = H - margin * 2;
+    let cell = Math.floor(Math.min(availW / COLS, availH / ROWS));
     if (cell < 6) cell = 6;
-    var boardW = cell * COLS;
-    var boardH = cell * ROWS;
-    var ox = Math.floor((W - boardW) / 2);
-    var oy = Math.floor((H - boardH) / 2);
-    return { ox: ox, oy: oy, cell: cell, w: boardW, h: boardH };
+    const boardW = cell * COLS, boardH = cell * ROWS;
+    return {
+        ox: Math.floor((W - boardW) / 2),
+        oy: Math.floor((H - boardH) / 2),
+        cell, w: boardW, h: boardH,
+    };
 }
 
 function drawGame(g, W, H) {
-    var b = computeBoard(W, H);
+    const b = computeBoard(W, H);
 
-    // Board background
     ctx.fillStyle = "#0d1a12";
     ctx.fillRect(b.ox, b.oy, b.w, b.h);
 
-    // Subtle grid
     ctx.strokeStyle = "#142b1e";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (var c = 1; c < COLS; c++) {
-        var x = b.ox + c * b.cell + 0.5;
-        ctx.moveTo(x, b.oy);
-        ctx.lineTo(x, b.oy + b.h);
+    for (let c = 1; c < COLS; c++) {
+        const x = b.ox + c * b.cell + 0.5;
+        ctx.moveTo(x, b.oy); ctx.lineTo(x, b.oy + b.h);
     }
-    for (var r = 1; r < ROWS; r++) {
-        var y = b.oy + r * b.cell + 0.5;
-        ctx.moveTo(b.ox, y);
-        ctx.lineTo(b.ox + b.w, y);
+    for (let r = 1; r < ROWS; r++) {
+        const y = b.oy + r * b.cell + 0.5;
+        ctx.moveTo(b.ox, y); ctx.lineTo(b.ox + b.w, y);
     }
     ctx.stroke();
 
-    // Board border
     ctx.strokeStyle = "#2a5a3b";
     ctx.lineWidth = 2;
     ctx.strokeRect(b.ox - 1, b.oy - 1, b.w + 2, b.h + 2);
 
-    // Food
-    var pulse = 1.0;
-    if (g.flashTimer > 0) pulse = 1.0 + 0.15 * (g.flashTimer / 120);
-    var pad = Math.max(2, Math.floor(b.cell * 0.15));
-    var fx = b.ox + g.food.x * b.cell + pad;
-    var fy = b.oy + g.food.y * b.cell + pad;
-    var fs = b.cell - pad * 2;
+    const pulse = g.flashTimer > 0 ? 1.0 + 0.15 * (g.flashTimer / 120) : 1.0;
+    const pad = Math.max(2, Math.floor(b.cell * 0.15));
+    const fx = b.ox + g.food.x * b.cell + pad;
+    const fy = b.oy + g.food.y * b.cell + pad;
+    const fs = b.cell - pad * 2;
+    const cxF = fx + fs / 2, cyF = fy + fs / 2;
     ctx.fillStyle = "#e74c3c";
-    ctx.beginPath();
-    var cx = fx + fs / 2, cy = fy + fs / 2;
-    ctx.arc(cx, cy, (fs / 2) * pulse, 0, Math.PI * 2);
-    ctx.fill();
-    // highlight
+    ctx.beginPath(); ctx.arc(cxF, cyF, (fs / 2) * pulse, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = "rgba(255,255,255,0.35)";
-    ctx.beginPath();
-    ctx.arc(cx - fs * 0.15, cy - fs * 0.15, fs * 0.12, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(cxF - fs * 0.15, cyF - fs * 0.15, fs * 0.12, 0, Math.PI * 2); ctx.fill();
 
-    // Snake
-    for (var i = g.snake.length - 1; i >= 0; i--) {
-        var seg = g.snake[i];
-        var sx = b.ox + seg.x * b.cell;
-        var sy = b.oy + seg.y * b.cell;
-        var isHead = (i === 0);
-        // Gradient shade: head brightest, body fades slightly with length
-        var shade = 1.0 - Math.min(0.4, i / (g.snake.length + 4));
-        var rCol = Math.floor(123 * shade);
-        var gCol = Math.floor(216 * shade);
-        var bCol = Math.floor(143 * shade);
-        ctx.fillStyle = "rgb(" + rCol + "," + gCol + "," + bCol + ")";
-        var p = Math.max(1, Math.floor(b.cell * 0.08));
+    for (let i = g.snake.length - 1; i >= 0; i--) {
+        const seg = g.snake[i];
+        const sx = b.ox + seg.x * b.cell, sy = b.oy + seg.y * b.cell;
+        const shade = 1.0 - Math.min(0.4, i / (g.snake.length + 4));
+        ctx.fillStyle = `rgb(${Math.floor(123*shade)},${Math.floor(216*shade)},${Math.floor(143*shade)})`;
+        const p = Math.max(1, Math.floor(b.cell * 0.08));
         ctx.fillRect(sx + p, sy + p, b.cell - p * 2, b.cell - p * 2);
 
-        if (isHead && g.alive) {
-            // Eyes oriented by direction
-            var eyeR = Math.max(1, Math.floor(b.cell * 0.08));
-            var cxh = sx + b.cell / 2;
-            var cyh = sy + b.cell / 2;
-            var off = b.cell * 0.22;
-            var perpX = -g.dir.y, perpY = g.dir.x;
-            var e1x = cxh + g.dir.x * off + perpX * off * 0.5;
-            var e1y = cyh + g.dir.y * off + perpY * off * 0.5;
-            var e2x = cxh + g.dir.x * off - perpX * off * 0.5;
-            var e2y = cyh + g.dir.y * off - perpY * off * 0.5;
+        if (i === 0 && g.alive) {
+            const eyeR = Math.max(1, Math.floor(b.cell * 0.08));
+            const cxh = sx + b.cell / 2, cyh = sy + b.cell / 2;
+            const off = b.cell * 0.22;
+            const perpX = -g.dir.y, perpY = g.dir.x;
+            const e1x = cxh + g.dir.x * off + perpX * off * 0.5;
+            const e1y = cyh + g.dir.y * off + perpY * off * 0.5;
+            const e2x = cxh + g.dir.x * off - perpX * off * 0.5;
+            const e2y = cyh + g.dir.y * off - perpY * off * 0.5;
             ctx.fillStyle = "#06100a";
             ctx.beginPath(); ctx.arc(e1x, e1y, eyeR, 0, Math.PI * 2); ctx.fill();
             ctx.beginPath(); ctx.arc(e2x, e2y, eyeR, 0, Math.PI * 2); ctx.fill();
@@ -261,220 +175,134 @@ function drawGame(g, W, H) {
 
 // ---------- HUD ----------
 function updateHUD(g) {
-    var s = document.getElementById("hud-score");
-    var bst = document.getElementById("hud-best");
-    var l = document.getElementById("hud-length");
-    if (s) s.textContent = String(g.score);
-    if (bst) bst.textContent = String(Storage.highScore);
-    if (l) l.textContent = String(g.snake.length);
+    const scoreEl = document.getElementById("hud-score");
+    const bestEl  = document.getElementById("hud-best");
+    const lenEl   = document.getElementById("hud-length");
+    if (scoreEl) scoreEl.textContent = String(g ? g.score : 0);
+    if (bestEl)  bestEl.textContent  = String(store.get("highScore"));
+    if (lenEl)   lenEl.textContent   = String(g ? g.snake.length : 3);
 }
 
 // ---------- Screens ----------
-var Screens = {
-    current: "title",
-    selIndex: {},   // screen -> selected menu index
+const hudEl = document.getElementById("hud");
+const overlayEl = document.getElementById("overlay");
 
-    init: function() {
-        this.selIndex["title"] = 0;
-        this.selIndex["gameover"] = 0;
-        this.selIndex["pause"] = 0;
-        this.selIndex["howtoplay"] = 0;
-    },
+const screens = Screens.create({
+    overlay: "#overlay",
+    itemsSelector: ".menu-items",
+    onMenuMove: sfx.menu,
+    onMenuSelect: sfx.select,
+});
 
-    getName: function() { return this.current; },
-
-    getMenuItems: function(screenId) {
-        var el = document.getElementById("screen-" + screenId);
-        if (!el) return [];
-        return el.querySelectorAll(".menu-item");
-    },
-
-    refreshSelection: function() {
-        var items = this.getMenuItems(this.current);
-        var idx = this.selIndex[this.current] || 0;
-        if (idx >= items.length) idx = 0;
-        this.selIndex[this.current] = idx;
-        for (var i = 0; i < items.length; i++) {
-            if (i === idx) items[i].classList.add("selected");
-            else items[i].classList.remove("selected");
-        }
-    },
-
-    switchTo: function(name) {
-        // Hide all screens
-        var screens = document.querySelectorAll(".screen");
-        for (var i = 0; i < screens.length; i++) {
-            screens[i].style.display = "none";
-        }
-
-        var overlay = document.getElementById("overlay");
-        var hud = document.getElementById("hud");
-
-        this.current = name;
-
-        if (name === "playing") {
-            overlay.style.display = "none";
-            hud.style.display = "block";
-            updateHUD(game);
-            return;
-        }
-
-        overlay.style.display = "block";
-        hud.style.display = (name === "pause" || name === "gameover") ? "block" : "none";
-
-        var screenEl = document.getElementById("screen-" + name);
-        if (screenEl) screenEl.style.display = "block";
-
-        if (name === "gameover") {
-            var stats = document.getElementById("gameover-stats");
-            if (stats) {
-                var best = Storage.highScore;
-                var newBest = (game && game.score >= best && game.score > 0) ? "  (NEW BEST!)" : "";
-                stats.textContent =
-                    "Score:  " + (game ? game.score : 0) + newBest + "\n" +
-                    "Length: " + (game ? game.snake.length : 0) + "\n" +
-                    "Best:   " + best;
-            }
-            updateHUD(game);
-        }
-
-        this.refreshSelection();
-    },
-
-    moveSel: function(delta) {
-        var items = this.getMenuItems(this.current);
-        if (items.length === 0) return;
-        var idx = this.selIndex[this.current] || 0;
-        idx = (idx + delta + items.length) % items.length;
-        this.selIndex[this.current] = idx;
-        this.refreshSelection();
-        Audio.sfxMenu();
-    },
-
-    activate: function() {
-        var items = this.getMenuItems(this.current);
-        var idx = this.selIndex[this.current] || 0;
-        if (idx >= items.length) return;
-        var action = items[idx].getAttribute("data-action");
-        Audio.sfxSelect();
-        this.doAction(action);
-    },
-
-    doAction: function(action) {
-        switch (action) {
-            case "play":
-            case "restart":
-                game = createGame();
-                updateHUD(game);
-                this.switchTo("playing");
-                break;
-            case "resume":
-                this.switchTo("playing");
-                break;
-            case "quit":
-                this.switchTo("title");
-                break;
-            case "howtoplay":
-                this.switchTo("howtoplay");
-                break;
-            case "back":
-                this.switchTo("title");
-                break;
-        }
-    },
-
-    keydown: function(key) {
-        if (this.current === "playing") {
-            // Direction input
-            var nd = null;
-            if (key === "ArrowUp" || key === "w" || key === "W") nd = { x: 0, y: -1 };
-            else if (key === "ArrowDown" || key === "s" || key === "S") nd = { x: 0, y: 1 };
-            else if (key === "ArrowLeft" || key === "a" || key === "A") nd = { x: -1, y: 0 };
-            else if (key === "ArrowRight" || key === "d" || key === "D") nd = { x: 1, y: 0 };
-            if (nd && game) {
-                // Disallow direct reverse relative to current committed dir
-                if (!(nd.x === -game.dir.x && nd.y === -game.dir.y)) {
-                    game.nextDir = nd;
-                }
-                return;
-            }
-            if (key === "Escape" || key === "p" || key === "P") {
-                this.switchTo("pause");
-                return;
-            }
-            return;
-        }
-
-        // Menu screens
-        if (key === "ArrowUp" || key === "w" || key === "W") { this.moveSel(-1); return; }
-        if (key === "ArrowDown" || key === "s" || key === "S") { this.moveSel(1); return; }
-        if (key === "Enter" || key === " ") { this.activate(); return; }
-        if (key === "Escape") {
-            if (this.current === "pause") this.doAction("resume");
-            else if (this.current === "howtoplay") this.doAction("back");
-            else if (this.current === "gameover") this.doAction("quit");
-            return;
-        }
+function doAction(action) {
+    switch (action) {
+        case "play":
+        case "restart":
+            game = createGame(); updateHUD(game); screens.switchTo("playing"); break;
+        case "resume":   screens.switchTo("playing"); break;
+        case "quit":     screens.switchTo("title"); break;
+        case "howtoplay":screens.switchTo("howtoplay"); break;
+        case "back":     screens.switchTo("title"); break;
     }
-};
+}
 
-// ---------- Update / draw ----------
+function showOverlay(name, withHud) {
+    screens.showOverlay(name);
+    hudEl.style.display = withHud ? "block" : "none";
+}
+
+screens.define("title", {
+    enter: () => showOverlay("title", false),
+    keydown: (key) => {
+        screens.menuNav("title", key, (idx, el) => doAction(el.getAttribute("data-action")),
+            { onBack: () => doAction("quit") });
+    },
+});
+screens.define("howtoplay", {
+    enter: () => showOverlay("howtoplay", false),
+    keydown: (key) => {
+        screens.menuNav("howtoplay", key, (idx, el) => doAction(el.getAttribute("data-action")),
+            { onBack: () => doAction("back") });
+    },
+});
+screens.define("playing", {
+    enter: () => { overlayEl.style.display = "none"; hudEl.style.display = "block"; updateHUD(game); },
+});
+screens.define("pause", {
+    enter: () => showOverlay("pause", true),
+    keydown: (key) => {
+        screens.menuNav("pause", key, (idx, el) => doAction(el.getAttribute("data-action")),
+            { onBack: () => doAction("resume") });
+    },
+});
+screens.define("gameover", {
+    enter: () => {
+        showOverlay("gameover", true);
+        const stats = document.getElementById("gameover-stats");
+        if (stats) {
+            const best = store.get("highScore");
+            const newBest = (game && game.score >= best && game.score > 0) ? "  (NEW BEST!)" : "";
+            stats.textContent =
+                "Score:  " + (game ? game.score : 0) + newBest + "\n" +
+                "Length: " + (game ? game.snake.length : 0) + "\n" +
+                "Best:   " + best;
+        }
+        updateHUD(game);
+    },
+    keydown: (key) => {
+        screens.menuNav("gameover", key, (idx, el) => doAction(el.getAttribute("data-action")),
+            { onBack: () => doAction("quit") });
+    },
+});
+
+screens.switchTo("title");
+
+// ---------- Input routing ----------
+// Rising-edge actions: queue next direction, pause toggle.
+Input.onAction((action, phase) => {
+    if (phase !== "down") return;
+    if (screens.name() === "playing") {
+        let nd = null;
+        if (action === "up")    nd = { x: 0, y: -1 };
+        if (action === "down")  nd = { x: 0, y:  1 };
+        if (action === "left")  nd = { x: -1, y: 0 };
+        if (action === "right") nd = { x: 1,  y: 0 };
+        if (nd && game) {
+            if (!(nd.x === -game.dir.x && nd.y === -game.dir.y)) game.nextDir = nd;
+            return;
+        }
+        if (action === "pause") { screens.switchTo("pause"); return; }
+        return;
+    }
+
+    // Menus: funnel action names back to the screen as raw keys so menuNav
+    // (which speaks in DOM key strings) can handle them uniformly.
+    if (action === "up")      screens.keydown("ArrowUp");
+    else if (action === "down")  screens.keydown("ArrowDown");
+    else if (action === "left")  screens.keydown("ArrowLeft");
+    else if (action === "right") screens.keydown("ArrowRight");
+    else if (action === "confirm") screens.keydown("Enter");
+    else if (action === "pause") screens.keydown("Escape");
+});
+
+// ---------- Loop ----------
 function update(dt) {
-    if (Screens.current !== "playing" || !game || !game.alive) return;
+    if (screens.name() !== "playing" || !game || !game.alive) return;
     game.stepTimer += dt;
     while (game.stepTimer >= game.stepInterval) {
         game.stepTimer -= game.stepInterval;
         stepGame(game);
         if (!game.alive) break;
     }
-    if (game.flashTimer > 0) {
-        game.flashTimer -= dt;
-        if (game.flashTimer < 0) game.flashTimer = 0;
-    }
+    if (game.flashTimer > 0) game.flashTimer = Math.max(0, game.flashTimer - dt);
 }
 
-function draw(W, H) {
+function draw() {
+    const W = getW(), H = getH();
     ctx.fillStyle = "#06100a";
     ctx.fillRect(0, 0, W, H);
     if (game) drawGame(game, W, H);
 }
 
-// ---------- Main loop ----------
-Screens.init();
-Screens.switchTo("title");
-
-var lastFrameTime = performance.now();
-function gameLoop(ts) {
-    requestAnimationFrame(gameLoop);
-    var dt = ts - lastFrameTime;
-    lastFrameTime = ts;
-    if (dt > 100) dt = 100;
-    if (dt < 0) dt = 0;
-
-    var W = getW(), H = getH();
-    update(dt);
-    draw(W, H);
-}
-
-// ---------- Events ----------
-document.body.addEventListener("keydown", function(e) {
-    Screens.keydown(e.key);
-});
-
-// Menu item click support
-document.addEventListener("click", function(e) {
-    var t = e.target;
-    if (!t || !t.classList) return;
-    if (t.classList.contains("menu-item")) {
-        var action = t.getAttribute("data-action");
-        if (action) {
-            Audio.sfxSelect();
-            Screens.doAction(action);
-        }
-    }
-});
-
-requestAnimationFrame(gameLoop);
-
-console.log("Snake loaded!");
+GameLoop.create({ tick: update, draw }).start();
 })();

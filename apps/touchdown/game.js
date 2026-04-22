@@ -181,18 +181,12 @@ T.Game = (function() {
         particles = [];
     }
 
-    // --- Input ---
-    function keydown(key) {
+    // --- Input (sampled each frame from lib/input) ---
+    function sampleInput() {
         if (!state) return;
-        if (key === "ArrowLeft" || key === "a" || key === "A") state.input.left = true;
-        else if (key === "ArrowRight" || key === "d" || key === "D") state.input.right = true;
-        else if (key === "ArrowUp" || key === "w" || key === "W" || key === " " || key === "Spacebar") state.input.thrust = true;
-    }
-    function keyup(key) {
-        if (!state) return;
-        if (key === "ArrowLeft" || key === "a" || key === "A") state.input.left = false;
-        else if (key === "ArrowRight" || key === "d" || key === "D") state.input.right = false;
-        else if (key === "ArrowUp" || key === "w" || key === "W" || key === " " || key === "Spacebar") state.input.thrust = false;
+        state.input.left   = Input.down("left");
+        state.input.right  = Input.down("right");
+        state.input.thrust = Input.down("thrust");
     }
 
     function setPaused(p) { if (state) state.paused = p; }
@@ -265,6 +259,7 @@ T.Game = (function() {
     // --- Physics ---
     function update(dt) {
         if (!state || state.paused || state.gameOver) return;
+        sampleInput();
         var f = dt / 16.67; // normalize so constants behave at 60fps
         if (f > 3) f = 3;
 
@@ -505,8 +500,7 @@ T.Game = (function() {
         advanceLevel: advanceLevel,
         update: update,
         draw: draw,
-        keydown: keydown,
-        keyup: keyup,
+        sampleInput: sampleInput,
         setPaused: setPaused,
         isPaused: isPaused,
         isGameOver: isGameOver,

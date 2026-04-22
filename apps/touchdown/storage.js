@@ -1,31 +1,21 @@
-// storage.js — High score persistence
+// storage.js — High score persistence (wrapped around lib/storage).
 var T = T || {};
 
-T.Storage = {
-    highScore: 0,
-
-    load: function() {
-        try {
-            var s = localStorage.getItem("touchdown_highscore");
-            if (s) {
-                var n = parseInt(s, 10);
-                if (!isNaN(n)) this.highScore = n;
+T.Storage = (function() {
+    var s = Storage.create("touchdown");
+    s.load({ highScore: 0 });
+    return {
+        get highScore() { return s.get("highScore") || 0; },
+        set highScore(v) { s.set("highScore", v); },
+        load: function() { /* already loaded */ },
+        save: function() { s.save(); },
+        maybeUpdate: function(score) {
+            if (score > (s.get("highScore") || 0)) {
+                s.set("highScore", score);
+                s.save();
+                return true;
             }
-        } catch(e) {}
-    },
-
-    save: function() {
-        try {
-            localStorage.setItem("touchdown_highscore", String(this.highScore));
-        } catch(e) {}
-    },
-
-    maybeUpdate: function(score) {
-        if (score > this.highScore) {
-            this.highScore = score;
-            this.save();
-            return true;
+            return false;
         }
-        return false;
-    }
-};
+    };
+})();
