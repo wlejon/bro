@@ -38,6 +38,9 @@
 .thumb[data-app="fps"] {
   background-image: url(thumbnails/fps.png);
 }
+.thumb[data-app="crater"] {
+  background-image: url(thumbnails/crater.png);
+}
 .thumb[data-app="synth"] {
   background-image: url(thumbnails/synth.png);
 }
