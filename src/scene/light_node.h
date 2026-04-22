@@ -62,6 +62,19 @@ public:
     bool castsShadow() const { return castsShadow_; }
     void setCastsShadow(bool b) { castsShadow_ = b; }
 
+    /// Constant depth bias added to the shadow comparison reference value
+    /// (in light-clip [0,1] depth space). Tweak up if acne appears, down if
+    /// peter-panning. Sensible default ~5e-4 for directional, slightly more
+    /// for spot/point. Negative values are allowed.
+    float shadowBias() const { return shadowBias_; }
+    void setShadowBias(float b) { shadowBias_ = b; }
+
+    /// World-space distance to push shadow-receiving fragments along their
+    /// normal before sampling the shadow map. Cheap fix for self-shadow
+    /// acne on curved surfaces; default 0.03.
+    float shadowNormalBias() const { return shadowNormalBias_; }
+    void setShadowNormalBias(float b) { shadowNormalBias_ = b; }
+
 private:
     Kind kind_ = Kind::Directional;
     Vec3 direction_{0.0f, -1.0f, 0.0f};
@@ -70,7 +83,9 @@ private:
     float range_ = 10.0f;
     float innerAngle_ = 0.35f;  // ~20 deg
     float outerAngle_ = 0.52f;  // ~30 deg
-    bool castsShadow_ = false;  // reserved for future shadow pass
+    bool castsShadow_ = false;
+    float shadowBias_ = 5e-4f;
+    float shadowNormalBias_ = 0.03f;
 };
 
 } // namespace bro::scene

@@ -186,13 +186,18 @@ void MeshNode::uploadToGPU() {
 }
 
 void MeshNode::onRender(SceneGraph& graph) {
-    if (mesh_.empty()) return;
+    drawRaw();
+}
+
+bool MeshNode::drawRaw() {
+    if (mesh_.empty()) return false;
     if (gpuDirty_) uploadToGPU();
-    if (!vao_ || indexCount_ == 0) return;
+    if (!vao_ || indexCount_ == 0) return false;
 
     glBindVertexArray(vao_);
     glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
+    return true;
 }
 
 } // namespace bro::scene

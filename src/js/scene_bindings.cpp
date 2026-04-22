@@ -1698,6 +1698,36 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
                     static_cast<scene::LightNode*>(w->node)->setOuterAngle((float)val);
             })
+        .prop("castsShadow",
+            [](NodeWrapper* w) -> bool {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return static_cast<scene::LightNode*>(w->node)->castsShadow();
+                return false;
+            },
+            [](NodeWrapper* w, bool val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setCastsShadow(val);
+            })
+        .prop("shadowBias",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->shadowBias());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setShadowBias((float)val);
+            })
+        .prop("shadowNormalBias",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->shadowNormalBias());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setShadowNormalBias((float)val);
+            })
 
         // Shape properties (silently return undefined / no-op for non-shape nodes)
         .prop("width",

@@ -178,6 +178,19 @@ public:
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }
 
+    // --- Shadow mapping ---
+
+    /// Configure shadow atlas and quality. `atlasSize` is the side length of
+    /// the square depth texture (e.g. 4096). `pcfTaps` is 1 (single sample)
+    /// or 3 (3x3 PCF, default). Defaults are sane — call only to tune.
+    void setShadowQuality(int atlasSize, int pcfTaps) {
+        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 4096;
+        shadowPCFTaps_ = (pcfTaps == 1) ? 1 : 3;
+        shadowAtlasDirty_ = true;
+    }
+    int shadowAtlasSize() const { return shadowAtlasSize_; }
+    int shadowPCFTaps() const { return shadowPCFTaps_; }
+
     /// Editor affordance: when true, every LightNode renders a small
     /// kind-specific marker billboard at its world position (visible in
     /// the 3D FBO, depth-tested against geometry). Also makes lights
@@ -225,6 +238,29 @@ private:
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
     void uploadLights(const std::vector<LightNode*>& lights);
+
+    // --- Shadow pipeline (lazy init) ---
+    // Atlas-tiled shadow maps: a single big depth texture sub-divided into N
+    // square tiles. Each shadow-casting light gets one or more tiles (1 for
+    // directional/spot, 6 for point cube faces, N for CSM cascades). All
+    // mesh fragments sample from one sampler2DShadow keyed by per-light slot.
+    void ensureShadowPipeline();
+    void ensureShadowAtlas();
+    void destroyShadowAtlas();
+
+    // Decide which lights cast shadows this frame, allocate atlas tiles, and
+    // compute world->shadow-clip matrices. Run after collectLights() and the
+    // camera has been set. Populates the shadow* per-frame arrays.
+    void prepareShadows(const std::vector<LightNode*>& lights);
+
+    // Render every shadow-casting mesh into each allocated atlas tile using
+    // the depth-only shadow program. Leaves shadowAtlasFBO_ unbound on exit.
+    void renderShadowPass();
+
+    // Compute the world-space AABB enclosing all shadow-casting meshes.
+    // Used to fit directional shadow frustums; returns empty BBox if none.
+    struct WorldAABB { float min[3]; float max[3]; bool empty; };
+    WorldAABB computeShadowCasterBounds() const;
 
     // Render a ringed-disc billboard for one light. Used by the editor-
     // affordance pass gated on showLightIcons_.
@@ -319,6 +355,49 @@ private:
     GLint tmUExposure_ = -1;
     GLint tmUGamma_ = -1;
     GLint tmUMode_ = -1;
+
+    // --- Shadow pipeline state ---
+    // Hard cap: 16 atlas tiles. A typical scene budget is 1 directional
+    // (1-4 cascades) + a few spots/points; overflow lights silently render
+    // unshadowed.
+    static constexpr int kMaxShadowTiles = 16;
+
+    int shadowAtlasSize_ = 4096;
+    int shadowPCFTaps_ = 3;       // 1 or 3 (3x3 PCF)
+    bool shadowAtlasDirty_ = true;
+
+    GLuint shadowProgram_ = 0;
+    GLint  shadowUMVP_ = -1;
+    GLuint shadowAtlasFBO_ = 0;
+    GLuint shadowAtlasTex_ = 0;
+    int    shadowAtlasAllocated_ = 0;  // current tex side; 0 if none
+
+    // Per-frame shadow data, populated by prepareShadows(). Indexed by slot.
+    int   shadowTileCount_ = 0;
+    float shadowMatrixCamRel_[kMaxShadowTiles][16] = {};
+    float shadowAtlasRect_[kMaxShadowTiles][4]     = {};   // origin.xy, size.xy in [0,1]
+    float shadowBias_[kMaxShadowTiles][2]          = {};   // const, normal-bias world units
+
+    // Per-light shadow slot (-1 if unshadowed). Indexed by light index.
+    int lightShadowSlot_[32] = {};
+
+    // For prepareShadows: matrices to render into the atlas (one per tile).
+    // World-space (no camera-relative bake) — used by the shadow caster pass.
+    float shadowRenderMatrix_[kMaxShadowTiles][16] = {};
+    // Which light owns each tile, for routing the caster draws.
+    LightNode* shadowTileLight_[kMaxShadowTiles] = {};
+
+    // Cache per-frame shadow caster list; rebuilt at top of prepareShadows.
+    std::vector<MeshNode*> shadowCasters_;
+
+    // Mesh shader uniform locations for shadow data.
+    GLint uShadowAtlas_ = -1;
+    GLint uShadowMatrix_ = -1;
+    GLint uShadowAtlasRect_ = -1;
+    GLint uShadowBiasArr_ = -1;
+    GLint uLightShadowSlot_ = -1;
+    GLint uShadowAtlasTexel_ = -1;
+    GLint uShadowPCFTaps_ = -1;
 
     // --- Billboard pipeline (lazy init) ---
     GLuint bbProgram_ = 0;

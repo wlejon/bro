@@ -107,6 +107,11 @@ public:
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
+    /// Bind VAO and issue glDrawElements without touching material uniforms.
+    /// Used by depth-only passes (shadow maps) where the caller's program is
+    /// already bound and only positions matter. Returns true if anything drew.
+    bool drawRaw();
+
 private:
     void uploadToGPU();
 

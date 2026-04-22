@@ -62,6 +62,7 @@ void main() {
 static const char* kMeshFragSrc = R"(
 #version 330 core
 #define MAX_LIGHTS 32
+#define MAX_SHADOWS 16
 
 in vec3 vWorldPos;   // camera-relative
 in vec3 vNormal;
@@ -94,6 +95,19 @@ uniform vec3  uLightColor[MAX_LIGHTS];    // linear RGB
 uniform float uLightIntensity[MAX_LIGHTS];
 uniform float uLightRange[MAX_LIGHTS];
 uniform vec2  uLightSpotCos[MAX_LIGHTS];  // .x = cos(innerAngle), .y = cos(outerAngle)
+uniform int   uLightShadowSlot[MAX_LIGHTS]; // -1 if unshadowed, else 0..MAX_SHADOWS-1
+
+// Atlas-tiled shadow maps. One sampler regardless of light count.
+//   uShadowMatrix: bias * lightProj * lightView * translate(cameraEye), so
+//     `uShadowMatrix[s] * vec4(vWorldPos, 1)` directly produces UV+depth in [0,1].
+//   uShadowAtlasRect: (origin.xy, size.xy) of the slot's tile in atlas UV.
+//   uShadowBias: (constant depth bias, normal-offset world units).
+uniform sampler2DShadow uShadowAtlas;
+uniform mat4  uShadowMatrix[MAX_SHADOWS];
+uniform vec4  uShadowAtlasRect[MAX_SHADOWS];
+uniform vec2  uShadowBias[MAX_SHADOWS];
+uniform float uShadowAtlasTexel;          // 1.0 / atlasSize, for PCF kernel
+uniform int   uShadowPCFTaps;             // 1 (single sample) or 3 (3x3 PCF)
 
 out vec4 FragColor;
 
@@ -130,6 +144,38 @@ float distanceAttenuation(float dist, float range) {
     float win = clamp(1.0 - t4, 0.0, 1.0);
     win = win * win;
     return win / (dist * dist + 1.0);
+}
+
+// Sample one tile of the shadow atlas. Returns 1.0 = lit, 0.0 = shadowed.
+// `posCamRel` is the camera-relative world position to test (already normal-
+// biased by the caller). `slot` is the per-light shadow slot 0..MAX_SHADOWS-1.
+// Out-of-frustum points return 1.0 (no shadow). PCF kernel stays inside the
+// tile via inset clamping so neighbouring tiles don't bleed in.
+float sampleShadow(int slot, vec3 posCamRel) {
+    vec4 sc = uShadowMatrix[slot] * vec4(posCamRel, 1.0);
+    if (sc.w <= 0.0) return 1.0;
+    sc /= sc.w;
+    if (sc.x < 0.0 || sc.x > 1.0 || sc.y < 0.0 || sc.y > 1.0 || sc.z > 1.0)
+        return 1.0;
+    float ref = sc.z - uShadowBias[slot].x;
+    vec2  rect_o = uShadowAtlasRect[slot].xy;
+    vec2  rect_s = uShadowAtlasRect[slot].zw;
+    vec2  texel  = vec2(uShadowAtlasTexel);
+    vec2  base   = rect_o + sc.xy * rect_s;
+    vec2  minUV  = rect_o + texel;
+    vec2  maxUV  = rect_o + rect_s - texel;
+    if (uShadowPCFTaps <= 1) {
+        vec2 uv = clamp(base, minUV, maxUV);
+        return texture(uShadowAtlas, vec3(uv, ref));
+    }
+    float s = 0.0;
+    for (int yy = -1; yy <= 1; ++yy) {
+        for (int xx = -1; xx <= 1; ++xx) {
+            vec2 uv = clamp(base + vec2(xx, yy) * texel, minUV, maxUV);
+            s += texture(uShadowAtlas, vec3(uv, ref));
+        }
+    }
+    return s / 9.0;
 }
 
 void main() {
@@ -209,8 +255,18 @@ void main() {
         vec3 kD = (vec3(1.0) - F) * (1.0 - uMetallic);
         vec3 diffuse = kD * baseColor / PI;
 
+        float shadow = 1.0;
+        int slot = uLightShadowSlot[i];
+        if (slot >= 0) {
+            // Push the sampled position along the surface normal to mask
+            // self-shadow acne on grazing surfaces — cheaper than depth-slope
+            // bias and works in shadow-clip space because the bake is linear.
+            vec3 posBiased = vWorldPos + N * uShadowBias[slot].y;
+            shadow = sampleShadow(slot, posBiased);
+        }
+
         vec3 radiance = uLightColor[i] * uLightIntensity[i] * atten;
-        Lo += (diffuse + specular) * radiance * NdotL;
+        Lo += shadow * (diffuse + specular) * radiance * NdotL;
     }
 
     vec3 ambient = uAmbient * baseColor * (1.0 - uMetallic);
@@ -273,6 +329,27 @@ void main() {
     }
     FragColor = vec4(c, src.a);
 }
+)";
+
+// ---------------------------------------------------------------------------
+// Shadow caster shader — depth-only. Used to render every shadow-casting
+// MeshNode into one tile of the shadow atlas per shadow-casting light. The
+// CPU pre-bakes uMVP = lightProj * lightView * meshWorldModel; no other
+// material state matters because the FBO writes only depth.
+// ---------------------------------------------------------------------------
+
+static const char* kShadowVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uMVP;
+void main() {
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+)";
+
+static const char* kShadowFragSrc = R"(
+#version 330 core
+void main() { }
 )";
 
 // ---------------------------------------------------------------------------
@@ -387,6 +464,8 @@ SceneGraph::~SceneGraph() {
     if (tonemapProgram_) { glDeleteProgram(tonemapProgram_); tonemapProgram_ = 0; }
     if (tonemapVBO_) { glDeleteBuffers(1, &tonemapVBO_); tonemapVBO_ = 0; }
     if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
+    destroyShadowAtlas();
+    if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -665,6 +744,13 @@ void SceneGraph::ensureMeshPipeline() {
         uLightIntensity_ = glGetUniformLocation(meshProgram_, "uLightIntensity");
         uLightRange_ = glGetUniformLocation(meshProgram_, "uLightRange");
         uLightSpotCos_ = glGetUniformLocation(meshProgram_, "uLightSpotCos");
+        uLightShadowSlot_  = glGetUniformLocation(meshProgram_, "uLightShadowSlot");
+        uShadowAtlas_      = glGetUniformLocation(meshProgram_, "uShadowAtlas");
+        uShadowMatrix_     = glGetUniformLocation(meshProgram_, "uShadowMatrix");
+        uShadowAtlasRect_  = glGetUniformLocation(meshProgram_, "uShadowAtlasRect");
+        uShadowBiasArr_    = glGetUniformLocation(meshProgram_, "uShadowBias");
+        uShadowAtlasTexel_ = glGetUniformLocation(meshProgram_, "uShadowAtlasTexel");
+        uShadowPCFTaps_    = glGetUniformLocation(meshProgram_, "uShadowPCFTaps");
         // Legacy — no longer declared in the shader, fine if -1.
         uLightDir_ = -1;
         uCameraPos_ = -1;
@@ -921,6 +1007,41 @@ void SceneGraph::collectLights(std::vector<LightNode*>& out) const {
 void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
     const int count = std::min((int)lights.size(), 32);
     glUniform1i(uLightCount_, count);
+
+    // Always upload shadow uniforms (even when no lights / no shadows): the
+    // shader unconditionally indexes them per-iteration. Texel + tap config
+    // is global so set them once per draw regardless of light count.
+    if (uShadowAtlasTexel_ >= 0) {
+        float texel = (shadowAtlasSize_ > 0) ? (1.0f / (float)shadowAtlasSize_) : 0.0f;
+        glUniform1f(uShadowAtlasTexel_, texel);
+    }
+    if (uShadowPCFTaps_ >= 0) glUniform1i(uShadowPCFTaps_, shadowPCFTaps_);
+
+    // Bind the shadow atlas to a fixed texture unit (1; unit 0 is baseColor).
+    // sampler2DShadow performs the depth comparison via the texture's
+    // GL_TEXTURE_COMPARE_MODE state set in ensureShadowAtlas().
+    if (uShadowAtlas_ >= 0) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_);
+        glUniform1i(uShadowAtlas_, 1);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    if (uShadowMatrix_ >= 0 && shadowTileCount_ > 0) {
+        glUniformMatrix4fv(uShadowMatrix_, shadowTileCount_, GL_FALSE,
+                           &shadowMatrixCamRel_[0][0]);
+    }
+    if (uShadowAtlasRect_ >= 0 && shadowTileCount_ > 0) {
+        glUniform4fv(uShadowAtlasRect_, shadowTileCount_, &shadowAtlasRect_[0][0]);
+    }
+    if (uShadowBiasArr_ >= 0 && shadowTileCount_ > 0) {
+        glUniform2fv(uShadowBiasArr_, shadowTileCount_, &shadowBias_[0][0]);
+    }
+    if (uLightShadowSlot_ >= 0) {
+        // Always send 32 slots so any light index is safe to read; -1 default.
+        glUniform1iv(uLightShadowSlot_, 32, lightShadowSlot_);
+    }
+
     if (count == 0) return;
 
     int   type[32];
@@ -970,6 +1091,296 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
 }
 
 // ---------------------------------------------------------------------------
+// Shadow pipeline
+// ---------------------------------------------------------------------------
+
+void SceneGraph::ensureShadowPipeline() {
+    if (shadowProgram_) return;
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kShadowVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kShadowFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    shadowProgram_ = glCreateProgram();
+    glAttachShader(shadowProgram_, vs);
+    glAttachShader(shadowProgram_, fs);
+    glLinkProgram(shadowProgram_);
+    GLint ok = 0;
+    glGetProgramiv(shadowProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512]; glGetProgramInfoLog(shadowProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Shadow program link error: %s", log);
+        glDeleteProgram(shadowProgram_);
+        shadowProgram_ = 0;
+    }
+    glDeleteShader(vs); glDeleteShader(fs);
+    if (shadowProgram_) {
+        shadowUMVP_ = glGetUniformLocation(shadowProgram_, "uMVP");
+    }
+}
+
+void SceneGraph::ensureShadowAtlas() {
+    if (shadowAtlasTex_ && shadowAtlasAllocated_ == shadowAtlasSize_ && !shadowAtlasDirty_) return;
+    destroyShadowAtlas();
+    shadowAtlasAllocated_ = shadowAtlasSize_;
+    shadowAtlasDirty_ = false;
+
+    glGenTextures(1, &shadowAtlasTex_);
+    glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+                 shadowAtlasSize_, shadowAtlasSize_, 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // Hardware PCF: sampler2DShadow returns a [0,1] comparison result and
+    // bilinearly filters between neighbouring texels — much cheaper than
+    // four manual texture() lookups, and visually identical for 2x2 PCF.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    // Atlas-edge sampling reads "infinitely far" depth, i.e. lit. Combined
+    // with the in-tile clamp in sampleShadow() this avoids cross-tile bleed.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float border[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+
+    glGenFramebuffers(1, &shadowAtlasFBO_);
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, shadowAtlasTex_, 0);
+    // No color buffer — depth-only.
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOG_ERROR("Shadow atlas FBO incomplete: 0x%x", status);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneGraph::destroyShadowAtlas() {
+    if (shadowAtlasFBO_) { glDeleteFramebuffers(1, &shadowAtlasFBO_); shadowAtlasFBO_ = 0; }
+    if (shadowAtlasTex_) { glDeleteTextures(1, &shadowAtlasTex_); shadowAtlasTex_ = 0; }
+    shadowAtlasAllocated_ = 0;
+}
+
+SceneGraph::WorldAABB SceneGraph::computeShadowCasterBounds() const {
+    WorldAABB out{};
+    out.empty = true;
+    out.min[0] = out.min[1] = out.min[2] =  1e30f;
+    out.max[0] = out.max[1] = out.max[2] = -1e30f;
+
+    auto walk = [&](auto&& self, SceneNode* n) -> void {
+        if (!n || !n->visible()) return;
+        if (n->type() == SceneNode::Type::Mesh) {
+            auto* m = static_cast<MeshNode*>(n);
+            if (!m->unlit() && !m->mesh().empty()) {
+                const auto& bb = m->localBounds();
+                const Mat4& M = m->worldMatrix();
+                // Transform the eight corners of the local AABB to world.
+                for (int c = 0; c < 8; ++c) {
+                    Vec3 lp{
+                        (c & 1) ? bb.max[0] : bb.min[0],
+                        (c & 2) ? bb.max[1] : bb.min[1],
+                        (c & 4) ? bb.max[2] : bb.min[2],
+                    };
+                    Vec3 wp = M.transformPoint(lp);
+                    out.min[0] = std::min(out.min[0], wp.x);
+                    out.min[1] = std::min(out.min[1], wp.y);
+                    out.min[2] = std::min(out.min[2], wp.z);
+                    out.max[0] = std::max(out.max[0], wp.x);
+                    out.max[1] = std::max(out.max[1], wp.y);
+                    out.max[2] = std::max(out.max[2], wp.z);
+                    out.empty = false;
+                }
+            }
+        }
+        for (auto* c : n->children()) self(self, c);
+    };
+    walk(walk, root_.get());
+    return out;
+}
+
+void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
+    // Reset per-frame shadow state. Default every light to "no shadow".
+    shadowTileCount_ = 0;
+    shadowCasters_.clear();
+    for (int i = 0; i < 32; ++i) lightShadowSlot_[i] = -1;
+
+    // Quick skip: if no light wants shadows, don't bother fitting.
+    bool anyCaster = false;
+    for (auto* L : lights) {
+        if (L && L->castsShadow()) { anyCaster = true; break; }
+    }
+    if (!anyCaster) return;
+
+    // Gather shadow-casting meshes once. Unlit meshes never cast.
+    auto gather = [&](auto&& self, SceneNode* n) -> void {
+        if (!n || !n->visible()) return;
+        if (n->type() == SceneNode::Type::Mesh) {
+            auto* m = static_cast<MeshNode*>(n);
+            if (!m->unlit() && !m->mesh().empty()) shadowCasters_.push_back(m);
+        }
+        for (auto* c : n->children()) self(self, c);
+    };
+    gather(gather, root_.get());
+    if (shadowCasters_.empty()) return;
+
+    // Scene bounds for fitting directional frustums. CSM uses view-frustum
+    // slices instead — added in a follow-up commit.
+    WorldAABB bounds = computeShadowCasterBounds();
+    if (bounds.empty) return;
+
+    // Bias matrix maps NDC [-1,1] to UV [0,1] in all three dims.
+    Mat4 bias = Mat4::translate(0.5f, 0.5f, 0.5f) * Mat4::scale(0.5f, 0.5f, 0.5f);
+
+    // Allocate atlas tiles in a square grid: ceil(sqrt(MAX)) x ceil(sqrt(MAX)).
+    // For MAX=16 this gives a clean 4x4. Each tile gets equal area.
+    const int gridDim = 4;                     // 4x4 = 16 tiles
+    const float tileUV = 1.0f / (float)gridDim; // 0.25 per tile
+
+    auto bakeTile = [&](int slot, const Mat4& lightProjView, LightNode* L) {
+        // shadowMatrixCamRel = bias * proj * view * translate(cameraEye)
+        // so the FS can multiply directly against vWorldPos (camera-relative).
+        Mat4 t = Mat4::translate(cameraEye_.x, cameraEye_.y, cameraEye_.z);
+        Mat4 cam = bias * lightProjView * t;
+        std::memcpy(shadowMatrixCamRel_[slot], cam.data(), sizeof(float) * 16);
+        std::memcpy(shadowRenderMatrix_[slot], lightProjView.data(), sizeof(float) * 16);
+
+        int gx = slot % gridDim;
+        int gy = slot / gridDim;
+        shadowAtlasRect_[slot][0] = gx * tileUV;
+        shadowAtlasRect_[slot][1] = gy * tileUV;
+        shadowAtlasRect_[slot][2] = tileUV;
+        shadowAtlasRect_[slot][3] = tileUV;
+
+        shadowBias_[slot][0] = L->shadowBias();
+        shadowBias_[slot][1] = L->shadowNormalBias();
+
+        shadowTileLight_[slot] = L;
+    };
+
+    // For each shadow-casting light, allocate slot(s) and build matrices.
+    // Spot/Point are deferred to follow-up commits — only Directional fits
+    // the scene-bounds-ortho path here.
+    for (int i = 0; i < (int)lights.size() && i < 32; ++i) {
+        LightNode* L = lights[i];
+        if (!L || !L->castsShadow()) continue;
+        if (shadowTileCount_ >= kMaxShadowTiles) break;
+
+        if (L->kind() == LightNode::Kind::Directional) {
+            // Light "looks" along its direction. Place the ortho eye outside
+            // the scene AABB along -direction so the entire scene is in
+            // front of it (in light space). Tight-fit ortho extents to the
+            // AABB's projected silhouette by transforming all 8 corners.
+            Vec3 d = L->direction();
+            float dlen = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
+            if (dlen < 1e-6f) continue;
+            d.x /= dlen; d.y /= dlen; d.z /= dlen;
+
+            Vec3 center{
+                0.5f * (bounds.min[0] + bounds.max[0]),
+                0.5f * (bounds.min[1] + bounds.max[1]),
+                0.5f * (bounds.min[2] + bounds.max[2])};
+            Vec3 ext{
+                0.5f * (bounds.max[0] - bounds.min[0]),
+                0.5f * (bounds.max[1] - bounds.min[1]),
+                0.5f * (bounds.max[2] - bounds.min[2])};
+            float radius = std::sqrt(ext.x*ext.x + ext.y*ext.y + ext.z*ext.z);
+            if (radius < 1e-3f) radius = 1.0f;
+            // Pull the eye back enough to safely include all geometry.
+            Vec3 eye{ center.x - d.x * radius * 2.0f,
+                      center.y - d.y * radius * 2.0f,
+                      center.z - d.z * radius * 2.0f };
+
+            // Stable up: pick world Y unless light is nearly vertical.
+            Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
+            Mat4 view = Mat4::lookAt(eye, center, up);
+
+            // Project all 8 world AABB corners into light view space, take
+            // their min/max — that's our tight ortho frustum.
+            float lo[3] = { 1e30f,  1e30f,  1e30f};
+            float hi[3] = {-1e30f, -1e30f, -1e30f};
+            for (int c = 0; c < 8; ++c) {
+                Vec3 wp{
+                    (c & 1) ? bounds.max[0] : bounds.min[0],
+                    (c & 2) ? bounds.max[1] : bounds.min[1],
+                    (c & 4) ? bounds.max[2] : bounds.min[2]};
+                Vec3 lp = view.transformPoint(wp);
+                lo[0] = std::min(lo[0], lp.x); hi[0] = std::max(hi[0], lp.x);
+                lo[1] = std::min(lo[1], lp.y); hi[1] = std::max(hi[1], lp.y);
+                lo[2] = std::min(lo[2], lp.z); hi[2] = std::max(hi[2], lp.z);
+            }
+            // GL ortho looks down -Z, so near = -hi[2], far = -lo[2].
+            // Pad far slightly to capture casters just behind the AABB.
+            Mat4 proj = Mat4::orthographic(lo[0], hi[0], lo[1], hi[1],
+                                           -hi[2] - radius, -lo[2]);
+            Mat4 projView = proj * view;
+            bakeTile(shadowTileCount_, projView, L);
+            lightShadowSlot_[i] = shadowTileCount_;
+            shadowTileCount_++;
+        }
+        // Spot/Point handled in follow-up commits.
+    }
+}
+
+void SceneGraph::renderShadowPass() {
+    if (shadowTileCount_ == 0) return;
+    ensureShadowPipeline();
+    ensureShadowAtlas();
+    if (!shadowProgram_ || !shadowAtlasFBO_) return;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
+    glViewport(0, 0, shadowAtlasSize_, shadowAtlasSize_);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_TRUE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+
+    // Front-face culling reduces self-shadow acne on closed convex meshes
+    // because back-faces (relative to the light) carry the depth value used
+    // for comparison. Opens up a peter-panning risk on thin geometry — the
+    // normal-bias + constant bias compensate.
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);
+
+    glUseProgram(shadowProgram_);
+
+    const int tileSize = shadowAtlasSize_ / 4;  // matches gridDim in prepareShadows
+
+    for (int slot = 0; slot < shadowTileCount_; ++slot) {
+        int gx = slot % 4;
+        int gy = slot / 4;
+        glViewport(gx * tileSize, gy * tileSize, tileSize, tileSize);
+        // Scissor the clear so previous frames in other tiles aren't wiped.
+        // (The full-FBO clear above handles cold start; per-tile work would
+        // skip it once we cache static shadows. Not yet.)
+
+        // shadowRenderMatrix_ holds lightProj*lightView in WORLD space.
+        // Per-mesh: uMVP = renderMatrix * meshWorldModel.
+        Mat4 lightVP;
+        std::memcpy(lightVP.data(), shadowRenderMatrix_[slot], sizeof(float) * 16);
+
+        for (auto* mesh : shadowCasters_) {
+            Mat4 mvp = lightVP * mesh->worldMatrix();
+            glUniformMatrix4fv(shadowUMVP_, 1, GL_FALSE, mvp.data());
+            mesh->drawRaw();
+        }
+    }
+
+    glCullFace(GL_BACK);
+    glDisable(GL_CULL_FACE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glUseProgram(0);
+}
+
+// ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
@@ -1014,6 +1425,25 @@ void SceneGraph::render() {
         if (hasBillboardNodes || hasLightIcons) ensureBillboardPipeline();
         ensureMeshFBO();
 
+        // Collect lights once per frame — reused for shadow + mesh + gizmo
+        // passes. Done before any FBO bind so the shadow pass can manage
+        // its own FBO state cleanly.
+        std::vector<LightNode*> lights;
+        collectLights(lights);
+        static LightNode implicitSun;
+        implicitSun.setKind(LightNode::Kind::Directional);
+        implicitSun.setDirection(Vec3(-0.3f, -1.0f, -0.5f).normalized());
+        implicitSun.setColor(1.0f, 0.98f, 0.95f);
+        implicitSun.setIntensity(3.0f);
+        std::vector<LightNode*> fallback;
+        if (lights.empty()) { fallback.push_back(&implicitSun); }
+        const auto& activeLights = lights.empty() ? fallback : lights;
+
+        // Shadow caster pass renders into the shadow atlas (its own FBO).
+        // Returns with FBO unbound; the mesh pass below rebinds meshFBO_.
+        prepareShadows(activeLights);
+        renderShadowPass();
+
         if (meshFBO_) {
             glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
             glViewport(0, 0, meshFBOWidth_, meshFBOHeight_);
@@ -1030,21 +1460,6 @@ void SceneGraph::render() {
             glDepthFunc(GL_LESS);
 
             hasMeshContent_ = true;
-
-            // Collect lights once per frame — reused for mesh + gizmo passes.
-            std::vector<LightNode*> lights;
-            collectLights(lights);
-            // If the user hasn't added any lights, fall back to a single
-            // implicit directional "sun" so the scene isn't pitch-black.
-            // This keeps createMesh-and-go behavior intact.
-            static LightNode implicitSun;
-            implicitSun.setKind(LightNode::Kind::Directional);
-            implicitSun.setDirection(Vec3(-0.3f, -1.0f, -0.5f).normalized());
-            implicitSun.setColor(1.0f, 0.98f, 0.95f);
-            implicitSun.setIntensity(3.0f);
-            std::vector<LightNode*> fallback;
-            if (lights.empty()) { fallback.push_back(&implicitSun); }
-            const auto& activeLights = lights.empty() ? fallback : lights;
 
             // --- Mesh pass --------------------------------------------------
             // Lit meshes render to the HDR FBO (pass through tonemap). Unlit
