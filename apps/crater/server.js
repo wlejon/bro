@@ -312,7 +312,7 @@ function startMatch() {
     scheduleBotTurn();
 }
 
-function advanceTurn() {
+function advanceTurn(extraDelayMs) {
     if (!state.aliveOrder.length) return;
     for (let step = 0; step < state.aliveOrder.length; step++) {
         state.turnIdx = (state.turnIdx + 1) % state.aliveOrder.length;
@@ -321,13 +321,13 @@ function advanceTurn() {
         if (p && p.alive) {
             state.turn = id;
             state.turnStart = Date.now();
-            scheduleBotTurn();
+            scheduleBotTurn(extraDelayMs || 0);
             return;
         }
     }
 }
 
-function checkWinCondition() {
+function checkWinCondition(broadcastDelayMs) {
     const alive = state.aliveOrder.filter(id => {
         const p = state.players.get(id);
         return p && p.alive;
@@ -336,12 +336,15 @@ function checkWinCondition() {
         state.phase    = 'ended';
         state.winnerId = alive.length === 1 ? alive[0] : null;
         const w = state.winnerId != null ? state.players.get(state.winnerId) : null;
-        broadcast('over', {
+        const payload = {
             winnerId:   state.winnerId,
             winnerName: w ? w.name : null,
-        });
-        // Return to lobby after a short delay so clients can display the screen.
-        setTimeout(returnToLobby, 5000);
+        };
+        // Defer by broadcastDelayMs so the killing shot's animation plays out
+        // on clients before the game-over screen replaces the match.
+        const delay = Math.max(0, broadcastDelayMs || 0);
+        setTimeout(() => broadcast('over', payload), delay);
+        setTimeout(returnToLobby, delay + 5000);
         return true;
     }
     return false;
@@ -413,8 +416,13 @@ function executeFire(p, angle, power, dir) {
     }
 
     const prevTurn = state.turn;
-    const over = checkWinCondition();
-    if (!over) advanceTurn();
+    // Defer the 'over' broadcast by flightMs so the client can play out the
+    // killing shot's animation before the game-over screen appears.
+    const over = checkWinCondition(res.flightMs + 500);
+    // Don't schedule the next turn's bot until this projectile has landed
+    // on the clients — otherwise a fast-lobbing bot can fire mid-flight and
+    // the client clobbers the in-flight projectile.
+    if (!over) advanceTurn(res.flightMs);
 
     broadcast('shot', {
         shooter:   p.id,
@@ -429,10 +437,10 @@ function executeFire(p, angle, power, dir) {
     });
 }
 
-function scheduleBotTurn() {
+function scheduleBotTurn(extraDelayMs) {
     const p = state.players.get(state.turn);
     if (!p || !p.bot || !p.alive) return;
-    setTimeout(() => botFire(p), C.BOT_DELAY);
+    setTimeout(() => botFire(p), C.BOT_DELAY + (extraDelayMs || 0));
 }
 
 function botFire(p) {

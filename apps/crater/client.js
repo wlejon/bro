@@ -55,7 +55,7 @@ Input.init([
     { name: 'fire',       label: 'Fire',       defaults: [' '] },
     { name: 'pause',      label: 'Pause',      defaults: ['Escape'] },
 ], { storageKey: 'crater:controls' });
-Input.attach(window);
+Input.attach(document.body);
 
 SFX.init({ sfxVol: store.get('sfxVol') });
 const sfx = {
@@ -517,6 +517,13 @@ function onMatchStart(msg) {
 
 function onShot(msg) {
     if (!match.active) return;
+    // If a previous projectile is still animating, resolve it instantly before
+    // starting the next one — otherwise the new shot overwrites the old and
+    // the earlier explosion/damage never gets applied.
+    if (match.projectile) {
+        detonate(match.projectile);
+        match.projectile = null;
+    }
     // Spawn animating projectile.
     match.projectile = {
         x: msg.originX, y: msg.originY,
@@ -684,7 +691,7 @@ screens.define('gameover', {
     },
 });
 
-window.addEventListener('keydown', (e) => {
+document.body.addEventListener('keydown', (e) => {
     // Don't steal input from the name/address fields.
     if (document.activeElement && document.activeElement.tagName === 'INPUT') {
         if (e.key === 'Enter' && screens.name() === 'title') connect();
