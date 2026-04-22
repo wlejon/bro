@@ -669,6 +669,86 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     JS_FreeValue(ctx, global);
 }
 
+// Dispatch event to window-level listeners (set on globalThis via
+// addEventListener). Per DOM spec, window is the outermost node in the
+// propagation path: it receives capture first and bubble last. The polyfill
+// stores these listeners in a side map — we invoke them here so window
+// listeners behave like any other EventTarget in the chain.
+static void dispatchToWindow(JSContext* ctx, bro::dom::Element* target,
+                             bro::dom::Event& event,
+                             JSValue originalJsEvent, bool isCapture) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
+    if (!JS_IsFunction(ctx, dispatch)) {
+        JS_FreeValue(ctx, dispatch);
+        JS_FreeValue(ctx, global);
+        return;
+    }
+
+    bool ownsEvent = JS_IsUndefined(originalJsEvent);
+    JSValue jsEvent;
+    if (ownsEvent) {
+        jsEvent = JS_NewObject(ctx);
+        populateJsEvent(ctx, jsEvent, event);
+        JS_SetPropertyStr(ctx, jsEvent, "stopPropagation",
+            JS_NewCFunction(ctx, js_ev_stopPropagation, "stopPropagation", 0));
+        JS_SetPropertyStr(ctx, jsEvent, "preventDefault",
+            JS_NewCFunction(ctx, js_ev_preventDefault, "preventDefault", 0));
+        JS_SetPropertyStr(ctx, jsEvent, "stopImmediatePropagation",
+            JS_NewCFunction(ctx, js_ev_stopImmediatePropagation,
+                            "stopImmediatePropagation", 0));
+        JS_SetPropertyStr(ctx, jsEvent, "composedPath",
+            JS_NewCFunction(ctx, js_ev_composedPath, "composedPath", 0));
+
+        // Resolve target to its JS wrapper.
+        JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+        if (!JS_IsUndefined(elemMap) && target) {
+            std::string tgtKey = std::to_string(target->nodeId());
+            JSValue tgtElem = JS_GetPropertyStr(ctx, elemMap, tgtKey.c_str());
+            if (JS_IsUndefined(tgtElem) || JS_IsNull(tgtElem)) {
+                JS_FreeValue(ctx, tgtElem);
+                tgtElem = DomBindings::wrapElement(ctx, target);
+            }
+            JS_SetPropertyStr(ctx, jsEvent, "target", tgtElem);
+        } else {
+            JS_SetPropertyStr(ctx, jsEvent, "target", JS_NULL);
+        }
+        JS_FreeValue(ctx, elemMap);
+    } else {
+        jsEvent = JS_DupValue(ctx, originalJsEvent);
+    }
+
+    JS_SetPropertyStr(ctx, jsEvent, "currentTarget", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, jsEvent, "eventPhase",
+        JS_NewInt32(ctx, isCapture ? CAPTURING_PHASE : BUBBLING_PHASE));
+
+    JSValue typeStr = JS_NewString(ctx, event.type().c_str());
+    JSValue captureArg = JS_NewBool(ctx, isCapture);
+    JSValue args[3] = { typeStr, jsEvent, captureArg };
+    JSValue ret = JS_Call(ctx, dispatch, global, 3, args);
+    if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
+    JS_FreeValue(ctx, ret);
+
+    // Read back propagation/defaultPrevented flags set by JS listeners.
+    JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
+    if (JS_ToBool(ctx, stoppedVal)) event.stopPropagation();
+    JS_FreeValue(ctx, stoppedVal);
+
+    JSValue immVal = JS_GetPropertyStr(ctx, jsEvent, "_immediateStopped");
+    if (JS_ToBool(ctx, immVal)) event.stopImmediatePropagation();
+    JS_FreeValue(ctx, immVal);
+
+    JSValue preventedVal = JS_GetPropertyStr(ctx, jsEvent, "_prevented");
+    if (JS_ToBool(ctx, preventedVal)) event.preventDefault();
+    JS_FreeValue(ctx, preventedVal);
+
+    JS_FreeValue(ctx, typeStr);
+    JS_FreeValue(ctx, captureArg);
+    JS_FreeValue(ctx, jsEvent);
+    JS_FreeValue(ctx, dispatch);
+    JS_FreeValue(ctx, global);
+}
+
 void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event& event,
                       JSValue originalJsEvent) {
     if (!target || !ctx) return;
@@ -685,7 +765,12 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
         stashComposedPath(ctx, originalJsEvent, path);
     }
 
-    // --- Capture phase: root → target (exclusive) ---
+    // --- Capture phase: window → root → target (exclusive) ---
+    // Window sits outside the DOM tree but is the outermost EventTarget per
+    // spec, so it captures first.
+    if (!event.propagationStopped()) {
+        dispatchToWindow(ctx, target, event, originalJsEvent, /*isCapture=*/true);
+    }
     for (int i = static_cast<int>(path.size()) - 1; i > 0; --i) {
         if (event.propagationStopped()) break;
         event.setCurrentTarget(path[i].element);
@@ -702,7 +787,7 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
                         event, AT_TARGET, originalJsEvent);
     }
 
-    // --- Bubble phase: target parent → root ---
+    // --- Bubble phase: target parent → root → window ---
     if (event.bubbles()) {
         for (size_t i = 1; i < path.size(); ++i) {
             if (event.propagationStopped()) break;
@@ -710,6 +795,9 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
             event.setEventPhase(BUBBLING_PHASE);
             invokeListeners(ctx, path[i].element, path[i].retargetedTarget,
                             event, BUBBLING_PHASE, originalJsEvent);
+        }
+        if (!event.propagationStopped()) {
+            dispatchToWindow(ctx, target, event, originalJsEvent, /*isCapture=*/false);
         }
     }
 

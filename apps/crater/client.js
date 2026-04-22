@@ -55,7 +55,7 @@ Input.init([
     { name: 'fire',       label: 'Fire',       defaults: [' '] },
     { name: 'pause',      label: 'Pause',      defaults: ['Escape'] },
 ], { storageKey: 'crater:controls' });
-Input.attach(document.body);
+Input.attach();
 
 SFX.init({ sfxVol: store.get('sfxVol') });
 const sfx = {

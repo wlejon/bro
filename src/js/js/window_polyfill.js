@@ -40,14 +40,22 @@
         for (var j = toRemove.length - 1; j >= 0; j--) arr.splice(toRemove[j], 1);
         return !(event && event.defaultPrevented);
     };
-    globalThis.__bro_dispatch_window_event = function(type, event) {
+    // When `capture` is undefined, fires all listeners regardless of flag —
+    // used by legacy one-off dispatch sites (DOMContentLoaded/load/popstate).
+    // When `capture` is true or false, fires only listeners matching that phase
+    // — used by the DOM event pipeline to model capture vs bubble at window.
+    globalThis.__bro_dispatch_window_event = function(type, event, capture) {
         var arr = listeners[type];
         if (!arr) return;
+        var filterByCapture = (capture !== undefined);
+        var isCap = !!capture;
         var toRemove = [];
         for (var i = 0; i < arr.length; i++) {
+            if (filterByCapture && arr[i].capture !== isCap) continue;
             try {
                 arr[i].fn(event);
                 if (arr[i].once) toRemove.push(i);
+                if (event && event._immediateStopped) break;
             } catch(e) { console.error('Event handler error:', e); }
         }
         for (var j = toRemove.length - 1; j >= 0; j--) arr.splice(toRemove[j], 1);
