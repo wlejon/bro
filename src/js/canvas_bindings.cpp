@@ -5,8 +5,17 @@
 
 #include <qjsbind/qjsbind.h>
 
-#include <string>
+#include <include/core/SkColor.h>
+#include <include/core/SkPoint.h>
+#include <include/core/SkShader.h>
+#include <include/core/SkTileMode.h>
+#include <include/effects/SkGradient.h>
+
+#include <cmath>
 #include <cstring>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace bro::js {
 
@@ -16,6 +25,81 @@ struct Ctx2DWrapper {
 };
 
 using CW = Ctx2DWrapper;
+
+// ---------------------------------------------------------------------------
+// CanvasGradient — returned by createLinearGradient / createRadialGradient.
+// Stores the parameters as plain data; the SkShader is built lazily by
+// buildShader() each time fillStyle/strokeStyle is assigned. That matches the
+// Canvas 2D spec: assigning the gradient snapshots its current stops onto
+// the paint — later addColorStop() calls on the same object only affect
+// subsequent assignments.
+// ---------------------------------------------------------------------------
+
+struct CanvasGradient {
+    enum Kind : uint8_t { kLinear = 0, kRadial = 1 };
+    Kind kind = kLinear;
+    // Linear: pts[0] = (p[0], p[1]), pts[1] = (p[2], p[3])
+    // Radial: center0 = (p[0], p[1]) r0 = p[2], center1 = (p[3], p[4]) r1 = p[5]
+    float p[6] = {};
+    std::vector<std::pair<float, uint32_t>> stops;  // (offset, ARGB packed)
+
+    sk_sp<SkShader> buildShader() const {
+        if (stops.empty()) return nullptr;
+
+        // Canvas 2D spec: if one stop, render as solid color across the range.
+        // SkShaders requires at least two stops — duplicate when needed.
+        std::vector<SkColor4f> colors;
+        std::vector<float> positions;
+        colors.reserve(stops.size() + 1);
+        positions.reserve(stops.size() + 1);
+        for (const auto& [off, argb] : stops) {
+            colors.push_back(SkColor4f::FromColor(static_cast<SkColor>(argb)));
+            positions.push_back(off);
+        }
+        if (colors.size() == 1) {
+            colors.push_back(colors[0]);
+            positions.push_back(positions[0]);
+        }
+
+        SkGradient::Colors c(
+            SkSpan<const SkColor4f>(colors.data(),    colors.size()),
+            SkSpan<const float>    (positions.data(), positions.size()),
+            SkTileMode::kClamp);
+        SkGradient grad(c, SkGradient::Interpolation{});
+
+        if (kind == kLinear) {
+            SkPoint pts[2] = { {p[0], p[1]}, {p[2], p[3]} };
+            return SkShaders::LinearGradient(pts, grad);
+        }
+        // Radial: two-point conical per Canvas 2D semantics.
+        return SkShaders::TwoPointConicalGradient(
+            { p[0], p[1] }, p[2],
+            { p[3], p[4] }, p[5],
+            grad);
+    }
+};
+
+static JSValue js_createLinearGradient(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    if (argc < 4) return JS_UNDEFINED;
+    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
+    auto* g = new CanvasGradient();
+    g->kind = CanvasGradient::kLinear;
+    g->p[0] = F(0); g->p[1] = F(1);
+    g->p[2] = F(2); g->p[3] = F(3);
+    return qjsbind::wrap<CanvasGradient>(ctx, g);
+}
+
+static JSValue js_createRadialGradient(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    if (argc < 6) return JS_UNDEFINED;
+    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
+    auto* g = new CanvasGradient();
+    g->kind = CanvasGradient::kRadial;
+    g->p[0] = F(0); g->p[1] = F(1); g->p[2] = F(2);
+    g->p[3] = F(3); g->p[4] = F(4); g->p[5] = F(5);
+    return qjsbind::wrap<CanvasGradient>(ctx, g);
+}
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -269,6 +353,13 @@ static JSValue raw_set_fillStyle(JSContext* ctx, JSValueConst this_val, int argc
     auto* w = qjsbind::unwrap<CW>(ctx, this_val);
     auto* sc = w ? w->scene : nullptr;
     if (!sc || argc < 1) return JS_UNDEFINED;
+    // Gradient / pattern? Snapshot the shader and install it on the paint.
+    if (JS_IsObject(argv[0])) {
+        if (auto* grad = qjsbind::unwrap<CanvasGradient>(ctx, argv[0])) {
+            sc->setFillShader(grad->buildShader());
+            return JS_UNDEFINED;
+        }
+    }
     const char* s = JS_ToCString(ctx, argv[0]);
     std::string str = s ? s : "";
     if (s) JS_FreeCString(ctx, s);
@@ -291,6 +382,12 @@ static JSValue raw_set_strokeStyle(JSContext* ctx, JSValueConst this_val, int ar
     auto* w = qjsbind::unwrap<CW>(ctx, this_val);
     auto* sc = w ? w->scene : nullptr;
     if (!sc || argc < 1) return JS_UNDEFINED;
+    if (JS_IsObject(argv[0])) {
+        if (auto* grad = qjsbind::unwrap<CanvasGradient>(ctx, argv[0])) {
+            sc->setStrokeShader(grad->buildShader());
+            return JS_UNDEFINED;
+        }
+    }
     const char* s = JS_ToCString(ctx, argv[0]);
     std::string str = s ? s : "";
     if (s) JS_FreeCString(ctx, s);
@@ -471,6 +568,23 @@ static void defineRawProp(JSContext* ctx, JSValue proto, const char* name,
 // =========================================================================
 
 void CanvasBindings::install(JSContext* ctx) {
+    // Register CanvasGradient first — returned by context createLinear/Radial.
+    {
+        qjsbind::Class<CanvasGradient>(ctx, "CanvasGradient")
+            .method("addColorStop", [](CanvasGradient* g, double offset, std::string color) {
+                if (!g) return;
+                if (!std::isfinite(offset)) return;
+                offset = offset < 0.0 ? 0.0 : (offset > 1.0 ? 1.0 : offset);
+                uint8_t r, gc, b, a;
+                if (!canvas::parseCSSColor(color, r, gc, b, a)) return;
+                uint32_t argb = (static_cast<uint32_t>(a) << 24) |
+                                (static_cast<uint32_t>(r)  << 16) |
+                                (static_cast<uint32_t>(gc) << 8)  |
+                                 static_cast<uint32_t>(b);
+                g->stops.emplace_back(static_cast<float>(offset), argb);
+            });
+    }
+
     // Register the class with qjsbind — destructor finalizes at end of block
     {
         qjsbind::Class<CW>(ctx, "CanvasRenderingContext2D")
@@ -580,6 +694,8 @@ void CanvasBindings::install(JSContext* ctx) {
             .method_raw("getImageData", js_getImageData, 4)
             .method_raw("putImageData", js_putImageData, 3)
             .method_raw("createImageData", js_createImageData, 2)
+            .method_raw("createLinearGradient", js_createLinearGradient, 4)
+            .method_raw("createRadialGradient", js_createRadialGradient, 6)
             .method_raw("measureText", js_measureText, 1)
             .method_raw("setLineDash", js_setLineDash, 1)
             .method_raw("getLineDash", js_getLineDash, 0)

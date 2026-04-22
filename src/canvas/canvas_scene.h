@@ -14,6 +14,7 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkPath.h>
 #include <include/core/SkPathBuilder.h>
+#include <include/core/SkShader.h>
 #include <include/core/SkSurface.h>
 #include <include/core/SkTypeface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
@@ -138,6 +139,15 @@ public:
 
     void setStrokeColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
     void getStrokeColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const;
+
+    // Gradient / pattern shaders. Pass nullptr to clear back to solid color.
+    // Setting a solid color via setFillColor/setStrokeColor also clears
+    // any shader (matches the Canvas 2D spec — fillStyle = "red" replaces
+    // the previous gradient).
+    void setFillShader(sk_sp<SkShader> shader);
+    void setStrokeShader(sk_sp<SkShader> shader);
+    bool hasFillShader() const   { return static_cast<bool>(state_.fillPaint.getShader()); }
+    bool hasStrokeShader() const { return static_cast<bool>(state_.strokePaint.getShader()); }
 
     void setLineWidth(float w);
     float lineWidth() const;

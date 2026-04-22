@@ -464,6 +464,9 @@ SkCanvas* CanvasScene::skCanvas() {
 
 void CanvasScene::setFillColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     state_.fillPaint.setColor(SkColorSetARGB(a, r, g, b));
+    // Canvas 2D spec: assigning a solid color to fillStyle replaces any
+    // gradient/pattern shader that was previously there.
+    state_.fillPaint.setShader(nullptr);
 }
 
 void CanvasScene::getFillColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const {
@@ -473,11 +476,20 @@ void CanvasScene::getFillColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) c
 
 void CanvasScene::setStrokeColor(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     state_.strokePaint.setColor(SkColorSetARGB(a, r, g, b));
+    state_.strokePaint.setShader(nullptr);
 }
 
 void CanvasScene::getStrokeColor(uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) const {
     SkColor c = state_.strokePaint.getColor();
     a = SkColorGetA(c); r = SkColorGetR(c); g = SkColorGetG(c); b = SkColorGetB(c);
+}
+
+void CanvasScene::setFillShader(sk_sp<SkShader> shader) {
+    state_.fillPaint.setShader(std::move(shader));
+}
+
+void CanvasScene::setStrokeShader(sk_sp<SkShader> shader) {
+    state_.strokePaint.setShader(std::move(shader));
 }
 
 void CanvasScene::setLineWidth(float w) {
