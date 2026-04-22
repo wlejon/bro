@@ -1,11 +1,17 @@
 const canvas = document.getElementById('stage');
 const scene = canvas.getContext('scene');
 
-scene.setCamera({
-    fov: 50,
-    position: [0, 4, 10],
+// Orbit camera around the sphere row at world-Y=1. Right-drag orbits,
+// middle-drag pans, wheel zooms. Left-click stays free for the
+// light-icon picker below.
+const cam = Camera.createOrbit({
     target: [0, 1, 0],
+    dist:   10,
+    fov:    50,
+    near:   0.1,
+    far:    200,
 });
+
 scene.setAmbient([0.03, 0.03, 0.035]);
 scene.setToneMap({ mode: 'aces', exposure: 1.0 });
 scene.showLightIcons = true;
@@ -180,6 +186,7 @@ function pickLightAt(clientX, clientY) {
 }
 
 canvas.addEventListener('mousedown', (ev) => {
+    if (ev.button !== 0) return;  // right/middle reserved for camera below
     // Let the gizmo consume clicks on its handles first (it hit-tests
     // before any other listener via the engine routing layer). If the
     // click wasn't on a handle, try selecting a light.
@@ -191,6 +198,34 @@ canvas.addEventListener('mousedown', (ev) => {
     }
     if (node.type !== 'light') return;  // only lights are selectable in this demo
     attachGizmoFor(node, node.kind);
+});
+
+// --- Camera input (right=orbit, middle=pan, wheel=zoom) ---------------------
+let rightDown = false, middleDown = false;
+function updatePointerLock() {
+    const want = rightDown || middleDown;
+    const locked = document.pointerLockElement === canvas;
+    if (want && !locked) canvas.requestPointerLock();
+    else if (!want && locked) document.exitPointerLock();
+}
+canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 2)      { rightDown  = true; e.preventDefault(); updatePointerLock(); }
+    else if (e.button === 1) { middleDown = true; e.preventDefault(); updatePointerLock(); }
+});
+document.addEventListener('mouseup', (e) => {
+    if (e.button === 2) rightDown  = false;
+    if (e.button === 1) middleDown = false;
+    updatePointerLock();
+});
+document.addEventListener('mousemove', (e) => {
+    if (rightDown)  Camera.orbitLook(cam, e.movementX, e.movementY);
+    if (middleDown) Camera.orbitPan (cam, e.movementX, e.movementY);
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
+canvas.addEventListener('wheel', (e) => {
+    cam.dist = Math.max(0.5, cam.dist * Math.exp(e.deltaY * 0.001));
+    e.preventDefault();
 });
 
 document.addEventListener('keydown', (ev) => {
@@ -275,6 +310,8 @@ shadowsIn.addEventListener('change', () => {
 // actually drag it somewhere; resumes when deselected.
 let t0 = performance.now();
 function frame() {
+    scene.setCamera(Camera.orbitViewOpts(cam, canvas));
+
     const animate = animateIn.checked && !selected;
     if (animate) {
         const t = (performance.now() - t0) / 1000.0;
