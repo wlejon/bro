@@ -421,7 +421,7 @@ A.Game = (function() {
         if (!state) return;
         state.keys.left  = Input.down("left");
         state.keys.right = Input.down("right");
-        state.keys.up    = Input.down("thrust");
+        state.keys.up    = Input.down("up");
         // primary action rising edge = fire bullet (consumed here)
         if (Input.pressed("primary")) fireBullet();
     }

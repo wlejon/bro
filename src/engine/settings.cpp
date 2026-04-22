@@ -324,6 +324,7 @@ void Settings::resetAll() {
 
 void Settings::defineEngineAction(const std::string& action,
                                   const std::vector<std::string>& defaultKeys) {
+    declaredActions_.insert(action);
     // Add to defaults layer (lowest priority — apps and users can override)
     for (auto& b : defaults_.input.actionBindings) {
         if (b.action == action) {
@@ -338,6 +339,7 @@ void Settings::defineEngineAction(const std::string& action,
 
 void Settings::defineAction(const std::string& action,
                             const std::vector<std::string>& defaultKeys) {
+    declaredActions_.insert(action);
     // Add to app layer
     for (auto& b : appOverrides_.input.actionBindings) {
         if (b.action == action) {
@@ -474,8 +476,12 @@ void Settings::resolveInput() {
         }
     }
 
-    // User layer overrides everything
+    // User layer overrides everything — but only for actions the current
+    // session has actually declared. User bindings for actions no app has
+    // registered this session stay persisted on disk; they just don't
+    // leak into this app's key->action map.
     for (auto& userBinding : userOverrides_.input.actionBindings) {
+        if (!declaredActions_.count(userBinding.action)) continue;
         bool found = false;
         for (auto& resolvedBinding : r.actionBindings) {
             if (resolvedBinding.action == userBinding.action) {

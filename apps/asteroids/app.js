@@ -11,13 +11,14 @@ function getH() { return ctx.canvasHeight || canvas.height || 800; }
 A.Storage.load();
 A.Audio.init();
 
+// Use the standard vocabulary so user rebindings carry across games.
+// "up" doubles as thrust-in-play and menu-up on title screens.
 Input.init([
     { name: "left",    label: "Rotate Left",  defaults: ["a", "ArrowLeft"] },
     { name: "right",   label: "Rotate Right", defaults: ["d", "ArrowRight"] },
-    { name: "thrust",  label: "Thrust",       defaults: ["w", "ArrowUp"] },
+    { name: "up",      label: "Thrust",       defaults: ["w", "ArrowUp"] },
+    { name: "down",    label: "Menu Down",    defaults: ["s", "ArrowDown"] },
     { name: "primary", label: "Fire",         defaults: [" ", "Mouse0"] },
-    { name: "up",      label: "Menu Up",      defaults: ["ArrowUp"] },
-    { name: "down",    label: "Menu Down",    defaults: ["ArrowDown"] },
     { name: "confirm", label: "Confirm",      defaults: ["Enter"] },
     { name: "pause",   label: "Pause",        defaults: ["Escape", "p"] },
 ]);

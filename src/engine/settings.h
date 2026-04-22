@@ -137,6 +137,13 @@ private:
     // Action binding reverse lookup: web key -> action name
     std::unordered_map<std::string, std::string> keyToAction_;
 
+    // Actions declared by the running app/engine this session. User-layer
+    // bindings for any other action persist on disk (so settings are shared
+    // across apps) but do NOT participate in key->action resolution — an
+    // app's keys shouldn't be stolen by a sibling app's saved binding for
+    // an action this app never asked for.
+    std::set<std::string> declaredActions_;
+
     std::string persistPath_;
     ChangeCallback changeCallback_;
 };
