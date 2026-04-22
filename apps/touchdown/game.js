@@ -146,6 +146,7 @@ T.Game = (function() {
             terrain: terrain,
             lander: newLander(W, H, level),
             input: { left: false, right: false, thrust: false },
+            mouse: { x: W/2, y: H/2, held: false },
             paused: false,
             gameOver: false,
             status: "flying",      // flying | landed | crashed
@@ -266,10 +267,27 @@ T.Game = (function() {
         var L = state.lander;
 
         if (state.status === "flying") {
-            if (state.input.left) L.angle -= ROT_SPEED * f;
-            if (state.input.right) L.angle += ROT_SPEED * f;
+            var mouseSteer = state.mouse && state.mouse.held;
+            if (mouseSteer) {
+                var dx = state.mouse.x - L.x;
+                var dy = state.mouse.y - L.y;
+                if (dx * dx + dy * dy > 16) {
+                    var target = Math.atan2(dx, -dy);
+                    var cur = L.angle;
+                    var diff = target - cur;
+                    while (diff > Math.PI) diff -= Math.PI * 2;
+                    while (diff < -Math.PI) diff += Math.PI * 2;
+                    var step = ROT_SPEED * f;
+                    if (diff > step) L.angle += step;
+                    else if (diff < -step) L.angle -= step;
+                    else L.angle = target;
+                }
+            } else {
+                if (state.input.left) L.angle -= ROT_SPEED * f;
+                if (state.input.right) L.angle += ROT_SPEED * f;
+            }
 
-            var wantThrust = state.input.thrust && L.fuel > 0;
+            var wantThrust = (state.input.thrust || mouseSteer) && L.fuel > 0;
             L.thrusting = wantThrust;
 
             if (wantThrust) {
@@ -501,6 +519,12 @@ T.Game = (function() {
         update: update,
         draw: draw,
         sampleInput: sampleInput,
+        setMouse: function(x, y, held) {
+            if (!state) return;
+            if (x !== undefined) state.mouse.x = x;
+            if (y !== undefined) state.mouse.y = y;
+            if (held !== undefined) state.mouse.held = !!held;
+        },
         setPaused: setPaused,
         isPaused: isPaused,
         isGameOver: isGameOver,

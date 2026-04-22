@@ -99,6 +99,51 @@ Input.onAction(function(action, phase) {
     // Directional actions update the input queue inside P.Input itself.
 });
 
+(function attachMenuMouse() {
+    var overlay = document.getElementById("overlay");
+    if (!overlay) return;
+    function findMenuItem(t) {
+        while (t && t !== overlay) {
+            if (t.classList && t.classList.contains("menu-item") &&
+                !t.classList.contains("menu-items")) return t;
+            t = t.parentNode;
+        }
+        return null;
+    }
+    overlay.addEventListener("mousemove", function(e) {
+        if (STATE !== "title" && STATE !== "gameover" && STATE !== "paused") return;
+        var t = findMenuItem(e.target);
+        if (!t) return;
+        var items = P.Screens.listItems();
+        for (var i = 0; i < items.length; i++) {
+            if (items[i] === t) {
+                if (P.Screens.menuIndex !== i) {
+                    P.Screens.menuIndex = i;
+                    P.Screens.updateMenu();
+                    P.Audio.sfxMenu();
+                }
+                return;
+            }
+        }
+    });
+    overlay.addEventListener("click", function(e) {
+        if (STATE !== "title" && STATE !== "gameover" && STATE !== "paused") return;
+        var t = findMenuItem(e.target);
+        if (!t) return;
+        var items = P.Screens.listItems();
+        for (var i = 0; i < items.length; i++) {
+            if (items[i] === t) {
+                P.Screens.menuIndex = i;
+                P.Screens.updateMenu();
+                var menuAction = P.Screens.menuSelect();
+                P.Audio.sfxMenu();
+                handleMenuAction(menuAction);
+                return;
+            }
+        }
+    });
+})();
+
 function handleMenuAction(action) {
     if (!action) return;
     if (action === "play") {

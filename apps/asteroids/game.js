@@ -97,8 +97,16 @@ A.Game = (function() {
             cooldown: 0,
             nextExtraLife: EXTRA_LIFE_AT,
             keys: {},
+            mouse: { x: 0, y: 0, held: false },
             running: false
         };
+    }
+
+    function setMouse(x, y, held) {
+        if (!state) return;
+        if (x !== undefined) state.mouse.x = x;
+        if (y !== undefined) state.mouse.y = y;
+        if (held !== undefined) state.mouse.held = !!held;
     }
 
     function makeShip(W, H) {
@@ -234,9 +242,25 @@ A.Game = (function() {
 
         // --- Ship control / physics ---
         if (s && s.alive) {
-            if (keys.left)  s.angle -= SHIP_ROT_SPEED * dt;
-            if (keys.right) s.angle += SHIP_ROT_SPEED * dt;
-            s.thrusting = !!keys.up;
+            var mouseSteer = state.mouse && state.mouse.held;
+            if (mouseSteer) {
+                var dx = state.mouse.x - s.x;
+                var dy = state.mouse.y - s.y;
+                if (dx * dx + dy * dy > 16) {
+                    var target = Math.atan2(dy, dx);
+                    var diff = target - s.angle;
+                    while (diff > Math.PI) diff -= Math.PI * 2;
+                    while (diff < -Math.PI) diff += Math.PI * 2;
+                    var step = SHIP_ROT_SPEED * dt;
+                    if (diff > step) s.angle += step;
+                    else if (diff < -step) s.angle -= step;
+                    else s.angle = target;
+                }
+            } else {
+                if (keys.left)  s.angle -= SHIP_ROT_SPEED * dt;
+                if (keys.right) s.angle += SHIP_ROT_SPEED * dt;
+            }
+            s.thrusting = mouseSteer || !!keys.up;
             if (s.thrusting) {
                 s.vx += Math.cos(s.angle) * SHIP_THRUST * dt;
                 s.vy += Math.sin(s.angle) * SHIP_THRUST * dt;
@@ -437,6 +461,7 @@ A.Game = (function() {
         draw: draw,
         sampleInput: sampleInput,
         clearKeys: clearKeys,
+        setMouse: setMouse,
         getState: function() { return state; },
         setPaused: function(p) { if (state) state.paused = p; },
         isGameOver: function() { return state ? state.gameOver : false; }

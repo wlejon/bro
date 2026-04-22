@@ -118,6 +118,58 @@ A.Screens = (function() {
         }
     }
 
+    var mouseAttached = false;
+    var lastW = 900, lastH = 800;
+
+    function findMenuItem(target, ov) {
+        while (target && target !== ov) {
+            if (target.className && target.className.indexOf("menu-item") !== -1 &&
+                target.className.indexOf("menu-items") === -1) {
+                return target;
+            }
+            target = target.parentNode;
+        }
+        return null;
+    }
+
+    function activeScreenId() {
+        if (currentName === "paused") return "pause";
+        if (currentName === "playing") return "";
+        return currentName;
+    }
+
+    function ensureMouse() {
+        if (mouseAttached) return;
+        if (!overlay) overlay = document.getElementById("overlay");
+        if (!overlay) return;
+        mouseAttached = true;
+        overlay.addEventListener("mousemove", function(e) {
+            var sid = activeScreenId();
+            if (!sid) return;
+            var t = findMenuItem(e.target, overlay);
+            if (!t) return;
+            var items = getMenuItems(sid);
+            var i = items.indexOf(t);
+            if (i >= 0 && menuIndex !== i) {
+                menuIndex = i;
+                updateSelection(sid);
+                A.Audio.sfxMenuMove();
+            }
+        });
+        overlay.addEventListener("click", function(e) {
+            var sid = activeScreenId();
+            if (!sid) return;
+            var t = findMenuItem(e.target, overlay);
+            if (!t) return;
+            var items = getMenuItems(sid);
+            var i = items.indexOf(t);
+            if (i < 0) return;
+            menuIndex = i;
+            updateSelection(sid);
+            keydown("Enter", lastW, lastH);
+        });
+    }
+
     function menuNav(screenId, key, onSelect) {
         var items = getMenuItems(screenId);
         if (!items.length) return;
@@ -149,6 +201,9 @@ A.Screens = (function() {
     function switchTo(name, W, H) {
         currentName = name;
         menuIndex = 0;
+        if (W) lastW = W;
+        if (H) lastH = H;
+        ensureMouse();
         if (name === "title") {
             showOverlay("title");
             showHud(false);

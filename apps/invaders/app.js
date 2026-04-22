@@ -409,6 +409,49 @@ function updateSelection() {
     }
 }
 
+(function attachMenuMouse() {
+    var overlay = document.getElementById("overlay");
+    if (!overlay) return;
+    function findMenuItem(t) {
+        while (t && t !== overlay) {
+            if (t.className && t.className.indexOf("menu-item") !== -1 &&
+                t.className.indexOf("menu-items") === -1) return t;
+            t = t.parentNode;
+        }
+        return null;
+    }
+    overlay.addEventListener("mousemove", function(e) {
+        if (!state.activeScreen) return;
+        var t = findMenuItem(e.target);
+        if (!t) return;
+        var items = getMenuItems();
+        for (var i = 0; i < items.length; i++) {
+            if (items[i] === t) {
+                if (state.menuIndex !== i) {
+                    state.menuIndex = i;
+                    updateSelection();
+                    Audio.menuMove();
+                }
+                return;
+            }
+        }
+    });
+    overlay.addEventListener("click", function(e) {
+        if (!state.activeScreen) return;
+        var t = findMenuItem(e.target);
+        if (!t) return;
+        var items = getMenuItems();
+        for (var i = 0; i < items.length; i++) {
+            if (items[i] === t) {
+                state.menuIndex = i;
+                updateSelection();
+                activateMenuItem();
+                return;
+            }
+        }
+    });
+})();
+
 function activateMenuItem() {
     var items = getMenuItems();
     var item = items[state.menuIndex];

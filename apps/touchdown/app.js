@@ -39,6 +39,27 @@ Input.onAction(function(action, phase) {
     else if (action === "pause")   T.Screens.keydown("Escape", getW(), getH());
 });
 
+function toCanvasCoords(ev) {
+    var rect = canvas.getBoundingClientRect();
+    var W = getW(), H = getH();
+    var sx = W / rect.width, sy = H / rect.height;
+    return { x: (ev.clientX - rect.left) * sx, y: (ev.clientY - rect.top) * sy };
+}
+canvas.addEventListener("mousemove", function(ev) {
+    var p = toCanvasCoords(ev);
+    T.Game.setMouse(p.x, p.y);
+});
+canvas.addEventListener("mousedown", function(ev) {
+    if (ev.button !== 2) return;
+    var p = toCanvasCoords(ev);
+    T.Game.setMouse(p.x, p.y, true);
+});
+window.addEventListener("mouseup", function(ev) {
+    if (ev.button !== 2) return;
+    T.Game.setMouse(undefined, undefined, false);
+});
+canvas.addEventListener("contextmenu", function(ev) { ev.preventDefault(); });
+
 T.Screens.switchTo("title");
 GameLoop.create({
     tick: function(dt) { T.Screens.update(dt, getW(), getH()); },
