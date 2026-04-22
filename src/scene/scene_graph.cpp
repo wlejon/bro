@@ -470,6 +470,47 @@ void main() {
 )";
 
 // ---------------------------------------------------------------------------
+// Skybox: render the IBL cubemap as the scene background. Reconstructs a
+// world-space view direction from NDC + camera FOV/aspect (no matrix
+// inverse needed — the view rotation transposed = view→world for the
+// orthonormal basis). Drawn first into the HDR FBO with depth-test off
+// so geometry simply paints over it.
+// ---------------------------------------------------------------------------
+
+static const char* kSkyboxVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec2 aPos;
+out vec3 vWorldDir;
+uniform mat3  uViewToWorld;
+uniform float uTanHalfFovY;
+uniform float uAspect;
+void main() {
+    vec3 viewDir = vec3(aPos.x * uTanHalfFovY * uAspect,
+                        aPos.y * uTanHalfFovY,
+                        -1.0);
+    vWorldDir = uViewToWorld * viewDir;
+    // z = 1 puts the quad at the far plane — even if depth test were on,
+    // this would lose to anything with valid geometry depth.
+    gl_Position = vec4(aPos, 1.0, 1.0);
+}
+)";
+
+static const char* kSkyboxFragSrc = R"(
+#version 330 core
+in vec3 vWorldDir;
+out vec4 FragColor;
+uniform samplerCube uEnv;
+uniform float uIntensity;
+uniform float uRotation;     // Y-axis rotation (radians), positive = clockwise looking down +Y
+void main() {
+    vec3 d = normalize(vWorldDir);
+    float c = cos(uRotation), s = sin(uRotation);
+    d = vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);
+    FragColor = vec4(texture(uEnv, d).rgb * uIntensity, 1.0);
+}
+)";
+
+// ---------------------------------------------------------------------------
 // Shadow caster shader — depth-only. Used to render every shadow-casting
 // MeshNode into one tile of the shadow atlas per shadow-casting light. The
 // CPU pre-bakes uMVP = lightProj * lightView * meshWorldModel; no other
@@ -609,6 +650,9 @@ SceneGraph::~SceneGraph() {
     if (envConvertVBO_) { glDeleteBuffers(1, &envConvertVBO_); envConvertVBO_ = 0; }
     if (envConvertVAO_) { glDeleteVertexArrays(1, &envConvertVAO_); envConvertVAO_ = 0; }
     if (envConvertFBO_) { glDeleteFramebuffers(1, &envConvertFBO_); envConvertFBO_ = 0; }
+    if (skyboxProgram_) { glDeleteProgram(skyboxProgram_); skyboxProgram_ = 0; }
+    if (skyboxVBO_) { glDeleteBuffers(1, &skyboxVBO_); skyboxVBO_ = 0; }
+    if (skyboxVAO_) { glDeleteVertexArrays(1, &skyboxVAO_); skyboxVAO_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -1311,6 +1355,100 @@ void SceneGraph::clearEnvironment() {
     envPath_.clear();
 }
 
+void SceneGraph::ensureSkyboxPipeline() {
+    if (skyboxProgram_) return;
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kSkyboxVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kSkyboxFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    skyboxProgram_ = glCreateProgram();
+    glAttachShader(skyboxProgram_, vs);
+    glAttachShader(skyboxProgram_, fs);
+    glLinkProgram(skyboxProgram_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint ok = 0;
+    glGetProgramiv(skyboxProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(skyboxProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Skybox program link error: %s", log);
+        glDeleteProgram(skyboxProgram_);
+        skyboxProgram_ = 0;
+        return;
+    }
+    skyUViewToWorld_ = glGetUniformLocation(skyboxProgram_, "uViewToWorld");
+    skyUTanHalfFovY_ = glGetUniformLocation(skyboxProgram_, "uTanHalfFovY");
+    skyUAspect_      = glGetUniformLocation(skyboxProgram_, "uAspect");
+    skyUEnv_         = glGetUniformLocation(skyboxProgram_, "uEnv");
+    skyUIntensity_   = glGetUniformLocation(skyboxProgram_, "uIntensity");
+    skyURotation_    = glGetUniformLocation(skyboxProgram_, "uRotation");
+
+    static const float quadVerts[12] = {
+        -1.0f, -1.0f,  1.0f, -1.0f,  1.0f,  1.0f,
+        -1.0f, -1.0f,  1.0f,  1.0f, -1.0f,  1.0f,
+    };
+    glGenVertexArrays(1, &skyboxVAO_);
+    glGenBuffers(1, &skyboxVBO_);
+    glBindVertexArray(skyboxVAO_);
+    glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 2, (void*)0);
+    glBindVertexArray(0);
+}
+
+void SceneGraph::renderSkyboxPass() {
+    if (!envCubemap_) return;
+    if (!cameraIsPerspective_) return;  // Ortho cameras have no view direction.
+    ensureSkyboxPipeline();
+    if (!skyboxProgram_) return;
+
+    // viewMatrix_ stores world→view (column-major). The 3x3 rotation block
+    // is orthonormal (lookAt produces it), so its transpose is its inverse
+    // and gives view→world. Pass that to the shader as a mat3.
+    float viewToWorld[9] = {
+        viewMatrix_.m[0][0], viewMatrix_.m[0][1], viewMatrix_.m[0][2],
+        viewMatrix_.m[1][0], viewMatrix_.m[1][1], viewMatrix_.m[1][2],
+        viewMatrix_.m[2][0], viewMatrix_.m[2][1], viewMatrix_.m[2][2],
+    };
+    // GLSL mat3 columns are: column 0 = view→world basis vector for view-X.
+    // viewMatrix's row 0 (m[0..2][0]) is the world-space camera-right vector,
+    // which is exactly view-X→world. So packing rows-of-view as cols-of-m3
+    // gives the transpose we want. The pack above does that.
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    glUseProgram(skyboxProgram_);
+    glUniformMatrix3fv(skyUViewToWorld_, 1, GL_FALSE, viewToWorld);
+    glUniform1f(skyUTanHalfFovY_, std::tan(cameraFovY_ * 0.5f));
+    glUniform1f(skyUAspect_, cameraAspect_);
+    glUniform1f(skyUIntensity_, envIntensity_);
+    glUniform1f(skyURotation_, envRotation_);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, envCubemap_);
+    glUniform1i(skyUEnv_, 0);
+
+    glBindVertexArray(skyboxVAO_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+
+    // Re-enable depth write/test for the geometry passes that follow.
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+}
+
 // ---------------------------------------------------------------------------
 // Light collection + upload
 // ---------------------------------------------------------------------------
@@ -1967,6 +2105,12 @@ void SceneGraph::render() {
             glDepthFunc(GL_LESS);
 
             hasMeshContent_ = true;
+
+            // Skybox first — paints the IBL cubemap into the cleared FBO so
+            // subsequent geometry naturally composits over it. No-op when no
+            // environment is loaded; depth state is left as the geometry
+            // pass expects (test on, write on, LESS).
+            renderSkyboxPass();
 
             // --- Mesh pass --------------------------------------------------
             // Lit meshes render to the HDR FBO (pass through tonemap). Unlit

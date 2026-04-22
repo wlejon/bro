@@ -1418,6 +1418,51 @@ static JSValue js_sg_setShadowQuality(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// setEnvironment({hdr, intensity, rotation}) — load HDR equirectangular
+// environment map for skybox + IBL. Pass {hdr: ""} or null to clear.
+static JSValue js_sg_setEnvironment(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        g->clearEnvironment();
+        return JS_TRUE;
+    }
+    if (!JS_IsObject(argv[0])) return JS_FALSE;
+    JSValueConst opts = argv[0];
+
+    JSValue hdrVal = JS_GetPropertyStr(ctx, opts, "hdr");
+    bool ok = true;
+    if (JS_IsString(hdrVal)) {
+        const char* path = JS_ToCString(ctx, hdrVal);
+        if (path && path[0]) {
+            ok = g->loadEnvironment(path);
+        } else {
+            g->clearEnvironment();
+        }
+        if (path) JS_FreeCString(ctx, path);
+    } else if (JS_IsNull(hdrVal) || JS_IsUndefined(hdrVal)) {
+        // No path key — leave the cubemap alone, just update intensity/rotation.
+    }
+    JS_FreeValue(ctx, hdrVal);
+
+    JSValue ivVal = JS_GetPropertyStr(ctx, opts, "intensity");
+    if (JS_IsNumber(ivVal)) {
+        double v = 1.0; JS_ToFloat64(ctx, &v, ivVal);
+        g->setEnvironmentIntensity((float)v);
+    }
+    JS_FreeValue(ctx, ivVal);
+
+    JSValue rotVal = JS_GetPropertyStr(ctx, opts, "rotation");
+    if (JS_IsNumber(rotVal)) {
+        double v = 0.0; JS_ToFloat64(ctx, &v, rotVal);
+        g->setEnvironmentRotation((float)v);
+    }
+    JS_FreeValue(ctx, rotVal);
+
+    return ok ? JS_TRUE : JS_FALSE;
+}
+
 // setFog({start, end, color})
 static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -2015,6 +2060,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("destroyNode", js_sg_destroyNode, 1)
         .method_raw("setCamera", js_sg_setCamera, 1)
         .method_raw("setFog", js_sg_setFog, 1)
+        .method_raw("setEnvironment", js_sg_setEnvironment, 1)
         .method_raw("syncPhysics", js_sg_syncPhysics, 0)
         .method_raw("raycast", js_sg_raycast, 2)
         .method_raw("unprojectLocal", js_sg_unprojectLocal, 2)

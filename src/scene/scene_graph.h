@@ -441,6 +441,8 @@ private:
     // --- IBL environment ---
     void ensureEnvConvertPipeline();
     bool runEquirectToCubemap(GLuint equirectTex, GLuint cubemap, int faceSize);
+    void ensureSkyboxPipeline();
+    void renderSkyboxPass();
 
     GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped
     int    envCubemapSize_ = 0;
@@ -455,6 +457,17 @@ private:
     GLuint envConvertFBO_ = 0;
     GLint  envCvUFace_ = -1;
     GLint  envCvUEquirect_ = -1;
+
+    // Skybox draw pipeline (lazy init)
+    GLuint skyboxProgram_ = 0;
+    GLuint skyboxVAO_ = 0;
+    GLuint skyboxVBO_ = 0;
+    GLint  skyUViewToWorld_ = -1;
+    GLint  skyUTanHalfFovY_ = -1;
+    GLint  skyUAspect_ = -1;
+    GLint  skyUEnv_ = -1;
+    GLint  skyUIntensity_ = -1;
+    GLint  skyURotation_ = -1;
 
     // --- Billboard pipeline (lazy init) ---
     GLuint bbProgram_ = 0;
