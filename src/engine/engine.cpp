@@ -1928,6 +1928,7 @@ void Engine::run() {
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(frameDt);
             }
+            drainWheelSmoothing(frameDt);
         }
 
         // 2. Tick timers + JS execution

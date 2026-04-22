@@ -1,6 +1,7 @@
 #include "layout/el_textarea.h"
 #include "dom/element.h"
 #include "render/renderer.h"
+#include "util/platform.h"
 
 #include <SDL3/SDL_keycode.h>
 #include <algorithm>
@@ -159,7 +160,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         setFocused(false);
         r.handled = true;
         r.unfocus = true;
-    } else if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
+    } else if (util::hasPrimaryMod(mod) && keycode == SDLK_A) {
         setCursorPos(static_cast<int>(val.size()));
         r.handled = true;
     }

@@ -21,6 +21,7 @@
 #include "layout/key_handle_result.h"
 #include "util/time.h"
 #include "util/log.h"
+#include "util/platform.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
@@ -807,8 +808,8 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
-    // Clipboard: Ctrl+C / Ctrl+X / Ctrl+V
-    if ((mod & SDL_KMOD_CTRL) &&
+    // Clipboard: ⌘-C / ⌘-X / ⌘-V on macOS, Ctrl equivalents elsewhere.
+    if (util::hasPrimaryMod(mod) &&
         (keycode == SDLK_C || keycode == SDLK_X || keycode == SDLK_V)) {
 
         auto* activeEl = document_->activeElement();
@@ -1109,15 +1110,29 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     dom::Element* target = hitTest(docX, docY);
 
+    // Convert raw SDL wheel delta to pixels once; reuse below for default
+    // scroll and the JS wheel event. See util::wheelDeltaToPixels for why
+    // this needs to distinguish classic ticks from precise/trackpad input.
+    const float pxPerTick = inputConfig_.scrollSpeed;
+    const float pxX = util::wheelDeltaToPixels(dx, pxPerTick);
+    const float pxY = util::wheelDeltaToPixels(dy, pxPerTick);
+    // Vertical-only default scroll: on macOS some trackpad configurations
+    // deliver vertical gestures through the X channel. Use the dominant
+    // axis so the engine's built-in scrolling matches native app behavior.
+    const float pxV = util::wheelDeltaToPixels(
+        util::verticalWheelDelta(dx, dy), pxPerTick);
+
     // Dispatch wheel event to JS
     if (target) {
         dom::WheelEvent wheelEvt("wheel", true, true);
         int mod = safeGetModState(window_.get());
         populateMouseEvent(wheelEvt, x, y, -1, pressedButtons_,
                           x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
-        // SDL gives scroll amounts in lines; convert to pixels for DOM_DELTA_PIXEL
-        wheelEvt.setDeltaX(static_cast<double>(-dx * inputConfig_.scrollSpeed));
-        wheelEvt.setDeltaY(static_cast<double>(-dy * inputConfig_.scrollSpeed));
+        // DOM convention: positive deltaY = scroll toward bottom of content.
+        // SDL convention: positive wheel.y = scroll up (classic wheel-up).
+        // Negate so the JS wheel event matches the browser contract.
+        wheelEvt.setDeltaX(static_cast<double>(-pxX));
+        wheelEvt.setDeltaY(static_cast<double>(-pxY));
         wheelEvt.setDeltaZ(0.0);
         wheelEvt.setDeltaMode(dom::WheelEvent::DOM_DELTA_PIXEL);
         applyMouseOffset(wheelEvt, target);
@@ -1134,8 +1149,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     auto* activeEl = document_->activeElement();
     auto* textarea = getElTextarea(activeEl);
     if (textarea && textarea->isFocused()) {
-        float lineH = 16.0f;
-        float scroll = textarea->scrollY() - dy * lineH * 3.0f;
+        float scroll = textarea->scrollY() - pxV;
         scroll = std::max(scroll, 0.0f);
         textarea->setScrollY(scroll);
         uiDirty_ = true;
@@ -1145,8 +1159,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     // Also allow scrolling textarea under mouse cursor (not just active one)
     auto* hoverTa = getElTextarea(target);
     if (hoverTa) {
-        float lineH = 16.0f;
-        float scroll = hoverTa->scrollY() - dy * lineH * 3.0f;
+        float scroll = hoverTa->scrollY() - pxV;
         scroll = std::max(scroll, 0.0f);
         hoverTa->setScrollY(scroll);
         uiDirty_ = true;
@@ -1161,9 +1174,8 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
             if (overflowScrollable(ov)) {
                 float maxST = maxScrollTop(el);
                 if (maxST <= 0) break; // content fits, no scrolling needed
-                float scrollPx = -dy * inputConfig_.scrollSpeed;
                 float prevScroll = el->scrollTopValue();
-                float newScroll = std::clamp(prevScroll + scrollPx, 0.0f, maxST);
+                float newScroll = std::clamp(prevScroll - pxV, 0.0f, maxST);
                 el->setScrollTopValue(newScroll);
                 if (newScroll != prevScroll) {
                     dispatchScrollEvent(el);
@@ -1178,17 +1190,53 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         }
     }
 
-    // Viewport scrolling
+    // Viewport scrolling — push into the smoothing residual rather than
+    // mutating scrollY_ directly. drainWheelSmoothing() eases it in over
+    // the next few frames, which turns irregular macOS momentum events
+    // into steady deceleration. The residual is unclamped here; the
+    // drain clamps against the live document height each frame (so late
+    // re-layouts don't leave us stuck past the bottom).
+    wheelResidualY_ -= pxV;
+    uiDirty_ = true;
+}
+
+void Engine::drainWheelSmoothing(float frameDtSec) {
+    if (wheelResidualY_ == 0.0f) return;
+
+    // Exponential ease: each frame apply a fraction of the residual.
+    // Higher rate = snappier response / more momentum jitter passing
+    // through; lower rate = smoother but floatier. ~60 gives ~63%/frame
+    // at 60 fps — settles in 2–3 frames, nearly imperceptible lag on
+    // steady swipes while taming irregular momentum tails.
+    constexpr float kSmoothRate = 60.0f;
+    float t = 1.0f - std::exp(-frameDtSec * kSmoothRate);
+    if (t > 1.0f) t = 1.0f;
+
+    // Snap the residual to scrollY_ once it's small enough to avoid
+    // infinitely shrinking float tails.
+    float apply = wheelResidualY_ * t;
+    if (std::abs(wheelResidualY_) < 0.5f) {
+        apply = wheelResidualY_;
+        wheelResidualY_ = 0.0f;
+    } else {
+        wheelResidualY_ -= apply;
+    }
+
+    if (!document_) { wheelResidualY_ = 0.0f; return; }
+
     float maxScroll = std::max(0.0f, documentHeight_ - static_cast<float>(contentHeight()));
     float prevScroll = scrollY_;
-    scrollY_ = std::clamp(scrollY_ - dy * inputConfig_.scrollSpeed, 0.0f, maxScroll);
+    scrollY_ = std::clamp(scrollY_ + apply, 0.0f, maxScroll);
+    if (scrollY_ == 0.0f || scrollY_ == maxScroll) {
+        // Hit an edge — discard remaining residual so we don't fight it.
+        wheelResidualY_ = 0.0f;
+    }
     if (scrollY_ != prevScroll) {
-        // Dispatch scroll event on document element
         if (document_->documentElement()) {
             dispatchScrollEvent(document_->documentElement());
         }
+        uiDirty_ = true;
     }
-    uiDirty_ = true;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 #include "engine/color_picker_overlay.h"
 
 #include "layout/draw_traversal.h"
+#include "util/platform.h"
 
 #include <SDL3/SDL_keycode.h>
 #include <algorithm>
@@ -537,7 +538,7 @@ bool ColorPickerOverlay::onKeyDown(int keycode, int mod) {
         requestDismiss();
         return true;
     }
-    if ((mod & SDL_KMOD_CTRL) && keycode == SDLK_A) {
+    if (util::hasPrimaryMod(mod) && keycode == SDLK_A) {
         hexCursor_ = static_cast<int>(hexText_.size());
         return true;
     }

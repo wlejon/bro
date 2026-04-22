@@ -10,6 +10,7 @@
 #include "engine/settings.h"
 #include "engine/key_mapping.h"
 #include "engine/overflow.h"
+#include "util/platform.h"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include "render/renderer.h"
@@ -1090,7 +1091,7 @@ bool Engine::systemHandleKeyDown(int keycode, int scancode, int mod, bool repeat
     return prevented;
 }
 
-bool Engine::systemHandleWheel(float x, float y, float /*dx*/, float dy) {
+bool Engine::systemHandleWheel(float x, float y, float dx, float dy) {
     if (!isSystemVisible()) return false;
     // Walk panels top-down (reverse render order) for the hit-test, then walk
     // the hit element's composed ancestors looking for a scrollable overflow
@@ -1108,7 +1109,8 @@ bool Engine::systemHandleWheel(float x, float y, float /*dx*/, float dy) {
             if (overflowScrollable(ov)) {
                 float maxST = maxScrollTop(el);
                 if (maxST > 0) {
-                    float scrollPx = -dy * inputConfig_.scrollSpeed;
+                    float scrollPx = -util::wheelDeltaToPixels(
+                        util::verticalWheelDelta(dx, dy), inputConfig_.scrollSpeed);
                     float prev = el->scrollTopValue();
                     float next = std::clamp(prev + scrollPx, 0.0f, maxST);
                     if (next != prev) {

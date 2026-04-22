@@ -162,6 +162,10 @@ public:
     void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
     void handleTextInput(const std::string& text);
     void handleWheel(float x, float y, float dx, float dy);
+
+    /// Eases accumulated wheel deltas (see wheelResidualY_) into scrollY_
+    /// over time. Called once per frame before layout/render.
+    void drainWheelSmoothing(float frameDtSec);
     void handleDropFile(const std::string& path, float x = -1, float y = -1);
     void handleDropText(const std::string& text, float x = -1, float y = -1);
 
@@ -564,6 +568,12 @@ private:
     // Viewport scrolling
     float scrollY_ = 0.0f;
     float documentHeight_ = 0.0f;
+    // Pending wheel-scroll deltas, drained with exponential easing each
+    // frame (see Engine::drainWheelSmoothing). macOS trackpad momentum
+    // phases emit events at irregular intervals with decaying magnitudes
+    // — applying them directly produces visible jitter; smoothing over a
+    // handful of frames yields steady deceleration.
+    float wheelResidualY_ = 0.0f;
 
     // Scrollbar components (styles from config)
     Scrollbar viewportScrollbar_;
