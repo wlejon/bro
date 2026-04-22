@@ -113,6 +113,19 @@ uniform vec2  uShadowBias[MAX_SHADOWS];
 uniform float uShadowAtlasTexel;          // 1.0 / atlasSize, for PCF kernel
 uniform int   uShadowPCFTaps;             // 1 (single sample) or 3 (3x3 PCF)
 
+// IBL — when uIBLEnabled == 1, replaces uAmbient with split-sum env lighting.
+//   uIBLIrradiance: pre-convolved cosine hemisphere → diffuse term.
+//   uIBLPrefilter:  GGX prefilter mip chain → specular term, sampled at LOD =
+//                   roughness * uIBLPrefilterMaxLOD.
+//   uIBLBRDF:       2D LUT(NdotV, roughness) → (Fr scale, Fr bias).
+uniform int         uIBLEnabled;
+uniform samplerCube uIBLIrradiance;
+uniform samplerCube uIBLPrefilter;
+uniform sampler2D   uIBLBRDF;
+uniform float       uIBLIntensity;
+uniform float       uIBLRotation;
+uniform float       uIBLPrefilterMaxLOD;
+
 out vec4 FragColor;
 
 const float PI = 3.14159265359;
@@ -138,6 +151,21 @@ float geometrySmith(float NdotV, float NdotL, float roughness) {
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     float f = pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
     return F0 + (1.0 - F0) * f;
+}
+
+// Sebastien Lagarde's Fresnel-with-roughness adaptation. Used for the IBL
+// ambient term where there's no half-vector — rough surfaces should get
+// bigger F at grazing angles, not the same F a mirror would.
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    float f = pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * f;
+}
+
+// Rotate a direction around the +Y axis. Same convention as the skybox
+// pass so the visible sky and the IBL-sampled environment stay aligned.
+vec3 rotateY(vec3 d, float a) {
+    float c = cos(a), s = sin(a);
+    return vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);
 }
 
 // Smooth distance window (Epic/Frostbite). Vanishes past `range`.
@@ -357,7 +385,33 @@ void main() {
         Lo += shadow * (diffuse + specular) * radiance * NdotL;
     }
 
-    vec3 ambient = uAmbient * baseColor * (1.0 - uMetallic);
+    vec3 ambient;
+    if (uIBLEnabled == 1) {
+        // Karis 2013 split-sum IBL. Sample the diffuse irradiance and the
+        // GGX-prefiltered specular along the reflection vector, multiplied
+        // by the env-independent BRDF LUT. The rotateY calls keep the
+        // sampled environment aligned with the skybox under uIBLRotation.
+        vec3 R    = reflect(-V, N);
+        vec3 N_s  = rotateY(N, uIBLRotation);
+        vec3 R_s  = rotateY(R, uIBLRotation);
+
+        vec3 F  = fresnelSchlickRoughness(NdotV, F0, rough);
+        vec3 kS = F;
+        vec3 kD = (1.0 - kS) * (1.0 - uMetallic);
+
+        vec3 irradiance = texture(uIBLIrradiance, N_s).rgb;
+        vec3 diffuse    = irradiance * baseColor;
+
+        float lod = rough * uIBLPrefilterMaxLOD;
+        vec3 prefiltered = textureLod(uIBLPrefilter, R_s, lod).rgb;
+        vec2 brdf        = texture(uIBLBRDF, vec2(NdotV, rough)).rg;
+        vec3 specular    = prefiltered * (F * brdf.x + brdf.y);
+
+        ambient = (kD * diffuse + specular) * uIBLIntensity;
+    } else {
+        // Fallback for scenes with no environment loaded — flat tint.
+        ambient = uAmbient * baseColor * (1.0 - uMetallic);
+    }
     vec3 emissive = uEmissiveColor * uEmissive;
     vec3 color = Lo + ambient + emissive;
 
@@ -1199,6 +1253,15 @@ void SceneGraph::ensureMeshPipeline() {
         uShadowBiasArr_    = glGetUniformLocation(meshProgram_, "uShadowBias");
         uShadowAtlasTexel_ = glGetUniformLocation(meshProgram_, "uShadowAtlasTexel");
         uShadowPCFTaps_    = glGetUniformLocation(meshProgram_, "uShadowPCFTaps");
+
+        uIBLEnabled_         = glGetUniformLocation(meshProgram_, "uIBLEnabled");
+        uIBLIrradiance_      = glGetUniformLocation(meshProgram_, "uIBLIrradiance");
+        uIBLPrefilter_       = glGetUniformLocation(meshProgram_, "uIBLPrefilter");
+        uIBLBRDF_            = glGetUniformLocation(meshProgram_, "uIBLBRDF");
+        uIBLIntensity_       = glGetUniformLocation(meshProgram_, "uIBLIntensity");
+        uIBLRotation_        = glGetUniformLocation(meshProgram_, "uIBLRotation");
+        uIBLPrefilterMaxLOD_ = glGetUniformLocation(meshProgram_, "uIBLPrefilterMaxLOD");
+
         // Legacy — no longer declared in the shader, fine if -1.
         uLightDir_ = -1;
         uCameraPos_ = -1;
@@ -2029,6 +2092,39 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_);
         glUniform1i(uShadowAtlas_, 1);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    // IBL bindings: irradiance cube on unit 2, prefilter cube on 3, BRDF
+    // LUT on 4. The mesh shader only reads them when uIBLEnabled == 1, so
+    // it's safe to leave them unbound if no environment is loaded — but we
+    // still bind the cube samplers (the GL spec lets a samplerCube uniform
+    // point at "no texture" but some drivers warn). Sampler unit assignments
+    // must match the bindIBLTextures calls in renderMeshNode for textured
+    // meshes, which re-bind unit 0 only.
+    bool iblOn = (envIrradianceCube_ != 0) && (envPrefilterCube_ != 0)
+              && (brdfLUT_ != 0);
+    if (uIBLEnabled_ >= 0) glUniform1i(uIBLEnabled_, iblOn ? 1 : 0);
+    if (iblOn) {
+        if (uIBLIntensity_ >= 0)       glUniform1f(uIBLIntensity_, envIntensity_);
+        if (uIBLRotation_ >= 0)        glUniform1f(uIBLRotation_, envRotation_);
+        if (uIBLPrefilterMaxLOD_ >= 0) glUniform1f(uIBLPrefilterMaxLOD_, (float)(envPrefilterMips_ - 1));
+
+        if (uIBLIrradiance_ >= 0) {
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, envIrradianceCube_);
+            glUniform1i(uIBLIrradiance_, 2);
+        }
+        if (uIBLPrefilter_ >= 0) {
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, envPrefilterCube_);
+            glUniform1i(uIBLPrefilter_, 3);
+        }
+        if (uIBLBRDF_ >= 0) {
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, brdfLUT_);
+            glUniform1i(uIBLBRDF_, 4);
+        }
         glActiveTexture(GL_TEXTURE0);
     }
 

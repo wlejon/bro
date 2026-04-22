@@ -438,6 +438,15 @@ private:
     GLint uShadowAtlasTexel_ = -1;
     GLint uShadowPCFTaps_ = -1;
 
+    // IBL uniforms in the mesh program
+    GLint uIBLEnabled_ = -1;
+    GLint uIBLIrradiance_ = -1;
+    GLint uIBLPrefilter_ = -1;
+    GLint uIBLBRDF_ = -1;
+    GLint uIBLIntensity_ = -1;
+    GLint uIBLRotation_ = -1;
+    GLint uIBLPrefilterMaxLOD_ = -1;
+
     // --- IBL environment ---
     void ensureEnvConvertPipeline();
     bool runEquirectToCubemap(GLuint equirectTex, GLuint cubemap, int faceSize);
