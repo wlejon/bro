@@ -226,10 +226,42 @@ function applyAmbient() {
 const showIconsIn = document.getElementById('showIcons');
 const animateIn = document.getElementById('animate');
 const shadowsIn = document.getElementById('shadows');
+const hdriSel = document.getElementById('hdri');
+const iblIntensityIn = document.getElementById('iblIntensity');
+const iblIntensityVal = document.getElementById('iblIntensityVal');
+const iblRotationIn = document.getElementById('iblRotation');
+const iblRotationVal = document.getElementById('iblRotationVal');
+
+function applyEnvironment() {
+    const slug = hdriSel.value;
+    if (!slug) {
+        scene.setEnvironment(null);
+        return;
+    }
+    scene.setEnvironment({
+        hdr: `apps/lighting-demo/hdri/${slug}_1k.hdr`,
+        intensity: parseFloat(iblIntensityIn.value),
+        rotation:  parseFloat(iblRotationIn.value),
+    });
+}
+function applyIBLIntensity() {
+    const v = parseFloat(iblIntensityIn.value);
+    iblIntensityVal.textContent = v.toFixed(2);
+    if (hdriSel.value) scene.setEnvironment({ intensity: v });
+}
+function applyIBLRotation() {
+    const v = parseFloat(iblRotationIn.value);
+    iblRotationVal.textContent = v.toFixed(2);
+    if (hdriSel.value) scene.setEnvironment({ rotation: v });
+}
+
 modeSel.addEventListener('change', applyToneMap);
 exposureIn.addEventListener('input', applyToneMap);
 sunIn.addEventListener('input', applySun);
 ambientIn.addEventListener('input', applyAmbient);
+hdriSel.addEventListener('change', applyEnvironment);
+iblIntensityIn.addEventListener('input', applyIBLIntensity);
+iblRotationIn.addEventListener('input', applyIBLRotation);
 showIconsIn.addEventListener('change', () => {
     scene.showLightIcons = showIconsIn.checked;
     if (!showIconsIn.checked) attachGizmoFor(null);

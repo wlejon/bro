@@ -123,10 +123,53 @@ scene.setToneMap({ mode: "aces",     exposure: 1.0, gamma: 2.2 });
 scene.setToneMap({ mode: "reinhard", exposure: 0.8 });
 scene.setToneMap({ mode: "linear" });             // debugging / offline passes
 
-// Ambient is a flat additive term applied after per-light contributions —
-// a stand-in until IBL probes land. Keep it small (0.01-0.05); higher
-// values wash out the PBR response.
+// Ambient is a flat additive term applied after per-light contributions.
+// Used as the fallback when no IBL environment is loaded; harmless to
+// leave at a small value (0.01-0.05) for indoor scenes that don't want
+// to take on a sky tint.
 scene.setAmbient([0.03, 0.03, 0.035]);
+
+
+// -----------------------------------------------------------------------------
+// Image-Based Lighting (IBL) — HDR environment maps
+// -----------------------------------------------------------------------------
+//
+// `scene.setEnvironment` loads an HDR equirectangular image (.hdr) and
+// uses it for both the visible skybox and the PBR ambient term. Once
+// loaded, every metal/dielectric surface picks up the environment's
+// colors via Karis's split-sum approximation (a precomputed irradiance
+// cube for diffuse + a GGX prefilter mip chain × BRDF LUT for specular).
+//
+// Loading is synchronous and runs three GPU bake passes off the .hdr:
+// equirect→cube, irradiance convolution, and the GGX prefilter chain.
+// First call also bakes the env-independent BRDF LUT. Total work is
+// ~few hundred million texture taps but happens once per HDR — runtime
+// shading is just three texture samples per fragment.
+
+scene.setEnvironment({ hdr: "apps/lighting-demo/hdri/venice_sunset_1k.hdr" });
+
+// `intensity` multiplies all IBL contributions (skybox + irradiance +
+// prefilter). 1.0 = neutral. Decoupled from sun intensity so you can
+// tune them independently.
+scene.setEnvironment({ hdr: "/hdri/kiara_dawn_1k.hdr", intensity: 1.5 });
+
+// `rotation` (radians) spins the environment around +Y. Useful for
+// aligning the visible sun in the HDR with your directional sun light.
+// Affects both the skybox and the IBL sample direction so they stay
+// consistent.
+scene.setEnvironment({ rotation: Math.PI / 2 });
+
+// Pass any subset of fields to update — omit `hdr` to keep the loaded
+// env, omit `intensity`/`rotation` to keep the current values.
+scene.setEnvironment({ intensity: 2.0 });
+
+// Pass null (or empty hdr) to clear and fall back to the flat
+// `setAmbient` term.
+scene.setEnvironment(null);
+
+// Compatible with any Radiance .hdr (top-down, RGBE-encoded). The 12
+// CC0 environments under apps/lighting-demo/hdri/ are good starting
+// points; more available at polyhaven.com/hdris (all CC0).
 
 
 // -----------------------------------------------------------------------------
