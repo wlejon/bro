@@ -148,6 +148,29 @@ float distanceAttenuation(float dist, float range) {
     return win / (dist * dist + 1.0);
 }
 
+// Rotated Poisson-disk taps for PCF. Pre-unit-scaled; caller multiplies by
+// (texel * radius) and rotates per-fragment. 16 taps give enough coverage
+// to hide individual shadow-map texel edges when the light projects the
+// atlas at a grazing angle (long sun shadows on a near-horizontal plane).
+const vec2 kPoisson16[16] = vec2[16](
+    vec2(-0.94201624, -0.39906216),
+    vec2( 0.94558609, -0.76890725),
+    vec2(-0.09418410, -0.92938870),
+    vec2( 0.34495938,  0.29387760),
+    vec2(-0.91588581,  0.45771432),
+    vec2(-0.81544232, -0.87912464),
+    vec2(-0.38277543,  0.27676845),
+    vec2( 0.97484398,  0.75648379),
+    vec2( 0.44323325, -0.97511554),
+    vec2( 0.53742981, -0.47373420),
+    vec2(-0.26496911, -0.41893023),
+    vec2( 0.79197514,  0.19090188),
+    vec2(-0.24188840,  0.99706507),
+    vec2(-0.81409955,  0.91437590),
+    vec2( 0.19984126,  0.78641367),
+    vec2( 0.14383161, -0.14100790)
+);
+
 // Sample one tile of the shadow atlas. Returns 1.0 = lit, 0.0 = shadowed.
 // `posCamRel` is the camera-relative world position to test (already normal-
 // biased by the caller). `slot` is the per-light shadow slot 0..MAX_SHADOWS-1.
@@ -164,20 +187,28 @@ float sampleShadow(int slot, vec3 posCamRel) {
     vec2  rect_s = uShadowAtlasRect[slot].zw;
     vec2  texel  = vec2(uShadowAtlasTexel);
     vec2  base   = rect_o + sc.xy * rect_s;
-    vec2  minUV  = rect_o + texel;
-    vec2  maxUV  = rect_o + rect_s - texel;
+    // Inset by the PCF radius so rotated taps can't straddle into a
+    // neighbouring tile (which would sample unrelated depths).
+    float radius = 2.0;
+    vec2  minUV  = rect_o + texel * (radius + 0.5);
+    vec2  maxUV  = rect_o + rect_s - texel * (radius + 0.5);
     if (uShadowPCFTaps <= 1) {
         vec2 uv = clamp(base, minUV, maxUV);
         return texture(uShadowAtlas, vec3(uv, ref));
     }
+    // Per-fragment rotation randomises the kernel so nearby fragments sample
+    // in different directions — dithers away banded Mach lines at shadow
+    // edges and shadow-map texel stretch at grazing light angles.
+    float ang = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+    float cs = cos(ang), sn = sin(ang);
+    mat2 rot = mat2(cs, -sn, sn, cs);
     float s = 0.0;
-    for (int yy = -1; yy <= 1; ++yy) {
-        for (int xx = -1; xx <= 1; ++xx) {
-            vec2 uv = clamp(base + vec2(xx, yy) * texel, minUV, maxUV);
-            s += texture(uShadowAtlas, vec3(uv, ref));
-        }
+    for (int k = 0; k < 16; ++k) {
+        vec2 off = rot * kPoisson16[k] * texel * radius;
+        vec2 uv  = clamp(base + off, minUV, maxUV);
+        s += texture(uShadowAtlas, vec3(uv, ref));
     }
-    return s / 9.0;
+    return s * (1.0 / 16.0);
 }
 
 void main() {
@@ -261,7 +292,11 @@ void main() {
         int slot = uLightShadowSlot[i];
         if (slot >= 0) {
             int sc = uLightShadowSlotCount[i];
-            int chosen = slot;
+            // Slope-scaled normal offset: grazing surfaces (NdotL near 0) are
+            // where constant bias falls down and acne shows up. Push harder
+            // there, stay tight where the surface faces the light.
+            float slopeK = clamp(1.0 - NdotL, 0.0, 1.0);
+            float biasScale = 1.0 + slopeK * 4.0;
             if (t == 1 && sc == 6) {
                 // Point light cube unfolded to 6 atlas tiles. Slot order
                 // follows the standard cube-map face convention:
@@ -275,22 +310,45 @@ void main() {
                     face = (toFrag.y > 0.0) ? 2 : 3;
                 else
                     face = (toFrag.z > 0.0) ? 4 : 5;
-                chosen = slot + face;
-            } else {
-                // Directional CSM: pick the tightest cascade containing
-                // this fragment by view-space distance. Splits[] are padded
-                // with a sentinel large value so the unrolled compares
-                // work for slot counts 1..4.
+                int chosen = slot + face;
+                vec3 posBiased = vWorldPos + N * uShadowBias[chosen].y * biasScale;
+                shadow = sampleShadow(chosen, posBiased);
+            } else if (t == 0 && sc > 1) {
+                // Directional CSM: pick the tightest cascade containing this
+                // fragment by view-space distance. Splits[] are padded with a
+                // sentinel so unrolled compares work for 1..4 slots.
                 vec4 splits = uLightCascadeSplit[i];
-                if (sc >= 2 && vCamDist > splits.x) chosen = slot + 1;
-                if (sc >= 3 && vCamDist > splits.y) chosen = slot + 2;
-                if (sc >= 4 && vCamDist > splits.z) chosen = slot + 3;
+                int c = 0;
+                if (sc >= 2 && vCamDist > splits.x) c = 1;
+                if (sc >= 3 && vCamDist > splits.y) c = 2;
+                if (sc >= 4 && vCamDist > splits.z) c = 3;
+                float thisFar, prevFar;
+                if      (c == 0) { thisFar = splits.x; prevFar = 0.0;       }
+                else if (c == 1) { thisFar = splits.y; prevFar = splits.x;  }
+                else if (c == 2) { thisFar = splits.z; prevFar = splits.y;  }
+                else             { thisFar = splits.w; prevFar = splits.z;  }
+                int chosen = slot + c;
+                vec3 posBiased = vWorldPos + N * uShadowBias[chosen].y * biasScale;
+                shadow = sampleShadow(chosen, posBiased);
+                // Fade-blend into the next cascade across the last 15% of
+                // this one so the resolution hand-off doesn't leave a seam.
+                if (c < sc - 1) {
+                    float range = max(thisFar - prevFar, 1e-4);
+                    float blendStart = thisFar - range * 0.15;
+                    float tb = clamp((vCamDist - blendStart)
+                                   / max(thisFar - blendStart, 1e-4), 0.0, 1.0);
+                    if (tb > 0.0) {
+                        int nxt = slot + c + 1;
+                        vec3 pb2 = vWorldPos + N * uShadowBias[nxt].y * biasScale;
+                        float s2 = sampleShadow(nxt, pb2);
+                        shadow = mix(shadow, s2, tb);
+                    }
+                }
+            } else {
+                // Single-tile: spot, single-cascade directional, etc.
+                vec3 posBiased = vWorldPos + N * uShadowBias[slot].y * biasScale;
+                shadow = sampleShadow(slot, posBiased);
             }
-            // Push the sampled position along the surface normal to mask
-            // self-shadow acne on grazing surfaces — cheaper than depth-slope
-            // bias and works in shadow-clip space because the bake is linear.
-            vec3 posBiased = vWorldPos + N * uShadowBias[chosen].y;
-            shadow = sampleShadow(chosen, posBiased);
         }
 
         vec3 radiance = uLightColor[i] * uLightIntensity[i] * atten;
@@ -1557,6 +1615,13 @@ void SceneGraph::renderShadowPass() {
     glEnable(GL_CULL_FACE);
     glCullFace(GL_FRONT);
 
+    // Slope-scaled depth bias shifts stored depth values away from the light
+    // proportional to surface slope. This is the big hammer for self-shadow
+    // acne — constant/normal bias alone can't cover the full dynamic range
+    // of slopes a directional light sees across the scene.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
+
     glUseProgram(shadowProgram_);
 
     const int tileSize = shadowAtlasSize_ / 4;  // matches gridDim in prepareShadows
@@ -1581,6 +1646,8 @@ void SceneGraph::renderShadowPass() {
         }
     }
 
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(0.0f, 0.0f);
     glCullFace(GL_BACK);
     glDisable(GL_CULL_FACE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

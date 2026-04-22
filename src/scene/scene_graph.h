@@ -184,7 +184,7 @@ public:
     /// the square depth texture (e.g. 4096). `pcfTaps` is 1 (single sample)
     /// or 3 (3x3 PCF, default). Defaults are sane — call only to tune.
     void setShadowQuality(int atlasSize, int pcfTaps) {
-        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 4096;
+        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 8192;
         shadowPCFTaps_ = (pcfTaps == 1) ? 1 : 3;
         shadowAtlasDirty_ = true;
     }
@@ -370,7 +370,7 @@ private:
     // unshadowed.
     static constexpr int kMaxShadowTiles = 16;
 
-    int shadowAtlasSize_ = 4096;
+    int shadowAtlasSize_ = 8192;
     int shadowPCFTaps_ = 3;       // 1 or 3 (3x3 PCF)
     bool shadowAtlasDirty_ = true;
 
