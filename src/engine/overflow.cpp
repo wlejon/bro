@@ -1,4 +1,5 @@
 #include "engine/overflow.h"
+#include "engine/scrollbar.h"
 #include "dom/element.h"
 #include "dom/shadow_root.h"
 
@@ -26,6 +27,59 @@ bool overflowScrollable(const std::string& ov) {
 float maxScrollTop(dom::Element* el) {
     auto& box = el->layoutBox();
     return std::max(0.0f, box.naturalHeight - box.contentRect.height);
+}
+
+dom::Element* findElementScrollbarHit(
+    dom::Element* elem, float x, float y,
+    float offsetX, float offsetY,
+    Scrollbar& scrollbar, ScrollbarMetrics& outMetrics)
+{
+    if (!elem) return nullptr;
+    auto& style = elem->computedStyle();
+    {
+        auto it = style.find("display");
+        if (it != style.end() && it->second == "none") return nullptr;
+    }
+
+    auto& lbox = elem->layoutBox();
+    float absX = lbox.contentRect.x + offsetX;
+    float absY = lbox.contentRect.y + offsetY;
+
+    // Recurse into composed children FIRST to find the deepest match.
+    float childOffsetX = absX;
+    float childOffsetY = absY - elem->scrollTopValue();
+    dom::Element* hit = nullptr;
+    elem->forEachComposedChild([&](dom::Element* child) {
+        if (!hit) {
+            hit = findElementScrollbarHit(child, x, y,
+                childOffsetX, childOffsetY, scrollbar, outMetrics);
+        }
+    });
+    if (hit) return hit;
+
+    std::string ov = getOverflowY(style);
+    if (overflowScrollable(ov)) {
+        float maxST = maxScrollTop(elem);
+        if (maxST > 0) {
+            float viewH = lbox.contentRect.height;
+            float contentH = viewH + maxST;
+            float bx = absX - lbox.padding.left - lbox.border.left;
+            float by = absY - lbox.padding.top - lbox.border.top;
+            float bw = lbox.fullWidth();
+            float bh = lbox.fullHeight();
+
+            auto& es = scrollbar.style();
+            auto m = scrollbar.layout(
+                bx + bw - es.width - es.margin,
+                by, bh, contentH, viewH,
+                elem->scrollTopValue());
+            if (scrollbar.hitTest(x, y, m)) {
+                outMetrics = m;
+                return elem;
+            }
+        }
+    }
+    return nullptr;
 }
 
 dom::Element* composedParent(dom::Element* el) {

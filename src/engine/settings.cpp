@@ -367,6 +367,29 @@ void Settings::rebindAction(const std::string& action,
     save();
 }
 
+void Settings::resetAction(const std::string& action) {
+    auto& v = userOverrides_.input.actionBindings;
+    for (auto it = v.begin(); it != v.end(); ++it) {
+        if (it->action == action) {
+            v.erase(it);
+            userPresence_.erase("input.bindings." + action);
+            resolve();
+            save();
+            return;
+        }
+    }
+}
+
+void Settings::resetAllActions() {
+    if (userOverrides_.input.actionBindings.empty()) return;
+    for (auto& b : userOverrides_.input.actionBindings) {
+        userPresence_.erase("input.bindings." + b.action);
+    }
+    userOverrides_.input.actionBindings.clear();
+    resolve();
+    save();
+}
+
 std::vector<std::string> Settings::getKeysForAction(const std::string& action) const {
     for (auto& b : resolved_.input.actionBindings) {
         if (b.action == action) return b.keys;

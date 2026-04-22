@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+<title>Input</title>
 <style>
 html, body {
     margin: 0;
@@ -74,25 +75,89 @@ h2 {
     line-height: 20px;
 }
 
+/* Panel inner area is 428px. h1 (~36) + 2 sliders (~68) + h2 (~42) plus
+   footer reservation (~64) leaves ~218px for the action list. Using a hair
+   less so the scrollbar thumb has breathing room above the footer rule. */
 #actions-list {
-    max-height: 160px;
+    max-height: 210px;
     overflow-y: auto;
+    padding-right: 4px;
 }
 
 .action-row {
-    padding: 4px 0;
-    height: 18px;
+    padding: 5px 0;
+    min-height: 22px;
 }
 
 .action-name {
     display: inline-block;
-    width: 140px;
+    width: 180px;
+    color: #ccc;
+    vertical-align: middle;
+}
+
+.key-chip {
+    display: inline-block;
+    padding: 3px 8px;
+    margin-right: 6px;
+    background: #222;
+    border: 1px solid #3a3a3a;
+    color: #f0c040;
+    cursor: pointer;
+    vertical-align: middle;
+    min-width: 24px;
+    text-align: center;
+}
+
+.key-chip:hover {
+    background: #2a2a2a;
+    border-color: #555;
+}
+
+.key-chip.capturing {
+    background: #3a2a10;
+    border-color: #f0c040;
+    color: #fff;
+}
+
+.key-chip.empty {
+    color: #666;
+    font-style: italic;
+}
+
+.row-btn {
+    display: inline-block;
+    padding: 3px 8px;
+    margin-right: 6px;
+    background: #1f1f1f;
+    border: 1px solid #333;
+    color: #999;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.row-btn:hover {
+    background: #262626;
+    border-color: #555;
     color: #ccc;
 }
 
-.action-keys {
-    display: inline-block;
-    color: #f0c040;
+.row-btn.subtle {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #666;
+}
+
+.row-btn.subtle:hover {
+    border-color: #333;
+    color: #aaa;
+}
+
+.conflict {
+    color: #e06060;
+    font-size: 11px;
+    margin-left: 200px;
+    padding: 2px 0;
 }
 
 .no-actions {
@@ -112,6 +177,7 @@ h2 {
 .btn {
     display: inline-block;
     padding: 6px 14px;
+    margin-right: 8px;
     background: #222222;
     border: 1px solid #3a3a3a;
     color: #ccc;
@@ -146,7 +212,8 @@ h2 {
     <div id="actions-list"></div>
 
     <div class="footer">
-        <span class="btn" id="reset-btn">Reset to Defaults</span>
+        <span class="btn" id="reset-btn">Reset Input Prefs</span>
+        <span class="btn" id="reset-bindings-btn">Reset All Bindings</span>
     </div>
 </div>
 
@@ -177,11 +244,115 @@ h2 {
 
     var actionsList = document.getElementById('actions-list');
     var resetBtn = document.getElementById('reset-btn');
+    var resetBindingsBtn = document.getElementById('reset-bindings-btn');
 
     var scrollMin = 1, scrollMax = 200;
     var dblMin = 100, dblMax = 1000;
 
-    function load() {
+    // While a chip is capturing a new key, all other interactions are blocked
+    // and the next non-modifier keydown replaces (or appends to) the action.
+    var capturing = null; // { action, slot (-1 = append), chip }
+
+    function keyLabel(key) {
+        if (!key) return '';
+        if (key === ' ') return 'Space';
+        if (key === 'ArrowLeft')  return 'Left';
+        if (key === 'ArrowRight') return 'Right';
+        if (key === 'ArrowUp')    return 'Up';
+        if (key === 'ArrowDown')  return 'Down';
+        if (key === 'Escape')    return 'Esc';
+        if (key === 'Enter')     return 'Enter';
+        if (key === 'Tab')       return 'Tab';
+        if (key === 'Backspace') return 'Bksp';
+        if (key === 'Delete')    return 'Del';
+        if (key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta') return key;
+        if (key.length === 1) return key.toUpperCase();
+        return key;
+    }
+
+    // System/engine actions (system_toggle_*) are rebindable but conceptually
+    // distinct. We still show them; a prefix filters them visually.
+    function sortActions(list) {
+        return list.slice().sort(function(a, b) {
+            var sa = a.action.indexOf('system_') === 0 ? 1 : 0;
+            var sb = b.action.indexOf('system_') === 0 ? 1 : 0;
+            if (sa !== sb) return sa - sb;
+            return a.action < b.action ? -1 : (a.action > b.action ? 1 : 0);
+        });
+    }
+
+    function stopCapture() {
+        capturing = null;
+        render();
+    }
+
+    function beginCapture(action, slot) {
+        capturing = { action: action, slot: slot };
+        render();
+    }
+
+    function applyCaptureKey(key) {
+        if (!capturing) return;
+        var action = capturing.action;
+        var keys = bro.settings.getActionKeys(action) || [];
+
+        // Esc cancels a capture instead of binding itself — otherwise every
+        // action would end up bound to Esc during a mis-click.
+        if (key === 'Escape') { stopCapture(); return; }
+
+        // If this key is already bound elsewhere, unbind it there so there's
+        // no silent double-bind. Same-action reassignment is allowed.
+        var owner = bro.settings.getKeyAction(key);
+        if (owner && owner !== action) {
+            var ownerKeys = bro.settings.getActionKeys(owner) || [];
+            var filtered = [];
+            for (var i = 0; i < ownerKeys.length; i++) {
+                if (ownerKeys[i] !== key) filtered.push(ownerKeys[i]);
+            }
+            bro.settings.rebindAction(owner, filtered);
+        }
+
+        var next = keys.slice();
+        if (capturing.slot < 0) {
+            // Append (but don't duplicate).
+            if (next.indexOf(key) < 0) next.push(key);
+        } else {
+            next[capturing.slot] = key;
+            // De-dupe adjacent slot with same key.
+            var seen = {};
+            var deduped = [];
+            for (var j = 0; j < next.length; j++) {
+                if (!seen[next[j]]) { seen[next[j]] = true; deduped.push(next[j]); }
+            }
+            next = deduped;
+        }
+        bro.settings.rebindAction(action, next);
+        stopCapture();
+    }
+
+    function removeKey(action, slot) {
+        var keys = bro.settings.getActionKeys(action) || [];
+        if (slot < 0 || slot >= keys.length) return;
+        keys.splice(slot, 1);
+        bro.settings.rebindAction(action, keys);
+        render();
+    }
+
+    function renderError(msg) {
+        actionsList.innerHTML = '';
+        var err = document.createElement('div');
+        err.className = 'no-actions';
+        err.style.setProperty('color', '#e06060');
+        err.textContent = msg;
+        actionsList.appendChild(err);
+    }
+
+    function render() {
+        try { renderImpl(); }
+        catch (e) { renderError('Input panel error: ' + (e && e.message ? e.message : e)); }
+    }
+
+    function renderImpl() {
         var all = bro.settings.getAll();
 
         var scrollPct = (all.input.scrollSpeed - scrollMin) / (scrollMax - scrollMin);
@@ -194,55 +365,149 @@ h2 {
         dblclickFill.style.setProperty('width', Math.round(dblPct * 100) + '%');
         dblclickVal.textContent = Math.round(all.input.doubleClickThresholdMs).toString();
 
-        var actions = bro.settings.getActions();
+        var actions = sortActions(bro.settings.getActions());
         actionsList.innerHTML = '';
         if (actions.length === 0) {
             var noAct = document.createElement('div');
             noAct.className = 'no-actions';
             noAct.textContent = 'No actions defined by this app';
             actionsList.appendChild(noAct);
-        } else {
-            for (var i = 0; i < actions.length; i++) {
-                var row = document.createElement('div');
-                row.className = 'action-row';
-
-                var nameSpan = document.createElement('span');
-                nameSpan.className = 'action-name';
-                nameSpan.textContent = actions[i].action;
-
-                var keysSpan = document.createElement('span');
-                keysSpan.className = 'action-keys';
-                keysSpan.textContent = actions[i].keys.join(', ');
-
-                row.appendChild(nameSpan);
-                row.appendChild(keysSpan);
-                actionsList.appendChild(row);
-            }
+            return;
+        }
+        for (var i = 0; i < actions.length; i++) {
+            buildRow(actions[i]);
         }
     }
 
+    function buildRow(action) {
+        var row = document.createElement('div');
+        row.className = 'action-row';
+
+        var nameSpan = document.createElement('span');
+        nameSpan.className = 'action-name';
+        nameSpan.textContent = action.action;
+        row.appendChild(nameSpan);
+
+        var keys = action.keys || [];
+        for (var i = 0; i < keys.length; i++) {
+            row.appendChild(buildKeyChip(action.action, i, keys[i]));
+        }
+
+        // Capturing-append placeholder: replaces the Add button while active.
+        if (capturing && capturing.action === action.action && capturing.slot < 0) {
+            var chip = document.createElement('span');
+            chip.className = 'key-chip capturing';
+            chip.textContent = 'press a key…';
+            row.appendChild(chip);
+        } else {
+            var add = document.createElement('span');
+            add.className = 'row-btn';
+            add.textContent = '+';
+            add.title = 'Add key';
+            (function(name) {
+                add.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    if (capturing) { stopCapture(); return; }
+                    beginCapture(name, -1);
+                });
+            })(action.action);
+            row.appendChild(add);
+        }
+
+        var reset = document.createElement('span');
+        reset.className = 'row-btn subtle';
+        reset.textContent = 'reset';
+        reset.title = 'Restore default keys';
+        (function(name) {
+            reset.addEventListener('click', function(e) {
+                e.stopPropagation();
+                bro.settings.resetAction(name);
+                render();
+            });
+        })(action.action);
+        row.appendChild(reset);
+
+        actionsList.appendChild(row);
+    }
+
+    function buildKeyChip(action, slot, key) {
+        var chip = document.createElement('span');
+        var isCapturing = capturing && capturing.action === action && capturing.slot === slot;
+        chip.className = 'key-chip' + (isCapturing ? ' capturing' : '');
+        chip.textContent = isCapturing ? 'press a key…' : keyLabel(key);
+        chip.title = isCapturing
+            ? 'Press any key to rebind, Esc to cancel'
+            : 'Click to rebind, right-click to remove';
+
+        chip.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (capturing && !isCapturing) { stopCapture(); return; }
+            if (isCapturing) { stopCapture(); return; }
+            beginCapture(action, slot);
+        });
+        // Right-click removes the key from the list.
+        chip.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (capturing) return;
+            removeKey(action, slot);
+        });
+        return chip;
+    }
+
     scrollTrack.addEventListener('click', function(e) {
+        if (capturing) { stopCapture(); return; }
         var rect = scrollTrack.getBoundingClientRect();
         var pct = (e.clientX - rect.left) / rect.width;
         pct = Math.max(0, Math.min(1, pct));
         bro.settings.set('input.scrollSpeed', scrollMin + pct * (scrollMax - scrollMin));
-        load();
+        render();
     });
 
     dblclickTrack.addEventListener('click', function(e) {
+        if (capturing) { stopCapture(); return; }
         var rect = dblclickTrack.getBoundingClientRect();
         var pct = (e.clientX - rect.left) / rect.width;
         pct = Math.max(0, Math.min(1, pct));
         bro.settings.set('input.doubleClickThresholdMs', dblMin + pct * (dblMax - dblMin));
-        load();
+        render();
     });
 
-    resetBtn.addEventListener('click', function() {
+    resetBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (capturing) { stopCapture(); return; }
         bro.settings.reset('input');
-        load();
+        render();
     });
 
-    load();
+    resetBindingsBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (capturing) { stopCapture(); return; }
+        bro.settings.resetAllActions();
+        render();
+    });
+
+    // Modifier-only presses shouldn't be accepted as a binding — wait for a
+    // real key. The user can still bind "Shift" etc. via the keyup side if
+    // nothing else came, but for capture we gate on non-modifier only.
+    function isModifierOnly(key) {
+        return key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta';
+    }
+
+    // Capture listens on window so it fires regardless of focus target.
+    window.addEventListener('keydown', function(e) {
+        if (!capturing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (isModifierOnly(e.key)) return;
+        applyCaptureKey(e.key);
+    }, true);
+
+    document.body.addEventListener('click', function() {
+        if (capturing) stopCapture();
+    });
+
+    render();
 })();
 </script>
 </body>

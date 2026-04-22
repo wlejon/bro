@@ -1531,48 +1531,13 @@ void Engine::rasterThreadFunc() {
             viewportScrollbar_.draw(rasterRenderer.get(), m);
         }
 
-        // Draw scrollbars for overflow elements
+        // Draw scrollbars for overflow elements in the app document. System
+        // panels draw their own scrollbars via drawElementScrollbars from
+        // drawSystemPanels (same helper, different tree).
         if (document_) {
-            std::function<void(dom::Element*, float, float)> drawElemScrollbars;
-            drawElemScrollbars = [&](dom::Element* elem, float offsetX, float offsetY) {
-                if (!elem) return;
-                auto& style = elem->computedStyle();
-                {
-                    auto it = style.find("display");
-                    if (it != style.end() && it->second == "none") return;
-                }
-                auto& lbox = elem->layoutBox();
-                float absX = lbox.contentRect.x + offsetX;
-                float absY = lbox.contentRect.y + offsetY;
-
-                std::string ov = getOverflowY(style);
-                if (overflowScrollable(ov)) {
-                    float maxST = maxScrollTop(elem);
-                    if (maxST > 0) {
-                        float viewH = lbox.contentRect.height;
-                        float contentH = viewH + maxST;
-                        float bx = absX - lbox.padding.left - lbox.border.left;
-                        float by = absY - lbox.padding.top - lbox.border.top;
-                        float bw = lbox.fullWidth();
-                        float bh = lbox.fullHeight();
-
-                        auto& es = elementScrollbar_.style();
-                        auto m = elementScrollbar_.layout(
-                            bx + bw - es.width - es.margin,
-                            by, bh, contentH, viewH,
-                            elem->scrollTopValue());
-                        elementScrollbar_.draw(rasterRenderer.get(), m);
-                    }
-                }
-
-                float childOffsetX = absX;
-                float childOffsetY = absY - elem->scrollTopValue();
-                elem->forEachComposedChild([&](dom::Element* child) {
-                    drawElemScrollbars(child, childOffsetX, childOffsetY);
-                });
-            };
-            drawElemScrollbars(document_->documentElement(),
-                               0.0f, static_cast<float>(insetTop) - scrollY);
+            drawElementScrollbars(rasterRenderer.get(),
+                                  document_->documentElement(),
+                                  0.0f, static_cast<float>(insetTop) - scrollY);
         }
 
         // Capture the last HTML layer
@@ -1622,34 +1587,12 @@ void Engine::rasterThreadFunc() {
                 rasterRenderer->rewrapGPUSurface(systemSurfacePool_[panelIdx], vpW, vpH);
                 rasterRenderer->switchSurface(systemSurfacePool_[panelIdx].surface);
 
-                // Install inline canvas blit callback per panel (splash's
-                // matrix canvas relies on this).
-                rasterDrawTraversal->setLayerBreakCallback(
-                    [&rasterRenderer](canvas::CanvasScene* scene, unsigned int,
-                                      float x, float y, float w, float h) {
-                        if (!scene || w <= 0 || h <= 0) return;
-                        // Bind the scene to the raster thread's Ganesh context
-                        // so ensureSurface takes the GPU path (Skia renders
-                        // directly onto a GL-backed surface, and snapshot+blit
-                        // onto the panel surface is GPU→GPU — no CPU upload).
-                        // setGrContext is idempotent on unchanged context.
-                        scene->setGrContext(rasterRenderer->grContext());
-                        scene->flushStaged();
-                        auto* src = scene->surface();
-                        if (!src) return;
-                        auto img = src->makeImageSnapshot();
-                        if (!img) return;
-                        auto* c = rasterRenderer->getCanvas();
-                        if (!c) return;
-                        SkRect dst = SkRect::MakeXYWH(x, y, w, h);
-                        c->drawImageRect(img, dst,
-                            SkSamplingOptions(SkFilterMode::kLinear));
-                        scene->clearDirty();
-                    });
-                rasterDrawTraversal->setBasePath(sdoc.document->basePath());
-                rasterDrawTraversal->draw(sdoc.document->documentElement(),
-                                          0, 0, vpW, vpH);
-                rasterDrawTraversal->setLayerBreakCallback(nullptr);
+                // Shared per-doc draw — installs canvas-blit callback, runs
+                // the layout traversal, and draws overflow scrollbars. Same
+                // helper used by the headless path so decoration passes never
+                // have to be remembered in two places.
+                drawSystemPanelDoc(rasterRenderer.get(), *rasterDrawTraversal,
+                                   sdoc, vpW, vpH);
 
                 UILayer panelLayer;
                 panelLayer.type = UILayer::HTML;
@@ -2503,6 +2446,50 @@ dom::Element* Engine::hitTest(float x, float y) {
 void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     if (!target || !jsRuntime_) return;
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
+}
+
+void Engine::drawElementScrollbars(render::Renderer* renderer,
+                                   dom::Element* root,
+                                   float offsetX, float offsetY) {
+    if (!renderer || !root) return;
+    std::function<void(dom::Element*, float, float)> walk;
+    walk = [&](dom::Element* elem, float ox, float oy) {
+        if (!elem) return;
+        auto& style = elem->computedStyle();
+        auto dispIt = style.find("display");
+        if (dispIt != style.end() && dispIt->second == "none") return;
+
+        auto& lbox = elem->layoutBox();
+        float absX = lbox.contentRect.x + ox;
+        float absY = lbox.contentRect.y + oy;
+
+        std::string ov = getOverflowY(style);
+        if (overflowScrollable(ov)) {
+            float maxST = maxScrollTop(elem);
+            if (maxST > 0) {
+                float viewH = lbox.contentRect.height;
+                float contentH = viewH + maxST;
+                float bx = absX - lbox.padding.left - lbox.border.left;
+                float by = absY - lbox.padding.top - lbox.border.top;
+                float bw = lbox.fullWidth();
+                float bh = lbox.fullHeight();
+
+                auto& es = elementScrollbar_.style();
+                auto m = elementScrollbar_.layout(
+                    bx + bw - es.width - es.margin,
+                    by, bh, contentH, viewH,
+                    elem->scrollTopValue());
+                elementScrollbar_.draw(renderer, m);
+            }
+        }
+
+        float childOx = absX;
+        float childOy = absY - elem->scrollTopValue();
+        elem->forEachComposedChild([&](dom::Element* child) {
+            walk(child, childOx, childOy);
+        });
+    };
+    walk(root, offsetX, offsetY);
 }
 
 

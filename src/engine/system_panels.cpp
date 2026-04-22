@@ -8,6 +8,10 @@
 #include "layout/layout_node_adapter.h"
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
+#include "engine/key_mapping.h"
+#include "engine/overflow.h"
+#include <SDL3/SDL.h>
+#include <algorithm>
 #include "render/renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
@@ -23,6 +27,7 @@
 #include "js/canvas_bindings.h"
 #include "js/image_bindings.h"
 #include "js/event_dispatch.h"
+#include "js/window_bindings.h"
 #include "js/settings_bindings.h"
 #include "canvas/canvas_scene.h"
 #include "platform/sdl_window.h"
@@ -227,10 +232,10 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         doc.timers = std::make_unique<js::Timers>();
         js::Timers::install(doc.jsCtx, doc.timers.get());
 
-        // Set window = globalThis
-        JSValue global = JS_GetGlobalObject(doc.jsCtx);
-        JS_SetPropertyStr(doc.jsCtx, global, "window", JS_DupValue(doc.jsCtx, global));
-        JS_FreeValue(doc.jsCtx, global);
+        // Install window bindings: sets window = globalThis, plus the
+        // addEventListener/dispatchEvent polyfill so panels can listen to
+        // window-level events (keydown capture for rebind UIs, etc.).
+        js::installWindowBindings(doc.jsCtx, viewportWidth_, viewportHeight_);
 
         // Install DOM bindings
         js::DomBindings::install(doc.jsCtx, doc.document.get());
@@ -753,17 +758,18 @@ void Engine::layoutSystemPanels(layout::SkiaTextMetrics& metrics) {
     }
 }
 
-void Engine::drawSystemPanels(render::Renderer* renderer,
-                              layout::DrawTraversal& traversal) {
-    if (!renderer || !isSystemVisible()) return;
+void Engine::drawSystemPanelDoc(render::Renderer* renderer,
+                                layout::DrawTraversal& traversal,
+                                SystemDocument& doc,
+                                int vpW, int vpH) {
+    if (!renderer || !doc.document) return;
 
     // System panels want 2D canvas children composited inline (the canvas
-    // is the panel). Install a layer-break callback that blits the canvas
-    // surface straight onto the current target Skia canvas — no separate
-    // GPU texture layer for system canvases.
-    // If the renderer is a GPU-backed SkiaRenderer, route system-panel
-    // canvases through its GrDirectContext so they render on the GPU (same
-    // reasoning as the windowed raster-thread callback in engine.cpp).
+    // *is* the panel). Install a layer-break callback that blits the canvas
+    // scene's surface straight onto the current target Skia canvas — no
+    // separate GPU texture layer for system canvases. If the renderer has
+    // a Ganesh context, bind the scene to it so Skia renders directly on
+    // the GPU and the snapshot→blit stays GPU→GPU (no CPU upload).
     auto* skiaRenderer = dynamic_cast<render::SkiaRenderer*>(renderer);
     GrDirectContext* panelGr = skiaRenderer ? skiaRenderer->grContext() : nullptr;
 
@@ -773,7 +779,7 @@ void Engine::drawSystemPanels(render::Renderer* renderer,
             if (!scene || !renderer) return;
             if (w <= 0 || h <= 0) return;
             if (panelGr) scene->setGrContext(panelGr);
-            scene->flush();
+            scene->flushStaged();
             auto* src = scene->surface();
             if (!src) return;
             auto img = src->makeImageSnapshot();
@@ -785,17 +791,33 @@ void Engine::drawSystemPanels(render::Renderer* renderer,
             scene->clearDirty();
         });
 
+    traversal.setBasePath(doc.document->basePath());
+    traversal.draw(doc.document->documentElement(), 0, 0,
+                   static_cast<float>(vpW), static_cast<float>(vpH));
+
+    // Scrollbar thumbs for overflow:auto|scroll descendants. Done after the
+    // content pass so thumbs render above element backgrounds, and always
+    // runs — one call site means decorations like this never go missing on
+    // one of the two render paths.
+    drawElementScrollbars(renderer, doc.document->documentElement(),
+                          0.0f, 0.0f);
+
+    traversal.setLayerBreakCallback(nullptr);
+}
+
+void Engine::drawSystemPanels(render::Renderer* renderer,
+                              layout::DrawTraversal& traversal) {
+    if (!renderer || !isSystemVisible()) return;
+
     for (auto& doc : systemDocs_) {
         if (!isSystemDocVisible(doc) || !doc.document) continue;
-        traversal.setBasePath(doc.document->basePath());
-        traversal.draw(doc.document->documentElement(), 0, 0,
-                       viewportWidth_, viewportHeight_);
+        drawSystemPanelDoc(renderer, traversal, doc,
+                           viewportWidth_, viewportHeight_);
     }
 
     // System-context overlay (if any) on top of panels.
     overlayMgr_.drawIfContext(OverlayContext::System, renderer);
 
-    traversal.setLayerBreakCallback(nullptr);
     systemDirty_ = false;
 }
 
@@ -869,6 +891,42 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
             systemDirty_ = true;
             return true;
         }
+    }
+
+    // Scrollbar hit test before DOM hit-test so a drag on the thumb wins over
+    // a click on the row underneath. Panels live in screen space (no viewport
+    // scroll), so the offset starts at 0. If we find a hit we stamp the drag
+    // target + owning doc so handleMouseMove / handleMouseUp in input_handling
+    // know this drag is system-owned.
+    for (int i = static_cast<int>(systemDocs_.size()) - 1; i >= 0; i--) {
+        auto& doc = systemDocs_[i];
+        if (!isSystemDocVisible(doc) || !doc.document) continue;
+        ScrollbarMetrics em;
+        dom::Element* hitElem = findElementScrollbarHit(
+            doc.document->documentElement(), x, y,
+            0.0f, 0.0f, elementScrollbar_, em);
+        if (!hitElem) continue;
+        if (elementScrollbar_.thumbHitTest(x, y, em)) {
+            elementScrollbar_.beginDrag(y, em);
+            scrollbarDragTarget_ = hitElem;
+            scrollbarDragSystemDoc_ = &doc;
+        } else {
+            // Click on track — page scroll to the clicked position.
+            float viewH = hitElem->layoutBox().contentRect.height;
+            float maxST = maxScrollTop(hitElem);
+            float contentH = viewH + maxST;
+            float newScroll = elementScrollbar_.scrollToPosition(y,
+                contentH, viewH, em);
+            float prev = hitElem->scrollTopValue();
+            float clamped = std::clamp(newScroll, 0.0f, maxST);
+            hitElem->setScrollTopValue(clamped);
+            if (clamped != prev) {
+                systemDirty_ = true;
+                doc.document->markDirty();
+            }
+        }
+        systemDirty_ = true;
+        return true;
     }
 
     // Hit-test panels in reverse (last rendered = on top).
@@ -993,6 +1051,104 @@ bool Engine::systemHandleMouseMove(float x, float y) {
         return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard input (modal panels)
+// ---------------------------------------------------------------------------
+//
+// When the settings modal is open the app should not see keystrokes at all —
+// the modal is, well, modal. We dispatch to every visible settings / nav
+// panel so each panel's own JS can handle keys in its own JSContext (capture
+// listeners, tab navigation, etc.). Perf / splash / menu panels are not
+// modal, so they don't capture keys.
+
+// Returns true if any panel listener called preventDefault — signalling that
+// engine-level shortcuts (like Esc-to-close) should be suppressed for this
+// keystroke. The return value does NOT mean "was there a visible modal"; the
+// caller already checks systemSettingsVisible_ before calling.
+bool Engine::systemHandleKeyDown(int keycode, int scancode, int mod, bool repeat) {
+    if (!systemSettingsVisible_) return false;
+    bool prevented = false;
+    for (auto& doc : systemDocs_) {
+        if (doc.group != "nav" && doc.group != "settings") continue;
+        if (!isSystemDocVisible(doc) || !doc.document || !doc.jsCtx) continue;
+        auto* body = doc.document->body();
+        if (!body) continue;
+        dom::KeyboardEvent evt("keydown");
+        evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+        evt.setCode(sdlScancodeToWebCode(scancode));
+        evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+        evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+        evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+        evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+        evt.setRepeat(repeat);
+        evt.setIsTrusted(true);
+        js::dispatchDomEvent(doc.jsCtx, body, evt);
+        if (evt.defaultPrevented()) prevented = true;
+    }
+    return prevented;
+}
+
+bool Engine::systemHandleWheel(float x, float y, float /*dx*/, float dy) {
+    if (!isSystemVisible()) return false;
+    // Walk panels top-down (reverse render order) for the hit-test, then walk
+    // the hit element's composed ancestors looking for a scrollable overflow
+    // box. Matches browser behavior where wheel bubbles to the nearest
+    // scrollable ancestor.
+    for (int i = static_cast<int>(systemDocs_.size()) - 1; i >= 0; i--) {
+        auto& doc = systemDocs_[i];
+        if (!isSystemDocVisible(doc) || !doc.document) continue;
+        dom::Element* target = systemHitTest(doc, x, y);
+        if (!target) continue;
+
+        auto* el = target;
+        while (el) {
+            std::string ov = getOverflowY(el->computedStyle());
+            if (overflowScrollable(ov)) {
+                float maxST = maxScrollTop(el);
+                if (maxST > 0) {
+                    float scrollPx = -dy * inputConfig_.scrollSpeed;
+                    float prev = el->scrollTopValue();
+                    float next = std::clamp(prev + scrollPx, 0.0f, maxST);
+                    if (next != prev) {
+                        el->setScrollTopValue(next);
+                        systemDirty_ = true;
+                        if (doc.document) doc.document->markDirty();
+                    }
+                    return true;
+                }
+            }
+            el = el->parentElement();
+        }
+        // Even when no scrollable ancestor exists, a modal panel should still
+        // swallow the wheel event — otherwise the app behind the modal scrolls.
+        if (systemSettingsVisible_) return true;
+    }
+    return false;
+}
+
+bool Engine::systemHandleKeyUp(int keycode, int scancode, int mod, bool repeat) {
+    if (!systemSettingsVisible_) return false;
+    bool prevented = false;
+    for (auto& doc : systemDocs_) {
+        if (doc.group != "nav" && doc.group != "settings") continue;
+        if (!isSystemDocVisible(doc) || !doc.document || !doc.jsCtx) continue;
+        auto* body = doc.document->body();
+        if (!body) continue;
+        dom::KeyboardEvent evt("keyup");
+        evt.setKey(sdlKeycodeToWebKey(keycode, mod));
+        evt.setCode(sdlScancodeToWebCode(scancode));
+        evt.setCtrlKey((mod & SDL_KMOD_CTRL) != 0);
+        evt.setShiftKey((mod & SDL_KMOD_SHIFT) != 0);
+        evt.setAltKey((mod & SDL_KMOD_ALT) != 0);
+        evt.setMetaKey((mod & SDL_KMOD_GUI) != 0);
+        evt.setRepeat(repeat);
+        evt.setIsTrusted(true);
+        js::dispatchDomEvent(doc.jsCtx, body, evt);
+        if (evt.defaultPrevented()) prevented = true;
+    }
+    return prevented;
 }
 
 // ---------------------------------------------------------------------------

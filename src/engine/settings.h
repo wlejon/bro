@@ -95,6 +95,11 @@ public:
     void defineEngineAction(const std::string& action, const std::vector<std::string>& defaultKeys);
     void defineAction(const std::string& action, const std::vector<std::string>& defaultKeys);
     void rebindAction(const std::string& action, const std::vector<std::string>& keys);
+    /// Remove the user-level rebind for a single action, reverting to
+    /// app/engine defaults. Other action overrides are left intact.
+    void resetAction(const std::string& action);
+    /// Remove all user-level rebinds for actions at once.
+    void resetAllActions();
     std::vector<std::string> getKeysForAction(const std::string& action) const;
     std::string getActionForKey(const std::string& webKey) const;
     const std::vector<ActionBinding>& getActions() const { return resolved_.input.actionBindings; }

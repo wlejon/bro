@@ -355,6 +355,18 @@ private:
     void layoutSystemPanels(layout::SkiaTextMetrics& metrics);
     void drawSystemPanels(render::Renderer* renderer,
                           layout::DrawTraversal& traversal);
+    /// Render one system panel's document tree into the current surface of
+    /// `renderer`. Handles basePath setup, the inline canvas-blit callback,
+    /// the main draw traversal, and overflow scrollbars — all the per-doc
+    /// work that's common between windowed mode (which per-panel switches
+    /// GPU surfaces beforehand) and headless mode (which draws straight onto
+    /// the main target). Keeping both paths funneled through one call site
+    /// means decorations added here (scrollbars, badges, outlines) show up
+    /// everywhere without duplication drift.
+    void drawSystemPanelDoc(render::Renderer* renderer,
+                            layout::DrawTraversal& traversal,
+                            SystemDocument& doc,
+                            int vpW, int vpH);
     /// Main thread: swap each visible system-panel CanvasScene's recorded
     /// commands into its staged buffer, so the raster thread can replay them
     /// without racing with JS that keeps pushing new commands. Must be called
@@ -365,6 +377,22 @@ private:
     bool systemHandleMouseDown(float x, float y, int button);
     bool systemHandleMouseUp(float x, float y, int button);
     bool systemHandleMouseMove(float x, float y);
+    /// Wheel scrolling on a system panel's overflow element. Returns true if
+    /// some element was scrolled; caller should skip app-level wheel handling.
+    bool systemHandleWheel(float x, float y, float dx, float dy);
+    /// Recurse the given subtree drawing a scrollbar thumb for every element
+    /// with overflow-y: auto|scroll that actually has clipped content. Shared
+    /// by the app-doc draw pass and per-system-panel drawing so modals and
+    /// overlays get scrollbars with no code duplication.
+    void drawElementScrollbars(render::Renderer* renderer,
+                               dom::Element* root,
+                               float offsetX, float offsetY);
+    /// Route a keydown/keyup to visible system panels (settings modal, etc.)
+    /// so its JS can capture keys. Returns true if the modal is active, in
+    /// which case the app does NOT see the key — modal panels are meant to
+    /// fully capture input while open.
+    bool systemHandleKeyDown(int keycode, int scancode, int mod, bool repeat);
+    bool systemHandleKeyUp(int keycode, int scancode, int mod, bool repeat);
 
     /// Raster thread entry point (windowed mode only).
     void rasterThreadFunc();
@@ -543,6 +571,11 @@ private:
     bool draggingViewportScrollbar_ = false;
     dom::Element* scrollbarDragTarget_ = nullptr;
     dom::Element* scrollbarHoveredElement_ = nullptr;
+    /// When non-null, scrollbarDragTarget_ belongs to this system panel
+    /// document rather than the app document, and the drag-update code
+    /// dispatches scroll events through the panel's JS context. Cleared
+    /// when the drag ends.
+    SystemDocument* scrollbarDragSystemDoc_ = nullptr;
 
     // UI render throttle — layout+rasterize at most every N ms (from config)
     double uiFrameIntervalMs_ = 8.0;

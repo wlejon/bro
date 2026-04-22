@@ -284,6 +284,29 @@ static JSValue js_settings_rebindAction(JSContext* ctx, JSValueConst, int argc, 
 }
 
 // ---------------------------------------------------------------------------
+// bro.settings.resetAction(action)
+// ---------------------------------------------------------------------------
+
+static JSValue js_settings_resetAction(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    auto* state = getState(ctx);
+    if (!state || !state->settings) return JS_UNDEFINED;
+    state->settings->resetAction(jsStr(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+// ---------------------------------------------------------------------------
+// bro.settings.resetAllActions()
+// ---------------------------------------------------------------------------
+
+static JSValue js_settings_resetAllActions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* state = getState(ctx);
+    if (!state || !state->settings) return JS_UNDEFINED;
+    state->settings->resetAllActions();
+    return JS_UNDEFINED;
+}
+
+// ---------------------------------------------------------------------------
 // bro.settings.getActionKeys(action)
 // ---------------------------------------------------------------------------
 
@@ -414,6 +437,8 @@ static const JSCFunctionListEntry js_settings_funcs[] = {
     JS_CFUNC_DEF("reset", 0, js_settings_reset),
     JS_CFUNC_DEF("defineAction", 2, js_settings_defineAction),
     JS_CFUNC_DEF("rebindAction", 2, js_settings_rebindAction),
+    JS_CFUNC_DEF("resetAction", 1, js_settings_resetAction),
+    JS_CFUNC_DEF("resetAllActions", 0, js_settings_resetAllActions),
     JS_CFUNC_DEF("getActionKeys", 1, js_settings_getActionKeys),
     JS_CFUNC_DEF("getKeyAction", 1, js_settings_getKeyAction),
     JS_CFUNC_DEF("getActions", 0, js_settings_getActions),

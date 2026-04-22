@@ -180,63 +180,8 @@ static void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
 // Scrollbar hit testing helper
 // ---------------------------------------------------------------------------
 
-/// Walk the DOM tree to find which overflow element's scrollbar contains (x, y).
-/// Returns the element whose scrollbar was hit, or nullptr.
-/// Sets outMetrics to the scrollbar metrics for the hit element.
-static dom::Element* findElementScrollbarHit(
-    dom::Element* elem, float x, float y,
-    float offsetX, float offsetY,
-    Scrollbar& scrollbar, ScrollbarMetrics& outMetrics)
-{
-    if (!elem) return nullptr;
-    auto& style = elem->computedStyle();
-    {
-        auto it = style.find("display");
-        if (it != style.end() && it->second == "none") return nullptr;
-    }
-
-    auto& lbox = elem->layoutBox();
-    float absX = lbox.contentRect.x + offsetX;
-    float absY = lbox.contentRect.y + offsetY;
-
-    // Recurse into composed children FIRST to find the deepest match
-    float childOffsetX = absX;
-    float childOffsetY = absY - elem->scrollTopValue();
-    dom::Element* hit = nullptr;
-    elem->forEachComposedChild([&](dom::Element* child) {
-        if (!hit) {
-            hit = findElementScrollbarHit(child, x, y,
-                childOffsetX, childOffsetY, scrollbar, outMetrics);
-        }
-    });
-    if (hit) return hit;
-
-    // Only show scrollbars for scroll/auto, not hidden
-    std::string ov = getOverflowY(style);
-    if (overflowScrollable(ov)) {
-        float maxST = maxScrollTop(elem);
-        if (maxST > 0) {
-            float viewH = lbox.contentRect.height;
-            float contentH = viewH + maxST;
-            float bx = absX - lbox.padding.left - lbox.border.left;
-            float by = absY - lbox.padding.top - lbox.border.top;
-            float bw = lbox.fullWidth();
-            float bh = lbox.fullHeight();
-
-            auto& es = scrollbar.style();
-            auto m = scrollbar.layout(
-                bx + bw - es.width - es.margin,
-                by, bh, contentH, viewH,
-                elem->scrollTopValue());
-            if (scrollbar.hitTest(x, y, m)) {
-                outMetrics = m;
-                return elem;
-            }
-        }
-    }
-
-    return nullptr;
-}
+// findElementScrollbarHit lives in engine/overflow.h so system_panels.cpp
+// and the app input handler share one implementation.
 
 // ---------------------------------------------------------------------------
 // Focus event dispatching
@@ -417,17 +362,10 @@ void Engine::handleMouseUp(float x, float y, int button) {
         return;
     }
 
-    // Forward to system overlay first
-    if (systemHandleMouseUp(x, y, button)) {
-        return;
-    }
-
-    // Gizmo consumes mouseUp only when the drag was active.
-    if (gizmoHandleMouseUp(docX, docY, button)) {
-        return;
-    }
-
-    // End scrollbar drags
+    // End scrollbar drags FIRST, before any early-return consumer — the
+    // mouseup that ends a drag must always terminate the drag regardless of
+    // where the pointer happens to be, otherwise the thumb stays glued to
+    // the cursor forever.
     if (viewportScrollbar_.isDragging()) {
         viewportScrollbar_.endDrag();
         draggingViewportScrollbar_ = false;
@@ -436,7 +374,25 @@ void Engine::handleMouseUp(float x, float y, int button) {
     if (elementScrollbar_.isDragging()) {
         elementScrollbar_.endDrag();
         scrollbarDragTarget_ = nullptr;
+        if (scrollbarDragSystemDoc_) {
+            systemDirty_ = true;
+            scrollbarDragSystemDoc_ = nullptr;
+        }
         uiDirty_ = true;
+        // The mouseup that ends a scrollbar drag is purely for drag
+        // termination — it shouldn't also be delivered to DOM listeners
+        // underneath (where it would look like a random click).
+        return;
+    }
+
+    // Forward to system overlay first
+    if (systemHandleMouseUp(x, y, button)) {
+        return;
+    }
+
+    // Gizmo consumes mouseUp only when the drag was active.
+    if (gizmoHandleMouseUp(docX, docY, button)) {
+        return;
     }
 
     // Stop range slider dragging
@@ -510,10 +466,18 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         uiDirty_ = true;
     }
 
-    // Forward to system overlay first (but don't block app mousemove —
-    // overlay consumes only if mouse is over an overlay element)
-    if (isSystemVisible()) {
-        systemHandleMouseMove(x, y);
+    // Forward to system overlay first. When the pointer is inside a visible
+    // system panel (menu bar, modal card, modal backdrop), systemHandleMouseMove
+    // returns true — consume the event so it doesn't bleed through to the app
+    // behind the modal. When it returns false the pointer is outside any
+    // system panel and the app handles the move normally. Exception: an
+    // in-progress scrollbar drag must keep updating even when the pointer
+    // strays outside the panel, so fall through in that case.
+    if (isSystemVisible() && !elementScrollbar_.isDragging() &&
+        systemHandleMouseMove(x, y)) {
+        lastMouseX_ = x;
+        lastMouseY_ = y;
+        return;
     }
 
     // Gizmo mousemove — drives hover state always; consumes only while
@@ -542,7 +506,9 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         return;
     }
 
-    // Element scrollbar drag
+    // Element scrollbar drag — works the same whether the target lives in
+    // the app doc or a system panel; only the dirty-bit bookkeeping and
+    // scroll event dispatch differ.
     if (elementScrollbar_.isDragging() && scrollbarDragTarget_) {
         auto* elem = scrollbarDragTarget_;
         float viewH = elem->layoutBox().contentRect.height;
@@ -550,7 +516,6 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         float contentH = viewH + maxST;
 
         auto& lbox = elem->layoutBox();
-        auto& es = elementScrollbar_.style();
         float bh = lbox.fullHeight();
         auto m = elementScrollbar_.layout(0, 0, bh, contentH, viewH,
             elem->scrollTopValue());
@@ -558,7 +523,15 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         float prev = elem->scrollTopValue();
         float clamped = std::clamp(newScroll, 0.0f, maxST);
         elem->setScrollTopValue(clamped);
-        if (clamped != prev) dispatchScrollEvent(elem);
+        if (clamped != prev) {
+            if (scrollbarDragSystemDoc_) {
+                if (scrollbarDragSystemDoc_->document)
+                    scrollbarDragSystemDoc_->document->markDirty();
+                systemDirty_ = true;
+            } else {
+                dispatchScrollEvent(elem);
+            }
+        }
         uiDirty_ = true;
         lastMouseX_ = x;
         lastMouseY_ = y;
@@ -780,11 +753,25 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
-    // ESC closes the preferences modal (if open). Matches platform convention
-    // for modal dialogs and frees apps to use ESC freely when it's closed.
-    if (keycode == SDLK_ESCAPE && !repeat && systemSettingsVisible_) {
-        toggleSystemSettings();
-        uiDirty_ = true;
+    // While the settings modal is open, route keys to its panels first.
+    // Modal means modal: app keystrokes are fully suppressed until the modal
+    // closes. Esc closes the modal unless a panel listener preventDefaulted
+    // the event (e.g. the input panel cancelling a rebind capture). The
+    // user's configured system_toggle_settings hotkey also still closes it.
+    if (systemSettingsVisible_) {
+        bool prevented = systemHandleKeyDown(keycode, scancode, mod, repeat);
+        if (!prevented && !repeat) {
+            if (keycode == SDLK_ESCAPE) {
+                toggleSystemSettings();
+                uiDirty_ = true;
+            } else if (settings_) {
+                std::string webKey = sdlKeycodeToWebKey(keycode, mod);
+                if (settings_->getActionForKey(webKey) == "system_toggle_settings") {
+                    toggleSystemSettings();
+                    uiDirty_ = true;
+                }
+            }
+        }
         return;
     }
 
@@ -939,6 +926,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 }
 
 void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
+    if (systemSettingsVisible_) {
+        systemHandleKeyUp(keycode, scancode, mod, repeat);
+        return;
+    }
     if (!document_) return;
 
     // Dispatch keyup to the focused input if any, otherwise body
@@ -1103,6 +1094,14 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     if (!document_) return;
 
     if (overlayMgr_.handleWheel(x, y, dx, dy)) {
+        uiDirty_ = true;
+        return;
+    }
+
+    // System panels (menu bar, modals) take wheel input first. Scrolls a
+    // panel-local overflow box if the pointer is over one, and fully swallows
+    // the event while a modal is open so the app behind doesn't scroll.
+    if (isSystemVisible() && systemHandleWheel(x, y, dx, dy)) {
         uiDirty_ = true;
         return;
     }
