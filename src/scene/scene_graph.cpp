@@ -470,6 +470,66 @@ void main() {
 )";
 
 // ---------------------------------------------------------------------------
+// Irradiance convolution: integrate the env cubemap over a cosine-weighted
+// hemisphere around each output texel's normal. The result feeds diffuse
+// IBL: `Ld = albedo * irradiance(N) / PI`. Diffuse is low-frequency so the
+// output cube can be tiny (32² is plenty); the cost is per-fragment Riemann
+// integration which dominates load time but is one-shot per HDR.
+// ---------------------------------------------------------------------------
+
+static const char* kIrradianceFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+out vec4 FragColor;
+
+uniform samplerCube uEnv;
+uniform int         uFace;
+
+const float PI     = 3.14159265358979;
+const float TWO_PI = 6.28318530717958;
+
+vec3 cubeDir(int face, vec2 uv) {
+    if (face == 0) return normalize(vec3( 1.0, -uv.y, -uv.x));
+    if (face == 1) return normalize(vec3(-1.0, -uv.y,  uv.x));
+    if (face == 2) return normalize(vec3( uv.x,  1.0,  uv.y));
+    if (face == 3) return normalize(vec3( uv.x, -1.0, -uv.y));
+    if (face == 4) return normalize(vec3( uv.x, -uv.y,  1.0));
+    return            normalize(vec3(-uv.x, -uv.y, -1.0));
+}
+
+void main() {
+    vec2 uv = vUV * 2.0 - 1.0;
+    vec3 N  = cubeDir(uFace, uv);
+
+    // Build a tangent basis around N. Picking up = world-Y unless N is
+    // near-parallel to it (then up = world-Z to keep the cross non-degenerate).
+    vec3 up    = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
+    vec3 right = normalize(cross(up, N));
+    up         = cross(N, right);
+
+    // Riemann hemisphere integration. sampleDelta=0.025 → ~252×63 = 15876
+    // samples per fragment; coarse but robust for an offline pass. Both
+    // sums of cos*sin and the normalising 1/N cancel into the PI factor.
+    vec3 irradiance = vec3(0.0);
+    int  nSamples   = 0;
+    const float sampleDelta = 0.025;
+    for (float phi = 0.0; phi < TWO_PI; phi += sampleDelta) {
+        for (float theta = 0.0; theta < 0.5 * PI; theta += sampleDelta) {
+            // Spherical → cartesian in tangent space.
+            vec3 t = vec3(sin(theta) * cos(phi),
+                          sin(theta) * sin(phi),
+                          cos(theta));
+            vec3 sampleVec = t.x * right + t.y * up + t.z * N;
+            irradiance += texture(uEnv, sampleVec).rgb * cos(theta) * sin(theta);
+            nSamples++;
+        }
+    }
+    irradiance = PI * irradiance / float(nSamples);
+    FragColor = vec4(irradiance, 1.0);
+}
+)";
+
+// ---------------------------------------------------------------------------
 // Skybox: render the IBL cubemap as the scene background. Reconstructs a
 // world-space view direction from NDC + camera FOV/aspect (no matrix
 // inverse needed — the view rotation transposed = view→world for the
@@ -653,6 +713,7 @@ SceneGraph::~SceneGraph() {
     if (skyboxProgram_) { glDeleteProgram(skyboxProgram_); skyboxProgram_ = 0; }
     if (skyboxVBO_) { glDeleteBuffers(1, &skyboxVBO_); skyboxVBO_ = 0; }
     if (skyboxVAO_) { glDeleteVertexArrays(1, &skyboxVAO_); skyboxVAO_ = 0; }
+    if (irrConvProgram_) { glDeleteProgram(irrConvProgram_); irrConvProgram_ = 0; }
 }
 
 SceneNode* SceneGraph::createNode(const std::string& name) {
@@ -1344,15 +1405,116 @@ bool SceneGraph::loadEnvironment(const std::string& hdrPath) {
     glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
 
     envPath_ = hdrPath;
-    LOG_INFO("Loaded HDR environment '%s' (%dx%d → cube %d²)",
-             hdrPath.c_str(), w, h, faceSize);
+
+    // Convolve diffuse irradiance from the freshly populated cubemap. This
+    // is the slow step (≈100M texture samples) but it's a one-shot per HDR
+    // load; the rendering loop only ever samples the resulting 32² cube.
+    if (!runIrradianceConvolution()) {
+        LOG_WARN("Loaded environment '%s' but irradiance convolution failed",
+                 hdrPath.c_str());
+    }
+
+    LOG_INFO("Loaded HDR environment '%s' (%dx%d → cube %d², irradiance %d²)",
+             hdrPath.c_str(), w, h, faceSize, envIrradianceSize_);
     return true;
 }
 
 void SceneGraph::clearEnvironment() {
     if (envCubemap_) { glDeleteTextures(1, &envCubemap_); envCubemap_ = 0; }
+    if (envIrradianceCube_) { glDeleteTextures(1, &envIrradianceCube_); envIrradianceCube_ = 0; }
     envCubemapSize_ = 0;
     envPath_.clear();
+}
+
+void SceneGraph::ensureIrradiancePipeline() {
+    if (irrConvProgram_) return;
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kEnvConvertVertSrc);  // shared NDC quad VS
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kIrradianceFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    irrConvProgram_ = glCreateProgram();
+    glAttachShader(irrConvProgram_, vs);
+    glAttachShader(irrConvProgram_, fs);
+    glLinkProgram(irrConvProgram_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    GLint ok = 0;
+    glGetProgramiv(irrConvProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(irrConvProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Irradiance program link error: %s", log);
+        glDeleteProgram(irrConvProgram_);
+        irrConvProgram_ = 0;
+        return;
+    }
+    irrCvUEnv_  = glGetUniformLocation(irrConvProgram_, "uEnv");
+    irrCvUFace_ = glGetUniformLocation(irrConvProgram_, "uFace");
+}
+
+bool SceneGraph::runIrradianceConvolution() {
+    if (!envCubemap_) return false;
+    ensureEnvConvertPipeline();   // we reuse its FBO + VAO
+    ensureIrradiancePipeline();
+    if (!irrConvProgram_ || !envConvertFBO_) return false;
+
+    const int faceSize = envIrradianceSize_;
+    if (!envIrradianceCube_) {
+        glGenTextures(1, &envIrradianceCube_);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, envIrradianceCube_);
+        for (int f = 0; f < 6; ++f) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA16F,
+                         faceSize, faceSize, 0, GL_RGBA, GL_FLOAT, nullptr);
+        }
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
+
+    GLint prevFBO = 0, prevViewport[4] = {};
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, envConvertFBO_);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, faceSize, faceSize);
+
+    glUseProgram(irrConvProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, envCubemap_);
+    glUniform1i(irrCvUEnv_, 0);
+    glBindVertexArray(envConvertVAO_);
+
+    bool ok = true;
+    for (int face = 0; face < 6; ++face) {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+                               envIrradianceCube_, 0);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("Irradiance FBO incomplete on face %d: 0x%x", face, status);
+            ok = false;
+            break;
+        }
+        glUniform1i(irrCvUFace_, face);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    return ok;
 }
 
 void SceneGraph::ensureSkyboxPipeline() {

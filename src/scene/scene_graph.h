@@ -443,9 +443,13 @@ private:
     bool runEquirectToCubemap(GLuint equirectTex, GLuint cubemap, int faceSize);
     void ensureSkyboxPipeline();
     void renderSkyboxPass();
+    void ensureIrradiancePipeline();
+    bool runIrradianceConvolution();
 
     GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped
     int    envCubemapSize_ = 0;
+    GLuint envIrradianceCube_ = 0;   // 32² RGBA16F cube, cosine-convolved diffuse
+    int    envIrradianceSize_ = 32;
     std::string envPath_;
     float  envIntensity_ = 1.0f;
     float  envRotation_ = 0.0f;
@@ -457,6 +461,11 @@ private:
     GLuint envConvertFBO_ = 0;
     GLint  envCvUFace_ = -1;
     GLint  envCvUEquirect_ = -1;
+
+    // Irradiance convolver (lazy init, reuses envConvert FBO/VAO)
+    GLuint irrConvProgram_ = 0;
+    GLint  irrCvUEnv_ = -1;
+    GLint  irrCvUFace_ = -1;
 
     // Skybox draw pipeline (lazy init)
     GLuint skyboxProgram_ = 0;
