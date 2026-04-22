@@ -281,6 +281,14 @@ private:
     Mat4 projectionMatrix_;
     Vec3 cameraEye_;
 
+    // Cached camera intrinsics — needed by CSM cascade fitting (which has to
+    // walk the view-frustum corners). Set by every setCamera*() entry point.
+    float cameraNearZ_ = 0.1f;
+    float cameraFarZ_  = 100.0f;
+    float cameraFovY_  = 1.0f;
+    float cameraAspect_ = 1.0f;
+    bool  cameraIsPerspective_ = true;
+
     // Legacy 2D camera state (drives the CanvasScene 2D path)
     float cameraX_ = 0, cameraY_ = 0;
     float cameraZoom_ = 1.0f;
@@ -380,6 +388,12 @@ private:
 
     // Per-light shadow slot (-1 if unshadowed). Indexed by light index.
     int lightShadowSlot_[32] = {};
+    // For directional CSM: 1..4 cascades, each occupies a contiguous slot.
+    int   lightShadowSlotCount_[32] = {};
+    // Cascade FAR distances in view space; .x = cascade 0 far, etc. The
+    // last cascade's far is implicitly +inf (any fragment further than
+    // .z still samples the last cascade).
+    float lightCascadeSplit_[32][4] = {};
 
     // For prepareShadows: matrices to render into the atlas (one per tile).
     // World-space (no camera-relative bake) — used by the shadow caster pass.
@@ -396,6 +410,8 @@ private:
     GLint uShadowAtlasRect_ = -1;
     GLint uShadowBiasArr_ = -1;
     GLint uLightShadowSlot_ = -1;
+    GLint uLightShadowSlotCount_ = -1;
+    GLint uLightCascadeSplit_ = -1;
     GLint uShadowAtlasTexel_ = -1;
     GLint uShadowPCFTaps_ = -1;
 

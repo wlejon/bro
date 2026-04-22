@@ -1728,6 +1728,26 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
                     static_cast<scene::LightNode*>(w->node)->setShadowNormalBias((float)val);
             })
+        .prop("cascadeCount",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewInt32(ctx, static_cast<scene::LightNode*>(w->node)->cascadeCount());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, int32_t val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setCascadeCount(val);
+            })
+        .prop("cascadeSplitLambda",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->cascadeSplitLambda());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node)->setCascadeSplitLambda((float)val);
+            })
 
         // Shape properties (silently return undefined / no-op for non-shape nodes)
         .prop("width",

@@ -95,7 +95,9 @@ uniform vec3  uLightColor[MAX_LIGHTS];    // linear RGB
 uniform float uLightIntensity[MAX_LIGHTS];
 uniform float uLightRange[MAX_LIGHTS];
 uniform vec2  uLightSpotCos[MAX_LIGHTS];  // .x = cos(innerAngle), .y = cos(outerAngle)
-uniform int   uLightShadowSlot[MAX_LIGHTS]; // -1 if unshadowed, else 0..MAX_SHADOWS-1
+uniform int   uLightShadowSlot[MAX_LIGHTS];      // -1 if unshadowed, else 0..MAX_SHADOWS-1
+uniform int   uLightShadowSlotCount[MAX_LIGHTS]; // 1 normally; 2..4 for directional CSM
+uniform vec4  uLightCascadeSplit[MAX_LIGHTS];    // far view-distance per cascade (CSM only)
 
 // Atlas-tiled shadow maps. One sampler regardless of light count.
 //   uShadowMatrix: bias * lightProj * lightView * translate(cameraEye), so
@@ -258,11 +260,21 @@ void main() {
         float shadow = 1.0;
         int slot = uLightShadowSlot[i];
         if (slot >= 0) {
+            // CSM: walk per-light cascades by view-space distance and pick
+            // the tightest cascade containing this fragment. Splits are
+            // padded with a sentinel large value so the unrolled compares
+            // work for slot counts 1..4.
+            int sc = uLightShadowSlotCount[i];
+            vec4 splits = uLightCascadeSplit[i];
+            int chosen = slot;
+            if (sc >= 2 && vCamDist > splits.x) chosen = slot + 1;
+            if (sc >= 3 && vCamDist > splits.y) chosen = slot + 2;
+            if (sc >= 4 && vCamDist > splits.z) chosen = slot + 3;
             // Push the sampled position along the surface normal to mask
             // self-shadow acne on grazing surfaces — cheaper than depth-slope
             // bias and works in shadow-clip space because the bake is linear.
-            vec3 posBiased = vWorldPos + N * uShadowBias[slot].y;
-            shadow = sampleShadow(slot, posBiased);
+            vec3 posBiased = vWorldPos + N * uShadowBias[chosen].y;
+            shadow = sampleShadow(chosen, posBiased);
         }
 
         vec3 radiance = uLightColor[i] * uLightIntensity[i] * atten;
@@ -563,6 +575,8 @@ void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
     projectionMatrix_ = Mat4::perspective(fovY, aspect, nearZ, farZ);
     viewMatrix_ = Mat4::lookAt(eye, target, up);
     cameraEye_ = eye;
+    cameraNearZ_ = nearZ; cameraFarZ_ = farZ; cameraFovY_ = fovY; cameraAspect_ = aspect;
+    cameraIsPerspective_ = true;
 }
 
 void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
@@ -577,6 +591,8 @@ void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ
     viewMatrix_.m[3][1] = negEye.y;
     viewMatrix_.m[3][2] = negEye.z;
     cameraEye_ = eye;
+    cameraNearZ_ = nearZ; cameraFarZ_ = farZ; cameraFovY_ = fovY; cameraAspect_ = aspect;
+    cameraIsPerspective_ = true;
 }
 
 void SceneGraph::setCameraOrtho(float left, float right, float bottom, float top,
@@ -585,6 +601,8 @@ void SceneGraph::setCameraOrtho(float left, float right, float bottom, float top
     projectionMatrix_ = Mat4::orthographic(left, right, bottom, top, nearZ, farZ);
     viewMatrix_ = Mat4::lookAt(eye, target, up);
     cameraEye_ = eye;
+    cameraNearZ_ = nearZ; cameraFarZ_ = farZ;
+    cameraIsPerspective_ = false;
 }
 
 void SceneGraph::setCameraPosition(float x, float y) {
@@ -745,6 +763,8 @@ void SceneGraph::ensureMeshPipeline() {
         uLightRange_ = glGetUniformLocation(meshProgram_, "uLightRange");
         uLightSpotCos_ = glGetUniformLocation(meshProgram_, "uLightSpotCos");
         uLightShadowSlot_  = glGetUniformLocation(meshProgram_, "uLightShadowSlot");
+        uLightShadowSlotCount_ = glGetUniformLocation(meshProgram_, "uLightShadowSlotCount");
+        uLightCascadeSplit_    = glGetUniformLocation(meshProgram_, "uLightCascadeSplit");
         uShadowAtlas_      = glGetUniformLocation(meshProgram_, "uShadowAtlas");
         uShadowMatrix_     = glGetUniformLocation(meshProgram_, "uShadowMatrix");
         uShadowAtlasRect_  = glGetUniformLocation(meshProgram_, "uShadowAtlasRect");
@@ -1041,6 +1061,12 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
         // Always send 32 slots so any light index is safe to read; -1 default.
         glUniform1iv(uLightShadowSlot_, 32, lightShadowSlot_);
     }
+    if (uLightShadowSlotCount_ >= 0) {
+        glUniform1iv(uLightShadowSlotCount_, 32, lightShadowSlotCount_);
+    }
+    if (uLightCascadeSplit_ >= 0) {
+        glUniform4fv(uLightCascadeSplit_, 32, &lightCascadeSplit_[0][0]);
+    }
 
     if (count == 0) return;
 
@@ -1207,7 +1233,12 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
     // Reset per-frame shadow state. Default every light to "no shadow".
     shadowTileCount_ = 0;
     shadowCasters_.clear();
-    for (int i = 0; i < 32; ++i) lightShadowSlot_[i] = -1;
+    for (int i = 0; i < 32; ++i) {
+        lightShadowSlot_[i] = -1;
+        lightShadowSlotCount_[i] = 0;
+        lightCascadeSplit_[i][0] = lightCascadeSplit_[i][1] =
+        lightCascadeSplit_[i][2] = lightCascadeSplit_[i][3] = 1e30f;
+    }
 
     // Quick skip: if no light wants shadows, don't bother fitting.
     bool anyCaster = false;
@@ -1271,56 +1302,148 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
         if (shadowTileCount_ >= kMaxShadowTiles) break;
 
         if (L->kind() == LightNode::Kind::Directional) {
-            // Light "looks" along its direction. Place the ortho eye outside
-            // the scene AABB along -direction so the entire scene is in
-            // front of it (in light space). Tight-fit ortho extents to the
-            // AABB's projected silhouette by transforming all 8 corners.
             Vec3 d = L->direction();
             float dlen = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
             if (dlen < 1e-6f) continue;
             d.x /= dlen; d.y /= dlen; d.z /= dlen;
 
-            Vec3 center{
-                0.5f * (bounds.min[0] + bounds.max[0]),
-                0.5f * (bounds.min[1] + bounds.max[1]),
-                0.5f * (bounds.min[2] + bounds.max[2])};
-            Vec3 ext{
-                0.5f * (bounds.max[0] - bounds.min[0]),
-                0.5f * (bounds.max[1] - bounds.min[1]),
-                0.5f * (bounds.max[2] - bounds.min[2])};
-            float radius = std::sqrt(ext.x*ext.x + ext.y*ext.y + ext.z*ext.z);
-            if (radius < 1e-3f) radius = 1.0f;
-            // Pull the eye back enough to safely include all geometry.
-            Vec3 eye{ center.x - d.x * radius * 2.0f,
-                      center.y - d.y * radius * 2.0f,
-                      center.z - d.z * radius * 2.0f };
+            // Camera basis from view matrix (transposed columns: row 0 = right,
+            // row 1 = up, row 2 = -forward). lookAt produces the same.
+            Vec3 sBasis{viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
+            Vec3 uBasis{viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
+            Vec3 fBasis{-viewMatrix_.m[0][2], -viewMatrix_.m[1][2], -viewMatrix_.m[2][2]};
 
-            // Stable up: pick world Y unless light is nearly vertical.
-            Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
-            Mat4 view = Mat4::lookAt(eye, center, up);
+            // Number of cascades. Cap to remaining tile budget so we don't
+            // blow past the atlas — better to drop late cascades than to
+            // silently corrupt allocations.
+            int N = L->cascadeCount();
+            if (cameraIsPerspective_ == false) N = 1;  // ortho cam = no need for splits
+            int budgetLeft = kMaxShadowTiles - shadowTileCount_;
+            if (N > budgetLeft) N = budgetLeft;
+            if (N <= 0) continue;
 
-            // Project all 8 world AABB corners into light view space, take
-            // their min/max — that's our tight ortho frustum.
-            float lo[3] = { 1e30f,  1e30f,  1e30f};
-            float hi[3] = {-1e30f, -1e30f, -1e30f};
-            for (int c = 0; c < 8; ++c) {
-                Vec3 wp{
-                    (c & 1) ? bounds.max[0] : bounds.min[0],
-                    (c & 2) ? bounds.max[1] : bounds.min[1],
-                    (c & 4) ? bounds.max[2] : bounds.min[2]};
-                Vec3 lp = view.transformPoint(wp);
-                lo[0] = std::min(lo[0], lp.x); hi[0] = std::max(hi[0], lp.x);
-                lo[1] = std::min(lo[1], lp.y); hi[1] = std::max(hi[1], lp.y);
-                lo[2] = std::min(lo[2], lp.z); hi[2] = std::max(hi[2], lp.z);
+            // Practical Split Scheme (Zhang et al., 2006): blend uniform and
+            // log spacing. lambda ~0.5 works well outdoors; closer to 0
+            // for tight indoor scenes with no far geometry.
+            float zn = std::max(cameraNearZ_, 1e-3f);
+            float zf = std::max(cameraFarZ_, zn + 1e-3f);
+            float lambda = L->cascadeSplitLambda();
+            // splitFar[c] = far view-distance of cascade c. cascade c covers
+            // [splitFar[c-1], splitFar[c]], with splitFar[-1] = zn.
+            float splitFar[5]; splitFar[0] = zn;
+            for (int c = 1; c <= N; ++c) {
+                float t = (float)c / (float)N;
+                float uniform = zn + (zf - zn) * t;
+                float logS    = zn * std::pow(zf / zn, t);
+                splitFar[c] = lambda * logS + (1.0f - lambda) * uniform;
             }
-            // GL ortho looks down -Z, so near = -hi[2], far = -lo[2].
-            // Pad far slightly to capture casters just behind the AABB.
-            Mat4 proj = Mat4::orthographic(lo[0], hi[0], lo[1], hi[1],
-                                           -hi[2] - radius, -lo[2]);
-            Mat4 projView = proj * view;
-            bakeTile(shadowTileCount_, projView, L);
-            lightShadowSlot_[i] = shadowTileCount_;
-            shadowTileCount_++;
+
+            int firstSlot = shadowTileCount_;
+            lightShadowSlot_[i] = firstSlot;
+            lightShadowSlotCount_[i] = N;
+            for (int c = 0; c < N - 1; ++c) {
+                lightCascadeSplit_[i][c] = splitFar[c + 1];
+            }
+            // The last cascade absorbs anything farther — already 1e30f from reset.
+
+            // Per-cascade fit: find the world-space corners of the camera
+            // sub-frustum [splitFar[c], splitFar[c+1]], then bound them
+            // with a sphere (rotation-stable; eliminates shimmer when the
+            // camera turns) and fit an ortho frustum in the light's view.
+            for (int c = 0; c < N; ++c) {
+                float zNear = splitFar[c];
+                float zFar  = splitFar[c + 1];
+                float tanH  = std::tan(cameraFovY_ * 0.5f);
+
+                Vec3 corners[8];
+                for (int k = 0; k < 2; ++k) {
+                    float z  = (k == 0) ? zNear : zFar;
+                    float hh = z * tanH;
+                    float hw = hh * cameraAspect_;
+                    Vec3 cz{cameraEye_.x + fBasis.x * z,
+                            cameraEye_.y + fBasis.y * z,
+                            cameraEye_.z + fBasis.z * z};
+                    for (int j = 0; j < 4; ++j) {
+                        float xs = (j & 1) ? 1.0f : -1.0f;
+                        float ys = (j & 2) ? 1.0f : -1.0f;
+                        corners[k*4 + j] = Vec3{
+                            cz.x + sBasis.x * (hw * xs) + uBasis.x * (hh * ys),
+                            cz.y + sBasis.y * (hw * xs) + uBasis.y * (hh * ys),
+                            cz.z + sBasis.z * (hw * xs) + uBasis.z * (hh * ys)};
+                    }
+                }
+
+                Vec3 center{0,0,0};
+                for (int k = 0; k < 8; ++k) {
+                    center.x += corners[k].x;
+                    center.y += corners[k].y;
+                    center.z += corners[k].z;
+                }
+                center.x *= 0.125f; center.y *= 0.125f; center.z *= 0.125f;
+
+                float radius = 0.0f;
+                for (int k = 0; k < 8; ++k) {
+                    float dx = corners[k].x - center.x;
+                    float dy = corners[k].y - center.y;
+                    float dz = corners[k].z - center.z;
+                    radius = std::max(radius, std::sqrt(dx*dx + dy*dy + dz*dz));
+                }
+                if (radius < 1e-3f) radius = 1.0f;
+                // Snap radius to 16ths of a unit so it doesn't change every
+                // micro-frame; combined with sphere fit this is the second
+                // half of the texel-snap shimmer fix.
+                radius = std::ceil(radius * 16.0f) / 16.0f;
+
+                // Light-space view: looking from above the bounding sphere
+                // along the light direction, looking AT the sphere center.
+                Vec3 eye{ center.x - d.x * radius * 2.0f,
+                          center.y - d.y * radius * 2.0f,
+                          center.z - d.z * radius * 2.0f };
+                Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
+                Mat4 view = Mat4::lookAt(eye, center, up);
+
+                // Texel-snap the cascade origin in light-space xy. Without
+                // this the shadow edges shimmer as the camera moves because
+                // the same world fragment maps to slightly different texels
+                // each frame. Snap the world center, not the projection.
+                int tilePx = shadowAtlasSize_ / 4;
+                float texelSize = (2.0f * radius) / (float)tilePx;
+                Vec3 centerLS = view.transformPoint(center);
+                float snapX = std::floor(centerLS.x / texelSize) * texelSize;
+                float snapY = std::floor(centerLS.y / texelSize) * texelSize;
+                float dxLS = centerLS.x - snapX;
+                float dyLS = centerLS.y - snapY;
+                // Build ortho extents around the snapped origin.
+                Mat4 proj = Mat4::orthographic(
+                    -radius - dxLS, radius - dxLS,
+                    -radius - dyLS, radius - dyLS,
+                    -radius * 2.0f - radius, -(-radius * 2.0f) + radius);
+                // Expand the depth range: scene casters outside the sphere
+                // should still write their depths (otherwise close objects
+                // behind the cascade get omitted from the shadow). Use the
+                // scene AABB extent along the light direction as an extra
+                // pad on the near side.
+                Vec3 boundsCenter{
+                    0.5f * (bounds.min[0] + bounds.max[0]),
+                    0.5f * (bounds.min[1] + bounds.max[1]),
+                    0.5f * (bounds.min[2] + bounds.max[2])};
+                Vec3 boundsExt{
+                    0.5f * (bounds.max[0] - bounds.min[0]),
+                    0.5f * (bounds.max[1] - bounds.min[1]),
+                    0.5f * (bounds.max[2] - bounds.min[2])};
+                float sceneRadius = std::sqrt(boundsExt.x*boundsExt.x +
+                                              boundsExt.y*boundsExt.y +
+                                              boundsExt.z*boundsExt.z);
+                float depthExt = std::max(sceneRadius * 2.0f, radius * 4.0f);
+                proj = Mat4::orthographic(
+                    -radius - dxLS, radius - dxLS,
+                    -radius - dyLS, radius - dyLS,
+                    0.0f, depthExt);
+
+                Mat4 projView = proj * view;
+                bakeTile(firstSlot + c, projView, L);
+                shadowTileCount_++;
+            }
         }
         // Spot/Point handled in follow-up commits.
     }
