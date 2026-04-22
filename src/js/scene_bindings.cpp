@@ -1407,6 +1407,17 @@ static JSValue js_sg_setAmbient(JSContext* ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+// setShadowQuality({atlasSize, pcfTaps}) — atlas side length and PCF kernel.
+static JSValue js_sg_setShadowQuality(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+    int atlasSize = (int)jsGetProp(ctx, argv[0], "atlasSize", 4096.0);
+    int pcfTaps   = (int)jsGetProp(ctx, argv[0], "pcfTaps",   3.0);
+    g->setShadowQuality(atlasSize, pcfTaps);
+    return JS_UNDEFINED;
+}
+
 // setFog({start, end, color})
 static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -1997,6 +2008,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createLight", js_sg_createLight, 1)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)
+        .method_raw("setShadowQuality", js_sg_setShadowQuality, 1)
         .method_raw("createTerrain", js_sg_createTerrain, 1)
         .method_raw("findById", js_sg_findById, 1)
         .method_raw("findByName", js_sg_findByName, 1)

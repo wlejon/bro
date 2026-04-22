@@ -176,6 +176,57 @@ scene.setAmbient([0.03, 0.03, 0.035]);
 
 
 // -----------------------------------------------------------------------------
+// Shadows
+// -----------------------------------------------------------------------------
+//
+// Each LightNode can opt into shadow casting. Shadows render into a single
+// shared depth atlas (default 4096^2, 16 tiles); the BRDF samples it with
+// hardware PCF (default 3x3). All three light kinds are supported:
+//
+//   directional → 1-4 cascades (CSM), tightly fit per camera-frustum slice
+//   spot        → single perspective map covering the cone
+//   point       → 6 atlas tiles (cube faces) selected by dominant axis
+//
+// Atlas budget: 16 tiles. A directional with 4 cascades takes 4 tiles, a
+// point takes 6, a spot takes 1. Lights that don't fit silently render
+// unshadowed (no error). Plan your budget accordingly:
+//   1 directional CSM (4) + 1 point (6) + 6 spots = full atlas.
+//
+// Per-light shadow controls:
+//
+//   light.castsShadow       — bool. Default false. Set true to allocate a
+//                             tile and start writing this light's shadow.
+//   light.shadowBias        — float, default 5e-4. Constant subtracted from
+//                             the depth-compare reference. Increase if you
+//                             see acne, decrease if peter-panning.
+//   light.shadowNormalBias  — float, default 0.03. World-space normal offset
+//                             applied to the receiver before sampling. Cheap
+//                             curved-surface acne fix; usually leave alone.
+//   light.cascadeCount      — int, 1-4 (directional only). Default 4. Each
+//                             cascade burns one atlas tile.
+//   light.cascadeSplitLambda — 0..1 (directional only). 0 = uniform splits
+//                             (indoor), 1 = log splits (outdoor). Default 0.5.
+//
+// Global controls:
+//
+//   scene.setShadowQuality(atlasSize, pcfTaps)
+//     atlasSize: 1024 / 2048 / 4096 / 8192 (square depth texture side).
+//     pcfTaps: 1 (single sample, hard edges) or 3 (3x3 kernel, default).
+//
+// Example — sun + a couple of accent lamps casting shadows:
+//
+//   const sun = scene.createLight({ type:'directional', direction:[-0.4,-1,-0.2] });
+//   sun.castsShadow = true;
+//   sun.cascadeCount = 4;
+//
+//   const lamp = scene.createLight({ type:'point', position:[0,3,0],
+//                                    range:8, intensity:30 });
+//   lamp.castsShadow = true;
+//
+//   scene.setShadowQuality(2048, 3);   // smaller atlas if VRAM is tight
+
+
+// -----------------------------------------------------------------------------
 // Performance notes
 // -----------------------------------------------------------------------------
 //

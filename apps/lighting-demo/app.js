@@ -225,6 +225,7 @@ function applyAmbient() {
 }
 const showIconsIn = document.getElementById('showIcons');
 const animateIn = document.getElementById('animate');
+const shadowsIn = document.getElementById('shadows');
 modeSel.addEventListener('change', applyToneMap);
 exposureIn.addEventListener('input', applyToneMap);
 sunIn.addEventListener('input', applySun);
@@ -232,6 +233,9 @@ ambientIn.addEventListener('input', applyAmbient);
 showIconsIn.addEventListener('change', () => {
     scene.showLightIcons = showIconsIn.checked;
     if (!showIconsIn.checked) attachGizmoFor(null);
+});
+shadowsIn.addEventListener('change', () => {
+    sun.castsShadow = shadowsIn.checked;
 });
 
 // --- Animation loop --------------------------------------------------------
