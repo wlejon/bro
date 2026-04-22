@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Tumble</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="view"></canvas>
+
+    <!-- In-game HUD -->
+    <div id="hud" style="display:none;">
+        <div id="hud-top">
+            <div id="hud-level">Level 1 — Drop-in</div>
+            <div id="hud-mode">BUILD</div>
+            <div id="hud-timer">0.00s</div>
+        </div>
+
+        <div id="hud-pieces">
+            <div class="hud-pieces-title">Pieces <span id="hud-budget">0 / 0</span></div>
+            <div id="hud-palette"></div>
+            <div class="hud-hint">
+                <b>1–7</b> select &nbsp; <b>R</b> rotate &nbsp; <b>Q/E</b> layer ↓/↑<br>
+                <b>Click</b> place &nbsp; <b>Right-click</b> remove<br>
+                <b>Space</b> run / reset &nbsp; <b>Esc</b> menu
+            </div>
+        </div>
+
+        <div id="hud-goal">
+            <div>Par <span id="hud-par">—</span></div>
+            <div>Best <span id="hud-best">—</span></div>
+            <div>Marbles <span id="hud-marbles">0</span></div>
+        </div>
+
+        <div id="hud-toast-area"></div>
+    </div>
+
+    <!-- Overlay screens -->
+    <div id="overlay">
+
+        <div id="screen-title">
+            <h1>TUMBLE</h1>
+            <p class="tagline">Build a marble run. Beat the clock.</p>
+            <div class="menu-items">
+                <div class="menu-item" data-action="play">Play</div>
+                <div class="menu-item" data-action="levels">Select Level</div>
+                <div class="menu-item" data-action="howto">How to Play</div>
+                <div class="menu-item" data-action="reset">Reset Progress</div>
+                <div class="menu-item" data-action="quit">Quit</div>
+            </div>
+        </div>
+
+        <div id="screen-levels" style="display:none;">
+            <h1>Select Level</h1>
+            <div id="levels-grid"></div>
+            <div class="menu-items">
+                <div class="menu-item" data-action="back">Back</div>
+            </div>
+        </div>
+
+        <div id="screen-howto" style="display:none;">
+            <h1>How to Play</h1>
+            <div class="howto">
+                <p>You have a marble spout and a goal cup. Your job: place pieces so a marble
+                released from the spout ends up in the cup.</p>
+                <p><b>Camera:</b> right-drag orbit, middle-drag pan, wheel zoom.</p>
+                <p><b>Build:</b> select a piece (<b>1–7</b>), click a cell to place it,
+                right-click to remove. <b>R</b> rotates, <b>Q/E</b> change layer height.</p>
+                <p><b>Run:</b> press <b>Space</b>. Marbles drop from the spout; the timer
+                starts on release and stops when the first marble lands in the cup.</p>
+                <p><b>Pieces:</b> Block is solid ground. Ramp slopes. Wall blocks lanes.
+                Bumper bounces. Spinner rotates and flings. Booster pushes marbles along
+                its facing direction. Chute funnels marbles toward its center.</p>
+                <p>Each level has a piece budget and a par time. Beat par for gold.</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item" data-action="back">Back</div>
+            </div>
+        </div>
+
+        <div id="screen-pause" style="display:none;">
+            <h2>Paused</h2>
+            <div class="menu-items">
+                <div class="menu-item" data-action="resume">Resume</div>
+                <div class="menu-item" data-action="restart">Restart Level</div>
+                <div class="menu-item" data-action="levels">Level Select</div>
+                <div class="menu-item" data-action="title">Main Menu</div>
+            </div>
+        </div>
+
+        <div id="screen-complete" style="display:none;">
+            <h1 id="complete-title">Level Complete</h1>
+            <p id="complete-time" class="big-time">0.00s</p>
+            <p id="complete-medal" class="medal">Bronze</p>
+            <p id="complete-detail" class="tagline"></p>
+            <div class="menu-items">
+                <div class="menu-item" data-action="next">Next Level</div>
+                <div class="menu-item" data-action="retry">Retry</div>
+                <div class="menu-item" data-action="levels">Level Select</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="../lib/camera.js"></script>
+    <script src="../lib/loop.js"></script>
+    <script src="../lib/input.js"></script>
+    <script src="../lib/audio.js"></script>
+    <script src="../lib/storage.js"></script>
+    <script src="../lib/hud.js"></script>
+    <script src="../lib/screens.js"></script>
+    <script src="levels.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

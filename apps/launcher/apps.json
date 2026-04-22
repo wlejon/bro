@@ -13,6 +13,7 @@
         { "dir": "echo" },
         { "dir": "fps", "server": { "script": "server.js" } },
         { "dir": "crater", "server": { "script": "server.js" } },
+        { "dir": "tumble" },
         { "dir": "synth" },
         { "dir": "ai-arena" },
         { "dir": "terrain" },
