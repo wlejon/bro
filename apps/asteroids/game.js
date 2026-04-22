@@ -225,6 +225,7 @@ A.Game = (function() {
         if (!state || !state.running || state.paused) return;
         state.W = W; state.H = H;
 
+        sampleInput();
         var keys = state.keys;
         var s = state.ship;
 
@@ -415,39 +416,26 @@ A.Game = (function() {
         }
     }
 
-    // --- Input handlers ---
-    function keydown(key) {
+    // --- Input sampling from lib/input each frame ---
+    function sampleInput() {
         if (!state) return;
-        switch (key) {
-            case "ArrowLeft":  case "Left":  state.keys.left = true; break;
-            case "ArrowRight": case "Right": state.keys.right = true; break;
-            case "ArrowUp":    case "Up":    state.keys.up = true; break;
-            case " ": case "Spacebar":
-                state.keys.fire = true;
-                fireBullet();
-                break;
-        }
-    }
-    function keyup(key) {
-        if (!state) return;
-        switch (key) {
-            case "ArrowLeft":  case "Left":  state.keys.left = false; break;
-            case "ArrowRight": case "Right": state.keys.right = false; break;
-            case "ArrowUp":    case "Up":    state.keys.up = false; break;
-            case " ": case "Spacebar":       state.keys.fire = false; break;
-        }
+        state.keys.left  = Input.down("left");
+        state.keys.right = Input.down("right");
+        state.keys.up    = Input.down("thrust");
+        // primary action rising edge = fire bullet (consumed here)
+        if (Input.pressed("primary")) fireBullet();
     }
 
     function clearKeys() {
         if (state) state.keys = {};
+        Input.clear();
     }
 
     return {
         start: startGame,
         update: update,
         draw: draw,
-        keydown: keydown,
-        keyup: keyup,
+        sampleInput: sampleInput,
         clearKeys: clearKeys,
         getState: function() { return state; },
         setPaused: function(p) { if (state) state.paused = p; },

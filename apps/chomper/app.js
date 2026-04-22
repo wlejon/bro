@@ -80,32 +80,23 @@ function hideCenter() {
     document.getElementById("center-text").style.display = "none";
 }
 
-// --- Input ---
-document.body.addEventListener("keydown", function(e) {
-    var k = e.key;
+// --- Input routing ---
+Input.onAction(function(action, phase) {
+    if (phase !== "down" || !action) return;
     if (STATE === "title" || STATE === "gameover" || STATE === "paused") {
-        if (k === "ArrowUp") P.Screens.menuUp();
-        else if (k === "ArrowDown") P.Screens.menuDown();
-        else if (k === "Enter" || k === " ") {
-            var action = P.Screens.menuSelect();
+        if (action === "up")   P.Screens.menuUp();
+        else if (action === "down") P.Screens.menuDown();
+        else if (action === "confirm") {
+            var menuAction = P.Screens.menuSelect();
             P.Audio.sfxMenu();
-            handleMenuAction(action);
-        } else if (k === "Escape") {
-            if (STATE === "paused") resumeGame();
+            handleMenuAction(menuAction);
+        } else if (action === "pause" && STATE === "paused") {
+            resumeGame();
         }
         return;
     }
-    if (STATE === "playing") {
-        if (k === "Escape" || k === "p" || k === "P") {
-            pauseGame();
-            return;
-        }
-        P.Input.onKeyDown(k);
-    }
-});
-
-document.body.addEventListener("keyup", function(e) {
-    P.Input.onKeyUp(e.key);
+    if (STATE === "playing" && action === "pause") pauseGame();
+    // Directional actions update the input queue inside P.Input itself.
 });
 
 function handleMenuAction(action) {
@@ -328,14 +319,7 @@ function drawDying(ctx, ox, oy, tile, t) {
 }
 
 // --- Main loop ---
-var lastFrameTime = 0;
-function gameLoop(timestamp) {
-    requestAnimationFrame(gameLoop);
-    var dt = timestamp - lastFrameTime;
-    lastFrameTime = timestamp;
-    if (dt > 100) dt = 100;
-    if (dt < 0) dt = 0;
-
+function frame(dt) {
     var W = getW(), H = getH();
 
     // Update
@@ -413,8 +397,7 @@ P.Screens.setTitleHigh();
 P.Screens.switchTo("title");
 showHUD(false);
 
-lastFrameTime = performance.now();
-requestAnimationFrame(gameLoop);
+GameLoop.create({ tick: frame, draw: function() {} }).start();
 
 console.log("Pac-Man loaded!");
 })();

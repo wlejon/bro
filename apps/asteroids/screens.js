@@ -201,7 +201,6 @@ A.Screens = (function() {
                 switchTo("paused");
                 return;
             }
-            A.Game.keydown(key);
         } else if (currentName === "paused") {
             if (key === "Escape") {
                 A.Game.setPaused(false);
@@ -232,11 +231,7 @@ A.Screens = (function() {
         }
     }
 
-    function keyup(key) {
-        if (currentName === "playing") {
-            A.Game.keyup(key);
-        }
-    }
+    function keyup(_key) { /* lib/input samples state each frame */ }
 
     function update(dt, W, H) {
         if (currentName === "title" || currentName === "howtoplay") {

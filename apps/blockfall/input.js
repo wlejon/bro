@@ -5,14 +5,14 @@ T.Input = {
     hasBro: false,
 
     ACTIONS: [
-        { name: "move_left",  label: "Move Left",  defaults: ["ArrowLeft"] },
-        { name: "move_right", label: "Move Right", defaults: ["ArrowRight"] },
-        { name: "soft_drop",  label: "Soft Drop",  defaults: ["ArrowDown"] },
+        { name: "move_left",  label: "Move Left",  defaults: ["a", "ArrowLeft"] },
+        { name: "move_right", label: "Move Right", defaults: ["d", "ArrowRight"] },
+        { name: "soft_drop",  label: "Soft Drop",  defaults: ["s", "ArrowDown"] },
         { name: "hard_drop",  label: "Hard Drop",  defaults: [" "] },
-        { name: "rotate_cw",  label: "Rotate CW",  defaults: ["ArrowUp"] },
-        { name: "rotate_ccw", label: "Rotate CCW", defaults: ["z"] },
-        { name: "hold_piece", label: "Hold",        defaults: ["c"] },
-        { name: "pause_game", label: "Pause",       defaults: ["Escape"] }
+        { name: "rotate_cw",  label: "Rotate CW",  defaults: ["w", "ArrowUp"] },
+        { name: "rotate_ccw", label: "Rotate CCW", defaults: ["q", "z"] },
+        { name: "hold_piece", label: "Hold",        defaults: ["c", "Shift"] },
+        { name: "pause_game", label: "Pause",       defaults: ["Escape", "p"] }
     ],
 
     controls: {},

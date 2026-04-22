@@ -1,28 +1,20 @@
-// storage.js — high score persistence
+// storage.js — high score persistence (wraps lib/storage).
 var P = P || {};
 
-P.Storage = {
-    highScore: 0,
-
-    load: function() {
-        try {
-            var s = localStorage.getItem("pacman_highscore");
-            if (s) this.highScore = parseInt(s, 10) || 0;
-        } catch(e) {}
-    },
-
-    save: function() {
-        try {
-            localStorage.setItem("pacman_highscore", String(this.highScore));
-        } catch(e) {}
-    },
-
-    maybeSetHigh: function(score) {
-        if (score > this.highScore) {
-            this.highScore = score;
-            this.save();
-            return true;
+P.Storage = (function() {
+    var s = Storage.create("chomper");
+    return {
+        get highScore() { return s.get("highScore") || 0; },
+        set highScore(v) { s.set("highScore", v); },
+        load: function() { s.load({ highScore: 0 }); },
+        save: function() { s.save(); },
+        maybeSetHigh: function(score) {
+            if (score > (s.get("highScore") || 0)) {
+                s.set("highScore", score);
+                s.save();
+                return true;
+            }
+            return false;
         }
-        return false;
-    }
-};
+    };
+})();

@@ -121,10 +121,6 @@ T.Screens = (function() {
     var countdownTimer = 0;
     var countdownPhase = 3;
 
-    // --- Rebind state ---
-    var rebinding = false;
-    var rebindActionName = "";
-
     // --- High score tab ---
     var hsMode = "marathon";
 
@@ -175,9 +171,6 @@ T.Screens = (function() {
                     backTarget = "modeSelect";
                     switchTo("settings");
                 } else if (idx === 4) {
-                    backTarget = "modeSelect";
-                    switchTo("controls");
-                } else if (idx === 5) {
                     switchTo("title");
                 }
             }, { onBack: function() { switchTo("title"); } });
@@ -248,69 +241,7 @@ T.Screens = (function() {
         }
     };
 
-    // --- CONTROLS ---
-    screens.controls = {
-        enter: function() {
-            menuIndex = 0;
-            rebinding = false;
-            showOverlay("controls");
-            this.refreshDisplay();
-            updateSelection("controls");
-            var prompt = document.getElementById("rebind-prompt");
-            if (prompt) prompt.style.display = "none";
-        },
-        exit: function() { rebinding = false; },
-        update: function(dt, W, H) { updateBgPieces(dt, W, H); },
-        draw: function(ctx, W, H) { drawBgPieces(ctx, W, H); },
-        refreshDisplay: function() {
-            for (var i = 0; i < T.Input.ACTIONS.length; i++) {
-                var a = T.Input.ACTIONS[i];
-                var keys = T.Input.getKeys(a.name);
-                var display = keys.length > 0 ? T.Input.keyDisplayName(keys[0]) : "???";
-                var el = document.getElementById("ctrl-" + a.name);
-                if (el) el.textContent = a.label + ": " + display;
-            }
-        },
-        keydown: function(key) {
-            if (rebinding) {
-                if (key === "Escape") {
-                    rebinding = false;
-                    var prompt = document.getElementById("rebind-prompt");
-                    if (prompt) prompt.style.display = "none";
-                    return;
-                }
-                T.Input.rebind(rebindActionName, [key]);
-                rebinding = false;
-                var prompt = document.getElementById("rebind-prompt");
-                if (prompt) prompt.style.display = "none";
-                this.refreshDisplay();
-                updateSelection("controls");
-                return;
-            }
-            var self = this;
-            menuNav("controls", key, function(idx) {
-                var items = getMenuItems("controls");
-                var item = items[idx];
-                if (!item) return;
-                var action = item.getAttribute("data-action");
-                if (action === "back") {
-                    switchTo(backTarget);
-                } else if (action === "resetControls") {
-                    T.Input.resetAll();
-                    self.refreshDisplay();
-                    updateSelection("controls");
-                } else {
-                    var controlName = item.getAttribute("data-control");
-                    if (controlName) {
-                        rebinding = true;
-                        rebindActionName = controlName;
-                        var prompt = document.getElementById("rebind-prompt");
-                        if (prompt) prompt.style.display = "block";
-                    }
-                }
-            }, { onBack: function() { switchTo(backTarget); } });
-        }
-    };
+    // Controls screen removed — System → Input (F8) handles rebinding.
 
     function showHUD() {
         var el = document.getElementById("hud");
@@ -775,7 +706,7 @@ T.Screens = (function() {
             });
 
             overlay.addEventListener("click", function(e) {
-                if (!activeScreenId || rebinding) return;
+                if (!activeScreenId) return;
                 var target = e.target;
                 while (target && target !== overlay) {
                     if (target.className && target.className.indexOf("menu-item") !== -1) break;
