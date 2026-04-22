@@ -447,6 +447,7 @@ private:
     bool runIrradianceConvolution();
     void ensurePrefilterPipeline();
     bool runPrefilterConvolution();
+    void ensureBRDFLUT();           // 2D RG16F LUT, baked once on first need
 
     GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped
     int    envCubemapSize_ = 0;
@@ -455,6 +456,8 @@ private:
     GLuint envPrefilterCube_ = 0;    // 128² RGBA16F cube, GGX-prefilter per mip
     int    envPrefilterSize_ = 128;
     int    envPrefilterMips_ = 5;    // mip 0..4 → roughness 0.0, 0.25, 0.5, 0.75, 1.0
+    GLuint brdfLUT_ = 0;             // 512² RG16F, env-independent (Karis split-sum)
+    int    brdfLUTSize_ = 512;
     std::string envPath_;
     float  envIntensity_ = 1.0f;
     float  envRotation_ = 0.0f;
@@ -478,6 +481,9 @@ private:
     GLint  pfUFace_ = -1;
     GLint  pfURoughness_ = -1;
     GLint  pfUEnvSize_ = -1;
+
+    // BRDF LUT bake (lazy init, reuses envConvert FBO/VAO)
+    GLuint brdfLUTProgram_ = 0;
 
     // Skybox draw pipeline (lazy init)
     GLuint skyboxProgram_ = 0;
