@@ -156,6 +156,12 @@ const m = require('./apps/launcher/apps.json');
 console.log(m.apps.map(a=>a.dir).join(' '));
 "))
 
+# Shared sibling dirs that apps load via ../<dir>/... — not in apps.json
+# but required at runtime. Add here as the shared surface grows.
+for shared in lib; do
+    [[ -d "apps/$shared" ]] && APPS+=("$shared")
+done
+
 # Exclude patterns: dev tests, scene-editor screenshots, transient caches.
 EXCLUDES=(
     --exclude='test_*.js'
