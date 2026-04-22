@@ -189,16 +189,8 @@ canvas.addEventListener('mousedown', (ev) => {
         if (selected) attachGizmoFor(null);
         return;
     }
-    // Only lights are interesting for this demo; ignore mesh hits.
-    // type discriminator: lights expose `intensity`, meshes don't.
-    if (typeof node.intensity !== 'number') return;
-    // Figure out which light was hit by identity match.
-    let kind = null;
-    if (node === sun) kind = 'directional';
-    else if (node === p1 || node === p2 || node === p3) kind = 'point';
-    else if (node === spot) kind = 'spot';
-    else kind = 'point';
-    attachGizmoFor(node, kind);
+    if (node.type !== 'light') return;  // only lights are selectable in this demo
+    attachGizmoFor(node, node.kind);
 });
 
 document.addEventListener('keydown', (ev) => {

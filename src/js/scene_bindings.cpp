@@ -1493,6 +1493,19 @@ void SceneBindings::install(JSContext* ctx) {
         .get("childCount", [](NodeWrapper* w) -> int {
             return (w && w->node) ? (int)w->node->children().size() : 0;
         })
+        .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->node) return JS_UNDEFINED;
+            switch (w->node->type()) {
+                case scene::SceneNode::Type::Mesh:    return JS_NewString(ctx, "mesh");
+                case scene::SceneNode::Type::Light:   return JS_NewString(ctx, "light");
+                case scene::SceneNode::Type::Shape:   return JS_NewString(ctx, "shape");
+                case scene::SceneNode::Type::Sprite:  return JS_NewString(ctx, "sprite");
+                case scene::SceneNode::Type::Physics: return JS_NewString(ctx, "physics");
+                case scene::SceneNode::Type::Html:    return JS_NewString(ctx, "html");
+                case scene::SceneNode::Type::Base:    return JS_NewString(ctx, "group");
+            }
+            return JS_UNDEFINED;
+        })
 
         // Transform
         .prop("x",
@@ -1574,6 +1587,16 @@ void SceneBindings::install(JSContext* ctx) {
             })
 
         // LightNode properties — no-op on non-light nodes.
+        .get("kind", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light)
+                return JS_UNDEFINED;
+            switch (static_cast<scene::LightNode*>(w->node)->kind()) {
+                case scene::LightNode::Kind::Directional: return JS_NewString(ctx, "directional");
+                case scene::LightNode::Kind::Point:       return JS_NewString(ctx, "point");
+                case scene::LightNode::Kind::Spot:        return JS_NewString(ctx, "spot");
+            }
+            return JS_UNDEFINED;
+        })
         .prop("direction",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
                 if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light)

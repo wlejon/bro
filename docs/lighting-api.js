@@ -150,9 +150,10 @@ scene.setAmbient([0.03, 0.03, 0.035]);
 //      Markers depth-test against geometry, so they occlude correctly.
 //   2. `scene.raycast(origin, dir)` also hits those icons as tiny
 //      world-space spheres (~0.32 units). Hits return the LightNode as
-//      `hit.node` — the same shape mesh hits return. Mesh vs light is
-//      disambiguated by `node.type` (or quacking — lights have
-//      `intensity`, meshes don't).
+//      `hit.node` — the same shape mesh hits return. Every scene node
+//      exposes a `type` string ('mesh' | 'light' | 'shape' | 'sprite' |
+//      'physics' | 'html' | 'group'); lights additionally expose
+//      `kind` ('directional' | 'point' | 'spot').
 //
 // Standard click-to-select pattern:
 //
@@ -163,8 +164,8 @@ scene.setAmbient([0.03, 0.03, 0.035]);
 //       const ray = scene.unprojectLocal(ev.clientX - r.left,
 //                                        ev.clientY - r.top);
 //       const hit = scene.raycast(ray.origin, ray.dir, 100);
-//       if (hit && typeof hit.node.intensity === 'number') {
-//           attachGizmoToLight(hit.node);
+//       if (hit && hit.node.type === 'light') {
+//           attachGizmoToLight(hit.node, hit.node.kind);
 //       }
 //   });
 //
