@@ -265,6 +265,13 @@ h2 {
         if (key === 'Tab')       return 'Tab';
         if (key === 'Backspace') return 'Bksp';
         if (key === 'Delete')    return 'Del';
+        if (key === 'Mouse0')    return 'L-Click';
+        if (key === 'Mouse1')    return 'M-Click';
+        if (key === 'Mouse2')    return 'R-Click';
+        if (key === 'Mouse3')    return 'Mouse4';
+        if (key === 'Mouse4')    return 'Mouse5';
+        if (key === 'WheelUp')   return 'Wheel\u2191';
+        if (key === 'WheelDown') return 'Wheel\u2193';
         if (key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta') return key;
         if (key.length === 1) return key.toUpperCase();
         return key;
@@ -502,6 +509,22 @@ h2 {
         if (isModifierOnly(e.key)) return;
         applyCaptureKey(e.key);
     }, true);
+
+    // Mouse + wheel capture while rebinding. Uses the same capture-phase
+    // pattern as keydown so the click/scroll is consumed before anything
+    // in the panel (chip handlers, body click-to-cancel) can react.
+    window.addEventListener('mousedown', function(e) {
+        if (!capturing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        applyCaptureKey('Mouse' + e.button);
+    }, true);
+    window.addEventListener('wheel', function(e) {
+        if (!capturing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        applyCaptureKey(e.deltaY < 0 ? 'WheelUp' : 'WheelDown');
+    }, { capture: true, passive: false });
 
     document.body.addEventListener('click', function() {
         if (capturing) stopCapture();
