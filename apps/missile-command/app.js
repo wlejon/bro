@@ -7,66 +7,26 @@ var ctx = canvas.getContext("2d");
 var getW = function() { return ctx.canvasWidth || canvas.width || 900; };
 var getH = function() { return ctx.canvasHeight || canvas.height || 700; };
 
-// ---------------- Audio (optional, very light) ----------------
+// ---------------- Audio ----------------
 var Audio = {
-    ctx: null,
-    bus: -1,
-    init: function() {
-        try { this.ctx = new AudioContext(); } catch(e) { this.ctx = null; return; }
-        try {
-            this.bus = this.ctx.createBus();
-            this.ctx.setBusGain(this.bus, 0.7);
-        } catch(e) { this.bus = -1; }
-    },
-    tone: function(freq, dur, type, vol) {
-        if (!this.ctx) return;
-        try {
-            var id = this.ctx.createVoice();
-            this.ctx.setVoiceWaveform(id, type || "square");
-            this.ctx.setVoiceFrequency(id, freq);
-            this.ctx.setVoiceGain(id, (vol || 0.5) * 14.0);
-            this.ctx.setVoiceAttack(id, 0.003);
-            this.ctx.setVoiceDecay(id, dur * 0.8);
-            this.ctx.setVoiceSustain(id, 0.0);
-            this.ctx.setVoiceRelease(id, 0.02);
-            if (this.bus !== -1) this.ctx.setVoiceBus(id, this.bus);
-            var t = this.ctx.currentTime;
-            this.ctx.startVoice(id, t);
-            this.ctx.stopVoice(id, t + dur);
-        } catch(e) {}
-    },
-    launch:   function() { this.tone(220, 0.08, "sawtooth", 0.4); },
-    explode:  function() { this.tone(90 + Math.random()*40, 0.25, "sawtooth", 0.7); },
-    cityHit:  function() { this.tone(60, 0.5, "sawtooth", 0.9); },
-    siloHit:  function() { this.tone(80, 0.4, "sawtooth", 0.8); },
-    menu:     function() { this.tone(500, 0.05, "square", 0.3); },
-    select:   function() { this.tone(700, 0.1, "square", 0.4); },
-    waveEnd:  function() {
-        var self = this;
-        self.tone(523, 0.12, "square", 0.6);
-        setTimeout(function() { self.tone(659, 0.12, "square", 0.6); }, 120);
-        setTimeout(function() { self.tone(784, 0.16, "square", 0.7); }, 240);
-    },
-    gameOver: function() {
-        var self = this;
-        self.tone(220, 0.3, "sawtooth", 0.6);
-        setTimeout(function() { self.tone(180, 0.3, "sawtooth", 0.6); }, 250);
-        setTimeout(function() { self.tone(140, 0.6, "sawtooth", 0.7); }, 500);
-    }
+    init:    function() { SFX.init(); },
+    launch:  function() { SFX.tone(220, 0.08, "sawtooth", 0.4); },
+    explode: function() { SFX.tone(90 + Math.random()*40, 0.25, "sawtooth", 0.7); },
+    cityHit: function() { SFX.tone(60, 0.5, "sawtooth", 0.9); },
+    siloHit: function() { SFX.tone(80, 0.4, "sawtooth", 0.8); },
+    menu:    function() { SFX.tone(500, 0.05, "square", 0.3); },
+    select:  function() { SFX.tone(700, 0.1, "square", 0.4); },
+    waveEnd: function() { SFX.sequence([[523,0.12,"square",0.6],[659,0.12,"square",0.6],[784,0.16,"square",0.7]]); },
+    gameOver:function() { SFX.sequence([[220,0.3,"sawtooth",0.6],[180,0.3,"sawtooth",0.6],[140,0.6,"sawtooth",0.7]]); },
 };
 
 // ---------------- Storage ----------------
-var Storage = {
-    highScore: 0,
-    load: function() {
-        try {
-            var v = localStorage.getItem("missilecommand_highscore");
-            if (v) this.highScore = parseInt(v, 10) || 0;
-        } catch(e) {}
-    },
-    save: function() {
-        try { localStorage.setItem("missilecommand_highscore", String(this.highScore)); } catch(e) {}
-    }
+var _store = Storage.create("missilecommand");
+var MC_Storage = {
+    get highScore() { return _store.get("highScore") || 0; },
+    set highScore(v) { _store.set("highScore", v); },
+    load: function() { _store.load({ highScore: 0 }); },
+    save: function() { _store.save(); },
 };
 
 // ---------------- Game constants ----------------
@@ -452,16 +412,16 @@ function completeWave() {
 }
 
 function endGame() {
-    if (state.score > Storage.highScore) {
-        Storage.highScore = state.score;
-        Storage.save();
+    if (state.score > MC_Storage.highScore) {
+        MC_Storage.highScore = state.score;
+        MC_Storage.save();
     }
     Audio.gameOver();
     var stats = document.getElementById("gameover-stats");
     if (stats) {
         stats.innerHTML = "Final score: <strong>" + state.score + "</strong><br>" +
                           "Wave reached: " + state.wave + "<br>" +
-                          "High score: " + Storage.highScore;
+                          "High score: " + MC_Storage.highScore;
     }
     setScreen("gameover");
 }
@@ -472,7 +432,7 @@ function updateHud() {
     var h = document.getElementById("hud-hi");
     if (s) s.textContent = String(state.score);
     if (w) w.textContent = String(state.wave);
-    if (h) h.textContent = String(Storage.highScore);
+    if (h) h.textContent = String(MC_Storage.highScore);
 }
 
 // ---------------- Rendering ----------------
@@ -689,7 +649,7 @@ function setScreen(name) {
 
 function refreshTitleScreen() {
     var t = document.getElementById("title-hi");
-    if (t) t.textContent = String(Storage.highScore);
+    if (t) t.textContent = String(MC_Storage.highScore);
 }
 
 function setupMenu(name) {
@@ -766,24 +726,29 @@ canvas.addEventListener("mousedown", function(ev) {
     launchPlayerMissile(p.x, y);
 });
 
-document.body.addEventListener("keydown", function(ev) {
-    var k = ev.key;
-    if (state.screen === "playing") {
-        if (k === "Escape") {
-            // Pause -> gameover-ish? Just end to menu for simplicity
-        }
-        return;
-    }
+// Input bindings (bro.settings-backed).
+Input.init([
+    { name: "primary", label: "Fire",      defaults: ["Mouse0", " "] },
+    { name: "up",      label: "Menu Up",   defaults: ["w", "ArrowUp"] },
+    { name: "down",    label: "Menu Down", defaults: ["s", "ArrowDown"] },
+    { name: "confirm", label: "Confirm",   defaults: ["Enter"] },
+    { name: "pause",   label: "Back",      defaults: ["Escape"] },
+]);
+Input.attach(window);
+
+Input.onAction(function(action, phase) {
+    if (phase !== "down" || !action) return;
+    if (state.screen === "playing") return; // mouse handled separately
     if (!state.menuItems.length) return;
-    if (k === "ArrowUp" || k === "w" || k === "W") {
+    if (action === "up") {
         state.menuSel = (state.menuSel - 1 + state.menuItems.length) % state.menuItems.length;
         updateMenuSelection(); Audio.menu();
-    } else if (k === "ArrowDown" || k === "s" || k === "S") {
+    } else if (action === "down") {
         state.menuSel = (state.menuSel + 1) % state.menuItems.length;
         updateMenuSelection(); Audio.menu();
-    } else if (k === "Enter" || k === " ") {
+    } else if (action === "confirm") {
         activateMenu();
-    } else if (k === "Escape") {
+    } else if (action === "pause") {
         if (state.screen === "howto") setScreen("title");
     }
 });
@@ -805,21 +770,11 @@ document.getElementById("overlay").addEventListener("click", function(ev) {
 });
 
 // ---------------- Boot ----------------
-Storage.load();
+MC_Storage.load();
 Audio.init();
 setScreen("title");
 
-var lastFrameTime = performance.now();
-function gameLoop(ts) {
-    requestAnimationFrame(gameLoop);
-    var dt = ts - lastFrameTime;
-    lastFrameTime = ts;
-    if (dt > 100) dt = 100;
-    if (dt < 0) dt = 0;
-    update(dt);
-    draw();
-}
-requestAnimationFrame(gameLoop);
+GameLoop.create({ tick: update, draw: draw }).start();
 
 console.log("Missile Command loaded");
 })();

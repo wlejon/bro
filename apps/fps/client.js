@@ -93,8 +93,15 @@ let serverX = 0, serverZ = 0;
 let hasServerPos = false;
 
 // Input
-const keys = {};
-let mouseDown = false;
+// Input actions backed by bro.settings (System → Input to rebind).
+Input.init([
+    { name: "forward", label: "Forward", defaults: ["w", "ArrowUp"] },
+    { name: "back",    label: "Back",    defaults: ["s", "ArrowDown"] },
+    { name: "left",    label: "Strafe Left",  defaults: ["a", "ArrowLeft"] },
+    { name: "right",   label: "Strafe Right", defaults: ["d", "ArrowRight"] },
+    { name: "primary", label: "Shoot",   defaults: ["Mouse0"] },
+]);
+Input.attach(window);
 
 // Remote players
 const remotePlayers = new Map();
@@ -203,11 +210,14 @@ function removeRemote(id) {
 
 function getInputBits() {
     let bits = 0;
-    if (keys['w'] || keys['arrowup'])    bits |= IN_FWD;
-    if (keys['s'] || keys['arrowdown'])  bits |= IN_BACK;
-    if (keys['a'] || keys['arrowleft'])  bits |= IN_LEFT;
-    if (keys['d'] || keys['arrowright']) bits |= IN_RIGHT;
-    if (mouseDown)                       bits |= IN_SHOOT;
+    // Only sample gameplay input while the pointer is captured so stray
+    // clicks/keys on the connect screen don't leak into the movement bits.
+    if (!pointerLocked) return bits;
+    if (Input.down("forward")) bits |= IN_FWD;
+    if (Input.down("back"))    bits |= IN_BACK;
+    if (Input.down("left"))    bits |= IN_LEFT;
+    if (Input.down("right"))   bits |= IN_RIGHT;
+    if (Input.down("primary")) bits |= IN_SHOOT;
     return bits;
 }
 
@@ -420,17 +430,13 @@ function flashDamage() { damageFlashTimer = 0.2; }
 
 // ─── Input ───────────────────────────────────────────────────────────────────
 
+// Escape releases pointer lock. Movement/shoot state is sampled each frame
+// from lib/input; we only need the pointer lock gesture here.
 document.addEventListener('keydown', (e) => {
-    keys[e.key.toLowerCase()] = true;
-    if (e.key === 'Escape') {
-        if (pointerLocked) {
-            document.exitPointerLock();
-            pointerLocked = false;
-        }
+    if (e.key === 'Escape' && pointerLocked) {
+        document.exitPointerLock();
+        pointerLocked = false;
     }
-});
-document.addEventListener('keyup', (e) => {
-    keys[e.key.toLowerCase()] = false;
 });
 
 canvas.addEventListener('mousedown', (e) => {
@@ -438,12 +444,7 @@ canvas.addEventListener('mousedown', (e) => {
     if (!pointerLocked) {
         canvas.requestPointerLock();
         pointerLocked = true;
-        return;
     }
-    if (e.button === 0) mouseDown = true;
-});
-document.addEventListener('mouseup', (e) => {
-    if (e.button === 0) mouseDown = false;
 });
 
 document.addEventListener('mousemove', (e) => {
