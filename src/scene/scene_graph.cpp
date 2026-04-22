@@ -260,16 +260,32 @@ void main() {
         float shadow = 1.0;
         int slot = uLightShadowSlot[i];
         if (slot >= 0) {
-            // CSM: walk per-light cascades by view-space distance and pick
-            // the tightest cascade containing this fragment. Splits are
-            // padded with a sentinel large value so the unrolled compares
-            // work for slot counts 1..4.
             int sc = uLightShadowSlotCount[i];
-            vec4 splits = uLightCascadeSplit[i];
             int chosen = slot;
-            if (sc >= 2 && vCamDist > splits.x) chosen = slot + 1;
-            if (sc >= 3 && vCamDist > splits.y) chosen = slot + 2;
-            if (sc >= 4 && vCamDist > splits.z) chosen = slot + 3;
+            if (t == 1 && sc == 6) {
+                // Point light cube unfolded to 6 atlas tiles. Slot order
+                // follows the standard cube-map face convention:
+                //   0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z
+                vec3 toFrag = vWorldPos - uLightPos[i];
+                vec3 absL = abs(toFrag);
+                int face;
+                if (absL.x >= absL.y && absL.x >= absL.z)
+                    face = (toFrag.x > 0.0) ? 0 : 1;
+                else if (absL.y >= absL.z)
+                    face = (toFrag.y > 0.0) ? 2 : 3;
+                else
+                    face = (toFrag.z > 0.0) ? 4 : 5;
+                chosen = slot + face;
+            } else {
+                // Directional CSM: pick the tightest cascade containing
+                // this fragment by view-space distance. Splits[] are padded
+                // with a sentinel large value so the unrolled compares
+                // work for slot counts 1..4.
+                vec4 splits = uLightCascadeSplit[i];
+                if (sc >= 2 && vCamDist > splits.x) chosen = slot + 1;
+                if (sc >= 3 && vCamDist > splits.y) chosen = slot + 2;
+                if (sc >= 4 && vCamDist > splits.z) chosen = slot + 3;
+            }
             // Push the sampled position along the surface normal to mask
             // self-shadow acne on grazing surfaces — cheaper than depth-slope
             // bias and works in shadow-clip space because the bake is linear.
@@ -1474,7 +1490,47 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
             lightShadowSlotCount_[i] = 1;
             shadowTileCount_++;
         }
-        // Point cube shadows handled in a follow-up commit.
+        else if (L->kind() == LightNode::Kind::Point) {
+            // Point light = 6-face cube projection. Each face gets its own
+            // atlas tile rendered with perspective(90deg, 1, near, far).
+            // Needs 6 contiguous slots; skip if the budget can't fit them.
+            if (shadowTileCount_ + 6 > kMaxShadowTiles) continue;
+
+            const Mat4& M = L->worldMatrix();
+            Vec3 eye{M.m[3][0], M.m[3][1], M.m[3][2]};
+            float far  = std::max(L->range(), 0.5f);
+            float near = std::max(0.05f, far * 0.005f);
+            // PI/2 + small fudge so the 6 frusta have a smidge of overlap
+            // at the seams; eliminates a single-texel sliver of "no shadow"
+            // at face boundaries.
+            Mat4 proj = Mat4::perspective(1.5708f, 1.0f, near, far);
+
+            // Cube-face conventions (matches D3D / OpenGL cube map order).
+            // Each entry is { forward.xyz, up.xyz }.
+            const Vec3 forward[6] = {
+                { 1, 0, 0}, {-1, 0, 0},
+                { 0, 1, 0}, { 0,-1, 0},
+                { 0, 0, 1}, { 0, 0,-1},
+            };
+            const Vec3 upVec[6] = {
+                {0,-1, 0}, {0,-1, 0},
+                {0, 0, 1}, {0, 0,-1},
+                {0,-1, 0}, {0,-1, 0},
+            };
+
+            int firstSlot = shadowTileCount_;
+            lightShadowSlot_[i] = firstSlot;
+            lightShadowSlotCount_[i] = 6;
+            for (int f = 0; f < 6; ++f) {
+                Vec3 target{eye.x + forward[f].x,
+                            eye.y + forward[f].y,
+                            eye.z + forward[f].z};
+                Mat4 view = Mat4::lookAt(eye, target, upVec[f]);
+                Mat4 projView = proj * view;
+                bakeTile(firstSlot + f, projView, L);
+                shadowTileCount_++;
+            }
+        }
     }
 }
 
