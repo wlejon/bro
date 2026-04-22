@@ -102,7 +102,12 @@ public:
     void resetAllActions();
     std::vector<std::string> getKeysForAction(const std::string& action) const;
     std::string getActionForKey(const std::string& webKey) const;
+    /// All resolved bindings (engine + app declared). Used internally.
     const std::vector<ActionBinding>& getActions() const { return resolved_.input.actionBindings; }
+    /// Only bindings declared by the current app via defineAction. This is
+    /// what the System → Input panel surfaces — engine-wide shortcuts like
+    /// perf overlay toggles aren't an app concern.
+    std::vector<ActionBinding> getAppActions() const;
 
     // --- Persistence ---
     void save();
@@ -143,6 +148,11 @@ private:
     // app's keys shouldn't be stolen by a sibling app's saved binding for
     // an action this app never asked for.
     std::set<std::string> declaredActions_;
+
+    // Subset of declaredActions_ registered by the current app via
+    // defineAction (engine-wide actions declared via defineEngineAction
+    // are excluded — they're not listed on the app's Input panel).
+    std::set<std::string> appDeclaredActions_;
 
     std::string persistPath_;
     ChangeCallback changeCallback_;

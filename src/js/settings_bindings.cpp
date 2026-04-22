@@ -342,11 +342,8 @@ static JSValue js_settings_getKeyAction(JSContext* ctx, JSValueConst, int argc, 
 // bro.settings.getActions()
 // ---------------------------------------------------------------------------
 
-static JSValue js_settings_getActions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    auto* state = getState(ctx);
-    if (!state || !state->settings) return JS_NewArray(ctx);
-
-    auto& actions = state->settings->getActions();
+static JSValue buildActionArray(JSContext* ctx,
+                                const std::vector<bro::engine::ActionBinding>& actions) {
     JSValue arr = JS_NewArray(ctx);
     for (size_t i = 0; i < actions.size(); i++) {
         JSValue obj = JS_NewObject(ctx);
@@ -359,10 +356,21 @@ static JSValue js_settings_getActions(JSContext* ctx, JSValueConst, int, JSValue
                                  JS_NewString(ctx, actions[i].keys[j].c_str()));
         }
         JS_SetPropertyStr(ctx, obj, "keys", keysArr);
-
         JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i), obj);
     }
     return arr;
+}
+
+static JSValue js_settings_getActions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* state = getState(ctx);
+    if (!state || !state->settings) return JS_NewArray(ctx);
+    return buildActionArray(ctx, state->settings->getActions());
+}
+
+static JSValue js_settings_getAppActions(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* state = getState(ctx);
+    if (!state || !state->settings) return JS_NewArray(ctx);
+    return buildActionArray(ctx, state->settings->getAppActions());
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +450,7 @@ static const JSCFunctionListEntry js_settings_funcs[] = {
     JS_CFUNC_DEF("getActionKeys", 1, js_settings_getActionKeys),
     JS_CFUNC_DEF("getKeyAction", 1, js_settings_getKeyAction),
     JS_CFUNC_DEF("getActions", 0, js_settings_getActions),
+    JS_CFUNC_DEF("getAppActions", 0, js_settings_getAppActions),
     JS_CFUNC_DEF("getDisplayModes", 0, js_settings_getDisplayModes),
     JS_CFUNC_DEF("getDefaults", 0, js_settings_getDefaults),
 };

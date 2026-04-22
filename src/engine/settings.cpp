@@ -340,6 +340,7 @@ void Settings::defineEngineAction(const std::string& action,
 void Settings::defineAction(const std::string& action,
                             const std::vector<std::string>& defaultKeys) {
     declaredActions_.insert(action);
+    appDeclaredActions_.insert(action);
     // Add to app layer
     for (auto& b : appOverrides_.input.actionBindings) {
         if (b.action == action) {
@@ -390,6 +391,15 @@ void Settings::resetAllActions() {
     userOverrides_.input.actionBindings.clear();
     resolve();
     save();
+}
+
+std::vector<ActionBinding> Settings::getAppActions() const {
+    std::vector<ActionBinding> out;
+    out.reserve(appDeclaredActions_.size());
+    for (auto& b : resolved_.input.actionBindings) {
+        if (appDeclaredActions_.count(b.action)) out.push_back(b);
+    }
+    return out;
 }
 
 std::vector<std::string> Settings::getKeysForAction(const std::string& action) const {
