@@ -262,22 +262,38 @@ const showIconsIn = document.getElementById('showIcons');
 const animateIn = document.getElementById('animate');
 const shadowsIn = document.getElementById('shadows');
 const hdriSel = document.getElementById('hdri');
+const envStatus = document.getElementById('envStatus');
 const iblIntensityIn = document.getElementById('iblIntensity');
 const iblIntensityVal = document.getElementById('iblIntensityVal');
 const iblRotationIn = document.getElementById('iblRotation');
 const iblRotationVal = document.getElementById('iblRotationVal');
 
+// Try the script's default first, then fall back through the other tiers
+// the user might have on disk. If nothing loads, prompt them to run the
+// download script — the .hdr files are .gitignored so a fresh checkout
+// won't have them yet.
+const HDRI_RES_ORDER = ['2k', '4k', '1k', '8k'];
 function applyEnvironment() {
     const slug = hdriSel.value;
     if (!slug) {
         scene.setEnvironment(null);
+        envStatus.textContent = '';
         return;
     }
-    scene.setEnvironment({
-        hdr: `apps/lighting-demo/hdri/${slug}_1k.hdr`,
+    const opts = {
         intensity: parseFloat(iblIntensityIn.value),
         rotation:  parseFloat(iblRotationIn.value),
-    });
+    };
+    for (const res of HDRI_RES_ORDER) {
+        const path = `apps/lighting-demo/hdri/${slug}_${res}.hdr`;
+        if (scene.setEnvironment({ ...opts, hdr: path })) {
+            envStatus.textContent = `loaded ${res}`;
+            envStatus.style.color = '#7bed9f';
+            return;
+        }
+    }
+    envStatus.textContent = 'HDRI missing — run apps/lighting-demo/hdri/download.sh';
+    envStatus.style.color = '#fd9';
 }
 function applyIBLIntensity() {
     const v = parseFloat(iblIntensityIn.value);

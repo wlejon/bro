@@ -462,9 +462,9 @@ private:
     int    envCubemapSize_ = 0;
     GLuint envIrradianceCube_ = 0;   // 32² RGBA16F cube, cosine-convolved diffuse
     int    envIrradianceSize_ = 32;
-    GLuint envPrefilterCube_ = 0;    // 128² RGBA16F cube, GGX-prefilter per mip
-    int    envPrefilterSize_ = 128;
-    int    envPrefilterMips_ = 5;    // mip 0..4 → roughness 0.0, 0.25, 0.5, 0.75, 1.0
+    GLuint envPrefilterCube_ = 0;    // 256² RGBA16F cube, GGX-prefilter per mip
+    int    envPrefilterSize_ = 256;
+    int    envPrefilterMips_ = 6;    // mip 0..5 → roughness 0.0, 0.2, 0.4, 0.6, 0.8, 1.0
     GLuint brdfLUT_ = 0;             // 512² RG16F, env-independent (Karis split-sum)
     int    brdfLUTSize_ = 512;
     std::string envPath_;

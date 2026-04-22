@@ -8,7 +8,7 @@ cmake-build-*/
 /node_modules/
 .shots
 /dist/
-
+*.hdr
 
 # IDE
 .vs/

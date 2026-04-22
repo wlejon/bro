@@ -1620,10 +1620,11 @@ bool SceneGraph::loadEnvironment(const std::string& hdrPath) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     stbi_image_free(data);
 
-    // (Re)allocate the destination cubemap. 512² is enough for a sharp
-    // skybox; prefilter mips will be derived from this in a later pass so
-    // we allocate the full mip chain upfront.
-    const int faceSize = 512;
+    // (Re)allocate the destination cubemap. 1024² per face matches a 4k
+    // equirect's angular density (~11 texels/deg) so we don't downsample
+    // good source HDRIs. Mip chain is reserved upfront for trilinear
+    // skybox sampling and to give glGenerateMipmap somewhere to write.
+    const int faceSize = 1024;
     if (envCubemap_ && envCubemapSize_ != faceSize) {
         glDeleteTextures(1, &envCubemap_);
         envCubemap_ = 0;
