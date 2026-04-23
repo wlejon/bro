@@ -790,7 +790,12 @@ static JSValue js_element_video_get_networkState(JSContext* ctx, JSValueConst th
 static JSValue js_element_video_get_currentSrc(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NewString(ctx, "");
-    return JS_NewString(ctx, el->getAttribute("src").c_str());
+    // currentSrc reflects the resolved URL of the currently-loaded resource,
+    // not the raw src attribute. Empty until load() has picked a resource.
+    if (auto* v = el->videoControl()) {
+        return JS_NewString(ctx, v->currentSrc().c_str());
+    }
+    return JS_NewString(ctx, "");
 }
 
 static JSValue js_element_video_get_videoWidth(JSContext* ctx, JSValueConst this_val) {

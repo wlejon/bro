@@ -27,6 +27,7 @@ bool ElVideo::load(const std::string& path) {
     const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
     if (!p->open(resolved)) return false;
     pipeline_ = std::move(p);
+    currentSrc_ = resolved;
     intrinsicWidth_ = pipeline_->frameWidth() > 0 ? pipeline_->frameWidth() : intrinsicWidth_;
     intrinsicHeight_ = pipeline_->frameHeight() > 0 ? pipeline_->frameHeight() : intrinsicHeight_;
     // Apply IDL state that was set before/after the element had a pipeline:
@@ -37,7 +38,9 @@ bool ElVideo::load(const std::string& path) {
     // Prime the first frame so layout has something to show before play().
     pipeline_->advanceTo(0);
     pendingLoadedMetadata_ = true;
+    pendingCanPlayThrough_ = true;
     endedFired_ = false;
+    waiting_ = false;
     lastTimeUpdateSec_ = -1.0;
 
     // Predecode the audio track in parallel through an independent demuxer.
@@ -278,8 +281,39 @@ void ElVideo::pumpEvents() {
         js::dispatchDomEvent(jsCtx_, elem_, canplay);
     }
 
+    // canplaythrough: bro predecodes audio into a single clip and demuxes
+    // video from a local file, so once metadata + first frame are ready we
+    // can assert the stream will play through without buffering.
+    if (pendingCanPlayThrough_ && !pendingLoadedMetadata_ && pipeline_->hasFrame()) {
+        pendingCanPlayThrough_ = false;
+        dom::Event evt("canplaythrough", false, false);
+        evt.setIsTrusted(true);
+        js::dispatchDomEvent(jsCtx_, elem_, evt);
+    }
+
     const double t = currentTime();
     const double dur = duration();
+
+    // waiting / playing: while the clock advances but no decoded frame is
+    // available, the element is "stalled at the edge of decoded data". Fire
+    // 'waiting' when that happens, 'playing' when a frame appears again.
+    if (pipeline_->isPlaying() && !pipeline_->isEnded()) {
+        const bool hasFrame = pipeline_->hasFrame();
+        if (!hasFrame && !waiting_) {
+            waiting_ = true;
+            dom::Event evt("waiting", false, false);
+            evt.setIsTrusted(true);
+            js::dispatchDomEvent(jsCtx_, elem_, evt);
+        } else if (hasFrame && waiting_) {
+            waiting_ = false;
+            dom::Event evt("playing", false, false);
+            evt.setIsTrusted(true);
+            js::dispatchDomEvent(jsCtx_, elem_, evt);
+        }
+    } else if (waiting_ && !pipeline_->isPlaying()) {
+        // Paused while waiting — drop the flag so a later play() can recover.
+        waiting_ = false;
+    }
 
     // timeupdate: throttle to kTimeUpdateIntervalSec of media time. Fires
     // while playing OR after a seek (seekTo resets lastTimeUpdateSec_).

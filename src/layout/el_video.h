@@ -53,6 +53,10 @@ public:
     bool isEnded() const;   // pipeline has drained and decoded last frame
     bool hasPipeline() const { return pipeline_ != nullptr; }
 
+    // Resolved URL of the currently-loaded resource. Empty when no resource
+    // has been selected. Matches HTMLMediaElement.currentSrc.
+    const std::string& currentSrc() const { return currentSrc_; }
+
     // Media element state (not backed by pipeline — tracked here so IDL
     // getters/setters are coherent and media events can fire when they change).
     double volume() const { return volume_; }
@@ -92,8 +96,11 @@ private:
     // still needs to be dispatched on the next pump.
     JSContext* jsCtx_ = nullptr;
     bool pendingLoadedMetadata_ = false;
+    bool pendingCanPlayThrough_ = false;
     bool endedFired_ = false;
+    bool waiting_ = false;
     double lastTimeUpdateSec_ = -1.0;
+    std::string currentSrc_;
 
     // Audio is predecoded at load() into a single broaudio clip and played
     // back via a clip playback instance. The first iteration buffers the
