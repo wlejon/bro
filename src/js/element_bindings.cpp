@@ -643,21 +643,76 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
 }
 
 // ---------------------------------------------------------------------------
-// <video> bindings — dispatch through Element::videoControl()
+// <video> / HTMLMediaElement bindings — dispatch through Element::videoControl()
 // ---------------------------------------------------------------------------
+
+// Fire a spec-trusted, non-bubbling, non-cancelable media event.
+static void fireMediaEvent(JSContext* ctx, bro::dom::Element* el, const char* type) {
+    if (!ctx || !el) return;
+    bro::dom::Event evt(type, false, false);
+    evt.setIsTrusted(true);
+    dispatchDomEvent(ctx, el, evt);
+}
 
 static JSValue js_element_video_play(JSContext* ctx, JSValueConst this_val,
                                      int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
-    if (el) if (auto* v = el->videoControl()) v->play();
-    return JS_UNDEFINED;
+    if (el) if (auto* v = el->videoControl()) {
+        bool wasPaused = !v->isPlaying();
+        v->play();
+        if (wasPaused) fireMediaEvent(ctx, el, "play");
+    }
+    // HTMLMediaElement.play() returns Promise<void>. Callers may or may not
+    // await; returning a resolved promise covers both shapes.
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    JSValue r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 0, nullptr);
+    JS_FreeValue(ctx, r);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    return promise;
 }
 
 static JSValue js_element_video_pause(JSContext* ctx, JSValueConst this_val,
                                       int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
-    if (el) if (auto* v = el->videoControl()) v->pause();
+    if (el) if (auto* v = el->videoControl()) {
+        bool wasPlaying = v->isPlaying();
+        v->pause();
+        if (wasPlaying) fireMediaEvent(ctx, el, "pause");
+    }
     return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_load(JSContext* ctx, JSValueConst this_val,
+                                     int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* v = el->videoControl();
+    if (!v) return JS_UNDEFINED;
+    std::string src = el->getAttribute("src");
+    if (src.empty()) return JS_UNDEFINED;
+    v->load(src);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_canPlayType(JSContext* ctx, JSValueConst /*this_val*/,
+                                            int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewString(ctx, "");
+    std::string mime = jsToStdString(ctx, argv[0]);
+    // Lowercase prefix match — bro ships a VP9/Opus WebM pipeline.
+    auto startsWith = [&](const char* p) {
+        size_t n = strlen(p);
+        return mime.size() >= n &&
+               std::equal(mime.begin(), mime.begin() + n, p,
+                          [](char a, char b){ return std::tolower((unsigned char)a) == b; });
+    };
+    if (startsWith("video/webm") || startsWith("audio/webm") ||
+        startsWith("audio/ogg") || mime.find("opus") != std::string::npos ||
+        mime.find("vp9") != std::string::npos || mime.find("vp8") != std::string::npos) {
+        return JS_NewString(ctx, "probably");
+    }
+    return JS_NewString(ctx, "");
 }
 
 static JSValue js_element_video_get_currentTime(JSContext* ctx, JSValueConst this_val) {
@@ -673,15 +728,21 @@ static JSValue js_element_video_set_currentTime(JSContext* ctx, JSValueConst thi
     if (!el) return JS_UNDEFINED;
     double t = 0.0;
     JS_ToFloat64(ctx, &t, val);
-    if (auto* v = el->videoControl()) v->seekTo(t);
+    if (auto* v = el->videoControl()) {
+        fireMediaEvent(ctx, el, "seeking");
+        v->seekTo(t);
+        fireMediaEvent(ctx, el, "seeked");
+        fireMediaEvent(ctx, el, "timeupdate");
+    }
     return JS_UNDEFINED;
 }
 
 static JSValue js_element_video_get_duration(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    double d = 0.0;
-    if (el) if (auto* v = el->videoControl()) d = v->duration();
-    return JS_NewFloat64(ctx, d);
+    if (!el) return JS_NewFloat64(ctx, std::nan(""));
+    auto* v = el->videoControl();
+    if (!v || !v->hasPipeline()) return JS_NewFloat64(ctx, std::nan(""));
+    return JS_NewFloat64(ctx, v->duration());
 }
 
 static JSValue js_element_video_get_paused(JSContext* ctx, JSValueConst this_val) {
@@ -689,6 +750,47 @@ static JSValue js_element_video_get_paused(JSContext* ctx, JSValueConst this_val
     if (!el) return JS_TRUE;
     if (auto* v = el->videoControl()) return JS_NewBool(ctx, !v->isPlaying());
     return JS_TRUE;
+}
+
+static JSValue js_element_video_get_ended(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    if (auto* v = el->videoControl()) return JS_NewBool(ctx, v->isEnded());
+    return JS_FALSE;
+}
+
+static JSValue js_element_video_get_seeking(JSContext* ctx, JSValueConst /*this_val*/) {
+    // bro's seekTo() is synchronous from the JS perspective — seeking completes
+    // before the setter returns, so `seeking` is never observably true.
+    return JS_FALSE;
+}
+
+static JSValue js_element_video_get_readyState(JSContext* ctx, JSValueConst this_val) {
+    // HAVE_NOTHING=0, HAVE_METADATA=1, HAVE_CURRENT_DATA=2,
+    // HAVE_FUTURE_DATA=3, HAVE_ENOUGH_DATA=4.
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    auto* v = el->videoControl();
+    if (!v || !v->hasPipeline()) return JS_NewInt32(ctx, 0);
+    if (v->isReady()) return JS_NewInt32(ctx, 4);
+    return JS_NewInt32(ctx, 1);
+}
+
+static JSValue js_element_video_get_networkState(JSContext* ctx, JSValueConst this_val) {
+    // NETWORK_EMPTY=0, NETWORK_IDLE=1, NETWORK_LOADING=2, NETWORK_NO_SOURCE=3.
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    std::string src = el->getAttribute("src");
+    if (src.empty()) return JS_NewInt32(ctx, 0);
+    auto* v = el->videoControl();
+    if (v && v->hasPipeline()) return JS_NewInt32(ctx, 1);
+    return JS_NewInt32(ctx, 3);
+}
+
+static JSValue js_element_video_get_currentSrc(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewString(ctx, "");
+    return JS_NewString(ctx, el->getAttribute("src").c_str());
 }
 
 static JSValue js_element_video_get_videoWidth(JSContext* ctx, JSValueConst this_val) {
@@ -701,6 +803,238 @@ static JSValue js_element_video_get_videoHeight(JSContext* ctx, JSValueConst thi
     auto* el = getElement(this_val);
     if (el) if (auto* v = el->videoControl()) return JS_NewInt32(ctx, v->videoHeight());
     return JS_NewInt32(ctx, 0);
+}
+
+// ---- Attribute-reflected media properties -----------------------------------
+
+static JSValue js_element_video_get_src(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewString(ctx, "");
+    return JS_NewString(ctx, el->getAttribute("src").c_str());
+}
+
+static JSValue js_element_video_set_src(JSContext* ctx, JSValueConst this_val,
+                                        JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    std::string s = jsToStdString(ctx, val);
+    el->setAttribute("src", s);
+    // Setting src triggers a fresh resource selection — reload via the pipeline.
+    if (auto* v = el->videoControl()) {
+        if (!s.empty()) v->load(s);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_autoplay(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    return JS_NewBool(ctx, el && el->hasAttribute("autoplay"));
+}
+
+static JSValue js_element_video_set_autoplay(JSContext* ctx, JSValueConst this_val,
+                                             JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val)) el->setAttribute("autoplay", "");
+    else el->removeAttribute("autoplay");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_controls(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    return JS_NewBool(ctx, el && el->hasAttribute("controls"));
+}
+
+static JSValue js_element_video_set_controls(JSContext* ctx, JSValueConst this_val,
+                                             JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val)) el->setAttribute("controls", "");
+    else el->removeAttribute("controls");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_loop(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    return JS_NewBool(ctx, el && el->hasAttribute("loop"));
+}
+
+static JSValue js_element_video_set_loop(JSContext* ctx, JSValueConst this_val,
+                                         JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    bool b = JS_ToBool(ctx, val);
+    if (b) el->setAttribute("loop", "");
+    else el->removeAttribute("loop");
+    if (auto* v = el->videoControl()) v->setLoopEnabled(b);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_preload(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewString(ctx, "metadata");
+    std::string p = el->getAttribute("preload");
+    return JS_NewString(ctx, p.empty() ? "metadata" : p.c_str());
+}
+
+static JSValue js_element_video_set_preload(JSContext* ctx, JSValueConst this_val,
+                                            JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("preload", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_defaultMuted(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    return JS_NewBool(ctx, el && el->hasAttribute("muted"));
+}
+
+static JSValue js_element_video_set_defaultMuted(JSContext* ctx, JSValueConst this_val,
+                                                 JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val)) el->setAttribute("muted", "");
+    else el->removeAttribute("muted");
+    return JS_UNDEFINED;
+}
+
+// ---- Pipeline-backed state props --------------------------------------------
+
+static JSValue js_element_video_get_volume(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewFloat64(ctx, 1.0);
+    if (auto* v = el->videoControl()) return JS_NewFloat64(ctx, v->volume());
+    return JS_NewFloat64(ctx, 1.0);
+}
+
+static JSValue js_element_video_set_volume(JSContext* ctx, JSValueConst this_val,
+                                           JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* v = el->videoControl();
+    if (!v) return JS_UNDEFINED;
+    double d = 1.0;
+    JS_ToFloat64(ctx, &d, val);
+    double prev = v->volume();
+    v->setVolume(d);
+    if (v->volume() != prev) fireMediaEvent(ctx, el, "volumechange");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_muted(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    if (auto* v = el->videoControl()) return JS_NewBool(ctx, v->muted());
+    // Before the pipeline attaches, fall back to the attribute (default muted).
+    return JS_NewBool(ctx, el->hasAttribute("muted"));
+}
+
+static JSValue js_element_video_set_muted(JSContext* ctx, JSValueConst this_val,
+                                          JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    bool b = JS_ToBool(ctx, val);
+    auto* v = el->videoControl();
+    if (!v) return JS_UNDEFINED;
+    bool prev = v->muted();
+    v->setMuted(b);
+    if (v->muted() != prev) fireMediaEvent(ctx, el, "volumechange");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_playbackRate(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewFloat64(ctx, 1.0);
+    if (auto* v = el->videoControl()) return JS_NewFloat64(ctx, v->playbackRate());
+    return JS_NewFloat64(ctx, 1.0);
+}
+
+static JSValue js_element_video_set_playbackRate(JSContext* ctx, JSValueConst this_val,
+                                                 JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* v = el->videoControl();
+    if (!v) return JS_UNDEFINED;
+    double d = 1.0;
+    JS_ToFloat64(ctx, &d, val);
+    double prev = v->playbackRate();
+    v->setPlaybackRate(d);
+    if (v->playbackRate() != prev) fireMediaEvent(ctx, el, "ratechange");
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_defaultPlaybackRate(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewFloat64(ctx, 1.0);
+    if (auto* v = el->videoControl()) return JS_NewFloat64(ctx, v->defaultPlaybackRate());
+    return JS_NewFloat64(ctx, 1.0);
+}
+
+static JSValue js_element_video_set_defaultPlaybackRate(JSContext* ctx, JSValueConst this_val,
+                                                        JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    auto* v = el->videoControl();
+    if (!v) return JS_UNDEFINED;
+    double d = 1.0;
+    JS_ToFloat64(ctx, &d, val);
+    v->setDefaultPlaybackRate(d);
+    return JS_UNDEFINED;
+}
+
+// ---- TimeRanges -------------------------------------------------------------
+
+// Build a {length, start(i), end(i)} object representing a single [0, dur] run.
+// Used for buffered/seekable/played — bro decodes sequentially with no gaps.
+static JSValue buildTimeRanges(JSContext* ctx, double duration, bool present) {
+    JSValue obj = JS_NewObject(ctx);
+    int32_t length = present ? 1 : 0;
+    JS_SetPropertyStr(ctx, obj, "length", JS_NewInt32(ctx, length));
+
+    JSValue durVal = JS_NewFloat64(ctx, duration);
+
+    JSValue startFn = JS_NewCFunctionData(ctx,
+        [](JSContext* c, JSValueConst, int, JSValueConst*, int, JSValue*) -> JSValue {
+            return JS_NewFloat64(c, 0.0);
+        }, 1, 0, 0, nullptr);
+    JSValue endFn = JS_NewCFunctionData(ctx,
+        [](JSContext* c, JSValueConst, int argc, JSValueConst* argv,
+           int, JSValue* fdata) -> JSValue {
+            (void)argc; (void)argv;
+            double d = 0.0;
+            JS_ToFloat64(c, &d, fdata[0]);
+            return JS_NewFloat64(c, d);
+        }, 1, 0, 1, &durVal);
+    JS_FreeValue(ctx, durVal);
+
+    JS_SetPropertyStr(ctx, obj, "start", startFn);
+    JS_SetPropertyStr(ctx, obj, "end", endFn);
+    return obj;
+}
+
+static JSValue js_element_video_get_buffered(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return buildTimeRanges(ctx, 0.0, false);
+    auto* v = el->videoControl();
+    bool present = v && v->hasPipeline();
+    return buildTimeRanges(ctx, v ? v->duration() : 0.0, present);
+}
+
+static JSValue js_element_video_get_seekable(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return buildTimeRanges(ctx, 0.0, false);
+    auto* v = el->videoControl();
+    bool present = v && v->hasPipeline();
+    return buildTimeRanges(ctx, v ? v->duration() : 0.0, present);
+}
+
+static JSValue js_element_video_get_played(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return buildTimeRanges(ctx, 0.0, false);
+    auto* v = el->videoControl();
+    if (!v || !v->hasPipeline()) return buildTimeRanges(ctx, 0.0, false);
+    return buildTimeRanges(ctx, v->currentTime(), v->currentTime() > 0.0);
 }
 
 static JSValue js_element_get_checked(JSContext* ctx, JSValueConst this_val)
@@ -2391,14 +2725,34 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("dataset",       js_element_get_dataset, nullptr),
     JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),
     JS_CGETSET_DEF("content",      js_element_get_content, nullptr),
-    // <video> properties and methods
+    // HTMLMediaElement / HTMLVideoElement
     JS_CGETSET_DEF("currentTime", js_element_video_get_currentTime, js_element_video_set_currentTime),
     JS_CGETSET_DEF("duration",    js_element_video_get_duration, nullptr),
     JS_CGETSET_DEF("paused",      js_element_video_get_paused, nullptr),
+    JS_CGETSET_DEF("ended",       js_element_video_get_ended, nullptr),
+    JS_CGETSET_DEF("seeking",     js_element_video_get_seeking, nullptr),
+    JS_CGETSET_DEF("readyState",  js_element_video_get_readyState, nullptr),
+    JS_CGETSET_DEF("networkState", js_element_video_get_networkState, nullptr),
+    JS_CGETSET_DEF("currentSrc",  js_element_video_get_currentSrc, nullptr),
     JS_CGETSET_DEF("videoWidth",  js_element_video_get_videoWidth, nullptr),
     JS_CGETSET_DEF("videoHeight", js_element_video_get_videoHeight, nullptr),
+    JS_CGETSET_DEF("src",         js_element_video_get_src, js_element_video_set_src),
+    JS_CGETSET_DEF("autoplay",    js_element_video_get_autoplay, js_element_video_set_autoplay),
+    JS_CGETSET_DEF("controls",    js_element_video_get_controls, js_element_video_set_controls),
+    JS_CGETSET_DEF("loop",        js_element_video_get_loop, js_element_video_set_loop),
+    JS_CGETSET_DEF("preload",     js_element_video_get_preload, js_element_video_set_preload),
+    JS_CGETSET_DEF("defaultMuted",js_element_video_get_defaultMuted, js_element_video_set_defaultMuted),
+    JS_CGETSET_DEF("volume",      js_element_video_get_volume, js_element_video_set_volume),
+    JS_CGETSET_DEF("muted",       js_element_video_get_muted, js_element_video_set_muted),
+    JS_CGETSET_DEF("playbackRate", js_element_video_get_playbackRate, js_element_video_set_playbackRate),
+    JS_CGETSET_DEF("defaultPlaybackRate", js_element_video_get_defaultPlaybackRate, js_element_video_set_defaultPlaybackRate),
+    JS_CGETSET_DEF("buffered",    js_element_video_get_buffered, nullptr),
+    JS_CGETSET_DEF("seekable",    js_element_video_get_seekable, nullptr),
+    JS_CGETSET_DEF("played",      js_element_video_get_played, nullptr),
     JS_CFUNC_DEF("play",  0, js_element_video_play),
     JS_CFUNC_DEF("pause", 0, js_element_video_pause),
+    JS_CFUNC_DEF("load",  0, js_element_video_load),
+    JS_CFUNC_DEF("canPlayType", 1, js_element_video_canPlayType),
     // Form control properties
     JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
     JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),

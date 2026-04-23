@@ -98,8 +98,9 @@ void ElVideo::openAudioTrack(const std::string& resolvedPath) {
 
 void ElVideo::startAudioPlayback(double fromSeconds) {
     if (!audioEngine_ || audioClipId_ < 0) return;
+    if (muted_) return;
     stopAudioPlayback();
-    audioPlaybackId_ = audioEngine_->playClip(audioClipId_, 1.0f, false);
+    audioPlaybackId_ = audioEngine_->playClip(audioClipId_, static_cast<float>(volume_), false);
     if (audioPlaybackId_ < 0) return;
     if (fromSeconds > 0.0) {
         // Clip is stored at the engine's sample rate (resampled at load).
@@ -167,6 +168,40 @@ bool ElVideo::isReady() const {
     return pipeline_ && pipeline_->hasFrame();
 }
 
+bool ElVideo::isEnded() const {
+    return pipeline_ && pipeline_->isEnded();
+}
+
+void ElVideo::setVolume(double v) {
+    if (v < 0.0) v = 0.0;
+    if (v > 1.0) v = 1.0;
+    if (volume_ == v) return;
+    volume_ = v;
+    applyAudioVolume();
+}
+
+void ElVideo::setMuted(bool m) {
+    if (muted_ == m) return;
+    muted_ = m;
+    if (muted_) {
+        stopAudioPlayback();
+    } else if (pipeline_ && pipeline_->isPlaying() && audioClipId_ >= 0) {
+        startAudioPlayback(currentTime());
+    }
+}
+
+void ElVideo::setPlaybackRate(double r) {
+    if (r <= 0.0) r = 1.0;
+    playbackRate_ = r;
+    // Pipeline clock runs at 1x; plumbing a rate through MediaClock + audio
+    // resampling is deferred. IDL getter/setter behavior is still spec-correct.
+}
+
+void ElVideo::applyAudioVolume() {
+    if (!audioEngine_ || audioPlaybackId_ < 0) return;
+    audioEngine_->setPlaybackGain(audioPlaybackId_, static_cast<float>(volume_));
+}
+
 void ElVideo::getContentSize(float& w, float& h) {
     w = static_cast<float>(intrinsicWidth_);
     h = static_cast<float>(intrinsicHeight_);
@@ -221,6 +256,18 @@ void ElVideo::pumpEvents() {
         dom::Event evt("loadedmetadata", false, false);
         evt.setIsTrusted(true);
         js::dispatchDomEvent(jsCtx_, elem_, evt);
+        // durationchange fires alongside loadedmetadata when duration first
+        // becomes known. Also fires if duration changes later (e.g. on reload).
+        const double dur = duration();
+        if (dur != lastDurationSec_) {
+            lastDurationSec_ = dur;
+            dom::Event devt("durationchange", false, false);
+            devt.setIsTrusted(true);
+            js::dispatchDomEvent(jsCtx_, elem_, devt);
+        }
+        dom::Event canplay("canplay", false, false);
+        canplay.setIsTrusted(true);
+        js::dispatchDomEvent(jsCtx_, elem_, canplay);
     }
 
     const double t = currentTime();
@@ -247,9 +294,20 @@ void ElVideo::pumpEvents() {
         endedFired_ = true;
         pipeline_->pause();
         stopAudioPlayback();
-        dom::Event evt("ended", false, false);
-        evt.setIsTrusted(true);
-        js::dispatchDomEvent(jsCtx_, elem_, evt);
+        // When loop is set, rewind and resume instead of firing ended — matches
+        // HTMLMediaElement.loop behavior (no ended event while looping).
+        if (loop_) {
+            seekTo(0.0);
+            pipeline_->play();
+            if (audioClipId_ >= 0 && !muted_) {
+                startAudioPlayback(0.0);
+            }
+            endedFired_ = false;
+        } else {
+            dom::Event evt("ended", false, false);
+            evt.setIsTrusted(true);
+            js::dispatchDomEvent(jsCtx_, elem_, evt);
+        }
     }
 }
 

@@ -50,6 +50,21 @@ public:
     double currentTime() const;
     double duration() const;
     bool isReady() const;   // have a decoded frame and tracks
+    bool isEnded() const;   // pipeline has drained and decoded last frame
+    bool hasPipeline() const { return pipeline_ != nullptr; }
+
+    // Media element state (not backed by pipeline — tracked here so IDL
+    // getters/setters are coherent and media events can fire when they change).
+    double volume() const { return volume_; }
+    void setVolume(double v);
+    bool muted() const { return muted_; }
+    void setMuted(bool m);
+    double playbackRate() const { return playbackRate_; }
+    void setPlaybackRate(double r);
+    double defaultPlaybackRate() const { return defaultPlaybackRate_; }
+    void setDefaultPlaybackRate(double r) { defaultPlaybackRate_ = r; }
+    bool loopEnabled() const { return loop_; }
+    void setLoopEnabled(bool l) { loop_ = l; }
 
     void getContentSize(float& w, float& h);
 
@@ -90,6 +105,17 @@ private:
     void openAudioTrack(const std::string& resolvedPath);
     void startAudioPlayback(double fromSeconds);
     void stopAudioPlayback();
+    void applyAudioVolume();
+
+    // HTMLMediaElement IDL state. volume/muted gate audio playback; others
+    // are currently informational (playbackRate plumbing into the pipeline
+    // clock is deferred until it's exercised by an app).
+    double volume_ = 1.0;
+    bool muted_ = false;
+    double playbackRate_ = 1.0;
+    double defaultPlaybackRate_ = 1.0;
+    bool loop_ = false;
+    double lastDurationSec_ = -1.0;
 };
 
 } // namespace bro::layout
