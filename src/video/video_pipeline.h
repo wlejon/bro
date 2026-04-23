@@ -57,6 +57,11 @@ public:
     TimeNs durationNs() const { return duration_; }
     TimeNs currentPts() const { return currentPts_; }
 
+    // True once the demuxer has returned no more packets and the decoder has
+    // produced all frames. Callers use this to fire the HTMLMediaElement
+    // "ended" event. Cleared by seekTo().
+    bool isEnded() const { return endOfStream_; }
+
     // Audio decode pulls packets as wall-clock advances; callers can drain
     // PCM on the audio thread. Null if the file has no audio track.
     AudioDecoder* audioDecoder() const { return adec_.get(); }

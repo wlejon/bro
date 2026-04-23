@@ -30,7 +30,8 @@ namespace bro::engine {
 // Replaced element initialization
 // ---------------------------------------------------------------------------
 
-void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer) {
+void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
+                            JSContext* jsCtx) {
     if (!elem) return;
 
     const auto& tag = elem->tagName();
@@ -56,6 +57,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer) {
     } else if ((tag == "VIDEO" || tag == "video") && !elem->videoControl()) {
         auto ctrl = std::make_unique<layout::ElVideo>(renderer);
         ctrl->setElement(elem);
+        ctrl->setJsContext(jsCtx);
         // If the element already has a src attribute, load it now.
         // Otherwise the JS binding will trigger load when src is set.
         std::string src = elem->getAttribute("src");
@@ -66,7 +68,8 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer) {
     // Recurse into children
     for (auto* child : elem->childNodes()) {
         if (child->nodeType() == dom::NodeType::Element) {
-            ensureReplacedElements(static_cast<dom::Element*>(child), renderer);
+            ensureReplacedElements(static_cast<dom::Element*>(child), renderer,
+                                   jsCtx);
         }
     }
 
@@ -75,7 +78,8 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer) {
         auto* sr = elem->shadowRoot();
         for (auto* child : sr->childNodes()) {
             if (child->nodeType() == dom::NodeType::Element) {
-                ensureReplacedElements(static_cast<dom::Element*>(child), renderer);
+                ensureReplacedElements(static_cast<dom::Element*>(child),
+                                       renderer, jsCtx);
             }
         }
     }

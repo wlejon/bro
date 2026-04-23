@@ -341,7 +341,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
 
         // Initialize replaced elements after scripts
         bro::engine::ensureReplacedElements(liveDoc.document->documentElement(),
-                                            renderer_.get());
+                                            renderer_.get(),
+                                            liveDoc.jsCtx);
 
         // Re-layout after scripts may have modified the DOM
         liveDoc.document->resolveStyles();

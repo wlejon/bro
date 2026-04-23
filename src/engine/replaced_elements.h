@@ -23,7 +23,8 @@ namespace bro::engine {
 /// Walk a DOM subtree and attach ElSelect / ElInput / ElTextarea / ElSvg
 /// controllers to any replaced elements that don't already have one.
 /// Used by the Engine for both the app document and system panels.
-void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer);
+void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
+                            JSContext* jsCtx = nullptr);
 
 // ---------------------------------------------------------------------------
 // Shared replaced-element interaction context

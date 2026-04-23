@@ -6,6 +6,8 @@
 #include <memory>
 #include <string>
 
+extern "C" { typedef struct JSContext JSContext; }
+
 namespace bro::dom { class Element; }
 namespace bro::video { class VideoPipeline; }
 
@@ -27,6 +29,11 @@ public:
 
     void setElement(dom::Element* el) { elem_ = el; }
     dom::Element* element() const { return elem_; }
+
+    // Set once by the engine so media events (loadedmetadata, timeupdate,
+    // ended) can be dispatched to JS listeners. Null in contexts without a
+    // JS runtime — events are silently dropped in that case.
+    void setJsContext(JSContext* ctx) { jsCtx_ = ctx; }
 
     // Open a WebM file; returns true on success. Does not auto-play.
     bool load(const std::string& path);
@@ -53,6 +60,15 @@ private:
 
     int intrinsicWidth_ = 300;
     int intrinsicHeight_ = 150;
+
+    // Event-lifecycle bookkeeping. ElVideo fires media events during draw()
+    // (on the main thread, with a known JSContext). Fields here latch what
+    // still needs to be dispatched on the next pump.
+    JSContext* jsCtx_ = nullptr;
+    bool pendingLoadedMetadata_ = false;
+    bool endedFired_ = false;
+    double lastTimeUpdateSec_ = -1.0;
+    void pumpEvents();
 };
 
 } // namespace bro::layout

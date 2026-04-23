@@ -2499,7 +2499,8 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
 // ---------------------------------------------------------------------------
 
 void Engine::ensureReplacedElements(dom::Element* elem) {
-    bro::engine::ensureReplacedElements(elem, renderer_.get());
+    JSContext* jsCtx = jsRuntime_ ? jsRuntime_->getContext() : nullptr;
+    bro::engine::ensureReplacedElements(elem, renderer_.get(), jsCtx);
 }
 
 // Headless/capture API (flush, advanceTime, eval, screenshot, capturePixels,
