@@ -58,4 +58,10 @@ public:
 /// that may already be freed. Call with true before teardown GC passes.
 void setElementFinalizerShutdown(bool shutting_down);
 
+/// Run interactive form submission: validates controls, fires 'invalid' on
+/// failures or 'submit' (SubmitEvent) on the form. Used by the click
+/// handler when a submit button is activated. `submitter` may be null.
+void requestFormSubmit(JSContext* ctx, bro::dom::Element* form,
+                       bro::dom::Element* submitter);
+
 } // namespace bro::js

@@ -244,6 +244,14 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
                           JS_NewBool(ctx, inputEvt->isComposing()));
     }
 
+    // SubmitEvent — carries the submit button (if any) that triggered it.
+    auto* submitEvt = dynamic_cast<bro::dom::SubmitEvent*>(&event);
+    if (submitEvt) {
+        auto* sub = submitEvt->submitter();
+        JS_SetPropertyStr(ctx, jsEvent, "submitter",
+                          sub ? DomBindings::wrapElement(ctx, sub) : JS_NULL);
+    }
+
     // TransitionEvent properties
     auto* transEvt = dynamic_cast<bro::dom::TransitionEvent*>(&event);
     if (transEvt) {

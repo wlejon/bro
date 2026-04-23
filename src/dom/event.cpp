@@ -95,4 +95,9 @@ DragEvent::DragEvent(const std::string& type, bool bubbles, bool cancelable)
 {
 }
 
+SubmitEvent::SubmitEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
 } // namespace bro::dom

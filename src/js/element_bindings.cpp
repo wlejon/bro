@@ -1589,10 +1589,17 @@ static JSValue js_element_get_willValidate(JSContext* ctx, JSValueConst this_val
     return JS_NewBool(ctx, willValidate(getElement(this_val)));
 }
 
+// Forward declaration so the element-level checkValidity can delegate when
+// called on a <form>.
+static JSValue js_form_checkValidity_impl(JSContext* ctx, bro::dom::Element* el);
+
 static JSValue js_element_checkValidity(JSContext* ctx, JSValueConst this_val,
                                         int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
     if (!el) return JS_TRUE;
+    if (el->tagName() == "FORM" || el->tagName() == "form") {
+        return js_form_checkValidity_impl(ctx, el);
+    }
     ValidityReport r = computeValidity(el);
     if (r.valid()) return JS_TRUE;
     // Fire cancelable 'invalid' event per spec.
@@ -1616,6 +1623,205 @@ static JSValue js_element_setCustomValidity(JSContext* ctx, JSValueConst this_va
     if (!el || argc < 1) return JS_UNDEFINED;
     el->setCustomValidity(jsToStdString(ctx, argv[0]));
     return JS_UNDEFINED;
+}
+
+// ---- HTMLFormElement ------------------------------------------------------
+
+namespace {
+// Collect form-associated controls for the given form. Controls associated
+// via ancestor: the form is their nearest <form> ancestor. Controls
+// associated via form="id" attribute: the attribute matches this form's id.
+// Returns owners in document order (best-effort via DFS).
+void collectFormElements(bro::dom::Element* form,
+                         std::vector<bro::dom::Element*>& out) {
+    if (!form || !form->document()) return;
+    const std::string formId = form->getAttribute("id");
+
+    auto isControl = [](const std::string& tag) {
+        return tag == "INPUT" || tag == "input" ||
+               tag == "SELECT" || tag == "select" ||
+               tag == "TEXTAREA" || tag == "textarea" ||
+               tag == "BUTTON" || tag == "button" ||
+               tag == "FIELDSET" || tag == "fieldset" ||
+               tag == "OBJECT" || tag == "object" ||
+               tag == "OUTPUT" || tag == "output";
+    };
+
+    std::function<void(bro::dom::Element*)> walk = [&](bro::dom::Element* e) {
+        if (!e) return;
+        if (isControl(e->tagName())) {
+            // Which form owns this control?
+            const std::string& ownerAttr = e->getAttribute("form");
+            bool owned = false;
+            if (!ownerAttr.empty()) {
+                if (ownerAttr == formId) owned = true;
+            } else {
+                for (auto* p = e->parentElement(); p; p = p->parentElement()) {
+                    if (p == form) { owned = true; break; }
+                    if (p->tagName() == "FORM" || p->tagName() == "form") break;
+                }
+            }
+            if (owned) out.push_back(e);
+        }
+        for (auto* c : e->children()) walk(c);
+    };
+    if (auto* root = form->document()->documentElement()) walk(root);
+}
+} // namespace
+
+static JSValue js_form_get_elements(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    std::vector<bro::dom::Element*> items;
+    collectFormElements(el, items);
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < items.size(); ++i) {
+        JS_SetPropertyUint32(ctx, arr, static_cast<uint32_t>(i),
+                             DomBindings::wrapElement(ctx, items[i]));
+    }
+    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, static_cast<int>(items.size())));
+    // Named access: form.elements["myname"] returns the matching control.
+    // A full HTMLFormControlsCollection is a Proxy — snapshot with properties
+    // works for the common case.
+    for (auto* c : items) {
+        const std::string& n = c->getAttribute("name");
+        if (!n.empty()) {
+            // Only set if not already present (first control wins for name lookup).
+            JSValue existing = JS_GetPropertyStr(ctx, arr, n.c_str());
+            if (JS_IsUndefined(existing)) {
+                JS_SetPropertyStr(ctx, arr, n.c_str(),
+                                  DomBindings::wrapElement(ctx, c));
+            }
+            JS_FreeValue(ctx, existing);
+        }
+    }
+    return arr;
+}
+
+static JSValue js_form_get_length(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    std::vector<bro::dom::Element*> items;
+    collectFormElements(el, items);
+    return JS_NewInt32(ctx, static_cast<int>(items.size()));
+}
+
+static JSValue js_form_submit(JSContext* ctx, JSValueConst this_val,
+                              int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    // .submit() skips constraint validation and skips the submit event per
+    // spec. bro has no native navigation; apps handle submission in script.
+    // We intentionally do nothing else — tests that want a notification
+    // should use requestSubmit() instead.
+    (void)el;
+    return JS_UNDEFINED;
+}
+
+void requestFormSubmit(JSContext* ctx, bro::dom::Element* form,
+                       bro::dom::Element* submitter) {
+    if (!form) return;
+    std::vector<bro::dom::Element*> items;
+    collectFormElements(form, items);
+    bool anyInvalid = false;
+    for (auto* c : items) {
+        ValidityReport r = computeValidity(c);
+        if (!r.valid()) {
+            anyInvalid = true;
+            bro::dom::Event invalidEvt("invalid", false, true);
+            invalidEvt.setIsTrusted(true);
+            dispatchDomEvent(ctx, c, invalidEvt);
+        }
+    }
+    if (anyInvalid) return;
+
+    bro::dom::SubmitEvent evt("submit", true, true);
+    evt.setIsTrusted(true);
+    evt.setSubmitter(submitter);
+    dispatchDomEvent(ctx, form, evt);
+    // If not cancelled, bro has no default navigation — the app owns it.
+}
+
+static JSValue js_form_requestSubmit(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    bro::dom::Element* submitter = nullptr;
+    if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+        submitter = getElement(argv[0]);
+    }
+    requestFormSubmit(ctx, el, submitter);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_form_reset(JSContext* ctx, JSValueConst this_val,
+                             int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+
+    bro::dom::Event resetEvt("reset", true, true);
+    resetEvt.setIsTrusted(true);
+    dispatchDomEvent(ctx, el, resetEvt);
+    if (resetEvt.defaultPrevented()) return JS_UNDEFINED;
+
+    std::vector<bro::dom::Element*> items;
+    collectFormElements(el, items);
+    for (auto* c : items) {
+        const std::string& tag = c->tagName();
+        if (tag == "INPUT" || tag == "input") {
+            const std::string& t = c->getAttribute("type");
+            if (t == "checkbox" || t == "radio") {
+                // Restore the `checked` attribute to its defaultChecked.
+                if (c->hasAttribute("data-default-checked")) {
+                    c->setAttribute("checked", "");
+                } else if (c->hasAttribute("_default_checked")) {
+                    c->setAttribute("checked", "");
+                } else {
+                    // defaultChecked tracks the parsed 'checked' attribute;
+                    // bro doesn't separately store it, so we preserve the
+                    // current attribute state (no change on reset for now).
+                }
+            } else {
+                // Restore value to defaultValue (parsed 'value' attribute).
+                // bro stores current value in the 'value' attribute and has
+                // no separate defaultValue slot, so for now reset is a no-op
+                // on non-checkable inputs. Document the limitation and ship.
+                (void)c;
+            }
+        } else if (tag == "TEXTAREA" || tag == "textarea") {
+            // Similar limitation: no stored defaultValue.
+        } else if (tag == "SELECT" || tag == "select") {
+            // Restore to the option with the `selected` attribute (or index 0
+            // if none). ElSelect itself doesn't track a separate default, so
+            // we read the DOM directly.
+            int def = 0, idx = 0, found = -1;
+            for (auto* child : c->children()) {
+                if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
+                if (child->hasAttribute("selected") && found < 0) found = idx;
+                ++idx;
+            }
+            def = (found >= 0) ? found : 0;
+            if (auto* sel = c->selectControl()) sel->setSelectedIndex(def);
+        }
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_form_checkValidity_impl(JSContext* ctx, bro::dom::Element* el) {
+    if (!el) return JS_TRUE;
+    std::vector<bro::dom::Element*> items;
+    collectFormElements(el, items);
+    bool allValid = true;
+    for (auto* c : items) {
+        ValidityReport r = computeValidity(c);
+        if (!r.valid()) {
+            allValid = false;
+            bro::dom::Event evt("invalid", false, true);
+            evt.setIsTrusted(true);
+            dispatchDomEvent(ctx, c, evt);
+        }
+    }
+    return JS_NewBool(ctx, allValid);
 }
 
 // files: FileList for <input type=file>. bro has no native file picker in
@@ -2500,6 +2706,45 @@ static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
     if (doc) doc->setActiveElement(el);
     dom::MouseEvent event("click");
     dispatchDomEvent(ctx, el, event);
+
+    // Button default action: submitting or resetting the owning form.
+    // Mirrors the hit-tested click path in replaced_elements.cpp so scripted
+    // clicks via element.click() exercise the same behavior.
+    if (!event.defaultPrevented()) {
+        const auto& tag = el->tagName();
+        const bool isButton = (tag == "BUTTON" || tag == "button");
+        const bool isInput = (tag == "INPUT" || tag == "input");
+        const std::string inputType = isInput ? el->getAttribute("type") : "";
+        const bool isActionInput =
+            isInput && (inputType == "submit" || inputType == "reset" || inputType == "image");
+        if (isButton || isActionInput) {
+            std::string btnType = el->getAttribute("type");
+            if (btnType.empty() && isButton) btnType = "submit";
+            if (btnType == "image") btnType = "submit"; // image = implicit submit
+            if (btnType == "submit") {
+                bro::dom::Element* owner = nullptr;
+                const std::string& attrForm = el->getAttribute("form");
+                if (!attrForm.empty() && el->document()) {
+                    auto* o = el->document()->getElementById(attrForm);
+                    if (o && (o->tagName() == "FORM" || o->tagName() == "form")) owner = o;
+                } else {
+                    for (auto* p = el->parentElement(); p; p = p->parentElement()) {
+                        if (p->tagName() == "FORM" || p->tagName() == "form") { owner = p; break; }
+                    }
+                }
+                if (owner) requestFormSubmit(ctx, owner, el);
+            } else if (btnType == "reset") {
+                for (auto* p = el->parentElement(); p; p = p->parentElement()) {
+                    if (p->tagName() == "FORM" || p->tagName() == "form") {
+                        bro::dom::Event resetEvt("reset", true, true);
+                        resetEvt.setIsTrusted(true);
+                        dispatchDomEvent(ctx, p, resetEvt);
+                        break;
+                    }
+                }
+            }
+        }
+    }
     return JS_UNDEFINED;
 }
 
@@ -3269,6 +3514,12 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("checkValidity",     0, js_element_checkValidity),
     JS_CFUNC_DEF("reportValidity",    0, js_element_reportValidity),
     JS_CFUNC_DEF("setCustomValidity", 1, js_element_setCustomValidity),
+    // HTMLFormElement
+    JS_CGETSET_DEF("elements",        js_form_get_elements, nullptr),
+    JS_CGETSET_DEF("length",          js_form_get_length, nullptr),
+    JS_CFUNC_DEF("submit",            0, js_form_submit),
+    JS_CFUNC_DEF("requestSubmit",     0, js_form_requestSubmit),
+    JS_CFUNC_DEF("reset",             0, js_form_reset),
     // Methods
     JS_CFUNC_DEF("getAttribute",        1, js_element_getAttribute),
     JS_CFUNC_DEF("hasAttribute",        1, js_element_hasAttribute),

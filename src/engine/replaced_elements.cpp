@@ -14,6 +14,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
+#include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "platform/sdl_window.h"
 
@@ -500,6 +501,48 @@ void dispatchDocMouseRelease(
         populate(clickEvt);
         clickEvt.setDetail(state.clickCount);
         js::dispatchDomEvent(ctx.jsCtx, target, clickEvt);
+
+        // Interactive form submission: a click on <button> or
+        // <input type=submit> walks up to the owning form and fires the
+        // submit event (with constraint validation). Skipped if the click
+        // was cancelled, or the button's type is explicitly button/reset.
+        if (!clickEvt.defaultPrevented() && target && ctx.jsCtx) {
+            const auto& tag = target->tagName();
+            const bool isButton = (tag == "BUTTON" || tag == "button");
+            const bool isInput = (tag == "INPUT" || tag == "input");
+            const std::string inputType = isInput ? target->getAttribute("type") : "";
+            const bool isActionInput =
+                isInput && (inputType == "submit" || inputType == "reset" || inputType == "image");
+            if (isButton || isActionInput) {
+                std::string btnType = target->getAttribute("type");
+                // <button> defaults to type=submit when no type attribute.
+                if (btnType.empty() && isButton) btnType = "submit";
+                if (btnType == "image") btnType = "submit";
+                if (btnType == "submit") {
+                    dom::Element* owner = nullptr;
+                    const std::string& attrForm = target->getAttribute("form");
+                    if (!attrForm.empty() && target->document()) {
+                        auto* o = target->document()->getElementById(attrForm);
+                        if (o && (o->tagName() == "FORM" || o->tagName() == "form")) owner = o;
+                    } else {
+                        for (auto* p = target->parentElement(); p; p = p->parentElement()) {
+                            if (p->tagName() == "FORM" || p->tagName() == "form") { owner = p; break; }
+                        }
+                    }
+                    if (owner) js::requestFormSubmit(ctx.jsCtx, owner, target);
+                } else if (btnType == "reset") {
+                    dom::Element* owner = nullptr;
+                    for (auto* p = target->parentElement(); p; p = p->parentElement()) {
+                        if (p->tagName() == "FORM" || p->tagName() == "form") { owner = p; break; }
+                    }
+                    if (owner) {
+                        dom::Event resetEvt("reset", true, true);
+                        resetEvt.setIsTrusted(true);
+                        js::dispatchDomEvent(ctx.jsCtx, owner, resetEvt);
+                    }
+                }
+            }
+        }
 
         if (state.clickCount == 2) {
             dom::MouseEvent dblEvt("dblclick", true, true);

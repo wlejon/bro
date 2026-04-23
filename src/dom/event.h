@@ -269,6 +269,22 @@ private:
     std::vector<ClipboardItem> items_;
 };
 
+// HTML SubmitEvent: fired on <form> when the form is submitted interactively
+// (not via the .submit() JS method). Carries the submit button that
+// triggered the submission, or null if submission wasn't button-triggered.
+// Element* is owned by the DOM; the event only holds a non-owning pointer.
+class SubmitEvent : public Event {
+public:
+    SubmitEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
+    ~SubmitEvent() override = default;
+
+    Element* submitter() const { return submitter_; }
+    void setSubmitter(Element* e) { submitter_ = e; }
+
+private:
+    Element* submitter_ = nullptr;
+};
+
 class DragEvent : public MouseEvent {
 public:
     DragEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
