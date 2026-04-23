@@ -3,20 +3,100 @@
 <head>
 <style>
 body { background: #222; color: #eee; font-family: sans-serif; margin: 0; padding: 20px; }
-video { background: #000; display: inline-block; margin-top: 10px; }
-button { margin-right: 8px; padding: 6px 12px; }
-#status { margin-top: 10px; font-family: monospace; }
+h1 { margin: 0 0 12px 0; font-size: 20px; }
+h2 { margin: 16px 0 6px 0; font-size: 14px; color: #9cf; text-transform: uppercase; letter-spacing: 0.08em; }
+video { background: #000; display: block; width: 480px; height: 270px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+button { padding: 6px 12px; background: #333; color: #eee; border: 1px solid #555; border-radius: 3px; cursor: pointer; }
+button:hover { background: #444; }
+button.active { background: #285; border-color: #3a6; }
+label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+input[type=range] { width: 160px; }
+input[type=text] { background: #111; color: #eee; border: 1px solid #555; padding: 4px 6px; border-radius: 3px; width: 260px; }
+.panel { display: flex; gap: 24px; margin-top: 12px; align-items: flex-start; }
+.col { flex: 1 1 0; min-width: 0; }
+.prog { width: 480px; height: 6px; background: #333; border-radius: 3px; margin: 4px 0 12px 0; overflow: hidden; }
+#status, #events { font-family: monospace; font-size: 12px; background: #111; padding: 8px; border-radius: 3px; white-space: pre-wrap; }
+#status { min-height: 90px; }
+#events { height: 160px; overflow-y: scroll; }
+.prog > div { height: 100%; background: #58f; width: 0%; }
 </style>
 </head>
 <body>
-  <h1>video demo</h1>
-  <video id="v" src="hello.webm" width="320" height="240"></video>
-  <div>
-    <button id="play">play</button>
-    <button id="pause">pause</button>
-    <button id="seek">seek 1s</button>
+  <h1>video demo — HTMLMediaElement IDL test bed</h1>
+
+  <video id="v" src="hello.webm"></video>
+  <div class="prog"><div id="progbar"></div></div>
+
+  <div class="panel">
+    <div class="col">
+      <h2>playback</h2>
+      <div class="row">
+        <button id="play">play</button>
+        <button id="pause">pause</button>
+        <button id="load">load()</button>
+        <button id="seek0">seek 0s</button>
+        <button id="seek1">seek 1s</button>
+        <button id="seek-end">seek end-0.2s</button>
+      </div>
+
+      <h2>source</h2>
+      <div class="row">
+        <input type="text" id="src-input" value="hello.webm">
+        <button id="apply-src">set src</button>
+      </div>
+
+      <h2>volume + rate</h2>
+      <div class="row">
+        <label>volume <input type="range" id="volume" min="0" max="1" step="0.05" value="1"></label>
+        <span id="volume-val">1.00</span>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="muted"> muted</label>
+      </div>
+      <div class="row">
+        <label>playbackRate <input type="range" id="rate" min="0.25" max="3" step="0.25" value="1"></label>
+        <span id="rate-val">1.00</span>
+      </div>
+
+      <h2>attribute flags</h2>
+      <div class="row">
+        <label><input type="checkbox" id="autoplay"> autoplay</label>
+        <label><input type="checkbox" id="loop"> loop</label>
+        <label><input type="checkbox" id="controls"> controls</label>
+        <label><input type="checkbox" id="defaultMuted"> defaultMuted</label>
+      </div>
+      <div class="row">
+        <label>preload
+          <select id="preload">
+            <option>none</option>
+            <option selected>metadata</option>
+            <option>auto</option>
+          </select>
+        </label>
+      </div>
+
+      <h2>canPlayType</h2>
+      <div class="row">
+        <button id="cpt-webm">"video/webm"</button>
+        <button id="cpt-vp9">"video/webm; codecs=vp9"</button>
+        <button id="cpt-mp4">"video/mp4"</button>
+        <span id="cpt-result"></span>
+      </div>
+    </div>
+
+    <div class="col">
+      <h2>state</h2>
+      <div id="status">idle</div>
+
+      <h2>events (latest 30)</h2>
+      <div id="events"></div>
+      <div class="row">
+        <button id="clear-events">clear</button>
+      </div>
+    </div>
   </div>
-  <div id="status">idle</div>
+
   <script src="app.js"></script>
 </body>
 </html>
