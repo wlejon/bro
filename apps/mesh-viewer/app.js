@@ -21,6 +21,53 @@ const canvas    = document.getElementById('canvas');
 const scene     = canvas.getContext('scene');
 const statusEl  = document.getElementById('status');
 
+// ---------------------------------------------------------------------------
+// Lighting rig
+// ---------------------------------------------------------------------------
+//
+// Three-point studio setup: a warm key light from the upper-right casts
+// shadows, a cool fill from the opposite side softens the shaded side, and
+// a top rim separates subject from background. ACES tonemap pins the
+// highlights so specular on metallic materials doesn't clip.
+//
+// Shadows are on by default; the "Shadows" toggle flips the key light's
+// castsShadow flag at runtime. A ground plane exists only to catch the
+// drop shadow — it's placed below the camera target and receives but
+// doesn't cast. All three lights plus the plane are built once and reused.
+
+scene.setToneMap({ mode: 'aces', exposure: 1.0, gamma: 2.2 });
+scene.setAmbient({ color: [0.08, 0.08, 0.10] });
+
+const keyLight = scene.createLight({
+    type: 'directional',
+    direction: [-0.4, -1.0, -0.3],
+    color:     [1.00, 0.96, 0.88],
+    intensity: 3.5,
+    castsShadow: true,
+});
+scene.createLight({
+    type: 'directional',
+    direction: [0.6, -0.4, 0.5],
+    color:     [0.70, 0.82, 1.00],
+    intensity: 1.2,
+});
+scene.createLight({
+    type: 'directional',
+    direction: [0.0, 0.8, -0.6],
+    color:     [1.00, 1.00, 1.00],
+    intensity: 0.8,
+});
+
+// Shadow-catcher plane. Placed at y = -1.2 (below typical bbox-normalized
+// content) and sized to cover the far shadow cast of a reframed model.
+const ground = scene.createMesh({
+    mesh: 'plane', halfW: 8, halfD: 8,
+    color: [0.25, 0.25, 0.27, 1.0],
+    roughness: 0.95, metallic: 0.0,
+    castsShadow: false,
+});
+ground.y = -1.2;
+
 const opsPanel  = document.getElementById('ops-panel');
 const dropOverlay = document.getElementById('drop-overlay');
 
@@ -49,6 +96,7 @@ const viewHullBtn  = document.getElementById('view-hull');
 const viewSelfxBtn = document.getElementById('view-selfx');
 const viewUVBtn    = document.getElementById('view-uv');
 const viewBonesBtn = document.getElementById('view-bones');
+const viewShadowsBtn = document.getElementById('view-shadows');
 
 // modify
 const modSubLoopBtn   = document.getElementById('mod-sub-loop');
@@ -96,7 +144,7 @@ let state = {
     bindPoseOnly: false,
     panelHidden: false,
 
-    view:    { color: 'original', hull: false, selfx: false, uv: false, bones: false },
+    view:    { color: 'original', hull: false, selfx: false, uv: false, bones: false, shadows: true },
     modify:  { dirty: false },
     lod:     { ratio: 1.0, built: false, encoded: null, originalTris: 0 },
     rig:     { active: -1, blend: -1, blendW: 0.5 },
@@ -419,20 +467,59 @@ function loadFile(idx) {
     const materials = gltf.materials || [];
     const images    = gltf.images    || [];
     const meshMat   = gltf.meshMaterial || [];
+
+    // glTF delivers textures as image indices (-1 = absent). Resolve to the
+    // { width, height, data } shape createMesh() wants, or null. Shared
+    // between baseColor / normal / metallicRoughness / occlusion.
+    const resolveImg = (idx) => {
+        if (idx == null || idx < 0 || idx >= images.length) return null;
+        const im = images[idx];
+        return (im && im.data && im.width > 0 && im.height > 0)
+             ? { width: im.width, height: im.height, data: im.data }
+             : null;
+    };
+
     const items = [];
     for (let i = 0; i < meshes.length; i++) {
         const bind = meshes[i];
         if (!bind.hasNormals) bind.computeNormals();
         const work = bind.clone();
 
-        const opts = { data: work, name: 'mesh-' + i };
+        const opts = { data: work, name: 'mesh-' + i, castsShadow: true, receivesShadow: true };
         const matIdx = meshMat[i] ?? -1;
         const mat = (matIdx >= 0 && matIdx < materials.length) ? materials[matIdx] : null;
-        const imgIdx = mat ? mat.baseColorTexture : -1;
-        const img = (imgIdx >= 0 && imgIdx < images.length) ? images[imgIdx] : null;
-        if (img && img.data && img.width > 0 && img.height > 0) {
-            opts.texture = { width: img.width, height: img.height, data: img.data };
-            opts.color   = mat.baseColorFactor || [1,1,1,1];
+
+        if (mat) {
+            const baseTex = resolveImg(mat.baseColorTexture);
+            if (baseTex) {
+                opts.texture = baseTex;
+                opts.color   = mat.baseColorFactor || [1, 1, 1, 1];
+            } else {
+                opts.color = mat.baseColorFactor || PALETTE[i % PALETTE.length];
+            }
+            // glTF spec: scalar factors multiply with sampled texture channels.
+            // When a MR texture is present, factors default to 1.0 (pass-through);
+            // when absent, the factors drive the PBR params directly. Our shader
+            // does the same multiply, so just forward whatever the file carries.
+            opts.metallic  = (mat.metallicFactor  != null) ? mat.metallicFactor  : 0.0;
+            opts.roughness = (mat.roughnessFactor != null) ? mat.roughnessFactor : 1.0;
+
+            const nTex  = resolveImg(mat.normalTexture);
+            const mrTex = resolveImg(mat.metallicRoughnessTexture);
+            const aoTex = resolveImg(mat.occlusionTexture);
+            if (nTex)  opts.normalTexture            = nTex;
+            if (mrTex) opts.metallicRoughnessTexture = mrTex;
+            if (aoTex) opts.occlusionTexture         = aoTex;
+
+            // Emissive factor + (optional) texture. The scene shader only
+            // supports a scalar emissive intensity, not a texture, so for now
+            // we collapse any emissive texture into its factor tint.
+            const ef = mat.emissiveFactor || [0, 0, 0];
+            const emStrength = Math.max(ef[0], ef[1], ef[2]);
+            if (emStrength > 0.0) {
+                opts.emissive = emStrength;
+                opts.emissiveColor = [ef[0] / emStrength, ef[1] / emStrength, ef[2] / emStrength];
+            }
         } else {
             opts.color = PALETTE[i % PALETTE.length];
         }
@@ -475,7 +562,8 @@ function loadFile(idx) {
 }
 
 function resetUIState() {
-    state.view = { color: 'original', hull: false, selfx: false, uv: false, bones: false };
+    state.view = { color: 'original', hull: false, selfx: false, uv: false, bones: false,
+                   shadows: state.view.shadows };
     state.lod = { ratio: 1.0, built: false, encoded: null, originalTris: 0 };
     state.rig.active = -1;
     state.rig.blend = -1;
@@ -651,7 +739,8 @@ async function setHullVisible(on) {
             it.hullNode = scene.createMesh({
                 data: hull,
                 color: [1.0, 0.85, 0.2, 1.0],
-                emissive: 0.6,
+                unlit: true,
+                castsShadow: false,
                 name: 'hull-' + it.node.name,
             });
             it.hullNode.scaleX = it.hullNode.scaleY = it.hullNode.scaleZ = 1.01;
@@ -694,7 +783,8 @@ async function setSelfxVisible(on) {
             positions: new Float32Array(srcPos),
             indices: newIdx,
             color: [1.0, 0.15, 0.15, 1.0],
-            emissive: 1.0,
+            unlit: true,
+            castsShadow: false,
             depthBias: [-1, -1000],
             name: 'selfx-' + it.node.name,
         });
@@ -892,7 +982,8 @@ function setupBoneNodes() {
         state.boneNodes.push(scene.createMesh({
             data: Mesh.sphere(size, 8, 6),
             color: '#ffe66d',
-            emissive: 1.0,
+            unlit: true,
+            castsShadow: false,
             depthBias: [-1, -1000],
             name: 'bone-' + i,
         }));
@@ -1044,6 +1135,7 @@ function syncControls() {
     viewSelfxBtn.classList.toggle('toggled', state.view.selfx);
     viewUVBtn   .classList.toggle('toggled', state.view.uv);
     viewBonesBtn.classList.toggle('toggled', state.view.bones);
+    viewShadowsBtn.classList.toggle('toggled', state.view.shadows);
 
     modResetBtn.disabled = state.busy || (!state.modify.dirty && !state.lod.built);
     lodBuildBtn.disabled = state.busy || state.lod.built || !state.loaded || (state.loaded && state.loaded.items.length !== 1);
@@ -1131,6 +1223,11 @@ viewUVBtn   .addEventListener('click', () => setUVVisible(!state.view.uv));
 viewBonesBtn.addEventListener('click', () => {
     state.view.bones = !state.view.bones;
     if (state.view.bones) setupBoneNodes(); else clearBoneNodes();
+    syncControls();
+});
+viewShadowsBtn.addEventListener('click', () => {
+    state.view.shadows = !state.view.shadows;
+    keyLight.castsShadow = state.view.shadows;
     syncControls();
 });
 

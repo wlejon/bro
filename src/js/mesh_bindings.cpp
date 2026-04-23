@@ -1383,7 +1383,8 @@ void MeshBindings::install(JSContext* ctx) {
         }
         JS_SetPropertyStr(ctx, obj, "images", imgArr);
 
-        // Materials — { name, baseColorFactor: [r,g,b,a], baseColorTexture: number|-1 }.
+        // Materials — full glTF metallic/roughness subset. Texture fields are
+        // image indices into `images` (-1 = none).
         JSValue matArr = JS_NewArray(ctx);
         for (size_t i = 0; i < scene.materials.size(); i++) {
             auto& m = scene.materials[i];
@@ -1393,7 +1394,17 @@ void MeshBindings::install(JSContext* ctx) {
             for (int k = 0; k < 4; k++)
                 JS_SetPropertyUint32(ctx, bc, k, JS_NewFloat64(ctx, m.baseColorFactor[k]));
             JS_SetPropertyStr(ctx, o, "baseColorFactor", bc);
-            JS_SetPropertyStr(ctx, o, "baseColorTexture", JS_NewInt32(ctx, m.baseColorTexture));
+            JS_SetPropertyStr(ctx, o, "metallicFactor",  JS_NewFloat64(ctx, m.metallicFactor));
+            JS_SetPropertyStr(ctx, o, "roughnessFactor", JS_NewFloat64(ctx, m.roughnessFactor));
+            JSValue ef = JS_NewArray(ctx);
+            for (int k = 0; k < 3; k++)
+                JS_SetPropertyUint32(ctx, ef, k, JS_NewFloat64(ctx, m.emissiveFactor[k]));
+            JS_SetPropertyStr(ctx, o, "emissiveFactor",  ef);
+            JS_SetPropertyStr(ctx, o, "baseColorTexture",         JS_NewInt32(ctx, m.baseColorTexture));
+            JS_SetPropertyStr(ctx, o, "metallicRoughnessTexture", JS_NewInt32(ctx, m.metallicRoughnessTexture));
+            JS_SetPropertyStr(ctx, o, "normalTexture",            JS_NewInt32(ctx, m.normalTexture));
+            JS_SetPropertyStr(ctx, o, "occlusionTexture",         JS_NewInt32(ctx, m.occlusionTexture));
+            JS_SetPropertyStr(ctx, o, "emissiveTexture",          JS_NewInt32(ctx, m.emissiveTexture));
             JS_SetPropertyUint32(ctx, matArr, (uint32_t)i, o);
         }
         JS_SetPropertyStr(ctx, obj, "materials", matArr);
