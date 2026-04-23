@@ -609,4 +609,14 @@
         };
         globalThis.XMLSerializer = XMLSerializer;
     }
+
+    // window.getSelection → document.getSelection. Both return the same
+    // Selection singleton per spec; the native method lives on document, so
+    // the window alias just forwards. Runs after DomBindings::install so
+    // document.getSelection is already bound.
+    if (typeof document !== 'undefined'
+            && typeof document.getSelection === 'function'
+            && typeof globalThis.getSelection !== 'function') {
+        globalThis.getSelection = function() { return document.getSelection(); };
+    }
 })();

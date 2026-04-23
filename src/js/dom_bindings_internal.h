@@ -7,6 +7,8 @@
 #include "dom/comment_node.h"
 #include "dom/shadow_root.h"
 
+namespace bro::dom { class Selection; class Range; }
+
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -35,6 +37,8 @@ extern JSClassID js_computed_class_id;
 extern JSClassID js_tokenlist_class_id;
 extern JSClassID js_shadowroot_class_id;
 extern JSClassID js_htmlcollection_class_id;
+extern JSClassID js_range_class_id;
+extern JSClassID js_selection_class_id;
 
 // ===========================================================================
 // Per-context / per-runtime state (defined in dom_bindings.cpp)
@@ -152,6 +156,11 @@ void installEventBindings(JSContext* ctx);
 void installNodeBindings(JSContext* ctx);
 void installDocumentBindings(JSContext* ctx);
 void installShadowRootBindings(JSContext* ctx);
+void installRangeBindings(JSContext* ctx);
+void installSelectionBindings(JSContext* ctx);
+
+// selection_bindings.cpp
+JSValue wrapSelection(JSContext* ctx, bro::dom::Selection* s);
 
 // ===========================================================================
 // qjsbind-managed classes — element and style

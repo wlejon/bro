@@ -1,7 +1,9 @@
 #include "js/dom_bindings.h"
 #include "js/dom_bindings_internal.h"
 #include "js/custom_elements.h"
+#include "js/event_dispatch.h"
 #include "dom/document.h"
+#include "dom/event.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -26,6 +28,8 @@ JSClassID js_computed_class_id = 0;
 JSClassID js_tokenlist_class_id = 0;
 JSClassID js_shadowroot_class_id = 0;
 JSClassID js_htmlcollection_class_id = 0;
+JSClassID js_range_class_id = 0;
+JSClassID js_selection_class_id = 0;
 
 // ===========================================================================
 // Per-context state
@@ -110,6 +114,24 @@ JSValue DomBindings::wrapDocument(JSContext* ctx, void* document_ptr)
 // install() – register everything
 // ===========================================================================
 
+// Thread-local map from Document -> JSContext so the Document's mutation
+// notifications can find the right JS runtime to fire selectionchange into.
+static std::unordered_map<bro::dom::Document*, JSContext*> s_doc_to_ctx;
+
+// Fire `selectionchange` on the document (non-bubbling, non-cancelable per
+// spec). Dispatched to the documentElement which is the closest analogue to
+// "Document" as an EventTarget in our implementation.
+static void fireSelectionChangeOnDocument(bro::dom::Document* doc) {
+    auto it = s_doc_to_ctx.find(doc);
+    if (it == s_doc_to_ctx.end() || !it->second) return;
+    JSContext* ctx = it->second;
+    auto* target = doc->documentElement();
+    if (!target) return;
+    bro::dom::Event event("selectionchange", /*bubbles=*/false, /*cancelable=*/false);
+    event.setIsTrusted(true);
+    dispatchDomEvent(ctx, target, event);
+}
+
 void DomBindings::install(JSContext* ctx, void* document_ptr)
 {
     JSRuntime* rt = JS_GetRuntime(ctx);
@@ -121,6 +143,15 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     installShadowRootBindings(ctx);
     installElementBindings(ctx);
     installStyleBindings(ctx);
+    installRangeBindings(ctx);
+    installSelectionBindings(ctx);
+
+    // Wire Document's selectionchange callback through JS event dispatch.
+    auto* doc = static_cast<bro::dom::Document*>(document_ptr);
+    if (doc) {
+        s_doc_to_ctx[doc] = ctx;
+        doc->setSelectionChangeCallback(&fireSelectionChangeOnDocument);
+    }
 
     // ----- Stash Document pointer for orphan management (per-context) -----
     s_ctx_documents[ctx] = static_cast<bro::dom::Document*>(document_ptr);
@@ -163,6 +194,11 @@ void DomBindings::setEngine(JSContext* ctx, void* engine) {
 }
 
 void DomBindings::cleanup(JSContext* ctx) {
+    // Drop Document→JSContext mapping for any document that used this context.
+    for (auto it = s_doc_to_ctx.begin(); it != s_doc_to_ctx.end(); ) {
+        if (it->second == ctx) it = s_doc_to_ctx.erase(it);
+        else ++it;
+    }
     s_ctx_documents.erase(ctx);
     s_ctx_factories.erase(ctx);
     s_ctx_sdl_windows.erase(ctx);

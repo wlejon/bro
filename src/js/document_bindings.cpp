@@ -2,6 +2,8 @@
 #include "js/custom_elements.h"
 #include "js/image_bindings.h"
 #include "engine/engine.h"
+#include "dom/range.h"
+#include "dom/selection.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -293,7 +295,15 @@ void installDocumentBindings(JSContext* ctx) {
         .method_raw("adoptNode", js_document_adoptNode, 1)
         .method_raw("addEventListener", js_document_addEventListener, 2)
         .method_raw("removeEventListener", js_document_removeEventListener, 2)
-        .method_raw("exitPointerLock", js_document_exitPointerLock, 0);
+        .method_raw("exitPointerLock", js_document_exitPointerLock, 0)
+        .method("createRange", [](Doc* d, JSContext* cx) -> JSValue {
+            auto* r = new bro::dom::Range();
+            r->setDocument(d);
+            return qjsbind::wrap<bro::dom::Range>(cx, r);
+        })
+        .method("getSelection", [](Doc* d, JSContext* cx) -> JSValue {
+            return wrapSelection(cx, d->selection());
+        });
 
     js_document_class_id = qjsbind::class_id<Doc>();
 }

@@ -21,6 +21,9 @@ namespace bro::engine { class TransitionManager; class AnimationManager; }
 
 namespace bro::dom {
 
+class Range;
+class Selection;
+
 class Document {
 public:
     Document();
@@ -128,6 +131,30 @@ public:
     void setBasePath(const std::string& path) { basePath_ = path; }
     const std::string& basePath() const { return basePath_; }
 
+    // ---------- Selection + live Range registry --------------------------
+    // The Document owns a single Selection (window.getSelection()) and keeps
+    // a set of live Range objects so it can update their endpoints when the
+    // DOM mutates. Range::setDocument() registers/unregisters itself.
+    Selection* selection();
+    void registerRange(Range* r);
+    void unregisterRange(Range* r);
+
+    // Notify live ranges about mutations.
+    // Call BEFORE performing the removal so ranges can observe parent/index.
+    void notifyNodeRemoved(Node* removed);
+    // Call AFTER text data is replaced. offset/count is the region that was
+    // replaced; newLen is the length of its replacement.
+    void notifyTextDataChanged(Node* node, int offset, int count, int newLen);
+    // Call AFTER splitText. `tail` is the new node holding [offset, end).
+    void notifyTextSplit(Node* node, int offset, Node* tail);
+    // Call AFTER a child is inserted at `index` under `parent`.
+    void notifyChildInserted(Node* parent, int index);
+
+    // JS runtime hooks: set by the JS engine when DomBindings::install runs.
+    using SelectionChangeCallback = void(*)(Document*);
+    void setSelectionChangeCallback(SelectionChangeCallback cb) { selectionChangeCb_ = cb; }
+    void fireSelectionChange();
+
 private:
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
@@ -164,6 +191,11 @@ private:
 
     // Elements that need scroll-to-bottom after next layout
     std::unordered_set<Element*> scrollToBottomElements_;
+
+    // Selection + live ranges (registered via Range::setDocument()).
+    std::unique_ptr<Selection> selection_;
+    std::unordered_set<Range*> liveRanges_;
+    SelectionChangeCallback selectionChangeCb_ = nullptr;
 };
 
 } // namespace bro::dom

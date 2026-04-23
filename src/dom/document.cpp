@@ -1,4 +1,6 @@
 #include "dom/document.h"
+#include "dom/range.h"
+#include "dom/selection.h"
 #include "engine/css_transitions.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/layout_node_adapter.h"
@@ -12,6 +14,71 @@ namespace bro::dom {
 
 Document::Document() = default;
 Document::~Document() = default;
+
+// ---------------------------------------------------------------------------
+// Selection + live Range registry
+// ---------------------------------------------------------------------------
+
+Selection* Document::selection() {
+    if (!selection_) selection_ = std::make_unique<Selection>(this);
+    return selection_.get();
+}
+
+void Document::registerRange(Range* r) {
+    if (r) liveRanges_.insert(r);
+}
+
+void Document::unregisterRange(Range* r) {
+    if (!r) return;
+    liveRanges_.erase(r);
+    // Range destruction invalidates Selection if this is its backing range.
+    if (selection_ && r == selection_->getRangeAt(0)) {
+        selection_->removeAllRanges();
+    }
+}
+
+void Document::notifyNodeRemoved(Node* removed) {
+    if (!removed) return;
+    Node* parent = removed->parentNode();
+    if (!parent) return;
+    int idx = -1;
+    const auto& kids = parent->childNodes();
+    for (size_t i = 0; i < kids.size(); ++i)
+        if (kids[i] == removed) { idx = static_cast<int>(i); break; }
+    if (idx < 0) return;
+    for (auto* r : liveRanges_)
+        r->onNodeRemoved(removed, parent, idx);
+    if (selection_ && selection_->rangeCount() > 0) {
+        selection_->schedulePendingChange();
+        selection_->flushPendingChange();
+    }
+}
+
+void Document::notifyTextDataChanged(Node* node, int offset, int count, int newLen) {
+    if (!node) return;
+    for (auto* r : liveRanges_)
+        r->onTextDataChanged(node, offset, count, newLen);
+    if (selection_ && selection_->rangeCount() > 0) {
+        selection_->schedulePendingChange();
+        selection_->flushPendingChange();
+    }
+}
+
+void Document::notifyTextSplit(Node* node, int offset, Node* tail) {
+    if (!node || !tail) return;
+    for (auto* r : liveRanges_)
+        r->onTextSplit(node, offset, tail);
+}
+
+void Document::notifyChildInserted(Node* parent, int index) {
+    if (!parent) return;
+    for (auto* r : liveRanges_)
+        r->onChildInserted(parent, index);
+}
+
+void Document::fireSelectionChange() {
+    if (selectionChangeCb_) selectionChangeCb_(this);
+}
 
 // ---------------------------------------------------------------------------
 // Parsing with gumbo

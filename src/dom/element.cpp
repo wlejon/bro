@@ -1,5 +1,7 @@
 #include "dom/element.h"
 #include "dom/document.h"
+#include "dom/range.h"
+#include "dom/selection.h"
 #include "dom/shadow_root.h"
 #include "dom/text_node.h"
 #include "dom/comment_node.h"
@@ -31,10 +33,24 @@ void Node::appendChild(Node* child) {
     children_.push_back(child);
 }
 
+// Walk up from any node to its owning Document (via the nearest Element).
+static Document* findDocument(Node* node) {
+    for (Node* n = node; n; n = n->parentNode()) {
+        if (n->nodeType() == NodeType::Element)
+            return static_cast<Element*>(n)->document();
+    }
+    return nullptr;
+}
+
 void Node::removeChild(Node* child) {
     if (!child) return;
     auto it = std::find(children_.begin(), children_.end(), child);
     if (it != children_.end()) {
+        // Notify live ranges BEFORE detaching so they can still see the
+        // child's former parent/index.
+        if (auto* doc = findDocument(this)) {
+            doc->notifyNodeRemoved(child);
+        }
         (*it)->parent_ = nullptr;
         children_.erase(it);
     }
