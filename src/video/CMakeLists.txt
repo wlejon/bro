@@ -27,3 +27,7 @@ if(_webm_inc)
         endif()
     endforeach()
 endif()
+
+# Smoke test: decode a WebM and dump what we saw. Not linked into bro.
+add_executable(bro_videoinspect tools/video_inspect.cpp)
+target_link_libraries(bro_videoinspect PRIVATE bro_video)
