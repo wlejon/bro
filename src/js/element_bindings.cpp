@@ -606,6 +606,13 @@ static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
             return JS_NewString(ctx, opts[idx].value.c_str());
         return JS_NewString(ctx, "");
     }
+    // <textarea> stores its current value in textContent, not the value attr
+    // (textareas don't have a value attribute per spec).
+    const std::string& tag = el->tagName();
+    if (tag == "TEXTAREA" || tag == "textarea") {
+        std::string t = el->textContent();
+        return JS_NewString(ctx, t.c_str());
+    }
     return JS_NewString(ctx, el->getAttribute("value").c_str());
 }
 
@@ -642,6 +649,11 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
         if (auto* sel = el->selectControl(); sel && matchIdx >= 0) {
             sel->setSelectedIndex(matchIdx);
         }
+        return JS_UNDEFINED;
+    }
+    // <textarea> mirrors current value in textContent per spec.
+    if (el->tagName() == "TEXTAREA" || el->tagName() == "textarea") {
+        el->setTextContent(s);
         return JS_UNDEFINED;
     }
     el->setAttribute("value", s);
@@ -1130,7 +1142,9 @@ static JSValue js_element_get_disabled(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_FALSE;
-    return JS_NewBool(ctx, !el->getAttribute("disabled").empty());
+    // Boolean HTML attribute: presence of the attribute means true, regardless
+    // of value. `<input disabled>` parses to disabled="" and still counts.
+    return JS_NewBool(ctx, el->hasAttribute("disabled"));
 }
 
 static JSValue js_element_set_disabled(JSContext* ctx, JSValueConst this_val,
