@@ -2485,7 +2485,14 @@ void Engine::pumpVideoEvents() {
     // mark the document dirty. Force a re-raster each frame while any video
     // is advancing so ElVideo::draw() keeps calling pipeline_->advance() and
     // presenting new frames.
-    if (anyPlaying) document_->markDirty();
+    if (anyPlaying) {
+        document_->markDirty();
+        // markDirty alone isn't enough in the windowed main loop: if the
+        // layout thread is already idle, nothing sets uiDirty_ so the
+        // raster signal path is skipped. Set uiDirty_ directly so the
+        // "no layout this frame" branch at engine.cpp still signals raster.
+        uiDirty_ = true;
+    }
 }
 
 void Engine::drawElementScrollbars(render::Renderer* renderer,
