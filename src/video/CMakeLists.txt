@@ -1,5 +1,23 @@
+find_package(unofficial-libwebm CONFIG REQUIRED)
+
 add_library(bro_video STATIC
     media_clock.cpp
+    webm_demuxer.cpp
 )
 target_include_directories(bro_video PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(bro_video PUBLIC bro_util)
+target_link_libraries(bro_video
+    PUBLIC bro_util
+    PRIVATE unofficial::libwebm::libwebm
+)
+
+# vcpkg's unofficial-libwebm target exposes headers at include/webm/, but
+# libwebm's own headers cross-reference each other via mkvparser/... with
+# no prefix. Add the webm/ subdir directly so those resolve.
+get_target_property(_webm_inc unofficial::libwebm::libwebm INTERFACE_INCLUDE_DIRECTORIES)
+if(_webm_inc)
+    foreach(_d IN LISTS _webm_inc)
+        if(EXISTS "${_d}/webm")
+            target_include_directories(bro_video PRIVATE "${_d}/webm")
+        endif()
+    endforeach()
+endif()
