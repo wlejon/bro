@@ -1,10 +1,14 @@
 #include "layout/el_video.h"
 
+#include "broaudio/engine.h"
+#include "broaudio/dsp/resampler.h"
 #include "dom/element.h"
 #include "dom/event.h"
 #include "js/event_dispatch.h"
 #include "render/renderer.h"
+#include "video/audio_decoder.h"
 #include "video/video_pipeline.h"
+#include "video/webm_demuxer.h"
 
 #include <cmath>
 
@@ -30,11 +34,108 @@ bool ElVideo::load(const std::string& path) {
     pendingLoadedMetadata_ = true;
     endedFired_ = false;
     lastTimeUpdateSec_ = -1.0;
+
+    // Predecode the audio track in parallel through an independent demuxer.
+    // VideoPipeline's main source pumps video only and drops audio packets,
+    // so we open the file a second time just for audio.
+    if (audioEngine_ && pipeline_->audioDecoder()) {
+        openAudioTrack(resolved);
+    }
     return true;
 }
 
-void ElVideo::play() { if (pipeline_) pipeline_->play(); }
-void ElVideo::pause() { if (pipeline_) pipeline_->pause(); }
+void ElVideo::openAudioTrack(const std::string& resolvedPath) {
+    bro::video::WebMDemuxer audioDemux;
+    if (!audioDemux.open(resolvedPath)) return;
+
+    uint32_t audioTrackId = 0;
+    uint32_t sampleRate = 0, channels = 0;
+    for (const auto& t : audioDemux.tracks()) {
+        if (t.kind == bro::video::TrackKind::Audio && t.codec == bro::video::Codec::Opus) {
+            audioTrackId = t.id;
+            sampleRate = t.sampleRate;
+            channels = t.channels;
+            break;
+        }
+    }
+    if (audioTrackId == 0) return;
+
+    auto decoder = bro::video::createOpusDecoder(sampleRate, channels);
+    if (!decoder) return;
+
+    // Drain Opus packets → PCM. For short clips (calling-app MVP is on the
+    // order of seconds) this fits comfortably in memory. Longer clips will
+    // move to a streaming source fed by the decode thread.
+    std::vector<float> pcm;
+    pcm.reserve(static_cast<size_t>(sampleRate) * channels * 2);
+    bro::video::MediaPacket pkt;
+    bro::video::AudioFrame frame;
+    while (audioDemux.readPacket(pkt)) {
+        if (pkt.trackId != audioTrackId) continue;
+        if (!decoder->decode(pkt, frame)) continue;
+        pcm.insert(pcm.end(), frame.samples.begin(), frame.samples.end());
+    }
+    if (pcm.empty()) return;
+
+    // broaudio clips are assumed to be at the engine's sample rate; Opus is
+    // typically 48 kHz and the engine default is 44.1 kHz, so resample.
+    int numFrames = static_cast<int>(pcm.size() / channels);
+    const int engineRate = audioEngine_->sampleRate();
+    if (static_cast<int>(sampleRate) != engineRate) {
+        auto resampled = broaudio::resample(pcm.data(), numFrames,
+                                            static_cast<int>(channels),
+                                            static_cast<int>(sampleRate),
+                                            engineRate);
+        if (resampled.empty()) return;
+        numFrames = static_cast<int>(resampled.size() / channels);
+        audioClipId_ = audioEngine_->createClip(resampled.data(), numFrames,
+                                                 static_cast<int>(channels));
+    } else {
+        audioClipId_ = audioEngine_->createClip(pcm.data(), numFrames,
+                                                 static_cast<int>(channels));
+    }
+}
+
+void ElVideo::startAudioPlayback(double fromSeconds) {
+    if (!audioEngine_ || audioClipId_ < 0) return;
+    stopAudioPlayback();
+    audioPlaybackId_ = audioEngine_->playClip(audioClipId_, 1.0f, false);
+    if (audioPlaybackId_ < 0) return;
+    if (fromSeconds > 0.0) {
+        // Clip is stored at the engine's sample rate (resampled at load).
+        int frames = audioEngine_->getClipSampleCount(audioClipId_);
+        int start = static_cast<int>(fromSeconds * audioEngine_->sampleRate());
+        if (start < 0) start = 0;
+        if (start >= frames) start = frames > 0 ? frames - 1 : 0;
+        audioEngine_->setPlaybackRegion(audioPlaybackId_, start, frames);
+    }
+}
+
+void ElVideo::stopAudioPlayback() {
+    if (!audioEngine_ || audioPlaybackId_ < 0) return;
+    audioEngine_->stopPlayback(audioPlaybackId_);
+    audioPlaybackId_ = -1;
+}
+
+void ElVideo::play() {
+    if (!pipeline_) return;
+    pipeline_->play();
+    // A/V sync: start audio from the current video clock position. For the
+    // short-clip MVP both advance on independent clocks; drift over a few
+    // seconds is imperceptible. Longer clips will pull the master clock from
+    // the audio output (getPlaybackPosition()) when we add streaming audio.
+    if (audioPlaybackId_ < 0) {
+        startAudioPlayback(currentTime());
+    } else if (audioEngine_) {
+        audioEngine_->setPlaybackPlaying(audioPlaybackId_, true);
+    }
+}
+void ElVideo::pause() {
+    if (pipeline_) pipeline_->pause();
+    if (audioEngine_ && audioPlaybackId_ >= 0) {
+        audioEngine_->setPlaybackPlaying(audioPlaybackId_, false);
+    }
+}
 bool ElVideo::isPlaying() const { return pipeline_ && pipeline_->isPlaying(); }
 
 void ElVideo::seekTo(double seconds) {
@@ -46,6 +147,12 @@ void ElVideo::seekTo(double seconds) {
     // stream is re-played past its tail, and force the next timeupdate.
     endedFired_ = false;
     lastTimeUpdateSec_ = -1.0;
+    // Re-anchor audio at the new position if we were playing.
+    if (pipeline_->isPlaying() && audioClipId_ >= 0) {
+        startAudioPlayback(seconds);
+    } else {
+        stopAudioPlayback();
+    }
 }
 
 double ElVideo::currentTime() const {
@@ -135,6 +242,7 @@ void ElVideo::pumpEvents() {
     if (!endedFired_ && pipeline_->isEnded() && pipeline_->hasFrame()) {
         endedFired_ = true;
         pipeline_->pause();
+        stopAudioPlayback();
         dom::Event evt("ended", false, false);
         evt.setIsTrusted(true);
         js::dispatchDomEvent(jsCtx_, elem_, evt);

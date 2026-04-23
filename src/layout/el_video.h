@@ -10,6 +10,7 @@ extern "C" { typedef struct JSContext JSContext; }
 
 namespace bro::dom { class Element; }
 namespace bro::video { class VideoPipeline; }
+namespace broaudio { class Engine; }
 
 namespace bro::layout {
 
@@ -34,6 +35,10 @@ public:
     // ended) can be dispatched to JS listeners. Null in contexts without a
     // JS runtime — events are silently dropped in that case.
     void setJsContext(JSContext* ctx) { jsCtx_ = ctx; }
+
+    // Set once by the engine so decoded audio can be routed through the
+    // shared broaudio graph. Null in contexts without an audio engine.
+    void setAudioEngine(broaudio::Engine* eng) { audioEngine_ = eng; }
 
     // Open a WebM file; returns true on success. Does not auto-play.
     bool load(const std::string& path);
@@ -69,6 +74,17 @@ private:
     bool endedFired_ = false;
     double lastTimeUpdateSec_ = -1.0;
     void pumpEvents();
+
+    // Audio is predecoded at load() into a single broaudio clip and played
+    // back via a clip playback instance. The first iteration buffers the
+    // whole audio track; streaming audio decode arrives with the decode
+    // thread. audioClipId_ = -1 when the source has no audio track.
+    broaudio::Engine* audioEngine_ = nullptr;
+    int audioClipId_ = -1;
+    int audioPlaybackId_ = -1;
+    void openAudioTrack(const std::string& resolvedPath);
+    void startAudioPlayback(double fromSeconds);
+    void stopAudioPlayback();
 };
 
 } // namespace bro::layout

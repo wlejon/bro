@@ -13,6 +13,7 @@ extern "C" { typedef struct JSContext JSContext; }
 namespace bro::dom { class Document; }
 namespace bro::js { class Runtime; }
 namespace bro::platform { class Window; }
+namespace broaudio { class Engine; }
 
 namespace bro::engine {
 
@@ -24,7 +25,8 @@ namespace bro::engine {
 /// controllers to any replaced elements that don't already have one.
 /// Used by the Engine for both the app document and system panels.
 void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
-                            JSContext* jsCtx = nullptr);
+                            JSContext* jsCtx = nullptr,
+                            broaudio::Engine* audioEngine = nullptr);
 
 // ---------------------------------------------------------------------------
 // Shared replaced-element interaction context

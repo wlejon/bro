@@ -31,7 +31,7 @@ namespace bro::engine {
 // ---------------------------------------------------------------------------
 
 void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
-                            JSContext* jsCtx) {
+                            JSContext* jsCtx, broaudio::Engine* audioEngine) {
     if (!elem) return;
 
     const auto& tag = elem->tagName();
@@ -58,6 +58,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
         auto ctrl = std::make_unique<layout::ElVideo>(renderer);
         ctrl->setElement(elem);
         ctrl->setJsContext(jsCtx);
+        ctrl->setAudioEngine(audioEngine);
         // If the element already has a src attribute, load it now.
         // Otherwise the JS binding will trigger load when src is set.
         std::string src = elem->getAttribute("src");
@@ -69,7 +70,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
     for (auto* child : elem->childNodes()) {
         if (child->nodeType() == dom::NodeType::Element) {
             ensureReplacedElements(static_cast<dom::Element*>(child), renderer,
-                                   jsCtx);
+                                   jsCtx, audioEngine);
         }
     }
 
@@ -79,7 +80,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
         for (auto* child : sr->childNodes()) {
             if (child->nodeType() == dom::NodeType::Element) {
                 ensureReplacedElements(static_cast<dom::Element*>(child),
-                                       renderer, jsCtx);
+                                       renderer, jsCtx, audioEngine);
             }
         }
     }
