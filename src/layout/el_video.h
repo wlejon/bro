@@ -58,6 +58,12 @@ public:
 
     bro::video::VideoPipeline* pipeline() const { return pipeline_.get(); }
 
+    // Dispatch any pending HTMLMediaElement events on the element's JS
+    // listeners. MUST be called on the main thread — uses the JSContext
+    // passed via setJsContext(). draw() runs on the raster thread, so the
+    // engine pumps events from its main loop instead.
+    void pumpEvents();
+
 private:
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
@@ -73,7 +79,6 @@ private:
     bool pendingLoadedMetadata_ = false;
     bool endedFired_ = false;
     double lastTimeUpdateSec_ = -1.0;
-    void pumpEvents();
 
     // Audio is predecoded at load() into a single broaudio clip and played
     // back via a clip playback instance. The first iteration buffers the

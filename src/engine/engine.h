@@ -309,6 +309,7 @@ private:
     bool gizmoHandleMouseUp(float x, float y, int button);
 
     void dispatchEvent(dom::Element* target, dom::Event& event);
+    void pumpVideoEvents();
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",
                             const std::string& inputType = "");
@@ -543,6 +544,7 @@ private:
     double totalFrameMs_ = 0.0;
     bool uiDirty_ = true;
     bool hasRenderedOnce_ = false;
+    bool mediaEventsArmed_ = false;
 
     // Hover tracking for mouseenter/mouseleave/mouseover/mouseout
     dom::Element* hoveredElement_ = nullptr;

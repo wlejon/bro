@@ -49,6 +49,10 @@ namespace bro::engine {
 
 void Engine::flush() {
     jsRuntime_->executePendingJobs();
+    // Pump HTMLMediaElement events from the main thread. In headless there
+    // is no raster thread, but we keep the call path consistent with the
+    // windowed engine so ElVideo::draw() never touches JS.
+    pumpVideoEvents();
     // Tick transitions and animations, mark dirty if any are active
     if (document_) {
         document_->setTransitionManager(&transitionManager_, virtualTime_);

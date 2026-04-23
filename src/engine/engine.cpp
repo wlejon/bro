@@ -703,6 +703,10 @@ Engine::Engine(const EngineConfig& config)
                                  static_cast<float>(contentHeight()), *textMetrics_);
         flush();
     }
+    // User script has not run yet during construction. Arm media events so
+    // the next pump (first JS-driven flush / first main-loop tick) fires
+    // queued loadedmetadata / timeupdate.
+    mediaEventsArmed_ = true;
 }
 
 void Engine::loadCustomFonts() {
@@ -1887,6 +1891,10 @@ void Engine::run() {
             }
         }
 
+        // Pump HTMLMediaElement events on every <video> — must happen on
+        // the main thread since QuickJS isn't thread-safe.
+        pumpVideoEvents();
+
         // 1. Poll platform events
         eventLoop_->pollEvents();
         if (eventLoop_->shouldQuit()) {
@@ -2447,6 +2455,26 @@ dom::Element* Engine::hitTest(float x, float y) {
 void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     if (!target || !jsRuntime_) return;
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
+}
+
+// Walk the document + shadow trees and pump any pending HTMLMediaElement
+// events (loadedmetadata, timeupdate, ended) on each ElVideo. Called from
+// the main thread because QuickJS is not thread-safe; ElVideo::draw() runs
+// on the raster thread and deliberately does not touch JS.
+static void pumpVideoEventsWalk(dom::Element* el) {
+    if (!el) return;
+    if (auto* v = el->videoControl()) v->pumpEvents();
+    el->forEachComposedChild([](dom::Element* c) { pumpVideoEventsWalk(c); });
+}
+void Engine::pumpVideoEvents() {
+    // The engine's initial layout flush runs BEFORE user script, so
+    // dispatching loadedmetadata / timeupdate there would drop events on
+    // the floor (no listeners registered yet). Wait until the user code
+    // has had a chance to run — the windowed main loop and any JS-driven
+    // flush() set this flag before pumping.
+    if (!mediaEventsArmed_) return;
+    if (!document_) return;
+    pumpVideoEventsWalk(document_->documentElement());
 }
 
 void Engine::drawElementScrollbars(render::Renderer* renderer,

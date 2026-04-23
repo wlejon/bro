@@ -192,7 +192,11 @@ void ElVideo::draw(render::Renderer* renderer,
     // by the pipeline's FileClock, which freezes nowNs() between
     // pause() and play().
     pipeline_->advance();
-    pumpEvents();
+    // NOTE: pumpEvents() runs on the main thread (Engine::pumpVideoEvents)
+    // — QuickJS is not thread-safe, and draw() executes on the raster
+    // thread. Pipeline state read here (currentPts, hasFrame) is written by
+    // this advance() call; main-thread pumpEvents reads it with a stale-
+    // read tolerance (same discipline as the rest of the pipeline state).
 
     if (pipeline_->hasFrame() && !pipeline_->currentRgba().empty()) {
         renderer->drawPixelsRGBA(pipeline_->currentRgba().data(),
