@@ -97,6 +97,8 @@ const viewSelfxBtn = document.getElementById('view-selfx');
 const viewUVBtn    = document.getElementById('view-uv');
 const viewBonesBtn = document.getElementById('view-bones');
 const viewShadowsBtn = document.getElementById('view-shadows');
+const viewEmissiveRange = document.getElementById('view-emissive');
+const viewEmissiveNum   = document.getElementById('view-emissive-num');
 
 // modify
 const modSubLoopBtn   = document.getElementById('mod-sub-loop');
@@ -144,7 +146,7 @@ let state = {
     bindPoseOnly: false,
     panelHidden: false,
 
-    view:    { color: 'original', hull: false, selfx: false, uv: false, bones: false, shadows: true },
+    view:    { color: 'original', hull: false, selfx: false, uv: false, bones: false, shadows: true, emissive: 1.0 },
     modify:  { dirty: false },
     lod:     { ratio: 1.0, built: false, encoded: null, originalTris: 0 },
     rig:     { active: -1, blend: -1, blendW: 0.5 },
@@ -541,10 +543,20 @@ function loadFile(idx) {
             baseNormals:   bind.hasNormals ? new Float32Array(bind.normals) : null,
             baseColors:    bind.hasColors  ? new Float32Array(bind.colors)  : null,
             node: scene.createMesh(opts),
+            loadedEmissive: opts.emissive || 0,
             hullNode: null,
             selfxNode: null,
         });
     }
+
+    // Seed the emissive slider with the file's own value (max across meshes)
+    // so the UI shows what was loaded before any user tuning. Meshy AI ships
+    // characters with factor [1,1,1] + an emissive tint map, which reads as
+    // "full self-illumination" — drag toward 0 for non-emissive subjects.
+    const fileEmissive = items.reduce((m, it) => Math.max(m, it.loadedEmissive), 0);
+    viewEmissiveRange.value = fileEmissive.toFixed(2);
+    viewEmissiveNum.textContent = fileEmissive.toFixed(2);
+    state.view.emissive = fileEmissive;
 
     state.loaded = {
         path: filePath, name, gltf,
@@ -1240,6 +1252,14 @@ viewShadowsBtn.addEventListener('click', () => {
     state.view.shadows = !state.view.shadows;
     keyLight.castsShadow = state.view.shadows;
     syncControls();
+});
+viewEmissiveRange.addEventListener('input', () => {
+    const v = parseFloat(viewEmissiveRange.value);
+    state.view.emissive = v;
+    viewEmissiveNum.textContent = v.toFixed(2);
+    if (state.loaded) {
+        for (const it of state.loaded.items) it.node.emissive = v;
+    }
 });
 
 // Stats
