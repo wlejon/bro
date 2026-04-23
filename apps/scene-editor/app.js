@@ -107,7 +107,7 @@ function setHighlightTriangles(primitive, triIndices, normal, positionsSrc, indi
     highlightNode = scene.createMesh({
         positions, normals, indices,
         color: '#ffa502',
-        emissive: 0.6,
+        unlit: true,
         name: 'highlight',
     });
     applyPrimitiveTransformToNode(highlightNode, primitive);
@@ -439,6 +439,58 @@ function applyCamera() {
     updateGizmoForActive();
 }
 applyCamera();
+
+// --- Lighting (opt-in) ------------------------------------------------------
+//
+// The editor defaults to lighting OFF: primitives and previews are drawn
+// with `unlit:true`, so surfaces render at their exact baseColor regardless
+// of any implicit sun / ambient / tonemap state. Press L to flip on a
+// studio-style rig (shadow sun + fill + ambient + ACES) for a preview-closer-
+// to-runtime look; press L again to return to the flat authoring view. The
+// rig is a visualization toggle only — it does not re-author mesh materials,
+// so unlit primitives stay flat until we wire a separate "lit preview" path.
+
+let _lightingOn = false;
+let _sunLight   = null;
+let _fillLight  = null;
+
+function setLightingEnabled(on) {
+    on = !!on;
+    if (on === _lightingOn) return;
+    _lightingOn = on;
+    if (on) {
+        scene.setToneMap({ mode: 'aces', exposure: 1.0, gamma: 2.2 });
+        scene.setAmbient([0.06, 0.065, 0.075]);
+        _sunLight = scene.createLight({
+            type:      'directional',
+            direction: [-0.45, -1.0, -0.35],
+            color:     [1.0, 0.98, 0.92],
+            intensity: 3.0,
+            name:      'editor-sun',
+        });
+        _sunLight.castsShadow        = true;
+        _sunLight.cascadeCount       = 4;
+        _sunLight.cascadeSplitLambda = 0.6;
+        _fillLight = scene.createLight({
+            type:      'directional',
+            direction: [0.6, -0.4, 0.5],
+            color:     [0.70, 0.78, 0.95],
+            intensity: 0.6,
+            name:      'editor-fill',
+        });
+        scene.setShadowQuality(4096, 3);
+    } else {
+        if (_sunLight)  { _sunLight.destroy();  _sunLight  = null; }
+        if (_fillLight) { _fillLight.destroy(); _fillLight = null; }
+        // Restore engine defaults (ACES + no ambient) so the flat-authoring
+        // view matches startup state exactly.
+        scene.setAmbient([0, 0, 0]);
+        scene.setToneMap({ mode: 'aces', exposure: 1.0, gamma: 2.2 });
+    }
+    const hint = document.getElementById('lighting-hint');
+    if (hint) hint.textContent = on ? 'on' : 'off';
+}
+window.setLightingEnabled = setLightingEnabled;
 
 // --- Screen → world ray -----------------------------------------------------
 
@@ -1121,7 +1173,7 @@ function refreshRectPreview() {
         rectPreviewNode = scene.createMesh({
             data:  mesh,
             color: '#ffa502',
-            emissive: 0.35,
+            unlit: true,
             name:  'rect-preview',
         });
     } else {
@@ -1245,7 +1297,7 @@ function refreshCirclePreview() {
         circlePreviewNode = scene.createMesh({
             data:  mesh,
             color: '#ffa502',
-            emissive: 0.35,
+            unlit: true,
             name:  'circle-preview',
         });
     } else {
@@ -1402,7 +1454,7 @@ function refreshLinePreview() {
             normals:   data.normals,
             colors:    data.colors,
             indices:   data.indices,
-            emissive:  0.5,
+            unlit:     true,
             name:      'line-preview',
         });
     } else {
@@ -1652,7 +1704,7 @@ function refreshArcPreview() {
             normals:   data.normals,
             colors:    data.colors,
             indices:   data.indices,
-            emissive:  0.6,
+            unlit:     true,
             name:      'arc-preview',
         });
     } else {
@@ -1781,7 +1833,7 @@ function refreshOffsetPreview() {
             normals:   data.normals,
             colors:    data.colors,
             indices:   data.indices,
-            emissive:  0.6,
+            unlit:     true,
             name:      'offset-preview',
         });
     } else {
@@ -2324,7 +2376,7 @@ for (const [type, color] of Object.entries(Inference._COLOR)) {
     const node = scene.createMesh({
         data: snapSphereMesh,
         color,
-        emissive: 0.8,
+        unlit: true,
         name: 'snap-sphere-' + type,
     });
     node.visible = false;
@@ -2931,6 +2983,14 @@ document.addEventListener('keydown', (e) => {
             e.preventDefault();
             return;
         }
+    }
+    // Toggle the studio lighting preview rig. Off = flat authoring view,
+    // on = shadow sun + fill + ACES. Guarded so mid-gesture keystrokes don't
+    // recreate lights while a drag is capturing state.
+    if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        setLightingEnabled(!_lightingOn);
+        e.preventDefault();
+        return;
     }
     // Tool selection is driven by the toolbar UI. Only Escape lives as a
     // global shortcut because it's a modal cancel (no tool change).

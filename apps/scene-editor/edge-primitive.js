@@ -86,7 +86,7 @@
             normals:   data.normals,
             colors:    data.colors,
             indices:   data.indices,
-            emissive:  0.6,
+            unlit:     true,
             name:      this.name + '-edges',
         });
         this.edgesNode.visible = this.isEffectivelyVisible();

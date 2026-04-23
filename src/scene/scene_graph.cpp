@@ -1014,6 +1014,16 @@ LightNode* SceneGraph::createLight(const std::string& name) {
 void SceneGraph::setCanvasSize(int w, int h) {
     canvasWidth_ = w;
     canvasHeight_ = h;
+    // If the projection was set to auto-follow the canvas aspect, recompute
+    // it now so viewport and projection stay in agreement through resizes.
+    // Only meaningful for perspective — orthographic callers pin their own
+    // half-extents explicitly, and we don't know their intent.
+    if (cameraAspectFollowsCanvas_ && cameraIsPerspective_ && w > 0 && h > 0) {
+        float aspect = static_cast<float>(w) / static_cast<float>(h);
+        cameraAspect_ = aspect;
+        projectionMatrix_ = Mat4::perspective(cameraFovY_, aspect,
+                                              cameraNearZ_, cameraFarZ_);
+    }
 }
 
 void SceneGraph::collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids) {

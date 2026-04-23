@@ -1240,10 +1240,15 @@ static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, 
     double farZ = jsGetProp(ctx, opts, "far", 1000.0);
     double aspect = jsGetProp(ctx, opts, "aspect", 0.0);
 
-    if (aspect <= 0) {
+    // Aspect omitted → derive from current canvas and flag the projection
+    // to auto-follow on future canvas resizes (setCanvasSize rebuilds it).
+    // Explicit aspect pins the projection and disables the follow behavior.
+    bool aspectFollowsCanvas = (aspect <= 0);
+    if (aspectFollowsCanvas) {
         int cw = g->canvasWidth(), ch = g->canvasHeight();
         aspect = (cw > 0 && ch > 0) ? double(cw) / double(ch) : 4.0 / 3.0;
     }
+    g->setCameraAspectFollowsCanvas(aspectFollowsCanvas);
 
     scene::Vec3 position = jsGetVec3(ctx, opts, "position", 0, 5, -10);
 

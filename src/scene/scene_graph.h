@@ -126,6 +126,13 @@ public:
     void setCamera(float fovY, float aspect, float nearZ, float farZ,
                    const Vec3& eye, const Vec3& target, const Vec3& up = {0, 1, 0});
 
+    /// When true, setCanvasSize() rebuilds the projection matrix using the
+    /// new canvas aspect ratio (and the stored fovY/near/far). Use this when
+    /// the caller wants the camera aspect to track the viewport; pin an
+    /// explicit aspect in setCamera() and leave this false for fixed-aspect
+    /// / cinematic cameras.
+    void setCameraAspectFollowsCanvas(bool on) { cameraAspectFollowsCanvas_ = on; }
+
     /// Set a 3D camera from a quaternion orientation (no lookAt — avoids precision loss).
     /// The quaternion represents the camera's world-space orientation.
     void setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
@@ -311,6 +318,12 @@ private:
     float cameraFovY_  = 1.0f;
     float cameraAspect_ = 1.0f;
     bool  cameraIsPerspective_ = true;
+    // When the caller didn't pin an explicit aspect (e.g. omitted `aspect`
+    // in scene.setCamera), the projection matrix must stay in lock-step with
+    // canvas/FBO dimensions — otherwise resizing the window squishes content
+    // because the FBO grows while the projection stays baked at the old
+    // aspect. setCanvasSize() rebuilds the projection when this is true.
+    bool  cameraAspectFollowsCanvas_ = false;
 
     // Legacy 2D camera state (drives the CanvasScene 2D path)
     float cameraX_ = 0, cameraY_ = 0;

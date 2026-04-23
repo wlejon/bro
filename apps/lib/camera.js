@@ -170,12 +170,17 @@
     // looks straight ahead (not back at the pivot).
     function orbitViewOpts(cam, canvas) {
         const fwd = quatRotVec(cam.rot, [0, 0, -1]);
+        // Omit `aspect`: the engine derives it from the scene graph's own
+        // canvas/FBO dimensions (layoutBox content rect), which is the same
+        // source the viewport uses. Passing clientWidth/clientHeight here can
+        // disagree with the engine's view of the canvas (e.g. before layout
+        // has settled on the first frame, or when canvas intrinsic sizing
+        // interacts with CSS), producing squished cubes.
         return {
             fov: cam.fov, near: cam.near, far: cam.far,
             position: cam.pos.slice(),
             target: [cam.pos[0]+fwd[0], cam.pos[1]+fwd[1], cam.pos[2]+fwd[2]],
             up: quatRotVec(cam.rot, [0, 1, 0]),
-            aspect: canvas.clientWidth / Math.max(1, canvas.clientHeight),
         };
     }
 

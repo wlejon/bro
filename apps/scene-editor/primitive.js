@@ -231,10 +231,10 @@
         this._worldInferenceDirty = true;
 
         this.meshNode = this.scene.createMesh({
-            data:     mesh,
-            color:    this.color,
-            emissive: 0.85,
-            name:     this.name,
+            data:  mesh,
+            color: this.color,
+            unlit: true,
+            name:  this.name,
         });
         this.meshNode.visible = this.isEffectivelyVisible();
         this._applyTransformToNode();
@@ -422,7 +422,7 @@
             normals:   data.normals,
             colors:    data.colors,
             indices:   data.indices,
-            emissive:  0.4,
+            unlit:     true,
             name:      this.name + '-edges',
         });
         this.edgesNode.visible = this.isEffectivelyVisible();
@@ -625,10 +625,10 @@
         p.inferenceGeo = src.inferenceGeo;
 
         p.meshNode = p.scene.createMesh({
-            data:     src.mesh,
-            color:    src.color,
-            emissive: 0.85,
-            name:     src.name + '(shadow)',
+            data:  src.mesh,
+            color: src.color,
+            unlit: true,
+            name:  src.name + '(shadow)',
         });
         p.meshNode.visible = p.isEffectivelyVisible();
         p._applyTransformToNode();
