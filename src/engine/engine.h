@@ -185,6 +185,13 @@ public:
     void exitPointerLock();
     dom::Element* pointerLockElement() const { return lockedElement_; }
 
+    // --- Page visibility / fullscreen notifications ---
+    // Invoke the JS bridge to flip document.visibilityState / dispatch
+    // visibilitychange / fullscreenchange. Safe to call before the JS runtime
+    // is ready (no-op).
+    void setPageVisibility(bool visible);
+    void setFullscreenState(bool fullscreen);
+
     // --- Headless API (also usable in windowed mode) ---
 
     /// Access the document.

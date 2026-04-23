@@ -691,6 +691,35 @@ bool Engine::requestPointerLock(dom::Element* target) {
     return true;
 }
 
+// Call a JS global function with a single boolean argument. Silently no-ops
+// if the function isn't defined yet (engine init orders JS wiring vs.
+// visibility notifications in ways callers shouldn't have to reason about).
+static void callJsBoolFn(JSContext* ctx, const char* name, bool arg) {
+    if (!ctx) return;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, global, name);
+    if (JS_IsFunction(ctx, fn)) {
+        JSValue a = JS_NewBool(ctx, arg);
+        JSValue ret = JS_Call(ctx, fn, JS_UNDEFINED, 1, &a);
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, a);
+    }
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, global);
+}
+
+void Engine::setPageVisibility(bool visible) {
+    if (!jsRuntime_) return;
+    callJsBoolFn(jsRuntime_->getContext(), "__bro_set_visibility", visible);
+    if (jsRuntime_) jsRuntime_->executePendingJobs();
+}
+
+void Engine::setFullscreenState(bool fullscreen) {
+    if (!jsRuntime_) return;
+    callJsBoolFn(jsRuntime_->getContext(), "__bro_set_fullscreen", fullscreen);
+    if (jsRuntime_) jsRuntime_->executePendingJobs();
+}
+
 void Engine::exitPointerLock() {
     if (!lockedElement_) return;
     lockedElement_ = nullptr;

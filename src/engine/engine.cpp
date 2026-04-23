@@ -268,8 +268,10 @@ Engine::Engine(const EngineConfig& config)
                                         const std::string& key) {
         if (category == "graphics" || category == "*") {
             auto& gfx = settings_->graphics();
-            if ((key == "fullscreen" || key == "*") && window_)
+            if ((key == "fullscreen" || key == "*") && window_) {
                 window_->setFullscreen(gfx.fullscreen);
+                setFullscreenState(gfx.fullscreen);
+            }
             if ((key == "vsync" || key == "*") && window_)
                 window_->setVSync(gfx.vsync);
             if ((key == "width" || key == "height" || key == "*") && window_ && !gfx.fullscreen)
@@ -1798,7 +1800,13 @@ void Engine::run() {
     };
     // SDL drops relative mouse mode on focus loss on some platforms — keep our
     // engine-side lock state in sync so apps see a pointerlockchange.
-    eventLoop_->onFocusLost = [this]() { exitPointerLock(); };
+    eventLoop_->onFocusLost = [this]() {
+        exitPointerLock();
+        setPageVisibility(false);
+    };
+    eventLoop_->onFocusGained = [this]() {
+        setPageVisibility(true);
+    };
 
     // Initial layout
     if (document_) {

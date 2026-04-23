@@ -426,4 +426,187 @@
     };
 
     // document.activeElement is now a native C++ getter (see js_document_proto_funcs)
+
+    // ---- Page visibility + fullscreen state ----------------------------------
+    // The engine drives these via __bro_set_visibility / __bro_set_fullscreen
+    // when SDL window focus changes or the graphics.fullscreen setting flips.
+    document.hidden = false;
+    document.visibilityState = 'visible';
+    document.fullscreenElement = null;
+    document.fullscreenEnabled = true;
+
+    function _fireDocEvent(type) {
+        var evt;
+        if (typeof CustomEvent === 'function') {
+            evt = new CustomEvent(type, { bubbles: false, cancelable: false });
+            try { evt.isTrusted = true; } catch(_) {}
+        } else {
+            evt = { type: type, target: document, bubbles: false,
+                    cancelable: false, defaultPrevented: false, isTrusted: true,
+                    preventDefault: function() { this.defaultPrevented = true; } };
+        }
+        // document.addEventListener in bro forwards to document.documentElement,
+        // but document itself has no dispatchEvent — fire on the root element
+        // so registered listeners actually run. Also notify window listeners.
+        var root = document.documentElement;
+        if (root && typeof root.dispatchEvent === 'function') {
+            try { root.dispatchEvent(evt); } catch(_) {}
+        }
+        if (typeof globalThis.__bro_dispatch_window_event === 'function') {
+            globalThis.__bro_dispatch_window_event(type, evt);
+        }
+    }
+
+    globalThis.__bro_set_visibility = function(visible) {
+        var next = visible ? 'visible' : 'hidden';
+        if (document.visibilityState === next) return;
+        document.visibilityState = next;
+        document.hidden = !visible;
+        _fireDocEvent('visibilitychange');
+    };
+    globalThis.__bro_set_fullscreen = function(on) {
+        var cur = document.fullscreenElement;
+        var next = on ? (document.documentElement || document.body) : null;
+        if (cur === next) return;
+        document.fullscreenElement = next;
+        _fireDocEvent('fullscreenchange');
+    };
+
+    if (typeof document.exitFullscreen === 'undefined' &&
+        typeof globalThis.__bro_set_fullscreen_setting === 'function') {
+        document.exitFullscreen = function() {
+            return globalThis.__bro_set_fullscreen_setting(false);
+        };
+    }
+
+    // ---- Element scroll helpers / requestFullscreen --------------------------
+    // qjsbind registers Element instances on a prototype that isn't the same
+    // object as globalThis.Element.prototype. Reach the real proto via a
+    // temporary element and install methods there. Methods guard themselves
+    // with `typeof === undefined` so re-runs are safe.
+    (function() {
+        var tmp = document.createElement('div');
+        var elProto = Object.getPrototypeOf(tmp);
+        if (!elProto) return;
+
+        var scrollArgs = globalThis.__bro_scroll_args ||
+            function(a, b) {
+                if (a !== null && typeof a === 'object' && !Array.isArray(a)) return { x: a.left, y: a.top };
+                return { x: a, y: b };
+            };
+        if (typeof elProto.scrollTo !== 'function') {
+            elProto.scrollTo = function(a, b) {
+                var p = scrollArgs(a, b);
+                if (typeof p.x === 'number') this.scrollLeft = p.x;
+                if (typeof p.y === 'number') this.scrollTop  = p.y;
+            };
+        }
+        if (typeof elProto.scrollBy !== 'function') {
+            elProto.scrollBy = function(a, b) {
+                var p = scrollArgs(a, b);
+                if (typeof p.x === 'number') this.scrollLeft = this.scrollLeft + p.x;
+                if (typeof p.y === 'number') this.scrollTop  = this.scrollTop  + p.y;
+            };
+        }
+        if (typeof elProto.requestFullscreen !== 'function' &&
+            typeof globalThis.__bro_set_fullscreen_setting === 'function') {
+            elProto.requestFullscreen = function() {
+                return globalThis.__bro_set_fullscreen_setting(true);
+            };
+        }
+    })();
+
+    // ---- DOMParser / XMLSerializer -------------------------------------------
+    // DOMParser: parse an HTML or XML string into a detached Document-like
+    // structure. We reuse the host Document's parser by stamping the string
+    // into a throwaway container via innerHTML, then re-exposing the child
+    // tree as a Document-shaped object. This is the same trick every
+    // lightweight framework polyfill uses and matches the behavior real
+    // browsers reach for HTML. XML support is best-effort — bro has no
+    // dedicated XML parser, so we return the HTML parse result.
+    if (typeof globalThis.DOMParser === 'undefined') {
+        function DOMParser() {}
+        DOMParser.prototype.parseFromString = function(str, mimeType) {
+            str = String(str || '');
+            var isFull = /^<!doctype\b/i.test(str) ||
+                         /<html[\s>]/i.test(str);
+            var hostDoc = document;
+            var wrapper = hostDoc.createElement('div');
+            wrapper.innerHTML = str;
+
+            var htmlEl = null, headEl = null, bodyEl = null;
+            if (isFull) {
+                // The inner parse may have stripped html/head/body depending
+                // on the host parser. Look for them explicitly.
+                for (var i = 0; i < wrapper.children.length; i++) {
+                    var c = wrapper.children[i];
+                    var t = (c.tagName || '').toUpperCase();
+                    if (t === 'HTML') htmlEl = c;
+                    else if (t === 'HEAD') headEl = c;
+                    else if (t === 'BODY') bodyEl = c;
+                }
+            }
+            if (!htmlEl) {
+                htmlEl = hostDoc.createElement('html');
+                headEl = hostDoc.createElement('head');
+                bodyEl = hostDoc.createElement('body');
+                htmlEl.appendChild(headEl);
+                htmlEl.appendChild(bodyEl);
+                // Move wrapper children into body.
+                while (wrapper.firstChild) bodyEl.appendChild(wrapper.firstChild);
+            } else {
+                if (!headEl) {
+                    for (var j = 0; j < htmlEl.children.length; j++) {
+                        var cc = htmlEl.children[j];
+                        var tt = (cc.tagName || '').toUpperCase();
+                        if (tt === 'HEAD') headEl = cc;
+                        if (tt === 'BODY') bodyEl = cc;
+                    }
+                }
+            }
+
+            return {
+                nodeType: 9,
+                contentType: mimeType || 'text/html',
+                documentElement: htmlEl,
+                head: headEl || null,
+                body: bodyEl || null,
+                querySelector: function(sel) {
+                    return htmlEl && htmlEl.querySelector ? htmlEl.querySelector(sel) : null;
+                },
+                querySelectorAll: function(sel) {
+                    return htmlEl && htmlEl.querySelectorAll ? htmlEl.querySelectorAll(sel) : [];
+                },
+                getElementById: function(id) {
+                    if (!htmlEl || !htmlEl.querySelector) return null;
+                    return htmlEl.querySelector('#' + id);
+                },
+                getElementsByTagName: function(tag) {
+                    if (!htmlEl || !htmlEl.getElementsByTagName) return [];
+                    return htmlEl.getElementsByTagName(tag);
+                },
+                createElement: function(t) { return hostDoc.createElement(t); },
+                createTextNode: function(t) { return hostDoc.createTextNode(t); },
+                createDocumentFragment: function() { return hostDoc.createDocumentFragment(); }
+            };
+        };
+        globalThis.DOMParser = DOMParser;
+    }
+
+    // XMLSerializer: serialize a node back to a string. For elements, we
+    // delegate to outerHTML. Documents round-trip via their documentElement.
+    if (typeof globalThis.XMLSerializer === 'undefined') {
+        function XMLSerializer() {}
+        XMLSerializer.prototype.serializeToString = function(node) {
+            if (!node) return '';
+            if (typeof node.outerHTML === 'string') return node.outerHTML;
+            // Document-shaped input
+            if (node.nodeType === 9 && node.documentElement) {
+                return node.documentElement.outerHTML || '';
+            }
+            if (typeof node.textContent === 'string') return node.textContent;
+            return String(node);
+        };
+        globalThis.XMLSerializer = XMLSerializer;
+    }
 })();

@@ -87,6 +87,10 @@ void EventLoop::pollEvents() {
                 if (onFocusLost) onFocusLost();
                 break;
 
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
+                if (onFocusGained) onFocusGained();
+                break;
+
             default:
                 break;
         }

@@ -157,4 +157,67 @@
     location.reload = function() {};
     location.assign = function() {};
     location.toString = function() { return location.href; };
+
+    // ------------------------------------------------------------
+    // window scrolling
+    // ------------------------------------------------------------
+    // The bro engine maintains a single scrollable root element; window
+    // scroll maps to setting scrollTop/scrollLeft on document.documentElement
+    // (or body if the document element isn't scrollable). The `behavior`
+    // option is accepted but always treated as 'auto' — smooth scrolling
+    // animation would need engine-side interpolation.
+    function _scrollArgs(a, b) {
+        if (a !== null && typeof a === 'object' && !Array.isArray(a)) {
+            return { x: a.left, y: a.top };
+        }
+        return { x: a, y: b };
+    }
+    function _scrollTarget() {
+        return document.documentElement || document.body;
+    }
+    globalThis.scrollTo = function(a, b) {
+        var p = _scrollArgs(a, b);
+        var t = _scrollTarget();
+        if (!t) return;
+        if (typeof p.x === 'number') t.scrollLeft = p.x;
+        if (typeof p.y === 'number') t.scrollTop = p.y;
+        globalThis.scrollX = t.scrollLeft;
+        globalThis.scrollY = t.scrollTop;
+        globalThis.pageXOffset = t.scrollLeft;
+        globalThis.pageYOffset = t.scrollTop;
+    };
+    globalThis.scrollBy = function(a, b) {
+        var p = _scrollArgs(a, b);
+        var t = _scrollTarget();
+        if (!t) return;
+        if (typeof p.x === 'number') t.scrollLeft = t.scrollLeft + p.x;
+        if (typeof p.y === 'number') t.scrollTop  = t.scrollTop  + p.y;
+        globalThis.scrollX = t.scrollLeft;
+        globalThis.scrollY = t.scrollTop;
+        globalThis.pageXOffset = t.scrollLeft;
+        globalThis.pageYOffset = t.scrollTop;
+    };
+    globalThis.scroll = globalThis.scrollTo;
+
+    // Element.prototype.scrollTo / scrollBy and requestFullscreen are added
+    // in dom_polyfills.js (which runs after the Element class is registered).
+    // Expose the _scrollArgs helper so it can share arg parsing.
+    globalThis.__bro_scroll_args = _scrollArgs;
+
+    // Page visibility + fullscreen setup moved to dom_polyfills.js, since
+    // `document` isn't bound to a real Document yet at this point in init.
+
+    // document.exitFullscreen / Element.prototype.requestFullscreen — bro
+    // controls fullscreen through bro.settings; the Element side is added
+    // in dom_polyfills.js after the class is registered. Expose the forwarder.
+    globalThis.__bro_set_fullscreen_setting = function(value) {
+        if (typeof bro !== 'undefined' && bro.settings && typeof bro.settings.set === 'function') {
+            try { bro.settings.set('graphics.fullscreen', value); return Promise.resolve(); }
+            catch(e) { return Promise.reject(e); }
+        }
+        return Promise.reject(new Error('fullscreen not supported'));
+    };
+    if (typeof document.exitFullscreen === 'undefined') {
+        document.exitFullscreen = function() { return globalThis.__bro_set_fullscreen_setting(false); };
+    }
 })();
