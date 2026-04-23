@@ -62,6 +62,17 @@ void Node::insertBefore(Node* newChild, Node* refChild) {
 
 Element::~Element() { magic_ = 0xDEAD; }
 
+std::string Element::resolveUrl(const std::string& src) const {
+    if (src.size() >= 2 && src[1] == ':') return src;                 // Windows absolute
+    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) return src;
+    if (!document_) return src;
+    const std::string& base = document_->basePath();
+    if (base.empty()) return src;
+    std::string path = base;
+    if (path.back() != '/' && path.back() != '\\') path += '/';
+    return path + src;
+}
+
 Element::Element(const std::string& tag)
     : tag_(tag)
     , style_(this)

@@ -6,17 +6,19 @@
 
 namespace bro::layout {
 
+
 ElVideo::ElVideo(render::Renderer* renderer) : renderer_(renderer) {}
 ElVideo::~ElVideo() = default;
 
 bool ElVideo::load(const std::string& path) {
     auto p = std::make_unique<bro::video::VideoPipeline>();
-    if (!p->open(path)) return false;
+    const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
+    if (!p->open(resolved)) return false;
     pipeline_ = std::move(p);
     intrinsicWidth_ = pipeline_->frameWidth() > 0 ? pipeline_->frameWidth() : intrinsicWidth_;
     intrinsicHeight_ = pipeline_->frameHeight() > 0 ? pipeline_->frameHeight() : intrinsicHeight_;
     // Prime the first frame so layout has something to show before play().
-    pipeline_->advance();
+    pipeline_->advanceTo(0);
     return true;
 }
 

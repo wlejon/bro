@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<style>
+body { background: #222; color: #eee; font-family: sans-serif; margin: 0; padding: 20px; }
+video { background: #000; display: inline-block; margin-top: 10px; }
+button { margin-right: 8px; padding: 6px 12px; }
+#status { margin-top: 10px; font-family: monospace; }
+</style>
+</head>
+<body>
+  <h1>video demo</h1>
+  <video id="v" src="hello.webm" width="320" height="240"></video>
+  <div>
+    <button id="play">play</button>
+    <button id="pause">pause</button>
+    <button id="seek">seek 1s</button>
+  </div>
+  <div id="status">idle</div>
+  <script src="app.js"></script>
+</body>
+</html>

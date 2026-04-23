@@ -96,6 +96,12 @@ public:
     void setDocument(Document* doc) { document_ = doc; }
     Document* document() const { return document_; }
 
+    // Resolve a relative URL against the owning Document's basePath.
+    // Absolute paths are returned unchanged. Kept on Element so callers
+    // that can't pull the full document.h (gumbo transitive include)
+    // still have a convenient resolver — mirrors what Image and fetch do.
+    std::string resolveUrl(const std::string& src) const;
+
     // Computed style (set by Cascade::resolve during style resolution)
     const htmlayout::css::ComputedStyle& computedStyle() const { return computedStyle_; }
     htmlayout::css::ComputedStyle& computedStyleMut() { return computedStyle_; }
