@@ -24,6 +24,109 @@
 #include "layout/key_handle_result.h"
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
+
+// ---------------------------------------------------------------------------
+// Contenteditable edit helpers — shared by handleKeyDown (backspace/delete,
+// cut/paste) and handleTextInput (typing). Defined here so both sites see
+// the template definition.
+// ---------------------------------------------------------------------------
+
+// Return true if `node` is inside a contenteditable host (attribute set to
+// anything other than "false"). Skips `contenteditable="false"`.
+static bool inEditableHost(bro::dom::Node* node) {
+    for (bro::dom::Node* n = node; n; n = n->parentNode()) {
+        if (n->nodeType() != bro::dom::NodeType::Element) continue;
+        auto* el = static_cast<bro::dom::Element*>(n);
+        if (!el->hasAttribute("contenteditable")) continue;
+        return el->getAttribute("contenteditable") != "false";
+    }
+    return false;
+}
+
+// Delete the content currently covered by the Selection's range, collapsing
+// it to the start position. Returns the post-deletion caret (node, offset).
+static void deleteRangeContents(bro::dom::Document* doc,
+                                bro::dom::Range& r,
+                                bro::dom::Node*& node, int& off) {
+    node = r.startContainer();
+    off = r.startOffset();
+    r.deleteContents();
+    if (doc) doc->markDirty();
+}
+
+// Dispatch beforeinput → optionally perform an edit → dispatch input.
+// `runEdit` is the mutation callback; runs only when beforeinput wasn't
+// default-prevented. Events fire on the nearest editable Element ancestor.
+template <typename EditFn>
+static void runEditableMutation(bro::dom::Document* doc,
+                                bro::js::Runtime* rt,
+                                bro::dom::Node* focusNode,
+                                const std::string& inputType,
+                                const std::string& data,
+                                EditFn&& runEdit) {
+    if (!doc || !focusNode) return;
+    auto* host = focusNode;
+    while (host && host->nodeType() != bro::dom::NodeType::Element)
+        host = host->parentNode();
+    auto* hostEl = host ? static_cast<bro::dom::Element*>(host) : doc->body();
+
+    bro::dom::InputEvent beforeEvt("beforeinput", /*bubbles=*/true, /*cancelable=*/true);
+    beforeEvt.setInputType(inputType);
+    beforeEvt.setData(data);
+    beforeEvt.setIsTrusted(true);
+    if (hostEl && rt) {
+        bro::js::dispatchDomEvent(rt->getContext(), hostEl, beforeEvt);
+    }
+    if (beforeEvt.defaultPrevented()) return;
+
+    runEdit();
+
+    bro::dom::InputEvent inputEvt("input", /*bubbles=*/true, /*cancelable=*/false);
+    inputEvt.setInputType(inputType);
+    inputEvt.setData(data);
+    inputEvt.setIsTrusted(true);
+    if (hostEl && rt) {
+        bro::js::dispatchDomEvent(rt->getContext(), hostEl, inputEvt);
+    }
+    doc->markDirty();
+}
+
+// Insert `text` at the current Selection. If the selection isn't collapsed,
+// deletes the contents first. Caret ends up after the inserted text.
+static void selectionInsertText(bro::dom::Document* doc, const std::string& text) {
+    if (!doc) return;
+    auto* sel = doc->selection();
+    if (!sel || sel->rangeCount() == 0) return;
+    auto* range = sel->getRangeAt(0);
+    if (!range) return;
+
+    bro::dom::Node* caretNode = nullptr;
+    int caretOff = 0;
+    if (!range->collapsed()) {
+        deleteRangeContents(doc, *range, caretNode, caretOff);
+    } else {
+        caretNode = range->startContainer();
+        caretOff = range->startOffset();
+    }
+    if (!caretNode) return;
+
+    if (caretNode->nodeType() == bro::dom::NodeType::Text) {
+        auto* tn = static_cast<bro::dom::TextNode*>(caretNode);
+        tn->insertData(caretOff, text);
+        int newOff = caretOff + static_cast<int>(text.size());
+        sel->collapse(tn, newOff);
+    } else if (caretNode->nodeType() == bro::dom::NodeType::Element) {
+        auto* el = static_cast<bro::dom::Element*>(caretNode);
+        auto* tn = doc->createTextNode(text);
+        auto& kids = el->childNodes();
+        if (caretOff >= static_cast<int>(kids.size())) {
+            el->appendChild(tn);
+        } else {
+            el->insertBefore(tn, kids[caretOff]);
+        }
+        sel->collapse(tn, static_cast<int>(text.size()));
+    }
+}
 #include "util/time.h"
 #include "util/log.h"
 #include "util/platform.h"
@@ -966,7 +1069,29 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             pasteEvt.setIsTrusted(true);
             dispatchEvent(target, pasteEvt);
 
-            // If not prevented, insert into focused input/textarea
+            // If not prevented and no form field consumes it, try inserting
+            // into a contenteditable host via the Selection.
+            if (!pasteEvt.defaultPrevented() && !text.empty()) {
+                bool handledByForm = false;
+                if (activeEl) {
+                    auto* input = getElInput(activeEl);
+                    auto* ta = getElTextarea(activeEl);
+                    handledByForm = (input && input->isFocused()) ||
+                                    (ta && ta->isFocused());
+                }
+                if (!handledByForm) {
+                    auto* sel = document_->selection();
+                    if (sel && sel->rangeCount() > 0) {
+                        auto* fn = sel->focusNode();
+                        if (fn && inEditableHost(fn)) {
+                            runEditableMutation(document_.get(), jsRuntime_.get(), fn,
+                                "insertFromPaste", text,
+                                [&] { selectionInsertText(document_.get(), text); });
+                            uiDirty_ = true;
+                        }
+                    }
+                }
+            }
             if (!pasteEvt.defaultPrevented() && !text.empty() && activeEl) {
                 layout::KeyHandleResult r;
                 if (auto* input = getElInput(activeEl); input && input->isFocused()) {
@@ -1009,8 +1134,8 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             if (!clipEvt.defaultPrevented() && !text.empty()) {
                 SDL_SetClipboardText(text.c_str());
 
-                // Cut: clear the field
-                if (keycode == SDLK_X && activeEl) {
+                // Cut: clear the field (form field case)
+                if (keycode == SDLK_X && fromFormField && activeEl) {
                     activeEl->setAttribute("value", "");
                     if (auto* input = getElInput(activeEl))
                         input->setCursorPos(0);
@@ -1023,6 +1148,24 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                     dispatchEvent(activeEl, inputEvt);
                     if (activeEl->document()) activeEl->document()->markDirty();
                     uiDirty_ = true;
+                } else if (keycode == SDLK_X && !fromFormField) {
+                    // Cut from a DOM Selection inside contenteditable.
+                    auto* sel = document_->selection();
+                    if (sel && sel->rangeCount() > 0 && !sel->isCollapsed()) {
+                        auto* fn = sel->focusNode();
+                        if (fn && inEditableHost(fn)) {
+                            runEditableMutation(document_.get(), jsRuntime_.get(), fn,
+                                "deleteByCut", "",
+                                [&] {
+                                    auto* range = sel->getRangeAt(0);
+                                    if (!range) return;
+                                    dom::Node* after = nullptr; int afterOff = 0;
+                                    deleteRangeContents(document_.get(), *range, after, afterOff);
+                                    if (after) sel->collapse(after, afterOff);
+                                });
+                            uiDirty_ = true;
+                        }
+                    }
                 }
             }
         }
@@ -1072,7 +1215,72 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             auto* focusText = (focusN && focusN->nodeType() == dom::NodeType::Text)
                 ? static_cast<dom::TextNode*>(focusN) : nullptr;
 
-            if (ctrl && keycode == SDLK_A) {
+            // -----------------------------------------------------------
+            // Contenteditable editing: Backspace / Delete / Enter, plus
+            // cut via Ctrl+X (copy lands in the earlier clipboard block).
+            // Only fires when the focus endpoint sits in an editable host.
+            // -----------------------------------------------------------
+            bool editable = focusN && inEditableHost(focusN);
+            if (editable && (keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE)) {
+                std::string inputType = (keycode == SDLK_BACKSPACE)
+                    ? "deleteContentBackward" : "deleteContentForward";
+                runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
+                    inputType, "",
+                    [&] {
+                        auto* range = sel->getRangeAt(0);
+                        if (!range) return;
+                        if (!range->collapsed()) {
+                            dom::Node* after = nullptr; int afterOff = 0;
+                            deleteRangeContents(document_.get(), *range, after, afterOff);
+                            if (after) sel->collapse(after, afterOff);
+                            return;
+                        }
+                        // Collapsed: delete one character backward/forward
+                        // within the current text node when possible.
+                        if (focusText) {
+                            int len = static_cast<int>(focusText->length());
+                            if (keycode == SDLK_BACKSPACE && focusO > 0) {
+                                focusText->deleteData(focusO - 1, 1);
+                                sel->collapse(focusText, focusO - 1);
+                            } else if (keycode == SDLK_DELETE && focusO < len) {
+                                focusText->deleteData(focusO, 1);
+                                sel->collapse(focusText, focusO);
+                            }
+                        }
+                    });
+                handled = true;
+            } else if (editable && keycode == SDLK_RETURN) {
+                // Enter inserts a <br> element — v1 treats contenteditable
+                // as plaintext-only (no block splitting on Enter).
+                runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
+                    "insertLineBreak", "\n",
+                    [&] {
+                        auto* range = sel->getRangeAt(0);
+                        if (!range) return;
+                        if (!range->collapsed()) {
+                            dom::Node* after = nullptr; int afterOff = 0;
+                            deleteRangeContents(document_.get(), *range, after, afterOff);
+                            if (after) sel->collapse(after, afterOff);
+                        }
+                        auto* br = document_->createElement("BR");
+                        range = sel->getRangeAt(0);
+                        if (range) range->insertNode(br);
+                        // Move caret past the <br>. For a text-node caret,
+                        // insertNode splits the text; the caret now sits
+                        // immediately after the <br> in its parent.
+                        if (br->parentNode()) {
+                            auto* p = br->parentNode();
+                            const auto& kids = p->childNodes();
+                            for (size_t i = 0; i < kids.size(); ++i) {
+                                if (kids[i] == br) {
+                                    sel->collapse(p, static_cast<int>(i + 1));
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                handled = true;
+            } else if (ctrl && keycode == SDLK_A) {
                 // Ctrl+A: select all children of the containing contenteditable
                 // host, or fall back to the body.
                 dom::Node* host = focusN;
@@ -1196,7 +1404,20 @@ void Engine::handleTextInput(const std::string& text) {
 
     if (result.handled) {
         applyKeyResult(activeEl, result);
+        return;
     }
+
+    // No form-field consumer — maybe the selection is inside a
+    // contenteditable host. Fire beforeinput → mutate → input.
+    auto* sel = document_->selection();
+    if (!sel || sel->rangeCount() == 0) return;
+    auto* focusNode = sel->focusNode();
+    if (!focusNode || !inEditableHost(focusNode)) return;
+
+    runEditableMutation(document_.get(), jsRuntime_.get(), focusNode,
+                        "insertText", text,
+                        [&] { selectionInsertText(document_.get(), text); });
+    uiDirty_ = true;
 }
 
 // ---------------------------------------------------------------------------
