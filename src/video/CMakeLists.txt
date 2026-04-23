@@ -1,13 +1,19 @@
 find_package(unofficial-libwebm CONFIG REQUIRED)
+find_package(unofficial-libvpx CONFIG REQUIRED)
+find_package(Opus CONFIG REQUIRED)
 
 add_library(bro_video STATIC
     media_clock.cpp
     webm_demuxer.cpp
+    video_decoder.cpp
+    audio_decoder.cpp
 )
 target_include_directories(bro_video PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bro_video
     PUBLIC bro_util
     PRIVATE unofficial::libwebm::libwebm
+            unofficial::libvpx::libvpx
+            Opus::opus
 )
 
 # vcpkg's unofficial-libwebm target exposes headers at include/webm/, but
