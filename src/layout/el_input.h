@@ -34,7 +34,18 @@ public:
 
     // Focus/cursor state
     int cursorPos() const { return cursorPos_; }
-    void setCursorPos(int pos) { cursorPos_ = pos; }
+    void setCursorPos(int pos) { cursorPos_ = pos; selStart_ = selEnd_ = pos; }
+
+    // Selection range (HTMLInputElement.selectionStart / selectionEnd).
+    // Collapsed = both equal cursorPos_. Direction is informational only.
+    int selectionStart() const { return selStart_; }
+    int selectionEnd() const { return selEnd_; }
+    void setSelectionRange(int start, int end) {
+        if (start < 0) start = 0;
+        if (end < start) end = start;
+        selStart_ = start; selEnd_ = end;
+        cursorPos_ = end;
+    }
     bool isFocused() const { return focused_; }
     void setFocused(bool f) { focused_ = f; }
 
@@ -75,6 +86,8 @@ private:
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
     int cursorPos_ = 0;
+    int selStart_ = 0;
+    int selEnd_ = 0;
     bool focused_ = false;
     bool dragging_ = false;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};

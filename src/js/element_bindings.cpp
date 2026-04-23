@@ -5,7 +5,10 @@
 #include "dom/event.h"
 #include "dom/shadow_root.h"
 #include "engine/engine.h"
+#include "dom/document.h"
+#include "layout/el_input.h"
 #include "layout/el_select.h"
+#include "layout/el_textarea.h"
 #include "layout/el_video.h"
 
 #include <qjsbind/qjsbind.h>
@@ -1155,7 +1158,224 @@ static JSValue js_element_set_placeholder(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// ---- Attribute methods ----------------------------------------------------
+// ---------------------------------------------------------------------------
+// HTMLInputElement / HTMLTextAreaElement / HTMLSelectElement form IDL
+// ---------------------------------------------------------------------------
+
+// Boolean reflected attribute: presence of the attribute → true.
+static JSValue bool_attr_get(JSContext* ctx, bro::dom::Element* el,
+                             const char* name) {
+    return JS_NewBool(ctx, el && el->hasAttribute(name));
+}
+static JSValue bool_attr_set(JSContext* ctx, bro::dom::Element* el,
+                             const char* name, JSValueConst val) {
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val)) el->setAttribute(name, "");
+    else el->removeAttribute(name);
+    return JS_UNDEFINED;
+}
+// String reflected attribute.
+static JSValue str_attr_get(JSContext* ctx, bro::dom::Element* el,
+                            const char* name) {
+    if (!el) return JS_NewString(ctx, "");
+    return JS_NewString(ctx, el->getAttribute(name).c_str());
+}
+static JSValue str_attr_set(JSContext* ctx, bro::dom::Element* el,
+                            const char* name, JSValueConst val) {
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute(name, jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_required(JSContext* ctx, JSValueConst this_val) {
+    return bool_attr_get(ctx, getElement(this_val), "required");
+}
+static JSValue js_element_set_required(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return bool_attr_set(ctx, getElement(this_val), "required", v);
+}
+static JSValue js_element_get_readOnly(JSContext* ctx, JSValueConst this_val) {
+    return bool_attr_get(ctx, getElement(this_val), "readonly");
+}
+static JSValue js_element_set_readOnly(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return bool_attr_set(ctx, getElement(this_val), "readonly", v);
+}
+static JSValue js_element_get_multiple(JSContext* ctx, JSValueConst this_val) {
+    return bool_attr_get(ctx, getElement(this_val), "multiple");
+}
+static JSValue js_element_set_multiple(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return bool_attr_set(ctx, getElement(this_val), "multiple", v);
+}
+static JSValue js_element_get_pattern(JSContext* ctx, JSValueConst this_val) {
+    return str_attr_get(ctx, getElement(this_val), "pattern");
+}
+static JSValue js_element_set_pattern(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return str_attr_set(ctx, getElement(this_val), "pattern", v);
+}
+static JSValue js_element_get_min(JSContext* ctx, JSValueConst this_val) {
+    return str_attr_get(ctx, getElement(this_val), "min");
+}
+static JSValue js_element_set_min(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return str_attr_set(ctx, getElement(this_val), "min", v);
+}
+static JSValue js_element_get_max(JSContext* ctx, JSValueConst this_val) {
+    return str_attr_get(ctx, getElement(this_val), "max");
+}
+static JSValue js_element_set_max(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return str_attr_set(ctx, getElement(this_val), "max", v);
+}
+static JSValue js_element_get_step(JSContext* ctx, JSValueConst this_val) {
+    return str_attr_get(ctx, getElement(this_val), "step");
+}
+static JSValue js_element_set_step(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return str_attr_set(ctx, getElement(this_val), "step", v);
+}
+static JSValue js_element_get_name(JSContext* ctx, JSValueConst this_val) {
+    return str_attr_get(ctx, getElement(this_val), "name");
+}
+static JSValue js_element_set_name(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return str_attr_set(ctx, getElement(this_val), "name", v);
+}
+static JSValue js_element_get_autocomplete(JSContext* ctx, JSValueConst this_val) {
+    return str_attr_get(ctx, getElement(this_val), "autocomplete");
+}
+static JSValue js_element_set_autocomplete(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    return str_attr_set(ctx, getElement(this_val), "autocomplete", v);
+}
+
+// minLength / maxLength: numeric reflected attributes. Spec: default -1 if
+// missing/invalid for minLength; default -1 (interpreted as "no limit") for
+// maxLength on input/textarea.
+static JSValue num_attr_get(JSContext* ctx, bro::dom::Element* el,
+                            const char* name, int defaultVal) {
+    if (!el || !el->hasAttribute(name)) return JS_NewInt32(ctx, defaultVal);
+    const std::string& s = el->getAttribute(name);
+    try { return JS_NewInt32(ctx, std::stoi(s)); }
+    catch (...) { return JS_NewInt32(ctx, defaultVal); }
+}
+static JSValue js_element_get_minLength(JSContext* ctx, JSValueConst this_val) {
+    return num_attr_get(ctx, getElement(this_val), "minlength", -1);
+}
+static JSValue js_element_set_minLength(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    int32_t n = 0; JS_ToInt32(ctx, &n, v);
+    el->setAttribute("minlength", std::to_string(n));
+    return JS_UNDEFINED;
+}
+static JSValue js_element_get_maxLength(JSContext* ctx, JSValueConst this_val) {
+    return num_attr_get(ctx, getElement(this_val), "maxlength", -1);
+}
+static JSValue js_element_set_maxLength(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    int32_t n = 0; JS_ToInt32(ctx, &n, v);
+    el->setAttribute("maxlength", std::to_string(n));
+    return JS_UNDEFINED;
+}
+static JSValue js_element_get_size(JSContext* ctx, JSValueConst this_val) {
+    return num_attr_get(ctx, getElement(this_val), "size", 0);
+}
+static JSValue js_element_set_size(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    int32_t n = 0; JS_ToInt32(ctx, &n, v);
+    el->setAttribute("size", std::to_string(n));
+    return JS_UNDEFINED;
+}
+
+// form: nearest ancestor <form>, unless the control has a `form="id"` attr —
+// then look up the document by id. Returns null if no owning form.
+static JSValue js_element_get_form(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    const std::string& formId = el->getAttribute("form");
+    if (!formId.empty() && el->document()) {
+        auto* owner = el->document()->getElementById(formId);
+        if (owner && (owner->tagName() == "FORM" || owner->tagName() == "form"))
+            return DomBindings::wrapElement(ctx, owner);
+        return JS_NULL;
+    }
+    for (auto* p = el->parentElement(); p; p = p->parentElement()) {
+        if (p->tagName() == "FORM" || p->tagName() == "form")
+            return DomBindings::wrapElement(ctx, p);
+    }
+    return JS_NULL;
+}
+
+// Selection API: delegates to ElInput. Non-text inputs return null / throw
+// per spec — bro returns safe defaults instead of throwing (matches our
+// overall "prefer no-op to exception" style for IDL edge cases).
+static JSValue js_element_get_selectionStart(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    if (auto* inp = el->inputControl()) return JS_NewInt32(ctx, inp->selectionStart());
+    // Textarea: use its cursorPos as a collapsed selection for now.
+    if (auto* ta = el->textareaControl()) return JS_NewInt32(ctx, ta->cursorPos());
+    return JS_NULL;
+}
+static JSValue js_element_set_selectionStart(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    int32_t n = 0; JS_ToInt32(ctx, &n, v);
+    if (auto* inp = el->inputControl()) {
+        inp->setSelectionRange(n, inp->selectionEnd() < n ? n : inp->selectionEnd());
+    }
+    return JS_UNDEFINED;
+}
+static JSValue js_element_get_selectionEnd(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    if (auto* inp = el->inputControl()) return JS_NewInt32(ctx, inp->selectionEnd());
+    if (auto* ta = el->textareaControl()) return JS_NewInt32(ctx, ta->cursorPos());
+    return JS_NULL;
+}
+static JSValue js_element_set_selectionEnd(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    int32_t n = 0; JS_ToInt32(ctx, &n, v);
+    if (auto* inp = el->inputControl()) {
+        inp->setSelectionRange(inp->selectionStart(), n);
+    }
+    return JS_UNDEFINED;
+}
+static JSValue js_element_setSelectionRange(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 2) return JS_UNDEFINED;
+    int32_t start = 0, end = 0;
+    JS_ToInt32(ctx, &start, argv[0]);
+    JS_ToInt32(ctx, &end, argv[1]);
+    if (auto* inp = el->inputControl()) inp->setSelectionRange(start, end);
+    else if (auto* ta = el->textareaControl()) ta->setCursorPos(end);
+    return JS_UNDEFINED;
+}
+static JSValue js_element_select(JSContext* ctx, JSValueConst this_val,
+                                 int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    const std::string& v = el->getAttribute("value");
+    int len = static_cast<int>(v.size());
+    if (auto* inp = el->inputControl()) inp->setSelectionRange(0, len);
+    return JS_UNDEFINED;
+}
+
+// files: FileList for <input type=file>. bro has no native file picker in
+// headless and no engine-driven file drop has been wired to <input> yet, so
+// this always returns null (spec: null for non-file inputs) or an empty
+// array-like for type=file. Extending to a live FileList when file drop
+// wiring lands is a focused follow-up.
+static JSValue js_element_get_files(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    const std::string& t = el->getAttribute("type");
+    if (t != "file") return JS_NULL;
+    // Empty FileList — array with length=0, array-like indexing returns undefined.
+    JSValue arr = JS_NewArray(ctx);
+    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, 0));
+    return arr;
+}
+
+
 
 static JSValue js_element_getAttribute(JSContext* ctx, JSValueConst this_val,
                                        int argc, JSValueConst* argv)
@@ -2766,6 +2986,24 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("type",        js_element_get_type,        js_element_set_type),
     JS_CGETSET_DEF("disabled",    js_element_get_disabled,    js_element_set_disabled),
     JS_CGETSET_DEF("placeholder", js_element_get_placeholder, js_element_set_placeholder),
+    JS_CGETSET_DEF("name",        js_element_get_name,        js_element_set_name),
+    JS_CGETSET_DEF("required",    js_element_get_required,    js_element_set_required),
+    JS_CGETSET_DEF("readOnly",    js_element_get_readOnly,    js_element_set_readOnly),
+    JS_CGETSET_DEF("multiple",    js_element_get_multiple,    js_element_set_multiple),
+    JS_CGETSET_DEF("pattern",     js_element_get_pattern,     js_element_set_pattern),
+    JS_CGETSET_DEF("min",         js_element_get_min,         js_element_set_min),
+    JS_CGETSET_DEF("max",         js_element_get_max,         js_element_set_max),
+    JS_CGETSET_DEF("step",        js_element_get_step,        js_element_set_step),
+    JS_CGETSET_DEF("minLength",   js_element_get_minLength,   js_element_set_minLength),
+    JS_CGETSET_DEF("maxLength",   js_element_get_maxLength,   js_element_set_maxLength),
+    JS_CGETSET_DEF("size",        js_element_get_size,        js_element_set_size),
+    JS_CGETSET_DEF("autocomplete",js_element_get_autocomplete,js_element_set_autocomplete),
+    JS_CGETSET_DEF("form",        js_element_get_form,        nullptr),
+    JS_CGETSET_DEF("selectionStart", js_element_get_selectionStart, js_element_set_selectionStart),
+    JS_CGETSET_DEF("selectionEnd",   js_element_get_selectionEnd,   js_element_set_selectionEnd),
+    JS_CGETSET_DEF("files",       js_element_get_files, nullptr),
+    JS_CFUNC_DEF("setSelectionRange", 2, js_element_setSelectionRange),
+    JS_CFUNC_DEF("select",            0, js_element_select),
     // Methods
     JS_CFUNC_DEF("getAttribute",        1, js_element_getAttribute),
     JS_CFUNC_DEF("hasAttribute",        1, js_element_hasAttribute),
