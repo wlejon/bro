@@ -7,6 +7,8 @@ add_library(bro_video STATIC
     webm_demuxer.cpp
     video_decoder.cpp
     audio_decoder.cpp
+    yuv_to_rgb.cpp
+    video_pipeline.cpp
 )
 target_include_directories(bro_video PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bro_video

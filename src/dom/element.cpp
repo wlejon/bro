@@ -7,6 +7,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
+#include "layout/el_video.h"
 #include "layout/element_ref_adapter.h"
 #include "css/selector.h"
 #include "util/log.h"
@@ -660,6 +661,10 @@ void Element::setSelectControl(std::unique_ptr<layout::ElSelect> ctrl) {
 
 void Element::setSvgControl(std::unique_ptr<layout::ElSvg> ctrl) {
     svgControl_ = std::move(ctrl);
+}
+
+void Element::setVideoControl(std::unique_ptr<layout::ElVideo> ctrl) {
+    videoControl_ = std::move(ctrl);
 }
 
 } // namespace bro::dom

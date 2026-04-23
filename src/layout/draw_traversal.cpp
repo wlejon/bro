@@ -3,6 +3,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
+#include "layout/el_video.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
@@ -587,6 +588,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         auto* selectCtrl = elem->selectControl();
         if (selectCtrl) {
             selectCtrl->draw(renderer_, box, style, offsetX, offsetY);
+        }
+        auto* videoCtrl = elem->videoControl();
+        if (videoCtrl) {
+            videoCtrl->draw(renderer_, elem, box, offsetX, offsetY);
         }
     }
 

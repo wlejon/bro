@@ -15,6 +15,7 @@ namespace bro::layout {
     class ElTextarea;
     class ElSelect;
     class ElSvg;
+    class ElVideo;
 }
 
 namespace bro::dom {
@@ -131,11 +132,13 @@ public:
     layout::ElTextarea* textareaControl() const { return textareaControl_.get(); }
     layout::ElSelect* selectControl() const { return selectControl_.get(); }
     layout::ElSvg* svgControl() const { return svgControl_.get(); }
+    layout::ElVideo* videoControl() const { return videoControl_.get(); }
 
     void setInputControl(std::unique_ptr<layout::ElInput> ctrl);
     void setTextareaControl(std::unique_ptr<layout::ElTextarea> ctrl);
     void setSelectControl(std::unique_ptr<layout::ElSelect> ctrl);
     void setSvgControl(std::unique_ptr<layout::ElSvg> ctrl);
+    void setVideoControl(std::unique_ptr<layout::ElVideo> ctrl);
 
     // Canvas scene (opaque pointer — set by engine, read by draw traversal)
     void setCanvasScene(void* scene) { canvasScene_ = scene; }
@@ -177,6 +180,7 @@ private:
     std::unique_ptr<layout::ElTextarea> textareaControl_;
     std::unique_ptr<layout::ElSelect> selectControl_;
     std::unique_ptr<layout::ElSvg> svgControl_;
+    std::unique_ptr<layout::ElVideo> videoControl_;
     void* canvasScene_ = nullptr;
     void* webglContext_ = nullptr;
     void* sceneGraph_ = nullptr;

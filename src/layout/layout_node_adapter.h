@@ -5,6 +5,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
+#include "layout/el_video.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -89,6 +90,10 @@ public:
             return true;
         }
         if (auto* ctrl = elem_->svgControl()) {
+            ctrl->getContentSize(w, h);
+            return true;
+        }
+        if (auto* ctrl = elem_->videoControl()) {
             ctrl->getContentSize(w, h);
             return true;
         }

@@ -86,6 +86,14 @@ public:
     virtual void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) = 0;
     virtual void drawImage(const void* data, size_t len, float x, float y, float w, float h) = 0;
 
+    // Draw a raw RGBA8 buffer. Unlike drawImage(), no codec decode happens —
+    // `rgba` must be tightly-packed or use `stride` for row padding. Used by
+    // video playback where decoding PNG/JPEG per frame would be absurd.
+    // Default implementation is a no-op so backends can adopt incrementally.
+    virtual void drawPixelsRGBA(const uint8_t* /*rgba*/,
+                                int /*srcW*/, int /*srcH*/, int /*stride*/,
+                                float /*x*/, float /*y*/, float /*w*/, float /*h*/) {}
+
     // SVG drawing primitives
     virtual void drawCircle(float cx, float cy, float r,
                             Color fill, Color stroke, float strokeWidth) = 0;

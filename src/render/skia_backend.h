@@ -58,6 +58,8 @@ public:
 
     void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) override;
     void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
+    void drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
+                        float x, float y, float w, float h) override;
 
     void drawCircle(float cx, float cy, float r,
                     Color fill, Color stroke, float strokeWidth) override;

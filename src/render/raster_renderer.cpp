@@ -1,5 +1,6 @@
 #include "render/raster_renderer.h"
 
+#include <include/core/SkBitmap.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkData.h>
 #include <include/core/SkFont.h>
@@ -210,6 +211,19 @@ void RasterRenderer::drawImage(const void* data, size_t len, float x, float y, f
     auto codec = SkCodec::MakeFromData(sk_data);
     if (!codec) return;
     auto [image, result] = codec->getImage();
+    if (!image) return;
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+}
+
+void RasterRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
+                                    float x, float y, float w, float h) {
+    if (!canvas_ || !rgba || srcW <= 0 || srcH <= 0) return;
+    if (stride <= 0) stride = srcW * 4;
+
+    SkImageInfo info = SkImageInfo::Make(srcW, srcH, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    SkBitmap bmp;
+    if (!bmp.installPixels(info, const_cast<uint8_t*>(rgba), static_cast<size_t>(stride))) return;
+    auto image = bmp.asImage();
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
 }

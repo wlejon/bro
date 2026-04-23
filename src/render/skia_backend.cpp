@@ -530,6 +530,19 @@ void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, flo
     stbi_image_free(pixels);
 }
 
+void SkiaRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
+                                  float x, float y, float w, float h) {
+    if (!canvas_ || !rgba || srcW <= 0 || srcH <= 0) return;
+    if (stride <= 0) stride = srcW * 4;
+
+    SkImageInfo info = SkImageInfo::Make(srcW, srcH, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    SkBitmap bmp;
+    if (!bmp.installPixels(info, const_cast<uint8_t*>(rgba), static_cast<size_t>(stride))) return;
+    auto image = bmp.asImage();
+    if (!image) return;
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+}
+
 void SkiaRenderer::setClip(float x, float y, float w, float h) {
     if (canvas_) canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
 }

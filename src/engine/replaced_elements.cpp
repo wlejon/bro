@@ -13,6 +13,7 @@
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_svg.h"
+#include "layout/el_video.h"
 #include "js/event_dispatch.h"
 #include "platform/sdl_window.h"
 
@@ -52,6 +53,14 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer) {
         ctrl->setElement(elem);
         ctrl->parseAttributes();
         elem->setSvgControl(std::move(ctrl));
+    } else if ((tag == "VIDEO" || tag == "video") && !elem->videoControl()) {
+        auto ctrl = std::make_unique<layout::ElVideo>(renderer);
+        ctrl->setElement(elem);
+        // If the element already has a src attribute, load it now.
+        // Otherwise the JS binding will trigger load when src is set.
+        std::string src = elem->getAttribute("src");
+        if (!src.empty()) ctrl->load(src);
+        elem->setVideoControl(std::move(ctrl));
     }
 
     // Recurse into children

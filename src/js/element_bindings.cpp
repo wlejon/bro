@@ -6,6 +6,7 @@
 #include "dom/shadow_root.h"
 #include "engine/engine.h"
 #include "layout/el_select.h"
+#include "layout/el_video.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -641,6 +642,67 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// ---------------------------------------------------------------------------
+// <video> bindings — dispatch through Element::videoControl()
+// ---------------------------------------------------------------------------
+
+static JSValue js_element_video_play(JSContext* ctx, JSValueConst this_val,
+                                     int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (el) if (auto* v = el->videoControl()) v->play();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_pause(JSContext* ctx, JSValueConst this_val,
+                                      int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (el) if (auto* v = el->videoControl()) v->pause();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_currentTime(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    double t = 0.0;
+    if (el) if (auto* v = el->videoControl()) t = v->currentTime();
+    return JS_NewFloat64(ctx, t);
+}
+
+static JSValue js_element_video_set_currentTime(JSContext* ctx, JSValueConst this_val,
+                                                JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    double t = 0.0;
+    JS_ToFloat64(ctx, &t, val);
+    if (auto* v = el->videoControl()) v->seekTo(t);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_video_get_duration(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    double d = 0.0;
+    if (el) if (auto* v = el->videoControl()) d = v->duration();
+    return JS_NewFloat64(ctx, d);
+}
+
+static JSValue js_element_video_get_paused(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_TRUE;
+    if (auto* v = el->videoControl()) return JS_NewBool(ctx, !v->isPlaying());
+    return JS_TRUE;
+}
+
+static JSValue js_element_video_get_videoWidth(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (el) if (auto* v = el->videoControl()) return JS_NewInt32(ctx, v->videoWidth());
+    return JS_NewInt32(ctx, 0);
+}
+
+static JSValue js_element_video_get_videoHeight(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (el) if (auto* v = el->videoControl()) return JS_NewInt32(ctx, v->videoHeight());
+    return JS_NewInt32(ctx, 0);
+}
+
 static JSValue js_element_get_checked(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
@@ -779,6 +841,15 @@ static JSValue js_element_setAttribute(JSContext* ctx, JSValueConst this_val,
     // Setting the style attribute must sync into the inline style proxy
     if (name == "style")
         el->style().setCssText(newVal);
+    // VIDEO src change: trigger load through the controller if attached.
+    // If the control isn't present yet, ensureReplacedElements picks the
+    // src attribute up when it runs, so the value-stored-on-attribute
+    // path alone suffices in that case.
+    if (name == "src" && (el->tagName() == "VIDEO" || el->tagName() == "video")) {
+        if (auto* v = el->videoControl()) {
+            if (!newVal.empty()) v->load(newVal);
+        }
+    }
     if (oldVal != newVal) {
         fireAttributeChangedCallback(ctx, this_val, name, oldVal, newVal);
         notifyMutationObservers(ctx, this_val, "attributes",
@@ -2278,6 +2349,14 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("dataset",       js_element_get_dataset, nullptr),
     JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),
     JS_CGETSET_DEF("content",      js_element_get_content, nullptr),
+    // <video> properties and methods
+    JS_CGETSET_DEF("currentTime", js_element_video_get_currentTime, js_element_video_set_currentTime),
+    JS_CGETSET_DEF("duration",    js_element_video_get_duration, nullptr),
+    JS_CGETSET_DEF("paused",      js_element_video_get_paused, nullptr),
+    JS_CGETSET_DEF("videoWidth",  js_element_video_get_videoWidth, nullptr),
+    JS_CGETSET_DEF("videoHeight", js_element_video_get_videoHeight, nullptr),
+    JS_CFUNC_DEF("play",  0, js_element_video_play),
+    JS_CFUNC_DEF("pause", 0, js_element_video_pause),
     // Form control properties
     JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
     JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),
