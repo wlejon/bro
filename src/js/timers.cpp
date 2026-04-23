@@ -308,8 +308,22 @@ void Timers::install(JSContext* ctx, Timers* instance)
         .function("requestAnimationFrame", js_requestAnimationFrame, 1)
         .function("cancelAnimationFrame", js_cancelAnimationFrame, 1);
 
-    qjsbind::Namespace(ctx, "performance")
-        .function("now", js_performanceNow, 0);
+    // Install performance.now() on the EXISTING performance object (brokit
+    // creates it with mark/measure/getEntries*, and we just need to override
+    // .now to return engine-tracked time — real in windowed, virtual in
+    // headless). Using Namespace here would replace the whole object and
+    // clobber brokit's User Timing additions.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue perf = JS_GetPropertyStr(ctx, global, "performance");
+    if (JS_IsUndefined(perf) || JS_IsNull(perf)) {
+        JS_FreeValue(ctx, perf);
+        perf = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "performance", JS_DupValue(ctx, perf));
+    }
+    JS_SetPropertyStr(ctx, perf, "now",
+        JS_NewCFunction(ctx, js_performanceNow, "now", 0));
+    JS_FreeValue(ctx, perf);
+    JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js
