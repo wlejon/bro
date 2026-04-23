@@ -304,6 +304,40 @@ static JSValue js_node_markHtmlDirty(JSContext* ctx, JSValueConst this_val, int,
     return JS_UNDEFINED;
 }
 
+// setBaseColorTexture(tex|null) — replace or clear the baseColor texture at
+// runtime. `tex` shape matches createMesh's `texture` option:
+// { width, height, data: Uint8Array(rgba8) }. Pass null/undefined to clear
+// so the mesh falls back to `uColor` (and vertex colors if present).
+static JSValue js_node_setBaseColorTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "setBaseColorTexture: not a MeshNode");
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
+
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        meshNode->clearBaseColorTexture();
+        return JS_UNDEFINED;
+    }
+    if (!JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setBaseColorTexture: expected { width, height, data } or null");
+
+    int w_ = (int)jsGetProp(ctx, argv[0], "width",  0);
+    int h_ = (int)jsGetProp(ctx, argv[0], "height", 0);
+    JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+    size_t off = 0, len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
+    if (!JS_IsException(ab)) {
+        size_t bytes = 0;
+        uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+        if (base && w_ > 0 && h_ > 0 && len >= (size_t)w_ * (size_t)h_ * 4) {
+            meshNode->setBaseColorTexture(w_, h_, base + off);
+        }
+        JS_FreeValue(ctx, ab);
+    }
+    JS_FreeValue(ctx, dataVal);
+    return JS_UNDEFINED;
+}
+
 // updateMesh(meshOrOpts[, opts])
 static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
@@ -2056,6 +2090,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("localToWorld", js_node_localToWorld, 2)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
         .method_raw("updateMesh", js_node_updateMesh, 1)
+        .method_raw("setBaseColorTexture", js_node_setBaseColorTexture, 1)
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
         .method_raw("attachAgent", nodeAttachAgent, 3)

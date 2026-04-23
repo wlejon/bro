@@ -97,6 +97,7 @@ const viewSelfxBtn = document.getElementById('view-selfx');
 const viewUVBtn    = document.getElementById('view-uv');
 const viewBonesBtn = document.getElementById('view-bones');
 const viewShadowsBtn = document.getElementById('view-shadows');
+const viewTextureBtn = document.getElementById('view-texture');
 const viewEmissiveRange = document.getElementById('view-emissive');
 const viewEmissiveNum   = document.getElementById('view-emissive-num');
 
@@ -146,7 +147,7 @@ let state = {
     bindPoseOnly: false,
     panelHidden: false,
 
-    view:    { color: 'original', hull: false, selfx: false, uv: false, bones: false, shadows: true, emissive: 1.0 },
+    view:    { color: 'original', hull: false, selfx: false, uv: false, bones: false, shadows: true, texture: true, emissive: 1.0 },
     modify:  { dirty: false },
     lod:     { ratio: 1.0, built: false, encoded: null, originalTris: 0 },
     rig:     { active: -1, blend: -1, blendW: 0.5 },
@@ -537,6 +538,11 @@ function loadFile(idx) {
             opts.color = PALETTE[i % PALETTE.length];
         }
 
+        // If the user has Texture toggled off, create without a baseColor map;
+        // we still cache the image on the item so the toggle can re-apply it.
+        const cachedTex = opts.texture || null;
+        if (!state.view.texture) delete opts.texture;
+
         items.push({
             bind, work,
             basePositions: new Float32Array(bind.positions),
@@ -544,6 +550,7 @@ function loadFile(idx) {
             baseColors:    bind.hasColors  ? new Float32Array(bind.colors)  : null,
             node: scene.createMesh(opts),
             loadedEmissive: opts.emissive || 0,
+            baseTexture: cachedTex,
             hullNode: null,
             selfxNode: null,
         });
@@ -586,7 +593,7 @@ function loadFile(idx) {
 
 function resetUIState() {
     state.view = { color: 'original', hull: false, selfx: false, uv: false, bones: false,
-                   shadows: state.view.shadows };
+                   shadows: state.view.shadows, texture: true, emissive: state.view.emissive };
     state.lod = { ratio: 1.0, built: false, encoded: null, originalTris: 0 };
     state.rig.active = -1;
     state.rig.blend = -1;
@@ -1159,6 +1166,7 @@ function syncControls() {
     viewUVBtn   .classList.toggle('toggled', state.view.uv);
     viewBonesBtn.classList.toggle('toggled', state.view.bones);
     viewShadowsBtn.classList.toggle('toggled', state.view.shadows);
+    viewTextureBtn.classList.toggle('toggled', state.view.texture);
 
     modResetBtn.disabled = state.busy || (!state.modify.dirty && !state.lod.built);
     lodBuildBtn.disabled = state.busy || state.lod.built || !state.loaded || (state.loaded && state.loaded.items.length !== 1);
@@ -1251,6 +1259,15 @@ viewBonesBtn.addEventListener('click', () => {
 viewShadowsBtn.addEventListener('click', () => {
     state.view.shadows = !state.view.shadows;
     keyLight.castsShadow = state.view.shadows;
+    syncControls();
+});
+viewTextureBtn.addEventListener('click', () => {
+    state.view.texture = !state.view.texture;
+    if (state.loaded) {
+        for (const it of state.loaded.items) {
+            it.node.setBaseColorTexture(state.view.texture ? it.baseTexture : null);
+        }
+    }
     syncControls();
 });
 viewEmissiveRange.addEventListener('input', () => {
