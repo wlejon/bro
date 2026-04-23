@@ -13,7 +13,18 @@
 namespace bro::dom {
 
 Document::Document() = default;
-Document::~Document() = default;
+
+// Selection owns a Range whose destructor calls back into unregisterRange().
+// Members destroy in reverse declaration order, so if we defaulted this the
+// liveRanges_ set would already be gone by the time ~Selection ran. Tear
+// selection_ down first, then clear any JS-owned Ranges that outlived us.
+Document::~Document() {
+    selection_.reset();
+    auto ranges = std::move(liveRanges_);
+    for (auto* r : ranges) {
+        if (r) r->setDocument(nullptr);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Selection + live Range registry

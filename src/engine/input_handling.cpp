@@ -500,6 +500,9 @@ void Engine::handleMouseDown(float x, float y, int button) {
                         selectionAnchorNode_ = hit.textNode;
                         selectionAnchorOffset_ = hit.srcOffset;
                         selectionDragging_ = true;
+                        selectionPressX_ = docX;
+                        selectionPressY_ = docY;
+                        selectionPastThreshold_ = false;
                     }
                     uiDirty_ = true;
                 } else {
@@ -666,15 +669,34 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // focus to follow the pointer. The anchor is whatever was captured on
     // mousedown (selectionAnchor*).
     if (selectionDragging_ && document_ && textMetrics_ && selectionAnchorNode_) {
-        auto hit = layout::hitTestText(document_.get(), docX, docY, *textMetrics_);
+        // Require the pointer to travel past a small threshold before we begin
+        // extending the selection. Without this, sub-pixel jitter during a
+        // plain click registers as a drag and snaps the focus to whatever
+        // text run hit-testing picks nearest — which inside a tiled/grid
+        // layout is often a far-away cell, creating an apparent "selects the
+        // whole page" bug from the user's perspective.
+        if (!selectionPastThreshold_) {
+            const float kThreshold = 4.0f;
+            float dx = docX - selectionPressX_;
+            float dy = docY - selectionPressY_;
+            if (dx*dx + dy*dy < kThreshold * kThreshold) {
+                // Still a potential click; leave the caret collapsed at anchor.
+            } else {
+                selectionPastThreshold_ = true;
+            }
+        }
+        auto hit = selectionPastThreshold_
+            ? layout::hitTestText(document_.get(), docX, docY, *textMetrics_)
+            : layout::TextHit{};
         if (hit.textNode) {
             auto* sel = document_->selection();
-            // Compute direction: if focus is before anchor, backward.
+            // Compute direction: if focus is before anchor, backward. Use
+            // comparePoint against a range collapsed at the anchor — probing
+            // with setEnd doesn't work because Range::normalize clamps
+            // reversed endpoints instead of swapping them.
             dom::Range probe;
             probe.setStart(selectionAnchorNode_, selectionAnchorOffset_);
-            probe.setEnd(hit.textNode, hit.srcOffset);
-            bool backward = !(probe.startContainer() == selectionAnchorNode_ &&
-                              probe.startOffset() == selectionAnchorOffset_);
+            bool backward = probe.comparePoint(hit.textNode, hit.srcOffset) < 0;
             if (backward) {
                 sel->setRange(hit.textNode, hit.srcOffset,
                               selectionAnchorNode_, selectionAnchorOffset_,

@@ -593,6 +593,12 @@ private:
     bool selectionDragging_ = false;
     dom::TextNode* selectionAnchorNode_ = nullptr;
     int selectionAnchorOffset_ = 0;
+    // Press position in document space, used to gate selection extension until
+    // the pointer has moved far enough that the user intends a drag (rather
+    // than a click with incidental sub-pixel motion).
+    float selectionPressX_ = 0.0f;
+    float selectionPressY_ = 0.0f;
+    bool  selectionPastThreshold_ = false;
 
     // Viewport scrolling
     float scrollY_ = 0.0f;
