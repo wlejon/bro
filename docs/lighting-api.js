@@ -112,10 +112,10 @@ s.emissive = 2.0;
 
 
 // -----------------------------------------------------------------------------
-// PBR textures: normal, metallic-roughness, occlusion
+// PBR textures: normal, metallic-roughness, occlusion, emissive
 // -----------------------------------------------------------------------------
 //
-// All three follow the same shape as the baseColor texture: an object with
+// All four follow the same shape as the baseColor texture: an object with
 // { width, height, data: Uint8Array(rgba8) }. Tangents for normal mapping
 // are generated automatically from the mesh UVs when a normal map is used.
 //
@@ -125,6 +125,10 @@ s.emissive = 2.0;
 //                              the sampled channel, so set scalars to 1.0 to
 //                              let the texture drive the value directly.
 //   occlusionTexture         — R channel; modulates ambient/IBL only.
+//   emissiveTexture          — RGB, multiplied by `emissive` × `emissiveColor`.
+//                              Matches glTF's `emission = factor * sample()`:
+//                              set `emissive = 1.0` and `emissiveColor` to
+//                              the glTF emissiveFactor.
 //
 // Any combination may be bound; maps you don't set fall back to the scalar
 // material params.
@@ -139,6 +143,9 @@ scene.createMesh({
     normalTexture:            { width: W, height: H, data: normalRGBA    },
     metallicRoughnessTexture: { width: W, height: H, data: mrRGBA        },
     occlusionTexture:         { width: W, height: H, data: aoRGBA        },
+    emissiveTexture:          { width: W, height: H, data: emissiveRGBA  },
+    emissive: 1.0,
+    emissiveColor: [1.0, 0.6, 0.2],  // tint factor from the source file
 });
 
 

@@ -955,7 +955,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
 
     // Optional texture maps: each is { width, height, data: Uint8Array(rgba8) }.
     // Keys: texture (baseColor), normalTexture, metallicRoughnessTexture,
-    //       occlusionTexture.
+    //       occlusionTexture, emissiveTexture.
     if (argc > 0 && JS_IsObject(argv[0])) {
         auto applyTex = [&](const char* key, void (scene::MeshNode::*setter)(int, int, const uint8_t*)) {
             JSValue tex = JS_GetPropertyStr(ctx, argv[0], key);
@@ -981,6 +981,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         applyTex("normalTexture",            &scene::MeshNode::setNormalTexture);
         applyTex("metallicRoughnessTexture", &scene::MeshNode::setMetallicRoughnessTexture);
         applyTex("occlusionTexture",         &scene::MeshNode::setOcclusionTexture);
+        applyTex("emissiveTexture",          &scene::MeshNode::setEmissiveTexture);
     }
 
     return wrapNode(ctx, node, g);

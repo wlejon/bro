@@ -98,9 +98,11 @@ uniform int       uHasTangent;
 uniform int       uHasNormalMap;
 uniform int       uHasMRMap;
 uniform int       uHasAOMap;
+uniform int       uHasEmissiveMap;
 uniform sampler2D uNormalMap;
-uniform sampler2D uMRMap;      // glTF: G=roughness, B=metallic
-uniform sampler2D uAOMap;      // R channel
+uniform sampler2D uMRMap;        // glTF: G=roughness, B=metallic
+uniform sampler2D uAOMap;        // R channel
+uniform sampler2D uEmissiveMap;  // RGB, multiplied by uEmissive * uEmissiveColor
 uniform int       uReceivesShadow;
 
 uniform float uFogStart;
@@ -262,7 +264,7 @@ float sampleShadow(int slot, vec3 posCamRel) {
     }
     return s * (1.0 / 16.0);
 }
-
+)" R"(
 void main() {
     if (uNearClip > 0.0 && vCamDist < uNearClip) discard;
 
@@ -452,6 +454,9 @@ void main() {
         ambient *= texture(uAOMap, vUV).r;
     }
     vec3 emissive = uEmissiveColor * uEmissive;
+    if (uHasEmissiveMap == 1) {
+        emissive *= texture(uEmissiveMap, vUV).rgb;
+    }
     vec3 color = Lo + ambient + emissive;
 
     // Distance fog (applied in linear space; tonemap runs after)
@@ -1283,9 +1288,11 @@ void SceneGraph::ensureMeshPipeline() {
         uHasNormalMap_   = glGetUniformLocation(meshProgram_, "uHasNormalMap");
         uHasMRMap_       = glGetUniformLocation(meshProgram_, "uHasMRMap");
         uHasAOMap_       = glGetUniformLocation(meshProgram_, "uHasAOMap");
+        uHasEmissiveMap_ = glGetUniformLocation(meshProgram_, "uHasEmissiveMap");
         uNormalMap_      = glGetUniformLocation(meshProgram_, "uNormalMap");
         uMRMap_          = glGetUniformLocation(meshProgram_, "uMRMap");
         uAOMap_          = glGetUniformLocation(meshProgram_, "uAOMap");
+        uEmissiveMap_    = glGetUniformLocation(meshProgram_, "uEmissiveMap");
         uReceivesShadow_ = glGetUniformLocation(meshProgram_, "uReceivesShadow");
         uFogStart_ = glGetUniformLocation(meshProgram_, "uFogStart");
         uFogEnd_ = glGetUniformLocation(meshProgram_, "uFogEnd");
@@ -3045,11 +3052,12 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
         glUniform1i(uUseTexture_, 0);
     }
 
-    // PBR map bindings — units 5/6/7 avoid collision with baseColor (0),
+    // PBR map bindings — units 5/6/7/8 avoid collision with baseColor (0),
     // shadow atlas (1), and IBL cubemaps/BRDF LUT (2/3/4).
     bool hasNM = mesh->hasNormalTexture();
     bool hasMR = mesh->hasMetallicRoughnessTexture();
     bool hasAO = mesh->hasOcclusionTexture();
+    bool hasEM = mesh->hasEmissiveTexture();
     if (hasNM) {
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, mesh->normalTextureId());
@@ -3065,10 +3073,16 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
         glBindTexture(GL_TEXTURE_2D, mesh->occlusionTextureId());
         if (uAOMap_ >= 0) glUniform1i(uAOMap_, 7);
     }
-    if (uHasTangent_    >= 0) glUniform1i(uHasTangent_,    mesh->mesh().hasTangents() ? 1 : 0);
-    if (uHasNormalMap_  >= 0) glUniform1i(uHasNormalMap_,  hasNM ? 1 : 0);
-    if (uHasMRMap_      >= 0) glUniform1i(uHasMRMap_,      hasMR ? 1 : 0);
-    if (uHasAOMap_      >= 0) glUniform1i(uHasAOMap_,      hasAO ? 1 : 0);
+    if (hasEM) {
+        glActiveTexture(GL_TEXTURE8);
+        glBindTexture(GL_TEXTURE_2D, mesh->emissiveTextureId());
+        if (uEmissiveMap_ >= 0) glUniform1i(uEmissiveMap_, 8);
+    }
+    if (uHasTangent_     >= 0) glUniform1i(uHasTangent_,     mesh->mesh().hasTangents() ? 1 : 0);
+    if (uHasNormalMap_   >= 0) glUniform1i(uHasNormalMap_,   hasNM ? 1 : 0);
+    if (uHasMRMap_       >= 0) glUniform1i(uHasMRMap_,       hasMR ? 1 : 0);
+    if (uHasAOMap_       >= 0) glUniform1i(uHasAOMap_,       hasAO ? 1 : 0);
+    if (uHasEmissiveMap_ >= 0) glUniform1i(uHasEmissiveMap_, hasEM ? 1 : 0);
     if (uReceivesShadow_ >= 0) glUniform1i(uReceivesShadow_, mesh->receivesShadow() ? 1 : 0);
 
     // Per-mesh polygon offset (depth bias). Used by callers that need to

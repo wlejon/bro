@@ -347,9 +347,11 @@ private:
     GLint uHasNormalMap_ = -1;
     GLint uHasMRMap_ = -1;
     GLint uHasAOMap_ = -1;
+    GLint uHasEmissiveMap_ = -1;
     GLint uNormalMap_ = -1;
     GLint uMRMap_ = -1;
     GLint uAOMap_ = -1;
+    GLint uEmissiveMap_ = -1;
     GLint uReceivesShadow_ = -1;
     GLint uFogStart_ = -1;
     GLint uFogEnd_ = -1;

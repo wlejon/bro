@@ -507,18 +507,29 @@ function loadFile(idx) {
             const nTex  = resolveImg(mat.normalTexture);
             const mrTex = resolveImg(mat.metallicRoughnessTexture);
             const aoTex = resolveImg(mat.occlusionTexture);
+            const emTex = resolveImg(mat.emissiveTexture);
             if (nTex)  opts.normalTexture            = nTex;
             if (mrTex) opts.metallicRoughnessTexture = mrTex;
             if (aoTex) opts.occlusionTexture         = aoTex;
 
-            // Emissive factor + (optional) texture. The scene shader only
-            // supports a scalar emissive intensity, not a texture, so for now
-            // we collapse any emissive texture into its factor tint.
+            // Emissive: glTF spec is `emission = factor * sample(texture)`.
+            // With a texture, forward scalar=1 + factor-as-tint so the map
+            // gates where the mesh emits. Without a texture, fall back to
+            // flat emission only when the factor is nonzero — otherwise
+            // files that declare a zero factor stay dark, and files that
+            // declare a `[1,1,1]` factor alongside a *missing* texture
+            // don't glow across the entire mesh.
             const ef = mat.emissiveFactor || [0, 0, 0];
-            const emStrength = Math.max(ef[0], ef[1], ef[2]);
-            if (emStrength > 0.0) {
-                opts.emissive = emStrength;
-                opts.emissiveColor = [ef[0] / emStrength, ef[1] / emStrength, ef[2] / emStrength];
+            if (emTex) {
+                opts.emissiveTexture = emTex;
+                opts.emissive        = 1.0;
+                opts.emissiveColor   = ef;
+            } else {
+                const emStrength = Math.max(ef[0], ef[1], ef[2]);
+                if (emStrength > 0.0) {
+                    opts.emissive      = emStrength;
+                    opts.emissiveColor = [ef[0] / emStrength, ef[1] / emStrength, ef[2] / emStrength];
+                }
             }
         } else {
             opts.color = PALETTE[i % PALETTE.length];

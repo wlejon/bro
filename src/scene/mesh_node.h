@@ -77,6 +77,14 @@ public:
     bool hasOcclusionTexture() const { return aoTex_ != 0; }
     GLuint occlusionTextureId() const { return aoTex_; }
 
+    /// Emissive map (RGB). Multiplied by the scalar `emissive` and the
+    /// `emissiveColor` tint — set intensity=1 and color to the glTF
+    /// emissiveFactor to match glTF's `emissiveTexture * emissiveFactor`.
+    void setEmissiveTexture(int width, int height, const uint8_t* rgba);
+    void clearEmissiveTexture();
+    bool hasEmissiveTexture() const { return emissiveTex_ != 0; }
+    GLuint emissiveTextureId() const { return emissiveTex_; }
+
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
 
@@ -174,12 +182,14 @@ private:
     GLuint normalTex_ = 0;
     GLuint mrTex_ = 0;
     GLuint aoTex_ = 0;
+    GLuint emissiveTex_ = 0;
     GLsizei indexCount_ = 0;
 
     PendingTex pendingBase_;
     PendingTex pendingNormal_;
     PendingTex pendingMR_;
     PendingTex pendingAO_;
+    PendingTex pendingEmissive_;
 
     // Material
     bool hasVertexColors_ = false;

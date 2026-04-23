@@ -55,6 +55,7 @@ void MeshNode::releaseGL() {
     if (normalTex_) { glDeleteTextures(1, &normalTex_); normalTex_ = 0; }
     if (mrTex_) { glDeleteTextures(1, &mrTex_); mrTex_ = 0; }
     if (aoTex_) { glDeleteTextures(1, &aoTex_); aoTex_ = 0; }
+    if (emissiveTex_) { glDeleteTextures(1, &emissiveTex_); emissiveTex_ = 0; }
     indexCount_ = 0;
 }
 
@@ -90,6 +91,11 @@ void MeshNode::setOcclusionTexture(int width, int height, const uint8_t* rgba) {
     stage(pendingAO_, width, height, rgba);
 }
 void MeshNode::clearOcclusionTexture() { stage(pendingAO_, 0, 0, nullptr); }
+
+void MeshNode::setEmissiveTexture(int width, int height, const uint8_t* rgba) {
+    stage(pendingEmissive_, width, height, rgba);
+}
+void MeshNode::clearEmissiveTexture() { stage(pendingEmissive_, 0, 0, nullptr); }
 
 // Upload or release a staged texture slot. Consumes p.dirty; frees staged CPU
 // bytes after upload. glTex must be the owning GL name (zeroed when released).
@@ -238,6 +244,7 @@ void MeshNode::uploadToGPU() {
     flushTex(pendingNormal_, normalTex_);
     flushTex(pendingMR_,     mrTex_);
     flushTex(pendingAO_,     aoTex_);
+    flushTex(pendingEmissive_, emissiveTex_);
 }
 
 void MeshNode::onRender(SceneGraph& graph) {
