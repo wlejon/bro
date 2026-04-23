@@ -37,6 +37,11 @@ public:
     // Move playback to `pts` ns; the next advanceTo() resumes from there.
     void seekTo(TimeNs pts);
 
+    // Playback rate multiplier applied to the pipeline's MediaClock. Audio
+    // is not yet rate-scaled; callers that care about audio pitch will need
+    // to gate rate != 1.0.
+    void setRate(double rate);
+
     // Called by the render path. Demuxes/decodes packets whose pts has
     // been reached, keeping the "current video frame" up to date. Returns
     // true if the current frame changed since the last call.

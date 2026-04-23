@@ -26,6 +26,11 @@ public:
     // Jump to a point in the stream. For file clocks this is cheap; for
     // network clocks the implementation may ignore or translate it.
     virtual void seekTo(TimeNs pts) = 0;
+
+    // Playback rate multiplier (1.0 = realtime). Network clocks typically
+    // ignore this; file clocks scale host time into stream time.
+    virtual void setRate(double rate) { (void)rate; }
+    virtual double rate() const { return 1.0; }
 };
 
 // Monotonic clock driven off the host steady_clock. Suitable for file
@@ -37,13 +42,19 @@ public:
     void setPlaying(bool playing) override;
     bool isPlaying() const override { return playing_.load(std::memory_order_acquire); }
     void seekTo(TimeNs pts) override;
+    void setRate(double rate) override;
+    double rate() const override;
 
 private:
     std::atomic<bool> playing_{false};
     // Anchor: the host time at which stream-ts 0 was "now". When paused,
     // we freeze the computed stream position into anchorPausedNs_.
+    // Stream position when playing is (hostNow - anchorHost) * rate.
     std::atomic<int64_t> anchorHostNs_{0};
     std::atomic<int64_t> anchorPausedNs_{0};
+    // Stored as micros so we can use atomic<int64_t> without a double atomic.
+    // 1.0x = 1'000'000.
+    std::atomic<int64_t> rateMicros_{1'000'000};
 };
 
 } // namespace bro::video

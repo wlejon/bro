@@ -29,6 +29,11 @@ bool ElVideo::load(const std::string& path) {
     pipeline_ = std::move(p);
     intrinsicWidth_ = pipeline_->frameWidth() > 0 ? pipeline_->frameWidth() : intrinsicWidth_;
     intrinsicHeight_ = pipeline_->frameHeight() > 0 ? pipeline_->frameHeight() : intrinsicHeight_;
+    // Apply IDL state that was set before/after the element had a pipeline:
+    // rate goes to the freshly-created clock, and the "muted" content
+    // attribute (reflected by defaultMuted) initializes the live muted state.
+    pipeline_->setRate(playbackRate_);
+    if (elem_ && elem_->hasAttribute("muted")) muted_ = true;
     // Prime the first frame so layout has something to show before play().
     pipeline_->advanceTo(0);
     pendingLoadedMetadata_ = true;
@@ -102,6 +107,7 @@ void ElVideo::startAudioPlayback(double fromSeconds) {
     stopAudioPlayback();
     audioPlaybackId_ = audioEngine_->playClip(audioClipId_, static_cast<float>(volume_), false);
     if (audioPlaybackId_ < 0) return;
+    audioEngine_->setPlaybackRate(audioPlaybackId_, static_cast<float>(playbackRate_));
     if (fromSeconds > 0.0) {
         // Clip is stored at the engine's sample rate (resampled at load).
         int frames = audioEngine_->getClipSampleCount(audioClipId_);
@@ -193,8 +199,10 @@ void ElVideo::setMuted(bool m) {
 void ElVideo::setPlaybackRate(double r) {
     if (r <= 0.0) r = 1.0;
     playbackRate_ = r;
-    // Pipeline clock runs at 1x; plumbing a rate through MediaClock + audio
-    // resampling is deferred. IDL getter/setter behavior is still spec-correct.
+    if (pipeline_) pipeline_->setRate(r);
+    if (audioEngine_ && audioPlaybackId_ >= 0) {
+        audioEngine_->setPlaybackRate(audioPlaybackId_, static_cast<float>(r));
+    }
 }
 
 void ElVideo::applyAudioVolume() {

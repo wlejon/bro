@@ -45,6 +45,10 @@ void VideoPipeline::play() { if (clock_) clock_->setPlaying(true); }
 void VideoPipeline::pause() { if (clock_) clock_->setPlaying(false); }
 bool VideoPipeline::isPlaying() const { return clock_ && clock_->isPlaying(); }
 
+void VideoPipeline::setRate(double rate) {
+    if (clock_) clock_->setRate(rate);
+}
+
 void VideoPipeline::seekTo(TimeNs pts) {
     if (!source_) return;
     source_->seekTo(pts);
