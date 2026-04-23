@@ -1047,6 +1047,82 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
+    // ----------------------------------------------------------------------
+    // DOM Selection keyboard navigation. Fires when no form field handled
+    // the key. Moves the focus endpoint of the active Selection; Shift
+    // extends the selection instead of collapsing it.
+    // ----------------------------------------------------------------------
+    if (document_) {
+        auto* sel = document_->selection();
+        if (sel && sel->rangeCount() > 0) {
+            bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+            bool ctrl = util::hasPrimaryMod(mod);
+            bool handled = false;
+
+            auto moveFocus = [&](dom::Node* n, int off) {
+                if (shift) {
+                    sel->extend(n, off);
+                } else {
+                    sel->collapse(n, off);
+                }
+            };
+
+            dom::Node* focusN = sel->focusNode();
+            int focusO = sel->focusOffset();
+            auto* focusText = (focusN && focusN->nodeType() == dom::NodeType::Text)
+                ? static_cast<dom::TextNode*>(focusN) : nullptr;
+
+            if (ctrl && keycode == SDLK_A) {
+                // Ctrl+A: select all children of the containing contenteditable
+                // host, or fall back to the body.
+                dom::Node* host = focusN;
+                while (host && host->nodeType() != dom::NodeType::Element)
+                    host = host->parentNode();
+                auto* el = static_cast<dom::Element*>(host);
+                while (el && !el->hasAttribute("contenteditable"))
+                    el = el->parentElement();
+                dom::Node* target = el ? static_cast<dom::Node*>(el)
+                                       : static_cast<dom::Node*>(document_->body());
+                if (target) sel->selectAllChildren(target);
+                handled = true;
+            } else if (focusText) {
+                const std::string& data = focusText->data();
+                int len = static_cast<int>(data.size());
+                if (keycode == SDLK_LEFT) {
+                    if (focusO > 0) {
+                        moveFocus(focusText, focusO - 1);
+                        handled = true;
+                    }
+                } else if (keycode == SDLK_RIGHT) {
+                    if (focusO < len) {
+                        moveFocus(focusText, focusO + 1);
+                        handled = true;
+                    }
+                } else if (keycode == SDLK_HOME) {
+                    moveFocus(focusText, 0);
+                    handled = true;
+                } else if (keycode == SDLK_END) {
+                    moveFocus(focusText, len);
+                    handled = true;
+                }
+            }
+
+            if (handled) {
+                uiDirty_ = true;
+                auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+                if (focusN && focusN->parentNode()) {
+                    auto* parentEl = focusN->nodeType() == dom::NodeType::Element
+                        ? static_cast<dom::Element*>(focusN)
+                        : focusN->parentNode()->nodeType() == dom::NodeType::Element
+                            ? static_cast<dom::Element*>(focusN->parentNode())
+                            : document_->body();
+                    if (parentEl) dispatchEvent(parentEl, evt);
+                }
+                return;
+            }
+        }
+    }
+
     // Default: dispatch keydown to body
     auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
     dom::Element* target = document_->body();

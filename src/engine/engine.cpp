@@ -2512,25 +2512,56 @@ void Engine::pumpVideoEvents() {
     }
 }
 
+// Is this node inside a subtree marked contenteditable? Walks up the DOM
+// to find the nearest ancestor element with a contenteditable attribute.
+// Treats contenteditable="false" as explicitly *not* editable (matches spec).
+static bool inContenteditableHost(bro::dom::Node* node) {
+    for (bro::dom::Node* n = node; n; n = n->parentNode()) {
+        if (n->nodeType() != bro::dom::NodeType::Element) continue;
+        auto* el = static_cast<bro::dom::Element*>(n);
+        if (!el->hasAttribute("contenteditable")) continue;
+        const std::string& v = el->getAttribute("contenteditable");
+        if (v == "false") return false;
+        return true;
+    }
+    return false;
+}
+
 void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {
     if (!renderer || !document_ || !textMetrics_) return;
     auto* sel = document_->selection();
-    if (!sel || sel->isCollapsed() || sel->rangeCount() == 0) return;
+    if (!sel || sel->rangeCount() == 0) return;
     const auto* range = sel->getRangeAt(0);
     if (!range || !range->startContainer() || !range->endContainer()) return;
 
-    auto rects = layout::getSelectionRects(document_.get(),
-                                           range->startContainer(),
-                                           range->startOffset(),
-                                           range->endContainer(),
-                                           range->endOffset(),
-                                           *textMetrics_);
-    // Accent with transparency — keeps underlying glyphs legible. Blue-ish
-    // default; apps can theme later if needed.
-    render::Color hl{0x33, 0x77, 0xff, 0x55};
-    for (const auto& r : rects) {
-        renderer->fillRect(r.x, r.y + docOffsetY, r.width, r.height, hl);
+    if (!sel->isCollapsed()) {
+        auto rects = layout::getSelectionRects(document_.get(),
+                                               range->startContainer(),
+                                               range->startOffset(),
+                                               range->endContainer(),
+                                               range->endOffset(),
+                                               *textMetrics_);
+        // Accent with transparency — keeps underlying glyphs legible. Blue-ish
+        // default; apps can theme later if needed.
+        render::Color hl{0x33, 0x77, 0xff, 0x55};
+        for (const auto& r : rects) {
+            renderer->fillRect(r.x, r.y + docOffsetY, r.width, r.height, hl);
+        }
+        return;
     }
+
+    // Collapsed selection inside a contenteditable host: draw a caret.
+    // Bro's inputs/textareas manage their own carets; the DOM Selection caret
+    // only shows outside form fields.
+    if (!inContenteditableHost(range->startContainer())) return;
+    auto* startNode = range->startContainer();
+    if (!startNode || startNode->nodeType() != bro::dom::NodeType::Text) return;
+    auto* tn = static_cast<bro::dom::TextNode*>(startNode);
+    float cx = 0, cy = 0, ch = 0;
+    if (!layout::getCaretRect(document_.get(), tn, range->startOffset(),
+                              *textMetrics_, cx, cy, ch)) return;
+    render::Color caretColor{0xff, 0xff, 0xff, 0xff};
+    renderer->fillRect(cx, cy + docOffsetY, 1.5f, ch, caretColor);
 }
 
 void Engine::drawElementScrollbars(render::Renderer* renderer,
