@@ -16,6 +16,9 @@
 #include "dataset_proxy.js.h"
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
+#include <regex>
 
 namespace bro::js {
 
@@ -1356,6 +1359,262 @@ static JSValue js_element_select(JSContext* ctx, JSValueConst this_val,
     const std::string& v = el->getAttribute("value");
     int len = static_cast<int>(v.size());
     if (auto* inp = el->inputControl()) inp->setSelectionRange(0, len);
+    return JS_UNDEFINED;
+}
+
+// ---- Constraint validation -----------------------------------------------
+
+namespace {
+struct ValidityReport {
+    bool valueMissing = false;
+    bool typeMismatch = false;
+    bool patternMismatch = false;
+    bool tooShort = false;
+    bool tooLong = false;
+    bool rangeUnderflow = false;
+    bool rangeOverflow = false;
+    bool stepMismatch = false;
+    bool badInput = false;
+    bool customError = false;
+    bool valid() const {
+        return !(valueMissing || typeMismatch || patternMismatch || tooShort ||
+                 tooLong || rangeUnderflow || rangeOverflow || stepMismatch ||
+                 badInput || customError);
+    }
+};
+
+// Candidate for constraint validation — roughly HTML's "willValidate":
+// form-associated controls that are not disabled / readonly / type=hidden/
+// button/submit/reset/image, and not inside a <datalist>.
+bool willValidate(bro::dom::Element* el) {
+    if (!el) return false;
+    const std::string& tag = el->tagName();
+    const bool isInput = (tag == "INPUT" || tag == "input");
+    const bool isTextarea = (tag == "TEXTAREA" || tag == "textarea");
+    const bool isSelect = (tag == "SELECT" || tag == "select");
+    if (!isInput && !isTextarea && !isSelect) return false;
+    if (el->hasAttribute("disabled") || el->hasAttribute("readonly")) return false;
+    if (isInput) {
+        const std::string& t = el->getAttribute("type");
+        if (t == "hidden" || t == "button" || t == "submit" ||
+            t == "reset"  || t == "image") return false;
+    }
+    return true;
+}
+
+std::string controlValue(bro::dom::Element* el) {
+    if (!el) return "";
+    const std::string& tag = el->tagName();
+    if (tag == "TEXTAREA" || tag == "textarea") {
+        // Textarea stores live value as textContent; a value attribute on
+        // textarea is non-spec and ignored by real browsers.
+        return el->textContent();
+    }
+    if (tag == "SELECT" || tag == "select") {
+        if (auto* sel = el->selectControl()) {
+            auto opts = sel->getOptions();
+            int idx = sel->selectedIndex();
+            if (idx >= 0 && idx < static_cast<int>(opts.size()))
+                return opts[idx].value;
+        }
+        return "";
+    }
+    return el->getAttribute("value");
+}
+
+ValidityReport computeValidity(bro::dom::Element* el) {
+    ValidityReport r;
+    if (!el) return r;
+    if (!el->customValidity().empty()) r.customError = true;
+    if (!willValidate(el)) return r;
+
+    const std::string tag = el->tagName();
+    const std::string type = (tag == "INPUT" || tag == "input")
+                             ? el->getAttribute("type") : "";
+    const std::string value = controlValue(el);
+    const bool empty = value.empty();
+
+    // valueMissing
+    if (el->hasAttribute("required")) {
+        if (type == "checkbox") {
+            if (!el->hasAttribute("checked")) r.valueMissing = true;
+        } else if (type == "radio") {
+            // For radios: any radio in the group with the same name must be checked.
+            // Scope: same form (or document if no form).
+            bool anyChecked = false;
+            const std::string& name = el->getAttribute("name");
+            // Search from the form ancestor or document root.
+            bro::dom::Element* root = nullptr;
+            for (auto* p = el->parentElement(); p; p = p->parentElement()) {
+                if (p->tagName() == "FORM" || p->tagName() == "form") { root = p; break; }
+            }
+            std::function<void(bro::dom::Element*)> walk = [&](bro::dom::Element* e){
+                if (!e || anyChecked) return;
+                if ((e->tagName() == "INPUT" || e->tagName() == "input") &&
+                    e->getAttribute("type") == "radio" &&
+                    e->getAttribute("name") == name &&
+                    e->hasAttribute("checked")) { anyChecked = true; return; }
+                for (auto* c : e->children()) walk(c);
+            };
+            if (root) walk(root);
+            else if (el->document() && el->document()->documentElement()) {
+                walk(el->document()->documentElement());
+            }
+            if (!anyChecked) r.valueMissing = true;
+        } else if (empty) {
+            r.valueMissing = true;
+        }
+    }
+
+    // typeMismatch / badInput — only when value is non-empty
+    if (!empty) {
+        if (type == "email") {
+            // Minimal: one '@' with something on each side and a '.' in domain.
+            auto at = value.find('@');
+            if (at == std::string::npos || at == 0 || at == value.size() - 1 ||
+                value.find('.', at) == std::string::npos) {
+                r.typeMismatch = true;
+            }
+        } else if (type == "url") {
+            // Minimal: has a scheme "xx:".
+            auto colon = value.find(':');
+            if (colon == std::string::npos || colon < 2) r.typeMismatch = true;
+        } else if (type == "number" || type == "range") {
+            try {
+                size_t n = 0;
+                (void)std::stod(value, &n);
+                if (n != value.size()) r.badInput = true;
+            } catch (...) { r.badInput = true; }
+        }
+    }
+
+    // patternMismatch — applies to text-like inputs when non-empty.
+    if (!empty && el->hasAttribute("pattern")) {
+        try {
+            std::regex re("^(?:" + el->getAttribute("pattern") + ")$",
+                          std::regex::ECMAScript);
+            if (!std::regex_match(value, re)) r.patternMismatch = true;
+        } catch (...) {
+            // Invalid pattern per author — spec: no mismatch (skip).
+        }
+    }
+
+    // minLength/maxLength — code-unit count on value.
+    if (!empty && el->hasAttribute("minlength")) {
+        try {
+            int min = std::stoi(el->getAttribute("minlength"));
+            if (min > 0 && static_cast<int>(value.size()) < min) r.tooShort = true;
+        } catch (...) {}
+    }
+    if (el->hasAttribute("maxlength")) {
+        try {
+            int max = std::stoi(el->getAttribute("maxlength"));
+            if (max >= 0 && static_cast<int>(value.size()) > max) r.tooLong = true;
+        } catch (...) {}
+    }
+
+    // range underflow/overflow/stepMismatch — number / range only.
+    if (!r.badInput && !empty && (type == "number" || type == "range")) {
+        double num = 0.0;
+        try { num = std::stod(value); } catch (...) { num = 0.0; }
+        if (el->hasAttribute("min")) {
+            try { if (num < std::stod(el->getAttribute("min"))) r.rangeUnderflow = true; }
+            catch (...) {}
+        }
+        if (el->hasAttribute("max")) {
+            try { if (num > std::stod(el->getAttribute("max"))) r.rangeOverflow = true; }
+            catch (...) {}
+        }
+        if (el->hasAttribute("step")) {
+            const std::string& s = el->getAttribute("step");
+            if (s != "any") {
+                try {
+                    double step = std::stod(s);
+                    double base = el->hasAttribute("min") ? std::stod(el->getAttribute("min")) : 0.0;
+                    double off = num - base;
+                    // Fuzzy modulo to avoid fp noise.
+                    double rem = off - std::round(off / step) * step;
+                    if (step > 0 && std::fabs(rem) > 1e-9) r.stepMismatch = true;
+                } catch (...) {}
+            }
+        }
+    }
+
+    return r;
+}
+
+std::string defaultValidationMessage(const ValidityReport& r,
+                                     bro::dom::Element* el) {
+    if (r.customError) return el->customValidity();
+    if (r.valueMissing)    return "Please fill out this field.";
+    if (r.typeMismatch)    return "Please enter a value of the correct type.";
+    if (r.patternMismatch) return "Please match the requested format.";
+    if (r.tooShort)        return "Please lengthen this text.";
+    if (r.tooLong)         return "Please shorten this text.";
+    if (r.rangeUnderflow)  return "Value is below the minimum.";
+    if (r.rangeOverflow)   return "Value is above the maximum.";
+    if (r.stepMismatch)    return "Please select a valid value.";
+    if (r.badInput)        return "Please enter a valid value.";
+    return "";
+}
+} // namespace
+
+static JSValue js_element_get_validity(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    ValidityReport r = computeValidity(el);
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "valueMissing",   JS_NewBool(ctx, r.valueMissing));
+    JS_SetPropertyStr(ctx, o, "typeMismatch",   JS_NewBool(ctx, r.typeMismatch));
+    JS_SetPropertyStr(ctx, o, "patternMismatch",JS_NewBool(ctx, r.patternMismatch));
+    JS_SetPropertyStr(ctx, o, "tooShort",       JS_NewBool(ctx, r.tooShort));
+    JS_SetPropertyStr(ctx, o, "tooLong",        JS_NewBool(ctx, r.tooLong));
+    JS_SetPropertyStr(ctx, o, "rangeUnderflow", JS_NewBool(ctx, r.rangeUnderflow));
+    JS_SetPropertyStr(ctx, o, "rangeOverflow",  JS_NewBool(ctx, r.rangeOverflow));
+    JS_SetPropertyStr(ctx, o, "stepMismatch",   JS_NewBool(ctx, r.stepMismatch));
+    JS_SetPropertyStr(ctx, o, "badInput",       JS_NewBool(ctx, r.badInput));
+    JS_SetPropertyStr(ctx, o, "customError",    JS_NewBool(ctx, r.customError));
+    JS_SetPropertyStr(ctx, o, "valid",          JS_NewBool(ctx, r.valid()));
+    return o;
+}
+
+static JSValue js_element_get_validationMessage(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewString(ctx, "");
+    ValidityReport r = computeValidity(el);
+    if (r.valid()) return JS_NewString(ctx, "");
+    return JS_NewString(ctx, defaultValidationMessage(r, el).c_str());
+}
+
+static JSValue js_element_get_willValidate(JSContext* ctx, JSValueConst this_val) {
+    return JS_NewBool(ctx, willValidate(getElement(this_val)));
+}
+
+static JSValue js_element_checkValidity(JSContext* ctx, JSValueConst this_val,
+                                        int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_TRUE;
+    ValidityReport r = computeValidity(el);
+    if (r.valid()) return JS_TRUE;
+    // Fire cancelable 'invalid' event per spec.
+    bro::dom::Event evt("invalid", false, true);
+    evt.setIsTrusted(true);
+    dispatchDomEvent(ctx, el, evt);
+    return JS_FALSE;
+}
+
+static JSValue js_element_reportValidity(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    // Same as checkValidity for now — no native bubble UI. Keeping the method
+    // separate so future UI can hook in without breaking callers that rely on
+    // checkValidity's quieter semantics.
+    return js_element_checkValidity(ctx, this_val, argc, argv);
+}
+
+static JSValue js_element_setCustomValidity(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el || argc < 1) return JS_UNDEFINED;
+    el->setCustomValidity(jsToStdString(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
@@ -3002,8 +3261,14 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("selectionStart", js_element_get_selectionStart, js_element_set_selectionStart),
     JS_CGETSET_DEF("selectionEnd",   js_element_get_selectionEnd,   js_element_set_selectionEnd),
     JS_CGETSET_DEF("files",       js_element_get_files, nullptr),
+    JS_CGETSET_DEF("validity",        js_element_get_validity, nullptr),
+    JS_CGETSET_DEF("validationMessage", js_element_get_validationMessage, nullptr),
+    JS_CGETSET_DEF("willValidate",    js_element_get_willValidate, nullptr),
     JS_CFUNC_DEF("setSelectionRange", 2, js_element_setSelectionRange),
     JS_CFUNC_DEF("select",            0, js_element_select),
+    JS_CFUNC_DEF("checkValidity",     0, js_element_checkValidity),
+    JS_CFUNC_DEF("reportValidity",    0, js_element_reportValidity),
+    JS_CFUNC_DEF("setCustomValidity", 1, js_element_setCustomValidity),
     // Methods
     JS_CFUNC_DEF("getAttribute",        1, js_element_getAttribute),
     JS_CFUNC_DEF("hasAttribute",        1, js_element_hasAttribute),

@@ -162,6 +162,12 @@ public:
     void setSceneGraphFBOTexture(unsigned int tex) { sceneGraphFBOTex_ = tex; }
     unsigned int sceneGraphFBOTexture() const { return sceneGraphFBOTex_; }
 
+    // Custom validity message (HTMLInputElement.setCustomValidity). Empty
+    // string means no custom error — any other value is treated as a
+    // validation failure and returned by validationMessage.
+    const std::string& customValidity() const { return customValidity_; }
+    void setCustomValidity(const std::string& m) { customValidity_ = m; }
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -187,6 +193,7 @@ private:
     std::unique_ptr<layout::ElSelect> selectControl_;
     std::unique_ptr<layout::ElSvg> svgControl_;
     std::unique_ptr<layout::ElVideo> videoControl_;
+    std::string customValidity_;
     void* canvasScene_ = nullptr;
     void* webglContext_ = nullptr;
     void* sceneGraph_ = nullptr;
