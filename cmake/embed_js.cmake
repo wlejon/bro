@@ -30,7 +30,14 @@ endwhile()
 file(WRITE "${OUTPUT}"
 "// Auto-generated from ${INPUT_NAME} — do not edit.
 #pragma once
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4838) // narrowing: byte values >0x7F in signed char[]
+#endif
 static const char ${VAR_NAME}[] = {
 ${BYTES}0x00
 };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 ")
