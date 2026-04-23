@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -160,7 +159,6 @@ private:
     // Contact events double-buffer: physics thread writes to back_, main drains front_.
     std::vector<ContactEvent> contactsFront_;
     std::vector<ContactEvent> contactsBack_;
-    std::mutex contactsMutex_;  // only held briefly at step boundary
 
     bool initialized_ = false;
 };

@@ -9,7 +9,6 @@
 #include <atomic>
 #include <string>
 #include <vector>
-#include <mutex>
 
 namespace bro::js {
 
@@ -22,15 +21,13 @@ static DialogBindings::TickCallback s_tickCb;
 // ---------------------------------------------------------------------------
 
 struct DialogResult {
-    std::mutex mtx;
     std::atomic<bool> ready{false};
-    std::vector<std::string> files;
+    std::vector<std::string> files;  // written by callback thread before `ready` release-store, read by main after acquire-load
 };
 
 static void dialogCallback(void* userdata, const char* const* filelist, int /*filter*/)
 {
     auto* result = static_cast<DialogResult*>(userdata);
-    std::lock_guard<std::mutex> lock(result->mtx);
     if (filelist) {
         for (const char* const* p = filelist; *p; ++p) {
             result->files.emplace_back(*p);
