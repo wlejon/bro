@@ -55,6 +55,9 @@
 #include "dom/node.h"
 #include "dom/event.h"
 #include "dom/shadow_root.h"
+#include "dom/range.h"
+#include "dom/selection.h"
+#include "layout/selection_geometry.h"
 
 #include <cstring>
 #include "layout/draw_traversal.h"
@@ -1520,6 +1523,12 @@ void Engine::rasterThreadFunc() {
             rasterDrawTraversal->draw(document_->documentElement(),
                                       0, static_cast<float>(insetTop) - scrollY,
                                       vpW, contentH, insetTop);
+
+            // Selection highlight overlay: drawn after the HTML so it sits on
+            // top of text. Semi-transparent accent color. Only fires when
+            // there's a non-empty selection in the app document.
+            drawSelectionHighlight(rasterRenderer.get(),
+                                   static_cast<float>(insetTop) - scrollY);
         }
 
         // Draw the active app-context overlay (dropdown / color picker / etc.)
@@ -2500,6 +2509,27 @@ void Engine::pumpVideoEvents() {
         // raster signal path is skipped. Set uiDirty_ directly so the
         // "no layout this frame" branch at engine.cpp still signals raster.
         uiDirty_ = true;
+    }
+}
+
+void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {
+    if (!renderer || !document_ || !textMetrics_) return;
+    auto* sel = document_->selection();
+    if (!sel || sel->isCollapsed() || sel->rangeCount() == 0) return;
+    const auto* range = sel->getRangeAt(0);
+    if (!range || !range->startContainer() || !range->endContainer()) return;
+
+    auto rects = layout::getSelectionRects(document_.get(),
+                                           range->startContainer(),
+                                           range->startOffset(),
+                                           range->endContainer(),
+                                           range->endOffset(),
+                                           *textMetrics_);
+    // Accent with transparency — keeps underlying glyphs legible. Blue-ish
+    // default; apps can theme later if needed.
+    render::Color hl{0x33, 0x77, 0xff, 0x55};
+    for (const auto& r : rects) {
+        renderer->fillRect(r.x, r.y + docOffsetY, r.width, r.height, hl);
     }
 }
 

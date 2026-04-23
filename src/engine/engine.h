@@ -40,7 +40,7 @@ namespace bro::platform {
 }
 namespace bro::render { class Renderer; }
 namespace bro::js { class Runtime; class Timers; }
-namespace bro::dom { class Document; class Element; class Event; }
+namespace bro::dom { class Document; class Element; class Event; class TextNode; }
 namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }
 
 namespace bro::engine {
@@ -399,6 +399,11 @@ private:
     void drawElementScrollbars(render::Renderer* renderer,
                                dom::Element* root,
                                float offsetX, float offsetY);
+    /// Draw the document's Selection highlight (semi-transparent rectangles
+    /// behind the selected text runs). `docOffsetY` is the vertical offset
+    /// applied to the app content by the main draw pass — typically
+    /// (insetTop - scrollY). No-op when the selection is empty.
+    void drawSelectionHighlight(render::Renderer* renderer, float docOffsetY);
     /// Route a keydown/keyup to visible system panels (settings modal, etc.)
     /// so its JS can capture keys. Returns true if the modal is active, in
     /// which case the app does NOT see the key — modal panels are meant to
@@ -573,6 +578,13 @@ private:
 
     // Mouse button state for buttons bitmask
     int pressedButtons_ = 0;
+
+    // Mouse-driven text selection. `selectionAnchor*` is pinned on mousedown
+    // (the static endpoint of a drag); selectionDragging_ means subsequent
+    // mousemove events should extend the focus to follow the cursor.
+    bool selectionDragging_ = false;
+    dom::TextNode* selectionAnchorNode_ = nullptr;
+    int selectionAnchorOffset_ = 0;
 
     // Viewport scrolling
     float scrollY_ = 0.0f;

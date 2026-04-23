@@ -15,10 +15,15 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
+#include "dom/range.h"
+#include "dom/selection.h"
+#include "dom/text_node.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
 #include "layout/key_handle_result.h"
+#include "layout/selection_geometry.h"
+#include "layout/skia_text_metrics.h"
 #include "util/time.h"
 #include "util/log.h"
 #include "util/platform.h"
@@ -344,6 +349,65 @@ void Engine::handleMouseDown(float x, float y, int button) {
                            viewportWidth_, viewportHeight_};
         dispatchDocMousePress(cctx, appMouseState_, target, evt, x, docY);
         jsRuntime_->executePendingJobs();
+
+        // Mouse-driven text selection. Left button only; bail out if the
+        // click landed on a text-editing control (input/textarea manage
+        // their own caret via ElInput) or a button-like control.
+        if (button == 0 && document_ && textMetrics_) {
+            bool isEditableControl = false;
+            if (target) {
+                const std::string& tag = target->tagName();
+                if (tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" ||
+                    tag == "BUTTON" || tag == "OPTION") {
+                    isEditableControl = true;
+                }
+            }
+            if (!isEditableControl) {
+                auto hit = layout::hitTestText(document_.get(), docX, docY, *textMetrics_);
+                auto* sel = document_->selection();
+                if (hit.textNode) {
+                    int detail = appMouseState_.clickCount;
+                    if (detail >= 3) {
+                        // Triple-click: select the entire text node.
+                        sel->setRange(hit.textNode, 0,
+                                      hit.textNode,
+                                      static_cast<int>(hit.textNode->length()),
+                                      dom::Selection::Forward);
+                        selectionDragging_ = false;
+                    } else if (detail == 2) {
+                        // Double-click: expand to word boundaries in the source
+                        // string around the hit offset.
+                        const std::string& s = hit.textNode->data();
+                        int off = std::max(0, std::min(hit.srcOffset,
+                            static_cast<int>(s.size())));
+                        auto isWordChar = [](unsigned char c) {
+                            return std::isalnum(c) || c == '_';
+                        };
+                        int lo = off;
+                        while (lo > 0 && isWordChar(
+                            static_cast<unsigned char>(s[lo - 1]))) lo--;
+                        int hi = off;
+                        while (hi < static_cast<int>(s.size()) &&
+                               isWordChar(static_cast<unsigned char>(s[hi]))) hi++;
+                        sel->setRange(hit.textNode, lo, hit.textNode, hi,
+                                      dom::Selection::Forward);
+                        selectionDragging_ = false;
+                    } else {
+                        sel->collapse(hit.textNode, hit.srcOffset);
+                        selectionAnchorNode_ = hit.textNode;
+                        selectionAnchorOffset_ = hit.srcOffset;
+                        selectionDragging_ = true;
+                    }
+                    uiDirty_ = true;
+                } else {
+                    // Click outside any text: clear selection.
+                    sel->removeAllRanges();
+                    selectionDragging_ = false;
+                    selectionAnchorNode_ = nullptr;
+                    uiDirty_ = true;
+                }
+            }
+        }
     }
 }
 
@@ -406,6 +470,12 @@ void Engine::handleMouseUp(float x, float y, int button) {
             dispatchEvent(activeEl, changeEvt);
             uiDirty_ = true;
         }
+    }
+
+    if (button == 0) {
+        // Terminate any in-progress selection drag regardless of where the
+        // pointer released — next mousedown starts fresh.
+        selectionDragging_ = false;
     }
 
     if (document_) {
@@ -487,6 +557,32 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         lastMouseX_ = x;
         lastMouseY_ = y;
         return;
+    }
+
+    // Mouse-driven text selection: while dragging, extend the selection's
+    // focus to follow the pointer. The anchor is whatever was captured on
+    // mousedown (selectionAnchor*).
+    if (selectionDragging_ && document_ && textMetrics_ && selectionAnchorNode_) {
+        auto hit = layout::hitTestText(document_.get(), docX, docY, *textMetrics_);
+        if (hit.textNode) {
+            auto* sel = document_->selection();
+            // Compute direction: if focus is before anchor, backward.
+            dom::Range probe;
+            probe.setStart(selectionAnchorNode_, selectionAnchorOffset_);
+            probe.setEnd(hit.textNode, hit.srcOffset);
+            bool backward = !(probe.startContainer() == selectionAnchorNode_ &&
+                              probe.startOffset() == selectionAnchorOffset_);
+            if (backward) {
+                sel->setRange(hit.textNode, hit.srcOffset,
+                              selectionAnchorNode_, selectionAnchorOffset_,
+                              dom::Selection::Backward);
+            } else {
+                sel->setRange(selectionAnchorNode_, selectionAnchorOffset_,
+                              hit.textNode, hit.srcOffset,
+                              dom::Selection::Forward);
+            }
+            uiDirty_ = true;
+        }
     }
 
     // Viewport scrollbar drag
@@ -884,13 +980,23 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                 }
             }
         } else {
-            // Copy or Cut: get text from focused input/textarea
+            // Copy or Cut: first try the focused input/textarea; if none has
+            // a value, fall back to the document's Selection so users can
+            // copy text they highlighted with click+drag outside form fields.
             std::string text;
+            bool fromFormField = false;
             if (activeEl) {
                 if (auto* input = getElInput(activeEl); input && input->isFocused()) {
                     text = activeEl->getAttribute("value");
+                    fromFormField = true;
                 } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
                     text = activeEl->getAttribute("value");
+                    fromFormField = true;
+                }
+            }
+            if (!fromFormField) {
+                if (auto* sel = document_->selection(); sel && !sel->isCollapsed()) {
+                    text = sel->toString();
                 }
             }
 
