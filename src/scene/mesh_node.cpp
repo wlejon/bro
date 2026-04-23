@@ -3,6 +3,7 @@
 #include "util/log.h"
 
 #include <bromesh/analysis/bbox.h>
+#include <bromesh/manipulation/normals.h>
 
 namespace bro::scene {
 
@@ -12,8 +13,19 @@ MeshNode::~MeshNode() {
     releaseGL();
 }
 
+// Auto-populate tangents for normal mapping when the source geometry has the
+// prerequisites (UVs + normals) but no tangent stream. Cheap enough to run
+// unconditionally; the shader only references tangents when a normal map is
+// bound, so the cost is wasted only when neither the mesh nor the material
+// uses normal maps. Kept in one place so both setMesh overloads behave the same.
+static void ensureTangents(bromesh::MeshData& m) {
+    if (m.hasUVs() && m.hasNormals() && !m.hasTangents())
+        bromesh::generateTangents(m);
+}
+
 void MeshNode::setMesh(const bromesh::MeshData& mesh) {
     mesh_ = mesh;
+    ensureTangents(mesh_);
     gpuDirty_ = true;
     bvhDirty_ = true;
     bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
@@ -21,6 +33,7 @@ void MeshNode::setMesh(const bromesh::MeshData& mesh) {
 
 void MeshNode::setMesh(bromesh::MeshData&& mesh) {
     mesh_ = std::move(mesh);
+    ensureTangents(mesh_);
     gpuDirty_ = true;
     bvhDirty_ = true;
     bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
@@ -39,27 +52,69 @@ void MeshNode::releaseGL() {
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
     if (ibo_) { glDeleteBuffers(1, &ibo_); ibo_ = 0; }
     if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
+    if (normalTex_) { glDeleteTextures(1, &normalTex_); normalTex_ = 0; }
+    if (mrTex_) { glDeleteTextures(1, &mrTex_); mrTex_ = 0; }
+    if (aoTex_) { glDeleteTextures(1, &aoTex_); aoTex_ = 0; }
     indexCount_ = 0;
 }
 
-void MeshNode::setBaseColorTexture(int width, int height, const uint8_t* rgba) {
-    if (width <= 0 || height <= 0 || !rgba) {
-        clearBaseColorTexture();
-        return;
+static void stage(MeshNode::PendingTex& p, int w, int h, const uint8_t* rgba) {
+    if (w <= 0 || h <= 0 || !rgba) {
+        p.data.clear();
+        p.w = 0;
+        p.h = 0;
+    } else {
+        p.data.assign(rgba, rgba + (size_t)w * (size_t)h * 4);
+        p.w = w;
+        p.h = h;
     }
-    pendingTexData_.assign(rgba, rgba + (size_t)width * (size_t)height * 4);
-    pendingTexW_ = width;
-    pendingTexH_ = height;
-    textureDirty_ = true;
+    p.dirty = true;
 }
 
-void MeshNode::clearBaseColorTexture() {
-    pendingTexData_.clear();
-    pendingTexW_ = 0;
-    pendingTexH_ = 0;
-    textureDirty_ = true;
-    // Actual glDeleteTextures is deferred to uploadToGPU / releaseGL so it
-    // runs on the render thread with a GL context bound.
+void MeshNode::setBaseColorTexture(int width, int height, const uint8_t* rgba) {
+    stage(pendingBase_, width, height, rgba);
+}
+void MeshNode::clearBaseColorTexture() { stage(pendingBase_, 0, 0, nullptr); }
+
+void MeshNode::setNormalTexture(int width, int height, const uint8_t* rgba) {
+    stage(pendingNormal_, width, height, rgba);
+}
+void MeshNode::clearNormalTexture() { stage(pendingNormal_, 0, 0, nullptr); }
+
+void MeshNode::setMetallicRoughnessTexture(int width, int height, const uint8_t* rgba) {
+    stage(pendingMR_, width, height, rgba);
+}
+void MeshNode::clearMetallicRoughnessTexture() { stage(pendingMR_, 0, 0, nullptr); }
+
+void MeshNode::setOcclusionTexture(int width, int height, const uint8_t* rgba) {
+    stage(pendingAO_, width, height, rgba);
+}
+void MeshNode::clearOcclusionTexture() { stage(pendingAO_, 0, 0, nullptr); }
+
+// Upload or release a staged texture slot. Consumes p.dirty; frees staged CPU
+// bytes after upload. glTex must be the owning GL name (zeroed when released).
+static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
+    if (!p.dirty) return;
+    if (p.w > 0 && p.h > 0 && !p.data.empty()) {
+        if (!glTex) glGenTextures(1, &glTex);
+        glBindTexture(GL_TEXTURE_2D, glTex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+                     p.w, p.h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, p.data.data());
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        p.data.clear();
+        p.data.shrink_to_fit();
+    } else if (glTex) {
+        glDeleteTextures(1, &glTex);
+        glTex = 0;
+    }
+    p.dirty = false;
 }
 
 void MeshNode::uploadToGPU() {
@@ -72,17 +127,19 @@ void MeshNode::uploadToGPU() {
 
     glBindVertexArray(vao_);
 
-    // Interleave: pos(3) + normal(3) + uv(2) + color(4)
+    // Interleave: pos(3) + normal(3) + uv(2) + color(4) + tangent(4)
     size_t vertCount = mesh_.vertexCount();
     bool hasNormals = mesh_.hasNormals();
     bool hasUVs = mesh_.hasUVs();
     bool hasColors = mesh_.hasColors();
+    bool hasTangents = mesh_.hasTangents();
     hasVertexColors_ = hasColors;
 
     size_t stride = 3; // position always
     if (hasNormals) stride += 3;
     if (hasUVs) stride += 2;
     if (hasColors) stride += 4;
+    if (hasTangents) stride += 4;
 
     std::vector<float> interleaved(vertCount * stride);
     for (size_t i = 0; i < vertCount; i++) {
@@ -107,6 +164,13 @@ void MeshNode::uploadToGPU() {
             interleaved[off + at + 1] = mesh_.colors[i * 4 + 1];
             interleaved[off + at + 2] = mesh_.colors[i * 4 + 2];
             interleaved[off + at + 3] = mesh_.colors[i * 4 + 3];
+            at += 4;
+        }
+        if (hasTangents) {
+            interleaved[off + at + 0] = mesh_.tangents[i * 4 + 0];
+            interleaved[off + at + 1] = mesh_.tangents[i * 4 + 1];
+            interleaved[off + at + 2] = mesh_.tangents[i * 4 + 2];
+            interleaved[off + at + 3] = mesh_.tangents[i * 4 + 3];
         }
     }
 
@@ -150,6 +214,16 @@ void MeshNode::uploadToGPU() {
         glDisableVertexAttribArray(3);
     }
 
+    // Attribute 4: tangent (vec4, xyz + handedness)
+    if (hasTangents) {
+        size_t tanOffset = 3 + (hasNormals ? 3 : 0) + (hasUVs ? 2 : 0) + (hasColors ? 4 : 0);
+        glEnableVertexAttribArray(4);
+        glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, byteStride,
+                              (void*)(tanOffset * sizeof(float)));
+    } else {
+        glDisableVertexAttribArray(4);
+    }
+
     // Index buffer
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
@@ -160,29 +234,10 @@ void MeshNode::uploadToGPU() {
     glBindVertexArray(0);
     gpuDirty_ = false;
 
-    if (textureDirty_) {
-        if (pendingTexW_ > 0 && pendingTexH_ > 0 && !pendingTexData_.empty()) {
-            if (!texture_) glGenTextures(1, &texture_);
-            glBindTexture(GL_TEXTURE_2D, texture_);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
-                         pendingTexW_, pendingTexH_, 0,
-                         GL_RGBA, GL_UNSIGNED_BYTE, pendingTexData_.data());
-            glGenerateMipmap(GL_TEXTURE_2D);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            // Free staged bytes — GL owns them now.
-            pendingTexData_.clear();
-            pendingTexData_.shrink_to_fit();
-        } else if (texture_) {
-            glDeleteTextures(1, &texture_);
-            texture_ = 0;
-        }
-        textureDirty_ = false;
-    }
+    flushTex(pendingBase_,   texture_);
+    flushTex(pendingNormal_, normalTex_);
+    flushTex(pendingMR_,     mrTex_);
+    flushTex(pendingAO_,     aoTex_);
 }
 
 void MeshNode::onRender(SceneGraph& graph) {

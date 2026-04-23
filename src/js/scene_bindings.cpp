@@ -839,6 +839,13 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, unlitVal);
 
+        JSValue csVal = JS_GetPropertyStr(ctx, opts, "castsShadow");
+        if (!JS_IsUndefined(csVal)) node->setCastsShadow(JS_ToBool(ctx, csVal) == 1);
+        JS_FreeValue(ctx, csVal);
+        JSValue rsVal = JS_GetPropertyStr(ctx, opts, "receivesShadow");
+        if (!JS_IsUndefined(rsVal)) node->setReceivesShadow(JS_ToBool(ctx, rsVal) == 1);
+        JS_FreeValue(ctx, rsVal);
+
         // Depth bias
         JSValue dbVal = JS_GetPropertyStr(ctx, opts, "depthBias");
         if (!JS_IsUndefined(dbVal)) {
@@ -946,26 +953,34 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         node->setMesh(std::move(meshData));
     }
 
-    // Optional texture: { width, height, data: Uint8Array(rgba8) }
+    // Optional texture maps: each is { width, height, data: Uint8Array(rgba8) }.
+    // Keys: texture (baseColor), normalTexture, metallicRoughnessTexture,
+    //       occlusionTexture.
     if (argc > 0 && JS_IsObject(argv[0])) {
-        JSValue tex = JS_GetPropertyStr(ctx, argv[0], "texture");
-        if (JS_IsObject(tex)) {
-            int w = (int)jsGetProp(ctx, tex, "width",  0);
-            int h = (int)jsGetProp(ctx, tex, "height", 0);
-            JSValue dataVal = JS_GetPropertyStr(ctx, tex, "data");
-            size_t bytes = 0;
-            size_t off = 0, len = 0;
-            JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
-            if (!JS_IsException(ab)) {
-                uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
-                if (base && w > 0 && h > 0 && len >= (size_t)w * (size_t)h * 4) {
-                    node->setBaseColorTexture(w, h, base + off);
+        auto applyTex = [&](const char* key, void (scene::MeshNode::*setter)(int, int, const uint8_t*)) {
+            JSValue tex = JS_GetPropertyStr(ctx, argv[0], key);
+            if (JS_IsObject(tex)) {
+                int w = (int)jsGetProp(ctx, tex, "width",  0);
+                int h = (int)jsGetProp(ctx, tex, "height", 0);
+                JSValue dataVal = JS_GetPropertyStr(ctx, tex, "data");
+                size_t bytes = 0;
+                size_t off = 0, len = 0;
+                JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
+                if (!JS_IsException(ab)) {
+                    uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+                    if (base && w > 0 && h > 0 && len >= (size_t)w * (size_t)h * 4) {
+                        (node->*setter)(w, h, base + off);
+                    }
+                    JS_FreeValue(ctx, ab);
                 }
-                JS_FreeValue(ctx, ab);
+                JS_FreeValue(ctx, dataVal);
             }
-            JS_FreeValue(ctx, dataVal);
-        }
-        JS_FreeValue(ctx, tex);
+            JS_FreeValue(ctx, tex);
+        };
+        applyTex("texture",                  &scene::MeshNode::setBaseColorTexture);
+        applyTex("normalTexture",            &scene::MeshNode::setNormalTexture);
+        applyTex("metallicRoughnessTexture", &scene::MeshNode::setMetallicRoughnessTexture);
+        applyTex("occlusionTexture",         &scene::MeshNode::setOcclusionTexture);
     }
 
     return wrapNode(ctx, node, g);
@@ -1761,13 +1776,29 @@ void SceneBindings::install(JSContext* ctx) {
             })
         .prop("castsShadow",
             [](NodeWrapper* w) -> bool {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                if (!w || !w->node) return false;
+                if (w->node->type() == scene::SceneNode::Type::Light)
                     return static_cast<scene::LightNode*>(w->node)->castsShadow();
+                if (w->node->type() == scene::SceneNode::Type::Mesh)
+                    return static_cast<scene::MeshNode*>(w->node)->castsShadow();
                 return false;
             },
             [](NodeWrapper* w, bool val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
+                if (!w || !w->node) return;
+                if (w->node->type() == scene::SceneNode::Type::Light)
                     static_cast<scene::LightNode*>(w->node)->setCastsShadow(val);
+                else if (w->node->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node)->setCastsShadow(val);
+            })
+        .prop("receivesShadow",
+            [](NodeWrapper* w) -> bool {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    return static_cast<scene::MeshNode*>(w->node)->receivesShadow();
+                return false;
+            },
+            [](NodeWrapper* w, bool val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node)->setReceivesShadow(val);
             })
         .prop("shadowBias",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {

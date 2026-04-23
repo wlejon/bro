@@ -57,6 +57,26 @@ public:
     bool hasBaseColorTexture() const { return texture_ != 0; }
     GLuint baseColorTextureId() const { return texture_; }
 
+    /// Tangent-space normal map (RGBA8, .xy = xy, .z ignored and reconstructed,
+    /// or full .xyz sampled directly — this shader reads all three channels).
+    void setNormalTexture(int width, int height, const uint8_t* rgba);
+    void clearNormalTexture();
+    bool hasNormalTexture() const { return normalTex_ != 0; }
+    GLuint normalTextureId() const { return normalTex_; }
+
+    /// Metallic-roughness texture (glTF packing: G = roughness, B = metallic).
+    /// R and A are unused. Scalar metallic/roughness multiply with the sample.
+    void setMetallicRoughnessTexture(int width, int height, const uint8_t* rgba);
+    void clearMetallicRoughnessTexture();
+    bool hasMetallicRoughnessTexture() const { return mrTex_ != 0; }
+    GLuint metallicRoughnessTextureId() const { return mrTex_; }
+
+    /// Ambient-occlusion map (R channel used). Modulates ambient/IBL only.
+    void setOcclusionTexture(int width, int height, const uint8_t* rgba);
+    void clearOcclusionTexture();
+    bool hasOcclusionTexture() const { return aoTex_ != 0; }
+    GLuint occlusionTextureId() const { return aoTex_; }
+
     void setEmissive(float e) { emissive_ = e; }
     float emissive() const { return emissive_; }
 
@@ -104,6 +124,18 @@ public:
     void setNearClipDist(float d) { nearClipDist_ = d; }
     float nearClipDist() const { return nearClipDist_; }
 
+    /// Whether this mesh writes into the shadow atlas. Default true. Set false
+    /// for meshes that should illuminate with shadows but not cast their own
+    /// (foliage impostors, transparent geometry, debug markers).
+    void setCastsShadow(bool b) { castsShadow_ = b; }
+    bool castsShadow() const { return castsShadow_; }
+
+    /// Whether light contributions to this mesh are shadow-attenuated. Default
+    /// true. Set false for geometry that should stay fully lit regardless of
+    /// occluders (self-lit props, UI billboards in the 3D world).
+    void setReceivesShadow(bool b) { receivesShadow_ = b; }
+    bool receivesShadow() const { return receivesShadow_; }
+
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
@@ -111,6 +143,16 @@ public:
     /// Used by depth-only passes (shadow maps) where the caller's program is
     /// already bound and only positions matter. Returns true if anything drew.
     bool drawRaw();
+
+    // Staged texture upload — setters capture the bytes and uploadToGPU()
+    // (which runs in the render thread with GL context bound) actually uploads.
+    // Public so file-scope helpers in mesh_node.cpp can operate on slots.
+    struct PendingTex {
+        std::vector<uint8_t> data;
+        int w = 0;
+        int h = 0;
+        bool dirty = false;
+    };
 
 private:
     void uploadToGPU();
@@ -129,15 +171,15 @@ private:
     GLuint vbo_ = 0;
     GLuint ibo_ = 0;
     GLuint texture_ = 0;
+    GLuint normalTex_ = 0;
+    GLuint mrTex_ = 0;
+    GLuint aoTex_ = 0;
     GLsizei indexCount_ = 0;
 
-    // Staged texture upload — setBaseColorTexture captures the bytes and
-    // uploadToGPU() (which runs in the render thread with GL context bound)
-    // actually uploads. Lets us call setBaseColorTexture() from any thread.
-    std::vector<uint8_t> pendingTexData_;
-    int pendingTexW_ = 0;
-    int pendingTexH_ = 0;
-    bool textureDirty_ = false;
+    PendingTex pendingBase_;
+    PendingTex pendingNormal_;
+    PendingTex pendingMR_;
+    PendingTex pendingAO_;
 
     // Material
     bool hasVertexColors_ = false;
@@ -154,6 +196,9 @@ private:
 
     // Near clip distance — discard fragments closer than this (for LOD overlap)
     float nearClipDist_ = 0.0f;
+
+    bool castsShadow_ = true;
+    bool receivesShadow_ = true;
 };
 
 } // namespace bro::scene

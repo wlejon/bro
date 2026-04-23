@@ -5,17 +5,21 @@
 // The scene graph supports forward clustered-style PBR lighting:
 //   - Cook-Torrance BRDF (GGX distribution, Schlick Fresnel, Smith geometry)
 //   - Up to 32 dynamic lights per frame (directional / point / spot)
-//   - Per-mesh PBR material: baseColor, metallic, roughness, emissive
+//   - Shadow atlas: CSM for directional, 6-face cube for point, spot tiles
+//   - Per-mesh PBR material: baseColor, metallic, roughness, emissive, AND
+//     normal / metallic-roughness / occlusion textures
+//   - Image-based lighting (HDR env → irradiance + GGX prefilter + BRDF LUT)
 //   - HDR intermediate render target (RGBA16F) + tonemap pass (ACES by default)
 //   - Configurable exposure, gamma, and flat ambient fill
+//   - Per-mesh shadow opt-out: `castsShadow`, `receivesShadow`
 //
 // Lights are SceneNodes — they participate in the hierarchy, transforms, and
 // any scene subsystem that operates on nodes (find-by-name, agents, gizmos).
 // Their world position comes from the node transform; Directional and Spot
 // lights additionally use an explicit `direction` vector.
 //
-// Shadows, image-based lighting (IBL), bloom, and PBR textures are deferred
-// to later milestones. See scene-api.js for the non-lighting surface.
+// Bloom and clustered light culling are deferred to later milestones. See
+// scene-api.js for the non-lighting surface.
 //
 // =============================================================================
 
@@ -105,6 +109,59 @@ const s = scene.createMesh({ mesh: "sphere" });
 s.metallic = 0.9;
 s.roughness = 0.15;
 s.emissive = 2.0;
+
+
+// -----------------------------------------------------------------------------
+// PBR textures: normal, metallic-roughness, occlusion
+// -----------------------------------------------------------------------------
+//
+// All three follow the same shape as the baseColor texture: an object with
+// { width, height, data: Uint8Array(rgba8) }. Tangents for normal mapping
+// are generated automatically from the mesh UVs when a normal map is used.
+//
+//   normalTexture            — tangent-space normal map (RGBA8, xyz read).
+//   metallicRoughnessTexture — glTF packing: G = roughness, B = metallic.
+//                              Scalar `metallic` / `roughness` multiply with
+//                              the sampled channel, so set scalars to 1.0 to
+//                              let the texture drive the value directly.
+//   occlusionTexture         — R channel; modulates ambient/IBL only.
+//
+// Any combination may be bound; maps you don't set fall back to the scalar
+// material params.
+
+scene.createMesh({
+    mesh: "sphere",
+    radius: 0.5,
+    color: "#ffffff",
+    metallic:  1.0,                  // treat MR texture as authoritative
+    roughness: 1.0,
+    texture:                  { width: W, height: H, data: baseColorRGBA },
+    normalTexture:            { width: W, height: H, data: normalRGBA    },
+    metallicRoughnessTexture: { width: W, height: H, data: mrRGBA        },
+    occlusionTexture:         { width: W, height: H, data: aoRGBA        },
+});
+
+
+// -----------------------------------------------------------------------------
+// Per-mesh shadow flags
+// -----------------------------------------------------------------------------
+//
+// Both default to true. Set either on the createMesh options or at runtime.
+//
+//   castsShadow    — whether this mesh writes into the shadow atlas. Disable
+//                    for foliage impostors, transparent geometry, or meshes
+//                    whose silhouette isn't meaningful for shadows.
+//   receivesShadow — whether light contributions to this mesh are shadow-
+//                    attenuated. Disable for self-lit props or UI billboards
+//                    that should stay visible regardless of occluders.
+//
+// Light-level shadow control is separate: each LightNode has its own
+// `castsShadow` flag governing whether that light casts shadows at all.
+
+const grass = scene.createMesh({ mesh: "plane", castsShadow: false });
+const hud   = scene.createMesh({ mesh: "sphere", receivesShadow: false });
+grass.castsShadow    = false;
+hud.receivesShadow   = false;
 
 
 // -----------------------------------------------------------------------------

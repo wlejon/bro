@@ -27,6 +27,7 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aColor;
+layout(location = 4) in vec4 aTangent; // xyz = tangent, w = handedness
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
@@ -37,11 +38,19 @@ out vec3 vNormal;
 out vec2 vUV;
 out vec4 vColor;
 out float vCamDist;
+out vec3 vTangentW;
+out vec3 vBitangentW;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
     vWorldPos = worldPos.xyz;
-    vNormal = mat3(uModel) * aNormal;
+    mat3 M3 = mat3(uModel);
+    vNormal = M3 * aNormal;
+    // Tangent frame. Safe to compute unconditionally: when the mesh has no
+    // tangents, aTangent defaults to vec4(0) (disabled attrib) and the shader
+    // branches on uHasTangent before touching vTangentW/vBitangentW.
+    vTangentW   = M3 * aTangent.xyz;
+    vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
     vUV = aUV;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
     vCamDist = length(worldPos.xyz);
@@ -71,6 +80,8 @@ in vec3 vNormal;
 in vec2 vUV;
 in vec4 vColor;
 in float vCamDist;
+in vec3 vTangentW;
+in vec3 vBitangentW;
 
 uniform vec4 uColor;           // baseColor RGBA (alpha = mesh transparency)
 uniform float uEmissive;       // scalar emissive multiplier (0 = off)
@@ -80,6 +91,17 @@ uniform float uRoughness;
 uniform int uUseVertexColor;
 uniform int uUseTexture;
 uniform sampler2D uBaseColorTex;
+
+// Extended PBR maps. uHas*Map gates sampling so meshes without these maps
+// keep their previous (scalar-only) appearance.
+uniform int       uHasTangent;
+uniform int       uHasNormalMap;
+uniform int       uHasMRMap;
+uniform int       uHasAOMap;
+uniform sampler2D uNormalMap;
+uniform sampler2D uMRMap;      // glTF: G=roughness, B=metallic
+uniform sampler2D uAOMap;      // R channel
+uniform int       uReceivesShadow;
 
 uniform float uFogStart;
 uniform float uFogEnd;
@@ -271,11 +293,24 @@ void main() {
     }
 
     vec3 N = normalize(vNormal);
+    if (uHasTangent == 1 && uHasNormalMap == 1) {
+        vec3 nTS = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
+        mat3 TBN = mat3(normalize(vTangentW), normalize(vBitangentW), N);
+        N = normalize(TBN * nTS);
+    }
     vec3 V = normalize(-vWorldPos);              // eye at origin (cam-relative)
     float NdotV = max(dot(N, V), 1e-4);
 
-    float rough = clamp(uRoughness, 0.04, 1.0);  // floor to avoid spec singularity
-    vec3 F0 = mix(vec3(0.04), baseColor, uMetallic);
+    // Material params — start from scalars, optionally modulated by MR map.
+    float metal = uMetallic;
+    float rough = uRoughness;
+    if (uHasMRMap == 1) {
+        vec4 mr = texture(uMRMap, vUV);
+        rough *= mr.g;
+        metal *= mr.b;
+    }
+    rough = clamp(rough, 0.04, 1.0);  // floor to avoid spec singularity
+    vec3 F0 = mix(vec3(0.04), baseColor, metal);
 
     vec3 Lo = vec3(0.0);
     for (int i = 0; i < uLightCount && i < MAX_LIGHTS; ++i) {
@@ -315,7 +350,7 @@ void main() {
         vec3  F = fresnelSchlick(VdotH, F0);
 
         vec3 specular = (D * G * F) / max(4.0 * NdotV * NdotL, 1e-4);
-        vec3 kD = (vec3(1.0) - F) * (1.0 - uMetallic);
+        vec3 kD = (vec3(1.0) - F) * (1.0 - metal);
         vec3 diffuse = kD * baseColor / PI;
 
         float shadow = 1.0;
@@ -379,6 +414,7 @@ void main() {
                 vec3 posBiased = vWorldPos + N * uShadowBias[slot].y * biasScale;
                 shadow = sampleShadow(slot, posBiased);
             }
+            if (uReceivesShadow == 0) shadow = 1.0;
         }
 
         vec3 radiance = uLightColor[i] * uLightIntensity[i] * atten;
@@ -397,7 +433,7 @@ void main() {
 
         vec3 F  = fresnelSchlickRoughness(NdotV, F0, rough);
         vec3 kS = F;
-        vec3 kD = (1.0 - kS) * (1.0 - uMetallic);
+        vec3 kD = (1.0 - kS) * (1.0 - metal);
 
         vec3 irradiance = texture(uIBLIrradiance, N_s).rgb;
         vec3 diffuse    = irradiance * baseColor;
@@ -410,7 +446,10 @@ void main() {
         ambient = (kD * diffuse + specular) * uIBLIntensity;
     } else {
         // Fallback for scenes with no environment loaded — flat tint.
-        ambient = uAmbient * baseColor * (1.0 - uMetallic);
+        ambient = uAmbient * baseColor * (1.0 - metal);
+    }
+    if (uHasAOMap == 1) {
+        ambient *= texture(uAOMap, vUV).r;
     }
     vec3 emissive = uEmissiveColor * uEmissive;
     vec3 color = Lo + ambient + emissive;
@@ -1240,6 +1279,14 @@ void SceneGraph::ensureMeshPipeline() {
         uUseVertexColor_ = glGetUniformLocation(meshProgram_, "uUseVertexColor");
         uUseTexture_     = glGetUniformLocation(meshProgram_, "uUseTexture");
         uBaseColorTex_   = glGetUniformLocation(meshProgram_, "uBaseColorTex");
+        uHasTangent_     = glGetUniformLocation(meshProgram_, "uHasTangent");
+        uHasNormalMap_   = glGetUniformLocation(meshProgram_, "uHasNormalMap");
+        uHasMRMap_       = glGetUniformLocation(meshProgram_, "uHasMRMap");
+        uHasAOMap_       = glGetUniformLocation(meshProgram_, "uHasAOMap");
+        uNormalMap_      = glGetUniformLocation(meshProgram_, "uNormalMap");
+        uMRMap_          = glGetUniformLocation(meshProgram_, "uMRMap");
+        uAOMap_          = glGetUniformLocation(meshProgram_, "uAOMap");
+        uReceivesShadow_ = glGetUniformLocation(meshProgram_, "uReceivesShadow");
         uFogStart_ = glGetUniformLocation(meshProgram_, "uFogStart");
         uFogEnd_ = glGetUniformLocation(meshProgram_, "uFogEnd");
         uFogColor_ = glGetUniformLocation(meshProgram_, "uFogColor");
@@ -2344,7 +2391,8 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
         if (!n || !n->visible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
-            if (!m->unlit() && !m->mesh().empty()) shadowCasters_.push_back(m);
+            if (!m->unlit() && m->castsShadow() && !m->mesh().empty())
+                shadowCasters_.push_back(m);
         }
         for (auto* c : n->children()) self(self, c);
     };
@@ -2996,6 +3044,32 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     } else {
         glUniform1i(uUseTexture_, 0);
     }
+
+    // PBR map bindings — units 5/6/7 avoid collision with baseColor (0),
+    // shadow atlas (1), and IBL cubemaps/BRDF LUT (2/3/4).
+    bool hasNM = mesh->hasNormalTexture();
+    bool hasMR = mesh->hasMetallicRoughnessTexture();
+    bool hasAO = mesh->hasOcclusionTexture();
+    if (hasNM) {
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, mesh->normalTextureId());
+        if (uNormalMap_ >= 0) glUniform1i(uNormalMap_, 5);
+    }
+    if (hasMR) {
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, mesh->metallicRoughnessTextureId());
+        if (uMRMap_ >= 0) glUniform1i(uMRMap_, 6);
+    }
+    if (hasAO) {
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, mesh->occlusionTextureId());
+        if (uAOMap_ >= 0) glUniform1i(uAOMap_, 7);
+    }
+    if (uHasTangent_    >= 0) glUniform1i(uHasTangent_,    mesh->mesh().hasTangents() ? 1 : 0);
+    if (uHasNormalMap_  >= 0) glUniform1i(uHasNormalMap_,  hasNM ? 1 : 0);
+    if (uHasMRMap_      >= 0) glUniform1i(uHasMRMap_,      hasMR ? 1 : 0);
+    if (uHasAOMap_      >= 0) glUniform1i(uHasAOMap_,      hasAO ? 1 : 0);
+    if (uReceivesShadow_ >= 0) glUniform1i(uReceivesShadow_, mesh->receivesShadow() ? 1 : 0);
 
     // Per-mesh polygon offset (depth bias). Used by callers that need to
     // layer co-located meshes — e.g. terrain LOD shells that overlap and need

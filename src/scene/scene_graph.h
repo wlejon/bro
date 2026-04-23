@@ -343,6 +343,14 @@ private:
     GLint uUseVertexColor_ = -1;
     GLint uUseTexture_ = -1;
     GLint uBaseColorTex_ = -1;
+    GLint uHasTangent_ = -1;
+    GLint uHasNormalMap_ = -1;
+    GLint uHasMRMap_ = -1;
+    GLint uHasAOMap_ = -1;
+    GLint uNormalMap_ = -1;
+    GLint uMRMap_ = -1;
+    GLint uAOMap_ = -1;
+    GLint uReceivesShadow_ = -1;
     GLint uFogStart_ = -1;
     GLint uFogEnd_ = -1;
     GLint uFogColor_ = -1;
