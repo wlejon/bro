@@ -24,6 +24,13 @@
     if (typeof document.location === 'undefined' && typeof window !== 'undefined')
         try { document.location = window.location; } catch(e) {}
 
+    // document.createTreeWalker — brokit ships TreeWalker but leaves the
+    // document hookup to the consumer (it has no DOM of its own).
+    if (typeof document.createTreeWalker !== 'function' &&
+        typeof globalThis.__brokit_install_createTreeWalker === 'function') {
+        globalThis.__brokit_install_createTreeWalker(document);
+    }
+
     // Array.from polyfill (QuickJS may not have it)
     if (!Array.from) {
         Array.from = function(obj, mapFn) {
@@ -514,6 +521,30 @@
                 return globalThis.__bro_set_fullscreen_setting(true);
             };
         }
+
+        // ---- AbortSignal support in addEventListener -------------------------
+        // Wrap addEventListener so {signal} removes the listener when aborted.
+        // Applies to Element, document (which forwards to documentElement), and
+        // window (whose addEventListener lives on globalThis).
+        function wrapWithSignal(proto) {
+            var orig = proto.addEventListener;
+            if (!orig || orig.__bro_signal_wrapped) return;
+            proto.addEventListener = function(type, fn, opts) {
+                var signal = (opts && typeof opts === 'object') ? opts.signal : null;
+                if (signal && signal.aborted) return;
+                orig.call(this, type, fn, opts);
+                if (signal && typeof signal.addEventListener === 'function') {
+                    var self = this;
+                    signal.addEventListener('abort', function onAbort() {
+                        self.removeEventListener(type, fn, opts);
+                    });
+                }
+            };
+            proto.addEventListener.__bro_signal_wrapped = true;
+        }
+        wrapWithSignal(elProto);
+        // window: addEventListener is defined directly on globalThis.
+        wrapWithSignal(globalThis);
     })();
 
     // ---- DOMParser / XMLSerializer -------------------------------------------
