@@ -298,6 +298,14 @@ public:
     /// to keep audio sequencer and other JS timers alive.
     void tickTimersOnly();
 
+    /// Shared text metrics, used by layout and by JS bindings that need
+    /// geometry against the live font stack (Range.getBoundingClientRect).
+    layout::SkiaTextMetrics* textMetrics() const { return textMetrics_.get(); }
+    /// Vertical offset the main draw pass applies to the app document,
+    /// (contentTop - scrollY). Bindings that return absolute viewport
+    /// coordinates add this to layout-space rects.
+    float docContentOffsetY() const;
+
 private:
     // Per-app configuration (stored for use throughout engine lifetime)
     GraphicsConfig graphicsConfig_;

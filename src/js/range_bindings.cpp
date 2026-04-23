@@ -2,6 +2,9 @@
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "dom/document.h"
+#include "layout/selection_geometry.h"
+#include "layout/skia_text_metrics.h"
+#include "engine/engine.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -227,6 +230,91 @@ static JSValue js_range_detach(JSContext* /*ctx*/, JSValueConst /*this_val*/,
     return JS_UNDEFINED;
 }
 
+// Build a plain JS object shaped like DOMRect: {x,y,width,height,top,right,
+// bottom,left}. Callers treat these as POJOs — we don't need a class since
+// DOMRect is a value type with only accessors.
+static JSValue makeDomRect(JSContext* ctx, float x, float y, float w, float h) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "x", JS_NewFloat64(ctx, x));
+    JS_SetPropertyStr(ctx, o, "y", JS_NewFloat64(ctx, y));
+    JS_SetPropertyStr(ctx, o, "width", JS_NewFloat64(ctx, w));
+    JS_SetPropertyStr(ctx, o, "height", JS_NewFloat64(ctx, h));
+    JS_SetPropertyStr(ctx, o, "top", JS_NewFloat64(ctx, y));
+    JS_SetPropertyStr(ctx, o, "left", JS_NewFloat64(ctx, x));
+    JS_SetPropertyStr(ctx, o, "right", JS_NewFloat64(ctx, x + w));
+    JS_SetPropertyStr(ctx, o, "bottom", JS_NewFloat64(ctx, y + h));
+    return o;
+}
+
+// Fetch (document, textMetrics, docOffsetY) by looking up the engine bound
+// to this JSContext. Returns false when not available (e.g. no engine or
+// layout hasn't run yet).
+static bool fetchGeometryDeps(JSContext* ctx,
+                              bro::dom::Document*& outDoc,
+                              htmlayout::layout::TextMetrics*& outMetrics,
+                              float& outOffsetY) {
+    outDoc = bro::js::getDocumentForCtx(ctx);
+    if (!outDoc) return false;
+    auto it = bro::js::s_ctx_engines.find(ctx);
+    if (it == bro::js::s_ctx_engines.end() || !it->second) return false;
+    auto* engine = static_cast<bro::engine::Engine*>(it->second);
+    outMetrics = engine->textMetrics();
+    if (!outMetrics) return false;
+    outOffsetY = engine->docContentOffsetY();
+    return true;
+}
+
+static JSValue js_range_getClientRects(JSContext* ctx, JSValueConst this_val,
+                                       int /*argc*/, JSValueConst* /*argv*/) {
+    auto* r = getRange(this_val);
+    if (!r) return JS_NewArray(ctx);
+    bro::dom::Document* doc;
+    htmlayout::layout::TextMetrics* metrics;
+    float offY;
+    if (!fetchGeometryDeps(ctx, doc, metrics, offY)) return JS_NewArray(ctx);
+
+    auto rects = bro::layout::getSelectionRects(
+        doc, r->startContainer(), r->startOffset(),
+        r->endContainer(), r->endOffset(), *metrics);
+
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (const auto& rect : rects) {
+        JS_SetPropertyUint32(ctx, arr, i++,
+            makeDomRect(ctx, rect.x, rect.y + offY, rect.width, rect.height));
+    }
+    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, static_cast<int>(i)));
+    return arr;
+}
+
+static JSValue js_range_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
+                                              int /*argc*/, JSValueConst* /*argv*/) {
+    auto* r = getRange(this_val);
+    if (!r) return makeDomRect(ctx, 0, 0, 0, 0);
+    bro::dom::Document* doc;
+    htmlayout::layout::TextMetrics* metrics;
+    float offY;
+    if (!fetchGeometryDeps(ctx, doc, metrics, offY))
+        return makeDomRect(ctx, 0, 0, 0, 0);
+
+    auto rects = bro::layout::getSelectionRects(
+        doc, r->startContainer(), r->startOffset(),
+        r->endContainer(), r->endOffset(), *metrics);
+    if (rects.empty()) return makeDomRect(ctx, 0, 0, 0, 0);
+
+    float left   = rects.front().x;
+    float top    = rects.front().y;
+    float right  = rects.front().x + rects.front().width;
+    float bottom = rects.front().y + rects.front().height;
+    for (const auto& rect : rects) {
+        left   = std::min(left,   rect.x);
+        top    = std::min(top,    rect.y);
+        right  = std::max(right,  rect.x + rect.width);
+        bottom = std::max(bottom, rect.y + rect.height);
+    }
+    return makeDomRect(ctx, left, top + offY, right - left, bottom - top);
+}
+
 // ---------------------------------------------------------------------------
 // Registration — via qjsbind::Class so the finalizer runs delete on owned
 // ranges. Unowned wrappers (Selection::getRangeAt) share the same class ID but
@@ -272,7 +360,9 @@ void installRangeBindings(JSContext* ctx)
         .method_raw("createContextualFragment",js_range_createContextualFragment, 1)
         .method_raw("cloneRange",              js_range_cloneRange, 0)
         .method_raw("toString",                js_range_toString, 0)
-        .method_raw("detach",                  js_range_detach, 0);
+        .method_raw("detach",                  js_range_detach, 0)
+        .method_raw("getClientRects",          js_range_getClientRects, 0)
+        .method_raw("getBoundingClientRect",   js_range_getBoundingClientRect, 0);
 
     js_range_class_id = qjsbind::class_id<Range>();
 

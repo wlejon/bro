@@ -2527,6 +2527,10 @@ static bool inContenteditableHost(bro::dom::Node* node) {
     return false;
 }
 
+float Engine::docContentOffsetY() const {
+    return static_cast<float>(contentTop()) - scrollY_;
+}
+
 void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {
     if (!renderer || !document_ || !textMetrics_) return;
     auto* sel = document_->selection();
