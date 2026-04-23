@@ -2461,10 +2461,15 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
 // events (loadedmetadata, timeupdate, ended) on each ElVideo. Called from
 // the main thread because QuickJS is not thread-safe; ElVideo::draw() runs
 // on the raster thread and deliberately does not touch JS.
-static void pumpVideoEventsWalk(dom::Element* el) {
+static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying) {
     if (!el) return;
-    if (auto* v = el->videoControl()) v->pumpEvents();
-    el->forEachComposedChild([](dom::Element* c) { pumpVideoEventsWalk(c); });
+    if (auto* v = el->videoControl()) {
+        v->pumpEvents();
+        if (v->isPlaying()) anyPlaying = true;
+    }
+    el->forEachComposedChild([&](dom::Element* c) {
+        pumpVideoEventsWalk(c, anyPlaying);
+    });
 }
 void Engine::pumpVideoEvents() {
     // The engine's initial layout flush runs BEFORE user script, so
@@ -2474,7 +2479,13 @@ void Engine::pumpVideoEvents() {
     // flush() set this flag before pumping.
     if (!mediaEventsArmed_) return;
     if (!document_) return;
-    pumpVideoEventsWalk(document_->documentElement());
+    bool anyPlaying = false;
+    pumpVideoEventsWalk(document_->documentElement(), anyPlaying);
+    // Playing <video> elements don't mutate the DOM, so nothing else would
+    // mark the document dirty. Force a re-raster each frame while any video
+    // is advancing so ElVideo::draw() keeps calling pipeline_->advance() and
+    // presenting new frames.
+    if (anyPlaying) document_->markDirty();
 }
 
 void Engine::drawElementScrollbars(render::Renderer* renderer,
