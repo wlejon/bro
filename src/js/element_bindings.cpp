@@ -1467,6 +1467,37 @@ static JSValue js_element_get_offsetTop(JSContext* ctx, JSValueConst this_val) {
     return JS_NewInt32(ctx, static_cast<int>(box.contentRect.y - box.padding.top - box.border.top));
 }
 
+static JSValue js_element_get_clientTop(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(el);
+    return JS_NewInt32(ctx, static_cast<int>(box.border.top));
+}
+
+static JSValue js_element_get_clientLeft(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(el);
+    return JS_NewInt32(ctx, static_cast<int>(box.border.left));
+}
+
+static JSValue js_element_get_hidden(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    return JS_NewBool(ctx, el->hasAttribute("hidden"));
+}
+
+static JSValue js_element_set_hidden(JSContext* ctx, JSValueConst this_val,
+                                     JSValueConst val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (JS_ToBool(ctx, val))
+        el->setAttribute("hidden", "");
+    else
+        el->removeAttribute("hidden");
+    return JS_UNDEFINED;
+}
+
 static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val) {
     // Per spec: scrollWidth = max(clientWidth, scrollable content width including padding)
     // Inline non-replaced elements return 0.
@@ -1606,6 +1637,14 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     JS_SetPropertyStr(ctx, rect, "bottom", JS_NewFloat64(ctx, y + h));
     JS_SetPropertyStr(ctx, rect, "right",  JS_NewFloat64(ctx, x + w));
     return rect;
+}
+
+static JSValue js_element_getClientRects(JSContext* ctx, JSValueConst this_val,
+                                         int /*argc*/, JSValueConst* /*argv*/) {
+    JSValue rect = js_element_getBoundingClientRect(ctx, this_val, 0, nullptr);
+    JSValue arr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, arr, 0, rect);
+    return arr;
 }
 
 static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
@@ -2340,6 +2379,9 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("offsetHeight",  js_element_get_offsetHeight, nullptr),
     JS_CGETSET_DEF("offsetLeft",    js_element_get_offsetLeft, nullptr),
     JS_CGETSET_DEF("offsetTop",     js_element_get_offsetTop, nullptr),
+    JS_CGETSET_DEF("clientTop",     js_element_get_clientTop, nullptr),
+    JS_CGETSET_DEF("clientLeft",    js_element_get_clientLeft, nullptr),
+    JS_CGETSET_DEF("hidden",        js_element_get_hidden, js_element_set_hidden),
     JS_CGETSET_DEF("scrollWidth",   js_element_get_scrollWidth, nullptr),
     JS_CGETSET_DEF("scrollHeight",  js_element_get_scrollHeight, nullptr),
     JS_CGETSET_DEF("scrollLeft",    js_element_get_scrollLeft, js_element_set_scrollLeft),
@@ -2388,6 +2430,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("remove",                    0, js_element_remove),
     JS_CFUNC_DEF("dispatchEvent",             1, js_element_dispatchEvent),
     JS_CFUNC_DEF("getBoundingClientRect",     0, js_element_getBoundingClientRect),
+    JS_CFUNC_DEF("getClientRects",            0, js_element_getClientRects),
     JS_CFUNC_DEF("click",                     0, js_element_click),
     JS_CFUNC_DEF("focus",                     0, js_element_focus),
     JS_CFUNC_DEF("blur",                      0, js_element_blur),

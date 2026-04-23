@@ -187,6 +187,46 @@ void installDocumentBindings(JSContext* ctx) {
             auto* body = d->body();
             return body ? DomBindings::wrapElement(cx, body) : JS_NULL;
         })
+        .get("head", [](Doc* d, JSContext* cx) -> JSValue {
+            auto* root = d->documentElement();
+            if (!root) return JS_NULL;
+            for (auto* child : root->childNodes()) {
+                if (child->nodeType() != bro::dom::NodeType::Element) continue;
+                auto* el = static_cast<bro::dom::Element*>(child);
+                const auto& tag = el->tagName();
+                if (tag == "HEAD" || tag == "head")
+                    return DomBindings::wrapElement(cx, el);
+            }
+            return JS_NULL;
+        })
+        .get("URL", [](Doc*, JSContext* cx) -> JSValue {
+            JSValue g = JS_GetGlobalObject(cx);
+            JSValue loc = JS_GetPropertyStr(cx, g, "location");
+            JS_FreeValue(cx, g);
+            if (JS_IsUndefined(loc) || JS_IsNull(loc)) {
+                JS_FreeValue(cx, loc);
+                return JS_NewString(cx, "");
+            }
+            JSValue href = JS_GetPropertyStr(cx, loc, "href");
+            JS_FreeValue(cx, loc);
+            if (JS_IsString(href)) return href;
+            JS_FreeValue(cx, href);
+            return JS_NewString(cx, "");
+        })
+        .get("documentURI", [](Doc*, JSContext* cx) -> JSValue {
+            JSValue g = JS_GetGlobalObject(cx);
+            JSValue loc = JS_GetPropertyStr(cx, g, "location");
+            JS_FreeValue(cx, g);
+            if (JS_IsUndefined(loc) || JS_IsNull(loc)) {
+                JS_FreeValue(cx, loc);
+                return JS_NewString(cx, "");
+            }
+            JSValue href = JS_GetPropertyStr(cx, loc, "href");
+            JS_FreeValue(cx, loc);
+            if (JS_IsString(href)) return href;
+            JS_FreeValue(cx, href);
+            return JS_NewString(cx, "");
+        })
         .get("documentElement", [](Doc* d, JSContext* cx) -> JSValue {
             auto* root = d->documentElement();
             return root ? DomBindings::wrapElement(cx, root) : JS_NULL;

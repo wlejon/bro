@@ -442,11 +442,11 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     auto it = listeners.find(event.type());
     bool hasListeners = (it != listeners.end() && !it->second.empty());
     bool hasInlineHandler = false;
+    std::string attrName;
     if (phase == AT_TARGET || phase == BUBBLING_PHASE) {
-        std::string attrName = "on" + event.type();
+        attrName = "on" + event.type();
         hasInlineHandler = !current->getAttribute(attrName).empty();
     }
-    if (!hasListeners && !hasInlineHandler) return;
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
@@ -460,6 +460,21 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     std::string elemKey = std::to_string(current->nodeId());
     JSValue jsElem = JS_GetPropertyStr(ctx, elemMap, elemKey.c_str());
     JS_FreeValue(ctx, elemMap);
+
+    // Check for IDL event-handler property (e.g. el.onclick = fn). Only possible
+    // if a JS wrapper already exists; a fresh wrapper would have no such prop.
+    bool hasPropertyHandler = false;
+    if (!attrName.empty() && !JS_IsUndefined(jsElem) && !JS_IsNull(jsElem)) {
+        JSValue propHandler = JS_GetPropertyStr(ctx, jsElem, attrName.c_str());
+        hasPropertyHandler = JS_IsFunction(ctx, propHandler);
+        JS_FreeValue(ctx, propHandler);
+    }
+
+    if (!hasListeners && !hasInlineHandler && !hasPropertyHandler) {
+        JS_FreeValue(ctx, jsElem);
+        JS_FreeValue(ctx, global);
+        return;
+    }
 
     if (JS_IsUndefined(jsElem) || JS_IsNull(jsElem)) {
         JS_FreeValue(ctx, jsElem);
@@ -623,11 +638,42 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         JS_SetPropertyStr(ctx, listenersArr, "length", JS_NewInt64(ctx, dst));
     }
 
+    // --- Inline event handler: IDL property (el.onclick = fn) ---
+    // Per DOM spec, fires after registered listeners during AT_TARGET/BUBBLING.
+    // Prefer the JS property over the HTML attribute when both are set (matches
+    // browser behavior: assigning el.onclick overrides the attribute).
+    bool propertyHandlerFired = false;
+    if ((phase == AT_TARGET || phase == BUBBLING_PHASE) && !event.propagationStopped()) {
+        JSValue propHandler = JS_GetPropertyStr(ctx, jsElem, attrName.c_str());
+        if (JS_IsFunction(ctx, propHandler)) {
+            JSValue result = JS_Call(ctx, propHandler, jsElem, 1, &jsEvent);
+            if (JS_IsException(result)) {
+                Runtime::checkException(ctx, result);
+            }
+            if (JS_IsBool(result) && !JS_ToBool(ctx, result)) {
+                event.preventDefault();
+            }
+            JS_FreeValue(ctx, result);
+            propertyHandlerFired = true;
+
+            JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
+            if (JS_ToBool(ctx, stoppedVal))
+                event.stopPropagation();
+            JS_FreeValue(ctx, stoppedVal);
+
+            JSValue preventedVal = JS_GetPropertyStr(ctx, jsEvent, "_prevented");
+            if (JS_ToBool(ctx, preventedVal))
+                event.preventDefault();
+            JS_FreeValue(ctx, preventedVal);
+        }
+        JS_FreeValue(ctx, propHandler);
+    }
+
     // --- Inline event handler attributes (onclick, onmouseover, etc.) ---
     // Per DOM spec, inline handlers fire during AT_TARGET or BUBBLING phase,
-    // after any registered listeners on the same element.
-    if ((phase == AT_TARGET || phase == BUBBLING_PHASE) && !event.propagationStopped()) {
-        std::string attrName = "on" + event.type();
+    // after any registered listeners on the same element. Skipped when an IDL
+    // property handler already fired (the property overrides the attribute).
+    if ((phase == AT_TARGET || phase == BUBBLING_PHASE) && !event.propagationStopped() && !propertyHandlerFired) {
         std::string handlerCode = current->getAttribute(attrName);
         if (!handlerCode.empty()) {
             // Compile the handler as a function body with 'event' parameter.

@@ -30,7 +30,7 @@ static int js_cssstyle_get_own_property(JSContext* ctx,
     // Skip exotic lookup for properties handled by the prototype function list.
     if (nameStr == "cssText" || nameStr == "setProperty" ||
         nameStr == "getPropertyValue" || nameStr == "removeProperty" ||
-        nameStr == "length") return 0;
+        nameStr == "length" || nameStr == "item") return 0;
 
     std::string cssName = camelToKebab(nameStr);
     std::string val = style->getProperty(cssName);
@@ -124,10 +124,52 @@ static JSValue js_cssstyle_setPropertyValue(JSContext* ctx,
     return JS_UNDEFINED;
 }
 
+static JSValue js_cssstyle_removeProperty(JSContext* ctx,
+                                          JSValueConst this_val,
+                                          int argc, JSValueConst* argv)
+{
+    auto* style = static_cast<bro::dom::StyleProxy*>(
+        JS_GetOpaque(this_val, js_cssstyle_class_id));
+    if (!style || argc < 1) return JS_NewString(ctx, "");
+    std::string name = jsToStdString(ctx, argv[0]);
+    std::string prev = style->getProperty(name);
+    style->removeProperty(name);
+    return JS_NewString(ctx, prev.c_str());
+}
+
+static JSValue js_cssstyle_get_length(JSContext* ctx, JSValueConst this_val)
+{
+    auto* style = static_cast<bro::dom::StyleProxy*>(
+        JS_GetOpaque(this_val, js_cssstyle_class_id));
+    if (!style) return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, static_cast<int32_t>(style->size()));
+}
+
+static JSValue js_cssstyle_item(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv)
+{
+    auto* style = static_cast<bro::dom::StyleProxy*>(
+        JS_GetOpaque(this_val, js_cssstyle_class_id));
+    if (!style || argc < 1) return JS_NewString(ctx, "");
+    int32_t idx = 0;
+    JS_ToInt32(ctx, &idx, argv[0]);
+    if (idx < 0 || static_cast<size_t>(idx) >= style->size())
+        return JS_NewString(ctx, "");
+    // unordered_map iteration order is implementation-defined but stable
+    // between mutations — good enough for per-spec item() callers that
+    // typically loop 0..length-1.
+    auto it = style->properties().begin();
+    std::advance(it, idx);
+    return JS_NewString(ctx, it->first.c_str());
+}
+
 static const JSCFunctionListEntry js_cssstyle_proto_funcs[] = {
     JS_CGETSET_DEF("cssText", js_cssstyle_get_cssText, js_cssstyle_set_cssText),
+    JS_CGETSET_DEF("length",  js_cssstyle_get_length,  nullptr),
     JS_CFUNC_DEF("getPropertyValue", 1, js_cssstyle_getPropertyValue),
     JS_CFUNC_DEF("setProperty",      2, js_cssstyle_setPropertyValue),
+    JS_CFUNC_DEF("removeProperty",   1, js_cssstyle_removeProperty),
+    JS_CFUNC_DEF("item",             1, js_cssstyle_item),
 };
 
 JSValue wrapStyleProxy(JSContext* ctx, bro::dom::StyleProxy* style)

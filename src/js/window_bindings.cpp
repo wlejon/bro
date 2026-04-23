@@ -20,6 +20,14 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
     JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth));
     JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight));
+    JS_SetPropertyStr(ctx, global, "outerWidth", JS_NewInt32(ctx, viewportWidth));
+    JS_SetPropertyStr(ctx, global, "outerHeight", JS_NewInt32(ctx, viewportHeight));
+    JS_SetPropertyStr(ctx, global, "screenX", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "screenY", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "scrollX", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "scrollY", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "pageXOffset", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "pageYOffset", JS_NewInt32(ctx, 0));
 
     // navigator — extend existing (brokit may have created it) rather than replace
     JSValue nav = JS_GetPropertyStr(ctx, global, "navigator");

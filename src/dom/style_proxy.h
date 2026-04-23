@@ -18,6 +18,8 @@ public:
     void setCssText(const std::string& text);
 
     bool empty() const { return properties_.empty(); }
+    size_t size() const { return properties_.size(); }
+    const std::unordered_map<std::string, std::string>& properties() const { return properties_; }
 
     static std::string camelToKebab(const std::string& camel);
     static std::string kebabToCamel(const std::string& kebab);
