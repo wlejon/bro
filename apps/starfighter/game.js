@@ -23,6 +23,10 @@ N.Game = (function() {
     var YOKE_MAX_DEFLECT = 22;     // world units the ship can move off-center
     var RETICLE_LAG_MS   = 140;
     var FORWARD_SPEED    = 0.07;   // space-rail star advance rate
+
+    // Parallax: world view slides opposite the ship position by this factor
+    // of shipX/shipY. Arcade yoke-look feel — subtle, not a free-look camera.
+    var PARALLAX         = 0.35;
     var RETICLE_Z        = 40;     // depth at which laser beams converge
     var FIRE_COOLDOWN_MS = 170;
     var BOLT_VISUAL_LIFE = 180;    // ms: cosmetic player bolts
@@ -431,6 +435,10 @@ N.Game = (function() {
         state.reticleX = targetX;
         state.reticleY = targetY;
 
+        // Parallax view shift — camera slides with the ship so the world
+        // appears to slide opposite the yoke.
+        N.Render.setCamera(state.shipX * PARALLAX, state.shipY * PARALLAX);
+
         N.Render.advanceStars(FORWARD_SPEED * dt);
         N.Render.updateShake(dt);
         N.Render.updateFlash(dt);
@@ -483,8 +491,10 @@ N.Game = (function() {
     }
 
     function drawReticle(ctx) {
-        var pr = N.Render.project(state.reticleX, state.reticleY, RETICLE_Z);
-        var ps = N.Render.project(state.shipX, state.shipY, RETICLE_Z);
+        // Reticle and ship marker are cockpit-attached — project without
+        // the parallax camera offset so they stay anchored to the yoke.
+        var pr = N.Render.projectHud(state.reticleX, state.reticleY, RETICLE_Z);
+        var ps = N.Render.projectHud(state.shipX, state.shipY, RETICLE_Z);
         if (pr.visible) {
             ctx.strokeStyle = "#ff4";
             ctx.lineWidth = 2;

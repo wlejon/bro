@@ -27,6 +27,14 @@ N.Render = (function() {
     var _shakeDecay = 0; // per ms
     var _jitter = 0;     // px, line endpoint noise
 
+    // Parallax camera offset in world units. World points are translated by
+    // (-_camX, -_camY) before projection — the arcade sells "looking around"
+    // by sliding the view slightly opposite the yoke. Reticle/HUD uses
+    // projectHud() to stay pinned to screen space.
+    var _camX = 0, _camY = 0;
+
+    function setCamera(cx, cy) { _camX = cx || 0; _camY = cy || 0; }
+
     function setViewport(W, H) {
         _W = W; _H = H;
         _focal = (H / 2) / Math.tan(VFOV / 2);
@@ -43,8 +51,18 @@ N.Render = (function() {
     function project(x, y, z) {
         if (z < NEAR_Z) return { x: 0, y: 0, z: z, visible: false };
         var inv = _focal / z;
-        var sx = _cx + x * inv + (_shakeAmp ? (Math.random() * 2 - 1) * _shakeAmp : 0);
-        var sy = _cy - y * inv + (_shakeAmp ? (Math.random() * 2 - 1) * _shakeAmp : 0);
+        var sx = _cx + (x - _camX) * inv + (_shakeAmp ? (Math.random() * 2 - 1) * _shakeAmp : 0);
+        var sy = _cy - (y - _camY) * inv + (_shakeAmp ? (Math.random() * 2 - 1) * _shakeAmp : 0);
+        return { x: sx, y: sy, z: z, visible: true };
+    }
+
+    // HUD projection — ignores camera parallax. Use for reticle and any
+    // element that should stay attached to the cockpit, not the world.
+    function projectHud(x, y, z) {
+        if (z < NEAR_Z) return { x: 0, y: 0, z: z, visible: false };
+        var inv = _focal / z;
+        var sx = _cx + x * inv;
+        var sy = _cy - y * inv;
         return { x: sx, y: sy, z: z, visible: true };
     }
 
@@ -214,6 +232,8 @@ N.Render = (function() {
         setViewport: setViewport,
         width: width, height: height, focal: focal,
         project: project,
+        projectHud: projectHud,
+        setCamera: setCamera,
         line: line,
         polyline: polyline,
         edges: edges,
