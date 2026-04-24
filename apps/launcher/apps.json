@@ -18,6 +18,7 @@
         { "dir": "crater", "server": { "script": "server.js" } },
         { "dir": "tumble" },
         { "dir": "serpcoil" },
+        { "dir": "blockpop" },
         { "dir": "synth" },
         { "dir": "ai-arena" },
         { "dir": "terrain" },
