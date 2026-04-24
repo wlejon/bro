@@ -17,6 +17,7 @@
         { "dir": "fps", "server": { "script": "server.js" } },
         { "dir": "crater", "server": { "script": "server.js" } },
         { "dir": "tumble" },
+        { "dir": "serpcoil" },
         { "dir": "synth" },
         { "dir": "ai-arena" },
         { "dir": "terrain" },

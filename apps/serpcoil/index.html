@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Serpcoil</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" style="display:none">
+        <div class="hud-row"><span class="hud-label">SCORE</span><span id="hud-score" class="hud-value">0</span></div>
+        <div class="hud-row"><span class="hud-label">LEVEL</span><span id="hud-level" class="hud-value">1</span></div>
+        <div class="hud-row"><span class="hud-label">COMBO</span><span id="hud-combo" class="hud-value">x1</span></div>
+        <div class="hud-row"><span class="hud-label">LEFT</span><span id="hud-left" class="hud-value">0</span></div>
+        <div id="hud-progress"><div id="hud-progress-fill"></div></div>
+        <div id="hud-danger" class="hud-danger" style="display:none">DANGER</div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none"></div>
+
+    <div id="overlay">
+        <!-- TITLE -->
+        <div id="screen-title" class="screen">
+            <div class="overlay-title">SERPCOIL</div>
+            <div class="overlay-sub">Weave the runes. Break the coil.</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="play">PLAY</div>
+                <div class="menu-item" data-action="levelselect">LEVEL SELECT</div>
+                <div class="menu-item" data-action="highscores">HIGH SCORES</div>
+                <div class="menu-item" data-action="howtoplay">HOW TO PLAY</div>
+                <div class="menu-item" data-action="settings">SETTINGS</div>
+                <div class="menu-item" data-action="credits">CREDITS</div>
+            </div>
+            <div class="overlay-hint">Arrow keys / mouse to navigate, Enter to select</div>
+        </div>
+
+        <!-- LEVEL SELECT -->
+        <div id="screen-levelselect" class="screen">
+            <div class="overlay-title">LEVEL SELECT</div>
+            <div id="level-grid" class="level-grid"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+            <div class="overlay-hint">Click a rune, or Esc to go back</div>
+        </div>
+
+        <!-- PAUSE -->
+        <div id="screen-pause" class="screen">
+            <div class="overlay-title">PAUSED</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="resume">RESUME</div>
+                <div class="menu-item" data-action="restart">RESTART LEVEL</div>
+                <div class="menu-item" data-action="settings">SETTINGS</div>
+                <div class="menu-item" data-action="quit">QUIT TO MENU</div>
+            </div>
+        </div>
+
+        <!-- LEVEL CLEAR -->
+        <div id="screen-levelclear" class="screen">
+            <div class="overlay-title">LEVEL CLEAR</div>
+            <div id="clear-stars" class="stars">★ ★ ★</div>
+            <div class="overlay-sub stats-block" id="clear-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="next">NEXT LEVEL</div>
+                <div class="menu-item" data-action="retry">RETRY</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+
+        <!-- GAME OVER -->
+        <div id="screen-gameover" class="screen">
+            <div class="overlay-title">COIL DEVOURED</div>
+            <div class="overlay-sub stats-block" id="gameover-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="retry">TRY AGAIN</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+
+        <!-- HIGH SCORES -->
+        <div id="screen-highscores" class="screen">
+            <div class="overlay-title">HIGH SCORES</div>
+            <div class="overlay-sub stats-block" id="hs-list">No scores yet</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- HOW TO PLAY -->
+        <div id="screen-howtoplay" class="screen">
+            <div class="overlay-title">HOW TO PLAY</div>
+            <div class="overlay-sub htp-body">
+                <p>A serpent of colored runes marches toward the maw.<br>
+                Fire runes from the eye at its center. Match three<br>
+                or more of the same color to break the chain.</p>
+                <p><strong>Controls:</strong></p>
+                <pre id="htp-controls">Aim        Mouse move / Arrow keys
+Fire       Left click / Space
+Swap       Right click / Shift
+Pause      Esc</pre>
+                <p><strong>Powerups:</strong><br>
+                Backtrack · Blaster · Colorshift · Slowmo</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- SETTINGS -->
+        <div id="screen-settings" class="screen">
+            <div class="overlay-title">SETTINGS</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-setting="sfxVol">SFX Volume: <span id="opt-sfxVol">80</span>%</div>
+                <div class="menu-item" data-setting="musicVol">Music Volume: <span id="opt-musicVol">70</span>%</div>
+                <div class="menu-item" data-setting="showTrails">Particle Trails: <span id="opt-showTrails">ON</span></div>
+                <div class="menu-item" data-action="back">BACK</div>
+            </div>
+            <div class="overlay-hint">Left/Right to change, Esc to go back</div>
+        </div>
+
+        <!-- CREDITS -->
+        <div id="screen-credits" class="screen">
+            <div class="overlay-title">CREDITS</div>
+            <div class="overlay-sub">
+                <p>Built with the <strong>bro</strong> app runtime</p>
+                <p>Audio powered by <strong>broaudio</strong></p>
+                <p>Original design and code</p>
+                <p class="credits-sub">Inspired by classic chain-shooter puzzlers</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="../lib/storage.js"></script>
+    <script src="../lib/loop.js"></script>
+    <script src="../lib/input.js"></script>
+    <script src="../lib/audio.js"></script>
+    <script src="../lib/hud.js"></script>
+    <script src="audio.js"></script>
+    <script src="path.js"></script>
+    <script src="chain.js"></script>
+    <script src="shooter.js"></script>
+    <script src="particles.js"></script>
+    <script src="levels.js"></script>
+    <script src="screens.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
