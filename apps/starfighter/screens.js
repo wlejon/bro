@@ -10,6 +10,23 @@ N.Screens = (function() {
     var hud = null;
     var mouseAttached = false;
     var lastW = 1024, lastH = 768;
+    // Set by app.js. Called with true when entering the playing state,
+    // false when leaving it — app.js uses this to drive pointer lock.
+    var onPlayingChange = null;
+
+    function setPlaying(isPlaying) {
+        if (isPlaying) document.body.classList.add("playing");
+        else document.body.classList.remove("playing");
+        if (onPlayingChange) onPlayingChange(isPlaying);
+    }
+
+    function resumePlaying() {
+        N.Game.setPaused(false);
+        hideOverlay();
+        showHud(true);
+        currentName = "playing";
+        setPlaying(true);
+    }
 
     // --- Title backdrop: slow-moving star tunnel for atmosphere -----------
     var titleStars = [];
@@ -213,8 +230,7 @@ N.Screens = (function() {
         if (H) lastH = H;
         ensureMouse();
         // Cursor: visible on all overlay states, hidden during playing.
-        if (name === "playing") document.body.classList.add("playing");
-        else document.body.classList.remove("playing");
+        setPlaying(name === "playing");
         if (name === "title") {
             showOverlay("title");
             showHud(false);
@@ -270,22 +286,11 @@ N.Screens = (function() {
                 N.Game.toggleTargetingComputer();
             }
         } else if (currentName === "paused") {
-            if (key === "Escape") {
-                N.Game.setPaused(false);
-                hideOverlay();
-                showHud(true);
-                currentName = "playing";
-                document.body.classList.add("playing");
-                return;
-            }
+            if (key === "Escape") { resumePlaying(); return; }
             menuNav("pause", key, function(item) {
                 var act = item.getAttribute("data-action");
                 if (act === "resume") {
-                    N.Game.setPaused(false);
-                    hideOverlay();
-                    showHud(true);
-                    currentName = "playing";
-                    document.body.classList.add("playing");
+                    resumePlaying();
                 } else if (act === "restart") {
                     switchTo("playing", W, H);
                 } else if (act === "quit") {
@@ -303,10 +308,7 @@ N.Screens = (function() {
                 var act = item.getAttribute("data-action");
                 if (act === "continue") {
                     N.Game.advanceLoop();
-                    hideOverlay();
-                    showHud(true);
-                    currentName = "playing";
-                    document.body.classList.add("playing");
+                    resumePlaying();
                 }
             });
         }
@@ -342,6 +344,7 @@ N.Screens = (function() {
         keydown: keydown,
         update: update,
         draw: draw,
-        getName: function() { return currentName; }
+        getName: function() { return currentName; },
+        setOnPlayingChange: function(fn) { onPlayingChange = fn; }
     };
 })();
