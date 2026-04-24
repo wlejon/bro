@@ -25,6 +25,28 @@ bro.crosshair.configure({
 bro.crosshair.show();
 
 // ============================================================================
+// Lighting — PBR sun + HDR sky (IBL)
+// ============================================================================
+
+scene.setToneMap({ mode: 'aces', exposure: 0.85, gamma: 2.2 });
+scene.setEnvironment({
+    hdr: 'apps/lighting-demo/hdri/kloofendal_43d_clear_puresky_2k.hdr',
+    intensity: 1.0,
+});
+
+var sun = scene.createLight({
+    type: 'directional',
+    direction: [-0.35, -1.0, -0.45],
+    color: [1.0, 0.96, 0.88],
+    intensity: 3.5,
+});
+sun.castsShadow = true;
+sun.cascadeCount = 4;
+sun.cascadeSplitLambda = 0.85;
+sun.shadowNormalBias = 0.05;
+scene.setShadowQuality(4096, 3);
+
+// ============================================================================
 // Config — single source of truth for all terrain parameters
 // ============================================================================
 
@@ -71,6 +93,21 @@ var camConfig = {
     far: 500,
 };
 
+// The UI palette is authored in sRGB (hex pickers). The PBR shader expects
+// linear baseColor, so convert before handing off.
+function srgbToLinear(c) {
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+function linearizePalette(pal) {
+    var out = pal.slice();
+    for (var i = 0; i < out.length; i += 4) {
+        out[i]     = srgbToLinear(out[i]);
+        out[i + 1] = srgbToLinear(out[i + 1]);
+        out[i + 2] = srgbToLinear(out[i + 2]);
+    }
+    return out;
+}
+
 function buildTerrainOpts() {
     // Auto-size chunkSizeY so terrain never clips at the top.
     // Height ranges from (baseHeight - heightAmplitude) to (baseHeight + heightAmplitude),
@@ -96,7 +133,7 @@ function buildTerrainOpts() {
         seaLevel: config.seaLevel,
         meshMode: config.meshMode,
         terraceStep: config.terraceStep,
-        palette: config.palette.slice(),
+        palette: linearizePalette(config.palette),
     };
 }
 
