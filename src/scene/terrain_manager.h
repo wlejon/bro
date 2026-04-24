@@ -154,7 +154,15 @@ public:
 
 private:
     struct ChunkEntry {
-        std::vector<float> heightmap;   // gridW * gridH float heights
+        // Interior heightmap, gridW * gridH floats. Used for gameplay queries
+        // (raycasts, material at world-xz, etc.) where the boundary-matching
+        // skirt is irrelevant.
+        std::vector<float> heightmap;
+        // Padded heightmap, (gridW + 2) * (gridH + 2) floats, sharing values
+        // with the neighbouring chunks' boundary rows. Used for seam-free
+        // mesh building so normals at shared edges use true central
+        // differences and voxel-neighbour queries see across the chunk edge.
+        std::vector<float> heightmapPadded;
         MeshNode* meshNode = nullptr;   // owned by SceneGraph
         bool dirty_ = false;            // needs mesh rebuild
     };

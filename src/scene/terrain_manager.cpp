@@ -203,32 +203,42 @@ void TerrainManager::worldToLocal(float wx, float wy, float wz,
 void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lod) {
     int gridW = config_.chunkSizeX + 1;
     int gridH = config_.chunkSizeZ + 1;
+    int paddedW = gridW + 2;
+    int paddedH = gridH + 2;
     size_t count = static_cast<size_t>(gridW) * gridH;
+    size_t paddedCount = static_cast<size_t>(paddedW) * paddedH;
     entry.heightmap.resize(count);
+    entry.heightmapPadded.resize(paddedCount);
 
     float effCellSize = lodCellSize(lod);
 
-    // Primary terrain noise
+    // Sample the noise fields over a 1-voxel-wider grid on every side. The
+    // outer ring is shared with the neighbouring chunks' boundary rows, which
+    // lets heightmapGrid and greedyMesh produce seam-free normals and faces
+    // at chunk edges.
+    //
+    // Each noise field has its own world-space step, so the skirt offset is
+    // field-specific (shift the origin back by one step).
     float step = effCellSize * config_.noiseFrequency;
-    float worldOffX = cx * config_.chunkSizeX * step;
-    float worldOffZ = cz * config_.chunkSizeZ * step;
+    float worldOffX = cx * config_.chunkSizeX * step - step;
+    float worldOffZ = cz * config_.chunkSizeZ * step - step;
 
-    noise_->node->GenUniformGrid2D(entry.heightmap.data(),
+    noise_->node->GenUniformGrid2D(entry.heightmapPadded.data(),
                                    worldOffX, worldOffZ,
-                                   gridW, gridH,
+                                   paddedW, paddedH,
                                    step, step,
                                    config_.seed);
 
     // Continental noise — same world positions, much lower frequency
     std::vector<float> continent;
     if (noise_->continentNode) {
-        continent.resize(count);
+        continent.resize(paddedCount);
         float cstep = effCellSize * config_.continentFrequency;
-        float cwOffX = cx * config_.chunkSizeX * cstep;
-        float cwOffZ = cz * config_.chunkSizeZ * cstep;
+        float cwOffX = cx * config_.chunkSizeX * cstep - cstep;
+        float cwOffZ = cz * config_.chunkSizeZ * cstep - cstep;
         noise_->continentNode->GenUniformGrid2D(continent.data(),
                                                 cwOffX, cwOffZ,
-                                                gridW, gridH,
+                                                paddedW, paddedH,
                                                 cstep, cstep,
                                                 config_.seed + 7777);
     }
@@ -236,13 +246,13 @@ void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lo
     // Mountain pass — enormous low-frequency terrain features
     std::vector<float> mountain;
     if (noise_->mountainNode) {
-        mountain.resize(count);
+        mountain.resize(paddedCount);
         float mstep = effCellSize * config_.mountainFrequency;
-        float mwOffX = cx * config_.chunkSizeX * mstep;
-        float mwOffZ = cz * config_.chunkSizeZ * mstep;
+        float mwOffX = cx * config_.chunkSizeX * mstep - mstep;
+        float mwOffZ = cz * config_.chunkSizeZ * mstep - mstep;
         noise_->mountainNode->GenUniformGrid2D(mountain.data(),
                                                mwOffX, mwOffZ,
-                                               gridW, gridH,
+                                               paddedW, paddedH,
                                                mstep, mstep,
                                                config_.seed + 55555);
     }
@@ -253,8 +263,8 @@ void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lo
     float cMin = config_.continentMin;
     float cMax = config_.continentMax;
 
-    for (size_t i = 0; i < count; i++) {
-        float raw = entry.heightmap[i];
+    for (size_t i = 0; i < paddedCount; i++) {
+        float raw = entry.heightmapPadded[i];
         // Normalize but don't clamp — allow full height range
         float t = (raw * invAmp + 1.0f) * 0.5f;
 
@@ -283,7 +293,15 @@ void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lo
             h += ridge * config_.mountainAmplitude * mGate;
         }
 
-        entry.heightmap[i] = h;
+        entry.heightmapPadded[i] = h;
+    }
+
+    // Copy the interior region into the plain heightmap for gameplay queries.
+    for (int z = 0; z < gridH; z++) {
+        std::memcpy(entry.heightmap.data() + static_cast<size_t>(z) * gridW,
+                    entry.heightmapPadded.data()
+                        + static_cast<size_t>(z + 1) * paddedW + 1,
+                    sizeof(float) * gridW);
     }
 }
 
@@ -397,16 +415,18 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
 
     bromesh::MeshData mesh;
 
+    int paddedW = gridW + 2;
+
     switch (config_.meshMode) {
     default:
     case 0: {
-        mesh = bromesh::heightmapGrid(entry.heightmap.data(),
-                                      gridW, gridH, effCellSize);
+        mesh = bromesh::heightmapGrid(entry.heightmapPadded.data(),
+                                      gridW, gridH, effCellSize, /*border=*/1);
         break;
     }
     case 1: {
-        mesh = bromesh::heightmapGrid(entry.heightmap.data(),
-                                      gridW, gridH, effCellSize);
+        mesh = bromesh::heightmapGrid(entry.heightmapPadded.data(),
+                                      gridW, gridH, effCellSize, /*border=*/1);
         mesh = bromesh::computeFlatNormals(mesh);
         break;
     }
@@ -417,12 +437,14 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
             float scale = lodCellSize(lod) / config_.cellSize;
             step *= std::sqrt(scale);  // sqrt scaling instead of linear
         }
-        std::vector<float> quantized(entry.heightmap.size());
-        for (size_t i = 0; i < entry.heightmap.size(); i++) {
-            quantized[i] = std::floor(entry.heightmap[i] / step) * step;
+        // Quantize the padded heightmap so the boundary skirt is quantized to
+        // the same steps as the interior — critical for flat seams to line up.
+        std::vector<float> quantized(entry.heightmapPadded.size());
+        for (size_t i = 0; i < entry.heightmapPadded.size(); i++) {
+            quantized[i] = std::floor(entry.heightmapPadded[i] / step) * step;
         }
         mesh = bromesh::heightmapGrid(quantized.data(),
-                                      gridW, gridH, effCellSize);
+                                      gridW, gridH, effCellSize, /*border=*/1);
         mesh = bromesh::computeFlatNormals(mesh);
         break;
     }
@@ -430,29 +452,35 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
         int sizeX = config_.chunkSizeX;
         int sizeZ = config_.chunkSizeZ;
 
+        // Size Y to the tallest column across the padded grid so neighbour
+        // skirt voxels (which participate in visibility) still fit.
         float maxH = 0.0f;
-        for (size_t i = 0; i < entry.heightmap.size(); i++)
-            maxH = std::max(maxH, entry.heightmap[i]);
+        for (float h : entry.heightmapPadded) maxH = std::max(maxH, h);
         int sizeY = std::max(static_cast<int>(maxH) + 2, 4);
 
-        bromesh::VoxelChunk voxels(sizeX, sizeY, sizeZ, effCellSize);
+        // Build a voxel grid with a 1-voxel X/Z halo filled from the padded
+        // heightmap so greedyMesh sees the neighbour's boundary column as a
+        // solid wall and suppresses the inner face — no double-sided seam.
+        int paddedX = sizeX + 2;
+        int paddedZ = sizeZ + 2;
+        bromesh::VoxelChunk voxels(paddedX, sizeY, paddedZ, effCellSize);
         voxels.fill(0);
 
-        for (int z = 0; z < sizeZ; z++) {
-            for (int x = 0; x < sizeX; x++) {
-                float fh = entry.heightmap[z * gridW + x];
+        float seaF = static_cast<float>(config_.seaLevel);
+        for (int pz = 0; pz < paddedZ; pz++) {
+            for (int px = 0; px < paddedX; px++) {
+                float fh = entry.heightmapPadded[pz * paddedW + px];
                 int h = static_cast<int>(fh);
                 if (h < 1) h = 1;
                 if (h >= sizeY) h = sizeY - 1;
 
-                float seaF = static_cast<float>(config_.seaLevel);
                 for (int y = 0; y <= h && y < sizeY; y++) {
                     uint8_t mat;
                     if (y == 0)          mat = 4;
                     else if (y == h)     mat = (h <= (int)seaF) ? 5 : 1;
                     else if (y >= h - 3) mat = (h <= (int)seaF) ? 5 : 2;
                     else                 mat = 3;
-                    voxels.setVoxel(x, y, z, mat);
+                    voxels.setVoxel(px, y, pz, mat);
                 }
             }
         }
@@ -460,7 +488,8 @@ void TerrainManager::buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod) 
 
         mesh = voxels.buildMesh(
             config_.palette.empty() ? nullptr : config_.palette.data(),
-            static_cast<int>(config_.palette.size() / 4));
+            static_cast<int>(config_.palette.size() / 4),
+            /*borderX=*/1, /*borderY=*/0, /*borderZ=*/1);
 
         if (!entry.meshNode) {
             entry.meshNode = graph_.createMesh("terrain-chunk");
