@@ -25,7 +25,7 @@ head, title, meta, link, style, script, noscript {
 
 /* ---------- Block-level elements ---------- */
 
-body, div, p, section, article, nav, aside, header, footer, main,
+body, div, p, pre, section, article, nav, aside, header, footer, main,
 figure, figcaption, blockquote, fieldset, form, details, summary,
 address, hgroup, search, dl, dt, dd, dialog, canvas {
     display: block;
@@ -153,10 +153,13 @@ code, pre, kbd, samp {
 }
 
 pre {
+    white-space: pre;
     background-color: #f5f5f5;
     padding: 8px;
     border: 1px solid #ddd;
     overflow: auto;
+    margin-top: 1em;
+    margin-bottom: 1em;
 }
 
 /* ---------- SVG ---------- */
