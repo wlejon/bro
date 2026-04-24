@@ -731,3 +731,306 @@ const traj = rr.trajectory(heroAgent.unit.id);
 /** Aggregate damage / hits / kills per (attacker, target) pair.
  *  @returns {[{attackerId, targetId, totalDamage, hits, kills}, ...]} */
 const dmg = rr.damageSummary();
+
+
+// =============================================================================
+// bro.ai.game.nn — Neural network primitives
+// =============================================================================
+//
+// Thin bindings over brogameagent::nn. Intended for training loops and custom
+// value/policy networks. Most users will compose SingleHeroNet and plug it
+// into a NeuralEvaluator / NeuralPrior (see bro.ai.game.learn) rather than
+// hand-wiring circuits.
+//
+// All Tensor arguments are *owned* JS objects; ops mutate them in place.
+//
+//   const t = bro.ai.game.nn.createTensor(rows, cols?);
+//   t.rows, t.cols, t.size                            // read-only shape
+//   t.zero(); t.resize(r, c);                         // fill / reshape
+//   t.get(r, c); t.set(r, c, v);                      // per-element
+//   t.toArray() -> Float32Array                        // copy out
+//   t.fromArray(Float32Array)                          // copy in
+//   t.copyFrom(otherTensor)                            // deep copy
+//
+// Circuit classes expose forward/backward, save/load (Uint8Array blobs),
+// and zeroGrad/sgdStep. Each circuit owns its own cache for backward.
+
+/** @type {Tensor} */
+const W = bro.ai.game.nn.createTensor(4, 3);
+
+/** Linear (dense) layer. W:(out,in), b:(out). */
+const lin = bro.ai.game.nn.createLinear(inDim, outDim, seed);
+lin.forward(x, y);            // y = W·x + b
+lin.backward(dY, dX);         // accumulates dW, dB; produces dX
+lin.zeroGrad(); lin.sgdStep(0.01, 0.9);
+lin.W; lin.b; lin.dW; lin.dB; // Tensor views (copies)
+const blob = lin.save();      // Uint8Array
+lin.load(blob);
+
+const relu = bro.ai.game.nn.createRelu();
+const tanh = bro.ai.game.nn.createTanh();
+
+/** DeepSetsEncoder — permutation-invariant self+enemies+allies encoder. */
+const enc = bro.ai.game.nn.createDeepSetsEncoder({hidden: 32, embedDim: 32}, seed);
+enc.outDim;                    // 3 * embedDim
+enc.forward(obsVec, embed);
+
+/** Value / factored-policy heads. */
+const vHead = bro.ai.game.nn.createValueHead(embedDim, hidden, seed);
+const val = vHead.forward(embed);   // scalar in [-1,1]
+vHead.backward(dValue, dEmbed);
+
+const pHead = bro.ai.game.nn.createFactoredPolicyHead(embedDim, seed);
+pHead.totalLogits;                  // N_MOVE + N_ATTACK + N_ABILITY
+pHead.forward(embed, logits);
+pHead.backward(dLogits, dEmbed);
+
+/** SingleHeroNet — encoder → trunk → {value, policy}. */
+const net = bro.ai.game.nn.createSingleHeroNet({
+  enc: { hidden: 32, embedDim: 32 },
+  trunkHidden: 64,
+  valueHidden: 32,
+  seed: 0xC0DEn,
+});
+const v2 = net.forward(x, logits);   // returns scalar value
+net.backward(dValue, dLogits);
+net.zeroGrad(); net.sgdStep(lr, momentum);
+net.embedDim; net.trunkDim; net.policyLogits; net.numParams;
+const blob2 = net.save();            // Uint8Array
+net.load(blob2);
+
+/** WeightsHandle — atomic publish/snapshot of net weights across threads. */
+const handle = bro.ai.game.nn.createWeightsHandle();
+handle.publish(blob2, 1n);           // blob = Uint8Array, version = BigInt
+const snap = handle.snapshot();      // { blob: Uint8Array, version: BigInt } | null
+handle.version();
+
+/** Primitive ops (same signatures as the C++ header). */
+bro.ai.game.nn.linearForward(W, b, x, y);
+bro.ai.game.nn.linearBackward(W, x, dY, dX, dW, dB);
+bro.ai.game.nn.reluForward(x, y);     bro.ai.game.nn.reluBackward(x, dY, dX);
+bro.ai.game.nn.tanhForward(x, y);     bro.ai.game.nn.tanhBackward(y, dY, dX);
+bro.ai.game.nn.softmaxForward(logits, probs, maskOrNull);
+bro.ai.game.nn.softmaxBackward(probs, dProbs, dLogits);
+/** @returns {number} loss */
+const loss = bro.ai.game.nn.softmaxXent(logits, target, probs, dLogits, maskOrNull);
+/** @returns {{loss, dPred}} */
+const mseR = bro.ai.game.nn.mseScalar(pred, target);
+bro.ai.game.nn.addInplace(y, x);  bro.ai.game.nn.addScalarInplace(y, s);
+/** @returns {BigInt} advanced seed state */
+const seed2 = bro.ai.game.nn.xavierInit(W, 0xC0DEn);
+bro.ai.game.nn.factoredSoftmax(logits, probs, atkMaskOrNull, abilMaskOrNull);
+const fLoss = bro.ai.game.nn.factoredXent(
+  logits, targetMove, targetAttack, targetAbility,
+  probs, dLogits, atkMaskOrNull, abilMaskOrNull);
+
+// Constants
+bro.ai.game.nn.N_MOVE;   // 9
+bro.ai.game.nn.N_ATTACK; // N_ENEMY_SLOTS + 1
+bro.ai.game.nn.N_ABILITY;// N_ABILITY_SLOTS + 1
+
+
+// =============================================================================
+// bro.ai.game.learn — Training infrastructure
+// =============================================================================
+
+/** NeuralEvaluator — IEvaluator adapter wrapping a SingleHeroNet. Pass as
+ *  the `evaluator` option in any Mcts/InfoSetMcts config. */
+const neuralEval = bro.ai.game.learn.createNeuralEvaluator(net, handle);
+neuralEval.evaluate(world, heroId);    // scalar in [-1,1]
+
+/** NeuralPrior — IPrior adapter. Pass as `prior` in Mcts/InfoSetMcts config. */
+const neuralPrior = bro.ai.game.learn.createNeuralPrior(net, handle);
+neuralPrior.setTemperature(1.0);
+neuralPrior.setUniformMix(0.05);
+
+/** GumbelNoisePrior — wraps an inner prior and adds IID Gumbel noise at the
+ *  root for exploration under small MCTS budgets. */
+const gumbel = bro.ai.game.learn.createGumbelNoisePrior(neuralPrior, /*scale*/ 1.0);
+gumbel.reseed(0xA11CEn);
+gumbel.setScale(1.0);
+
+/** Situation — training example as a plain object.
+ *  {obs, atkMask, abilMask, targetMove, targetAttack, targetAbility, valueTarget} */
+
+/** ReplayBuffer — fixed-capacity FIFO of situations. */
+const buf = bro.ai.game.learn.createReplayBuffer(/*capacity*/ 4096);
+buf.push(situation);
+buf.size; buf.capacity;
+const batch = buf.sample(32);
+const all = buf.all(); buf.clear();
+
+/** ExItTrainer — mini-batch SGD+momentum against (value, policy) targets. */
+const trainer = bro.ai.game.learn.createExItTrainer();
+trainer.setNet(net);
+trainer.setBuffer(buf);
+trainer.setWeightsHandle(handle);
+trainer.setConfig({
+  lr: 0.01, momentum: 0.9, batch: 32,
+  policyWeight: 1.0, valueWeight: 1.0,
+  publishEvery: 100,
+  rngSeed: 0x1234n,
+});
+const step = trainer.step();         // {lossValue, lossPolicy, lossTotal, samples}
+const stepN = trainer.stepN(100);
+trainer.totalSteps; trainer.totalPublishes;
+
+/** Extract AlphaZero-style training targets from a completed Mcts search.
+ *  @returns {{move: Float32Array, attack: Float32Array, ability: Float32Array}}
+ *  or null if the tree is empty. */
+const targets = bro.ai.game.learn.targetsFromMcts(mcts);
+
+/** Build a Situation from a completed search. value_target is left at 0 —
+ *  the caller fills it with the eventual episode return before pushing. */
+const sit = bro.ai.game.learn.makeSituation(mcts, hero, world);
+sit.valueTarget = finalReturn;
+buf.push(sit);
+
+/** Gumbel-improved policy target (Danihelka 2022, simplified). */
+const tgt2 = bro.ai.game.learn.gumbelImprovedPolicy(mcts);
+
+
+// =============================================================================
+// Belief / observability / Information-Set MCTS
+// =============================================================================
+
+/** VisibilityConfig is a plain object:
+ *   { fovRadians?: number, maxRange?: number, checkLos?: boolean } */
+
+/** Build a fresh TeamObservation against ground truth. Allies are fully
+ *  known; enemies are visible iff any living ally has LOS+FOV+range.
+ *  @returns {{teamId, timestamp, allies, enemies}} */
+const teamObs = bro.ai.game.observe(world, teamId, visCfg, /*now*/ simTime);
+
+/** Merge a fresh observation into a prior one, carrying stale enemies
+ *  forward with lastSeenElapsed updated. */
+const merged = bro.ai.game.mergeObservations(prior, fresh, now);
+
+/** TeamBelief — per-team particle cloud over hidden enemy state. */
+const tb = bro.ai.game.createTeamBelief({
+  teamId: 0, numParticles: 32, navGrid: nav,
+  motion: { maxSpeed: 6, accelStd: 4, spreadOnLoss: 3 },
+  seed: 0xBE11Fn,
+});
+tb.registerEnemy(enemyId, maxHp, /*initialPos*/ {x:0,z:0});
+tb.propagate(world, visCfg, dt);
+tb.update(teamObs);
+const particles = tb.sample();        // { [enemyId]: {x,z,vx,vz,hp,heading,weight} }
+const means = tb.mean();
+tb.ess;                                // effective sample size
+tb.enemies();                          // per-enemy {enemyId, visible, everSeen, ...}
+tb.teamId; tb.numParticles; tb.clear();
+
+/** InfoSetMcts — IS-MCTS for single-hero under partial observability. */
+const isMcts = bro.ai.game.createInfoSetMcts();
+isMcts.setBelief(tb);
+isMcts.setEvaluator("hpDelta");       // string preset, function, or object
+isMcts.setPrior("attackBias");
+isMcts.setConfig({iterations: 500, rolloutHorizon: 32, simDt: 0.016});
+const act = isMcts.search(world, hero);
+isMcts.advanceRoot(act);
+isMcts.resetTree();
+isMcts.lastStats;                      // {iterations, meanEss, ...}
+
+/** InfoSetTeamMcts — team analogue. */
+const isTeam = bro.ai.game.createInfoSetTeamMcts();
+isTeam.setBelief(tb);
+isTeam.setConfig({iterations: 400});
+const joint = isTeam.search(world, [hero1, hero2]);
+
+
+// =============================================================================
+// Snapshots, projectiles, VecSimulation, MCTS primitives
+// =============================================================================
+
+/** Snapshot / restore — opaque handles. */
+const asnap = bro.ai.game.captureAgentSnapshot(agent);
+bro.ai.game.applyAgentSnapshot(agent, asnap);
+asnap.id; asnap.x; asnap.z; asnap.hp; asnap.alive;
+
+const wsnap = bro.ai.game.captureWorldSnapshot(world);
+bro.ai.game.applyWorldSnapshot(world, wsnap);
+wsnap.agentCount; wsnap.projectileCount; wsnap.eventCount; wsnap.nextProjectileId;
+const projs = wsnap.projectiles();     // [{id, x, z, mode, ...}, ...]
+
+/** Patch a captured WorldSnapshot with a sampled particle map (IS-MCTS
+ *  determinization helper). */
+bro.ai.game.patchSnapshotWithParticles(wsnap, particles);
+
+/** Projectiles — plain objects. kind: "physical"|"magical"|"true",
+ *  mode: "single"|"pierce"|"aoe" (see bro.ai.game.PROJECTILE_MODE / DAMAGE_KIND). */
+const pid = bro.ai.game.spawnProjectile(world, {
+  ownerId: attackerId, teamId: 0, targetId: -1,
+  x: 0, z: 0, vx: 20, vz: 0, speed: 20, radius: 0.3,
+  damage: 25, kind: "physical",
+  remainingLife: 2.0, mode: "single",
+});
+const live = bro.ai.game.worldProjectiles(world);
+
+/** VecSimulation — batched 1v1 envs for self-play training. */
+const vec = bro.ai.game.createVecSimulation({
+  numEnvs: 64, arenaHalfSize: 12, dt: 0.016, maxStepsPerEpisode: 600,
+  hp: 100, damage: 5, attackRange: 2.5, moveSpeed: 6,
+  rewardDamageDealt: 1.0, rewardKill: 100, rewardDeath: -100,
+});
+vec.numEnvs;
+vec.seedAndReset(0x1234n);
+const heroObs = vec.observe(1);           // Float32Array length N*OBS_TOTAL
+const heroMask = vec.actionMask(1);       // {mask, enemyIds}
+vec.applyActions(1, heroActions);         // array of N AgentAction objects
+vec.applyActions(2, oppActions);
+vec.step();
+const d = vec.dones();                    // {done: Int32Array, winner: Int32Array}
+const r = vec.rewards();                  // {hero: Float32Array, opponent: Float32Array}
+vec.stepCounts(); vec.episodeCounts(); vec.resetDone(); vec.resetEnv(0);
+
+/** MCTS primitives as first-class objects — pass them as `evaluator`,
+ *  `prior`, or `rolloutPolicy` in any Mcts / InfoSetMcts / LayeredPlanner
+ *  / Commander config, in addition to the existing string presets. */
+const hpEval     = bro.ai.game.createHpDeltaEvaluator();
+const tHp        = bro.ai.game.createTeamHpDeltaEvaluator();
+const tAdv       = bro.ai.game.createTeamAdvantageEvaluator();
+const tPos       = bro.ai.game.createTeamPositionEvaluator();
+const randRoll   = bro.ai.game.createRandomRollout();
+const aggRoll    = bro.ai.game.createAggressiveRollout();
+const scrRoll    = bro.ai.game.createScriptedRollout();
+const uniformPr  = bro.ai.game.createUniformPrior();
+const atkBiasPr  = bro.ai.game.createAttackBiasPrior();
+const tacticPr   = bro.ai.game.createTacticPrior();
+tacticPr.setMatchWeight(8.0); tacticPr.setOtherWeight(1.0);
+
+const mctsWithNN = bro.ai.game.createMcts({
+  iterations: 800, priorC: 2.0,
+  evaluator: neuralEval,
+  prior: neuralPrior,
+  rolloutPolicy: scrRoll,
+});
+
+// String constants mirror the enum values.
+bro.ai.game.PROJECTILE_MODE.Single;      // "single"
+bro.ai.game.DAMAGE_KIND.Magical;         // "magical"
+
+
+// =============================================================================
+// Unit buffs / DoT / HoT — extended fields on agent.unit
+// =============================================================================
+//
+// In addition to the base combat fields, every Unit proxy exposes the timed
+// buff and DoT/HoT fields directly. All are read/write so abilities can
+// apply effects by setting magnitude + remaining duration, and Unit.tickCooldowns
+// decays them over time.
+//
+//   unit.armorBonus / armorBonusRemaining
+//   unit.magicResistBonus / magicResistBonusRemaining
+//   unit.damageMul / damageMulRemaining
+//   unit.attacksMul / attacksMulRemaining
+//   unit.moveSpeedMul / moveSpeedMulRemaining
+//   unit.stealthChance / stealthChanceRemaining
+//
+//   unit.dotDps / dotRemaining / dotKind / dotSourceId
+//   unit.hotRate / hotRemaining
+//
+//   unit.attackKind                     // "physical"|"magical"|"true"
+//   unit.attackCooldown                  // read/write
+//   unit.effectiveMagicResist            // armor + armorBonus
+//   unit.effectiveAttacksPerSec          // attacksPerSec * attacksMul

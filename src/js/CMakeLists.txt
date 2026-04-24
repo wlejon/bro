@@ -55,6 +55,10 @@ add_library(bro_js STATIC
     menu_bindings.cpp
     ai_bindings.cpp
     ai_binding_integration.cpp
+    ai_nn_bindings.cpp
+    ai_learn_bindings.cpp
+    ai_belief_bindings.cpp
+    ai_extras_bindings.cpp
     headless_bindings.cpp
     message_serializer.cpp
     worker.cpp

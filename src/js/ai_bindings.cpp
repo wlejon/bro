@@ -869,6 +869,10 @@ private:
 static std::shared_ptr<brogameagent::mcts::IRolloutPolicy>
 parseRolloutPolicy(JSContext* ctx, JSValueConst opts) {
     JSValue v = JS_GetPropertyStr(ctx, opts, "rolloutPolicy");
+    if (auto sp = extractRolloutClassic(ctx, v)) {
+        JS_FreeValue(ctx, v);
+        return sp;
+    }
     if (JS_IsFunction(ctx, v)) {
         auto p = std::make_shared<JsRolloutPolicy>(ctx, v);
         JS_FreeValue(ctx, v);
@@ -999,6 +1003,14 @@ parseCombatActionArray(JSContext* ctx, JSValueConst arr) {
 static std::shared_ptr<brogameagent::mcts::IPrior>
 parsePrior(JSContext* ctx, JSValueConst opts) {
     JSValue pv = JS_GetPropertyStr(ctx, opts, "prior");
+    if (auto sp = extractPriorShared(ctx, pv)) {
+        JS_FreeValue(ctx, pv);
+        return sp;
+    }
+    if (auto sp = extractPriorClassic(ctx, pv)) {
+        JS_FreeValue(ctx, pv);
+        return sp;
+    }
     if (JS_IsFunction(ctx, pv)) {
         auto p = std::make_shared<JsPrior>(ctx, pv);
         JS_FreeValue(ctx, pv);
@@ -1030,6 +1042,14 @@ parsePrior(JSContext* ctx, JSValueConst opts) {
 static std::shared_ptr<brogameagent::mcts::IEvaluator>
 parseHeroEvaluator(JSContext* ctx, JSValueConst opts) {
     JSValue v = JS_GetPropertyStr(ctx, opts, "evaluator");
+    if (auto se = extractHeroEvaluatorShared(ctx, v)) {
+        JS_FreeValue(ctx, v);
+        return se;
+    }
+    if (auto se = extractHeroEvaluatorClassic(ctx, v)) {
+        JS_FreeValue(ctx, v);
+        return se;
+    }
     if (JS_IsFunction(ctx, v)) {
         auto e = std::make_shared<JsEvaluator>(ctx, v);
         JS_FreeValue(ctx, v);
@@ -1050,6 +1070,10 @@ parseHeroEvaluator(JSContext* ctx, JSValueConst opts) {
 static std::shared_ptr<brogameagent::mcts::ITeamEvaluator>
 parseTeamEvaluator(JSContext* ctx, JSValueConst opts) {
     JSValue v = JS_GetPropertyStr(ctx, opts, "evaluator");
+    if (auto sp = extractTeamEvaluatorClassic(ctx, v)) {
+        JS_FreeValue(ctx, v);
+        return sp;
+    }
     if (JS_IsFunction(ctx, v)) {
         auto e = std::make_shared<JsTeamEvaluator>(ctx, v);
         JS_FreeValue(ctx, v);
@@ -1542,7 +1566,83 @@ void AIBindings::install(JSContext* ctx) {
                 [](UnitData* d, double amount, std::string kind) -> double {
                     if (!d->agentRef) return 0;
                     return d->agentRef->unit().takeDamage((float)amount, parseDamageKind(kind.c_str()));
-                });
+                })
+            // Additive buffs (armor / magic resist): magnitude + remaining duration.
+            .prop("armorBonus",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().armorBonus : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().armorBonus = (float)v; })
+            .prop("armorBonusRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().armorBonusRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().armorBonusRemaining = (float)v; })
+            .prop("magicResistBonus",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().magicResistBonus : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().magicResistBonus = (float)v; })
+            .prop("magicResistBonusRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().magicResistBonusRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().magicResistBonusRemaining = (float)v; })
+            // Multiplicative buffs (damage / attacks / move speed).
+            .prop("damageMul",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().damageMul : 1.0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().damageMul = (float)v; })
+            .prop("damageMulRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().damageMulRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().damageMulRemaining = (float)v; })
+            .prop("attacksMul",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().attacksMul : 1.0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().attacksMul = (float)v; })
+            .prop("attacksMulRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().attacksMulRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().attacksMulRemaining = (float)v; })
+            .prop("moveSpeedMul",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().moveSpeedMul : 1.0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().moveSpeedMul = (float)v; })
+            .prop("moveSpeedMulRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().moveSpeedMulRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().moveSpeedMulRemaining = (float)v; })
+            // Stealth (dodge chance).
+            .prop("stealthChance",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().stealthChance : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().stealthChance = (float)v; })
+            .prop("stealthChanceRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().stealthChanceRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().stealthChanceRemaining = (float)v; })
+            // Damage-over-time.
+            .prop("dotDps",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().dotDps : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().dotDps = (float)v; })
+            .prop("dotRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().dotRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().dotRemaining = (float)v; })
+            .prop("dotSourceId",
+                [](UnitData* d) -> int { return d->agentRef ? d->agentRef->unit().dotSourceId : -1; },
+                [](UnitData* d, int v) { if (d->agentRef) d->agentRef->unit().dotSourceId = v; })
+            .prop("dotKind",
+                [](UnitData* d) -> std::string {
+                    return d->agentRef ? damageKindStr(d->agentRef->unit().dotKind) : "physical";
+                },
+                [](UnitData* d, std::string s) { if (d->agentRef) d->agentRef->unit().dotKind = parseDamageKind(s.c_str()); })
+            // Heal-over-time.
+            .prop("hotRate",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().hotRate : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().hotRate = (float)v; })
+            .prop("hotRemaining",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().hotRemaining : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().hotRemaining = (float)v; })
+            // Effective stats that factor in buffs (read-only helpers).
+            .get("effectiveMagicResist",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().effectiveMagicResist() : 0; })
+            .get("effectiveAttacksPerSec",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().effectiveAttacksPerSec() : 0; })
+            // attackKind (baseline damage type from auto-attacks).
+            .prop("attackKind",
+                [](UnitData* d) -> std::string {
+                    return d->agentRef ? damageKindStr(d->agentRef->unit().attackKind) : "physical";
+                },
+                [](UnitData* d, std::string s) { if (d->agentRef) d->agentRef->unit().attackKind = parseDamageKind(s.c_str()); })
+            // attackCooldown is read/writable.
+            .prop("attackCooldown",
+                [](UnitData* d) -> double { return d->agentRef ? d->agentRef->unit().attackCooldown : 0; },
+                [](UnitData* d, double v) { if (d->agentRef) d->agentRef->unit().attackCooldown = (float)v; });
     }
 
     // ─── Agent class ───────────────────────────────────────────────────
@@ -2712,6 +2812,18 @@ void AIBindings::install(JSContext* ctx) {
     // Capabilities (JS-authored capability registration)
     installRegisterCapability(ctx, gameObj);
 
+    // NN subsystem: bro.ai.game.nn
+    installNNBindings(ctx, gameObj);
+
+    // Learn subsystem: bro.ai.game.learn
+    installLearnBindings(ctx, gameObj);
+
+    // Belief / observability / InfoSetMcts
+    installBeliefBindings(ctx, gameObj);
+
+    // Snapshots, projectiles, VecSimulation, classic MCTS primitives
+    installExtrasBindings(ctx, gameObj);
+
     // ── Steering sub-namespace: bro.ai.game.steer ──────────────────────
     JSValue steerObj = JS_NewObject(ctx);
 
@@ -2823,6 +2935,16 @@ brogameagent::Agent* agentFromJS(JSContext* ctx, JSValueConst val) {
 brogameagent::World* worldFromJS(JSContext* ctx, JSValueConst val) {
     auto* d = qjsbind::unwrap<WorldData>(ctx, val);
     return d ? &d->world : nullptr;
+}
+
+brogameagent::mcts::Mcts* mctsFromJS(JSContext* ctx, JSValueConst val) {
+    auto* d = qjsbind::unwrap<MctsData>(ctx, val);
+    return d ? &d->mcts : nullptr;
+}
+
+brogameagent::NavGrid* navGridFromJS(JSContext* ctx, JSValueConst val) {
+    auto* d = qjsbind::unwrap<NavGridData>(ctx, val);
+    return d && d->grid ? d->grid.get() : nullptr;
 }
 
 JSValue findAgentJSRef(JSContext* ctx, JSValueConst worldJsRef, brogameagent::Agent* agent) {
