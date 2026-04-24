@@ -66,6 +66,12 @@ public:
     struct DrawPos { float x, y, w, h; };
     DrawPos lastDrawPos() const { return lastDrawPos_; }
 
+    // Chrome sizes for range inputs derived from the element's drawn height,
+    // so the thumb always fits inside the element's hit box regardless of
+    // how CSS sizes the control.
+    static float rangeThumbRadius(float h);
+    static float rangeTrackHeight(float h);
+
     // Key/text input handling — returns result for engine to dispatch events
     KeyHandleResult handleKeyDown(dom::Element* el, int keycode, int mod);
     KeyHandleResult handleTextInput(dom::Element* el, const std::string& text);

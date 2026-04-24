@@ -109,6 +109,7 @@ input[type="range"] {
     padding: 0;
     border: none;
     background-color: transparent;
+    height: 20px;
 }
 
 input[type="color"] {

@@ -230,7 +230,7 @@ void focusNewControl(
             *ctx.dirtyFlag = true;
         } else if (itype == layout::ElInput::InputType::Range) {
             auto dp = newInput->lastDrawPos();
-            float thumbR = 7.0f;
+            float thumbR = layout::ElInput::rangeThumbRadius(dp.h);
             float trackStart = dp.x + thumbR;
             float trackEnd = dp.x + dp.w - thumbR;
             float pct = (trackEnd > trackStart) ?

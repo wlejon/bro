@@ -802,7 +802,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         auto* rangeInput = getElInput(activeEl);
         if (rangeInput && rangeInput->isDragging()) {
             auto dp = rangeInput->lastDrawPos();
-            float thumbR = 7.0f;
+            float thumbR = layout::ElInput::rangeThumbRadius(dp.h);
             float trackStart = dp.x + thumbR;
             float trackEnd = dp.x + dp.w - thumbR;
             float pct = (trackEnd > trackStart) ?

@@ -457,11 +457,40 @@ void ElInput::drawRadio_(float x, float y, float w, float h) {
     }
 }
 
+float ElInput::rangeThumbRadius(float h) {
+    // Scale with element height, but keep the thumb inside the hit box
+    // (diameter <= h). 0.4 * h gives ~8 at the default 20px height.
+    float r = std::clamp(h * 0.4f, 2.0f, 10.0f);
+    return std::min(r, h * 0.5f);
+}
+
+float ElInput::rangeTrackHeight(float h) {
+    return std::clamp(h * 0.2f, 2.0f, 6.0f);
+}
+
 void ElInput::drawRange_(float x, float y, float w, float h) {
-    float trackH = 4.0f;
+    float trackH = rangeTrackHeight(h);
     float trackY = y + (h - trackH) / 2;
-    float thumbR = 7.0f;
+    float thumbR = rangeThumbRadius(h);
     float trackPad = thumbR;
+
+    // Accent color — honor CSS accent-color for the filled track and thumb,
+    // falling back to Windows-blue when unset.
+    render::Color accent = {0, 120, 215, 255};
+    if (elem_) {
+        auto& style = elem_->computedStyle();
+        auto it = style.find("accent-color");
+        if (it != style.end() && !it->second.empty() && it->second != "auto") {
+            accent = DrawTraversal::parseColor(it->second);
+        }
+    }
+    render::Color accentDark = {
+        static_cast<uint8_t>(accent.r * 0.82f),
+        static_cast<uint8_t>(accent.g * 0.82f),
+        static_cast<uint8_t>(accent.b * 0.82f),
+        accent.a
+    };
+    render::Color focusRing = {accent.r, accent.g, accent.b, 128};
 
     renderer_->fillRoundRect(x + trackPad, trackY, w - trackPad * 2, trackH,
                             2, 2, {200, 200, 200, 255});
@@ -474,14 +503,13 @@ void ElInput::drawRange_(float x, float y, float w, float h) {
     float thumbY = y + h / 2;
 
     renderer_->fillRoundRect(x + trackPad, trackY, thumbX - x - trackPad, trackH,
-                            2, 2, {0, 120, 215, 255});
+                            2, 2, accent);
 
-    render::Color thumbFill = dragging_ ? render::Color{0, 100, 195, 255}
-                                        : render::Color{0, 120, 215, 255};
+    render::Color thumbFill = dragging_ ? accentDark : accent;
     renderer_->drawCircle(thumbX, thumbY, thumbR, thumbFill, {255, 255, 255, 255}, 1.5f);
 
     if (focused_) {
-        renderer_->drawCircle(thumbX, thumbY, thumbR + 2, {0, 0, 0, 0}, {0, 120, 215, 128}, 1.5f);
+        renderer_->drawCircle(thumbX, thumbY, thumbR + 2, {0, 0, 0, 0}, focusRing, 1.5f);
     }
 }
 
