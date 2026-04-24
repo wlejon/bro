@@ -130,6 +130,17 @@ void Engine::flush() {
             }),
         sceneGraphs_.end());
 
+    // Prune detached WebGL contexts (canvas elements removed from DOM).
+    webglEntries_.erase(
+        std::remove_if(webglEntries_.begin(), webglEntries_.end(),
+            [](auto& entry) {
+                if (!entry.element) return false;
+                auto* n = entry.element;
+                while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                return n->tagName() != "html" && n->tagName() != "HTML";
+            }),
+        webglEntries_.end());
+
     // Prune detached canvas scenes (elements removed from DOM)
     for (auto& cs : canvasScenes_) {
         cs->rasterize(gl_.get());  // triggers detached check

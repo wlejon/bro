@@ -1952,6 +1952,22 @@ void Engine::run() {
                 }),
             sceneGraphs_.end());
 
+        // 1c2. Prune detached WebGL contexts. Per HTML spec, a rendering
+        //      context's lifetime is bound to its canvas element — once the
+        //      canvas leaves the document, the context and its GPU resources
+        //      are released. Without this, webglEntries_[0] below can refer
+        //      to a stale canvas whose layout box drives a spurious resize()
+        //      of the wrong FBO.
+        webglEntries_.erase(
+            std::remove_if(webglEntries_.begin(), webglEntries_.end(),
+                [](auto& entry) {
+                    if (!entry.element) return false;
+                    auto* n = entry.element;
+                    while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                    return n->tagName() != "html" && n->tagName() != "HTML";
+                }),
+            webglEntries_.end());
+
         // Sync scene graph physics nodes (body transforms → node transforms).
         for (auto& sg : sceneGraphs_) {
             sg.graph->syncPhysics();
