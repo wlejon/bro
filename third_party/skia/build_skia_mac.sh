@@ -5,6 +5,12 @@
 #   - Xcode Command Line Tools (clang, make, python3)
 #   - ninja (brew install ninja)
 #
+# On first run, this script clones Skia (~1 GB) into third_party/skia/src/
+# and runs `python3 tools/git-sync-deps`, which downloads several hundred MB
+# of additional build dependencies (including an Emscripten SDK). Expect the
+# first build to take 15-25 minutes end-to-end on modern hardware; subsequent
+# rebuilds reuse the cached source tree.
+#
 # Usage:
 #   cd third_party/skia
 #   ./build_skia_mac.sh          # builds Release
@@ -17,12 +23,29 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKIA_SRC="$SCRIPT_DIR/src"
 CONFIG="${1:-Release}"
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-    arm64)  TARGET_CPU="arm64" ;;
-    x86_64) TARGET_CPU="x64" ;;
-    *) echo "Unsupported arch: $ARCH"; exit 1 ;;
-esac
+# Derive target arch from *hardware*, not from the process arch. `uname -m`
+# reports x86_64 when this script runs under a Rosetta shell on Apple Silicon,
+# which would silently produce an x86_64 Skia that later fails to link against
+# the arm64 rest of the build.
+if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = "1" ]; then
+    TARGET_CPU="arm64"
+else
+    case "$(uname -m)" in
+        x86_64) TARGET_CPU="x64" ;;
+        *) echo "Unsupported arch: $(uname -m)"; exit 1 ;;
+    esac
+fi
+
+# Preflight: a damaged Xcode Command Line Tools install (common after
+# Migration Assistant) can leave a gutted libc++ directory that shadows the
+# real headers in the SDK, causing every C++ compile to fail with "'cstddef'
+# file not found". Check once, fail fast, before burning 15 minutes of build
+# time on the first PNG source.
+if ! echo '#include <cstddef>' | clang++ -std=c++20 -x c++ -fsyntax-only - >/dev/null 2>&1; then
+    echo "error: clang++ cannot find <cstddef>. Xcode Command Line Tools appear damaged."
+    echo "  Try:  sudo rm -rf /Library/Developer/CommandLineTools && sudo xcode-select --install"
+    exit 1
+fi
 
 build_config() {
     local config="$1"

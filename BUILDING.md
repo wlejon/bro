@@ -17,10 +17,20 @@
 
 **macOS (12+, arm64 or x86_64):**
 - **Xcode Command Line Tools** (`xcode-select --install`) — Apple clang 17+
-- **CMake** 3.24+, **Ninja** (`brew install cmake ninja`)
-- **bash 4+** for `tests/run_tests.sh` (`brew install bash`) — the system bash 3.2 lacks `mapfile`
+- One command for the brew deps: `brew install cmake ninja bash pkg-config`
+  - **CMake** 3.24+ and **Ninja** for building
+  - **bash 4+** for `tests/run_tests.sh` (system bash 3.2 lacks `mapfile`)
+  - **pkg-config** is needed by vcpkg's abseil port while building GameNetworkingSockets
 - **vcpkg** (for GameNetworkingSockets)
 - **Skia** pre-built library (see below)
+
+On Apple Silicon machines that were provisioned via Migration Assistant from
+an Intel Mac, double-check that Homebrew is the native arm64 build at
+`/opt/homebrew` — a leftover Intel brew at `/usr/local` runs under Rosetta
+and its cmake will default to the `x64-osx` vcpkg triplet, which won't match
+the arm64 GameNetworkingSockets install. The top-level `CMakeLists.txt`
+detects arm64 hardware via `sysctl` and forces `arm64-osx` / `-arch arm64`
+as a defense, but running a native brew removes the whole class of problem.
 
 ## Setup
 

@@ -1,9 +1,43 @@
 cmake_minimum_required(VERSION 3.24)
 
+# On Apple Silicon, derive triplet / target arch from the *hardware* rather
+# than the process arch, so an Intel (Rosetta) cmake invocation doesn't
+# silently pick x64-osx / x86_64 and fail to link against arm64 vcpkg
+# artifacts. Runs before project() so CMAKE_OSX_ARCHITECTURES takes effect.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    execute_process(COMMAND sysctl -n hw.optional.arm64
+        OUTPUT_VARIABLE _bro_host_is_arm64
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(_bro_host_is_arm64 STREQUAL "1")
+        if(NOT DEFINED CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL "")
+            set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "")
+        endif()
+        if(NOT DEFINED VCPKG_TARGET_TRIPLET OR VCPKG_TARGET_TRIPLET STREQUAL "")
+            set(VCPKG_TARGET_TRIPLET "arm64-osx" CACHE STRING "")
+        endif()
+    endif()
+endif()
+
 # vcpkg toolchain (set VCPKG_ROOT or pass -DCMAKE_TOOLCHAIN_FILE on the command line)
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
     set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
 endif()
+
+# Submodule preflight: a `git clone` without --recursive leaves the third_party
+# submodule dirs empty and produces cryptic downstream failures. Only check
+# non-sibling submodules — the brokit/htmlayout/broaudio/bromesh/qjsbind/
+# brogameagent deps fall back to sibling repos at ../<name> (see third_party/
+# CMakeLists.txt), so it's fine if their third_party/<name> dirs are empty.
+foreach(_bro_submodule IN ITEMS quickjs SDL jolt)
+    set(_bro_submodule_dir "${CMAKE_CURRENT_SOURCE_DIR}/third_party/${_bro_submodule}")
+    file(GLOB _bro_submodule_contents "${_bro_submodule_dir}/*")
+    if(_bro_submodule_contents STREQUAL "")
+        message(FATAL_ERROR
+            "third_party/${_bro_submodule} is empty — submodules are not initialized.\n"
+            "Run:  git submodule update --init --recursive")
+    endif()
+endforeach()
 
 project(bro VERSION 0.1.0 LANGUAGES C CXX)
 
