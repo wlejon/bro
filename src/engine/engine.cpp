@@ -1908,6 +1908,23 @@ void Engine::run() {
             }
         }
 
+        // Destroy DOM nodes queued for deferred free while both the layout
+        // and raster threads are confirmed not to be reading the DOM.
+        // Layout is guaranteed idle by the wait above; raster is safe in
+        // any state except kRasterBusy / kRasterDomStable (those are the
+        // windows where it actively traverses elements). Also require that
+        // the structure is clean — otherwise the persistent layout tree
+        // may still hold LayoutNodeAdapter pointers at nodes in the queue,
+        // and hitTestText (called below during event polling) would return
+        // a dangling TextNode*.
+        if (document_) {
+            uint32_t rs = rasterShared_.state.load(std::memory_order_acquire);
+            if (rs != kRasterBusy && rs != kRasterDomStable &&
+                !document_->isStructureDirty()) {
+                document_->drainPendingFrees();
+            }
+        }
+
         // Pump HTMLMediaElement events on every <video> — must happen on
         // the main thread since QuickJS isn't thread-safe.
         pumpVideoEvents();
@@ -2279,6 +2296,7 @@ void Engine::run() {
                 bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
                 if (rasterIdle && !uiThrottled) {
                     stageSystemPanelCanvases();
+                    updateSelectionSnapshot();
                     rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                     rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
                     rasterShared_.insetTop.store(contentTop(), std::memory_order_relaxed);
@@ -2296,6 +2314,7 @@ void Engine::run() {
             bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
             if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
                 stageSystemPanelCanvases();
+                updateSelectionSnapshot();
                 rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                 rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
                 rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),
@@ -2531,12 +2550,24 @@ float Engine::docContentOffsetY() const {
     return static_cast<float>(contentTop()) - scrollY_;
 }
 
-void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {
-    if (!renderer || !document_ || !textMetrics_) return;
+void Engine::updateSelectionSnapshot() {
+    selectionSnapshot_.rects.clear();
+    selectionSnapshot_.hasCaret = false;
+    if (!document_ || !textMetrics_) return;
     auto* sel = document_->selection();
     if (!sel || sel->rangeCount() == 0) return;
     const auto* range = sel->getRangeAt(0);
-    if (!range || !range->startContainer() || !range->endContainer()) return;
+    if (!range) return;
+    // Validate the Range endpoints are still live. A hit-test textnode can
+    // be orphaned or freed via a path that bypasses freeNode (or slips past
+    // the onNodeDestroyed safety net), leaving the Range with a dangling
+    // pointer. Dereferencing it in getSelectionRects / inContenteditableHost
+    // crashes. If either endpoint is stale, clear the selection and bail.
+    if (!document_->ownsNode(range->startContainer()) ||
+        !document_->ownsNode(range->endContainer())) {
+        sel->removeAllRanges();
+        return;
+    }
 
     if (!sel->isCollapsed()) {
         auto rects = layout::getSelectionRects(document_.get(),
@@ -2545,16 +2576,14 @@ void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY
                                                range->endContainer(),
                                                range->endOffset(),
                                                *textMetrics_);
-        // Accent with transparency — keeps underlying glyphs legible. Blue-ish
-        // default; apps can theme later if needed.
-        render::Color hl{0x33, 0x77, 0xff, 0x55};
+        selectionSnapshot_.rects.reserve(rects.size());
         for (const auto& r : rects) {
-            renderer->fillRect(r.x, r.y + docOffsetY, r.width, r.height, hl);
+            selectionSnapshot_.rects.push_back({r.x, r.y, r.width, r.height});
         }
         return;
     }
 
-    // Collapsed selection inside a contenteditable host: draw a caret.
+    // Collapsed selection inside a contenteditable host: compute caret rect.
     // Bro's inputs/textareas manage their own carets; the DOM Selection caret
     // only shows outside form fields.
     if (!inContenteditableHost(range->startContainer())) return;
@@ -2564,8 +2593,25 @@ void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY
     float cx = 0, cy = 0, ch = 0;
     if (!layout::getCaretRect(document_.get(), tn, range->startOffset(),
                               *textMetrics_, cx, cy, ch)) return;
-    render::Color caretColor{0xff, 0xff, 0xff, 0xff};
-    renderer->fillRect(cx, cy + docOffsetY, 1.5f, ch, caretColor);
+    selectionSnapshot_.hasCaret = true;
+    selectionSnapshot_.caretX = cx;
+    selectionSnapshot_.caretY = cy;
+    selectionSnapshot_.caretHeight = ch;
+}
+
+void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {
+    if (!renderer) return;
+    // Accent with transparency — keeps underlying glyphs legible.
+    render::Color hl{0x33, 0x77, 0xff, 0x55};
+    for (const auto& r : selectionSnapshot_.rects) {
+        renderer->fillRect(r.x, r.y + docOffsetY, r.w, r.h, hl);
+    }
+    if (selectionSnapshot_.hasCaret) {
+        render::Color caretColor{0xff, 0xff, 0xff, 0xff};
+        renderer->fillRect(selectionSnapshot_.caretX,
+                           selectionSnapshot_.caretY + docOffsetY,
+                           1.5f, selectionSnapshot_.caretHeight, caretColor);
+    }
 }
 
 void Engine::drawElementScrollbars(render::Renderer* renderer,

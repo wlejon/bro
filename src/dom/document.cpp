@@ -105,6 +105,17 @@ void Document::parse(const std::string& html, const std::string& authorCss,
     // LayoutRoot points into ownedNodes_ via raw Element*; clear it first so
     // we don't hold dangling pointers when ownedNodes_ drops its unique_ptrs.
     layoutRoot_.reset();
+    // Any outstanding Range (including the Selection's backing range) points
+    // into the tree we're about to destroy. ownedNodes_.clear() bypasses
+    // freeNode, so onNodeDestroyed never fires — null endpoints first.
+    if (selection_) selection_->removeAllRanges();
+    for (auto* r : liveRanges_) {
+        if (r) {
+            r->onNodeDestroyed(r->startContainer());
+            r->onNodeDestroyed(r->endContainer());
+        }
+    }
+    pendingFrees_.clear();
     ownedNodes_.clear();
     cascade_.clear();
 
@@ -424,6 +435,14 @@ void Document::freeNode(Node* node) {
     for (auto* child : kids) {
         freeNode(child);
     }
+    // Clear any live Range endpoints that still reference this node. Paths
+    // like setTextContent and innerHTML-replacement detach children without
+    // firing notifyNodeRemoved, so endpoints can outlive the node they
+    // point at — this is the last chance to break that reference before
+    // the memory is (eventually) freed from pendingFrees_.
+    for (auto* r : liveRanges_) {
+        r->onNodeDestroyed(node);
+    }
     // Unregister element id from the lookup map
     if (node->nodeType() == NodeType::Element) {
         auto* elem = static_cast<Element*>(node);
@@ -431,7 +450,24 @@ void Document::freeNode(Node* node) {
         if (!id.empty())
             unregisterElementId(id);
     }
-    ownedNodes_.erase(node);
+    // Move the owning unique_ptr into pendingFrees_ rather than destroying
+    // it now. The raster thread may still hold a raw pointer from an
+    // in-flight traversal; delaying destruction until both threads are
+    // idle keeps those pointers valid for their brief lifetime.
+    auto it = ownedNodes_.find(node);
+    if (it != ownedNodes_.end()) {
+        pendingFrees_.push_back(std::move(it->second));
+        ownedNodes_.erase(it);
+    }
+}
+
+void Document::drainPendingFrees() {
+    pendingFrees_.clear();
+}
+
+bool Document::ownsNode(const Node* n) const {
+    if (!n) return false;
+    return ownedNodes_.find(const_cast<Node*>(n)) != ownedNodes_.end();
 }
 
 // ---------------------------------------------------------------------------

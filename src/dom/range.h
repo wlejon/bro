@@ -93,6 +93,12 @@ public:
     // onChildInserted: a node was inserted at `index` under `parent`. Child-
     // index endpoints on `parent` that are >= index shift up.
     void onChildInserted(Node* parent, int index);
+    // onNodeDestroyed: `destroyed` is about to be deallocated. Called by
+    // Document::freeNode as a safety net — some mutation paths (setTextContent,
+    // innerHTML replacement) skip onNodeRemoved, so endpoints can end up
+    // pointing at memory that's being freed. Clears any endpoint still
+    // referencing this specific node.
+    void onNodeDestroyed(Node* destroyed);
 
 private:
     Node* startContainer_ = nullptr;

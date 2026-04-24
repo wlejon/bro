@@ -468,7 +468,11 @@ void Engine::handleMouseDown(float x, float y, int button) {
             if (!isEditableControl) {
                 auto hit = layout::hitTestText(document_.get(), docX, docY, *textMetrics_);
                 auto* sel = document_->selection();
-                if (hit.textNode) {
+                // Validate the hit textnode is still owned by the document.
+                // Hit-testing can surface layout-cached pointers into detached
+                // subtrees; binding a Range to one guarantees a dangling
+                // endpoint the instant that subtree is freed.
+                if (hit.textNode && document_->ownsNode(hit.textNode)) {
                     int detail = appMouseState_.clickCount;
                     if (detail >= 3) {
                         // Triple-click: select the entire text node.
@@ -688,7 +692,11 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         auto hit = selectionPastThreshold_
             ? layout::hitTestText(document_.get(), docX, docY, *textMetrics_)
             : layout::TextHit{};
-        if (hit.textNode) {
+        // Drop the drag if either endpoint's textnode is no longer live.
+        // selectionAnchorNode_ was captured on mousedown and can be freed
+        // by app code mid-drag (e.g. HUD rebuilds) even if the hit is fresh.
+        if (hit.textNode && document_->ownsNode(hit.textNode) &&
+            document_->ownsNode(selectionAnchorNode_)) {
             auto* sel = document_->selection();
             // Compute direction: if focus is before anchor, backward. Use
             // comparePoint against a range collapsed at the anchor — probing

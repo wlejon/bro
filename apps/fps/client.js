@@ -544,7 +544,7 @@ function render() {
     const bits = getInputBits();
     const isMoving = (bits & (IN_FWD | IN_BACK | IN_LEFT | IN_RIGHT)) !== 0;
     bro.crosshair.setMoving(isMoving);
-    if (mouseDown && localAlive) bro.crosshair.addBloom(dt * 40);
+    if ((bits & IN_SHOOT) && localAlive) bro.crosshair.addBloom(dt * 40);
 
     // Gentle server correction: nudge toward authoritative position
     // On localhost this is nearly zero; on real network it keeps us honest

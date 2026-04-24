@@ -44,8 +44,23 @@ public:
     // Allocate a ShadowRoot owned by this document
     ShadowRoot* allocateShadowRoot(Element* host, ShadowRoot::Mode mode);
 
-    // Free a node from ownedNodes_ (called after removal from tree + JS wrapper invalidation)
+    // Queue a node for deletion. The node is detached from ownedNodes_ and
+    // held in pendingFrees_ until drainPendingFrees() runs. Deferral is
+    // required because the raster/layout threads may still hold pointers
+    // into the DOM from an in-flight traversal — freeing synchronously
+    // while they read would crash. Called after removal from tree + JS
+    // wrapper invalidation.
     void freeNode(Node* node);
+
+    // Destroy any nodes queued by freeNode(). Caller must guarantee no
+    // other thread is reading the DOM (layout + raster both idle).
+    void drainPendingFrees();
+
+    // True if `n` is still a node owned by this document (i.e. present in
+    // ownedNodes_ and not queued for deferred free). Use this to validate
+    // raw Node* pointers held across frames — e.g. Range endpoints, cached
+    // hit-test results — before dereferencing them.
+    bool ownsNode(const Node* n) const;
 
     // Queries
     Element* getElementById(const std::string& id);
@@ -177,6 +192,10 @@ private:
     std::string basePath_;
     std::unordered_map<std::string, Element*> idMap_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;
+
+    // Nodes moved out of ownedNodes_ by freeNode() but not yet destroyed.
+    // Drained by the engine when no other thread is reading the DOM.
+    std::vector<std::unique_ptr<Node>> pendingFrees_;
 
     // Persistent layout tree (see layoutRoot()).
     std::unique_ptr<layout::LayoutNodeAdapter> layoutRoot_;

@@ -614,4 +614,15 @@ void Range::onChildInserted(Node* parent, int index) {
     adjust(endContainer_, endOffset_);
 }
 
+void Range::onNodeDestroyed(Node* destroyed) {
+    if (startContainer_ == destroyed) {
+        startContainer_ = nullptr;
+        startOffset_ = 0;
+    }
+    if (endContainer_ == destroyed) {
+        endContainer_ = nullptr;
+        endOffset_ = 0;
+    }
+}
+
 } // namespace bro::dom

@@ -522,6 +522,7 @@ bool Engine::screenshot(const std::string& path) {
                          viewportWidth_, contentHeight(), contentTop());
 
     // Selection highlight on top of HTML text.
+    updateSelectionSnapshot();
     drawSelectionHighlight(renderer_.get(), static_cast<float>(contentTop()));
 
     // Draw crosshair on the Skia surface

@@ -407,10 +407,17 @@ private:
     void drawElementScrollbars(render::Renderer* renderer,
                                dom::Element* root,
                                float offsetX, float offsetY);
+    /// Snapshot the Selection's geometry (highlight rects + optional caret)
+    /// into selectionSnapshot_. Must run on the main thread because it reads
+    /// live Range/Node pointers that JS can mutate. Call before signaling the
+    /// raster thread — drawSelectionHighlight consumes the snapshot without
+    /// touching the DOM.
+    void updateSelectionSnapshot();
     /// Draw the document's Selection highlight (semi-transparent rectangles
     /// behind the selected text runs). `docOffsetY` is the vertical offset
     /// applied to the app content by the main draw pass — typically
-    /// (insetTop - scrollY). No-op when the selection is empty.
+    /// (insetTop - scrollY). Reads selectionSnapshot_, so safe on the raster
+    /// thread. No-op when the selection is empty.
     void drawSelectionHighlight(render::Renderer* renderer, float docOffsetY);
     /// Route a keydown/keyup to visible system panels (settings modal, etc.)
     /// so its JS can capture keys. Returns true if the modal is active, in
@@ -448,6 +455,17 @@ private:
     std::unique_ptr<layout::SkiaTextMetrics> textMetrics_;
     layout::FontManager fontManager_;
     std::unique_ptr<platform::EventLoop> eventLoop_;
+
+    // Selection geometry snapshot — computed on the main thread from live
+    // Range/Node pointers, then consumed by the raster thread without
+    // touching the DOM. See updateSelectionSnapshot / drawSelectionHighlight.
+    struct SelectionSnapshot {
+        struct Rect { float x, y, w, h; };
+        std::vector<Rect> rects;
+        bool hasCaret = false;
+        float caretX = 0, caretY = 0, caretHeight = 0;
+    };
+    SelectionSnapshot selectionSnapshot_;
 
     bool running_ = false;
     int viewportWidth_;
