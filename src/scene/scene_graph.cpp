@@ -981,6 +981,9 @@ SceneGraph::~SceneGraph() {
     nodes_.clear();
 
     // Destroy GL resources
+    if (fallback2D_) { glDeleteTextures(1, &fallback2D_); fallback2D_ = 0; }
+    if (fallbackCube_) { glDeleteTextures(1, &fallbackCube_); fallbackCube_ = 0; }
+    if (fallbackShadow_) { glDeleteTextures(1, &fallbackShadow_); fallbackShadow_ = 0; }
     destroyMeshFBO();
     destroyTonemapFBO();
     if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
@@ -1330,6 +1333,53 @@ void SceneGraph::ensureMeshPipeline() {
         uLightDir_ = -1;
         uCameraPos_ = -1;
     }
+}
+
+void SceneGraph::ensureFallbackTextures() {
+    if (fallback2D_ && fallbackCube_ && fallbackShadow_) return;
+
+    if (!fallback2D_) {
+        glGenTextures(1, &fallback2D_);
+        glBindTexture(GL_TEXTURE_2D, fallback2D_);
+        uint8_t white[4] = {255, 255, 255, 255};
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, white);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+
+    if (!fallbackCube_) {
+        glGenTextures(1, &fallbackCube_);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, fallbackCube_);
+        uint8_t white[4] = {255, 255, 255, 255};
+        for (int f = 0; f < 6; ++f) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_RGBA8, 1, 1, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, white);
+        }
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    }
+
+    if (!fallbackShadow_) {
+        glGenTextures(1, &fallbackShadow_);
+        glBindTexture(GL_TEXTURE_2D, fallbackShadow_);
+        float one = 1.0f; // depth = far, comparison always passes (ref <= 1)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, 1, 1, 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, &one);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 }
 
 void SceneGraph::ensureMeshFBO() {
@@ -2150,12 +2200,18 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
     }
     if (uShadowPCFTaps_ >= 0) glUniform1i(uShadowPCFTaps_, shadowPCFTaps_);
 
+    // Ensure valid texture objects exist for every sampler unit this program
+    // references. macOS GL 4.1 core profile rejects draws (GL_INVALID_OPERATION)
+    // when a sampler uniform points at an unbound texture, or when two samplers
+    // of different types resolve to the same unit.
+    ensureFallbackTextures();
+
     // Bind the shadow atlas to a fixed texture unit (1; unit 0 is baseColor).
     // sampler2DShadow performs the depth comparison via the texture's
     // GL_TEXTURE_COMPARE_MODE state set in ensureShadowAtlas().
     if (uShadowAtlas_ >= 0) {
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_);
+        glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_ ? shadowAtlasTex_ : fallbackShadow_);
         glUniform1i(uShadowAtlas_, 1);
         glActiveTexture(GL_TEXTURE0);
     }
@@ -2170,28 +2226,29 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
     bool iblOn = (envIrradianceCube_ != 0) && (envPrefilterCube_ != 0)
               && (brdfLUT_ != 0);
     if (uIBLEnabled_ >= 0) glUniform1i(uIBLEnabled_, iblOn ? 1 : 0);
-    if (iblOn) {
-        if (uIBLIntensity_ >= 0)       glUniform1f(uIBLIntensity_, envIntensity_);
-        if (uIBLRotation_ >= 0)        glUniform1f(uIBLRotation_, envRotation_);
-        if (uIBLPrefilterMaxLOD_ >= 0) glUniform1f(uIBLPrefilterMaxLOD_, (float)(envPrefilterMips_ - 1));
+    if (uIBLIntensity_ >= 0)       glUniform1f(uIBLIntensity_, iblOn ? envIntensity_ : 0.0f);
+    if (uIBLRotation_ >= 0)        glUniform1f(uIBLRotation_, envRotation_);
+    if (uIBLPrefilterMaxLOD_ >= 0) glUniform1f(uIBLPrefilterMaxLOD_,
+                                               iblOn ? (float)(envPrefilterMips_ - 1) : 0.0f);
 
-        if (uIBLIrradiance_ >= 0) {
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_CUBE_MAP, envIrradianceCube_);
-            glUniform1i(uIBLIrradiance_, 2);
-        }
-        if (uIBLPrefilter_ >= 0) {
-            glActiveTexture(GL_TEXTURE3);
-            glBindTexture(GL_TEXTURE_CUBE_MAP, envPrefilterCube_);
-            glUniform1i(uIBLPrefilter_, 3);
-        }
-        if (uIBLBRDF_ >= 0) {
-            glActiveTexture(GL_TEXTURE4);
-            glBindTexture(GL_TEXTURE_2D, brdfLUT_);
-            glUniform1i(uIBLBRDF_, 4);
-        }
-        glActiveTexture(GL_TEXTURE0);
+    // Bind IBL textures unconditionally — use fallbacks when IBL is off so the
+    // sampler units always have a valid texture of the matching type.
+    if (uIBLIrradiance_ >= 0) {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, iblOn ? envIrradianceCube_ : fallbackCube_);
+        glUniform1i(uIBLIrradiance_, 2);
     }
+    if (uIBLPrefilter_ >= 0) {
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, iblOn ? envPrefilterCube_ : fallbackCube_);
+        glUniform1i(uIBLPrefilter_, 3);
+    }
+    if (uIBLBRDF_ >= 0) {
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, iblOn ? brdfLUT_ : fallback2D_);
+        glUniform1i(uIBLBRDF_, 4);
+    }
+    glActiveTexture(GL_TEXTURE0);
 
     if (uShadowMatrix_ >= 0 && shadowTileCount_ > 0) {
         glUniformMatrix4fv(uShadowMatrix_, shadowTileCount_, GL_FALSE,
@@ -3043,14 +3100,10 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     // Bind baseColor texture if present. Texture wins over vertex-color when
     // both are set — matches glTF PBR "baseColorTexture * baseColorFactor".
     bool bindTex = mesh->hasBaseColorTexture();
-    if (bindTex) {
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, mesh->baseColorTextureId());
-        glUniform1i(uBaseColorTex_, 0);
-        glUniform1i(uUseTexture_, 1);
-    } else {
-        glUniform1i(uUseTexture_, 0);
-    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, bindTex ? mesh->baseColorTextureId() : fallback2D_);
+    glUniform1i(uBaseColorTex_, 0);
+    glUniform1i(uUseTexture_, bindTex ? 1 : 0);
 
     // PBR map bindings — units 5/6/7/8 avoid collision with baseColor (0),
     // shadow atlas (1), and IBL cubemaps/BRDF LUT (2/3/4).

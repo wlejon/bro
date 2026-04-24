@@ -461,6 +461,16 @@ private:
     GLint uShadowAtlasTexel_ = -1;
     GLint uShadowPCFTaps_ = -1;
 
+    // 1×1 fallback textures bound to sampler units when the real textures
+    // aren't available. Prevents GL_INVALID_OPERATION on strict core-profile
+    // drivers (macOS GL 4.1) when IBL/shadows aren't active: unbound samplers
+    // alias unit 0 and cross sampler types (sampler2D / samplerCube /
+    // sampler2DShadow) which the spec forbids at draw time.
+    GLuint fallback2D_ = 0;       // white RGBA8 2D
+    GLuint fallbackCube_ = 0;     // white RGBA8 cube
+    GLuint fallbackShadow_ = 0;   // depth24 2D with COMPARE_REF_TO_TEXTURE
+    void ensureFallbackTextures();
+
     // IBL uniforms in the mesh program
     GLint uIBLEnabled_ = -1;
     GLint uIBLIrradiance_ = -1;
