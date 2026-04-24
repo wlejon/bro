@@ -19,6 +19,7 @@
         { "dir": "tumble" },
         { "dir": "serpcoil" },
         { "dir": "blockpop" },
+        { "dir": "fluffshuffle" },
         { "dir": "synth" },
         { "dir": "ai-arena" },
         { "dir": "terrain" },
