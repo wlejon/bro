@@ -2,6 +2,7 @@
     "apps": [
         { "dir": "blockfall" },
         { "dir": "gemswap" },
+        { "dir": "pegbounce" },
         { "dir": "snake" },
         { "dir": "breakout" },
         { "dir": "asteroids" },

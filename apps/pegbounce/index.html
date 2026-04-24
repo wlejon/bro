@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pegbounce</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" style="display:none">
+        <div class="hud-row"><div class="hud-label">SCORE</div><div id="hud-score" class="hud-value">0</div></div>
+        <div class="hud-row"><div class="hud-label">BALLS</div><div id="hud-balls" class="hud-value">10</div></div>
+        <div class="hud-row"><div class="hud-label">ORANGE</div><div id="hud-orange" class="hud-value">0</div></div>
+        <div class="hud-row"><div class="hud-label">MULT</div><div id="hud-mult" class="hud-value">x1</div></div>
+        <div class="hud-row"><div class="hud-label">GUIDE</div><div id="hud-guide" class="hud-value">Wingtip</div></div>
+        <div class="hud-row"><div class="hud-label">LEVEL</div><div id="hud-level" class="hud-value">1</div></div>
+    </div>
+
+    <div id="combo-text"></div>
+    <div id="fever-text"></div>
+
+    <div id="overlay">
+        <!-- TITLE -->
+        <div id="screen-title" class="screen">
+            <div class="overlay-title">PEGBOUNCE</div>
+            <div class="overlay-sub">Clear the orange pegs. Let the bounce take you.</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="play">PLAY</div>
+                <div class="menu-item" data-action="levels">LEVEL SELECT</div>
+                <div class="menu-item" data-action="highscores">HIGH SCORES</div>
+                <div class="menu-item" data-action="howto">HOW TO PLAY</div>
+                <div class="menu-item" data-action="settings">SETTINGS</div>
+                <div class="menu-item" data-action="credits">CREDITS</div>
+                <div class="menu-item" data-action="quit">QUIT</div>
+            </div>
+            <div class="overlay-hint">Arrow keys navigate, Enter selects</div>
+        </div>
+
+        <!-- LEVEL SELECT -->
+        <div id="screen-levels" class="screen">
+            <div class="overlay-title">LEVEL SELECT</div>
+            <div id="level-grid" class="level-grid"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+            <div class="overlay-hint">Click a level to begin</div>
+        </div>
+
+        <!-- GUIDE SELECT -->
+        <div id="screen-guide" class="screen">
+            <div class="overlay-title">CHOOSE YOUR GUIDE</div>
+            <div class="overlay-sub">Each guide grants a unique ability when a green peg is struck.</div>
+            <div id="guide-cards" class="guide-cards"></div>
+            <div class="menu-items">
+                <div class="menu-item" data-action="confirm">START LEVEL</div>
+                <div class="menu-item" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- PAUSE -->
+        <div id="screen-pause" class="screen">
+            <div class="overlay-title">PAUSED</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="resume">RESUME</div>
+                <div class="menu-item" data-action="restart">RESTART LEVEL</div>
+                <div class="menu-item" data-action="settings">SETTINGS</div>
+                <div class="menu-item" data-action="quit">QUIT TO MENU</div>
+            </div>
+        </div>
+
+        <!-- LEVEL CLEAR -->
+        <div id="screen-clear" class="screen">
+            <div class="overlay-title">LEVEL CLEAR</div>
+            <div class="overlay-sub stats-block" id="clear-stats"></div>
+            <div id="clear-stars" class="stars">&#9734;&#9734;&#9734;</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="next">NEXT LEVEL</div>
+                <div class="menu-item" data-action="retry">RETRY</div>
+                <div class="menu-item" data-action="levels">LEVEL SELECT</div>
+            </div>
+        </div>
+
+        <!-- LEVEL FAIL -->
+        <div id="screen-fail" class="screen">
+            <div class="overlay-title">LEVEL FAILED</div>
+            <div class="overlay-sub stats-block" id="fail-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="retry">RETRY</div>
+                <div class="menu-item" data-action="levels">LEVEL SELECT</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+
+        <!-- HIGH SCORES -->
+        <div id="screen-highscores" class="screen">
+            <div class="overlay-title">HIGH SCORES</div>
+            <div class="overlay-sub stats-block" id="hs-list">No scores yet</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- HOW TO PLAY -->
+        <div id="screen-howto" class="screen">
+            <div class="overlay-title">HOW TO PLAY</div>
+            <div class="overlay-sub htp-body">
+                <p>Aim with the mouse. Click or press <strong>Space</strong> to launch the ball.</p>
+                <p>Gravity pulls the ball down through a field of pegs. Every peg it hits lights up
+                and bursts at the end of the shot.</p>
+                <p><strong>Peg colors:</strong><br>
+                <span class="sw blue"></span> Blue &mdash; bonus score<br>
+                <span class="sw orange"></span> Orange &mdash; clear all to win the level<br>
+                <span class="sw green"></span> Green &mdash; triggers your guide's ability<br>
+                <span class="sw purple"></span> Purple &mdash; doubles score for the rest of the shot</p>
+                <p>A catch bar scrolls along the bottom. Land in it to win a free ball.</p>
+                <p><strong>Controls:</strong> Mouse aims, click launches. Or Left/Right + Space.
+                Esc to pause.</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- SETTINGS -->
+        <div id="screen-settings" class="screen">
+            <div class="overlay-title">SETTINGS</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-setting="sfxVol">SFX Volume: <span id="opt-sfxVol">80</span>%</div>
+                <div class="menu-item" data-setting="musicVol">Music Volume: <span id="opt-musicVol">60</span>%</div>
+                <div class="menu-item" data-setting="trajectory">Aim Trajectory: <span id="opt-trajectory">ON</span></div>
+                <div class="menu-item" data-setting="screenshake">Screen Shake: <span id="opt-screenshake">ON</span></div>
+                <div class="menu-item" data-action="back">BACK</div>
+            </div>
+            <div class="overlay-hint">Left/Right to change</div>
+        </div>
+
+        <!-- CREDITS -->
+        <div id="screen-credits" class="screen">
+            <div class="overlay-title">CREDITS</div>
+            <div class="overlay-sub">
+                <p>Built on the <strong>bro</strong> app runtime</p>
+                <p>Audio via <strong>broaudio</strong></p>
+                <p class="credits-sub">An original peg-clearing physics pachinko.</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="../lib/loop.js"></script>
+    <script src="../lib/input.js"></script>
+    <script src="../lib/audio.js"></script>
+    <script src="../lib/storage.js"></script>
+    <script src="../lib/hud.js"></script>
+    <script src="../lib/screens.js"></script>
+    <script src="physics.js"></script>
+    <script src="levels.js"></script>
+    <script src="guides.js"></script>
+    <script src="particles.js"></script>
+    <script src="audio.js"></script>
+    <script src="screens.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
