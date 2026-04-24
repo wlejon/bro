@@ -563,7 +563,13 @@ void main() {
     // HDRIs from stb_image are uploaded top-down (row 0 = north pole),
     // so the +Y direction must read v=0. Hence 0.5 - theta/PI.
     vec2 eq = vec2(phi / TWO_PI + 0.5, 0.5 - theta / PI);
-    FragColor = vec4(texture(uEquirect, eq).rgb, 1.0);
+    vec3 s = texture(uEquirect, eq).rgb;
+    // Sanitise the source: some HDRs carry tiny negative pixels (from upstream
+    // tonemapping) and stray non-finite values (from floating-point overflow
+    // in broken encoders). Both poison every downstream convolution pass.
+    s = max(s, vec3(0.0));
+    if (any(isnan(s)) || any(isinf(s))) s = vec3(0.0);
+    FragColor = vec4(s, 1.0);
 }
 )";
 
@@ -618,11 +624,16 @@ void main() {
                           sin(theta) * sin(phi),
                           cos(theta));
             vec3 sampleVec = t.x * right + t.y * up + t.z * N;
-            irradiance += texture(uEnv, sampleVec).rgb * cos(theta) * sin(theta);
+            // Reject NaN/Inf and clamp tiny negatives from upstream processing
+            // so the accumulation stays well-defined and non-negative.
+            vec3 s = texture(uEnv, sampleVec).rgb;
+            s = max(s, vec3(0.0));
+            if (any(isnan(s)) || any(isinf(s))) continue;
+            irradiance += s * cos(theta) * sin(theta);
             nSamples++;
         }
     }
-    irradiance = PI * irradiance / float(nSamples);
+    irradiance = nSamples > 0 ? PI * irradiance / float(nSamples) : vec3(0.0);
     FragColor = vec4(irradiance, 1.0);
 }
 )";
@@ -717,19 +728,40 @@ void main() {
             // is low for this tap, eliminating bright firefly samples.
             float D     = distributionGGX(N, H, uRoughness);
             float NdotH = max(dot(N, H), 0.0);
-            float HdotV = max(dot(H, V), 0.0);
-            float pdf   = (D * NdotH / (4.0 * HdotV)) + 1e-4;
+            // Floor HdotV inside the reciprocal — otherwise HdotV→0 drives
+            // pdf→Inf and the log2 below to -Inf, producing NaN/Inf LOD.
+            float HdotV = max(dot(H, V), 1e-4);
+            float pdf   = D * NdotH / (4.0 * HdotV) + 1e-4;
 
             float saTexel  = 4.0 * PI / (6.0 * uEnvSize * uEnvSize);
-            float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf + 1e-4);
+            float saSample = 1.0 / (float(SAMPLE_COUNT) * pdf);
+            // Clamp log2 argument away from zero, and clamp the final mip to
+            // a sane range so textureLod never sees -Inf or a mip beyond the
+            // source cubemap's last level.
             float mipLevel = uRoughness == 0.0 ? 0.0
-                           : 0.5 * log2(saSample / saTexel);
+                           : clamp(0.5 * log2(max(saSample / saTexel, 1e-8)),
+                                   0.0, 16.0);
 
-            prefiltered += textureLod(uEnv, L, mipLevel).rgb * NdotL;
-            totalWeight += NdotL;
+            // Guard the env tap itself: some HDRs carry tiny negative pixels
+            // from upstream tonemapping, and stray Inf values can sneak past
+            // importance sampling at very low roughness. Both poison the
+            // accumulation if left unchecked.
+            vec3 s = textureLod(uEnv, L, mipLevel).rgb;
+            s = max(s, vec3(0.0));
+            if (!any(isnan(s)) && !any(isinf(s))) {
+                prefiltered += s * NdotL;
+                totalWeight += NdotL;
+            }
         }
     }
-    prefiltered /= totalWeight;
+    // totalWeight can legitimately be 0 at extreme roughnesses where every
+    // importance-sampled direction missed; fall back to the coarsest mip of
+    // the source at N (a rough approximation, but keeps the output finite).
+    if (totalWeight > 0.0) {
+        prefiltered /= totalWeight;
+    } else {
+        prefiltered = max(textureLod(uEnv, N, 16.0).rgb, vec3(0.0));
+    }
     FragColor = vec4(prefiltered, 1.0);
 }
 )";
