@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nova Squadron</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" style="display:none">
+        <div class="hud-col hud-left">
+            <div class="hud-row"><span class="hud-label">SCORE</span><span id="hud-score" class="hud-value">0</span></div>
+            <div class="hud-row"><span class="hud-label">HI</span><span id="hud-hi" class="hud-value">0</span></div>
+        </div>
+        <div class="hud-col hud-right">
+            <div class="hud-row"><span class="hud-label">SECTOR</span><span id="hud-wave" class="hud-value">1-1</span></div>
+            <div class="hud-row"><span class="hud-label">SHIELDS</span><span id="hud-shields" class="hud-value">- - - - - -</span></div>
+        </div>
+        <div id="hud-lock" class="hud-lock"></div>
+        <div id="hud-radio" class="hud-radio"></div>
+    </div>
+
+    <div id="overlay">
+
+        <!-- TITLE -->
+        <div id="screen-title" class="screen">
+            <div class="overlay-title">NOVA SQUADRON</div>
+            <div class="overlay-sub">
+                <div class="subtitle">&mdash; TRENCH RUN &mdash;</div>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="play">ENGAGE</div>
+                <div class="menu-item" data-action="howtoplay">BRIEFING</div>
+                <div class="menu-item" data-action="quit">QUIT</div>
+            </div>
+            <div class="overlay-hint">Arrow keys to navigate, Enter to select</div>
+        </div>
+
+        <!-- BRIEFING -->
+        <div id="screen-howtoplay" class="screen">
+            <div class="overlay-title">BRIEFING</div>
+            <div class="overlay-sub htp-body">
+                <p>The Dominion has completed its planetoid fortress, <em>the Citadel</em>.
+                One unshielded exhaust vent reaches its reactor core. Ignite the reactor
+                and the Citadel falls.</p>
+                <p><strong>THREE SECTORS</strong> &mdash; you will cycle through them as
+                long as you survive:</p>
+                <p>
+                1. &nbsp;<strong>SPACE.</strong> Enemy fighters. Dogfight. Watch for the Black Ace.<br>
+                2. &nbsp;<strong>SURFACE.</strong> Towers, bunkers, catwalks. Strafe and destroy.<br>
+                3. &nbsp;<strong>TRENCH.</strong> Barriers, turrets. Hit the vent dead center.
+                </p>
+                <p><strong>CONTROLS</strong></p>
+<pre>Mouse         Yoke (pitch + yaw)
+L-Click       Fire
+Space         Fire (alternate)
+T             Toggle targeting computer
+Esc           Pause</pre>
+                <p><strong>SCORING</strong><br>
+                Fighter 1,000 &nbsp; Tower 300 &nbsp; Bunker 50 &nbsp; Turret 50<br>
+                Direct Vent Hit 25,000 &nbsp; <strong>Bullseye 100,000</strong><br>
+                Targeting-computer off on vent run: bonus multiplier.</p>
+            </div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="back">BACK</div>
+            </div>
+        </div>
+
+        <!-- PAUSE -->
+        <div id="screen-pause" class="screen">
+            <div class="overlay-title">PAUSED</div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="resume">RESUME</div>
+                <div class="menu-item" data-action="restart">RESTART</div>
+                <div class="menu-item" data-action="quit">QUIT TO MENU</div>
+            </div>
+        </div>
+
+        <!-- GAME OVER -->
+        <div id="screen-gameover" class="screen">
+            <div class="overlay-title">SHIP LOST</div>
+            <div class="overlay-sub stats-block" id="gameover-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="restart">FLY AGAIN</div>
+                <div class="menu-item" data-action="quit">MAIN MENU</div>
+            </div>
+        </div>
+
+        <!-- VICTORY (citadel destroyed — shows between loops) -->
+        <div id="screen-victory" class="screen">
+            <div class="overlay-title">CITADEL DESTROYED</div>
+            <div class="overlay-sub stats-block" id="victory-stats"></div>
+            <div class="menu-items">
+                <div class="menu-item selected" data-action="continue">NEXT CAMPAIGN</div>
+            </div>
+            <div class="overlay-hint">Enemy forces are regrouping. Press Enter to engage.</div>
+        </div>
+    </div>
+
+    <script src="../lib/loop.js"></script>
+    <script src="../lib/input.js"></script>
+    <script src="../lib/audio.js"></script>
+    <script src="../lib/storage.js"></script>
+    <script src="storage.js"></script>
+    <script src="audio.js"></script>
+    <script src="render.js"></script>
+    <script src="enemies.js"></script>
+    <script src="waves.js"></script>
+    <script src="game.js"></script>
+    <script src="screens.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

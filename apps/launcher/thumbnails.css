@@ -23,6 +23,9 @@
 .thumb[data-app="invaders"] {
   background-image: url(thumbnails/invaders.png);
 }
+.thumb[data-app="starfighter"] {
+  background-image: url(thumbnails/starfighter.png);
+}
 .thumb[data-app="hopper"] {
   background-image: url(thumbnails/hopper.png);
 }
