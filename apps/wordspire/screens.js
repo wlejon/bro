@@ -47,18 +47,22 @@ W.Screens = (function () {
             var y = ((i * 151 + bgT * 0.03) % (Hd + 60));
             ctx.globalAlpha = 0.05 + (i % 5) * 0.015;
             var col = i % 3 === 0 ? '#e8c168' : (i % 3 === 1 ? '#8cdff6' : '#c8b8e8');
-            W.PixelFont.drawCentered(ctx, glyphs.charAt(i % glyphs.length),
+            W.Text.drawCentered(ctx, glyphs.charAt(i % glyphs.length),
                                      Math.floor(x), Math.floor(y), 6, col);
         }
         ctx.globalAlpha = 1.0;
     }
 
-    // Big pixel-font title / menu drawn on canvas so it survives screenshots.
+    // The DOM overlay (#overlay > .screen) isn't composited into bro-headless
+    // screenshots — only the canvas scene layer is. To make title / mode /
+    // gameover screens visible both in windowed play AND in screenshot tests,
+    // menus are also drawn on the canvas here. The DOM overlay is what actually
+    // handles clicks and keyboard navigation; this is the visual twin.
     function drawMenu(ctx, Wd, Hd, title, subtitle, items, selectedIdx, hint) {
         var cy = Math.floor(Hd * 0.18);
-        W.PixelFont.drawCentered(ctx, title, Wd / 2, cy, 8, '#e8c168');
+        W.Text.drawCentered(ctx, title, Wd / 2, cy, 8, '#e8c168');
         if (subtitle) {
-            W.PixelFont.drawCentered(ctx, subtitle, Wd / 2, cy + 64, 3, '#b8a8d8');
+            W.Text.drawCentered(ctx, subtitle, Wd / 2, cy + 64, 3, '#b8a8d8');
         }
         var topY = Math.floor(Hd * 0.5);
         for (var i = 0; i < items.length; i++) {
@@ -68,13 +72,12 @@ W.Screens = (function () {
                 ctx.fillStyle = 'rgba(232,193,104,0.18)';
                 ctx.fillRect(Wd * 0.2, y - 16, Wd * 0.6, 40);
             }
-            W.PixelFont.drawCentered(ctx, items[i],
-                                     Wd / 2, y + 4,
-                                     isSel ? 5 : 4,
-                                     isSel ? '#fff4d8' : '#7a6a9a');
+            W.Text.drawCentered(ctx, items[i], Wd / 2, y + 4,
+                                isSel ? 5 : 4,
+                                isSel ? '#fff4d8' : '#7a6a9a');
         }
         if (hint) {
-            W.PixelFont.drawCentered(ctx, hint, Wd / 2, Hd - 40, 2, '#554966');
+            W.Text.drawCentered(ctx, hint, Wd / 2, Hd - 40, 2, '#554966');
         }
     }
 

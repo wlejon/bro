@@ -717,22 +717,22 @@ W.Board = (function () {
 
         // Pixel-font letter (centered).
         var letterScale = Math.max(2, Math.floor(cell / 12));
-        W.PixelFont.drawCentered(ctx, tile.letter,
+        W.Text.drawCentered(ctx, tile.letter,
                                  rx + w / 2, ry + h / 2 - letterScale,
                                  letterScale, text);
 
         // Letter-value chip bottom-right.
         var v = W.Scoring.letterValue(tile.letter);
         var vScale = Math.max(1, Math.floor(cell / 28));
-        var vw = W.PixelFont.measure(String(v), vScale);
-        W.PixelFont.draw(ctx, String(v),
+        var vw = W.Text.measure(String(v), vScale);
+        W.Text.draw(ctx, String(v),
                          rx + w - vw - 4, ry + h - 7 * vScale - 3,
                          vScale, 'rgba(220,220,255,0.7)');
 
         // Multiplier chip top-left (x2/x3/...).
         if (tile.mult > 1) {
             var mScale = Math.max(1, Math.floor(cell / 28));
-            W.PixelFont.draw(ctx, 'x' + tile.mult, rx + 4, ry + 3, mScale, border);
+            W.Text.draw(ctx, 'x' + tile.mult, rx + 4, ry + 3, mScale, border);
         }
     }
 
@@ -796,7 +796,7 @@ W.Board = (function () {
             ctx.save();
             ctx.globalAlpha = a;
             var ls = Math.max(2, Math.floor(r.cell * (0.08 + (1 - a) * 0.06)));
-            W.PixelFont.drawCentered(ctx, pa.letter, px, py, ls, '#e8c168');
+            W.Text.drawCentered(ctx, pa.letter, px, py, ls, '#e8c168');
             ctx.restore();
         }
 
@@ -808,19 +808,19 @@ W.Board = (function () {
         var word = pathToWord(currentChain, grid);
         if (word) {
             var previewScale = 4;
-            W.PixelFont.drawCentered(ctx, word.toUpperCase(),
+            W.Text.drawCentered(ctx, word.toUpperCase(),
                                      r.x + r.cell * COLS / 2, previewY,
                                      previewScale, '#e0d4ff');
             var predicted = W.Scoring.computeWordScore(word, pathToTiles(currentChain, grid));
             var valid = W.Dictionary.isWord(word);
-            W.PixelFont.drawCentered(ctx, '+' + predicted + (valid ? '' : ' ?'),
+            W.Text.drawCentered(ctx, '+' + predicted + (valid ? '' : ' ?'),
                                      r.x + r.cell * COLS / 2, previewY + 36,
                                      2, valid ? '#8cdff6' : '#aa7788');
         } else {
             var hint = (mode === 'puzzle' && puzzleTarget)
                 ? ('TARGET: ' + puzzleTarget.toUpperCase())
                 : 'CHAIN 3+ LETTERS AND SUBMIT';
-            W.PixelFont.drawCentered(ctx, hint,
+            W.Text.drawCentered(ctx, hint,
                                      r.x + r.cell * COLS / 2, previewY + 8,
                                      2, '#554966');
         }
@@ -847,7 +847,7 @@ W.Board = (function () {
         ctx.strokeStyle = currentChain.length >= 3 ? '#e8c168' : '#3a3258';
         ctx.lineWidth = 2;
         ctx.stroke();
-        W.PixelFont.drawCentered(ctx, 'SUBMIT', bx + bw / 2, by + bh / 2, 3,
+        W.Text.drawCentered(ctx, 'SUBMIT', bx + bw / 2, by + bh / 2, 3,
                                  currentChain.length >= 3 ? '#fff4d8' : '#7a6a9a');
 
         var cx2 = bx, cy2 = by + bh + 10;
@@ -856,7 +856,7 @@ W.Board = (function () {
         ctx.fill();
         ctx.strokeStyle = '#3a3258';
         ctx.stroke();
-        W.PixelFont.drawCentered(ctx, 'CLEAR', cx2 + bw / 2, cy2 + 17, 2, '#b8a8d8');
+        W.Text.drawCentered(ctx, 'CLEAR', cx2 + bw / 2, cy2 + 17, 2, '#b8a8d8');
     }
 
     function drawHudPanel(ctx, r) {
@@ -886,8 +886,8 @@ W.Board = (function () {
         ctx.stroke();
         var yy = y + pad;
         for (var i = 0; i < lines.length; i++) {
-            W.PixelFont.draw(ctx, lines[i][0], x + pad, yy, 1, '#7a6a9a');
-            W.PixelFont.draw(ctx, lines[i][1], x + pad, yy + 10, 2, '#f0e0ff');
+            W.Text.draw(ctx, lines[i][0], x + pad, yy, 1, '#7a6a9a');
+            W.Text.draw(ctx, lines[i][1], x + pad, yy + 10, 2, '#f0e0ff');
             yy += rowH;
         }
 
@@ -908,7 +908,7 @@ W.Board = (function () {
                 ctx.fill();
                 ctx.strokeStyle = '#802015';
                 ctx.stroke();
-                W.PixelFont.draw(ctx, '! BURNING TILE !', x + 10, wy + 9, 2, '#ff4b3d');
+                W.Text.draw(ctx, '! BURNING TILE !', x + 10, wy + 9, 2, '#ff4b3d');
             }
         }
     }

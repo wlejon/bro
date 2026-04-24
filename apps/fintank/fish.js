@@ -206,7 +206,7 @@ F.Fish = (function () {
         if (!f.dead && hungry) {
             ctx.save();
             ctx.globalAlpha = 0.7 + 0.3 * Math.sin(f.wag * 2);
-            W.PixelFont.drawCentered(ctx, '!', f.x, f.y - sz - 14, 2, '#ff9a6a');
+            W.Text.drawCentered(ctx, '!', f.x, f.y - sz - 14, 2, '#ff9a6a');
             ctx.restore();
         }
     }

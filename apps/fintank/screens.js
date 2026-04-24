@@ -57,27 +57,30 @@ F.Screens = (function () {
         ctx.globalAlpha = 1;
     }
 
-    function drawMenu(ctx, Wd, Hd, title, subtitle, items, selIdx, hint) {
+    // DOM overlays (#overlay > .screen) don't composite into bro-headless
+    // screenshots — only the canvas scene layer is captured. So title / slot
+    // / gameover menus are also drawn on canvas. The DOM overlay still owns
+    // click + keyboard navigation; this is the visual twin.
+    function drawMenu(ctx, Wd, Hd, title, subtitle, items, selectedIdx, hint) {
         var cy = Math.floor(Hd * 0.18);
-        W.PixelFont.drawCentered(ctx, title, Wd / 2, cy, 8, '#f2c95b');
+        W.Text.drawCentered(ctx, title, Wd / 2, cy, 8, '#f2c95b');
         if (subtitle) {
-            W.PixelFont.drawCentered(ctx, subtitle, Wd / 2, cy + 64, 3, '#a8c8dc');
+            W.Text.drawCentered(ctx, subtitle, Wd / 2, cy + 64, 3, '#a8c8dc');
         }
         var topY = Math.floor(Hd * 0.5);
         for (var i = 0; i < items.length; i++) {
-            var isSel = (i === selIdx);
+            var isSel = (i === selectedIdx);
             var y = topY + i * 46;
             if (isSel) {
                 ctx.fillStyle = 'rgba(242,201,91,0.18)';
                 ctx.fillRect(Wd * 0.2, y - 12, Wd * 0.6, 34);
             }
-            W.PixelFont.drawCentered(ctx, items[i],
-                                     Wd / 2, y + 4,
-                                     isSel ? 4 : 3,
-                                     isSel ? '#fff8d8' : '#6a8ca8');
+            W.Text.drawCentered(ctx, items[i], Wd / 2, y + 4,
+                                isSel ? 4 : 3,
+                                isSel ? '#fff8d8' : '#6a8ca8');
         }
         if (hint) {
-            W.PixelFont.drawCentered(ctx, hint, Wd / 2, Hd - 40, 2, '#4a6a80');
+            W.Text.drawCentered(ctx, hint, Wd / 2, Hd - 40, 2, '#4a6a80');
         }
     }
 
@@ -127,13 +130,25 @@ F.Screens = (function () {
             for (var i = 1; i <= 3; i++) {
                 var s = F.Economy.loadSlot(i);
                 var fresh = (s.day === 1 && s.fish.length === 0 && s.coins === 200 && !s.bestDay);
-                labels.push('SLOT ' + i + ' - ' + (fresh ? 'NEW' : ('DAY ' + s.day + ' - ' + s.coins + 'C - ' + s.fish.length + ' FISH')));
+                labels.push('SLOT ' + i + ' - ' + (fresh ? 'NEW' :
+                    ('DAY ' + s.day + ' - ' + s.coins + 'C - ' + s.fish.length + ' FISH')));
             }
             labels.push('BACK');
             drawMenu(ctx, Wd, Hd, 'SAVE SLOT', '',
                      labels, selIdx('slots'), 'DEL TO ERASE SELECTED SLOT');
         },
-        refresh: function () {},
+        refresh: function () {
+            var items = mgr.getMenuItems('slots');
+            for (var i = 0; i < items.length; i++) {
+                var slot = items[i].getAttribute('data-slot');
+                if (!slot) continue;
+                var n = parseInt(slot, 10);
+                var s = F.Economy.loadSlot(n);
+                var fresh = (s.day === 1 && s.fish.length === 0 && s.coins === 200 && !s.bestDay);
+                items[i].textContent = 'SLOT ' + n + (fresh ? ' - NEW'
+                    : ' - DAY ' + s.day + ' - ' + s.coins + 'C - ' + s.fish.length + ' FISH');
+            }
+        },
         keydown: function (key) {
             var self = this;
             if (key === 'Delete' || key === 'Backspace') {

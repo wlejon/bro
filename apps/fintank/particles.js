@@ -119,7 +119,7 @@ F.Particles = (function () {
                 ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
                 ctx.fill();
             } else if (p.kind === 'text') {
-                W.PixelFont.drawCentered(ctx, p.text, p.x, p.y, 2, p.color);
+                W.Text.drawCentered(ctx, p.text, p.x, p.y, 2, p.color);
             }
         }
         ctx.globalAlpha = 1;
@@ -143,5 +143,4 @@ F.Particles = (function () {
     };
 })();
 
-// share PixelFont under W as in wordspire
 window.W = window.W || {};
