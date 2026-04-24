@@ -73,7 +73,7 @@ sup { font-size: 0.83em; vertical-align: super; }
 mark { background-color: yellow; }
 
 span, a, abbr, cite, q { display: inline; }
-br { display: block; }
+br { display: inline; }
 
 /* ---------- Form controls ---------- */
 
