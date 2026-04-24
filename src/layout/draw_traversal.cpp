@@ -1084,6 +1084,25 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
         }
     };
 
+    // Prefer the runs produced by the inline formatting context: one per
+    // wrapped line segment, already positioned. This keeps drawn glyphs aligned
+    // with the layout — and therefore with selection highlights and hit tests.
+    const auto& runs = tbox.textRuns;
+    if (!runs.empty()) {
+        std::string transform;
+        if (ttIt != style.end()) transform = ttIt->second;
+        for (const auto& run : runs) {
+            if (run.text.empty()) continue;
+            std::string line = transform.empty()
+                ? run.text
+                : applyTextTransform(run.text, transform);
+            float lx = offsetX + run.x;
+            float ly = offsetY + run.y + ascent;
+            drawLine(line, lx, ly);
+        }
+        return;
+    }
+
     // Handle multi-line text (newlines in pre/pre-wrap)
     auto wsIt = style.find("white-space");
     bool preserveNewlines = false;
