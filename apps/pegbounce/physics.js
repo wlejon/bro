@@ -240,6 +240,11 @@
             friction: BALL_FRICTION,
             restitution: BALL_RESTITUTION,
             linearDamping: BALL_LINEAR_DAMPING,
+            // Jolt's default mMaxLinearVelocity is 500 (m/s). Pegbounce
+            // talks in pixels/sec, so 500 is a hard cap that makes the
+            // ball appear to decelerate after ~0.36s of free fall and
+            // also clamps launch shots. Lift the cap above MAX_SPEED.
+            maxLinearVelocity: MAX_SPEED + 200,
             dofs: '2d',
             ccd: true,
         });
@@ -609,6 +614,7 @@
             radius: BALL_RADIUS,
             friction: BALL_FRICTION, restitution: BALL_RESTITUTION,
             linearDamping: BALL_LINEAR_DAMPING,
+            maxLinearVelocity: MAX_SPEED + 200,
             dofs: '2d', ccd: true,
         });
         pw.setLinearVelocity(ghost, vx, -vy, 0);

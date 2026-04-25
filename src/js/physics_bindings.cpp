@@ -268,6 +268,8 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
     out.gravityFactor = (float)jsGetNum(ctx, opts, "gravityFactor", 1.0);
     out.linearDamping = (float)jsGetNum(ctx, opts, "linearDamping", 0.05);
     out.angularDamping = (float)jsGetNum(ctx, opts, "angularDamping", 0.05);
+    out.maxLinearVelocity = (float)jsGetNum(ctx, opts, "maxLinearVelocity", 500.0);
+    out.maxAngularVelocity = (float)jsGetNum(ctx, opts, "maxAngularVelocity", 0.25 * 3.14159265 * 60.0);
     out.userData = jsGetU64(ctx, opts, "userData", 0);
 
     std::string dofs = jsGetString(ctx, opts, "dofs");

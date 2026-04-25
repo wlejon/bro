@@ -113,6 +113,8 @@ Physics.setLayers({
  * @param {number}  [opts.gravityFactor=1]
  * @param {number}  [opts.linearDamping=0.05]
  * @param {number}  [opts.angularDamping=0.05]
+ * @param {number}  [opts.maxLinearVelocity=500] - Jolt clamps body speed to this; raise it for pixel-unit games where 500 px/s is slow
+ * @param {number}  [opts.maxAngularVelocity=47.12] - 0.25*PI*60 rad/s default
  *
  * Shape-specific:
  * @param {{x,y,z}} [opts.halfExtents]  - box (default 0.5, 0.5, 0.5)

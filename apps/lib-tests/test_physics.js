@@ -436,5 +436,46 @@ t('Physics.setLayer changes runtime collision layer', function() {
     Physics.setLayers({ names: ['static', 'moving'], matrix: [false, true, true, true] });
 });
 
+t('maxLinearVelocity binding lifts Jolt 500 m/s default', function() {
+    // Regression: Jolt's BodyCreationSettings::mMaxLinearVelocity defaults to
+    // 500. For pixel-unit games with high gravity, that clamp made the ball
+    // appear to decelerate during a free fall. Confirm the binding lets us
+    // raise the cap.
+    Physics.destroyAll();
+    Physics.setGravity(0, -1400, 0);  // px/s^2 style
+    var ball = Physics.createBody({
+        shape: 'sphere', radius: 9,
+        position: { x: 0, y: 1000, z: 0 },
+        linearDamping: 0,
+        maxLinearVelocity: 2000,
+    });
+    Physics.setLinearVelocity(ball, 0, 0, 0);
+    // Step 0.6s; expected |vy| ~ 840, well above the old 500 cap.
+    for (var i = 0; i < 72; i++) advanceTime(16);  // ~1.15s
+    var v = Physics.getVelocity(ball);
+    truthy(Math.abs(v.linear.y) > 700,
+           'free fall passes 500 cap (vy=' + v.linear.y.toFixed(1) + ')');
+    Physics.destroyBody(ball);
+    Physics.setGravity(0, -9.81, 0);
+});
+
+t('default maxLinearVelocity remains Jolt 500', function() {
+    Physics.destroyAll();
+    Physics.setGravity(0, -1400, 0);
+    var ball = Physics.createBody({
+        shape: 'sphere', radius: 9,
+        position: { x: 0, y: 1000, z: 0 },
+        linearDamping: 0,
+    });
+    Physics.setLinearVelocity(ball, 0, 0, 0);
+    for (var i = 0; i < 72; i++) advanceTime(16);
+    var v = Physics.getVelocity(ball);
+    // Should clamp at ~500.
+    truthy(Math.abs(v.linear.y) <= 501,
+           'default cap holds (vy=' + v.linear.y.toFixed(1) + ')');
+    Physics.destroyBody(ball);
+    Physics.setGravity(0, -9.81, 0);
+});
+
 console.log('=== Done: ' + tests + ' tests, ' + failed + ' failures ===');
 if (failed > 0) throw new Error(failed + ' physics tests failed');

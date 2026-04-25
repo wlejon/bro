@@ -87,6 +87,8 @@ struct BodyOptions {
     float gravityFactor = 1.0f;
     float linearDamping = 0.05f;
     float angularDamping = 0.05f;
+    float maxLinearVelocity = 500.0f;          // Jolt default (m/s or px/s)
+    float maxAngularVelocity = 0.25f * 3.14159265f * 60.0f;
 
     int layer = -1;       // -1 = auto (static→non-moving, dynamic→moving)
     uint64_t userData = 0;

@@ -411,6 +411,8 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
     settings.mGravityFactor = opts.gravityFactor;
     settings.mLinearDamping = opts.linearDamping;
     settings.mAngularDamping = opts.angularDamping;
+    settings.mMaxLinearVelocity = opts.maxLinearVelocity;
+    settings.mMaxAngularVelocity = opts.maxAngularVelocity;
     settings.mUserData = opts.userData;
     settings.mAllowedDOFs = opts.dofs;
     settings.mMotionQuality = opts.ccd ? EMotionQuality::LinearCast : EMotionQuality::Discrete;
