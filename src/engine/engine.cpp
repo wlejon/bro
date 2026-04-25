@@ -666,8 +666,11 @@ Engine::Engine(const EngineConfig& config)
 
         // Install window.close() now that event loop exists
         js::installWindowClose(jsRuntime_->getContext(), eventLoop_.get());
+    }
 
-        // 13. Create UI overlay quad VAO/VBO
+    // UI overlay quad VAO/VBO — used by compositeLayers (windowed main loop
+    // and headless screenshot path both go through it).
+    if (gl_) {
         glGenVertexArrays(1, &uiQuadVAO_);
         glGenBuffers(1, &uiQuadVBO_);
     }
@@ -852,12 +855,169 @@ void Engine::drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-void Engine::compositeLayers(const std::vector<UILayer>& layers) {
+void Engine::buildAppLayers(render::SkiaRenderer* renderer,
+                            layout::DrawTraversal& traversal,
+                            std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                            int& poolW, int& poolH,
+                            int vpW, int vpH, int insetTop, float scrollY,
+                            std::vector<UILayer>& outLayers) {
+    if (!renderer || !renderer->grContext()) return;
+
+    int contentH = vpH - insetTop;
+
+    // Invalidate pool on viewport resize.
+    if (poolW != vpW || poolH != vpH) {
+        for (auto& ps : pool) renderer->destroyGPUSurface(ps);
+        pool.clear();
+        poolW = vpW;
+        poolH = vpH;
+    }
+
+    int htmlLayerIdx = 0;
+
+    // Layer-break callback fires on canvas/WebGL/scene-graph elements
+    // encountered during the draw traversal. Each break: emit the current
+    // HTML layer (texture from pool[prev]), emit the canvas/WebGL/scene
+    // layer, switch the renderer to a fresh pool surface for subsequent
+    // HTML content.
+    traversal.setLayerBreakCallback(
+        [&](canvas::CanvasScene* scene, unsigned int directTexture,
+            float x, float y, float w, float h) {
+            int prevIdx = htmlLayerIdx;
+            htmlLayerIdx++;
+            while (htmlLayerIdx >= static_cast<int>(pool.size())) {
+                pool.push_back(renderer->createGPUSurface(vpW, vpH));
+            }
+            renderer->switchSurface(pool[htmlLayerIdx].surface);
+
+            UILayer htmlLayer;
+            htmlLayer.type = UILayer::HTML;
+            htmlLayer.texture = pool[prevIdx].texture;
+            outLayers.push_back(std::move(htmlLayer));
+
+            UILayer canvasLayer;
+            canvasLayer.type = UILayer::Canvas;
+            canvasLayer.canvasScene = scene;
+            canvasLayer.texture = directTexture;  // non-zero for WebGL/scene-graph
+            canvasLayer.cx = x; canvasLayer.cy = y;
+            canvasLayer.cw = w; canvasLayer.ch = h;
+            outLayers.push_back(std::move(canvasLayer));
+        });
+
+    // Ensure pool has a GPU surface for HTML layer 0
+    if (pool.empty()) {
+        pool.push_back(renderer->createGPUSurface(vpW, vpH));
+    }
+    // Rewrap existing pool surfaces with fresh Skia wrappers
+    for (auto& ps : pool) {
+        renderer->rewrapGPUSurface(ps, vpW, vpH);
+    }
+    // Switch to pool surface for HTML layer 0
+    auto origSurface = renderer->switchSurface(pool[0].surface);
+
+    // Draw traversal — reads layout boxes and computed styles (read-only).
+    // App content is translated down by insetTop so the top strip is
+    // reserved for the engine-owned menu bar.
+    if (document_ && document_->documentElement()) {
+        traversal.setBasePath(document_->basePath());
+        traversal.draw(document_->documentElement(),
+                       0, static_cast<float>(insetTop) - scrollY,
+                       vpW, contentH, insetTop);
+
+        // Selection highlight overlay sits above text. Reads
+        // selectionSnapshot_ (built on main thread before we run).
+        drawSelectionHighlight(renderer,
+                               static_cast<float>(insetTop) - scrollY);
+    }
+
+    // App-context overlay (dropdown / color picker / etc.)
+    overlayMgr_.drawIfContext(OverlayContext::App, renderer);
+
+    // Viewport scrollbar in the content area below the menu bar
+    if (document_) {
+        float ct = static_cast<float>(insetTop);
+        float vh = static_cast<float>(contentH);
+        auto& vs = viewportScrollbar_.style();
+        auto m = viewportScrollbar_.layout(
+            static_cast<float>(vpW) - vs.width - vs.margin,
+            ct, vh, documentHeight_, vh, scrollY);
+        viewportScrollbar_.draw(renderer, m);
+
+        drawElementScrollbars(renderer,
+                              document_->documentElement(),
+                              0.0f, static_cast<float>(insetTop) - scrollY);
+    }
+
+    // Capture the last HTML layer
+    renderer->switchSurface(origSurface);
+    UILayer lastHtml;
+    lastHtml.type = UILayer::HTML;
+    lastHtml.texture = pool[htmlLayerIdx].texture;
+    outLayers.push_back(std::move(lastHtml));
+
+    // Flush each pool surface's deferred Ganesh ops
+    for (int i = 0; i <= htmlLayerIdx; ++i) {
+        if (pool[i].surface && renderer->grContext()) {
+            renderer->grContext()->flush(pool[i].surface.get());
+        }
+    }
+    traversal.setLayerBreakCallback(nullptr);
+}
+
+void Engine::buildSystemPanelLayers(render::SkiaRenderer* renderer,
+                                    layout::DrawTraversal& traversal,
+                                    layout::FontManager* fontManager,
+                                    std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                                    int& poolW, int& poolH,
+                                    int vpW, int vpH,
+                                    std::vector<UILayer>& outLayers) {
+    if (!renderer || !renderer->grContext() || !isSystemVisible()) return;
+
+    if (poolW != vpW || poolH != vpH) {
+        for (auto& ps : pool) renderer->destroyGPUSurface(ps);
+        pool.clear();
+        poolW = vpW;
+        poolH = vpH;
+    }
+
+    layout::SkiaTextMetrics sysMetrics(renderer, fontManager);
+    layoutSystemPanels(sysMetrics);
+
+    size_t panelIdx = 0;
+    for (auto& sdoc : systemDocs_) {
+        if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
+
+        while (panelIdx >= pool.size()) {
+            pool.push_back(renderer->createGPUSurface(vpW, vpH));
+        }
+        renderer->rewrapGPUSurface(pool[panelIdx], vpW, vpH);
+        auto prev = renderer->switchSurface(pool[panelIdx].surface);
+
+        drawSystemPanelDoc(renderer, traversal, sdoc, vpW, vpH);
+
+        UILayer panelLayer;
+        panelLayer.type = UILayer::HTML;
+        panelLayer.texture = pool[panelIdx].texture;
+        outLayers.push_back(std::move(panelLayer));
+
+        if (renderer->grContext()) {
+            renderer->grContext()->flush(pool[panelIdx].surface.get());
+        }
+        renderer->switchSurface(prev);
+        panelIdx++;
+    }
+    systemDirty_ = false;
+}
+
+void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO) {
     if (!gl_) return;
     if (layers.empty()) return;
 
     float vw = static_cast<float>(viewportWidth_);
     float vh = static_cast<float>(viewportHeight_);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
+    glViewport(0, 0, viewportWidth_, viewportHeight_);
 
     glUseProgram(gl_->textureProgram());
     float viewport[2] = {vw, vh};
@@ -1161,6 +1321,15 @@ void Engine::drawCrosshairSkia(SkCanvas* canvas) {
 }
 
 Engine::~Engine() {
+    // Release screenshot pool surfaces while the main GL context is still
+    // current. Safe to skip if the pool is empty (windowed mode never uses it).
+    if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+        for (auto& ps : screenshotHtmlPool_) skia->destroyGPUSurface(ps);
+        screenshotHtmlPool_.clear();
+        for (auto& ps : screenshotSystemPool_) skia->destroyGPUSurface(ps);
+        screenshotSystemPool_.clear();
+    }
+
     // Ensure layout thread is stopped (safety — normally joined in run())
     if (layoutThread_.joinable()) {
         layoutShared_.state.store(kLayoutShutdown, std::memory_order_release);
@@ -1459,170 +1628,24 @@ void Engine::rasterThreadFunc() {
         // Reset Ganesh GL state tracking for this frame
         rasterRenderer->grContext()->resetContext();
 
-        // Invalidate surface pool on viewport resize
-        if (htmlSurfacePoolW_ != vpW || htmlSurfacePoolH_ != vpH) {
-            for (auto& ps : htmlSurfacePool_) {
-                rasterRenderer->destroyGPUSurface(ps);
-            }
-            htmlSurfacePool_.clear();
-            htmlSurfacePoolW_ = vpW;
-            htmlSurfacePoolH_ = vpH;
-        }
-
-        int htmlLayerIdx = 0;
-
-        // Set up layer break callback for canvas/WebGL elements
-        rasterDrawTraversal->setLayerBreakCallback(
-            [this, &rasterRenderer, &htmlLayerIdx, &backBuf, vpW, vpH](
-                canvas::CanvasScene* scene, unsigned int directTexture,
-                float x, float y, float w, float h) {
-                int prevIdx = htmlLayerIdx;
-                htmlLayerIdx++;
-                while (htmlLayerIdx >= static_cast<int>(htmlSurfacePool_.size())) {
-                    htmlSurfacePool_.push_back(
-                        rasterRenderer->createGPUSurface(vpW, vpH));
-                }
-                rasterRenderer->switchSurface(htmlSurfacePool_[htmlLayerIdx].surface);
-
-                UILayer htmlLayer;
-                htmlLayer.type = UILayer::HTML;
-                htmlLayer.texture = htmlSurfacePool_[prevIdx].texture;
-                backBuf.appLayers.push_back(std::move(htmlLayer));
-
-                UILayer canvasLayer;
-                canvasLayer.type = UILayer::Canvas;
-                canvasLayer.canvasScene = scene;
-                canvasLayer.texture = directTexture;  // non-zero for WebGL
-                canvasLayer.cx = x; canvasLayer.cy = y;
-                canvasLayer.cw = w; canvasLayer.ch = h;
-                backBuf.appLayers.push_back(std::move(canvasLayer));
-            });
-
         // Begin frame
         rasterRenderer->beginFrame(vpW, vpH);
 
-        // Ensure pool has a GPU surface for HTML layer 0
-        if (htmlSurfacePool_.empty()) {
-            htmlSurfacePool_.push_back(rasterRenderer->createGPUSurface(vpW, vpH));
-        }
-        // Rewrap existing pool surfaces with fresh Skia wrappers
-        for (auto& ps : htmlSurfacePool_) {
-            rasterRenderer->rewrapGPUSurface(ps, vpW, vpH);
-        }
-        // Switch to pool surface for HTML layer 0
-        auto origSurface = rasterRenderer->switchSurface(htmlSurfacePool_[0].surface);
+        // App layers (HTML interleaved with canvas/WebGL/scene-graph)
+        buildAppLayers(rasterRenderer.get(), *rasterDrawTraversal,
+                       htmlSurfacePool_, htmlSurfacePoolW_, htmlSurfacePoolH_,
+                       vpW, vpH, insetTop, scrollY,
+                       backBuf.appLayers);
 
-        // Draw traversal — reads layout boxes and computed styles (read-only).
-        // App content is translated down by insetTop so the top strip is
-        // reserved for the engine-owned menu bar.
-        if (document_ && document_->documentElement()) {
-            // Resolve app-relative background-image URLs against the app dir.
-            // (System panels below set their own basePath; we re-establish this
-            // each frame because that call mutates shared state.)
-            rasterDrawTraversal->setBasePath(document_->basePath());
-            rasterDrawTraversal->draw(document_->documentElement(),
-                                      0, static_cast<float>(insetTop) - scrollY,
-                                      vpW, contentH, insetTop);
-
-            // Selection highlight overlay: drawn after the HTML so it sits on
-            // top of text. Semi-transparent accent color. Only fires when
-            // there's a non-empty selection in the app document.
-            drawSelectionHighlight(rasterRenderer.get(),
-                                   static_cast<float>(insetTop) - scrollY);
-        }
-
-        // Draw the active app-context overlay (dropdown / color picker / etc.)
-        // on top of all elements.
-        overlayMgr_.drawIfContext(OverlayContext::App, rasterRenderer.get());
-
-        // Draw viewport scrollbar in the content area below the menu bar
-        {
-            float ct = static_cast<float>(insetTop);
-            float vh = static_cast<float>(contentH);
-            auto& vs = viewportScrollbar_.style();
-            auto m = viewportScrollbar_.layout(
-                static_cast<float>(vpW) - vs.width - vs.margin,
-                ct, vh, documentHeight_, vh, scrollY);
-            viewportScrollbar_.draw(rasterRenderer.get(), m);
-        }
-
-        // Draw scrollbars for overflow elements in the app document. System
-        // panels draw their own scrollbars via drawElementScrollbars from
-        // drawSystemPanels (same helper, different tree).
-        if (document_) {
-            drawElementScrollbars(rasterRenderer.get(),
-                                  document_->documentElement(),
-                                  0.0f, static_cast<float>(insetTop) - scrollY);
-        }
-
-        // Capture the last HTML layer
-        rasterRenderer->switchSurface(origSurface);
-        UILayer lastHtml;
-        lastHtml.type = UILayer::HTML;
-        lastHtml.texture = htmlSurfacePool_[htmlLayerIdx].texture;
-        backBuf.appLayers.push_back(std::move(lastHtml));
-
-        // Flush each pool surface's deferred Ganesh ops
-        for (int i = 0; i <= htmlLayerIdx; ++i) {
-            if (htmlSurfacePool_[i].surface && rasterRenderer->grContext()) {
-                rasterRenderer->grContext()->flush(htmlSurfacePool_[i].surface.get());
-            }
-        }
-        rasterDrawTraversal->setLayerBreakCallback(nullptr);
-
-        // --- System panels ---
-        // Lay out and draw each visible system panel into its own GPU-backed
-        // Skia surface. These composite on top of the crosshair on the main
-        // thread via backBuf.systemLayers. Layout runs here on the raster
-        // thread too — safe because system DOM mutations happen on the main
-        // thread during the JS phase, before we're signaled.
-        if (isSystemVisible()) {
-            // Resize system surface pool on viewport change
-            if (systemSurfacePoolW_ != vpW || systemSurfacePoolH_ != vpH) {
-                for (auto& ps : systemSurfacePool_) {
-                    rasterRenderer->destroyGPUSurface(ps);
-                }
-                systemSurfacePool_.clear();
-                systemSurfacePoolW_ = vpW;
-                systemSurfacePoolH_ = vpH;
-            }
-
-            layout::SkiaTextMetrics sysMetrics(rasterRenderer.get(),
-                                               &rasterFontManager);
-            layoutSystemPanels(sysMetrics);
-
-            size_t panelIdx = 0;
-            for (auto& sdoc : systemDocs_) {
-                if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
-
-                while (panelIdx >= systemSurfacePool_.size()) {
-                    systemSurfacePool_.push_back(
-                        rasterRenderer->createGPUSurface(vpW, vpH));
-                }
-                rasterRenderer->rewrapGPUSurface(systemSurfacePool_[panelIdx], vpW, vpH);
-                rasterRenderer->switchSurface(systemSurfacePool_[panelIdx].surface);
-
-                // Shared per-doc draw — installs canvas-blit callback, runs
-                // the layout traversal, and draws overflow scrollbars. Same
-                // helper used by the headless path so decoration passes never
-                // have to be remembered in two places.
-                drawSystemPanelDoc(rasterRenderer.get(), *rasterDrawTraversal,
-                                   sdoc, vpW, vpH);
-
-                UILayer panelLayer;
-                panelLayer.type = UILayer::HTML;
-                panelLayer.texture = systemSurfacePool_[panelIdx].texture;
-                backBuf.systemLayers.push_back(std::move(panelLayer));
-
-                if (rasterRenderer->grContext()) {
-                    rasterRenderer->grContext()->flush(
-                        systemSurfacePool_[panelIdx].surface.get());
-                }
-                panelIdx++;
-            }
-            rasterRenderer->switchSurface(origSurface);
-            systemDirty_ = false;
-        }
+        // System panel layers (menu bar / preferences / splash) on top of
+        // crosshair. Layout runs on the raster thread too — safe because
+        // system DOM mutations happen on the main thread during JS phase.
+        buildSystemPanelLayers(rasterRenderer.get(), *rasterDrawTraversal,
+                               &rasterFontManager,
+                               systemSurfacePool_, systemSurfacePoolW_,
+                               systemSurfacePoolH_,
+                               vpW, vpH,
+                               backBuf.systemLayers);
 
         rasterRenderer->endFrame();
 

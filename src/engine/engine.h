@@ -235,6 +235,14 @@ public:
     /// Returns empty vector on failure.
     std::vector<uint8_t> capturePixels();
 
+private:
+    /// Unified GPU readback used by screenshot() and capturePixels(). Mirrors
+    /// the windowed pipeline: rAF → render scenes → buildAppLayers →
+    /// buildSystemPanelLayers → compositeLayers (into a one-shot FBO) → readback.
+    /// Returns RGBA8 top-down pixels; empty vector on failure or non-GPU mode.
+    std::vector<uint8_t> renderUnifiedToPixels();
+public:
+
     /// Find an element by selector (#id shorthand or CSS selector).
     dom::Element* querySelector(const std::string& selector) const;
 
@@ -335,7 +343,31 @@ private:
     void compositeCanvasScenes(int w, int h);
     void compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO);
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
-    void compositeLayers(const std::vector<UILayer>& layers);
+    void compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO = 0);
+
+    /// Build the app document's UI layer list — one HTML surface per
+    /// inter-canvas/WebGL/scene-graph slice, plus per-canvas Canvas entries.
+    /// Same routine as the windowed raster thread (uses the layer-break
+    /// callback). `pool` is the caller-owned surface pool (raster thread or
+    /// screenshot path). `poolW`/`poolH` track the pool's surface size for
+    /// invalidation on viewport resize.
+    void buildAppLayers(render::SkiaRenderer* renderer,
+                        layout::DrawTraversal& traversal,
+                        std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                        int& poolW, int& poolH,
+                        int vpW, int vpH, int insetTop, float scrollY,
+                        std::vector<UILayer>& outLayers);
+
+    /// Build per-system-panel HTML surface layers. Mirrors the raster
+    /// thread's system panel block — one GPU-backed Skia surface per
+    /// visible panel, drawSystemPanelDoc into each, then push HTML layer.
+    void buildSystemPanelLayers(render::SkiaRenderer* renderer,
+                                layout::DrawTraversal& traversal,
+                                layout::FontManager* fontManager,
+                                std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                                int& poolW, int& poolH,
+                                int vpW, int vpH,
+                                std::vector<UILayer>& outLayers);
     void drawCrosshairGL();                  // windowed/headless GPU path
     void drawCrosshairSkia(SkCanvas* canvas); // headless CPU path
     void ensureReplacedElements(dom::Element* elem);
@@ -532,6 +564,14 @@ private:
     // surfaces mid-frame.
     std::vector<render::SkiaRenderer::GPUSurface> systemSurfacePool_;
     int systemSurfacePoolW_ = 0, systemSurfacePoolH_ = 0;
+
+    // Headless screenshot path uses the main thread's renderer + GL context,
+    // but needs its own surface pool so it doesn't fight the raster thread's
+    // pool on size invalidation. Lives only in headless mode.
+    std::vector<render::SkiaRenderer::GPUSurface> screenshotHtmlPool_;
+    int screenshotHtmlPoolW_ = 0, screenshotHtmlPoolH_ = 0;
+    std::vector<render::SkiaRenderer::GPUSurface> screenshotSystemPool_;
+    int screenshotSystemPoolW_ = 0, screenshotSystemPoolH_ = 0;
 
     CrosshairConfig crosshair_;
     MenuBar menuBar_;
