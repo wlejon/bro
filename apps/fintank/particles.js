@@ -5,9 +5,8 @@ var F = window.F = window.F || {};
 F.Particles = (function () {
     var items = [];
     var bubbles = [];
-    var shakeT = 0, shakeMag = 0;
 
-    function reset() { items.length = 0; bubbles.length = 0; shakeT = 0; shakeMag = 0; }
+    function reset() { items.length = 0; bubbles.length = 0; FX.reset(); }
 
     function add(p) { items.push(p); }
 
@@ -89,7 +88,7 @@ F.Particles = (function () {
             b.y += b.vy * s;
             if (b.y < 20) bubbles.splice(j, 1);
         }
-        if (shakeT > 0) shakeT = Math.max(0, shakeT - s);
+        FX.tick(dt);
     }
 
     function draw(ctx) {
@@ -126,14 +125,8 @@ F.Particles = (function () {
         ctx.restore();
     }
 
-    function shake(mag) { shakeT = 0.18; shakeMag = mag || 6; }
-    function shakeOffset() {
-        if (shakeT <= 0) return { x: 0, y: 0 };
-        return {
-            x: (Math.random() - 0.5) * shakeMag,
-            y: (Math.random() - 0.5) * shakeMag
-        };
-    }
+    function shake(mag) { FX.shake(180, mag || 6); }
+    function shakeOffset() { return FX.shakeOffset(); }
 
     return {
         reset: reset, add: add, update: update, draw: draw,

@@ -4,10 +4,6 @@ var T = T || {};
 T.FX = {
     particles: [],
     flashCells: [],
-    shakeTimer: 0,
-    shakeMag: 0,
-    actionText: "",
-    actionTextTimer: 0,
     lineClearAnim: null,
 
     spawn: function(x, y, count, color, opts) {
@@ -29,20 +25,9 @@ T.FX = {
         this.flashCells.push({ r: r, c: c, timer: duration, color: color });
     },
 
-    shake: function(duration, magnitude) {
-        this.shakeTimer = duration;
-        this.shakeMag = magnitude;
-    },
+    shake: function(duration, magnitude) { FX.shake(duration, magnitude); },
 
-    showText: function(text) {
-        this.actionText = text;
-        this.actionTextTimer = 800;
-        var el = document.getElementById("action-text");
-        if (el) {
-            el.textContent = text;
-            el.style.display = "block";
-        }
-    },
+    showText: function(text) { FX.toast(text); },
 
     startLineClear: function(rows) {
         this.lineClearAnim = { rows: rows, timer: 0, duration: 250 };
@@ -62,14 +47,7 @@ T.FX = {
             fc[i].timer -= dt;
             if (fc[i].timer <= 0) fc.splice(i, 1);
         }
-        if (this.shakeTimer > 0) this.shakeTimer -= dt;
-        if (this.actionTextTimer > 0) {
-            this.actionTextTimer -= dt;
-            if (this.actionTextTimer <= 0) {
-                var el = document.getElementById("action-text");
-                if (el) el.style.display = "none";
-            }
-        }
+        FX.tick(dt);
         if (this.lineClearAnim) {
             this.lineClearAnim.timer += dt;
             if (this.lineClearAnim.timer >= this.lineClearAnim.duration)
@@ -77,21 +55,13 @@ T.FX = {
         }
     },
 
-    getShakeOffset: function() {
-        if (this.shakeTimer <= 0) return { x: 0, y: 0 };
-        var intensity = (this.shakeTimer / 300) * this.shakeMag;
-        return {
-            x: (Math.random() - 0.5) * intensity,
-            y: (Math.random() - 0.5) * intensity
-        };
-    },
+    getShakeOffset: function() { return FX.shakeOffset(); },
 
     clear: function() {
         this.particles.length = 0;
         this.flashCells.length = 0;
-        this.shakeTimer = 0;
-        this.actionTextTimer = 0;
         this.lineClearAnim = null;
+        FX.reset();
     },
 
     drawParticles: function(ctx) {
@@ -129,8 +99,5 @@ T.FX = {
         }
     },
 
-    hideActionText: function() {
-        var el = document.getElementById("action-text");
-        if (el) el.style.display = "none";
-    }
+    hideActionText: function() { FX.reset(); }
 };

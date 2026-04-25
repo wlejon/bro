@@ -5,9 +5,6 @@ var G = window.G = window.G || {};
 G.Particles = (function () {
     var parts = [];
     var flashes = []; // { x, y, w, h, color, timer, life }
-    var shakeTimer = 0, shakeMag = 0;
-    var actionTextTimer = 0;
-    var cascadeTextTimer = 0;
 
     function spawn(x, y, count, color, opts) {
         opts = opts || {};
@@ -28,28 +25,10 @@ G.Particles = (function () {
         flashes.push({ x: x, y: y, w: w, h: h, color: color, timer: life || 250, life: life || 250 });
     }
 
-    function shake(duration, magnitude) {
-        shakeTimer = duration;
-        shakeMag = magnitude;
-    }
-
-    function shakeOffset() {
-        if (shakeTimer <= 0) return { x: 0, y: 0 };
-        var m = (shakeTimer / 300) * shakeMag;
-        return { x: (Math.random() - 0.5) * m, y: (Math.random() - 0.5) * m };
-    }
-
-    function showAction(text) {
-        var el = document.getElementById('action-text');
-        if (el) { el.textContent = text; el.style.display = 'block'; }
-        actionTextTimer = 900;
-    }
-
-    function showCascade(text) {
-        var el = document.getElementById('cascade-text');
-        if (el) { el.textContent = text; el.style.display = 'block'; }
-        cascadeTextTimer = 700;
-    }
+    function shake(duration, magnitude) { FX.shake(duration, magnitude); }
+    function shakeOffset() { return FX.shakeOffset(); }
+    function showAction(text)  { FX.toast(text, { selector: '#action-text',  duration: 900 }); }
+    function showCascade(text) { FX.toast(text, { selector: '#cascade-text', duration: 700 }); }
 
     function update(dt) {
         for (var i = parts.length - 1; i >= 0; i--) {
@@ -64,32 +43,13 @@ G.Particles = (function () {
             flashes[j].timer -= dt;
             if (flashes[j].timer <= 0) flashes.splice(j, 1);
         }
-        if (shakeTimer > 0) shakeTimer -= dt;
-
-        if (actionTextTimer > 0) {
-            actionTextTimer -= dt;
-            if (actionTextTimer <= 0) {
-                var el = document.getElementById('action-text');
-                if (el) el.style.display = 'none';
-            }
-        }
-        if (cascadeTextTimer > 0) {
-            cascadeTextTimer -= dt;
-            if (cascadeTextTimer <= 0) {
-                var el2 = document.getElementById('cascade-text');
-                if (el2) el2.style.display = 'none';
-            }
-        }
+        FX.tick(dt);
     }
 
     function clear() {
         parts.length = 0;
         flashes.length = 0;
-        shakeTimer = 0;
-        actionTextTimer = 0;
-        cascadeTextTimer = 0;
-        var a = document.getElementById('action-text'); if (a) a.style.display = 'none';
-        var c = document.getElementById('cascade-text'); if (c) c.style.display = 'none';
+        FX.reset();
     }
 
     function drawParticles(ctx) {
