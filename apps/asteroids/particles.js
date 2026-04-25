@@ -1,51 +1,59 @@
-// particles.js — Particle effects for explosions and ship trail
+// particles.js — A.FX wrapper around lib/particles.js.
+//
+// Asteroids' callsites pass time and speed in milliseconds (life in ms,
+// speed in px/ms). The lib speaks seconds. This shim does the conversion
+// so game.js stays untouched.
 var A = A || {};
 
-A.FX = {
-    particles: [],
+A.FX = (function () {
+    'use strict';
 
-    spawn: function(x, y, count, opts) {
+    const sys = Particles.createSystem({ wrap: true, cap: 600 });
+    let lastW = 900, lastH = 800;
+
+    function spawn(x, y, count, opts) {
         opts = opts || {};
-        for (var i = 0; i < count; i++) {
-            var a = Math.random() * Math.PI * 2;
-            var sp = (opts.speed || 0.15) * (0.5 + Math.random());
-            var life = (opts.life || 600) + Math.random() * (opts.lifeVar || 400);
-            this.particles.push({
+        const baseSpeed = (opts.speed || 0.15) * 1000;     // px/ms -> px/s
+        const baseLife  = (opts.life  || 600)  / 1000;     // ms    -> s
+        const lifeVar   = (opts.lifeVar || 400) / 1000;
+        const biasX = (opts.vx || 0) * 1000;
+        const biasY = (opts.vy || 0) * 1000;
+        const color = opts.color || '#ffffff';
+        for (let i = 0; i < count; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const sp  = baseSpeed * (0.5 + Math.random());
+            Particles.add(sys, {
                 x: x, y: y,
-                vx: Math.cos(a) * sp + (opts.vx || 0),
-                vy: Math.sin(a) * sp + (opts.vy || 0),
-                life: life, maxLife: life,
-                color: opts.color || "#ffffff"
+                vx: Math.cos(ang) * sp + biasX,
+                vy: Math.sin(ang) * sp + biasY,
+                life:    baseLife + Math.random() * lifeVar,
+                color:   color,
+                size:    1,
+                gravity: 0,
+                drag:    1,
             });
         }
-    },
-
-    update: function(dt) {
-        var p = this.particles;
-        for (var i = p.length - 1; i >= 0; i--) {
-            p[i].life -= dt;
-            if (p[i].life <= 0) { p.splice(i, 1); continue; }
-            p[i].x += p[i].vx * dt;
-            p[i].y += p[i].vy * dt;
-        }
-    },
-
-    draw: function(ctx, W, H) {
-        var p = this.particles;
-        for (var i = 0; i < p.length; i++) {
-            var pr = p[i];
-            var x = pr.x, y = pr.y;
-            // wrap
-            if (x < 0) x += W; else if (x >= W) x -= W;
-            if (y < 0) y += H; else if (y >= H) y -= H;
-            ctx.globalAlpha = Math.max(0, pr.life / pr.maxLife);
-            ctx.fillStyle = pr.color;
-            ctx.fillRect(x - 1, y - 1, 2, 2);
-        }
-        ctx.globalAlpha = 1.0;
-    },
-
-    clear: function() {
-        this.particles.length = 0;
     }
-};
+
+    function update(dt) {
+        Particles.step(sys, dt / 1000, lastW, lastH);
+    }
+
+    function draw(ctx, W, H) {
+        if (W) lastW = W;
+        if (H) lastH = H;
+        // Asteroids draws particles as 2px squares, not pegbounce's circles.
+        const list = sys.list;
+        for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
+        }
+        ctx.globalAlpha = 1;
+    }
+
+    function clear() { Particles.clear(sys); }
+
+    return { spawn, update, draw, clear };
+})();
