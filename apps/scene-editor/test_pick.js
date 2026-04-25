@@ -31,13 +31,14 @@ assert(p[0] >= -1 - EPS && p[0] <= 1 + EPS, `hit x in bbox (got ${p[0]})`);
 assert(p[1] >= -1 - EPS && p[1] <= 1 + EPS, `hit y in bbox (got ${p[1]})`);
 assert(p[2] >= -1 - EPS && p[2] <= 1 + EPS, `hit z in bbox (got ${p[2]})`);
 
-// A miss: click far off-screen corner — ray should exit the view frustum
-// beyond the box and not hit anything visible through that pixel.
-// (The box only covers a small central region, so top-left pixel misses.)
-const missRay = window.__editor.screenToRay(5, 5);
+// A miss: a far-right pixel — ray exits the view frustum beyond the box.
+// Avoid the top-left corner: it overlaps the HUD overlay, and synthesized
+// clicks on overlapping HTML don't fall through to the canvas listener.
+const MISS_X = 1850, MISS_Y = 540;
+const missRay = window.__editor.screenToRay(MISS_X, MISS_Y);
 const miss = window.__editor.boxBVH.raycast(
     window.__editor.boxMesh, missRay.origin, missRay.dir, 0);
-assert(!miss, `top-left corner should miss (got ${miss && JSON.stringify(miss)})`);
+assert(!miss, `far-right pixel should miss (got ${miss && JSON.stringify(miss)})`);
 
 // Clicking the box should install a highlight overlay node.
 assert(window.__editor.highlightNode, 'highlight node should exist after pick');
@@ -63,8 +64,9 @@ for (const n of triNormals) {
 }
 assert(axisHits.size === 6, `all 6 axis directions present (got ${[...axisHits].sort().join(',')})`);
 
-// Second click on a miss (top-left) should clear the highlight.
-click(5, 5);
+// Second click on a miss (far-right pixel, off the box) should clear the
+// highlight.
+click(MISS_X, MISS_Y);
 advanceTime(50);
 assert(!window.__editor.highlightNode, 'highlight should clear on miss');
 

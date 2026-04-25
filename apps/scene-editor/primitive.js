@@ -233,7 +233,6 @@
         this.meshNode = this.scene.createMesh({
             data:  mesh,
             color: this.color,
-            unlit: true,
             name:  this.name,
         });
         this.meshNode.visible = this.isEffectivelyVisible();
@@ -627,7 +626,6 @@
         p.meshNode = p.scene.createMesh({
             data:  src.mesh,
             color: src.color,
-            unlit: true,
             name:  src.name + '(shadow)',
         });
         p.meshNode.visible = p.isEffectivelyVisible();

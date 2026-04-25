@@ -166,7 +166,6 @@ const sceneAxesNode = scene.createMesh({
     normals:   sceneAxesData.normals,
     colors:    sceneAxesData.colors,
     indices:   sceneAxesData.indices,
-    unlit:     true,
     name: 'scene-axes',
 });
 
@@ -440,57 +439,34 @@ function applyCamera() {
 }
 applyCamera();
 
-// --- Lighting (opt-in) ------------------------------------------------------
+// --- Lighting --------------------------------------------------------------
 //
-// The editor defaults to lighting OFF: primitives and previews are drawn
-// with `unlit:true`, so surfaces render at their exact baseColor regardless
-// of any implicit sun / ambient / tonemap state. Press L to flip on a
-// studio-style rig (shadow sun + fill + ambient + ACES) for a preview-closer-
-// to-runtime look; press L again to return to the flat authoring view. The
-// rig is a visualization toggle only — it does not re-author mesh materials,
-// so unlit primitives stay flat until we wire a separate "lit preview" path.
+// Editor look: evenly lit from all angles, no shadows. High ambient gives
+// every face a readable base color regardless of orientation; two soft
+// directionals (top-front key + opposite fill) add just enough shading to
+// read shape without making any face go dark. Linear tonemap keeps authored
+// vertex colors faithful (no ACES desaturation on the red/green/blue axes).
+//
+// Primitives and the ground/axes use the default lit shader so they
+// participate in depth occlusion. UI affordances (highlight, tool previews,
+// snap spheres, edge wireframes) stay `unlit:true` to read as crisp overlays.
 
-let _lightingOn = false;
-let _sunLight   = null;
-let _fillLight  = null;
-
-function setLightingEnabled(on) {
-    on = !!on;
-    if (on === _lightingOn) return;
-    _lightingOn = on;
-    if (on) {
-        scene.setToneMap({ mode: 'aces', exposure: 1.0, gamma: 2.2 });
-        scene.setAmbient([0.06, 0.065, 0.075]);
-        _sunLight = scene.createLight({
-            type:      'directional',
-            direction: [-0.45, -1.0, -0.35],
-            color:     [1.0, 0.98, 0.92],
-            intensity: 3.0,
-            name:      'editor-sun',
-        });
-        _sunLight.castsShadow        = true;
-        _sunLight.cascadeCount       = 4;
-        _sunLight.cascadeSplitLambda = 0.6;
-        _fillLight = scene.createLight({
-            type:      'directional',
-            direction: [0.6, -0.4, 0.5],
-            color:     [0.70, 0.78, 0.95],
-            intensity: 0.6,
-            name:      'editor-fill',
-        });
-        scene.setShadowQuality(4096, 3);
-    } else {
-        if (_sunLight)  { _sunLight.destroy();  _sunLight  = null; }
-        if (_fillLight) { _fillLight.destroy(); _fillLight = null; }
-        // Restore engine defaults (ACES + no ambient) so the flat-authoring
-        // view matches startup state exactly.
-        scene.setAmbient([0, 0, 0]);
-        scene.setToneMap({ mode: 'aces', exposure: 1.0, gamma: 2.2 });
-    }
-    const hint = document.getElementById('lighting-hint');
-    if (hint) hint.textContent = on ? 'on' : 'off';
-}
-window.setLightingEnabled = setLightingEnabled;
+scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 2.2 });
+scene.setAmbient([0.55, 0.56, 0.58]);
+scene.createLight({
+    type:      'directional',
+    direction: [-0.4, -1.0, -0.3],
+    color:     [1.0, 0.98, 0.94],
+    intensity: 0.7,
+    name:      'editor-key',
+});
+scene.createLight({
+    type:      'directional',
+    direction: [0.5, -0.3, 0.6],
+    color:     [0.88, 0.92, 1.0],
+    intensity: 0.4,
+    name:      'editor-fill',
+});
 
 // --- Screen → world ray -----------------------------------------------------
 
@@ -517,7 +493,10 @@ function screenToRay(px, py) {
     const nx = (2 * px / w) - 1;
     const ny = 1 - (2 * py / h);
     const tanHalf = Math.tan(opts.fov * Math.PI / 180 * 0.5);
-    const aspect  = opts.aspect;
+    // orbitViewOpts intentionally omits `aspect` so the engine can derive it
+    // from the canvas FBO. For ray casting we still need it; use the same
+    // canvas dimensions the engine uses for the projection.
+    const aspect  = w / Math.max(1, h);
 
     const fx = opts.target[0] - opts.position[0];
     const fy = opts.target[1] - opts.position[1];
@@ -2984,15 +2963,7 @@ document.addEventListener('keydown', (e) => {
             return;
         }
     }
-    // Toggle the studio lighting preview rig. Off = flat authoring view,
-    // on = shadow sun + fill + ACES. Guarded so mid-gesture keystrokes don't
-    // recreate lights while a drag is capturing state.
-    if ((e.key === 'l' || e.key === 'L') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        setLightingEnabled(!_lightingOn);
-        e.preventDefault();
-        return;
-    }
-    // Tool selection is driven by the toolbar UI. Only Escape lives as a
+// Tool selection is driven by the toolbar UI. Only Escape lives as a
     // global shortcut because it's a modal cancel (no tool change).
     if (e.key === 'Escape') {
         // A modal gesture takes priority — cancel it. Only if no gesture is

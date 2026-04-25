@@ -134,8 +134,13 @@ assert(box2.visible, 'box2 visible again');
 
 {
     const I = window.Inference;
-    const camOpts = Camera.orbitViewOpts(E.cam, document.getElementById('canvas'));
-    const W = 1920, H = 1080;       // headless default viewport
+    const cnv = document.getElementById('canvas');
+    const camOpts = Camera.orbitViewOpts(E.cam, cnv);
+    // Use the canvas's own client dims for projection — that's the FBO size
+    // the engine builds the projection matrix against. The window viewport
+    // (1920x1080) and the canvas client area can differ when other DOM
+    // elements share the page, so hardcoding either side breaks round-trip.
+    const W = cnv.clientWidth, H = cnv.clientHeight;
     const corner = [3 + 1, 0 + 1, 0 + 1];  // box2's (+X, +Y, +Z) corner
     const sp = I.worldToScreen(corner, camOpts, W, H);
     assert(!sp.behind, 'box2 corner is in front of camera');

@@ -96,8 +96,10 @@
     }
 
     // Project a world point to screen pixels using orbitViewOpts-shape
-    // camera options { position, target, up, fov, aspect }. Mirrors the
-    // basis derivation in app.js#screenToRay so projection and unprojection
+    // camera options { position, target, up, fov }. Aspect is derived from
+    // the supplied viewport dimensions — same source the engine uses when
+    // building the projection matrix from the canvas FBO. Mirrors the basis
+    // derivation in app.js#screenToRay so projection and unprojection
     // round-trip consistently.
     function worldToScreen(world, camOpts, width, height) {
         const fx = camOpts.target[0] - camOpts.position[0];
@@ -127,7 +129,8 @@
         if (zc <= 1e-6) return { x: 0, y: 0, depth: zc, behind: true };
 
         const tanHalf = Math.tan(camOpts.fov * Math.PI / 180 * 0.5);
-        const nx = (xc / zc) / (camOpts.aspect * tanHalf);
+        const aspect = width / Math.max(1, height);
+        const nx = (xc / zc) / (aspect * tanHalf);
         const ny = (yc / zc) / tanHalf;
         return {
             x: (nx + 1) * 0.5 * width,
