@@ -261,7 +261,6 @@
                     if (peg.type === Physics.PEG.ORANGE) {
                         pts = 100;
                         S.shotOrangeCount++;
-                        S.mult = comboMult(S.shotOrangeCount);
                         Sfx.orangeHit(S.comboCount);
                     } else if (peg.type === Physics.PEG.PURPLE) {
                         pts = 500;
@@ -274,6 +273,11 @@
                     } else {
                         Sfx.pegHit(S.comboCount);
                     }
+                    // Escalate multiplier on every peg, taking the better of
+                    // the orange-tier or raw-combo-tier ladders. This rewards
+                    // wide chain reactions (pulsewave, lucky bounces) instead
+                    // of only orange-heavy shots.
+                    S.mult = comboMult(S.shotOrangeCount, S.comboCount);
                     const baseMult = S.mult * (S.purpleActive ? 2 : 1);
                     S.shotScore += pts * baseMult;
                     const col = pegColor(peg.type);
@@ -304,12 +308,18 @@
         ev.length = 0;
     }
 
-    function comboMult(orangeCleared) {
-        if (orangeCleared >= 15) return 10;
-        if (orangeCleared >= 10) return 5;
-        if (orangeCleared >= 6)  return 3;
-        if (orangeCleared >= 3)  return 2;
-        return 1;
+    function comboMult(orangeCleared, comboCount) {
+        const fromOrange =
+            orangeCleared >= 15 ? 10 :
+            orangeCleared >= 10 ? 5 :
+            orangeCleared >= 6  ? 3 :
+            orangeCleared >= 3  ? 2 : 1;
+        const fromCombo =
+            comboCount >= 30 ? 10 :
+            comboCount >= 20 ? 5 :
+            comboCount >= 12 ? 3 :
+            comboCount >= 6  ? 2 : 1;
+        return Math.max(fromOrange, fromCombo);
     }
 
     function showFever(text) {
@@ -447,6 +457,30 @@
             ctx.beginPath();
             ctx.arc(b.x, b.y, 42, 0, Math.PI * 2);
             ctx.fill();
+        }
+    }
+
+    function drawPulses(pulses) {
+        if (!pulses || !pulses.length) return;
+        for (const pw of pulses) {
+            const t = Math.min(1, pw.age / pw.duration);
+            const r = t * pw.R;
+            const alpha = 1 - t;
+            // Inner soft glow filling the swept area.
+            const g = ctx.createRadialGradient(pw.cx, pw.cy, 0, pw.cx, pw.cy, Math.max(r, 1));
+            g.addColorStop(0, 'rgba(140,255,150,0)');
+            g.addColorStop(0.7, 'rgba(140,255,150,' + (0.18 * alpha) + ')');
+            g.addColorStop(1, 'rgba(140,255,150,' + (0.35 * alpha) + ')');
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(pw.cx, pw.cy, Math.max(r, 1), 0, Math.PI * 2);
+            ctx.fill();
+            // Bright leading ring.
+            ctx.strokeStyle = 'rgba(180,255,180,' + (0.9 * alpha) + ')';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.arc(pw.cx, pw.cy, r, 0, Math.PI * 2);
+            ctx.stroke();
         }
     }
 
@@ -641,6 +675,7 @@
 
             drawAimGuide();
             for (const p of S.world.pegs) drawPeg(p);
+            drawPulses(S.world.pulses);
             drawBall(S.world.ball);
             for (const eb of S.world.extraBalls) drawBall(eb);
             drawCatchbar(S.world.catchbar);
@@ -905,6 +940,7 @@
         let shotScore = 0;
         let comboMultSeen = 1;
         let shotOrangeCount = 0;
+        let shotComboCount = 0;
         const startOrange = Physics.countRemainingOrange(w);
         while (Physics.hasActiveBall(w) && elapsed < 12) {
             Physics.step(w, dt);
@@ -915,14 +951,16 @@
                 const peg = e.peg;
                 if (peg._testScored) continue;
                 peg._testScored = true;
+                shotComboCount++;
                 let pts = 10;
                 if (peg.type === Physics.PEG.ORANGE) {
                     pts = 100;
                     shotOrangeCount++;
-                    comboMultSeen = Math.max(comboMultSeen, comboMult(shotOrangeCount));
                 }
                 else if (peg.type === Physics.PEG.PURPLE) pts = 500;
-                shotScore += pts * comboMult(shotOrangeCount);
+                const m = comboMult(shotOrangeCount, shotComboCount);
+                comboMultSeen = Math.max(comboMultSeen, m);
+                shotScore += pts * m;
             }
             ev.length = 0;
             elapsed += dt;

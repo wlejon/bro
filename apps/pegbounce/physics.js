@@ -58,7 +58,11 @@
     const GRAVITY = 1400;            // px/sec^2
     const MAX_SPEED = 1650;          // hard cap to keep solver stable
     const WALL_RESTITUTION = 0.62;
-    const CATCHBAR_RESTITUTION = 0.35;
+    const CATCHBAR_RESTITUTION = 0.95;
+    // Minimum upward speed when the ball lands on top of the catch bar.
+    // Sized to clear the playfield height under GRAVITY (sqrt(2*g*H) with
+    // some headroom), so a top-hit always returns the ball near the top.
+    const CATCHBAR_KICK = 1300;
 
     // Playfield logical size. App canvas may scale; physics uses these.
     const FIELD_W = 1024;
@@ -132,6 +136,7 @@
             onFire: false,
         };
         world.extraBalls.length = 0;
+        if (world.pulses) world.pulses.length = 0;
         world.time = 0;
         world.slowmo = 0;
         world.shotIndex++;
@@ -232,6 +237,28 @@
         }
         world.time += dtSec;
 
+        // Pulsewave shock fronts: light & clear pegs as the front sweeps past.
+        if (world.pulses && world.pulses.length) {
+            for (let i = world.pulses.length - 1; i >= 0; i--) {
+                const pw = world.pulses[i];
+                pw.age += dtSec;
+                const t = Math.min(1, pw.age / pw.duration);
+                const front = t * pw.R;
+                while (pw.queue.length && pw.queue[0].dist <= front) {
+                    const c = pw.queue.shift();
+                    if (!c.peg.removed && !c.peg.lit) {
+                        // Same visual treatment as a ball hit: drainEvents
+                        // marks the peg lit (white ring) and emits a particle
+                        // burst; sweepLit clears it at shot end.
+                        world.scoreEvents.push({ kind: 'peg-hit', peg: c.peg });
+                    }
+                }
+                if (pw.age >= pw.duration && pw.queue.length === 0) {
+                    world.pulses.splice(i, 1);
+                }
+            }
+        }
+
         // Moving pegs (kinematic animation).
         for (const p of world.pegs) {
             if (p.kind !== 'moving' || p.removed) continue;
@@ -314,7 +341,14 @@
                 x2: world.catchbar.x + world.catchbar.halfW,
                 y2: world.catchbar.y + CATCHBAR_H,
             };
+            const incomingVy = ball.vy;
             if (resolveBallBox(ball, cbBox, world.scoreEvents, ball.radius, CATCHBAR_RESTITUTION)) {
+                // Top-hit (ball was falling): apply a paddle-like upward
+                // kick so the ball returns to the playfield instead of
+                // dying just below the bar.
+                if (incomingVy > 0 && ball.vy < 0 && -ball.vy < CATCHBAR_KICK) {
+                    ball.vy = -CATCHBAR_KICK;
+                }
                 world.scoreEvents.push({ kind: 'catchbar-hit' });
             }
 
@@ -356,8 +390,12 @@
     }
 
     function countRemainingOrange(world) {
+        // "Remaining" = still in play to be hit: not lit and not removed.
+        // Lit pegs count as already cleared so mid-shot final-orange logic
+        // (slow-mo, fever) fires when the last orange is lit, before the
+        // end-of-shot sweep.
         let n = 0;
-        for (const p of world.pegs) if (p.type === PEG.ORANGE && !p.removed) n++;
+        for (const p of world.pegs) if (p.type === PEG.ORANGE && !p.removed && !p.lit) n++;
         return n;
     }
 

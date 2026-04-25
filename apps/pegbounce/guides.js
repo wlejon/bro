@@ -44,21 +44,25 @@
         {
             id: 'pulsewave', name: 'Pulsewave', icon: '&#x25CE;',
             color: '#8fe07e',
-            blurb: 'Pulls every lit peg inward toward the ball for a compound chain.',
+            blurb: 'Emits a shockwave that lights every peg in a wide radius.',
             trigger(world, peg) {
-                if (!world.ball) return { fx: 'pulse' };
-                const bx = world.ball.x, by = world.ball.y;
+                const cx = peg.x, cy = peg.y;
+                const R = 160;
+                // Queue every fresh peg in radius, sorted by distance so the
+                // shock front lights them in order over the pulse duration.
+                const queue = [];
                 for (const p of world.pegs) {
-                    if (p.removed || !p.lit || p.kind === 'moving') continue;
-                    const dx = bx - p.x, dy = by - p.y;
-                    const d = Math.hypot(dx, dy) || 1;
-                    // Slide 40% of the way toward the ball, clamped so pegs
-                    // don't collide with each other.
-                    const t = 0.4;
-                    p.x += (dx / d) * Math.min(60, d * t);
-                    p.y += (dy / d) * Math.min(60, d * t);
+                    if (p.removed || p.lit || p === peg) continue;
+                    const dx = p.x - cx, dy = p.y - cy;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 > R * R) continue;
+                    queue.push({ peg: p, dist: Math.sqrt(d2) });
                 }
-                return { fx: 'pulse' };
+                queue.sort((a, b) => a.dist - b.dist);
+                (world.pulses || (world.pulses = [])).push({
+                    cx, cy, R, age: 0, duration: 0.5, queue,
+                });
+                return { fx: 'pulse', cx, cy, radius: R };
             },
         },
         {
