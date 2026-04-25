@@ -19,9 +19,7 @@
     const FIELD_W = Physics.FIELD_W, FIELD_H = Physics.FIELD_H;
 
     function canvasSize() {
-        const cw = ctx.canvasWidth  || canvas.width  || FIELD_W;
-        const ch = ctx.canvasHeight || canvas.height || FIELD_H;
-        return { w: cw, h: ch };
+        return Canvas.size(ctx, FIELD_W, FIELD_H);
     }
 
     // ----------------- Persistent settings / progress -----------------------

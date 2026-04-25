@@ -168,8 +168,8 @@ var Game = {
 // =========================================================================
 var canvas = document.getElementById("game");
 var ctx = canvas.getContext("2d");
-function getW() { return ctx.canvasWidth || canvas.width || 800; }
-function getH() { return ctx.canvasHeight || canvas.height || 800; }
+function getW() { return Canvas.w(ctx, 800); }
+function getH() { return Canvas.h(ctx, 800); }
 
 function recalcLayout(W, H) {
     Game.ox = Math.floor((W - GRID_W) / 2);

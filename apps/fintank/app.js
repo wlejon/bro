@@ -542,8 +542,8 @@ F.Game = (function () {
         return { bestDay: slot.bestDay || slot.day, totalCoins: slot.totalCoins || 0, slot: slot.slot };
     }
 
-    function getW() { return ctx.canvasWidth || canvas.width || 1200; }
-    function getH() { return ctx.canvasHeight || canvas.height || 800; }
+    function getW() { return Canvas.w(ctx, 1200); }
+    function getH() { return Canvas.h(ctx, 800); }
 
     function init() {
         canvas = document.getElementById('game');

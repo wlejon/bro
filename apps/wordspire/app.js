@@ -3,8 +3,8 @@
 (function () {
     var canvas = document.getElementById('game');
     var ctx = canvas.getContext('2d');
-    function Wd() { return ctx.canvasWidth  || canvas.width  || 1000; }
-    function Hd() { return ctx.canvasHeight || canvas.height || 800;  }
+    function Wd() { return Canvas.w(ctx, 1000); }
+    function Hd() { return Canvas.h(ctx, 800);  }
 
     W.Audio.init();
     W.Screens.init();

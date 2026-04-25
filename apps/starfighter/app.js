@@ -5,8 +5,8 @@
 var canvas = document.getElementById("game");
 var ctx = canvas.getContext("2d");
 
-function getW() { return ctx.canvasWidth || canvas.width || 1024; }
-function getH() { return ctx.canvasHeight || canvas.height || 768; }
+function getW() { return Canvas.w(ctx, 1024); }
+function getH() { return Canvas.h(ctx, 768); }
 
 N.Storage.load();
 N.Audio.init();

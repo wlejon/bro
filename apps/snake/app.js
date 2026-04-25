@@ -27,8 +27,8 @@ const sfx = {
 // ---------- Canvas ----------
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
-const getW = () => ctx.canvasWidth || canvas.width || 800;
-const getH = () => ctx.canvasHeight || canvas.height || 700;
+const getW = () => Canvas.w(ctx, 800);
+const getH = () => Canvas.h(ctx, 700);
 
 // ---------- Constants ----------
 const COLS = 28, ROWS = 22;

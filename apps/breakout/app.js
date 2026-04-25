@@ -5,8 +5,8 @@
 // --- Canvas ---
 var canvas = document.getElementById("game");
 var ctx = canvas.getContext("2d");
-var getW = function() { return ctx.canvasWidth || canvas.width || 800; };
-var getH = function() { return ctx.canvasHeight || canvas.height || 700; };
+var getW = function() { return Canvas.w(ctx, 800); };
+var getH = function() { return Canvas.h(ctx, 700); };
 
 // --- Storage / Audio (library-backed) ---
 var _store = Storage.create("breakout");
@@ -303,7 +303,7 @@ canvas.addEventListener("mousemove", function(e) {
     var rect = canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
     var x;
     if (rect) {
-        var scaleX = (ctx.canvasWidth || canvas.width || 800) / (rect.width || 800);
+        var scaleX = Canvas.w(ctx, 800) / (rect.width || 800);
         x = (e.clientX - rect.left) * scaleX;
     } else if (typeof e.offsetX === "number") x = e.offsetX;
     else x = e.clientX;

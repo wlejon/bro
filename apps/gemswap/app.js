@@ -4,8 +4,8 @@
     var canvas = document.getElementById('game');
     var ctx = canvas.getContext('2d');
 
-    function W() { return ctx.canvasWidth || canvas.width || 900; }
-    function H() { return ctx.canvasHeight || canvas.height || 800; }
+    function W() { return Canvas.w(ctx, 900); }
+    function H() { return Canvas.h(ctx, 800); }
 
     G.Controls.init();
     G.Screens.init();

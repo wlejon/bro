@@ -4,8 +4,8 @@
 
 var canvas = document.getElementById("game");
 var ctx = canvas.getContext("2d");
-var getW = function() { return ctx.canvasWidth || canvas.width || 800; };
-var getH = function() { return ctx.canvasHeight || canvas.height || 700; };
+var getW = function() { return Canvas.w(ctx, 800); };
+var getH = function() { return Canvas.h(ctx, 700); };
 
 var lastFrameTime = 0;
 
