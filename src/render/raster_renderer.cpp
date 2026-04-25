@@ -127,14 +127,18 @@ void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
     if (runs.empty()) return;
 
     float cursor = x;
-    for (const auto& run : runs) {
+    for (size_t r = 0; r < runs.size(); ++r) {
+        const auto& run = runs[r];
         const char* data = text.data() + run.start;
+        bool isLastRun = (r + 1 == runs.size());
         if (letterSpacing == 0.0f) {
             canvas_->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
                                     cursor, y, run.font, paint);
             cursor += run.font.measureText(data, run.length, SkTextEncoding::kUTF8);
         } else {
-            // Walk UTF-8 codepoints, applying letter-spacing after each.
+            // Walk UTF-8 codepoints, applying letter-spacing BETWEEN them
+            // (n - 1 times) so visible glyph extent matches the layout box
+            // and centered text isn't drifted leftward by trailing dead space.
             size_t i = 0;
             while (i < run.length) {
                 unsigned char b = static_cast<unsigned char>(data[i]);
@@ -147,7 +151,8 @@ void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
                 canvas_->drawSimpleText(data + i, n, SkTextEncoding::kUTF8,
                                         cursor, y, run.font, paint);
                 cursor += run.font.measureText(data + i, n, SkTextEncoding::kUTF8);
-                cursor += letterSpacing;
+                bool isLastCodepoint = (i + n >= run.length);
+                if (!(isLastCodepoint && isLastRun)) cursor += letterSpacing;
                 i += n;
             }
         }

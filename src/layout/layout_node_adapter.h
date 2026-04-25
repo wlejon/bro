@@ -88,12 +88,8 @@ public:
         return empty;
     }
 
-    LayoutNode* pseudoBefore() const override {
-        return pseudoBeforeAdapter_ ? pseudoBeforeAdapter_.get() : nullptr;
-    }
-    LayoutNode* pseudoAfter() const override {
-        return pseudoAfterAdapter_ ? pseudoAfterAdapter_.get() : nullptr;
-    }
+    LayoutNode* pseudoBefore() const override { return ensurePseudo("before"); }
+    LayoutNode* pseudoAfter()  const override { return ensurePseudo("after");  }
 
     // bro::dom::Element only tracks vertical scroll today (scrollTop_).
     // scrollLeftPx() returns 0 until horizontal scrolling is supported.
@@ -181,7 +177,6 @@ public:
     // This handles shadow DOM composed children and slot distribution.
     static std::unique_ptr<LayoutNodeAdapter> buildTree(dom::Element* root) {
         auto node = std::make_unique<LayoutNodeAdapter>(root);
-        attachPseudos(node.get(), root);
         buildChildren(node.get(), root);
         return node;
     }
@@ -191,18 +186,22 @@ private:
     LayoutNodeAdapter(dom::Element* host, const std::string& which, bool isText)
         : pseudoHost_(host), pseudoWhich_(which), pseudoIsText_(isText) {}
 
-    // Attach ::before/::after wrappers to an element-kind adapter when the
-    // host has resolved pseudo content. Called during tree construction.
-    static void attachPseudos(LayoutNodeAdapter* parent, dom::Element* elem) {
-        if (!elem) return;
-        if (!elem->pseudoContent("before").empty()) {
-            parent->pseudoBeforeAdapter_ = makePseudo(elem, "before");
-            parent->pseudoBeforeAdapter_->parent_ = parent;
+    // Lazily build / tear down the synthetic pseudo wrapper on each layout
+    // pass. Pseudo content can appear or disappear when classes change (e.g.
+    // .selected moving between menu items toggles ::before/::after rules);
+    // checking elem_->pseudoContent at access time keeps the layout tree in
+    // sync without requiring a structural rebuild.
+    LayoutNode* ensurePseudo(const std::string& which) const {
+        if (!elem_) return nullptr;
+        bool want = !elem_->pseudoContent(which).empty();
+        auto& slot = (which == "before") ? pseudoBeforeAdapter_ : pseudoAfterAdapter_;
+        if (want && !slot) {
+            slot = makePseudo(elem_, which);
+            slot->parent_ = const_cast<LayoutNodeAdapter*>(this);
+        } else if (!want && slot) {
+            slot.reset();
         }
-        if (!elem->pseudoContent("after").empty()) {
-            parent->pseudoAfterAdapter_ = makePseudo(elem, "after");
-            parent->pseudoAfterAdapter_->parent_ = parent;
-        }
+        return slot.get();
     }
 
     // Get the containing shadow root for an element (walk up parents)
@@ -256,7 +255,6 @@ private:
 
                 auto child = std::make_unique<LayoutNodeAdapter>(childElem);
                 child->parent_ = parent;
-                attachPseudos(child.get(), childElem);
                 buildChildren(child.get(), childElem);
                 parent->children_.push_back(std::move(child));
             } else if (childNode->nodeType() == dom::NodeType::Text) {
@@ -279,7 +277,6 @@ private:
 
             auto child = std::make_unique<LayoutNodeAdapter>(elem);
             child->parent_ = parent;
-            attachPseudos(child.get(), elem);
             buildChildren(child.get(), elem);
             parent->children_.push_back(std::move(child));
         } else if (node->nodeType() == dom::NodeType::Text) {
@@ -300,8 +297,10 @@ private:
     // Synthetic ::before / ::after wrappers (only set on element-kind adapters
     // whose host has resolved pseudo content). The wrappers live outside
     // children_ so getLayoutChildren() can return them via pseudoBefore/After.
-    std::unique_ptr<LayoutNodeAdapter> pseudoBeforeAdapter_;
-    std::unique_ptr<LayoutNodeAdapter> pseudoAfterAdapter_;
+    // Mutable: ensurePseudo creates/destroys them on demand from a const
+    // accessor when the host's pseudo content turns on or off between layouts.
+    mutable std::unique_ptr<LayoutNodeAdapter> pseudoBeforeAdapter_;
+    mutable std::unique_ptr<LayoutNodeAdapter> pseudoAfterAdapter_;
 
     // Pseudo-element identification (set on synthetic adapters only).
     dom::Element* pseudoHost_ = nullptr;
