@@ -571,9 +571,15 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxST);
     float childOffsetY = y - scrollTop;
 
+    // ::before pseudo content (drawn before children)
+    if (visible) drawPseudo(elem, "before", childOffsetX, childOffsetY);
+
     // Draw composed children (shadow DOM + slot replacement)
     for (auto* child : elem->composedChildNodes())
         drawNode(child, childOffsetX, childOffsetY);
+
+    // ::after pseudo content (drawn after children)
+    if (visible) drawPseudo(elem, "after", childOffsetX, childOffsetY);
 
     // Draw replaced element content (input, textarea, select, svg)
     if (visible) {
@@ -1126,6 +1132,76 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
         }
     } else {
         drawLine(text, x, y);
+    }
+}
+
+void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
+                                float offsetX, float offsetY) {
+    if (!host) return;
+    const std::string& content = host->pseudoContent(which);
+    if (content.empty()) return;
+    auto& style = host->pseudoStyle(which);
+    auto& pbox = host->pseudoBox(which);
+
+    // Font from pseudo style — pseudo styles inherit from the host but may
+    // override font-* / color, so we cannot reuse the host's font handle.
+    std::string family = "Arial";
+    auto famIt = style.find("font-family");
+    if (famIt != style.end() && !famIt->second.empty()) {
+        family = famIt->second;
+        if (family.front() == '"' || family.front() == '\'') {
+            family = family.substr(1, family.size() - 2);
+        }
+    }
+    float size = 16.0f;
+    auto sizeIt = style.find("font-size");
+    if (sizeIt != style.end()) {
+        char* end = nullptr;
+        float v = std::strtof(sizeIt->second.c_str(), &end);
+        if (end != sizeIt->second.c_str() && v > 0) size = v;
+    }
+    int weight = 400;
+    auto weightIt = style.find("font-weight");
+    if (weightIt != style.end()) {
+        const auto& w = weightIt->second;
+        if (w == "bold") weight = 700;
+        else if (w == "lighter") weight = 100;
+        else { try { weight = std::stoi(w); } catch (...) {} }
+    }
+    bool italic = false;
+    auto styleIt = style.find("font-style");
+    if (styleIt != style.end()) {
+        italic = (styleIt->second == "italic" || styleIt->second == "oblique");
+    }
+    uint64_t fontHandle = fontManager_->createFont(renderer_, family, size, weight, italic);
+    if (!fontHandle) return;
+
+    auto fm = fontManager_->getMetrics(fontHandle);
+    float ascent = fm.ascent;
+
+    render::Color color = {0, 0, 0, 255};
+    auto cIt = style.find("color");
+    if (cIt != style.end()) tryParseColor(cIt->second, color);
+
+    TextShadow shadow;
+    bool hasShadow = false;
+    auto tsIt = style.find("text-shadow");
+    if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, shadow);
+
+    // Use placed runs lifted onto pseudoBox by the layout adapter.
+    // Run positions are relative to the pseudo wrapper's content origin
+    // (recursive layoutInline produces a local IFC), so add the wrapper's
+    // contentRect to translate them into the host's IFC coord space.
+    float baseX = offsetX + pbox.contentRect.x;
+    float baseY = offsetY + pbox.contentRect.y;
+    for (const auto& run : pbox.textRuns) {
+        if (run.text.empty()) continue;
+        float lx = baseX + run.x;
+        float ly = baseY + run.y + ascent;
+        if (hasShadow) {
+            renderer_->drawText(run.text, lx + shadow.dx, ly + shadow.dy, fontHandle, shadow.color);
+        }
+        renderer_->drawText(run.text, lx, ly, fontHandle, color);
     }
 }
 

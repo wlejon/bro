@@ -356,6 +356,25 @@ void Document::resolveStylesRecursive(Element* elem,
             animationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }
 
+        // ::before / ::after generated content. Resolve the pseudo style and
+        // stash it on the element if `content` is a non-empty string literal
+        // (parser keeps surrounding double-quotes; strip them here).
+        elem->clearPseudos();
+        for (const char* which : {"before", "after"}) {
+            auto pseudoStyle = cascade_.resolvePseudo(*adapter, which, elem->computedStyle());
+            auto cIt = pseudoStyle.find("content");
+            if (cIt == pseudoStyle.end()) continue;
+            const std::string& raw = cIt->second;
+            if (raw.empty() || raw == "normal" || raw == "none") continue;
+            std::string contentStr = raw;
+            if (contentStr.size() >= 2 &&
+                contentStr.front() == '"' && contentStr.back() == '"') {
+                contentStr = contentStr.substr(1, contentStr.size() - 2);
+            }
+            if (contentStr.empty()) continue;
+            elem->setPseudo(which, std::move(contentStr), std::move(pseudoStyle));
+        }
+
         elem->clearDirty();
     }
 

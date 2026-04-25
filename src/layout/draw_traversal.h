@@ -66,6 +66,8 @@ private:
     void drawBackground(dom::Element* elem, float x, float y, float w, float h);
     void drawBorders(dom::Element* elem, float x, float y, float w, float h);
     void drawText(dom::Node* textNode, dom::Element* parent, float offsetX, float offsetY);
+    void drawPseudo(dom::Element* host, const std::string& which,
+                    float offsetX, float offsetY);
 
 public:
     // Color parsing helper (public for shared use by element controls)

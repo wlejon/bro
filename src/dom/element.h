@@ -111,6 +111,51 @@ public:
     const htmlayout::layout::LayoutBox& layoutBox() const { return layoutBox_; }
     void setLayoutBox(const htmlayout::layout::LayoutBox& box) { layoutBox_ = box; }
 
+    // Generated content for ::before / ::after. The cascade resolves these
+    // in Document::resolveStyles when CSS rules target the pseudo-element.
+    // `which` is "before" or "after". Empty content string means no pseudo.
+    const std::string& pseudoContent(const std::string& which) const {
+        static const std::string empty;
+        if (which == "before") return pseudoBeforeContent_;
+        if (which == "after")  return pseudoAfterContent_;
+        return empty;
+    }
+    const htmlayout::css::ComputedStyle& pseudoStyle(const std::string& which) const {
+        static const htmlayout::css::ComputedStyle empty;
+        if (which == "before") return pseudoBeforeStyle_;
+        if (which == "after")  return pseudoAfterStyle_;
+        return empty;
+    }
+    const htmlayout::layout::LayoutBox& pseudoBox(const std::string& which) const {
+        static const htmlayout::layout::LayoutBox empty;
+        if (which == "before") return pseudoBeforeBox_;
+        if (which == "after")  return pseudoAfterBox_;
+        return empty;
+    }
+    htmlayout::layout::LayoutBox& pseudoBoxMut(const std::string& which) {
+        static htmlayout::layout::LayoutBox empty;
+        if (which == "before") return pseudoBeforeBox_;
+        if (which == "after")  return pseudoAfterBox_;
+        return empty;
+    }
+    void setPseudo(const std::string& which,
+                   std::string content,
+                   htmlayout::css::ComputedStyle style) {
+        if (which == "before") {
+            pseudoBeforeContent_ = std::move(content);
+            pseudoBeforeStyle_ = std::move(style);
+        } else if (which == "after") {
+            pseudoAfterContent_ = std::move(content);
+            pseudoAfterStyle_ = std::move(style);
+        }
+    }
+    void clearPseudos() {
+        pseudoBeforeContent_.clear();
+        pseudoAfterContent_.clear();
+        pseudoBeforeStyle_.clear();
+        pseudoAfterStyle_.clear();
+    }
+
     // Shadow DOM
     ShadowRoot* attachShadow(ShadowRoot::Mode mode);
     ShadowRoot* shadowRoot() const { return shadowRoot_; }
@@ -186,6 +231,14 @@ private:
     // htmlayout integration
     htmlayout::css::ComputedStyle computedStyle_;
     htmlayout::layout::LayoutBox layoutBox_;
+
+    // ::before / ::after generated content (empty = no pseudo)
+    std::string pseudoBeforeContent_;
+    std::string pseudoAfterContent_;
+    htmlayout::css::ComputedStyle pseudoBeforeStyle_;
+    htmlayout::css::ComputedStyle pseudoAfterStyle_;
+    htmlayout::layout::LayoutBox pseudoBeforeBox_;
+    htmlayout::layout::LayoutBox pseudoAfterBox_;
 
     // Replaced element controllers
     std::unique_ptr<layout::ElInput> inputControl_;

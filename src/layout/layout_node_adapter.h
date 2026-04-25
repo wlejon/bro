@@ -34,17 +34,36 @@ public:
     explicit LayoutNodeAdapter(dom::TextNode* text, dom::Element* parentElem)
         : elem_(nullptr), textNode_(text), parentElem_(parentElem) {}
 
+    // Construct a synthetic pseudo-element wrapper (::before / ::after).
+    // hostElem is the real element the pseudo belongs to; which is
+    // "before" or "after". The wrapper's only child is a pseudo-text node.
+    static std::unique_ptr<LayoutNodeAdapter> makePseudo(dom::Element* hostElem,
+                                                          const std::string& which) {
+        auto wrap = std::unique_ptr<LayoutNodeAdapter>(
+            new LayoutNodeAdapter(hostElem, which, /*isText=*/false));
+        auto txt = std::unique_ptr<LayoutNodeAdapter>(
+            new LayoutNodeAdapter(hostElem, which, /*isText=*/true));
+        txt->parent_ = wrap.get();
+        wrap->children_.push_back(std::move(txt));
+        return wrap;
+    }
+
     dom::Element* element() const { return elem_; }
     dom::TextNode* textNodePtr() const { return textNode_; }
 
     std::string tagName() const override {
+        if (pseudoHost_) return pseudoIsText_ ? "#text" : ("::" + pseudoWhich_);
         if (elem_) return elem_->tagName();
         return "#text";
     }
 
-    bool isTextNode() const override { return textNode_ != nullptr; }
+    bool isTextNode() const override {
+        if (pseudoHost_) return pseudoIsText_;
+        return textNode_ != nullptr;
+    }
 
     std::string textContent() const override {
+        if (pseudoHost_ && pseudoIsText_) return pseudoHost_->pseudoContent(pseudoWhich_);
         if (textNode_) return textNode_->data();
         return "";
     }
@@ -61,11 +80,19 @@ public:
     }
 
     const htmlayout::css::ComputedStyle& computedStyle() const override {
+        if (pseudoHost_) return pseudoHost_->pseudoStyle(pseudoWhich_);
         if (elem_) return elem_->computedStyle();
         // Text nodes inherit parent's style
         if (parentElem_) return parentElem_->computedStyle();
         static const htmlayout::css::ComputedStyle empty;
         return empty;
+    }
+
+    LayoutNode* pseudoBefore() const override {
+        return pseudoBeforeAdapter_ ? pseudoBeforeAdapter_.get() : nullptr;
+    }
+    LayoutNode* pseudoAfter() const override {
+        return pseudoAfterAdapter_ ? pseudoAfterAdapter_.get() : nullptr;
     }
 
     // bro::dom::Element only tracks vertical scroll today (scrollTop_).
@@ -110,7 +137,20 @@ public:
 
     // Write layout results back to the DOM element/text node
     void syncBoxToElement() {
-        if (elem_) {
+        if (pseudoHost_ && !pseudoIsText_) {
+            // Pseudo-element wrapper: stash its computed box on the host
+            // so the draw traversal can paint background/borders/text.
+            // The wrapper's contentRect is the pseudo's content origin;
+            // its lone text child carries the placed text runs which are
+            // copied in below after recursing.
+            pseudoHost_->pseudoBoxMut(pseudoWhich_) = box;
+        } else if (pseudoHost_ && pseudoIsText_) {
+            // Pseudo-text: lift placed text runs onto the host's pseudoBox
+            // so the draw traversal can render them without walking into
+            // the synthetic layout subtree.
+            auto& hostBox = pseudoHost_->pseudoBoxMut(pseudoWhich_);
+            hostBox.textRuns = box.textRuns;
+        } else if (elem_) {
             elem_->setLayoutBox(box);
         } else if (textNode_) {
             textNode_->setLayoutBox(box);
@@ -118,6 +158,8 @@ public:
         for (auto& child : children_) {
             child->syncBoxToElement();
         }
+        if (pseudoBeforeAdapter_) pseudoBeforeAdapter_->syncBoxToElement();
+        if (pseudoAfterAdapter_)  pseudoAfterAdapter_->syncBoxToElement();
     }
 
     // Map a layout-tree node back to its backing DOM element. All nodes in
@@ -130,6 +172,7 @@ public:
     static dom::Element* elementFor(htmlayout::layout::LayoutNode* node) {
         if (!node) return nullptr;
         auto* a = static_cast<LayoutNodeAdapter*>(node);
+        if (a->pseudoHost_) return a->pseudoHost_;
         if (a->elem_) return a->elem_;
         return a->parentElem_;
     }
@@ -138,11 +181,30 @@ public:
     // This handles shadow DOM composed children and slot distribution.
     static std::unique_ptr<LayoutNodeAdapter> buildTree(dom::Element* root) {
         auto node = std::make_unique<LayoutNodeAdapter>(root);
+        attachPseudos(node.get(), root);
         buildChildren(node.get(), root);
         return node;
     }
 
 private:
+    // Private constructor for synthetic pseudo-element adapters.
+    LayoutNodeAdapter(dom::Element* host, const std::string& which, bool isText)
+        : pseudoHost_(host), pseudoWhich_(which), pseudoIsText_(isText) {}
+
+    // Attach ::before/::after wrappers to an element-kind adapter when the
+    // host has resolved pseudo content. Called during tree construction.
+    static void attachPseudos(LayoutNodeAdapter* parent, dom::Element* elem) {
+        if (!elem) return;
+        if (!elem->pseudoContent("before").empty()) {
+            parent->pseudoBeforeAdapter_ = makePseudo(elem, "before");
+            parent->pseudoBeforeAdapter_->parent_ = parent;
+        }
+        if (!elem->pseudoContent("after").empty()) {
+            parent->pseudoAfterAdapter_ = makePseudo(elem, "after");
+            parent->pseudoAfterAdapter_->parent_ = parent;
+        }
+    }
+
     // Get the containing shadow root for an element (walk up parents)
     static dom::ShadowRoot* containingShadow(dom::Element* elem) {
         return elem ? elem->containingShadowRoot() : nullptr;
@@ -194,6 +256,7 @@ private:
 
                 auto child = std::make_unique<LayoutNodeAdapter>(childElem);
                 child->parent_ = parent;
+                attachPseudos(child.get(), childElem);
                 buildChildren(child.get(), childElem);
                 parent->children_.push_back(std::move(child));
             } else if (childNode->nodeType() == dom::NodeType::Text) {
@@ -216,6 +279,7 @@ private:
 
             auto child = std::make_unique<LayoutNodeAdapter>(elem);
             child->parent_ = parent;
+            attachPseudos(child.get(), elem);
             buildChildren(child.get(), elem);
             parent->children_.push_back(std::move(child));
         } else if (node->nodeType() == dom::NodeType::Text) {
@@ -232,6 +296,17 @@ private:
     dom::Element* parentElem_ = nullptr;  // for text nodes: their parent element
     LayoutNodeAdapter* parent_ = nullptr;
     std::vector<std::unique_ptr<LayoutNodeAdapter>> children_;
+
+    // Synthetic ::before / ::after wrappers (only set on element-kind adapters
+    // whose host has resolved pseudo content). The wrappers live outside
+    // children_ so getLayoutChildren() can return them via pseudoBefore/After.
+    std::unique_ptr<LayoutNodeAdapter> pseudoBeforeAdapter_;
+    std::unique_ptr<LayoutNodeAdapter> pseudoAfterAdapter_;
+
+    // Pseudo-element identification (set on synthetic adapters only).
+    dom::Element* pseudoHost_ = nullptr;
+    std::string pseudoWhich_;       // "before" or "after"
+    bool pseudoIsText_ = false;     // false: pseudo wrapper; true: pseudo's text child
 };
 
 } // namespace bro::layout
