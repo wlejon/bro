@@ -246,5 +246,195 @@ t('CCD flag accepted', function() {
     Physics.destroyBody(b);
 });
 
+// ---------------------------------------------------------------------------
+// Pass-2 capability tests
+// ---------------------------------------------------------------------------
+
+t('Physics.destroyAll clears bodies and constraints', function() {
+    var f = Physics.createBody({
+        shape: 'box', static: true,
+        position: { x: 0, y: -1, z: 0 },
+        halfExtents: { x: 5, y: 1, z: 5 }
+    });
+    var a = Physics.createBody({ shape: 'sphere', radius: 0.3, position: {x:0,y:5,z:0} });
+    var b = Physics.createBody({ shape: 'sphere', radius: 0.3, position: {x:1,y:5,z:0} });
+    var c = Physics.createConstraint({
+        type: 'distance', body1: a, body2: b,
+        point1: {x:0,y:5,z:0}, point2: {x:1,y:5,z:0},
+        minDistance: 0.5, maxDistance: 1.5
+    });
+    truthy(c > 0, 'constraint made');
+    Physics.destroyAll();
+    // World is reusable: create+step succeeds and old tags are gone.
+    eq(Physics.getTransform(a), undefined, 'old tag invalid after destroyAll');
+    var fresh = Physics.createBody({ shape: 'sphere', radius: 0.3, position: {x:0,y:5,z:0} });
+    truthy(fresh > 0, 'world reusable after destroyAll');
+    for (var i = 0; i < 30; i++) advanceTime(16);
+    var ty = Physics.getTransform(fresh).position.y;
+    truthy(ty < 5, 'gravity still works');
+    Physics.destroyAll();
+});
+
+t('two-world isolation: handle world independent of default', function() {
+    var w = Physics.createWorldHandle({ maxBodies: 64, gravity: {x:0,y:-9.81,z:0} });
+    truthy(w, 'handle created');
+    var floor = Physics.createBody({ shape: 'box', static: true,
+        position: {x:0,y:-1,z:0}, halfExtents:{x:10,y:1,z:10} });
+    var defBall = Physics.createBody({ shape: 'sphere', radius: 0.3,
+        position: {x:0,y:5,z:0} });
+    var sbBall = w.createBody({ shape: 'sphere', radius: 0.3, position: {x:0,y:5,z:0} });
+    // Step default world via engine timer (advanceTime); sandbox via .step.
+    for (var i = 0; i < 90; i++) {
+        advanceTime(16);
+        w.step(1/60);
+    }
+    var defY = Physics.getTransform(defBall).position.y;
+    var sbY  = w.getTransform(sbBall).position.y;
+    // Default ball lands on floor near 0; sandbox has no floor → falls below.
+    truthy(defY > -1.0 && defY < 1.5, 'default ball landed: ' + defY);
+    truthy(sbY < -2, 'sandbox ball fell free: ' + sbY);
+    // destroyAll on sandbox does not touch default
+    w.destroyAll();
+    eq(w.getTransform(sbBall), undefined, 'sandbox tags gone after destroyAll');
+    truthy(Physics.getTransform(defBall) !== undefined, 'default body intact');
+    w.destroy();
+    Physics.destroyBody(defBall);
+    Physics.destroyBody(floor);
+});
+
+t('sandbox handle.destroyAll keeps world reusable', function() {
+    var w = Physics.createWorldHandle({ maxBodies: 64 });
+    var floor = w.createBody({ shape:'box', static:true, position:{x:0,y:-1,z:0},
+        halfExtents:{x:10,y:1,z:10} });
+    var ball = w.createBody({ shape:'sphere', radius:0.3, position:{x:0,y:5,z:0} });
+    for (var i = 0; i < 60; i++) w.step(1/60);
+    w.destroyAll();
+    // Reuse: drop again
+    var ball2 = w.createBody({ shape:'sphere', radius:0.3, position:{x:0,y:5,z:0} });
+    truthy(ball2 > 0, 'created after destroyAll');
+    var y0 = w.getTransform(ball2).position.y;
+    for (var i = 0; i < 30; i++) w.step(1/60);
+    var y1 = w.getTransform(ball2).position.y;
+    truthy(y1 < y0, 'gravity active after destroyAll');
+    w.destroy();
+});
+
+t('polyline (capsule segments): ball rests on it', function() {
+    Physics.destroyAll();
+    var lib = (typeof Physics2D !== 'undefined') ? Physics2D : null;
+    // Build a flat horizontal polyline directly via Physics2D to exercise
+    // the capsule-per-segment path. (Physics2D coords are canvas-style.)
+    Physics2D.init({ width: 800, height: 600, gravity: 980 });
+    var line = Physics2D.createPolyline([
+        { x: 100, y: 400 }, { x: 700, y: 400 }
+    ], { thickness: 6 });
+    truthy(Array.isArray(line), 'returns array of segment tags');
+    truthy(line.length >= 1, 'at least one segment');
+    var ball = Physics2D.createCircle(400, 200, 12, { restitution: 0.2 });
+    var prevY = -1, stableFrames = 0;
+    for (var i = 0; i < 240; i++) {
+        advanceTime(16);
+        var p = Physics2D.getPosition(ball);
+        if (p.y > 100 && Math.abs(p.y - prevY) < 0.5 && p.y < 410) stableFrames++;
+        else stableFrames = 0;
+        prevY = p.y;
+    }
+    truthy(stableFrames > 20, 'ball came to rest on polyline (stableFrames=' + stableFrames + ', y=' + prevY + ')');
+    truthy(prevY < 410, 'ball above polyline: ' + prevY);
+    Physics2D.destroyBody(ball);
+    Physics2D.destroyBody(line);
+    Physics.destroyAll();
+});
+
+t('contact events: one Added + one Removed per encounter (no Persisted)', function() {
+    Physics.destroyAll();
+    var floor = Physics.createBody({ shape:'box', static:true, position:{x:0,y:-1,z:0},
+        halfExtents:{x:10,y:1,z:10} });
+    var ball = Physics.createBody({ shape:'sphere', radius:0.3, position:{x:0,y:3,z:0},
+        restitution: 0.0, linearDamping: 0.5 });
+    Physics.getContacts();  // drain stale
+    var added = 0, removed = 0;
+    // Drop, settle.
+    for (var i = 0; i < 60; i++) {
+        advanceTime(16);
+        var evs = Physics.getContacts();
+        for (var j = 0; j < evs.length; j++) {
+            if (evs[j].type === 'added') added++;
+            else if (evs[j].type === 'removed') removed++;
+        }
+    }
+    // Lift the ball away → expect one Removed.
+    Physics.setPosition(ball, 100, 100, 0);
+    Physics.setLinearVelocity(ball, 0, 0, 0);
+    for (var i = 0; i < 30; i++) {
+        advanceTime(16);
+        var evs = Physics.getContacts();
+        for (var j = 0; j < evs.length; j++) {
+            if (evs[j].type === 'added') added++;
+            else if (evs[j].type === 'removed') removed++;
+        }
+    }
+    // Allow tiny bounce-induced re-contacts (<= 3) — what we DON'T want is
+    // 60+ persistedevents per second. The old singleton + Persisted hookup
+    // would have recorded ~60 events/sec while resting.
+    truthy(added >= 1 && added <= 3, 'added events bounded (got ' + added + ')');
+    truthy(removed >= 1 && removed <= 3, 'removed events bounded (got ' + removed + ')');
+    Physics.destroyAll();
+});
+
+t('kinematic body pushes dynamic on contact', function() {
+    Physics.destroyAll();
+    var floor = Physics.createBody({ shape:'box', static:true, position:{x:0,y:-1,z:0},
+        halfExtents:{x:20,y:1,z:20} });
+    // Kinematic bar at x=-3, sliding in +X
+    var bar = Physics.createBody({ shape:'box', position:{x:-3,y:1,z:0},
+        halfExtents:{x:0.5,y:0.5,z:0.5} });
+    Physics.setKinematic(bar);
+    var ball = Physics.createBody({ shape:'sphere', radius:0.4,
+        position:{x:0,y:1,z:0}, restitution: 0.0, friction: 0.5 });
+    var startX = Physics.getTransform(ball).position.x;
+    // Slide bar across by repeated moveKinematic; engine ticks at 1/60s.
+    var dt = 1/60;
+    for (var i = 0; i < 60; i++) {
+        var bx = -3 + (i / 60) * 4;  // bar travels from -3 to ~+1
+        Physics.moveKinematic(bar, bx, 1, 0, dt);
+        advanceTime(16);
+    }
+    var endX = Physics.getTransform(ball).position.x;
+    truthy(endX > startX + 0.5, 'kinematic bar pushed ball: ' + startX + ' -> ' + endX);
+    Physics.destroyAll();
+});
+
+t('Physics.setLayer changes runtime collision layer', function() {
+    Physics.destroyAll();
+    Physics.setLayers({
+        names: ['static', 'moving', 'ghost'],
+        matrix: [
+            false, true,  false,
+            true,  true,  false,
+            false, false, false,
+        ]
+    });
+    var floor = Physics.createBody({ shape:'box', static:true, layer:'static',
+        position:{x:0,y:-1,z:0}, halfExtents:{x:10,y:1,z:10} });
+    var ball = Physics.createBody({ shape:'sphere', radius:0.3, layer:'moving',
+        position:{x:0,y:5,z:0}, restitution: 0.0 });
+    // Land on floor first
+    for (var i = 0; i < 60; i++) advanceTime(16);
+    var landedY = Physics.getTransform(ball).position.y;
+    truthy(landedY > -1 && landedY < 1.5, 'landed on floor: ' + landedY);
+    // Now switch ball to ghost layer → no longer collides; it should fall.
+    var ok = Physics.setLayer(ball, 'ghost');
+    truthy(ok, 'setLayer returned true');
+    // Reactivate so it re-evaluates broadphase + gravity.
+    Physics.setPosition(ball, 0, 5, 0);
+    Physics.activate(ball);
+    for (var i = 0; i < 60; i++) advanceTime(16);
+    var endY = Physics.getTransform(ball).position.y;
+    truthy(endY < -1, 'ghost ball passes through floor: ' + endY);
+    Physics.destroyAll();
+    Physics.setLayers({ names: ['static', 'moving'], matrix: [false, true, true, true] });
+});
+
 console.log('=== Done: ' + tests + ' tests, ' + failed + ' failures ===');
 if (failed > 0) throw new Error(failed + ' physics tests failed');
