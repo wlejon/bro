@@ -1,87 +1,98 @@
-// screens.js — screen/state management
+// screens.js — overlay state, backed by lib/screens.js.
+//
+// Preserves the existing P.Screens API (menuUp/Down/Select/listItems/
+// updateMenu/menuIndex, plus DOM helpers) so app.js stays untouched.
 var P = P || {};
 
-P.Screens = {
-    current: "title",
-    menuIndex: 0,
+P.Screens = (function () {
+    'use strict';
 
-    getScreen: function() { return document.getElementById("screen-" + this.current); },
+    var S = Screens.create({
+        overlay:      '#overlay',
+        onMenuMove:   function () { P.Audio.sfxMenu(); },
+        onMenuSelect: function () { P.Audio.sfxMenu(); },
+    });
 
-    listItems: function() {
-        var sc = this.getScreen();
-        if (!sc) return [];
-        return sc.querySelectorAll(".menu-item");
-    },
+    // app.js sets this; lib invokes it on mouse-click (which sends keydown
+    // 'Enter' to the active screen).
+    var confirmHandler = null;
 
-    switchTo: function(name) {
-        var prev = document.getElementById("screen-" + this.current);
-        if (prev) prev.style.display = "none";
-        this.current = name;
-        var next = document.getElementById("screen-" + name);
-        if (next) {
-            next.style.display = "block";
-            this.menuIndex = 0;
-            this.updateMenu();
-        }
-        var overlay = document.getElementById("overlay");
-        overlay.style.display = name ? "block" : "none";
-    },
-
-    hideOverlay: function() {
-        var overlay = document.getElementById("overlay");
-        overlay.style.display = "none";
-        var prev = document.getElementById("screen-" + this.current);
-        if (prev) prev.style.display = "none";
-        this.current = "";
-    },
-
-    updateMenu: function() {
-        var items = this.listItems();
-        for (var i = 0; i < items.length; i++) {
-            if (i === this.menuIndex) items[i].classList.add("selected");
-            else items[i].classList.remove("selected");
-        }
-    },
-
-    menuUp: function() {
-        var items = this.listItems();
-        if (!items.length) return;
-        this.menuIndex = (this.menuIndex - 1 + items.length) % items.length;
-        this.updateMenu();
-        P.Audio.sfxMenu();
-    },
-
-    menuDown: function() {
-        var items = this.listItems();
-        if (!items.length) return;
-        this.menuIndex = (this.menuIndex + 1) % items.length;
-        this.updateMenu();
-        P.Audio.sfxMenu();
-    },
-
-    menuSelect: function() {
-        var items = this.listItems();
-        if (!items.length) return null;
-        var item = items[this.menuIndex];
-        return item ? item.getAttribute("data-action") : null;
-    },
-
-    setGameOverStats: function(score, isNew) {
-        var se = document.getElementById("go-score");
-        var he = document.getElementById("go-high");
-        var ne = document.getElementById("go-new");
-        if (se) se.textContent = String(score);
-        if (he) he.textContent = String(P.Storage.highScore);
-        if (ne) ne.style.display = isNew ? "block" : "none";
-    },
-
-    setTitleHigh: function() {
-        var el = document.getElementById("title-high");
-        if (el) el.textContent = String(P.Storage.highScore);
-    },
-
-    setGameOverTitle: function(text) {
-        var el = document.getElementById("gameover-title");
-        if (el) el.textContent = text;
+    function defineSimple(name) {
+        S.define(name, {
+            enter: function () { S.showOverlay(name); S.updateSelection(name); },
+            keydown: function (key) {
+                if ((key === 'Enter' || key === ' ') && confirmHandler) {
+                    var items = S.getMenuItems(name);
+                    var item = items[menuIdx];
+                    confirmHandler(item ? item.getAttribute('data-action') : null);
+                }
+            },
+        });
     }
-};
+    defineSimple('title');
+    defineSimple('paused');
+    defineSimple('gameover');
+
+    var menuIdx = 0;
+
+    return {
+        // current screen name; legacy default is "title"
+        current: 'title',
+        // app.js assigns to this; lib triggers it on click.
+        set onConfirm(fn) { confirmHandler = fn; },
+        get onConfirm()   { return confirmHandler; },
+        // legacy mutable index — read by app.js mouse handler
+        get menuIndex() { return menuIdx; },
+        set menuIndex(i) { menuIdx = i; S.setMenuIndex(i); },
+
+        listItems: function () { return S.getMenuItems(this.current); },
+
+        switchTo: function (name) {
+            this.current = name;
+            menuIdx = 0;
+            S.switchTo(name);
+        },
+        hideOverlay: function () { this.current = ''; S.hideOverlay(); },
+
+        updateMenu: function () { S.setMenuIndex(menuIdx); },
+
+        menuUp: function () {
+            var items = this.listItems();
+            if (!items.length) return;
+            menuIdx = (menuIdx - 1 + items.length) % items.length;
+            S.setMenuIndex(menuIdx);
+            P.Audio.sfxMenu();
+        },
+        menuDown: function () {
+            var items = this.listItems();
+            if (!items.length) return;
+            menuIdx = (menuIdx + 1) % items.length;
+            S.setMenuIndex(menuIdx);
+            P.Audio.sfxMenu();
+        },
+        menuSelect: function () {
+            var items = this.listItems();
+            if (!items.length) return null;
+            var item = items[menuIdx];
+            return item ? item.getAttribute('data-action') : null;
+        },
+
+        // DOM helpers — text setters into specific overlay elements
+        setGameOverStats: function (score, isNew) {
+            var se = document.getElementById('go-score');
+            var he = document.getElementById('go-high');
+            var ne = document.getElementById('go-new');
+            if (se) se.textContent = String(score);
+            if (he) he.textContent = String(P.Storage.highScore);
+            if (ne) ne.style.display = isNew ? 'block' : 'none';
+        },
+        setTitleHigh: function () {
+            var el = document.getElementById('title-high');
+            if (el) el.textContent = String(P.Storage.highScore);
+        },
+        setGameOverTitle: function (text) {
+            var el = document.getElementById('gameover-title');
+            if (el) el.textContent = text;
+        },
+    };
+})();
