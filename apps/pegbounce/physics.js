@@ -1,24 +1,40 @@
-// physics.js — 2D ball vs circle/box physics for Pegbounce.
+// physics.js — Pegbounce physics, backed by Jolt via Physics.createWorldHandle.
 //
-// Chose 2D canvas + custom collision over Jolt because:
-//   - Gameplay is fundamentally 2D; there's no reason to pay 3D setup cost.
-//   - A small swept-circle vs static-circle solver is trivial to make
-//     deterministic and test-friendly, which the test harness needs.
-//   - Keeps the whole app free of external dependencies beyond apps/lib.
+// Migration note: this file used to host a hand-rolled 2D circle/box solver.
+// It was retired in favour of the engine's Jolt physics. We keep the same
+// public surface (Physics.createWorld / addPeg / launchBall / step / predict
+// / sweepLit / hasActiveBall / countRemainingOrange / markLitFromEvents) so
+// the rest of the app, levels.js, guides.js, and test.js do not need to know
+// the underlying solver changed.
 //
-// Units are pixels. World gravity is pixels/sec^2. Time is ms in the outer
-// loop but substepped internally in seconds.
+// Why sandbox worlds (Physics.createWorldHandle) instead of the default world:
+//   - Two independent simulations are needed: the LIVE shot and the MIRAGE
+//     prediction. Sandbox worlds give each its own body/event space.
+//   - Slow-mo (Option C from the migration plan): the live world is stepped
+//     manually with a scaled dt, which lets us slow time without poking the
+//     engine's auto-stepped default world. See step() below.
 //
-// Exposes:
-//   Physics.World — simulation container with pegs, ball, catch bar, walls.
-//   Physics.rand(seed) — seedable RNG so headless tests are stable.
-//   Physics.distPointSeg — helpers used by level painter too.
+// Coordinate system: Pegbounce thinks in canvas-style pixels (Y-down). Jolt
+// is Y-up. We flip Y locally; bodies live at z=0 with `dofs:'2d'` so they
+// can't drift off-plane.
+//
+// Units: world gravity is in pixels/sec^2. Tunables here are calibrated to
+// approximate the feel of the previous solver (RESTITUTION ~0.74 ball, etc.)
+// while giving Jolt's solver normal-shaped restitution and friction.
 
 'use strict';
 (function (global) {
 
-    // ------------------------- Seedable RNG ------------------------------
-    // Mulberry32 is dead simple and fine for our needs.
+    // Engine-bound Jolt physics namespace. Captured BEFORE we overwrite
+    // global.Physics with the pegbounce module surface below — otherwise
+    // every Physics.createWorldHandle call would recurse into ourselves.
+    const Jolt = global.Physics;
+    if (!Jolt || typeof Jolt.createWorldHandle !== 'function') {
+        throw new Error('pegbounce: engine Physics.createWorldHandle missing');
+    }
+
+
+    // ---------- Seedable RNG (kept; level layouts use it deterministically) -
     function rand(seed) {
         let s = (seed | 0) || 1;
         return function () {
@@ -30,10 +46,8 @@
         };
     }
 
-    // ------------------------- Math helpers ------------------------------
+    // ---------- Geom helper retained for level painter callers ---------------
     function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
-
-    // Closest point on segment ab to point p; returns [px, py, t].
     function closestOnSeg(ax, ay, bx, by, px, py) {
         const dx = bx - ax, dy = by - ay;
         const l2 = dx * dx + dy * dy;
@@ -43,201 +57,275 @@
         return [ax + dx * t, ay + dy * t, t];
     }
 
-    // ------------------------- Peg types --------------------------------
-    const PEG = {
-        BLUE:   'blue',
-        ORANGE: 'orange',
-        GREEN:  'green',
-        PURPLE: 'purple',
-    };
-
+    // ---------- Tunables -----------------------------------------------------
+    const PEG = { BLUE: 'blue', ORANGE: 'orange', GREEN: 'green', PURPLE: 'purple' };
     const PEG_RADIUS = 9;
     const BALL_RADIUS = 9;
-    const RESTITUTION = 0.74;
-    const FRICTION_TAN = 0.02;       // tangential energy loss on impact
-    const GRAVITY = 1400;            // px/sec^2
-    const MAX_SPEED = 1650;          // hard cap to keep solver stable
+    const GRAVITY = 1400;          // px/sec^2 (matches old feel)
+    const MAX_SPEED = 1800;
+    const BALL_RESTITUTION = 0.78;
+    const BALL_FRICTION = 0.02;
+    const BALL_LINEAR_DAMPING = 0.0;
+    const PEG_RESTITUTION = 0.78;
+    const PEG_FRICTION = 0.02;
     const WALL_RESTITUTION = 0.62;
+    const WALL_FRICTION = 0.0;
     const CATCHBAR_RESTITUTION = 0.95;
-    // Minimum upward speed when the ball lands on top of the catch bar.
-    // Sized to clear the playfield height under GRAVITY (sqrt(2*g*H) with
-    // some headroom), so a top-hit always returns the ball near the top.
-    const CATCHBAR_KICK = 1300;
+    const CATCHBAR_FRICTION = 0.0;
+    const LAUNCH_SPEED_CAP = 1200; // soft cap
 
-    // Playfield logical size. App canvas may scale; physics uses these.
     const FIELD_W = 1024;
     const FIELD_H = 768;
-    const FIELD_TOP = 56;             // cannon band height
-    const FIELD_BOTTOM = FIELD_H;     // ball exits past this
+    const FIELD_TOP = 56;
+    const FIELD_BOTTOM = FIELD_H;
     const CATCHBAR_Y = FIELD_H - 36;
     const CATCHBAR_H = 14;
     const CATCHBAR_HALFW = 72;
 
-    // ------------------------- World ------------------------------------
-    function createWorld() {
-        return {
-            pegs:          [],     // {x, y, type, lit, removed, vx?, vy?, kind?}
-            ball:          null,   // {x,y,vx,vy,active,radius,onFire,splitOf}
-            extraBalls:    [],     // Orbital split-ball copies
-            catchbar:      { x: FIELD_W * 0.5, vx: 180, y: CATCHBAR_Y, halfW: CATCHBAR_HALFW },
-            walls: [
-                // axis-aligned boxes: left, right, top
-                { x1: -20,        y1: FIELD_TOP, x2: 0,         y2: FIELD_H + 40 },
-                { x1: FIELD_W,    y1: FIELD_TOP, x2: FIELD_W + 20, y2: FIELD_H + 40 },
-                { x1: -20,        y1: FIELD_TOP - 20, x2: FIELD_W + 20, y2: FIELD_TOP },
-            ],
+    // ---------- Coordinate flip ----------------------------------------------
+    // Pegbounce uses canvas pixels (Y-down). Jolt uses Y-up. We treat the Jolt
+    // world's Y origin as the bottom of the playfield.
+    function pxY(canvasY) { return FIELD_H - canvasY; }
+    function cyY(joltY)   { return FIELD_H - joltY; }
+
+    // ---------- World container ----------------------------------------------
+    // Each "world" is a JS object holding:
+    //   handle        — Physics sandbox handle (may be omitted for predict
+    //                    sandboxes that share the live one between rebuilds)
+    //   pegs[]        — js peg records (x, y, type, lit, removed, kind, ...)
+    //                    each with .body = Jolt tag (or 0 if removed)
+    //   ball / extraBalls — js wrapper records pointing at jolt tags
+    //   walls[]       — jolt body tags for the 3 static walls
+    //   catchbar      — { x, vx, halfW, y, body }
+    //   scoreEvents[] — queued events (peg-hit / wall-hit / catchbar-hit /
+    //                    ball-exit) drained by app.js drainEvents().
+    //
+    // A unique numeric "userKey" per peg is stored as the body's userData.
+    // getContacts() returns body tags; we look up bodyTag → js peg via a map.
+    function createWorld(opts) {
+        opts = opts || {};
+        const handle = Jolt.createWorldHandle({
+            maxBodies: opts.maxBodies || 1024,
+            gravity: { x: 0, y: -GRAVITY, z: 0 },
+        });
+
+        const w = {
+            handle: handle,
+            pegs: [],
+            ball: null,
+            extraBalls: [],
+            catchbar: null,
+            walls: [],
+            tagToPeg: new Map(),    // bodyTag -> js peg record
+            ballTags: new Set(),    // tags of any ball body (live + splits)
+            ballRecords: new Map(), // bodyTag -> ball record
             gravity: GRAVITY,
-            time: 0,                  // seconds elapsed in current shot
-            slowmo: 0,                // seconds remaining of slowmo
-            scoreEvents: [],          // queued per-hit events for scoring code
+            time: 0,
+            slowmo: 0,
+            scoreEvents: [],
             pegRadius: PEG_RADIUS,
             ballRadius: BALL_RADIUS,
-            fireRadius: 40,           // Terraflame radius
+            fireRadius: 40,
             shotIndex: 0,
             rng: rand(1),
+            destroyed: false,
+            // Bodies pending destroy at end of step (we never destroy mid-iter
+            // to keep contact-event semantics clean).
+            pendingDestroy: [],
         };
+
+        addWalls(w);
+        addCatchbar(w);
+        return w;
     }
 
+    function addWalls(w) {
+        // Three static walls: left, right, top. Bottom is open so the ball
+        // exits and the shot ends.
+        const create = (cx, cy, hw, hh) => {
+            return w.handle.createBody({
+                shape: 'box',
+                static: true,
+                position: { x: cx, y: pxY(cy), z: 0 },
+                halfExtents: { x: hw, y: hh, z: 10 },
+                friction: WALL_FRICTION,
+                restitution: WALL_RESTITUTION,
+            });
+        };
+        // Left wall (x:-10..0). Box sits at x=-10 center, half-width 10.
+        w.walls.push(create(-10, FIELD_H / 2, 10, FIELD_H));
+        // Right
+        w.walls.push(create(FIELD_W + 10, FIELD_H / 2, 10, FIELD_H));
+        // Top
+        w.walls.push(create(FIELD_W / 2, FIELD_TOP - 10, FIELD_W, 10));
+    }
+
+    function addCatchbar(w) {
+        const cb = {
+            x: FIELD_W * 0.5, vx: 180,
+            y: CATCHBAR_Y, halfW: CATCHBAR_HALFW,
+            body: 0,
+        };
+        // Kinematic body: dynamic bodies bounce off it but it isn't moved by
+        // collisions. We drive its X position each frame in step().
+        cb.body = w.handle.createBody({
+            shape: 'box',
+            position: { x: cb.x, y: pxY(cb.y + CATCHBAR_H / 2), z: 0 },
+            halfExtents: { x: cb.halfW, y: CATCHBAR_H / 2, z: 10 },
+            friction: CATCHBAR_FRICTION,
+            restitution: CATCHBAR_RESTITUTION,
+            dofs: '2d',
+        });
+        w.handle.setKinematic(cb.body);
+        w.catchbar = cb;
+    }
+
+    // ---------- Peg add ------------------------------------------------------
+    let s_userKeyCounter = 1;
+    function nextUserKey() { return s_userKeyCounter++; }
+
     function addPeg(world, x, y, type) {
-        world.pegs.push({
-            x, y, type,
-            lit: false,
-            removed: false,
+        const peg = {
+            x: x, y: y, type: type,
+            lit: false, removed: false,
             kind: 'static',
             phase: world.rng() * Math.PI * 2,
+            body: 0,
+            userKey: nextUserKey(),
+        };
+        peg.body = world.handle.createBody({
+            shape: 'sphere',
+            static: true,
+            position: { x: x, y: pxY(y), z: 0 },
+            radius: PEG_RADIUS,
+            friction: PEG_FRICTION,
+            restitution: PEG_RESTITUTION,
+            userData: peg.userKey,
         });
+        world.pegs.push(peg);
+        world.tagToPeg.set(peg.body, peg);
     }
 
     function addMovingPeg(world, x, y, type, mode, params) {
-        const p = {
-            x, y, type,
+        const peg = {
+            x: x, y: y, type: type,
             lit: false, removed: false,
-            kind: 'moving',
-            mode: mode,          // 'orbit' | 'oscillate'
-            ox: x, oy: y,
-            params: params,
+            kind: 'moving', mode: mode,
+            ox: x, oy: y, params: params,
             phase: world.rng() * Math.PI * 2,
+            body: 0,
+            userKey: nextUserKey(),
         };
-        world.pegs.push(p);
+        // Kinematic so it pushes the ball but isn't pushed.
+        peg.body = world.handle.createBody({
+            shape: 'sphere',
+            position: { x: x, y: pxY(y), z: 0 },
+            radius: PEG_RADIUS,
+            friction: PEG_FRICTION,
+            restitution: PEG_RESTITUTION,
+            userData: peg.userKey,
+            dofs: '2d',
+        });
+        world.handle.setKinematic(peg.body);
+        world.pegs.push(peg);
+        world.tagToPeg.set(peg.body, peg);
+    }
+
+    // ---------- Ball lifecycle ----------------------------------------------
+    function makeBallBody(world, x, y, vx, vy) {
+        const tag = world.handle.createBody({
+            shape: 'sphere',
+            position: { x: x, y: pxY(y), z: 0 },
+            radius: BALL_RADIUS,
+            friction: BALL_FRICTION,
+            restitution: BALL_RESTITUTION,
+            linearDamping: BALL_LINEAR_DAMPING,
+            dofs: '2d',
+            ccd: true,
+        });
+        // velocity: vx is canvas-x, vy is canvas-down. Flip y for jolt.
+        world.handle.setLinearVelocity(tag, vx, -vy, 0);
+        return tag;
+    }
+
+    function destroyBallBody(world, tag) {
+        if (!tag) return;
+        world.handle.destroyBody(tag);
+        world.ballTags.delete(tag);
+        world.ballRecords.delete(tag);
     }
 
     function resetBall(world) {
+        if (world.ball) destroyBallBody(world, world.ball.body);
         world.ball = null;
+        for (const eb of world.extraBalls) destroyBallBody(world, eb.body);
         world.extraBalls.length = 0;
     }
 
     function launchBall(world, angleRad, speed, launchX, launchY) {
-        world.ball = {
-            x: launchX, y: launchY,
-            vx: Math.cos(angleRad) * speed,
-            vy: Math.sin(angleRad) * speed,
-            active: true,
-            radius: BALL_RADIUS,
-            onFire: false,
-        };
+        // Tear down any prior ball bodies.
+        if (world.ball) destroyBallBody(world, world.ball.body);
+        for (const eb of world.extraBalls) destroyBallBody(world, eb.body);
         world.extraBalls.length = 0;
+
+        const sp = Math.min(speed, LAUNCH_SPEED_CAP);
+        const vx = Math.cos(angleRad) * sp;
+        const vy = Math.sin(angleRad) * sp;
+        const tag = makeBallBody(world, launchX, launchY, vx, vy);
+        const rec = {
+            x: launchX, y: launchY,
+            vx: vx, vy: vy,
+            active: true, radius: BALL_RADIUS,
+            onFire: false,
+            body: tag,
+        };
+        world.ball = rec;
+        world.ballTags.add(tag);
+        world.ballRecords.set(tag, rec);
         if (world.pulses) world.pulses.length = 0;
         world.time = 0;
         world.slowmo = 0;
         world.shotIndex++;
-        // Purge pegs that were lit in a previous shot (signature delayed-remove
-        // happens on ball exit — see finishShot).
+        world.feverBlasted = false;
+        world.caughtThisShot = false;
     }
 
-    // Append extra balls (Orbital).
     function spawnSplitBalls(world) {
         if (!world.ball) return;
         const main = world.ball;
+        const sp = Math.hypot(main.vx, main.vy);
+        const baseAng = Math.atan2(main.vy, main.vx);
         for (let i = -1; i <= 1; i += 2) {
-            const ang = Math.atan2(main.vy, main.vx) + i * 0.35;
-            const sp  = Math.hypot(main.vx, main.vy);
-            world.extraBalls.push({
+            const ang = baseAng + i * 0.35;
+            const vx = Math.cos(ang) * sp;
+            const vy = Math.sin(ang) * sp;
+            const tag = makeBallBody(world, main.x, main.y, vx, vy);
+            const rec = {
                 x: main.x, y: main.y,
-                vx: Math.cos(ang) * sp,
-                vy: Math.sin(ang) * sp,
-                active: true,
-                radius: BALL_RADIUS,
-                split: true,
-                life: 1.2,
-            });
+                vx: vx, vy: vy,
+                active: true, radius: BALL_RADIUS,
+                onFire: !!main.onFire,
+                split: true, life: 1.2,
+                body: tag,
+            };
+            world.extraBalls.push(rec);
+            world.ballTags.add(tag);
+            world.ballRecords.set(tag, rec);
         }
     }
 
-    // -------------------- Ball vs peg resolution ------------------------
-    function resolveBallPeg(ball, peg, events, ballRadius, pegRadius) {
-        const dx = ball.x - peg.x;
-        const dy = ball.y - peg.y;
-        const d2 = dx * dx + dy * dy;
-        const rr = ballRadius + pegRadius;
-        if (d2 >= rr * rr) return false;
-        const d = Math.sqrt(Math.max(d2, 1e-6));
-        const nx = dx / d, ny = dy / d;
-        // Push ball out along normal
-        const pen = rr - d + 0.01;
-        ball.x += nx * pen;
-        ball.y += ny * pen;
-        // Reflect velocity
-        const vdotn = ball.vx * nx + ball.vy * ny;
-        if (vdotn < 0) {
-            ball.vx -= (1 + RESTITUTION) * vdotn * nx;
-            ball.vy -= (1 + RESTITUTION) * vdotn * ny;
-            // Tangential friction
-            const tx = -ny, ty = nx;
-            const vt = ball.vx * tx + ball.vy * ty;
-            ball.vx -= FRICTION_TAN * vt * tx;
-            ball.vy -= FRICTION_TAN * vt * ty;
-        }
-        events.push({ kind: 'peg-hit', peg });
-        return true;
-    }
-
-    // Ball vs axis-aligned box wall. Uses a simple swept-circle approach:
-    // find closest point on the box, resolve as with a circle.
-    function resolveBallBox(ball, box, events, ballRadius, restitution) {
-        const cx = clamp(ball.x, box.x1, box.x2);
-        const cy = clamp(ball.y, box.y1, box.y2);
-        const dx = ball.x - cx;
-        const dy = ball.y - cy;
-        const d2 = dx * dx + dy * dy;
-        if (d2 >= ballRadius * ballRadius) return false;
-        let nx, ny;
-        if (d2 < 1e-6) {
-            // Inside the box — push out along axis of shallowest penetration.
-            const leftPen   = ball.x - box.x1;
-            const rightPen  = box.x2 - ball.x;
-            const topPen    = ball.y - box.y1;
-            const bottomPen = box.y2 - ball.y;
-            const minPen = Math.min(leftPen, rightPen, topPen, bottomPen);
-            if (minPen === leftPen)       { nx = -1; ny =  0; ball.x = box.x1 - ballRadius; }
-            else if (minPen === rightPen) { nx =  1; ny =  0; ball.x = box.x2 + ballRadius; }
-            else if (minPen === topPen)   { nx =  0; ny = -1; ball.y = box.y1 - ballRadius; }
-            else                          { nx =  0; ny =  1; ball.y = box.y2 + ballRadius; }
-        } else {
-            const d = Math.sqrt(d2);
-            nx = dx / d; ny = dy / d;
-            const pen = ballRadius - d + 0.01;
-            ball.x += nx * pen;
-            ball.y += ny * pen;
-        }
-        const vdotn = ball.vx * nx + ball.vy * ny;
-        if (vdotn < 0) {
-            ball.vx -= (1 + restitution) * vdotn * nx;
-            ball.vy -= (1 + restitution) * vdotn * ny;
-        }
-        events.push({ kind: 'wall-hit' });
-        return true;
-    }
-
-    // --------------------- Integration step -----------------------------
-    // Substeps based on speed so the ball can't tunnel through a peg row.
+    // ---------- Step (live simulation) --------------------------------------
+    // dtSec is the wall-clock delta. Slow-mo scales it before stepping Jolt;
+    // this is Option C from the migration plan (sandbox handle, manual step).
     function step(world, dtSec) {
+        if (world.destroyed) return;
         if (world.slowmo > 0) {
             world.slowmo -= dtSec;
             dtSec *= 0.35;
         }
         world.time += dtSec;
 
-        // Pulsewave shock fronts: light & clear pegs as the front sweeps past.
+        // Pulsewave shock fronts (gameplay only, not physics).
         if (world.pulses && world.pulses.length) {
             for (let i = world.pulses.length - 1; i >= 0; i--) {
                 const pw = world.pulses[i];
@@ -247,9 +335,6 @@
                 while (pw.queue.length && pw.queue[0].dist <= front) {
                     const c = pw.queue.shift();
                     if (!c.peg.removed && !c.peg.lit) {
-                        // Same visual treatment as a ball hit: drainEvents
-                        // marks the peg lit (white ring) and emits a particle
-                        // burst; sweepLit clears it at shot end.
                         world.scoreEvents.push({ kind: 'peg-hit', peg: c.peg });
                     }
                 }
@@ -259,109 +344,174 @@
             }
         }
 
-        // Moving pegs (kinematic animation).
+        // Animate moving pegs (kinematic) toward their next pose.
         for (const p of world.pegs) {
             if (p.kind !== 'moving' || p.removed) continue;
+            let nx = p.x, ny = p.y;
             if (p.mode === 'orbit') {
                 const { radius, speed } = p.params;
                 const t = world.time * speed + p.phase;
-                p.x = p.ox + Math.cos(t) * radius;
-                p.y = p.oy + Math.sin(t) * radius;
+                nx = p.ox + Math.cos(t) * radius;
+                ny = p.oy + Math.sin(t) * radius;
             } else if (p.mode === 'oscillate') {
                 const { amp, axis, speed } = p.params;
                 const t = world.time * speed + p.phase;
-                if (axis === 'x') { p.x = p.ox + Math.sin(t) * amp; p.y = p.oy; }
-                else              { p.x = p.ox;                       p.y = p.oy + Math.sin(t) * amp; }
+                if (axis === 'x') { nx = p.ox + Math.sin(t) * amp; ny = p.oy; }
+                else              { nx = p.ox; ny = p.oy + Math.sin(t) * amp; }
             }
+            p.x = nx; p.y = ny;
+            // Drive kinematic body via moveKinematic so contacts are stable.
+            world.handle.moveKinematic(p.body, nx, pxY(ny), 0, dtSec || 1/60);
         }
 
-        // Catch bar: bounce off left/right walls.
+        // Drive the catchbar bouncing left/right (visual + physical).
         const cb = world.catchbar;
-        cb.x += cb.vx * dtSec;
-        if (cb.x - cb.halfW < 0) { cb.x = cb.halfW; cb.vx = Math.abs(cb.vx); }
-        if (cb.x + cb.halfW > FIELD_W) { cb.x = FIELD_W - cb.halfW; cb.vx = -Math.abs(cb.vx); }
+        if (cb) {
+            cb.x += cb.vx * dtSec;
+            if (cb.x - cb.halfW < 0) { cb.x = cb.halfW; cb.vx = Math.abs(cb.vx); }
+            if (cb.x + cb.halfW > FIELD_W) { cb.x = FIELD_W - cb.halfW; cb.vx = -Math.abs(cb.vx); }
+            world.handle.moveKinematic(cb.body, cb.x, pxY(cb.y + CATCHBAR_H / 2), 0, dtSec || 1/60);
+        }
 
-        if (!world.ball) return;
+        // Step the world. Sub-step a couple of times if dt is bigger than
+        // 1/120 to limit tunneling for fast balls (CCD also helps).
+        const subs = Math.max(1, Math.ceil(dtSec / (1/120)));
+        const sdt = dtSec / subs;
+        for (let i = 0; i < subs; i++) {
+            world.handle.step(sdt);
+        }
 
-        stepBall(world, world.ball, dtSec);
+        // Cap ball speed to keep solver stable.
+        capBallSpeed(world);
+
+        // Drain physics contact events into score events.
+        drainContacts(world);
+
+        // Sync ball record positions / velocities from Jolt for renderer.
+        syncBallRecords(world);
+
+        // Off-field?
+        checkExits(world);
+
+        // Extra balls life timer.
         for (let i = world.extraBalls.length - 1; i >= 0; i--) {
             const eb = world.extraBalls[i];
             eb.life -= dtSec;
-            if (eb.life <= 0) { world.extraBalls.splice(i, 1); continue; }
-            stepBall(world, eb, dtSec);
-            if (!eb.active) world.extraBalls.splice(i, 1);
-        }
-    }
-
-    function stepBall(world, ball, dtSec) {
-        if (!ball || !ball.active) return;
-        ball.vy += world.gravity * dtSec;
-        const sp = Math.hypot(ball.vx, ball.vy);
-        if (sp > MAX_SPEED) {
-            ball.vx *= MAX_SPEED / sp;
-            ball.vy *= MAX_SPEED / sp;
-        }
-        // Choose substep count so max movement per step < peg radius.
-        const moveLen = Math.hypot(ball.vx, ball.vy) * dtSec;
-        const maxStep = world.pegRadius * 0.5;
-        const steps = Math.max(1, Math.ceil(moveLen / maxStep));
-        const sdt = dtSec / steps;
-
-        for (let s = 0; s < steps; s++) {
-            ball.x += ball.vx * sdt;
-            ball.y += ball.vy * sdt;
-
-            // Walls
-            for (const box of world.walls) {
-                resolveBallBox(ball, box, world.scoreEvents, ball.radius, WALL_RESTITUTION);
+            if (eb.life <= 0 || !eb.active) {
+                if (eb.body) destroyBallBody(world, eb.body);
+                world.extraBalls.splice(i, 1);
             }
+        }
 
-            // Pegs (O(n) per step; n is small).
+        // Terraflame: pegs within the fire radius of a fire ball get burned.
+        // (Cheap O(n) per ball.)
+        for (const ball of activeBalls(world)) {
+            if (!ball.onFire) continue;
+            const rr = world.fireRadius * world.fireRadius;
             for (const peg of world.pegs) {
-                if (peg.removed) continue;
-                resolveBallPeg(ball, peg, world.scoreEvents, ball.radius, world.pegRadius);
-            }
-
-            // Terraflame: burn pegs within radius without needing contact.
-            if (ball.onFire) {
-                for (const peg of world.pegs) {
-                    if (peg.removed || peg.lit) continue;
-                    const dx = peg.x - ball.x;
-                    const dy = peg.y - ball.y;
-                    if (dx * dx + dy * dy < world.fireRadius * world.fireRadius) {
-                        world.scoreEvents.push({ kind: 'peg-hit', peg, fire: true });
-                    }
+                if (peg.removed || peg.lit) continue;
+                const dx = peg.x - ball.x;
+                const dy = peg.y - ball.y;
+                if (dx * dx + dy * dy < rr) {
+                    world.scoreEvents.push({ kind: 'peg-hit', peg, fire: true });
                 }
             }
+        }
 
-            // Catch bar — a box of width halfW*2 and height CATCHBAR_H.
-            const cbBox = {
-                x1: world.catchbar.x - world.catchbar.halfW,
-                y1: world.catchbar.y,
-                x2: world.catchbar.x + world.catchbar.halfW,
-                y2: world.catchbar.y + CATCHBAR_H,
-            };
-            const incomingVy = ball.vy;
-            if (resolveBallBox(ball, cbBox, world.scoreEvents, ball.radius, CATCHBAR_RESTITUTION)) {
-                // Top-hit (ball was falling): apply a paddle-like upward
-                // kick so the ball returns to the playfield instead of
-                // dying just below the bar.
-                if (incomingVy > 0 && ball.vy < 0 && -ball.vy < CATCHBAR_KICK) {
-                    ball.vy = -CATCHBAR_KICK;
-                }
-                world.scoreEvents.push({ kind: 'catchbar-hit' });
-            }
+        // Apply pending body destroys.
+        if (world.pendingDestroy.length) {
+            for (const tag of world.pendingDestroy) world.handle.destroyBody(tag);
+            world.pendingDestroy.length = 0;
+        }
+    }
 
-            // Exited play field below? Ball is done.
-            if (ball.y - ball.radius > FIELD_BOTTOM) {
-                ball.active = false;
-                world.scoreEvents.push({ kind: 'ball-exit', ball });
-                return;
+    function activeBalls(world) {
+        const out = [];
+        if (world.ball && world.ball.active) out.push(world.ball);
+        for (const eb of world.extraBalls) if (eb.active) out.push(eb);
+        return out;
+    }
+
+    function capBallSpeed(world) {
+        const tags = [];
+        if (world.ball && world.ball.active) tags.push(world.ball.body);
+        for (const eb of world.extraBalls) if (eb.active) tags.push(eb.body);
+        for (const tag of tags) {
+            const v = world.handle.getVelocity ? world.handle.getVelocity(tag) : null;
+            if (!v) continue;
+            const sp = Math.hypot(v.linear.x, v.linear.y);
+            if (sp > MAX_SPEED) {
+                const k = MAX_SPEED / sp;
+                world.handle.setLinearVelocity(tag, v.linear.x * k, v.linear.y * k, 0);
             }
         }
     }
 
-    // Mark events as lit in the peg list. The caller decides scoring.
+    function syncBallRecords(world) {
+        for (const ball of [world.ball, ...world.extraBalls]) {
+            if (!ball || !ball.body) continue;
+            const xf = world.handle.getTransform(ball.body);
+            const v  = world.handle.getVelocity(ball.body);
+            if (xf) {
+                ball.x = xf.position.x;
+                ball.y = cyY(xf.position.y);
+            }
+            if (v) {
+                ball.vx = v.linear.x;
+                ball.vy = -v.linear.y;
+            }
+        }
+    }
+
+    function drainContacts(world) {
+        const evs = world.handle.getContacts();
+        if (!evs.length) return;
+        for (const e of evs) {
+            if (e.type !== 'added') continue;
+            const a = e.body1, b = e.body2;
+            const aIsBall = world.ballTags.has(a);
+            const bIsBall = world.ballTags.has(b);
+            if (!aIsBall && !bIsBall) continue;
+            const ballTag = aIsBall ? a : b;
+            const otherTag = aIsBall ? b : a;
+            const peg = world.tagToPeg.get(otherTag);
+            if (peg) {
+                if (!peg.removed) world.scoreEvents.push({ kind: 'peg-hit', peg });
+                continue;
+            }
+            // Catchbar?
+            if (world.catchbar && world.catchbar.body === otherTag) {
+                world.scoreEvents.push({ kind: 'catchbar-hit' });
+                continue;
+            }
+            // Walls
+            if (world.walls.indexOf(otherTag) >= 0) {
+                world.scoreEvents.push({ kind: 'wall-hit' });
+                continue;
+            }
+        }
+    }
+
+    function checkExits(world) {
+        // Ball exits below the field.
+        const tryExit = (b) => {
+            if (!b || !b.active) return;
+            if (b.y - b.radius > FIELD_BOTTOM) {
+                b.active = false;
+                world.scoreEvents.push({ kind: 'ball-exit', ball: b });
+                if (b.body) {
+                    world.pendingDestroy.push(b.body);
+                    world.ballTags.delete(b.body);
+                    world.ballRecords.delete(b.body);
+                    b.body = 0;
+                }
+            }
+        };
+        tryExit(world.ball);
+        for (const eb of world.extraBalls) tryExit(eb);
+    }
+
+    // ---------- Mark & sweep -------------------------------------------------
     function markLitFromEvents(world, events) {
         for (const ev of events) {
             if (ev.kind === 'peg-hit' && ev.peg && !ev.peg.lit && !ev.peg.removed) {
@@ -370,19 +520,26 @@
         }
     }
 
-    // Remove all lit pegs (called when ball exits play field).
     function sweepLit(world) {
         const removed = [];
         for (const p of world.pegs) {
             if (p.lit && !p.removed) {
                 p.removed = true;
                 removed.push(p);
+                if (p.body) {
+                    // Defer the destroy so any in-flight contact event isn't
+                    // tied to a tag we just freed.
+                    world.tagToPeg.delete(p.body);
+                    if (world.handle && !world.destroyed) {
+                        world.handle.destroyBody(p.body);
+                    }
+                    p.body = 0;
+                }
             }
         }
         return removed;
     }
 
-    // Query: does any active ball exist in the world?
     function hasActiveBall(world) {
         if (world.ball && world.ball.active) return true;
         for (const b of world.extraBalls) if (b.active) return true;
@@ -390,101 +547,103 @@
     }
 
     function countRemainingOrange(world) {
-        // "Remaining" = still in play to be hit: not lit and not removed.
-        // Lit pegs count as already cleared so mid-shot final-orange logic
-        // (slow-mo, fever) fires when the last orange is lit, before the
-        // end-of-shot sweep.
         let n = 0;
-        for (const p of world.pegs) if (p.type === PEG.ORANGE && !p.removed && !p.lit) n++;
+        for (const p of world.pegs) {
+            if (p.type === PEG.ORANGE && !p.removed && !p.lit) n++;
+        }
         return n;
     }
 
-    // Predict trajectory points (Mirage guide). Doesn't mutate world.
+    // ---------- Predict (Mirage) --------------------------------------------
+    // We keep a single shared sandbox handle for predictions, recreating its
+    // contents from the live world each call. This is much cheaper than
+    // creating/destroying a handle per call.
+    let s_predictWorld = null;
+    function getPredictWorld() {
+        if (!s_predictWorld) {
+            s_predictWorld = Jolt.createWorldHandle({
+                maxBodies: 1024,
+                gravity: { x: 0, y: -GRAVITY, z: 0 },
+            });
+        }
+        return s_predictWorld;
+    }
+
+    // Doesn't mutate `world`. Pushes (x, y) samples into `pointsOut`.
     function predict(world, angleRad, speed, launchX, launchY, maxSeconds, pointsOut) {
-        // Clone ball state minimally; reuse same peg list (they won't be
-        // removed inside prediction because we don't touch peg.removed).
-        const ghost = {
-            x: launchX, y: launchY,
-            vx: Math.cos(angleRad) * speed,
-            vy: Math.sin(angleRad) * speed,
-            active: true,
+        if (!world) return;
+        const pw = getPredictWorld();
+        pw.destroyAll();
+
+        // Re-create static walls and pegs in the predict world.
+        const wallSpec = [
+            { cx: -10, cy: FIELD_H / 2, hw: 10, hh: FIELD_H },
+            { cx: FIELD_W + 10, cy: FIELD_H / 2, hw: 10, hh: FIELD_H },
+            { cx: FIELD_W / 2, cy: FIELD_TOP - 10, hw: FIELD_W, hh: 10 },
+        ];
+        for (const s of wallSpec) {
+            pw.createBody({
+                shape: 'box', static: true,
+                position: { x: s.cx, y: pxY(s.cy), z: 0 },
+                halfExtents: { x: s.hw, y: s.hh, z: 10 },
+                friction: WALL_FRICTION, restitution: WALL_RESTITUTION,
+            });
+        }
+        for (const p of world.pegs) {
+            if (p.removed) continue;
+            pw.createBody({
+                shape: 'sphere', static: true,
+                position: { x: p.x, y: pxY(p.y), z: 0 },
+                radius: PEG_RADIUS,
+                friction: PEG_FRICTION, restitution: PEG_RESTITUTION,
+            });
+        }
+
+        // Create the ghost ball.
+        const sp = Math.min(speed, LAUNCH_SPEED_CAP);
+        const vx = Math.cos(angleRad) * sp;
+        const vy = Math.sin(angleRad) * sp;
+        const ghost = pw.createBody({
+            shape: 'sphere',
+            position: { x: launchX, y: pxY(launchY), z: 0 },
             radius: BALL_RADIUS,
-        };
-        const tmpEvents = [];
-        const fakeWorld = {
-            pegs: world.pegs,
-            walls: world.walls,
-            gravity: world.gravity,
-            pegRadius: world.pegRadius,
-            scoreEvents: tmpEvents,
-            catchbar: world.catchbar,
-            fireRadius: world.fireRadius,
-        };
+            friction: BALL_FRICTION, restitution: BALL_RESTITUTION,
+            linearDamping: BALL_LINEAR_DAMPING,
+            dofs: '2d', ccd: true,
+        });
+        pw.setLinearVelocity(ghost, vx, -vy, 0);
+
         const dt = 1 / 120;
-        const samples = Math.floor(maxSeconds * 40);
-        const every = Math.floor((maxSeconds / dt) / samples);
-        let step = 0;
-        for (let t = 0; t < maxSeconds; t += dt) {
-            stepBallPredict(fakeWorld, ghost, dt);
-            if (!ghost.active) break;
-            if ((step++ % every) === 0) {
-                pointsOut.push({ x: ghost.x, y: ghost.y });
-                if (pointsOut.length >= samples) break;
+        const totalSteps = Math.floor(maxSeconds / dt);
+        const sampleStride = Math.max(1, Math.floor(totalSteps / 80));
+        for (let i = 0; i < totalSteps; i++) {
+            pw.step(dt);
+            if ((i % sampleStride) === 0) {
+                const xf = pw.getTransform(ghost);
+                if (!xf) break;
+                const cx = xf.position.x;
+                const cy = cyY(xf.position.y);
+                pointsOut.push({ x: cx, y: cy });
+                if (cy - BALL_RADIUS > FIELD_BOTTOM) break;
             }
         }
     }
 
-    // Predict loop is a hot path but short; trimmed copy of stepBall that
-    // doesn't touch lit/removed state.
-    function stepBallPredict(world, ball, dtSec) {
-        ball.vy += world.gravity * dtSec;
-        const moveLen = Math.hypot(ball.vx, ball.vy) * dtSec;
-        const maxStep = world.pegRadius * 0.5;
-        const steps = Math.max(1, Math.ceil(moveLen / maxStep));
-        const sdt = dtSec / steps;
-        for (let s = 0; s < steps; s++) {
-            ball.x += ball.vx * sdt;
-            ball.y += ball.vy * sdt;
-            for (const box of world.walls) {
-                const cx = clamp(ball.x, box.x1, box.x2);
-                const cy = clamp(ball.y, box.y1, box.y2);
-                const dx = ball.x - cx, dy = ball.y - cy;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < ball.radius * ball.radius && d2 > 1e-6) {
-                    const d = Math.sqrt(d2);
-                    const nx = dx / d, ny = dy / d;
-                    const pen = ball.radius - d + 0.01;
-                    ball.x += nx * pen; ball.y += ny * pen;
-                    const vd = ball.vx * nx + ball.vy * ny;
-                    if (vd < 0) {
-                        ball.vx -= (1 + WALL_RESTITUTION) * vd * nx;
-                        ball.vy -= (1 + WALL_RESTITUTION) * vd * ny;
-                    }
-                }
-            }
-            for (const peg of world.pegs) {
-                if (peg.removed) continue;
-                const dx = ball.x - peg.x, dy = ball.y - peg.y;
-                const rr = ball.radius + world.pegRadius;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < rr * rr && d2 > 1e-6) {
-                    const d = Math.sqrt(d2);
-                    const nx = dx / d, ny = dy / d;
-                    const pen = rr - d + 0.01;
-                    ball.x += nx * pen; ball.y += ny * pen;
-                    const vd = ball.vx * nx + ball.vy * ny;
-                    if (vd < 0) {
-                        ball.vx -= (1 + RESTITUTION) * vd * nx;
-                        ball.vy -= (1 + RESTITUTION) * vd * ny;
-                    }
-                }
-            }
-            if (ball.y - ball.radius > FIELD_BOTTOM) { ball.active = false; return; }
-        }
+    // ---------- World destroy -----------------------------------------------
+    function destroyWorld(world) {
+        if (!world || world.destroyed) return;
+        world.destroyed = true;
+        try { world.handle.destroy(); } catch (e) {}
+        world.handle = null;
+        world.tagToPeg.clear();
+        world.ballTags.clear();
+        world.ballRecords.clear();
     }
 
+    // Public API matches the legacy custom-solver surface.
     global.Physics = {
-        createWorld, addPeg, addMovingPeg,
+        createWorld, destroyWorld,
+        addPeg, addMovingPeg,
         resetBall, launchBall, spawnSplitBalls,
         step, markLitFromEvents, sweepLit,
         hasActiveBall, countRemainingOrange,

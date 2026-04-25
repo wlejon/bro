@@ -82,7 +82,7 @@
         {
             id: 1, name: 'First Bounce',
             background: ['#0a1230', '#041025'], balls: 10,
-            stars: [8000, 16000, 28000],
+            stars: [1500, 3000, 6000],
             build(world) {
                 pyramid(world, 16, 3, 7, (k, i) => (i === 3 && (k % 2 === 0)) ? P.PEG.ORANGE : P.PEG.BLUE);
                 place(world, 16, 2, P.PEG.GREEN);
@@ -93,7 +93,7 @@
         {
             id: 2, name: 'Lattice',
             background: ['#0d0a30', '#02061a'], balls: 10,
-            stars: [10000, 20000, 35000],
+            stars: [3000, 6000, 12000],
             build(world) {
                 grid(world, 3, 4, 26, 8, (c, r) => (c % 2 === 0 && r % 2 === 0) ? (((c * 3 + r * 7) % 6 === 0) ? P.PEG.ORANGE : P.PEG.BLUE) : null);
                 place(world, 8, 10, P.PEG.GREEN); place(world, 24, 10, P.PEG.GREEN);
@@ -104,7 +104,7 @@
         {
             id: 3, name: 'Twin Peaks',
             background: ['#0e1340', '#050a24'], balls: 10,
-            stars: [9000, 18000, 30000],
+            stars: [1500, 3500, 7000],
             build(world) {
                 pyramid(world, 9, 4, 5, (k, i) => (i < 2 ? P.PEG.ORANGE : P.PEG.BLUE));
                 pyramid(world, 23, 4, 5, (k, i) => (i < 2 ? P.PEG.ORANGE : P.PEG.BLUE));
@@ -116,7 +116,7 @@
         {
             id: 4, name: 'Funnel',
             background: ['#180a30', '#0a041e'], balls: 10,
-            stars: [11000, 22000, 36000],
+            stars: [1200, 3000, 6000],
             build(world) {
                 for (let i = 0; i < 10; i++) {
                     place(world, 4 + i, 3 + i, P.PEG.BLUE);
@@ -133,7 +133,7 @@
         {
             id: 5, name: 'Spiral',
             background: ['#05242b', '#01161b'], balls: 9,
-            stars: [12000, 24000, 40000],
+            stars: [2500, 5000, 9000],
             build(world) {
                 let cx = 16, cy = 9;
                 let r = 1;
@@ -154,7 +154,7 @@
         {
             id: 6, name: 'Ringmaster',
             background: ['#2a0530', '#140218'], balls: 9,
-            stars: [13000, 26000, 44000],
+            stars: [2000, 4000, 8000],
             build(world) {
                 ring(world, 16, 8,  3, 10, (i) => (i % 2) ? P.PEG.ORANGE : P.PEG.BLUE);
                 ring(world, 16, 8,  5, 16, (i) => (i % 3 === 0) ? P.PEG.ORANGE : P.PEG.BLUE);
@@ -167,7 +167,7 @@
         {
             id: 7, name: 'Breakthrough',
             background: ['#0a3013', '#031508'], balls: 9,
-            stars: [14000, 28000, 46000],
+            stars: [800, 1800, 3500],
             build(world) {
                 for (let c = 2; c < 30; c++) {
                     if (c === 14 || c === 15 || c === 16 || c === 17) continue;
@@ -183,7 +183,7 @@
         {
             id: 8, name: 'Checkerboard',
             background: ['#201028', '#0a0414'], balls: 9,
-            stars: [14000, 28000, 48000],
+            stars: [8000, 16000, 28000],
             build(world) {
                 for (let r = 3; r <= 15; r++) {
                     for (let c = 2; c <= 30; c++) {
@@ -201,7 +201,7 @@
         {
             id: 9, name: 'Hourglass',
             background: ['#2a1a0a', '#140a03'], balls: 9,
-            stars: [15000, 30000, 50000],
+            stars: [1500, 3500, 7000],
             build(world) {
                 for (let i = 0; i < 10; i++) {
                     place(world, 4 + i, 3 + i, P.PEG.BLUE);
@@ -217,7 +217,7 @@
         {
             id: 10, name: 'Cluster Bomb',
             background: ['#23053a', '#0e021a'], balls: 8,
-            stars: [16000, 32000, 54000],
+            stars: [800, 1800, 3500],
             build(world) {
                 grid(world, 10, 6, 13, 7, (c, r) => {
                     if ((c * 3 + r * 5) % 4 === 0) return P.PEG.ORANGE;
@@ -231,7 +231,7 @@
         {
             id: 11, name: 'Orbiters',
             background: ['#05204a', '#020f24'], balls: 8,
-            stars: [17000, 34000, 56000],
+            stars: [1000, 2200, 4500],
             build(world) {
                 grid(world, 3, 4, 26, 7, (c, r) => (r % 2 === 0 && c % 2 === 0) ? P.PEG.BLUE : null);
                 for (let k = 0; k < 5; k++) {
@@ -247,7 +247,7 @@
         {
             id: 12, name: 'Tides',
             background: ['#0b1a3c', '#04091e'], balls: 8,
-            stars: [18000, 36000, 58000],
+            stars: [800, 1800, 3500],
             build(world) {
                 for (let r = 4; r <= 14; r += 2) {
                     for (let c = 4; c <= 28; c += 4) {
@@ -263,7 +263,7 @@
         {
             id: 13, name: 'Cascade',
             background: ['#3a1205', '#170602'], balls: 8,
-            stars: [18000, 36000, 60000],
+            stars: [2500, 5000, 9000],
             build(world) {
                 for (let i = 0; i < 10; i++) {
                     for (let k = 0; k < 4; k++) {
@@ -278,7 +278,7 @@
         {
             id: 14, name: 'Honeycomb',
             background: ['#3a2a05', '#170f02'], balls: 8,
-            stars: [19000, 38000, 62000],
+            stars: [8000, 14000, 22000],
             build(world) {
                 for (let r = 3; r <= 14; r++) {
                     const off = (r & 1) ? 1 : 0;
@@ -295,7 +295,7 @@
         {
             id: 15, name: 'Zigzag',
             background: ['#05281e', '#02140e'], balls: 7,
-            stars: [19000, 38000, 64000],
+            stars: [1200, 2800, 5500],
             build(world) {
                 const rows = [
                     [2,3,4,5,6,7,8,9,10,11,12,13,14,15],
@@ -316,7 +316,7 @@
         {
             id: 16, name: 'Hot Core',
             background: ['#3a0518', '#180208'], balls: 7,
-            stars: [21000, 42000, 66000],
+            stars: [2000, 4000, 8000],
             build(world) {
                 ring(world, 16, 9, 7, 24, () => P.PEG.BLUE);
                 ring(world, 16, 9, 4, 14, () => P.PEG.ORANGE);
@@ -329,7 +329,7 @@
         {
             id: 17, name: 'Gauntlet',
             background: ['#081028', '#03060f'], balls: 7,
-            stars: [22000, 44000, 70000],
+            stars: [1500, 3000, 6000],
             build(world) {
                 for (let r = 3; r < 16; r += 2) {
                     for (let c = 2; c <= 30; c += 2) {
@@ -347,7 +347,7 @@
         {
             id: 18, name: 'Dance Floor',
             background: ['#1c062a', '#0a0213'], balls: 7,
-            stars: [23000, 46000, 72000],
+            stars: [400, 1000, 2500],
             build(world) {
                 for (let i = 0; i < 12; i++) {
                     const row = 4 + (i % 4) * 3;
@@ -365,7 +365,7 @@
         {
             id: 19, name: 'Thickets',
             background: ['#220f03', '#0d0601'], balls: 7,
-            stars: [24000, 48000, 76000],
+            stars: [10000, 18000, 28000],
             build(world) {
                 for (let r = 3; r <= 16; r++) {
                     for (let c = 2; c <= 30; c++) {
@@ -383,7 +383,7 @@
         {
             id: 20, name: 'The Maw',
             background: ['#3a0505', '#180202'], balls: 6,
-            stars: [26000, 52000, 84000],
+            stars: [5000, 10000, 18000],
             build(world) {
                 // Outer ring of blues.
                 ring(world, 16, 9, 10, 36, () => P.PEG.BLUE);

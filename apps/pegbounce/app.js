@@ -1,8 +1,14 @@
 // app.js — Pegbounce entry point.
 //
-// Physics approach: 2D canvas with a custom circle-vs-circle solver (see
-// physics.js for rationale). Determinism comes from a seedable RNG and an
-// integer-substep solver keyed off the ball's speed.
+// Physics approach: Jolt (engine-bound), driven through physics.js's wrapper.
+// Each level instantiates its own sandbox world handle (Physics.createWorld
+// builds a Physics.createWorldHandle internally), so we get isolation between
+// the live shot and the Mirage trajectory predict.
+//
+// Slow-mo (Option C from the migration plan): physics.js scales the dt it
+// passes to handle.step() while world.slowmo > 0. That keeps every visual
+// effect — particle motion, ball trail, peg-light timing — smoothly slowed
+// without poking the engine's auto-stepped default world.
 //
 // High-level structure:
 //   • state — UI mode, current level/world, score/combo accumulators
@@ -97,6 +103,8 @@
         opts = opts || {};
         S.levelIdx = idx;
         const lv = Levels.LEVELS[idx];
+        // Tear down the previous world's Jolt sandbox handle before building a new one.
+        if (S.world) Physics.destroyWorld(S.world);
         S.world = Levels.buildLevel(idx, opts.seed != null ? opts.seed : (idx * 73 + 11));
         S.balls = lv.balls;
         S.ballsStart = lv.balls;
@@ -551,7 +559,7 @@
             for (let i = 0; i < 22; i++) {
                 x += vx * dt;
                 y += vy * dt;
-                vy += Physics.createWorld().gravity * dt;
+                vy += 1400 * dt; // GRAVITY constant from physics.js
                 if (y > FIELD_H) break;
                 // Stop at first peg
                 let hitPeg = false;
@@ -629,12 +637,11 @@
                 // Launch from keyboard.
                 if (Input.pressed('launch')) tryLaunch();
 
-                // Physics step (multi-sub so dt jitter doesn't tunnel).
-                const subs = 3;
-                for (let k = 0; k < subs; k++) {
-                    Physics.step(S.world, dt / subs);
-                    drainEvents();
-                }
+                // Physics step. The sandbox-handle implementation in
+                // physics.js handles its own substepping internally for
+                // tunneling safety; we just hand it a frame dt.
+                Physics.step(S.world, dt);
+                drainEvents();
                 Particles.step(S.particles, dt);
 
                 if (S.fx.shake > 0) S.fx.shake = Math.max(0, S.fx.shake - dt * 2);
@@ -965,7 +972,9 @@
         }
         Physics.sweepLit(w);
         orangeCleared = startOrange - Physics.countRemainingOrange(w);
-        return { orangeCleared, shotScore, comboMult: comboMultSeen, elapsed, startOrange };
+        const result = { orangeCleared, shotScore, comboMult: comboMultSeen, elapsed, startOrange };
+        Physics.destroyWorld(w);
+        return result;
     }
 
     // Same as simulateShot but also applies to the *live* world (for
