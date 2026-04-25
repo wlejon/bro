@@ -915,7 +915,12 @@ void CanvasScene::ellipse(float cx, float cy, float rx, float ry, float rotation
     float sx = rx * std::cos(startAngle);
     float sy = ry * std::sin(startAngle);
     tmp.moveTo(sx, sy);
-    tmp.arcTo(oval, startDeg, sweep, false);
+    // Skia treats exactly ±360° sweep as degenerate; use addOval for full ellipses.
+    if (std::abs(sweep) >= 360.0f) {
+        tmp.addOval(oval, acw ? SkPathDirection::kCCW : SkPathDirection::kCW);
+    } else {
+        tmp.arcTo(oval, startDeg, sweep, false);
+    }
 
     SkPath tmpPath = tmp.detach();
     SkMatrix mat;
