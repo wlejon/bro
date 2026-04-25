@@ -73,44 +73,47 @@ struct PhysicsWorld::Layers {
     }
 };
 
-// --- Contact listener (collects events for JS) ---
+// --- Contact listener (collects events for JS, per-world) ---
+//
+// Contact listener semantics (intentional):
+//  - OnContactAdded fires once when a new pair forms → ContactEvent::Added
+//  - OnContactRemoved fires once when a pair separates → ContactEvent::Removed
+//  - OnContactPersisted is intentionally NOT subscribed to. We do not surface
+//    per-step "still in contact" events to JS; users wanting that can iterate
+//    bodies themselves. This keeps the event queue O(events) not O(pairs*frames).
 
-class ContactListenerImpl : public ContactListener {
-public:
+struct PhysicsWorld::ListenerImpl : public ContactListener {
     void OnContactAdded(const Body& b1, const Body& b2,
                         const ContactManifold&, ContactSettings&) override {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(mutex);
         ContactEvent e;
         e.type = ContactEvent::Added;
         e.body1 = b1.GetID();
         e.body2 = b2.GetID();
         e.isSensor = b1.IsSensor() || b2.IsSensor();
-        events_.push_back(e);
+        events.push_back(e);
     }
 
     void OnContactRemoved(const SubShapeIDPair& pair) override {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(mutex);
         ContactEvent e;
         e.type = ContactEvent::Removed;
         e.body1 = pair.GetBody1ID();
         e.body2 = pair.GetBody2ID();
         e.isSensor = false;  // can't tell here without body lookup; leave false
-        events_.push_back(e);
+        events.push_back(e);
     }
 
     std::vector<ContactEvent> drain() {
-        std::lock_guard lock(mutex_);
+        std::lock_guard lock(mutex);
         std::vector<ContactEvent> out;
-        out.swap(events_);
+        out.swap(events);
         return out;
     }
 
-private:
-    std::mutex mutex_;
-    std::vector<ContactEvent> events_;
+    std::mutex mutex;
+    std::vector<ContactEvent> events;
 };
-
-static ContactListenerImpl* s_contactListener = nullptr;
 
 // --- Jolt global init (once) ---
 
@@ -166,10 +169,9 @@ bool PhysicsWorld::init(int maxBodies) {
 
     physicsSystem_.SetGravity(Vec3(0, -9.81f, 0));
 
-    // Install contact listener
-    static ContactListenerImpl contactListener;
-    s_contactListener = &contactListener;
-    physicsSystem_.SetContactListener(s_contactListener);
+    // Install per-world contact listener
+    listener_ = std::make_unique<ListenerImpl>();
+    physicsSystem_.SetContactListener(listener_.get());
 
     initialized_ = true;
     return true;
@@ -264,8 +266,8 @@ bool PhysicsWorld::consumeStep() {
     if (shared_.state.load(std::memory_order_acquire) != kPhysicsDone)
         return false;
 
-    if (s_contactListener) {
-        contactsFront_ = s_contactListener->drain();
+    if (listener_) {
+        contactsFront_ = listener_->drain();
     }
 
     shared_.state.store(kPhysicsIdle, std::memory_order_release);
@@ -279,8 +281,8 @@ bool PhysicsWorld::isIdle() const {
 void PhysicsWorld::stepInline() {
     if (!initialized_) return;
     physicsSystem_.Update(timeStep_, 1, tempAllocator_.get(), jobSystem_.get());
-    if (s_contactListener) {
-        contactsFront_ = s_contactListener->drain();
+    if (listener_) {
+        contactsFront_ = listener_->drain();
     }
 }
 
@@ -541,6 +543,52 @@ void PhysicsWorld::addImpulse(BodyID id, Vec3 impulse) {
 
 void PhysicsWorld::addTorque(BodyID id, Vec3 torque) {
     physicsSystem_.GetBodyInterface().AddTorque(id, torque);
+}
+
+void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDestroyed) {
+    if (!initialized_) return;
+
+    // Constraints first (so removing bodies doesn't trip Jolt's constraint asserts).
+    for (auto& [h, c] : constraints_) {
+        if (c.ref) physicsSystem_.RemoveConstraint(c.ref.GetPtr());
+    }
+    constraints_.clear();
+
+    BodyInterface& bi = physicsSystem_.GetBodyInterface();
+    BodyIDVector bodyIDs;
+    physicsSystem_.GetBodies(bodyIDs);
+    for (const BodyID& id : bodyIDs) {
+        if (id.IsInvalid()) continue;
+        if (onBodyDestroyed) onBodyDestroyed(id);
+        if (bi.IsAdded(id)) bi.RemoveBody(id);
+        bi.DestroyBody(id);
+    }
+
+    // Drop any pending contact events from this world.
+    if (listener_) listener_->drain();
+    contactsFront_.clear();
+}
+
+void PhysicsWorld::setLayer(BodyID id, int layer) {
+    if (layer < 0 || layer >= numLayers_) return;
+    auto& bi = physicsSystem_.GetBodyInterface();
+    bi.SetObjectLayer(id, static_cast<ObjectLayer>(layer));
+    // Jolt's BodyInterface::SetObjectLayer triggers a broadphase notification
+    // internally; no extra action needed. (Verified against Jolt source.)
+}
+
+void PhysicsWorld::setKinematic(BodyID id) {
+    auto& bi = physicsSystem_.GetBodyInterface();
+    bi.SetMotionType(id, EMotionType::Kinematic, EActivation::Activate);
+}
+
+void PhysicsWorld::moveKinematic(BodyID id, RVec3 targetPos, Quat targetRot, float dt) {
+    if (dt <= 0.0f) {
+        physicsSystem_.GetBodyInterface().SetPositionAndRotation(
+            id, targetPos, targetRot, EActivation::Activate);
+        return;
+    }
+    physicsSystem_.GetBodyInterface().MoveKinematic(id, targetPos, targetRot, dt);
 }
 
 void PhysicsWorld::setMotionType(BodyID id, bool isStatic) {

@@ -159,6 +159,11 @@ public:
     void setTimeStep(float dt) { timeStep_ = dt; }
     float timeStep() const { return timeStep_; }
 
+    /// Destroy every body and constraint in this world. Filter callback receives
+    /// each BodyID before destruction; if it returns true the caller wants
+    /// further bookkeeping (e.g. tag map cleanup).
+    void destroyAll(const std::function<void(JPH::BodyID)>& onBodyDestroyed = {});
+
     /// Set gravity.
     void setGravity(float x, float y, float z);
     JPH::Vec3 gravity() const;
@@ -218,6 +223,21 @@ public:
     bool isActive(JPH::BodyID id) const;
     bool isSensor(JPH::BodyID id) const;
 
+    /// Change a body's collision layer post-creation. Triggers a broadphase
+    /// notification so future queries reflect the new layer. Cost is
+    /// effectively a remove+add in the broadphase for that one body; cheap.
+    void setLayer(JPH::BodyID id, int layer);
+
+    /// Set kinematic motion type. A kinematic body is moved via velocity/
+    /// MoveKinematic and pushes dynamic bodies but is not pushed back.
+    void setKinematic(JPH::BodyID id);
+
+    /// Move a kinematic body to a target transform over the given timestep.
+    /// Internally sets the linear/angular velocity such that integration
+    /// reaches the target in dt seconds. Use for stable kinematic bodies that
+    /// need to interact with dynamic ones.
+    void moveKinematic(JPH::BodyID id, JPH::RVec3 targetPos, JPH::Quat targetRot, float dt);
+
     void setUserData(JPH::BodyID id, uint64_t data);
     uint64_t getUserData(JPH::BodyID id) const;
 
@@ -251,6 +271,11 @@ public:
 private:
     void physicsThreadFunc();
     void rebuildLayerFilters();
+
+    // listener_ must outlive physicsSystem_ — declare first so it's destroyed
+    // last (members destroy in reverse declaration order).
+    struct ListenerImpl;
+    std::unique_ptr<ListenerImpl> listener_;
 
     JPH::PhysicsSystem physicsSystem_;
     std::unique_ptr<JPH::TempAllocatorImpl> tempAllocator_;

@@ -85,52 +85,59 @@ var Physics2D = (function() {
         return tag;
     }
 
-    // Create a static collider from a 2D polyline. Each consecutive pair of
-    // points becomes a thin quad (two triangles), giving you Line-Rider-style
-    // ground geometry. Points are canvas coords; thickness is in pixels.
+    // Create a static collider from a 2D polyline. Each segment becomes a
+    // thin static capsule rotated to align with the segment, which is two-
+    // sided collision out of the box (no mesh winding tricks). Returns an
+    // ARRAY of body tags — one per segment — so callers can destroy them
+    // together. (Earlier versions returned a single mesh tag with double-
+    // wound triangles; that bloated the BVH and assumed a winding choice.)
+    //
+    // The wrapper records the segment list under tag[0] for backward-compat
+    // calls like getBody(tag) — destroyBody(tag) accepts the array directly.
     function createPolyline(points, opts) {
         opts = opts || {};
         var thickness = opts.thickness !== undefined ? opts.thickness : 4;
         var halfT = thickness / 2;
-        // Build extruded ribbon along polyline (each segment → 4 verts, 2 tris).
         var n = points.length;
-        if (n < 2) return -1;
-        var positions = [];
-        var indices = [];
+        if (n < 2) return [];
+        var tags = [];
+        var fric = opts.friction !== undefined ? opts.friction : 0.5;
+        var rest = opts.restitution !== undefined ? opts.restitution : 0.0;
         for (var i = 0; i + 1 < n; i++) {
             var a = points[i], b = points[i + 1];
             var ax = toPhysX(a.x), ay = toPhysY(a.y);
             var bx = toPhysX(b.x), by = toPhysY(b.y);
             var dx = bx - ax, dy = by - ay;
             var len = Math.sqrt(dx * dx + dy * dy);
-            if (len === 0) continue;
-            // Perpendicular for thickness
-            var nx = -dy / len, ny = dx / len;
-            var v0 = positions.length / 3;
-            positions.push(ax + nx*halfT, ay + ny*halfT, 0);  // top-left
-            positions.push(bx + nx*halfT, by + ny*halfT, 0);  // top-right
-            positions.push(bx - nx*halfT, by - ny*halfT, 0);  // bot-right
-            positions.push(ax - nx*halfT, ay - ny*halfT, 0);  // bot-left
-            // CCW for +Z normal: (0,1,2),(0,2,3) → but we want collisions on
-            // top side. Add both winding orders so segments collide either way.
-            indices.push(v0, v0+1, v0+2,  v0, v0+2, v0+3);
-            indices.push(v0, v0+2, v0+1,  v0, v0+3, v0+2);
+            if (len < 1e-3) continue;
+            // Capsule's local long axis is +Y. We want to align that with the
+            // segment direction (dx, dy). Compute Z-axis quaternion that
+            // rotates +Y onto (dx/len, dy/len).
+            var ang = Math.atan2(dy, dx) - Math.PI / 2;
+            var qz = Math.sin(ang / 2);
+            var qw = Math.cos(ang / 2);
+            // halfHeight = half the cylinder portion (excludes hemisphere caps).
+            // Use halfT as the radius and (len/2 - halfT) as halfHeight; clamp
+            // to >0 to avoid zero-height capsules on tiny segments.
+            var halfH = Math.max(0.001, len * 0.5 - halfT);
+            var tag = Physics.createBody({
+                shape: 'capsule',
+                static: true,
+                halfHeight: halfH,
+                radius: halfT,
+                position: { x: (ax + bx) * 0.5, y: (ay + by) * 0.5, z: 0 },
+                rotation: { x: 0, y: 0, z: qz, w: qw },
+                friction: fric,
+                restitution: rest,
+                layer: opts.layer,
+            });
+            tags.push(tag);
+            bodies[tag] = { tag: tag, type: 'polyline-segment' };
         }
-        if (indices.length === 0) return -1;
-        var pos32 = new Float32Array(positions);
-        var idx32 = new Uint32Array(indices);
-        var tag = Physics.createBody({
-            shape: 'mesh',
-            static: true,
-            positions: pos32,
-            indices: idx32,
-            position: { x: 0, y: 0, z: 0 },
-            friction: opts.friction !== undefined ? opts.friction : 0.5,
-            restitution: opts.restitution !== undefined ? opts.restitution : 0.0,
-            layer: opts.layer
-        });
-        bodies[tag] = { tag: tag, type: 'polyline', points: points };
-        return tag;
+        if (tags.length === 0) return [];
+        // Stash full segment list on the first tag's record for getBody() compat.
+        if (bodies[tags[0]]) bodies[tags[0]].points = points;
+        return tags;
     }
 
     function createSensor(x, y, w, h, opts) {
@@ -178,16 +185,68 @@ var Physics2D = (function() {
     }
 
     function setLayer(tag, name) {
-        // Layer is a creation-time property in Jolt; mutate via destroy/recreate.
-        // For now just no-op; document accordingly.
-        // Reserved for future expansion.
+        // Backed by Physics.setLayer → Jolt BodyInterface::SetObjectLayer
+        // (broadphase notification handled by Jolt internally; cost ~ remove+
+        // add of one body in the broadphase, cheap).
+        Physics.setLayer(tag, name);
+    }
+
+    // --- Kinematic bodies (driven by velocity, not affected by gravity) ---
+    //
+    // Use createKinematic for bars/platforms that move under script control
+    // and need to push dynamic bodies on contact. setKinematicTarget
+    // computes the velocity that reaches (x,y) from the current position in
+    // dt seconds — Jolt integrates that for one step, giving stable contact
+    // forces against dynamic bodies (vs. teleporting with setPosition,
+    // which produces unphysical impulses).
+    function createKinematic(opts) {
+        opts = opts || {};
+        var bo = commonOpts(opts);
+        var tag;
+        if (opts.shape === 'circle') {
+            bo.shape = 'sphere';
+            bo.position = { x: toPhysX(opts.x), y: toPhysY(opts.y), z: 0 };
+            bo.radius = opts.radius;
+            tag = Physics.createBody(bo);
+            bodies[tag] = { tag: tag, type: 'kinematic-circle', radius: opts.radius };
+        } else {
+            // box default
+            bo.shape = 'box';
+            bo.position = { x: toPhysX(opts.x), y: toPhysY(opts.y), z: 0 };
+            bo.halfExtents = { x: opts.w / 2, y: opts.h / 2, z: 10 };
+            tag = Physics.createBody(bo);
+            bodies[tag] = { tag: tag, type: 'kinematic-box', width: opts.w, height: opts.h };
+        }
+        Physics.setKinematic(tag);
+        return tag;
+    }
+
+    function setKinematicTarget(tag, x, y, dt) {
+        if (dt === undefined || dt <= 0) {
+            Physics.setPosition(tag, toPhysX(x), toPhysY(y), 0);
+            return;
+        }
+        Physics.moveKinematic(tag, toPhysX(x), toPhysY(y), 0, dt);
     }
 
     // --- Standard accessors ---
 
     function destroyBody(tag) {
+        // Accept arrays (e.g. createPolyline returns one) for ergonomic cleanup.
+        if (Array.isArray(tag)) {
+            for (var i = 0; i < tag.length; i++) {
+                Physics.destroyBody(tag[i]);
+                delete bodies[tag[i]];
+            }
+            return;
+        }
         Physics.destroyBody(tag);
         delete bodies[tag];
+    }
+
+    function destroyAll() {
+        Physics.destroyAll();
+        bodies = {};
     }
 
     function getPosition(tag) {
@@ -287,7 +346,10 @@ var Physics2D = (function() {
         createHingeConstraint: createHingeConstraint,
         destroyConstraint: destroyConstraint,
         setLayer: setLayer,
+        createKinematic: createKinematic,
+        setKinematicTarget: setKinematicTarget,
         destroyBody: destroyBody,
+        destroyAll: destroyAll,
         getPosition: getPosition,
         getAngle: getAngle,
         getTransform: getTransform,
