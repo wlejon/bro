@@ -19,9 +19,31 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     endif()
 endif()
 
-# vcpkg toolchain (set VCPKG_ROOT or pass -DCMAKE_TOOLCHAIN_FILE on the command line)
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+# vcpkg toolchain. Resolution order:
+#   1. -DCMAKE_TOOLCHAIN_FILE=... on the command line (respected as-is)
+#   2. $VCPKG_ROOT environment variable
+#   3. Auto-detect at common install locations (so a fresh `cmake -B build-xxx`
+#      works on machines where vcpkg lives in a predictable place).
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    if(DEFINED ENV{VCPKG_ROOT})
+        set(_bro_vcpkg_root "$ENV{VCPKG_ROOT}")
+    else()
+        foreach(_candidate
+                "$ENV{HOME}/vcpkg"
+                "$ENV{HOME}/src/vcpkg"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg"
+                "/opt/vcpkg"
+                "/usr/local/vcpkg")
+            if(EXISTS "${_candidate}/scripts/buildsystems/vcpkg.cmake")
+                set(_bro_vcpkg_root "${_candidate}")
+                message(STATUS "vcpkg: auto-detected at ${_bro_vcpkg_root}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if(DEFINED _bro_vcpkg_root)
+        set(CMAKE_TOOLCHAIN_FILE "${_bro_vcpkg_root}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+    endif()
 endif()
 
 # Submodule preflight: a `git clone` without --recursive leaves the third_party
