@@ -132,6 +132,57 @@ void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t fo
     }
 }
 
+void SkiaRenderer::drawTextEx(std::string_view text, float x, float y,
+                              uint64_t font_handle, Color color,
+                              float letterSpacing, float blur) {
+    if (!canvas_ || text.empty()) return;
+    auto fontIt = fonts_.find(font_handle);
+    if (fontIt == fonts_.end()) return;
+
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    if (blur > 0) {
+        // Skia sigma matches CSS blur radius / 2 (the same convention used
+        // by drawBoxShadow). MakeBlur draws a Gaussian falloff over the
+        // glyph mask, producing the text-shadow halo.
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    }
+
+    const FontEntry& fe = fontIt->second;
+    auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
+                                      fe.style, fallbackCache_);
+    if (runs.empty()) return;
+
+    float cursor = x;
+    for (const auto& run : runs) {
+        const char* data = text.data() + run.start;
+        if (letterSpacing == 0.0f) {
+            canvas_->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
+                                    cursor, y, run.font, paint);
+            cursor += run.font.measureText(data, run.length, SkTextEncoding::kUTF8);
+        } else {
+            // Walk UTF-8 codepoints and emit each with letter-spacing applied
+            // after every codepoint — matches CSS behavior, which adds the
+            // spacing as additional advance to each character.
+            size_t i = 0;
+            while (i < run.length) {
+                unsigned char b = static_cast<unsigned char>(data[i]);
+                size_t n = 1;
+                if      ((b & 0x80) == 0x00) n = 1;
+                else if ((b & 0xE0) == 0xC0) n = 2;
+                else if ((b & 0xF0) == 0xE0) n = 3;
+                else if ((b & 0xF8) == 0xF0) n = 4;
+                if (i + n > run.length) n = run.length - i;
+                canvas_->drawSimpleText(data + i, n, SkTextEncoding::kUTF8,
+                                        cursor, y, run.font, paint);
+                cursor += run.font.measureText(data + i, n, SkTextEncoding::kUTF8);
+                cursor += letterSpacing;
+                i += n;
+            }
+        }
+    }
+}
+
 TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handle) {
     auto it = fonts_.find(font_handle);
     if (it == fonts_.end()) return {};

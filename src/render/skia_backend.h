@@ -51,6 +51,9 @@ public:
     void fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) override;
 
     void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) override;
+    void drawTextEx(std::string_view text, float x, float y,
+                    uint64_t font_handle, Color color,
+                    float letterSpacing, float blur) override;
     TextMetrics measureText(std::string_view text, uint64_t font_handle) override;
 
     uint64_t createFont(std::string_view family, float size, int weight, bool italic) override;

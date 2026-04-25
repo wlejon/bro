@@ -73,6 +73,17 @@ public:
     virtual void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) = 0;
     virtual TextMetrics measureText(std::string_view text, uint64_t font_handle) = 0;
 
+    // Extended text draw: letter-spacing applies a per-character advance on
+    // top of the natural glyph advance (matching CSS letter-spacing). When
+    // blur > 0 the glyphs are blurred — used to render text-shadow halos.
+    // Default forwards to plain drawText so backends can adopt incrementally.
+    virtual void drawTextEx(std::string_view text, float x, float y,
+                            uint64_t font_handle, Color color,
+                            float letterSpacing, float blur) {
+        (void)letterSpacing; (void)blur;
+        drawText(text, x, y, font_handle, color);
+    }
+
     virtual uint64_t createFont(std::string_view family, float size, int weight, bool italic) = 0;
     virtual void deleteFont(uint64_t font_handle) = 0;
 

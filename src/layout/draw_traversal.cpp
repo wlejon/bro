@@ -1020,6 +1020,33 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     auto tsIt = style.find("text-shadow");
     if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, shadow);
 
+    // Resolve letter-spacing for the renderer. Layout already accounts for
+    // it in the text-run widths (text.cpp), so the painter must add the same
+    // per-glyph advance or the visible glyphs end up flush-left in their box.
+    float letterSpacing = 0.0f;
+    {
+        auto lsIt = style.find("letter-spacing");
+        if (lsIt != style.end() && !lsIt->second.empty() &&
+            lsIt->second != "normal") {
+            float fs = 16.0f;
+            auto fsIt = style.find("font-size");
+            if (fsIt != style.end()) {
+                char* end = nullptr;
+                float v = std::strtof(fsIt->second.c_str(), &end);
+                if (end != fsIt->second.c_str() && v > 0) fs = v;
+            }
+            const std::string& v = lsIt->second;
+            char* end = nullptr;
+            float n = std::strtof(v.c_str(), &end);
+            if (end != v.c_str()) {
+                std::string unit(end);
+                if (unit == "em") letterSpacing = n * fs;
+                else if (unit == "rem") letterSpacing = n * 16.0f;
+                else letterSpacing = n; // px / unitless
+            }
+        }
+    }
+
     // Parse text-decoration
     std::string decoration;
     auto tdIt = style.find("text-decoration");
@@ -1064,13 +1091,22 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     auto drawLine = [&](std::string_view line, float lx, float ly) {
         auto tm = renderer_->measureText(line, fontHandle);
 
-        // Draw text shadow first (behind text)
+        // Draw text shadow first (behind text). drawTextEx applies the blur
+        // mask filter to the shadow paint so a non-zero blur radius produces
+        // a real Gaussian halo instead of a sharp colored copy.
         if (hasShadow) {
-            renderer_->drawText(line, lx + shadow.dx, ly + shadow.dy, fontHandle, shadow.color);
+            renderer_->drawTextEx(line, lx + shadow.dx, ly + shadow.dy,
+                                  fontHandle, shadow.color,
+                                  letterSpacing, shadow.blur);
         }
 
-        // Draw the text
-        renderer_->drawText(line, lx, ly, fontHandle, color);
+        // Draw the text. Letter-spacing is applied here so visible glyph
+        // advances match the widths the layout assumed.
+        if (letterSpacing != 0.0f) {
+            renderer_->drawTextEx(line, lx, ly, fontHandle, color, letterSpacing, 0.0f);
+        } else {
+            renderer_->drawText(line, lx, ly, fontHandle, color);
+        }
 
         // Draw text-decoration
         if (!decoration.empty() && decoration != "none") {
@@ -1188,6 +1224,25 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
     auto tsIt = style.find("text-shadow");
     if (tsIt != style.end()) hasShadow = parseTextShadow(tsIt->second, shadow);
 
+    // Resolve letter-spacing for the pseudo's own style (pseudos inherit it
+    // by default but the rule may override).
+    float letterSpacing = 0.0f;
+    {
+        auto lsIt = style.find("letter-spacing");
+        if (lsIt != style.end() && !lsIt->second.empty() &&
+            lsIt->second != "normal") {
+            const std::string& v = lsIt->second;
+            char* end = nullptr;
+            float n = std::strtof(v.c_str(), &end);
+            if (end != v.c_str()) {
+                std::string unit(end);
+                if (unit == "em") letterSpacing = n * size;
+                else if (unit == "rem") letterSpacing = n * 16.0f;
+                else letterSpacing = n;
+            }
+        }
+    }
+
     // Use placed runs lifted onto pseudoBox by the layout adapter.
     // Run positions are relative to the pseudo wrapper's content origin
     // (recursive layoutInline produces a local IFC), so add the wrapper's
@@ -1199,9 +1254,15 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
         float lx = baseX + run.x;
         float ly = baseY + run.y + ascent;
         if (hasShadow) {
-            renderer_->drawText(run.text, lx + shadow.dx, ly + shadow.dy, fontHandle, shadow.color);
+            renderer_->drawTextEx(run.text, lx + shadow.dx, ly + shadow.dy,
+                                  fontHandle, shadow.color,
+                                  letterSpacing, shadow.blur);
         }
-        renderer_->drawText(run.text, lx, ly, fontHandle, color);
+        if (letterSpacing != 0.0f) {
+            renderer_->drawTextEx(run.text, lx, ly, fontHandle, color, letterSpacing, 0.0f);
+        } else {
+            renderer_->drawText(run.text, lx, ly, fontHandle, color);
+        }
     }
 }
 
