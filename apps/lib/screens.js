@@ -24,6 +24,22 @@
 //   });
 //   S.switchTo("title");
 //   window.addEventListener("keydown", (e) => S.keydown(e.key));
+//
+// Optional shared background — many apps run the same animated bg on
+// title/howto/gameover. Pass it once and the manager runs it for the
+// listed screens (before each screen's own update/draw):
+//
+//   Screens.create({
+//       backgroundScreens: ['title', 'howto', 'gameover'],
+//       backgroundInit:    (W, H) => initStarfield(W, H),
+//       backgroundUpdate:  (dt, W, H) => stepStarfield(dt, W, H),
+//       backgroundDraw:    (ctx, W, H) => drawStarfield(ctx, W, H),
+//   });
+//
+// Optional HUD auto-toggle — show a HUD element only on listed screens
+// (default ['playing']):
+//
+//   Screens.create({ hudSelector: '#hud', hudFor: ['playing', 'paused'] });
 
 (function (global) {
     'use strict';
@@ -36,6 +52,23 @@
         const itemsSel   = opts.itemsSelector || '.menu-items';
         const onMenuMove   = opts.onMenuMove   || null; // () => SFX
         const onMenuSelect = opts.onMenuSelect || null;
+
+        // Optional shared animated background for one or more screens.
+        // The manager calls backgroundUpdate/backgroundDraw automatically
+        // before the active screen's own update/draw, so callers don't
+        // have to wire the same code into every title/howto/gameover.
+        const bgScreens     = opts.backgroundScreens || null;
+        const bgInit        = opts.backgroundInit    || null;
+        const bgUpdate      = opts.backgroundUpdate  || null;
+        const bgDraw        = opts.backgroundDraw    || null;
+        let   bgInited      = false;
+
+        // Optional HUD auto-toggle. If hudSelector is set, the manager
+        // shows it on screens listed in hudFor (default ['playing']) and
+        // hides it on all others.
+        const hudSelector   = opts.hudSelector || null;
+        const hudFor        = opts.hudFor || ['playing'];
+        let   hudEl         = null;
 
         let overlayEl = null;
         let current   = null;
@@ -182,6 +215,18 @@
             ensureMouse();
             if (current.enter) current.enter(payload);
             if (activeScreenId) updateSelection(activeScreenId);
+            applyHudToggle();
+        }
+
+        function applyHudToggle() {
+            if (!hudSelector) return;
+            if (!hudEl) hudEl = document.querySelector(hudSelector);
+            if (!hudEl) return;
+            hudEl.style.display = hudFor.indexOf(currentName) >= 0 ? '' : 'none';
+        }
+
+        function bgActive() {
+            return bgScreens && bgScreens.indexOf(currentName) >= 0;
         }
 
         return {
@@ -193,8 +238,17 @@
             menuNav,
             keydown: (key) => { if (current && current.keydown) current.keydown(key); },
             keyup:   (key) => { if (current && current.keyup)   current.keyup(key); },
-            update:  (dt, w, h) => { if (current && current.update) current.update(dt, w, h); },
-            draw:    (ctx, w, h) => { if (current && current.draw) current.draw(ctx, w, h); },
+            update:  (dt, w, h) => {
+                if (bgActive()) {
+                    if (!bgInited && bgInit) { bgInit(w, h); bgInited = true; }
+                    if (bgUpdate) bgUpdate(dt, w, h);
+                }
+                if (current && current.update) current.update(dt, w, h);
+            },
+            draw:    (ctx, w, h) => {
+                if (bgActive() && bgDraw) bgDraw(ctx, w, h);
+                if (current && current.draw) current.draw(ctx, w, h);
+            },
         };
     }
 
