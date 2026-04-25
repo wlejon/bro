@@ -830,10 +830,6 @@ W.Board = (function () {
 
         // Spire side illustration.
         drawSpire(ctx, W_, H_);
-
-        // Hud text via pixel font — top-left panel under DOM HUD (which doesn't
-        // render in screenshots). Purely informational on-canvas.
-        drawHudPanel(ctx, r);
     }
 
     function drawSubmitButton(ctx, r) {
@@ -859,59 +855,6 @@ W.Board = (function () {
         W.Text.drawCentered(ctx, 'CLEAR', cx2 + bw / 2, cy2 + 17, 2, '#b8a8d8');
     }
 
-    function drawHudPanel(ctx, r) {
-        var pad = 16;
-        var x = 20, y = 20;
-        var w = Math.max(140, r.x - 32);
-        var lines = [
-            ['SCORE', String(score)],
-            ['LEVEL', String(level)],
-            [mode === 'timed' ? 'TIME' : (mode === 'puzzle' ? 'PUZZLE' : 'WORDS'),
-             mode === 'timed'
-                ? (function () { var s = Math.max(0, Math.ceil(timedRemaining / 1000));
-                                  var m = Math.floor(s / 60); var ss = s % 60;
-                                  return m + ':' + (ss < 10 ? '0' : '') + ss; })()
-                : (mode === 'puzzle' ? ((puzzleSolved + 1) + '/' + puzzleTotal) : String(wordsPlayed))],
-            ['LONGEST', longestWord ? longestWord.toUpperCase() : '-'],
-            ['BEST', bestWordText ? (bestWordText.toUpperCase() + ' ' + bestWordScore) : '-']
-        ];
-        if (streak >= 2) lines.push(['COMBO', 'x' + streak]);
-        var rowH = 30;
-        var h = pad * 2 + lines.length * rowH;
-        roundRect(ctx, x, y, w, h, 8);
-        ctx.fillStyle = 'rgba(12,8,22,0.85)';
-        ctx.fill();
-        ctx.strokeStyle = '#2a1f3a';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        var yy = y + pad;
-        for (var i = 0; i < lines.length; i++) {
-            W.Text.draw(ctx, lines[i][0], x + pad, yy, 1, '#7a6a9a');
-            W.Text.draw(ctx, lines[i][1], x + pad, yy + 10, 2, '#f0e0ff');
-            yy += rowH;
-        }
-
-        // Burning warn.
-        if (mode === 'classic' && grid) {
-            var warn = false;
-            for (var c = 0; c < COLS; c++) {
-                for (var rr = ROWS - 2; rr < ROWS; rr++) {
-                    if (grid[c][rr] && grid[c][rr].burning) { warn = true; break; }
-                }
-                if (warn) break;
-            }
-            if (warn) {
-                var wy = y + h + 8;
-                var ww = Math.max(180, w);
-                roundRect(ctx, x, wy, ww, 26, 4);
-                ctx.fillStyle = 'rgba(60,10,10,0.9)';
-                ctx.fill();
-                ctx.strokeStyle = '#802015';
-                ctx.stroke();
-                W.Text.draw(ctx, '! BURNING TILE !', x + 10, wy + 9, 2, '#ff4b3d');
-            }
-        }
-    }
 
     function drawSpire(ctx, W_, H_) {
         // Tower of letters building on the right side.

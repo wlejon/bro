@@ -477,18 +477,6 @@ F.Game = (function () {
 
         // Pet
         if (activePet) F.Pets.draw(dctx, activePet);
-
-        // HUD overlay on canvas (pixel font for screenshot safety)
-        if (slot) {
-            var t = Math.max(0, Math.ceil((DAY_MS - dayTimer) / 1000));
-            W.Text.draw(dctx, 'COINS ' + slot.coins, 200, 18, 2, '#f2c95b');
-            W.Text.draw(dctx, 'DAY ' + slot.day, 360, 18, 2, '#a8f06c');
-            W.Text.draw(dctx, 'TIME ' + t, 460, 18, 2, '#8fd6f0');
-            var alive = 0;
-            for (var n = 0; n < fish.length; n++) if (!fish[n].dead) alive++;
-            W.Text.draw(dctx, 'FISH ' + alive + '/' + F.Economy.maxFishCap(slot), 560, 18, 2, '#fff8d8');
-            if (slot.activePet) W.Text.draw(dctx, 'PET ' + slot.activePet.toUpperCase(), 740, 18, 2, '#b06acb');
-        }
     }
 
     function drawCoin(dctx, c) {
