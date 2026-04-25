@@ -65,3 +65,27 @@
 .thumb[data-app="example"] {
   background-image: url(thumbnails/example.png);
 }
+.thumb[data-app="fintank"] {
+  background-image: url(thumbnails/fintank.png);
+}
+.thumb[data-app="fluffshuffle"] {
+  background-image: url(thumbnails/fluffshuffle.png);
+}
+.thumb[data-app="gemswap"] {
+  background-image: url(thumbnails/gemswap.png);
+}
+.thumb[data-app="pegbounce"] {
+  background-image: url(thumbnails/pegbounce.png);
+}
+.thumb[data-app="serpcoil"] {
+  background-image: url(thumbnails/serpcoil.png);
+}
+.thumb[data-app="wordspire"] {
+  background-image: url(thumbnails/wordspire.png);
+}
+.thumb[data-app="blockpop"] {
+  background-image: url(thumbnails/blockpop.png);
+}
+.thumb[data-app="tumble"] {
+  background-image: url(thumbnails/tumble.png);
+}
