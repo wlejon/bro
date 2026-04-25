@@ -53,45 +53,6 @@ W.Screens = (function () {
         ctx.globalAlpha = 1.0;
     }
 
-    // The DOM overlay (#overlay > .screen) isn't composited into bro-headless
-    // screenshots — only the canvas scene layer is. To make title / mode /
-    // gameover screens visible both in windowed play AND in screenshot tests,
-    // menus are also drawn on the canvas here. The DOM overlay is what actually
-    // handles clicks and keyboard navigation; this is the visual twin.
-    function drawMenu(ctx, Wd, Hd, title, subtitle, items, selectedIdx, hint) {
-        var cy = Math.floor(Hd * 0.18);
-        W.Text.drawCentered(ctx, title, Wd / 2, cy, 8, '#e8c168');
-        if (subtitle) {
-            W.Text.drawCentered(ctx, subtitle, Wd / 2, cy + 64, 3, '#b8a8d8');
-        }
-        var topY = Math.floor(Hd * 0.5);
-        for (var i = 0; i < items.length; i++) {
-            var isSel = (i === selectedIdx);
-            var y = topY + i * 56;
-            if (isSel) {
-                ctx.fillStyle = 'rgba(232,193,104,0.18)';
-                ctx.fillRect(Wd * 0.2, y - 16, Wd * 0.6, 40);
-            }
-            W.Text.drawCentered(ctx, items[i], Wd / 2, y + 4,
-                                isSel ? 5 : 4,
-                                isSel ? '#fff4d8' : '#7a6a9a');
-        }
-        if (hint) {
-            W.Text.drawCentered(ctx, hint, Wd / 2, Hd - 40, 2, '#554966');
-        }
-    }
-
-    function titleSelectedIndex() {
-        var items = mgr.getMenuItems('title');
-        for (var i = 0; i < items.length; i++) if (items[i].classList.contains('selected')) return i;
-        return 0;
-    }
-    function genericSelectedIndex(screenId) {
-        var items = mgr.getMenuItems(screenId);
-        for (var i = 0; i < items.length; i++) if (items[i].classList.contains('selected')) return i;
-        return 0;
-    }
-
     function showHUD() { Hud.show('#hud'); }
     function hideHUD() { Hud.hide('#hud'); }
 
@@ -109,12 +70,7 @@ W.Screens = (function () {
         enter: function () { mgr.showOverlay('title'); hideHUD(); },
         exit:  function () {},
         update: function () {},
-        draw: function (ctx, Wd, Hd) {
-            drawBg(ctx, Wd, Hd);
-            drawMenu(ctx, Wd, Hd, 'WORDSPIRE', 'CHAIN LETTERS. BUILD THE SPIRE.',
-                     ['PLAY', 'HIGH SCORES', 'HOW TO PLAY', 'SETTINGS', 'CREDITS', 'QUIT'],
-                     titleSelectedIndex(), 'ARROWS NAVIGATE. ENTER TO SELECT.');
-        },
+        draw: drawBg,
         keydown: function (key) {
             mgr.menuNav('title', key, function (idx, el) {
                 var a = el && el.getAttribute('data-action');
@@ -133,12 +89,7 @@ W.Screens = (function () {
         enter: function () { mgr.showOverlay('mode-select'); hideHUD(); },
         exit:  function () {},
         update: function () {},
-        draw: function (ctx, Wd, Hd) {
-            drawBg(ctx, Wd, Hd);
-            drawMenu(ctx, Wd, Hd, 'SELECT MODE', '',
-                     ['CLASSIC', 'TIMED', 'PUZZLE', 'BACK'],
-                     genericSelectedIndex('mode-select'), '');
-        },
+        draw: drawBg,
         keydown: function (key) {
             mgr.menuNav('mode-select', key, function (idx, el) {
                 var m = el && el.getAttribute('data-mode');
@@ -286,16 +237,7 @@ W.Screens = (function () {
         },
         exit: function () {},
         update: function () {},
-        draw: function (ctx, Wd, Hd) {
-            drawBg(ctx, Wd, Hd);
-            var st = W.Board.getStats();
-            var title = st.finished ? (st.mode.toUpperCase() + ' COMPLETE') : 'GAME OVER';
-            drawMenu(ctx, Wd, Hd, title,
-                     'SCORE ' + st.score + '   WORDS ' + st.words,
-                     ['PLAY AGAIN', 'HIGH SCORES', 'MAIN MENU'],
-                     genericSelectedIndex('gameover'),
-                     'LONGEST: ' + (st.longest ? st.longest.toUpperCase() : '-'));
-        },
+        draw: drawBg,
         keydown: function (key) {
             mgr.menuNav('gameover', key, function (idx, el) {
                 var a = el && el.getAttribute('data-action');

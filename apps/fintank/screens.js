@@ -57,33 +57,6 @@ F.Screens = (function () {
         ctx.globalAlpha = 1;
     }
 
-    // DOM overlays (#overlay > .screen) don't composite into bro-headless
-    // screenshots — only the canvas scene layer is captured. So title / slot
-    // / gameover menus are also drawn on canvas. The DOM overlay still owns
-    // click + keyboard navigation; this is the visual twin.
-    function drawMenu(ctx, Wd, Hd, title, subtitle, items, selectedIdx, hint) {
-        var cy = Math.floor(Hd * 0.18);
-        W.Text.drawCentered(ctx, title, Wd / 2, cy, 8, '#f2c95b');
-        if (subtitle) {
-            W.Text.drawCentered(ctx, subtitle, Wd / 2, cy + 64, 3, '#a8c8dc');
-        }
-        var topY = Math.floor(Hd * 0.5);
-        for (var i = 0; i < items.length; i++) {
-            var isSel = (i === selectedIdx);
-            var y = topY + i * 46;
-            if (isSel) {
-                ctx.fillStyle = 'rgba(242,201,91,0.18)';
-                ctx.fillRect(Wd * 0.2, y - 12, Wd * 0.6, 34);
-            }
-            W.Text.drawCentered(ctx, items[i], Wd / 2, y + 4,
-                                isSel ? 4 : 3,
-                                isSel ? '#fff8d8' : '#6a8ca8');
-        }
-        if (hint) {
-            W.Text.drawCentered(ctx, hint, Wd / 2, Hd - 40, 2, '#4a6a80');
-        }
-    }
-
     function selIdx(screenId) {
         var items = mgr.getMenuItems(screenId);
         for (var i = 0; i < items.length; i++) if (items[i].classList.contains('selected')) return i;
@@ -98,14 +71,7 @@ F.Screens = (function () {
         enter: function () { mgr.showOverlay('title'); hideHUD(); },
         exit: function () {},
         update: function () {},
-        draw: function (ctx, Wd, Hd) {
-            drawBg(ctx, Wd, Hd);
-            drawMenu(ctx, Wd, Hd, 'FINTANK',
-                     'TEND YOUR FISH. FIGHT OFF INTRUDERS.',
-                     ['PLAY', 'HIGH SCORES', 'HOW TO PLAY', 'SETTINGS', 'CREDITS', 'QUIT'],
-                     selIdx('title'),
-                     'ARROWS NAVIGATE. ENTER TO SELECT.');
-        },
+        draw: drawBg,
         keydown: function (key) {
             mgr.menuNav('title', key, function (idx, el) {
                 var a = el && el.getAttribute('data-action');
@@ -124,19 +90,7 @@ F.Screens = (function () {
         enter: function () { mgr.showOverlay('slots'); this.refresh(); },
         exit: function () {},
         update: function () {},
-        draw: function (ctx, Wd, Hd) {
-            drawBg(ctx, Wd, Hd);
-            var labels = [];
-            for (var i = 1; i <= 3; i++) {
-                var s = F.Economy.loadSlot(i);
-                var fresh = (s.day === 1 && s.fish.length === 0 && s.coins === 200 && !s.bestDay);
-                labels.push('SLOT ' + i + ' - ' + (fresh ? 'NEW' :
-                    ('DAY ' + s.day + ' - ' + s.coins + 'C - ' + s.fish.length + ' FISH')));
-            }
-            labels.push('BACK');
-            drawMenu(ctx, Wd, Hd, 'SAVE SLOT', '',
-                     labels, selIdx('slots'), 'DEL TO ERASE SELECTED SLOT');
-        },
+        draw: drawBg,
         refresh: function () {
             var items = mgr.getMenuItems('slots');
             for (var i = 0; i < items.length; i++) {

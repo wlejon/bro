@@ -331,54 +331,21 @@ bool Engine::screenshot(const std::string& path) {
         glBindFramebuffer(GL_FRAMEBUFFER, compositeFBO);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, compositeTex, 0);
 
-        // 4. Clear and render scene layers (WebGL etc.)
+        // 4. Clear the composite target.
         glViewport(0, 0, w, h);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // 4. Composite UI overlay (premultiplied alpha)
-        GLuint uiTex = skia->getUITexture();
-        if (uiTex) {
-            float fw = (float)w, fh = (float)h;
-            render::TextureVertex quad[6] = {
-                {0, 0, 0, 0}, {fw, 0, 1, 0}, {fw, fh, 1, 1},
-                {0, 0, 0, 0}, {fw, fh, 1, 1}, {0, fh, 0, 1},
-            };
+        // Composite in DOM z-order: scene layers (canvas / WebGL / 3D) first,
+        // then the HTML/CSS UI overlay on top. A standard browser renders the
+        // document tree top-to-bottom — later siblings (like a full-screen
+        // `#overlay` div that comes after `<canvas>`) appear above the canvas.
+        // The single-UI-texture shortcut here loses true per-element z-order,
+        // but for the common "canvas as background, overlay on top" layout it
+        // matches browser behaviour; the windowed path does full layer-break
+        // interleaving via compositeLayers().
 
-            GLuint quadVBO = 0;
-            glGenBuffers(1, &quadVBO);
-            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-
-            GLuint quadVAO = 0;
-            glGenVertexArrays(1, &quadVAO);
-            glBindVertexArray(quadVAO);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
-                                  (void*)offsetof(render::TextureVertex, u));
-
-            glUseProgram(gl_->textureProgram());
-            float viewport[2] = {fw, fh};
-            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
-            glUniform1i(gl_->textureSamplerLoc(), 0);
-
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_SCISSOR_TEST);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, uiTex);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-
-            glDeleteBuffers(1, &quadVBO);
-            glDeleteVertexArrays(1, &quadVAO);
-        }
-
-        // 5. Composite canvas FBO textures ON TOP of the UI
+        // 5. Composite canvas FBO textures
         compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
 
         // 5a. Composite scene graph mesh FBO textures at element positions
@@ -477,7 +444,51 @@ bool Engine::screenshot(const std::string& path) {
             glDeleteVertexArrays(1, &quadVAO);
         }
 
-        // 5c. Draw crosshair overlay
+        // 5c. Composite UI overlay on top (premultiplied alpha). The Skia
+        // surface contains the HTML/CSS tree; transparent pixels where there
+        // is no painted content let the canvas/WebGL layers below show through.
+        GLuint uiTex = skia->getUITexture();
+        if (uiTex) {
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {0, 0, 0, 0}, {fw, 0, 1, 0}, {fw, fh, 1, 1},
+                {0, 0, 0, 0}, {fw, fh, 1, 1}, {0, fh, 0, 1},
+            };
+
+            GLuint quadVBO = 0;
+            glGenBuffers(1, &quadVBO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+
+            GLuint quadVAO = 0;
+            glGenVertexArrays(1, &quadVAO);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_SCISSOR_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, uiTex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
+
+        // 5d. Draw crosshair overlay on top of everything
         drawCrosshairGL();
 
         // 6. Read back pixels
@@ -602,49 +613,11 @@ std::vector<uint8_t> Engine::capturePixels() {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Composite UI overlay
-        GLuint uiTex = skia->getUITexture();
-        if (uiTex) {
-            float fw = (float)w, fh = (float)h;
-            render::TextureVertex quad[6] = {
-                {0, 0, 0, 0}, {fw, 0, 1, 0}, {fw, fh, 1, 1},
-                {0, 0, 0, 0}, {fw, fh, 1, 1}, {0, fh, 0, 1},
-            };
+        // Composite in DOM z-order: scene layers first, UI overlay on top.
+        // Matches standard browser behaviour for the common "canvas first,
+        // overlay-div sibling after" layout.
 
-            GLuint quadVBO = 0;
-            glGenBuffers(1, &quadVBO);
-            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-
-            GLuint quadVAO = 0;
-            glGenVertexArrays(1, &quadVAO);
-            glBindVertexArray(quadVAO);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
-                                  (void*)offsetof(render::TextureVertex, u));
-
-            glUseProgram(gl_->textureProgram());
-            float viewport[2] = {fw, fh};
-            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
-            glUniform1i(gl_->textureSamplerLoc(), 0);
-
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_SCISSOR_TEST);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, uiTex);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
-
-            glDeleteBuffers(1, &quadVBO);
-            glDeleteVertexArrays(1, &quadVAO);
-        }
-
-        // Composite canvas FBO textures ON TOP of the UI
+        // Composite canvas FBO textures
         compositeCanvasScenes(gl_.get(), w, h, compositeFBO);
 
         // Composite scene graph mesh FBO textures at element positions
@@ -732,7 +705,50 @@ std::vector<uint8_t> Engine::capturePixels() {
             glDeleteVertexArrays(1, &quadVAO);
         }
 
-        // Draw crosshair overlay
+        // Composite UI overlay on top. Transparent pixels in the Skia
+        // surface let scene layers below show through.
+        GLuint uiTex = skia->getUITexture();
+        if (uiTex) {
+            float fw = (float)w, fh = (float)h;
+            render::TextureVertex quad[6] = {
+                {0, 0, 0, 0}, {fw, 0, 1, 0}, {fw, fh, 1, 1},
+                {0, 0, 0, 0}, {fw, fh, 1, 1}, {0, fh, 0, 1},
+            };
+
+            GLuint quadVBO = 0;
+            glGenBuffers(1, &quadVBO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+
+            GLuint quadVAO = 0;
+            glGenVertexArrays(1, &quadVAO);
+            glBindVertexArray(quadVAO);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+
+            glUseProgram(gl_->textureProgram());
+            float viewport[2] = {fw, fh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, viewport);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_SCISSOR_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, uiTex);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            glDeleteBuffers(1, &quadVBO);
+            glDeleteVertexArrays(1, &quadVAO);
+        }
+
+        // Draw crosshair overlay on top of everything
         drawCrosshairGL();
 
         // Read back pixels
