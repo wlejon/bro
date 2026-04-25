@@ -101,21 +101,150 @@ class SceneGraph {
    * sprites currently render as 1x1 transparent until a texture is
    * wired in.
    *
+   * Spritesheet animation: pass `sheet` to slice the source image into
+   * frames, then either set `frameIndex` directly or register named
+   * `animations` and `play` one. The engine advances frames each
+   * frame using the standard frame dt (windowed real time, headless
+   * virtual time). When the active animation is non-looping, set
+   * `sprite.onAnimationEnd = (name) => {}` to be notified — and
+   * optionally chain via the spec's `next` field.
+   *
+   * @example
+   *   scene.createSprite({
+   *     src: 'assets/zombie.png',
+   *     sheet: { frameWidth: 64, frameHeight: 64, columns: 8, rows: 4 },
+   *     animations: {
+   *       walk:   { frames: [0,1,2,3,4,5,6,7], fps: 12, loop: true },
+   *       attack: { frames: [8,9,10,11],       fps: 16, loop: false, next: "walk" }
+   *     },
+   *     play: 'walk'
+   *   });
+   *
    * @param {Object} [opts]
    * @param {string} [opts.name]
    * @param {string} [opts.src] - image file path
-   * @param {number} [opts.width]
+   * @param {number} [opts.width] - display width (defaults to sheet frame size or image natural size)
    * @param {number} [opts.height]
    * @param {number} [opts.x=0]
    * @param {number} [opts.y=0]
    * @param {number} [opts.opacity=1.0]
    * @param {number} [opts.anchorX=0.5]
    * @param {number} [opts.anchorY=0.5]
+   * @param {Object} [opts.sheet] - spritesheet metadata (grid OR explicit frames)
+   * @param {number} [opts.sheet.frameWidth] - per-cell width in image pixels (grid form)
+   * @param {number} [opts.sheet.frameHeight]
+   * @param {number} [opts.sheet.columns]
+   * @param {number} [opts.sheet.rows]
+   * @param {Array<{x:number,y:number,w:number,h:number}>} [opts.sheet.frames] - explicit list (replaces grid)
+   * @param {Object} [opts.animations] - { name: { frames, fps, loop, next } }
+   * @param {string} [opts.play] - initial animation to play
+   * @param {number} [opts.frameIndex] - direct frame seek (without animation)
    * @param {number[]} [opts.worldAnchor] - [x,y,z] world position; switches to 3D billboard
    * @param {string} [opts.billboard="full"] - "full" | "ylock"
    * @returns {SceneNode}
    */
   createSprite(opts) {}
+
+  /**
+   * Create a 2D particle emitter node. Uses a fixed-size pool (no
+   * per-particle allocation after maxParticles is set) and integrates
+   * particles in the engine's per-frame tick. Renders via the canvas
+   * 2D path and honors the scene's camera transform.
+   *
+   * `texture` is optional — without it particles render as filled
+   * circles using the colour gradient. `blend: "additive"` switches to
+   * the canvas-2D `kPlus` blend mode for a glow look (good for sparks,
+   * embers).
+   *
+   * @example
+   *   const emitter = scene.createParticles({
+   *     x: 100, y: 200,
+   *     rate: 50, burst: 30, maxParticles: 500,
+   *     lifetime: { min: 0.4, max: 1.0 },
+   *     velocity: { angle: -90, angleSpread: 30, speed: 200, speedSpread: 50 },
+   *     gravity: { x: 0, y: 600 },
+   *     size: { start: 8, end: 0 },
+   *     color: { start: '#ffeebb', end: 'rgba(255,180,40,0)' },
+   *     blend: 'additive'
+   *   });
+   *   emitter.burst(50);
+   *   emitter.stop();   // existing particles finish
+   *   emitter.clear();  // also kill live ones
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.name]
+   * @param {number} [opts.x]
+   * @param {number} [opts.y]
+   * @param {number} [opts.maxParticles=256] - hard cap on simultaneously alive particles
+   * @param {string} [opts.texture] - image path; falls back to filled-circle particles
+   * @param {string} [opts.blend="normal"] - "normal" | "additive"
+   * @param {number} [opts.rate=0] - emission rate (particles/sec); 0 = burst-only
+   * @param {number} [opts.burst=0] - emit N immediately on creation
+   * @param {boolean} [opts.autoplay=true]
+   * @param {{min:number,max:number}|number} [opts.lifetime] - seconds
+   * @param {Object} [opts.velocity]
+   * @param {number} [opts.velocity.angle=-90] - center launch angle (degrees)
+   * @param {number} [opts.velocity.angleSpread=360] - cone full width (degrees)
+   * @param {number} [opts.velocity.speed=100] - center speed (px/s)
+   * @param {number} [opts.velocity.speedSpread=0]
+   * @param {{x:number,y:number}|number[]} [opts.gravity] - constant accel applied each frame
+   * @param {{start:number,end:number}} [opts.size] - particle size at start/end of life
+   * @param {{start:string,end:string}|string} [opts.color] - start/end CSS colours (interpolated)
+   * @param {Object} [opts.rotation]
+   * @param {number} [opts.rotation.start=0] - initial rotation (degrees)
+   * @param {number} [opts.rotation.spinSpeed=0] - mean spin (deg/s)
+   * @param {number} [opts.rotation.spinSpread=0] - random spread (deg/s)
+   * @param {number} [opts.drag=1.0] - per-second velocity multiplier (1 = none, <1 = damping)
+   * @returns {SceneNode}
+   */
+  createParticles(opts) {}
+
+  /**
+   * Create a 2D tilemap node. Stores N layers of `columns x rows` tile
+   * indices and renders each layer in order via batched drawImage calls.
+   * Tile value 0 = empty (skipped). Tile values 1..N index the tileset
+   * grid (row-major, 1-based).
+   *
+   * @example
+   *   // Single dense layer
+   *   const map = scene.createTilemap({
+   *     tileWidth: 32, tileHeight: 32,
+   *     columns: 40, rows: 30,
+   *     tileset: { src: 'assets/tiles.png', tileWidth: 32, tileHeight: 32, columns: 8 },
+   *     data: new Uint16Array(40 * 30)   // 0 = empty
+   *   });
+   *   map.setTile(5, 10, 7);                 // place tile 7 at (col=5,row=10)
+   *   map.getTile(5, 10);                    // -> 7
+   *   const hit = map.tileAtWorld(160, 320); // -> { col, row } | null
+   *
+   *   // Multiple named layers (rendered in order)
+   *   scene.createTilemap({
+   *     tileWidth: 16, tileHeight: 16, columns: 64, rows: 64,
+   *     tileset: { src: 'assets/tiles.png', tileWidth: 16, tileHeight: 16, columns: 16 },
+   *     layers: [
+   *       { name: 'ground', data: groundData },
+   *       { name: 'decals', data: decalData }
+   *     ]
+   *   });
+   *
+   * @param {Object} opts
+   * @param {string} [opts.name]
+   * @param {number} opts.tileWidth - per-tile output width (node-local pixels)
+   * @param {number} opts.tileHeight
+   * @param {number} opts.columns
+   * @param {number} opts.rows
+   * @param {number} [opts.x]
+   * @param {number} [opts.y]
+   * @param {Object} opts.tileset
+   * @param {string} opts.tileset.src - tileset image path
+   * @param {number} [opts.tileset.tileWidth] - per-cell width in image pixels
+   * @param {number} [opts.tileset.tileHeight]
+   * @param {number} [opts.tileset.columns] - 0 = auto from image width
+   * @param {Uint16Array|number[]} [opts.data] - single-layer dense data
+   * @param {Array<{name:string,data:(Uint16Array|number[])}>} [opts.layers] - multi-layer (overrides `data`)
+   * @returns {SceneNode}
+   */
+  createTilemap(opts) {}
 
   /**
    * Create an HTML-rasterizing scene node and add it to the root.
@@ -567,6 +696,102 @@ class SceneNode {
 
   /** Destroy this node (removes from parent and scene). */
   destroy() {}
+
+
+  // --- SpriteNode animation -------------------------------------------------
+
+  /**
+   * For a sprite with a configured sheet, the index of the active frame
+   * (0-based into the sheet's frame list). Set directly to seek; reading
+   * during animation returns whatever frame is currently displayed.
+   */
+  get frameIndex() {}
+  set frameIndex(value) {}
+
+  /**
+   * SpriteNode: true while a registered animation is actively cycling.
+   * ParticleNode: true while emitting (existing particles continue
+   * either way until they expire).
+   */
+  get isPlaying() {}
+
+  /** Name of the currently active sprite animation, or "" if none. */
+  get currentAnimation() {}
+
+  /**
+   * Animation-end callback. Fires once when a non-looping animation
+   * completes its last frame, before any chained `next` animation
+   * starts. Pass null to clear.
+   *   sprite.onAnimationEnd = (name) => { console.log("done:", name); };
+   */
+  set onAnimationEnd(fn) {}
+
+  /**
+   * SpriteNode: start (or resume) an animation. With no argument,
+   * resumes the most recently played animation.
+   * ParticleNode: resume emission.
+   * @param {string} [name]
+   * @returns {SceneNode} this
+   */
+  play(name) {}
+
+  /**
+   * SpriteNode: pause animation playback (current frame is held).
+   * ParticleNode: stop emitting; existing particles finish naturally.
+   * @returns {SceneNode} this
+   */
+  stop() {}
+
+  /**
+   * SpriteNode only: register or replace a named animation at runtime.
+   * The spec is the same shape as the createSprite `animations` entry.
+   * @param {string} name
+   * @param {{frames:number[], fps?:number, loop?:boolean, next?:string}} spec
+   */
+  addAnimation(name, spec) {}
+
+
+  // --- ParticleNode ---------------------------------------------------------
+
+  /** Live particle count (read-only). */
+  get liveCount() {}
+
+  /** Steady-state emission rate (particles/sec). Set to 0 for burst-only. */
+  get rate() {}
+  set rate(value) {}
+
+  /** Emit `n` particles immediately, regardless of `rate`. */
+  burst(n) {}
+
+  /** Stop emitting AND kill all live particles immediately. */
+  clear() {}
+
+  /**
+   * Reconfigure the emitter at runtime. Accepts the same option keys as
+   * createParticles (rate, lifetime, velocity, gravity, size, color,
+   * rotation, drag, blend, texture, maxParticles).
+   * @param {Object} opts
+   */
+  configure(opts) {}
+
+
+  // --- TilemapNode ----------------------------------------------------------
+
+  /**
+   * Set a tile by (col, row). 0 = empty. Out-of-bounds is silently
+   * ignored. `layer` may be an index or a string layer name; defaults
+   * to 0.
+   */
+  setTile(col, row, tileIndex, layer) {}
+
+  /** Returns the tile index at (col, row) — 0 if empty or out-of-bounds. */
+  getTile(col, row, layer) {}
+
+  /**
+   * Map world coordinates to grid cell. Honors the tilemap's transform.
+   * @returns {{col:number,row:number}|null}
+   */
+  tileAtWorld(worldX, worldY) {}
 
   /**
    * Replace the mesh on a MeshNode in place (keeps transform, color, etc).
