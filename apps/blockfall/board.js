@@ -537,7 +537,6 @@ T.Board = {
         ctx.fillRect(hx, hy, pvCell * 4 + 8, pvCell * 3 + 8);
         ctx.strokeStyle = "#333";
         ctx.strokeRect(hx, hy, pvCell * 4 + 8, pvCell * 3 + 8);
-        // Note: ctx.fillText not supported on bro canvas; labels shown via box context
         if (B.holdType > 0) {
             ctx.globalAlpha = B.holdUsed ? 0.4 : 1.0;
             B.drawMiniPiece(ctx, B.holdType, hx + 4, hy + 4, pvCell);
@@ -550,7 +549,6 @@ T.Board = {
         ctx.fillRect(nx, ny, pvCell * 4 + 8, pvCell * 3 + 8);
         ctx.strokeStyle = "#333";
         ctx.strokeRect(nx, ny, pvCell * 4 + 8, pvCell * 3 + 8);
-        // Labels not rendered via fillText (unsupported on bro canvas)
         if (B.nextTypes.length > 0) {
             B.drawMiniPiece(ctx, B.nextTypes[0], nx + 4, ny + 4, pvCell);
         }
