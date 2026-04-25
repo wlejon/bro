@@ -295,8 +295,14 @@ public:
     /// Called by SceneGraph during render traversal. Override in renderable nodes.
     virtual void onRender(class SceneGraph& graph) {}
 
+    /// Called by SceneGraph::tickAnimations(dt) once per engine frame, before
+    /// JS callbacks run, on every node in the tree (independent of visibility).
+    /// Override in nodes that need time-based simulation (sprite frame
+    /// advance, particle integration, etc.). Default: no-op.
+    virtual void onTick(float /*dtSec*/) {}
+
     // --- Type tag for downcasting ---
-    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light };
+    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light, Particles, Tilemap };
     virtual Type type() const { return Type::Base; }
 
     // --- World anchor + billboard (Shape/Sprite/Html) ---

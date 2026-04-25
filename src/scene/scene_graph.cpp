@@ -1090,6 +1090,30 @@ LightNode* SceneGraph::createLight(const std::string& name) {
     return ptr;
 }
 
+ParticleNode* SceneGraph::createParticles(const std::string& name) {
+    auto node = std::make_unique<ParticleNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+TilemapNode* SceneGraph::createTilemap(const std::string& name) {
+    auto node = std::make_unique<TilemapNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+void SceneGraph::tickAnimations(float dtSec) {
+    if (dtSec <= 0.0f) return;
+    // Iterate the node table directly (independent of tree visibility, so
+    // off-screen / parented-but-hidden particles still expire).
+    for (auto& [id, node] : nodes_) {
+        if (node) node->onTick(dtSec);
+    }
+    if (root_) root_->onTick(dtSec);
+}
+
 void SceneGraph::setCanvasSize(int w, int h) {
     canvasWidth_ = w;
     canvasHeight_ = h;

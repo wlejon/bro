@@ -12,9 +12,12 @@
 #include "scene/mesh_node.h"
 #include "scene/html_node.h"
 #include "scene/light_node.h"
+#include "scene/particle_node.h"
+#include "scene/tilemap_node.h"
 #include "dom/element.h"
 #include "physics/physics_world.h"
 #include "canvas/canvas_scene.h"
+#include "js/runtime.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -243,10 +246,14 @@ static JSValue js_node_remove(JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+// Forward decl — clears the JS animation-end callback for a SpriteNode id.
+static void clearSpriteEndCallback(uint32_t nodeId);
+
 // destroy()
 static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (w && w->graph) {
+        if (w->node) clearSpriteEndCallback(w->node->id());
         w->graph->destroyNode(w->node);
         w->node = nullptr;
     }
@@ -417,6 +424,462 @@ static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int arg
     return JS_DupValue(ctx, this_val);
 }
 
+// Forward declarations — parseAnimSpec and getGraph are defined further down
+// (alongside the SceneGraph wrapper / sprite createSprite handler), but the
+// sprite/particle/tilemap helpers below need them. The sprite-sheet related
+// types referenced are also forward-declared above via scene_node.h.
+struct GraphWrapper;
+static inline scene::SceneGraph* getGraph(JSContext* ctx, JSValueConst val);
+static scene::SpriteNode::AnimationSpec parseAnimSpec(JSContext* ctx, JSValueConst obj);
+
+// ---------------------------------------------------------------------------
+// Sprite animation-end JS callback registry (keyed by node id).
+// ---------------------------------------------------------------------------
+
+namespace {
+struct SpriteEndCB { JSContext* ctx; JSValue fn; };
+}
+static std::unordered_map<uint32_t, SpriteEndCB>& spriteEndCallbacks() {
+    static std::unordered_map<uint32_t, SpriteEndCB> map;
+    return map;
+}
+static void clearSpriteEndCallback(uint32_t nodeId) {
+    auto& m = spriteEndCallbacks();
+    auto it = m.find(nodeId);
+    if (it != m.end()) {
+        JS_FreeValue(it->second.ctx, it->second.fn);
+        m.erase(it);
+    }
+}
+static void installSpriteEndCallback(scene::SpriteNode* node, JSContext* ctx, JSValue fn) {
+    uint32_t id = node->id();
+    clearSpriteEndCallback(id);
+    if (JS_IsFunction(ctx, fn)) {
+        spriteEndCallbacks()[id] = { ctx, JS_DupValue(ctx, fn) };
+        node->setOnAnimationEnd([id](const std::string& name) {
+            auto& m = spriteEndCallbacks();
+            auto it = m.find(id);
+            if (it == m.end()) return;
+            JSContext* c = it->second.ctx;
+            JSValue dup = JS_DupValue(c, it->second.fn);
+            JSValue arg = JS_NewString(c, name.c_str());
+            JSValue ret = JS_Call(c, dup, JS_UNDEFINED, 1, &arg);
+            if (JS_IsException(ret)) {
+                Runtime::checkException(c, ret);
+            }
+            JS_FreeValue(c, ret);
+            JS_FreeValue(c, arg);
+            JS_FreeValue(c, dup);
+        });
+    } else {
+        node->setOnAnimationEnd(nullptr);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sprite node methods
+// ---------------------------------------------------------------------------
+
+// Unified play() for SpriteNode and ParticleNode. Sprite: optional animation
+// name. Particles: ignores any args.
+static JSValue js_node_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node) return JS_UNDEFINED;
+    if (w->node->type() == scene::SceneNode::Type::Sprite) {
+        auto* s = static_cast<scene::SpriteNode*>(w->node);
+        if (argc > 0 && JS_IsString(argv[0])) s->play(jsStr(ctx, argv[0]));
+        else                                  s->resume();
+    } else if (w->node->type() == scene::SceneNode::Type::Particles) {
+        static_cast<scene::ParticleNode*>(w->node)->play();
+    }
+    return JS_DupValue(ctx, this_val);
+}
+
+static JSValue js_node_stop(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node) return JS_UNDEFINED;
+    if (w->node->type() == scene::SceneNode::Type::Sprite) {
+        static_cast<scene::SpriteNode*>(w->node)->stop();
+    } else if (w->node->type() == scene::SceneNode::Type::Particles) {
+        static_cast<scene::ParticleNode*>(w->node)->stop();
+    }
+    return JS_DupValue(ctx, this_val);
+}
+
+static JSValue js_sprite_addAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Sprite || argc < 2)
+        return JS_UNDEFINED;
+    auto* s = static_cast<scene::SpriteNode*>(w->node);
+    std::string name = jsStr(ctx, argv[0]);
+    if (JS_IsObject(argv[1])) {
+        s->addAnimation(name, parseAnimSpec(ctx, argv[1]));
+    }
+    return JS_DupValue(ctx, this_val);
+}
+
+// ---------------------------------------------------------------------------
+// Particle node helpers + methods
+// ---------------------------------------------------------------------------
+
+static scene::Color colorFromJS(JSContext* ctx, JSValueConst v, scene::Color def) {
+    if (JS_IsString(v)) {
+        uint8_t r, g, b, a;
+        std::string s = jsStr(ctx, v);
+        if (parseColor(s, r, g, b, a)) return {r, g, b, a};
+    }
+    return def;
+}
+
+// Read a property that can be a number or {min,max}; returns chosen min,max.
+static void parseRange(JSContext* ctx, JSValueConst opts, const char* key,
+                       float& outMin, float& outMax) {
+    JSValue v = JS_GetPropertyStr(ctx, opts, key);
+    if (JS_IsNumber(v)) {
+        double n = 0; JS_ToFloat64(ctx, &n, v);
+        outMin = outMax = (float)n;
+    } else if (JS_IsObject(v)) {
+        outMin = (float)jsGetProp(ctx, v, "min", outMin);
+        outMax = (float)jsGetProp(ctx, v, "max", outMax);
+    }
+    JS_FreeValue(ctx, v);
+}
+
+static void applyParticleOpts(JSContext* ctx, JSValueConst opts, scene::ParticleNode* node) {
+    // maxParticles (must run before any burst/play)
+    JSValue mpVal = JS_GetPropertyStr(ctx, opts, "maxParticles");
+    if (JS_IsNumber(mpVal)) {
+        int32_t n = 256; JS_ToInt32(ctx, &n, mpVal);
+        node->setMaxParticles(n);
+    }
+    JS_FreeValue(ctx, mpVal);
+
+    // texture
+    JSValue texVal = JS_GetPropertyStr(ctx, opts, "texture");
+    if (JS_IsString(texVal)) node->setTexturePath(jsStr(ctx, texVal));
+    JS_FreeValue(ctx, texVal);
+
+    // blend
+    JSValue blendVal = JS_GetPropertyStr(ctx, opts, "blend");
+    if (JS_IsString(blendVal)) {
+        std::string s = jsStr(ctx, blendVal);
+        node->setBlend(s == "additive" ? scene::ParticleNode::Blend::Additive
+                                       : scene::ParticleNode::Blend::Normal);
+    }
+    JS_FreeValue(ctx, blendVal);
+
+    // rate
+    JSValue rateVal = JS_GetPropertyStr(ctx, opts, "rate");
+    if (JS_IsNumber(rateVal)) node->setRate((float)jsNum(ctx, rateVal));
+    JS_FreeValue(ctx, rateVal);
+
+    // lifetime
+    {
+        float lo = 0.5f, hi = 1.0f;
+        parseRange(ctx, opts, "lifetime", lo, hi);
+        node->setLifetime(lo, hi);
+    }
+
+    // velocity: { angle, angleSpread, speed, speedSpread }
+    JSValue velVal = JS_GetPropertyStr(ctx, opts, "velocity");
+    if (JS_IsObject(velVal)) {
+        node->setVelocity(
+            (float)jsGetProp(ctx, velVal, "angle", -90),
+            (float)jsGetProp(ctx, velVal, "angleSpread", 360),
+            (float)jsGetProp(ctx, velVal, "speed", 100),
+            (float)jsGetProp(ctx, velVal, "speedSpread", 0));
+    }
+    JS_FreeValue(ctx, velVal);
+
+    // gravity: { x, y } or [x, y]
+    JSValue gravVal = JS_GetPropertyStr(ctx, opts, "gravity");
+    if (JS_IsObject(gravVal)) {
+        if (JS_IsArray(gravVal)) {
+            JSValue gx = JS_GetPropertyUint32(ctx, gravVal, 0);
+            JSValue gy = JS_GetPropertyUint32(ctx, gravVal, 1);
+            node->setGravity((float)jsNum(ctx, gx), (float)jsNum(ctx, gy));
+            JS_FreeValue(ctx, gx); JS_FreeValue(ctx, gy);
+        } else {
+            node->setGravity(
+                (float)jsGetProp(ctx, gravVal, "x", 0),
+                (float)jsGetProp(ctx, gravVal, "y", 0));
+        }
+    }
+    JS_FreeValue(ctx, gravVal);
+
+    // size: { start, end }
+    JSValue sizeVal = JS_GetPropertyStr(ctx, opts, "size");
+    if (JS_IsObject(sizeVal)) {
+        node->setSize(
+            (float)jsGetProp(ctx, sizeVal, "start", 6),
+            (float)jsGetProp(ctx, sizeVal, "end", 0));
+    } else if (JS_IsNumber(sizeVal)) {
+        float v = (float)jsNum(ctx, sizeVal);
+        node->setSize(v, v);
+    }
+    JS_FreeValue(ctx, sizeVal);
+
+    // color: { start, end }
+    JSValue colorVal = JS_GetPropertyStr(ctx, opts, "color");
+    if (JS_IsObject(colorVal)) {
+        JSValue cs = JS_GetPropertyStr(ctx, colorVal, "start");
+        JSValue ce = JS_GetPropertyStr(ctx, colorVal, "end");
+        scene::Color start = colorFromJS(ctx, cs, {255,255,255,255});
+        scene::Color end   = colorFromJS(ctx, ce, {start.r, start.g, start.b, 0});
+        node->setColors(start, end);
+        JS_FreeValue(ctx, cs); JS_FreeValue(ctx, ce);
+    } else if (JS_IsString(colorVal)) {
+        scene::Color c = colorFromJS(ctx, colorVal, {255,255,255,255});
+        scene::Color end = c; end.a = 0;
+        node->setColors(c, end);
+    }
+    JS_FreeValue(ctx, colorVal);
+
+    // rotation: { start, spinSpeed, spinSpread }
+    JSValue rotVal = JS_GetPropertyStr(ctx, opts, "rotation");
+    if (JS_IsObject(rotVal)) {
+        node->setRotation(
+            (float)jsGetProp(ctx, rotVal, "start", 0),
+            (float)jsGetProp(ctx, rotVal, "spinSpeed", 0),
+            (float)jsGetProp(ctx, rotVal, "spinSpread", 0));
+    }
+    JS_FreeValue(ctx, rotVal);
+
+    // drag (per-second multiplier)
+    JSValue dragVal = JS_GetPropertyStr(ctx, opts, "drag");
+    if (JS_IsNumber(dragVal)) node->setDrag((float)jsNum(ctx, dragVal));
+    JS_FreeValue(ctx, dragVal);
+
+    // initial burst
+    JSValue burstVal = JS_GetPropertyStr(ctx, opts, "burst");
+    if (JS_IsNumber(burstVal)) {
+        int32_t n = 0; JS_ToInt32(ctx, &n, burstVal);
+        node->burst(n);
+    }
+    JS_FreeValue(ctx, burstVal);
+
+    // autoplay (default true)
+    JSValue apVal = JS_GetPropertyStr(ctx, opts, "autoplay");
+    bool autoplay = JS_IsUndefined(apVal) ? true : JS_ToBool(ctx, apVal);
+    JS_FreeValue(ctx, apVal);
+    if (autoplay) node->play(); else node->stop();
+}
+
+// createParticles(opts?) → SceneNode (ParticleNode)
+static JSValue js_sg_createParticles(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+    auto* node = g->createParticles();
+    g->root()->addChild(node);
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+        JSValue xVal = JS_GetPropertyStr(ctx, opts, "x");
+        JSValue yVal = JS_GetPropertyStr(ctx, opts, "y");
+        if (!JS_IsUndefined(xVal) || !JS_IsUndefined(yVal))
+            node->setPosition((float)jsNum(ctx, xVal), (float)jsNum(ctx, yVal));
+        JS_FreeValue(ctx, xVal);
+        JS_FreeValue(ctx, yVal);
+        applyParticleOpts(ctx, opts, node);
+    }
+    return wrapNode(ctx, node, g);
+}
+
+static JSValue js_particles_burst(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Particles) return JS_UNDEFINED;
+    int32_t n = 1;
+    if (argc > 0) JS_ToInt32(ctx, &n, argv[0]);
+    static_cast<scene::ParticleNode*>(w->node)->burst(n);
+    return JS_DupValue(ctx, this_val);
+}
+
+static JSValue js_particles_clear(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
+        static_cast<scene::ParticleNode*>(w->node)->clear();
+    return JS_DupValue(ctx, this_val);
+}
+
+static JSValue js_particles_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Particles) return JS_UNDEFINED;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        applyParticleOpts(ctx, argv[0], static_cast<scene::ParticleNode*>(w->node));
+    }
+    return JS_DupValue(ctx, this_val);
+}
+
+// ---------------------------------------------------------------------------
+// Tilemap node
+// ---------------------------------------------------------------------------
+
+static bool readUint16Array(JSContext* ctx, JSValueConst v, std::vector<uint16_t>& out) {
+    if (!JS_IsObject(v)) return false;
+    size_t off = 0, byteLen = 0, bpe = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &byteLen, &bpe);
+    if (JS_IsException(ab)) { JS_FreeValue(ctx, ab); return false; }
+    size_t abufLen = 0;
+    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, ab);
+    JS_FreeValue(ctx, ab);
+    if (!raw) {
+        // Fall back to plain Array of numbers.
+        if (!JS_IsArray(v)) return false;
+        JSValue lenVal = JS_GetPropertyStr(ctx, v, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        out.resize(len);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue elem = JS_GetPropertyUint32(ctx, v, i);
+            int32_t n = 0; JS_ToInt32(ctx, &n, elem);
+            out[i] = (uint16_t)n;
+            JS_FreeValue(ctx, elem);
+        }
+        return true;
+    }
+    // Treat as Uint16Array (bpe should be 2).
+    if (bpe == 2) {
+        const uint16_t* data = reinterpret_cast<const uint16_t*>(raw + off);
+        size_t count = byteLen / sizeof(uint16_t);
+        out.assign(data, data + count);
+        return true;
+    }
+    if (bpe == 4) {
+        const uint32_t* data = reinterpret_cast<const uint32_t*>(raw + off);
+        size_t count = byteLen / sizeof(uint32_t);
+        out.resize(count);
+        for (size_t i = 0; i < count; ++i) out[i] = (uint16_t)data[i];
+        return true;
+    }
+    if (bpe == 1) {
+        size_t count = byteLen;
+        out.resize(count);
+        for (size_t i = 0; i < count; ++i) out[i] = raw[off + i];
+        return true;
+    }
+    return false;
+}
+
+// createTilemap({tileWidth, tileHeight, columns, rows, tileset:{src, tileWidth, tileHeight, columns}, data|layers})
+static JSValue js_sg_createTilemap(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+    auto* node = g->createTilemap();
+    g->root()->addChild(node);
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        int tw = (int)jsGetProp(ctx, opts, "tileWidth", 32);
+        int th = (int)jsGetProp(ctx, opts, "tileHeight", 32);
+        node->setTileSize(tw, th);
+
+        int cols = (int)jsGetProp(ctx, opts, "columns", 0);
+        int rows = (int)jsGetProp(ctx, opts, "rows", 0);
+        node->setMapSize(cols, rows);
+
+        JSValue xVal = JS_GetPropertyStr(ctx, opts, "x");
+        JSValue yVal = JS_GetPropertyStr(ctx, opts, "y");
+        if (!JS_IsUndefined(xVal) || !JS_IsUndefined(yVal))
+            node->setPosition((float)jsNum(ctx, xVal), (float)jsNum(ctx, yVal));
+        JS_FreeValue(ctx, xVal); JS_FreeValue(ctx, yVal);
+
+        // tileset
+        JSValue tsVal = JS_GetPropertyStr(ctx, opts, "tileset");
+        if (JS_IsObject(tsVal)) {
+            std::string src = jsGetStr(ctx, tsVal, "src", "");
+            int sw = (int)jsGetProp(ctx, tsVal, "tileWidth", tw);
+            int sh = (int)jsGetProp(ctx, tsVal, "tileHeight", th);
+            int sc = (int)jsGetProp(ctx, tsVal, "columns", 0);
+            node->setTileset(src, sw, sh, sc);
+        }
+        JS_FreeValue(ctx, tsVal);
+
+        // layers (multi) or data (single layer)
+        JSValue layersVal = JS_GetPropertyStr(ctx, opts, "layers");
+        if (JS_IsArray(layersVal)) {
+            JSValue lenVal = JS_GetPropertyStr(ctx, layersVal, "length");
+            int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+            JS_FreeValue(ctx, lenVal);
+            for (int32_t i = 0; i < len; ++i) {
+                JSValue lo = JS_GetPropertyUint32(ctx, layersVal, i);
+                std::string lname = jsGetStr(ctx, lo, "name", "");
+                if (lname.empty()) lname = "layer" + std::to_string(i);
+                int idx = node->addLayer(lname);
+                JSValue dv = JS_GetPropertyStr(ctx, lo, "data");
+                std::vector<uint16_t> buf;
+                if (readUint16Array(ctx, dv, buf)) {
+                    node->setLayerData(idx, buf.data(), buf.size());
+                }
+                JS_FreeValue(ctx, dv);
+                JS_FreeValue(ctx, lo);
+            }
+        } else {
+            JSValue dataVal = JS_GetPropertyStr(ctx, opts, "data");
+            if (!JS_IsUndefined(dataVal)) {
+                int idx = node->addLayer("default");
+                std::vector<uint16_t> buf;
+                if (readUint16Array(ctx, dataVal, buf)) {
+                    node->setLayerData(idx, buf.data(), buf.size());
+                }
+            }
+            JS_FreeValue(ctx, dataVal);
+        }
+        JS_FreeValue(ctx, layersVal);
+    }
+    return wrapNode(ctx, node, g);
+}
+
+static int resolveLayerArg(JSContext* ctx, JSValueConst v, scene::TilemapNode* tm) {
+    if (JS_IsUndefined(v) || JS_IsNull(v)) return 0;
+    if (JS_IsString(v)) return tm->layerIndex(jsStr(ctx, v));
+    int32_t n = 0; JS_ToInt32(ctx, &n, v);
+    return n;
+}
+
+static JSValue js_tilemap_setTile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Tilemap || argc < 3) return JS_UNDEFINED;
+    auto* tm = static_cast<scene::TilemapNode*>(w->node);
+    int32_t col = 0, row = 0; int32_t tile = 0;
+    JS_ToInt32(ctx, &col, argv[0]);
+    JS_ToInt32(ctx, &row, argv[1]);
+    JS_ToInt32(ctx, &tile, argv[2]);
+    int layer = (argc > 3) ? resolveLayerArg(ctx, argv[3], tm) : 0;
+    tm->setTile(col, row, (uint16_t)tile, layer);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_tilemap_getTile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Tilemap || argc < 2) return JS_NewInt32(ctx, 0);
+    auto* tm = static_cast<scene::TilemapNode*>(w->node);
+    int32_t col = 0, row = 0;
+    JS_ToInt32(ctx, &col, argv[0]);
+    JS_ToInt32(ctx, &row, argv[1]);
+    int layer = (argc > 2) ? resolveLayerArg(ctx, argv[2], tm) : 0;
+    return JS_NewInt32(ctx, tm->getTile(col, row, layer));
+}
+
+static JSValue js_tilemap_tileAtWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Tilemap || argc < 2) return JS_NULL;
+    auto* tm = static_cast<scene::TilemapNode*>(w->node);
+    int col = 0, row = 0;
+    if (!tm->tileAtWorld((float)jsNum(ctx, argv[0]), (float)jsNum(ctx, argv[1]), col, row))
+        return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "col", JS_NewInt32(ctx, col));
+    JS_SetPropertyStr(ctx, obj, "row", JS_NewInt32(ctx, row));
+    return obj;
+}
+
 // ---------------------------------------------------------------------------
 // SceneGraph wrapper
 // ---------------------------------------------------------------------------
@@ -568,6 +1031,103 @@ static JSValue js_sg_createShape(JSContext* ctx, JSValueConst this_val, int argc
     return wrapNode(ctx, node, g);
 }
 
+// Parse a `sheet` option onto a SpriteNode. Two forms:
+//   { frameWidth, frameHeight, columns, rows }     -- uniform grid
+//   { frames: [{x,y,w,h}, ...] }                  -- explicit list
+static void applySpriteSheet(JSContext* ctx, JSValueConst opts, scene::SpriteNode* node) {
+    JSValue sheetVal = JS_GetPropertyStr(ctx, opts, "sheet");
+    if (!JS_IsObject(sheetVal)) { JS_FreeValue(ctx, sheetVal); return; }
+
+    JSValue framesVal = JS_GetPropertyStr(ctx, sheetVal, "frames");
+    if (JS_IsArray(framesVal)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, framesVal, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        std::vector<scene::SpriteNode::Frame> frames;
+        frames.reserve(len);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue f = JS_GetPropertyUint32(ctx, framesVal, i);
+            scene::SpriteNode::Frame fr{};
+            fr.x = (float)jsGetProp(ctx, f, "x", 0);
+            fr.y = (float)jsGetProp(ctx, f, "y", 0);
+            fr.w = (float)jsGetProp(ctx, f, "w", 0);
+            fr.h = (float)jsGetProp(ctx, f, "h", 0);
+            frames.push_back(fr);
+            JS_FreeValue(ctx, f);
+        }
+        node->setSheetFrames(std::move(frames));
+    } else {
+        int fw = (int)jsGetProp(ctx, sheetVal, "frameWidth", 0);
+        int fh = (int)jsGetProp(ctx, sheetVal, "frameHeight", 0);
+        int cols = (int)jsGetProp(ctx, sheetVal, "columns", 0);
+        int rows = (int)jsGetProp(ctx, sheetVal, "rows", 0);
+        node->setSheetGrid(fw, fh, cols, rows);
+    }
+    JS_FreeValue(ctx, framesVal);
+    JS_FreeValue(ctx, sheetVal);
+}
+
+// Parse an animation spec object: { frames: [...], fps, loop, next }.
+static scene::SpriteNode::AnimationSpec parseAnimSpec(JSContext* ctx, JSValueConst obj) {
+    scene::SpriteNode::AnimationSpec spec;
+    JSValue framesVal = JS_GetPropertyStr(ctx, obj, "frames");
+    if (JS_IsArray(framesVal)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, framesVal, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        spec.frames.reserve(len);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue elem = JS_GetPropertyUint32(ctx, framesVal, i);
+            int32_t v = 0;
+            JS_ToInt32(ctx, &v, elem);
+            spec.frames.push_back(v);
+            JS_FreeValue(ctx, elem);
+        }
+    }
+    JS_FreeValue(ctx, framesVal);
+
+    JSValue fpsVal = JS_GetPropertyStr(ctx, obj, "fps");
+    if (!JS_IsUndefined(fpsVal)) spec.fps = (float)jsNum(ctx, fpsVal);
+    JS_FreeValue(ctx, fpsVal);
+
+    JSValue loopVal = JS_GetPropertyStr(ctx, obj, "loop");
+    if (!JS_IsUndefined(loopVal)) spec.loop = JS_ToBool(ctx, loopVal);
+    JS_FreeValue(ctx, loopVal);
+
+    JSValue nextVal = JS_GetPropertyStr(ctx, obj, "next");
+    if (JS_IsString(nextVal)) spec.next = jsStr(ctx, nextVal);
+    JS_FreeValue(ctx, nextVal);
+
+    return spec;
+}
+
+// Parse `animations: { name: spec, ... }` into the SpriteNode.
+static void applySpriteAnimations(JSContext* ctx, JSValueConst opts, scene::SpriteNode* node) {
+    JSValue animsVal = JS_GetPropertyStr(ctx, opts, "animations");
+    if (!JS_IsObject(animsVal)) { JS_FreeValue(ctx, animsVal); return; }
+
+    JSPropertyEnum* tab = nullptr;
+    uint32_t count = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &count, animsVal,
+                                JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+        for (uint32_t i = 0; i < count; ++i) {
+            const char* keyStr = JS_AtomToCString(ctx, tab[i].atom);
+            if (!keyStr) continue;
+            JSValue v = JS_GetProperty(ctx, animsVal, tab[i].atom);
+            if (JS_IsObject(v)) {
+                node->addAnimation(keyStr, parseAnimSpec(ctx, v));
+            }
+            JS_FreeValue(ctx, v);
+            JS_FreeCString(ctx, keyStr);
+        }
+        for (uint32_t i = 0; i < count; ++i) JS_FreeAtom(ctx, tab[i].atom);
+        js_free(ctx, tab);
+    }
+    JS_FreeValue(ctx, animsVal);
+}
+
 // createSprite(opts?) → SceneNode (SpriteNode)
 static JSValue js_sg_createSprite(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -618,6 +1178,19 @@ static JSValue js_sg_createSprite(JSContext* ctx, JSValueConst this_val, int arg
                 JS_IsUndefined(ayVal) ? 0.5f : (float)jsNum(ctx, ayVal));
         JS_FreeValue(ctx, axVal);
         JS_FreeValue(ctx, ayVal);
+
+        // Spritesheet config + named animations + initial play.
+        applySpriteSheet(ctx, opts, node);
+        applySpriteAnimations(ctx, opts, node);
+        JSValue playVal = JS_GetPropertyStr(ctx, opts, "play");
+        if (JS_IsString(playVal)) node->play(jsStr(ctx, playVal));
+        JS_FreeValue(ctx, playVal);
+        JSValue fiVal = JS_GetPropertyStr(ctx, opts, "frameIndex");
+        if (JS_IsNumber(fiVal)) {
+            int32_t idx = 0; JS_ToInt32(ctx, &idx, fiVal);
+            node->setFrameIndex(idx);
+        }
+        JS_FreeValue(ctx, fiVal);
 
         applyBillboardOpts(ctx, opts, node);
     }
@@ -1053,7 +1626,10 @@ static JSValue js_sg_destroyNode(JSContext* ctx, JSValueConst this_val, int argc
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1) return JS_UNDEFINED;
     auto* cw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
-    if (cw) g->destroyNode(cw->node);
+    if (cw) {
+        if (cw->node) clearSpriteEndCallback(cw->node->id());
+        g->destroyNode(cw->node);
+    }
     return JS_UNDEFINED;
 }
 
@@ -2085,6 +2661,57 @@ void SceneBindings::install(JSContext* ctx) {
             return arr;
         })
 
+        // SpriteNode: frame index + isPlaying + currentAnimation
+        .prop("frameIndex",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Sprite)
+                    return JS_NewInt32(ctx, static_cast<scene::SpriteNode*>(w->node)->frameIndex());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, int32_t val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Sprite)
+                    static_cast<scene::SpriteNode*>(w->node)->setFrameIndex(val);
+            })
+        .get("isPlaying", [](NodeWrapper* w) -> bool {
+            if (!w || !w->node) return false;
+            if (w->node->type() == scene::SceneNode::Type::Sprite)
+                return static_cast<scene::SpriteNode*>(w->node)->isPlaying();
+            if (w->node->type() == scene::SceneNode::Type::Particles)
+                return static_cast<scene::ParticleNode*>(w->node)->isPlaying();
+            return false;
+        })
+        .get("currentAnimation", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Sprite) {
+                const auto& s = static_cast<scene::SpriteNode*>(w->node)->currentAnimation();
+                return JS_NewString(ctx, s.c_str());
+            }
+            return JS_UNDEFINED;
+        })
+        // ParticleNode: live count + emitter rate
+        .get("liveCount", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
+                return JS_NewInt32(ctx, static_cast<scene::ParticleNode*>(w->node)->liveCount());
+            return JS_UNDEFINED;
+        })
+        .prop("rate",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
+                    return JS_NewFloat64(ctx, static_cast<scene::ParticleNode*>(w->node)->rate());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
+                    static_cast<scene::ParticleNode*>(w->node)->setRate((float)val);
+            })
+        // SpriteNode: animation-end callback. Setter installs/removes the JS
+        // callback in the side registry.
+        .prop("onAnimationEnd",
+            [](NodeWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Sprite) return;
+                installSpriteEndCallback(static_cast<scene::SpriteNode*>(w->node), ctx, val);
+            })
+
         // Methods (raw — complex arg handling)
         .method_raw("add", js_node_add, 1)
         .method_raw("remove", js_node_remove, 1)
@@ -2096,7 +2723,18 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
         .method_raw("attachAgent", nodeAttachAgent, 3)
-        .method_raw("detachAgent", nodeDetachAgent, 0);
+        .method_raw("detachAgent", nodeDetachAgent, 0)
+        // Sprite animation + Particles control
+        .method_raw("play", js_node_play, 1)
+        .method_raw("stop", js_node_stop, 0)
+        .method_raw("addAnimation", js_sprite_addAnimation, 2)
+        .method_raw("burst", js_particles_burst, 1)
+        .method_raw("clear", js_particles_clear, 0)
+        .method_raw("configure", js_particles_configure, 1)
+        // Tilemap
+        .method_raw("setTile", js_tilemap_setTile, 4)
+        .method_raw("getTile", js_tilemap_getTile, 3)
+        .method_raw("tileAtWorld", js_tilemap_tileAtWorld, 2);
 
     // --- SceneGraph class ---
     qjsbind::Class<GraphWrapper>(ctx, "SceneGraph")
@@ -2125,6 +2763,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createMesh", js_sg_createMesh, 1)
         .method_raw("createHtmlNode", js_sg_createHtml, 1)
         .method_raw("createLight", js_sg_createLight, 1)
+        .method_raw("createParticles", js_sg_createParticles, 1)
+        .method_raw("createTilemap", js_sg_createTilemap, 1)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)
         .method_raw("setShadowQuality", js_sg_setShadowQuality, 1)

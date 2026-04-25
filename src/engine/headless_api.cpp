@@ -226,6 +226,7 @@ void Engine::advanceTime(double ms) {
             float aiDt = static_cast<float>(step * 0.001);
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(aiDt);
+                sg.graph->tickAnimations(aiDt);
             }
         }
 

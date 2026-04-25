@@ -7,6 +7,8 @@
 #include "scene/mesh_node.h"
 #include "scene/html_node.h"
 #include "scene/light_node.h"
+#include "scene/particle_node.h"
+#include "scene/tilemap_node.h"
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
 
@@ -43,6 +45,8 @@ public:
     MeshNode* createMesh(const std::string& name = "");
     HtmlNode* createHtml(const std::string& name = "");
     LightNode* createLight(const std::string& name = "");
+    ParticleNode* createParticles(const std::string& name = "");
+    TilemapNode* createTilemap(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);
@@ -94,6 +98,14 @@ public:
     void setCanvasSize(int w, int h);
     int canvasWidth() const { return canvasWidth_; }
     int canvasHeight() const { return canvasHeight_; }
+
+    /// Tick all node animations / particle simulation / etc. Called once per
+    /// engine frame (before JS callbacks fire and before render()). Walks the
+    /// node table and calls SceneNode::onTick(dt) on each entry, including the
+    /// root and invisible nodes — invisible particles still need to expire.
+    /// Headless drives this with the virtual-time step so screenshot tests
+    /// of effects are deterministic.
+    void tickAnimations(float dtSec);
 
     /// Update world matrices for any dirty nodes, then render all visible nodes.
     /// 3D MeshNodes are rendered into an FBO via GL. 2D nodes render via CanvasScene.

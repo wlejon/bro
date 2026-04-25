@@ -7,6 +7,8 @@ add_library(bro_scene STATIC
     mesh_node.cpp
     html_node.cpp
     light_node.cpp
+    particle_node.cpp
+    tilemap_node.cpp
     terrain_manager.cpp
     agent_binding.cpp
     ai_world_ticker.cpp

@@ -2008,6 +2008,7 @@ void Engine::run() {
             lastFrameTimeMs_ = nowMs;
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(frameDt);
+                sg.graph->tickAnimations(frameDt);
             }
             drainWheelSmoothing(frameDt);
         }

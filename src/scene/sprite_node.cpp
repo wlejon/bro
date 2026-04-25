@@ -4,6 +4,8 @@
 
 #include <stb_image.h>
 
+#include <algorithm>
+
 namespace bro::scene {
 
 SpriteNode::SpriteNode(const std::string& name) : SceneNode(name) {}
@@ -19,6 +21,113 @@ void SpriteNode::setImagePath(const std::string& path) {
     imagePath_ = path;
     imageLoaded_ = false;
     pixels_.clear();
+}
+
+void SpriteNode::setSheetGrid(int frameWidth, int frameHeight, int columns, int rows) {
+    frames_.clear();
+    if (frameWidth <= 0 || frameHeight <= 0 || columns <= 0 || rows <= 0) return;
+    frames_.reserve(static_cast<size_t>(columns) * static_cast<size_t>(rows));
+    for (int row = 0; row < rows; ++row) {
+        for (int col = 0; col < columns; ++col) {
+            frames_.push_back({
+                static_cast<float>(col * frameWidth),
+                static_cast<float>(row * frameHeight),
+                static_cast<float>(frameWidth),
+                static_cast<float>(frameHeight)
+            });
+        }
+    }
+}
+
+void SpriteNode::setSheetFrames(std::vector<Frame> frames) {
+    frames_ = std::move(frames);
+}
+
+void SpriteNode::addAnimation(const std::string& name, AnimationSpec spec) {
+    // Filter out invalid frame indices to avoid runtime surprises.
+    spec.frames.erase(
+        std::remove_if(spec.frames.begin(), spec.frames.end(),
+                       [&](int idx) { return idx < 0 || idx >= (int)frames_.size(); }),
+        spec.frames.end());
+    animations_[name] = std::move(spec);
+}
+
+void SpriteNode::play(const std::string& name) {
+    auto it = animations_.find(name);
+    if (it == animations_.end() || it->second.frames.empty()) {
+        // Unknown animation: fall back to frame 0 if a sheet exists.
+        currentAnim_.clear();
+        if (!frames_.empty()) frameIndex_ = 0;
+        playing_ = false;
+        return;
+    }
+    currentAnim_ = name;
+    animStep_ = 0;
+    animElapsed_ = 0.0f;
+    frameIndex_ = it->second.frames.front();
+    playing_ = true;
+}
+
+void SpriteNode::stop() {
+    playing_ = false;
+}
+
+void SpriteNode::resume() {
+    if (!currentAnim_.empty() && animations_.count(currentAnim_)) {
+        playing_ = true;
+    }
+}
+
+void SpriteNode::setFrameIndex(int idx) {
+    if (frames_.empty()) {
+        frameIndex_ = idx;
+        return;
+    }
+    if (idx < 0) idx = 0;
+    if (idx >= (int)frames_.size()) idx = (int)frames_.size() - 1;
+    frameIndex_ = idx;
+}
+
+bool SpriteNode::currentSheetRect(float& x, float& y, float& w, float& h) const {
+    if (frames_.empty()) return false;
+    int idx = frameIndex_;
+    if (idx < 0) idx = 0;
+    if (idx >= (int)frames_.size()) idx = (int)frames_.size() - 1;
+    const Frame& f = frames_[idx];
+    x = f.x; y = f.y; w = f.w; h = f.h;
+    return true;
+}
+
+void SpriteNode::onTick(float dtSec) {
+    if (!playing_ || currentAnim_.empty() || dtSec <= 0.0f) return;
+    auto it = animations_.find(currentAnim_);
+    if (it == animations_.end() || it->second.frames.empty() || it->second.fps <= 0.0f) return;
+
+    AnimationSpec& spec = it->second;
+    animElapsed_ += dtSec;
+    float frameDur = 1.0f / spec.fps;
+    while (animElapsed_ >= frameDur) {
+        animElapsed_ -= frameDur;
+        ++animStep_;
+        if (animStep_ >= (int)spec.frames.size()) {
+            if (spec.loop) {
+                animStep_ = 0;
+            } else {
+                // Last frame done.
+                animStep_ = (int)spec.frames.size() - 1;
+                frameIndex_ = spec.frames[animStep_];
+                std::string finished = currentAnim_;
+                std::string chain = spec.next;
+                playing_ = false;
+                if (onEnd_) onEnd_(finished);
+                if (!chain.empty()) {
+                    play(chain);
+                }
+                return;
+            }
+        }
+        frameIndex_ = spec.frames[animStep_];
+    }
 }
 
 void SpriteNode::onRender(SceneGraph& graph) {
@@ -40,8 +149,28 @@ void SpriteNode::onRender(SceneGraph& graph) {
 
     if (pixels_.empty()) return;
 
-    float dw = (width_ > 0) ? width_ : static_cast<float>(imgW_);
-    float dh = (height_ > 0) ? height_ : static_cast<float>(imgH_);
+    // Source rect resolution priority:
+    //   1. Active sheet frame (if a sheet is configured)
+    //   2. setSourceRect()
+    //   3. Full image
+    float sx = 0, sy = 0, sw = 0, sh = 0;
+    bool hasSheetRect = currentSheetRect(sx, sy, sw, sh);
+    bool useSrc = hasSheetRect || hasSourceRect_;
+    if (!hasSheetRect && hasSourceRect_) {
+        sx = srcX_; sy = srcY_; sw = srcW_; sh = srcH_;
+    }
+
+    // Display size: explicit > sheet frame size > full image.
+    float dw, dh;
+    if (width_ > 0 || height_ > 0) {
+        dw = (width_ > 0) ? width_ : sw;
+        dh = (height_ > 0) ? height_ : sh;
+    } else if (hasSheetRect) {
+        dw = sw; dh = sh;
+    } else {
+        dw = static_cast<float>(imgW_);
+        dh = static_cast<float>(imgH_);
+    }
 
     const auto& wm = worldMatrix();
 
@@ -55,9 +184,9 @@ void SpriteNode::onRender(SceneGraph& graph) {
     float ax = -dw * anchorX_;
     float ay = -dh * anchorY_;
 
-    if (hasSourceRect_) {
+    if (useSrc) {
         cs->drawImage(pixels_.data(), imgW_, imgH_,
-                      srcX_, srcY_, srcW_, srcH_,
+                      sx, sy, sw, sh,
                       ax, ay, dw, dh);
     } else {
         cs->drawImage(pixels_.data(), imgW_, imgH_,
