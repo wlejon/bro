@@ -146,4 +146,67 @@ for (let i = 0; i < nOrangeTotals.length; i++) {
     assert(nOrangeTotals[i] > 0, 'level ' + (i + 1) + ' has at least one orange peg, got ' + nOrangeTotals[i]);
 }
 
+// ---------- Mirage predict vs live trajectory parity ----------
+// The Mirage guide draws Physics.predict(...) as a preview line. It must
+// agree with the live ball flight when given identical launch params, or
+// the preview will look offset/shallow versus reality. (See app.js
+// drawAimGuide + tryLaunch — both must use the same muzzle position.)
+{
+    const w2 = P.createWorld();
+    // No pegs in the field: pure ballistic comparison.
+    const angle = (75 * Math.PI) / 180; // mostly down, slightly right
+    const speed = 820;
+    const lx = 600, ly = 80;
+
+    // Live: launch and step at 1/120, capturing positions at fixed times.
+    P.launchBall(w2, angle, speed, lx, ly);
+    const livePts = [];
+    const stepDt = 1/120;
+    const sampleEvery = 12; // 0.1s
+    for (let i = 0; i < 240; i++) {
+        P.step(w2, stepDt);
+        if (i % sampleEvery === 0 && w2.ball && w2.ball.active) {
+            livePts.push({ t: (i + 1) * stepDt, x: w2.ball.x, y: w2.ball.y });
+        }
+        if (!P.hasActiveBall(w2)) break;
+    }
+
+    // Predict: same params, same launch position.
+    const predPts = [];
+    P.predict(w2, angle, speed, lx, ly, 2.0, predPts);
+    P.destroyWorld(w2);
+
+    assert(livePts.length > 4, 'live ball produced enough samples');
+    assert(predPts.length > 4, 'predict produced enough samples');
+
+    // Predict samples are time-ordered with stride totalSteps/80 over
+    // 2.0s @ dt=1/120 → 240 steps / 80 = 3 → ~0.025s per sample. We compare
+    // by index over the first few samples (both start at the same launch).
+    // Tolerance is generous (within a few ball-radii) because predict
+    // sample times don't line up exactly with live sample times — the
+    // important thing is that they don't drift apart by tens of pixels.
+    // Pair samples by trajectory-arclength index: every Nth predict sample
+    // should equal a live sample, since both are stepped at 1/120 with the
+    // same launch state. predict samples every (totalSteps/80) steps; live
+    // samples every 12 steps; over 2.0s @ 1/120 totalSteps=240, predict
+    // stride=3, live stride=12 → 4 predict samples per live sample.
+    let maxDx = 0, maxDy = 0;
+    const ratio = 4;
+    const toCompare = Math.min(livePts.length, Math.floor(predPts.length / ratio));
+    for (let i = 0; i < toCompare; i++) {
+        const lp = livePts[i];
+        const pp = predPts[i * ratio];
+        if (!pp) break;
+        const dx = Math.abs(pp.x - lp.x);
+        const dy = Math.abs(pp.y - lp.y);
+        if (dx > maxDx) maxDx = dx;
+        if (dy > maxDy) maxDy = dy;
+    }
+    console.log('predict vs live drift: maxDx=' + maxDx.toFixed(2)
+        + ' maxDy=' + maxDy.toFixed(2));
+    // Physics is identical, so drift should be sub-pixel.
+    assert(maxDx < 1, 'predict X matches live within 1px (got ' + maxDx.toFixed(2) + ')');
+    assert(maxDy < 1, 'predict Y matches live within 1px (got ' + maxDy.toFixed(2) + ')');
+}
+
 console.log('pegbounce tests passed.');

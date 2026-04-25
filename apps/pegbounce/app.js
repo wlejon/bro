@@ -172,7 +172,11 @@
         S.mult                = 1;
         S.purpleActive        = false;
         S.balls -= 1;
-        Physics.launchBall(S.world, S.aimAngle, speed, S.cannonX, S.cannonY + 24);
+        // Launch from the muzzle tip — same offset the Mirage predict and the
+        // short aim arc use so the previewed trajectory matches the live one.
+        const muzzleX = S.cannonX + Math.cos(S.aimAngle) * 30;
+        const muzzleY = S.cannonY + Math.sin(S.aimAngle) * 30;
+        Physics.launchBall(S.world, S.aimAngle, speed, muzzleX, muzzleY);
         S.replayLog.push({ kind: 'launch', a: S.aimAngle, s: speed });
         Sfx.launch();
     }
