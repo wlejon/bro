@@ -81,7 +81,7 @@ SC.Levels = (function () {
             name: "River Bend",
             controls: sCurve(10),
             totalOrbs: 45, palette: [1, 2, 3], chainSpeed: 30,
-            shooter: { x: W/2, y: H/2 }
+            shooter: { x: 380, y: 80 }
         },
         // 3 — zig zag
         {
@@ -95,14 +95,14 @@ SC.Levels = (function () {
             name: "Inward Gyre",
             controls: spiral(W/2, H/2, 2.2, 330, 80, 16),
             totalOrbs: 52, palette: [1, 2, 3, 4], chainSpeed: 30,
-            shooter: { x: 160, y: 160 }
+            shooter: { x: 1140, y: 140 }
         },
         // 5 — figure eight
         {
             name: "Twin Runes",
             controls: figureEight(W/2, H/2, 420, 260, 28),
             totalOrbs: 55, palette: [1, 2, 3, 4], chainSpeed: 32,
-            shooter: { x: W/2, y: H/2 }
+            shooter: { x: W/2, y: 80 }
         },
         // 6 — double S
         {
@@ -110,7 +110,7 @@ SC.Levels = (function () {
             controls: [{x:120,y:180},{x:1160,y:180},{x:1160,y:380},{x:120,y:380},
                        {x:120,y:580},{x:1160,y:580},{x:1160,y:700},{x:900,y:720}],
             totalOrbs: 58, palette: [1, 2, 3, 4], chainSpeed: 34,
-            shooter: { x: W/2, y: H/2 }
+            shooter: { x: 620, y: 480 }
         },
         // 7 — wide spiral
         {
@@ -155,14 +155,14 @@ SC.Levels = (function () {
             name: "Bound Infinity",
             controls: figureEight(W/2, H/2, 460, 260, 36),
             totalOrbs: 82, palette: [1, 2, 3, 4, 5, 6], chainSpeed: 40,
-            shooter: { x: W/2, y: H/2 }
+            shooter: { x: W/2, y: 80 }
         },
         // 13 — spiral tight
         {
             name: "Whorl of Thorns",
             controls: spiral(W/2, H/2, 3.5, 340, 50, 20),
             totalOrbs: 86, palette: [1, 2, 3, 4, 5, 6], chainSpeed: 42,
-            shooter: { x: 160, y: 160 }
+            shooter: { x: 1140, y: 660 }
         },
         // 14 — snake maze
         {
@@ -175,7 +175,7 @@ SC.Levels = (function () {
                 {x:220,y:700},{x:1160,y:700}
             ],
             totalOrbs: 92, palette: [1, 2, 3, 4, 5, 6], chainSpeed: 42,
-            shooter: { x: W/2, y: H/2 }
+            shooter: { x: 80, y: 480 }
         },
         // 15 — final: complex spiral/figure8 hybrid
         {
@@ -183,7 +183,7 @@ SC.Levels = (function () {
             controls: spiral(W/2, H/2, 2.5, 360, 80, 16)
                 .concat(figureEight(W/2, H/2, 80, 60, 8)),
             totalOrbs: 100, palette: [1, 2, 3, 4, 5, 6], chainSpeed: 46,
-            shooter: { x: W/2, y: H - 160 }
+            shooter: { x: 1200, y: 80 }
         }
     ];
 

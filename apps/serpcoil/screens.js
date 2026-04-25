@@ -11,7 +11,8 @@ SC.Game = (function () {
         path: null, chain: null, shooter: null,
         level: 0,           // 0-based index
         score: 0,
-        combo: 1,           // multiplier
+        combo: 1,           // displayed multiplier (max cascade depth this window)
+        cascadeDepth: 0,    // pops in the current cascade window
         comboOrbs: 0,       // orbs popped this combo window
         comboTimer: 0,      // ms remaining on combo decay
         popsCounted: 0,
@@ -77,22 +78,31 @@ SC.Game = (function () {
         return base * mult;
     }
 
-    // Fire events from pops to update score, fx, audio, combo.
-    function onPopGroup(popped, comboDepth, positions) {
+    // Fire events from pops to update score, fx, audio, combo. Called
+    // for every pop — both the initial insert-triggered match AND each
+    // follow-up pop that occurs after a merge closes a gap.
+    function onPopGroup(popped, _ignored, positions) {
         var color = popped[0] ? popped[0].color : 1;
-        var gain = scoreForPop(popped.length, comboDepth);
+        // Cascade tracking: if combo timer is still alive, this pop is
+        // part of an ongoing cascade. Otherwise it starts a fresh one.
+        if (state.comboTimer <= 0) state.cascadeDepth = 0;
+        state.cascadeDepth += 1;
+        if (state.cascadeDepth > state.combo) state.combo = state.cascadeDepth;
+        state.comboTimer = 1800;
+
+        var gain = scoreForPop(popped.length, state.cascadeDepth);
         state.score += gain;
         state.popsCounted += popped.length;
-        // Combo
-        if (comboDepth > state.combo) state.combo = comboDepth;
-        state.comboTimer = 1800;
 
         for (var i = 0; i < positions.length; i++) {
             SC.FX.burst(positions[i].x, positions[i].y, positions[i].color, 14);
         }
         var p0 = positions[0];
-        if (p0) SC.FX.floatText(p0.x, p0.y - 10, "+" + gain, "#ffd86b");
-        SC.Audio.sfxPop(color, comboDepth);
+        if (p0) {
+            SC.FX.floatText(p0.x, p0.y - 10, "+" + gain, "#ffd86b");
+            SC.FX.shockwave(p0.x, p0.y, { maxR: 80 });
+        }
+        SC.Audio.sfxPop(color, state.cascadeDepth);
 
         // Chance to award powerup onto next slot.
         if (state.shooter.maybeInjectPU()) {
@@ -102,16 +112,10 @@ SC.Game = (function () {
         }
     }
 
-    // Runs the pop cascade from an insertion/hit at idx.
+    // Pop directly at idx (used by insert / colorshift). Follow-up combo
+    // pops are handled inside chain.tick when segments merge.
     function handlePopAt(idx) {
-        var res = state.chain.popAround(idx, onPopGroup);
-        if (res.comboDepth > 0) {
-            // Combo shockwave at first pop location.
-            if (res.positions.length) {
-                SC.FX.shockwave(res.positions[0].x, res.positions[0].y, { maxR: 80 });
-            }
-        }
-        return res;
+        return state.chain.popAround(idx, onPopGroup);
     }
 
     // --- Projectile / insertion ---
@@ -185,6 +189,7 @@ SC.Game = (function () {
         state.level = levelIdx;
         state.score = 0;
         state.combo = 1;
+        state.cascadeDepth = 0;
         state.comboOrbs = 0;
         state.comboTimer = 0;
         state.popsCounted = 0;
@@ -228,7 +233,7 @@ SC.Game = (function () {
         } else {
             state.shooter.aimAt(state.mouseX, state.mouseY);
         }
-        state.chain.tick(dt);
+        state.chain.tick(dt, onPopGroup);
         state.shooter.tick(dt);
 
         // Danger enter transition
@@ -254,10 +259,36 @@ SC.Game = (function () {
             }
         }
 
+        // Once the spawn queue is empty, the shooter should only offer
+        // colors that still exist on the board. If the player's loaded
+        // current/next ball is now a color the previous shot cleared,
+        // dissolve it (burst fx) and replace with a still-living color.
+        if (state.chain.remainingToSpawn() === 0) {
+            var live = state.chain.colorsRemaining();
+            if (live.length > 0) {
+                state.shooter.setPalette(live);
+                var sx = state.shooter.x(), sy = state.shooter.y();
+                var pickLive = function () { return live[(Math.random() * live.length) | 0]; };
+                if (live.indexOf(state.shooter.current()) < 0) {
+                    SC.FX.burst(sx, sy, state.shooter.current(), 14);
+                    state.shooter.setCurrent(pickLive(), state.shooter.currentPU());
+                }
+                if (live.indexOf(state.shooter.next()) < 0) {
+                    var ang = state.shooter.aim();
+                    var bx = sx - Math.cos(ang) * 38, by = sy - Math.sin(ang) * 38;
+                    SC.FX.burst(bx, by, state.shooter.next(), 10);
+                    state.shooter.setNext(pickLive(), state.shooter.nextPU());
+                }
+            }
+        }
+
         // Combo decay
         if (state.comboTimer > 0) {
             state.comboTimer -= dt;
-            if (state.comboTimer <= 0) state.combo = 1;
+            if (state.comboTimer <= 0) {
+                state.combo = 1;
+                state.cascadeDepth = 0;
+            }
         }
 
         // Mouth puff spawn events.
@@ -332,6 +363,7 @@ SC.Game = (function () {
         if (state.progress.unlocked <= state.level + 1 && state.level + 1 < SC.Levels.count()) {
             state.progress.unlocked = state.level + 2;
         }
+        state.storage.set("unlocked", state.progress.unlocked);
         state.storage.save();
         persistHighScore();
     }
@@ -527,6 +559,19 @@ SC.Game = (function () {
             stars: state.storage.get("stars") || {},
             bestScore: state.storage.get("bestScore") || {}
         };
+        // Self-heal: any cleared level (stars > 0) must unlock its successor.
+        // Recovers from past saves where the unlock counter wasn't persisted.
+        for (var lk in state.progress.stars) {
+            if (state.progress.stars[lk] > 0) {
+                var minUnlock = (parseInt(lk, 10) | 0) + 2;
+                if (minUnlock > state.progress.unlocked &&
+                    minUnlock <= SC.Levels.count()) {
+                    state.progress.unlocked = minUnlock;
+                }
+            }
+        }
+        state.storage.set("unlocked", state.progress.unlocked);
+        state.storage.save();
         // Settings ref shares the same object tree — so updates persist via save()
         state.settings = {
             sfxVol: state.storage.get("sfxVol"),

@@ -69,7 +69,7 @@ SC.Chain = (function () {
         var totalToSpawn = opts.totalToSpawn || 50;
         var speed = opts.speed || 35;              // px/s march speed
         var baseSpeed = speed;
-        var insertSpeed = opts.insertSpeed || 1000; // px/s when inserting/settling
+        var pullbackRate = opts.pullbackRate || 260; // px/s — front segments retreat at this rate to rejoin the rear after a pop.
         var spawnInterval = opts.spawnInterval || 380; // ms between new orbs
 
         var orbs = [];  // {color, d, phase}
@@ -79,6 +79,13 @@ SC.Chain = (function () {
         var slowmoTimer = 0;      // ms remaining
         var speedBoostTimer = 0;  // ms scaling
         var rng = opts.rng || Math.random;
+
+        // Pre-generate the entire spawn sequence so we can answer "what
+        // colors might still appear?" deterministically.
+        var spawnQueue = [];
+        for (var sq = 0; sq < totalToSpawn; sq++) {
+            spawnQueue.push(palette[(rng() * palette.length) | 0]);
+        }
 
         // Utility: insert an orb into the array while keeping sort order by d.
         function insertSorted(orb) {
@@ -93,43 +100,86 @@ SC.Chain = (function () {
         }
 
         function spawnOrb(dtMs) {
-            if (spawned >= totalToSpawn) return;
+            if (spawnQueue.length === 0) return;
             spawnTimer += dtMs;
             if (spawnTimer < spawnInterval) return;
             spawnTimer -= spawnInterval;
             // Spawn at d just behind existing first orb so chain stays packed.
             var d0 = 0;
             if (orbs.length > 0) d0 = orbs[0].d - ORB_DIAM;
-            orbs.unshift({ color: randomColor(), d: d0, phase: rng() * Math.PI * 2 });
+            orbs.unshift({ color: spawnQueue.shift(), d: d0, phase: rng() * Math.PI * 2 });
             spawned++;
         }
 
-        // March the chain forward. We move the head, then pack everyone
-        // else behind it tightly.
+        // Distinct colors still in play: anything currently on the path
+        // OR still queued to spawn. Once a color disappears from this set
+        // it's truly gone for the rest of the level.
+        function colorsRemaining() {
+            var seen = {};
+            for (var i = 0; i < orbs.length; i++) seen[orbs[i].color] = true;
+            for (var j = 0; j < spawnQueue.length; j++) seen[spawnQueue[j]] = true;
+            var out = [];
+            for (var k in seen) out.push(parseInt(k, 10));
+            out.sort();
+            return out;
+        }
+
+        // March the chain forward.
+        //
+        // The chain is logically a sequence of contiguous "segments" — runs
+        // of orbs packed against one another. Initially there's one segment;
+        // each pop splits the segment around the cleared run into two
+        // (everything behind the gap, and everything ahead).
+        //
+        // Motion rules (Zuma-style):
+        //   - The rear-most segment is the only one being pushed forward
+        //     by the mouth, so it marches forward at base speed.
+        //   - Every other segment has nothing behind it pushing — it
+        //     RETREATS toward the rear at pullbackRate until it kisses
+        //     the segment behind it and they merge into one packed run.
+        //
+        // The visible effect: clearing a group of orbs in the middle of the
+        // chain pulls the front portion BACK toward the mouth (giving the
+        // player breathing room), rather than racing forward toward the goal.
         function advance(dtMs) {
+            if (orbs.length === 0) return [];
             var dtS = dtMs / 1000;
             var spd = baseSpeed;
             if (slowmoTimer > 0) { spd *= 0.5; slowmoTimer -= dtMs; }
-            // Danger speedup
             if (dangerActive) spd *= 1.25;
 
-            // Advance head (last orb) forward.
-            if (orbs.length === 0) return;
-            var head = orbs[orbs.length - 1];
-            head.d += spd * dtS;
-            // Pack trailing orbs: each orb must be at least ORB_DIAM behind the next.
-            for (var i = orbs.length - 2; i >= 0; i--) {
-                var target = orbs[i+1].d - ORB_DIAM;
-                if (orbs[i].d > target) orbs[i].d = target;
-                // otherwise leave gaps (caused by recent pops) so chain snaps back.
-                // Settle: pull orbs that are behind target forward toward the next.
-                else if (orbs[i].d < target) {
-                    // Shift forward at insertSpeed (simulates chain snap).
-                    orbs[i].d = Math.min(target, orbs[i].d + (insertSpeed * dtS));
+            // Find segment boundaries: a new segment begins wherever an orb
+            // is more than ORB_DIAM ahead of its predecessor.
+            var segStarts = [0];
+            for (var i = 1; i < orbs.length; i++) {
+                if (orbs[i].d - orbs[i-1].d > ORB_DIAM + 0.5) segStarts.push(i);
+            }
+
+            // Apply per-segment motion.
+            for (var s = 0; s < segStarts.length; s++) {
+                var lo = segStarts[s];
+                var hi = (s + 1 < segStarts.length) ? segStarts[s+1] - 1 : orbs.length - 1;
+                var delta = (s === 0) ? spd * dtS : -pullbackRate * dtS;
+                for (var k = lo; k <= hi; k++) orbs[k].d += delta;
+            }
+
+            // Resolve merges: as soon as a retreating front segment is
+            // within tolerance of touching the rear, snap it to exact
+            // ORB_DIAM spacing and record the merge. Use the same tolerance
+            // as segment detection so we never silently merge without
+            // emitting an event.
+            var merges = [];
+            for (var s2 = 1; s2 < segStarts.length; s2++) {
+                var rearLast = orbs[segStarts[s2] - 1].d;
+                var frontFirst = orbs[segStarts[s2]].d;
+                var space = frontFirst - rearLast;
+                if (space <= ORB_DIAM + 0.5) {
+                    var shift = ORB_DIAM - space;
+                    for (var k2 = segStarts[s2]; k2 < orbs.length; k2++) orbs[k2].d += shift;
+                    merges.push(segStarts[s2]);
                 }
             }
-            // Prevent the first orb from going negative.
-            if (orbs[0].d < 0) orbs[0].d = 0;
+            return merges;
         }
 
         // Check if the lead orb has reached the goal.
@@ -149,14 +199,19 @@ SC.Chain = (function () {
         // projectile). Returns the insertion index.
         function insertAt(d, color) {
             var orb = { color: color, d: d, phase: rng() * Math.PI * 2 };
-            // Find nearest index by distance.
             var idx = insertSorted(orb);
-            // Push everything FORWARD from idx onward by ORB_DIAM so the
-            // inserted orb doesn't overlap — simulates the chain making
-            // room. Orbs BEHIND remain stationary; they'll snap-forward on
-            // the next advance.
+            // First, make sure the new orb doesn't overlap the orb BEHIND
+            // it — snap it forward against its rear neighbor. The back of
+            // the chain stays anchored; the inserted ball plus everything
+            // ahead is what bumps forward to make room.
+            if (idx > 0 && orb.d < orbs[idx - 1].d + ORB_DIAM) {
+                orb.d = orbs[idx - 1].d + ORB_DIAM;
+            }
+            // Cascade the front portion forward to maintain min spacing.
             for (var j = idx + 1; j < orbs.length; j++) {
-                orbs[j].d = Math.max(orbs[j].d, orbs[j-1].d + ORB_DIAM);
+                if (orbs[j].d < orbs[j-1].d + ORB_DIAM) {
+                    orbs[j].d = orbs[j-1].d + ORB_DIAM;
+                }
             }
             return idx;
         }
@@ -193,37 +248,22 @@ SC.Chain = (function () {
             return removed;
         }
 
-        // Pop matches around an index, chaining cascading pops. Returns
-        // { popped: [...orbs], comboDepth: n, positions: [...xy] }.
+        // Pop a single match group around `hintIdx`. Cascading combos do
+        // NOT happen here — they are driven by advance() merges, so the
+        // chain can visibly retreat and close the gap before the next
+        // group resolves. Returns the same shape as before for back-compat.
         function popAround(hintIdx, onPop) {
-            var totalPopped = [];
-            var combo = 0;
+            var ranges = detectMatches(hintIdx);
+            if (ranges.length === 0) return { popped: [], comboDepth: 0, positions: [] };
+            var r = ranges[0];
             var positions = [];
-            var idx = hintIdx;
-            while (true) {
-                var ranges = detectMatches(idx);
-                if (ranges.length === 0) break;
-                var r = ranges[0];
-                // Record positions for particle fx.
-                for (var k = r[0]; k < r[1]; k++) {
-                    var p = path.pointAt(orbs[k].d);
-                    positions.push({ x: p.x, y: p.y, color: orbs[k].color });
-                }
-                var rem = removeRange(r[0], r[1]);
-                totalPopped = totalPopped.concat(rem);
-                combo++;
-                if (onPop) onPop(rem, combo, positions.slice(positions.length - rem.length));
-                // After removal, orbs at r[0]-1 and r[0] (was r[1]) are now adjacent.
-                // Check if they form a new match.
-                var a = r[0] - 1, b = r[0];
-                if (a >= 0 && b < orbs.length && orbs[a].color === orbs[b].color) {
-                    idx = a;
-                    // Continue cascade.
-                } else {
-                    break;
-                }
+            for (var k = r[0]; k < r[1]; k++) {
+                var p = path.pointAt(orbs[k].d);
+                positions.push({ x: p.x, y: p.y, color: orbs[k].color });
             }
-            return { popped: totalPopped, comboDepth: combo, positions: positions };
+            var rem = removeRange(r[0], r[1]);
+            if (onPop) onPop(rem, 1, positions);
+            return { popped: rem, comboDepth: 1, positions: positions };
         }
 
         // Push orbs backward by `amount` (powerup: backtrack).
@@ -294,16 +334,29 @@ SC.Chain = (function () {
             totalToSpawn: function () { return totalToSpawn; },
             spawnedCount: function () { return spawned; },
             count: function () { return orbs.length; },
+            colorsRemaining: colorsRemaining,
             isComplete: isComplete,
             dangerActive: function () { return dangerActive; },
             headD: function () {
                 return orbs.length ? orbs[orbs.length - 1].d : 0;
             },
             // ticks
-            tick: function (dtMs) {
+            tick: function (dtMs, onPop) {
                 spawnOrb(dtMs);
-                advance(dtMs);
+                var merges = advance(dtMs);
                 updateDangerState();
+                // If a merge brought together two orbs of the same color,
+                // pop the resulting run. Each tick can only produce one
+                // merge (rear segment is the only one being pushed forward),
+                // so we don't need to worry about index shifting from
+                // earlier pops invalidating later merge indices.
+                for (var m = 0; m < merges.length; m++) {
+                    var idx = merges[m];
+                    if (idx > 0 && idx < orbs.length &&
+                        orbs[idx].color === orbs[idx - 1].color) {
+                        popAround(idx, onPop);
+                    }
+                }
             },
             // operations
             insertAt: insertAt,
@@ -317,7 +370,7 @@ SC.Chain = (function () {
             draw: draw,
             ORB_DIAM: ORB_DIAM,
             // test hook: force empty
-            forceEmpty: function () { orbs.length = 0; spawned = totalToSpawn; },
+            forceEmpty: function () { orbs.length = 0; spawned = totalToSpawn; spawnQueue.length = 0; },
             setPalette: function (p) { palette = p.slice(); }
         };
     }
