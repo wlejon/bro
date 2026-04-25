@@ -3,6 +3,7 @@
 #include "js/mesh_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/dom_bindings.h"
+#include "js/physics_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/shape_node.h"
@@ -678,12 +679,13 @@ static JSValue js_sg_createPhysicsNode(JSContext* ctx, JSValueConst this_val, in
         if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
         JS_FreeValue(ctx, nameVal);
 
-        // Body ID (raw Jolt BodyID index+sequence number)
+        // Body tag (JS-side monotonic id; mapped via PhysicsBindings)
         JSValue bodyVal = JS_GetPropertyStr(ctx, opts, "body");
         if (JS_IsNumber(bodyVal)) {
-            int32_t bodyRaw;
-            JS_ToInt32(ctx, &bodyRaw, bodyVal);
-            node->setBody(JPH::BodyID((uint32_t)bodyRaw));
+            int32_t bodyTag;
+            JS_ToInt32(ctx, &bodyTag, bodyVal);
+            JPH::BodyID id = PhysicsBindings::bodyIdForTag(bodyTag);
+            if (!id.IsInvalid()) node->setBody(id);
         }
         JS_FreeValue(ctx, bodyVal);
 

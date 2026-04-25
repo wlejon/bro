@@ -2,6 +2,7 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
+#include "physics/physics_world.h"
 
 #include "observer_check.js.h"
 
@@ -206,6 +207,18 @@ void Engine::advanceTime(double ms) {
         }
 
         if (activeWebGL) activeWebGL->unbindCanvasFBO();
+
+        // Step physics deterministically against virtual time, synchronously
+        // on the main thread (headless does not start the physics worker thread).
+        if (physicsWorld_) {
+            double stepMs = physicsWorld_->timeStep() * 1000.0;
+            physicsAccumMs_ += step;
+            int safety = 16;
+            while (physicsAccumMs_ + 0.5 >= stepMs && safety-- > 0) {
+                physicsAccumMs_ -= stepMs;
+                physicsWorld_->stepInline();
+            }
+        }
 
         // Step AI bindings once per advanceTime step (deterministic, uses the
         // headless virtual-time step as dt).

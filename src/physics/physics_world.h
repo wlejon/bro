@@ -4,12 +4,16 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyID.h>
+#include <Jolt/Physics/Body/AllowedDOFs.h>
+#include <Jolt/Physics/Body/MotionQuality.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 
@@ -30,6 +34,7 @@ struct ContactEvent {
     Type type;
     JPH::BodyID body1;
     JPH::BodyID body2;
+    bool isSensor = false;  // true when either body is a sensor (overlap event)
 };
 
 /// Raycast hit result.
@@ -38,6 +43,87 @@ struct RayHit {
     float fraction;       // 0..1 along the ray
     JPH::Vec3 normal;
     JPH::RVec3 position;
+};
+
+/// Body creation options (covers all shapes & flags).
+struct BodyOptions {
+    enum Shape {
+        ShapeBox,
+        ShapeSphere,
+        ShapeCapsule,
+        ShapeCylinder,
+        ShapeConvexHull,
+        ShapeMesh,        // static only
+        ShapeCompound,
+    };
+
+    Shape shape = ShapeBox;
+    JPH::RVec3 position{0, 0, 0};
+    JPH::Quat rotation = JPH::Quat::sIdentity();
+
+    // Box
+    JPH::Vec3 halfExtents{0.5f, 0.5f, 0.5f};
+    // Sphere / capsule / cylinder
+    float radius = 0.5f;
+    float halfHeight = 0.5f;
+    // ConvexHull
+    std::vector<JPH::Vec3> hullPoints;
+    // Mesh (static only)
+    std::vector<JPH::Vec3> meshVertices;
+    std::vector<uint32_t>  meshIndices;       // triangle list (multiple of 3)
+    // Compound: sub-parts (each carries its own shape + local transform)
+    std::vector<BodyOptions> compoundParts;
+    JPH::Vec3 localPosition{0, 0, 0};         // used only for compound sub-parts
+    JPH::Quat localRotation = JPH::Quat::sIdentity();
+
+    bool isStatic = false;
+    bool isSensor = false;
+    bool ccd = false;                          // Linear cast for fast bodies
+    JPH::EAllowedDOFs dofs = JPH::EAllowedDOFs::All;
+
+    float friction = 0.5f;
+    float restitution = 0.3f;
+    float density = 1000.0f;
+    float gravityFactor = 1.0f;
+    float linearDamping = 0.05f;
+    float angularDamping = 0.05f;
+
+    int layer = -1;       // -1 = auto (static→non-moving, dynamic→moving)
+    uint64_t userData = 0;
+};
+
+/// Constraint creation options.
+struct ConstraintOptions {
+    enum Type {
+        Distance,
+        Point,
+        Hinge,
+        Fixed,
+        Slider,
+    };
+    Type type = Distance;
+    JPH::BodyID body1;
+    JPH::BodyID body2;          // may be invalid → attach to world
+
+    // Anchor points (world-space by default; for fixed/slider some use this as ref)
+    JPH::RVec3 point1{0, 0, 0};
+    JPH::RVec3 point2{0, 0, 0};
+
+    // Distance
+    float minDistance = -1.0f;  // <0 = use rest length
+    float maxDistance = -1.0f;
+
+    // Hinge / slider axis (world-space)
+    JPH::Vec3 axis{0, 1, 0};
+    float limitMin = 0.0f;
+    float limitMax = 0.0f;
+    bool hasLimits = false;
+
+    // Breaking (Jolt: 0 = never break)
+    float breakingImpulse = 0.0f;
+
+    // Collide-connected (default false — common to want no self-collision)
+    bool collideConnected = false;
 };
 
 class PhysicsWorld {
@@ -62,6 +148,10 @@ public:
     /// Returns true if the physics thread is idle (JS can access bodies).
     bool isIdle() const;
 
+    /// Step the simulation synchronously on the calling thread. Use when no
+    /// worker thread is active (e.g. headless mode).
+    void stepInline();
+
     /// Shut down the physics thread and clean up.
     void shutdown();
 
@@ -73,29 +163,38 @@ public:
     void setGravity(float x, float y, float z);
     JPH::Vec3 gravity() const;
 
+    // --- Layers (call only when idle, ideally just after init) ---
+
+    /// Reset and configure named collision layers. Up to kMaxLayers names;
+    /// matrix is row-major flat array of size n*n (true=collide).
+    /// Default layers ("static", "moving") are reset.
+    static constexpr int kMaxLayers = 16;
+    bool configureLayers(const std::vector<std::string>& names,
+                         const std::vector<bool>& matrix);
+    int layerIndex(const std::string& name) const;
+    const std::string& layerName(int idx) const;
+    int numLayers() const { return numLayers_; }
+
     // --- Body management (call only when idle) ---
 
-    /// Create a box body. Returns BodyID.
+    /// Unified body creation. Returns invalid BodyID on failure.
+    JPH::BodyID createBody(const BodyOptions& opts);
+
+    /// Legacy convenience overloads.
     JPH::BodyID createBox(JPH::RVec3 position, JPH::Quat rotation,
                           JPH::Vec3 halfExtents, bool isStatic,
                           float friction = 0.5f, float restitution = 0.3f);
-
-    /// Create a sphere body.
     JPH::BodyID createSphere(JPH::RVec3 position, JPH::Quat rotation,
                              float radius, bool isStatic,
                              float friction = 0.5f, float restitution = 0.3f);
-
-    /// Create a capsule body.
     JPH::BodyID createCapsule(JPH::RVec3 position, JPH::Quat rotation,
                               float halfHeight, float radius, bool isStatic,
                               float friction = 0.5f, float restitution = 0.3f);
-
-    /// Create a cylinder body.
     JPH::BodyID createCylinder(JPH::RVec3 position, JPH::Quat rotation,
                                float halfHeight, float radius, bool isStatic,
                                float friction = 0.5f, float restitution = 0.3f);
 
-    /// Remove and destroy a body.
+    /// Remove and destroy a body. Also destroys constraints attached to it.
     void destroyBody(JPH::BodyID id);
 
     // --- Body state (call only when idle) ---
@@ -117,6 +216,19 @@ public:
     void setMotionType(JPH::BodyID id, bool isStatic);
     void activate(JPH::BodyID id);
     bool isActive(JPH::BodyID id) const;
+    bool isSensor(JPH::BodyID id) const;
+
+    void setUserData(JPH::BodyID id, uint64_t data);
+    uint64_t getUserData(JPH::BodyID id) const;
+
+    // --- Constraints ---
+
+    /// Returns a non-zero handle on success, 0 on failure.
+    uint32_t createConstraint(const ConstraintOptions& opts);
+    void destroyConstraint(uint32_t handle);
+    void setConstraintEnabled(uint32_t handle, bool enabled);
+    /// Returns and clears any constraint-broken events accumulated since last call.
+    std::vector<uint32_t> drainBrokenConstraints();
 
     // --- Queries (call only when idle) ---
 
@@ -138,6 +250,7 @@ public:
 
 private:
     void physicsThreadFunc();
+    void rebuildLayerFilters();
 
     JPH::PhysicsSystem physicsSystem_;
     std::unique_ptr<JPH::TempAllocatorImpl> tempAllocator_;
@@ -146,6 +259,16 @@ private:
     // Broadphase / collision layer config (stored as members for lifetime)
     struct Layers;
     std::unique_ptr<Layers> layers_;
+    std::vector<std::string> layerNames_;
+    std::vector<bool> layerMatrix_;     // flat n*n
+    int numLayers_ = 0;
+
+    // Constraint registry
+    struct ConstraintEntry {
+        JPH::Ref<JPH::Constraint> ref;
+    };
+    std::unordered_map<uint32_t, ConstraintEntry> constraints_;
+    uint32_t nextConstraintHandle_ = 1;
 
     // Thread state
     struct Shared {
