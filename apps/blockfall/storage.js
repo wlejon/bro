@@ -1,70 +1,55 @@
-// storage.js — Settings persistence and high score tracking
+// storage.js — settings + per-mode high scores, backed by lib/storage.js.
+//
+// Three high-score tables (marathon/sprint/ultra). Sprint is timed
+// (lower is better), so it uses ascending sort on `time`; the others
+// sort descending on `score`.
 var T = T || {};
 
-T.Storage = {
-    settings: {
+T.Storage = (function () {
+    'use strict';
+
+    var DEFAULTS = {
         startLevel: 1,
-        sfxVol: 80,
-        musicVol: 70,
+        sfxVol:     80,
+        musicVol:   70,
         ghostPiece: true,
-        gridLines: true
-    },
+        gridLines:  true,
+    };
 
-    load: function() {
-        try {
-            var s = localStorage.getItem("tetris_settings");
-            if (s) {
-                var parsed = JSON.parse(s);
-                var settings = this.settings;
-                for (var k in parsed) {
-                    if (settings.hasOwnProperty(k)) settings[k] = parsed[k];
-                }
-            }
-        } catch(e) {}
-    },
+    var settingsStore = Storage.create('blockfall');
 
-    save: function() {
-        try {
-            localStorage.setItem("tetris_settings", JSON.stringify(this.settings));
-        } catch(e) {}
-    },
+    var hs = {
+        marathon: Storage.highscores('blockfall:marathon', 10),
+        sprint:   Storage.highscores('blockfall:sprint',   10, { field: 'time', ascending: true }),
+        ultra:    Storage.highscores('blockfall:ultra',    10),
+    };
 
-    MAX_SCORES: 10,
+    return {
+        // Direct mutable settings object (callers read+write fields).
+        settings: Object.assign({}, DEFAULTS),
 
-    loadHighScores: function() {
-        try {
-            var s = localStorage.getItem("tetris_highscores");
-            if (s) return JSON.parse(s);
-        } catch(e) {}
-        return { marathon: [], sprint: [], ultra: [] };
-    },
+        load: function () {
+            var data = settingsStore.load(DEFAULTS);
+            for (var k in data) this.settings[k] = data[k];
+        },
+        save: function () {
+            for (var k in this.settings) settingsStore.set(k, this.settings[k]);
+            settingsStore.save();
+        },
 
-    saveHighScores: function(scores) {
-        try {
-            localStorage.setItem("tetris_highscores", JSON.stringify(scores));
-        } catch(e) {}
-    },
-
-    addHighScore: function(mode, entry) {
-        var scores = this.loadHighScores();
-        if (!scores[mode]) scores[mode] = [];
-        scores[mode].push(entry);
-        if (mode === "sprint") {
-            scores[mode].sort(function(a, b) { return a.time - b.time; });
-        } else {
-            scores[mode].sort(function(a, b) { return b.score - a.score; });
-        }
-        scores[mode] = scores[mode].slice(0, this.MAX_SCORES);
-        this.saveHighScores(scores);
-        return scores;
-    },
-
-    isHighScore: function(mode, value) {
-        var scores = this.loadHighScores();
-        if (!scores[mode] || scores[mode].length < this.MAX_SCORES) return true;
-        if (mode === "sprint") {
-            return value < scores[mode][scores[mode].length - 1].time;
-        }
-        return value > scores[mode][scores[mode].length - 1].score;
-    }
-};
+        loadHighScores: function () {
+            return {
+                marathon: hs.marathon.list(),
+                sprint:   hs.sprint.list(),
+                ultra:    hs.ultra.list(),
+            };
+        },
+        addHighScore: function (mode, entry) {
+            if (hs[mode]) hs[mode].add(entry);
+            return this.loadHighScores();
+        },
+        isHighScore: function (mode, value) {
+            return hs[mode] ? hs[mode].qualifies(value) : true;
+        },
+    };
+})();
