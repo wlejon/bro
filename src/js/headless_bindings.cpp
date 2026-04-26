@@ -898,14 +898,21 @@ static JSValue js_overlayPanels(JSContext* ctx, JSValueConst, int, JSValueConst*
 // Install
 // ---------------------------------------------------------------------------
 
-void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
+void installCanvasSnapshotBinding(JSContext* ctx, engine::Engine* engine) {
     qjsbind::Global(ctx)
-        // Stash engine pointer
         .value(kEngineKey, JS_NewInt64(ctx, static_cast<int64_t>(
                                reinterpret_cast<intptr_t>(engine))))
+        .function("screenshotCanvas", js_screenshotCanvas, 2);
+}
+
+void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
+    // The canvas-snapshot binding is also installed by Engine in both modes;
+    // re-installing is harmless (same engine pointer, same function).
+    installCanvasSnapshotBinding(ctx, engine);
+
+    qjsbind::Global(ctx)
         // Core
         .function("screenshot", js_screenshot, 1)
-        .function("screenshotCanvas", js_screenshotCanvas, 2)
         .function("advanceTime", js_advanceTime, 1)
         .function("flush", js_flush, 0)
         .function("sleep", js_advanceTime, 1)

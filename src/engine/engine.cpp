@@ -30,6 +30,7 @@
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
 #include "js/video_bindings.h"
+#include "js/headless_bindings.h"
 #include "js/worker.h"
 #include "js/physics_bindings.h"
 #include "js/scene_bindings.h"
@@ -414,6 +415,10 @@ Engine::Engine(const EngineConfig& config)
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::VideoBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+    // screenshotCanvas works on both GPU-backed (windowed) and raster
+    // (headless) Skia surfaces, so it's installed in both modes — apps can
+    // use it for in-app capture / save flows without a headless drive.
+    js::installCanvasSnapshotBinding(jsRuntime_->getContext(), this);
 
     // Register app directory as base path for fetch and fs (overlay: last added = checked first)
     brokit::api::addFetchBasePath(jsRuntime_->getContext(), manifest_.basePath);

@@ -1,10 +1,14 @@
 // =============================================================================
-// bro Video Encoder API
+// bro Video / GIF Encoder API
 // =============================================================================
 //
 // VideoEncoder writes a single-track WebM file containing a VP9 video stream.
 // Frames are RGBA in, encoded with libvpx (software). Audio tracks aren't
 // supported yet — add when the calling-app work needs them.
+//
+// GifEncoder writes an animated GIF89a with a per-frame 256-color palette
+// (median-cut quantization). Suitable for sprite/animation export and for
+// quick sharing of pixel art; for natural-image content prefer WebM.
 //
 // Hardware encode is intentionally not exposed: VP9 hardware support is
 // sparse (no NVENC, no D3D12 Video Encode), so a HW path would require
@@ -129,3 +133,41 @@ for (let i = 0; i < fps * 4; i++) {
     enc2.addCanvasFrame(document.querySelector('#stage'));
 }
 enc2.finish();
+
+
+// =============================================================================
+// GifEncoder
+// =============================================================================
+//
+// new GifEncoder({ path, width, height, fps?, delayCs?, paletteBits?, loopCount? })
+//
+//   path          — output .gif file path.
+//   width, height — frame size in pixels (no even-size requirement).
+//   fps           — frames per second (default 25). Converted internally to
+//                   delayCs = round(100 / fps).
+//   delayCs       — frame delay in centiseconds (1/100 sec). Used if fps
+//                   isn't set. Default 4 (≈25 fps).
+//   paletteBits   — 1..8 (default 8 = 256 colors per frame).
+//   loopCount     — 0 = loop forever (default), 1 = play once,
+//                   N = repeat N times.
+//
+// Pixels with alpha < 128 become the GIF transparent index; partial alpha
+// is treated as opaque. Each frame carries its own quantized local palette.
+
+const gif = new GifEncoder({
+    path: 'output/clip.gif',
+    width: 64, height: 64,
+    fps: 12,
+});
+for (let i = 0; i < 24; i++) {
+    drawSomethingInto(frame);
+    gif.addFrameRGBA(frame);
+}
+gif.finish();
+
+// Per-frame delay override:
+gif.setNextFrameDelayCs(50);   // hold the next frame for 0.5 seconds
+gif.addCanvasFrame(canvas);
+
+// Same canvas-snapshot path as VideoEncoder — gif and webm encoders are
+// interchangeable from the addFrame side.

@@ -10,6 +10,7 @@ add_library(bro_video STATIC
     yuv_to_rgb.cpp
     rgba_to_yuv.cpp
     webm_encoder.cpp
+    gif_encoder.cpp
     video_pipeline.cpp
 )
 target_include_directories(bro_video PUBLIC ${CMAKE_SOURCE_DIR}/src)
