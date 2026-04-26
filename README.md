@@ -14,7 +14,9 @@ Note from the co-pilot: i am a career programmer but this and its sister reposit
 
 Coding agents build web UIs really well. While they can build native UIs, in my experience, there's a lot more debugging happening to get something working. Electron/Tauri/etc solve that, but only for what the web platform natively supports.
 
-Bro is the middle path. HTML/CSS/JS is the UI layer — so agents stay productive — but the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a 3D scene graph, Jolt physics, a real-time audio engine, mesh generation and CSG, navmesh pathfinding, game networking over GNS, native file dialogs, menu bars. All exposed to JS, all running in one process, no IPC to a Chromium renderer.
+Bro is a different path. HTML/CSS/JS is the UI/app layer like Electron but the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a 3D scene graph, Jolt physics, a real-time audio engine, mesh generation and CSG, navmesh pathfinding, game networking over GNS, native file dialogs, menu bars. All exposed to JS, all running in one process, no IPC to a Chromium renderer.
+
+None of this is new, it's just a reconfiguration that works better for coding agents.
 
 ## Hello world
 
@@ -42,19 +44,6 @@ see apps/ for more examples
 **Beyond the web** — 3D scene graph with mesh rendering and terrain (`bro.scene`), Jolt rigid-body physics with contact events, Web Audio with synthesis / effects / spatial / MIDI (broaudio), mesh generation and CSG (bromesh), navmesh and A* pathfinding (`bro.ai.game`), game networking over GameNetworkingSockets (`bro.net`), native file dialogs, native menu bars, 3D transform gizmos, native crosshair.
 
 **For development** — Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing. See [docs/headless.md](docs/headless.md).
-
-## Example apps
-
-See `apps/` for runnable examples:
-
-- `launcher` — app picker, opens the others
-- `tetris` — keyboard input, canvas, audio
-- `synth` — wavetable synth with MIDI, keyboard, and effects chain
-- `mesh-viewer` — 3D mesh import (OBJ / glTF / STL / PLY / FBX / VOX)
-- `terrain` — voxel terrain with streaming chunks and raycast editing
-- `fps` — first-person demo: scene, physics, input, audio
-- `ai-arena` — navmesh + MCTS agents
-- `scene-editor`, `spatial-audio`, `example`
 
 ## Architecture
 
