@@ -58,9 +58,15 @@ G.Board = (function () {
     // Flash-then-clear sequence after a match.
     var flashTiles = [];       // [{r,c,kind,color}]
     var flashTimer = 0;
-    var FLASH_MS = 260;
-    var FALL_MS  = 240;
+    var FLASH_MS = 260;          // updated per-cascade based on group size
+    var FALL_MS  = 140;
     var SNAP_MS  = 140;
+    var POP_DUR_MS = 140;        // per-tile pop animation length
+    var POP_STAGGER_MS = 32;     // delay between tiles popping in a group
+    var SETTLE_MS = 40;         // breath between cascades
+
+    var flashDuration = FLASH_MS;
+    var settleTimer = 0;
 
     // Last-cascade upgrades to place after flash clears.
     var pendingUpgrades = null;
@@ -348,6 +354,8 @@ G.Board = (function () {
         shakeAmp = 0;
         shakeT = 0;
         lockTimer = 0;
+        settleTimer = 0;
+        flashDuration = FLASH_MS;
         cursor = { r: Math.floor(rows / 2), c: Math.floor(cols / 2), active: false };
         stats = { moves: 0, popped: 0, jumboMade: 0, arrowMade: 0, prismMade: 0, maxChain: 0, unlocks: 0 };
 
@@ -449,6 +457,23 @@ G.Board = (function () {
         }
     }
 
+    // Hovered cell when the player isn't actively dragging or animating.
+    // Used to preview which row/column they'd move and to flag lock blockers.
+    function hoverCell() {
+        if (drag || snap || flashTiles.length > 0 || gameOverFlag) return null;
+        if (!pointInBoard(pointer.x, pointer.y)) return null;
+        return pointToCell(pointer.x, pointer.y);
+    }
+
+    function rowHasLock(r) {
+        for (var c = 0; c < cols; c++) if (grid[r][c] && grid[r][c].locked) return true;
+        return false;
+    }
+    function colHasLock(c) {
+        for (var r = 0; r < rows; r++) if (grid[r][c] && grid[r][c].locked) return true;
+        return false;
+    }
+
     function drawBoardFrame(ctx) {
         var sx = 0, sy = 0;
         if (shakeAmp > 0) {
@@ -466,19 +491,62 @@ G.Board = (function () {
         ctx.lineWidth = 2;
         ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-        // Cell tint. Highlight the active row/column while dragging.
+        var hov = hoverCell();
+        var hovRowBlocked = hov && rowHasLock(hov.r);
+        var hovColBlocked = hov && colHasLock(hov.c);
+
+        // Cell tint. Highlight the active row/column while dragging, and
+        // the hovered row+column when idle (red if locked, soft green if free).
         for (var r = 0; r < rows; r++) {
             for (var c = 0; c < cols; c++) {
                 var p = cellXY(r, c);
+                var checker = (r + c) & 1;
                 var hot = drag &&
                     ((drag.axis === 'h' && drag.index === r) ||
                      (drag.axis === 'v' && drag.index === c));
-                ctx.fillStyle = hot
-                    ? ((r + c) & 1 ? 'rgba(70, 90, 140, 0.55)' : 'rgba(60, 80, 130, 0.55)')
-                    : ((r + c) & 1 ? 'rgba(30, 40, 70, 0.55)' : 'rgba(22, 32, 60, 0.55)');
+                var fill;
+                if (hot) {
+                    fill = checker ? 'rgba(70, 90, 140, 0.55)' : 'rgba(60, 80, 130, 0.55)';
+                } else if (hov && (r === hov.r || c === hov.c)) {
+                    var rowHit = (r === hov.r);
+                    var colHit = (c === hov.c);
+                    var blocked = (rowHit && hovRowBlocked) || (colHit && hovColBlocked);
+                    if (blocked) {
+                        fill = checker ? 'rgba(120, 50, 60, 0.55)' : 'rgba(105, 42, 52, 0.55)';
+                    } else {
+                        fill = checker ? 'rgba(50, 90, 80, 0.55)' : 'rgba(42, 80, 70, 0.55)';
+                    }
+                } else {
+                    fill = checker ? 'rgba(30, 40, 70, 0.55)' : 'rgba(22, 32, 60, 0.55)';
+                }
+                ctx.fillStyle = fill;
                 ctx.fillRect(p.x, p.y, layout.cell, layout.cell);
             }
         }
+
+        // Gutter stripes — permanent indicator of locked rows/columns.
+        // Drawn in the 10px gutter between the board edge and the frame.
+        var lockColor = 'rgba(180, 220, 255, 0.78)';
+        var lockColorHi = 'rgba(220, 240, 255, 0.95)';
+        for (var rr = 0; rr < rows; rr++) {
+            if (!rowHasLock(rr)) continue;
+            var py = layout.oy + rr * layout.cell + 2;
+            var ph = layout.cell - 4;
+            var hi = hov && hov.r === rr;
+            ctx.fillStyle = hi ? lockColorHi : lockColor;
+            ctx.fillRect(layout.ox - 7, py, 4, ph);
+            ctx.fillRect(layout.ox + layout.boardW + 3, py, 4, ph);
+        }
+        for (var cc = 0; cc < cols; cc++) {
+            if (!colHasLock(cc)) continue;
+            var px = layout.ox + cc * layout.cell + 2;
+            var pw = layout.cell - 4;
+            var hi2 = hov && hov.c === cc;
+            ctx.fillStyle = hi2 ? lockColorHi : lockColor;
+            ctx.fillRect(px, layout.oy - 7, pw, 4);
+            ctx.fillRect(px, layout.oy + layout.boardH + 3, pw, 4);
+        }
+
         ctx.restore();
     }
 
@@ -518,6 +586,17 @@ G.Board = (function () {
 
         var cell = layout.cell;
 
+        // Build a pop-state lookup so the grid-draw loop can render popping
+        // tiles with anticipation/burst rather than as plain idle puffs.
+        var popMap = null;
+        if (flashTiles.length > 0) {
+            popMap = {};
+            for (var fpi = 0; fpi < flashTiles.length; fpi++) {
+                var fpt = flashTiles[fpi];
+                popMap[fpt.r + ',' + fpt.c] = fpt;
+            }
+        }
+
         // Draw each puff. For tiles on the active drag axis, render them
         // twice (original + wrapped copy offset by ±boardW/H) so the slide
         // reads as seamless.
@@ -534,35 +613,74 @@ G.Board = (function () {
                 var bx = cx + off.dx;
                 var by = cy + off.dy + fall;
 
-                // Wrap ghosts when dragging: draw the same puff at +/-boardSize.
-                drawPuffAt(ctx, g, bx, by, cell, heldTile(r, c));
+                var popOpts = null;
+                if (popMap) {
+                    var pop = popMap[r + ',' + c];
+                    if (pop) {
+                        var local = (flashTimer - pop.delay);
+                        if (local < 0) {
+                            // Anticipation — slight pulse before this tile pops.
+                            var pre = Math.max(0, 1 + local / 80);
+                            popOpts = { pulse: 0.10 * pre };
+                        } else if (local < POP_DUR_MS) {
+                            popOpts = { popLocal: local / POP_DUR_MS };
+                        } else {
+                            popOpts = { skip: true };
+                        }
+                    }
+                }
+                if (popOpts && popOpts.skip) continue;
+
+                drawPuffAt(ctx, g, bx, by, cell, heldTile(r, c), popOpts);
                 if (off.dx !== 0) {
-                    drawPuffAt(ctx, g, bx + layout.boardW, by, cell, heldTile(r, c));
-                    drawPuffAt(ctx, g, bx - layout.boardW, by, cell, heldTile(r, c));
+                    drawPuffAt(ctx, g, bx + layout.boardW, by, cell, heldTile(r, c), popOpts);
+                    drawPuffAt(ctx, g, bx - layout.boardW, by, cell, heldTile(r, c), popOpts);
                 }
                 if (off.dy !== 0) {
-                    drawPuffAt(ctx, g, bx, by + layout.boardH, cell, heldTile(r, c));
-                    drawPuffAt(ctx, g, bx, by - layout.boardH, cell, heldTile(r, c));
+                    drawPuffAt(ctx, g, bx, by + layout.boardH, cell, heldTile(r, c), popOpts);
+                    drawPuffAt(ctx, g, bx, by - layout.boardH, cell, heldTile(r, c), popOpts);
                 }
             }
         }
 
-        // Flashes for popping tiles.
+        // Hover blocker halo — when the player is hovering a cell whose
+        // row or column contains a locked puff, ring the locking puff(s)
+        // so the source of the restriction is obvious.
+        var hov2 = hoverCell();
+        if (hov2) {
+            var pulse = 0.55 + 0.45 * Math.sin(gameTime * 0.006);
+            ctx.strokeStyle = 'rgba(255, 200, 210, ' + (0.45 + pulse * 0.35) + ')';
+            ctx.lineWidth = 2.2;
+            for (var rL = 0; rL < rows; rL++) {
+                for (var cL = 0; cL < cols; cL++) {
+                    var gL = grid[rL][cL];
+                    if (!gL || !gL.locked) continue;
+                    if (rL !== hov2.r && cL !== hov2.c) continue;
+                    var pL = cellXY(rL, cL);
+                    var cxL = pL.x + cell / 2, cyL = pL.y + cell / 2;
+                    ctx.beginPath();
+                    ctx.arc(cxL, cyL, cell * 0.42, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // Pop shock ring per tile — expands from the tile and fades, syncing
+        // with that tile's individual pop rather than the whole flash window.
         if (flashTiles.length > 0) {
-            var prog = Math.min(1, flashTimer / FLASH_MS);
             for (var i = 0; i < flashTiles.length; i++) {
                 var t = flashTiles[i];
+                var localR = (flashTimer - t.delay) / POP_DUR_MS;
+                if (localR <= 0 || localR >= 1) continue;
                 var p2 = cellXY(t.r, t.c);
                 var cx2 = p2.x + cell / 2, cy2 = p2.y + cell / 2;
-                ctx.globalAlpha = 1 - prog;
-                // Pop ring.
-                ctx.strokeStyle = 'rgba(255, 240, 200, ' + (1 - prog) + ')';
+                var fade = 1 - localR;
+                ctx.strokeStyle = 'rgba(255, 240, 200, ' + (fade * 0.85) + ')';
                 ctx.lineWidth = 3;
                 ctx.beginPath();
-                ctx.arc(cx2, cy2, cell * 0.35 + prog * cell * 0.35, 0, Math.PI * 2);
+                ctx.arc(cx2, cy2, cell * 0.35 + localR * cell * 0.55, 0, Math.PI * 2);
                 ctx.stroke();
             }
-            ctx.globalAlpha = 1;
         }
 
         ctx.restore();
@@ -594,17 +712,38 @@ G.Board = (function () {
         return 0;
     }
 
-    function drawPuffAt(ctx, puff, cx, cy, cell, held) {
+    function drawPuffAt(ctx, puff, cx, cy, cell, held, popOpts) {
         if (!puff) return;
         var lookAt = (G.Screens && G.Screens.settings && G.Screens.settings().eyeTrack)
             ? pointer : null;
+        var state = held ? 'held' : 'idle';
+        var pulse = 0;
+        var popProgress = 0;
+        var alpha = 1;
+        if (popOpts) {
+            if (popOpts.popLocal != null) {
+                state = 'pop';
+                popProgress = popOpts.popLocal;
+                alpha = 1 - popOpts.popLocal;
+            } else if (popOpts.pulse != null) {
+                pulse = popOpts.pulse;
+            }
+        }
         var opts = {
             t: gameTime,
             lookAt: lookAt,
-            state: held ? 'held' : 'idle',
-            popProgress: 0,
+            state: state,
+            popProgress: popProgress,
+            pulse: pulse,
         };
-        G.Puffs.draw(ctx, puff, cx, cy, cell, opts);
+        if (alpha < 1) {
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, alpha);
+            G.Puffs.draw(ctx, puff, cx, cy, cell, opts);
+            ctx.restore();
+        } else {
+            G.Puffs.draw(ctx, puff, cx, cy, cell, opts);
+        }
     }
 
     function heldTile(r, c) {
@@ -671,12 +810,7 @@ G.Board = (function () {
     }
 
     function rowOrColLocked(axis, index) {
-        if (axis === 'h') {
-            for (var c = 0; c < cols; c++) if (grid[index][c] && grid[index][c].locked) return true;
-        } else {
-            for (var r = 0; r < rows; r++) if (grid[r][index] && grid[r][index].locked) return true;
-        }
-        return false;
+        return axis === 'h' ? rowHasLock(index) : colHasLock(index);
     }
 
     function commitDrag() {
@@ -868,19 +1002,49 @@ G.Board = (function () {
             finalClears.push(u2);
         }
 
-        // Queue flash + schedule clear.
-        flashTiles = finalClears.slice();
+        // Queue flash with a per-tile stagger so a big group ripples instead
+        // of popping all at once. Tiles further from the centroid pop later.
+        var staged = finalClears.slice();
+        var cxAvg = 0, cyAvg = 0;
+        for (var sa = 0; sa < staged.length; sa++) { cxAvg += staged[sa].r; cyAvg += staged[sa].c; }
+        if (staged.length > 0) { cxAvg /= staged.length; cyAvg /= staged.length; }
+        for (var sb = 0; sb < staged.length; sb++) {
+            var dr2 = staged[sb].r - cxAvg, dc2 = staged[sb].c - cyAvg;
+            staged[sb]._dist = Math.sqrt(dr2 * dr2 + dc2 * dc2);
+        }
+        staged.sort(function (a, b) { return a._dist - b._dist; });
+        for (var sc2 = 0; sc2 < staged.length; sc2++) {
+            staged[sc2].delay = sc2 * POP_STAGGER_MS;
+            staged[sc2].burstFired = false;
+        }
+        flashTiles = staged;
         flashTimer = 0;
+        flashDuration = (staged.length > 0
+            ? staged[staged.length - 1].delay + POP_DUR_MS + 30
+            : POP_DUR_MS + 30);
         pendingUpgrades = upgrades;
+        settleTimer = 0;
 
-        // Particles.
+        // Score popup at each match group's centroid (escalates with chain).
         if (G.Particles) {
-            var PAL = G.Puffs.PALETTE;
-            for (var p = 0; p < finalClears.length; p++) {
-                var gref = grid[finalClears[p].r][finalClears[p].c];
-                var color = (gref && PAL[gref.color]) ? PAL[gref.color].core : '#ffffff';
-                var pos = cellXY(finalClears[p].r, finalClears[p].c);
-                G.Particles.burst(pos.x + layout.cell / 2, pos.y + layout.cell / 2, color, 8 + chain * 2);
+            var PAL2 = G.Puffs.PALETTE;
+            for (var gi = 0; gi < groups.length; gi++) {
+                var grpL = groups[gi];
+                var midR = 0, midC = 0;
+                for (var ci = 0; ci < grpL.cells.length; ci++) {
+                    midR += grpL.cells[ci][0]; midC += grpL.cells[ci][1];
+                }
+                midR /= grpL.cells.length; midC /= grpL.cells.length;
+                var lx = layout.ox + (midC + 0.5) * layout.cell;
+                var ly = layout.oy + (midR + 0.5) * layout.cell;
+                var labelColor = (PAL2[grpL.color] && PAL2[grpL.color].belly) || '#ffe9b0';
+                var groupScore = scoreChain(grpL.size, chain - 1);
+                G.Particles.popLabel(lx, ly - 10, '+' + groupScore, labelColor, false);
+            }
+            if (chain >= 2) {
+                var px = layout.ox + layout.boardW / 2;
+                var py = layout.oy + layout.boardH / 2;
+                G.Particles.popLabel(px, py, 'CHAIN x' + chain, '#ffd980', true);
             }
         }
 
@@ -989,10 +1153,24 @@ G.Board = (function () {
             }
         }
 
-        // Flash countdown.
+        // Flash countdown — and per-tile burst emission as each one pops.
         if (flashTiles.length > 0) {
             flashTimer += dt;
-            if (flashTimer >= FLASH_MS) {
+            if (G.Particles) {
+                var PALb = G.Puffs.PALETTE;
+                for (var fi = 0; fi < flashTiles.length; fi++) {
+                    var ft = flashTiles[fi];
+                    if (ft.burstFired) continue;
+                    if (flashTimer < ft.delay + POP_DUR_MS * 0.35) continue;
+                    var gb = grid[ft.r][ft.c];
+                    var bcolor = (gb && PALb[gb.color]) ? PALb[gb.color].core : '#ffffff';
+                    var bp = cellXY(ft.r, ft.c);
+                    G.Particles.burst(bp.x + layout.cell / 2, bp.y + layout.cell / 2,
+                                      bcolor, 10 + chain * 2);
+                    ft.burstFired = true;
+                }
+            }
+            if (flashTimer >= flashDuration) {
                 applyFlashRemoval();
                 collapseAndFill();
             }
@@ -1009,14 +1187,20 @@ G.Board = (function () {
         }
         for (var d = done.length - 1; d >= 0; d--) anims.splice(done[d], 1);
 
-        // After things settle, check for new matches (cascades).
+        // After things settle, hold briefly so each cascade reads as its own
+        // beat, then check for new matches.
         if (!isBusy() && !drag && !snap) {
+            if (chain > 0 && settleTimer < SETTLE_MS) {
+                settleTimer += dt;
+                return;
+            }
             var groups = findMatches(grid);
             if (groups.length > 0) {
                 resolveGroups(groups);
             } else {
                 // Chain finished.
                 if (chain > 0) chain = 0;
+                settleTimer = 0;
                 // Mode-specific end checks.
                 if (mode === 'classic') {
                     var threshold = level * 15;
