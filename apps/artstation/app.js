@@ -890,8 +890,8 @@
     let watchTimers    = {};    // name -> debounce timer id
 
     function isWindowed() {
-        // Headless installs screenshotCanvas; if it's missing we're windowed.
-        return typeof screenshotCanvas === 'undefined';
+        // advanceTime() is headless-only (screenshotCanvas is in both modes).
+        return typeof advanceTime === 'undefined';
     }
 
     function discoverAssets() {
