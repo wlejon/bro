@@ -49,6 +49,45 @@ frame's top-left and clipped to the frame rect — so coordinates are local
 to the frame. `imageSmoothingEnabled` is off; integer coords give crisp
 pixel art.
 
+## Defining a procedural animation
+
+For animations driven by *state* (particles, physics, IK, springs, anything
+stepping over time) instead of N hand-drawn cells, use `defineAnimated`.
+The framework steps headless virtual time, calls your `frame` function once
+per tick, and tiles the captures into a regular spritesheet — so playback
+is identical to a hand-laid `defineSheet`.
+
+```js
+defineAnimated('explosion', {
+    frameWidth: 32, frameHeight: 32,
+    fps: 24, duration: 0.75,        // → 18 frames
+    cols: 6,                         // sheet layout (rows auto)
+    bg: 'transparent', pixel: true,
+
+    init() {
+        // Returns the state object passed into every frame() call.
+        return { particles: seedParticles() };
+    },
+
+    frame(ctx, w, h, t, dt, state) {
+        // ctx is pre-translated/clipped to the current cell.
+        // t = elapsed seconds, dt = 1/fps (constant).
+        for (const p of state.particles) {
+            p.x += p.vx * dt; p.y += p.vy * dt;
+            brush.px(ctx, p.x, p.y, p.color);
+        }
+    },
+
+    // Optional. Defaults to one 'play' animation covering all frames.
+    animations: { play: { frames: 'all', fps: 24, loop: false } },
+});
+```
+
+The PNG that lands in `output/` is shaped like any other sprite sheet, so
+`scene.createSprite({ src, sheet, animations })` plays it back without
+caring that the source was procedural. Use a deterministic PRNG in `init`
+if you want byte-stable renders across runs.
+
 ## Defining a tileset
 
 ```js

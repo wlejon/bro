@@ -1,0 +1,35 @@
+{
+  "kind": "sheet",
+  "src": "explosion.png",
+  "frameWidth": 32,
+  "frameHeight": 32,
+  "cols": 6,
+  "rows": 3,
+  "frameCount": 18,
+  "animations": {
+    "play": {
+      "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "fps": 24,
+      "loop": false
+    }
+  }
+}
