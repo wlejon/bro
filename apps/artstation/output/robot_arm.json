@@ -1,0 +1,16 @@
+{
+  "kind": "sheet",
+  "src": "robot_arm.png",
+  "frameWidth": 128,
+  "frameHeight": 128,
+  "cols": 8,
+  "rows": 6,
+  "frameCount": 48,
+  "animations": {
+    "wave": {
+      "frames": "all",
+      "fps": 24,
+      "loop": true
+    }
+  }
+}

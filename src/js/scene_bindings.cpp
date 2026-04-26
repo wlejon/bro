@@ -2288,6 +2288,40 @@ void SceneBindings::install(JSContext* ctx) {
                     w->node->setRotationEuler(e.x, e.y, (float)val);
                 }
             })
+        // [x,y,z,w] quaternion. Unlike rotationX/Y/Z (which round-trip
+        // through Euler each set), this writes the node orientation
+        // atomically — required when assigning arbitrary rotations
+        // (e.g. port-to-port mating in the parts DSL).
+        .prop("quaternion",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node) return JS_UNDEFINED;
+                const auto& q = w->node->rotation();
+                JSValue arr = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, q.x));
+                JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, q.y));
+                JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, q.z));
+                JS_SetPropertyUint32(ctx, arr, 3, JS_NewFloat64(ctx, q.w));
+                return arr;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node) return;
+                if (!JS_IsArray(val)) return;
+                JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
+                JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
+                JSValue e2 = JS_GetPropertyUint32(ctx, val, 2);
+                JSValue e3 = JS_GetPropertyUint32(ctx, val, 3);
+                double qx = 0, qy = 0, qz = 0, qw = 1;
+                JS_ToFloat64(ctx, &qx, e0);
+                JS_ToFloat64(ctx, &qy, e1);
+                JS_ToFloat64(ctx, &qz, e2);
+                JS_ToFloat64(ctx, &qw, e3);
+                JS_FreeValue(ctx, e0);
+                JS_FreeValue(ctx, e1);
+                JS_FreeValue(ctx, e2);
+                JS_FreeValue(ctx, e3);
+                scene::Quat q{(float)qx, (float)qy, (float)qz, (float)qw};
+                w->node->setRotation(q.normalized());
+            })
         .prop("scaleX",
             [](NodeWrapper* w) -> double { return w->node ? w->node->scale().x : 1; },
             [](NodeWrapper* w, double val) { if (w->node) w->node->setScale((float)val, w->node->scale().y, w->node->scale().z); })

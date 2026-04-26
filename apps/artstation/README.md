@@ -117,6 +117,92 @@ In windowed mode, three buttons in the save bar above the canvases call
 `save()` / `saveVideo()` / `saveGif()` for the currently-selected asset.
 PNG is enabled for any asset; WebM/GIF only for animated and sheet kinds.
 
+## Defining a parts assembly
+
+For 3D characters, robots, props — anything you'd want to *both* showcase
+in a 2D game (as a rendered sprite sheet) *and* drop into a 3D game (as a
+real mesh + skeleton later). Compose the asset out of small reusable
+**parts** that mate **port-to-port**:
+
+```js
+// A part is pure data: a mesh-builder + named ports (local-space frames).
+definePart('arm_segment', {
+    build: () => Mesh.capsule(0.14, 0.32, 18, 8),
+    color: '#cfd6e0', metallic: 0.1, roughness: 0.4,
+    ports: {
+        proximal: { pos: [0,  0.46, 0], dir: [0,  1, 0], up: [0, 0, 1] },
+        distal:   { pos: [0, -0.46, 0], dir: [0, -1, 0], up: [0, 0, 1] },
+    },
+});
+
+// An assembly is a named tree of part instances. Each child says which
+// of its ports mates against which of its parent's ports. Joints can be
+// fixed (rigid weld) or hinge (single-axis articulation).
+defineAssembly('robot_arm', {
+    frameWidth: 128, frameHeight: 128, fps: 24, duration: 2.0, cols: 8,
+    bg: 'transparent', pixel: false,
+    camera: { fov: 36, position: [3.6, 1.8, 3.8], target: [0, 1, 0] },
+    lighting: 'studio',
+
+    parts: {
+        base:     { part: 'arm_base' },
+        shoulder: { part: 'joint_ball', parent: 'base',
+                    via: 'top', at: 'proximal',
+                    joint: { type: 'hinge', axis: [0, 1, 0] } },
+        upper:    { part: 'arm_segment', parent: 'shoulder',
+                    via: 'distal', at: 'proximal',
+                    joint: { type: 'hinge', axis: [1, 0, 0], angle: 0.5 } },
+        // ... etc
+    },
+
+    frame(refs, t, dt, i) {
+        // refs.<inst> is the MeshNode (for color/material/visibility).
+        // refs._joints.<inst>.angle is the hinge state.
+        refs._joints.shoulder.angle = Math.sin(t * Math.PI) * 0.7;
+    },
+});
+```
+
+### Port conventions
+
+- `pos` is the attach point in **part-local** coords.
+- `dir` is the **outward** direction (away from the part body) at that
+  point. When two ports mate, the child's `dir` is rotated to face
+  *opposite* the parent's `dir` — they meet head-to-head.
+- `up` (optional, but recommended) pins the twist about the joint axis,
+  so a part doesn't spin freely after mating. If both parent and child
+  ports specify `up`, the framework rolls the child to align them.
+
+### Mating fields per part instance
+
+| Field | Meaning |
+|-------|---------|
+| `part` | Name of a `definePart` registration. |
+| `parent` | Name of another instance in this assembly. Omit for the root. |
+| `via` | Port on the parent that this child mates against. |
+| `at` | Port on this child that meets the parent's `via`. |
+| `twist` | Constant roll (radians) about the joint axis at mount time — useful for mirroring (`twist: Math.PI`) or rotating the child without authoring a flipped part. |
+| `joint` | `{ type: 'fixed' \| 'hinge', axis: [x,y,z], angle: 0 }`. Hinge axis is in **parent-part-local** coords; default = the parent port's outward dir (gives a "twist" hinge). Use `[1,0,0]` etc. for an elbow-style perpendicular hinge. `angle` is the resting angle — `frame()` mutates `refs._joints.<name>.angle` to animate. |
+| `color`, `metallic`, `roughness`, `emissive`, `emissiveColor` | Per-instance overrides; fall back to the part's defaults. |
+
+### Why this beats nested scenes for parts
+
+A part is a **value** — pure data, no identity, freely reusable. A scene
+is a runtime entity with a camera, physics world, and mutable child list.
+The assembly's output projection (unified mesh + skeleton, eventually) is
+a flat structure, and the parts graph projects onto it cleanly. Nested
+scenes still earn their keep for runtime composition (a security-camera
+feed showing another room) — different problem, different tool.
+
+### Output
+
+`defineAssembly` compiles to `defineScene` under the hood, so the same
+PNG / WebM / GIF / preview pipeline `defineScene` uses just works:
+
+```bash
+bro-headless apps/artstation -e "load('robot_arm'); render(); save('robot_arm'); saveGif('robot_arm');"
+```
+
 ## Defining a tileset
 
 ```js
