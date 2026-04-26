@@ -399,7 +399,10 @@ private:
         // Graphic Control Extension: transparency on, transparent index 0.
         const uint8_t gce[] = {
             0x21, 0xF9, 0x04,
-            0x05,                                                // packed: disposal=0, transparency flag set
+            // packed: disposal=2 (restore to background), transparency on.
+            // Sprite frames are authored independently and expect the prior
+            // frame to be cleared, not preserved underneath.
+            0x09,
             static_cast<uint8_t>(nextDelayCs_ & 0xFF),
             static_cast<uint8_t>((nextDelayCs_ >> 8) & 0xFF),
             0x00,                                                // transparent color index
