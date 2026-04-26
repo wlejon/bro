@@ -1,0 +1,79 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: #1a1a1f;
+    color: #ddd;
+    font: 13px ui-monospace, Menlo, Consolas, monospace;
+    padding: 12px;
+}
+
+#header {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #333;
+}
+#title { font-size: 16px; font-weight: bold; color: #fff; }
+#status { color: #8c8; }
+
+#layout {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+#layout > div {
+    background: #232328;
+    border: 1px solid #333;
+    padding: 8px;
+}
+
+.label {
+    font-size: 10px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+/* Checkerboard transparency background for the sheet so empty pixels are
+   visible during inspection. The actual saved PNG comes from the canvas
+   itself, not this background. */
+canvas {
+    display: block;
+    background-color: #2a2a30;
+    background-image:
+      linear-gradient(45deg, #3a3a40 25%, transparent 25%),
+      linear-gradient(-45deg, #3a3a40 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #3a3a40 75%),
+      linear-gradient(-45deg, transparent 75%, #3a3a40 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    image-rendering: pixelated;
+}
+
+#sheet {
+    /* size set programmatically; remains 1:1 logical:CSS for screenshot */
+    image-rendering: pixelated;
+}
+
+#inspect {
+    image-rendering: pixelated;
+}
+
+#stage {
+    background: #111;
+}
+
+#info {
+    background: #181820;
+    padding: 10px;
+    color: #aaa;
+    white-space: pre-wrap;
+    line-height: 1.5;
+    min-height: 240px;
+    border-color: #333;
+}

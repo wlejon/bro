@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Art Station</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="header">
+        <span id="title">Art Station</span>
+        <span id="status">no asset loaded</span>
+    </div>
+
+    <div id="layout">
+        <!-- Sheet canvas: pixel-perfect 1:1 size of the asset; this is what
+             we screenshot-crop to produce the final PNG. -->
+        <div id="sheet-wrap">
+            <div class="label">SHEET (1:1)</div>
+            <canvas id="sheet" width="32" height="32"></canvas>
+        </div>
+
+        <!-- Inspect canvas: integer-scaled view of the sheet for visual
+             debugging via screenshots. -->
+        <div id="inspect-wrap">
+            <div class="label">INSPECT (scaled)</div>
+            <canvas id="inspect" width="256" height="256"></canvas>
+        </div>
+
+        <!-- Stage: scene-based animation preview to verify the produced
+             spritesheet animates correctly when fed back into createSprite. -->
+        <div id="stage-wrap">
+            <div class="label">STAGE</div>
+            <canvas id="stage" width="320" height="240"></canvas>
+        </div>
+
+        <!-- Info pane shows asset manifest, palette, frame indices. -->
+        <pre id="info">No asset loaded.\n\nfrom headless:\n  load('hero')\n  render()\n  save('hero')\n  inspect(8)\n  preview('walk')</pre>
+    </div>
+
+    <script src="brush.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

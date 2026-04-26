@@ -1,0 +1,21 @@
+{
+  "kind": "sheet",
+  "src": "smoke.png",
+  "frameWidth": 16,
+  "frameHeight": 16,
+  "cols": 4,
+  "rows": 1,
+  "frameCount": 4,
+  "animations": {
+    "blink": {
+      "frames": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "fps": 4,
+      "loop": true
+    }
+  }
+}
