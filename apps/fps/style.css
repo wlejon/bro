@@ -1,7 +1,7 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body {
     background: #000; color: #fff; font-family: sans-serif;
-    overflow: hidden; width: 1920px; height: 1080px;
+    overflow: hidden; width: 100%; height: 100%;
 }
 
 /* Connect screen — centered card (no flex/inset) */
@@ -38,7 +38,7 @@ html, body {
 /* Canvas */
 #game {
     position: absolute; top: 0; left: 0;
-    width: 1920px; height: 1080px; display: none;
+    width: 100%; height: 100%; display: none;
 }
 #game.active { display: block; }
 #connect-screen.hidden { display: none !important; }
@@ -46,7 +46,7 @@ html, body {
 /* HUD overlay */
 #hud {
     position: absolute; top: 0; left: 0;
-    width: 1920px; height: 1080px;
+    width: 100%; height: 100%;
     pointer-events: none;
 }
 #hud.hidden { display: none !important; }
@@ -89,9 +89,9 @@ html, body {
 
 /* Death screen */
 #death-screen {
-    position: absolute; top: 0; left: 0; width: 1920px; height: 1080px;
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
     background: rgba(139,0,0,0.3);
-    text-align: center; padding-top: 400px;
+    text-align: center; padding-top: 40vh;
 }
 #death-screen.hidden { display: none !important; }
 .death-text { font-size: 64px; font-weight: bold; color: #e94560; letter-spacing: 6px; }
