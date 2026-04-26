@@ -7,9 +7,9 @@
 <body>
     <div id="root"></div>
     <script>
-        // Engine reserves a top inset for the menu bar (~28px); tests click
-        // in absolute viewport coords starting at (0,0), so hide the menu
-        // to give them the full viewport.
+        // Hide the menu bar so innerHeight matches the configured viewport.
+        // (Mouse coords from getBoundingClientRect work either way thanks
+        // to the headless globals folding contentTop in automatically.)
         if (typeof bro !== 'undefined' && bro.menu) bro.menu.hide();
     </script>
 </body>

@@ -134,6 +134,16 @@ static int domToSdlButton(int domButton) {
     }
 }
 
+// Headless mouse input takes viewport-relative coordinates (matching
+// getBoundingClientRect / clientX / clientY in the DOM). The engine's
+// handleMouse* methods expect screen-space coords, which include the
+// menu-bar inset reserved at the top. Add contentTop() so callers can
+// pass values straight from getBoundingClientRect without knowing the
+// engine reserves a top inset.
+static float toScreenY(engine::Engine* engine, double viewportY) {
+    return static_cast<float>(viewportY) + static_cast<float>(engine->contentTop());
+}
+
 static JSValue js_mouseDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "mouseDown(x, y [, button]) requires x and y");
     auto* engine = getEngine(ctx);
@@ -145,7 +155,7 @@ static JSValue js_mouseDown(JSContext* ctx, JSValueConst, int argc, JSValueConst
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    engine->handleMouseDown(static_cast<float>(x), static_cast<float>(y), domToSdlButton(button));
+    engine->handleMouseDown(static_cast<float>(x), toScreenY(engine, y), domToSdlButton(button));
     engine->flush();
     return JS_UNDEFINED;
 }
@@ -161,7 +171,7 @@ static JSValue js_mouseUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    engine->handleMouseUp(static_cast<float>(x), static_cast<float>(y), domToSdlButton(button));
+    engine->handleMouseUp(static_cast<float>(x), toScreenY(engine, y), domToSdlButton(button));
     engine->flush();
     return JS_UNDEFINED;
 }
@@ -175,7 +185,7 @@ static JSValue js_mouseMove(JSContext* ctx, JSValueConst, int argc, JSValueConst
     if (JS_ToFloat64(ctx, &x, argv[0])) return JS_EXCEPTION;
     if (JS_ToFloat64(ctx, &y, argv[1])) return JS_EXCEPTION;
 
-    float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
     engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
     engine->flush();
     return JS_UNDEFINED;
@@ -192,7 +202,7 @@ static JSValue js_click(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
     int sdlBtn = domToSdlButton(button);
     engine->handleMouseDown(fx, fy, sdlBtn);
     engine->handleMouseUp(fx, fy, sdlBtn);
@@ -212,7 +222,7 @@ static JSValue js_wheel(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     double dx = 0;
     if (argc >= 4) JS_ToFloat64(ctx, &dx, argv[3]);
 
-    engine->handleWheel(static_cast<float>(x), static_cast<float>(y),
+    engine->handleWheel(static_cast<float>(x), toScreenY(engine, y),
                         static_cast<float>(dx), static_cast<float>(dy));
     engine->flush();
     return JS_UNDEFINED;
@@ -310,7 +320,7 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
     if (JS_ToFloat64(ctx, &y, argv[1])) return JS_EXCEPTION;
 
     // Move mouse to drop position first
-    float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
     engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
 
     // Drop each file path
@@ -354,7 +364,7 @@ static JSValue js_dropText(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     if (!text) return JS_EXCEPTION;
 
     // Move mouse to drop position first
-    float fx = static_cast<float>(x), fy = static_cast<float>(y);
+    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
     engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
 
     engine->handleDropText(text);

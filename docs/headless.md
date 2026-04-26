@@ -47,9 +47,11 @@ These functions are available in addition to all standard DOM APIs:
 
 All input functions go through the full engine pipeline (hit testing, focus management, event dispatch, bubbling). After each call, `flush()` is called automatically to process pending JS jobs.
 
+Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` / `clientX` / `clientY`. The engine reserves a top inset for the menu bar (~28px); these helpers add it internally so `click(rect.x, rect.y)` Just Works without offset math.
+
 | Function | Description |
 |----------|-------------|
-| `click(x, y [, button])` | Simulate a mouse click at screen coordinates (mousedown + mouseup) |
+| `click(x, y [, button])` | Simulate a mouse click at viewport coordinates (mousedown + mouseup) |
 | `mouseDown(x, y [, button])` | Simulate a mouse button press |
 | `mouseUp(x, y [, button])` | Simulate a mouse button release |
 | `mouseMove(x, y)` | Simulate mouse movement (triggers hover, mousemove events) |
