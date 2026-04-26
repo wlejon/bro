@@ -1,5 +1,6 @@
 #include "js/headless_bindings.h"
 #include "engine/engine.h"
+#include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
@@ -8,6 +9,14 @@
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
+
+#define STB_IMAGE_WRITE_STATIC
+#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
+// stb_image_write.h is implemented elsewhere (skia_backend / raster_renderer);
+// we only need the prototype here.
+extern "C" int stbi_write_png(char const* filename, int w, int h, int comp,
+                              const void* data, int stride_in_bytes);
+#endif
 
 #include <string>
 #include <sstream>
@@ -73,6 +82,9 @@ static JSValue js_screenshot(JSContext* ctx, JSValueConst, int argc, JSValueCons
             ax += pb.contentRect.x;
             ay += pb.contentRect.y;
         }
+        // Add menu bar inset so the crop matches getBoundingClientRect-based
+        // viewport coords (mouse helpers do the same compensation).
+        ay += static_cast<float>(engine->contentTop());
         int w = static_cast<int>(box.fullWidth());
         int h = static_cast<int>(box.fullHeight());
         ok = engine->screenshot(path, static_cast<int>(ax), static_cast<int>(ay), w, h);
@@ -83,6 +95,43 @@ static JSValue js_screenshot(JSContext* ctx, JSValueConst, int argc, JSValueCons
     JS_FreeCString(ctx, path);
     if (ok) return JS_TRUE;
     return JS_ThrowInternalError(ctx, "screenshot failed");
+}
+
+// screenshotCanvas(path, selector) — direct snapshot of a <canvas> element's
+// underlying Skia surface, preserving alpha. Bypasses the framebuffer
+// composite path used by screenshot(), which clears with opaque black and
+// flattens transparent canvas pixels. Required for exporting sprite/tileset
+// PNGs that must keep a transparent background.
+static JSValue js_screenshotCanvas(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "screenshotCanvas(path, selector) requires both arguments");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
+    const char* selector = JS_ToCString(ctx, argv[1]);
+    if (!selector) { JS_FreeCString(ctx, path); return JS_EXCEPTION; }
+
+    auto cleanup = [&]() { JS_FreeCString(ctx, path); JS_FreeCString(ctx, selector); };
+
+    auto* el = engine->querySelector(selector);
+    if (!el) { cleanup(); return JS_ThrowTypeError(ctx, "screenshotCanvas: element not found: %s", selector); }
+    auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+    if (!cs) { cleanup(); return JS_ThrowTypeError(ctx, "screenshotCanvas: element has no 2D canvas: %s", selector); }
+
+    // Read straight from the canvas's Skia surface as un-premultiplied RGBA so
+    // alpha survives intact. The canvas is sized in CSS pixels matching its
+    // backing store, so we read the full surface.
+    int w = static_cast<int>(el->layoutBox().contentRect.width);
+    int h = static_cast<int>(el->layoutBox().contentRect.height);
+    if (w <= 0 || h <= 0) { cleanup(); return JS_ThrowInternalError(ctx, "screenshotCanvas: zero-size canvas"); }
+    auto pixels = cs->getImageData(0, 0, w, h);
+    if (pixels.empty()) { cleanup(); return JS_ThrowInternalError(ctx, "screenshotCanvas: read failed"); }
+
+    bool ok = stbi_write_png(path, w, h, 4, pixels.data(), w * 4) != 0;
+    cleanup();
+    if (ok) return JS_TRUE;
+    return JS_ThrowInternalError(ctx, "screenshotCanvas: write failed");
 }
 
 static JSValue js_advanceTime(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -851,6 +900,7 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
                                reinterpret_cast<intptr_t>(engine))))
         // Core
         .function("screenshot", js_screenshot, 1)
+        .function("screenshotCanvas", js_screenshotCanvas, 2)
         .function("advanceTime", js_advanceTime, 1)
         .function("flush", js_flush, 0)
         .function("sleep", js_advanceTime, 1)
