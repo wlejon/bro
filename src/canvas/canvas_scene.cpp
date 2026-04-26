@@ -415,6 +415,31 @@ int CanvasScene::queryLayoutHeight() const {
 void CanvasScene::ensureSurface(int w, int h) {
     if (surface_ && surfWidth_ == w && surfHeight_ == h) return;
 
+    bool isResize = (surface_ != nullptr);
+
+    if (grContext_) {
+        // Resizing: drop the old SkSurface, drain Ganesh, and recreate the
+        // texture/FBO from scratch instead of reusing the names. Two reasons:
+        //   1) Skia's Ganesh wraps the FBO by ID and caches GL state for it;
+        //      reallocating the texture's storage in place (glTexImage2D on
+        //      the same name) leaves Skia's cached state pointing at a now-
+        //      orphaned wrapping. The next draw against the new wrapping
+        //      replays a stale clear.
+        //   2) On macOS Metal-backed OpenGL, the FBO attachment caches an
+        //      internal GLDTextureRec*; that pointer goes stale when the
+        //      attached texture is reallocated underneath, and the next
+        //      glClear hits a NULL deref inside gleUpdateDrawFramebufferState.
+        // The original Windows symptom (canvas keeps drawing the previous
+        // asset after a resize) and the macOS release-build crash both come
+        // from this same surface-reuse race.
+        if (isResize) {
+            surface_.reset();
+            grContext_->flushAndSubmit();
+            if (gpuFBO_)    { glDeleteFramebuffers(1, &gpuFBO_); gpuFBO_ = 0; }
+            if (glTexture_) { glDeleteTextures(1, &glTexture_);  glTexture_ = 0; }
+        }
+    }
+
     surfWidth_ = w;
     surfHeight_ = h;
 
@@ -441,6 +466,12 @@ void CanvasScene::ensureSurface(int w, int h) {
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_2D, glTexture_, 0);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        // Tell Skia to discard its cached view of GL state — the FBO/texture
+        // names may have been recycled to fresh objects above, and Ganesh's
+        // bind cache from the prior wrapping must not be applied to the new
+        // one.
+        grContext_->resetContext();
 
         GrGLFramebufferInfo fbInfo;
         fbInfo.fFBOID = gpuFBO_;
