@@ -2136,13 +2136,9 @@ static JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int a
 // suitable for ctx2d.putImageData(). Returns null if no 3D content has been
 // rendered yet (FBO not allocated). Pixels arrive top-down (CSS row order),
 // pre-flipped from GL's bottom-up native layout by readTonemapPixelsRGBA().
-static JSValue js_sg_toImageData(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
-    auto* g = getGraph(ctx, this_val);
-    if (!g) return JS_NULL;
-    int w = 0, h = 0;
-    auto pixels = g->readTonemapPixelsRGBA(w, h);
-    if (pixels.empty() || w <= 0 || h <= 0) return JS_NULL;
-
+static JSValue buildImageDataFromPixels(JSContext* ctx,
+                                        const std::vector<uint8_t>& pixels,
+                                        int w, int h) {
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
     JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
@@ -2156,6 +2152,39 @@ static JSValue js_sg_toImageData(JSContext* ctx, JSValueConst this_val, int, JSV
     JS_FreeValue(ctx, abuf);
     JS_SetPropertyStr(ctx, obj, "data", dataArr);
     return obj;
+}
+
+static JSValue js_sg_toImageData(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_NULL;
+    int w = 0, h = 0;
+    auto pixels = g->readTonemapPixelsRGBA(w, h);
+    if (pixels.empty() || w <= 0 || h <= 0) return JS_NULL;
+    return buildImageDataFromPixels(ctx, pixels, w, h);
+}
+
+// Synchronously render the scene and return its tonemap output as ImageData.
+// Unlike toImageData(), this does not depend on the engine's per-tick render
+// having already populated the FBO — it drives the render itself, so it works
+// in windowed mode where there's no flush() global. Optional width/height
+// args resize the scene's render target before rendering, which is what
+// off-document capture canvases (e.g. sprite-sheet authoring) need.
+static JSValue js_sg_captureFrame(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_NULL;
+    if (argc >= 2) {
+        int32_t w = 0, h = 0;
+        if (JS_ToInt32(ctx, &w, argv[0]) || JS_ToInt32(ctx, &h, argv[1])) return JS_NULL;
+        if (w > 0 && h > 0 && (w != g->canvasWidth() || h != g->canvasHeight())) {
+            g->setCanvasSize(w, h);
+        }
+    }
+    g->render();
+    int rw = 0, rh = 0;
+    auto pixels = g->readTonemapPixelsRGBA(rw, rh);
+    if (pixels.empty() || rw <= 0 || rh <= 0) return JS_NULL;
+    return buildImageDataFromPixels(ctx, pixels, rw, rh);
 }
 
 static JSValue mat4ToJSArray(JSContext* ctx, const scene::Mat4& mat) {
@@ -2805,6 +2834,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("raycast", js_sg_raycast, 2)
         .method_raw("unprojectLocal", js_sg_unprojectLocal, 2)
         .method_raw("toImageData", js_sg_toImageData, 0)
+        .method_raw("captureFrame", js_sg_captureFrame, 2)
         .get("viewMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->graph) return JS_NULL;
             return mat4ToJSArray(ctx, w->graph->viewMatrix());

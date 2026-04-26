@@ -457,25 +457,39 @@ class SceneGraph {
    * no 3D content come back as RGBA(0,0,0,0) — letting the result composite
    * cleanly onto a 2D canvas via `ctx2d.putImageData()`.
    *
-   * Returns null if no 3D content has been rendered yet (the tonemap FBO
-   * is allocated lazily on first 3D pass). Call `flush()` after building
-   * scene content to drive a render before reading.
+   * Returns null if no 3D content has been rendered yet (the tonemap FBO is
+   * allocated lazily on first 3D pass). Most callers want `captureFrame()`
+   * instead — this only returns whatever the engine's last tick produced.
    *
-   * Used by the artstation `defineScene` capture pipeline: render a 3D
-   * scene at the sprite cell size, readback per frame, and tile the
-   * captures into a 2D sprite sheet.
+   * @returns {?{ width: number, height: number, data: Uint8ClampedArray }}
+   */
+  toImageData() {}
+
+  /**
+   * Synchronously render the scene and return its tonemap output as an
+   * ImageData-shaped object: `{ width, height, data: Uint8ClampedArray }`.
+   * Unlike `toImageData()`, this drives the render itself rather than
+   * reading whatever the last engine tick happened to produce — so it
+   * works in windowed mode (no `flush()` global required) and in any code
+   * path that needs a deterministic readback after mutating the scene.
+   *
+   * Optional `width` / `height` resize the scene's render target before
+   * rendering. Sprite-sheet authoring uses this to capture each frame at
+   * exactly the cell size, regardless of the host canvas's layout box —
+   * the capture canvas can be `display:none`.
    *
    * @example
    *   const scene = canvas.getContext('scene');
    *   scene.createMesh({ mesh: 'box', color: 'red' });
    *   scene.setCamera({ position: [2,2,2], target: [0,0,0] });
-   *   flush();
-   *   const img = scene.toImageData();
+   *   const img = scene.captureFrame(64, 64);
    *   sheetCtx.putImageData(img, cellX, cellY);
    *
+   * @param {number} [width]  Target render width (omit to use current size)
+   * @param {number} [height] Target render height (omit to use current size)
    * @returns {?{ width: number, height: number, data: Uint8ClampedArray }}
    */
-  toImageData() {}
+  captureFrame(width, height) {}
 
   /**
    * Cast a ray against all visible 3D mesh nodes in the scene and return the
