@@ -4,28 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
+**Windows** uses the Visual Studio multi-config generator — one build dir, pick the config at build time:
 ```bash
-# Configure
-cmake -B build
-
-# Build (debug)
+cmake -B build                                 # configure (do not use MinGW)
 cmake --build build --config Debug
-
-# Build (release)
 cmake --build build --config Release
-```
-
-**Windows** (Visual Studio multi-config generator, do not use MinGW):
-```bash
 ./build/src/Debug/bro.exe apps/example
-./build/src/headless/Debug/bro-headless.exe apps/example
+./build/src/Release/bro.exe apps/example
 ```
 
-**Linux / macOS** (single-config, executables have no .exe suffix or config subdirectory):
+**Linux / macOS** use Ninja (single-config) — `--config` is ignored, so use a separate build dir per config:
 ```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug        # debug
+cmake --build build
 ./build/src/bro apps/example
-./build/src/headless/bro-headless apps/example
+
+cmake -B build-release -DCMAKE_BUILD_TYPE=Release   # release
+cmake --build build-release
+./build-release/src/bro apps/example
 ```
+
+For `scripts/package-release.sh` on Linux/macOS, pass `--build-dir build-release` so it picks up the Release binaries (the script's `--config Release` default is the Windows-style config selector and is a no-op for Ninja).
 
 **Common headless invocations** (paths differ per platform as above):
 ```bash

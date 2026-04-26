@@ -31,6 +31,22 @@ if [[ -z "$VERSION" ]]; then
     VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0)"
 fi
 
+# On single-config generators (Ninja/Make), --config is ignored; the build dir
+# is locked to whatever CMAKE_BUILD_TYPE was set at configure time. Catch the
+# common Linux/macOS mistake of pointing this script at a Debug build dir.
+if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+    CACHED_TYPE="$(grep -E '^CMAKE_BUILD_TYPE:STRING=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2)"
+    CACHED_GEN="$(grep -E '^CMAKE_GENERATOR:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2)"
+    if [[ "$CACHED_GEN" != "Visual Studio"* ]] && [[ -n "$CACHED_TYPE" ]] && [[ "$CACHED_TYPE" != "Release" ]] && [[ "$CACHED_TYPE" != "RelWithDebInfo" ]] && [[ "$CACHED_TYPE" != "MinSizeRel" ]]; then
+        echo "ERROR: $BUILD_DIR is configured as $CACHED_TYPE, not Release." >&2
+        echo "  Configure a separate Release build dir:" >&2
+        echo "    cmake -B build-release -DCMAKE_BUILD_TYPE=Release" >&2
+        echo "    cmake --build build-release" >&2
+        echo "    $0 --build-dir build-release${VERSION:+ --version $VERSION}" >&2
+        exit 1
+    fi
+fi
+
 # Platform detection
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) PLATFORM="win" ; EXE=".exe" ; LIB_GLOB="*.dll" ;;
