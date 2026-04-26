@@ -626,6 +626,367 @@
         info.textContent = lines.join('\n');
     }
 
+    // ---------- Windowed: asset picker + live preview + hot reload ------
+    //
+    // Headless drives the app via load/render/save explicitly. Windowed mode
+    // is the artist's view: discover every asset, list them as buttons, and
+    // when one is clicked render it + animate it live. fs.watch the assets
+    // directory so saving an asset module re-renders + restarts the loop
+    // without an app restart.
+    //
+    // Live preview bypasses the headless save→PNG→createSprite roundtrip
+    // because save() needs screenshotCanvas (headless-only). Instead we
+    // blit cells straight from the sheet canvas onto the stage canvas at
+    // the correct fps. The PNG export path is unchanged.
+
+    const picker       = document.getElementById('picker');
+    const watchStatus  = document.getElementById('watch-status');
+    let livePreviewRAF = null;
+    let liveStartTime  = 0;
+    let liveAnimSpec   = null;  // { frames: [i,...], fps, loop } for sheet
+    let liveState      = null;  // mutable state for animated kind
+    let liveLastTickMs = 0;     // wall-clock of last animated tick
+    let liveAccumS     = 0;     // accumulated seconds toward next frame
+    let liveFrameIdx   = 0;     // current frame for animated
+    let watcher        = null;
+    let watchTimers    = {};    // name -> debounce timer id
+
+    function isWindowed() {
+        // Headless installs screenshotCanvas; if it's missing we're windowed.
+        return typeof screenshotCanvas === 'undefined';
+    }
+
+    function discoverAssets() {
+        const fs = require('fs');
+        const names = [];
+        try {
+            const entries = fs.readdirSync('assets');
+            for (const e of entries) {
+                if (typeof e === 'string' && e.endsWith('.js')) {
+                    names.push(e.slice(0, -3));
+                }
+            }
+        } catch (err) {
+            console.log('discoverAssets failed:', err.message);
+        }
+        names.sort();
+        return names;
+    }
+
+    function rebuildPicker() {
+        if (!picker) return;
+        picker.textContent = '';
+        const names = discoverAssets();
+        for (const name of names) {
+            const btn = document.createElement('button');
+            btn.className = 'asset-btn';
+            btn.dataset.name = name;
+            const kind = REGISTRY[name] ? REGISTRY[name].kind : '?';
+            btn.textContent = name;
+            const kSpan = document.createElement('span');
+            kSpan.className = 'kind';
+            kSpan.textContent = kind;
+            btn.appendChild(kSpan);
+            if (name === CURRENT) btn.classList.add('selected');
+            btn.addEventListener('click', () => selectAsset(name));
+            picker.appendChild(btn);
+        }
+    }
+
+    function refreshPickerSelection() {
+        if (!picker) return;
+        for (const btn of picker.querySelectorAll('.asset-btn')) {
+            btn.classList.toggle('selected', btn.dataset.name === CURRENT);
+            const kSpan = btn.querySelector('.kind');
+            if (kSpan && REGISTRY[btn.dataset.name]) {
+                kSpan.textContent = REGISTRY[btn.dataset.name].kind;
+            }
+        }
+    }
+
+    // Stop any running live preview loop.
+    function stopLivePreview() {
+        if (livePreviewRAF) {
+            cancelAnimationFrame(livePreviewRAF);
+            livePreviewRAF = null;
+        }
+        liveAnimSpec = null;
+        liveState    = null;
+    }
+
+    // Pick the first animation from a sheet/animated manifest.
+    function defaultAnimation(meta) {
+        const anims = meta.animations || {};
+        const keys = Object.keys(anims);
+        if (keys.length === 0) {
+            const all = [];
+            for (let i = 0; i < meta.frameCount; i++) all.push(i);
+            return { frames: all, fps: 8, loop: true };
+        }
+        for (const pref of ['idle', 'play', 'loop']) {
+            if (anims[pref]) return anims[pref];
+        }
+        return anims[keys[0]];
+    }
+
+    // Pick the largest integer scale that fits a (w, h) into the stage with
+    // a small margin. Used by every live-preview path.
+    function fitScale(w, h, margin) {
+        margin = margin == null ? 32 : margin;
+        const maxW = stageCanvas.width  - margin;
+        const maxH = stageCanvas.height - margin;
+        return Math.max(1, Math.min(Math.floor(maxW / w),
+                                    Math.floor(maxH / h)));
+    }
+
+    // Clear stage + return its 2D context configured for pixel art.
+    function resetStage(bg) {
+        const ctx = stageCanvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = bg || '#111';
+        ctx.fillRect(0, 0, stageCanvas.width, stageCanvas.height);
+        return ctx;
+    }
+
+
+    // Run drawFn(ctx, w, h) inside a clipped, scaled, centered region of
+    // the stage. Coordinates inside drawFn are local to (0,0)..(w,h).
+    function withCenteredCell(ctx, w, h, drawFn) {
+        const scale = fitScale(w, h);
+        const dw = w * scale, dh = h * scale;
+        const dx = Math.floor((stageCanvas.width  - dw) / 2);
+        const dy = Math.floor((stageCanvas.height - dh) / 2);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(dx, dy, dw, dh);
+        ctx.clip();
+        ctx.translate(dx, dy);
+        ctx.scale(scale, scale);
+        try { drawFn(ctx); } catch (e) { console.log('live draw threw:', e.message); }
+        ctx.restore();
+    }
+
+    // ── Per-kind live frame draws. All draw directly from the asset spec.
+    //   We never read from the sheet canvas — cross-canvas drawImage isn't
+    //   reliable through bro's GPU compositor and made the stage stay blank
+    //   while the sheet flickered. Drawing from spec is also more honest:
+    //   what you see on stage is exactly what your code produces, with no
+    //   intermediate raster buffer to get out of sync.
+
+    function drawSheetFrameLive(spec, idx) {
+        const fn = spec.frames[idx];
+        if (!fn) return;
+        const ctx = resetStage();
+        withCenteredCell(ctx, spec.frameWidth, spec.frameHeight, (c) => {
+            fn(c, spec.frameWidth, spec.frameHeight, idx);
+        });
+    }
+
+    function drawAnimatedFrameLive(spec, t, dt, state) {
+        const ctx = resetStage();
+        withCenteredCell(ctx, spec.frameWidth, spec.frameHeight, (c) => {
+            spec.frame(c, spec.frameWidth, spec.frameHeight, t, dt, state);
+        });
+    }
+
+    function drawTilesetLive(spec) {
+        const ctx = resetStage();
+        const ts = spec.tileSize;
+        const scale = 2;
+        const cellsX = Math.floor(stageCanvas.width  / (ts * scale));
+        const cellsY = Math.floor(stageCanvas.height / (ts * scale));
+        const defined = spec.tiles.length - 1; // index 0 reserved
+        if (defined <= 0) return;
+        for (let r = 0; r < cellsY; r++) {
+            for (let c = 0; c < cellsX; c++) {
+                const idx = ((r * cellsX + c) % defined) + 1;
+                const fn = spec.tiles[idx];
+                if (!fn) continue;
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(c * ts * scale, r * ts * scale, ts * scale, ts * scale);
+                ctx.clip();
+                ctx.translate(c * ts * scale, r * ts * scale);
+                ctx.scale(scale, scale);
+                try { fn(ctx, ts, idx); } catch (e) {}
+                ctx.restore();
+            }
+        }
+    }
+
+    function drawImageLive(spec) {
+        const ctx = resetStage();
+        withCenteredCell(ctx, spec.width, spec.height, (c) => {
+            spec.draw(c, spec.width, spec.height);
+        });
+    }
+
+    function drawAtlasLive(name) {
+        const entry = REGISTRY[name];
+        const layout = entry.layout || atlasLayout(entry.spec);
+        const ctx = resetStage();
+        withCenteredCell(ctx, layout.width, layout.height, (c) => {
+            for (const it of layout.items) {
+                c.save();
+                c.beginPath();
+                c.rect(it.x, it.y, it.w, it.h);
+                c.clip();
+                c.translate(it.x, it.y);
+                try { it.draw(c, it.w, it.h, it.name); } catch (e) {}
+                c.restore();
+            }
+        });
+    }
+
+    function startLivePreview(name) {
+        stopLivePreview();
+        const entry = REGISTRY[name];
+        if (!entry) return;
+
+        const spec = entry.spec;
+
+        if (entry.kind === 'tileset')   { drawTilesetLive(spec);  return; }
+        if (entry.kind === 'image' ||
+            entry.kind === 'nineslice') { drawImageLive(spec);    return; }
+        if (entry.kind === 'atlas')     { drawAtlasLive(name);    return; }
+
+        if (entry.kind === 'sheet') {
+            const meta = buildManifest(name, entry);
+            liveAnimSpec  = defaultAnimation(meta);
+            liveStartTime = performance.now();
+            const loop = (t) => {
+                if (!liveAnimSpec || CURRENT !== name) return;
+                const elapsed = (t - liveStartTime) / 1000;
+                const idx = Math.floor(elapsed * liveAnimSpec.fps);
+                const len = liveAnimSpec.frames.length;
+                const frameIdx = liveAnimSpec.loop
+                    ? liveAnimSpec.frames[idx % len]
+                    : liveAnimSpec.frames[Math.min(idx, len - 1)];
+                drawSheetFrameLive(spec, frameIdx);
+                livePreviewRAF = requestAnimationFrame(loop);
+            };
+            livePreviewRAF = requestAnimationFrame(loop);
+            return;
+        }
+
+        if (entry.kind === 'animated') {
+            // Animated kind: state evolves over time. We step state forward
+            // by dt (1/fps) each animation frame; rAF runs faster than fps
+            // so we accumulate real-time and step when enough has passed.
+            const totalFrames = Math.max(1, Math.round(spec.fps * spec.duration));
+            const dt = 1 / spec.fps;
+            liveState      = (typeof spec.init === 'function') ? (spec.init() || {}) : {};
+            liveFrameIdx   = 0;
+            liveAccumS     = 0;
+            liveLastTickMs = performance.now();
+            liveAnimSpec   = { kind: 'animated' }; // sentinel so stop checks work
+
+            const loop = (t) => {
+                if (!liveAnimSpec || CURRENT !== name) return;
+                // Clamp realDt so a paused/backgrounded window or a wonky
+                // first timestamp can't cause the inner step loop to run
+                // thousands of times. Cap at one logical animation cycle.
+                let realDt = (t - liveLastTickMs) / 1000;
+                if (!isFinite(realDt) || realDt < 0) realDt = dt;
+                if (realDt > spec.duration) realDt = spec.duration;
+                liveLastTickMs = t;
+                liveAccumS += realDt;
+                let stepCount = 0;
+                while (liveAccumS >= dt && stepCount < totalFrames * 2) {
+                    liveAccumS -= dt;
+                    liveFrameIdx++;
+                    stepCount++;
+                    if (liveFrameIdx >= totalFrames) {
+                        // Loop: re-seed state so particles / springs / etc.
+                        // restart from a clean slate.
+                        liveState = (typeof spec.init === 'function') ? (spec.init() || {}) : {};
+                        liveFrameIdx = 0;
+                    }
+                }
+                drawAnimatedFrameLive(spec, liveFrameIdx * dt, dt, liveState);
+                livePreviewRAF = requestAnimationFrame(loop);
+            };
+            livePreviewRAF = requestAnimationFrame(loop);
+            return;
+        }
+    }
+
+    // Load + render + start live preview. Used by picker clicks and by
+    // hot-reload after a file edit.
+    function selectAsset(name) {
+        try {
+            load(name);
+            render(name);
+            refreshPickerSelection();
+            startLivePreview(name);
+        } catch (err) {
+            console.log(`selectAsset(${name}) failed:`, err.message);
+            status.textContent = `error: ${err.message}`;
+        }
+    }
+
+    function startWatcher() {
+        if (watcher || typeof require !== 'function') return;
+        let fs;
+        try { fs = require('fs'); } catch (e) { return; }
+        if (typeof fs.watch !== 'function') {
+            watchStatus.textContent = 'fs.watch unavailable';
+            return;
+        }
+        try {
+            watcher = fs.watch('assets', { recursive: false }, (event, filename) => {
+                if (!filename || !filename.endsWith('.js')) return;
+                const name = filename.slice(0, -3);
+                // Debounce per-file: editors often fire 2-3 events per save.
+                if (watchTimers[name]) clearTimeout(watchTimers[name]);
+                watchTimers[name] = setTimeout(() => {
+                    delete watchTimers[name];
+                    handleAssetChange(name, event);
+                }, 80);
+            });
+            watcher.on('error', err => {
+                watchStatus.textContent = `watch error: ${err.message}`;
+            });
+            watchStatus.textContent = 'watching assets/';
+        } catch (e) {
+            watchStatus.textContent = `watch failed: ${e.message}`;
+        }
+    }
+
+    function handleAssetChange(name, event) {
+        // Refresh picker so newly-added files show up and removed ones drop.
+        rebuildPicker();
+        const after = discoverAssets();
+
+        // If the changed file is the one we're viewing, reload it. Otherwise
+        // just register it so the picker stays current.
+        if (name === CURRENT) {
+            selectAsset(name);
+            watchStatus.textContent = `reloaded ${name}`;
+        } else if (after.includes(name)) {
+            // New asset added while not selected — load to populate kind tag.
+            try { load(name); refreshPickerSelection(); } catch (e) {}
+            watchStatus.textContent = `${event}: ${name}`;
+        } else {
+            watchStatus.textContent = `${event}: ${name}`;
+        }
+    }
+
+    // Defer init: when bro-headless executes app.js, the headless globals
+    // (`screenshotCanvas`, `screenshot`, etc.) are not yet installed at script
+    // load time but are by the time the next task runs. Deferring also lets
+    // us run after the global expose block below — load() evals asset
+    // modules in global scope and needs window.defineSheet to exist.
+    function initWindowed() {
+        if (!isWindowed()) return;
+        rebuildPicker();
+        const names = discoverAssets();
+        if (names.length > 0) selectAsset(names[0]);
+        startWatcher();
+    }
+
+    setTimeout(initWindowed, 0);
+
     // ---------- Expose globals ------------------------------------------
 
     window.defineSheet     = defineSheet;

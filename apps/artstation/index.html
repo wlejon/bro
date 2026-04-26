@@ -8,7 +8,12 @@
     <div id="header">
         <span id="title">Art Station</span>
         <span id="status">no asset loaded</span>
+        <span id="watch-status"></span>
     </div>
+
+    <!-- Asset picker: populated from assets/*.js when running windowed.
+         Click a button to render+animate that asset live. -->
+    <div id="picker"></div>
 
     <div id="layout">
         <!-- Sheet canvas: pixel-perfect 1:1 size of the asset; this is what

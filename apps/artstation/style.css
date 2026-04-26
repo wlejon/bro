@@ -17,6 +17,33 @@ body {
 }
 #title { font-size: 16px; font-weight: bold; color: #fff; }
 #status { color: #8c8; }
+#watch-status { color: #888; font-size: 11px; margin-left: auto; }
+
+#picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+.asset-btn {
+    background: #232328;
+    color: #ddd;
+    border: 1px solid #333;
+    padding: 6px 12px;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.asset-btn:hover { background: #2e2e35; border-color: #555; }
+.asset-btn.selected { background: #3b3b46; border-color: #88c; color: #fff; }
+.asset-btn .kind {
+    color: #888;
+    font-size: 10px;
+    text-transform: uppercase;
+    margin-left: 6px;
+    letter-spacing: 0.5px;
+}
+.asset-btn.selected .kind { color: #aaf; }
 
 #layout {
     display: grid;
@@ -65,6 +92,13 @@ canvas {
 }
 
 #stage {
+    /* Bro's layout doesn't promote <canvas width/height> attributes to a
+       CSS intrinsic box, so without explicit dimensions the canvas
+       collapses to height:0 — buffer paints land but nothing reaches the
+       screen. SHEET/INSPECT escape this because resetCanvas() rewrites
+       canvas.style.width/height per asset; STAGE keeps a fixed size. */
+    width:  320px;
+    height: 240px;
     background: #111;
 }
 
