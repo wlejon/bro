@@ -96,6 +96,39 @@ fs.constants.R_OK;  // 4
 fs.constants.W_OK;  // 2
 fs.constants.X_OK;  // 1
 
+// ── Watch (native FSWatcher) ──
+//
+// Backed by inotify (Linux), FSEvents (macOS) and ReadDirectoryChangesW
+// (Windows). Each watcher owns one OS thread that pushes events into a
+// lock-free ring; the engine's per-frame tick drains the ring and dispatches
+// 'change' / 'error' callbacks on the JS thread.
+//
+//   const w = fs.watch(path, options?, listener?);
+//
+//   options: {
+//     recursive: boolean,   // include subdirectories (default false)
+//     persistent: boolean,  // accepted for Node compat — currently ignored
+//   }
+//   listener: (eventType, filename) => void
+//     eventType: 'rename' (created/deleted/moved) | 'change' (modified)
+//     filename:  basename when non-recursive; forward-slash path relative to
+//                the watched root when recursive
+//
+//   w.on('change', (eventType, filename) => ...);
+//   w.on('error', (err) => ...);     // err.code === 'EWATCHER'
+//   w.on('close', () => ...);
+//   w.off(event, listener);
+//   w.close();                       // idempotent
+//
+// Events are coalesced by the OS, not by us — a single editor save may
+// produce one or several 'change' events depending on how the editor writes
+// (truncate-then-write, atomic-rename, etc).
+
+const watcher = fs.watch('apps/artstation/assets', { recursive: true }, function (event, filename) {
+    console.log(event, filename);
+});
+watcher.on('error', err => console.error('watch error:', err.message));
+
 
 // -----------------------------------------------------------------------------
 // path — require('path')

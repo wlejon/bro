@@ -1748,6 +1748,18 @@ void Engine::run() {
                 JS_FreeValue(jsRuntime_->getContext(), global);
             }
 
+            // 3b. Pump brokit fs.watch (drain native watcher rings → JS callbacks)
+            {
+                JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
+                JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_fs_watch_tick");
+                if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
+                    JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
+                    JS_FreeValue(jsRuntime_->getContext(), ret);
+                }
+                JS_FreeValue(jsRuntime_->getContext(), tickFn);
+                JS_FreeValue(jsRuntime_->getContext(), global);
+            }
+
             // 4. Execute pending JS jobs
             jsRuntime_->executePendingJobs();
 
@@ -2034,6 +2046,18 @@ void Engine::run() {
         {
             JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
             JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_ws_tick");
+            if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
+                JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
+                JS_FreeValue(jsRuntime_->getContext(), ret);
+            }
+            JS_FreeValue(jsRuntime_->getContext(), tickFn);
+            JS_FreeValue(jsRuntime_->getContext(), global);
+        }
+
+        // 2b'. Tick brokit fs.watch (deliver native filesystem events to JS)
+        {
+            JSValue global = JS_GetGlobalObject(jsRuntime_->getContext());
+            JSValue tickFn = JS_GetPropertyStr(jsRuntime_->getContext(), global, "__brokit_fs_watch_tick");
             if (JS_IsFunction(jsRuntime_->getContext(), tickFn)) {
                 JSValue ret = JS_Call(jsRuntime_->getContext(), tickFn, JS_UNDEFINED, 0, nullptr);
                 JS_FreeValue(jsRuntime_->getContext(), ret);

@@ -306,6 +306,16 @@ void Worker::threadFunc()
         JS_FreeValue(ctx, tickFn);
         JS_FreeValue(ctx, g);
 
+        // Tick fs.watch (deliver native filesystem events to JS)
+        g = JS_GetGlobalObject(ctx);
+        tickFn = JS_GetPropertyStr(ctx, g, "__brokit_fs_watch_tick");
+        if (JS_IsFunction(ctx, tickFn)) {
+            JSValue ret = JS_Call(ctx, tickFn, JS_UNDEFINED, 0, nullptr);
+            JS_FreeValue(ctx, ret);
+        }
+        JS_FreeValue(ctx, tickFn);
+        JS_FreeValue(ctx, g);
+
         // Drain this subscriber's network events — fires JS onconnect /
         // ondisconnect / onmessage callbacks on this worker thread.
         if (netService_) {
