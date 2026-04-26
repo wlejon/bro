@@ -136,6 +136,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/dialogs-api.js` | `showOpenFileDialog` / `showOpenFolderDialog` / `showSaveFileDialog` — SDL3-backed native dialogs |
 | `docs/menu-api.js` | `bro.menu` — native menu bar (set/addItem/updateItem, item event) |
 | `docs/gizmo-api.js` | `bro.gizmo` — 3D transform handles (translate/rotate/scale) for scene editing |
+| `docs/video-api.js` | `VideoEncoder` — WebM/VP9 software encoder (RGBA in, file out) |
 
 Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system, including action binding/rebinding), `docs/inspect.md` (DOM inspector that's very useful in headless), `docs/multi-repo-workflow.md` (sibling library development).
 

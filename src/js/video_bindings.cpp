@@ -1,0 +1,213 @@
+#include "js/video_bindings.h"
+
+#include "canvas/canvas_scene.h"
+#include "dom/element.h"
+#include "js/dom_bindings_internal.h"
+#include "video/webm_encoder.h"
+
+#include <qjsbind/qjsbind.h>
+
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <string>
+
+namespace bro::js {
+
+namespace {
+
+std::string s_basePath;
+
+std::string resolvePath(const std::string& src) {
+    if (src.size() >= 2 && src[1] == ':') return src;
+    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) return src;
+    if (s_basePath.empty()) return src;
+    std::string path = s_basePath;
+    if (path.back() != '/' && path.back() != '\\') path += '/';
+    return path + src;
+}
+
+video::WebmEncoder::Quality parseQuality(const std::string& s) {
+    if (s == "realtime") return video::WebmEncoder::Quality::Realtime;
+    if (s == "best")     return video::WebmEncoder::Quality::Best;
+    return video::WebmEncoder::Quality::Good;  // default + "good"
+}
+
+// JS-owned wrapper around the C++ encoder. Holds a unique_ptr so finishing
+// or destroying the JS object also cleans up libvpx + the file handle.
+struct EncoderData {
+    std::unique_ptr<video::WebmEncoder> enc;
+    int width = 0;
+    int height = 0;
+    std::string lastErr;
+};
+
+using ED = EncoderData;
+
+// JS: new VideoEncoder({ path, width, height, fps?, fpsDen?, bitrateKbps?,
+//                        quality?, keyframeIntervalSec?, threads? })
+ED* js_videoEncoderCtor(JSContext* ctx, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0])) {
+        JS_ThrowTypeError(ctx, "VideoEncoder requires a config object");
+        return nullptr;
+    }
+    auto getInt = [&](const char* key, int dflt) -> int {
+        JSValue v = JS_GetPropertyStr(ctx, argv[0], key);
+        int out = dflt;
+        if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+            int32_t i = dflt;
+            JS_ToInt32(ctx, &i, v);
+            out = i;
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    };
+    auto getStr = [&](const char* key) -> std::string {
+        JSValue v = JS_GetPropertyStr(ctx, argv[0], key);
+        std::string out;
+        if (JS_IsString(v)) {
+            const char* s = JS_ToCString(ctx, v);
+            if (s) { out = s; JS_FreeCString(ctx, s); }
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    };
+
+    std::string path = getStr("path");
+    if (path.empty()) {
+        JS_ThrowTypeError(ctx, "VideoEncoder: path is required");
+        return nullptr;
+    }
+    video::WebmEncoder::Config cfg;
+    cfg.width = getInt("width", 0);
+    cfg.height = getInt("height", 0);
+    cfg.fpsNum = getInt("fps", 30);
+    cfg.fpsDen = getInt("fpsDen", 1);
+    cfg.targetBitrateKbps = getInt("bitrateKbps", 0);
+    cfg.keyframeIntervalSec = getInt("keyframeIntervalSec", 2);
+    cfg.threads = getInt("threads", 0);
+    cfg.quality = parseQuality(getStr("quality"));
+
+    std::string err;
+    auto enc = video::WebmEncoder::create(resolvePath(path), cfg, &err);
+    if (!enc) {
+        JS_ThrowInternalError(ctx, "VideoEncoder open failed: %s", err.c_str());
+        return nullptr;
+    }
+
+    auto* data = new ED();
+    data->enc = std::move(enc);
+    data->width = cfg.width;
+    data->height = cfg.height;
+    return data;
+}
+
+// JS: enc.addFrameRGBA(uint8Array [, stride])
+//   Bytes must hold width*height*4 RGBA pixels, top-down.
+JSValue js_videoEncoder_addFrameRGBA(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<ED>(ctx, this_val);
+    if (!d || !d->enc) return JS_ThrowInternalError(ctx, "encoder closed");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "addFrameRGBA requires a Uint8Array");
+
+    size_t byteLen = 0;
+    size_t byteOff = 0;
+    size_t bytesPerElem = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &byteLen, &bytesPerElem);
+    if (JS_IsException(ab)) return ab;
+    size_t bufSize = 0;
+    uint8_t* buf = JS_GetArrayBuffer(ctx, &bufSize, ab);
+    JS_FreeValue(ctx, ab);
+    if (!buf) return JS_ThrowTypeError(ctx, "addFrameRGBA: argument is not a typed array");
+
+    int stride = d->width * 4;
+    if (argc >= 2 && !JS_IsUndefined(argv[1])) {
+        int32_t s = stride;
+        JS_ToInt32(ctx, &s, argv[1]);
+        if (s > 0) stride = s;
+    }
+    const size_t needed = static_cast<size_t>(stride) * d->height;
+    if (byteLen < needed) {
+        return JS_ThrowRangeError(ctx,
+            "addFrameRGBA: buffer too small (have %zu, need %zu)", byteLen, needed);
+    }
+
+    if (!d->enc->addFrameRGBA(buf + byteOff, stride)) {
+        d->lastErr = d->enc->lastError();
+        return JS_ThrowInternalError(ctx, "addFrameRGBA failed: %s", d->lastErr.c_str());
+    }
+    return JS_TRUE;
+}
+
+// JS: enc.addCanvasFrame(canvasElement)
+//   Snapshots the canvas's Skia surface (preserves alpha) and encodes it.
+//   Same pixel-source path as headless screenshotCanvas.
+JSValue js_videoEncoder_addCanvasFrame(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<ED>(ctx, this_val);
+    if (!d || !d->enc) return JS_ThrowInternalError(ctx, "encoder closed");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "addCanvasFrame requires a canvas element");
+
+    auto* el = bro::js::getElement(argv[0]);
+    if (!el) return JS_ThrowTypeError(ctx, "addCanvasFrame: argument is not an element");
+    auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
+    if (!cs) return JS_ThrowTypeError(ctx, "addCanvasFrame: element has no 2D canvas");
+
+    cs->flush();
+    auto* surf = cs->surface();
+    if (!surf) return JS_ThrowInternalError(ctx, "addCanvasFrame: no surface");
+    const int w = surf->width();
+    const int h = surf->height();
+    if (w != d->width || h != d->height) {
+        return JS_ThrowRangeError(ctx,
+            "addCanvasFrame: canvas %dx%d does not match encoder %dx%d",
+            w, h, d->width, d->height);
+    }
+    auto pixels = cs->getImageData(0, 0, w, h);
+    if (pixels.empty()) {
+        return JS_ThrowInternalError(ctx, "addCanvasFrame: pixel read failed");
+    }
+
+    if (!d->enc->addFrameRGBA(pixels.data(), w * 4)) {
+        d->lastErr = d->enc->lastError();
+        return JS_ThrowInternalError(ctx, "addCanvasFrame: encode failed: %s",
+                                     d->lastErr.c_str());
+    }
+    return JS_TRUE;
+}
+
+// JS: enc.finish() — flush + close. Idempotent. Returns true on success.
+JSValue js_videoEncoder_finish(JSContext* ctx, JSValueConst this_val,
+                               int /*argc*/, JSValueConst* /*argv*/) {
+    auto* d = qjsbind::unwrap<ED>(ctx, this_val);
+    if (!d) return JS_ThrowInternalError(ctx, "encoder gone");
+    if (!d->enc) return JS_TRUE;
+    bool ok = d->enc->finish();
+    if (!ok) d->lastErr = d->enc->lastError();
+    return JS_NewBool(ctx, ok);
+}
+
+} // namespace
+
+void VideoBindings::install(JSContext* ctx, const std::string& basePath) {
+    s_basePath = basePath;
+
+    qjsbind::Class<ED>(ctx, "VideoEncoder")
+        .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> ED* {
+            return js_videoEncoderCtor(ctx, argc, argv);
+        })
+        .get("width",          [](ED* d) -> int { return d->width; })
+        .get("height",         [](ED* d) -> int { return d->height; })
+        .get("framesWritten",  [](ED* d) -> int {
+            return d->enc ? d->enc->framesWritten() : 0;
+        })
+        .get("lastError",      [](ED* d) -> std::string {
+            if (d->enc) return d->enc->lastError();
+            return d->lastErr;
+        })
+        .method_raw("addFrameRGBA",    js_videoEncoder_addFrameRGBA, 1)
+        .method_raw("addCanvasFrame",  js_videoEncoder_addCanvasFrame, 1)
+        .method_raw("finish",          js_videoEncoder_finish, 0);
+}
+
+} // namespace bro::js

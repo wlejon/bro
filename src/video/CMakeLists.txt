@@ -8,6 +8,8 @@ add_library(bro_video STATIC
     video_decoder.cpp
     audio_decoder.cpp
     yuv_to_rgb.cpp
+    rgba_to_yuv.cpp
+    webm_encoder.cpp
     video_pipeline.cpp
 )
 target_include_directories(bro_video PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -33,3 +35,8 @@ endif()
 # Smoke test: decode a WebM and dump what we saw. Not linked into bro.
 add_executable(bro_videoinspect tools/video_inspect.cpp)
 target_link_libraries(bro_videoinspect PRIVATE bro_video)
+
+# Smoke test: encode a synthetic gradient to WebM, decode it back, and
+# report frame counts / sizes / first-pixel sanity check. Not linked into bro.
+add_executable(bro_videoencodetest tools/video_encode_test.cpp)
+target_link_libraries(bro_videoencodetest PRIVATE bro_video)
