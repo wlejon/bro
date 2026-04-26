@@ -88,17 +88,34 @@ The PNG that lands in `output/` is shaped like any other sprite sheet, so
 caring that the source was procedural. Use a deterministic PRNG in `init`
 if you want byte-stable renders across runs.
 
-Animated assets can also be encoded to a WebM/VP9 video via `saveVideo()`,
-which walks the same virtual-time loop and writes one frame per cell:
+Animated assets can also be encoded to a WebM/VP9 video or animated GIF via
+`saveVideo()` / `saveGif()`. Both walk the same virtual-time loop and write
+one frame per cell:
 
 ```bash
-bro-headless apps/artstation -e "load('explosion'); saveVideo()"
+bro-headless apps/artstation -e "load('explosion'); saveVideo(); saveGif()"
 # → apps/artstation/output/explosion.webm
+# → apps/artstation/output/explosion.gif
 ```
 
 Frame width/height must be even (VP9 4:2:0 chroma). The asset's `fps` and
-`duration` drive video frame rate and length. Quality preset and bitrate
-can be overridden via `saveVideo(name, { quality: 'best', bitrateKbps: 2000 })`.
+`duration` drive video frame rate and length. Override per-call:
+`saveVideo(name, { quality: 'best', bitrateKbps: 2000 })` or
+`saveGif(name, { paletteBits: 6, loopCount: 0 })`.
+
+`defineSheet` assets work too — saveVideo/saveGif walk the chosen
+animation's frame indices and produce a video looping that animation. Pick
+the animation with `opts.anim`, otherwise the first one wins (preferring
+`idle` / `play` / `loop`). Output filename gets the animation suffix:
+
+```bash
+bro-headless apps/artstation -e "load('blob'); saveGif('blob', { anim: 'walk' })"
+# → apps/artstation/output/blob_walk.gif
+```
+
+In windowed mode, three buttons in the save bar above the canvases call
+`save()` / `saveVideo()` / `saveGif()` for the currently-selected asset.
+PNG is enabled for any asset; WebM/GIF only for animated and sheet kinds.
 
 ## Defining a tileset
 
@@ -139,7 +156,8 @@ defineTileset('terrain', {
 | `render(name?)` | Render the current (or named) asset to the sheet canvas |
 | `save(name?)` | Write the sheet PNG (alpha preserved) + sidecar manifest JSON |
 | `inspectArt(scale?)` | Re-render at integer scale into the inspect canvas (debug) |
-| `saveVideo(name?, opts?)` | Encode a `defineAnimated` asset to `output/<name>.webm` (VP9). Opts: path, fps, bitrateKbps, quality |
+| `saveVideo(name?, opts?)` | Encode `defineAnimated` or `defineSheet` to `output/<name>.webm` (VP9). Opts: path, fps, bitrateKbps, quality, anim |
+| `saveGif(name?, opts?)` | Encode `defineAnimated` or `defineSheet` to `output/<name>.gif` (GIF89a). Opts: path, fps, paletteBits, loopCount, anim |
 | `preview(animName?)` | Animate the saved sprite back through the scene API on the stage canvas |
 | `previewMap(layoutFn?)` | Lay the tileset into a small tilemap on the stage canvas |
 | `listAssets()` | Names + kinds of every loaded asset |

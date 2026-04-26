@@ -484,20 +484,21 @@
         for (let y = cellH; y < h; y += cellH) ctx.fillRect(0, y, w, 1);
     }
 
-    // ---------- Save (PNG via headless screenshot crop) -----------------
+    // ---------- Save (PNG of sheet canvas) ------------------------------
 
     // Saves the sheet canvas to output/<name>.png and writes a sidecar
     // <name>.json with the manifest (frame size, animations, etc) so
     // game code can load both with one fetch.
     //
-    // The actual PNG write happens via headless's `screenshot(path,sel)`
-    // helper which crops to the element's bounding box. We size the
-    // canvas pixel-exact to the asset, so the cropped PNG is 1:1.
+    // Uses screenshotCanvas (engine-level binding, available in both
+    // windowed and headless) which snapshots the canvas's Skia surface
+    // directly and preserves alpha — bypassing the framebuffer composite
+    // path that would flatten transparent pixels to opaque black.
     function save(name) {
         name = name || CURRENT;
         if (!name) throw new Error('nothing to save');
         if (typeof screenshotCanvas !== 'function') {
-            throw new Error('save() requires headless mode (screenshotCanvas missing)');
+            throw new Error('save() requires the screenshotCanvas global');
         }
         const entry = REGISTRY[name];
         const outDir = 'apps/artstation/output';
@@ -524,22 +525,111 @@
         return { png: pngPath, json: jsonPath, meta };
     }
 
-    // ---------- Save video (procedural animation → WebM) ----------------
+    // ---------- Save video / GIF (procedural animation → file) ----------
 
-    // saveVideo(name?, opts?) — encode an `animated` asset to a VP9/WebM file.
-    // Walks the same virtual-time loop as renderAnimated, but instead of
-    // tiling each frame into a sheet it pushes each frame straight into a
-    // VideoEncoder. Requires the VideoEncoder global (engine-level binding,
-    // present in both windowed and headless).
+    // Drive `addFrame(ctx, sheetCanvas)` once per logical frame for an
+    // animated or sheet asset. Resizes the sheet canvas to frame size and
+    // either runs the procedural step (animated) or replays the picked
+    // animation's hand-drawn frame functions (sheet). Restores the full
+    // spritesheet render at the end so the UI doesn't end up stuck on the
+    // last single frame.
     //
-    // opts:
-    //   path        — override output path (default output/<name>.webm)
-    //   fps         — encoder fps (default spec.fps)
+    // Returns { fw, fh, framesEmitted, fps } describing what got encoded;
+    // callers attach this onto whatever encoder-specific result they return.
+    function driveAnimationFrames(name, opts, addFrame) {
+        const entry = REGISTRY[name];
+        const spec = entry.spec;
+        opts = opts || {};
+
+        let fw, fh, fps, frames;
+
+        if (entry.kind === 'animated') {
+            fw = spec.frameWidth; fh = spec.frameHeight;
+            fps = opts.fps || spec.fps;
+            const dt = 1 / spec.fps;
+            const total = animatedFrameCount(spec);
+            const ctx = resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+            const state = (typeof spec.init === 'function') ? (spec.init() || {}) : {};
+            for (let i = 0; i < total; i++) {
+                resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+                ctx.save();
+                try { spec.frame(ctx, fw, fh, i * dt, dt, state); }
+                catch (e) { console.log(`frame ${i} threw:`, e.message); }
+                ctx.restore();
+                if (typeof flush === 'function') flush();
+                addFrame(ctx, sheetCanvas, i);
+            }
+            frames = total;
+        } else if (entry.kind === 'sheet') {
+            // Pick an animation: explicit opts.anim, then 'idle'/'play'/'loop',
+            // then the first one defined. Sheets without animations encode
+            // the whole frames[] array in declaration order.
+            fw = spec.frameWidth; fh = spec.frameHeight;
+            const anims = spec.animations || {};
+            const animKeys = Object.keys(anims);
+            let frameIndices;
+            if (opts.anim && anims[opts.anim]) {
+                frameIndices = anims[opts.anim].frames.slice();
+                fps = opts.fps || anims[opts.anim].fps || 8;
+            } else if (animKeys.length > 0) {
+                const pick = ['idle','play','loop'].find(k => anims[k]) || animKeys[0];
+                frameIndices = anims[pick].frames.slice();
+                fps = opts.fps || anims[pick].fps || 8;
+            } else {
+                frameIndices = spec.frames.map((_, i) => i);
+                fps = opts.fps || 8;
+            }
+            const ctx = resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+            for (let i = 0; i < frameIndices.length; i++) {
+                const idx = frameIndices[i];
+                const fn = spec.frames[idx];
+                resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+                if (fn) {
+                    ctx.save();
+                    try { fn(ctx, fw, fh, idx); }
+                    catch (e) { console.log(`sheet frame ${idx} threw:`, e.message); }
+                    ctx.restore();
+                }
+                if (typeof flush === 'function') flush();
+                addFrame(ctx, sheetCanvas, i);
+            }
+            frames = frameIndices.length;
+        } else {
+            throw new Error(`save video/gif requires animated or sheet asset, not ${entry.kind}`);
+        }
+
+        return { fw, fh, fps, framesEmitted: frames };
+    }
+
+    // Pick a default output path for the given asset + format. Sheets get
+    // an animation suffix (when one is chosen) so multiple animations can
+    // coexist as separate files; animated assets just take the asset name.
+    function defaultExportPath(name, opts, ext) {
+        opts = opts || {};
+        const entry = REGISTRY[name];
+        const outDir = 'apps/artstation/output';
+        if (opts.path) return opts.path;
+        if (entry.kind === 'sheet') {
+            const anims = entry.spec.animations || {};
+            const animKeys = Object.keys(anims);
+            let pick = opts.anim;
+            if (!pick && animKeys.length > 0) {
+                pick = ['idle','play','loop'].find(k => anims[k]) || animKeys[0];
+            }
+            return pick ? `${outDir}/${name}_${pick}.${ext}` : `${outDir}/${name}.${ext}`;
+        }
+        return `${outDir}/${name}.${ext}`;
+    }
+
+    // saveVideo(name?, opts?) — encode an `animated` or `sheet` asset to a
+    // VP9/WebM file. opts:
+    //   path        — override output path
+    //   fps         — encoder fps (defaults: animated→spec.fps, sheet→anim.fps)
     //   bitrateKbps — VBR target (default auto in encoder)
     //   quality     — 'realtime' | 'good' | 'best' (default 'good')
+    //   anim        — for sheet kind: animation name to encode (default: first)
     //
-    // Frame size is taken from the animated spec. Width/height must be even
-    // for VP9 4:2:0 chroma — odd sizes throw rather than silently rescaling.
+    // Frame size must be even (VP9 4:2:0 chroma) — odd sizes throw.
     function saveVideo(name, opts) {
         name = name || CURRENT;
         if (!name) throw new Error('nothing to saveVideo');
@@ -548,8 +638,8 @@
         }
         const entry = REGISTRY[name];
         if (!entry) throw new Error(`asset not loaded: ${name}`);
-        if (entry.kind !== 'animated') {
-            throw new Error('saveVideo() only supports defineAnimated assets');
+        if (entry.kind !== 'animated' && entry.kind !== 'sheet') {
+            throw new Error('saveVideo() only supports animated or sheet assets');
         }
         const spec = entry.spec;
         if ((spec.frameWidth & 1) || (spec.frameHeight & 1)) {
@@ -559,51 +649,90 @@
         }
 
         opts = opts || {};
-        const outDir  = 'apps/artstation/output';
-        const path    = opts.path    || `${outDir}/${name}.webm`;
-        const fps     = opts.fps     || spec.fps;
+        const path    = defaultExportPath(name, opts, 'webm');
         const quality = opts.quality || 'good';
 
-        // Render frames into the sheet canvas at frame size — the encoder
-        // pulls pixels straight off this canvas's Skia surface. We restore
-        // the full sheet render afterwards so the UI still shows the asset.
-        const fw = spec.frameWidth, fh = spec.frameHeight;
-        const ctx = resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
-
-        const enc = new VideoEncoder({
-            path,
-            width: fw, height: fh,
-            fps,
-            quality,
-            bitrateKbps: opts.bitrateKbps || 0,
-        });
-
-        const frameCount = animatedFrameCount(spec);
-        const dt = 1 / spec.fps;
-        const state = (typeof spec.init === 'function') ? (spec.init() || {}) : {};
+        let enc = null;
+        let result = null;
         try {
-            for (let i = 0; i < frameCount; i++) {
-                resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
-                ctx.save();
-                try { spec.frame(ctx, fw, fh, i * dt, dt, state); }
-                catch (e) { console.log(`saveVideo frame ${i} threw:`, e.message); }
-                ctx.restore();
-                // Drain canvas commands so the Skia surface reflects this
-                // frame before the encoder snapshots it.
-                if (typeof flush === 'function') flush();
-                enc.addCanvasFrame(sheetCanvas);
-            }
-            if (!enc.finish()) {
+            const stats = driveAnimationFrames(name, opts, (ctx, canvas, i) => {
+                if (!enc) {
+                    enc = new VideoEncoder({
+                        path,
+                        width: canvas.width, height: canvas.height,
+                        fps: opts.fps || (entry.kind === 'animated' ? spec.fps : 8),
+                        quality,
+                        bitrateKbps: opts.bitrateKbps || 0,
+                    });
+                }
+                enc.addCanvasFrame(canvas);
+            });
+            if (enc && !enc.finish()) {
                 throw new Error('encoder finish failed: ' + enc.lastError);
             }
+            result = {
+                path, frames: enc ? enc.framesWritten : 0,
+                fps: stats.fps, width: stats.fw, height: stats.fh,
+            };
         } finally {
-            // Always re-render the spritesheet view so the UI doesn't end
-            // up showing the last single frame, even if encoding threw.
-            try { renderAnimated(name); inspect(); } catch (e) {}
+            try { render(name); } catch (e) {}
         }
 
-        status.textContent = `saved ${path} (${enc.framesWritten} frames)`;
-        return { path, frames: enc.framesWritten, fps, width: fw, height: fh };
+        status.textContent = `saved ${path} (${result.frames} frames)`;
+        return result;
+    }
+
+    // saveGif(name?, opts?) — same shape as saveVideo, writes an animated
+    // GIF89a instead. opts:
+    //   path        — override output path
+    //   fps         — defaults same as saveVideo
+    //   paletteBits — 1..8, defaults 8 (256 colors per frame)
+    //   loopCount   — 0 = infinite (default), 1 = play once, N = repeat N
+    //   anim        — for sheet kind: animation name to encode
+    function saveGif(name, opts) {
+        name = name || CURRENT;
+        if (!name) throw new Error('nothing to saveGif');
+        if (typeof GifEncoder !== 'function') {
+            throw new Error('saveGif() requires the GifEncoder global');
+        }
+        const entry = REGISTRY[name];
+        if (!entry) throw new Error(`asset not loaded: ${name}`);
+        if (entry.kind !== 'animated' && entry.kind !== 'sheet') {
+            throw new Error('saveGif() only supports animated or sheet assets');
+        }
+
+        opts = opts || {};
+        const path = defaultExportPath(name, opts, 'gif');
+        const spec = entry.spec;
+
+        let enc = null;
+        let result = null;
+        try {
+            const stats = driveAnimationFrames(name, opts, (ctx, canvas, i) => {
+                if (!enc) {
+                    enc = new GifEncoder({
+                        path,
+                        width: canvas.width, height: canvas.height,
+                        fps: opts.fps || (entry.kind === 'animated' ? spec.fps : 8),
+                        paletteBits: opts.paletteBits || 8,
+                        loopCount: (opts.loopCount == null) ? 0 : opts.loopCount,
+                    });
+                }
+                enc.addCanvasFrame(canvas);
+            });
+            if (enc && !enc.finish()) {
+                throw new Error('encoder finish failed: ' + enc.lastError);
+            }
+            result = {
+                path, frames: enc ? enc.framesWritten : 0,
+                fps: stats.fps, width: stats.fw, height: stats.fh,
+            };
+        } finally {
+            try { render(name); } catch (e) {}
+        }
+
+        status.textContent = `saved ${path} (${result.frames} frames)`;
+        return result;
     }
 
     // ---------- Preview (animate the produced sheet via scene API) ------
@@ -1020,6 +1149,47 @@
         }
     }
 
+    // ---------- Save bar (PNG / WebM / GIF buttons in windowed mode) -----
+
+    const saveBar    = document.getElementById('save-bar');
+    const saveStatus = document.getElementById('save-status');
+
+    // Per-asset enablement: PNG works for any asset that has a sheet
+    // canvas surface (i.e. anything we can render); WebM/GIF need an
+    // animated or sheet asset since they encode multi-frame content.
+    function refreshSaveBar() {
+        if (!saveBar) return;
+        const entry = CURRENT ? REGISTRY[CURRENT] : null;
+        const canPng  = !!entry;
+        const canAnim = !!entry && (entry.kind === 'animated' || entry.kind === 'sheet');
+        for (const btn of saveBar.querySelectorAll('.save-btn')) {
+            const action = btn.dataset.action;
+            btn.disabled = (action === 'png') ? !canPng : !canAnim;
+        }
+    }
+
+    function bindSaveBar() {
+        if (!saveBar) return;
+        for (const btn of saveBar.querySelectorAll('.save-btn')) {
+            btn.addEventListener('click', () => runSaveAction(btn.dataset.action));
+        }
+        refreshSaveBar();
+    }
+
+    function runSaveAction(action) {
+        if (!CURRENT) { saveStatus.textContent = 'no asset loaded'; return; }
+        try {
+            let r;
+            if (action === 'png')  r = save();
+            if (action === 'webm') r = saveVideo();
+            if (action === 'gif')  r = saveGif();
+            saveStatus.textContent = r ? `wrote ${r.path || r.png}` : 'done';
+        } catch (e) {
+            saveStatus.textContent = `error: ${e.message}`;
+            console.log('save action', action, 'failed:', e.message);
+        }
+    }
+
     // Load + render + start live preview. Used by picker clicks and by
     // hot-reload after a file edit.
     function selectAsset(name) {
@@ -1027,6 +1197,7 @@
             load(name);
             render(name);
             refreshPickerSelection();
+            refreshSaveBar();
             startLivePreview(name);
             // Windowed-mode race: the canvas pipeline can latch onto the
             // previous asset's layout box when processing this frame's draw
@@ -1102,6 +1273,7 @@
     function initWindowed() {
         if (!isWindowed()) return;
         rebuildPicker();
+        bindSaveBar();
         const names = discoverAssets();
         if (names.length > 0) selectAsset(names[0]);
         startWatcher();
@@ -1122,6 +1294,7 @@
     window.render        = render;
     window.save          = save;
     window.saveVideo     = saveVideo;
+    window.saveGif       = saveGif;
     window.preview       = preview;
     window.previewMap    = previewMap;
     // Headless installs its own `inspect()` (layout debugger) after page

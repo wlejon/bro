@@ -15,6 +15,15 @@
          Click a button to render+animate that asset live. -->
     <div id="picker"></div>
 
+    <!-- Save action bar: buttons enabled per asset kind. PNG always works
+         once an asset is loaded; WebM/GIF only on animated or sheet kinds. -->
+    <div id="save-bar">
+        <button class="save-btn" data-action="png">save PNG</button>
+        <button class="save-btn" data-action="webm">save WebM</button>
+        <button class="save-btn" data-action="gif">save GIF</button>
+        <span id="save-status"></span>
+    </div>
+
     <div id="layout">
         <!-- Sheet canvas: pixel-perfect 1:1 size of the asset; this is what
              we screenshot-crop to produce the final PNG. -->
