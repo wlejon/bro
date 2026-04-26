@@ -241,7 +241,6 @@ defineTileset('terrain', {
 | `load(name)` | Load `assets/<name>.js` and register its asset(s) |
 | `render(name?)` | Render the current (or named) asset to the sheet canvas |
 | `save(name?)` | Write the sheet PNG (alpha preserved) + sidecar manifest JSON |
-| `inspectArt(scale?)` | Re-render at integer scale into the inspect canvas (debug) |
 | `saveVideo(name?, opts?)` | Encode `defineAnimated` or `defineSheet` to `output/<name>.webm` (VP9). Opts: path, fps, bitrateKbps, quality, anim |
 | `saveGif(name?, opts?)` | Encode `defineAnimated` or `defineSheet` to `output/<name>.gif` (GIF89a). Opts: path, fps, paletteBits, loopCount, anim |
 | `preview(animName?)` | Animate the saved sprite back through the scene API on the stage canvas |

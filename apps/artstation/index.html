@@ -50,13 +50,6 @@
             <canvas id="sheet" width="32" height="32"></canvas>
         </div>
 
-        <!-- Inspect canvas: integer-scaled view of the sheet for visual
-             debugging via screenshots. -->
-        <div id="inspect-wrap">
-            <div class="label">INSPECT (scaled)</div>
-            <canvas id="inspect" width="256" height="256"></canvas>
-        </div>
-
         <!-- Stage: scene-based animation preview to verify the produced
              spritesheet animates correctly when fed back into createSprite. -->
         <div id="stage-wrap">
@@ -74,7 +67,6 @@ From headless:
   load('hero')
   render()
   save('hero')
-  inspectArt(8)
   preview('walk')</pre>
     </div>
 

@@ -137,7 +137,7 @@ body {
 
 #layout {
     display: grid;
-    grid-template-columns: auto auto auto 1fr;
+    grid-template-columns: auto auto 1fr;
     gap: 16px;
     align-items: start;
 }
@@ -172,32 +172,19 @@ canvas {
     image-rendering: pixelated;
 }
 
-/* Buffer dims (canvas.width/height) are set programmatically; the screenshot
-   path reads from that buffer so display size doesn't affect output.
-   Display size is clamped here so a 1024×768 animated scene sheet doesn't
-   blow out the column. resetCanvas() pins style.aspectRatio per asset, so
-   the browser shrinks proportionally. */
+/* Buffer dims (canvas.width/height) are set programmatically; the
+   screenshot path reads the buffer, so display size doesn't affect output.
+   resetCanvas() clamps the CSS display dims to a per-canvas max with
+   aspect ratio preserved (see displayCap() in app.js). */
 #sheet {
     image-rendering: pixelated;
-    max-width: 480px;
-    max-height: 720px;
-    width: auto;
-    height: auto;
-}
-
-#inspect {
-    image-rendering: pixelated;
-    max-width: 360px;
-    max-height: 720px;
-    width: auto;
-    height: auto;
 }
 
 #stage {
     /* Bro's layout doesn't promote <canvas width/height> attributes to a
        CSS intrinsic box, so without explicit dimensions the canvas
        collapses to height:0 — buffer paints land but nothing reaches the
-       screen. SHEET/INSPECT escape this because resetCanvas() rewrites
+       screen. SHEET escapes this because resetCanvas() rewrites
        canvas.style.width/height per asset; STAGE keeps a fixed size. */
     width:  320px;
     height: 240px;

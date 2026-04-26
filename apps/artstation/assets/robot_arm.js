@@ -179,9 +179,11 @@ defineAssembly('robot_arm', {
     },
 
     frame(refs, t, dt, i) {
-        // Two-second loop. The wave is a shoulder-yaw sweep; over the same
-        // span the gripper opens and closes once and the wrist nods.
-        const yaw   = Math.sin(t * Math.PI)        * 0.7;     // ±0.7
+        // Two-second loop. The wave is a shoulder-yaw sweep — kept narrow
+        // (±0.45 rad ~ ±26°) so the gripper stays inside the 128×128 frame
+        // at peak yaw; over the same span the gripper opens/closes once
+        // and the wrist nods.
+        const yaw   = Math.sin(t * Math.PI)        * 0.45;
         const wrist = -0.4 + Math.sin(t * Math.PI * 2) * 0.20;
         const grip  =  0.25 + 0.55 * (0.5 + 0.5 * Math.cos(t * Math.PI * 2));
 

@@ -10,7 +10,6 @@
 (function () {
 
     const sheetCanvas   = document.getElementById('sheet');
-    const inspectCanvas = document.getElementById('inspect');
     const stageCanvas   = document.getElementById('stage');
     const status        = document.getElementById('status');
     const info          = document.getElementById('info');
@@ -429,22 +428,26 @@
         ctx.imageSmoothingEnabled = true;
     }
 
+    // Per-canvas display caps for resetCanvas. The buffer stays at full
+    // resolution; only the CSS display dims get clamped here. Stage is
+    // user-fixed at 320×240 in style.css so we leave it untouched.
+    function displayCap(canvas) {
+        if (canvas.id === 'sheet') return { w: 520, h: 720 };
+        return { w: Infinity, h: Infinity };
+    }
+
     // Resize a canvas to the target asset size and clear to bg. The buffer
-    // is set to (w, h) at full resolution so screenshot exports stay
-    // pixel-perfect; the CSS display size is clamped via the canvas's
-    // existing max-width / max-height from style.css so a giant sprite
-    // sheet (e.g. 1024×768 from a long animated scene) doesn't blow out
-    // the windowed grid layout.
+    // (canvas.width / height) is set at full resolution so screenshot
+    // exports stay pixel-perfect; the CSS display size is clamped to a
+    // per-canvas max while preserving aspect ratio, so a 1024×768 sheet
+    // doesn't blow out the windowed grid column.
     function resetCanvas(canvas, w, h, bg, pixel) {
         canvas.width  = w;
         canvas.height = h;
-        // Let CSS shrink the displayed canvas via aspect-ratio + max-width
-        // (defined per-canvas in style.css). Clear inline width so it
-        // doesn't override the stylesheet, and pin aspect-ratio so the
-        // browser computes the height proportionally.
-        canvas.style.width  = '';
-        canvas.style.height = '';
-        canvas.style.aspectRatio = `${w} / ${h}`;
+        const cap = displayCap(canvas);
+        const scale = Math.min(1, cap.w / w, cap.h / h);
+        canvas.style.width  = Math.round(w * scale) + 'px';
+        canvas.style.height = Math.round(h * scale) + 'px';
         const ctx = canvas.getContext('2d');
         // Queue a full-surface clear regardless of dimensions — protects
         // against stale pixels surviving from a previous asset's draws when
@@ -539,134 +542,6 @@
             default: throw new Error('unknown kind: ' + entry.kind);
         }
         updateInfo(name);
-        if (entry.kind === 'sheet' || entry.kind === 'tileset' ||
-            entry.kind === 'animated') {
-            inspect();
-        } else if (entry.kind === 'scene') {
-            inspectScene(name);
-        } else {
-            // No inspect view for this kind — wipe any stale pixels left over
-            // from the previously-selected asset so the panel doesn't lie.
-            resetCanvas(inspectCanvas, inspectCanvas.width, inspectCanvas.height, null);
-        }
-    }
-
-    function inspectScene(name) {
-        const entry = REGISTRY[name];
-        const spec = entry.spec;
-        const lay = entry.layout || sceneSize(spec);
-        const fw = spec.frameWidth, fh = spec.frameHeight;
-        const sw = lay.w, sh = lay.h;
-        const scale = Math.max(1, Math.floor(384 / Math.max(sw, sh)));
-        const w = sw * scale, h = sh * scale;
-        const ctx = resetCanvas(inspectCanvas, w, h, '#222');
-
-        // Re-capture each frame at scaled cell size and putImageData onto
-        // the inspect canvas. Mirrors the sheet inspect path but goes
-        // through scene.captureFrame() since 3D content can't be replayed
-        // by drawing into a 2D ctx.
-        const scene = ensureCaptureCanvas();
-        clearScene(scene);
-        let refs = {};
-        try { refs = spec.build(scene) || {}; }
-        catch (e) { console.log('scene build threw:', e.message); }
-        const dt = 1 / spec.fps;
-        for (let i = 0; i < lay.n; i++) {
-            const cx = (i % lay.cols) * fw * scale;
-            const cy = Math.floor(i / lay.cols) * fh * scale;
-            try { spec.frame(scene, i * dt, dt, refs, i); }
-            catch (e) { console.log(`scene frame ${i} threw:`, e.message); }
-            const img = scene.captureFrame(fw * scale, fh * scale);
-            if (img) ctx.putImageData(img, cx, cy);
-        }
-
-        // Cell grid overlay so frame boundaries are still visible after
-        // the captures land — useful for spotting accidentally-clipped
-        // geometry that runs off the cell edge.
-        ctx.fillStyle = 'rgba(0,255,255,0.35)';
-        const cellW = fw * scale, cellH = fh * scale;
-        for (let x = cellW; x < w; x += cellW) ctx.fillRect(x, 0, 1, h);
-        for (let y = cellH; y < h; y += cellH) ctx.fillRect(0, y, w, 1);
-    }
-
-    // ---------- Inspect view (integer-scaled copy of the sheet) ---------
-
-    // Re-renders the current asset into the inspect canvas at integer scale
-    // by replaying the frame/tile draw functions through a scaled transform
-    // (canvas-to-canvas drawImage isn't supported on the scene path).
-    // Default scale picks the largest integer factor that fits ~384px.
-    function inspect(scale) {
-        if (!CURRENT) return;
-        const sw = sheetCanvas.width, sh = sheetCanvas.height;
-        if (scale === undefined) {
-            scale = Math.max(1, Math.floor(384 / Math.max(sw, sh)));
-        }
-        const w = sw * scale, h = sh * scale;
-        const ctx = resetCanvas(inspectCanvas, w, h, null);
-        configurePixel(ctx);
-
-        const entry = REGISTRY[CURRENT];
-        const spec = entry.spec;
-
-        if (entry.kind === 'sheet') {
-            const fw = spec.frameWidth, fh = spec.frameHeight;
-            for (let i = 0; i < spec.frames.length; i++) {
-                const fn = spec.frames[i];
-                if (!fn) continue;
-                const cx = (i % spec.cols) * fw * scale;
-                const cy = Math.floor(i / spec.cols) * fh * scale;
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(cx, cy, fw * scale, fh * scale);
-                ctx.clip();
-                ctx.translate(cx, cy);
-                ctx.scale(scale, scale);
-                try { fn(ctx, fw, fh, i); } catch (e) {}
-                ctx.restore();
-            }
-        } else if (entry.kind === 'animated') {
-            // Replay the procedural animation through virtual frame indices,
-            // same as renderAnimated but at integer scale into inspect.
-            const lay = entry.layout || animatedSize(spec);
-            const fw = spec.frameWidth, fh = spec.frameHeight;
-            const dt = 1 / spec.fps;
-            const state = (typeof spec.init === 'function') ? (spec.init() || {}) : {};
-            for (let i = 0; i < lay.n; i++) {
-                const cx = (i % lay.cols) * fw * scale;
-                const cy = Math.floor(i / lay.cols) * fh * scale;
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(cx, cy, fw * scale, fh * scale);
-                ctx.clip();
-                ctx.translate(cx, cy);
-                ctx.scale(scale, scale);
-                try { spec.frame(ctx, fw, fh, i * dt, dt, state); } catch (e) {}
-                ctx.restore();
-            }
-        } else {
-            const ts = spec.tileSize;
-            for (let i = 0; i < spec.tiles.length; i++) {
-                const fn = spec.tiles[i];
-                if (!fn) continue;
-                const cx = (i % spec.cols) * ts * scale;
-                const cy = Math.floor(i / spec.cols) * ts * scale;
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(cx, cy, ts * scale, ts * scale);
-                ctx.clip();
-                ctx.translate(cx, cy);
-                ctx.scale(scale, scale);
-                try { fn(ctx, ts, i); } catch (e) {}
-                ctx.restore();
-            }
-        }
-
-        // Faint cyan grid lines on frame/tile boundaries.
-        ctx.fillStyle = 'rgba(0,255,255,0.35)';
-        const cellW = (entry.kind === 'tileset' ? spec.tileSize : spec.frameWidth) * scale;
-        const cellH = (entry.kind === 'tileset' ? spec.tileSize : spec.frameHeight) * scale;
-        for (let x = cellW; x < w; x += cellW) ctx.fillRect(x, 0, 1, h);
-        for (let y = cellH; y < h; y += cellH) ctx.fillRect(0, y, w, 1);
     }
 
     // ---------- Save (PNG of sheet canvas) ------------------------------
@@ -1722,8 +1597,5 @@
     window.saveGif       = saveGif;
     window.preview       = preview;
     window.previewMap    = previewMap;
-    // Headless installs its own `inspect()` (layout debugger) after page
-    // load, so we expose ours under a different name to avoid the clobber.
-    window.inspectArt    = inspect;
 
 })();
