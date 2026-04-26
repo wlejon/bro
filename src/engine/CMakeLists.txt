@@ -21,7 +21,6 @@ function(embed_js JS_FILE VAR_NAME)
 endfunction()
 
 embed_js(observer_check.js  js_observer_check)
-embed_js(canvas_resize.js   js_canvas_resize)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 

@@ -8,7 +8,6 @@
 #include <fstream>
 
 #include "observer_check.js.h"
-#include "canvas_resize.js.h"
 
 #include "platform/sdl_window.h"
 #include "platform/event_loop.h"
@@ -2504,17 +2503,24 @@ void Engine::handleResize(int w, int h) {
         JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, w));
         JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, ch));
 
-        // Update canvas element width/height attributes via JS
-        JSValue fn = JS_Eval(ctx, js_canvas_resize, strlen(js_canvas_resize),
-                             "<resize>", JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsFunction(ctx, fn)) {
-            JSValue args[2] = { JS_NewInt32(ctx, w), JS_NewInt32(ctx, ch) };
-            JSValue ret = JS_Call(ctx, fn, global, 2, args);
-            JS_FreeValue(ctx, ret);
-            JS_FreeValue(ctx, args[0]);
-            JS_FreeValue(ctx, args[1]);
+        // Auto-size every <canvas> that didn't declare a fixed buffer size.
+        // Authors opt out by setting the width/height HTML attributes; those
+        // canvases keep whatever bitmap size they declared. We update the
+        // CanvasScene directly (not via the JS width/height setters) so the
+        // HTML attribute stays absent on auto-sized canvases — that way the
+        // "no attribute => auto-size" signal remains stable across resizes.
+        if (document_) {
+            for (auto* el : document_->querySelectorAll("canvas")) {
+                if (!el) continue;
+                if (el->hasAttribute("width") || el->hasAttribute("height"))
+                    continue;
+                auto* cs = static_cast<bro::canvas::CanvasScene*>(el->canvasScene());
+                if (!cs) continue;
+                cs->setIntrinsicWidth(w);
+                cs->setIntrinsicHeight(ch);
+                cs->reset();
+            }
         }
-        JS_FreeValue(ctx, fn);
 
         // Dispatch resize event to window listeners
         JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
