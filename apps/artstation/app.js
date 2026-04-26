@@ -524,6 +524,88 @@
         return { png: pngPath, json: jsonPath, meta };
     }
 
+    // ---------- Save video (procedural animation → WebM) ----------------
+
+    // saveVideo(name?, opts?) — encode an `animated` asset to a VP9/WebM file.
+    // Walks the same virtual-time loop as renderAnimated, but instead of
+    // tiling each frame into a sheet it pushes each frame straight into a
+    // VideoEncoder. Requires the VideoEncoder global (engine-level binding,
+    // present in both windowed and headless).
+    //
+    // opts:
+    //   path        — override output path (default output/<name>.webm)
+    //   fps         — encoder fps (default spec.fps)
+    //   bitrateKbps — VBR target (default auto in encoder)
+    //   quality     — 'realtime' | 'good' | 'best' (default 'good')
+    //
+    // Frame size is taken from the animated spec. Width/height must be even
+    // for VP9 4:2:0 chroma — odd sizes throw rather than silently rescaling.
+    function saveVideo(name, opts) {
+        name = name || CURRENT;
+        if (!name) throw new Error('nothing to saveVideo');
+        if (typeof VideoEncoder !== 'function') {
+            throw new Error('saveVideo() requires the VideoEncoder global');
+        }
+        const entry = REGISTRY[name];
+        if (!entry) throw new Error(`asset not loaded: ${name}`);
+        if (entry.kind !== 'animated') {
+            throw new Error('saveVideo() only supports defineAnimated assets');
+        }
+        const spec = entry.spec;
+        if ((spec.frameWidth & 1) || (spec.frameHeight & 1)) {
+            throw new Error(
+                `saveVideo: frame size ${spec.frameWidth}x${spec.frameHeight} ` +
+                `must be even (VP9 4:2:0 chroma)`);
+        }
+
+        opts = opts || {};
+        const outDir  = 'apps/artstation/output';
+        const path    = opts.path    || `${outDir}/${name}.webm`;
+        const fps     = opts.fps     || spec.fps;
+        const quality = opts.quality || 'good';
+
+        // Render frames into the sheet canvas at frame size — the encoder
+        // pulls pixels straight off this canvas's Skia surface. We restore
+        // the full sheet render afterwards so the UI still shows the asset.
+        const fw = spec.frameWidth, fh = spec.frameHeight;
+        const ctx = resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+
+        const enc = new VideoEncoder({
+            path,
+            width: fw, height: fh,
+            fps,
+            quality,
+            bitrateKbps: opts.bitrateKbps || 0,
+        });
+
+        const frameCount = animatedFrameCount(spec);
+        const dt = 1 / spec.fps;
+        const state = (typeof spec.init === 'function') ? (spec.init() || {}) : {};
+        try {
+            for (let i = 0; i < frameCount; i++) {
+                resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+                ctx.save();
+                try { spec.frame(ctx, fw, fh, i * dt, dt, state); }
+                catch (e) { console.log(`saveVideo frame ${i} threw:`, e.message); }
+                ctx.restore();
+                // Drain canvas commands so the Skia surface reflects this
+                // frame before the encoder snapshots it.
+                if (typeof flush === 'function') flush();
+                enc.addCanvasFrame(sheetCanvas);
+            }
+            if (!enc.finish()) {
+                throw new Error('encoder finish failed: ' + enc.lastError);
+            }
+        } finally {
+            // Always re-render the spritesheet view so the UI doesn't end
+            // up showing the last single frame, even if encoding threw.
+            try { renderAnimated(name); inspect(); } catch (e) {}
+        }
+
+        status.textContent = `saved ${path} (${enc.framesWritten} frames)`;
+        return { path, frames: enc.framesWritten, fps, width: fw, height: fh };
+    }
+
     // ---------- Preview (animate the produced sheet via scene API) ------
 
     let stageScene = null;
@@ -1039,6 +1121,7 @@
     window.load          = load;
     window.render        = render;
     window.save          = save;
+    window.saveVideo     = saveVideo;
     window.preview       = preview;
     window.previewMap    = previewMap;
     // Headless installs its own `inspect()` (layout debugger) after page

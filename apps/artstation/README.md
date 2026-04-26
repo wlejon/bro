@@ -88,6 +88,18 @@ The PNG that lands in `output/` is shaped like any other sprite sheet, so
 caring that the source was procedural. Use a deterministic PRNG in `init`
 if you want byte-stable renders across runs.
 
+Animated assets can also be encoded to a WebM/VP9 video via `saveVideo()`,
+which walks the same virtual-time loop and writes one frame per cell:
+
+```bash
+bro-headless apps/artstation -e "load('explosion'); saveVideo()"
+# → apps/artstation/output/explosion.webm
+```
+
+Frame width/height must be even (VP9 4:2:0 chroma). The asset's `fps` and
+`duration` drive video frame rate and length. Quality preset and bitrate
+can be overridden via `saveVideo(name, { quality: 'best', bitrateKbps: 2000 })`.
+
 ## Defining a tileset
 
 ```js
@@ -127,6 +139,7 @@ defineTileset('terrain', {
 | `render(name?)` | Render the current (or named) asset to the sheet canvas |
 | `save(name?)` | Write the sheet PNG (alpha preserved) + sidecar manifest JSON |
 | `inspectArt(scale?)` | Re-render at integer scale into the inspect canvas (debug) |
+| `saveVideo(name?, opts?)` | Encode a `defineAnimated` asset to `output/<name>.webm` (VP9). Opts: path, fps, bitrateKbps, quality |
 | `preview(animName?)` | Animate the saved sprite back through the scene API on the stage canvas |
 | `previewMap(layoutFn?)` | Lay the tileset into a small tilemap on the stage canvas |
 | `listAssets()` | Names + kinds of every loaded asset |

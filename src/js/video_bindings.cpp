@@ -16,17 +16,6 @@ namespace bro::js {
 
 namespace {
 
-std::string s_basePath;
-
-std::string resolvePath(const std::string& src) {
-    if (src.size() >= 2 && src[1] == ':') return src;
-    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) return src;
-    if (s_basePath.empty()) return src;
-    std::string path = s_basePath;
-    if (path.back() != '/' && path.back() != '\\') path += '/';
-    return path + src;
-}
-
 video::WebmEncoder::Quality parseQuality(const std::string& s) {
     if (s == "realtime") return video::WebmEncoder::Quality::Realtime;
     if (s == "best")     return video::WebmEncoder::Quality::Best;
@@ -89,7 +78,7 @@ ED* js_videoEncoderCtor(JSContext* ctx, int argc, JSValueConst* argv) {
     cfg.quality = parseQuality(getStr("quality"));
 
     std::string err;
-    auto enc = video::WebmEncoder::create(resolvePath(path), cfg, &err);
+    auto enc = video::WebmEncoder::create(path, cfg, &err);
     if (!enc) {
         JS_ThrowInternalError(ctx, "VideoEncoder open failed: %s", err.c_str());
         return nullptr;
@@ -189,9 +178,7 @@ JSValue js_videoEncoder_finish(JSContext* ctx, JSValueConst this_val,
 
 } // namespace
 
-void VideoBindings::install(JSContext* ctx, const std::string& basePath) {
-    s_basePath = basePath;
-
+void VideoBindings::install(JSContext* ctx, const std::string& /*basePath*/) {
     qjsbind::Class<ED>(ctx, "VideoEncoder")
         .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> ED* {
             return js_videoEncoderCtor(ctx, argc, argv);

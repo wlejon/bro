@@ -11,8 +11,9 @@
 // a different codec. When that becomes a bottleneck, expect a sibling
 // class (H264Encoder / AV1Encoder) sharing the same shape.
 //
-// Available in both windowed and headless. Output paths are resolved
-// relative to the app directory, like fetch / fs.
+// Available in both windowed and headless. Output paths are taken as-is
+// (resolved against the engine's cwd), matching how `screenshot()` and
+// `screenshotCanvas()` treat paths — no implicit basePath prepending.
 // =============================================================================
 
 
