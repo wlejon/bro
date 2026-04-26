@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <vector>
 
 namespace bro::scene {
 
@@ -1637,6 +1639,38 @@ void SceneGraph::destroyTonemapFBO() {
     if (tonemapFBO_)      { glDeleteFramebuffers(1, &tonemapFBO_); tonemapFBO_ = 0; }
     tonemapFBOWidth_ = 0;
     tonemapFBOHeight_ = 0;
+}
+
+std::vector<uint8_t> SceneGraph::readTonemapPixelsRGBA(int& outW, int& outH) {
+    outW = tonemapFBOWidth_;
+    outH = tonemapFBOHeight_;
+    if (!tonemapFBO_ || outW <= 0 || outH <= 0) {
+        outW = outH = 0;
+        return {};
+    }
+
+    std::vector<uint8_t> px(static_cast<size_t>(outW) * outH * 4);
+    GLint prevReadFBO = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, tonemapFBO_);
+    GLint prevAlign = 4;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, outW, outH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glPixelStorei(GL_PACK_ALIGNMENT, prevAlign);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevReadFBO));
+
+    // GL origin is bottom-left; CSS / ImageData / putImageData expect top-left.
+    const size_t rowBytes = static_cast<size_t>(outW) * 4;
+    std::vector<uint8_t> tmp(rowBytes);
+    for (int y = 0; y < outH / 2; ++y) {
+        uint8_t* a = px.data() + static_cast<size_t>(y) * rowBytes;
+        uint8_t* b = px.data() + static_cast<size_t>(outH - 1 - y) * rowBytes;
+        std::memcpy(tmp.data(), a, rowBytes);
+        std::memcpy(a, b, rowBytes);
+        std::memcpy(b, tmp.data(), rowBytes);
+    }
+    return px;
 }
 
 void SceneGraph::runTonemapPass() {

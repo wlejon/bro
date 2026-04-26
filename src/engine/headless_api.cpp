@@ -118,6 +118,31 @@ void Engine::flush() {
         }
     }
 
+    // Sync each scene graph's canvas dimensions from the element's layout
+    // box, then render. Mirrors the windowed main loop so flush()-driven
+    // capture paths (screenshotCanvas, scene.toImageData) see fresh content
+    // without having to advanceTime by a step. Without this, JS code that
+    // creates a scene canvas + populates it + immediately reads pixels would
+    // see an unallocated FBO because render() short-circuits when canvas
+    // size is zero.
+    if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
+        for (auto& sg : sceneGraphs_) {
+            if (sg.graph) sg.graph->materializeHtmlNodes(skia, &fontManager_);
+        }
+    }
+    for (auto& sg : sceneGraphs_) {
+        if (sg.element) {
+            auto& box = sg.element->layoutBox();
+            int ew = static_cast<int>(box.contentRect.width);
+            int eh = static_cast<int>(box.contentRect.height);
+            if (ew > 0 && eh > 0 &&
+                (ew != sg.graph->canvasWidth() || eh != sg.graph->canvasHeight())) {
+                sg.graph->setCanvasSize(ew, eh);
+            }
+        }
+        if (sg.graph) sg.graph->render();
+    }
+
     // Prune detached scene graphs (elements removed from DOM).
     // Must happen before canvas scene pruning so the scene graph releases
     // its canvasScene_ pointer before the CanvasScene is destroyed.

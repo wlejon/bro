@@ -450,6 +450,34 @@ class SceneGraph {
 
 
   /**
+   * Read the post-tonemap LDR pixels of this scene as an ImageData-shaped
+   * object: `{ width, height, data: Uint8ClampedArray }`. Pixels arrive in
+   * top-down row order (matches CSS / putImageData), pre-flipped from GL's
+   * native bottom-up layout. Alpha is preserved end-to-end, so areas with
+   * no 3D content come back as RGBA(0,0,0,0) — letting the result composite
+   * cleanly onto a 2D canvas via `ctx2d.putImageData()`.
+   *
+   * Returns null if no 3D content has been rendered yet (the tonemap FBO
+   * is allocated lazily on first 3D pass). Call `flush()` after building
+   * scene content to drive a render before reading.
+   *
+   * Used by the artstation `defineScene` capture pipeline: render a 3D
+   * scene at the sprite cell size, readback per frame, and tile the
+   * captures into a 2D sprite sheet.
+   *
+   * @example
+   *   const scene = canvas.getContext('scene');
+   *   scene.createMesh({ mesh: 'box', color: 'red' });
+   *   scene.setCamera({ position: [2,2,2], target: [0,0,0] });
+   *   flush();
+   *   const img = scene.toImageData();
+   *   sheetCtx.putImageData(img, cellX, cellY);
+   *
+   * @returns {?{ width: number, height: number, data: Uint8ClampedArray }}
+   */
+  toImageData() {}
+
+  /**
    * Cast a ray against all visible 3D mesh nodes in the scene and return the
    * closest hit, or null. Each MeshNode is tested in its local space using
    * the node's pre-built BVH; the ray is transformed by the node's TRS.

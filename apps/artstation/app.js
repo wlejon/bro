@@ -86,6 +86,34 @@
         REGISTRY[name] = { kind: 'animated', spec };
     }
 
+    // spec: { frameWidth, frameHeight, fps, duration, cols, build, frame,
+    //         animations?, bg?, pixel? }
+    //   - build(scene) => refs. Called once on a fresh offscreen scene canvas
+    //     to populate meshes / lights / camera. Return value is passed back
+    //     into frame() so per-frame code can grab nodes without globals.
+    //   - frame(scene, t, dt, refs, frameIndex): called once per frame to
+    //     animate transforms / drive physics / etc. The framework renders the
+    //     scene after frame() returns and copies the resulting pixels into
+    //     the i-th cell of the sheet canvas via getImageData/putImageData.
+    //   - Output is a regular sprite-sheet PNG (manifest kind='sheet') so
+    //     scene.createSprite, saveVideo, saveGif, and preview() all work.
+    //   - This is the 3D pipeline: a real scene with PBR lighting + bromesh
+    //     geometry rendered through the engine's mesh FBO + tonemap, captured
+    //     each timestep into a 2D atlas. Use it when canvas-2D painting can't
+    //     reach the lighting/geometry quality you need.
+    function defineScene(name, spec) {
+        if (typeof spec.build !== 'function') {
+            throw new Error('defineScene requires build(scene) function');
+        }
+        if (typeof spec.frame !== 'function') {
+            throw new Error('defineScene requires frame(scene,t,dt,refs,i) function');
+        }
+        if (!spec.fps || !spec.duration) {
+            throw new Error('defineScene requires fps and duration');
+        }
+        REGISTRY[name] = { kind: 'scene', spec };
+    }
+
     function listAssets() {
         return Object.keys(REGISTRY).map(n => ({
             name: n, kind: REGISTRY[n].kind
@@ -226,6 +254,104 @@
         }
     }
 
+    // ---- defineScene support --------------------------------------------
+    //
+    // Hidden, off-screen canvas used to render 3D scenes for sheet capture.
+    // We position it absolutely off-screen rather than display:none because
+    // bro skips render for elements with no layout box, and we *want* the
+    // scene to actually render so its tonemap FBO can be readback'd. The
+    // canvas size matches the asset's frameWidth/frameHeight so we capture
+    // exactly the cell-sized region per frame — no scaling, no cropping.
+    let captureCanvas = null;
+    let captureScene  = null;
+
+    function ensureCaptureCanvas(w, h) {
+        if (!captureCanvas) {
+            captureCanvas = document.createElement('canvas');
+            captureCanvas.id = '__artstation_capture';
+            captureCanvas.style.position = 'absolute';
+            captureCanvas.style.left = '-99999px';
+            captureCanvas.style.top  = '-99999px';
+            document.body.appendChild(captureCanvas);
+        }
+        if (captureCanvas.width !== w || captureCanvas.height !== h) {
+            captureCanvas.width = w;
+            captureCanvas.height = h;
+            captureCanvas.style.width  = w + 'px';
+            captureCanvas.style.height = h + 'px';
+            // Recreating the context is required when the size changes
+            // because the underlying scene FBO is sized lazily — and for a
+            // brand-new asset there's no existing context anyway.
+            captureScene = null;
+        }
+        if (!captureScene) {
+            captureScene = captureCanvas.getContext('scene');
+        }
+        return captureScene;
+    }
+
+    // Wipe every node in the scene graph so a re-render with a different
+    // asset (or a re-render of the same asset after an edit) doesn't carry
+    // over stale meshes/lights from the previous build.
+    function clearScene(scene) {
+        if (!scene || !scene.root) return;
+        const kids = scene.root.children.slice();
+        for (const c of kids) {
+            try { scene.destroyNode(c); } catch (e) {}
+        }
+    }
+
+    function sceneSize(spec) {
+        const n = Math.max(1, Math.round(spec.fps * spec.duration));
+        const cols = spec.cols || Math.min(n, 8);
+        const rows = Math.ceil(n / cols);
+        return { w: spec.frameWidth * cols, h: spec.frameHeight * rows, cols, rows, n };
+    }
+
+    function renderScene(name) {
+        const entry = REGISTRY[name];
+        const spec = entry.spec;
+        const layout = sceneSize(spec);
+        entry.layout = layout;
+
+        const fw = spec.frameWidth, fh = spec.frameHeight;
+        const sheetCtx = resetCanvas(sheetCanvas, layout.w, layout.h, spec.bg, spec.pixel);
+
+        const scene = ensureCaptureCanvas(fw, fh);
+        clearScene(scene);
+
+        // Two flushes: the first publishes the new canvas size into the
+        // layout/render pipeline so the scene's mesh FBO gets sized to
+        // (fw, fh) before build() runs. The second drains any GL state set
+        // up by build() (texture creation, buffer uploads) so the first
+        // frame's render is on a fully-initialized scene.
+        if (typeof flush === 'function') flush();
+
+        const refs = spec.build(scene) || {};
+        if (typeof flush === 'function') flush();
+
+        const dt = 1 / spec.fps;
+        for (let i = 0; i < layout.n; i++) {
+            const cx = (i % layout.cols) * fw;
+            const cy = Math.floor(i / layout.cols) * fh;
+            const t = i * dt;
+
+            try { spec.frame(scene, t, dt, refs, i); }
+            catch (e) { console.log(`scene frame ${i} threw:`, e.message); }
+
+            // Drive a real engine tick so the scene re-renders with the new
+            // transforms; the tonemap FBO is then ready for readback.
+            if (typeof flush === 'function') flush();
+
+            const img = scene.toImageData ? scene.toImageData() : null;
+            if (img && img.width === fw && img.height === fh) {
+                sheetCtx.putImageData(img, cx, cy);
+            } else {
+                console.log(`scene frame ${i}: toImageData unavailable or size mismatch`);
+            }
+        }
+    }
+
     function buildManifest(name, entry) {
         const spec = entry.spec;
         switch (entry.kind) {
@@ -250,6 +376,21 @@
                 width: spec.width, height: spec.height,
                 slice: spec.slice,
             };
+            case 'scene': {
+                const lay = entry.layout || sceneSize(spec);
+                const allFrames = [];
+                for (let i = 0; i < lay.n; i++) allFrames.push(i);
+                const anims = spec.animations || {
+                    play: { frames: allFrames, fps: spec.fps, loop: false }
+                };
+                return {
+                    kind: 'sheet', src: `${name}.png`,
+                    frameWidth: spec.frameWidth, frameHeight: spec.frameHeight,
+                    cols: lay.cols, rows: lay.rows,
+                    frameCount: lay.n,
+                    animations: anims,
+                };
+            }
             case 'animated': {
                 const lay = entry.layout || animatedSize(spec);
                 // Default to a single 'play' animation covering all frames.
@@ -391,17 +532,39 @@
             case 'nineslice': renderNineSlice(name); break;
             case 'atlas':     renderAtlas(name); break;
             case 'animated':  renderAnimated(name); break;
+            case 'scene':     renderScene(name); break;
             default: throw new Error('unknown kind: ' + entry.kind);
         }
         updateInfo(name);
         if (entry.kind === 'sheet' || entry.kind === 'tileset' ||
             entry.kind === 'animated') {
             inspect();
+        } else if (entry.kind === 'scene') {
+            // Inspect for scene kind only draws the cell grid: replaying the
+            // 3D render into the inspect canvas would require a second
+            // capture pass per frame, and the sheet canvas already shows the
+            // pixels at 1:1 — anything more is debugger UX, not authoring UX.
+            inspectSceneGrid(name);
         } else {
             // No inspect view for this kind — wipe any stale pixels left over
             // from the previously-selected asset so the panel doesn't lie.
             resetCanvas(inspectCanvas, inspectCanvas.width, inspectCanvas.height, null);
         }
+    }
+
+    function inspectSceneGrid(name) {
+        const entry = REGISTRY[name];
+        const spec = entry.spec;
+        const lay = entry.layout || sceneSize(spec);
+        const sw = sheetCanvas.width, sh = sheetCanvas.height;
+        const scale = Math.max(1, Math.floor(384 / Math.max(sw, sh)));
+        const w = sw * scale, h = sh * scale;
+        const ctx = resetCanvas(inspectCanvas, w, h, '#222');
+        ctx.fillStyle = 'rgba(0,255,255,0.45)';
+        const cellW = spec.frameWidth * scale;
+        const cellH = spec.frameHeight * scale;
+        for (let x = cellW; x < w; x += cellW) ctx.fillRect(x, 0, 1, h);
+        for (let y = cellH; y < h; y += cellH) ctx.fillRect(0, y, w, 1);
     }
 
     // ---------- Inspect view (integer-scaled copy of the sheet) ---------
@@ -543,6 +706,36 @@
 
         let fw, fh, fps, frames;
 
+        if (entry.kind === 'scene') {
+            // Encode each scene frame straight from the offscreen capture
+            // canvas: re-run build/frame, flush, putImageData onto a sheet
+            // canvas now sized to the cell dimensions, addFrame. The scene
+            // capture path mirrors renderScene() — we just deposit every
+            // frame at (0,0) instead of tiling them across a sheet.
+            fw = spec.frameWidth; fh = spec.frameHeight;
+            fps = opts.fps || spec.fps;
+            const dt = 1 / spec.fps;
+            const total = Math.max(1, Math.round(spec.fps * spec.duration));
+            const ctx = resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+            const scene = ensureCaptureCanvas(fw, fh);
+            clearScene(scene);
+            if (typeof flush === 'function') flush();
+            const refs = spec.build(scene) || {};
+            if (typeof flush === 'function') flush();
+            for (let i = 0; i < total; i++) {
+                resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
+                try { spec.frame(scene, i * dt, dt, refs, i); }
+                catch (e) { console.log(`scene frame ${i} threw:`, e.message); }
+                if (typeof flush === 'function') flush();
+                const img = scene.toImageData ? scene.toImageData() : null;
+                if (img) ctx.putImageData(img, 0, 0);
+                if (typeof flush === 'function') flush();
+                addFrame(ctx, sheetCanvas, i);
+            }
+            frames = total;
+            return { fw, fh, fps, framesEmitted: frames };
+        }
+
         if (entry.kind === 'animated') {
             fw = spec.frameWidth; fh = spec.frameHeight;
             fps = opts.fps || spec.fps;
@@ -595,7 +788,7 @@
             }
             frames = frameIndices.length;
         } else {
-            throw new Error(`save video/gif requires animated or sheet asset, not ${entry.kind}`);
+            throw new Error(`save video/gif requires animated, sheet, or scene asset, not ${entry.kind}`);
         }
 
         return { fw, fh, fps, framesEmitted: frames };
@@ -631,7 +824,7 @@
         if (out.fps == null) {
             const spec = entry.spec;
             let baseFps;
-            if (entry.kind === 'animated') {
+            if (entry.kind === 'animated' || entry.kind === 'scene') {
                 baseFps = spec.fps;
             } else {
                 const anims = spec.animations || {};
@@ -663,8 +856,8 @@
         }
         const entry = REGISTRY[name];
         if (!entry) throw new Error(`asset not loaded: ${name}`);
-        if (entry.kind !== 'animated' && entry.kind !== 'sheet') {
-            throw new Error('saveVideo() only supports animated or sheet assets');
+        if (entry.kind !== 'animated' && entry.kind !== 'sheet' && entry.kind !== 'scene') {
+            throw new Error('saveVideo() only supports animated, sheet, or scene assets');
         }
         const spec = entry.spec;
         if ((spec.frameWidth & 1) || (spec.frameHeight & 1)) {
@@ -722,8 +915,8 @@
         }
         const entry = REGISTRY[name];
         if (!entry) throw new Error(`asset not loaded: ${name}`);
-        if (entry.kind !== 'animated' && entry.kind !== 'sheet') {
-            throw new Error('saveGif() only supports animated or sheet assets');
+        if (entry.kind !== 'animated' && entry.kind !== 'sheet' && entry.kind !== 'scene') {
+            throw new Error('saveGif() only supports animated, sheet, or scene assets');
         }
 
         opts = applyPlaybackOpts(name, opts);
@@ -874,12 +1067,19 @@
             lines.push(`frame:  ${s.frameWidth} x ${s.frameHeight}`);
             lines.push(`grid:   ${lay.cols} x ${lay.rows}`);
             lines.push(`frames: ${lay.n} (${s.duration}s @ ${s.fps}fps)`);
+        } else if (entry.kind === 'scene') {
+            const s = entry.spec;
+            const lay = entry.layout || sceneSize(s);
+            lines.push(`frame:  ${s.frameWidth} x ${s.frameHeight} (3D)`);
+            lines.push(`grid:   ${lay.cols} x ${lay.rows}`);
+            lines.push(`frames: ${lay.n} (${s.duration}s @ ${s.fps}fps)`);
         }
         let sz;
         if      (entry.kind === 'sheet')    sz = sheetSize(entry.spec);
         else if (entry.kind === 'tileset')  sz = tilesetSize(entry.spec);
         else if (entry.kind === 'atlas')    { const l = entry.layout || atlasLayout(entry.spec); sz = { w: l.width, h: l.height }; }
         else if (entry.kind === 'animated') { const l = entry.layout || animatedSize(entry.spec); sz = { w: l.w, h: l.h }; }
+        else if (entry.kind === 'scene')    { const l = entry.layout || sceneSize(entry.spec); sz = { w: l.w, h: l.h }; }
         else                                sz = { w: entry.spec.width, h: entry.spec.height };
         lines.push(`png:    ${sz.w} x ${sz.h} px`);
         if (entry.kind === 'nineslice') {
@@ -1294,7 +1494,7 @@
         if (!saveBar) return;
         const entry = CURRENT ? REGISTRY[CURRENT] : null;
         const canPng  = !!entry;
-        const canAnim = !!entry && (entry.kind === 'animated' || entry.kind === 'sheet');
+        const canAnim = !!entry && (entry.kind === 'animated' || entry.kind === 'sheet' || entry.kind === 'scene');
         for (const btn of saveBar.querySelectorAll('.save-btn')) {
             const action = btn.dataset.action;
             btn.disabled = (action === 'png') ? !canPng : !canAnim;
@@ -1424,6 +1624,7 @@
     window.defineNineSlice = defineNineSlice;
     window.defineAtlas     = defineAtlas;
     window.defineAnimated  = defineAnimated;
+    window.defineScene     = defineScene;
     window.listAssets    = listAssets;
     window.load          = load;
     window.render        = render;

@@ -1,0 +1,41 @@
+{
+  "kind": "sheet",
+  "src": "td_test_scene.png",
+  "frameWidth": 64,
+  "frameHeight": 64,
+  "cols": 8,
+  "rows": 3,
+  "frameCount": 24,
+  "animations": {
+    "spin": {
+      "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23
+      ],
+      "fps": 24,
+      "loop": true
+    }
+  }
+}

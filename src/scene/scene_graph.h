@@ -117,6 +117,16 @@ public:
     /// Returns true if any MeshNodes were rendered this frame.
     bool hasMeshContent() const { return hasMeshContent_; }
 
+    /// Read RGBA8 pixels from the post-tonemap LDR FBO. Used by offscreen
+    /// capture (artstation defineScene): renders 3D content with alpha=0 in
+    /// uncovered regions, so the readback is suitable for compositing into a
+    /// 2D canvas cell via putImageData. Pixels are returned in top-down row
+    /// order (matches CSS / ImageData), unlike GL's bottom-up native layout.
+    /// Returns empty vector if the tonemap FBO hasn't been populated yet
+    /// (e.g. no render() with 3D content has run). Must be called on the GL
+    /// thread.
+    std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
+
     /// Callback invoked after render() with the current mesh FBO texture (or 0).
     /// Used to push the texture ID to the DOM element for compositing.
     using FBOTextureCallback = std::function<void(unsigned int texId)>;

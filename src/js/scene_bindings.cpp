@@ -2132,6 +2132,32 @@ static JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int a
     return out;
 }
 
+// Read the post-tonemap LDR FBO of this scene as an ImageData-shaped object
+// suitable for ctx2d.putImageData(). Returns null if no 3D content has been
+// rendered yet (FBO not allocated). Pixels arrive top-down (CSS row order),
+// pre-flipped from GL's bottom-up native layout by readTonemapPixelsRGBA().
+static JSValue js_sg_toImageData(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_NULL;
+    int w = 0, h = 0;
+    auto pixels = g->readTonemapPixelsRGBA(w, h);
+    if (pixels.empty() || w <= 0 || h <= 0) return JS_NULL;
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
+
+    JSValue abuf = JS_NewArrayBufferCopy(ctx, pixels.data(), pixels.size());
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue u8cCtor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
+    JSValue dataArr = JS_CallConstructor(ctx, u8cCtor, 1, &abuf);
+    JS_FreeValue(ctx, u8cCtor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, abuf);
+    JS_SetPropertyStr(ctx, obj, "data", dataArr);
+    return obj;
+}
+
 static JSValue mat4ToJSArray(JSContext* ctx, const scene::Mat4& mat) {
     JSValue arr = JS_NewArray(ctx);
     int idx = 0;
@@ -2778,6 +2804,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("syncPhysics", js_sg_syncPhysics, 0)
         .method_raw("raycast", js_sg_raycast, 2)
         .method_raw("unprojectLocal", js_sg_unprojectLocal, 2)
+        .method_raw("toImageData", js_sg_toImageData, 0)
         .get("viewMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->graph) return JS_NULL;
             return mat4ToJSArray(ctx, w->graph->viewMatrix());
