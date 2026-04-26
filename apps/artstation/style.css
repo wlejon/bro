@@ -172,13 +172,25 @@ canvas {
     image-rendering: pixelated;
 }
 
+/* Buffer dims (canvas.width/height) are set programmatically; the screenshot
+   path reads from that buffer so display size doesn't affect output.
+   Display size is clamped here so a 1024×768 animated scene sheet doesn't
+   blow out the column. resetCanvas() pins style.aspectRatio per asset, so
+   the browser shrinks proportionally. */
 #sheet {
-    /* size set programmatically; remains 1:1 logical:CSS for screenshot */
     image-rendering: pixelated;
+    max-width: 480px;
+    max-height: 720px;
+    width: auto;
+    height: auto;
 }
 
 #inspect {
     image-rendering: pixelated;
+    max-width: 360px;
+    max-height: 720px;
+    width: auto;
+    height: auto;
 }
 
 #stage {

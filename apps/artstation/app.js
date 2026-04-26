@@ -325,6 +325,25 @@
         }
     }
 
+    // Expand the documented `frames: 'all'` sentinel into a concrete index
+    // array so live preview / save paths can treat `frames` as an array
+    // unconditionally. Mutates a shallow copy of `anims`; original spec
+    // animations stay readable for re-renders after edits.
+    function expandFrameSentinels(anims, frameCount) {
+        if (!anims) return anims;
+        const out = {};
+        for (const [k, a] of Object.entries(anims)) {
+            if (a && a.frames === 'all') {
+                const all = [];
+                for (let i = 0; i < frameCount; i++) all.push(i);
+                out[k] = { ...a, frames: all };
+            } else {
+                out[k] = a;
+            }
+        }
+        return out;
+    }
+
     function buildManifest(name, entry) {
         const spec = entry.spec;
         switch (entry.kind) {
@@ -333,7 +352,7 @@
                 frameWidth: spec.frameWidth, frameHeight: spec.frameHeight,
                 cols: spec.cols, rows: spec.rows,
                 frameCount: spec.frames.length,
-                animations: spec.animations || {},
+                animations: expandFrameSentinels(spec.animations, spec.frames.length) || {},
             };
             case 'tileset': return {
                 kind: 'tileset', src: `${name}.png`,
@@ -353,7 +372,7 @@
                 const lay = entry.layout || sceneSize(spec);
                 const allFrames = [];
                 for (let i = 0; i < lay.n; i++) allFrames.push(i);
-                const anims = spec.animations || {
+                const anims = expandFrameSentinels(spec.animations, lay.n) || {
                     play: { frames: allFrames, fps: spec.fps, loop: false }
                 };
                 return {
@@ -367,12 +386,13 @@
             case 'animated': {
                 const lay = entry.layout || animatedSize(spec);
                 // Default to a single 'play' animation covering all frames.
-                // User can override via spec.animations and the override
-                // wins. Manifest output mirrors defineSheet so consumers
-                // (scene.createSprite) treat it as an ordinary sprite sheet.
+                // User can override via spec.animations (with `frames: 'all'`
+                // as a shorthand for the full range). Manifest output
+                // mirrors defineSheet so consumers (scene.createSprite)
+                // treat it as an ordinary sprite sheet.
                 const allFrames = [];
                 for (let i = 0; i < lay.n; i++) allFrames.push(i);
-                const anims = spec.animations || {
+                const anims = expandFrameSentinels(spec.animations, lay.n) || {
                     play: { frames: allFrames, fps: spec.fps, loop: false }
                 };
                 return {
@@ -409,12 +429,22 @@
         ctx.imageSmoothingEnabled = true;
     }
 
-    // Resize a canvas to the target asset size and clear to bg.
+    // Resize a canvas to the target asset size and clear to bg. The buffer
+    // is set to (w, h) at full resolution so screenshot exports stay
+    // pixel-perfect; the CSS display size is clamped via the canvas's
+    // existing max-width / max-height from style.css so a giant sprite
+    // sheet (e.g. 1024×768 from a long animated scene) doesn't blow out
+    // the windowed grid layout.
     function resetCanvas(canvas, w, h, bg, pixel) {
         canvas.width  = w;
         canvas.height = h;
-        canvas.style.width  = w + 'px';
-        canvas.style.height = h + 'px';
+        // Let CSS shrink the displayed canvas via aspect-ratio + max-width
+        // (defined per-canvas in style.css). Clear inline width so it
+        // doesn't override the stylesheet, and pin aspect-ratio so the
+        // browser computes the height proportionally.
+        canvas.style.width  = '';
+        canvas.style.height = '';
+        canvas.style.aspectRatio = `${w} / ${h}`;
         const ctx = canvas.getContext('2d');
         // Queue a full-surface clear regardless of dimensions — protects
         // against stale pixels surviving from a previous asset's draws when
