@@ -191,6 +191,15 @@ canvas {
     background: #111;
 }
 
+/* Live preview canvas for `scene` assets. Hidden by default; the scene
+   live-preview path sizes its buffer + display to (fw*scale, fh*scale),
+   shows it, and hides #stage. The engine composites it per tick — no
+   captureFrame/readback in the hot path. */
+#stage-3d {
+    display: none;
+    background: #111;
+}
+
 #info {
     background: #181820;
     padding: 10px;

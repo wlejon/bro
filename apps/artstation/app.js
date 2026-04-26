@@ -11,8 +11,25 @@
 
     const sheetCanvas   = document.getElementById('sheet');
     const stageCanvas   = document.getElementById('stage');
+    const stage3dCanvas = document.getElementById('stage-3d');
     const status        = document.getElementById('status');
     const info          = document.getElementById('info');
+
+    // Live-preview scene context for `scene` assets. Built lazily on first
+    // scene preview, then reused — clearScene() wipes child nodes between
+    // assets without losing the GL context. Distinct from captureCanvas:
+    // this one is on-screen and composited by the engine each tick (no
+    // captureFrame/readback in the live path); captureCanvas stays
+    // off-screen for export (renderScene/saveVideo/saveGif).
+    let stage3dScene = null;
+    function ensureStage3D() {
+        if (!stage3dScene) stage3dScene = stage3dCanvas.getContext('scene');
+        return stage3dScene;
+    }
+    function showStage3D(on) {
+        stage3dCanvas.style.display = on ? 'block' : 'none';
+        stageCanvas.style.display   = on ? 'none'  : 'block';
+    }
 
     // Registry of every asset defined by loaded modules.
     const REGISTRY = {};         // name -> { kind: 'sheet'|'tileset', spec }
@@ -1085,6 +1102,8 @@
         }
         liveAnimSpec = null;
         liveState    = null;
+        // Revert to 2D stage; scene-kind preview will re-show #stage-3d.
+        showStage3D(false);
     }
 
     // Pick the first animation from a sheet/animated manifest.
@@ -1160,27 +1179,6 @@
         withCenteredCell(ctx, spec.frameWidth, spec.frameHeight, (c) => {
             spec.frame(c, spec.frameWidth, spec.frameHeight, t, dt, state);
         });
-    }
-
-    // Live-preview render for scene assets. Mutates the shared capture
-    // SceneGraph for frame `idx`, captures it at stage-scaled resolution
-    // (so a 64×64 source doesn't look postage-stamp-sized), and blits the
-    // ImageData onto the stage centered. Captures at scaled-up size rather
-    // than capturing native + scaling-on-blit because cross-canvas drawImage
-    // through the GPU compositor is unreliable here (see comment above
-    // drawSheetFrameLive); putImageData is a clean pixel write.
-    function drawSceneFrameLive(spec, scene, refs, idx) {
-        const fw = spec.frameWidth, fh = spec.frameHeight;
-        const scale = fitScale(fw, fh);
-        const dt = 1 / spec.fps;
-        try { spec.frame(scene, idx * dt, dt, refs, idx); }
-        catch (e) { console.log(`scene frame ${idx} threw:`, e.message); }
-        const img = scene.captureFrame(fw * scale, fh * scale);
-        const ctx = resetStage();
-        if (!img) return;
-        const dx = Math.floor((stageCanvas.width  - img.width)  / 2);
-        const dy = Math.floor((stageCanvas.height - img.height) / 2);
-        ctx.putImageData(img, dx, dy);
     }
 
     function drawTilesetLive(spec) {
@@ -1276,19 +1274,38 @@
         }
 
         if (entry.kind === 'scene') {
-            // Scene live preview: same animation-driven indexing as 'sheet',
-            // but each frame re-runs spec.frame() on the capture SceneGraph
-            // and blits its tonemap readback onto the stage.
+            // Scene live preview renders to a visible scene canvas and lets
+            // the engine composite it per tick — no captureFrame, no FBO
+            // readback, no putImageData. The rAF loop just mutates the
+            // graph via spec.frame(); cost per tick is whatever spec.frame
+            // does plus engine compositing (which would happen anyway).
+            // captureFrame stays in renderScene/saveVideo/saveGif where the
+            // pixels actually need to land in JS-land.
             const meta = buildManifest(name, entry);
             const anims = meta.animations || {};
             liveAnimSpec  = (playback.anim && anims[playback.anim])
                 ? anims[playback.anim]
                 : defaultAnimation(meta);
-            const liveScene = ensureCaptureCanvas();
+
+            // Size the visible scene canvas to match the asset at the
+            // largest integer scale that fits the stage area, then swap
+            // visibility from the 2D stage to the 3D one.
+            const fw = spec.frameWidth, fh = spec.frameHeight;
+            const scale = fitScale(fw, fh);
+            const bw = fw * scale, bh = fh * scale;
+            if (stage3dCanvas.width  !== bw) stage3dCanvas.width  = bw;
+            if (stage3dCanvas.height !== bh) stage3dCanvas.height = bh;
+            stage3dCanvas.style.width  = bw + 'px';
+            stage3dCanvas.style.height = bh + 'px';
+            showStage3D(true);
+
+            const liveScene = ensureStage3D();
             clearScene(liveScene);
             let liveRefs = {};
             try { liveRefs = spec.build(liveScene) || {}; }
             catch (e) { console.log('scene build threw:', e.message); }
+
+            const dtLogical = 1 / spec.fps;
             liveStartTime  = performance.now();
             liveAccumS     = 0;
             liveLastTickMs = liveStartTime;
@@ -1304,7 +1321,12 @@
                     ? (idx % len)
                     : Math.min(idx, len - 1);
                 const frameIdx = liveAnimSpec.frames[slot];
-                drawSceneFrameLive(spec, liveScene, liveRefs, frameIdx);
+                // Continuous t for smooth motion; idx still passed for any
+                // frame fn that wants per-cell switching. dt stays at the
+                // logical 1/fps so velocity*dt math matches the captured
+                // sheet's per-cell step.
+                try { spec.frame(liveScene, liveAccumS, dtLogical, liveRefs, frameIdx); }
+                catch (e) { console.log(`scene frame ${frameIdx} threw:`, e.message); }
                 updateFrameCounter(slot, len);
                 livePreviewRAF = requestAnimationFrame(loop);
             };
