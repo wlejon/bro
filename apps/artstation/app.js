@@ -302,6 +302,10 @@
         canvas.style.width  = w + 'px';
         canvas.style.height = h + 'px';
         const ctx = canvas.getContext('2d');
+        // Queue a full-surface clear regardless of dimensions — protects
+        // against stale pixels surviving from a previous asset's draws when
+        // the canvas pipeline hasn't yet caught up to the new size.
+        if (typeof ctx.reset === 'function') ctx.reset();
         if (pixel === false) configureSmooth(ctx);
         else                 configurePixel(ctx);
         ctx.clearRect(0, 0, w, h);
@@ -390,10 +394,14 @@
             default: throw new Error('unknown kind: ' + entry.kind);
         }
         updateInfo(name);
-        // Auto-update the inspect canvas (sheet/tileset only — leaving the
-        // image/nineslice inspect path off because canvas-2d clip+scale on
-        // the inspect surface drops draws silently in headless).
-        if (entry.kind === 'sheet' || entry.kind === 'tileset') inspect();
+        if (entry.kind === 'sheet' || entry.kind === 'tileset' ||
+            entry.kind === 'animated') {
+            inspect();
+        } else {
+            // No inspect view for this kind — wipe any stale pixels left over
+            // from the previously-selected asset so the panel doesn't lie.
+            resetCanvas(inspectCanvas, inspectCanvas.width, inspectCanvas.height, null);
+        }
     }
 
     // ---------- Inspect view (integer-scaled copy of the sheet) ---------
@@ -431,6 +439,25 @@
                 try { fn(ctx, fw, fh, i); } catch (e) {}
                 ctx.restore();
             }
+        } else if (entry.kind === 'animated') {
+            // Replay the procedural animation through virtual frame indices,
+            // same as renderAnimated but at integer scale into inspect.
+            const lay = entry.layout || animatedSize(spec);
+            const fw = spec.frameWidth, fh = spec.frameHeight;
+            const dt = 1 / spec.fps;
+            const state = (typeof spec.init === 'function') ? (spec.init() || {}) : {};
+            for (let i = 0; i < lay.n; i++) {
+                const cx = (i % lay.cols) * fw * scale;
+                const cy = Math.floor(i / lay.cols) * fh * scale;
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(cx, cy, fw * scale, fh * scale);
+                ctx.clip();
+                ctx.translate(cx, cy);
+                ctx.scale(scale, scale);
+                try { spec.frame(ctx, fw, fh, i * dt, dt, state); } catch (e) {}
+                ctx.restore();
+            }
         } else {
             const ts = spec.tileSize;
             for (let i = 0; i < spec.tiles.length; i++) {
@@ -451,8 +478,8 @@
 
         // Faint cyan grid lines on frame/tile boundaries.
         ctx.fillStyle = 'rgba(0,255,255,0.35)';
-        const cellW = (entry.kind === 'sheet' ? spec.frameWidth : spec.tileSize) * scale;
-        const cellH = (entry.kind === 'sheet' ? spec.frameHeight : spec.tileSize) * scale;
+        const cellW = (entry.kind === 'tileset' ? spec.tileSize : spec.frameWidth) * scale;
+        const cellH = (entry.kind === 'tileset' ? spec.tileSize : spec.frameHeight) * scale;
         for (let x = cellW; x < w; x += cellW) ctx.fillRect(x, 0, 1, h);
         for (let y = cellH; y < h; y += cellH) ctx.fillRect(0, y, w, 1);
     }
@@ -919,6 +946,19 @@
             render(name);
             refreshPickerSelection();
             startLivePreview(name);
+            // Windowed-mode race: the canvas pipeline can latch onto the
+            // previous asset's layout box when processing this frame's draw
+            // commands, so the SHEET (and INSPECT) keep showing the prior
+            // asset's pixels. Re-rendering one rAF later runs after layout
+            // has published the new canvas dimensions, so the surface
+            // re-clears at the correct size and replays cleanly.
+            if (isWindowed()) {
+                requestAnimationFrame(() => {
+                    if (CURRENT === name) {
+                        try { render(name); } catch (e) {}
+                    }
+                });
+            }
         } catch (err) {
             console.log(`selectAsset(${name}) failed:`, err.message);
             status.textContent = `error: ${err.message}`;

@@ -10,6 +10,7 @@
 #include "layout/el_select.h"
 #include "layout/el_textarea.h"
 #include "layout/el_video.h"
+#include "canvas/canvas_scene.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -2430,6 +2431,15 @@ static JSValue js_element_set_width(JSContext* ctx, JSValueConst this_val, JSVal
     auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
     int w; JS_ToInt32(ctx, &w, val);
     el->setAttribute("width", std::to_string(w));
+    // HTML5 canvas: setting width is the bitmap size, not just an attribute.
+    // Push it straight to the CanvasScene so the surface resizes/clears
+    // synchronously rather than waiting on the threaded layout pipeline —
+    // otherwise draw commands recorded after this can race the layout
+    // update and land on a surface still sized for the previous content.
+    if (auto* cs = static_cast<bro::canvas::CanvasScene*>(el->canvasScene())) {
+        cs->setIntrinsicWidth(w);
+        cs->reset();
+    }
     return JS_UNDEFINED;
 }
 
@@ -2444,6 +2454,10 @@ static JSValue js_element_set_height(JSContext* ctx, JSValueConst this_val, JSVa
     auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
     int h; JS_ToInt32(ctx, &h, val);
     el->setAttribute("height", std::to_string(h));
+    if (auto* cs = static_cast<bro::canvas::CanvasScene*>(el->canvasScene())) {
+        cs->setIntrinsicHeight(h);
+        cs->reset();
+    }
     return JS_UNDEFINED;
 }
 

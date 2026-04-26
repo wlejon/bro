@@ -129,6 +129,18 @@ public:
     int height() const { return queryLayoutHeight(); }
     SkSurface* surface() const { return surface_.get(); }
 
+    /// Set the canvas's intrinsic bitmap size (HTML canvas.width/height).
+    /// When non-zero, takes precedence over layout-derived size — the surface
+    /// resizes the moment the JS attribute is set, without waiting for the
+    /// layout thread to publish a new content rect. Pass 0 to clear back to
+    /// layout-driven sizing. Atomic so the canvas thread reads consistently.
+    void setIntrinsicSize(int w, int h) {
+        intrinsicW_.store(w, std::memory_order_relaxed);
+        intrinsicH_.store(h, std::memory_order_relaxed);
+    }
+    void setIntrinsicWidth(int w)  { intrinsicW_.store(w, std::memory_order_relaxed); }
+    void setIntrinsicHeight(int h) { intrinsicH_.store(h, std::memory_order_relaxed); }
+
     void setViewportScroll(float scrollY) { viewportScrollY_ = scrollY; }
     bool isDetached() const { return detached_; }
 
@@ -316,6 +328,13 @@ private:
     // Skia surface (raster, RGBA premul)
     sk_sp<SkSurface> surface_;
     int surfWidth_ = 0, surfHeight_ = 0;
+
+    // Intrinsic bitmap size set via canvas.width / canvas.height attribute.
+    // When non-zero, overrides layout-derived sizing. Atomic because the
+    // canvas thread reads these from queryLayoutWidth/Height while the
+    // main thread writes them from JS attribute setters.
+    std::atomic<int> intrinsicW_{0};
+    std::atomic<int> intrinsicH_{0};
 
     // GL texture for compositing
     GLuint glTexture_ = 0;

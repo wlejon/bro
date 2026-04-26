@@ -215,18 +215,23 @@ void CanvasScene::prepareAndSignal() {
         return;
     }
 
-    // Query element layout position and size (main thread, DOM access)
+    // Query element layout position (main thread, DOM access). The displayed
+    // size on screen still comes from layout, but the bitmap (surface) size
+    // uses queryLayoutWidth/Height so that an intrinsic canvas.width/height
+    // attribute beats the layout box. Without this, the threaded layout
+    // pipeline can lag a frame behind a JS attribute change and we'd publish
+    // the previous asset's size to the canvas thread.
     float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
     if (layoutCb_) {
         layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
-        if (layoutW <= 0 || layoutH <= 0) return;
     }
 
     screenX_ = layoutX;
     screenY_ = layoutY - viewportScrollY_;
 
-    int canvasW = static_cast<int>(layoutW);
-    int canvasH = static_cast<int>(layoutH);
+    int canvasW = queryLayoutWidth();
+    int canvasH = queryLayoutHeight();
+    if (canvasW <= 0 || canvasH <= 0) return;
 
     // Only signal if there's work to do (commands or resize)
     bool needsResize = (canvasW != surfWidth_ || canvasH != surfHeight_);
@@ -382,6 +387,12 @@ void CanvasScene::flushStagedCommands() {
 // ---------------------------------------------------------------------------
 
 int CanvasScene::queryLayoutWidth() const {
+    // Intrinsic bitmap size (canvas.width attribute) wins — the layout
+    // thread can lag a frame or two behind JS attribute mutation, and
+    // sourcing surface size from it would race draw commands recorded at
+    // the new size against a still-old surface.
+    int iw = intrinsicW_.load(std::memory_order_relaxed);
+    if (iw > 0) return iw;
     if (layoutCb_) {
         float ox, oy, ow = 0, oh = 0;
         layoutCb_(layoutUd_, ox, oy, ow, oh);
@@ -391,6 +402,8 @@ int CanvasScene::queryLayoutWidth() const {
 }
 
 int CanvasScene::queryLayoutHeight() const {
+    int ih = intrinsicH_.load(std::memory_order_relaxed);
+    if (ih > 0) return ih;
     if (layoutCb_) {
         float ox, oy, ow = 0, oh = 0;
         layoutCb_(layoutUd_, ox, oy, ow, oh);
@@ -1197,18 +1210,19 @@ void CanvasScene::rasterize(render::GLContext* gl) {
         return;
     }
 
-    // Query element layout position and size
+    // Query element layout position (display rect). Surface size comes from
+    // queryLayoutWidth/Height so intrinsic canvas.width/height beats layout.
     float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
     if (layoutCb_) {
         layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
-        if (layoutW <= 0 || layoutH <= 0) return;
     }
 
     screenX_ = layoutX;
     screenY_ = layoutY - viewportScrollY_;
 
-    int canvasW = static_cast<int>(layoutW);
-    int canvasH = static_cast<int>(layoutH);
+    int canvasW = queryLayoutWidth();
+    int canvasH = queryLayoutHeight();
+    if (canvasW <= 0 || canvasH <= 0) return;
     ensureSurface(canvasW, canvasH);
 
     // Replay deferred canvas commands onto the Skia surface. flushCommands
