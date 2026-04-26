@@ -93,7 +93,7 @@
             }
             const el = document.getElementById(prefix + screenId);
             if (el) el.style.display = 'block';
-            ov.style.display = 'block';
+            ov.style.display = '';
             activeScreenId = screenId;
         }
 
