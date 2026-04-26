@@ -1,0 +1,10 @@
+{
+  "kind": "sheet",
+  "src": "smooth_test.png",
+  "frameWidth": 96,
+  "frameHeight": 96,
+  "cols": 2,
+  "rows": 1,
+  "frameCount": 2,
+  "animations": {}
+}

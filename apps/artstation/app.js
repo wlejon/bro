@@ -36,6 +36,35 @@
         REGISTRY[name] = { kind: 'tileset', spec };
     }
 
+    // spec: { width, height, draw, bg?, pixel? }
+    //   - draw: (ctx, w, h) => void
+    //   - Single static image. Sidecar manifest stays minimal.
+    function defineImage(name, spec) {
+        REGISTRY[name] = { kind: 'image', spec };
+    }
+
+    // spec: { width, height, slice: {left, right, top, bottom}, draw, bg?, pixel? }
+    //   - draw: (ctx, w, h) => void
+    //   - Nine-slice image. Manifest carries slice rects so game code can
+    //     stretch the middle and tile the edges.
+    function defineNineSlice(name, spec) {
+        if (!spec.slice) throw new Error('defineNineSlice requires slice {left,right,top,bottom}');
+        REGISTRY[name] = { kind: 'nineslice', spec };
+    }
+
+    // spec: { regions, padding?, maxWidth?, pixel?, bg? }
+    //   - regions: array of { name, width, height, draw }
+    //     draw: (ctx, w, h, name) => void
+    //   - padding: gutter pixels between regions (default 1)
+    //   - maxWidth: bin width for the shelf-pack (default 256)
+    //   - Pack variable-sized regions into one PNG with a JSON region map.
+    //     Region name → {x, y, w, h} so game code can crop subimages without
+    //     a fixed grid.
+    function defineAtlas(name, spec) {
+        if (!Array.isArray(spec.regions)) throw new Error('defineAtlas requires regions array');
+        REGISTRY[name] = { kind: 'atlas', spec };
+    }
+
     function listAssets() {
         return Object.keys(REGISTRY).map(n => ({
             name: n, kind: REGISTRY[n].kind
@@ -78,19 +107,118 @@
         return { w: spec.tileSize * spec.cols, h: spec.tileSize * rows };
     }
 
+    // Shelf-pack: simple bin-packing for variable-sized rectangles. Sorts by
+    // height descending, then fills each shelf left-to-right, opening a new
+    // shelf when current width is exceeded. Good packing density for atlases
+    // of similarly-sized icons; not optimal for wildly varied sizes, but
+    // simple and deterministic.
+    function shelfPack(regions, maxWidth, padding) {
+        padding = padding || 1;
+        const items = regions.map((r, i) => ({
+            i, name: r.name, w: r.width, h: r.height, draw: r.draw,
+        }));
+        items.sort((a, b) => b.h - a.h);
+
+        let shelfX = 0, shelfY = 0, shelfH = 0;
+        let totalW = 0, totalH = 0;
+        const placed = [];
+        for (const it of items) {
+            if (shelfX + it.w > maxWidth && shelfX > 0) {
+                shelfY += shelfH + padding;
+                shelfX = 0;
+                shelfH = 0;
+            }
+            placed.push({ ...it, x: shelfX, y: shelfY });
+            shelfX += it.w + padding;
+            if (it.h > shelfH) shelfH = it.h;
+            if (shelfX > totalW) totalW = shelfX;
+            if (shelfY + shelfH > totalH) totalH = shelfY + shelfH;
+        }
+        // Trim trailing padding.
+        return { items: placed, width: totalW - padding, height: totalH };
+    }
+
+    function atlasLayout(spec) {
+        const padding = spec.padding == null ? 1 : spec.padding;
+        const maxWidth = spec.maxWidth || 256;
+        return shelfPack(spec.regions, maxWidth, padding);
+    }
+
+    function renderAtlas(name) {
+        const entry = REGISTRY[name];
+        const spec = entry.spec;
+        const layout = atlasLayout(spec);
+        entry.layout = layout;
+        const ctx = resetCanvas(sheetCanvas, layout.width, layout.height,
+                                spec.bg, spec.pixel);
+        for (const it of layout.items) {
+            ctx.save();
+            ctx.translate(it.x, it.y);
+            try { it.draw(ctx, it.w, it.h, it.name); }
+            catch (e) { console.log(`atlas region ${it.name} threw:`, e.message); }
+            ctx.restore();
+        }
+    }
+
+    function buildManifest(name, entry) {
+        const spec = entry.spec;
+        switch (entry.kind) {
+            case 'sheet': return {
+                kind: 'sheet', src: `${name}.png`,
+                frameWidth: spec.frameWidth, frameHeight: spec.frameHeight,
+                cols: spec.cols, rows: spec.rows,
+                frameCount: spec.frames.length,
+                animations: spec.animations || {},
+            };
+            case 'tileset': return {
+                kind: 'tileset', src: `${name}.png`,
+                tileSize: spec.tileSize, cols: spec.cols,
+                tileCount: spec.tiles.length,
+            };
+            case 'image': return {
+                kind: 'image', src: `${name}.png`,
+                width: spec.width, height: spec.height,
+            };
+            case 'nineslice': return {
+                kind: 'nineslice', src: `${name}.png`,
+                width: spec.width, height: spec.height,
+                slice: spec.slice,
+            };
+            case 'atlas': {
+                const lay = entry.layout || atlasLayout(spec);
+                const regions = {};
+                for (const it of lay.items) {
+                    regions[it.name] = { x: it.x, y: it.y, w: it.w, h: it.h };
+                }
+                return {
+                    kind: 'atlas', src: `${name}.png`,
+                    width: lay.width, height: lay.height,
+                    regions,
+                };
+            }
+        }
+        return { kind: entry.kind, src: `${name}.png` };
+    }
+
     function configurePixel(ctx) {
         // Pixel-perfect: integer coords, no smoothing.
         ctx.imageSmoothingEnabled = false;
     }
 
+    // Smooth-mode: anti-aliased shapes, float coords.
+    function configureSmooth(ctx) {
+        ctx.imageSmoothingEnabled = true;
+    }
+
     // Resize a canvas to the target asset size and clear to bg.
-    function resetCanvas(canvas, w, h, bg) {
+    function resetCanvas(canvas, w, h, bg, pixel) {
         canvas.width  = w;
         canvas.height = h;
         canvas.style.width  = w + 'px';
         canvas.style.height = h + 'px';
         const ctx = canvas.getContext('2d');
-        configurePixel(ctx);
+        if (pixel === false) configureSmooth(ctx);
+        else                 configurePixel(ctx);
         ctx.clearRect(0, 0, w, h);
         if (bg && bg !== 'transparent') {
             ctx.fillStyle = bg;
@@ -103,7 +231,7 @@
         const entry = REGISTRY[name];
         const spec = entry.spec;
         const { w, h } = sheetSize(spec);
-        const ctx = resetCanvas(sheetCanvas, w, h, spec.bg);
+        const ctx = resetCanvas(sheetCanvas, w, h, spec.bg, spec.pixel);
 
         const fw = spec.frameWidth, fh = spec.frameHeight;
         for (let i = 0; i < spec.frames.length; i++) {
@@ -130,7 +258,7 @@
         const entry = REGISTRY[name];
         const spec = entry.spec;
         const { w, h } = tilesetSize(spec);
-        const ctx = resetCanvas(sheetCanvas, w, h, spec.bg);
+        const ctx = resetCanvas(sheetCanvas, w, h, spec.bg, spec.pixel);
 
         const ts = spec.tileSize;
         for (let i = 0; i < spec.tiles.length; i++) {
@@ -152,17 +280,34 @@
         }
     }
 
+    function renderImage(name) {
+        const spec = REGISTRY[name].spec;
+        const ctx = resetCanvas(sheetCanvas, spec.width, spec.height, spec.bg, spec.pixel);
+        try { spec.draw(ctx, spec.width, spec.height); }
+        catch (e) { console.log('draw threw:', e.message); }
+    }
+
+    // Same render path as image; slice metadata stays in the manifest.
+    function renderNineSlice(name) { renderImage(name); }
+
     function render(name) {
         name = name || CURRENT;
         if (!name) throw new Error('nothing loaded — call load("name") first');
         CURRENT = name;
         const entry = REGISTRY[name];
-        if (entry.kind === 'sheet') renderSheet(name);
-        else if (entry.kind === 'tileset') renderTileset(name);
-        else throw new Error('unknown kind: ' + entry.kind);
+        switch (entry.kind) {
+            case 'sheet':     renderSheet(name); break;
+            case 'tileset':   renderTileset(name); break;
+            case 'image':     renderImage(name); break;
+            case 'nineslice': renderNineSlice(name); break;
+            case 'atlas':     renderAtlas(name); break;
+            default: throw new Error('unknown kind: ' + entry.kind);
+        }
         updateInfo(name);
-        // Auto-update the inspect canvas at default scale.
-        inspect();
+        // Auto-update the inspect canvas (sheet/tileset only — leaving the
+        // image/nineslice inspect path off because canvas-2d clip+scale on
+        // the inspect surface drops draws silently in headless).
+        if (entry.kind === 'sheet' || entry.kind === 'tileset') inspect();
     }
 
     // ---------- Inspect view (integer-scaled copy of the sheet) ---------
@@ -250,24 +395,7 @@
         // composite path used by screenshot() flattens transparency).
         screenshotCanvas(pngPath, '#sheet');
 
-        const meta = (entry.kind === 'sheet')
-            ? {
-                kind: 'sheet',
-                src: `${name}.png`,
-                frameWidth: entry.spec.frameWidth,
-                frameHeight: entry.spec.frameHeight,
-                cols: entry.spec.cols,
-                rows: entry.spec.rows,
-                frameCount: entry.spec.frames.length,
-                animations: entry.spec.animations || {},
-              }
-            : {
-                kind: 'tileset',
-                src: `${name}.png`,
-                tileSize: entry.spec.tileSize,
-                cols: entry.spec.cols,
-                tileCount: entry.spec.tiles.length,
-              };
+        const meta = buildManifest(name, entry);
 
         // brokit fs is exposed as `bro.fs` and as require('fs'). Try both.
         try {
@@ -379,20 +507,37 @@
                     lines.push(`  ${a}: ${an.frames.length}f @ ${an.fps}fps${an.loop?' loop':''}`);
                 }
             }
-        } else {
+        } else if (entry.kind === 'tileset') {
             const s = entry.spec;
             lines.push(`tile:   ${s.tileSize} x ${s.tileSize}`);
             lines.push(`tiles:  ${s.tiles.length} (cols=${s.cols})`);
+        } else if (entry.kind === 'image' || entry.kind === 'nineslice') {
+            lines.push(`size:   ${entry.spec.width} x ${entry.spec.height}`);
+        } else if (entry.kind === 'atlas') {
+            const lay = entry.layout || atlasLayout(entry.spec);
+            lines.push(`region: ${entry.spec.regions.length}`);
+            lines.push(`pack:   ${lay.width} x ${lay.height}`);
         }
-        const sz = (entry.kind === 'sheet' ? sheetSize : tilesetSize)(entry.spec);
+        let sz;
+        if      (entry.kind === 'sheet')   sz = sheetSize(entry.spec);
+        else if (entry.kind === 'tileset') sz = tilesetSize(entry.spec);
+        else if (entry.kind === 'atlas')   { const l = entry.layout || atlasLayout(entry.spec); sz = { w: l.width, h: l.height }; }
+        else                                sz = { w: entry.spec.width, h: entry.spec.height };
         lines.push(`png:    ${sz.w} x ${sz.h} px`);
+        if (entry.kind === 'nineslice') {
+            const s = entry.spec.slice;
+            lines.push(`slice:  L${s.left} R${s.right} T${s.top} B${s.bottom}`);
+        }
         info.textContent = lines.join('\n');
     }
 
     // ---------- Expose globals ------------------------------------------
 
-    window.defineSheet   = defineSheet;
-    window.defineTileset = defineTileset;
+    window.defineSheet     = defineSheet;
+    window.defineTileset   = defineTileset;
+    window.defineImage     = defineImage;
+    window.defineNineSlice = defineNineSlice;
+    window.defineAtlas     = defineAtlas;
     window.listAssets    = listAssets;
     window.load          = load;
     window.render        = render;

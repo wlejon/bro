@@ -173,11 +173,119 @@ const brush = (() => {
         } catch (e) { /* canvas2D scene path may not support imageData yet */ }
     }
 
+    // ---- Smooth-mode helpers (antialiased; assume imageSmoothingEnabled) -
+
+    const smooth = {
+        roundRect(ctx, x, y, w, h, r, fill) {
+            if (fill !== undefined) ctx.fillStyle = fill;
+            r = Math.min(r, w / 2, h / 2);
+            if (r <= 0) { ctx.fillRect(x, y, w, h); return; }
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+            ctx.fill();
+        },
+        roundRectOutline(ctx, x, y, w, h, r, stroke, lineWidth) {
+            if (stroke !== undefined) ctx.strokeStyle = stroke;
+            if (lineWidth !== undefined) ctx.lineWidth = lineWidth;
+            r = Math.min(r, w / 2, h / 2);
+            ctx.beginPath();
+            if (r <= 0) { ctx.rect(x, y, w, h); ctx.stroke(); return; }
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+            ctx.stroke();
+        },
+        circle(ctx, cx, cy, r, fill) {
+            if (fill !== undefined) ctx.fillStyle = fill;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fill();
+        },
+        circleOutline(ctx, cx, cy, r, stroke, lineWidth) {
+            if (stroke !== undefined) ctx.strokeStyle = stroke;
+            if (lineWidth !== undefined) ctx.lineWidth = lineWidth;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.stroke();
+        },
+        ellipse(ctx, cx, cy, rx, ry, rotation, fill) {
+            if (fill !== undefined) ctx.fillStyle = fill;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, rx, ry, rotation || 0, 0, Math.PI * 2);
+            ctx.fill();
+        },
+        linearGradient(ctx, x0, y0, x1, y1, stops) {
+            const g = ctx.createLinearGradient(x0, y0, x1, y1);
+            for (const [t, col] of stops) g.addColorStop(t, col);
+            return g;
+        },
+        radialGradient(ctx, cx, cy, r0, r1, stops) {
+            const g = ctx.createRadialGradient(cx, cy, r0, cx, cy, r1);
+            for (const [t, col] of stops) g.addColorStop(t, col);
+            return g;
+        },
+        polyline(ctx, points, close) {
+            if (!points.length) return;
+            ctx.beginPath();
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+            if (close) ctx.closePath();
+        },
+        smoothPath(ctx, points, tension, close) {
+            tension = tension == null ? 0.5 : tension;
+            if (points.length < 2) return;
+            const t = tension, n = points.length;
+            ctx.beginPath();
+            ctx.moveTo(points[0][0], points[0][1]);
+            for (let i = 0; i < n - 1; i++) {
+                const p0 = points[i - 1] || points[close ? n - 1 : i];
+                const p1 = points[i];
+                const p2 = points[i + 1];
+                const p3 = points[i + 2] || points[close ? (i + 2) % n : i + 1];
+                const c1x = p1[0] + (p2[0] - p0[0]) * t / 6;
+                const c1y = p1[1] + (p2[1] - p0[1]) * t / 6;
+                const c2x = p2[0] - (p3[0] - p1[0]) * t / 6;
+                const c2y = p2[1] - (p3[1] - p1[1]) * t / 6;
+                ctx.bezierCurveTo(c1x, c1y, c2x, c2y, p2[0], p2[1]);
+            }
+            if (close) ctx.closePath();
+        },
+        shadow(ctx, color, blur, dx, dy) {
+            ctx.shadowColor = color || 'rgba(0,0,0,0.5)';
+            ctx.shadowBlur = blur || 4;
+            ctx.shadowOffsetX = dx || 0;
+            ctx.shadowOffsetY = dy || 0;
+        },
+        clearShadow(ctx) {
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+        },
+    };
+
     return {
         PICO8, ENDESGA16,
         px, hline, vline, rect, rectOutline,
         line, circle, circleOutline,
         stamp, gradV, mirrorH, hexToRgb,
+        smooth,
     };
 })();
 
