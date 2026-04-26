@@ -45,6 +45,65 @@ body {
 }
 .asset-btn.selected .kind { color: #aaf; }
 
+#transport {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #2a2a30;
+}
+#transport .t-label {
+    color: #888;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-left: 6px;
+}
+#play-toggle {
+    background: #2a2a32;
+    color: #ddd;
+    border: 1px solid #444;
+    width: 28px;
+    height: 26px;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 3px;
+}
+#play-toggle:hover { background: #353540; border-color: #88c; }
+#anim-select {
+    background: #2a2a32;
+    color: #ddd;
+    border: 1px solid #444;
+    padding: 4px 8px;
+    font: inherit;
+    border-radius: 3px;
+    min-width: 100px;
+}
+#anim-select:disabled { opacity: 0.4; }
+#speed-buttons { display: inline-flex; gap: 2px; }
+.speed-btn {
+    background: #2a2a32;
+    color: #aaa;
+    border: 1px solid #444;
+    padding: 4px 8px;
+    font: inherit;
+    cursor: pointer;
+    border-radius: 3px;
+}
+.speed-btn:hover { background: #353540; border-color: #88c; }
+.speed-btn.selected {
+    background: #3b3b46;
+    border-color: #88c;
+    color: #fff;
+}
+#frame-counter {
+    color: #888;
+    font-size: 11px;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+}
+
 #save-bar {
     display: flex;
     gap: 6px;

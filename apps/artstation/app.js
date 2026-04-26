@@ -621,6 +621,31 @@
         return `${outDir}/${name}.${ext}`;
     }
 
+    // Merge windowed transport state (selected animation + speed multiplier)
+    // into save opts so an export plays back identically to the on-screen
+    // preview. Explicit caller opts win (so headless tests stay deterministic).
+    function applyPlaybackOpts(name, opts) {
+        const entry = REGISTRY[name];
+        const out = Object.assign({}, opts || {});
+        if (!out.anim && playback.anim) out.anim = playback.anim;
+        if (out.fps == null) {
+            const spec = entry.spec;
+            let baseFps;
+            if (entry.kind === 'animated') {
+                baseFps = spec.fps;
+            } else {
+                const anims = spec.animations || {};
+                const pick = (out.anim && anims[out.anim])
+                    ? out.anim
+                    : (['idle','play','loop'].find(k => anims[k]) || Object.keys(anims)[0]);
+                baseFps = (pick && anims[pick] && anims[pick].fps) || 8;
+            }
+            const speed = playback.speed || 1;
+            out.fps = baseFps * speed;
+        }
+        return out;
+    }
+
     // saveVideo(name?, opts?) — encode an `animated` or `sheet` asset to a
     // VP9/WebM file. opts:
     //   path        — override output path
@@ -648,7 +673,7 @@
                 `must be even (VP9 4:2:0 chroma)`);
         }
 
-        opts = opts || {};
+        opts = applyPlaybackOpts(name, opts);
         const path    = defaultExportPath(name, opts, 'webm');
         const quality = opts.quality || 'good';
 
@@ -701,7 +726,7 @@
             throw new Error('saveGif() only supports animated or sheet assets');
         }
 
-        opts = opts || {};
+        opts = applyPlaybackOpts(name, opts);
         const path = defaultExportPath(name, opts, 'gif');
         const spec = entry.spec;
 
@@ -888,6 +913,15 @@
     let liveFrameIdx   = 0;     // current frame for animated
     let watcher        = null;
     let watchTimers    = {};    // name -> debounce timer id
+
+    // Transport state — drives BOTH the live preview and the save path.
+    // anim: name of the picked animation (sheet kind only; null/'play' for
+    //   animated). saveVideo/saveGif read playback.anim before falling back
+    //   to their own anim picker.
+    // speed: playback rate multiplier. 1 = native fps. Live preview multiplies
+    //   the rate; save multiplies the encoder fps so the exported file plays
+    //   at the same wall-clock speed as the on-screen preview.
+    const playback = { paused: false, speed: 1, anim: null };
 
     function isWindowed() {
         // advanceTime() is headless-only (screenshotCanvas is in both modes).
@@ -1090,17 +1124,29 @@
 
         if (entry.kind === 'sheet') {
             const meta = buildManifest(name, entry);
-            liveAnimSpec  = defaultAnimation(meta);
+            // Honor the picked animation if it exists in the manifest;
+            // otherwise fall back to the default pick.
+            const anims = meta.animations || {};
+            liveAnimSpec  = (playback.anim && anims[playback.anim])
+                ? anims[playback.anim]
+                : defaultAnimation(meta);
             liveStartTime = performance.now();
+            liveAccumS    = 0;        // logical seconds played, advances by realDt*speed
+            liveLastTickMs = liveStartTime;
             const loop = (t) => {
                 if (!liveAnimSpec || CURRENT !== name) return;
-                const elapsed = (t - liveStartTime) / 1000;
-                const idx = Math.floor(elapsed * liveAnimSpec.fps);
+                let realDt = (t - liveLastTickMs) / 1000;
+                if (!isFinite(realDt) || realDt < 0) realDt = 0;
+                liveLastTickMs = t;
+                if (!playback.paused) liveAccumS += realDt * playback.speed;
+                const idx = Math.floor(liveAccumS * liveAnimSpec.fps);
                 const len = liveAnimSpec.frames.length;
-                const frameIdx = liveAnimSpec.loop
-                    ? liveAnimSpec.frames[idx % len]
-                    : liveAnimSpec.frames[Math.min(idx, len - 1)];
+                const slot = liveAnimSpec.loop
+                    ? (idx % len)
+                    : Math.min(idx, len - 1);
+                const frameIdx = liveAnimSpec.frames[slot];
                 drawSheetFrameLive(spec, frameIdx);
+                updateFrameCounter(slot, len);
                 livePreviewRAF = requestAnimationFrame(loop);
             };
             livePreviewRAF = requestAnimationFrame(loop);
@@ -1128,7 +1174,7 @@
                 if (!isFinite(realDt) || realDt < 0) realDt = dt;
                 if (realDt > spec.duration) realDt = spec.duration;
                 liveLastTickMs = t;
-                liveAccumS += realDt;
+                if (!playback.paused) liveAccumS += realDt * playback.speed;
                 let stepCount = 0;
                 while (liveAccumS >= dt && stepCount < totalFrames * 2) {
                     liveAccumS -= dt;
@@ -1142,11 +1188,98 @@
                     }
                 }
                 drawAnimatedFrameLive(spec, liveFrameIdx * dt, dt, liveState);
+                updateFrameCounter(liveFrameIdx, totalFrames);
                 livePreviewRAF = requestAnimationFrame(loop);
             };
             livePreviewRAF = requestAnimationFrame(loop);
             return;
         }
+
+        // Static kinds: no frame counter.
+        updateFrameCounter(null, null);
+    }
+
+    // ---------- Transport (play/pause + speed + animation picker) -------
+
+    const playToggle    = document.getElementById('play-toggle');
+    const animSelect    = document.getElementById('anim-select');
+    const speedButtons  = document.getElementById('speed-buttons');
+    const frameCounter  = document.getElementById('frame-counter');
+
+    function updateFrameCounter(idx, total) {
+        if (!frameCounter) return;
+        if (idx == null || total == null) { frameCounter.textContent = ''; return; }
+        frameCounter.textContent = `frame ${idx + 1} / ${total}`;
+    }
+
+    function setPaused(paused) {
+        playback.paused = paused;
+        if (playToggle) playToggle.textContent = paused ? '▶' : '⏸';
+        if (paused) liveLastTickMs = performance.now();
+    }
+
+    function setSpeed(s) {
+        playback.speed = s;
+        if (!speedButtons) return;
+        for (const b of speedButtons.querySelectorAll('.speed-btn')) {
+            b.classList.toggle('selected', parseFloat(b.dataset.speed) === s);
+        }
+    }
+
+    // Populate the anim dropdown for the current asset. Sheet assets list
+    // every animation; animated assets show the synthetic 'play' entry;
+    // others disable the picker. Restarting the live preview is the caller's
+    // job — refreshTransport just resyncs the controls to the asset.
+    function refreshTransport() {
+        if (!animSelect) return;
+        const entry = CURRENT ? REGISTRY[CURRENT] : null;
+        animSelect.textContent = '';
+        if (!entry) {
+            animSelect.disabled = true;
+            updateFrameCounter(null, null);
+            return;
+        }
+        let names = [];
+        if (entry.kind === 'sheet') {
+            names = Object.keys(entry.spec.animations || {});
+            if (names.length === 0) names = ['(all frames)'];
+        } else if (entry.kind === 'animated') {
+            names = Object.keys(entry.spec.animations || { play: null });
+        }
+        animSelect.disabled = names.length <= 1;
+        for (const n of names) {
+            const opt = document.createElement('option');
+            opt.value = n;
+            opt.textContent = n;
+            animSelect.appendChild(opt);
+        }
+        // Carry the current pick across asset switches when possible; else
+        // default to the first available animation.
+        if (playback.anim && names.indexOf(playback.anim) >= 0) {
+            animSelect.value = playback.anim;
+        } else {
+            playback.anim = names[0];
+            animSelect.value = names[0];
+        }
+    }
+
+    function bindTransport() {
+        if (playToggle) {
+            playToggle.addEventListener('click', () => setPaused(!playback.paused));
+        }
+        if (speedButtons) {
+            for (const b of speedButtons.querySelectorAll('.speed-btn')) {
+                b.addEventListener('click', () => setSpeed(parseFloat(b.dataset.speed)));
+            }
+        }
+        if (animSelect) {
+            animSelect.addEventListener('change', () => {
+                playback.anim = animSelect.value;
+                if (CURRENT) startLivePreview(CURRENT);
+            });
+        }
+        setPaused(false);
+        setSpeed(1);
     }
 
     // ---------- Save bar (PNG / WebM / GIF buttons in windowed mode) -----
@@ -1197,6 +1330,7 @@
             load(name);
             render(name);
             refreshPickerSelection();
+            refreshTransport();
             refreshSaveBar();
             startLivePreview(name);
             // Windowed-mode race: the canvas pipeline can latch onto the
@@ -1273,6 +1407,7 @@
     function initWindowed() {
         if (!isWindowed()) return;
         rebuildPicker();
+        bindTransport();
         bindSaveBar();
         const names = discoverAssets();
         if (names.length > 0) selectAsset(names[0]);

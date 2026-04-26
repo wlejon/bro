@@ -15,6 +15,24 @@
          Click a button to render+animate that asset live. -->
     <div id="picker"></div>
 
+    <!-- Transport: play/pause + speed + animation selector. Drives the
+         live preview AND the save (saveVideo/saveGif honor the same anim
+         and speed so the export matches what's on screen). -->
+    <div id="transport">
+        <button id="play-toggle" title="Play / Pause">⏸</button>
+        <label class="t-label">anim</label>
+        <select id="anim-select"></select>
+        <label class="t-label">speed</label>
+        <span id="speed-buttons">
+            <button class="speed-btn" data-speed="0.25">0.25×</button>
+            <button class="speed-btn" data-speed="0.5">0.5×</button>
+            <button class="speed-btn selected" data-speed="1">1×</button>
+            <button class="speed-btn" data-speed="2">2×</button>
+            <button class="speed-btn" data-speed="4">4×</button>
+        </span>
+        <span id="frame-counter"></span>
+    </div>
+
     <!-- Save action bar: buttons enabled per asset kind. PNG always works
          once an asset is loaded; WebM/GIF only on animated or sheet kinds. -->
     <div id="save-bar">
