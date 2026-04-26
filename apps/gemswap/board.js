@@ -61,8 +61,17 @@ G.Board = (function () {
     var swapPair = null;       // {a,b,back} active swap tween
     var swapTime = 0;
     var SWAP_MS = 180;
-    var FLASH_MS = 240;
-    var FALL_MS = 240;
+    var FLASH_MS = 240;          // base; recalculated per cascade from group size
+    var FALL_MS = 140;
+    var SHATTER_MS = 140;        // per-tile shatter animation length
+    var SHATTER_STAGGER_MS = 32; // delay between tiles shattering in a group
+    var SETTLE_MS = 40;          // breath between cascades
+    var CHARGE_MS = 35;          // brief charge-up flash before each tile shatters
+
+    var flashDuration = FLASH_MS;
+    var settleTimer = 0;
+    var shakeAmp = 0;
+    var shakeT = 0;
 
     // Stats
     var stats = null;
@@ -292,6 +301,10 @@ G.Board = (function () {
         anims = [];
         flashTiles = [];
         swapPair = null;
+        settleTimer = 0;
+        shakeAmp = 0;
+        shakeT = 0;
+        flashDuration = FLASH_MS;
         stats = { swaps: 0, matches: 0, flameMade: 0, starMade: 0, hyperMade: 0, maxChain: 0 };
 
         if (mode === 'timed') {
@@ -586,23 +599,64 @@ G.Board = (function () {
         ctx.restore();
     }
 
-    function drawFlashes(ctx) {
+    // Per-tile shatter overlay — radiant glint ring expanding outward as
+    // each tile shatters, synced to that tile's individual stagger.
+    function drawShatterRings(ctx) {
         if (flashTiles.length === 0) return;
-        var a = 1 - (flashTimer / FLASH_MS);
+        var cell = layout.cell;
         ctx.save();
-        ctx.fillStyle = 'rgba(255,255,255,' + (0.5 * a) + ')';
         for (var i = 0; i < flashTiles.length; i++) {
             var t = flashTiles[i];
+            var local = (flashTimer - t.delay - CHARGE_MS) / SHATTER_MS;
+            if (local <= 0 || local >= 1) continue;
             var p = cellXY(t.r, t.c);
-            ctx.fillRect(p.x, p.y, layout.cell, layout.cell);
+            var cx = p.x + cell / 2, cy = p.y + cell / 2;
+            var fade = 1 - local;
+            // Bright glint ring.
+            ctx.strokeStyle = 'rgba(255, 250, 220, ' + (fade * 0.85) + ')';
+            ctx.lineWidth = 2.4;
+            ctx.beginPath();
+            ctx.arc(cx, cy, cell * 0.30 + local * cell * 0.55, 0, Math.PI * 2);
+            ctx.stroke();
+            // Inner cross-flash for the first half.
+            if (local < 0.5) {
+                var cf = 1 - local * 2;
+                ctx.strokeStyle = 'rgba(255, 255, 255, ' + (cf * 0.7) + ')';
+                ctx.lineWidth = 1.6;
+                ctx.beginPath();
+                ctx.moveTo(cx - cell * 0.45 * cf, cy);
+                ctx.lineTo(cx + cell * 0.45 * cf, cy);
+                ctx.moveTo(cx, cy - cell * 0.45 * cf);
+                ctx.lineTo(cx, cy + cell * 0.45 * cf);
+                ctx.stroke();
+            }
         }
         ctx.restore();
     }
 
     function drawBoard(ctx) {
+        var sx = 0, sy = 0;
+        if (shakeAmp > 0) {
+            sx = (Math.random() - 0.5) * shakeAmp;
+            sy = (Math.random() - 0.5) * shakeAmp;
+        }
+        ctx.save();
+        ctx.translate(sx, sy);
+
         drawBoardFrame(ctx);
         drawHint(ctx);
         var cell = layout.cell;
+
+        // Per-tile shatter lookup so the gem-draw loop can render each
+        // shattering gem with its own charge flash + scale-out + fade.
+        var shatterMap = null;
+        if (flashTiles.length > 0) {
+            shatterMap = {};
+            for (var fpi = 0; fpi < flashTiles.length; fpi++) {
+                var fpt = flashTiles[fpi];
+                shatterMap[fpt.r + ',' + fpt.c] = fpt;
+            }
+        }
 
         // Draw all gems, with anim offsets where present.
         for (var r = 0; r < rows; r++) {
@@ -612,8 +666,34 @@ G.Board = (function () {
                 var p = cellXY(r, c);
                 var cx = p.x + cell / 2;
                 var cy = p.y + cell / 2;
-                var skip = false;
                 var pulse = 0;
+                var shatterAlpha = 1;
+                var shatterScale = 1;
+                var shatterRot = 0;
+                var shatterCharge = 0;
+                var shatterSkip = false;
+                if (shatterMap) {
+                    var sh = shatterMap[r + ',' + c];
+                    if (sh) {
+                        var local = flashTimer - sh.delay;
+                        if (local < 0) {
+                            // not yet
+                        } else if (local < CHARGE_MS) {
+                            // Charge phase — bright flash, gem slightly bulges.
+                            shatterCharge = local / CHARGE_MS;
+                            shatterScale = 1 + 0.10 * shatterCharge;
+                        } else if (local < CHARGE_MS + SHATTER_MS) {
+                            var lt = (local - CHARGE_MS) / SHATTER_MS;
+                            shatterAlpha = 1 - lt;
+                            shatterScale = 1.10 + lt * 0.7;
+                            shatterRot = lt * 0.8;
+                        } else {
+                            shatterSkip = true;
+                        }
+                    }
+                }
+                if (shatterSkip) continue;
+
                 // swap animation
                 if (swapPair) {
                     var t = Math.min(1, swapTime / SWAP_MS);
@@ -638,14 +718,33 @@ G.Board = (function () {
                         cy = p.y + cell / 2 + (an.fromY - p.y) * (1 - ease2);
                     }
                 }
-                if (skip) continue;
                 if (sel && sel.r === r && sel.c === c) pulse = 0.2 * (0.5 + 0.5 * Math.sin(gameTime * 0.015));
-                drawGem(ctx, g, cx, cy, cell, { pulse: pulse });
+
+                if (shatterAlpha < 1 || shatterScale !== 1 || shatterRot !== 0 || shatterCharge > 0) {
+                    ctx.save();
+                    ctx.globalAlpha = Math.max(0, shatterAlpha);
+                    ctx.translate(cx, cy);
+                    ctx.rotate(shatterRot);
+                    ctx.scale(shatterScale, shatterScale);
+                    drawGem(ctx, g, 0, 0, cell, { pulse: pulse });
+                    if (shatterCharge > 0) {
+                        // Bright charge-up overlay — quick white flash before shatter.
+                        ctx.globalAlpha = 0.55 * shatterCharge;
+                        ctx.fillStyle = '#ffffff';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, cell * 0.36, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    ctx.restore();
+                } else {
+                    drawGem(ctx, g, cx, cy, cell, { pulse: pulse });
+                }
             }
         }
         drawSelection(ctx);
         drawCursor(ctx);
-        drawFlashes(ctx);
+        drawShatterRings(ctx);
+        ctx.restore();
     }
 
     // ------------------------------------------------------------------
@@ -740,6 +839,10 @@ G.Board = (function () {
 
     function update(dt) {
         gameTime += dt;
+        if (shakeAmp > 0) {
+            shakeT -= dt;
+            if (shakeT <= 0) { shakeAmp = 0; shakeT = 0; }
+        }
         if (mode === 'timed' && !gameOverFlag && !finished) {
             modeTimer -= dt;
             if (modeTimer <= 0) {
@@ -806,10 +909,23 @@ G.Board = (function () {
             }
         }
 
-        // Flash countdown
+        // Flash countdown — fire shard bursts as each tile begins shattering.
         if (flashTiles.length > 0) {
             flashTimer += dt;
-            if (flashTimer >= FLASH_MS) {
+            if (G.Particles) {
+                for (var fi = 0; fi < flashTiles.length; fi++) {
+                    var ft = flashTiles[fi];
+                    if (ft.burstFired) continue;
+                    if (flashTimer < ft.delay + CHARGE_MS) continue;
+                    var gb = grid[ft.r][ft.c];
+                    var bcol = (gb && PALETTE[gb.color]) ? PALETTE[gb.color].core : '#ffffff';
+                    var bp = cellXY(ft.r, ft.c);
+                    G.Particles.burst(bp.x + layout.cell / 2, bp.y + layout.cell / 2,
+                                      bcol, 8 + chain * 2);
+                    ft.burstFired = true;
+                }
+            }
+            if (flashTimer >= flashDuration) {
                 // actually remove the tiles
                 for (var i = 0; i < flashTiles.length; i++) {
                     var t = flashTiles[i];
@@ -859,11 +975,19 @@ G.Board = (function () {
 
         if (anims.length === 0 && flashTiles.length === 0 && !swapPair && pendingFalls === null) {
             if (animating) {
+                // Brief settle pause between cascades so each chain step
+                // reads as its own beat.
+                if (chain > 0 && settleTimer < SETTLE_MS) {
+                    settleTimer += dt;
+                    return;
+                }
                 // post-settle check
                 var m = findMatches(grid);
                 if (m.length > 0) {
+                    settleTimer = 0;
                     resolveMatchGroups(m);
                 } else {
+                    settleTimer = 0;
                     animating = false;
                     chain = 0;
                     // end-of-move checks
@@ -963,21 +1087,57 @@ G.Board = (function () {
             var key = cellsToClear[u].r + ',' + cellsToClear[u].c;
             if (!seen[key]) { seen[key] = true; uniq.push(cellsToClear[u]); }
         }
+
+        // Stagger shatter by distance from match centroid so big groups
+        // ripple outward instead of all popping at once.
+        var midR = 0, midC = 0;
+        for (var sa = 0; sa < uniq.length; sa++) { midR += uniq[sa].r; midC += uniq[sa].c; }
+        if (uniq.length > 0) { midR /= uniq.length; midC /= uniq.length; }
+        for (var sb = 0; sb < uniq.length; sb++) {
+            var dr2 = uniq[sb].r - midR, dc2 = uniq[sb].c - midC;
+            uniq[sb]._dist = Math.sqrt(dr2 * dr2 + dc2 * dc2);
+        }
+        uniq.sort(function (a, b) { return a._dist - b._dist; });
+        for (var sc = 0; sc < uniq.length; sc++) {
+            uniq[sc].delay = sc * SHATTER_STAGGER_MS;
+            uniq[sc].burstFired = false;
+        }
+
         clearTiles(uniq, groups[0].color);
 
-        // Particles
+        // Score popup at each match group's centroid (tinted with gem color).
+        // Chain banner for x2+.
         if (G.Particles) {
-            for (var p = 0; p < uniq.length; p++) {
-                var g4 = grid[uniq[p].r][uniq[p].c];
-                var col = (g4 && PALETTE[g4.color]) ? PALETTE[g4.color].core : '#ffffff';
-                var pp = cellXY(uniq[p].r, uniq[p].c);
-                G.Particles.burst(pp.x + layout.cell / 2, pp.y + layout.cell / 2, col, 6 + chain);
+            for (var gi = 0; gi < groups.length; gi++) {
+                var grpL = groups[gi];
+                var mr = 0, mc = 0;
+                for (var ci = 0; ci < grpL.cells.length; ci++) {
+                    mr += grpL.cells[ci][0]; mc += grpL.cells[ci][1];
+                }
+                mr /= grpL.cells.length; mc /= grpL.cells.length;
+                var lx = layout.ox + (mc + 0.5) * layout.cell;
+                var ly = layout.oy + (mr + 0.5) * layout.cell;
+                var labelColor = (PALETTE[grpL.color] && PALETTE[grpL.color].core) || '#ffe9b0';
+                var groupScore = baseScore(grpL.size) * Math.max(1, chain);
+                G.Particles.popLabel(lx, ly - 6, '+' + groupScore, labelColor, false);
+            }
+            if (chain >= 2) {
+                var bx = layout.ox + layout.boardW / 2;
+                var by = layout.oy + layout.boardH / 2;
+                G.Particles.popLabel(bx, by, 'CHAIN x' + chain, '#ffe070', true);
             }
         }
 
+        // Mild screen shake escalating with chain (gems should feel weighty).
+        shakeAmp = Math.min(5, 1.2 + chain * 0.8);
+        shakeT = 200;
+
+        flashDuration = (uniq.length > 0
+            ? uniq[uniq.length - 1].delay + SHATTER_MS + 30
+            : SHATTER_MS + 30);
+        settleTimer = 0;
+
         pendingFalls = { collapse: true, upgrade: upgrade };
-        flashTiles = uniq.slice();
-        flashTimer = 0;
     }
 
     function clearTiles(tiles, primaryColor) {
