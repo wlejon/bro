@@ -1056,6 +1056,12 @@ std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
     std::vector<uint8_t> pixels(w * h * 4, 0);
     if (!surface_) return pixels;
 
+    // Re-sync Ganesh against the current GL state before readback. Outside
+    // code (engine compositing, screenshot path) may have changed the bound
+    // FBO since Skia last drew; without this, readPixels samples stale state
+    // and silently returns the cleared buffer.
+    if (grContext_) grContext_->resetContext();
+
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     surface_->readPixels(info, pixels.data(), w * 4, x, y);
     return pixels;
@@ -1100,6 +1106,12 @@ void CanvasScene::flushCommands() {
 
     auto* c = skCanvas();
     if (!c) { commands_.clear(); return; }
+
+    // Re-sync Skia's GL state cache: external code (engine compositing,
+    // screenshot paths) may have changed FBO/program bindings since the
+    // last Ganesh draw. Without this, Skia draws against stale state and
+    // commands silently miss the canvas FBO.
+    if (grContext_) grContext_->resetContext();
 
     for (auto& cmd : commands_) {
         switch (cmd.type) {
@@ -1162,6 +1174,13 @@ void CanvasScene::flushCommands() {
         }
     }
     commands_.clear();
+    // Submit GPU work so subsequent surface->readPixels (and the next
+    // rasterize) see the result. Skia internally flushes on readPixels,
+    // but explicit submit is needed so other GL code (engine compositing)
+    // sees the canvas FBO contents.
+    if (grContext_) {
+        grContext_->flushAndSubmit();
+    }
     dirty_ = true;
 }
 
@@ -1192,22 +1211,16 @@ void CanvasScene::rasterize(render::GLContext* gl) {
     int canvasH = static_cast<int>(layoutH);
     ensureSurface(canvasW, canvasH);
 
-    // Replay deferred canvas commands onto the Skia surface
-    if (grContext_) {
-        // Tell Ganesh to re-sync with actual GL state before drawing,
-        // since the engine's raw GL operations may have changed it.
-        grContext_->resetContext();
-    }
-
+    // Replay deferred canvas commands onto the Skia surface. flushCommands
+    // handles the Ganesh resetContext + flushAndSubmit so the FBO contains
+    // the drawn result; we restore the default framebuffer here for the
+    // compositing code that runs after.
     flushCommands();
 
     if (!dirty_) return;
     dirty_ = false;
 
     if (grContext_) {
-        // GPU path: Skia already drew to the FBO texture via Ganesh.
-        // Flush GPU commands and restore default framebuffer.
-        grContext_->flushAndSubmit();
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return;
     }

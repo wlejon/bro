@@ -119,11 +119,16 @@ static JSValue js_screenshotCanvas(JSContext* ctx, JSValueConst, int argc, JSVal
     auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
     if (!cs) { cleanup(); return JS_ThrowTypeError(ctx, "screenshotCanvas: element has no 2D canvas: %s", selector); }
 
-    // Read straight from the canvas's Skia surface as un-premultiplied RGBA so
-    // alpha survives intact. The canvas is sized in CSS pixels matching its
-    // backing store, so we read the full surface.
-    int w = static_cast<int>(el->layoutBox().contentRect.width);
-    int h = static_cast<int>(el->layoutBox().contentRect.height);
+    // Lay out the document so the canvas element's box matches the size the
+    // app just set via canvas.width / canvas.style.width. Then drain queued
+    // commands so the surface materializes at that size. screenshotCanvas is
+    // typically called right after JS draws with no engine tick in between.
+    engine->flush();
+    cs->flush();
+    auto* surf = cs->surface();
+    if (!surf) { cleanup(); return JS_ThrowInternalError(ctx, "screenshotCanvas: no surface"); }
+    int w = surf->width();
+    int h = surf->height();
     if (w <= 0 || h <= 0) { cleanup(); return JS_ThrowInternalError(ctx, "screenshotCanvas: zero-size canvas"); }
     auto pixels = cs->getImageData(0, 0, w, h);
     if (pixels.empty()) { cleanup(); return JS_ThrowInternalError(ctx, "screenshotCanvas: read failed"); }
