@@ -256,35 +256,20 @@
 
     // ---- defineScene support --------------------------------------------
     //
-    // Hidden, off-screen canvas used to render 3D scenes for sheet capture.
-    // We position it absolutely off-screen rather than display:none because
-    // bro skips render for elements with no layout box, and we *want* the
-    // scene to actually render so its tonemap FBO can be readback'd. The
-    // canvas size matches the asset's frameWidth/frameHeight so we capture
-    // exactly the cell-sized region per frame — no scaling, no cropping.
+    // Hidden canvas hosting a SceneGraph for sheet capture. display:none keeps
+    // the engine's per-tick scene compositor from drawing it on screen; sizing
+    // and rendering go through scene.captureFrame(w, h), which drives a
+    // synchronous render and reads back the tonemap FBO. That works in both
+    // windowed and headless modes — no flush() dependency.
     let captureCanvas = null;
     let captureScene  = null;
 
-    function ensureCaptureCanvas(w, h) {
+    function ensureCaptureCanvas() {
         if (!captureCanvas) {
             captureCanvas = document.createElement('canvas');
             captureCanvas.id = '__artstation_capture';
-            captureCanvas.style.position = 'absolute';
-            captureCanvas.style.left = '-99999px';
-            captureCanvas.style.top  = '-99999px';
+            captureCanvas.style.display = 'none';
             document.body.appendChild(captureCanvas);
-        }
-        if (captureCanvas.width !== w || captureCanvas.height !== h) {
-            captureCanvas.width = w;
-            captureCanvas.height = h;
-            captureCanvas.style.width  = w + 'px';
-            captureCanvas.style.height = h + 'px';
-            // Recreating the context is required when the size changes
-            // because the underlying scene FBO is sized lazily — and for a
-            // brand-new asset there's no existing context anyway.
-            captureScene = null;
-        }
-        if (!captureScene) {
             captureScene = captureCanvas.getContext('scene');
         }
         return captureScene;
@@ -317,18 +302,10 @@
         const fw = spec.frameWidth, fh = spec.frameHeight;
         const sheetCtx = resetCanvas(sheetCanvas, layout.w, layout.h, spec.bg, spec.pixel);
 
-        const scene = ensureCaptureCanvas(fw, fh);
+        const scene = ensureCaptureCanvas();
         clearScene(scene);
 
-        // Two flushes: the first publishes the new canvas size into the
-        // layout/render pipeline so the scene's mesh FBO gets sized to
-        // (fw, fh) before build() runs. The second drains any GL state set
-        // up by build() (texture creation, buffer uploads) so the first
-        // frame's render is on a fully-initialized scene.
-        if (typeof flush === 'function') flush();
-
         const refs = spec.build(scene) || {};
-        if (typeof flush === 'function') flush();
 
         const dt = 1 / spec.fps;
         for (let i = 0; i < layout.n; i++) {
@@ -339,15 +316,11 @@
             try { spec.frame(scene, t, dt, refs, i); }
             catch (e) { console.log(`scene frame ${i} threw:`, e.message); }
 
-            // Drive a real engine tick so the scene re-renders with the new
-            // transforms; the tonemap FBO is then ready for readback.
-            if (typeof flush === 'function') flush();
-
-            const img = scene.toImageData ? scene.toImageData() : null;
+            const img = scene.captureFrame(fw, fh);
             if (img && img.width === fw && img.height === fh) {
                 sheetCtx.putImageData(img, cx, cy);
             } else {
-                console.log(`scene frame ${i}: toImageData unavailable or size mismatch`);
+                console.log(`scene frame ${i}: captureFrame unavailable or size mismatch`);
             }
         }
     }
@@ -540,11 +513,7 @@
             entry.kind === 'animated') {
             inspect();
         } else if (entry.kind === 'scene') {
-            // Inspect for scene kind only draws the cell grid: replaying the
-            // 3D render into the inspect canvas would require a second
-            // capture pass per frame, and the sheet canvas already shows the
-            // pixels at 1:1 — anything more is debugger UX, not authoring UX.
-            inspectSceneGrid(name);
+            inspectScene(name);
         } else {
             // No inspect view for this kind — wipe any stale pixels left over
             // from the previously-selected asset so the panel doesn't lie.
@@ -552,17 +521,40 @@
         }
     }
 
-    function inspectSceneGrid(name) {
+    function inspectScene(name) {
         const entry = REGISTRY[name];
         const spec = entry.spec;
         const lay = entry.layout || sceneSize(spec);
-        const sw = sheetCanvas.width, sh = sheetCanvas.height;
+        const fw = spec.frameWidth, fh = spec.frameHeight;
+        const sw = lay.w, sh = lay.h;
         const scale = Math.max(1, Math.floor(384 / Math.max(sw, sh)));
         const w = sw * scale, h = sh * scale;
         const ctx = resetCanvas(inspectCanvas, w, h, '#222');
-        ctx.fillStyle = 'rgba(0,255,255,0.45)';
-        const cellW = spec.frameWidth * scale;
-        const cellH = spec.frameHeight * scale;
+
+        // Re-capture each frame at scaled cell size and putImageData onto
+        // the inspect canvas. Mirrors the sheet inspect path but goes
+        // through scene.captureFrame() since 3D content can't be replayed
+        // by drawing into a 2D ctx.
+        const scene = ensureCaptureCanvas();
+        clearScene(scene);
+        let refs = {};
+        try { refs = spec.build(scene) || {}; }
+        catch (e) { console.log('scene build threw:', e.message); }
+        const dt = 1 / spec.fps;
+        for (let i = 0; i < lay.n; i++) {
+            const cx = (i % lay.cols) * fw * scale;
+            const cy = Math.floor(i / lay.cols) * fh * scale;
+            try { spec.frame(scene, i * dt, dt, refs, i); }
+            catch (e) { console.log(`scene frame ${i} threw:`, e.message); }
+            const img = scene.captureFrame(fw * scale, fh * scale);
+            if (img) ctx.putImageData(img, cx, cy);
+        }
+
+        // Cell grid overlay so frame boundaries are still visible after
+        // the captures land — useful for spotting accidentally-clipped
+        // geometry that runs off the cell edge.
+        ctx.fillStyle = 'rgba(0,255,255,0.35)';
+        const cellW = fw * scale, cellH = fh * scale;
         for (let x = cellW; x < w; x += cellW) ctx.fillRect(x, 0, 1, h);
         for (let y = cellH; y < h; y += cellH) ctx.fillRect(0, y, w, 1);
     }
@@ -717,19 +709,15 @@
             const dt = 1 / spec.fps;
             const total = Math.max(1, Math.round(spec.fps * spec.duration));
             const ctx = resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
-            const scene = ensureCaptureCanvas(fw, fh);
+            const scene = ensureCaptureCanvas();
             clearScene(scene);
-            if (typeof flush === 'function') flush();
             const refs = spec.build(scene) || {};
-            if (typeof flush === 'function') flush();
             for (let i = 0; i < total; i++) {
                 resetCanvas(sheetCanvas, fw, fh, spec.bg, spec.pixel);
                 try { spec.frame(scene, i * dt, dt, refs, i); }
                 catch (e) { console.log(`scene frame ${i} threw:`, e.message); }
-                if (typeof flush === 'function') flush();
-                const img = scene.toImageData ? scene.toImageData() : null;
+                const img = scene.captureFrame(fw, fh);
                 if (img) ctx.putImageData(img, 0, 0);
-                if (typeof flush === 'function') flush();
                 addFrame(ctx, sheetCanvas, i);
             }
             frames = total;
@@ -893,7 +881,11 @@
                 fps: stats.fps, width: stats.fw, height: stats.fh,
             };
         } finally {
+            // Re-render rebuilds the capture SceneGraph (clearScene + build),
+            // which invalidates the refs the live preview captured. Restart
+            // it so the stage keeps animating after save returns.
             try { render(name); } catch (e) {}
+            try { startLivePreview(name); } catch (e) {}
         }
 
         status.textContent = `saved ${path} (${result.frames} frames)`;
@@ -946,7 +938,11 @@
                 fps: stats.fps, width: stats.fw, height: stats.fh,
             };
         } finally {
+            // Re-render rebuilds the capture SceneGraph (clearScene + build),
+            // which invalidates the refs the live preview captured. Restart
+            // it so the stage keeps animating after save returns.
             try { render(name); } catch (e) {}
+            try { startLivePreview(name); } catch (e) {}
         }
 
         status.textContent = `saved ${path} (${result.frames} frames)`;
@@ -1261,6 +1257,27 @@
         });
     }
 
+    // Live-preview render for scene assets. Mutates the shared capture
+    // SceneGraph for frame `idx`, captures it at stage-scaled resolution
+    // (so a 64×64 source doesn't look postage-stamp-sized), and blits the
+    // ImageData onto the stage centered. Captures at scaled-up size rather
+    // than capturing native + scaling-on-blit because cross-canvas drawImage
+    // through the GPU compositor is unreliable here (see comment above
+    // drawSheetFrameLive); putImageData is a clean pixel write.
+    function drawSceneFrameLive(spec, scene, refs, idx) {
+        const fw = spec.frameWidth, fh = spec.frameHeight;
+        const scale = fitScale(fw, fh);
+        const dt = 1 / spec.fps;
+        try { spec.frame(scene, idx * dt, dt, refs, idx); }
+        catch (e) { console.log(`scene frame ${idx} threw:`, e.message); }
+        const img = scene.captureFrame(fw * scale, fh * scale);
+        const ctx = resetStage();
+        if (!img) return;
+        const dx = Math.floor((stageCanvas.width  - img.width)  / 2);
+        const dy = Math.floor((stageCanvas.height - img.height) / 2);
+        ctx.putImageData(img, dx, dy);
+    }
+
     function drawTilesetLive(spec) {
         const ctx = resetStage();
         const ts = spec.tileSize;
@@ -1346,6 +1363,43 @@
                     : Math.min(idx, len - 1);
                 const frameIdx = liveAnimSpec.frames[slot];
                 drawSheetFrameLive(spec, frameIdx);
+                updateFrameCounter(slot, len);
+                livePreviewRAF = requestAnimationFrame(loop);
+            };
+            livePreviewRAF = requestAnimationFrame(loop);
+            return;
+        }
+
+        if (entry.kind === 'scene') {
+            // Scene live preview: same animation-driven indexing as 'sheet',
+            // but each frame re-runs spec.frame() on the capture SceneGraph
+            // and blits its tonemap readback onto the stage.
+            const meta = buildManifest(name, entry);
+            const anims = meta.animations || {};
+            liveAnimSpec  = (playback.anim && anims[playback.anim])
+                ? anims[playback.anim]
+                : defaultAnimation(meta);
+            const liveScene = ensureCaptureCanvas();
+            clearScene(liveScene);
+            let liveRefs = {};
+            try { liveRefs = spec.build(liveScene) || {}; }
+            catch (e) { console.log('scene build threw:', e.message); }
+            liveStartTime  = performance.now();
+            liveAccumS     = 0;
+            liveLastTickMs = liveStartTime;
+            const loop = (t) => {
+                if (!liveAnimSpec || CURRENT !== name) return;
+                let realDt = (t - liveLastTickMs) / 1000;
+                if (!isFinite(realDt) || realDt < 0) realDt = 0;
+                liveLastTickMs = t;
+                if (!playback.paused) liveAccumS += realDt * playback.speed;
+                const idx = Math.floor(liveAccumS * liveAnimSpec.fps);
+                const len = liveAnimSpec.frames.length;
+                const slot = liveAnimSpec.loop
+                    ? (idx % len)
+                    : Math.min(idx, len - 1);
+                const frameIdx = liveAnimSpec.frames[slot];
+                drawSceneFrameLive(spec, liveScene, liveRefs, frameIdx);
                 updateFrameCounter(slot, len);
                 livePreviewRAF = requestAnimationFrame(loop);
             };
@@ -1440,7 +1494,7 @@
             return;
         }
         let names = [];
-        if (entry.kind === 'sheet') {
+        if (entry.kind === 'sheet' || entry.kind === 'scene') {
             names = Object.keys(entry.spec.animations || {});
             if (names.length === 0) names = ['(all frames)'];
         } else if (entry.kind === 'animated') {
@@ -1542,7 +1596,12 @@
             if (isWindowed()) {
                 requestAnimationFrame(() => {
                     if (CURRENT === name) {
+                        // Same invalidation as the save path: render() rebuilds
+                        // the capture SceneGraph for scene assets, which kills
+                        // the refs the live-preview rAF loop was holding.
+                        // Restart the loop so the stage keeps animating.
                         try { render(name); } catch (e) {}
+                        try { startLivePreview(name); } catch (e) {}
                     }
                 });
             }

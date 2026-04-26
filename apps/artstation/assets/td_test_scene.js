@@ -1,7 +1,8 @@
-// First defineScene asset: a rotating colored cube on a small ground plane,
-// lit by a sun-like directional light + soft ambient. Pure smoke test for
-// the 3D capture pipeline — proves bromesh primitives + PBR lighting +
-// scene.toImageData round-trip end-to-end into a sprite-sheet PNG.
+// First defineScene asset: a rotating colored cube on a transparent
+// background, lit by a sun-like directional light + soft ambient. Doubles
+// as the scene-capture transparency smoke test — pixels outside the cube
+// silhouette must read RGBA(0,0,0,0) end-to-end (mesh FBO clear → tonemap
+// pass → readback → putImageData onto the sheet's transparent canvas).
 //
 // Build: bro-headless apps/artstation -e "load('td_test_scene'); render(); save();"
 // Output: apps/artstation/output/td_test_scene.png + .json
@@ -14,16 +15,6 @@ defineScene('td_test_scene', {
     pixel: false,                      // 3D output — let smoothing through
 
     build(scene) {
-        // Ground: large plane below the origin, slightly tinted.
-        const ground = scene.createMesh({
-            mesh: 'plane',
-            halfW: 4, halfD: 4,
-            y: -0.5,
-            color: '#3a3a44',
-            metallic: 0.0,
-            roughness: 0.9,
-        });
-
         // The hero. A small cube the camera will orbit visually as the
         // cube spins (cube spins in frame(); camera is fixed).
         const cube = scene.createMesh({
@@ -55,7 +46,7 @@ defineScene('td_test_scene', {
             up:       [0, 1, 0],
         });
 
-        return { cube, ground, sun };
+        return { cube, sun };
     },
 
     frame(scene, t, dt, refs, i) {
