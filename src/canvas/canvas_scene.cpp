@@ -717,14 +717,22 @@ void CanvasScene::applyFont() {
 
 SkPaint CanvasScene::makeFillPaint() const {
     SkPaint p = state_.fillPaint;
-    p.setAlphaf(p.getAlphaf() * state_.globalAlphaVal);
+    // Skia multiplies the paint's color alpha into the shader output. The
+    // Canvas 2D spec says a gradient/pattern carries its own colors and only
+    // globalAlpha modulates them — but setFillShader leaves whatever alpha
+    // the previous `fillStyle = "rgba(...)"` assignment baked into the
+    // paint color, which would silently dim the first gradient draw after
+    // any low-alpha solid fill.
+    if (p.getShader()) p.setAlphaf(state_.globalAlphaVal);
+    else               p.setAlphaf(p.getAlphaf() * state_.globalAlphaVal);
     p.setBlendMode(blendModeFromOp(state_.compositeOp));
     return p;
 }
 
 SkPaint CanvasScene::makeStrokePaint() const {
     SkPaint p = state_.strokePaint;
-    p.setAlphaf(p.getAlphaf() * state_.globalAlphaVal);
+    if (p.getShader()) p.setAlphaf(state_.globalAlphaVal);
+    else               p.setAlphaf(p.getAlphaf() * state_.globalAlphaVal);
     p.setBlendMode(blendModeFromOp(state_.compositeOp));
     if (!state_.lineDash.empty()) {
         // HTML5 spec: odd-length segment arrays are doubled.
