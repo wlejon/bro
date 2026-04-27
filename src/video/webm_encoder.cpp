@@ -6,11 +6,14 @@
 #include <vpx/vpx_encoder.h>
 #include <vpx/vpx_image.h>
 
+#include <opus/opus.h>
+
 #include <mkvmuxer/mkvmuxer.h>
 #include <mkvmuxer/mkvwriter.h>
 
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 namespace bro::video {
 
@@ -28,6 +31,28 @@ unsigned int autoBitrateKbps(int width, int height, int fpsNum, int fpsDen) {
     if (kbps < 200) kbps = 200;
     if (kbps > 8000) kbps = 8000;
     return kbps;
+}
+
+// Opus accepts only these input rates.
+bool isOpusSampleRate(int sr) {
+    return sr == 8000 || sr == 12000 || sr == 16000 || sr == 24000 || sr == 48000;
+}
+
+// Build a minimal RFC 7845 OpusHead identification header for codec_private.
+// 19 bytes, channel mapping family 0 (mono / stereo).
+std::vector<uint8_t> makeOpusHead(int channels, int inputSampleRate, int preSkip48k) {
+    std::vector<uint8_t> h(19, 0);
+    std::memcpy(h.data(), "OpusHead", 8);
+    h[8]  = 1;                                              // version
+    h[9]  = static_cast<uint8_t>(channels);
+    h[10] = static_cast<uint8_t>(preSkip48k & 0xff);        // pre-skip LE
+    h[11] = static_cast<uint8_t>((preSkip48k >> 8) & 0xff);
+    h[12] = static_cast<uint8_t>(inputSampleRate & 0xff);   // input rate LE
+    h[13] = static_cast<uint8_t>((inputSampleRate >> 8) & 0xff);
+    h[14] = static_cast<uint8_t>((inputSampleRate >> 16) & 0xff);
+    h[15] = static_cast<uint8_t>((inputSampleRate >> 24) & 0xff);
+    // h[16..17]: output gain = 0; h[18]: channel mapping family = 0
+    return h;
 }
 
 int qualityToDeadline(WebmEncoder::Quality q) {
@@ -153,6 +178,70 @@ public:
         // default_duration is in nanoseconds.
         track->set_default_duration(static_cast<uint64_t>(1.0e9 / frameRate));
 
+        // ---- Optional Opus audio track ----
+        if (cfg_.audioSampleRate > 0) {
+            if (!isOpusSampleRate(cfg_.audioSampleRate)) {
+                setErr("audioSampleRate must be 8000, 12000, 16000, 24000, or 48000");
+                if (err) *err = lastErr_;
+                return false;
+            }
+            if (cfg_.audioChannels < 1 || cfg_.audioChannels > 2) {
+                setErr("audioChannels must be 1 or 2");
+                if (err) *err = lastErr_;
+                return false;
+            }
+            int oerr = 0;
+            opusEnc_ = opus_encoder_create(cfg_.audioSampleRate,
+                                           cfg_.audioChannels,
+                                           OPUS_APPLICATION_AUDIO, &oerr);
+            if (!opusEnc_ || oerr != OPUS_OK) {
+                setErr(std::string("opus_encoder_create failed: ") +
+                       opus_strerror(oerr));
+                if (err) *err = lastErr_;
+                return false;
+            }
+            opus_encoder_ctl(opusEnc_, OPUS_SET_BITRATE(
+                cfg_.audioBitrateKbps * 1000));
+            opus_encoder_ctl(opusEnc_, OPUS_SET_VBR(1));
+
+            // Pre-skip = encoder lookahead, expressed at 48 kHz.
+            opus_int32 lookahead = 0;
+            opus_encoder_ctl(opusEnc_, OPUS_GET_LOOKAHEAD(&lookahead));
+            const int preSkip48k = static_cast<int>(
+                static_cast<int64_t>(lookahead) * 48000 / cfg_.audioSampleRate);
+
+            audioTrackId_ = segment_.AddAudioTrack(cfg_.audioSampleRate,
+                                                   cfg_.audioChannels, 0);
+            if (audioTrackId_ == 0) {
+                setErr("AddAudioTrack failed");
+                if (err) *err = lastErr_;
+                return false;
+            }
+            auto* atrack = static_cast<mkvmuxer::AudioTrack*>(
+                segment_.GetTrackByNumber(audioTrackId_));
+            if (!atrack) {
+                setErr("GetTrackByNumber(audio) returned null");
+                if (err) *err = lastErr_;
+                return false;
+            }
+            atrack->set_codec_id("A_OPUS");
+            auto opusHead = makeOpusHead(cfg_.audioChannels,
+                                         cfg_.audioSampleRate, preSkip48k);
+            atrack->SetCodecPrivate(opusHead.data(),
+                                    static_cast<int>(opusHead.size()));
+            // codec_delay (pre-skip in nanoseconds at 48 kHz) and
+            // seek_pre_roll (Opus standard: 80 ms) help decoders prime.
+            atrack->set_codec_delay(static_cast<uint64_t>(
+                static_cast<int64_t>(preSkip48k) * 1'000'000'000LL / 48000));
+            atrack->set_seek_pre_roll(80'000'000ULL);
+
+            // Frame size: 20 ms Opus packets — best size/latency tradeoff.
+            audioFrameSize_ = cfg_.audioSampleRate / 50;
+            audioPcmBuf_.reserve(static_cast<size_t>(audioFrameSize_) *
+                                 cfg_.audioChannels);
+            audioOutBuf_.resize(4000);  // libopus max recommended packet size
+        }
+
         return true;
     }
 
@@ -188,6 +277,36 @@ public:
         return drainPackets();
     }
 
+    bool addAudioFramesPCM(const float* interleaved, int frameCount) override {
+        if (!opusEnc_) return true;  // no audio track configured — silent no-op
+        if (finished_) {
+            setErr("addAudioFramesPCM after finish");
+            return false;
+        }
+        if (!interleaved || frameCount <= 0) return true;
+
+        const int ch = cfg_.audioChannels;
+        const size_t total = static_cast<size_t>(frameCount) * ch;
+        size_t consumed = 0;
+        while (consumed < total) {
+            const size_t want = static_cast<size_t>(audioFrameSize_) * ch
+                              - audioPcmBuf_.size();
+            const size_t take = std::min(want, total - consumed);
+            audioPcmBuf_.insert(audioPcmBuf_.end(),
+                                interleaved + consumed,
+                                interleaved + consumed + take);
+            consumed += take;
+            if (audioPcmBuf_.size() ==
+                static_cast<size_t>(audioFrameSize_) * ch) {
+                if (!encodeOpusFrame(audioPcmBuf_.data(), audioFrameSize_)) {
+                    return false;
+                }
+                audioPcmBuf_.clear();
+            }
+        }
+        return true;
+    }
+
     bool finish() override {
         if (finished_) return true;
         finished_ = true;
@@ -209,7 +328,16 @@ public:
             }
         }
 
+        // Drain any partial Opus frame, zero-padded.
+        if (opusEnc_ && !audioPcmBuf_.empty()) {
+            const int ch = cfg_.audioChannels;
+            audioPcmBuf_.resize(static_cast<size_t>(audioFrameSize_) * ch, 0.0f);
+            if (!encodeOpusFrame(audioPcmBuf_.data(), audioFrameSize_)) ok = false;
+            audioPcmBuf_.clear();
+        }
+
         if (writerOpen_) {
+            if (!flushPending()) ok = false;
             if (!segment_.Finalize()) {
                 setErr("Segment::Finalize failed");
                 ok = false;
@@ -225,6 +353,10 @@ public:
             vpx_codec_destroy(&codec_);
             codecInited_ = false;
         }
+        if (opusEnc_) {
+            opus_encoder_destroy(opusEnc_);
+            opusEnc_ = nullptr;
+        }
         return ok;
     }
 
@@ -237,6 +369,63 @@ private:
     // Pull all available packets from the encoder and mux them. Returns true
     // if at least one packet was consumed (used by the flush loop to know
     // whether to feed another null image).
+    bool encodeOpusFrame(const float* pcm, int frameSize) {
+        const int n = opus_encode_float(opusEnc_, pcm, frameSize,
+                                        audioOutBuf_.data(),
+                                        static_cast<opus_int32>(audioOutBuf_.size()));
+        if (n < 0) {
+            setErr(std::string("opus_encode_float failed: ") + opus_strerror(n));
+            return false;
+        }
+        if (n == 0) {
+            audioFramesEncoded_ += frameSize;
+            return true;
+        }
+        const uint64_t pts_ns =
+            static_cast<uint64_t>(audioFramesEncoded_) * 1'000'000'000ULL /
+            static_cast<uint64_t>(cfg_.audioSampleRate);
+        enqueuePacket(pts_ns, audioTrackId_, /*isKey=*/true,
+                      audioOutBuf_.data(), static_cast<size_t>(n));
+        audioFramesEncoded_ += frameSize;
+        return true;
+    }
+
+    // libwebm requires globally monotonic timestamps, but interleaved video
+    // and audio production naturally goes out of order (video PTS jumps by
+    // 1/fps while audio PTS jumps by 20 ms). Buffer all packets and sort
+    // before muxing during finish().
+    struct PendingPacket {
+        uint64_t pts_ns;
+        uint64_t trackId;
+        bool isKey;
+        std::vector<uint8_t> data;
+    };
+    void enqueuePacket(uint64_t pts_ns, uint64_t trackId, bool isKey,
+                       const uint8_t* buf, size_t len) {
+        PendingPacket p;
+        p.pts_ns = pts_ns;
+        p.trackId = trackId;
+        p.isKey = isKey;
+        p.data.assign(buf, buf + len);
+        pending_.push_back(std::move(p));
+    }
+    bool flushPending() {
+        std::stable_sort(pending_.begin(), pending_.end(),
+            [](const PendingPacket& a, const PendingPacket& b) {
+                return a.pts_ns < b.pts_ns;
+            });
+        for (auto& p : pending_) {
+            if (!segment_.AddFrame(p.data.data(), p.data.size(),
+                                   p.trackId, p.pts_ns, p.isKey)) {
+                setErr("Segment::AddFrame failed during flush");
+                return false;
+            }
+            if (p.trackId == videoTrackId_) ++framesWritten_;
+        }
+        pending_.clear();
+        return true;
+    }
+
     bool drainPackets() {
         bool gotAny = false;
         const void* iter = nullptr;
@@ -249,13 +438,9 @@ private:
                 (static_cast<uint64_t>(pkt->data.frame.pts) *
                  static_cast<uint64_t>(cfg_.fpsDen) * 1'000'000'000ULL) /
                 static_cast<uint64_t>(cfg_.fpsNum);
-            if (!segment_.AddFrame(static_cast<const uint8_t*>(pkt->data.frame.buf),
-                                   pkt->data.frame.sz, videoTrackId_,
-                                   pts_ns, isKey)) {
-                setErr("Segment::AddFrame failed");
-                return gotAny;
-            }
-            ++framesWritten_;
+            enqueuePacket(pts_ns, videoTrackId_, isKey,
+                          static_cast<const uint8_t*>(pkt->data.frame.buf),
+                          pkt->data.frame.sz);
             gotAny = true;
         }
         return gotAny;
@@ -272,6 +457,15 @@ private:
     mkvmuxer::Segment segment_;
     bool writerOpen_ = false;
     uint64_t videoTrackId_ = 0;
+    uint64_t audioTrackId_ = 0;
+
+    OpusEncoder* opusEnc_ = nullptr;
+    int audioFrameSize_ = 0;            // samples per channel per Opus packet
+    int64_t audioFramesEncoded_ = 0;    // running PTS in input samples
+    std::vector<float> audioPcmBuf_;    // interleaved staging for partial fills
+    std::vector<uint8_t> audioOutBuf_;
+
+    std::vector<PendingPacket> pending_;
 
     uint64_t frameIndex_ = 0;
     int framesWritten_ = 0;

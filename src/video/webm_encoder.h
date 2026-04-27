@@ -36,6 +36,11 @@ public:
         Quality quality = Quality::Good;
         // 0 = libvpx default (typically 1).
         int threads = 0;
+
+        // Audio. 0 = no audio track. Opus only accepts 8/12/16/24/48 kHz.
+        int audioSampleRate = 0;
+        int audioChannels   = 2;
+        int audioBitrateKbps = 96;
     };
 
     // Open a WebM file for writing. Returns null on init failure (codec
@@ -51,6 +56,12 @@ public:
     // Width/height of `rgba` must match the configured size. Returns false
     // on encode error; call lastError() for details.
     virtual bool addFrameRGBA(const uint8_t* rgba, int srcStride) = 0;
+
+    // Push interleaved float PCM. `frameCount` is samples per channel.
+    // Channel count must match Config::audioChannels. Samples are buffered
+    // and encoded in 20 ms Opus packets; trailing partial chunks are
+    // zero-padded inside finish(). No-op if no audio track was configured.
+    virtual bool addAudioFramesPCM(const float* interleaved, int frameCount) = 0;
 
     // Flush remaining frames out of the encoder, write the WebM trailer,
     // close the file. Safe to call multiple times; subsequent calls no-op.

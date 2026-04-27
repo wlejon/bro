@@ -29,6 +29,7 @@ struct EncoderData {
     std::unique_ptr<video::WebmEncoder> enc;
     int width = 0;
     int height = 0;
+    int audioChannels = 0;  // 0 = no audio track
     std::string lastErr;
 };
 
@@ -77,6 +78,9 @@ ED* js_videoEncoderCtor(JSContext* ctx, int argc, JSValueConst* argv) {
     cfg.keyframeIntervalSec = getInt("keyframeIntervalSec", 2);
     cfg.threads = getInt("threads", 0);
     cfg.quality = parseQuality(getStr("quality"));
+    cfg.audioSampleRate  = getInt("audioSampleRate", 0);
+    cfg.audioChannels    = getInt("audioChannels", 2);
+    cfg.audioBitrateKbps = getInt("audioBitrateKbps", 96);
 
     std::string err;
     auto enc = video::WebmEncoder::create(path, cfg, &err);
@@ -89,6 +93,7 @@ ED* js_videoEncoderCtor(JSContext* ctx, int argc, JSValueConst* argv) {
     data->enc = std::move(enc);
     data->width = cfg.width;
     data->height = cfg.height;
+    data->audioChannels = cfg.audioSampleRate > 0 ? cfg.audioChannels : 0;
     return data;
 }
 
@@ -161,6 +166,44 @@ JSValue js_videoEncoder_addCanvasFrame(JSContext* ctx, JSValueConst this_val,
     if (!d->enc->addFrameRGBA(pixels.data(), w * 4)) {
         d->lastErr = d->enc->lastError();
         return JS_ThrowInternalError(ctx, "addCanvasFrame: encode failed: %s",
+                                     d->lastErr.c_str());
+    }
+    return JS_TRUE;
+}
+
+// JS: enc.addAudioFramesPCM(Float32Array)
+//   Interleaved float PCM at the configured audioSampleRate / audioChannels.
+//   Length must be a multiple of channelCount; values outside [-1,1] clip.
+JSValue js_videoEncoder_addAudioFramesPCM(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<ED>(ctx, this_val);
+    if (!d || !d->enc) return JS_ThrowInternalError(ctx, "encoder closed");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "addAudioFramesPCM requires a Float32Array");
+
+    size_t byteLen = 0, byteOff = 0, bytesPerElem = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &byteLen, &bytesPerElem);
+    if (JS_IsException(ab)) return ab;
+    size_t bufSize = 0;
+    uint8_t* buf = JS_GetArrayBuffer(ctx, &bufSize, ab);
+    JS_FreeValue(ctx, ab);
+    if (!buf || bytesPerElem != 4) {
+        return JS_ThrowTypeError(ctx, "addAudioFramesPCM: expected Float32Array");
+    }
+    const float* pcm = reinterpret_cast<const float*>(buf + byteOff);
+    const int totalSamples = static_cast<int>(byteLen / 4);
+    if (d->audioChannels <= 0) {
+        return JS_ThrowInternalError(ctx,
+            "addAudioFramesPCM: encoder was not configured with audio");
+    }
+    if (totalSamples % d->audioChannels != 0) {
+        return JS_ThrowRangeError(ctx,
+            "addAudioFramesPCM: sample count (%d) not a multiple of channels (%d)",
+            totalSamples, d->audioChannels);
+    }
+    const int frameCount = totalSamples / d->audioChannels;
+    if (!d->enc->addAudioFramesPCM(pcm, frameCount)) {
+        d->lastErr = d->enc->lastError();
+        return JS_ThrowInternalError(ctx, "addAudioFramesPCM failed: %s",
                                      d->lastErr.c_str());
     }
     return JS_TRUE;
@@ -346,9 +389,10 @@ void VideoBindings::install(JSContext* ctx, const std::string& /*basePath*/) {
             if (d->enc) return d->enc->lastError();
             return d->lastErr;
         })
-        .method_raw("addFrameRGBA",    js_videoEncoder_addFrameRGBA, 1)
-        .method_raw("addCanvasFrame",  js_videoEncoder_addCanvasFrame, 1)
-        .method_raw("finish",          js_videoEncoder_finish, 0);
+        .method_raw("addFrameRGBA",       js_videoEncoder_addFrameRGBA, 1)
+        .method_raw("addCanvasFrame",     js_videoEncoder_addCanvasFrame, 1)
+        .method_raw("addAudioFramesPCM",  js_videoEncoder_addAudioFramesPCM, 1)
+        .method_raw("finish",             js_videoEncoder_finish, 0);
 
     qjsbind::Class<GD>(ctx, "GifEncoder")
         .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> GD* {

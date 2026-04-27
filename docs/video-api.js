@@ -2,9 +2,10 @@
 // bro Video / GIF Encoder API
 // =============================================================================
 //
-// VideoEncoder writes a single-track WebM file containing a VP9 video stream.
-// Frames are RGBA in, encoded with libvpx (software). Audio tracks aren't
-// supported yet — add when the calling-app work needs them.
+// VideoEncoder writes a WebM file with a VP9 video track and an optional
+// Opus audio track. Frames are RGBA in (libvpx software encode); audio is
+// caller-provided interleaved float PCM (libopus). The audio track is only
+// created when audioSampleRate is set in the constructor config.
 //
 // GifEncoder writes an animated GIF89a with a per-frame 256-color palette
 // (median-cut quantization). Suitable for sprite/animation export and for
@@ -43,6 +44,10 @@
 //                   Maps to libvpx VPX_DL_REALTIME / GOOD / BEST and
 //                   tunes cpu-used (7 / 1 / 0).
 //   threads       — encoder threads (default 1). Bump for >720p.
+//   audioSampleRate  — 8000 / 12000 / 16000 / 24000 / 48000. Set to enable
+//                      the Opus audio track; 0 (default) = no audio.
+//   audioChannels    — 1 (mono) or 2 (stereo). Default 2.
+//   audioBitrateKbps — Opus VBR target. Default 96.
 //
 // Throws on invalid config or file open failure. Constructor returns an
 // open encoder ready for frames.
@@ -94,6 +99,27 @@ for (let i = 0; i < 60; i++) {
     flush();                         // ensure the surface picks up new commands
     enc.addCanvasFrame(sheet);
 }
+
+
+// -----------------------------------------------------------------------------
+// enc.addAudioFramesPCM(float32Array)
+// -----------------------------------------------------------------------------
+//
+// Push interleaved float PCM at the configured sample rate / channel count.
+// Length must be a multiple of audioChannels. Samples are buffered and
+// encoded into 20 ms Opus packets; any trailing partial chunk is zero-padded
+// inside finish(). Throws if the encoder was not configured with audio.
+//
+// Mono example (1 second of 440 Hz sine at 48 kHz):
+//   const sr = 48000;
+//   const enc = new VideoEncoder({ path: 'out.webm', width: 256, height: 256,
+//                                   audioSampleRate: sr, audioChannels: 1 });
+//   const samples = new Float32Array(sr);
+//   for (let i = 0; i < sr; i++) samples[i] = 0.2 * Math.sin(2*Math.PI*440*i/sr);
+//   enc.addAudioFramesPCM(samples);
+//
+// Stereo input is interleaved L,R,L,R,... — same shape as Web Audio's
+// channel-interleaved buffers.
 
 
 // -----------------------------------------------------------------------------
