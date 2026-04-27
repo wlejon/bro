@@ -61,22 +61,21 @@ case "$(uname -m)" in
     *)                  ARCH="$(uname -m)" ;;
 esac
 
-# Each target lives in its own subdirectory (src/, src/headless/, src/server/).
-# On Windows (multi-config), the config suffix is appended to each.
-# Resolve per-binary paths via a helper.
+# All targets share a unified output directory:
+#   Windows (multi-config): $BUILD_DIR/$CONFIG/<target>.exe
+#   Linux/macOS (Ninja):    $BUILD_DIR/<target>
 bin_path() {
     local target="$1"
-    local subdir="$2"
     if [[ "$PLATFORM" == "win" ]]; then
-        echo "$BUILD_DIR/src/$subdir$CONFIG/$target$EXE"
+        echo "$BUILD_DIR/$CONFIG/$target$EXE"
     else
-        echo "$BUILD_DIR/src/$subdir$target$EXE"
+        echo "$BUILD_DIR/$target$EXE"
     fi
 }
 
-BRO_EXE="$(bin_path bro '')"
-BRO_HEADLESS_EXE="$(bin_path bro-headless 'headless/')"
-BRO_SERVER_EXE="$(bin_path bro-server 'server/')"
+BRO_EXE="$(bin_path bro)"
+BRO_HEADLESS_EXE="$(bin_path bro-headless)"
+BRO_SERVER_EXE="$(bin_path bro-server)"
 
 if [[ ! -x "$BRO_EXE" ]]; then
     echo "error: $BRO_EXE not found. Build first:" >&2

@@ -72,10 +72,10 @@ See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands
 
 ```bash
 # Windows
-./build/src/Debug/bro.exe apps/example
+./build/Debug/bro.exe apps/example
 
 # Linux / macOS
-./build/src/bro apps/example
+./build/bro apps/example
 ```
 
 Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a window.

@@ -13,12 +13,14 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEST_APP="$SCRIPT_DIR/test_app"
 
 # Find the headless binary
-if [[ -f "$PROJECT_DIR/build/src/headless/Debug/bro-headless.exe" ]]; then
-    BRO="$PROJECT_DIR/build/src/headless/Debug/bro-headless.exe"
-elif [[ -f "$PROJECT_DIR/build/src/headless/Release/bro-headless.exe" ]]; then
-    BRO="$PROJECT_DIR/build/src/headless/Release/bro-headless.exe"
-elif [[ -f "$PROJECT_DIR/build/src/headless/bro-headless" ]]; then
-    BRO="$PROJECT_DIR/build/src/headless/bro-headless"
+if [[ -f "$PROJECT_DIR/build/Debug/bro-headless.exe" ]]; then
+    BRO="$PROJECT_DIR/build/Debug/bro-headless.exe"
+elif [[ -f "$PROJECT_DIR/build/Release/bro-headless.exe" ]]; then
+    BRO="$PROJECT_DIR/build/Release/bro-headless.exe"
+elif [[ -f "$PROJECT_DIR/build/bro-headless" ]]; then
+    BRO="$PROJECT_DIR/build/bro-headless"
+elif [[ -f "$PROJECT_DIR/build-release/bro-headless" ]]; then
+    BRO="$PROJECT_DIR/build-release/bro-headless"
 else
     echo "ERROR: bro-headless not found. Build first with: cmake --build build"
     exit 1

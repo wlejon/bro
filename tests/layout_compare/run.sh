@@ -19,9 +19,10 @@ TOLERANCE="${TOLERANCE:-2}"
 if [ -z "${BRO_HEADLESS:-}" ]; then
     # Try common locations
     for candidate in \
-        "$SCRIPT_DIR/../../build/src/headless/Debug/bro-headless.exe" \
-        "$SCRIPT_DIR/../../build/src/headless/Release/bro-headless.exe" \
-        "$SCRIPT_DIR/../../build/src/headless/bro-headless"; do
+        "$SCRIPT_DIR/../../build/Debug/bro-headless.exe" \
+        "$SCRIPT_DIR/../../build/Release/bro-headless.exe" \
+        "$SCRIPT_DIR/../../build/bro-headless" \
+        "$SCRIPT_DIR/../../build-release/bro-headless"; do
         if [ -x "$candidate" ]; then
             BRO_HEADLESS="$candidate"
             break

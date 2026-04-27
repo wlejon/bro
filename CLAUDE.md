@@ -9,19 +9,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cmake -B build                                 # configure (do not use MinGW)
 cmake --build build --config Debug
 cmake --build build --config Release
-./build/src/Debug/bro.exe apps/example
-./build/src/Release/bro.exe apps/example
+./build/Debug/bro.exe apps/example
+./build/Release/bro.exe apps/example          # bro-headless.exe lives alongside
 ```
 
 **Linux / macOS** use Ninja (single-config) — `--config` is ignored, so use a separate build dir per config:
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Debug        # debug
 cmake --build build
-./build/src/bro apps/example
+./build/bro apps/example
 
 cmake -B build-release -DCMAKE_BUILD_TYPE=Release   # release
 cmake --build build-release
-./build-release/src/bro apps/example
+./build-release/bro apps/example
 ```
 
 For `scripts/package-release.sh` on Linux/macOS, pass `--build-dir build-release` so it picks up the Release binaries (the script's `--config Release` default is the Windows-style config selector and is a no-op for Ninja).

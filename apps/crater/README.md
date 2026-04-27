@@ -63,10 +63,10 @@ From the launcher (preferred — server is auto-spawned):
 Standalone:
 ```
 # terminal 1
-./build/src/headless/Debug/bro-headless.exe apps/crater server.js
+./build/Debug/bro-headless.exe apps/crater server.js
 
 # terminal 2 (and 3, and 4…)
-./build/src/Debug/bro.exe apps/crater
+./build/Debug/bro.exe apps/crater
 ```
 
 ## Controls

@@ -21,8 +21,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) HEADLESS="$BUILD_DIR/src/headless/$CONFIG/bro-headless.exe" ;;
-    *)                    HEADLESS="$BUILD_DIR/src/headless/bro-headless" ;;
+    MINGW*|MSYS*|CYGWIN*) HEADLESS="$BUILD_DIR/$CONFIG/bro-headless.exe" ;;
+    *)                    HEADLESS="$BUILD_DIR/bro-headless" ;;
 esac
 
 if [[ ! -x "$HEADLESS" ]]; then
