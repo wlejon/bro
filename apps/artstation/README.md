@@ -253,14 +253,6 @@ defineTileset('terrain', {
 straight to PNG with full alpha — the regular `screenshot()` flattens
 transparent pixels to opaque black during framebuffer composite.
 
-For visual inspection, upscale the PNG and view it as a normal image:
-
-```bash
-# 8x nearest-neighbor upscale via Pillow
-python -c "from PIL import Image; im=Image.open('output/blob.png'); \
-  im.resize((im.size[0]*8, im.size[1]*8), Image.NEAREST).save('output/_blob_zoom.png')"
-```
-
 ## Why no painting UI?
 
 The user is an AI model. It can write JS that places a pixel exactly where
