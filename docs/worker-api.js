@@ -245,7 +245,7 @@ class MessagePort extends EventTarget {
 // The following types can be sent between main thread and workers:
 //
 //   Primitives:
-//     undefined, null, boolean, number (int32 / float64), string
+//     undefined, null, boolean, number (int32 / float64), string, bigint
 //
 //   Objects:
 //     Plain objects (own enumerable string properties, recursive)

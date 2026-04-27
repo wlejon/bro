@@ -29,6 +29,7 @@ enum Tag : uint8_t {
     kTransferIndex   = 0x0A,  // index into transferredBuffers
     kTypedArray      = 0x0B,  // TypedArray: subtype + byte offset + length + ArrayBuffer
     kTransferMesh    = 0x0C,  // index into transferredObjects (zero-copy Mesh)
+    kBigInt          = 0x0D,  // arbitrary-precision: decimal string representation
 };
 
 // Deleter for MeshData* stored in TransferredObject (type=kMesh).
@@ -132,6 +133,23 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
         JS_ToFloat64(ctx, &v, val);
         w.u8(kFloat64);
         w.f64(v);
+        return true;
+    }
+
+    // BigInt — arbitrary precision, encoded as its decimal string. We could
+    // fast-path int64-fit values but the saving is marginal and a single
+    // encoding keeps deserialization branch-free.
+    if (JS_IsBigInt(val)) {
+        JSValue strVal = JS_ToString(ctx, val);
+        if (JS_IsException(strVal)) return false;
+        size_t len;
+        const char* s = JS_ToCStringLen(ctx, &len, strVal);
+        JS_FreeValue(ctx, strVal);
+        if (!s) return false;
+        w.u8(kBigInt);
+        w.u32(static_cast<uint32_t>(len));
+        w.bytes(reinterpret_cast<const uint8_t*>(s), len);
+        JS_FreeCString(ctx, s);
         return true;
     }
 
@@ -386,6 +404,28 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
         if (!r.ok(len)) return JS_ThrowTypeError(ctx, "postMessage: truncated string data");
         const uint8_t* s = r.ptr(len);
         return JS_NewStringLen(ctx, reinterpret_cast<const char*>(s), len);
+    }
+    case kBigInt: {
+        if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated bigint length");
+        uint32_t len = r.u32();
+        if (!r.ok(len)) return JS_ThrowTypeError(ctx, "postMessage: truncated bigint data");
+        const uint8_t* s = r.ptr(len);
+        // Construct via the global BigInt(string) constructor — handles
+        // arbitrary precision without dipping into QuickJS internals.
+        JSValue strVal = JS_NewStringLen(ctx, reinterpret_cast<const char*>(s), len);
+        if (JS_IsException(strVal)) return strVal;
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_GetPropertyStr(ctx, global, "BigInt");
+        JS_FreeValue(ctx, global);
+        if (JS_IsException(ctor) || !JS_IsFunction(ctx, ctor)) {
+            JS_FreeValue(ctx, ctor);
+            JS_FreeValue(ctx, strVal);
+            return JS_ThrowTypeError(ctx, "postMessage: BigInt global not available");
+        }
+        JSValue result = JS_Call(ctx, ctor, JS_UNDEFINED, 1, &strVal);
+        JS_FreeValue(ctx, ctor);
+        JS_FreeValue(ctx, strVal);
+        return result;
     }
     case kArrayBuffer: {
         if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated arraybuffer length");
