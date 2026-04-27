@@ -31,7 +31,7 @@ namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::net { class NetService; }
-namespace bro::scene { class SceneGraph; }
+namespace bro::scene { class SceneGraph; class HtmlNode; }
 namespace bro::canvas { class CanvasScene; }
 
 namespace bro::platform {
@@ -338,6 +338,28 @@ private:
                             const std::string& inputType = "");
     void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);
     void dispatchScrollEvent(dom::Element* el);
+
+    // World-space HtmlNode mouse routing. Returns the SceneGraph attached
+    // to `el` if any, or null. Scene-anchored hit testing only kicks in
+    // for the canvas element that owns a graph; everything else passes
+    // through to the standard DOM dispatch path.
+    scene::SceneGraph* sceneGraphForElement(const dom::Element* el) const;
+    bool elementAbsoluteOrigin(dom::Element* el, float& outX, float& outY) const;
+    // Pick the HtmlNode under (docX, docY) when the DOM hit test landed on
+    // `canvasEl` and that element owns a SceneGraph. Returns true on hit
+    // and writes the picked node + element + local CSS pixel coords.
+    bool pickHtmlNodeUnderMouse(dom::Element* canvasEl, float docX, float docY,
+                                scene::HtmlNode*& outNode, dom::Element*& outEl,
+                                float& outLocalPxX, float& outLocalPxY);
+    // Dispatch one synthesized mouse event into a HtmlNode's detached
+    // document. Caller has already resolved the inner element and local
+    // CSS pixel coords. `relatedTarget` is for over/out semantics.
+    void dispatchHtmlNodeMouseEvent(const std::string& type,
+                                    dom::Element* target,
+                                    float localPxX, float localPxY,
+                                    int button, int pressedButtons, int mods,
+                                    float movX, float movY, bool bubbles,
+                                    dom::Element* relatedTarget = nullptr);
     void advanceFocus(bool reverse);
     void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
     void compositeCanvasScenes(int w, int h);
@@ -626,6 +648,15 @@ private:
 
     // Hover tracking for mouseenter/mouseleave/mouseover/mouseout
     dom::Element* hoveredElement_ = nullptr;
+
+    // World-space HtmlNode hover + press tracking. When a click lands on a
+    // canvas with a SceneGraph, the engine ray-casts into the scene's
+    // HtmlNode billboards and routes mouse events into the detached
+    // document. These mirror hoveredElement_ but for the inner doc.
+    scene::HtmlNode* hoveredHtmlNode_ = nullptr;
+    dom::Element*    hoveredHtmlElement_ = nullptr;
+    scene::HtmlNode* htmlNodeMouseDownNode_ = nullptr;
+    dom::Element*    htmlNodeMouseDownElement_ = nullptr;
 
     // Mouse tracking for mousemove movement deltas
     float lastMouseX_ = 0.0f;

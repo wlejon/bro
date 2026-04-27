@@ -258,9 +258,13 @@ class SceneGraph {
    * RGBA buffer and renders as a billboard textured quad through the 3D
    * mesh FBO, depth-tested against scene geometry.
    *
-   * Billboarding + worldAnchor behave the same as createShape. Hit
-   * testing for world-space clicks on HtmlNodes is a deliberate
-   * follow-up — they're visual only today.
+   * Billboarding + worldAnchor behave the same as createShape.
+   * Mouse events routed through the engine input pipeline (mousedown,
+   * mouseup, click, mousemove, mouseover/out, mouseenter/leave) hit-test
+   * against world-space HtmlNode billboards before reaching the canvas
+   * itself — listeners attached to elements inside `node.root` fire as
+   * if they were rendered in the page. Keyboard input and focus are not
+   * routed through HtmlNodes.
    *
    * Example:
    *   const label = scene.createHtmlNode({

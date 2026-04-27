@@ -181,6 +181,20 @@ public:
     bool unprojectLocal(float localX, float localY,
                         Vec3& outOrigin, Vec3& outDir) const;
 
+    /// Pick the front-most world-anchored HtmlNode hit by a canvas-local
+    /// ray. On hit, writes the HtmlNode pointer and the local CSS-pixel
+    /// coordinates inside its layout box (top-left origin, matching the
+    /// node's raster surface). Returns false if no node is hit, the camera
+    /// is uninitialised, or there are no HtmlNodes in the graph.
+    struct HtmlNodePick {
+        HtmlNode* node = nullptr;
+        float localPxX = 0.0f;
+        float localPxY = 0.0f;
+        float distance = 0.0f;
+    };
+    bool pickHtmlNode(float canvasLocalX, float canvasLocalY,
+                      HtmlNodePick& out) const;
+
     /// Set distance fog parameters. start/end in world units, color is RGB [0,1].
     void setFog(float start, float end, float r, float g, float b) {
         fogStart_ = start; fogEnd_ = end;

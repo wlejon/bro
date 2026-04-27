@@ -3167,6 +3167,87 @@ bool SceneGraph::unprojectLocal(float localX, float localY,
     return true;
 }
 
+bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
+                              HtmlNodePick& out) const {
+    Vec3 rayOrigin, rayDir;
+    if (!unprojectLocal(canvasLocalX, canvasLocalY, rayOrigin, rayDir)) {
+        return false;
+    }
+
+    // Camera basis vectors — match the full-face billboard orientation
+    // used in renderBillboardNode. YLock can drift the visible quad
+    // slightly off the picking quad when the camera nears vertical, but
+    // full-face is the common case and full-face picking is consistent
+    // with what the user sees most of the time.
+    const Vec3 camRight  {viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
+    const Vec3 camUp     {viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
+    const Vec3 quadNormal{
+        camRight.y * camUp.z - camRight.z * camUp.y,
+        camRight.z * camUp.x - camRight.x * camUp.z,
+        camRight.x * camUp.y - camRight.y * camUp.x,
+    };
+
+    float closest = 1e30f;
+    bool found = false;
+    HtmlNodePick best{};
+
+    for (auto& [id, node] : nodes_) {
+        if (!node) continue;
+        if (node->type() != SceneNode::Type::Html) continue;
+        if (!node->visible()) continue;
+        if (!node->hasWorldAnchor()) continue;
+
+        auto* hn = static_cast<HtmlNode*>(node.get());
+        float ppu = hn->pxPerUnit();
+        if (ppu <= 0.0f) ppu = 100.0f;
+        const Vec3& scl = node->scale();
+        const float halfW = 0.5f * (hn->layoutWidth()  / ppu) * scl.x;
+        const float halfH = 0.5f * (hn->layoutHeight() / ppu) * scl.y;
+        if (halfW <= 0.0f || halfH <= 0.0f) continue;
+
+        const Vec3 anchor = node->worldAnchor();
+
+        // Ray-plane intersection: t = (anchor - origin) · n / (dir · n).
+        const Vec3 toAnchor{anchor.x - rayOrigin.x,
+                            anchor.y - rayOrigin.y,
+                            anchor.z - rayOrigin.z};
+        const float denom = rayDir.x * quadNormal.x
+                          + rayDir.y * quadNormal.y
+                          + rayDir.z * quadNormal.z;
+        if (std::fabs(denom) < 1e-6f) continue;  // ray parallel to quad
+        const float t = (toAnchor.x * quadNormal.x
+                       + toAnchor.y * quadNormal.y
+                       + toAnchor.z * quadNormal.z) / denom;
+        if (t <= 0.0f || t >= closest) continue;
+
+        const Vec3 hitWorld{rayOrigin.x + rayDir.x * t,
+                            rayOrigin.y + rayDir.y * t,
+                            rayOrigin.z + rayDir.z * t};
+        const Vec3 offset{hitWorld.x - anchor.x,
+                          hitWorld.y - anchor.y,
+                          hitWorld.z - anchor.z};
+        const float u = offset.x * camRight.x + offset.y * camRight.y + offset.z * camRight.z;
+        const float v = offset.x * camUp.x    + offset.y * camUp.y    + offset.z * camUp.z;
+        if (std::fabs(u) > halfW || std::fabs(v) > halfH) continue;
+
+        // Convert quad-local (u,v) in world units to top-left CSS pixels.
+        // u is along camRight (positive = right); v is along camUp (positive
+        // = up). The raster surface is top-down, so flip v.
+        const float fx = (u / halfW) * 0.5f + 0.5f;          // 0..1, left→right
+        const float fy = 0.5f - (v / halfH) * 0.5f;          // 0..1, top→bottom
+        best.node = hn;
+        best.localPxX = fx * hn->layoutWidth();
+        best.localPxY = fy * hn->layoutHeight();
+        best.distance = t;
+        closest = t;
+        found = true;
+    }
+
+    if (!found) return false;
+    out = best;
+    return true;
+}
+
 void SceneGraph::renderNode(SceneNode* /*node*/) {
     // Retained for ABI stability but unused now that render() performs
     // explicit mesh / billboard / 2D passes.

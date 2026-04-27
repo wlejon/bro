@@ -8,6 +8,11 @@
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 
+#include "scene/scene_graph.h"
+#include "scene/html_node.h"
+#include "layout/layout_node_adapter.h"
+#include "layout/box.h"
+
 #include "platform/sdl_window.h"
 #include "js/runtime.h"
 #include "js/timers.h"
@@ -446,6 +451,27 @@ void Engine::handleMouseDown(float x, float y, int button) {
         dom::Element* target = hitTest(docX, docY);
         if (target) applyMouseOffset(evt, target);
 
+        // World-space HtmlNode hit test: if the click landed on a canvas
+        // that owns a SceneGraph, ray-cast into the scene's HtmlNode
+        // billboards. A hit consumes the event — the canvas itself does
+        // not see mousedown in that case (parallels how a regular DOM
+        // child element captures clicks before its parent).
+        scene::HtmlNode* hnHit = nullptr;
+        dom::Element* hnEl = nullptr;
+        float hnPxX = 0.0f, hnPxY = 0.0f;
+        if (target && pickHtmlNodeUnderMouse(target, docX, docY,
+                                              hnHit, hnEl, hnPxX, hnPxY)) {
+            htmlNodeMouseDownNode_ = hnHit;
+            htmlNodeMouseDownElement_ = hnEl;
+            dispatchHtmlNodeMouseEvent("mousedown", hnEl, hnPxX, hnPxY,
+                                        button, pressedButtons_, mod,
+                                        x - lastMouseX_, y - lastMouseY_,
+                                        /*bubbles=*/true);
+            return;
+        }
+        htmlNodeMouseDownNode_ = nullptr;
+        htmlNodeMouseDownElement_ = nullptr;
+
         ControlContext cctx{document_.get(), jsRuntime_->getContext(),
                            renderer_.get(), window_.get(), &uiDirty_,
                            &overlayMgr_, OverlayContext::App,
@@ -596,6 +622,36 @@ void Engine::handleMouseUp(float x, float y, int button) {
         float movY = y - lastMouseY_;
         float clientY = y - ct;
         float pageY = clientY + scrollY_;
+
+        // Mirror the mousedown HtmlNode routing on release: if the press
+        // landed on a HtmlNode and the release ray-casts to the same node,
+        // dispatch mouseup + click; otherwise dispatch mouseup only on the
+        // press target so handlers see a balanced down/up pair.
+        scene::HtmlNode* hnHit = nullptr;
+        dom::Element* hnEl = nullptr;
+        float hnPxX = 0.0f, hnPxY = 0.0f;
+        bool hnReleaseHit = (target && pickHtmlNodeUnderMouse(target, docX, docY,
+                                                                hnHit, hnEl, hnPxX, hnPxY));
+        if (htmlNodeMouseDownNode_) {
+            if (hnReleaseHit && hnHit == htmlNodeMouseDownNode_) {
+                dispatchHtmlNodeMouseEvent("mouseup", hnEl, hnPxX, hnPxY,
+                                            button, pressedButtons_, mod,
+                                            movX, movY, /*bubbles=*/true);
+                if (button == 0 && hnEl == htmlNodeMouseDownElement_) {
+                    dispatchHtmlNodeMouseEvent("click", hnEl, hnPxX, hnPxY,
+                                                button, pressedButtons_, mod,
+                                                movX, movY, /*bubbles=*/true);
+                }
+            } else {
+                dispatchHtmlNodeMouseEvent("mouseup", htmlNodeMouseDownElement_,
+                                            hnPxX, hnPxY,
+                                            button, pressedButtons_, mod,
+                                            movX, movY, /*bubbles=*/true);
+            }
+            htmlNodeMouseDownNode_ = nullptr;
+            htmlNodeMouseDownElement_ = nullptr;
+            return;
+        }
 
         dom::MouseEvent upEvt("mouseup");
         populateMouseEvent(upEvt, x, y, button, pressedButtons_,
@@ -877,8 +933,52 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             uiDirty_ = true;
         }
 
-        // Always dispatch mousemove
-        if (target) {
+        // World-space HtmlNode hover + move routing. Tracked in parallel
+        // with hoveredElement_ — the canvas remains the outer-doc hover
+        // target while the inner HtmlNode element gets enter/leave/over/
+        // out/move events for its own hover state and listeners.
+        scene::HtmlNode* hnNode = nullptr;
+        dom::Element* hnEl = nullptr;
+        float hnPxX = 0.0f, hnPxY = 0.0f;
+        bool hnHit = (target && pickHtmlNodeUnderMouse(target, docX, docY,
+                                                        hnNode, hnEl, hnPxX, hnPxY));
+        if (hnEl != hoveredHtmlElement_) {
+            int mod = safeGetModState(window_.get());
+            if (hoveredHtmlElement_) {
+                dispatchHtmlNodeMouseEvent("mouseout", hoveredHtmlElement_,
+                                            hnPxX, hnPxY, -1, pressedButtons_,
+                                            mod, xrel, yrel, /*bubbles=*/true,
+                                            hnEl);
+                dispatchHtmlNodeMouseEvent("mouseleave", hoveredHtmlElement_,
+                                            hnPxX, hnPxY, -1, pressedButtons_,
+                                            mod, xrel, yrel, /*bubbles=*/false,
+                                            hnEl);
+                hoveredHtmlElement_->markDirty();
+            }
+            if (hnEl) {
+                dispatchHtmlNodeMouseEvent("mouseover", hnEl,
+                                            hnPxX, hnPxY, -1, pressedButtons_,
+                                            mod, xrel, yrel, /*bubbles=*/true,
+                                            hoveredHtmlElement_);
+                dispatchHtmlNodeMouseEvent("mouseenter", hnEl,
+                                            hnPxX, hnPxY, -1, pressedButtons_,
+                                            mod, xrel, yrel, /*bubbles=*/false,
+                                            hoveredHtmlElement_);
+                hnEl->markDirty();
+            }
+            hoveredHtmlElement_ = hnEl;
+            hoveredHtmlNode_ = hnNode;
+            uiDirty_ = true;
+        }
+
+        // Always dispatch mousemove. Route into the inner HtmlNode if the
+        // pointer is currently over one — otherwise normal DOM target.
+        if (hnHit) {
+            int mod = safeGetModState(window_.get());
+            dispatchHtmlNodeMouseEvent("mousemove", hnEl, hnPxX, hnPxY,
+                                        -1, pressedButtons_, mod,
+                                        xrel, yrel, /*bubbles=*/true);
+        } else if (target) {
             int mod = safeGetModState(window_.get());
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
@@ -1851,6 +1951,102 @@ std::string Engine::simulateCut() {
     }
 
     return text;
+}
+
+// ---------------------------------------------------------------------------
+// World-space HtmlNode mouse routing
+// ---------------------------------------------------------------------------
+
+scene::SceneGraph* Engine::sceneGraphForElement(const dom::Element* el) const {
+    if (!el) return nullptr;
+    for (auto& sg : sceneGraphs_) {
+        if (sg.element == el && sg.graph) return sg.graph.get();
+    }
+    return nullptr;
+}
+
+bool Engine::elementAbsoluteOrigin(dom::Element* el, float& outX, float& outY) const {
+    if (!el) return false;
+    auto& box = el->layoutBox();
+    float ax = box.contentRect.x;
+    float ay = box.contentRect.y;
+    for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
+        auto& pb = lp->layoutBox();
+        ax += pb.contentRect.x;
+        ay += pb.contentRect.y;
+        ay -= lp->scrollTopValue();
+    }
+    outX = ax;
+    outY = ay;
+    return true;
+}
+
+bool Engine::pickHtmlNodeUnderMouse(dom::Element* canvasEl, float docX, float docY,
+                                    scene::HtmlNode*& outNode, dom::Element*& outEl,
+                                    float& outLocalPxX, float& outLocalPxY) {
+    outNode = nullptr;
+    outEl = nullptr;
+    auto* sg = sceneGraphForElement(canvasEl);
+    if (!sg) return false;
+
+    float originX = 0.0f, originY = 0.0f;
+    if (!elementAbsoluteOrigin(canvasEl, originX, originY)) return false;
+    const float canvasLocalX = docX - originX;
+    const float canvasLocalY = docY - originY;
+
+    scene::SceneGraph::HtmlNodePick pick;
+    if (!sg->pickHtmlNode(canvasLocalX, canvasLocalY, pick)) return false;
+    if (!pick.node) return false;
+
+    auto* doc = pick.node->document();
+    if (!doc) return false;
+    auto* root = doc->layoutRoot();
+    if (!root) return false;
+
+    auto* layoutNode = htmlayout::layout::hitTest(root, pick.localPxX, pick.localPxY);
+    auto* hitEl = layout::LayoutNodeAdapter::elementFor(layoutNode);
+    if (!hitEl) hitEl = doc->documentElement();
+    if (!hitEl) return false;
+
+    outNode = pick.node;
+    outEl = hitEl;
+    outLocalPxX = pick.localPxX;
+    outLocalPxY = pick.localPxY;
+    return true;
+}
+
+void Engine::dispatchHtmlNodeMouseEvent(const std::string& type,
+                                        dom::Element* target,
+                                        float localPxX, float localPxY,
+                                        int button, int pressedButtons, int mods,
+                                        float movX, float movY, bool bubbles,
+                                        dom::Element* relatedTarget) {
+    if (!target) return;
+    dom::MouseEvent evt(type, bubbles, /*cancelable=*/true);
+    evt.setIsTrusted(true);
+    evt.setClientX(static_cast<double>(localPxX));
+    evt.setClientY(static_cast<double>(localPxY));
+    evt.setScreenX(static_cast<double>(localPxX));
+    evt.setScreenY(static_cast<double>(localPxY));
+    evt.setPageX(static_cast<double>(localPxX));
+    evt.setPageY(static_cast<double>(localPxY));
+    evt.setMovementX(static_cast<double>(movX));
+    evt.setMovementY(static_cast<double>(movY));
+    evt.setButton(button);
+    evt.setButtons(pressedButtons);
+    evt.setShiftKey((mods & SDL_KMOD_SHIFT) != 0);
+    evt.setCtrlKey ((mods & SDL_KMOD_CTRL ) != 0);
+    evt.setAltKey  ((mods & SDL_KMOD_ALT  ) != 0);
+    evt.setMetaKey ((mods & SDL_KMOD_GUI  ) != 0);
+    if (relatedTarget) evt.setRelatedTarget(relatedTarget);
+
+    // offsetX/Y is the same as clientX/Y here — the inner document's layout
+    // origin matches the raster surface origin.
+    evt.setOffsetX(static_cast<double>(localPxX));
+    evt.setOffsetY(static_cast<double>(localPxY));
+
+    dispatchEvent(target, evt);
+    if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 } // namespace bro::engine
