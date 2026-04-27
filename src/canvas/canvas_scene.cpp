@@ -172,6 +172,40 @@ void CanvasScene::canvasThreadFunc(SDL_Window* win) {
             }
         }
 
+        // Snapshot readback (canvas-as-source for drawImage / getImageData).
+        // Done on the worker because the surface is Ganesh-backed against
+        // this thread's GrContext — readPixels from the main thread would
+        // cross GL contexts. The bytes copy into a portable raster SkImage
+        // so destination scenes can blit it through their own GrContext.
+        if (canvasShared_.snapshotRequested.load(std::memory_order_acquire)) {
+            int sw = surfWidth_;
+            int sh = surfHeight_;
+            if (surface_ && sw > 0 && sh > 0) {
+                if (threadGrContext_) threadGrContext_->resetContext();
+                snapshot_.assign(static_cast<size_t>(sw) * sh * 4, 0);
+                auto info = SkImageInfo::Make(sw, sh, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+                bool ok = surface_->readPixels(info, snapshot_.data(), sw * 4, 0, 0);
+                if (ok) {
+                    auto data = SkData::MakeWithCopy(snapshot_.data(), snapshot_.size());
+                    snapshotImage_ = SkImages::RasterFromData(info, data, sw * 4);
+                    snapshotW_ = sw;
+                    snapshotH_ = sh;
+                    snapshotValid_ = true;
+                    snapshotImageValid_ = static_cast<bool>(snapshotImage_);
+                } else {
+                    snapshotImage_.reset();
+                    snapshotValid_ = false;
+                    snapshotImageValid_ = false;
+                }
+            } else {
+                snapshot_.clear();
+                snapshotImage_.reset();
+                snapshotValid_ = false;
+                snapshotImageValid_ = false;
+            }
+            canvasShared_.snapshotRequested.store(false, std::memory_order_release);
+        }
+
         // GL fence sync — ensures GPU commands complete before main thread
         // samples the texture for compositing.
         GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -209,10 +243,17 @@ void CanvasScene::prepareAndSignal() {
     uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
     if (s != kCanvasIdle) return;
 
-    // Check if element was removed from the DOM
-    if (detachedCb_ && detachedCb_(detachedUd_)) {
-        detached_ = true;
-        return;
+    // Check if element was removed from the DOM. Offscreen canvases (created
+    // via document.createElement and never appended) read as orphaned from
+    // frame one even though they're being used as sprite atlases — defer the
+    // signal until the canvas has been seen attached at least once.
+    if (detachedCb_) {
+        bool orphaned = detachedCb_(detachedUd_);
+        if (!orphaned) everAttached_ = true;
+        if (orphaned && everAttached_) {
+            detached_ = true;
+            return;
+        }
     }
 
     // Query element layout position (main thread, DOM access). The displayed
@@ -284,11 +325,15 @@ void CanvasScene::flushSync() {
         s = canvasShared_.state.load(std::memory_order_acquire);
     }
 
-    // Now idle — swap commands and signal
-    if (s == kCanvasIdle && !commands_.empty()) {
+    // Now idle — swap commands and signal. Also signal when a snapshot has
+    // been requested with no pending commands, so the worker can run the
+    // readback on its own GrContext rather than the main thread reading a
+    // surface owned by a different GL context.
+    bool snapshotPending = canvasShared_.snapshotRequested.load(std::memory_order_acquire);
+    if (s == kCanvasIdle && (!commands_.empty() || snapshotPending)) {
         int cw = queryLayoutWidth();
         int ch = queryLayoutHeight();
-        std::swap(commands_, stagedCommands_);
+        if (!commands_.empty()) std::swap(commands_, stagedCommands_);
         canvasShared_.canvasWidth.store(cw, std::memory_order_relaxed);
         canvasShared_.canvasHeight.store(ch, std::memory_order_relaxed);
         canvasShared_.state.store(kCanvasCommandsReady, std::memory_order_release);
@@ -416,6 +461,9 @@ void CanvasScene::ensureSurface(int w, int h) {
     if (surface_ && surfWidth_ == w && surfHeight_ == h) return;
 
     bool isResize = (surface_ != nullptr);
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
+    snapshotImage_.reset();
 
     if (grContext_) {
         // Resizing: drop the old SkSurface, drain Ganesh, and recreate the
@@ -492,6 +540,8 @@ void CanvasScene::ensureSurface(int w, int h) {
     if (surface_) {
         surface_->getCanvas()->clear(SK_ColorTRANSPARENT);
         dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
     }
 }
 
@@ -804,6 +854,8 @@ void CanvasScene::fillRect(float x, float y, float w, float h) {
     cmd.p[0] = x; cmd.p[1] = y; cmd.p[2] = w; cmd.p[3] = h;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 void CanvasScene::strokeRect(float x, float y, float w, float h) {
@@ -813,6 +865,8 @@ void CanvasScene::strokeRect(float x, float y, float w, float h) {
     cmd.p[0] = x; cmd.p[1] = y; cmd.p[2] = w; cmd.p[3] = h;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 void CanvasScene::clearRect(float x, float y, float w, float h) {
@@ -821,6 +875,8 @@ void CanvasScene::clearRect(float x, float y, float w, float h) {
     cmd.p[0] = x; cmd.p[1] = y; cmd.p[2] = w; cmd.p[3] = h;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 void CanvasScene::fillText(const std::string& text, float x, float y) {
@@ -835,6 +891,8 @@ void CanvasScene::fillText(const std::string& text, float x, float y) {
     cmd.font = font_;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 void CanvasScene::strokeText(const std::string& text, float x, float y) {
@@ -849,6 +907,8 @@ void CanvasScene::strokeText(const std::string& text, float x, float y) {
     cmd.font = font_;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 render::TextMetrics CanvasScene::measureText(const std::string& text) {
@@ -893,6 +953,8 @@ void CanvasScene::stroke() {
     cmd.path = pathBuilder_.snapshot();
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 void CanvasScene::fill() {
@@ -902,6 +964,8 @@ void CanvasScene::fill() {
     cmd.path = pathBuilder_.snapshot();
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 void CanvasScene::clip() {
@@ -1091,6 +1155,8 @@ void CanvasScene::drawImage(const void* rgbaData, int imgW, int imgH,
         : SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone);
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1098,25 +1164,137 @@ void CanvasScene::drawImage(const void* rgbaData, int imgW, int imgH,
 // ---------------------------------------------------------------------------
 
 std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
-    // Flush deferred commands so pixel state is current
+    std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4, 0);
+    if (w <= 0 || h <= 0) return pixels;
+
     if (threaded_) {
-        flushSync();
-    } else {
-        flushCommands();
+        // Defer the readback to the canvas worker so it runs on the same
+        // GL/GrContext that owns surface_. Re-uses the cached snapshot when
+        // valid, otherwise round-trips through the worker via flushSync.
+        int sw = queryLayoutWidth();
+        int sh = queryLayoutHeight();
+        if (sw <= 0 || sh <= 0) return pixels;
+        if (!snapshotValid_ || snapshotW_ != sw || snapshotH_ != sh) {
+            canvasShared_.snapshotRequested.store(true, std::memory_order_release);
+            flushSync();
+        }
+        if (!snapshotValid_ || snapshot_.empty()) return pixels;
+
+        const int x0 = std::max(0, x);
+        const int x1 = std::min(sw, x + w);
+        const int y0 = std::max(0, y);
+        const int y1 = std::min(sh, y + h);
+        if (x1 <= x0 || y1 <= y0) return pixels;
+        const int copyW = x1 - x0;
+        for (int row = y0; row < y1; ++row) {
+            int dstRow = row - y;
+            int dstCol = x0 - x;
+            std::memcpy(&pixels[(static_cast<size_t>(dstRow) * w + dstCol) * 4],
+                        &snapshot_[(static_cast<size_t>(row) * sw + x0) * 4],
+                        static_cast<size_t>(copyW) * 4);
+        }
+        return pixels;
     }
 
-    std::vector<uint8_t> pixels(w * h * 4, 0);
+    // Non-threaded path: surface lives on the calling thread, safe to read
+    // here directly.
+    flushCommands();
     if (!surface_) return pixels;
-
-    // Re-sync Ganesh against the current GL state before readback. Outside
-    // code (engine compositing, screenshot path) may have changed the bound
-    // FBO since Skia last drew; without this, readPixels samples stale state
-    // and silently returns the cleared buffer.
     if (grContext_) grContext_->resetContext();
-
     auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     surface_->readPixels(info, pixels.data(), w * 4, x, y);
     return pixels;
+}
+
+void CanvasScene::drawImage(sk_sp<SkImage> img,
+                            float sx, float sy, float sw, float sh,
+                            float dx, float dy, float dw, float dh) {
+    if (!img) return;
+    CanvasCmd cmd;
+    cmd.type = CanvasCmd::kDrawImage;
+    cmd.paint.setAlphaf(state_.globalAlphaVal);
+    cmd.paint.setBlendMode(blendModeFromOp(state_.compositeOp));
+    cmd.img = std::move(img);
+    cmd.src = SkRect::MakeXYWH(sx, sy, sw, sh);
+    cmd.dst = SkRect::MakeXYWH(dx, dy, dw, dh);
+    cmd.samp = imageSmoothingEnabled_
+        ? SkSamplingOptions(SkFilterMode::kLinear, SkMipmapMode::kLinear)
+        : SkSamplingOptions(SkFilterMode::kNearest, SkMipmapMode::kNone);
+    commands_.push_back(std::move(cmd));
+    dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
+}
+
+sk_sp<SkImage> CanvasScene::snapshotImage() {
+    if (snapshotImageValid_ && snapshotImage_) return snapshotImage_;
+
+    int w = queryLayoutWidth();
+    int h = queryLayoutHeight();
+    if (w <= 0 || h <= 0) return nullptr;
+
+    if (threaded_) {
+        // Worker reads pixels on its own GL/GrContext and builds a portable
+        // raster SkImage in snapshotImage_. Round-trip via flushSync.
+        canvasShared_.snapshotRequested.store(true, std::memory_order_release);
+        flushSync();
+        return snapshotImageValid_ ? snapshotImage_ : nullptr;
+    }
+
+    // Non-threaded: read directly. A raster-backed SkImage is portable —
+    // makeImageSnapshot would tie the result to this scene's grContext.
+    flushCommands();
+    if (!surface_) return nullptr;
+    if (grContext_) grContext_->resetContext();
+    auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    snapshot_.assign(static_cast<size_t>(w) * h * 4, 0);
+    if (!surface_->readPixels(info, snapshot_.data(), w * 4, 0, 0)) {
+        snapshot_.clear();
+        snapshotValid_ = false;
+        snapshotImageValid_ = false;
+        return nullptr;
+    }
+    snapshotW_ = w;
+    snapshotH_ = h;
+    snapshotValid_ = true;
+    auto data = SkData::MakeWithCopy(snapshot_.data(), snapshot_.size());
+    snapshotImage_ = SkImages::RasterFromData(info, data, w * 4);
+    snapshotImageValid_ = static_cast<bool>(snapshotImage_);
+    return snapshotImage_;
+}
+
+const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
+    if (snapshotValid_ && snapshotW_ == w && snapshotH_ == h && !snapshot_.empty()) {
+        return snapshot_.data();
+    }
+
+    if (threaded_) {
+        canvasShared_.snapshotRequested.store(true, std::memory_order_release);
+        flushSync();
+        if (!snapshotValid_ || snapshotW_ != w || snapshotH_ != h || snapshot_.empty()) {
+            return nullptr;
+        }
+        return snapshot_.data();
+    }
+
+    // Non-threaded path
+    flushCommands();
+    if (!surface_ || w <= 0 || h <= 0) {
+        snapshotValid_ = false;
+        return nullptr;
+    }
+    if (grContext_) grContext_->resetContext();
+    auto info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    snapshot_.assign(static_cast<size_t>(w) * h * 4, 0);
+    if (!surface_->readPixels(info, snapshot_.data(), w * 4, 0, 0)) {
+        snapshot_.clear();
+        snapshotValid_ = false;
+        return nullptr;
+    }
+    snapshotW_ = w;
+    snapshotH_ = h;
+    snapshotValid_ = true;
+    return snapshot_.data();
 }
 
 void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy) {
@@ -1136,6 +1314,8 @@ void CanvasScene::putImageData(const uint8_t* data, int w, int h, int dx, int dy
     cmd.p[1] = static_cast<float>(dy);
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,6 +1327,8 @@ void CanvasScene::reset() {
     cmd.type = CanvasCmd::kReset;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1234,6 +1416,8 @@ void CanvasScene::flushCommands() {
         grContext_->flushAndSubmit();
     }
     dirty_ = true;
+    snapshotValid_ = false;
+    snapshotImageValid_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1243,10 +1427,14 @@ void CanvasScene::flushCommands() {
 void CanvasScene::rasterize(render::GLContext* gl) {
     if (!gl) return;
 
-    // Check if element was removed from the DOM
-    if (detachedCb_ && detachedCb_(detachedUd_)) {
-        detached_ = true;
-        return;
+    // Check if element was removed from the DOM. See note in prepareAndSignal.
+    if (detachedCb_) {
+        bool orphaned = detachedCb_(detachedUd_);
+        if (!orphaned) everAttached_ = true;
+        if (orphaned && everAttached_) {
+            detached_ = true;
+            return;
+        }
     }
 
     // Query element layout position (display rect). Surface size comes from

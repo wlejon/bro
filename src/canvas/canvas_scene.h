@@ -247,10 +247,34 @@ public:
                    float sx, float sy, float sw, float sh,
                    float dx, float dy, float dw, float dh);
 
+    /// Overload for the canvas-as-CanvasImageSource fast path. Avoids the
+    /// per-call rgba copy + SkImage allocation that the rgbaData overload
+    /// pays — instead the caller provides an already-built SkImage (typically
+    /// one shared across many blits, e.g. the snapshot of a sprite atlas).
+    void drawImage(sk_sp<SkImage> img,
+                   float sx, float sy, float sw, float sh,
+                   float dx, float dy, float dw, float dh);
+
     // --- Pixel manipulation ---
 
     std::vector<uint8_t> getImageData(int x, int y, int w, int h);
     void putImageData(const uint8_t* data, int w, int h, int dx, int dy);
+
+    /// Cached pixel snapshot of the surface's (0,0,w,h) region, suitable for
+    /// drawImage(<canvas>) sources. Returns a pointer into a buffer owned by
+    /// this scene; the pointer is valid until the next mutation (any new draw
+    /// command, reset, or surface resize) or scene destruction. Returns
+    /// nullptr only if `surface_` cannot be created (e.g. zero-sized canvas).
+    ///
+    /// Re-reads from the surface only when the cache is stale. Lets a scene
+    /// be used as a sprite atlas without paying a GPU readback per blit.
+    const uint8_t* snapshotPixels(int w, int h);
+
+    /// Cached SkImage snapshot of the surface — the canvas-source fast path
+    /// for drawImage(<canvas>). Stays alive (and Ganesh sees a single texture
+    /// across many blits) until any new draw command lands, the surface
+    /// resizes, or reset() runs. Returns null when there's no surface yet.
+    sk_sp<SkImage> snapshotImage();
 
     // --- Reset (discard content) ---
 
@@ -291,7 +315,27 @@ public:
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
     void checkDetached() {
-        if (detachedCb_ && detachedCb_(detachedUd_)) detached_ = true;
+        if (!detachedCb_) return;
+        bool orphaned = detachedCb_(detachedUd_);
+        // An offscreen canvas (document.createElement('canvas') with no
+        // appendChild) reads as orphaned from frame one, but the JS side is
+        // still using it as a sprite atlas / readback target. Only mark for
+        // cleanup once we've actually seen it attached to the document — that
+        // distinguishes "removed from the DOM" from "intentionally offscreen".
+        if (!orphaned) everAttached_ = true;
+        if (orphaned && everAttached_) detached_ = true;
+    }
+
+    /// Called from the JS HTMLCanvasElement finalizer when its wrapper is
+    /// GC'd. The element it pointed at is about to be freed, so we drop the
+    /// callback userdata that aimed at it and mark the scene detached — the
+    /// engine's next per-frame cleanup pass collects it.
+    void onElementFinalized() {
+        detached_ = true;
+        detachedCb_ = nullptr;
+        detachedUd_ = nullptr;
+        layoutCb_ = nullptr;
+        layoutUd_ = nullptr;
     }
 
 private:
@@ -324,10 +368,20 @@ private:
     void* detachedUd_ = nullptr;
     float viewportScrollY_ = 0;
     bool detached_ = false;
+    bool everAttached_ = false;
 
     // Skia surface (raster, RGBA premul)
     sk_sp<SkSurface> surface_;
     int surfWidth_ = 0, surfHeight_ = 0;
+
+    // Snapshot cache for drawImage(<canvas>) sources — see snapshotPixels()
+    // and snapshotImage(). Invalidated whenever a new draw command lands,
+    // reset() runs, or the surface resizes. Cleared lazily on next call.
+    std::vector<uint8_t> snapshot_;
+    int snapshotW_ = 0, snapshotH_ = 0;
+    bool snapshotValid_ = false;
+    sk_sp<SkImage> snapshotImage_;
+    bool snapshotImageValid_ = false;
 
     // Intrinsic bitmap size set via canvas.width / canvas.height attribute.
     // When non-zero, overrides layout-derived sizing. Atomic because the
@@ -399,6 +453,11 @@ private:
         std::atomic<uintptr_t> fenceSync{0};
         std::atomic<int> canvasWidth{0};
         std::atomic<int> canvasHeight{0};
+        // Main thread sets before publishing kCanvasCommandsReady; worker
+        // reads under acquire and refreshes snapshot_/snapshotImage_ on the
+        // worker thread (where the surface's GrContext lives). Cleared by
+        // the worker once the snapshot has been written.
+        std::atomic<bool> snapshotRequested{false};
     };
     CanvasShared canvasShared_;
     std::atomic<bool> canvasReady_{false};

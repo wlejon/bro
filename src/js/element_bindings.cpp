@@ -62,6 +62,16 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
 
     if (!el->isAlive()) return;
 
+    // Offscreen canvases (document.createElement('canvas') with no append)
+    // are pinned to life by the JS wrapper alone. When the wrapper is GC'd,
+    // mark the backing CanvasScene detached so the engine's per-frame cleanup
+    // pass collects it — and clear the scene's callback userdata before the
+    // Element is freed below, so it never dereferences a dangling pointer.
+    if (auto* cs = static_cast<bro::canvas::CanvasScene*>(el->canvasScene())) {
+        cs->onElementFinalized();
+        el->setCanvasScene(nullptr);
+    }
+
     if (!el->parentNode()) {
         auto* doc = el->document();
         if (doc) doc->freeNode(el);
