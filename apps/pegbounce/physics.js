@@ -156,8 +156,12 @@
         w.walls.push(create(-10, FIELD_H / 2, 10, FIELD_H));
         // Right
         w.walls.push(create(FIELD_W + 10, FIELD_H / 2, 10, FIELD_H));
-        // Top
-        w.walls.push(create(FIELD_W / 2, FIELD_TOP - 10, FIELD_W, 10));
+        // Top. Sits at the top of the canvas, NOT flush with FIELD_TOP — the
+        // cannon (at y=40) launches the ball at y ≈ 40 + sin(angle)*30, which
+        // is above FIELD_TOP=56 for shallow angles. Putting the wall body in
+        // that range used to trap the ball (it spawned inside the wall and
+        // jittered with no apparent gravity when aimed near horizontal).
+        w.walls.push(create(FIELD_W / 2, 15, FIELD_W, 10));
     }
 
     function addCatchbar(w) {
@@ -584,7 +588,7 @@
         const wallSpec = [
             { cx: -10, cy: FIELD_H / 2, hw: 10, hh: FIELD_H },
             { cx: FIELD_W + 10, cy: FIELD_H / 2, hw: 10, hh: FIELD_H },
-            { cx: FIELD_W / 2, cy: FIELD_TOP - 10, hw: FIELD_W, hh: 10 },
+            { cx: FIELD_W / 2, cy: 15, hw: FIELD_W, hh: 10 },
         ];
         for (const s of wallSpec) {
             pw.createBody({
