@@ -929,8 +929,11 @@ uniform vec3 uAnchorRel;     // worldAnchor - cameraEye
 uniform vec3 uRight;         // billboard right axis, world space
 uniform vec3 uUp;            // billboard up axis, world space
 uniform vec2 uHalfSize;      // world-space half-extents
+uniform vec2 uUvMin;         // texture sub-rect (default 0,0)
+uniform vec2 uUvMax;         // texture sub-rect (default 1,1)
 
-out vec2 vUV;
+out vec2 vUV;        // [0..1] within the local quad
+out vec2 vTexUV;     // sampler UV: lerp(uvMin, uvMax, vUV)
 
 void main() {
     vec3 worldRel = uAnchorRel
@@ -938,6 +941,7 @@ void main() {
                   + uUp    * (aQuad.y * uHalfSize.y);
     // Flip Y so UV origin is top-left (matches Skia/CSS pixel layout).
     vUV = vec2(aQuad.x * 0.5 + 0.5, 0.5 - aQuad.y * 0.5);
+    vTexUV = mix(uUvMin, uUvMax, vUV);
     gl_Position = uVP * vec4(worldRel, 1.0);
 }
 )";
@@ -945,6 +949,7 @@ void main() {
 static const char* kBillboardFragSrc = R"(
 #version 330 core
 in vec2 vUV;
+in vec2 vTexUV;
 
 uniform int uShapeMode;      // 0 = rect, 1 = circle SDF, 2 = textured, 3 = ringed disc
 uniform vec4 uColor;         // rect / circle fill, or tint for texture
@@ -989,9 +994,15 @@ void main() {
         vec4 c = mix(uColor, uStroke, ringT);
         float a = c.a * alpha;
         FragColor = vec4(c.rgb * a, a);
+    } else if (uShapeMode == 4) {
+        // Textured with straight-alpha source (sprite RGBA from stb_image).
+        vec4 tex = texture(uTex, vTexUV);
+        float a = tex.a * uColor.a;
+        if (a <= 0.0) discard;
+        FragColor = vec4(tex.rgb * uColor.rgb * a, a);
     } else {
-        // Textured (premultiplied alpha from Skia surfaces).
-        vec4 tex = texture(uTex, vUV);
+        // Textured (premultiplied alpha from Skia surfaces — HtmlNode).
+        vec4 tex = texture(uTex, vTexUV);
         vec4 c = tex * uColor; // uColor.a tints premultiplied texture
         if (c.a <= 0.0) discard;
         FragColor = c;
@@ -1524,6 +1535,8 @@ void SceneGraph::ensureBillboardPipeline() {
     bbUStroke_     = glGetUniformLocation(bbProgram_, "uStroke");
     bbUStrokeWidth_ = glGetUniformLocation(bbProgram_, "uStrokeWidth");
     bbUTex_        = glGetUniformLocation(bbProgram_, "uTex");
+    bbUUvMin_      = glGetUniformLocation(bbProgram_, "uUvMin");
+    bbUUvMax_      = glGetUniformLocation(bbProgram_, "uUvMax");
 
     // Two triangles covering [-1,1] on both axes. Shared across every
     // billboard — only uniforms change per draw.
@@ -3276,13 +3289,17 @@ namespace {
 // defaults keep the quad a reasonable size even if the user forgot to set
 // dimensions.
 struct BillboardDraw {
-    int shapeMode = 0;        // 0 rect, 1 circle, 2 textured
+    // 0 rect, 1 circle SDF, 2 premul-textured (HtmlNode), 3 ringed disc,
+    // 4 straight-alpha textured (SpriteNode).
+    int shapeMode = 0;
     float halfW = 0.5f;
     float halfH = 0.5f;
     float color[4] = {1, 1, 1, 1};
     float stroke[4] = {0, 0, 0, 0};
     float strokeWidth = 0.0f;
     GLuint texture = 0;
+    float uvMin[2] = {0.0f, 0.0f};
+    float uvMax[2] = {1.0f, 1.0f};
 };
 
 static inline void color8(float* out, const Color& c) {
@@ -3336,15 +3353,29 @@ static bool resolveBillboard(SceneNode* node, BillboardDraw& d) {
     case T::Sprite: {
         auto* s = static_cast<SpriteNode*>(node);
         const Vec3& scl = node->scale();
-        d.shapeMode = 2;
-        d.halfW = 0.5f * s->width()  * scl.x;
-        d.halfH = 0.5f * s->height() * scl.y;
+        // Default the world-quad size to the sheet frame (or full image)
+        // when the user didn't set explicit width/height — saves callers
+        // from having to compute world-unit extents twice.
+        float worldW = s->width();
+        float worldH = s->height();
+        if (worldW <= 0.0f || worldH <= 0.0f) {
+            float sx, sy, sw, sh;
+            if (s->currentSheetRect(sx, sy, sw, sh)) {
+                if (worldW <= 0.0f) worldW = sw;
+                if (worldH <= 0.0f) worldH = sh;
+            } else if (s->imageWidth() > 0 && s->imageHeight() > 0) {
+                if (worldW <= 0.0f) worldW = static_cast<float>(s->imageWidth());
+                if (worldH <= 0.0f) worldH = static_cast<float>(s->imageHeight());
+            }
+        }
+        d.shapeMode = 4;  // straight-alpha textured
+        d.halfW = 0.5f * worldW * scl.x;
+        d.halfH = 0.5f * worldH * scl.y;
         d.color[0] = d.color[1] = d.color[2] = 1.0f;
         d.color[3] = s->opacity();
-        // Texture upload for SpriteNode billboards is a deliberate follow-up;
-        // without a texture the shader has nothing to sample, so fade out.
-        d.texture = 0;
-        d.color[3] = 0.0f;
+        d.texture = s->textureId();
+        s->currentUvRect(d.uvMin[0], d.uvMin[1], d.uvMax[0], d.uvMax[1]);
+        if (d.texture == 0) d.color[3] = 0.0f;
         return true;
     }
     case T::Html: {
@@ -3408,8 +3439,10 @@ void SceneGraph::renderBillboardNode(SceneNode* node) {
     glUniform4fv(bbUColor_,  1, d.color);
     glUniform4fv(bbUStroke_, 1, d.stroke);
     glUniform1f(bbUStrokeWidth_, d.strokeWidth);
+    glUniform2f(bbUUvMin_, d.uvMin[0], d.uvMin[1]);
+    glUniform2f(bbUUvMax_, d.uvMax[0], d.uvMax[1]);
 
-    if (d.shapeMode == 2) {
+    if (d.shapeMode == 2 || d.shapeMode == 4) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, d.texture);
         glUniform1i(bbUTex_, 0);
@@ -3477,6 +3510,8 @@ void SceneGraph::renderLightIcon(LightNode* light) {
     glUniform4fv(bbUColor_,  1, core);
     glUniform4fv(bbUStroke_, 1, ring);
     glUniform1f(bbUStrokeWidth_, strokeT);
+    glUniform2f(bbUUvMin_, 0.0f, 0.0f);
+    glUniform2f(bbUUvMax_, 1.0f, 1.0f);
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
@@ -3490,9 +3525,19 @@ void SceneGraph::materializeHtmlNodes(render::SkiaRenderer* renderer,
                                       layout::FontManager* fontManager) {
     if (!renderer || !fontManager) return;
     for (auto& [id, node] : nodes_) {
-        if (node->type() != SceneNode::Type::Html) continue;
-        auto* hn = static_cast<HtmlNode*>(node.get());
-        hn->materializePending(renderer, fontManager);
+        if (node->type() == SceneNode::Type::Html) {
+            auto* hn = static_cast<HtmlNode*>(node.get());
+            hn->materializePending(renderer, fontManager);
+            continue;
+        }
+        // World-anchored sprites participate in the same 3D billboard pass
+        // as HtmlNodes and need their textures uploaded on the GL/main
+        // thread before scene render. Skip 2D-only sprites — those go
+        // through the canvas path which doesn't need GL textures.
+        if (node->type() == SceneNode::Type::Sprite && node->hasWorldAnchor()) {
+            auto* sp = static_cast<SpriteNode*>(node.get());
+            sp->materializeBillboard();
+        }
     }
 }
 

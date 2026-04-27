@@ -10,17 +10,21 @@ namespace bro::scene {
 
 SpriteNode::SpriteNode(const std::string& name) : SceneNode(name) {}
 
+SpriteNode::~SpriteNode() { releaseGL(); }
+
 void SpriteNode::setImageData(const uint8_t* rgba, int w, int h) {
     imgW_ = w;
     imgH_ = h;
     pixels_.assign(rgba, rgba + w * h * 4);
     imageLoaded_ = true;
+    textureDirty_ = true;
 }
 
 void SpriteNode::setImagePath(const std::string& path) {
     imagePath_ = path;
     imageLoaded_ = false;
     pixels_.clear();
+    textureDirty_ = true;
 }
 
 void SpriteNode::setSheetGrid(int frameWidth, int frameHeight, int columns, int rows) {
@@ -128,6 +132,70 @@ void SpriteNode::onTick(float dtSec) {
         }
         frameIndex_ = spec.frames[animStep_];
     }
+}
+
+void SpriteNode::materializeBillboard() {
+    // Lazy-load image from path, mirroring the 2D onRender path. Without
+    // this, world-anchored sprites that never went through the 2D path
+    // would never have pixels in time for the billboard pass.
+    if (!imageLoaded_ && !imagePath_.empty()) {
+        int w, h, channels;
+        unsigned char* data = stbi_load(imagePath_.c_str(), &w, &h, &channels, 4);
+        if (data) {
+            imgW_ = w;
+            imgH_ = h;
+            pixels_.assign(data, data + w * h * 4);
+            stbi_image_free(data);
+            textureDirty_ = true;
+        }
+        imageLoaded_ = true;
+    }
+    if (pixels_.empty() || imgW_ <= 0 || imgH_ <= 0) return;
+    if (texture_ != 0 && !textureDirty_) return;
+
+    if (!texture_) glGenTextures(1, &texture_);
+    glBindTexture(GL_TEXTURE_2D, texture_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgW_, imgH_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, pixels_.data());
+    // NEAREST works best for pixel art; the 2D canvas path uses Skia's
+    // sampler with similar defaults. Switch to LINEAR when the sprite is
+    // large relative to the screen quad — we don't have that info here, so
+    // keep NEAREST as the cheaper, sharper default.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    texW_ = imgW_;
+    texH_ = imgH_;
+    textureDirty_ = false;
+}
+
+void SpriteNode::currentUvRect(float& uMin, float& vMin,
+                                float& uMax, float& vMax) const {
+    uMin = 0.0f; vMin = 0.0f; uMax = 1.0f; vMax = 1.0f;
+    if (imgW_ <= 0 || imgH_ <= 0) return;
+    float sx, sy, sw, sh;
+    if (currentSheetRect(sx, sy, sw, sh)) {
+        // sheet frame
+    } else if (hasSourceRect_) {
+        sx = srcX_; sy = srcY_; sw = srcW_; sh = srcH_;
+    } else {
+        return;  // full image
+    }
+    const float fw = static_cast<float>(imgW_);
+    const float fh = static_cast<float>(imgH_);
+    uMin = sx / fw;
+    vMin = sy / fh;
+    uMax = (sx + sw) / fw;
+    vMax = (sy + sh) / fh;
+}
+
+void SpriteNode::releaseGL() {
+    if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
+    texW_ = 0;
+    texH_ = 0;
 }
 
 void SpriteNode::onRender(SceneGraph& graph) {

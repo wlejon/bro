@@ -574,6 +574,8 @@ private:
     GLint bbUStroke_ = -1;
     GLint bbUStrokeWidth_ = -1;
     GLint bbUTex_ = -1;
+    GLint bbUUvMin_ = -1;
+    GLint bbUUvMax_ = -1;
 };
 
 } // namespace bro::scene

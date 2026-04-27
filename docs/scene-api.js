@@ -96,10 +96,12 @@ class SceneGraph {
   /**
    * Create a 2D sprite node and add it to the root.
    *
-   * World-anchored billboards: same options as createShape. Texture
-   * upload for billboarded sprites is a follow-up — world-anchored
-   * sprites currently render as 1x1 transparent until a texture is
-   * wired in.
+   * World-anchored billboards: same options as createShape. The image
+   * (or active spritesheet frame's UV sub-rect) uploads to a GL texture
+   * and renders inside the 3D mesh FBO, depth-tested against scene
+   * geometry. If width/height are unset, the world quad sizes itself
+   * from the active sheet frame (or full image) using one world unit
+   * per pixel — pass explicit width/height to override.
    *
    * Spritesheet animation: pass `sheet` to slice the source image into
    * frames, then either set `frameIndex` directly or register named
