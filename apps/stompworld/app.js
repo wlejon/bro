@@ -9,6 +9,8 @@
     const TILE   = 32;
 
     const canvas = document.getElementById('game');
+    canvas.width  = VIEW_W;
+    canvas.height = VIEW_H;
     const ctx    = canvas.getContext('2d');
     ctx.imageSmoothingEnabled = false;
 
@@ -66,10 +68,15 @@
                     this.spawn.x = e.x;
                     this.spawn.y = e.y;
                 } else if (e.kind === 'stomper') {
+                    // Spawn so the stomper's feet sit at the bottom of its tile cell.
+                    // The level placement convention: 'G' is on the row directly above ground,
+                    // so its bottom-edge aligns with the top of the ground row.
                     this.stompers.push({
-                        x: e.x + 2, y: e.y + (TILE - 24),
+                        x: e.x + 2,
+                        y: (e.row + 1) * TILE - 24,
                         w: 28, h: 24,
-                        vx: -60,
+                        vx: -50, vy: 0,
+                        onGround: false,
                         alive: true,
                         squashTimer: 0,
                         animT: 0,
@@ -136,39 +143,76 @@
     }
 
     // ── Stomper update ──────────────────────────────────────────────────────
+    // Tile-aware AABB sweep with gravity. Reverses on wall hits and at ledge
+    // edges, so stompers patrol whatever platform they spawn on.
+    const STOMP_GRAVITY = 1800;
+    const STOMP_MAX_FALL = 800;
+    function stompMoveX(s, dx, tm) {
+        s.x += dx;
+        const r0 = Math.floor(s.y / TILE);
+        const r1 = Math.floor((s.y + s.h - 0.001) / TILE);
+        if (dx > 0) {
+            const col = Math.floor((s.x + s.w - 0.001) / TILE);
+            for (let r = r0; r <= r1; r++) {
+                if (tm.solidAt(col, r)) {
+                    s.x = col * TILE - s.w; s.vx = -Math.abs(s.vx); return true;
+                }
+            }
+        } else if (dx < 0) {
+            const col = Math.floor(s.x / TILE);
+            for (let r = r0; r <= r1; r++) {
+                if (tm.solidAt(col, r)) {
+                    s.x = (col + 1) * TILE; s.vx = Math.abs(s.vx); return true;
+                }
+            }
+        }
+        return false;
+    }
+    function stompMoveY(s, dy, tm) {
+        s.y += dy;
+        const c0 = Math.floor(s.x / TILE);
+        const c1 = Math.floor((s.x + s.w - 0.001) / TILE);
+        if (dy > 0) {
+            const row = Math.floor((s.y + s.h - 0.001) / TILE);
+            for (let c = c0; c <= c1; c++) {
+                if (tm.solidAt(c, row)) {
+                    s.y = row * TILE - s.h; s.vy = 0; s.onGround = true; return;
+                }
+            }
+        } else if (dy < 0) {
+            const row = Math.floor(s.y / TILE);
+            for (let c = c0; c <= c1; c++) {
+                if (tm.solidAt(c, row)) {
+                    s.y = (row + 1) * TILE; s.vy = 0; return;
+                }
+            }
+        }
+    }
+
     function stepStomper(s, dt) {
         if (!s.alive) {
             s.squashTimer -= dt;
             return;
         }
         s.animT += dt;
-        const dx = s.vx * (dt / 1000);
-
-        // Move horizontally; reverse on wall.
-        s.x += dx;
         const tm = Game.tilemap;
-        const r0 = Math.floor(s.y / TILE);
-        const r1 = Math.floor((s.y + s.h - 0.001) / TILE);
-        if (s.vx > 0) {
-            const col = Math.floor((s.x + s.w - 0.001) / TILE);
-            for (let r = r0; r <= r1; r++) {
-                if (tm.solidAt(col, r)) {
-                    s.x = col * TILE - s.w; s.vx = -s.vx; return;
-                }
-            }
-        } else {
-            const col = Math.floor(s.x / TILE);
-            for (let r = r0; r <= r1; r++) {
-                if (tm.solidAt(col, r)) {
-                    s.x = (col + 1) * TILE; s.vx = -s.vx; return;
-                }
-            }
-        }
+        const dts = dt / 1000;
 
-        // Don't walk off ledges: probe the tile under the leading foot.
-        const probeX = s.vx > 0 ? s.x + s.w + 1 : s.x - 1;
-        const probeY = s.y + s.h + 1;
-        if (!tm.solidAtPx(probeX, probeY)) s.vx = -s.vx;
+        s.vy += STOMP_GRAVITY * dts;
+        if (s.vy > STOMP_MAX_FALL) s.vy = STOMP_MAX_FALL;
+
+        s.onGround = false;
+        stompMoveX(s, s.vx * dts, tm);
+        stompMoveY(s, s.vy * dts, tm);
+
+        // Don't walk off ledges: if grounded and the tile under the leading foot
+        // is empty, flip direction. Stompers fall off conveyer-style only when
+        // gravity carries them off (e.g. squashed mid-air or off a moving platform).
+        if (s.onGround) {
+            const probeX = s.vx > 0 ? s.x + s.w + 1 : s.x - 1;
+            const probeY = s.y + s.h + 2;
+            if (!tm.solidAtPx(probeX, probeY)) s.vx = -s.vx;
+        }
     }
 
     // ── Player ↔ stomper ────────────────────────────────────────────────────
@@ -224,13 +268,11 @@
 
     // ── Render ───────────────────────────────────────────────────────────────
     function drawSky() {
-        const W = Canvas.w(ctx, VIEW_W);
-        const H = Canvas.h(ctx, VIEW_H);
-        const g = ctx.createLinearGradient(0, 0, 0, H);
+        const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
         g.addColorStop(0, '#6cb0f0');
         g.addColorStop(1, '#a8d4f8');
         ctx.fillStyle = g;
-        ctx.fillRect(0, 0, W, H);
+        ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     }
 
     function drawHero() {
@@ -265,13 +307,34 @@
         Art.drawFlag(ctx, Math.round(f.x - Game.cam.x), Math.round(f.y - Game.cam.y));
     }
 
+    // Letterbox the fixed VIEW_W × VIEW_H virtual viewport into the actual
+    // canvas surface (which the bro engine sizes from the CSS layout box, not
+    // from canvas.width). Aspect is preserved; bars are drawn black.
     function draw() {
+        const W = Canvas.w(ctx, VIEW_W);
+        const H = Canvas.h(ctx, VIEW_H);
+        ctx.save();
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+        const scale = Math.min(W / VIEW_W, H / VIEW_H);
+        const ox = Math.floor((W - VIEW_W * scale) / 2);
+        const oy = Math.floor((H - VIEW_H * scale) / 2);
+        ctx.translate(ox, oy);
+        ctx.scale(scale, scale);
+        // Clip so out-of-viewport content (over-wide tilemaps, off-screen sprites)
+        // doesn't bleed into the letterbox bars.
+        ctx.beginPath();
+        ctx.rect(0, 0, VIEW_W, VIEW_H);
+        ctx.clip();
+
         drawSky();
-        if (!Game.tilemap) return;
-        Game.tilemap.draw(ctx, Game.cam.x, Game.cam.y, VIEW_W, VIEW_H);
-        drawFlag();
-        drawStompers();
-        drawHero();
+        if (Game.tilemap) {
+            Game.tilemap.draw(ctx, Game.cam.x, Game.cam.y, VIEW_W, VIEW_H);
+            drawFlag();
+            drawStompers();
+            drawHero();
+        }
+        ctx.restore();
     }
 
     // ── Update ───────────────────────────────────────────────────────────────
