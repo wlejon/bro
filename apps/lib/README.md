@@ -37,6 +37,9 @@ any per-app `storage.js` that wraps it).
 | `screens.js`   | `Screens`   | overlay state machine, menu nav, optional shared bg + HUD toggle |
 | `netroom.js`   | `NetRoom`   | lobby + turn helpers over `bro.net`                              |
 | `camera.js`    | `Camera`    | 3D orbit/fly camera                                              |
+| `camera2d.js`  | `Camera2D`  | 2D follow camera with deadzone + level-bounds clamping           |
+| `tilemap.js`   | `Tilemap`   | fixed-size tile grid, atlas blit, AABB queries (`solidAtPx`)     |
+| `platformer.js`| `Platformer`| AABB body + tile collision + jump feel (coyote/buffer/cut)       |
 
 Conventions:
 - All modules are safe to load without calling `init()` — lazy by default.

@@ -4,14 +4,27 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace bro::js {
 
-/// Decoded image pixel data (returned by ImageBindings::getImageData).
+/// Decoded image pixel data (returned by ImageBindings::getImagePixels).
+///
+/// Two storage modes:
+///   - Borrowed: `data` points into another object's buffer (e.g. an Image's
+///     decoded `pixels` vector). `owned` is empty.
+///   - Owned: `data` points into `owned`, which holds a freshly read pixel
+///     buffer (e.g. snapshotted from an HTMLCanvasElement's surface). The
+///     caller must keep this struct alive while using `data`.
+///
+/// Callers don't need to care which mode is in use — just read `data`,
+/// `width`, `height`. The struct's destructor frees `owned` when it goes
+/// out of scope.
 struct ImagePixels {
     const uint8_t* data = nullptr;  // RGBA pixels
     int width = 0;
     int height = 0;
+    std::vector<uint8_t> owned;     // optional; data may point into here
 };
 
 class ImageBindings {

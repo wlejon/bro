@@ -1,5 +1,6 @@
 #include "js/canvas_bindings.h"
 #include "js/image_bindings.h"
+#include "js/dom_bindings_internal.h"
 #include "canvas/canvas_scene.h"
 #include "canvas/canvas2d.h"
 
@@ -121,10 +122,43 @@ static JSValue js_drawImage(JSContext* ctx, JSValueConst this_val,
     auto* sc = w ? w->scene : nullptr;
     if (!sc || argc < 3) return JS_UNDEFINED;
 
+    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
+
+    // Fast path: source is an HTMLCanvasElement. Snapshot its surface as an
+    // SkImage (cached on the source scene, invalidated on mutation) and draw
+    // straight from it — Ganesh sees one texture across many blits, instead
+    // of N copies of the same RGBA buffer turning into N unique GPU uploads.
+    // This is what makes sprite-atlas-style rendering practical: a tilemap
+    // that issues 1000 drawImage(atlas, ...) calls per frame works the way
+    // you'd expect, not at one-readback-per-blit speed.
+    if (auto* el = bro::js::getElement(argv[0])) {
+        auto* srcScene = static_cast<bro::canvas::CanvasScene*>(el->canvasScene());
+        if (srcScene) {
+            sk_sp<SkImage> img = srcScene->snapshotImage();
+            if (img) {
+                int sw = img->width(), sh = img->height();
+                if (argc >= 9) {
+                    sc->drawImage(std::move(img),
+                                  F(1), F(2), F(3), F(4), F(5), F(6), F(7), F(8));
+                } else if (argc >= 5) {
+                    sc->drawImage(std::move(img),
+                                  0, 0, (float)sw, (float)sh,
+                                  F(1), F(2), F(3), F(4));
+                } else {
+                    sc->drawImage(std::move(img),
+                                  0, 0, (float)sw, (float)sh,
+                                  F(1), F(2), (float)sw, (float)sh);
+                }
+                return JS_UNDEFINED;
+            }
+        }
+    }
+
+    // Slow path: Image (or any other CanvasImageSource that exposes pixels).
+    // Falls through to the rgba-copy path so PNG/JPG-decoded sources still
+    // work the way they always have.
     ImagePixels pix;
     if (!ImageBindings::getImagePixels(argv[0], pix)) return JS_UNDEFINED;
-
-    auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
 
     if (argc >= 9) {
         sc->drawImage(pix.data, pix.width, pix.height,

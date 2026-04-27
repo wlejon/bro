@@ -1,10 +1,13 @@
 #include "js/image_bindings.h"
+#include "js/dom_bindings_internal.h"
+#include "canvas/canvas_scene.h"
 
 #include <qjsbind/qjsbind.h>
 
 #include "util/log.h"
 
 #include <stb_image.h>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -202,12 +205,40 @@ JSValue ImageBindings::createImage(JSContext* ctx) {
 }
 
 bool ImageBindings::getImagePixels(JSValue val, ImagePixels& out) {
-    auto* img = qjsbind::unwrap<ID>(nullptr, val);
-    if (!img || !img->complete || img->pixels.empty()) return false;
-    out.data = img->pixels.data();
-    out.width = img->width;
-    out.height = img->height;
-    return true;
+    // 1) Loaded Image (PNG/JPG decoded via stb_image, or 1x1 fallback).
+    if (auto* img = qjsbind::unwrap<ID>(nullptr, val)) {
+        if (img->complete && !img->pixels.empty()) {
+            out.data   = img->pixels.data();
+            out.width  = img->width;
+            out.height = img->height;
+            return true;
+        }
+    }
+
+    // 2) HTMLCanvasElement — snapshot its 2D context's surface. The Canvas 2D
+    //    spec lets any CanvasImageSource feed drawImage / WebGL texImage2D,
+    //    and other canvases are a load-bearing CanvasImageSource (offscreen
+    //    sprite atlases, recipe-baked tilesets, etc.). The scene caches the
+    //    snapshot until the next mutation, so atlas-style usage (one bake,
+    //    many blits) doesn't pay a GPU readback per draw.
+    if (auto* el = getElement(val)) {
+        auto* scene = static_cast<bro::canvas::CanvasScene*>(el->canvasScene());
+        if (scene) {
+            int w = std::atoi(el->getAttribute("width").c_str());
+            int h = std::atoi(el->getAttribute("height").c_str());
+            if (w <= 0) w = 300;   // HTML canvas defaults
+            if (h <= 0) h = 150;
+            const uint8_t* px = scene->snapshotPixels(w, h);
+            if (px) {
+                out.data   = px;
+                out.width  = w;
+                out.height = h;
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 } // namespace bro::js
