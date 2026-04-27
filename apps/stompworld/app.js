@@ -328,7 +328,9 @@
         ctx.clip();
 
         drawSky();
-        if (Game.tilemap) {
+        if (S.name() === 'training' && Training.sim) {
+            Training.draw();
+        } else if (Game.tilemap) {
             Game.tilemap.draw(ctx, Game.cam.x, Game.cam.y, VIEW_W, VIEW_H);
             drawFlag();
             drawStompers();
@@ -339,6 +341,7 @@
 
     // ── Update ───────────────────────────────────────────────────────────────
     function update(dt) {
+        if (S.name() === 'training') { Training.update(dt); return; }
         if (S.name() !== 'playing') return;
 
         // Win celebration: drift right, ignore input, then advance.
@@ -400,6 +403,231 @@
         Game.cam.follow(Game.player.x + Game.player.w / 2, VIEW_H / 2);
     }
 
+    // ── Training mode ────────────────────────────────────────────────────────
+    // The displayed game is driven by LiveAgent (low-iter MCTS over the
+    // *current* PolicyValueNet snapshot). A background Worker runs the full
+    // ExIt training loop and posts fresh weights after every episode it
+    // completes, which the live agent loads in place. Watch the same hero
+    // get less terrible in real time as the worker churns.
+    //
+    // Controls: F = run live sim faster (still uses the latest weights),
+    //           Esc = back to title.
+    const Training = {
+        sim: null,
+        liveAgent: null,
+        worker: null,
+        ghosts: null,
+        cam: null,
+        fast: false,
+        FAST_MULT: 8,
+        running: false,
+        decisionAccum: 0,
+        DECISION_PERIOD_MS: 1000 / 60 * 4,   // ≈ FRAME_SKIP * FIXED_DT_MS
+        // Stats merged from worker postMessages.
+        workerStats: {
+            episode: 0, iters: 0, steps: 0, bestX: 0, lastReason: 'fresh',
+            lossValue: 0, lossPolicy: 0, trainSteps: 0,
+            netVersion: 0n, bufSize: 0,
+        },
+        liveStats: { episodes: 0, lastReason: 'fresh', bestX: 0, decisions: 0 },
+
+        start() {
+            const lvl = Level.load({ tileSize: TILE });
+            let spawn = { x: 0, y: 0 };
+            const stomperTemplates = [];
+            let flag = null;
+            for (const e of lvl.entities) {
+                if (e.kind === 'player') {
+                    spawn.x = e.x; spawn.y = e.y;
+                } else if (e.kind === 'stomper') {
+                    stomperTemplates.push({
+                        x: e.x + 2,
+                        y: (e.row + 1) * TILE - 24,
+                        w: 28, h: 24, vx: -50, vy: 0,
+                        onGround: false, alive: true, squashTimer: 0, animT: 0,
+                    });
+                } else if (e.kind === 'flag') {
+                    flag = { x: e.x, w: 32, h: 96, y: e.row * TILE - 64 };
+                    flag.y = e.row * TILE - flag.h + TILE;
+                }
+            }
+            this.sim = SwSim.create({
+                tilemap: lvl.tilemap,
+                spawn, stompers: stomperTemplates, flag,
+                timeLimit: 300,
+            });
+            this.liveAgent = LiveAgent.create({ sim: this.sim, iterations: 24 });
+            this.ghosts = Ghosts.create({ maxGhosts: 6 });
+            this.cam = Camera2D.create({
+                viewW: VIEW_W, viewH: VIEW_H,
+                levelW: lvl.tilemap.widthPx,
+                levelH: lvl.tilemap.heightPx,
+                deadzoneW: 120, deadzoneH: 1024,
+            });
+            this.cam.snapTo(this.sim.player.x + this.sim.player.w / 2, VIEW_H / 2);
+            this.fast = false;
+            this.decisionAccum = 0;
+            this.liveStats = { episodes: 0, lastReason: 'fresh', bestX: 0, decisions: 0 };
+            this.ghostRec = { frames: [] };
+
+            // Spawn the trainer worker.
+            this.worker = new Worker('trainer_worker.js');
+            this.worker.onmessage = (e) => {
+                const msg = e && e.data; if (!msg) return;
+                if (msg.type === 'weights') {
+                    this.liveAgent.setWeights(msg.bytes, msg.version);
+                    if (msg.stats) Object.assign(this.workerStats, msg.stats);
+                } else if (msg.type === 'stats') {
+                    if (msg.stats) Object.assign(this.workerStats, msg.stats);
+                }
+            };
+            this.running = true;
+        },
+
+        stop() {
+            this.running = false;
+            if (this.worker) {
+                try { this.worker.postMessage({ type: 'stop' }); } catch (_) {}
+                try { this.worker.terminate(); } catch (_) {}
+                this.worker = null;
+            }
+        },
+
+        oneDecision() {
+            if (!this.liveAgent.weightsLoaded) return;   // wait for first publish
+            const action = this.liveAgent.decide();
+            const out = this.sim.step(action);
+            if (this.sim.player.x > this.liveStats.bestX)
+                this.liveStats.bestX = this.sim.player.x;
+            this.liveStats.decisions++;
+
+            // Ghost frame.
+            const p = this.sim.player;
+            let frame = 0;
+            if (!p.onGround) frame = 3;
+            else if (Math.abs(p.vx) > 8) frame = 1 + (((this.sim.tick / 8) | 0) % 2);
+            this.ghostRec.frames.push({
+                tick: this.sim.tick, x: p.x, y: p.y, frame, facing: p.facing,
+            });
+
+            if (out.done) {
+                const reason = this.sim.won ? 'flag'
+                             : (this.sim.timeLeft <= 0 ? 'timeout' : 'death');
+                this.liveStats.lastReason = reason;
+                this.liveStats.episodes++;
+                if (this.ghostRec.frames.length > 0) {
+                    this.ghosts.commit({ frames: this.ghostRec.frames.slice() });
+                    this.ghostRec.frames.length = 0;
+                }
+                this.sim.reset();
+                this.liveStats.bestX = this.sim.player.x;
+            }
+        },
+
+        update(dt) {
+            if (!this.running) return;
+            // Pace decisions in real time so the user can watch one hero
+            // play. Fast mode just shortens the period; the worker is
+            // unaffected (it runs flat-out on its own thread regardless).
+            const period = this.fast ? (this.DECISION_PERIOD_MS / this.FAST_MULT)
+                                     : this.DECISION_PERIOD_MS;
+            this.decisionAccum += dt;
+            let safety = 64;
+            while (this.decisionAccum >= period && safety-- > 0) {
+                this.decisionAccum -= period;
+                this.oneDecision();
+            }
+            this.cam.follow(this.sim.player.x + this.sim.player.w / 2, VIEW_H / 2);
+        },
+
+        // Helper: draw one ghost sprite using the hero atlas.
+        drawGhostSprite(ctx, x, y, frame, flipped, alpha) {
+            const drawX = Math.round(x - this.cam.x);
+            const drawY = Math.round(y - this.cam.y - 2);
+            ctx.globalAlpha = alpha;
+            Art.drawHero(ctx, drawX, drawY, frame, flipped);
+            ctx.globalAlpha = 1;
+        },
+
+        draw() {
+            if (!this.sim) return;
+            const tm = this.sim.tilemap;
+            tm.draw(ctx, this.cam.x, this.cam.y, VIEW_W, VIEW_H);
+
+            // Flag.
+            if (this.sim.flag) {
+                Art.drawFlag(ctx,
+                             Math.round(this.sim.flag.x - this.cam.x),
+                             Math.round(this.sim.flag.y - this.cam.y));
+            }
+
+            // Stompers (live).
+            for (const s of this.sim.stompers) {
+                if (!this.cam.visible(s.x, s.y, s.w, s.h)) continue;
+                const f = !s.alive ? 2 : (Math.floor(s.animT / 200) % 2);
+                Art.drawStomper(ctx,
+                                Math.round(s.x - this.cam.x),
+                                Math.round(s.y - this.cam.y), f);
+            }
+
+            // Ghosts (under live hero).
+            const t = this.sim.tick;
+            this.ghosts.draw(ctx, t, (cctx, x, y, fr, flipped, a) =>
+                this.drawGhostSprite(cctx, x, y, fr, flipped, a));
+
+            // Live hero.
+            const p = this.sim.player;
+            let frame = 0;
+            if (!p.onGround) frame = 3;
+            else if (Math.abs(p.vx) > 8) frame = 1 + (((this.sim.tick / 8) | 0) % 2);
+            Art.drawHero(ctx,
+                         Math.round(p.x - this.cam.x),
+                         Math.round(p.y - this.cam.y - 2),
+                         frame, p.facing < 0);
+
+            // HUD overlay (drawn in the virtual viewport so it letterboxes).
+            this.drawHud();
+        },
+
+        drawHud() {
+            const w = this.workerStats;
+            const l = this.liveStats;
+            const ready = this.liveAgent && this.liveAgent.weightsLoaded;
+            const lines = [
+                'TRAINING — F = fast' + (this.fast ? ' [ON]' : '') + '   Esc = quit',
+                'live: ep ' + l.episodes + '   bestX ' + (l.bestX | 0)
+                    + '   last: ' + l.lastReason
+                    + (ready ? '' : '   [waiting for weights]'),
+                'worker: ep ' + w.episode + '   iters ' + w.iters + '   steps ' + w.steps,
+                'buf ' + (w.bufSize || 0) + '   train_steps ' + (w.trainSteps || 0)
+                    + '   net v' + (w.netVersion ? w.netVersion.toString() : '0'),
+                'loss  v=' + (w.lossValue || 0).toFixed(4)
+                    + '   p=' + (w.lossPolicy || 0).toFixed(4),
+            ];
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,0,0,0.55)';
+            ctx.fillRect(8, 8, 360, 14 * lines.length + 10);
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px monospace';
+            ctx.textBaseline = 'top';
+            for (let i = 0; i < lines.length; i++) {
+                ctx.fillText(lines[i], 14, 12 + i * 14);
+            }
+            ctx.restore();
+        },
+
+        keydown(key) {
+            if (key === 'Escape' || key === 'Esc' || key === 'q' || key === 'Q') {
+                this.stop();
+                S.switchTo('title');
+                return;
+            }
+            if (key === 'f' || key === 'F') {
+                this.fast = !this.fast;
+            }
+        },
+    };
+
     // ── Screens ──────────────────────────────────────────────────────────────
     const S = Screens.create({
         overlay: '#overlay',
@@ -412,6 +640,8 @@
     function pickAction(action) {
         if (action === 'play' || action === 'restart') {
             Game.startRun(); S.switchTo('playing');
+        } else if (action === 'train') {
+            S.switchTo('training');
         } else if (action === 'resume') {
             S.switchTo('playing');
         } else if (action === 'howtoplay') {
@@ -444,6 +674,14 @@
         enter() { S.hideOverlay(); },
     });
 
+    S.define('training', {
+        enter() {
+            S.hideOverlay();
+            Training.start();
+        },
+        keydown(key) { Training.keydown(key); },
+    });
+
     window.addEventListener('keydown', (e) => S.keydown(e.key));
 
     function refreshOverlayStats() {
@@ -464,5 +702,5 @@
     loop.start();
 
     // Expose for debugging in headless / devtools.
-    window.__SW = { Game, S, Art };
+    window.__SW = { Game, S, Art, Training };
 })();
