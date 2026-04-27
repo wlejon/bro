@@ -13,7 +13,10 @@
 #include <brogameagent/learn/search_trace.h>
 #include <brogameagent/learn/gumbel.h>
 #include <brogameagent/learn/trainer.h>
+#include <brogameagent/learn/generic_replay_buffer.h>
+#include <brogameagent/learn/generic_trainer.h>
 #include <brogameagent/nn/net.h>
+#include <brogameagent/nn/policy_value_net.h>
 
 #include <cstring>
 #include <memory>
@@ -51,6 +54,17 @@ struct ExItTrainerData {
     std::shared_ptr<nn::SingleHeroNet>      netRef;
     std::shared_ptr<nn::WeightsHandle>      handleRef;
     std::shared_ptr<learn::ReplayBuffer>    bufRef;
+};
+
+struct GenericReplayBufferData {
+    std::shared_ptr<learn::GenericReplayBuffer> buf;
+};
+
+struct GenericExItTrainerData {
+    std::unique_ptr<learn::GenericExItTrainer>      trainer;
+    std::shared_ptr<nn::PolicyValueNet>             netRef;
+    std::shared_ptr<nn::WeightsHandle>              handleRef;
+    std::shared_ptr<learn::GenericReplayBuffer>     bufRef;
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -126,6 +140,60 @@ static bool readSituation(JSContext* ctx, JSValueConst v, learn::Situation& out)
     copyFloatProp(ctx, v, "targetMove",    out.target_move.data(),   (int)out.target_move.size());
     copyFloatProp(ctx, v, "targetAttack",  out.target_attack.data(), (int)out.target_attack.size());
     copyFloatProp(ctx, v, "targetAbility", out.target_ability.data(),(int)out.target_ability.size());
+    out.value_target = (float)getDouble(ctx, v, "valueTarget", 0.0);
+    return true;
+}
+
+// ─── GenericSituation <-> JS object marshalling ───────────────────────────
+//
+// JS shape: { obs: Float32Array, policyTarget: Float32Array,
+//             actionMask?: Float32Array, valueTarget: number }
+
+static JSValue makeFloat32ArrayCopyVec(JSContext* ctx, const std::vector<float>& v) {
+    return makeFloat32ArrayCopy(ctx, v.data(), (int)v.size());
+}
+
+static bool readFloatVec(JSContext* ctx, JSValueConst obj, const char* key,
+                         std::vector<float>& out, bool required) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) {
+        JS_FreeValue(ctx, v);
+        if (required) return false;
+        out.clear();
+        return true;
+    }
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, nullptr);
+    if (JS_IsException(abuf)) {
+        JS_GetException(ctx);
+        JS_FreeValue(ctx, v);
+        return !required;
+    }
+    size_t abufLen = 0;
+    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    JS_FreeValue(ctx, v);
+    if (!raw) return !required;
+    int n = (int)(viewLen / sizeof(float));
+    out.assign(reinterpret_cast<float*>(raw + byteOff),
+               reinterpret_cast<float*>(raw + byteOff) + n);
+    return true;
+}
+
+static JSValue makeGenericSituationObject(JSContext* ctx, const learn::GenericSituation& s) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "obs",          makeFloat32ArrayCopyVec(ctx, s.obs));
+    JS_SetPropertyStr(ctx, o, "policyTarget", makeFloat32ArrayCopyVec(ctx, s.policy_target));
+    JS_SetPropertyStr(ctx, o, "actionMask",   makeFloat32ArrayCopyVec(ctx, s.action_mask));
+    JS_SetPropertyStr(ctx, o, "valueTarget",  JS_NewFloat64(ctx, s.value_target));
+    return o;
+}
+
+static bool readGenericSituation(JSContext* ctx, JSValueConst v, learn::GenericSituation& out) {
+    if (!JS_IsObject(v)) return false;
+    if (!readFloatVec(ctx, v, "obs", out.obs, /*required*/ true)) return false;
+    if (!readFloatVec(ctx, v, "policyTarget", out.policy_target, /*required*/ true)) return false;
+    readFloatVec(ctx, v, "actionMask", out.action_mask, /*required*/ false);
     out.value_target = (float)getDouble(ctx, v, "valueTarget", 0.0);
     return true;
 }
@@ -304,6 +372,129 @@ static void registerClasses(JSContext* ctx) {
                     return obj;
                 });
     }
+
+    // ── GenericReplayBuffer ────────────────────────────────────────────────
+    {
+        qjsbind::Class<GenericReplayBufferData>(ctx, "AIGenericReplayBuffer", qjsbind::NoGlobal)
+            .get("size",     [](GenericReplayBufferData* d) -> int { return d->buf ? (int)d->buf->size() : 0; })
+            .get("capacity", [](GenericReplayBufferData* d) -> int { return d->buf ? (int)d->buf->capacity() : 0; })
+            .method_raw("push",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<GenericReplayBufferData>(ctx, this_val);
+                    if (!d || !d->buf || argc < 1) return JS_UNDEFINED;
+                    learn::GenericSituation s{};
+                    if (!readGenericSituation(ctx, argv[0], s))
+                        return JS_ThrowTypeError(ctx, "push(situation): expected {obs, policyTarget, valueTarget, actionMask?}");
+                    d->buf->push(std::move(s));
+                    return JS_UNDEFINED;
+                }, 1)
+            .method("clear", [](GenericReplayBufferData* d) { if (d->buf) d->buf->clear(); })
+            .method_raw("sample",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<GenericReplayBufferData>(ctx, this_val);
+                    if (!d || !d->buf) return JS_NewArray(ctx);
+                    int32_t n = 0;
+                    if (argc >= 1) JS_ToInt32(ctx, &n, argv[0]);
+                    if (n < 0) n = 0;
+                    static thread_local std::mt19937_64 rng{std::random_device{}()};
+                    auto batch = d->buf->sample((size_t)n, rng);
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < batch.size(); ++i)
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeGenericSituationObject(ctx, batch[i]));
+                    return arr;
+                }, 1)
+            .method("all",
+                [](GenericReplayBufferData* d, JSContext* ctx) -> JSValue {
+                    JSValue arr = JS_NewArray(ctx);
+                    if (!d->buf) return arr;
+                    const auto& v = d->buf->all();
+                    for (size_t i = 0; i < v.size(); ++i)
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, makeGenericSituationObject(ctx, v[i]));
+                    return arr;
+                });
+    }
+
+    // ── GenericExItTrainer ─────────────────────────────────────────────────
+    {
+        qjsbind::Class<GenericExItTrainerData>(ctx, "AIGenericExItTrainer", qjsbind::NoGlobal)
+            .get("totalSteps",     [](GenericExItTrainerData* d) -> int { return d->trainer ? d->trainer->total_steps() : 0; })
+            .get("totalPublishes", [](GenericExItTrainerData* d) -> int { return d->trainer ? d->trainer->total_publishes() : 0; })
+            .method_raw("setNet",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<GenericExItTrainerData>(ctx, this_val);
+                    if (!d || !d->trainer || argc < 1) return JS_UNDEFINED;
+                    auto netShared = nnPolicyValueNetSharedFromJS(ctx, argv[0]);
+                    if (!netShared) return JS_ThrowTypeError(ctx, "setNet(net): expected PolicyValueNet");
+                    d->netRef = netShared;
+                    d->trainer->set_net(netShared.get());
+                    JS_SetPropertyStr(ctx, this_val, "__net", JS_DupValue(ctx, argv[0]));
+                    return JS_UNDEFINED;
+                }, 1)
+            .method_raw("setBuffer",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<GenericExItTrainerData>(ctx, this_val);
+                    if (!d || !d->trainer || argc < 1) return JS_UNDEFINED;
+                    auto* bd = qjsbind::unwrap<GenericReplayBufferData>(ctx, argv[0]);
+                    if (!bd || !bd->buf) return JS_ThrowTypeError(ctx, "setBuffer(buf): expected GenericReplayBuffer");
+                    d->bufRef = bd->buf;
+                    d->trainer->set_buffer(bd->buf.get());
+                    JS_SetPropertyStr(ctx, this_val, "__buf", JS_DupValue(ctx, argv[0]));
+                    return JS_UNDEFINED;
+                }, 1)
+            .method_raw("setWeightsHandle",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<GenericExItTrainerData>(ctx, this_val);
+                    if (!d || !d->trainer || argc < 1) return JS_UNDEFINED;
+                    auto* h = nnWeightsHandleFromJS(ctx, argv[0]);
+                    if (!h) return JS_ThrowTypeError(ctx, "setWeightsHandle(handle): expected WeightsHandle");
+                    d->trainer->set_weights_handle(h);
+                    JS_SetPropertyStr(ctx, this_val, "__handle", JS_DupValue(ctx, argv[0]));
+                    return JS_UNDEFINED;
+                }, 1)
+            .method("setConfig",
+                [](GenericExItTrainerData* d, JSContext* ctx, JSValueConst cfgV) {
+                    if (!d->trainer || !JS_IsObject(cfgV)) return;
+                    learn::GenericTrainerConfig c = d->trainer->config();
+                    c.lr            = (float)getDouble(ctx, cfgV, "lr", c.lr);
+                    c.momentum      = (float)getDouble(ctx, cfgV, "momentum", c.momentum);
+                    c.batch         = getInt(ctx, cfgV, "batch", c.batch);
+                    c.policy_weight = (float)getDouble(ctx, cfgV, "policyWeight", c.policy_weight);
+                    c.value_weight  = (float)getDouble(ctx, cfgV, "valueWeight", c.value_weight);
+                    c.publish_every = getInt(ctx, cfgV, "publishEvery", c.publish_every);
+                    JSValue sv = JS_GetPropertyStr(ctx, cfgV, "rngSeed");
+                    if (!JS_IsUndefined(sv) && !JS_IsNull(sv)) {
+                        int64_t s = 0;
+                        if (JS_ToBigInt64(ctx, &s, sv) != 0) {
+                            double ds = 0; JS_ToFloat64(ctx, &ds, sv); s = (int64_t)ds;
+                        }
+                        c.rng_seed = (uint64_t)s;
+                    }
+                    JS_FreeValue(ctx, sv);
+                    d->trainer->set_config(c);
+                })
+            .method("step",
+                [](GenericExItTrainerData* d, JSContext* ctx) -> JSValue {
+                    JSValue obj = JS_NewObject(ctx);
+                    if (!d->trainer) return obj;
+                    auto s = d->trainer->step();
+                    JS_SetPropertyStr(ctx, obj, "lossValue",  JS_NewFloat64(ctx, s.loss_value));
+                    JS_SetPropertyStr(ctx, obj, "lossPolicy", JS_NewFloat64(ctx, s.loss_policy));
+                    JS_SetPropertyStr(ctx, obj, "lossTotal",  JS_NewFloat64(ctx, s.loss_total));
+                    JS_SetPropertyStr(ctx, obj, "samples",    JS_NewInt32(ctx, s.samples));
+                    return obj;
+                })
+            .method("stepN",
+                [](GenericExItTrainerData* d, JSContext* ctx, int n) -> JSValue {
+                    JSValue obj = JS_NewObject(ctx);
+                    if (!d->trainer) return obj;
+                    auto s = d->trainer->step_n(n);
+                    JS_SetPropertyStr(ctx, obj, "lossValue",  JS_NewFloat64(ctx, s.loss_value));
+                    JS_SetPropertyStr(ctx, obj, "lossPolicy", JS_NewFloat64(ctx, s.loss_policy));
+                    JS_SetPropertyStr(ctx, obj, "lossTotal",  JS_NewFloat64(ctx, s.loss_total));
+                    JS_SetPropertyStr(ctx, obj, "samples",    JS_NewInt32(ctx, s.samples));
+                    return obj;
+                });
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -370,6 +561,22 @@ static JSValue js_createExItTrainer(JSContext* ctx, JSValueConst, int, JSValueCo
     auto* d = new ExItTrainerData();
     d->trainer = std::make_unique<learn::ExItTrainer>();
     return qjsbind::wrap<ExItTrainerData>(ctx, d);
+}
+
+static JSValue js_createGenericReplayBuffer(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    size_t cap = 4096;
+    if (argc >= 1) {
+        int32_t v = 0; JS_ToInt32(ctx, &v, argv[0]);
+        if (v > 0) cap = (size_t)v;
+    }
+    auto* d = new GenericReplayBufferData{ std::make_shared<learn::GenericReplayBuffer>(cap) };
+    return qjsbind::wrap<GenericReplayBufferData>(ctx, d);
+}
+
+static JSValue js_createGenericExItTrainer(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* d = new GenericExItTrainerData();
+    d->trainer = std::make_unique<learn::GenericExItTrainer>();
+    return qjsbind::wrap<GenericExItTrainerData>(ctx, d);
 }
 
 // ─── Free functions ────────────────────────────────────────────────────────
@@ -439,6 +646,10 @@ void installLearnBindings(JSContext* ctx, JSValue gameObj) {
         JS_NewCFunction(ctx, js_createGumbelNoisePrior, "createGumbelNoisePrior", 2));
     JS_SetPropertyStr(ctx, learnObj, "createExItTrainer",
         JS_NewCFunction(ctx, js_createExItTrainer, "createExItTrainer", 0));
+    JS_SetPropertyStr(ctx, learnObj, "createGenericReplayBuffer",
+        JS_NewCFunction(ctx, js_createGenericReplayBuffer, "createGenericReplayBuffer", 1));
+    JS_SetPropertyStr(ctx, learnObj, "createGenericExItTrainer",
+        JS_NewCFunction(ctx, js_createGenericExItTrainer, "createGenericExItTrainer", 0));
     JS_SetPropertyStr(ctx, learnObj, "targetsFromMcts",
         JS_NewCFunction(ctx, js_targetsFromMcts, "targetsFromMcts", 1));
     JS_SetPropertyStr(ctx, learnObj, "makeSituation",

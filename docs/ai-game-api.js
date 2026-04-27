@@ -785,6 +785,34 @@ pHead.totalLogits;                  // N_MOVE + N_ATTACK + N_ABILITY
 pHead.forward(embed, logits);
 pHead.backward(dLogits, dEmbed);
 
+/** PolicyValueNet — generic small MLP with value head and a single (flat)
+ *  policy head, decoupled from the MOBA-shaped observation/action layout
+ *  that SingleHeroNet assumes. Use this when your observation is hand-crafted
+ *  and your action space is a small flat set of discrete choices (e.g.
+ *  platformer buttons, gridworld moves, puzzle-game pieces).
+ *
+ *  Architecture:
+ *    in_dim → hidden[0] → ReLU → ... → hidden[n-1] → { value(tanh), logits }
+ *
+ *  Forward returns the scalar value; logits are written into the supplied
+ *  Tensor. Backward expects (dValue, dLogits) where dLogits is typically
+ *  (probs - target) from nn.softmaxXent (with optional legal-action mask).
+ *
+ *  Wire format magic differs from SingleHeroNet — blobs are not interchangeable.
+ */
+const pvnet = bro.ai.game.nn.createPolicyValueNet({
+    inDim: 60,
+    hidden: [64, 64],         // any non-empty list of positive ints
+    valueHidden: 32,
+    numActions: 6,
+    seed: 0xC0DE1234n,
+});
+pvnet.inDim; pvnet.numActions; pvnet.trunkDim; pvnet.numParams;
+const valuePV = pvnet.forward(obsTensor, logitsTensor);     // returns scalar
+pvnet.backward(dValuePV, dLogitsTensor);
+pvnet.zeroGrad(); pvnet.sgdStep(lr, momentum);
+const pvBlob = pvnet.save();   pvnet.load(pvBlob);
+
 /** SingleHeroNet — encoder → trunk → {value, policy}. */
 const net = bro.ai.game.nn.createSingleHeroNet({
   enc: { hidden: 32, embedDim: 32 },
@@ -888,6 +916,44 @@ buf.push(sit);
 
 /** Gumbel-improved policy target (Danihelka 2022, simplified). */
 const tgt2 = bro.ai.game.learn.gumbelImprovedPolicy(mcts);
+
+
+// ─── Generic ExIt: arbitrary obs / flat discrete action space ─────────────
+//
+// Pair PolicyValueNet with the generic replay buffer + trainer when your
+// problem doesn't fit the combat-shaped Situation (no enemy slots, no
+// ability cooldowns, no factored heads). Same SGD+momentum loop, same
+// WeightsHandle hot-swap; differs only in the Situation shape and which
+// net it drives.
+
+/** GenericSituation — plain JS object the buffer accepts:
+ *    {
+ *      obs:          Float32Array(net.inDim),
+ *      policyTarget: Float32Array(net.numActions),  // soft distribution, sums to ≈ 1
+ *      actionMask?:  Float32Array(net.numActions),  // 1.0 legal, 0.0 illegal; omit ⇒ all legal
+ *      valueTarget:  number in [-1, 1]              // typically discounted return, clipped
+ *    }
+ */
+
+const gbuf = bro.ai.game.learn.createGenericReplayBuffer(/*capacity*/ 4096);
+gbuf.push({ obs: o, policyTarget: pi, actionMask: mask, valueTarget: 0.7 });
+gbuf.size; gbuf.capacity;
+const gbatch = gbuf.sample(32);   // [GenericSituation, ...]
+const gall   = gbuf.all();        gbuf.clear();
+
+const gtrainer = bro.ai.game.learn.createGenericExItTrainer();
+gtrainer.setNet(pvnet);
+gtrainer.setBuffer(gbuf);
+gtrainer.setWeightsHandle(handle);
+gtrainer.setConfig({
+    lr: 0.01, momentum: 0.9, batch: 32,
+    policyWeight: 1.0, valueWeight: 1.0,
+    publishEvery: 100,
+    rngSeed: 0x1234n,
+});
+const gstep   = gtrainer.step();        // {lossValue, lossPolicy, lossTotal, samples}
+const gstepN  = gtrainer.stepN(100);
+gtrainer.totalSteps; gtrainer.totalPublishes;
 
 
 // =============================================================================

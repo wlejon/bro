@@ -18,6 +18,7 @@
 #include <brogameagent/nn/encoder.h>
 #include <brogameagent/nn/heads.h>
 #include <brogameagent/nn/net.h>
+#include <brogameagent/nn/policy_value_net.h>
 
 #include <cstring>
 #include <memory>
@@ -36,6 +37,7 @@ struct DeepSetsEncoderData       { nn::DeepSetsEncoder e; };
 struct ValueHeadData             { nn::ValueHead v; };
 struct FactoredPolicyHeadData    { nn::FactoredPolicyHead h; };
 struct SingleHeroNetData         { std::shared_ptr<nn::SingleHeroNet> net; };
+struct PolicyValueNetData        { std::shared_ptr<nn::PolicyValueNet> net; };
 struct WeightsHandleData         { std::shared_ptr<nn::WeightsHandle> handle; };
 
 // ─── Small helpers ─────────────────────────────────────────────────────────
@@ -464,6 +466,55 @@ static void registerClasses(JSContext* ctx) {
                 }, 1);
     }
 
+    // ── PolicyValueNet ─────────────────────────────────────────────────────
+    {
+        qjsbind::Class<PolicyValueNetData>(ctx, "AIPolicyValueNet", qjsbind::NoGlobal)
+            .get("inDim",       [](PolicyValueNetData* d) -> int { return d->net ? d->net->in_dim() : 0; })
+            .get("numActions",  [](PolicyValueNetData* d) -> int { return d->net ? d->net->num_actions() : 0; })
+            .get("trunkDim",    [](PolicyValueNetData* d) -> int { return d->net ? d->net->trunk_dim() : 0; })
+            .get("numParams",   [](PolicyValueNetData* d) -> int { return d->net ? d->net->num_params() : 0; })
+            .method("forward",
+                [](PolicyValueNetData* d, JSContext* ctx, JSValueConst x, JSValueConst logits) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    auto* xt = tensorFromJS(ctx, x); auto* lt = tensorFromJS(ctx, logits);
+                    if (!xt || !lt) return JS_ThrowTypeError(ctx, "PolicyValueNet.forward(x,logits)");
+                    float v = 0.0f;
+                    d->net->forward(*xt, v, *lt);
+                    return JS_NewFloat64(ctx, v);
+                })
+            .method("backward",
+                [](PolicyValueNetData* d, JSContext* ctx, double dValue, JSValueConst dLogits) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    auto* dl = tensorFromJS(ctx, dLogits);
+                    if (!dl) return JS_ThrowTypeError(ctx, "PolicyValueNet.backward(dValue,dLogits)");
+                    d->net->backward((float)dValue, *dl);
+                    return JS_UNDEFINED;
+                })
+            .method("zeroGrad", [](PolicyValueNetData* d) { if (d->net) d->net->zero_grad(); })
+            .method("sgdStep",  [](PolicyValueNetData* d, double lr, double m) { if (d->net) d->net->sgd_step((float)lr, (float)m); })
+            .method("save",
+                [](PolicyValueNetData* d, JSContext* ctx) -> JSValue {
+                    if (!d->net) return makeUint8ArrayCopy(ctx, nullptr, 0);
+                    auto blob = d->net->save();
+                    return makeUint8ArrayCopy(ctx, blob.data(), blob.size());
+                })
+            .method_raw("load",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<PolicyValueNetData>(ctx, this_val);
+                    if (!d || !d->net || argc < 1) return JS_UNDEFINED;
+                    size_t byteOff = 0, viewLen = 0;
+                    JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
+                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    size_t abufLen = 0;
+                    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+                    JS_FreeValue(ctx, abuf);
+                    if (!raw) return JS_ThrowTypeError(ctx, "bad buffer");
+                    std::vector<uint8_t> blob(raw + byteOff, raw + byteOff + viewLen);
+                    d->net->load(blob);
+                    return JS_UNDEFINED;
+                }, 1);
+    }
+
     // ── WeightsHandle ──────────────────────────────────────────────────────
     {
         qjsbind::Class<WeightsHandleData>(ctx, "AIWeightsHandle", qjsbind::NoGlobal)
@@ -594,6 +645,47 @@ static JSValue js_createSingleHeroNet(JSContext* ctx, JSValueConst, int argc, JS
 static JSValue js_createWeightsHandle(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return qjsbind::wrap<WeightsHandleData>(ctx,
         new WeightsHandleData{ std::make_shared<nn::WeightsHandle>() });
+}
+
+static JSValue js_createPolicyValueNet(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    nn::PolicyValueNet::Config cfg{};
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        cfg.in_dim       = getInt(ctx, argv[0], "inDim",       cfg.in_dim);
+        cfg.num_actions  = getInt(ctx, argv[0], "numActions",  cfg.num_actions);
+        cfg.value_hidden = getInt(ctx, argv[0], "valueHidden", cfg.value_hidden);
+
+        // hidden: array of ints. If absent, keep the default {64, 64}.
+        JSValue hv = JS_GetPropertyStr(ctx, argv[0], "hidden");
+        if (JS_IsArray(hv)) {
+            uint32_t len = 0;
+            JSValue lv = JS_GetPropertyStr(ctx, hv, "length");
+            JS_ToUint32(ctx, &len, lv);
+            JS_FreeValue(ctx, lv);
+            std::vector<int> hidden;
+            hidden.reserve(len);
+            for (uint32_t i = 0; i < len; ++i) {
+                JSValue ev = JS_GetPropertyUint32(ctx, hv, i);
+                int32_t w = 0;
+                JS_ToInt32(ctx, &w, ev);
+                JS_FreeValue(ctx, ev);
+                if (w > 0) hidden.push_back(w);
+            }
+            if (!hidden.empty()) cfg.hidden = std::move(hidden);
+        }
+        JS_FreeValue(ctx, hv);
+
+        JSValue seedV = JS_GetPropertyStr(ctx, argv[0], "seed");
+        cfg.seed = readSeed(ctx, seedV, cfg.seed);
+        JS_FreeValue(ctx, seedV);
+    }
+    if (cfg.in_dim <= 0 || cfg.num_actions <= 0 || cfg.hidden.empty() || cfg.value_hidden <= 0) {
+        return JS_ThrowTypeError(ctx,
+            "createPolicyValueNet({inDim,numActions,hidden:[...],valueHidden,seed?}) — "
+            "inDim, numActions, hidden[], valueHidden are required");
+    }
+    auto net = std::make_shared<nn::PolicyValueNet>();
+    net->init(cfg);
+    return qjsbind::wrap<PolicyValueNetData>(ctx, new PolicyValueNetData{ std::move(net) });
 }
 
 // ─── Ops ───────────────────────────────────────────────────────────────────
@@ -764,6 +856,7 @@ void installNNBindings(JSContext* ctx, JSValue gameObj) {
     JS_SetPropertyStr(ctx, nnObj, "createValueHead",          JS_NewCFunction(ctx, js_createValueHead, "createValueHead", 3));
     JS_SetPropertyStr(ctx, nnObj, "createFactoredPolicyHead", JS_NewCFunction(ctx, js_createFactoredPolicyHead, "createFactoredPolicyHead", 2));
     JS_SetPropertyStr(ctx, nnObj, "createSingleHeroNet",      JS_NewCFunction(ctx, js_createSingleHeroNet, "createSingleHeroNet", 1));
+    JS_SetPropertyStr(ctx, nnObj, "createPolicyValueNet",     JS_NewCFunction(ctx, js_createPolicyValueNet, "createPolicyValueNet", 1));
     JS_SetPropertyStr(ctx, nnObj, "createWeightsHandle",      JS_NewCFunction(ctx, js_createWeightsHandle, "createWeightsHandle", 0));
 
     // Ops
@@ -803,6 +896,14 @@ std::shared_ptr<nn::SingleHeroNet> nnSingleHeroNetSharedFromJS(JSContext* ctx, J
 nn::WeightsHandle* nnWeightsHandleFromJS(JSContext* ctx, JSValueConst v) {
     auto* d = qjsbind::unwrap<WeightsHandleData>(ctx, v);
     return d && d->handle ? d->handle.get() : nullptr;
+}
+nn::PolicyValueNet* nnPolicyValueNetFromJS(JSContext* ctx, JSValueConst v) {
+    auto* d = qjsbind::unwrap<PolicyValueNetData>(ctx, v);
+    return d && d->net ? d->net.get() : nullptr;
+}
+std::shared_ptr<nn::PolicyValueNet> nnPolicyValueNetSharedFromJS(JSContext* ctx, JSValueConst v) {
+    auto* d = qjsbind::unwrap<PolicyValueNetData>(ctx, v);
+    return d ? d->net : std::shared_ptr<nn::PolicyValueNet>{};
 }
 
 } // namespace bro::js
