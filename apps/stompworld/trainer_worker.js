@@ -10,11 +10,10 @@
 // display agent). This worker owns the network, the replay buffer, the
 // SGD trainer, and the on-disk checkpoint ring + best.bin.
 //
-// Startup: load shared libs, build a "training-only" SwAgent (we use
-// just its net/buffer/trainer/handle wiring — its self-play methods are
-// unused). Resume from `ckpt/best.bin` if present; otherwise run BC
-// warmup against the heuristic + 5000 SGD pretrain. Then publish the
-// initial weights and enter the ingest+train+publish loop.
+// Startup: load shared libs, build the trainer wiring (net + buffer +
+// trainer + handle). Resume from `ckpt/best.bin` if present; otherwise
+// run BC warmup against the heuristic + 5000 SGD pretrain. Then publish
+// the initial weights and enter the ingest+train+publish loop.
 
 'use strict';
 
@@ -24,7 +23,6 @@ const fs = require('fs');
 const SHARED = [
     '../lib/tilemap.js',
     '../lib/platformer.js',
-    '../lib/mcts_js.js',
     'level.js',
     'sim.js',
     'agent_obs.js',
