@@ -420,7 +420,7 @@
         ctx.clip();
 
         drawSky();
-        if (S.name() === 'training' && Training.sim) {
+        if (S.name() === 'training' && Training.lvlTilemap) {
             Training.draw();
         } else if (Game.tilemap) {
             Game.tilemap.draw(ctx, Game.cam.x, Game.cam.y, VIEW_W, VIEW_H);
@@ -500,291 +500,393 @@
     }
 
     // ── Training mode ────────────────────────────────────────────────────────
-    // The displayed game is driven by LiveAgent (low-iter MCTS over the
-    // *current* PolicyValueNet snapshot). A background Worker runs the full
-    // ExIt training loop and posts fresh weights after every episode it
-    // completes, which the live agent loads in place. Watch the same hero
-    // get less terrible in real time as the worker churns.
+    // Layered architecture, all heavy work off the main thread:
     //
-    // Controls: F = run live sim faster (still uses the latest weights),
+    //   trainer_worker      owns net + buffer + SGD; ingests tuples,
+    //                       publishes weights, persists checkpoints.
+    //   mcts_worker × N     pure self-play data generators at varying
+    //                       search depths (Dirichlet exploration on).
+    //                       No render, no failure memory.
+    //   live_worker         owns the displayed sim. Runs MCTS on top of
+    //                       the best-crop pool's seeds, biased away from
+    //                       recently-failed lines via FailureTape. Posts
+    //                       a render snapshot per decision.
+    //
+    // Main thread:
+    //   - routes: tuples (any worker → trainer), weights (trainer → all
+    //     play workers), trajectory_end (any → trainer for ckpt metric).
+    //   - holds the BestCrop pool: every trajectory from any worker is
+    //     ingested and ranked. Periodically (~SEED_PERIOD_MS) main picks
+    //     a top entry and seeds the live worker with either the start
+    //     state alone or a replayed prefix of its action sequence — so
+    //     the display agent runs MCTS on top of the best raw data we
+    //     have, not from scratch.
+    //   - draws from the latest render snapshot at 60 fps regardless of
+    //     how slow any individual MCTS search runs.
+    //
+    // Controls: F = bump live decision rate, C = clear failure tape,
     //           Esc = back to title.
     const Training = {
-        sim: null,
-        liveAgent: null,
-        worker: null,
-        ghosts: null,
+        trainer: null,
+        live: null,
+        mctsWorkers: [],
+        pool: null,
         cam: null,
+        snap: null,
         fast: false,
         FAST_MULT: 8,
         running: false,
-        decisionAccum: 0,
-        DECISION_PERIOD_MS: 1000 / 60 * 4,   // ≈ FRAME_SKIP * FIXED_DT_MS
-        // Stats merged from worker postMessages.
+
+        // Static level data for rendering — sims live in the workers.
+        lvlTilemap: null,
+        lvlFlag: null,
+
+        // Worker-config knobs. Two MCTS data workers at very different
+        // search depths so the trainer sees a mix of cheap/diverse and
+        // deep/confident visit distributions.
+        NUM_MCTS_WORKERS: 2,
+        MCTS_DEPTHS:  [50, 200],
+        MCTS_ROLLOUT: [6, 10],
+
+        // Seed pump: how often main hands the live worker a fresh
+        // start-state from the best-crop pool.
+        seedAccum: 0,
+        SEED_PERIOD_MS: 500,
+
+        // Live decision pump (main → live worker). Both workers self-clock
+        // via 'ready' messages and main answers with 'step' (live) or
+        // 'tick' (mcts). For live we also enforce wall-clock pacing — if
+        // a 'ready' arrives before LIVE_PERIOD_MS has elapsed since the
+        // last decision, we hold the credit until the period passes so
+        // the displayed agent runs in real time. Fast mode shrinks the
+        // period.
+        LIVE_PERIOD_MS: 1000 / 60 * 4,    // matches sim FRAME_SKIP
+        liveLastStep: 0,
+        liveCredits: 0,
+
+        // mcts workers are self-clocking: they post 'ready' after each
+        // batch, and main responds with another 'tick'.
+        mctsReady: [],
+
+        // HUD aggregates.
         workerStats: {
-            episode: 0, iters: 0, steps: 0, bestX: 0, lastReason: 'fresh',
-            lossValue: 0, lossPolicy: 0, trainSteps: 0,
-            netVersion: 0n, bufSize: 0,
-            spawnCol: 0, spawnIdx: 0,
-            bestMean: 0, meanReturn: 0, resumed: 0,
-            perColRates: '',
+            ingested: 0, bufSize: 0, trainSteps: 0,
+            lossValue: 0, lossPolicy: 0,
+            netVersion: 0n, bestMean: 0, meanReturn: 0, resumed: 0,
         },
-        liveStats: { episodes: 0, lastReason: 'fresh', bestX: 0, decisions: 0 },
+        liveStats: {
+            episodes: 0, lastReason: 'fresh', bestX: 0,
+            decisions: 0, tapeEntries: 0, tapeSigs: 0,
+        },
+        mctsStats: [],
+        warmupInfo: null,
+        poolTopReturn: 0,
+        poolCapacity: 32,
 
         start() {
             const lvl = Level.load({ tileSize: TILE });
-            let spawn = { x: 0, y: 0 };
-            const stomperTemplates = [];
-            const flyerTemplates = [];
+            this.lvlTilemap = lvl.tilemap;
             let flag = null;
             for (const e of lvl.entities) {
-                if (e.kind === 'player') {
-                    spawn.x = e.x; spawn.y = e.y;
-                } else if (e.kind === 'stomper') {
-                    stomperTemplates.push({
-                        x: e.x + 2,
-                        y: (e.row + 1) * TILE - 24,
-                        w: 28, h: 24, vx: -50, vy: 0,
-                        onGround: false, alive: true, squashTimer: 0, animT: 0,
-                    });
-                } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
-                    flyerTemplates.push(makeFlyer(e));
-                } else if (e.kind === 'flag') {
+                if (e.kind === 'flag') {
                     flag = { x: e.x, w: 32, h: 96, y: e.row * TILE - 64 };
                     flag.y = e.row * TILE - flag.h + TILE;
                 }
             }
-            this.sim = SwSim.create({
-                tilemap: lvl.tilemap,
-                spawn, stompers: stomperTemplates, flyers: flyerTemplates, flag,
-                timeLimit: 300,
-                // 45 decisions ≈ 3 s of no rightward progress. Without
-                // this the live agent can spend the entire 300 s pinned
-                // against a pipe; with it, the episode resets and we get
-                // to see another fresh attempt.
-                stallDecisions: 45,
-                stallEpsilonPx: 8,
-            });
-            this.liveAgent = LiveAgent.create({
-                sim: this.sim,
-                iterations: 64,
-                rolloutDepth: 12,
-            });
-            this.ghosts = Ghosts.create({ maxGhosts: 6 });
+            this.lvlFlag = flag;
+
             this.cam = Camera2D.create({
                 viewW: VIEW_W, viewH: VIEW_H,
                 levelW: lvl.tilemap.widthPx,
                 levelH: lvl.tilemap.heightPx,
                 deadzoneW: 120, deadzoneH: 1024,
             });
-            this.cam.snapTo(this.sim.player.x + this.sim.player.w / 2, VIEW_H / 2);
-            this.fast = false;
-            this.decisionAccum = 0;
-            this.liveStats = { episodes: 0, lastReason: 'fresh', bestX: 0, decisions: 0 };
-            this.ghostRec = { frames: [] };
-            // Per-decision tuples sealed at episode end and shipped to the
-            // worker so the displayed agent's MCTS searches and outcomes
-            // become training data. Mirrors SwAgent's pending list.
-            this.pendingTuples = [];
+            this.cam.snapTo(VIEW_W / 2, VIEW_H / 2);
 
-            // Spawn the trainer worker.
-            this.worker = new Worker('trainer_worker.js');
+            this.snap = null;
+            this.pool = BestCrop.create({ capacity: this.poolCapacity });
+            this.poolTopReturn = 0;
+            this.fast = false;
             this.warmupInfo = null;
-            this.worker.onmessage = (e) => {
-                const msg = e && e.data; if (!msg) return;
-                if (msg.type === 'weights') {
-                    this.liveAgent.setWeights(msg.bytes, msg.version);
-                    if (msg.stats) Object.assign(this.workerStats, msg.stats);
-                } else if (msg.type === 'stats') {
-                    if (msg.stats) Object.assign(this.workerStats, msg.stats);
-                } else if (msg.type === 'warmup') {
-                    this.warmupInfo = msg.stats || {};
-                }
-            };
+            this.mctsStats = [];
+            this.mctsReady = [];
+            this.seedAccum = 0;
+            this.liveLastStep = 0;
+            this.liveCredits = 0;
+            for (let i = 0; i < this.NUM_MCTS_WORKERS; i++) {
+                this.mctsStats.push({});
+                this.mctsReady.push(false);
+            }
+
+            this.trainer = new Worker('trainer_worker.js');
+            this.trainer.onmessage = (e) => this.onTrainerMessage(e && e.data);
+
+            this.live = new Worker('live_worker.js');
+            this.live.onmessage = (e) => this.onLiveMessage(e && e.data);
+
+            this.mctsWorkers = [];
+            for (let i = 0; i < this.NUM_MCTS_WORKERS; i++) {
+                const w = new Worker('mcts_worker.js');
+                const idx = i;
+                w.onmessage = (e) => this.onMctsMessage(e && e.data, idx);
+                w.postMessage({
+                    type: 'init',
+                    workerId:     idx + 1,
+                    iterations:   this.MCTS_DEPTHS[i]  || 100,
+                    rolloutDepth: this.MCTS_ROLLOUT[i] || 8,
+                });
+                this.mctsWorkers.push(w);
+            }
             this.running = true;
         },
 
         stop() {
             this.running = false;
-            if (this.worker) {
-                try { this.worker.postMessage({ type: 'stop' }); } catch (_) {}
-                try { this.worker.terminate(); } catch (_) {}
-                this.worker = null;
+            const all = [this.trainer, this.live, ...(this.mctsWorkers || [])]
+                .filter(Boolean);
+            for (const w of all) {
+                try { w.postMessage({ type: 'stop' }); } catch (_) {}
+                try { w.terminate(); } catch (_) {}
+            }
+            this.trainer = null;
+            this.live = null;
+            this.mctsWorkers = [];
+        },
+
+        // Each play-worker recipient needs its own ArrayBuffer so we can
+        // hand them off zero-copy via the transferList. Cloning the small
+        // weights blob N times costs less than the cross-thread copy
+        // postMessage would otherwise do for N recipients.
+        broadcastWeights(bytes, version) {
+            const recipients = [this.live, ...this.mctsWorkers].filter(Boolean);
+            for (let i = 0; i < recipients.length; i++) {
+                const copy = new Uint8Array(bytes.length);
+                copy.set(bytes);
+                try {
+                    recipients[i].postMessage({
+                        type: 'weights', bytes: copy, version,
+                    }, [copy.buffer]);
+                } catch (_) {}
             }
         },
 
-        oneDecision() {
-            if (!this.liveAgent.weightsLoaded) return;   // wait for first publish
-            // Snapshot obs from the pre-step state so (obs, policyTarget)
-            // line up — the visits below are the policy MCTS computed from
-            // exactly this state.
-            const obs = SwAgentObs.build(this.sim).slice();
-            const { action, visits } = this.liveAgent.decideWithVisits();
-            const out = this.sim.step(action);
-            this.pendingTuples.push({
-                obs, policyTarget: visits, reward: out.reward,
-            });
-            if (this.sim.player.x > this.liveStats.bestX)
-                this.liveStats.bestX = this.sim.player.x;
-            this.liveStats.decisions++;
+        onTrainerMessage(m) {
+            if (!m) return;
+            if (m.type === 'weights') {
+                this.broadcastWeights(m.bytes, m.version);
+                if (m.stats) Object.assign(this.workerStats, m.stats);
+            } else if (m.type === 'stats') {
+                if (m.stats) Object.assign(this.workerStats, m.stats);
+            } else if (m.type === 'warmup') {
+                this.warmupInfo = m.stats || {};
+            }
+        },
 
-            // Ghost frame.
-            const p = this.sim.player;
-            let frame = 0;
-            if (!p.onGround) frame = 3;
-            else if (Math.abs(p.vx) > 8) frame = 1 + (((this.sim.tick / 8) | 0) % 2);
-            this.ghostRec.frames.push({
-                tick: this.sim.tick, x: p.x, y: p.y, frame, facing: p.facing,
-            });
+        onLiveMessage(m) {
+            if (!m) return;
+            if (m.type === 'render') {
+                this.snap = m.snap;
+                const s = m.snap;
+                if (s.episodes    != null) this.liveStats.episodes    = s.episodes;
+                if (s.lastReason  != null) this.liveStats.lastReason  = s.lastReason;
+                if (s.bestX       != null) this.liveStats.bestX       = s.bestX | 0;
+                if (s.decisions   != null) this.liveStats.decisions   = s.decisions;
+                if (s.tapeEntries != null) this.liveStats.tapeEntries = s.tapeEntries;
+                if (s.tapeSigs    != null) this.liveStats.tapeSigs    = s.tapeSigs;
+            } else if (m.type === 'tuples') {
+                this.routeTuples(m);
+            } else if (m.type === 'trajectory') {
+                this.ingestTrajectory(m);
+            } else if (m.type === 'ready') {
+                // Worker finished a decision (or stalled on no-weights).
+                // We grant a 'step' as soon as the LIVE_PERIOD_MS pacing
+                // budget allows. If not yet, increment credits and let
+                // pumpLive flush them when wall time catches up.
+                this.liveCredits++;
+                this.tryReleaseLiveCredit();
+            }
+        },
 
-            if (out.done) {
-                const reason = this.sim.won           ? 'flag'
-                             : this.sim.stalledOut    ? 'stall'
-                             : this.sim.timeLeft <= 0 ? 'timeout'
-                             :                          'death';
-                this.liveStats.lastReason = reason;
-                this.liveStats.episodes++;
-                if (this.ghostRec.frames.length > 0) {
-                    this.ghosts.commit({ frames: this.ghostRec.frames.slice() });
-                    this.ghostRec.frames.length = 0;
+        tryReleaseLiveCredit() {
+            if (!this.live || this.liveCredits <= 0) return;
+            const period = this.fast
+                ? this.LIVE_PERIOD_MS / this.FAST_MULT
+                : this.LIVE_PERIOD_MS;
+            const now = Date.now();
+            if (now - this.liveLastStep < period) return;
+            this.liveLastStep = now;
+            this.liveCredits--;
+            try { this.live.postMessage({ type: 'step' }); } catch (_) {}
+        },
+
+        onMctsMessage(m, idx) {
+            if (!m) return;
+            if (m.type === 'tuples') {
+                this.routeTuples(m);
+            } else if (m.type === 'trajectory') {
+                this.ingestTrajectory(m);
+            } else if (m.type === 'stats') {
+                this.mctsStats[idx] = m;
+            } else if (m.type === 'ready') {
+                // Worker finished a batch and is waiting for the next.
+                // Send another 'tick' to keep it fed. This is back-pressure:
+                // we never queue more than ~1 batch ahead, so a stall in
+                // any worker doesn't pile up.
+                if (this.mctsWorkers[idx]) {
+                    try {
+                        this.mctsWorkers[idx].postMessage({ type: 'tick' });
+                    } catch (_) {}
                 }
-                this.shipTuples(reason);
-                this.sim.reset();
-                this.liveStats.bestX = this.sim.player.x;
             }
         },
 
-        // Seal value targets with discounted return (γ=0.99, clamped to
-        // [-1, 1] to match SwAgent.endEpisode), ship to the worker, and
-        // clear the pending list. The worker pushes these into its replay
-        // buffer alongside its own self-play tuples.
-        shipTuples(reason) {
-            const tuples = this.pendingTuples;
-            if (tuples.length === 0 || !this.worker) {
-                this.pendingTuples = [];
-                return;
-            }
-            const gamma = 0.99;
-            let g = 0;
-            for (let i = tuples.length - 1; i >= 0; i--) {
-                g = tuples[i].reward + gamma * g;
-                tuples[i].valueTarget = g < -1 ? -1 : (g > 1 ? 1 : g);
-            }
+        routeTuples(m) {
+            if (!this.trainer) return;
             try {
-                this.worker.postMessage({ type: 'live_tuples', reason, tuples });
-            } catch (_) { /* worker may have been torn down */ }
-            this.pendingTuples = [];
+                this.trainer.postMessage({
+                    type: 'tuples',
+                    tuples: m.tuples,
+                    reason: m.reason,
+                    weight: m.weight | 0,
+                });
+            } catch (_) {}
+        },
+
+        ingestTrajectory(m) {
+            this.pool.ingest({
+                startSnap:   m.startSnap,
+                actions:     m.actions,
+                decisions:   m.decisions,
+                totalReturn: m.totalReturn,
+                searchDepth: m.searchDepth,
+                reason:      m.reason,
+                source:      m.source,
+                bestX:       m.bestX,
+            });
+            this.poolTopReturn = this.pool.topReturn();
+            if (this.trainer) {
+                try {
+                    this.trainer.postMessage({
+                        type: 'trajectory_end',
+                        totalReturn: m.totalReturn,
+                        reason: m.reason,
+                    });
+                } catch (_) {}
+            }
+        },
+
+        // The live worker always starts at the level's default spawn
+        // (col 2). The pool keeps collecting trajectories from all
+        // workers as training data, but we don't use it to teleport
+        // the displayed agent — the user wants every visible run to
+        // start at the beginning of the map. The "search on top of
+        // search" layering still happens implicitly: the trainer pulls
+        // tuples from the deep mcts workers and republishes weights,
+        // and the live agent's shallow MCTS refines on top of those
+        // weights. Just no state-restore funny business.
+        pumpSeed(dt) {
+            this.seedAccum += dt;
+            if (this.seedAccum < this.SEED_PERIOD_MS) return;
+            this.seedAccum = 0;
+            this.pool.step();   // age entries even if we don't seed from it
         },
 
         update(dt) {
             if (!this.running) return;
-            // Pace decisions in real time so the user can watch one hero
-            // play. Fast mode just shortens the period; the worker is
-            // unaffected (it runs flat-out on its own thread regardless).
-            const period = this.fast ? (this.DECISION_PERIOD_MS / this.FAST_MULT)
-                                     : this.DECISION_PERIOD_MS;
-            this.decisionAccum += dt;
-            let safety = 64;
-            while (this.decisionAccum >= period && safety-- > 0) {
-                this.decisionAccum -= period;
-                this.oneDecision();
+            this.pumpSeed(dt);
+            // Try to release any banked live-decision credits now that
+            // wall time has advanced. Credits only accumulate when the
+            // worker is faster than the period; if MCTS is slower than
+            // real time the worker can't keep up and we just don't send.
+            this.tryReleaseLiveCredit();
+            if (this.snap && this.snap.player) {
+                this.cam.follow(
+                    this.snap.player.x + this.snap.player.w / 2, VIEW_H / 2);
             }
-            this.cam.follow(this.sim.player.x + this.sim.player.w / 2, VIEW_H / 2);
-        },
-
-        // Helper: draw one ghost sprite using the hero atlas.
-        drawGhostSprite(ctx, x, y, frame, flipped, alpha) {
-            const drawX = Math.round(x - this.cam.x);
-            const drawY = Math.round(y - this.cam.y - 2);
-            ctx.globalAlpha = alpha;
-            Art.drawHero(ctx, drawX, drawY, frame, flipped);
-            ctx.globalAlpha = 1;
         },
 
         draw() {
-            if (!this.sim) return;
-            const tm = this.sim.tilemap;
-            tm.draw(ctx, this.cam.x, this.cam.y, VIEW_W, VIEW_H);
-
-            // Flag.
-            if (this.sim.flag) {
+            if (!this.lvlTilemap) return;
+            this.lvlTilemap.draw(ctx, this.cam.x, this.cam.y, VIEW_W, VIEW_H);
+            if (this.lvlFlag) {
+                const f = this.lvlFlag;
                 Art.drawFlag(ctx,
-                             Math.round(this.sim.flag.x - this.cam.x),
-                             Math.round(this.sim.flag.y - this.cam.y));
+                    Math.round(f.x - this.cam.x),
+                    Math.round(f.y - this.cam.y));
             }
-
-            // Stompers (live).
-            for (const s of this.sim.stompers) {
-                if (!this.cam.visible(s.x, s.y, s.w, s.h)) continue;
-                const f = !s.alive ? 2 : (Math.floor(s.animT / 200) % 2);
-                Art.drawStomper(ctx,
-                                Math.round(s.x - this.cam.x),
-                                Math.round(s.y - this.cam.y), f);
+            if (this.snap) {
+                for (const s of this.snap.stompers) {
+                    if (!this.cam.visible(s.x, s.y, s.w, s.h)) continue;
+                    const fr = !s.alive ? 2 : (Math.floor(s.animT / 200) % 2);
+                    Art.drawStomper(ctx,
+                        Math.round(s.x - this.cam.x),
+                        Math.round(s.y - this.cam.y), fr);
+                }
+                for (const fl of this.snap.flyers) {
+                    if (!this.cam.visible(fl.x, fl.y, fl.w, fl.h)) continue;
+                    const fr = (Math.floor(fl.animT / 150) % 2);
+                    Art.drawFlyer(ctx,
+                        Math.round(fl.x - this.cam.x),
+                        Math.round(fl.y - this.cam.y), fr, fl.vx > 0);
+                }
+                const p = this.snap.player;
+                let frame = 0;
+                if (!p.onGround) frame = 3;
+                else if (Math.abs(p.vx) > 8) frame = 1 + (((this.snap.tick / 8) | 0) % 2);
+                Art.drawHero(ctx,
+                    Math.round(p.x - this.cam.x),
+                    Math.round(p.y - this.cam.y - 2),
+                    frame, p.facing < 0);
             }
-
-            // Flyers (live).
-            for (const fl of this.sim.flyers) {
-                if (!this.cam.visible(fl.x, fl.y, fl.w, fl.h)) continue;
-                const fr = (Math.floor(fl.animT / 150) % 2);
-                Art.drawFlyer(ctx,
-                              Math.round(fl.x - this.cam.x),
-                              Math.round(fl.y - this.cam.y), fr, fl.vx > 0);
-            }
-
-            // Ghosts (under live hero).
-            const t = this.sim.tick;
-            this.ghosts.draw(ctx, t, (cctx, x, y, fr, flipped, a) =>
-                this.drawGhostSprite(cctx, x, y, fr, flipped, a));
-
-            // Live hero.
-            const p = this.sim.player;
-            let frame = 0;
-            if (!p.onGround) frame = 3;
-            else if (Math.abs(p.vx) > 8) frame = 1 + (((this.sim.tick / 8) | 0) % 2);
-            Art.drawHero(ctx,
-                         Math.round(p.x - this.cam.x),
-                         Math.round(p.y - this.cam.y - 2),
-                         frame, p.facing < 0);
-
-            // HUD overlay (drawn in the virtual viewport so it letterboxes).
             this.drawHud();
         },
 
         drawHud() {
             const w = this.workerStats;
             const l = this.liveStats;
-            const ready = this.liveAgent && this.liveAgent.weightsLoaded;
             const lines = [
-                'TRAINING — F = fast' + (this.fast ? ' [ON]' : '') + '   Esc = quit',
+                'TRAINING — F = fast' + (this.fast ? ' [ON]' : '')
+                    + '   C = clear failures   Esc = quit',
                 'live: ep ' + l.episodes + '   bestX ' + (l.bestX | 0)
                     + '   last: ' + l.lastReason
-                    + (ready ? '' : '   [waiting for weights]'),
-                'worker: ep ' + w.episode + '   iters ' + w.iters + '   steps ' + w.steps
-                    + '   spawn col ' + (w.spawnCol | 0)
-                    + (w.resumed ? '   [resumed]' : ''),
-                'buf ' + (w.bufSize || 0) + '   train_steps ' + (w.trainSteps || 0)
-                    + '   net v' + (w.netVersion ? w.netVersion.toString() : '0'),
-                'loss  v=' + (w.lossValue || 0).toFixed(4)
-                    + '   p=' + (w.lossPolicy || 0).toFixed(4),
-                'return mean(20)=' + (w.meanReturn || 0).toFixed(3)
-                    + '   best=' + (w.bestMean || 0).toFixed(3),
-                'flag/att: ' + (w.perColRates || ''),
+                    + '   decisions ' + l.decisions
+                    + (this.snap ? '' : '   [waiting for first snap]'),
+                'failure tape: ' + l.tapeSigs + ' sigs / ' + l.tapeEntries + ' entries',
+                'pool: ' + this.pool.size() + '/' + this.poolCapacity
+                    + '   top return ' + this.poolTopReturn.toFixed(2)
+                    + '   accepted ' + this.pool.totalAccepted(),
             ];
+            for (let i = 0; i < this.mctsWorkers.length; i++) {
+                const ms = this.mctsStats[i] || {};
+                lines.push('mcts#' + (i + 1) + ' (it=' + (this.MCTS_DEPTHS[i] | 0) + '):'
+                    + '   ep ' + (ms.episodes | 0)
+                    + '   last: ' + (ms.lastReason || 'fresh'));
+            }
+            lines.push('trainer: ingested ' + (w.ingested || 0)
+                + '   buf ' + (w.bufSize || 0)
+                + '   train ' + (w.trainSteps || 0)
+                + '   net v' + (w.netVersion ? w.netVersion.toString() : '0'));
+            lines.push('loss  v=' + (+(w.lossValue) || 0).toFixed(4)
+                + '   p=' + (+(w.lossPolicy) || 0).toFixed(4)
+                + '   mean(20)=' + (+(w.meanReturn) || 0).toFixed(3)
+                + '   best=' + (+(w.bestMean) || 0).toFixed(3)
+                + (w.resumed ? '   [resumed]' : ''));
             if (this.warmupInfo) {
                 const wu = this.warmupInfo;
                 if (wu.resumed) {
-                    lines.push('warmup: resumed @ ep ' + (wu.episode | 0)
-                               + '   meanReturn ' + (+wu.meanReturn).toFixed(3));
+                    lines.push('warmup: resumed @ mean '
+                        + (+wu.meanReturn || 0).toFixed(3));
                 } else {
                     lines.push('warmup: kept ' + (wu.kept | 0) + '/' + (wu.attempts | 0)
-                               + ' (flag ' + (wu.flags | 0) + ')'
-                               + '   tuples ' + (wu.tuplesPushed | 0)
-                               + '   pretrain ' + (wu.pretrainSteps | 0)
-                               + ' p=' + (+wu.pretrainLossPolicy || 0).toFixed(3));
+                        + ' (flag ' + (wu.flags | 0) + ')'
+                        + '   tuples ' + (wu.tuplesPushed | 0)
+                        + '   pretrain ' + (wu.pretrainSteps | 0)
+                        + ' p=' + (+wu.pretrainLossPolicy || 0).toFixed(3));
                 }
             }
             ctx.save();
             ctx.fillStyle = 'rgba(0,0,0,0.55)';
-            ctx.fillRect(8, 8, 360, 14 * lines.length + 10);
+            ctx.fillRect(8, 8, 460, 14 * lines.length + 10);
             ctx.fillStyle = '#fff';
             ctx.font = '12px monospace';
             ctx.textBaseline = 'top';
@@ -802,6 +904,13 @@
             }
             if (key === 'f' || key === 'F') {
                 this.fast = !this.fast;
+                // Pacing happens in main's pumpLive via FAST_MULT;
+                // worker doesn't need to know.
+            }
+            if (key === 'c' || key === 'C') {
+                if (this.live) {
+                    try { this.live.postMessage({ type: 'clear_failures' }); } catch (_) {}
+                }
             }
         },
     };
