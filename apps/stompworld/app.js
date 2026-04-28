@@ -31,6 +31,9 @@
         gameover:() => SFX.sequence([[392,0.20,'sawtooth',0.55],[330,0.20,'sawtooth',0.55],[262,0.40,'triangle',0.55]]),
         timeWarn:() => SFX.tone(880, 0.08, 'square', 0.40),
         flyer:   () => SFX.tone(0,   0.08, 'whitenoise', 0.18),
+        beam:    () => SFX.sequence([[1400,0.04,'square',0.35],[800,0.06,'sawtooth',0.45]]),
+        boom:    () => SFX.sequence([[120,0.10,'sawtooth',0.65],[60,0.18,'whitenoise',0.55],[40,0.22,'triangle',0.45]]),
+        beamHit: () => SFX.tone(180, 0.06, 'whitenoise', 0.50),
         // UI
         menu:    () => SFX.tone(400, 0.04, 'sine',   0.30),
         select:  () => SFX.tone(660, 0.08, 'square', 0.40),
@@ -42,12 +45,43 @@
         { name: 'left',    label: 'Run Left',  defaults: ['a', 'ArrowLeft'] },
         { name: 'right',   label: 'Run Right', defaults: ['d', 'ArrowRight'] },
         { name: 'primary', label: 'Jump',      defaults: [' ', 'w', 'ArrowUp'] },
+        { name: 'shoot',   label: 'Fire Beam', defaults: ['j', 'k', 'f', 'Mouse0'] },
         { name: 'up',      label: 'Menu Up',   defaults: ['ArrowUp'] },
         { name: 'down',    label: 'Menu Down', defaults: ['ArrowDown'] },
         { name: 'confirm', label: 'Confirm',   defaults: ['Enter'] },
         { name: 'pause',   label: 'Pause',     defaults: ['Escape', 'p'] },
     ]);
     Input.attach(window);
+
+    // ── Mouse aim ────────────────────────────────────────────────────────────
+    // Raw client coords; virtual-viewport + world coords are resolved at fire
+    // / draw time so they always reflect the current camera and letterbox.
+    const Mouse = { clientX: 0, clientY: 0, vx: VIEW_W / 2, vy: VIEW_H / 2 };
+    function updateMouseFromClient() {
+        const rect = canvas.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return;
+        const internalW = Canvas.w(ctx, VIEW_W);
+        const internalH = Canvas.h(ctx, VIEW_H);
+        const cx = (Mouse.clientX - rect.left) * (internalW / rect.width);
+        const cy = (Mouse.clientY - rect.top)  * (internalH / rect.height);
+        const scale = Math.min(internalW / VIEW_W, internalH / VIEW_H);
+        if (scale <= 0) return;
+        const ox = Math.floor((internalW - VIEW_W * scale) / 2);
+        const oy = Math.floor((internalH - VIEW_H * scale) / 2);
+        Mouse.vx = (cx - ox) / scale;
+        Mouse.vy = (cy - oy) / scale;
+    }
+    function aimWorld() {
+        updateMouseFromClient();
+        return {
+            x: Mouse.vx + (Game.cam ? Game.cam.x : 0),
+            y: Mouse.vy + (Game.cam ? Game.cam.y : 0),
+        };
+    }
+    window.addEventListener('mousemove', (e) => {
+        Mouse.clientX = e.clientX;
+        Mouse.clientY = e.clientY;
+    });
 
     // ── Storage ──────────────────────────────────────────────────────────────
     const store = Storage.create('stompworld');
@@ -88,9 +122,25 @@
         deathTimer: 0,  // > 0 = death anim playing
         winTimer:   0,  // > 0 = win anim playing
         spawn: { x: 0, y: 0 },
+        // Catharsis weapon — currently always-on in play mode for testing.
+        // The training rewards/agent wiring still treat the weapon as
+        // pickup-gated; that integration lands with the AI sim refactor.
+        // Killed enemies stay in flyers[]/stompers[] with ragdoll=true so
+        // collision skips them and render draws them tumbling.
+        hasWeapon: false,
+        weaponCooldown: 0,           // ms until next shot allowed
+        beams: [],                   // [{x0,y0,x1,y1,ttl,ttlMax}]
+        explosions: [],              // [{cx,cy,rMax,ttl,ttlMax}]
+        // Tunables.
+        BEAM_THICKNESS: 8,
+        BEAM_LENGTH:    600,
+        EXPLOSION_R:    56,
+        WEAPON_COOLDOWN_MS: 250,
+        BEAM_TTL_MS:    80,
+        EXPLOSION_TTL_MS: 320,
 
         loadLevel() {
-            const lvl = Level.load({ tileSize: TILE });
+            const lvl = Level.load({ tileSize: TILE, destructible: true });
             this.tilemap  = lvl.tilemap;
             this.stompers = [];
             this.flyers   = [];
@@ -185,7 +235,14 @@
         startRun() {
             this.score = 0; this.lives = 3; this.timeLeft = 300;
             this.deathTimer = 0; this.winTimer = 0;
+            this.hasWeapon = true;     // testbed: weapon equipped from spawn
+            this.weaponCooldown = 0;
+            this.beams.length = 0;
+            this.explosions.length = 0;
             this.loadLevel();
+            // Consume any rising-edge shoot input left over from the menu
+            // click that started the run, otherwise we'd fire on spawn frame.
+            Input.pressed('shoot');
             updateHud();
         },
     };
@@ -248,6 +305,7 @@
     }
 
     function stepStomper(s, dt) {
+        if (s.ragdoll) { stepRagdoll(s, dt); return; }
         if (!s.alive) {
             s.squashTimer -= dt;
             return;
@@ -277,6 +335,7 @@
     // Sky enemies that patrol horizontally and (optionally) bob vertically.
     // No tilemap collision; they live above the ground.
     function stepFlyer(f, dt) {
+        if (f.ragdoll) { stepRagdoll(f, dt); return; }
         const dts = dt / 1000;
         f.x += f.vx * dts;
         if (f.x > f.spawnX + f.patrolRange) {
@@ -299,6 +358,7 @@
     function handleFlyers() {
         const p = Game.player;
         for (const f of Game.flyers) {
+            if (f.ragdoll) continue;
             if (p.x + p.w <= f.x || p.x >= f.x + f.w) continue;
             if (p.y + p.h <= f.y || p.y >= f.y + f.h) continue;
             // Any contact kills — flyers are not stompable.
@@ -311,7 +371,7 @@
     function handleStompers() {
         const p = Game.player;
         for (const s of Game.stompers) {
-            if (!s.alive) continue;
+            if (!s.alive || s.ragdoll) continue;
             if (p.x + p.w <= s.x || p.x >= s.x + s.w) continue;
             if (p.y + p.h <= s.y || p.y >= s.y + s.h) continue;
             // From above (falling and feet near stomper top) = stomp.
@@ -336,6 +396,153 @@
         Audio.die();
         Game.deathTimer = 900;
         updateHud();
+    }
+
+    // ── Weapon: beam + explosion + ragdoll launches ─────────────────────────
+    // Beam fires horizontal from player center in facing direction. damageBeam
+    // walks the centerline pixel-by-pixel (stopOnHit=true), carving an 8px
+    // band up to the impact point; we then carve a 56px disc explosion there.
+    // Anything (flyer/stomper) AABB-overlapping the beam path or the explosion
+    // disc gets ragdoll-launched.
+    function rdRand(min, max) { return min + Math.random() * (max - min); }
+
+    function ragdollify(e, dirX) {
+        e.alive   = false;
+        e.ragdoll = true;
+        e.vx      = dirX * rdRand(180, 380) + rdRand(-60, 60);
+        e.vy      = -rdRand(420, 720);
+        e.rot     = 0;
+        e.rotVel  = rdRand(-12, 12);
+        e.ragdollTTL = 2200;
+    }
+
+    // Test if AABB e overlaps either the beam segment thickened to ±half px,
+    // or the explosion disc at (hx, hy) of radius r. The beam is given as a
+    // line from (x0,y0) to (x1,y1) at any angle. We use Liang–Barsky against
+    // the AABB expanded by `half` on every side as a conservative band test —
+    // it slightly over-reports hits at the band's outer corners, which is
+    // fine here (the beam visual already has rounded caps).
+    function entityHit(e, x0, y0, x1, y1, half, hx, hy, r) {
+        const ex0 = e.x, ex1 = e.x + e.w;
+        const ey0 = e.y, ey1 = e.y + e.h;
+        // Explosion disc.
+        const cx = hx < ex0 ? ex0 : (hx > ex1 ? ex1 : hx);
+        const cy = hy < ey0 ? ey0 : (hy > ey1 ? ey1 : hy);
+        const ddx = cx - hx, ddy = cy - hy;
+        if (ddx * ddx + ddy * ddy <= r * r) return true;
+        // Beam segment vs expanded AABB.
+        const ax0 = ex0 - half, ay0 = ey0 - half;
+        const ax1 = ex1 + half, ay1 = ey1 + half;
+        const dx = x1 - x0, dy = y1 - y0;
+        const ps = [-dx, dx, -dy, dy];
+        const qs = [x0 - ax0, ax1 - x0, y0 - ay0, ay1 - y0];
+        let t0 = 0, t1 = 1;
+        for (let i = 0; i < 4; i++) {
+            if (ps[i] === 0) {
+                if (qs[i] < 0) return false;
+            } else {
+                const t = qs[i] / ps[i];
+                if (ps[i] < 0) {
+                    if (t > t1) return false;
+                    if (t > t0) t0 = t;
+                } else {
+                    if (t < t0) return false;
+                    if (t < t1) t1 = t;
+                }
+            }
+        }
+        return true;
+    }
+
+    function fireWeapon() {
+        if (!Game.hasWeapon || Game.weaponCooldown > 0) return;
+        const p = Game.player;
+        const px = p.x + p.w / 2;
+        const py = p.y + p.h / 2;
+        // Aim direction: from player center toward the cursor's world point.
+        const aim = aimWorld();
+        let dxA = aim.x - px, dyA = aim.y - py;
+        const dist = Math.hypot(dxA, dyA);
+        let ux, uy;
+        if (dist < 1) {
+            ux = p.facing < 0 ? -1 : 1; uy = 0;
+        } else {
+            ux = dxA / dist; uy = dyA / dist;
+        }
+        // Face the way we're shooting so the run/idle sprite reads correctly.
+        if (Math.abs(ux) > 0.05) p.facing = ux < 0 ? -1 : 1;
+        // Start the beam outside the player AABB along the aim direction so
+        // we don't immediately stop on a tile the player is overlapping.
+        const startOff = p.w / 2 + 2;
+        const x0 = px + ux * startOff;
+        const y0 = py + uy * startOff;
+        const x1 = px + ux * Game.BEAM_LENGTH;
+        const y1 = py + uy * Game.BEAM_LENGTH;
+        const r = Game.tilemap.damageBeam(x0, y0, x1, y1, Game.BEAM_THICKNESS, true);
+        const hx = r.hitX, hy = r.hitY;
+        const explosionR = r.hit ? Game.EXPLOSION_R : 0;
+        if (explosionR > 0) Game.tilemap.damageCircle(hx, hy, explosionR);
+
+        // Visuals.
+        Game.beams.push({
+            x0, y0, x1: hx, y1: hy,
+            ttl: Game.BEAM_TTL_MS, ttlMax: Game.BEAM_TTL_MS,
+        });
+        if (explosionR > 0) {
+            Game.explosions.push({
+                cx: hx, cy: hy, rMax: explosionR,
+                ttl: Game.EXPLOSION_TTL_MS, ttlMax: Game.EXPLOSION_TTL_MS,
+            });
+        }
+
+        // Hits. Ragdoll launch direction uses the beam's horizontal component
+        // so enemies tumble away from the shooter regardless of aim angle.
+        const halfBeam = Game.BEAM_THICKNESS / 2 + 2;
+        const launchDir = ux < 0 ? -1 : 1;
+        let killedAny = false;
+        for (const f of Game.flyers) {
+            if (f.ragdoll) continue;
+            if (entityHit(f, x0, y0, hx, hy, halfBeam, hx, hy, explosionR)) {
+                ragdollify(f, launchDir); killedAny = true; Game.score += 200;
+            }
+        }
+        for (const s of Game.stompers) {
+            if (!s.alive || s.ragdoll) continue;
+            if (entityHit(s, x0, y0, hx, hy, halfBeam, hx, hy, explosionR)) {
+                ragdollify(s, launchDir); killedAny = true; Game.score += 100;
+            }
+        }
+        if (killedAny) updateHud();
+
+        Audio.beam();
+        if (r.hit) Audio.boom();
+        Game.weaponCooldown = Game.WEAPON_COOLDOWN_MS;
+    }
+
+    function stepRagdoll(e, dt) {
+        const dts = dt / 1000;
+        e.vy += 1800 * dts;            // gravity
+        e.x  += e.vx * dts;
+        e.y  += e.vy * dts;
+        e.rot = (e.rot || 0) + (e.rotVel || 0) * dts;
+        e.ragdollTTL -= dt;
+    }
+
+    function pruneRagdolls() {
+        const tm = Game.tilemap;
+        const cap = tm ? tm.heightPx + 200 : 9999;
+        function alive(e) { return !e.ragdoll || (e.ragdollTTL > 0 && e.y < cap); }
+        Game.flyers   = Game.flyers.filter(alive);
+        Game.stompers = Game.stompers.filter(alive);
+    }
+
+    function updateBeamsExplosions(dt) {
+        for (const b of Game.beams) b.ttl -= dt;
+        for (const e of Game.explosions) e.ttl -= dt;
+        if (Game.beams.length)
+            Game.beams = Game.beams.filter((b) => b.ttl > 0);
+        if (Game.explosions.length)
+            Game.explosions = Game.explosions.filter((e) => e.ttl > 0);
     }
 
     // ── Win / lose check ─────────────────────────────────────────────────────
@@ -386,10 +593,17 @@
         for (const s of Game.stompers) {
             if (!Game.cam.visible(s.x, s.y, s.w, s.h)) continue;
             const frame = !s.alive ? 2 : (Math.floor(s.animT / 200) % 2);
-            Art.drawStomper(ctx,
-                            Math.round(s.x - Game.cam.x),
-                            Math.round(s.y - Game.cam.y),
-                            frame);
+            const dx = Math.round(s.x - Game.cam.x);
+            const dy = Math.round(s.y - Game.cam.y);
+            if (s.ragdoll) {
+                ctx.save();
+                ctx.translate(dx + s.w / 2, dy + s.h / 2);
+                ctx.rotate(s.rot || 0);
+                Art.drawStomper(ctx, -s.w / 2, -s.h / 2, 0);
+                ctx.restore();
+            } else {
+                Art.drawStomper(ctx, dx, dy, frame);
+            }
         }
     }
 
@@ -397,11 +611,74 @@
         for (const f of Game.flyers) {
             if (!Game.cam.visible(f.x, f.y, f.w, f.h)) continue;
             const frame = (Math.floor(f.animT / 150) % 2);
-            Art.drawFlyer(ctx,
-                          Math.round(f.x - Game.cam.x),
-                          Math.round(f.y - Game.cam.y),
-                          frame, f.vx > 0);
+            const dx = Math.round(f.x - Game.cam.x);
+            const dy = Math.round(f.y - Game.cam.y);
+            if (f.ragdoll) {
+                ctx.save();
+                ctx.translate(dx + f.w / 2, dy + f.h / 2);
+                ctx.rotate(f.rot || 0);
+                Art.drawFlyer(ctx, -f.w / 2, -f.h / 2, frame, false);
+                ctx.restore();
+            } else {
+                Art.drawFlyer(ctx, dx, dy, frame, f.vx > 0);
+            }
         }
+    }
+
+    function drawBeamsExplosions() {
+        // Beam: bright outer band + white-hot core, both fading by ttl.
+        for (const b of Game.beams) {
+            const a = Math.max(0, b.ttl / b.ttlMax);
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = 'rgba(255, 220, 80, ' + (a * 0.85).toFixed(3) + ')';
+            ctx.lineWidth = Game.BEAM_THICKNESS + 6;
+            ctx.beginPath();
+            ctx.moveTo(b.x0 - Game.cam.x, b.y0 - Game.cam.y);
+            ctx.lineTo(b.x1 - Game.cam.x, b.y1 - Game.cam.y);
+            ctx.stroke();
+            ctx.strokeStyle = 'rgba(255, 255, 240, ' + a.toFixed(3) + ')';
+            ctx.lineWidth = Game.BEAM_THICKNESS - 4;
+            ctx.beginPath();
+            ctx.moveTo(b.x0 - Game.cam.x, b.y0 - Game.cam.y);
+            ctx.lineTo(b.x1 - Game.cam.x, b.y1 - Game.cam.y);
+            ctx.stroke();
+            ctx.restore();
+        }
+        // Explosion: expanding orange outer + white core, both fading.
+        for (const e of Game.explosions) {
+            const u = 1 - Math.max(0, e.ttl / e.ttlMax);     // 0 → 1
+            const r = e.rMax * (0.35 + 0.65 * u);
+            const a = (1 - u) * 0.95;
+            const cx = e.cx - Game.cam.x;
+            const cy = e.cy - Game.cam.y;
+            ctx.save();
+            ctx.fillStyle = 'rgba(255, 150, 40, ' + a.toFixed(3) + ')';
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 240, 200, ' + (a * 0.7).toFixed(3) + ')';
+            ctx.beginPath();
+            ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    function drawAimCursor() {
+        updateMouseFromClient();
+        const x = Mouse.vx, y = Mouse.vy;
+        if (x < 0 || x > VIEW_W || y < 0 || y > VIEW_H) return;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 240, 80, 0.85)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - 6, y); ctx.lineTo(x - 2, y);
+        ctx.moveTo(x + 2, y); ctx.lineTo(x + 6, y);
+        ctx.moveTo(x, y - 6); ctx.lineTo(x, y - 2);
+        ctx.moveTo(x, y + 2); ctx.lineTo(x, y + 6);
+        ctx.stroke();
+        ctx.restore();
     }
 
     function drawFlag() {
@@ -439,6 +716,8 @@
             drawStompers();
             drawFlyers();
             drawHero();
+            drawBeamsExplosions();
+            drawAimCursor();
         }
         ctx.restore();
     }
@@ -447,6 +726,11 @@
     function update(dt) {
         if (S.name() === 'training') { Training.update(dt); return; }
         if (S.name() !== 'playing') return;
+
+        // Tick visuals + ragdolls every frame regardless of win/death anim
+        // so they don't linger across screen transitions.
+        updateBeamsExplosions(dt);
+        pruneRagdolls();
 
         // Win celebration: drift right, ignore input, then advance.
         if (Game.winTimer > 0) {
@@ -506,6 +790,10 @@
         if (pev.landed) Audio.land();
 
         if (Input.pressed('pause')) { Audio.pause(); S.switchTo('pause'); return; }
+
+        // Weapon: cooldown decay + fire on shoot edge.
+        if (Game.weaponCooldown > 0) Game.weaponCooldown -= dt;
+        if (Input.pressed('shoot')) fireWeapon();
 
         for (const s of Game.stompers) stepStomper(s, dt);
         for (const f of Game.flyers)   stepFlyer(f, dt);

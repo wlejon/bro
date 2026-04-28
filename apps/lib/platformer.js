@@ -1,8 +1,10 @@
 // platformer.js — AABB body + tile-based collision + jump feel helpers.
 //
 // Body coordinates are world pixels; (x, y) is the top-left of the AABB.
-// Collision is axis-separated and uses Tilemap.solidAtPx for solidity, so any
-// data source can drive it as long as it implements solidAtPx(px, py).
+// Collision is axis-separated. For non-destructible tilemaps we fast-path
+// against the tile grid (2 cell checks per axis). For destructible tilemaps
+// we walk the leading edge pixel-by-pixel against the per-pixel bitmask, so
+// the body falls through holes carved by damageBeam/damageCircle.
 //
 // Jump feel:
 //   - coyoteTime: ms after leaving ground during which jump still works
@@ -56,30 +58,80 @@
         return b;
     }
 
+    // Pixel-precise solid scan along a vertical or horizontal segment.
+    // For destructible tilemaps, walks pixel-by-pixel against the bitmask.
+    // For tile-grid tilemaps, scans the 1–2 tile rows/cols touched by the
+    // body's edge (matches the legacy fast path).
+    function anySolidVertical(tm, edgeX, yLo, yHi) {
+        if (tm.destructible) {
+            for (let y = yLo; y <= yHi; y++) {
+                if (tm.solidAtPixel(edgeX, y)) return true;
+            }
+            return false;
+        }
+        const ts = tm.tileSize;
+        const col = Math.floor(edgeX / ts);
+        const r0  = Math.floor(yLo / ts);
+        const r1  = Math.floor(yHi / ts);
+        for (let r = r0; r <= r1; r++) {
+            if (tm.solidAt(col, r)) return true;
+        }
+        return false;
+    }
+    function anySolidHorizontal(tm, edgeY, xLo, xHi) {
+        if (tm.destructible) {
+            for (let x = xLo; x <= xHi; x++) {
+                if (tm.solidAtPixel(x, edgeY)) return true;
+            }
+            return false;
+        }
+        const ts = tm.tileSize;
+        const row = Math.floor(edgeY / ts);
+        const c0  = Math.floor(xLo / ts);
+        const c1  = Math.floor(xHi / ts);
+        for (let c = c0; c <= c1; c++) {
+            if (tm.solidAt(c, row)) return true;
+        }
+        return false;
+    }
+
     function moveX(b, dx, tm) {
         let hitWall = false;
         if (dx === 0) return hitWall;
         b.x += dx;
+        const yLo = Math.floor(b.y);
+        const yHi = Math.floor(b.y + b.h - 0.001);
         if (dx > 0) {
-            const edge = b.x + b.w - 0.001;
-            const col  = Math.floor(edge / tm.tileSize);
-            const r0   = Math.floor(b.y / tm.tileSize);
-            const r1   = Math.floor((b.y + b.h - 0.001) / tm.tileSize);
-            for (let r = r0; r <= r1; r++) {
-                if (tm.solidAt(col, r)) {
-                    b.x = col * tm.tileSize - b.w;
-                    b.vx = 0; hitWall = true; break;
+            const edge = Math.floor(b.x + b.w - 0.001);
+            if (anySolidVertical(tm, edge, yLo, yHi)) {
+                if (tm.destructible) {
+                    // Walk left from the colliding edge until the AABB-tall
+                    // strip is clear; that pixel column becomes the new
+                    // right-edge resting place. resolveEdge ends at the
+                    // first non-solid column; body's right edge sits there.
+                    let resolveEdge = edge;
+                    while (resolveEdge >= 0 && anySolidVertical(tm, resolveEdge, yLo, yHi)) resolveEdge--;
+                    b.x = resolveEdge + 1 - b.w;
+                } else {
+                    const ts = tm.tileSize;
+                    const col = Math.floor(edge / ts);
+                    b.x = col * ts - b.w;
                 }
+                b.vx = 0; hitWall = true;
             }
         } else {
-            const col = Math.floor(b.x / tm.tileSize);
-            const r0  = Math.floor(b.y / tm.tileSize);
-            const r1  = Math.floor((b.y + b.h - 0.001) / tm.tileSize);
-            for (let r = r0; r <= r1; r++) {
-                if (tm.solidAt(col, r)) {
-                    b.x = (col + 1) * tm.tileSize;
-                    b.vx = 0; hitWall = true; break;
+            const edge = Math.floor(b.x);
+            if (anySolidVertical(tm, edge, yLo, yHi)) {
+                if (tm.destructible) {
+                    let resolveEdge = edge;
+                    while (resolveEdge < tm.widthPx && anySolidVertical(tm, resolveEdge, yLo, yHi)) resolveEdge++;
+                    b.x = resolveEdge;
+                } else {
+                    const ts = tm.tileSize;
+                    const col = Math.floor(edge / ts);
+                    b.x = (col + 1) * ts;
                 }
+                b.vx = 0; hitWall = true;
             }
         }
         return hitWall;
@@ -88,28 +140,37 @@
     function moveY(b, dy, tm, ev) {
         if (dy === 0) return;
         b.y += dy;
+        const xLo = Math.floor(b.x);
+        const xHi = Math.floor(b.x + b.w - 0.001);
         if (dy > 0) {
-            const edge = b.y + b.h - 0.001;
-            const row  = Math.floor(edge / tm.tileSize);
-            const c0   = Math.floor(b.x / tm.tileSize);
-            const c1   = Math.floor((b.x + b.w - 0.001) / tm.tileSize);
-            for (let c = c0; c <= c1; c++) {
-                if (tm.solidAt(c, row)) {
-                    b.y = row * tm.tileSize - b.h;
-                    b.vy = 0;
-                    b.onGround = true;
-                    return;
+            const edge = Math.floor(b.y + b.h - 0.001);
+            if (anySolidHorizontal(tm, edge, xLo, xHi)) {
+                if (tm.destructible) {
+                    let resolveEdge = edge;
+                    while (resolveEdge >= 0 && anySolidHorizontal(tm, resolveEdge, xLo, xHi)) resolveEdge--;
+                    b.y = resolveEdge + 1 - b.h;
+                } else {
+                    const ts = tm.tileSize;
+                    const row = Math.floor(edge / ts);
+                    b.y = row * ts - b.h;
                 }
+                b.vy = 0;
+                b.onGround = true;
+                return;
             }
         } else {
-            const row = Math.floor(b.y / tm.tileSize);
-            const c0  = Math.floor(b.x / tm.tileSize);
-            const c1  = Math.floor((b.x + b.w - 0.001) / tm.tileSize);
-            for (let c = c0; c <= c1; c++) {
-                if (tm.solidAt(c, row)) {
-                    b.y = (row + 1) * tm.tileSize;
-                    b.vy = 0; ev.hitCeiling = true; return;
+            const edge = Math.floor(b.y);
+            if (anySolidHorizontal(tm, edge, xLo, xHi)) {
+                if (tm.destructible) {
+                    let resolveEdge = edge;
+                    while (resolveEdge < tm.heightPx && anySolidHorizontal(tm, resolveEdge, xLo, xHi)) resolveEdge++;
+                    b.y = resolveEdge;
+                } else {
+                    const ts = tm.tileSize;
+                    const row = Math.floor(edge / ts);
+                    b.y = (row + 1) * ts;
                 }
+                b.vy = 0; ev.hitCeiling = true; return;
             }
         }
     }

@@ -87,12 +87,13 @@
         setRange(8,  84, 'BBQBB');                  // upper cluster (decorative skyline)
 
         // ── Final staircase (cols 100–104, rising right) ────────────────────
-        // Each column is solid from a given row down to row 15.
-        fillCol(100, 15, 15, '#');                  // 1 high
-        fillCol(101, 14, 15, '#');                  // 2 high
-        fillCol(102, 13, 15, '#');                  // 3 high
-        fillCol(103, 12, 15, '#');                  // 4 high
-        fillCol(104, 11, 15, '#');                  // 5 high
+        // Built from bricks rather than ground so it remains destructible —
+        // ground tiles are pinned indestructible by the tilemap.
+        fillCol(100, 15, 15, 'B');                  // 1 high
+        fillCol(101, 14, 15, 'B');                  // 2 high
+        fillCol(102, 13, 15, 'B');                  // 3 high
+        fillCol(103, 12, 15, 'B');                  // 4 high
+        fillCol(104, 11, 15, 'B');                  // 5 high
 
         // ── Flyers ──────────────────────────────────────────────────────────
         // Place flyers at three distinct heights so the agent has to learn
@@ -141,10 +142,15 @@
 
     function load(opts) {
         const tileSize = (opts && opts.tileSize) || 32;
+        const destructible = !!(opts && opts.destructible);
         const tm = Tilemap.create({
             tileSize, cols: COLS, rows: ROWS_N,
             drawTile: Art.drawTile,
             solidIds: SOLID_IDS,
+            // Ground tile (id 1) is the floor — must stay intact so the player
+            // can't blast through it. Bricks/pipes/Q-blocks are still fair game.
+            indestructibleIds: [1],
+            destructible,
         });
 
         const entities = [];
