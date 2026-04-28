@@ -37,7 +37,10 @@ for (const p of SHARED) {
 const TILE = 32;
 
 // ── Checkpoints ─────────────────────────────────────────────────────────────
-const CKPT_DIR = 'apps/stompworld/ckpt';
+// Bumped to ckpt2 when the obs layout + action space changed (added beam
+// fire action, swapped per-entity floats for grid-rasterized obs window).
+// Old ckpt/ files are shape-incompatible with the new net.
+const CKPT_DIR = 'apps/stompworld/ckpt2';
 const CKPT_RING_SIZE = 10;
 const CKPT_BEST_WINDOW = 20;
 let ckptRingIdx = 0;
@@ -59,49 +62,20 @@ function safeRead(path) {
 }
 
 // ── Build agent (we use only net + buffer + trainer + handle) ───────────────
-function makeFlyer(e) {
-    const bob = e.kind === 'flyer_bob';
-    const cx = e.col * TILE + TILE / 2;
-    const cy = e.row * TILE + TILE / 2;
-    const FLY_W = 24, FLY_H = 16;
-    return {
-        x: cx - FLY_W / 2, y: cy - FLY_H / 2,
-        w: FLY_W, h: FLY_H, vx: -80, vy: 0,
-        spawnX: cx - FLY_W / 2, spawnY: cy - FLY_H / 2,
-        patrolRange: 96,
-        bobAmp: bob ? 32 : 0, bobFreq: bob ? Math.PI : 0,
-        bobT: 0, animT: 0,
-    };
-}
-
+// Tilemap is built destructible so the new beam mechanic carves terrain
+// during MCTS rollouts and BC episodes; without it, fire actions are
+// silently no-ops on the trainer side.
 function buildAgent() {
-    const lvl = Level.load({ tileSize: TILE });
-    let spawn = { x: 0, y: 0 };
-    const stomperTemplates = [];
-    const flyerTemplates = [];
-    let flag = null;
-    for (const e of lvl.entities) {
-        if (e.kind === 'player') { spawn.x = e.x; spawn.y = e.y; }
-        else if (e.kind === 'stomper') {
-            stomperTemplates.push({
-                x: e.x + 2, y: (e.row + 1) * TILE - 24,
-                w: 28, h: 24, vx: -50, vy: 0,
-                onGround: false, alive: true, squashTimer: 0, animT: 0,
-            });
-        } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
-            flyerTemplates.push(makeFlyer(e));
-        } else if (e.kind === 'flag') {
-            flag = { x: e.x, w: 32, h: 96, y: e.row * TILE - 64 };
-            flag.y = e.row * TILE - flag.h + TILE;
-        }
-    }
+    const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
     const sim = SwSim.create({
         tilemap: lvl.tilemap,
-        spawn, stompers: stomperTemplates, flyers: flyerTemplates, flag,
+        spawn: lvl.spawn,
+        stompers: lvl.stompers, flyers: lvl.flyers,
+        flag: lvl.flag, pickup: lvl.pickup,
         timeLimit: 20, stallDecisions: 30,
     });
     const agent = SwAgent.create({ sim });
-    return { sim, agent, baseSpawnY: spawn.y };
+    return { sim, agent, baseSpawnY: lvl.spawn.y };
 }
 
 const { sim, agent, baseSpawnY } = buildAgent();

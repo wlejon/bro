@@ -1,141 +1,178 @@
 // agent_obs.js — observation builder for the stompworld AI.
 //
-// Input: a SwSim instance (live state). Output: a fixed-size Float32Array
-// matching SwAgentObs.OBS_DIM. Layout:
+// Built on top of bro.ai.game.grid.createObsWindow (the brogameagent grid
+// kit). The window rasters a fixed footprint around the player into a
+// flat Float32Array; tile + entity layers are appended after the self
+// block, in this order:
 //
-//   Self block (8 floats):
-//     [0] vx / runSpeed                        in [-1, 1]
-//     [1] vy / maxFall                         in [-1, 1]
-//     [2] onGround                             {0, 1}
-//     [3] facing                               {-1, +1}
-//     [4] coyote / coyoteTime                  in [0, 1]
-//     [5] buffer / jumpBuffer                  in [0, 1]
-//     [6] dx_to_flag / 800   (clamped)         signed, capped at one screen
-//     [7] dy_to_flag / 256   (clamped)         signed
+//   self block   (12 floats — see SELF layout below)
+//   tile layer   (cols 13 × rows 9 × 2 channels = 234 floats)
+//                  ch 0: original-layout solid (1 if any solid tile id)
+//                  ch 1: destructible (1 if solid AND not the indestructible
+//                        ground id). Per-pixel destruction state is not
+//                        exposed in obs; the cumulative destruction count
+//                        is captured in the self block instead.
+//   stomper layer (cols 13 × rows 9 × 1 channel  = 117 floats)
+//                  ch 0: valid alive stomper present in this cell (count-
+//                        normalized to 1 in case multiples land in one cell)
+//   flyer layer  (cols 13 × rows 9 × 1 channel  = 117 floats)
+//                  ch 0: valid alive flyer
+//   pickup layer (cols 13 × rows 9 × 1 channel  = 117 floats)
+//                  ch 0: pickup present in this cell (zeroed once collected)
 //
-//   Forward tile window (rows 5 × cols 8 = 40 floats), 1.0 = solid:
-//     rows = playerRow-2 .. playerRow+2
-//     cols = playerCol-1 .. playerCol+6   (1 behind, 6 ahead)
-//     index = 8 + (rowOffset+2)*8 + (colOffset+1)
-//
-//   3 nearest stompers × 5 floats = 15 floats:
-//     [valid, dx/300, dy/96, vxSign, alive]
-//
-//   3 nearest flyers × 5 floats = 15 floats:
-//     [valid, dx/300, dy/192, vxSign, vySign]
-//     (dy normalized over 192 because flyers live in the sky — full
-//      screen-half range. vySign covers bobbing motion.)
-//
-// Total: 8 + 40 + 15 + 15 = 78 floats.
+// Self block layout:
+//   [0]  vx / runSpeed              clamp [-1, 1]
+//   [1]  vy / maxFall               clamp [-1, 1]
+//   [2]  onGround                   {0, 1}
+//   [3]  facing                     {-1, +1}
+//   [4]  coyote / coyoteTime        clamp [0, 1]
+//   [5]  buffer / jumpBuffer        clamp [0, 1]
+//   [6]  dx_to_pickup / 800         signed, clamp [-1, 1] (0 if collected)
+//   [7]  dx_to_flag   / 800         signed, clamp [-1, 1]
+//   [8]  hasWeapon                  {0, 1}
+//   [9]  pickupCollected            {0, 1}
+//   [10] weaponCooldown / cooldownMax  clamp [0, 1]
+//   [11] phase / 2                  {0, 0.5, 1}
 
 (function (global) {
     'use strict';
 
     const TILE = 32;
-    const COLS_AHEAD  = 6;
-    const COLS_BEHIND = 1;
-    const ROWS_UP     = 2;
-    const ROWS_DOWN   = 2;
-    const N_STOMPERS  = 3;
 
-    const TILE_COLS = COLS_BEHIND + 1 + COLS_AHEAD;          // 8
-    const TILE_ROWS = ROWS_UP    + 1 + ROWS_DOWN;            // 5
-    const TILE_BLOCK = TILE_COLS * TILE_ROWS;                // 40
-    const SELF_BLOCK = 8;
-    const N_FLYERS   = 3;
-    const STOMPER_BLOCK = N_STOMPERS * 5;                    // 15
-    const FLYER_BLOCK   = N_FLYERS   * 5;                    // 15
-    const OBS_DIM = SELF_BLOCK + TILE_BLOCK + STOMPER_BLOCK + FLYER_BLOCK; // 78
+    // Window footprint in tile cells.
+    const COLS_BEHIND = 2;
+    const COLS_AHEAD  = 10;
+    const ROWS_UP     = 4;
+    const ROWS_DOWN   = 4;
+
+    const SELF_BLOCK_SIZE = 12;
 
     const RUN_SPEED   = 240;
     const MAX_FALL    = 900;
     const COYOTE_T    = 100;
     const JUMP_BUFFER = 120;
 
-    const out = new Float32Array(OBS_DIM);
-
     function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+    // Bound to a sim instance the first time build(sim) is called. The
+    // ObsWindow's tile/layer samplers close over this reference so they
+    // see whatever sim is currently active. Single-sim per worker is the
+    // norm here; if that ever changes we should switch to per-sim windows.
+    let _sim = null;
+
+    function makeWindow() {
+        return bro.ai.game.grid.createObsWindow({
+            spec: {
+                colsBehind: COLS_BEHIND, colsAhead: COLS_AHEAD,
+                rowsUp:     ROWS_UP,     rowsDown:  ROWS_DOWN,
+                tileChannels: 2,
+                selfBlockSize: SELF_BLOCK_SIZE,
+            },
+            tile: {
+                normalize: new Float32Array([1, 1]),
+                oob: new Float32Array([1, 0]),    // out-of-world reads as solid wall
+                sample(c, r) {
+                    const tm = _sim.tilemap;
+                    if (c < 0 || c >= tm.cols || r < 0 || r >= tm.rows) return false;
+                    const id = tm.data[r * tm.cols + c];
+                    if (!id) return [0, 0];
+                    if (!tm.solidAt(c, r)) return [0, 0];
+                    return [1, id === 1 ? 0 : 1];   // ground (id 1) is indestructible
+                },
+            },
+            layers: [
+                {   // stompers
+                    channels: 1,
+                    enumerate() { return _sim.stompers.length; },
+                    sample(i) {
+                        const s = _sim.stompers[i];
+                        if (!s.alive) return { col: -1, row: -1, value: 0 };
+                        return {
+                            col: Math.floor((s.x + s.w / 2) / TILE),
+                            row: Math.floor((s.y + s.h / 2) / TILE),
+                            value: 1,
+                        };
+                    },
+                },
+                {   // flyers
+                    channels: 1,
+                    enumerate() { return _sim.flyers.length; },
+                    sample(i) {
+                        const f = _sim.flyers[i];
+                        if (!f.alive) return { col: -1, row: -1, value: 0 };
+                        return {
+                            col: Math.floor((f.x + f.w / 2) / TILE),
+                            row: Math.floor((f.y + f.h / 2) / TILE),
+                            value: 1,
+                        };
+                    },
+                },
+                {   // pickup (single-entity layer)
+                    channels: 1,
+                    enumerate() {
+                        return (_sim.pickup && !_sim.pickupCollected) ? 1 : 0;
+                    },
+                    sample() {
+                        const pk = _sim.pickup;
+                        return {
+                            col: Math.floor((pk.x + pk.w / 2) / TILE),
+                            row: Math.floor((pk.y + pk.h / 2) / TILE),
+                            value: 1,
+                        };
+                    },
+                },
+            ],
+        });
+    }
+
+    let _win = null;
+    let _selfBuf = null;
+
+    function ensureWindow() {
+        if (!_win) {
+            _win = makeWindow();
+            _selfBuf = new Float32Array(SELF_BLOCK_SIZE);
+        }
+    }
+
     function build(sim) {
-        out.fill(0);
+        _sim = sim;
+        ensureWindow();
         const p = sim.player;
         const tm = sim.tilemap;
         const flag = sim.flag;
+        const pk   = sim.pickup;
+        const cooldownMax = SwSim.WEAPON_COOLDOWN_DECISIONS || 1;
 
-        // Self block.
-        out[0] = clamp(p.vx / RUN_SPEED, -1, 1);
-        out[1] = clamp(p.vy / MAX_FALL,  -1, 1);
-        out[2] = p.onGround ? 1 : 0;
-        out[3] = p.facing < 0 ? -1 : 1;
-        out[4] = clamp(p.coyote / COYOTE_T,    0, 1);
-        out[5] = clamp(p.buffer / JUMP_BUFFER, 0, 1);
-        if (flag) {
-            out[6] = clamp((flag.x - p.x) / 800, -1, 1);
-            out[7] = clamp((flag.y - p.y) / 256, -1, 1);
-        }
+        _selfBuf[0] = clamp(p.vx / RUN_SPEED, -1, 1);
+        _selfBuf[1] = clamp(p.vy / MAX_FALL,  -1, 1);
+        _selfBuf[2] = p.onGround ? 1 : 0;
+        _selfBuf[3] = p.facing < 0 ? -1 : 1;
+        _selfBuf[4] = clamp(p.coyote / COYOTE_T,    0, 1);
+        _selfBuf[5] = clamp(p.buffer / JUMP_BUFFER, 0, 1);
+        _selfBuf[6] = (pk && !sim.pickupCollected)
+            ? clamp((pk.x - p.x) / 800, -1, 1) : 0;
+        _selfBuf[7] = flag ? clamp((flag.x - p.x) / 800, -1, 1) : 0;
+        _selfBuf[8] = sim.hasWeapon ? 1 : 0;
+        _selfBuf[9] = sim.pickupCollected ? 1 : 0;
+        _selfBuf[10] = clamp(sim.weaponCooldown / cooldownMax, 0, 1);
+        _selfBuf[11] = (sim.phase || 0) / 2;
 
-        // Forward tile window.
-        const pCol = Math.floor((p.x + p.w / 2) / TILE);
-        const pRow = Math.floor((p.y + p.h / 2) / TILE);
-        let idx = SELF_BLOCK;
-        for (let dr = -ROWS_UP; dr <= ROWS_DOWN; dr++) {
-            for (let dc = -COLS_BEHIND; dc <= COLS_AHEAD; dc++) {
-                out[idx++] = tm.solidAt(pCol + dc, pRow + dr) ? 1 : 0;
-            }
-        }
-
-        // 3 nearest stompers (alive or not, but invalid → all zeros).
-        const stompers = sim.stompers;
-        // Build a (dist², stomper) list, sort in-place by distance squared.
-        // Avoid alloc each call by reusing a small scratch (n is small).
-        const candidates = [];
-        for (let i = 0; i < stompers.length; i++) {
-            const s = stompers[i];
-            // Discard squashed-and-disposed (squashTimer expired) — still reads
-            // as 0s if "valid" stays false; but until timer ends we still
-            // present them so the policy learns to pass over them.
-            const dx = (s.x + s.w / 2) - (p.x + p.w / 2);
-            const dy = (s.y + s.h / 2) - (p.y + p.h / 2);
-            candidates.push({ d2: dx * dx + dy * dy, dx, dy, s });
-        }
-        candidates.sort((a, b) => a.d2 - b.d2);
-
-        let off = SELF_BLOCK + TILE_BLOCK;
-        for (let i = 0; i < N_STOMPERS; i++) {
-            if (i < candidates.length) {
-                const c = candidates[i];
-                out[off + 0] = 1;                       // valid
-                out[off + 1] = clamp(c.dx / 300, -1, 1);
-                out[off + 2] = clamp(c.dy / 96,  -1, 1);
-                out[off + 3] = c.s.vx > 0 ? 1 : (c.s.vx < 0 ? -1 : 0);
-                out[off + 4] = c.s.alive ? 1 : 0;
-            }
-            off += 5;
-        }
-
-        // 3 nearest flyers.
-        const flyers = sim.flyers || [];
-        const fcands = [];
-        for (let i = 0; i < flyers.length; i++) {
-            const f = flyers[i];
-            const dx = (f.x + f.w / 2) - (p.x + p.w / 2);
-            const dy = (f.y + f.h / 2) - (p.y + p.h / 2);
-            fcands.push({ d2: dx * dx + dy * dy, dx, dy, f });
-        }
-        fcands.sort((a, b) => a.d2 - b.d2);
-        for (let i = 0; i < N_FLYERS; i++) {
-            if (i < fcands.length) {
-                const c = fcands[i];
-                out[off + 0] = 1;                       // valid
-                out[off + 1] = clamp(c.dx / 300, -1, 1);
-                out[off + 2] = clamp(c.dy / 192, -1, 1);
-                out[off + 3] = c.f.vx > 0 ? 1 : (c.f.vx < 0 ? -1 : 0);
-                out[off + 4] = c.f.vy > 0 ? 1 : (c.f.vy < 0 ? -1 : 0);
-            }
-            off += 5;
-        }
-        return out;
+        const egoCol = Math.floor((p.x + p.w / 2) / TILE);
+        const egoRow = Math.floor((p.y + p.h / 2) / TILE);
+        return _win.build(egoCol, egoRow, _selfBuf);
     }
 
-    global.SwAgentObs = { build, OBS_DIM };
+    // Lazy OBS_DIM: cannot know until the window is constructed (which
+    // requires bro.ai.game.grid to be available). Workers + main both
+    // import this module before any sim is built, so ensureWindow on
+    // first OBS_DIM read is the simplest contract.
+    Object.defineProperty(global, 'SwAgentObs', {
+        value: {
+            build,
+            get OBS_DIM() { ensureWindow(); return _win.outDim; },
+        },
+        configurable: true,
+        writable: true,
+    });
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,143 +1,177 @@
 // bc_warmup.js — behavioral-cloning warm start for the stompworld agent.
 //
-// Generates demonstration episodes from a hand-coded heuristic ("walk right;
-// jump over walls, pits, and stompers") and pushes (obs, one-hot policy,
-// discounted return) tuples directly into the agent's replay buffer. This
-// breaks the cold-start trap where a randomly initialized policy never
-// stumbles into the +5 flag reward and so learns "stand still" as the
-// optimum. The net pre-trains on these tuples on the trainer's first
-// stepN() call after warmup completes.
+// Generates demonstration episodes from a hand-coded heuristic and pushes
+// (obs, one-hot policy, discounted return) tuples directly into the
+// agent's replay buffer. Breaks the cold-start trap where a randomly
+// initialized policy never stumbles into reward and so learns "stand
+// still" as the optimum.
 //
-// The heuristic uses only the obs vector (no privileged sim state), so it
-// stays a fair upper bound on what the policy could learn from observation
-// alone. We do *not* clone the heuristic exactly — we just give the buffer
-// enough good trajectories that "move right" stops being numerically
-// indistinguishable from "stand still."
+// The heuristic reads sim state directly (player, tilemap, mobs, pickup,
+// weapon flags). Behavior:
+//
+//   Phase 0 (no weapon):   walk right toward the pickup; jump pits, walls,
+//                          and stompers; jump over body-level flyers; avoid
+//                          jumping into apex-lethal flyers.
+//   Phase 1 (has weapon, not yet cleared):
+//                          fire on close flyers and obstructing destructible
+//                          walls; otherwise walk toward the spawn (left).
+//   Phase 2 (cleared):     walk right toward the flag; opportunistic fire.
+//
+// We do NOT clone exactly — the agent's replay buffer just needs a few
+// good trajectories that beat "stand still" numerically.
 
 (function (global) {
     'use strict';
 
-    const TILE_COLS = 8;     // matches agent_obs forward window
-    const TILE_BLOCK_OFF = 8;
-    const STOMPER_OFF = TILE_BLOCK_OFF + 40;          // obs[48..62]
-    const FLYER_OFF   = STOMPER_OFF + 15;             // obs[63..77]
+    const TILE = 32;
 
-    // Read a forward-window cell from the obs vector.
-    //   dr ∈ [-2, +2], dc ∈ [-1, +6]
-    function tileAt(obs, dr, dc) {
-        const idx = TILE_BLOCK_OFF + (dr + 2) * TILE_COLS + (dc + 1);
-        return obs[idx] > 0.5;
+    function tileSolid(sim, c, r) {
+        const tm = sim.tilemap;
+        if (c < 0 || c >= tm.cols || r < 0 || r >= tm.rows) return false;
+        return !!tm.solidAt(c, r);
     }
 
-    // Pick a discrete action in [0..5] from an obs vector. Always biases
-    // rightward; jumps proactively when an obstacle, pit, or live stomper
-    // is within reach in the next few tiles. Lookahead extends to dc=3 —
-    // at runSpeed=240 that's ~400 ms of warning, enough margin for the
-    // jump arc (~570 ms aloft).
-    function heuristicAction(obs, rng) {
-        const onGround = obs[2] > 0.5;
-        const coyoteHot = obs[4] > 0.1;
+    function tileDestructible(sim, c, r) {
+        const tm = sim.tilemap;
+        if (c < 0 || c >= tm.cols || r < 0 || r >= tm.rows) return false;
+        const id = tm.data[r * tm.cols + c];
+        return id !== 0 && id !== 1 && tm.solidAt(c, r);
+    }
 
-        // Trigger jumps only when the obstacle is at the very next tile.
-        // Looking ≥2 tiles ahead causes the player to take off too early
-        // and land short — at jumpVel=-850 the arc is 170 px (~5.3 tiles)
-        // wide, so jumping from 3 tiles before a gap lands you in the
-        // middle of it.
-        const wallAhead = tileAt(obs, 0, 1);
-        const headBlock = tileAt(obs, -1, 1);
-        const pitAhead  = !tileAt(obs, 1, 1);
+    function nearestStomperAhead(sim, dir) {
+        const p = sim.player;
+        const px = p.x + p.w / 2;
+        let best = null;
+        for (const s of sim.stompers) {
+            if (!s.alive) continue;
+            const dx = (s.x + s.w / 2) - px;
+            if (dx * dir <= 0) continue;
+            if (Math.abs(dx) > 250) continue;
+            if (Math.abs((s.y + s.h / 2) - (p.y + p.h / 2)) > 100) continue;
+            if (!best || Math.abs(dx) < Math.abs(best.dx)) best = { s, dx };
+        }
+        return best;
+    }
 
-        // Stomper in stomp-trigger window. With jumpVel=-850, runSpeed=240,
-        // the player descends back to stomper-top height at ~0.68 s after
-        // takeoff. Approach rate (player + stomper) ≈ 290 px/s, so the
-        // pre-jump center-to-center dx that lines the descent up with the
-        // stomper is ≈ 195 px (dxN ≈ 0.65). AABB overlap allows ±26 px,
-        // i.e. dxN ∈ [0.57, 0.74]. We widen the lower bound to ~0 so the
-        // heuristic also fires "evade by jumping" when too close to stomp
-        // cleanly — being airborne over a passing stomper is always safer
-        // than walking into it.
-        let stomperClose = false;
-        for (let i = 0; i < 3; i++) {
-            const off = STOMPER_OFF + i * 5;
-            const valid = obs[off] > 0.5;
-            const alive = obs[off + 4] > 0.5;
-            if (!valid || !alive) continue;
-            const dxN = obs[off + 1];   // dx / 300
-            const dyN = obs[off + 2];   // dy / 96
-            if (dxN > 0 && dxN < 0.75 && Math.abs(dyN) < 0.6) {
-                stomperClose = true;
-                break;
+    function classifyFlyersAhead(sim, dir) {
+        // Returns { bodyLevel, apexLethal, beamTargetable } booleans.
+        // bodyLevel: needs jumping over (row 15 / dy ≈ 0).
+        // apexLethal: lethal at jump apex (row 11 / dy ≈ -100..-200).
+        // beamTargetable: alive flyer in front, anywhere within ~5 tiles.
+        const p = sim.player;
+        const pcx = p.x + p.w / 2;
+        const pcy = p.y + p.h / 2;
+        let bodyLevel = false, apexLethal = false, beamTargetable = false;
+        for (const f of sim.flyers) {
+            if (!f.alive) continue;
+            const dx = (f.x + f.w / 2) - pcx;
+            const dy = (f.y + f.h / 2) - pcy;
+            if (dx * dir <= 0) continue;
+            const adx = Math.abs(dx);
+            if (adx < 175) {
+                if (Math.abs(dy) < 30) bodyLevel = true;
+                else if (dy > -200 && dy < -50) apexLethal = true;
             }
+            if (adx < 200) beamTargetable = true;
         }
-        // If a pit is between us and the stomper, defer the stomper-jump:
-        // jumping from too far back lands us inside the gap. Let pitAhead
-        // (dc=1) trigger the jump at the gap edge instead — the same arc
-        // clears the gap and lands on/past the stomper.
-        const gapBetween = !tileAt(obs, 1, 1) || !tileAt(obs, 1, 2) ||
-                           !tileAt(obs, 1, 3) || !tileAt(obs, 1, 4);
-        if (stomperClose && gapBetween) stomperClose = false;
+        return { bodyLevel, apexLethal, beamTargetable };
+    }
 
-        // Tiny exploration noise so demo trajectories don't collapse to one
-        // path — but capped low to keep most episodes successful.
+    function destructibleWallAhead(sim, dir) {
+        // Look 1-2 cols ahead at the player's row for a destructible wall.
+        const p = sim.player;
+        const pCol = Math.floor((p.x + p.w / 2) / TILE);
+        const pRow = Math.floor((p.y + p.h / 2) / TILE);
+        for (let dc = 1; dc <= 2; dc++) {
+            const c = pCol + dc * dir;
+            if (tileDestructible(sim, c, pRow) ||
+                tileDestructible(sim, c, pRow - 1)) return true;
+        }
+        return false;
+    }
+
+    function pitAhead(sim, dir) {
+        // 1 tile ahead at the row directly under the player's feet.
+        const p = sim.player;
+        const pCol = Math.floor((p.x + p.w / 2) / TILE);
+        const footRow = Math.floor((p.y + p.h + 2) / TILE);
+        return !tileSolid(sim, pCol + dir, footRow);
+    }
+
+    function wallAhead(sim, dir) {
+        const p = sim.player;
+        const pCol = Math.floor((p.x + p.w / 2) / TILE);
+        const pRow = Math.floor((p.y + p.h / 2) / TILE);
+        return tileSolid(sim, pCol + dir, pRow);
+    }
+
+    function headBlock(sim, dir) {
+        const p = sim.player;
+        const pCol = Math.floor((p.x + p.w / 2) / TILE);
+        const pRow = Math.floor((p.y + p.h / 2) / TILE);
+        return tileSolid(sim, pCol + dir, pRow - 1);
+    }
+
+    function chooseDirection(sim) {
+        // Direction the heuristic wants to move: right toward pickup pre-
+        // collection, left toward spawn after pickup until destruction is
+        // "enough", then right toward flag.
+        if (sim.phase === 0) return 1;
+        if (sim.phase === 2) return 1;
+        return -1;
+    }
+
+    function heuristicAction(sim, rng) {
+        const p = sim.player;
+        const onGround = !!p.onGround;
+        const coyoteHot = (p.coyote || 0) > 10;
+        const dir = chooseDirection(sim);
+        const facing = p.facing < 0 ? -1 : 1;
+
+        // Tiny exploration noise.
         const r = rng();
-        if (r < 0.02) return 2 + ((rng() * 4) | 0);   // 2..5
+        if (r < 0.02) return ((rng() * 7) | 0);   // any of 0..6
 
-        // Flyer awareness. dy in obs is normalized over 192 px:
-        //   dyN ≈   0    → row 15 (body level)         — MUST jump over
-        //   dyN ≈ -0.5   → row 12 (apex transit)       — jumping is risky
-        //   dyN ≈ -0.65  → row 11 (apex collision)     — jumping is fatal
-        // The categories are deliberately wide to also catch bobbing
-        // flyers ('X') as they swing through their range.
-        let bodyLevelFlyer = false;   // forces a jump-over
-        let apexLethalFlyer = false;  // suppresses jumping
-        for (let i = 0; i < 3; i++) {
-            const off = FLYER_OFF + i * 5;
-            if (obs[off] < 0.5) continue;
-            const dxN = obs[off + 1];
-            const dyN = obs[off + 2];
-            // Only consider flyers ahead in close range.
-            if (dxN <= 0 || dxN > 0.55) continue;
-            if (dyN > -0.18 && dyN < 0.18)             bodyLevelFlyer = true;
-            else if (dyN > -0.85 && dyN < -0.30)       apexLethalFlyer = true;
-        }
-        // Body-level flyer overrides everything: must jump or die. Lead
-        // distance is short here (we want the jump fired close to contact
-        // so apex aligns over the flyer rather than after it).
-        if (bodyLevelFlyer && (onGround || coyoteHot)) return 5;
-
-        const triggerJump = wallAhead || pitAhead || stomperClose || headBlock;
-
-        // Apex-lethal flyer in front: never jump. Walk under it. This is
-        // the "anti-jump-spam" lesson the prior must learn — without it,
-        // the policy generalizes "JR is always best" and dies at the very
-        // first row-11 flyer (col 6).
-        if (apexLethalFlyer && triggerJump && onGround) {
-            // We'd otherwise jump, but a lethal flyer is in the apex zone.
-            // Suppress the jump unless we have no choice (pit ahead = will
-            // fall). For pits we accept the risk and jump anyway; flyer
-            // patrols are stochastic enough that some attempts succeed.
-            if (!pitAhead) return 2;
-        }
-        if (apexLethalFlyer && !triggerJump) {
-            // Belt-and-suspenders: even without an existing trigger, force
-            // walk in the apex-lethal zone in case some later check fires.
-            return 2;
+        // Beam logic. Fire when (a) we have the weapon, (b) cooldown is up,
+        // and (c) there's something worth shooting in our facing arc.
+        if (sim.hasWeapon && sim.weaponCooldown <= 0) {
+            const flyers = classifyFlyersAhead(sim, facing);
+            const wallDestr = destructibleWallAhead(sim, facing);
+            if (flyers.beamTargetable || (wallDestr && onGround)) return 6;
         }
 
-        if (triggerJump && (onGround || coyoteHot)) return 5; // jump-right
+        // Movement target obstacles in the chosen direction.
+        const stomper = nearestStomperAhead(sim, dir);
+        const stomperClose = stomper && Math.abs(stomper.dx) < 90;
+        const flyersDir = classifyFlyersAhead(sim, dir);
 
-        // Hold the jump while rising. Switching to R while airborne lets
-        // jumpHeld go false, which triggers Platformer's jumpCutMul=0.45
-        // every tick and slams the apex — fatal for the wider arcs at
-        // jumpVel=-850. obs[1] = vy / MAX_FALL; negative = rising.
-        const rising = obs[1] < -0.05;
-        if (!onGround && rising) return 5;
+        const wAhead = wallAhead(sim, dir);
+        const hBlock = headBlock(sim, dir);
+        const pAhead = pitAhead(sim, dir);
 
-        return 2;
+        // Body-level flyer: must jump or die.
+        if (flyersDir.bodyLevel && (onGround || coyoteHot)) {
+            return dir > 0 ? 5 : 4;
+        }
+
+        const triggerJump = wAhead || hBlock || pAhead || stomperClose;
+
+        if (flyersDir.apexLethal && triggerJump && onGround) {
+            // Suppress jump unless we'll fall otherwise.
+            if (!pAhead) return dir > 0 ? 2 : 1;
+        }
+        if (flyersDir.apexLethal && !triggerJump) return dir > 0 ? 2 : 1;
+
+        if (triggerJump && (onGround || coyoteHot)) return dir > 0 ? 5 : 4;
+
+        // Hold the jump while rising (avoid jumpCutMul).
+        if (!onGround && p.vy < -50) return dir > 0 ? 5 : 4;
+
+        return dir > 0 ? 2 : 1;
     }
 
     // Run one heuristic episode end-to-end. Returns an array of pending
-    // tuples {obs, policyTarget, reward}; caller seals with discounted
+    // tuples {obs, policyTarget, mask, reward}; caller seals with discounted
     // returns and pushes into the buffer. Caller sets the spawn before
     // calling.
     function rollOne(sim, rng, maxDecisions) {
@@ -149,11 +183,7 @@
 
         for (let t = 0; t < maxDecisions; t++) {
             const obs = SwAgentObs.build(sim).slice();
-            const a = heuristicAction(obs, rng);
-            // Hard one-hot: a strong, decisive teacher. The MCTS-derived
-            // visit distributions added later will smooth this out
-            // naturally; we want the gradient to actually push the prior
-            // off uniform during pretraining.
+            const a = heuristicAction(sim, rng);
             const target = new Float32Array(numActions);
             target[a] = 1.0;
             const r = sim.step(a);
@@ -163,18 +193,9 @@
         return out;
     }
 
-    // Drain heuristic rollouts into `agent.buffer`. We keep "good" episodes
-    // — either flag-reaching or with a positive-enough total return —
-    // because hard one-hot demos from a partial-success run still teach
-    // the apprentice the right local response (jump pits, jump walls,
-    // jump stompers). Strict flag-only filtering won't work from spawn 2:
-    // the heuristic can't clear the unjumpable 5-tile gap at cols 45–49.
-    //
-    // The caller picks `spawnX` to point the warmup at a region the
-    // heuristic can actually solve (e.g. col 78 — long flat run to flag).
     function populate(agent, sim, opts) {
         opts = opts || {};
-        const targetSamples   = opts.targetSamples   || 30;   // good episodes
+        const targetSamples   = opts.targetSamples   || 30;
         const maxAttempts     = opts.maxAttempts     || 200;
         const gamma           = opts.gamma           || 0.99;
         const maxDecisions    = opts.maxDecisions    || 400;
@@ -206,7 +227,6 @@
             for (const t of tuples) epReward += t.reward;
             totalReward += epReward;
 
-            // Keep flag-reachers and partial-progress runs above the floor.
             if (!won && epReward < minReward) continue;
             kept++;
 

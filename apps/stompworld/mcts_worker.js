@@ -40,52 +40,24 @@ for (const p of SHARED) {
 }
 
 const TILE = 32;
-const SPAWN_COLS = [2, 32, 48, 78];
-const TRAIN_TIME_LIMIT = 20;
-
-function makeFlyer(e) {
-    const bob = e.kind === 'flyer_bob';
-    const cx = e.col * TILE + TILE / 2;
-    const cy = e.row * TILE + TILE / 2;
-    const FLY_W = 24, FLY_H = 16;
-    return {
-        x: cx - FLY_W / 2, y: cy - FLY_H / 2,
-        w: FLY_W, h: FLY_H, vx: -80, vy: 0,
-        spawnX: cx - FLY_W / 2, spawnY: cy - FLY_H / 2,
-        patrolRange: 96,
-        bobAmp: bob ? 32 : 0, bobFreq: bob ? Math.PI : 0,
-        bobT: 0, animT: 0,
-    };
-}
+// Includes col 100 (near the pickup at col 115) so a fraction of episodes
+// can capture full pickup → backtrack-and-destroy → flag arcs within the
+// training horizon. The lower spawns still feed local-skill data (jumping,
+// stomping, beam against terrain).
+const SPAWN_COLS = [2, 32, 48, 78, 100];
+const TRAIN_TIME_LIMIT = 30;
 
 function buildSim() {
-    const lvl = Level.load({ tileSize: TILE });
-    let spawn = { x: 0, y: 0 };
-    const stomperTemplates = [];
-    const flyerTemplates = [];
-    let flag = null;
-    for (const e of lvl.entities) {
-        if (e.kind === 'player') { spawn.x = e.x; spawn.y = e.y; }
-        else if (e.kind === 'stomper') {
-            stomperTemplates.push({
-                x: e.x + 2, y: (e.row + 1) * TILE - 24,
-                w: 28, h: 24, vx: -50, vy: 0,
-                onGround: false, alive: true, squashTimer: 0, animT: 0,
-            });
-        } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
-            flyerTemplates.push(makeFlyer(e));
-        } else if (e.kind === 'flag') {
-            flag = { x: e.x, w: 32, h: 96, y: e.row * TILE - 64 };
-            flag.y = e.row * TILE - flag.h + TILE;
-        }
-    }
+    const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
     const sim = SwSim.create({
         tilemap: lvl.tilemap,
-        spawn, stompers: stomperTemplates, flyers: flyerTemplates, flag,
+        spawn: lvl.spawn,
+        stompers: lvl.stompers, flyers: lvl.flyers,
+        flag: lvl.flag, pickup: lvl.pickup,
         timeLimit: TRAIN_TIME_LIMIT,
         stallDecisions: 30,
     });
-    return { sim, baseSpawnY: spawn.y };
+    return { sim, baseSpawnY: lvl.spawn.y };
 }
 
 let workerId = 0;

@@ -8,6 +8,7 @@
 //   C  cloud           .  empty
 // Entity chars (treated as empty tiles, then spawned):
 //   P  player spawn    G  stomper         F  flag
+//   I  beam pickup (granting the destructible-terrain weapon)
 //
 // Grid: 120 cols × 18 rows of 32 px tiles → 3840 × 576 px world.
 //
@@ -23,7 +24,7 @@
 //   73–77  5-tile gap
 //   78–95  long ground with mid-height brick cluster
 //   96–104 5-step staircase ascent
-//   105–119 ground approach + flag
+//   105–119 ground approach + beam pickup (col 115) + flag (col 118)
 
 (function (global) {
     'use strict';
@@ -38,7 +39,7 @@
     };
     const SOLID_IDS = [1, 2, 3, 4, 5, 6, 7];
     const ENTITY_CHARS = {
-        'P': 'player', 'G': 'stomper', 'F': 'flag',
+        'P': 'player', 'G': 'stomper', 'F': 'flag', 'I': 'pickup',
         // Flying enemies. 'V' = horizontal patrol only; 'X' = horizontal +
         // sinusoidal vertical bob. Letters chosen so they don't collide
         // with existing tile chars (B, Q, [, ], <, >, C) or other entity
@@ -133,6 +134,7 @@
         set(15, 62, 'G');                           // ground stomper under platform
         set(15, 80, 'G');                           // long-ground stomper
         set(15, 90, 'G');                           // long-ground stomper
+        set(15, 115, 'I');                          // beam pickup (gates destruction)
         set(15, 118, 'F');                          // flag
 
         return rows.map((arr) => arr.join(''));
@@ -176,5 +178,68 @@
         return { tilemap: tm, entities };
     }
 
-    global.Level = { load, COLS, ROWS_N };
+    // Parse level entities into the per-mob template objects that
+    // SwSim.create expects. All three workers (trainer / mcts / live)
+    // and the live game share these conventions, so the construction
+    // logic lives here.
+    function makeStomper(e, tileSize) {
+        return {
+            x: e.x + 2,
+            y: (e.row + 1) * tileSize - 24,
+            w: 28, h: 24, vx: -50, vy: 0,
+            onGround: false, alive: true, squashTimer: 0, animT: 0,
+        };
+    }
+    function makeFlyer(e, tileSize) {
+        const bob = e.kind === 'flyer_bob';
+        const cx = e.col * tileSize + tileSize / 2;
+        const cy = e.row * tileSize + tileSize / 2;
+        const FLY_W = 24, FLY_H = 16;
+        return {
+            x: cx - FLY_W / 2, y: cy - FLY_H / 2,
+            w: FLY_W, h: FLY_H, vx: -80, vy: 0,
+            spawnX: cx - FLY_W / 2, spawnY: cy - FLY_H / 2,
+            patrolRange: 96,
+            bobAmp: bob ? 32 : 0, bobFreq: bob ? Math.PI : 0,
+            bobT: 0, animT: 0, alive: true,
+        };
+    }
+    function makeFlag(e, tileSize) {
+        const flag = { x: e.x, w: 32, h: 96, y: e.row * tileSize - 64 };
+        flag.y = e.row * tileSize - flag.h + tileSize;
+        return flag;
+    }
+    function makePickup(e, tileSize) {
+        // 24×24 collectible centered in its tile cell.
+        const cx = e.col * tileSize + tileSize / 2;
+        const cy = e.row * tileSize + tileSize / 2;
+        return { x: cx - 12, y: cy - 12, w: 24, h: 24 };
+    }
+
+    // Build the {tilemap, spawn, stompers, flyers, flag, pickup} bundle
+    // used by SwSim.create. opts forwards to load().
+    function buildLevel(opts) {
+        const tileSize = (opts && opts.tileSize) || 32;
+        const lvl = load(opts);
+        let spawn = { x: 0, y: 0 };
+        const stompers = [];
+        const flyers = [];
+        let flag = null;
+        let pickup = null;
+        for (const e of lvl.entities) {
+            if (e.kind === 'player') { spawn.x = e.x; spawn.y = e.y; }
+            else if (e.kind === 'stomper') stompers.push(makeStomper(e, tileSize));
+            else if (e.kind === 'flyer' || e.kind === 'flyer_bob')
+                flyers.push(makeFlyer(e, tileSize));
+            else if (e.kind === 'flag') flag = makeFlag(e, tileSize);
+            else if (e.kind === 'pickup') pickup = makePickup(e, tileSize);
+        }
+        return {
+            tilemap: lvl.tilemap, entities: lvl.entities,
+            spawn, stompers, flyers, flag, pickup,
+        };
+    }
+
+    global.Level = { load, buildLevel, makeStomper, makeFlyer, makeFlag, makePickup,
+                     COLS, ROWS_N };
 })(typeof window !== 'undefined' ? window : globalThis);

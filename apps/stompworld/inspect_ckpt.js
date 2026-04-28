@@ -13,8 +13,8 @@
     const TILE = 32;
     const NN = bro.ai.game.nn;
 
-    const path = 'apps/stompworld/ckpt/best.bin';
-    const meta = JSON.parse(fs.readFileSync('apps/stompworld/ckpt/best.json', 'utf-8'));
+    const path = 'apps/stompworld/ckpt2/best.bin';
+    const meta = JSON.parse(fs.readFileSync('apps/stompworld/ckpt2/best.json', 'utf-8'));
     const bytes = new Uint8Array(fs.readFileSync(path));
 
     console.log('='.repeat(72));
