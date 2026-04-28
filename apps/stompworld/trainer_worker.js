@@ -60,6 +60,9 @@ function safeWriteJson(path, obj) {
 function safeRead(path) {
     try { return fs.readFileSync(path); } catch (_) { return null; }
 }
+function safeReadText(path) {
+    try { return fs.readFileSync(path, 'utf-8'); } catch (_) { return null; }
+}
 
 // ── Build agent (we use only net + buffer + trainer + handle) ───────────────
 // Tilemap is built destructible so the new beam mechanic carves terrain
@@ -95,14 +98,14 @@ const { sim, agent, baseSpawnY } = buildAgent();
 }
 
 // ── Resume or warmup ────────────────────────────────────────────────────────
-const bestMetaRaw = safeRead(`${CKPT_DIR}/best.json`);
+const bestMetaRaw = safeReadText(`${CKPT_DIR}/best.json`);
 const bestBytes   = safeRead(`${CKPT_DIR}/best.bin`);
 let warmupStats = null;
 let resumedFromCheckpoint = false;
 
 if (bestMetaRaw && bestBytes) {
     try {
-        const meta = JSON.parse(bestMetaRaw.toString('utf-8'));
+        const meta = JSON.parse(bestMetaRaw);
         agent.net.load(new Uint8Array(bestBytes));
         bestMean = +meta.meanReturn || -Infinity;
         resumedFromCheckpoint = true;
