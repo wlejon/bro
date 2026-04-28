@@ -1100,3 +1100,118 @@ bro.ai.game.DAMAGE_KIND.Magical;         // "magical"
 //   unit.attackCooldown                  // read/write
 //   unit.effectiveMagicResist            // armor + armorBonus
 //   unit.effectiveAttacksPerSec          // attacksPerSec * attacksMul
+
+
+// =============================================================================
+// GenericMcts — env-agnostic PUCT search
+// =============================================================================
+//
+// The MCTS classes above (Mcts / DecoupledMcts / TeamMcts / TacticMcts /
+// OptionMcts / Commander) are welded to the bundled World/Agent/CombatAction
+// model — they only plan over brogameagent's combat sim. createGenericMcts
+// is the escape hatch for anything else: a custom JS-side env, a 2D platformer,
+// a board game, a planner test harness. You describe the env with five
+// callbacks and search() runs the same AlphaZero-style PUCT algorithm over it.
+//
+// Algorithm:
+//
+//     score(a) = Q(s, a) + cPuct · P(s, a) · √N(s) / (1 + N(s, a))
+//
+// Q is the action's mean discounted return; P is the prior (uniform when no
+// priorFn is set); N is visit count. Leaf evaluation uses valueFn when
+// provided, otherwise a random rollout of rolloutDepth steps. Optional
+// Dirichlet root noise matches the AlphaZero exploration scheme.
+
+/**
+ * Create an env-agnostic PUCT MCTS searcher.
+ *
+ * @param {Object} opts
+ * @param {Object} opts.env  - Environment description; required.
+ * @param {number} opts.env.numActions     - Total action space size (max action index + 1).
+ * @param {function():any}    opts.env.snapshot      - Capture current env state. Held opaquely
+ *                                                     for the duration of one search() call.
+ * @param {function(any)}     opts.env.restore       - Restore env from a snapshot.
+ * @param {function(int):{reward:number,done:boolean}} opts.env.step - Apply action, mutate env.
+ * @param {function():(Int32Array|number[])}          opts.env.legalActions - Legal action indices
+ *                                                     in [0, numActions). Re-queried at every
+ *                                                     expansion, so it must reflect current state.
+ * @param {function():Float32Array}                   opts.env.observe - Observation vector forwarded
+ *                                                     to priorFn / valueFn. Shape and semantics
+ *                                                     are entirely up to you.
+ * @param {number} [opts.iterations=100]   - Iterations per search() call.
+ * @param {number} [opts.cPuct=1.5]        - PUCT exploration constant.
+ * @param {number} [opts.gamma=0.99]       - Discount per decision step.
+ * @param {number} [opts.rolloutDepth=8]   - Random-rollout depth (used only when valueFn unset).
+ * @param {number} [opts.dirichletAlpha=0] - Dirichlet root noise concentration. 0 = noise off.
+ * @param {number} [opts.dirichletEpsilon=0] - Mixing weight for Dirichlet noise on root prior.
+ * @param {bigint|number} [opts.seed]      - Rollout / noise RNG seed.
+ * @param {function(Float32Array obs, Int32Array legal):Float32Array} [opts.priorFn]
+ *        - Optional learned-policy prior. Returns a probability per action over numActions.
+ *          Only entries at `legal` indices are read.
+ * @param {function(Float32Array obs):number} [opts.valueFn]
+ *        - Optional learned-value function in [-1, 1]. When set, replaces random rollout
+ *          for leaf evaluation.
+ * @returns {GenericMcts}
+ */
+const m = bro.ai.game.createGenericMcts({
+    env: {
+        numActions: 6,
+        snapshot()    { return mySim.snapshot(); },
+        restore(s)    { mySim.restore(s); },
+        step(action)  { return mySim.step(action); },     // {reward, done}
+        legalActions(){ return mySim.legalActions(); },
+        observe()     { return buildObs(mySim); },
+    },
+    iterations: 200,
+    cPuct: 1.5,
+    gamma: 0.99,
+    rolloutDepth: 8,
+    dirichletAlpha: 0.5,
+    dirichletEpsilon: 0.25,
+    seed: 0xC0DE1234n,
+    priorFn(obs, legal) { return netForwardProbs(obs, legal); },
+    valueFn(obs)        { return netForwardValue(obs); },
+});
+
+/**
+ * Run a search starting from the env's current state. Returns the most-visited
+ * root action, or -1 if the action space is empty. Snapshot/restore is used
+ * internally; the env is left in its pre-search state on exit.
+ * @returns {number}
+ */
+const action = m.search();
+
+/**
+ * Normalized root visit distribution over [0, numActions). Sums to 1 over
+ * visited actions. Useful as the policy target for ExIt-style training.
+ * @returns {Float32Array}
+ */
+const visits = m.rootVisits();
+
+/**
+ * Promote the subtree under `action` to the new root, reusing its statistics.
+ * If `action` was never expanded, the tree is dropped and the next search()
+ * rebuilds from scratch.
+ */
+m.advanceRoot(action);
+
+/** Drop the search tree. */
+m.reset();
+
+/**
+ * Replace the search-time configuration. Same fields as the constructor opts
+ * (iterations, cPuct, gamma, rolloutDepth, dirichletAlpha, dirichletEpsilon, seed).
+ */
+m.setConfig({ iterations: 400, dirichletAlpha: 0 });
+
+/** Replace or clear the prior / value functions at any time. */
+m.setPriorFn((obs, legal) => netForwardProbs(obs, legal));
+m.setValueFn((obs) => netForwardValue(obs));
+m.setPriorFn(null);   // pass null/undefined to fall back to uniform prior
+
+/**
+ * Stats from the most recent search() call.
+ *   { iterations, treeSize, bestVisits, bestAction }
+ * @returns {Object}
+ */
+const stats = m.lastStats();

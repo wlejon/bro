@@ -112,16 +112,20 @@
         const mctsSeed = opts.seed != null
             ? (Number(BigInt(opts.seed) & 0xFFFFFFFFn) ^ 0xC0DE) >>> 0
             : 0xC0DE;
-        const mcts = MctsJs.create({
+        const mcts = bro.ai.game.createGenericMcts({
             env: {
+                numActions,
                 snapshot:     () => sim.snapshot(),
                 restore:      (s) => sim.restore(s),
                 step:         (a) => sim.step(a),
                 legalActions: () => sim.legalActions(),
                 observe:      () => SwAgentObs.build(sim),
-                numActions,
             },
-            numActions, cPuct, seed: mctsSeed,
+            cPuct, gamma, rolloutDepth,
+            iterations,
+            dirichletAlpha, dirichletEpsilon,
+            seed: mctsSeed,
+            priorFn, valueFn,
         });
 
         // Per-episode buffers.
@@ -142,10 +146,7 @@
         function decide() {
             const obs = SwAgentObs.build(sim).slice();
             mcts.reset();
-            const action = mcts.search({
-                iterations, priorFn, valueFn, gamma, rolloutDepth,
-                dirichletAlpha, dirichletEpsilon,
-            });
+            const action = mcts.search();
             const visits = mcts.rootVisits();
             pending.push({ obs, policyTarget: visits, reward: 0 });
             return action;

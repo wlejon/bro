@@ -75,6 +75,9 @@ void installBeliefBindings(JSContext* ctx, JSValue gameObj);
 //    classic MCTS evaluators/priors/rollouts as first-class JS objects. ──
 void installExtrasBindings(JSContext* ctx, JSValue gameObj);
 
+// ── Env-agnostic GenericMcts (ai_generic_mcts_bindings.cpp) ──
+void installGenericMctsBindings(JSContext* ctx, JSValue gameObj);
+
 /// Classic-MCTS wrapper extractors. Return empty shared_ptr if not a match.
 std::shared_ptr<brogameagent::mcts::IEvaluator>
 extractHeroEvaluatorClassic(JSContext* ctx, JSValueConst v);

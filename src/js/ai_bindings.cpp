@@ -2824,6 +2824,9 @@ void AIBindings::install(JSContext* ctx) {
     // Snapshots, projectiles, VecSimulation, classic MCTS primitives
     installExtrasBindings(ctx, gameObj);
 
+    // Env-agnostic GenericMcts (bro.ai.game.createGenericMcts)
+    installGenericMctsBindings(ctx, gameObj);
+
     // ── Steering sub-namespace: bro.ai.game.steer ──────────────────────
     JSValue steerObj = JS_NewObject(ctx);
 
