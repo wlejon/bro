@@ -889,7 +889,7 @@
         },
         liveStats: {
             episodes: 0, lastReason: 'fresh', bestX: 0,
-            decisions: 0, tapeEntries: 0, tapeSigs: 0,
+            decisions: 0, tapeSize: 0, tapeCapacity: 0,
         },
         mctsStats: [],
         warmupInfo: null,
@@ -921,8 +921,13 @@
             this.prevEpisodes = 0;
             this.prevReason = 'fresh';
             this.flyerCooldown = 0;
-            this.pool = BestCrop.create({ capacity: this.poolCapacity });
+            this.pool = bro.ai.game.grid.createBestCrop({
+                capacity: this.poolCapacity,
+                depthBonus: 0.001, ageDecay: 0.0001,
+                seedTopK: 8, seed: 0xC0DE5EEDn,
+            });
             this.poolTopReturn = 0;
+            this.poolAccepted = 0;
             this.fast = false;
             this.warmupInfo = null;
             this.mctsStats = [];
@@ -1008,8 +1013,8 @@
                 if (s.lastReason  != null) this.liveStats.lastReason  = s.lastReason;
                 if (s.bestX       != null) this.liveStats.bestX       = s.bestX | 0;
                 if (s.decisions   != null) this.liveStats.decisions   = s.decisions;
-                if (s.tapeEntries != null) this.liveStats.tapeEntries = s.tapeEntries;
-                if (s.tapeSigs    != null) this.liveStats.tapeSigs    = s.tapeSigs;
+                if (s.tapeSize     != null) this.liveStats.tapeSize     = s.tapeSize;
+                if (s.tapeCapacity != null) this.liveStats.tapeCapacity = s.tapeCapacity;
             } else if (m.type === 'tuples') {
                 this.routeTuples(m);
             } else if (m.type === 'trajectory') {
@@ -1070,17 +1075,18 @@
         },
 
         ingestTrajectory(m) {
-            this.pool.ingest({
-                startSnap:   m.startSnap,
-                actions:     m.actions,
-                decisions:   m.decisions,
-                totalReturn: m.totalReturn,
-                searchDepth: m.searchDepth,
-                reason:      m.reason,
-                source:      m.source,
-                bestX:       m.bestX,
+            // bro.ai.game.grid.createBestCrop wants {snapshot, prefix, score,
+            // depth}; ranks internally with the configured depthBonus +
+            // ageDecay weights. Top-return / accepted-count are tracked here
+            // since the pool no longer surfaces them directly.
+            this.pool.push({
+                snapshot: m.startSnap,
+                prefix:   m.actions,
+                score:    m.totalReturn,
+                depth:    m.searchDepth,
             });
-            this.poolTopReturn = this.pool.topReturn();
+            this.poolAccepted++;
+            if (m.totalReturn > this.poolTopReturn) this.poolTopReturn = m.totalReturn;
             if (this.trainer) {
                 try {
                     this.trainer.postMessage({
@@ -1101,16 +1107,8 @@
         // tuples from the deep mcts workers and republishes weights,
         // and the live agent's shallow MCTS refines on top of those
         // weights. Just no state-restore funny business.
-        pumpSeed(dt) {
-            this.seedAccum += dt;
-            if (this.seedAccum < this.SEED_PERIOD_MS) return;
-            this.seedAccum = 0;
-            this.pool.step();   // age entries even if we don't seed from it
-        },
-
         update(dt) {
             if (!this.running) return;
-            this.pumpSeed(dt);
             // Try to release any banked live-decision credits now that
             // wall time has advanced. Credits only accumulate when the
             // worker is faster than the period; if MCTS is slower than
@@ -1221,10 +1219,10 @@
                     + '   last: ' + l.lastReason
                     + '   decisions ' + l.decisions
                     + (this.snap ? '' : '   [waiting for first snap]'),
-                'failure tape: ' + l.tapeSigs + ' sigs / ' + l.tapeEntries + ' entries',
-                'pool: ' + this.pool.size() + '/' + this.poolCapacity
+                'failure tape: ' + l.tapeSize + '/' + l.tapeCapacity,
+                'pool: ' + this.pool.size + '/' + this.poolCapacity
                     + '   top return ' + this.poolTopReturn.toFixed(2)
-                    + '   accepted ' + this.pool.totalAccepted(),
+                    + '   accepted ' + this.poolAccepted,
             ];
             for (let i = 0; i < this.mctsWorkers.length; i++) {
                 const ms = this.mctsStats[i] || {};

@@ -30,7 +30,6 @@ const SHARED = [
     'level.js',
     'sim.js',
     'agent_obs.js',
-    'failure_tape.js',
     'play_agent.js',
 ];
 for (const p of SHARED) {
@@ -58,10 +57,30 @@ function buildSim() {
 }
 
 const { sim, baseSpawnY, defaultSpawnX } = buildSim();
-const tape = FailureTape.create({
-    maxEntries: 200, lookback: 8, penalty: 0.1,
-    numActions: sim.numActions, tile: TILE,
+
+// FailureTape from the brogameagent grid kit. Records (sig, action) pairs
+// from the tail of failed episodes; emits a per-action multiplier capped
+// between `floor` and 1.0 that we apply to the network prior at every
+// MCTS expansion (via play_agent's priorAdjust hook). Caller computes the
+// signature string — we use a coarse (col, row, onGround, vxSign) tuple
+// so distinct micro-positions hash to the same line.
+const tape = bro.ai.game.grid.createFailureTape({
+    tapeDepth:    8,
+    ringCapacity: 200,
+    penalty:      0.1,
+    floor:        0.001,
 });
+function buildSig() {
+    const p = sim.player;
+    const col = Math.floor(p.x / TILE);
+    const row = Math.floor(p.y / TILE);
+    const og  = p.onGround ? 1 : 0;
+    const vxSign = p.vx > 8 ? 1 : (p.vx < -8 ? -1 : 0);
+    // Include the weapon-cooldown bucket so the same line with a hot
+    // beam vs a cool beam isn't treated as identical state.
+    const wc = sim.weaponCooldown > 0 ? 1 : 0;
+    return col + ',' + row + ',' + og + ',' + vxSign + ',' + wc;
+}
 
 // Live MCTS depth is sized to fit comfortably inside one decision period
 // (LIVE_PERIOD_MS = 67 ms in main = sim FRAME_SKIP). A trained network
@@ -74,8 +93,8 @@ const agent = PlayAgent.create({
     rolloutDepth: 4,
     dirichletAlpha: 0.0,
     dirichletEpsilon: 0.0,
-    sigFn: () => tape.buildSig(sim),
-    priorBias: (sig, legal) => tape.biasFor(sig, legal),
+    sigFn: buildSig,
+    priorAdjust: (sig, prior) => tape.applyPriors(sig, prior),
 });
 
 let pendingSeed = null;     // {startSnap, prefixActions?} or {spawnCol}
@@ -165,8 +184,8 @@ function makeSnap(extra) {
         episodes, lastReason,
         bestX: bestXEpisode,
         decisions: decisionsTotal,
-        tapeEntries: tape.entries(),
-        tapeSigs: tape.sigs(),
+        tapeSize: tape.size,
+        tapeCapacity: tape.capacity,
         netVersion: agent.netVersion,
         timeLeft: sim.timeLeft,
     }, extra || {});
@@ -181,10 +200,19 @@ function startEpisode() {
     self.postMessage({ type: 'render', snap: makeSnap({ event: 'start' }) });
 }
 
+const TAPE_LOOKBACK = 8;
 function endEpisode(reason) {
     const result = agent.endEpisode(reason);
     if (reason === 'death' || reason === 'stall' || reason === 'timeout') {
-        tape.recordFailure(sigList, result.actions);
+        // Build the tail of (sig, action) pairs from the parallel buffers
+        // and hand it to the grid-kit tape, which dedupes + ages internally.
+        const len = Math.min(sigList.length, result.actions.length);
+        const start = Math.max(0, len - TAPE_LOOKBACK);
+        const tail = [];
+        for (let i = start; i < len; i++) {
+            tail.push({ sig: sigList[i], action: result.actions[i] });
+        }
+        if (tail.length) tape.recordFailure(tail);
     }
     self.postMessage({
         type: 'tuples',
@@ -222,7 +250,7 @@ function doStep() {
         return;
     }
     if (!inEpisode) startEpisode();
-    sigList.push(tape.buildSig(sim));
+    sigList.push(buildSig());
     const action = agent.decide();
     const out = agent.applyAction(action);
     decisionsTotal++;

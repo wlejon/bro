@@ -18,10 +18,12 @@
 //   }
 //
 // Optional behavior knobs:
-//   priorBias(sig, legal) → Float32Array(numActions) of multiplicative
-//     factors applied to the network's prior at every expansion. Used by
-//     the live worker to penalize actions on the failure tape.
-//   sigFn() → string used as the lookup key for priorBias. Worker-supplied.
+//   priorAdjust(sig, prior) → Float32Array(numActions) — receives the
+//     softmax-and-mask-applied prior and returns an adjusted prior (already
+//     multiplied + renormalized). Used by the live worker to penalize
+//     actions tagged in the failure tape; matches bro.ai.game.grid.
+//     FailureTape.applyPriors's contract directly.
+//   sigFn() → string used as the lookup key for priorAdjust. Worker-supplied.
 
 (function (global) {
     'use strict';
@@ -56,8 +58,8 @@
         const dirichletAlpha   = opts.dirichletAlpha   != null ? opts.dirichletAlpha   : 0.0;
         const dirichletEpsilon = opts.dirichletEpsilon != null ? opts.dirichletEpsilon : 0.0;
 
-        const priorBias = opts.priorBias || null;
-        const sigFn     = opts.sigFn     || null;
+        const priorAdjust = opts.priorAdjust || null;
+        const sigFn       = opts.sigFn       || null;
 
         const net = NN.createPolicyValueNet({
             inDim: obsDim,
@@ -88,21 +90,16 @@
             const mask = new Float32Array(numActions);
             for (let i = 0; i < legal.length; i++) mask[legal[i]] = 1;
             const probs = softmax(logits, mask);
-            // Apply optional bias (failure-tape penalty etc.) and renormalize.
-            if (priorBias && sigFn) {
-                const sig = sigFn();
-                const bias = priorBias(sig, legal);
-                if (bias) {
+            if (priorAdjust && sigFn) {
+                const adjusted = priorAdjust(sigFn(), probs);
+                if (adjusted) {
+                    // applyPriors multiplies in place; renormalize so the
+                    // adjusted prior is still a probability distribution
+                    // (PUCT's UCB term assumes a normalized prior).
                     let s = 0;
-                    for (let i = 0; i < legal.length; i++) {
-                        const a = legal[i];
-                        const b = bias[a];
-                        probs[a] *= (b != null && b > 0) ? b : 1;
-                        s += probs[a];
-                    }
-                    if (s > 0) for (let i = 0; i < legal.length; i++) {
-                        probs[legal[i]] /= s;
-                    }
+                    for (let i = 0; i < adjusted.length; i++) s += adjusted[i];
+                    if (s > 0) for (let i = 0; i < adjusted.length; i++) adjusted[i] /= s;
+                    return adjusted;
                 }
             }
             return probs;
