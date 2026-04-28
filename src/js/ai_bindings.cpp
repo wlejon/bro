@@ -2827,6 +2827,9 @@ void AIBindings::install(JSContext* ctx) {
     // Env-agnostic GenericMcts (bro.ai.game.createGenericMcts)
     installGenericMctsBindings(ctx, gameObj);
 
+    // Grid-world / platformer kit (bro.ai.game.grid.*)
+    installGridBindings(ctx, gameObj);
+
     // ── Steering sub-namespace: bro.ai.game.steer ──────────────────────
     JSValue steerObj = JS_NewObject(ctx);
 

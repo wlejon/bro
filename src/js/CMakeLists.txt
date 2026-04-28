@@ -61,6 +61,7 @@ add_library(bro_js STATIC
     ai_belief_bindings.cpp
     ai_extras_bindings.cpp
     ai_generic_mcts_bindings.cpp
+    ai_grid_bindings.cpp
     headless_bindings.cpp
     message_serializer.cpp
     worker.cpp

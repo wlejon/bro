@@ -78,6 +78,9 @@ void installExtrasBindings(JSContext* ctx, JSValue gameObj);
 // ── Env-agnostic GenericMcts (ai_generic_mcts_bindings.cpp) ──
 void installGenericMctsBindings(JSContext* ctx, JSValue gameObj);
 
+// ── Grid-world / platformer training kit (ai_grid_bindings.cpp) ──
+void installGridBindings(JSContext* ctx, JSValue gameObj);
+
 /// Classic-MCTS wrapper extractors. Return empty shared_ptr if not a match.
 std::shared_ptr<brogameagent::mcts::IEvaluator>
 extractHeroEvaluatorClassic(JSContext* ctx, JSValueConst v);
