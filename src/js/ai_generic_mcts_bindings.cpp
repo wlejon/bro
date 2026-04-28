@@ -72,7 +72,7 @@ std::vector<float> readFloat32Array(JSContext* ctx, JSValueConst val) {
     if (JS_IsUndefined(val) || JS_IsNull(val)) return out;
     size_t byte_off = 0, view_len = 0;
     JSValue abuf = JS_GetTypedArrayBuffer(ctx, val, &byte_off, &view_len, nullptr);
-    if (JS_IsException(abuf)) { JS_GetException(ctx); return out; }
+    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return out; }
     size_t abuf_len = 0;
     uint8_t* raw = JS_GetArrayBuffer(ctx, &abuf_len, abuf);
     JS_FreeValue(ctx, abuf);
@@ -103,7 +103,7 @@ std::vector<int> readIntArray(JSContext* ctx, JSValueConst val) {
             return out;
         }
     } else {
-        JS_GetException(ctx);
+        JS_FreeValue(ctx, JS_GetException(ctx));
     }
 
     // Fall back to plain Array<number>.
@@ -205,7 +205,7 @@ static mcts::GenericEnv makeGenericEnv(GenericMctsData* d) {
     env.snapshot_fn = [d, ctx]() -> std::any {
         JSValue r = JS_Call(ctx, d->snapshot_fn, d->env_obj, 0, nullptr);
         if (JS_IsException(r)) {
-            JS_GetException(ctx);
+            JS_FreeValue(ctx, JS_GetException(ctx));
             return std::any{};
         }
         std::any out{ JsValueHolder(ctx, r) };
@@ -219,7 +219,7 @@ static mcts::GenericEnv makeGenericEnv(GenericMctsData* d) {
         if (!h) return;
         JSValueConst args[1] = { h->v };
         JSValue r = JS_Call(ctx, d->restore_fn, d->env_obj, 1, args);
-        if (JS_IsException(r)) JS_GetException(ctx);
+        if (JS_IsException(r)) JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, r);
     };
 
@@ -229,7 +229,7 @@ static mcts::GenericEnv makeGenericEnv(GenericMctsData* d) {
         JSValue r = JS_Call(ctx, d->step_fn, d->env_obj, 1, args);
         JS_FreeValue(ctx, av);
         mcts::GenericStepResult out{};
-        if (JS_IsException(r)) { JS_GetException(ctx); return out; }
+        if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return out; }
         if (JS_IsObject(r)) {
             out.reward = static_cast<float>(getDouble(ctx, r, "reward", 0.0));
             JSValue dv = JS_GetPropertyStr(ctx, r, "done");
@@ -242,7 +242,7 @@ static mcts::GenericEnv makeGenericEnv(GenericMctsData* d) {
 
     env.legal_actions_fn = [d, ctx]() -> std::vector<int> {
         JSValue r = JS_Call(ctx, d->legal_fn, d->env_obj, 0, nullptr);
-        if (JS_IsException(r)) { JS_GetException(ctx); return {}; }
+        if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
         auto out = readIntArray(ctx, r);
         JS_FreeValue(ctx, r);
         return out;
@@ -250,7 +250,7 @@ static mcts::GenericEnv makeGenericEnv(GenericMctsData* d) {
 
     env.observe_fn = [d, ctx]() -> std::vector<float> {
         JSValue r = JS_Call(ctx, d->observe_fn, d->env_obj, 0, nullptr);
-        if (JS_IsException(r)) { JS_GetException(ctx); return {}; }
+        if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
         auto out = readFloat32Array(ctx, r);
         JS_FreeValue(ctx, r);
         return out;
@@ -274,7 +274,7 @@ static void rewirePrior(GenericMctsData* d) {
             JSValue r = JS_Call(ctx, d->prior_fn, JS_UNDEFINED, 2, args);
             JS_FreeValue(ctx, obs_v);
             JS_FreeValue(ctx, leg_v);
-            if (JS_IsException(r)) { JS_GetException(ctx); return {}; }
+            if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
             auto out = readFloat32Array(ctx, r);
             JS_FreeValue(ctx, r);
             return out;
@@ -292,7 +292,7 @@ static void rewireValue(GenericMctsData* d) {
             JSValueConst args[1] = { obs_v };
             JSValue r = JS_Call(ctx, d->value_fn, JS_UNDEFINED, 1, args);
             JS_FreeValue(ctx, obs_v);
-            if (JS_IsException(r)) { JS_GetException(ctx); return 0.0f; }
+            if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return 0.0f; }
             double x = 0.0;
             JS_ToFloat64(ctx, &x, r);
             JS_FreeValue(ctx, r);

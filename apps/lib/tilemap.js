@@ -320,6 +320,35 @@
             return (((v + (v >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
         }
 
+        // ── MCTS damage slot ───────────────────────────────────────────────
+        // Keeps a saved copy of damagedWords in this tilemap so MCTS searches
+        // can roll back per-iteration without serializing the damage state
+        // through the FFI as a JS Int32Array each snapshot/restore. One slot
+        // is enough — only one search runs at a time per worker.
+        let savedDamage = null;   // Map<wordIdx, value> | null
+
+        function saveDamageSnapshot() {
+            if (!destructible) return;
+            savedDamage = damagedWords.size > 0
+                ? new Map(damagedWords)
+                : new Map();
+        }
+
+        function restoreDamageSnapshot() {
+            if (!destructible || savedDamage === null) return;
+            for (const k of damagedWords.keys()) bitmask[k] = pristineMask[k];
+            damagedWords.clear();
+            pixelsCleared = 0;
+            for (const [k, v] of savedDamage) {
+                bitmask[k] = v;
+                damagedWords.set(k, v);
+                pixelsCleared += popcount(pristineMask[k] & ~v);
+            }
+            rebuildDamagedTiles();
+        }
+
+        function clearDamageSnapshot() { savedDamage = null; }
+
         // Reset all damage to pristine. Used on episode reset.
         function resetDamage() {
             if (!destructible) return;
@@ -410,6 +439,7 @@
             draw,
             damageBeam, damageCircle,
             damageDiff, applyDamageDiff, resetDamage,
+            saveDamageSnapshot, restoreDamageSnapshot, clearDamageSnapshot,
             get pixelsCleared() { return pixelsCleared; },
             get damagedWordCount() { return damagedWords ? damagedWords.size : 0; },
             setSolid(id, isSolid) { solid[id] = isSolid ? 1 : 0; },

@@ -51,7 +51,7 @@ function buildSim() {
         // pure travel plus aim/destroy stalls. 600 s gives plenty of
         // room to demonstrate the full loop without timing out.
         timeLimit: 600,
-        stallDecisions: 45, stallEpsilonPx: 8,
+        stallDecisions: 120, stallEpsilonPx: 8,
     });
     return { sim, baseSpawnY: lvl.spawn.y, defaultSpawnX: lvl.spawn.x };
 }

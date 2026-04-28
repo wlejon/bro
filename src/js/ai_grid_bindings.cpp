@@ -57,25 +57,34 @@ struct JsValueHolder {
 };
 
 // ─── Typed array marshalling ───────────────────────────────────────────────
+//
+// Hot paths: ObsWindow tile/layer samplers can return plain JS arrays like
+// [1, 0], not Float32Arrays. We must avoid calling JS_GetTypedArrayBuffer on
+// non-typed-array values: that path constructs and throws a TypeError every
+// call, and even when caught and freed it churns the heap with Error objects
+// and stack frames. Check JS_IsArray first; fall through to the typed-array
+// path only when it isn't a plain array. Any leftover exception (the value
+// is neither a plain array nor a typed array) is captured-and-freed properly
+// — `JS_GetException(ctx)` returns a strong ref the caller owns.
 std::vector<float> readFloat32Array(JSContext* ctx, JSValueConst val) {
     std::vector<float> out;
     if (JS_IsUndefined(val) || JS_IsNull(val)) return out;
+    if (JS_IsArray(val)) {
+        JSValue lv = JS_GetPropertyStr(ctx, val, "length");
+        uint32_t n = 0; JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+        out.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, val, i);
+            double d = 0; JS_ToFloat64(ctx, &d, e);
+            JS_FreeValue(ctx, e);
+            out.push_back(static_cast<float>(d));
+        }
+        return out;
+    }
     size_t off = 0, len = 0;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, val, &off, &len, nullptr);
     if (JS_IsException(ab)) {
-        JS_GetException(ctx);
-        // Fall back to plain JS array
-        if (JS_IsArray(val)) {
-            JSValue lv = JS_GetPropertyStr(ctx, val, "length");
-            uint32_t n = 0; JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-            out.reserve(n);
-            for (uint32_t i = 0; i < n; ++i) {
-                JSValue e = JS_GetPropertyUint32(ctx, val, i);
-                double d = 0; JS_ToFloat64(ctx, &d, e);
-                JS_FreeValue(ctx, e);
-                out.push_back(static_cast<float>(d));
-            }
-        }
+        JS_FreeValue(ctx, JS_GetException(ctx));
         return out;
     }
     size_t ab_len = 0;
@@ -91,30 +100,30 @@ std::vector<float> readFloat32Array(JSContext* ctx, JSValueConst val) {
 std::vector<int> readIntArray(JSContext* ctx, JSValueConst val) {
     std::vector<int> out;
     if (JS_IsUndefined(val) || JS_IsNull(val)) return out;
+    if (JS_IsArray(val)) {
+        JSValue lv = JS_GetPropertyStr(ctx, val, "length");
+        uint32_t n = 0; JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+        out.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, val, i);
+            int32_t x = 0; JS_ToInt32(ctx, &x, e); JS_FreeValue(ctx, e);
+            out.push_back(x);
+        }
+        return out;
+    }
     size_t off = 0, len = 0;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, val, &off, &len, nullptr);
-    if (!JS_IsException(ab)) {
-        size_t ab_len = 0;
-        uint8_t* raw = JS_GetArrayBuffer(ctx, &ab_len, ab);
-        JS_FreeValue(ctx, ab);
-        if (raw) {
-            size_t n = len / sizeof(int32_t);
-            out.resize(n);
-            if (n) std::memcpy(out.data(), raw + off, n * sizeof(int32_t));
-            return out;
-        }
-    } else {
-        JS_GetException(ctx);
+    if (JS_IsException(ab)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return out;
     }
-    if (!JS_IsArray(val)) return out;
-    JSValue lv = JS_GetPropertyStr(ctx, val, "length");
-    uint32_t n = 0; JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-    out.reserve(n);
-    for (uint32_t i = 0; i < n; ++i) {
-        JSValue e = JS_GetPropertyUint32(ctx, val, i);
-        int32_t x = 0; JS_ToInt32(ctx, &x, e); JS_FreeValue(ctx, e);
-        out.push_back(x);
-    }
+    size_t ab_len = 0;
+    uint8_t* raw = JS_GetArrayBuffer(ctx, &ab_len, ab);
+    JS_FreeValue(ctx, ab);
+    if (!raw) return out;
+    size_t n = len / sizeof(int32_t);
+    out.resize(n);
+    if (n) std::memcpy(out.data(), raw + off, n * sizeof(int32_t));
     return out;
 }
 
@@ -237,7 +246,7 @@ static JSValue js_createObsWindow(JSContext* ctx, JSValueConst, int argc, JSValu
             JSValueConst args[2] = { cv, rv };
             JSValue r = JS_Call(ctx, dd->tile_fn, JS_UNDEFINED, 2, args);
             JS_FreeValue(ctx, cv); JS_FreeValue(ctx, rv);
-            if (JS_IsException(r)) { JS_GetException(ctx); return false; }
+            if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return false; }
             if (JS_IsBool(r)) {
                 bool b = JS_ToBool(ctx, r) > 0;
                 JS_FreeValue(ctx, r);
@@ -294,7 +303,7 @@ static JSValue js_createObsWindow(JSContext* ctx, JSValueConst, int argc, JSValu
                 JSValue fn = dd->enumerate_fns[static_cast<size_t>(idx)];
                 if (!JS_IsFunction(ctx, fn)) return 0;
                 JSValue r = JS_Call(ctx, fn, JS_UNDEFINED, 0, nullptr);
-                if (JS_IsException(r)) { JS_GetException(ctx); return 0; }
+                if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return 0; }
                 int32_t n = 0; JS_ToInt32(ctx, &n, r); JS_FreeValue(ctx, r);
                 return n > 0 ? static_cast<size_t>(n) : 0;
             };
@@ -306,7 +315,7 @@ static JSValue js_createObsWindow(JSContext* ctx, JSValueConst, int argc, JSValu
                 JSValueConst args[1] = { iv };
                 JSValue r = JS_Call(ctx, fn, JS_UNDEFINED, 1, args);
                 JS_FreeValue(ctx, iv);
-                if (JS_IsException(r)) { JS_GetException(ctx); return c; }
+                if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return c; }
                 c.col = getInt(ctx, r, "col", 0);
                 c.row = getInt(ctx, r, "row", 0);
                 JSValue vals = JS_GetPropertyStr(ctx, r, "values");
@@ -425,7 +434,7 @@ static mcts_ns::GenericEnv buildEnvFromJs(JsEnvCallbacks* cb) {
     env.num_actions = cb->num_actions;
     env.snapshot_fn = [cb, ctx]() -> std::any {
         JSValue r = JS_Call(ctx, cb->snapshot_fn, cb->env_obj, 0, nullptr);
-        if (JS_IsException(r)) { JS_GetException(ctx); return std::any{}; }
+        if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return std::any{}; }
         std::any out{ JsValueHolder(ctx, r) };
         JS_FreeValue(ctx, r);
         return out;
@@ -436,7 +445,7 @@ static mcts_ns::GenericEnv buildEnvFromJs(JsEnvCallbacks* cb) {
         if (!h) return;
         JSValueConst args[1] = { h->v };
         JSValue r = JS_Call(ctx, cb->restore_fn, cb->env_obj, 1, args);
-        if (JS_IsException(r)) JS_GetException(ctx);
+        if (JS_IsException(r)) JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, r);
     };
     env.step_fn = [cb, ctx](int action) -> mcts_ns::GenericStepResult {
@@ -445,7 +454,7 @@ static mcts_ns::GenericEnv buildEnvFromJs(JsEnvCallbacks* cb) {
         JSValue r = JS_Call(ctx, cb->step_fn, cb->env_obj, 1, args);
         JS_FreeValue(ctx, av);
         mcts_ns::GenericStepResult out{};
-        if (JS_IsException(r)) { JS_GetException(ctx); return out; }
+        if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return out; }
         if (JS_IsObject(r)) {
             out.reward = static_cast<float>(getDouble(ctx, r, "reward", 0.0));
             JSValue dv = JS_GetPropertyStr(ctx, r, "done");
@@ -457,14 +466,14 @@ static mcts_ns::GenericEnv buildEnvFromJs(JsEnvCallbacks* cb) {
     };
     env.legal_actions_fn = [cb, ctx]() -> std::vector<int> {
         JSValue r = JS_Call(ctx, cb->legal_fn, cb->env_obj, 0, nullptr);
-        if (JS_IsException(r)) { JS_GetException(ctx); return {}; }
+        if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
         auto out = readIntArray(ctx, r);
         JS_FreeValue(ctx, r);
         return out;
     };
     env.observe_fn = [cb, ctx]() -> std::vector<float> {
         JSValue r = JS_Call(ctx, cb->observe_fn, cb->env_obj, 0, nullptr);
-        if (JS_IsException(r)) { JS_GetException(ctx); return {}; }
+        if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
         auto out = readFloat32Array(ctx, r);
         JS_FreeValue(ctx, r);
         return out;
@@ -544,7 +553,7 @@ static JSValue js_generateBC(JSContext* ctx, JSValueConst, int argc, JSValueCons
         JS_FreeValue(ctx, ov); JS_FreeValue(ctx, lv);
         int32_t a = -1;
         if (!JS_IsException(r)) JS_ToInt32(ctx, &a, r);
-        else JS_GetException(ctx);
+        else JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, r);
         return a;
     };

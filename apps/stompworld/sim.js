@@ -373,9 +373,15 @@
             if (y != null) spawnY = y;
         }
 
+        // Snapshot does NOT carry damage state. For MCTS, the tilemap keeps
+        // a single saved-damage slot (saveDamageSnapshot / restoreDamageSnapshot)
+        // that play_agent's env wrapper drives at search boundaries — that
+        // way damage stays inside the tilemap library on the owning thread
+        // instead of crossing the FFI as an Int32Array per iteration. For
+        // startSnap (captured at episode start, post-reset), damage is empty
+        // anyway, and applySeed always calls sim.reset() before restore.
         function snapshot() {
             const p = state.player;
-            const dmg = tilemap.damageDiff();
             return {
                 player: {
                     x: p.x, y: p.y, w: p.w, h: p.h,
@@ -396,7 +402,6 @@
                     bobAmp: f.bobAmp, bobFreq: f.bobFreq, bobT: f.bobT,
                     animT: f.animT, alive: f.alive,
                 })),
-                damageDiff: dmg ? new Int32Array(dmg) : null,
                 score: state.score,
                 alive: state.alive,
                 won:   state.won,
@@ -431,7 +436,10 @@
             const fLen = snap.flyers ? snap.flyers.length : 0;
             state.flyers.length = fLen;
             for (let i = 0; i < fLen; i++) state.flyers[i] = { ...snap.flyers[i] };
-            tilemap.applyDamageDiff(snap.damageDiff || null);
+            // Damage state is NOT in snap — see snapshot() comment. MCTS
+            // restores it via tilemap.restoreDamageSnapshot() after this call;
+            // applySeed calls sim.reset() (which resets damage) before
+            // restore, so non-MCTS callers also see correct damage state.
             state.score = snap.score;
             state.alive = snap.alive;
             state.won   = snap.won;
@@ -520,6 +528,8 @@
             if (!state.alive || state.won) return { reward: 0, done: true };
 
             const isFire = (action === 6) && state.hasWeapon && state.weaponCooldown <= 0;
+            const preX = state.player.x;
+            const preOnGround = state.player.onGround;
             let stompKills = 0;
             let died  = false;
             let won   = false;
@@ -527,6 +537,7 @@
             let pixelsThis = 0;
             let beamStomps = 0;
             let beamFlyers = 0;
+            let leftGround = false;
 
             for (let t = 0; t < FRAME_SKIP; t++) {
                 const input = actionToInput(isFire ? 0 : action, t === 0, state.prevJumpHeld);
@@ -535,6 +546,7 @@
                 state.tick++;
                 state.timeLeft -= FIXED_DT_MS / 1000;
                 stompKills += ev.kills | 0;
+                if (preOnGround && !state.player.onGround) leftGround = true;
                 if (ev.killed) { died = true; break; }
                 if (isFire) {
                     // Sweep angle: linearly interpolated across the FRAME_SKIP
@@ -575,13 +587,35 @@
                        + (pickupHit ? REW_PICKUP : 0)
                        + shapingBonus;
 
-            // Stall: re-using the inline detector (snapshot/restore-friendly).
+            // Stall: only termination signal for truly idle agents. Any of
+            // these counts as "doing something" and resets the counter:
+            //   - new forward x progress (best-x grows)
+            //   - meaningful displacement in any direction (e.g. backtracking
+            //     for the pickup, sidestepping a flyer)
+            //   - jumped this decision (left ground)
+            //   - beam fire actually hit (cleared pixels or killed)
+            //   - stomp kill, pickup grab, or flag touch
+            // This lets the agent stand still briefly to wait for a flyer to
+            // pass without being penalized as stuck — only a genuinely-frozen
+            // agent (no movement, no actions, no hits) can stall out, and the
+            // stallDecisions budget is now generous enough that a few seconds
+            // of patience is fine.
+            const dx = Math.abs(state.player.x - preX);
+            const productive =
+                state.player.x > state.stallBestX + stallEpsilonPx
+                || dx > stallEpsilonPx
+                || leftGround
+                || pixelsThis > 0
+                || stompKills > 0
+                || beamStomps > 0
+                || beamFlyers > 0
+                || pickupHit
+                || won;
             if (state.player.x > state.stallBestX + stallEpsilonPx) {
                 state.stallBestX = state.player.x;
-                state.stallSince = 0;
-            } else {
-                state.stallSince++;
             }
+            if (productive) state.stallSince = 0;
+            else state.stallSince++;
             const stalled = stallDecisions > 0 && state.stallSince >= stallDecisions;
 
             let done = false;

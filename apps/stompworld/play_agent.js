@@ -109,11 +109,23 @@
         const mctsSeed = opts.seed != null
             ? (Number(BigInt(opts.seed) & 0xFFFFFFFFn) ^ 0xC0DE) >>> 0
             : 0xC0DE;
+        // env.snapshot/restore stash the tilemap's damage state in a single
+        // tilemap-side slot rather than ferrying it through the JS snapshot
+        // object (and the FFI) as an Int32Array each iteration. The damage
+        // state stays in the tilemap library on this worker thread; the
+        // snapshot we hand to C++ MCTS is small. One search at a time per
+        // worker, so a single saved slot is enough.
         const mcts = bro.ai.game.createGenericMcts({
             env: {
                 numActions,
-                snapshot:     () => sim.snapshot(),
-                restore:      (s) => sim.restore(s),
+                snapshot:     () => {
+                    sim.tilemap.saveDamageSnapshot();
+                    return sim.snapshot();
+                },
+                restore:      (s) => {
+                    sim.restore(s);
+                    sim.tilemap.restoreDamageSnapshot();
+                },
                 step:         (a) => sim.step(a),
                 legalActions: () => sim.legalActions(),
                 observe:      () => SwAgentObs.build(sim),

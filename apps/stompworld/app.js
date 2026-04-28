@@ -930,13 +930,29 @@
                 this.mctsReady.push(false);
             }
 
+            // Only the trainer spawns up front. The live + mcts workers are
+            // held until the trainer finishes its synchronous BC warmup and
+            // posts a 'warmup' message — otherwise the play workers generate
+            // tuples that pile up unread in the trainer's inbox (since its
+            // onmessage doesn't run until warmup returns), holding obs +
+            // policyTarget Float32Arrays alive and burning memory.
+            this.lastWeightsBytes   = null;
+            this.lastWeightsVersion = 0n;
+            this.mctsWorkers        = [];
+            this.live               = null;
             this.trainer = new Worker('trainer_worker.js');
             this.trainer.onmessage = (e) => this.onTrainerMessage(e && e.data);
+            this.running = true;
+        },
 
+        // Stand up the live + mcts workers. Idempotent. Called once the
+        // trainer has finished warmup so they don't blast tuples at a
+        // synchronously-busy trainer.
+        spawnPlayWorkers() {
+            if (this.live || this.mctsWorkers.length) return;
             this.live = new Worker('live_worker.js');
             this.live.onmessage = (e) => this.onLiveMessage(e && e.data);
 
-            this.mctsWorkers = [];
             for (let i = 0; i < this.NUM_MCTS_WORKERS; i++) {
                 const w = new Worker('mcts_worker.js');
                 const idx = i;
@@ -949,7 +965,12 @@
                 });
                 this.mctsWorkers.push(w);
             }
-            this.running = true;
+            // Hand the play workers the most recent weights we've seen so
+            // they don't sit in a no-weights stall waiting for the trainer's
+            // next publish.
+            if (this.lastWeightsBytes) {
+                this.broadcastWeights(this.lastWeightsBytes, this.lastWeightsVersion);
+            }
         },
 
         stop() {
@@ -985,12 +1006,19 @@
         onTrainerMessage(m) {
             if (!m) return;
             if (m.type === 'weights') {
+                // Cache so we can prime late-spawned play workers without
+                // waiting for the trainer's next publish.
+                this.lastWeightsBytes   = m.bytes;
+                this.lastWeightsVersion = m.version;
                 this.broadcastWeights(m.bytes, m.version);
                 if (m.stats) Object.assign(this.workerStats, m.stats);
             } else if (m.type === 'stats') {
                 if (m.stats) Object.assign(this.workerStats, m.stats);
             } else if (m.type === 'warmup') {
                 this.warmupInfo = m.stats || {};
+                // Trainer is now responsive — safe to spawn the play workers
+                // and start streaming tuples through it.
+                this.spawnPlayWorkers();
             }
         },
 
@@ -1187,6 +1215,7 @@
                     Math.round(pk.y - this.cam.y),
                     this.pickupAnimT);
             }
+            if (!this.snap) this.drawLoading();
             if (this.snap) {
                 for (const s of this.snap.stompers) {
                     if (!this.cam.visible(s.x, s.y, s.w, s.h)) continue;
@@ -1212,6 +1241,40 @@
                     frame, p.facing < 0);
             }
             this.drawHud();
+        },
+
+        drawLoading() {
+            // Until the live worker posts its first render snap, the canvas
+            // would otherwise just show a static tilemap with no agent. Most
+            // of the wait is the trainer's synchronous BC warmup + 5000 SGD
+            // pretrain (or checkpoint resume + net load), then the live +
+            // mcts workers booting their inference nets. Surface the phase
+            // so the user knows we're actually working.
+            let phase;
+            if (!this.warmupInfo) phase = 'Warming up trainer (BC episodes + pretrain)';
+            else if (this.warmupInfo.resumed) phase = 'Resuming from checkpoint, spawning workers';
+            else phase = 'Spawning play workers';
+            const dots = '.'.repeat(1 + ((Date.now() / 400) | 0) % 3);
+            const title = 'Loading training' + dots;
+            const sub = phase + '…';
+            ctx.save();
+            ctx.fillStyle = 'rgba(0,0,0,0.65)';
+            const boxW = 520, boxH = 110;
+            const bx = Math.floor((VIEW_W - boxW) / 2);
+            const by = Math.floor((VIEW_H - boxH) / 2);
+            ctx.fillRect(bx, by, boxW, boxH);
+            ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bx + 0.5, by + 0.5, boxW - 1, boxH - 1);
+            ctx.fillStyle = '#fff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = 'bold 22px monospace';
+            ctx.fillText(title, VIEW_W / 2, by + 36);
+            ctx.font = '14px monospace';
+            ctx.fillStyle = '#cde';
+            ctx.fillText(sub, VIEW_W / 2, by + 72);
+            ctx.restore();
         },
 
         drawHud() {

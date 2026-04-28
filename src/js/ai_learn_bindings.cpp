@@ -101,7 +101,7 @@ static bool copyFloatProp(JSContext* ctx, JSValueConst obj, const char* key,
     if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return false; }
     size_t byteOff = 0, viewLen = 0;
     JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, nullptr);
-    if (JS_IsException(abuf)) { JS_GetException(ctx); JS_FreeValue(ctx, v); return false; }
+    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); JS_FreeValue(ctx, v); return false; }
     size_t abufLen = 0;
     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
     JS_FreeValue(ctx, abuf);
@@ -165,7 +165,7 @@ static bool readFloatVec(JSContext* ctx, JSValueConst obj, const char* key,
     size_t byteOff = 0, viewLen = 0;
     JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, nullptr);
     if (JS_IsException(abuf)) {
-        JS_GetException(ctx);
+        JS_FreeValue(ctx, JS_GetException(ctx));
         JS_FreeValue(ctx, v);
         return !required;
     }

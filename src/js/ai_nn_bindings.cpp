@@ -69,7 +69,7 @@ static float* getFloatArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outCoun
     if (JS_IsUndefined(arr) || JS_IsNull(arr)) { outCount = 0; return nullptr; }
     size_t byteOff = 0, viewLen = 0;
     JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
-    if (JS_IsException(abuf)) { JS_GetException(ctx); outCount = 0; return nullptr; }
+    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); outCount = 0; return nullptr; }
     size_t abufLen = 0;
     uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
     JS_FreeValue(ctx, abuf);
@@ -196,7 +196,7 @@ static void registerClasses(JSContext* ctx) {
                     // getFloatArrayPtr treats lengths in floats; redo as raw bytes.
                     size_t byteOff = 0, viewLen = 0;
                     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
-                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
                     size_t abufLen = 0;
                     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                     JS_FreeValue(ctx, abuf);
@@ -308,7 +308,7 @@ static void registerClasses(JSContext* ctx) {
                     if (!d || argc < 1) return JS_UNDEFINED;
                     size_t byteOff = 0, viewLen = 0;
                     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
-                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
                     size_t abufLen = 0;
                     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                     JS_FreeValue(ctx, abuf);
@@ -358,7 +358,7 @@ static void registerClasses(JSContext* ctx) {
                     if (!d || argc < 1) return JS_UNDEFINED;
                     size_t byteOff = 0, viewLen = 0;
                     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
-                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
                     size_t abufLen = 0;
                     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                     JS_FreeValue(ctx, abuf);
@@ -406,7 +406,7 @@ static void registerClasses(JSContext* ctx) {
                     if (!d || argc < 1) return JS_UNDEFINED;
                     size_t byteOff = 0, viewLen = 0;
                     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
-                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
                     size_t abufLen = 0;
                     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                     JS_FreeValue(ctx, abuf);
@@ -455,7 +455,7 @@ static void registerClasses(JSContext* ctx) {
                     if (!d || !d->net || argc < 1) return JS_UNDEFINED;
                     size_t byteOff = 0, viewLen = 0;
                     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
-                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
                     size_t abufLen = 0;
                     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                     JS_FreeValue(ctx, abuf);
@@ -504,7 +504,7 @@ static void registerClasses(JSContext* ctx) {
                     if (!d || !d->net || argc < 1) return JS_UNDEFINED;
                     size_t byteOff = 0, viewLen = 0;
                     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
-                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
                     size_t abufLen = 0;
                     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                     JS_FreeValue(ctx, abuf);
@@ -524,7 +524,7 @@ static void registerClasses(JSContext* ctx) {
                     if (!d || !d->handle || argc < 2) return JS_ThrowTypeError(ctx, "publish(blob, version)");
                     size_t byteOff = 0, viewLen = 0;
                     JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
-                    if (JS_IsException(abuf)) { JS_GetException(ctx); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
                     size_t abufLen = 0;
                     uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                     JS_FreeValue(ctx, abuf);
