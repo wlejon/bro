@@ -762,8 +762,22 @@ static JSValue js_createGridTrainer(JSContext* ctx, JSValueConst, int argc, JSVa
 void installGridBindings(JSContext* ctx, JSValue gameObj) {
     JSValue gridObj = JS_NewObject(ctx);
 
-    // ObsWindow
+    // ObsWindow.
+    //
+    // gc_mark exposes the JS function refs we hold (tile_fn + per-layer
+    // sample_fns / enumerate_fns) to QuickJS's cycle GC. Without it the
+    // typical wiring forms an unbreakable cycle: the wrapper is held by a
+    // module-scope `_win` whose closure scope is captured by the very
+    // sample/enumerate functions we DupValue into the wrapper. Refcount-
+    // only collection can't break that loop, and the runtime asserts on
+    // a non-empty gc_obj_list during JS_FreeRuntime.
     qjsbind::Class<ObsWindowData>(ctx, "AIGridObsWindow", qjsbind::NoGlobal)
+        .gc_mark([](ObsWindowData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+            if (!d) return;
+            JS_MarkValue(rt, d->tile_fn, mark);
+            for (auto& v : d->enumerate_fns) JS_MarkValue(rt, v, mark);
+            for (auto& v : d->sample_fns)    JS_MarkValue(rt, v, mark);
+        })
         .get("outDim", [](ObsWindowData* d) { return d && d->win ? d->win->out_dim() : 0; })
         .method("layout", [](ObsWindowData* d, JSContext* ctx) -> JSValue {
             JSValue o = JS_NewObject(ctx);

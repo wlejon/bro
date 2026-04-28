@@ -417,7 +417,23 @@ static JSValue js_createGenericMcts(JSContext* ctx, JSValueConst,
 // ─── Install ───────────────────────────────────────────────────────────────
 
 void installGenericMctsBindings(JSContext* ctx, JSValue gameObj) {
+    // gc_mark exposes the JS callbacks we DupValue'd to QuickJS's cycle GC.
+    // Without it the typical wiring (env object owns the mcts wrapper, the
+    // mcts wrapper holds DupValue'd refs to the env object's snapshot/
+    // restore/step/legalActions/observe/prior/value methods) forms a
+    // refcount-only cycle the GC can't break, leaking on JS_FreeRuntime.
     qjsbind::Class<GenericMctsData>(ctx, "AIGenericMcts", qjsbind::NoGlobal)
+        .gc_mark([](GenericMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+            if (!d) return;
+            JS_MarkValue(rt, d->env_obj,     mark);
+            JS_MarkValue(rt, d->snapshot_fn, mark);
+            JS_MarkValue(rt, d->restore_fn,  mark);
+            JS_MarkValue(rt, d->step_fn,     mark);
+            JS_MarkValue(rt, d->legal_fn,    mark);
+            JS_MarkValue(rt, d->observe_fn,  mark);
+            JS_MarkValue(rt, d->prior_fn,    mark);
+            JS_MarkValue(rt, d->value_fn,    mark);
+        })
         .get("numActions", [](GenericMctsData* d) -> int { return d ? d->num_actions : 0; })
         .method_raw("search",
             [](JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/) -> JSValue {

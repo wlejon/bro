@@ -177,6 +177,22 @@ void Worker::threadFunc()
     runtime->setModuleLoader();
     JSContext* ctx = runtime->getContext();
 
+    // Per-worker JS interrupt handler. terminate() flips terminated_ and
+    // joins the thread, but if the worker is currently executing JS (most
+    // notably during synchronous top-level script load — e.g. the
+    // stompworld trainer's BC warmup runs before the event loop is even
+    // entered), the join would block forever otherwise. The handler is
+    // polled by QuickJS every N bytecodes, returning non-zero aborts the
+    // current JS_Call with an uncatchable interrupt exception. Honors the
+    // process-wide Ctrl+C flag too so workers shut down on signals.
+    JS_SetInterruptHandler(runtime->getRuntime(),
+        [](JSRuntime* /*rt*/, void* opaque) -> int {
+            auto* self = static_cast<Worker*>(opaque);
+            if (self->terminated_.load(std::memory_order_relaxed)) return 1;
+            if (bro::util::interrupted()) return 1;
+            return 0;
+        }, this);
+
     // --- 2. Install brokit APIs (no DOM, no canvas, no window) ---
     // Use installAll to get console, timers, encoding, URL, crypto, base64,
     // structuredClone, fetch, streams, noise, etc.
@@ -231,15 +247,19 @@ void Worker::threadFunc()
     if (!std::filesystem::path(fullPath).is_absolute())
         fullPath = basePath_ + "/" + scriptPath_;
 
-    if (!runtime->loadFile(fullPath)) {
+    bool loadOk = runtime->loadFile(fullPath);
+    if (!loadOk) {
         LOG_ERROR("Worker: failed to load script '%s'", fullPath.c_str());
-        alive_.store(false, std::memory_order_release);
-        return;
     }
     runtime->executePendingJobs();
 
     // --- 7. Event loop ---
-    while (!terminated_.load(std::memory_order_acquire)) {
+    // Skipped if the script failed to load OR was interrupted mid-load
+    // (terminated_ already set). Cleanup at the bottom still runs in both
+    // cases so bindings get torn down and the GC drains JS reference
+    // cycles before the runtime destructor — otherwise the dtor can
+    // assert on a non-empty gc_obj_list.
+    while (loadOk && !terminated_.load(std::memory_order_acquire)) {
         // Process-wide Ctrl+C: interrupts any JS currently running via the
         // QuickJS interrupt handler; here we also exit the loop so workers
         // idling between messages shut down.
@@ -348,9 +368,33 @@ void Worker::threadFunc()
     s_wcd = nullptr;
     JS_SetContextOpaque(ctx, nullptr);
 
+    // Break the worker-specific reference cycles before the runtime
+    // destructor's gc_obj_list assertion fires. `self` is the global
+    // pointing at itself (self-loop refcount); `onmessage` is the user's
+    // JS closure which captures script-scope locals (e.g. agent / sim /
+    // tilemap → C++-bound qjsbind classes), keeping their finalizers
+    // unreachable. Deleting both lets the global drop its strong refs to
+    // them so the cascade reaches everything reachable only through
+    // those handles. Plain GC alone can't break the self-loop because
+    // the global is also the GC root.
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSAtom aSelf      = JS_NewAtom(ctx, "self");
+        JSAtom aOnmessage = JS_NewAtom(ctx, "onmessage");
+        JS_DeleteProperty(ctx, global, aSelf, 0);
+        JS_DeleteProperty(ctx, global, aOnmessage, 0);
+        JS_FreeAtom(ctx, aSelf);
+        JS_FreeAtom(ctx, aOnmessage);
+        JS_FreeValue(ctx, global);
+    }
+
     // Drain microtasks and run GC to break reference cycles (e.g. the
     // Mesh prototype↔constructor cycle from JS_SetConstructor) before
     // the runtime destructor asserts on a non-empty gc_obj_list.
+    // qjsbind classes that DupValue JS callbacks must register a gc_mark
+    // (e.g. AIGridObsWindow, AIGenericMcts) so the cycle GC can see those
+    // refs — without it, refcount-only release can't break wrapper-↔-
+    // closure cycles and the runtime asserts on shutdown.
     runtime->executePendingJobs();
     JS_RunGC(runtime->getRuntime());
     runtime->executePendingJobs();

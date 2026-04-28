@@ -930,29 +930,30 @@
                 this.mctsReady.push(false);
             }
 
-            // Only the trainer spawns up front. The live + mcts workers are
-            // held until the trainer finishes its synchronous BC warmup and
-            // posts a 'warmup' message — otherwise the play workers generate
-            // tuples that pile up unread in the trainer's inbox (since its
-            // onmessage doesn't run until warmup returns), holding obs +
-            // policyTarget Float32Arrays alive and burning memory.
+            // Spawn all workers up front. The play workers run concurrently
+            // with the trainer's synchronous BC warmup so the user sees
+            // motion immediately (against the trainer's initial random or
+            // checkpoint-loaded weights, which it publishes before warmup).
+            //
+            // The original "hold play workers until warmup" gate was added
+            // to fix a memory pile-up: tuples posted to a busy trainer queue
+            // up in its inbox (its onmessage doesn't run during synchronous
+            // warmup), keeping obs + policyTarget Float32Arrays alive. Fix
+            // that here on the main side instead — `trainerReady` gates the
+            // tuple/trajectory_end forwarding in routeTuples / ingestTrajectory,
+            // so during warmup the workers' produced tuples are dropped on
+            // the floor on main rather than queuing in the trainer.
             this.lastWeightsBytes   = null;
             this.lastWeightsVersion = 0n;
-            this.mctsWorkers        = [];
-            this.live               = null;
+            this.trainerReady       = false;
+            this.droppedTuples      = 0;
             this.trainer = new Worker('trainer_worker.js');
             this.trainer.onmessage = (e) => this.onTrainerMessage(e && e.data);
-            this.running = true;
-        },
 
-        // Stand up the live + mcts workers. Idempotent. Called once the
-        // trainer has finished warmup so they don't blast tuples at a
-        // synchronously-busy trainer.
-        spawnPlayWorkers() {
-            if (this.live || this.mctsWorkers.length) return;
             this.live = new Worker('live_worker.js');
             this.live.onmessage = (e) => this.onLiveMessage(e && e.data);
 
+            this.mctsWorkers = [];
             for (let i = 0; i < this.NUM_MCTS_WORKERS; i++) {
                 const w = new Worker('mcts_worker.js');
                 const idx = i;
@@ -965,12 +966,7 @@
                 });
                 this.mctsWorkers.push(w);
             }
-            // Hand the play workers the most recent weights we've seen so
-            // they don't sit in a no-weights stall waiting for the trainer's
-            // next publish.
-            if (this.lastWeightsBytes) {
-                this.broadcastWeights(this.lastWeightsBytes, this.lastWeightsVersion);
-            }
+            this.running = true;
         },
 
         stop() {
@@ -1016,9 +1012,10 @@
                 if (m.stats) Object.assign(this.workerStats, m.stats);
             } else if (m.type === 'warmup') {
                 this.warmupInfo = m.stats || {};
-                // Trainer is now responsive — safe to spawn the play workers
-                // and start streaming tuples through it.
-                this.spawnPlayWorkers();
+                // Trainer is responsive now — start streaming tuples through.
+                // Anything produced during warmup was dropped on the main
+                // side to keep the trainer's inbox empty.
+                this.trainerReady = true;
             }
         },
 
@@ -1082,6 +1079,15 @@
 
         routeTuples(m) {
             if (!this.trainer) return;
+            // Drop tuples while the trainer is in synchronous warmup —
+            // posting them would just queue in its inbox and pin the
+            // tuple Float32Arrays alive until warmup returned. The play
+            // workers self-clock and will keep producing fresh tuples
+            // once trainerReady flips.
+            if (!this.trainerReady) {
+                this.droppedTuples += (m.tuples ? m.tuples.length : 0);
+                return;
+            }
             try {
                 this.trainer.postMessage({
                     type: 'tuples',
@@ -1096,7 +1102,8 @@
             // bro.ai.game.grid.createBestCrop wants {snapshot, prefix, score,
             // depth}; ranks internally with the configured depthBonus +
             // ageDecay weights. Top-return / accepted-count are tracked here
-            // since the pool no longer surfaces them directly.
+            // since the pool no longer surfaces them directly. Pool ingest
+            // happens regardless of trainerReady (it's main-local).
             this.pool.push({
                 snapshot: m.startSnap,
                 prefix:   m.actions,
@@ -1105,7 +1112,11 @@
             });
             this.poolAccepted++;
             if (m.totalReturn > this.poolTopReturn) this.poolTopReturn = m.totalReturn;
-            if (this.trainer) {
+            // Skip forwarding trajectory_end until trainer is responsive,
+            // for the same inbox-pile-up reason as routeTuples. The trainer
+            // only uses this for the trailing-mean checkpoint metric, which
+            // is a no-op during warmup anyway.
+            if (this.trainer && this.trainerReady) {
                 try {
                     this.trainer.postMessage({
                         type: 'trajectory_end',
@@ -1244,19 +1255,19 @@
         },
 
         drawLoading() {
-            // Until the live worker posts its first render snap, the canvas
-            // would otherwise just show a static tilemap with no agent. Most
-            // of the wait is the trainer's synchronous BC warmup + 5000 SGD
-            // pretrain (or checkpoint resume + net load), then the live +
-            // mcts workers booting their inference nets. Surface the phase
-            // so the user knows we're actually working.
-            let phase;
-            if (!this.warmupInfo) phase = 'Warming up trainer (BC episodes + pretrain)';
-            else if (this.warmupInfo.resumed) phase = 'Resuming from checkpoint, spawning workers';
-            else phase = 'Spawning play workers';
+            // Shown until the live worker posts its first render snap. The
+            // play workers run concurrently with the trainer's BC warmup,
+            // so the first snap typically arrives well before warmup ends —
+            // this overlay just bridges the live worker's boot + first
+            // decision (loading shared libs, building net, first MCTS run).
+            // The trainer's warmup status is surfaced separately in the HUD
+            // line, so the agent can be visible-and-playing while training
+            // is still warming up.
+            const sub = this.warmupInfo
+                ? 'Booting live worker'
+                : 'Booting workers (trainer warmup runs in background)';
             const dots = '.'.repeat(1 + ((Date.now() / 400) | 0) % 3);
             const title = 'Loading training' + dots;
-            const sub = phase + '…';
             ctx.save();
             ctx.fillStyle = 'rgba(0,0,0,0.65)';
             const boxW = 520, boxH = 110;
@@ -1273,7 +1284,7 @@
             ctx.fillText(title, VIEW_W / 2, by + 36);
             ctx.font = '14px monospace';
             ctx.fillStyle = '#cde';
-            ctx.fillText(sub, VIEW_W / 2, by + 72);
+            ctx.fillText(sub + '…', VIEW_W / 2, by + 72);
             ctx.restore();
         },
 
@@ -1298,10 +1309,16 @@
                     + '   ep ' + (ms.episodes | 0)
                     + '   last: ' + (ms.lastReason || 'fresh'));
             }
-            lines.push('trainer: ingested ' + (w.ingested || 0)
-                + '   buf ' + (w.bufSize || 0)
-                + '   train ' + (w.trainSteps || 0)
-                + '   net v' + (w.netVersion ? w.netVersion.toString() : '0'));
+            if (!this.warmupInfo) {
+                const dots = '.'.repeat(1 + ((Date.now() / 400) | 0) % 3);
+                lines.push('trainer: warming up (BC + pretrain)' + dots
+                    + '   tuples dropped during warmup: ' + (this.droppedTuples | 0));
+            } else {
+                lines.push('trainer: ingested ' + (w.ingested || 0)
+                    + '   buf ' + (w.bufSize || 0)
+                    + '   train ' + (w.trainSteps || 0)
+                    + '   net v' + (w.netVersion ? w.netVersion.toString() : '0'));
+            }
             lines.push('loss  v=' + (+(w.lossValue) || 0).toFixed(4)
                 + '   p=' + (+(w.lossPolicy) || 0).toFixed(4)
                 + '   mean(20)=' + (+(w.meanReturn) || 0).toFixed(3)
