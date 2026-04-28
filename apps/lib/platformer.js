@@ -97,7 +97,6 @@
                 if (tm.solidAt(c, row)) {
                     b.y = row * tm.tileSize - b.h;
                     b.vy = 0;
-                    if (!b.onGround) ev.landed = true;
                     b.onGround = true;
                     return;
                 }
@@ -164,6 +163,13 @@
         b.onGround = false;
         ev.hitWall = moveX(b, b.vx * dt, tm);
         moveY(b, b.vy * dt, tm, ev);
+
+        // landed is the airborne→grounded transition: true only when the
+        // body wasn't grounded coming in but is grounded after this step.
+        // Using `wasOnGround` here avoids the "fires every frame while
+        // standing still" bug — moveY can't tell the difference because
+        // we cleared b.onGround above to detect the new collision.
+        if (!wasOnGround && b.onGround) ev.landed = true;
 
         return ev;
     }

@@ -16,14 +16,25 @@
 
 
     // ── Audio ────────────────────────────────────────────────────────────────
+    // All effects go through SFX (apps/lib/audio.js), which wraps the broaudio
+    // engine via createVoice + ADSR. Tones are short blips; sequences are
+    // arpeggios fired with setTimeout so the C++ engine handles the actual
+    // mixing. Keep durations short — the engine compressor swallows overlap.
     SFX.init();
     const Audio = {
-        jump:    () => SFX.tone(520, 0.10, 'square',   0.3),
-        stomp:   () => SFX.tone(180, 0.08, 'square',   0.5),
-        die:     () => SFX.sequence([[300,0.15,'sawtooth',0.5],[200,0.25,'sawtooth',0.5]]),
-        win:     () => SFX.sequence([[523,0.10,'square',0.6],[659,0.10,'square',0.6],[784,0.20,'square',0.7]]),
-        menu:    () => SFX.tone(400, 0.04, 'sine',     0.3),
-        select:  () => SFX.tone(600, 0.08, 'square',   0.4),
+        // Player
+        jump:    () => SFX.sequence([[520,0.06,'square',0.35],[720,0.08,'square',0.30]]),
+        land:    () => SFX.tone(140, 0.05, 'triangle', 0.35),
+        stomp:   () => SFX.sequence([[260,0.05,'square',0.55],[120,0.10,'sawtooth',0.55],[80,0.08,'whitenoise',0.30]]),
+        die:     () => SFX.sequence([[440,0.10,'square',0.55],[330,0.12,'sawtooth',0.55],[220,0.18,'sawtooth',0.55],[150,0.30,'triangle',0.55]]),
+        win:     () => SFX.sequence([[523,0.10,'square',0.55],[659,0.10,'square',0.60],[784,0.10,'square',0.65],[1047,0.25,'square',0.70]]),
+        gameover:() => SFX.sequence([[392,0.20,'sawtooth',0.55],[330,0.20,'sawtooth',0.55],[262,0.40,'triangle',0.55]]),
+        timeWarn:() => SFX.tone(880, 0.08, 'square', 0.40),
+        flyer:   () => SFX.tone(0,   0.08, 'whitenoise', 0.18),
+        // UI
+        menu:    () => SFX.tone(400, 0.04, 'sine',   0.30),
+        select:  () => SFX.tone(660, 0.08, 'square', 0.40),
+        pause:   () => SFX.sequence([[300,0.05,'square',0.30],[200,0.08,'square',0.30]]),
     };
 
     // ── Input ────────────────────────────────────────────────────────────────
@@ -464,6 +475,7 @@
                     if (Game.score > store.get('best')) {
                         store.set('best', Game.score); store.save();
                     }
+                    Audio.gameover();
                     S.switchTo('gameover');
                 } else {
                     Game.respawnPlayer();
@@ -474,21 +486,26 @@
         }
 
         // Time tick.
+        const prevTime = Game.timeLeft;
         Game.timeLeft -= dt / 1000;
         if (Game.timeLeft <= 0) { killPlayer(); updateHud(); return; }
-        if (Math.floor(Game.timeLeft) !== Math.floor(Game.timeLeft + dt / 1000)) {
+        const tNow = Math.floor(Game.timeLeft);
+        if (tNow !== Math.floor(prevTime)) {
             updateHud();
+            if (tNow <= 5 && tNow >= 1) Audio.timeWarn();
         }
 
         // Player physics.
-        Platformer.step(Game.player, {
+        const pev = Platformer.step(Game.player, {
             left:        Input.down('left'),
             right:       Input.down('right'),
             jumpHeld:    Input.down('primary'),
             jumpPressed: Input.pressed('primary'),
         }, Game.tilemap, dt);
+        if (pev.jumped) Audio.jump();
+        if (pev.landed) Audio.land();
 
-        if (Input.pressed('pause')) { S.switchTo('pause'); return; }
+        if (Input.pressed('pause')) { Audio.pause(); S.switchTo('pause'); return; }
 
         for (const s of Game.stompers) stepStomper(s, dt);
         for (const f of Game.flyers)   stepFlyer(f, dt);
@@ -568,6 +585,14 @@
         // batch, and main responds with another 'tick'.
         mctsReady: [],
 
+        // Audio diff state — compare last vs current render snap to fire
+        // sounds on transitions (stomp, land, jump, death/win episode end).
+        // Skipped while fast mode is on so we don't spray at 8x speed.
+        prevAudioSnap: null,
+        prevEpisodes: 0,
+        prevReason: 'fresh',
+        flyerCooldown: 0,
+
         // HUD aggregates.
         workerStats: {
             ingested: 0, bufSize: 0, trainSteps: 0,
@@ -604,6 +629,10 @@
             this.cam.snapTo(VIEW_W / 2, VIEW_H / 2);
 
             this.snap = null;
+            this.prevAudioSnap = null;
+            this.prevEpisodes = 0;
+            this.prevReason = 'fresh';
+            this.flyerCooldown = 0;
             this.pool = BestCrop.create({ capacity: this.poolCapacity });
             this.poolTopReturn = 0;
             this.fast = false;
@@ -802,7 +831,60 @@
             if (this.snap && this.snap.player) {
                 this.cam.follow(
                     this.snap.player.x + this.snap.player.w / 2, VIEW_H / 2);
+                this.diffSnapAudio(dt);
             }
+        },
+
+        // Snapshot diffing on the main thread is the cheap path: the live
+        // worker doesn't know about audio, so we infer events by comparing
+        // the most recent two render snaps. Fast mode mutes this entirely
+        // so 8× playback doesn't machine-gun the speakers.
+        diffSnapAudio(dt) {
+            if (this.fast) { this.prevAudioSnap = this.snap; return; }
+            const cur = this.snap;
+            const prev = this.prevAudioSnap;
+            if (this.flyerCooldown > 0) this.flyerCooldown -= dt;
+
+            // Episode boundary — episodes counter ticked since last frame.
+            // cur.lastReason is the reason the *previous* episode ended,
+            // posted on the spawn frame of the new one.
+            if (cur.episodes !== this.prevEpisodes) {
+                if (cur.lastReason === 'flag')      Audio.win();
+                else if (cur.lastReason === 'death') Audio.die();
+                this.prevEpisodes = cur.episodes;
+                this.prevAudioSnap = cur;
+                return;
+            }
+
+            if (prev && prev.player && cur.player) {
+                const a = prev.player, b = cur.player;
+                if (!a.onGround && b.onGround) Audio.land();
+                else if (a.onGround && !b.onGround && b.vy < -200) Audio.jump();
+
+                // Stomper kills: any stomper that flipped alive → dead.
+                const ps = prev.stompers || [];
+                const cs = cur.stompers || [];
+                const n = Math.min(ps.length, cs.length);
+                for (let i = 0; i < n; i++) {
+                    if (ps[i].alive && !cs[i].alive) { Audio.stomp(); break; }
+                }
+
+                // Flyer proximity warning — quiet noise blip when one
+                // gets close to the player. Cooldown so it doesn't loop
+                // every frame when the agent hugs a flyer.
+                if (this.flyerCooldown <= 0 && cur.flyers) {
+                    for (const f of cur.flyers) {
+                        const dx = (f.x + f.w / 2) - (b.x + b.w / 2);
+                        const dy = (f.y + f.h / 2) - (b.y + b.h / 2);
+                        if (dx * dx + dy * dy < 80 * 80) {
+                            Audio.flyer();
+                            this.flyerCooldown = 350;
+                            break;
+                        }
+                    }
+                }
+            }
+            this.prevAudioSnap = cur;
         },
 
         draw() {

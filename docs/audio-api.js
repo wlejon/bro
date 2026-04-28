@@ -178,8 +178,8 @@ class AudioContext {
   /** @param {boolean} enabled */ setCompressorEnabled(enabled) {}
   /** @param {number} dB */ setCompressorThreshold(dB) {}
   /** @param {number} ratio */ setCompressorRatio(ratio) {}
-  /** @param {number} seconds */ setCompressorAttack(seconds) {}
-  /** @param {number} seconds */ setCompressorRelease(seconds) {}
+  /** @param {number} ms - attack time in milliseconds, clamped to [0.1, 100] */ setCompressorAttack(ms) {}
+  /** @param {number} ms - release time in milliseconds, clamped to [1, 1000] */ setCompressorRelease(ms) {}
 
 
   // --- Mix Bus API ----------------------------------------------------------
@@ -218,8 +218,8 @@ class AudioContext {
   /** @param {number} busId @param {boolean} enabled */ setBusCompressorEnabled(busId, enabled) {}
   /** @param {number} busId @param {number} dB */ setBusCompressorThreshold(busId, dB) {}
   /** @param {number} busId @param {number} ratio */ setBusCompressorRatio(busId, ratio) {}
-  /** @param {number} busId @param {number} seconds */ setBusCompressorAttack(busId, seconds) {}
-  /** @param {number} busId @param {number} seconds */ setBusCompressorRelease(busId, seconds) {}
+  /** @param {number} busId @param {number} ms - attack time in milliseconds, clamped to [0.1, 100] */ setBusCompressorAttack(busId, ms) {}
+  /** @param {number} busId @param {number} ms - release time in milliseconds, clamped to [1, 1000] */ setBusCompressorRelease(busId, ms) {}
   /** @param {number} busId @param {number} sidechainBusId */ setBusCompressorSidechain(busId, sidechainBusId) {}
 
   /** @param {number} busId @param {boolean} enabled */ setBusReverbEnabled(busId, enabled) {}
