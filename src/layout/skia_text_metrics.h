@@ -5,6 +5,7 @@
 #include "render/renderer.h"
 #include <string>
 #include <cmath>
+#include <cstdlib>
 
 namespace bro::layout {
 
@@ -42,9 +43,11 @@ private:
         else if (weight == "600") w = 600;
         else if (weight == "800") w = 800;
         else if (weight == "900") w = 900;
+        else if (weight == "normal" || weight.empty()) w = 400;
         else {
-            // Try parsing numeric weight
-            try { w = std::stoi(weight); } catch (...) {}
+            char* end = nullptr;
+            long v = std::strtol(weight.c_str(), &end, 10);
+            if (end != weight.c_str() && v > 0) w = static_cast<int>(v);
         }
         return fontManager_->createFont(renderer_,
             family.empty() ? "Arial" : family, size > 0 ? size : 16.0f, w, false);

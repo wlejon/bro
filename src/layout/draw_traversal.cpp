@@ -1202,7 +1202,12 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
         const auto& w = weightIt->second;
         if (w == "bold") weight = 700;
         else if (w == "lighter") weight = 100;
-        else { try { weight = std::stoi(w); } catch (...) {} }
+        else if (w == "normal" || w.empty()) weight = 400;
+        else {
+            char* end = nullptr;
+            long v = std::strtol(w.c_str(), &end, 10);
+            if (end != w.c_str() && v > 0) weight = static_cast<int>(v);
+        }
     }
     bool italic = false;
     auto styleIt = style.find("font-style");
@@ -1293,8 +1298,11 @@ uint64_t DrawTraversal::getFontHandle(dom::Element* elem) {
         const auto& w = weightIt->second;
         if (w == "bold") weight = 700;
         else if (w == "lighter") weight = 100;
+        else if (w == "normal" || w.empty()) weight = 400;
         else {
-            try { weight = std::stoi(w); } catch (...) {}
+            char* end = nullptr;
+            long v = std::strtol(w.c_str(), &end, 10);
+            if (end != w.c_str() && v > 0) weight = static_cast<int>(v);
         }
     }
 
