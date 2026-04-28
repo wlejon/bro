@@ -193,6 +193,44 @@
         ctx.drawImage(stompSheet, sx, 0, STOMP_W, STOMP_H, x, y, STOMP_W, STOMP_H);
     }
 
+    // ── Flyer sheet (2 frames × 24×16) ───────────────────────────────────────
+    // A flapping bat-ish silhouette: small, dark, easy to read against sky.
+    // Two frames so wings animate in the live game.
+    const FLY_PAL = {
+        B: '#000', d: '#3a1a4a', p: '#7a3aaa', e: '#ff6655',
+        '.': null,
+    };
+    const FLY_FRAMES = [
+        // 0 wings up
+        ['BB....BB', 'BdB..BdB', 'BddBBddB',
+         '.BdpdpdB', '.BddedB.', '..BBBB..'],
+        // 1 wings down
+        ['........', 'BB....BB', 'BdBBBBdB',
+         'BdpdpdpB', 'BBddedBB', '..BBBB..'],
+    ];
+    const FLY_W = 24, FLY_H = 16, FLY_CELL = 3;
+    let flyerSheet = null;
+    function buildFlyer() {
+        flyerSheet = makeCanvas(FLY_W * FLY_FRAMES.length, FLY_H);
+        const cx = flyerSheet.getContext('2d');
+        for (let i = 0; i < FLY_FRAMES.length; i++) {
+            stamp(cx, i * FLY_W, 0, FLY_FRAMES[i], FLY_PAL, FLY_CELL);
+        }
+    }
+    function drawFlyer(ctx, x, y, frame, flipX) {
+        if (!flyerSheet) buildFlyer();
+        const sx = (frame || 0) * FLY_W;
+        if (flipX) {
+            ctx.save();
+            ctx.translate(x + FLY_W, y);
+            ctx.scale(-1, 1);
+            ctx.drawImage(flyerSheet, sx, 0, FLY_W, FLY_H, 0, 0, FLY_W, FLY_H);
+            ctx.restore();
+        } else {
+            ctx.drawImage(flyerSheet, sx, 0, FLY_W, FLY_H, x, y, FLY_W, FLY_H);
+        }
+    }
+
     // ── Flag (32×96, baked once) ─────────────────────────────────────────────
     let flagCanvas = null;
     function buildFlag() {
@@ -218,6 +256,7 @@
         TILE,
         HERO_W, HERO_H,
         STOMP_W, STOMP_H,
-        drawTile, drawHero, drawStomper, drawFlag,
+        FLY_W, FLY_H,
+        drawTile, drawHero, drawStomper, drawFlyer, drawFlag,
     };
 })(typeof window !== 'undefined' ? window : globalThis);

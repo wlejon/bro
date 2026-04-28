@@ -14,10 +14,15 @@
 // Across those ticks, jumpHeld stays true for jump actions; jumpPressed is
 // true only on the first tick (matches how a tap registers in Platformer).
 //
-// Rewards (per env.step):
-//   + 0.01 * Δx_in_tiles            progress (capped to a few tiles per step)
+// Rewards (per env.step) — potential-based shaping via Manhattan distance to
+// the flag (in tiles). Only the *change* in distance is paid each step, so
+// the optimal policy is preserved (Ng et al. 1999) but the gradient toward
+// the flag is dense and signed (going backwards costs).
+//   + REW_PROGRESS_PER_TILE * (prevDist - currDist)   progress (signed)
 //   + 0.5  per stomper killed
-//   - 1.0  on death                 terminal
+//   - 0.3  on death                 terminal (lowered from -1.0 so movement
+//                                   followed by death is not strictly worse
+//                                   than standing still and timing out)
 //   + 5.0  on flag                  terminal
 //   - 0.2  on timeout               terminal
 //
@@ -34,9 +39,9 @@
     const STOMP_BOUNCE_VY = -380;
 
     // Reward shaping.
-    const REW_PROGRESS_PER_TILE = 0.01;
+    const REW_PROGRESS_PER_TILE = 0.02;   // signed: + when distance to flag drops
     const REW_STOMP             =  0.5;
-    const REW_DEATH             = -1.0;
+    const REW_DEATH             = -0.3;
     const REW_FLAG              =  5.0;
     const REW_TIMEOUT           = -0.2;
 
@@ -128,28 +133,74 @@
         return { kills, killed: false };
     }
 
+    // ── Flyer update + collision ──────────────────────────────────────────
+    // Flyers patrol horizontally between [spawnX-patrolRange, spawnX+range]
+    // and (optionally) bob vertically as a sine wave around spawnY. They
+    // ignore the tilemap entirely (sky enemies). Any AABB contact with the
+    // player kills — flyers are not stompable, so the only correct response
+    // is to avoid them.
+    const FLY_SPEED = 80;
+    function stepFlyer(f, dt) {
+        const dts = dt / 1000;
+        f.x += f.vx * dts;
+        if (f.x > f.spawnX + f.patrolRange) {
+            f.x = f.spawnX + f.patrolRange;
+            f.vx = -Math.abs(f.vx);
+        } else if (f.x < f.spawnX - f.patrolRange) {
+            f.x = f.spawnX - f.patrolRange;
+            f.vx = Math.abs(f.vx);
+        }
+        if (f.bobAmp > 0) {
+            f.bobT += dts;
+            const newY = f.spawnY + Math.sin(f.bobT * f.bobFreq) * f.bobAmp;
+            f.vy = (newY - f.y) / dts;
+            f.y = newY;
+        } else {
+            f.vy = 0;
+        }
+        f.animT += dt;
+    }
+    function resolvePlayerFlyers(p, flyers) {
+        for (const f of flyers) {
+            if (p.x + p.w <= f.x || p.x >= f.x + f.w) continue;
+            if (p.y + p.h <= f.y || p.y >= f.y + f.h) continue;
+            return true;   // any contact kills
+        }
+        return false;
+    }
+
     // ── Public: Sim.create({ tilemap, spawn, stompers, flag, timeLimit }) ─
     function create(level) {
         const tilemap = level.tilemap;
         const flag    = level.flag;
         const timeLimit = level.timeLimit != null ? level.timeLimit : 300;
+        // Stall timeout: end the episode early if the player hasn't made
+        // forward progress (new max-x by at least `stallEpsilonPx`) for
+        // this many consecutive decisions. 0 = disabled. The deadband
+        // matters: without it, a 1-pixel jitter against a pipe keeps
+        // resetting the counter and the agent flails forever.
+        const stallDecisions = level.stallDecisions != null ? level.stallDecisions : 0;
+        const stallEpsilonPx = level.stallEpsilonPx != null ? level.stallEpsilonPx : 8;
 
-        // Initial state captured for resets.
-        const spawnX = level.spawn.x;
-        const spawnY = level.spawn.y - 4;
+        // Initial state captured for resets. Mutable so the trainer can
+        // implement curriculum learning by re-spawning at later checkpoints.
+        let spawnX = level.spawn.x;
+        let spawnY = level.spawn.y - 4;
         const stomperTemplates = level.stompers.map((s) => ({ ...s }));
+        const flyerTemplates = (level.flyers || []).map((f) => ({ ...f }));
 
         const playerCfg = {
             gravity:    2400, maxFall:    900,
             runSpeed:   240,  accel:      1800,
             airAccel:   1200, friction:   1800,
-            jumpVel:    -680, jumpCutMul: 0.45,
+            jumpVel:    -850, jumpCutMul: 0.45,
             coyoteTime: 100,  jumpBuffer: 120,
         };
 
         const state = {
             player: null,
             stompers: null,
+            flyers: null,
             score: 0,
             alive: true,
             won: false,
@@ -158,7 +209,25 @@
             // Keep a memory of the most-recent jump-hold flag so adjacent
             // step() calls don't re-pulse jumpPressed every decision.
             prevJumpHeld: false,
+            // Manhattan distance to flag in tiles, for PBRS. Updated at the
+            // start of each step() so reward = Δ(prev − curr).
+            prevDist: 0,
+            // Stall detection: max-x reached so far this episode + the
+            // count of decisions since that record was last broken.
+            stallBestX: 0,
+            stallSince: 0,
         };
+
+        // Manhattan distance from player center to flag center, in tiles.
+        // Returns 0 if there's no flag (sim is degenerate but we don't crash).
+        function distToFlag(p) {
+            if (!flag) return 0;
+            const px = p.x + p.w / 2;
+            const py = p.y + p.h / 2;
+            const fx = flag.x + flag.w / 2;
+            const fy = flag.y + flag.h / 2;
+            return (Math.abs(fx - px) + Math.abs(fy - py)) / TILE;
+        }
 
         function reset() {
             state.player = Platformer.createBody({
@@ -166,14 +235,27 @@
             });
             state.player.facing = 1;
             state.stompers = stomperTemplates.map((s) => ({ ...s }));
+            state.flyers   = flyerTemplates.map((f) => ({ ...f, bobT: 0, animT: 0 }));
             state.score = 0;
             state.alive = true;
             state.won = false;
             state.tick = 0;
             state.timeLeft = timeLimit;
             state.prevJumpHeld = false;
+            state.prevDist = distToFlag(state.player);
+            state.stallBestX = state.player.x;
+            state.stallSince = 0;
+            state.stalledOut = false;
         }
         reset();
+
+        // Curriculum hook: re-spawn at an arbitrary world x. Y is held at
+        // the original spawn row (level layout assumption). Caller is
+        // responsible for invoking reset() after.
+        function setSpawn(x, y) {
+            spawnX = x;
+            if (y != null) spawnY = y;
+        }
 
         function snapshot() {
             // Deep-copy the parts that mutate. Tilemap and flag are static.
@@ -190,12 +272,23 @@
                     vx: s.vx, vy: s.vy, onGround: s.onGround,
                     alive: s.alive, squashTimer: s.squashTimer, animT: s.animT,
                 })),
+                flyers: state.flyers.map((f) => ({
+                    x: f.x, y: f.y, w: f.w, h: f.h,
+                    vx: f.vx, vy: f.vy,
+                    spawnX: f.spawnX, spawnY: f.spawnY,
+                    patrolRange: f.patrolRange,
+                    bobAmp: f.bobAmp, bobFreq: f.bobFreq, bobT: f.bobT,
+                    animT: f.animT,
+                })),
                 score: state.score,
                 alive: state.alive,
                 won:   state.won,
                 tick:  state.tick,
                 timeLeft: state.timeLeft,
                 prevJumpHeld: state.prevJumpHeld,
+                prevDist: state.prevDist,
+                stallBestX: state.stallBestX,
+                stallSince: state.stallSince,
             };
         }
 
@@ -215,22 +308,34 @@
                 const src = snap.stompers[i];
                 state.stompers[i] = { ...src };
             }
+            const fLen = snap.flyers ? snap.flyers.length : 0;
+            state.flyers.length = fLen;
+            for (let i = 0; i < fLen; i++) {
+                state.flyers[i] = { ...snap.flyers[i] };
+            }
             state.score = snap.score;
             state.alive = snap.alive;
             state.won   = snap.won;
             state.tick  = snap.tick;
             state.timeLeft = snap.timeLeft;
             state.prevJumpHeld = snap.prevJumpHeld;
+            state.prevDist = snap.prevDist != null ? snap.prevDist : distToFlag(state.player);
+            state.stallBestX = snap.stallBestX != null ? snap.stallBestX : state.player.x;
+            state.stallSince = snap.stallSince != null ? snap.stallSince : 0;
         }
 
         // Run one physics tick with the supplied input. Returns events.
         function tickPhysics(input, dt) {
             const ev = Platformer.step(state.player, input, tilemap, dt);
             for (const s of state.stompers) stepStomper(s, dt, tilemap);
+            for (const f of state.flyers) stepFlyer(f, dt);
 
             const r = resolvePlayerStompers(state.player, state.stompers);
             ev.kills = r.kills;
             ev.killed = r.killed;
+            if (!ev.killed && resolvePlayerFlyers(state.player, state.flyers)) {
+                ev.killed = true;
+            }
             // Fall out of world.
             if (state.player.y > tilemap.heightPx + 64) ev.killed = true;
             return ev;
@@ -240,7 +345,6 @@
         function step(action) {
             if (!state.alive || state.won) return { reward: 0, done: true };
 
-            const xBefore = state.player.x;
             let kills = 0;
             let died  = false;
             let won   = false;
@@ -263,12 +367,31 @@
                 if (state.timeLeft <= 0) break;
             }
 
-            const dxTiles = (state.player.x - xBefore) / TILE;
-            let reward = REW_PROGRESS_PER_TILE * dxTiles + REW_STOMP * kills;
+            // Potential-based shaping: reward the *signed* drop in Manhattan
+            // distance to the flag (in tiles) over the decision. Backwards
+            // motion costs symmetrically, which suppresses oscillation.
+            const currDist = distToFlag(state.player);
+            const dDist = state.prevDist - currDist;
+            state.prevDist = currDist;
+            let reward = REW_PROGRESS_PER_TILE * dDist + REW_STOMP * kills;
+
+            // Stall detection: a new max-x resets the counter; otherwise
+            // count decisions since last progress. Crossing the threshold
+            // cuts the episode short with the timeout penalty so the
+            // trainer doesn't burn the full timeLimit on stuck behavior.
+            if (state.player.x > state.stallBestX + stallEpsilonPx) {
+                state.stallBestX = state.player.x;
+                state.stallSince = 0;
+            } else {
+                state.stallSince++;
+            }
+            const stalled = stallDecisions > 0 && state.stallSince >= stallDecisions;
+
             let done = false;
             if (won)            { reward += REW_FLAG;    done = true; }
             else if (died)      { reward += REW_DEATH;   done = true; state.alive = false; }
             else if (state.timeLeft <= 0) { reward += REW_TIMEOUT; done = true; state.alive = false; }
+            else if (stalled)             { reward += REW_TIMEOUT; done = true; state.alive = false; state.stalledOut = true; }
             state.score += kills * 100 + (won ? 1000 : 0);
             return { reward, done };
         }
@@ -283,17 +406,19 @@
             flag,
             get player()   { return state.player; },
             get stompers() { return state.stompers; },
+            get flyers()   { return state.flyers; },
             get score()    { return state.score; },
             get alive()    { return state.alive; },
             get won()      { return state.won; },
             get tick()     { return state.tick; },
             get timeLeft() { return state.timeLeft; },
+            get stalledOut() { return state.stalledOut; },
             // Constants the agent peeks at for observation building.
             tile: TILE,
             frameSkip: FRAME_SKIP,
             // Env interface.
             numActions: 6,
-            reset, snapshot, restore, step, legalActions,
+            reset, snapshot, restore, step, legalActions, setSpawn,
         };
     }
 

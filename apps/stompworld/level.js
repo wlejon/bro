@@ -37,7 +37,15 @@
         'C': 8,
     };
     const SOLID_IDS = [1, 2, 3, 4, 5, 6, 7];
-    const ENTITY_CHARS = { 'P': 'player', 'G': 'stomper', 'F': 'flag' };
+    const ENTITY_CHARS = {
+        'P': 'player', 'G': 'stomper', 'F': 'flag',
+        // Flying enemies. 'V' = horizontal patrol only; 'X' = horizontal +
+        // sinusoidal vertical bob. Letters chosen so they don't collide
+        // with existing tile chars (B, Q, [, ], <, >, C) or other entity
+        // chars (P, G, F). 'X' rather than 'W' since 'W' is reserved as a
+        // shorthand someone might want to add later for a wider gap glyph.
+        'V': 'flyer', 'X': 'flyer_bob',
+    };
 
     // Programmatic row builder: start with 120 dots, poke characters into columns.
     function buildRows() {
@@ -85,6 +93,34 @@
         fillCol(102, 13, 15, '#');                  // 3 high
         fillCol(103, 12, 15, '#');                  // 4 high
         fillCol(104, 11, 15, '#');                  // 5 high
+
+        // ── Flyers ──────────────────────────────────────────────────────────
+        // Place flyers at three distinct heights so the agent has to learn
+        // "when to jump" rather than "always jump" or "never jump":
+        //
+        //   row 11 (y=[352,368]): "NO-JUMP" zone. Overlaps player AABB at
+        //       jump apex (player AABB at peak = [332,362]). Lethal if the
+        //       agent jumps anywhere near one. Cannot be jumped over.
+        //   row 12 (y=[384,400]): "TIMING" zone. Apex passes safely, but
+        //       AABB overlap during ascent/descent — must time jumps so
+        //       player passes through this row at apex (not transit).
+        //       Used for bobbing flyers ('X') so height varies.
+        //   row 15 (y=[480,496]): "FORCED-JUMP" zone. Body-height flyer
+        //       overlaps the running player on ground — must jump over to
+        //       proceed. Apex (332) clears flyer top (480) easily.
+        //
+        // 'V' = horizontal patrol; 'X' = horizontal + vertical bob.
+        set(11,  6, 'V');   // intro: punish panic-jumps
+        set(15, 20, 'V');   // post-gap-1: forced jump-over
+        set(11, 33, 'V');   // pipes area: no jump-spam between pipes
+        set(12, 41, 'X');   // post-pipes: bobbing timing
+        set(11, 54, 'V');   // post-gap-2: lethal apex
+        set(15, 60, 'V');   // mid-section: forced jump-over
+        set(11, 68, 'V');   // pre-gap-3: lethal apex
+        set(12, 76, 'X');   // gap-3 area: bobbing
+        set(15, 86, 'V');   // long flat: forced jump-over
+        set(11, 95, 'V');   // pre-staircase: must NOT jump
+        set(12,108, 'X');   // post-staircase: bobbing late hazard
 
         // ── Spawns ──────────────────────────────────────────────────────────
         set(15, 2, 'P');                            // player

@@ -21,7 +21,12 @@
 //   3 nearest stompers × 5 floats = 15 floats:
 //     [valid, dx/300, dy/96, vxSign, alive]
 //
-// Total: 8 + 40 + 15 = 63 floats.
+//   3 nearest flyers × 5 floats = 15 floats:
+//     [valid, dx/300, dy/192, vxSign, vySign]
+//     (dy normalized over 192 because flyers live in the sky — full
+//      screen-half range. vySign covers bobbing motion.)
+//
+// Total: 8 + 40 + 15 + 15 = 78 floats.
 
 (function (global) {
     'use strict';
@@ -37,8 +42,10 @@
     const TILE_ROWS = ROWS_UP    + 1 + ROWS_DOWN;            // 5
     const TILE_BLOCK = TILE_COLS * TILE_ROWS;                // 40
     const SELF_BLOCK = 8;
+    const N_FLYERS   = 3;
     const STOMPER_BLOCK = N_STOMPERS * 5;                    // 15
-    const OBS_DIM = SELF_BLOCK + TILE_BLOCK + STOMPER_BLOCK; // 63
+    const FLYER_BLOCK   = N_FLYERS   * 5;                    // 15
+    const OBS_DIM = SELF_BLOCK + TILE_BLOCK + STOMPER_BLOCK + FLYER_BLOCK; // 78
 
     const RUN_SPEED   = 240;
     const MAX_FALL    = 900;
@@ -102,6 +109,28 @@
                 out[off + 2] = clamp(c.dy / 96,  -1, 1);
                 out[off + 3] = c.s.vx > 0 ? 1 : (c.s.vx < 0 ? -1 : 0);
                 out[off + 4] = c.s.alive ? 1 : 0;
+            }
+            off += 5;
+        }
+
+        // 3 nearest flyers.
+        const flyers = sim.flyers || [];
+        const fcands = [];
+        for (let i = 0; i < flyers.length; i++) {
+            const f = flyers[i];
+            const dx = (f.x + f.w / 2) - (p.x + p.w / 2);
+            const dy = (f.y + f.h / 2) - (p.y + p.h / 2);
+            fcands.push({ d2: dx * dx + dy * dy, dx, dy, f });
+        }
+        fcands.sort((a, b) => a.d2 - b.d2);
+        for (let i = 0; i < N_FLYERS; i++) {
+            if (i < fcands.length) {
+                const c = fcands[i];
+                out[off + 0] = 1;                       // valid
+                out[off + 1] = clamp(c.dx / 300, -1, 1);
+                out[off + 2] = clamp(c.dy / 192, -1, 1);
+                out[off + 3] = c.f.vx > 0 ? 1 : (c.f.vx < 0 ? -1 : 0);
+                out[off + 4] = c.f.vy > 0 ? 1 : (c.f.vy < 0 ? -1 : 0);
             }
             off += 5;
         }

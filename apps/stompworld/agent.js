@@ -48,16 +48,35 @@
         const obsDim = SwAgentObs.OBS_DIM;
         const numActions = sim.numActions;
         const gamma   = opts.gamma   != null ? opts.gamma   : 0.99;
-        const bufCap  = opts.bufferCapacity != null ? opts.bufferCapacity : 4096;
-        const startupIterations = opts.startupIterations != null ? opts.startupIterations : 50;
-        const maxIterations     = opts.maxIterations     != null ? opts.maxIterations     : 200;
-        const trainStepsPerEpisode = opts.trainStepsPerEpisode != null ? opts.trainStepsPerEpisode : 30;
+        // Buffer is large enough to retain many recent episodes; with the
+        // shorter (~20s) training horizon used in trainer_worker.js this
+        // amounts to dozens of trajectories instead of just one.
+        const bufCap  = opts.bufferCapacity != null ? opts.bufferCapacity : 50000;
+        const startupIterations = opts.startupIterations != null ? opts.startupIterations : 80;
+        const maxIterations     = opts.maxIterations     != null ? opts.maxIterations     : 400;
+        const trainStepsPerEpisode = opts.trainStepsPerEpisode != null ? opts.trainStepsPerEpisode : 60;
+        // Dirichlet exploration noise on the MCTS root prior. AlphaZero
+        // settled on (ε=0.25, α=0.3) for chess; we use (0.25, 0.5) — same
+        // ε so MCTS visits aren't dominated by a confident-but-wrong prior,
+        // and slightly higher α so the noise spreads across our smaller
+        // (6) action space rather than concentrating on one action.
+        const dirichletAlpha   = opts.dirichletAlpha   != null ? opts.dirichletAlpha   : 0.5;
+        const dirichletEpsilon = opts.dirichletEpsilon != null ? opts.dirichletEpsilon : 0.25;
+        // Successful-episode bias: push flag-reaching tuples this many
+        // times into the FIFO buffer. Cheap weighted-sampling proxy: makes
+        // those critical "JR-at-the-gap-edge" decisions show up more often
+        // when the trainer pulls a batch.
+        const flagPushMult = opts.flagPushMult != null ? opts.flagPushMult : 3;
 
         // ── Net + handle + buffer + trainer ─────────────────────────────────
+        // Bigger trunk (128×128 vs the old 64×64 — ~3× params) and a wider
+        // value head. The user wants the net to drive most of the win, so
+        // raw policy capacity is the lever — MCTS will then layer polish
+        // on top instead of doing the heavy lifting.
         const net = NN.createPolicyValueNet({
             inDim: obsDim,
-            hidden: opts.hidden || [64, 64],
-            valueHidden: opts.valueHidden || 32,
+            hidden: opts.hidden || [128, 128],
+            valueHidden: opts.valueHidden || 64,
             numActions,
             seed: opts.seed != null ? opts.seed : 0xA11CE5n,
         });
@@ -68,9 +87,10 @@
         trainer.setBuffer(buf);
         trainer.setWeightsHandle(handle);
         trainer.setConfig({
-            lr:        opts.lr       != null ? opts.lr       : 0.01,
+            // Wider net + bigger batch ⇒ smaller LR for stable gradients.
+            lr:        opts.lr       != null ? opts.lr       : 0.005,
             momentum:  opts.momentum != null ? opts.momentum : 0.9,
-            batch:     opts.batch    != null ? opts.batch    : 32,
+            batch:     opts.batch    != null ? opts.batch    : 64,
             policyWeight: 1.0, valueWeight: 1.0,
             publishEvery: 25,
             rngSeed: 0x1234n,
@@ -149,6 +169,7 @@
                 priorFn, valueFn,
                 gamma,
                 rolloutDepth: 6,
+                dirichletAlpha, dirichletEpsilon,
             });
             const visits = mcts.rootVisits();
 
@@ -189,15 +210,21 @@
             }
             const action_mask = new Float32Array(numActions);
             for (let i = 0; i < numActions; i++) action_mask[i] = 1;
-            for (const tup of pending) {
-                buf.push({
-                    obs: tup.obs,
-                    policyTarget: tup.policyTarget,
-                    actionMask: action_mask,
-                    valueTarget: tup.valueTarget,
-                });
+            // Push flag-reaching trajectories N× to bias the buffer. The
+            // FIFO is 50k tuples; even 3× across a successful 300-decision
+            // run only consumes ~1.8% of the buffer.
+            const repeats = (reason === 'flag') ? flagPushMult : 1;
+            for (let k = 0; k < repeats; k++) {
+                for (const tup of pending) {
+                    buf.push({
+                        obs: tup.obs,
+                        policyTarget: tup.policyTarget,
+                        actionMask: action_mask,
+                        valueTarget: tup.valueTarget,
+                    });
+                }
             }
-            const tupCount = pending.length;
+            const tupCount = pending.length * repeats;
             pending.length = 0;
 
             // Hand the trajectory off to the ghost recorder.
@@ -241,6 +268,8 @@
             get stats() { return stats; },
             get net() { return net; },
             get buffer() { return buf; },
+            get trainer() { return trainer; },
+            get handle() { return handle; },
         };
     }
 

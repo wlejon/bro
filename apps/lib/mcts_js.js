@@ -47,6 +47,49 @@
             return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
         }
 
+        // Box-Muller standard normal off the same PRNG.
+        function randn() {
+            const u1 = Math.max(1e-12, rand());
+            const u2 = rand();
+            return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+        }
+        // Marsaglia–Tsang Gamma(α, 1) sampler. Handles α<1 via the boost
+        // identity: Gamma(α) = Gamma(α+1) * U^(1/α).
+        function sampleGamma(alpha) {
+            if (alpha < 1) {
+                return sampleGamma(alpha + 1) * Math.pow(Math.max(1e-12, rand()), 1 / alpha);
+            }
+            const d = alpha - 1 / 3;
+            const c = 1 / Math.sqrt(9 * d);
+            // Tail probability of rejection is tiny; loop is bounded in practice.
+            for (;;) {
+                let x, v;
+                do { x = randn(); v = 1 + c * x; } while (v <= 0);
+                v = v * v * v;
+                const u = rand();
+                if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+                if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+            }
+        }
+        // Symmetric Dirichlet(α) over the legal-action subset; entries on
+        // illegal actions stay zero.
+        function sampleDirichlet(legal, alpha) {
+            const out = new Float32Array(numActions);
+            let sum = 0;
+            for (let i = 0; i < legal.length; i++) {
+                const g = sampleGamma(alpha);
+                out[legal[i]] = g;
+                sum += g;
+            }
+            if (sum > 0) {
+                for (let i = 0; i < legal.length; i++) out[legal[i]] /= sum;
+            } else {
+                const u = 1 / Math.max(1, legal.length);
+                for (let i = 0; i < legal.length; i++) out[legal[i]] = u;
+            }
+            return out;
+        }
+
         // ── Tree node ───────────────────────────────────────────────────────
         // n.children[a] is the Node for taking action `a`, or null if not expanded.
         // n.P[a] is the prior, n.N[a] visits, n.W[a] sum of values, n.legal[a] bool.
@@ -138,6 +181,11 @@
             const valueFn  = searchOpts.valueFn || null;
             const gamma    = searchOpts.gamma != null ? searchOpts.gamma : 0.99;
             const rolloutDepth = searchOpts.rolloutDepth || 8;
+            // Dirichlet exploration noise on the root prior (AlphaZero). Off
+            // by default — pass dirichletAlpha (>0) and dirichletEpsilon
+            // (∈[0,1]) to enable.
+            const dAlpha   = searchOpts.dirichletAlpha   || 0;
+            const dEps     = searchOpts.dirichletEpsilon || 0;
 
             // Capture root state once per search.
             rootSnapshot = env.snapshot();
@@ -145,6 +193,22 @@
 
             // Re-expand the root each search if not already.
             if (!root.expanded) expand(root, priorFn);
+
+            // Mix Dirichlet noise into the root prior so MCTS occasionally
+            // visits actions the net thinks are bad — critical for breaking
+            // out of cold-start traps in sparse-reward environments. Done
+            // *after* expansion so we operate on the normalized prior.
+            if (dAlpha > 0 && dEps > 0) {
+                const legalIdx = [];
+                for (let a = 0; a < numActions; a++) if (root.legal[a]) legalIdx.push(a);
+                if (legalIdx.length > 0) {
+                    const noise = sampleDirichlet(legalIdx, dAlpha);
+                    for (let i = 0; i < legalIdx.length; i++) {
+                        const a = legalIdx[i];
+                        root.P[a] = (1 - dEps) * root.P[a] + dEps * noise[a];
+                    }
+                }
+            }
 
             for (let it = 0; it < iterations; it++) {
                 env.restore(rootSnapshot);

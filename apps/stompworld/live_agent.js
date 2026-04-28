@@ -32,18 +32,18 @@
 
         const obsDim     = SwAgentObs.OBS_DIM;
         const numActions = sim.numActions;
-        const iterations = opts.iterations != null ? opts.iterations : 24;
+        const iterations = opts.iterations != null ? opts.iterations : 64;
         const cPuct      = opts.cPuct      != null ? opts.cPuct      : 1.5;
         const gamma      = opts.gamma      != null ? opts.gamma      : 0.99;
-        const rolloutDepth = opts.rolloutDepth != null ? opts.rolloutDepth : 4;
+        const rolloutDepth = opts.rolloutDepth != null ? opts.rolloutDepth : 12;
 
         // Match the worker's net config exactly. If you change the worker's
         // hidden/valueHidden, change them here too — load() will fault on a
         // shape mismatch otherwise.
         const net = NN.createPolicyValueNet({
             inDim: obsDim,
-            hidden: opts.hidden || [64, 64],
-            valueHidden: opts.valueHidden || 32,
+            hidden: opts.hidden || [128, 128],
+            valueHidden: opts.valueHidden || 64,
             numActions,
             seed: 0xA11CE5n,
         });
@@ -91,9 +91,20 @@
                 iterations, priorFn, valueFn, gamma, rolloutDepth,
             });
         }
+        // Same as decide() but also returns the MCTS root visit distribution
+        // to be used as a policy target for off-thread training. Caller owns
+        // the returned Float32Array (a fresh copy from mcts.rootVisits()).
+        function decideWithVisits() {
+            mcts.reset();
+            const action = mcts.search({
+                iterations, priorFn, valueFn, gamma, rolloutDepth,
+            });
+            return { action, visits: mcts.rootVisits() };
+        }
 
         return {
             decide,
+            decideWithVisits,
             setWeights,
             get sim() { return sim; },
             get netVersion() { return netVersion; },

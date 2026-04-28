@@ -43,11 +43,32 @@
     store.load({ best: 0 });
 
     // ── Game state ───────────────────────────────────────────────────────────
+    // Flyer template: returns a populated runtime entity from a level entity.
+    function makeFlyer(e) {
+        const bob = e.kind === 'flyer_bob';
+        const cx = e.col * TILE + TILE / 2;
+        const cy = e.row * TILE + TILE / 2;
+        const FLY_W = 24, FLY_H = 16;
+        return {
+            x: cx - FLY_W / 2, y: cy - FLY_H / 2,
+            w: FLY_W, h: FLY_H,
+            vx: -80, vy: 0,
+            spawnX: cx - FLY_W / 2,
+            spawnY: cy - FLY_H / 2,
+            patrolRange: 96,
+            bobAmp:  bob ? 32 : 0,
+            bobFreq: bob ? Math.PI : 0,    // ~2 s period
+            bobT:    0,
+            animT:   0,
+        };
+    }
+
     const Game = {
         tilemap: null,
         cam: null,
         player: null,
         stompers: [],
+        flyers: [],
         flag: null,
         score: 0,
         lives: 3,
@@ -61,6 +82,7 @@
             const lvl = Level.load({ tileSize: TILE });
             this.tilemap  = lvl.tilemap;
             this.stompers = [];
+            this.flyers   = [];
             this.flag = null;
 
             for (const e of lvl.entities) {
@@ -81,6 +103,8 @@
                         squashTimer: 0,
                         animT: 0,
                     });
+                } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
+                    this.flyers.push(makeFlyer(e));
                 } else if (e.kind === 'flag') {
                     this.flag = { x: e.x, y: e.y * 0 + (e.row * TILE) - 64, h: 96, w: 32 };
                     // Anchor the flag's foot to the ground row immediately below its spawn.
@@ -98,7 +122,7 @@
                     accel:      1800,
                     airAccel:   1200,
                     friction:   1800,
-                    jumpVel:    -680,
+                    jumpVel:    -850,
                     jumpCutMul: 0.45,
                     coyoteTime: 100,
                     jumpBuffer: 120,
@@ -121,6 +145,29 @@
             this.player.vx = 0; this.player.vy = 0;
             this.player.coyote = 0; this.player.buffer = 0;
             this.player.facing = 1;
+            // Re-create the mob layout from the level definition so
+            // squashed/displaced stompers come back when the player
+            // respawns. Keeps the array reference stable in case the
+            // renderer holds onto it.
+            this.stompers.length = 0;
+            this.flyers.length = 0;
+            const lvl = Level.load({ tileSize: TILE });
+            for (const e of lvl.entities) {
+                if (e.kind === 'stomper') {
+                    this.stompers.push({
+                        x: e.x + 2,
+                        y: (e.row + 1) * TILE - 24,
+                        w: 28, h: 24,
+                        vx: -50, vy: 0,
+                        onGround: false,
+                        alive: true,
+                        squashTimer: 0,
+                        animT: 0,
+                    });
+                } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
+                    this.flyers.push(makeFlyer(e));
+                }
+            }
             this.cam.snapTo(this.player.x + this.player.w / 2, VIEW_H / 2);
         },
 
@@ -215,6 +262,40 @@
         }
     }
 
+    // ── Flyer step ──────────────────────────────────────────────────────────
+    // Sky enemies that patrol horizontally and (optionally) bob vertically.
+    // No tilemap collision; they live above the ground.
+    function stepFlyer(f, dt) {
+        const dts = dt / 1000;
+        f.x += f.vx * dts;
+        if (f.x > f.spawnX + f.patrolRange) {
+            f.x = f.spawnX + f.patrolRange;
+            f.vx = -Math.abs(f.vx);
+        } else if (f.x < f.spawnX - f.patrolRange) {
+            f.x = f.spawnX - f.patrolRange;
+            f.vx = Math.abs(f.vx);
+        }
+        if (f.bobAmp > 0) {
+            f.bobT += dts;
+            const newY = f.spawnY + Math.sin(f.bobT * f.bobFreq) * f.bobAmp;
+            f.vy = (newY - f.y) / dts;
+            f.y = newY;
+        } else {
+            f.vy = 0;
+        }
+        f.animT += dt;
+    }
+    function handleFlyers() {
+        const p = Game.player;
+        for (const f of Game.flyers) {
+            if (p.x + p.w <= f.x || p.x >= f.x + f.w) continue;
+            if (p.y + p.h <= f.y || p.y >= f.y + f.h) continue;
+            // Any contact kills — flyers are not stompable.
+            killPlayer();
+            return;
+        }
+    }
+
     // ── Player ↔ stomper ────────────────────────────────────────────────────
     function handleStompers() {
         const p = Game.player;
@@ -301,6 +382,17 @@
         }
     }
 
+    function drawFlyers() {
+        for (const f of Game.flyers) {
+            if (!Game.cam.visible(f.x, f.y, f.w, f.h)) continue;
+            const frame = (Math.floor(f.animT / 150) % 2);
+            Art.drawFlyer(ctx,
+                          Math.round(f.x - Game.cam.x),
+                          Math.round(f.y - Game.cam.y),
+                          frame, f.vx > 0);
+        }
+    }
+
     function drawFlag() {
         if (!Game.flag) return;
         const f = Game.flag;
@@ -334,6 +426,7 @@
             Game.tilemap.draw(ctx, Game.cam.x, Game.cam.y, VIEW_W, VIEW_H);
             drawFlag();
             drawStompers();
+            drawFlyers();
             drawHero();
         }
         ctx.restore();
@@ -350,6 +443,7 @@
             Game.player.vx = 80;
             Platformer.step(Game.player, { right: true }, Game.tilemap, dt);
             for (const s of Game.stompers) stepStomper(s, dt);
+            for (const f of Game.flyers)   stepFlyer(f, dt);
             Game.cam.follow(Game.player.x + Game.player.w / 2, VIEW_H / 2);
             if (Game.winTimer <= 0) {
                 if (Game.score > store.get('best')) {
@@ -397,7 +491,9 @@
         if (Input.pressed('pause')) { S.switchTo('pause'); return; }
 
         for (const s of Game.stompers) stepStomper(s, dt);
+        for (const f of Game.flyers)   stepFlyer(f, dt);
         handleStompers();
+        handleFlyers();
         checkWinLose();
 
         Game.cam.follow(Game.player.x + Game.player.w / 2, VIEW_H / 2);
@@ -428,6 +524,9 @@
             episode: 0, iters: 0, steps: 0, bestX: 0, lastReason: 'fresh',
             lossValue: 0, lossPolicy: 0, trainSteps: 0,
             netVersion: 0n, bufSize: 0,
+            spawnCol: 0, spawnIdx: 0,
+            bestMean: 0, meanReturn: 0, resumed: 0,
+            perColRates: '',
         },
         liveStats: { episodes: 0, lastReason: 'fresh', bestX: 0, decisions: 0 },
 
@@ -435,6 +534,7 @@
             const lvl = Level.load({ tileSize: TILE });
             let spawn = { x: 0, y: 0 };
             const stomperTemplates = [];
+            const flyerTemplates = [];
             let flag = null;
             for (const e of lvl.entities) {
                 if (e.kind === 'player') {
@@ -446,6 +546,8 @@
                         w: 28, h: 24, vx: -50, vy: 0,
                         onGround: false, alive: true, squashTimer: 0, animT: 0,
                     });
+                } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
+                    flyerTemplates.push(makeFlyer(e));
                 } else if (e.kind === 'flag') {
                     flag = { x: e.x, w: 32, h: 96, y: e.row * TILE - 64 };
                     flag.y = e.row * TILE - flag.h + TILE;
@@ -453,10 +555,20 @@
             }
             this.sim = SwSim.create({
                 tilemap: lvl.tilemap,
-                spawn, stompers: stomperTemplates, flag,
+                spawn, stompers: stomperTemplates, flyers: flyerTemplates, flag,
                 timeLimit: 300,
+                // 45 decisions ≈ 3 s of no rightward progress. Without
+                // this the live agent can spend the entire 300 s pinned
+                // against a pipe; with it, the episode resets and we get
+                // to see another fresh attempt.
+                stallDecisions: 45,
+                stallEpsilonPx: 8,
             });
-            this.liveAgent = LiveAgent.create({ sim: this.sim, iterations: 24 });
+            this.liveAgent = LiveAgent.create({
+                sim: this.sim,
+                iterations: 64,
+                rolloutDepth: 12,
+            });
             this.ghosts = Ghosts.create({ maxGhosts: 6 });
             this.cam = Camera2D.create({
                 viewW: VIEW_W, viewH: VIEW_H,
@@ -469,9 +581,14 @@
             this.decisionAccum = 0;
             this.liveStats = { episodes: 0, lastReason: 'fresh', bestX: 0, decisions: 0 };
             this.ghostRec = { frames: [] };
+            // Per-decision tuples sealed at episode end and shipped to the
+            // worker so the displayed agent's MCTS searches and outcomes
+            // become training data. Mirrors SwAgent's pending list.
+            this.pendingTuples = [];
 
             // Spawn the trainer worker.
             this.worker = new Worker('trainer_worker.js');
+            this.warmupInfo = null;
             this.worker.onmessage = (e) => {
                 const msg = e && e.data; if (!msg) return;
                 if (msg.type === 'weights') {
@@ -479,6 +596,8 @@
                     if (msg.stats) Object.assign(this.workerStats, msg.stats);
                 } else if (msg.type === 'stats') {
                     if (msg.stats) Object.assign(this.workerStats, msg.stats);
+                } else if (msg.type === 'warmup') {
+                    this.warmupInfo = msg.stats || {};
                 }
             };
             this.running = true;
@@ -495,8 +614,15 @@
 
         oneDecision() {
             if (!this.liveAgent.weightsLoaded) return;   // wait for first publish
-            const action = this.liveAgent.decide();
+            // Snapshot obs from the pre-step state so (obs, policyTarget)
+            // line up — the visits below are the policy MCTS computed from
+            // exactly this state.
+            const obs = SwAgentObs.build(this.sim).slice();
+            const { action, visits } = this.liveAgent.decideWithVisits();
             const out = this.sim.step(action);
+            this.pendingTuples.push({
+                obs, policyTarget: visits, reward: out.reward,
+            });
             if (this.sim.player.x > this.liveStats.bestX)
                 this.liveStats.bestX = this.sim.player.x;
             this.liveStats.decisions++;
@@ -511,17 +637,42 @@
             });
 
             if (out.done) {
-                const reason = this.sim.won ? 'flag'
-                             : (this.sim.timeLeft <= 0 ? 'timeout' : 'death');
+                const reason = this.sim.won           ? 'flag'
+                             : this.sim.stalledOut    ? 'stall'
+                             : this.sim.timeLeft <= 0 ? 'timeout'
+                             :                          'death';
                 this.liveStats.lastReason = reason;
                 this.liveStats.episodes++;
                 if (this.ghostRec.frames.length > 0) {
                     this.ghosts.commit({ frames: this.ghostRec.frames.slice() });
                     this.ghostRec.frames.length = 0;
                 }
+                this.shipTuples(reason);
                 this.sim.reset();
                 this.liveStats.bestX = this.sim.player.x;
             }
+        },
+
+        // Seal value targets with discounted return (γ=0.99, clamped to
+        // [-1, 1] to match SwAgent.endEpisode), ship to the worker, and
+        // clear the pending list. The worker pushes these into its replay
+        // buffer alongside its own self-play tuples.
+        shipTuples(reason) {
+            const tuples = this.pendingTuples;
+            if (tuples.length === 0 || !this.worker) {
+                this.pendingTuples = [];
+                return;
+            }
+            const gamma = 0.99;
+            let g = 0;
+            for (let i = tuples.length - 1; i >= 0; i--) {
+                g = tuples[i].reward + gamma * g;
+                tuples[i].valueTarget = g < -1 ? -1 : (g > 1 ? 1 : g);
+            }
+            try {
+                this.worker.postMessage({ type: 'live_tuples', reason, tuples });
+            } catch (_) { /* worker may have been torn down */ }
+            this.pendingTuples = [];
         },
 
         update(dt) {
@@ -570,6 +721,15 @@
                                 Math.round(s.y - this.cam.y), f);
             }
 
+            // Flyers (live).
+            for (const fl of this.sim.flyers) {
+                if (!this.cam.visible(fl.x, fl.y, fl.w, fl.h)) continue;
+                const fr = (Math.floor(fl.animT / 150) % 2);
+                Art.drawFlyer(ctx,
+                              Math.round(fl.x - this.cam.x),
+                              Math.round(fl.y - this.cam.y), fr, fl.vx > 0);
+            }
+
             // Ghosts (under live hero).
             const t = this.sim.tick;
             this.ghosts.draw(ctx, t, (cctx, x, y, fr, flipped, a) =>
@@ -598,12 +758,30 @@
                 'live: ep ' + l.episodes + '   bestX ' + (l.bestX | 0)
                     + '   last: ' + l.lastReason
                     + (ready ? '' : '   [waiting for weights]'),
-                'worker: ep ' + w.episode + '   iters ' + w.iters + '   steps ' + w.steps,
+                'worker: ep ' + w.episode + '   iters ' + w.iters + '   steps ' + w.steps
+                    + '   spawn col ' + (w.spawnCol | 0)
+                    + (w.resumed ? '   [resumed]' : ''),
                 'buf ' + (w.bufSize || 0) + '   train_steps ' + (w.trainSteps || 0)
                     + '   net v' + (w.netVersion ? w.netVersion.toString() : '0'),
                 'loss  v=' + (w.lossValue || 0).toFixed(4)
                     + '   p=' + (w.lossPolicy || 0).toFixed(4),
+                'return mean(20)=' + (w.meanReturn || 0).toFixed(3)
+                    + '   best=' + (w.bestMean || 0).toFixed(3),
+                'flag/att: ' + (w.perColRates || ''),
             ];
+            if (this.warmupInfo) {
+                const wu = this.warmupInfo;
+                if (wu.resumed) {
+                    lines.push('warmup: resumed @ ep ' + (wu.episode | 0)
+                               + '   meanReturn ' + (+wu.meanReturn).toFixed(3));
+                } else {
+                    lines.push('warmup: kept ' + (wu.kept | 0) + '/' + (wu.attempts | 0)
+                               + ' (flag ' + (wu.flags | 0) + ')'
+                               + '   tuples ' + (wu.tuplesPushed | 0)
+                               + '   pretrain ' + (wu.pretrainSteps | 0)
+                               + ' p=' + (+wu.pretrainLossPolicy || 0).toFixed(3));
+                }
+            }
             ctx.save();
             ctx.fillStyle = 'rgba(0,0,0,0.55)';
             ctx.fillRect(8, 8, 360, 14 * lines.length + 10);
