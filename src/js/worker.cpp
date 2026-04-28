@@ -248,7 +248,10 @@ void Worker::threadFunc()
         fullPath = basePath_ + "/" + scriptPath_;
 
     bool loadOk = runtime->loadFile(fullPath);
-    if (!loadOk) {
+    if (!loadOk
+        && !terminated_.load(std::memory_order_relaxed)
+        && !bro::util::interrupted())
+    {
         LOG_ERROR("Worker: failed to load script '%s'", fullPath.c_str());
     }
     runtime->executePendingJobs();

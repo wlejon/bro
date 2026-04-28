@@ -181,6 +181,33 @@ bool Runtime::checkException(JSContext* ctx, JSValue val)
         return false;
 
     JSValue exception = JS_GetException(ctx);
+
+    // Filter out our own interrupt-handler-induced exceptions. When the
+    // QuickJS interrupt callback returns non-zero (Ctrl+C, worker shutdown,
+    // engine teardown), the in-flight JS_Call is aborted with an
+    // InternalError whose message is exactly "interrupted". That's our
+    // intended termination path, not a script bug — logging it floods the
+    // console on every clean shutdown. No realistic user code throws an
+    // InternalError with that exact message, so identifying it by name +
+    // message is reliable in practice.
+    if (JS_IsObject(exception)) {
+        JSValue nameVal = JS_GetPropertyStr(ctx, exception, "name");
+        JSValue msgVal  = JS_GetPropertyStr(ctx, exception, "message");
+        const char* name = JS_ToCString(ctx, nameVal);
+        const char* msg  = JS_ToCString(ctx, msgVal);
+        bool isInterrupt = name && msg
+            && std::strcmp(name, "InternalError") == 0
+            && std::strcmp(msg, "interrupted") == 0;
+        if (name) JS_FreeCString(ctx, name);
+        if (msg)  JS_FreeCString(ctx, msg);
+        JS_FreeValue(ctx, nameVal);
+        JS_FreeValue(ctx, msgVal);
+        if (isInterrupt) {
+            JS_FreeValue(ctx, exception);
+            return true;
+        }
+    }
+
     const char* str = JS_ToCString(ctx, exception);
     if (str) {
         LOG_ERROR("JS Exception: %s", str);
