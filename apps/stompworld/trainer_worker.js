@@ -72,7 +72,7 @@ function buildAgent() {
         spawn: lvl.spawn,
         stompers: lvl.stompers, flyers: lvl.flyers,
         flag: lvl.flag, pickup: lvl.pickup,
-        timeLimit: 20, stallDecisions: 90,
+        timeLimit: 20, stallDecisions: 50,
     });
     const agent = SwAgent.create({ sim });
     return { sim, agent, baseSpawnY: lvl.spawn.y };

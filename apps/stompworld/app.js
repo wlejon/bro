@@ -180,9 +180,9 @@
             for (const s of lvl.stompers) this.stompers.push(s);
             this.flyers.length = 0;
             for (const f of lvl.flyers) this.flyers.push(f);
-            this.pickup = lvl.pickup;
-            // Death respawns disarm the player (the pickup is back too).
-            this.hasWeapon = false;
+            // Play mode starts armed; the pickup is a training-only gate.
+            this.pickup = null;
+            this.hasWeapon = true;
             this.weaponCooldown = 0;
             this.cam.snapTo(this.player.x + this.player.w / 2, VIEW_H / 2);
         },
@@ -190,11 +190,12 @@
         startRun() {
             this.score = 0; this.lives = 3; this.timeLeft = 300;
             this.deathTimer = 0; this.winTimer = 0;
-            this.hasWeapon = false;    // pickup-gated; collect beam at col 115
+            this.hasWeapon = true;     // play mode starts armed (pickup is a training-only gate)
             this.weaponCooldown = 0;
             this.beams.length = 0;
             this.explosions.length = 0;
             this.loadLevel();
+            this.pickup = null;        // hide the training pickup in play mode
             // Consume any rising-edge shoot input left over from the menu
             // click that started the run, otherwise we'd fire on spawn frame.
             Input.pressed('shoot');

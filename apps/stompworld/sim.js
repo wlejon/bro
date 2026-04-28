@@ -251,6 +251,12 @@
         const pickup  = level.pickup;   // {x, y, w, h} or null
         const timeLimit = level.timeLimit != null ? level.timeLimit : 600;
         const stallDecisions = level.stallDecisions != null ? level.stallDecisions : 0;
+        // Stall epsilon: how far past the agent's lifetime x-extents it has
+        // to reach for a step to count as "exploring new ground." Tracking
+        // both max and min extents lets legitimate backtracking (e.g. for
+        // the pickup) refresh the counter while still catching cyclic
+        // motion — once the agent has visited the full reachable range,
+        // bouncing between two flyers stops growing either extent.
         const stallEpsilonPx = level.stallEpsilonPx != null ? level.stallEpsilonPx : 8;
 
         let spawnX = level.spawn.x;
@@ -293,7 +299,9 @@
             // Stall detection (kept inline rather than via grid kit's
             // StallDetector — that one has no snapshot/restore which the
             // MCTS environment contract requires).
-            stallBestX: 0,
+            stallMaxX: 0,
+            stallMinX: 0,
+            stallBestPhi: 0,
             stallSince: 0,
             stalledOut: false,
         };
@@ -362,7 +370,9 @@
             tilemap.resetDamage();
             recomputePhase();
             state.prevPhi = computePhi();
-            state.stallBestX = state.player.x;
+            state.stallMaxX = state.player.x;
+            state.stallMinX = state.player.x;
+            state.stallBestPhi = state.prevPhi;
             state.stallSince = 0;
             state.stalledOut = false;
         }
@@ -416,7 +426,9 @@
                 beamFlyerKillsTotal: state.beamFlyerKillsTotal,
                 phase: state.phase,
                 prevPhi: state.prevPhi,
-                stallBestX: state.stallBestX,
+                stallMaxX: state.stallMaxX,
+                stallMinX: state.stallMinX,
+                stallBestPhi: state.stallBestPhi,
                 stallSince: state.stallSince,
                 stalledOut: state.stalledOut,
             };
@@ -454,7 +466,9 @@
             state.beamFlyerKillsTotal = snap.beamFlyerKillsTotal | 0;
             state.phase = snap.phase | 0;
             state.prevPhi = snap.prevPhi != null ? snap.prevPhi : computePhi();
-            state.stallBestX = snap.stallBestX != null ? snap.stallBestX : state.player.x;
+            state.stallMaxX = snap.stallMaxX != null ? snap.stallMaxX : state.player.x;
+            state.stallMinX = snap.stallMinX != null ? snap.stallMinX : state.player.x;
+            state.stallBestPhi = snap.stallBestPhi != null ? snap.stallBestPhi : state.prevPhi;
             state.stallSince = snap.stallSince != null ? snap.stallSince : 0;
             state.stalledOut = !!snap.stalledOut;
         }
@@ -528,8 +542,6 @@
             if (!state.alive || state.won) return { reward: 0, done: true };
 
             const isFire = (action === 6) && state.hasWeapon && state.weaponCooldown <= 0;
-            const preX = state.player.x;
-            const preOnGround = state.player.onGround;
             let stompKills = 0;
             let died  = false;
             let won   = false;
@@ -537,7 +549,6 @@
             let pixelsThis = 0;
             let beamStomps = 0;
             let beamFlyers = 0;
-            let leftGround = false;
 
             for (let t = 0; t < FRAME_SKIP; t++) {
                 const input = actionToInput(isFire ? 0 : action, t === 0, state.prevJumpHeld);
@@ -546,7 +557,6 @@
                 state.tick++;
                 state.timeLeft -= FIXED_DT_MS / 1000;
                 stompKills += ev.kills | 0;
-                if (preOnGround && !state.player.onGround) leftGround = true;
                 if (ev.killed) { died = true; break; }
                 if (isFire) {
                     // Sweep angle: linearly interpolated across the FRAME_SKIP
@@ -575,10 +585,14 @@
             else if (state.weaponCooldown > 0) state.weaponCooldown--;
 
             // Phase + potential-based shaping bonus (γΦ' − Φ).
+            const prevPhase = state.phase;
             recomputePhase();
             const phi = computePhi();
             const shapingBonus = PBRS_GAMMA * phi - state.prevPhi;
             state.prevPhi = phi;
+            // Phi units change with phase (distance to a different target),
+            // so the goal-progress baseline resets on every transition.
+            if (state.phase !== prevPhase) state.stallBestPhi = phi;
 
             let reward = REW_PER_PIXEL * pixelsThis
                        + REW_STOMP * stompKills
@@ -587,34 +601,44 @@
                        + (pickupHit ? REW_PICKUP : 0)
                        + shapingBonus;
 
-            // Stall: only termination signal for truly idle agents. Any of
-            // these counts as "doing something" and resets the counter:
-            //   - new forward x progress (best-x grows)
-            //   - meaningful displacement in any direction (e.g. backtracking
-            //     for the pickup, sidestepping a flyer)
-            //   - jumped this decision (left ground)
-            //   - beam fire actually hit (cleared pixels or killed)
-            //   - stomp kill, pickup grab, or flag touch
-            // This lets the agent stand still briefly to wait for a flyer to
-            // pass without being penalized as stuck — only a genuinely-frozen
-            // agent (no movement, no actions, no hits) can stall out, and the
-            // stallDecisions budget is now generous enough that a few seconds
-            // of patience is fine.
-            const dx = Math.abs(state.player.x - preX);
-            const productive =
-                state.player.x > state.stallBestX + stallEpsilonPx
-                || dx > stallEpsilonPx
-                || leftGround
-                || pixelsThis > 0
+            // Stall: counter resets when any of three signals fire —
+            //   1. lifetime x-extents grew (covered new ground)
+            //   2. Φ improved past its phase-best (closer to current
+            //      target — pickup, spawn, or flag depending on phase)
+            //   3. a productive action landed (kill, pickup, beam hit, win)
+            // Each signal covers the others' blind spots. Extents handle
+            // exploration; Φ-progress handles return trips through already-
+            // explored ground (e.g. walking back to the flag after clearing
+            // terrain — neither extent grows, but distance-to-flag improves
+            // every step). Productive actions cover destroying terrain in
+            // place. Pure cyclic motion (oscillating between two flyers,
+            // jumping in place) refreshes none of these and the counter
+            // accumulates until the episode is terminated.
+            const productiveAction =
+                pixelsThis > 0
                 || stompKills > 0
                 || beamStomps > 0
                 || beamFlyers > 0
                 || pickupHit
                 || won;
-            if (state.player.x > state.stallBestX + stallEpsilonPx) {
-                state.stallBestX = state.player.x;
+            let exploredNew = false;
+            if (state.player.x > state.stallMaxX + stallEpsilonPx) {
+                state.stallMaxX = state.player.x;
+                exploredNew = true;
             }
-            if (productive) state.stallSince = 0;
+            if (state.player.x < state.stallMinX - stallEpsilonPx) {
+                state.stallMinX = state.player.x;
+                exploredNew = true;
+            }
+            // Φ improvement threshold: 1 tile of progress toward target.
+            // (PBRS_SCALE is per-tile, so 1 × PBRS_SCALE = 1 tile.)
+            const phiEps = PBRS_SCALE;
+            let goalProgress = false;
+            if (phi > state.stallBestPhi + phiEps) {
+                state.stallBestPhi = phi;
+                goalProgress = true;
+            }
+            if (exploredNew || goalProgress || productiveAction) state.stallSince = 0;
             else state.stallSince++;
             const stalled = stallDecisions > 0 && state.stallSince >= stallDecisions;
 

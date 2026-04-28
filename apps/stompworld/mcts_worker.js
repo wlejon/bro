@@ -55,7 +55,7 @@ function buildSim() {
         stompers: lvl.stompers, flyers: lvl.flyers,
         flag: lvl.flag, pickup: lvl.pickup,
         timeLimit: TRAIN_TIME_LIMIT,
-        stallDecisions: 90,
+        stallDecisions: 50,
     });
     return { sim, baseSpawnY: lvl.spawn.y };
 }
