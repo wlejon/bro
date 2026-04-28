@@ -88,26 +88,6 @@
     store.load({ best: 0 });
 
     // ── Game state ───────────────────────────────────────────────────────────
-    // Flyer template: returns a populated runtime entity from a level entity.
-    function makeFlyer(e) {
-        const bob = e.kind === 'flyer_bob';
-        const cx = e.col * TILE + TILE / 2;
-        const cy = e.row * TILE + TILE / 2;
-        const FLY_W = 24, FLY_H = 16;
-        return {
-            x: cx - FLY_W / 2, y: cy - FLY_H / 2,
-            w: FLY_W, h: FLY_H,
-            vx: -80, vy: 0,
-            spawnX: cx - FLY_W / 2,
-            spawnY: cy - FLY_H / 2,
-            patrolRange: 96,
-            bobAmp:  bob ? 32 : 0,
-            bobFreq: bob ? Math.PI : 0,    // ~2 s period
-            bobT:    0,
-            animT:   0,
-        };
-    }
-
     const Game = {
         tilemap: null,
         cam: null,
@@ -115,6 +95,7 @@
         stompers: [],
         flyers: [],
         flag: null,
+        pickup: null,                // {x, y, w, h, t}; null after collected
         score: 0,
         lives: 3,
         timeLeft: 300,
@@ -122,15 +103,16 @@
         deathTimer: 0,  // > 0 = death anim playing
         winTimer:   0,  // > 0 = win anim playing
         spawn: { x: 0, y: 0 },
-        // Catharsis weapon — currently always-on in play mode for testing.
-        // The training rewards/agent wiring still treat the weapon as
-        // pickup-gated; that integration lands with the AI sim refactor.
-        // Killed enemies stay in flyers[]/stompers[] with ragdoll=true so
-        // collision skips them and render draws them tumbling.
+        // Beam weapon — pickup-gated. Player walks unarmed until they
+        // collect the beam canister at col 115, after which they can fire
+        // mouse-aimed beams that carve destructible terrain. Killed enemies
+        // stay in arrays with ragdoll=true so collision skips them and the
+        // renderer draws them tumbling.
         hasWeapon: false,
         weaponCooldown: 0,           // ms until next shot allowed
         beams: [],                   // [{x0,y0,x1,y1,ttl,ttlMax}]
         explosions: [],              // [{cx,cy,rMax,ttl,ttlMax}]
+        pickupAnimT: 0,              // bob phase for the pickup sprite
         // Tunables.
         BEAM_THICKNESS: 8,
         BEAM_LENGTH:    600,
@@ -138,40 +120,23 @@
         WEAPON_COOLDOWN_MS: 250,
         BEAM_TTL_MS:    80,
         EXPLOSION_TTL_MS: 320,
+        // Score values (per event).
+        SCORE_PER_PIXEL:   0.05,     // ~50 per fully-cleared tile
+        SCORE_STOMP:       100,
+        SCORE_BEAM_STOMP:  100,
+        SCORE_BEAM_FLYER:  500,      // highest per-event reward
+        SCORE_PICKUP:      300,
+        SCORE_FLAG:        1000,
 
         loadLevel() {
-            const lvl = Level.load({ tileSize: TILE, destructible: true });
+            const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
             this.tilemap  = lvl.tilemap;
-            this.stompers = [];
-            this.flyers   = [];
-            this.flag = null;
-
-            for (const e of lvl.entities) {
-                if (e.kind === 'player') {
-                    this.spawn.x = e.x;
-                    this.spawn.y = e.y;
-                } else if (e.kind === 'stomper') {
-                    // Spawn so the stomper's feet sit at the bottom of its tile cell.
-                    // The level placement convention: 'G' is on the row directly above ground,
-                    // so its bottom-edge aligns with the top of the ground row.
-                    this.stompers.push({
-                        x: e.x + 2,
-                        y: (e.row + 1) * TILE - 24,
-                        w: 28, h: 24,
-                        vx: -50, vy: 0,
-                        onGround: false,
-                        alive: true,
-                        squashTimer: 0,
-                        animT: 0,
-                    });
-                } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
-                    this.flyers.push(makeFlyer(e));
-                } else if (e.kind === 'flag') {
-                    this.flag = { x: e.x, y: e.y * 0 + (e.row * TILE) - 64, h: 96, w: 32 };
-                    // Anchor the flag's foot to the ground row immediately below its spawn.
-                    this.flag.y = e.row * TILE - this.flag.h + TILE;
-                }
-            }
+            this.stompers = lvl.stompers;
+            this.flyers   = lvl.flyers;
+            this.flag     = lvl.flag;
+            this.pickup   = lvl.pickup;
+            this.spawn.x  = lvl.spawn.x;
+            this.spawn.y  = lvl.spawn.y;
 
             this.player = Platformer.createBody({
                 x: this.spawn.x, y: this.spawn.y - 4,
@@ -206,36 +171,26 @@
             this.player.vx = 0; this.player.vy = 0;
             this.player.coyote = 0; this.player.buffer = 0;
             this.player.facing = 1;
-            // Re-create the mob layout from the level definition so
-            // squashed/displaced stompers come back when the player
-            // respawns. Keeps the array reference stable in case the
-            // renderer holds onto it.
+            // Rebuild mob + pickup layout from the level definition so
+            // squashed stompers and a collected pickup come back when the
+            // player respawns. Reuse the existing arrays so the renderer's
+            // references stay stable.
+            const lvl = Level.buildLevel({ tileSize: TILE });
             this.stompers.length = 0;
+            for (const s of lvl.stompers) this.stompers.push(s);
             this.flyers.length = 0;
-            const lvl = Level.load({ tileSize: TILE });
-            for (const e of lvl.entities) {
-                if (e.kind === 'stomper') {
-                    this.stompers.push({
-                        x: e.x + 2,
-                        y: (e.row + 1) * TILE - 24,
-                        w: 28, h: 24,
-                        vx: -50, vy: 0,
-                        onGround: false,
-                        alive: true,
-                        squashTimer: 0,
-                        animT: 0,
-                    });
-                } else if (e.kind === 'flyer' || e.kind === 'flyer_bob') {
-                    this.flyers.push(makeFlyer(e));
-                }
-            }
+            for (const f of lvl.flyers) this.flyers.push(f);
+            this.pickup = lvl.pickup;
+            // Death respawns disarm the player (the pickup is back too).
+            this.hasWeapon = false;
+            this.weaponCooldown = 0;
             this.cam.snapTo(this.player.x + this.player.w / 2, VIEW_H / 2);
         },
 
         startRun() {
             this.score = 0; this.lives = 3; this.timeLeft = 300;
             this.deathTimer = 0; this.winTimer = 0;
-            this.hasWeapon = true;     // testbed: weapon equipped from spawn
+            this.hasWeapon = false;    // pickup-gated; collect beam at col 115
             this.weaponCooldown = 0;
             this.beams.length = 0;
             this.explosions.length = 0;
@@ -251,10 +206,12 @@
     const hudScore = document.getElementById('hud-score');
     const hudLives = document.getElementById('hud-lives');
     const hudTime  = document.getElementById('hud-time');
+    const hudBeam  = document.getElementById('hud-beam');
     function updateHud() {
         hudScore.textContent = Game.score;
         hudLives.textContent = Game.lives;
         hudTime.textContent  = Math.max(0, Math.ceil(Game.timeLeft));
+        if (hudBeam) hudBeam.style.display = Game.hasWeapon ? '' : 'none';
     }
 
     // ── Stomper update ──────────────────────────────────────────────────────
@@ -380,7 +337,7 @@
                 s.alive = false;
                 s.squashTimer = 350;
                 p.vy = -380;
-                Game.score += 100;
+                Game.score += Game.SCORE_STOMP;
                 Audio.stomp();
                 updateHud();
             } else {
@@ -481,7 +438,13 @@
         const r = Game.tilemap.damageBeam(x0, y0, x1, y1, Game.BEAM_THICKNESS, true);
         const hx = r.hitX, hy = r.hitY;
         const explosionR = r.hit ? Game.EXPLOSION_R : 0;
-        if (explosionR > 0) Game.tilemap.damageCircle(hx, hy, explosionR);
+        let pixelsCleared = r.cleared | 0;
+        if (explosionR > 0) {
+            pixelsCleared += Game.tilemap.damageCircle(hx, hy, explosionR) | 0;
+        }
+        if (pixelsCleared > 0) {
+            Game.score += Math.floor(pixelsCleared * Game.SCORE_PER_PIXEL);
+        }
 
         // Visuals.
         Game.beams.push({
@@ -503,16 +466,18 @@
         for (const f of Game.flyers) {
             if (f.ragdoll) continue;
             if (entityHit(f, x0, y0, hx, hy, halfBeam, hx, hy, explosionR)) {
-                ragdollify(f, launchDir); killedAny = true; Game.score += 200;
+                ragdollify(f, launchDir); killedAny = true;
+                Game.score += Game.SCORE_BEAM_FLYER;
             }
         }
         for (const s of Game.stompers) {
             if (!s.alive || s.ragdoll) continue;
             if (entityHit(s, x0, y0, hx, hy, halfBeam, hx, hy, explosionR)) {
-                ragdollify(s, launchDir); killedAny = true; Game.score += 100;
+                ragdollify(s, launchDir); killedAny = true;
+                Game.score += Game.SCORE_BEAM_STOMP;
             }
         }
-        if (killedAny) updateHud();
+        if (killedAny || pixelsCleared > 0) updateHud();
 
         Audio.beam();
         if (r.hit) Audio.boom();
@@ -545,6 +510,20 @@
             Game.explosions = Game.explosions.filter((e) => e.ttl > 0);
     }
 
+    // Beam pickup: AABB overlap arms the player and removes the pickup.
+    function checkPickup() {
+        if (!Game.pickup || Game.hasWeapon) return;
+        const p = Game.player;
+        const pk = Game.pickup;
+        if (p.x + p.w <= pk.x || p.x >= pk.x + pk.w) return;
+        if (p.y + p.h <= pk.y || p.y >= pk.y + pk.h) return;
+        Game.hasWeapon = true;
+        Game.pickup = null;
+        Game.score += Game.SCORE_PICKUP;
+        Audio.select();
+        updateHud();
+    }
+
     // ── Win / lose check ─────────────────────────────────────────────────────
     function checkWinLose() {
         const p = Game.player;
@@ -557,7 +536,7 @@
         if (Game.flag && Game.winTimer === 0) {
             const f = Game.flag;
             if (p.x + p.w >= f.x + 8 && p.x <= f.x + f.w - 8) {
-                Game.score += 1000;
+                Game.score += Game.SCORE_FLAG;
                 Audio.win();
                 Game.winTimer = 1500;
                 updateHud();
@@ -687,6 +666,15 @@
         Art.drawFlag(ctx, Math.round(f.x - Game.cam.x), Math.round(f.y - Game.cam.y));
     }
 
+    function drawPickup() {
+        if (!Game.pickup) return;
+        const pk = Game.pickup;
+        Art.drawPickup(ctx,
+            Math.round(pk.x - Game.cam.x),
+            Math.round(pk.y - Game.cam.y),
+            Game.pickupAnimT);
+    }
+
     // Letterbox the fixed VIEW_W × VIEW_H virtual viewport into the actual
     // canvas surface (which the bro engine sizes from the CSS layout box, not
     // from canvas.width). Aspect is preserved; bars are drawn black.
@@ -713,11 +701,12 @@
         } else if (Game.tilemap) {
             Game.tilemap.draw(ctx, Game.cam.x, Game.cam.y, VIEW_W, VIEW_H);
             drawFlag();
+            drawPickup();
             drawStompers();
             drawFlyers();
             drawHero();
             drawBeamsExplosions();
-            drawAimCursor();
+            if (Game.hasWeapon) drawAimCursor();
         }
         ctx.restore();
     }
@@ -799,7 +788,9 @@
         for (const f of Game.flyers)   stepFlyer(f, dt);
         handleStompers();
         handleFlyers();
+        checkPickup();
         checkWinLose();
+        Game.pickupAnimT += dt;
 
         Game.cam.follow(Game.player.x + Game.player.w / 2, VIEW_H / 2);
     }
@@ -897,16 +888,15 @@
         poolCapacity: 32,
 
         start() {
-            const lvl = Level.load({ tileSize: TILE });
+            // The Training-mode renderer mirrors the live worker's sim
+            // visually. We need a destructible tilemap on this side too so
+            // applyDamageDiff() lands; the live worker ships a sparse diff
+            // every render frame and we mirror it before draw().
+            const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
             this.lvlTilemap = lvl.tilemap;
-            let flag = null;
-            for (const e of lvl.entities) {
-                if (e.kind === 'flag') {
-                    flag = { x: e.x, w: 32, h: 96, y: e.row * TILE - 64 };
-                    flag.y = e.row * TILE - flag.h + TILE;
-                }
-            }
-            this.lvlFlag = flag;
+            this.lvlFlag    = lvl.flag;
+            this.lvlPickup  = lvl.pickup;
+            this.pickupAnimT = 0;
 
             this.cam = Camera2D.create({
                 viewW: VIEW_W, viewH: VIEW_H,
@@ -1114,10 +1104,18 @@
             // worker is faster than the period; if MCTS is slower than
             // real time the worker can't keep up and we just don't send.
             this.tryReleaseLiveCredit();
+            this.pickupAnimT += dt;
             if (this.snap && this.snap.player) {
                 this.cam.follow(
                     this.snap.player.x + this.snap.player.w / 2, VIEW_H / 2);
                 this.diffSnapAudio(dt);
+            }
+            // Mirror destruction onto our local tilemap. The live worker
+            // ships a sparse Int32Array diff in each render snap; applying
+            // it here resets to pristine and re-applies, so the diff is
+            // authoritative even across episode resets (which ship null).
+            if (this.snap && this.lvlTilemap.destructible) {
+                this.lvlTilemap.applyDamageDiff(this.snap.damageDiff || null);
             }
         },
 
@@ -1181,6 +1179,13 @@
                 Art.drawFlag(ctx,
                     Math.round(f.x - this.cam.x),
                     Math.round(f.y - this.cam.y));
+            }
+            if (this.lvlPickup && (!this.snap || !this.snap.pickupCollected)) {
+                const pk = this.lvlPickup;
+                Art.drawPickup(ctx,
+                    Math.round(pk.x - this.cam.x),
+                    Math.round(pk.y - this.cam.y),
+                    this.pickupAnimT);
             }
             if (this.snap) {
                 for (const s of this.snap.stompers) {

@@ -252,11 +252,29 @@
         ctx.drawImage(flagCanvas, x, y);
     }
 
+    // Beam pickup: chunky 24×24 yellow-rimmed canister with a slow bob.
+    // x, y are top-left in world space; t is an animation phase (ms).
+    function drawPickup(ctx, x, y, t) {
+        const off = Math.sin((t || 0) * 0.005) * 2;
+        ctx.save();
+        ctx.translate(x, y + off);
+        ctx.fillStyle = '#222';
+        ctx.fillRect(0, 0, 24, 24);
+        ctx.fillStyle = '#ffd84d';
+        ctx.fillRect(2, 2, 20, 20);
+        ctx.fillStyle = '#e83b3b';
+        ctx.fillRect(6, 6, 12, 12);
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(10, 4, 4, 16);
+        ctx.fillRect(4, 10, 16, 4);
+        ctx.restore();
+    }
+
     global.Art = {
         TILE,
         HERO_W, HERO_H,
         STOMP_W, STOMP_H,
         FLY_W, FLY_H,
-        drawTile, drawHero, drawStomper, drawFlyer, drawFlag,
+        drawTile, drawHero, drawStomper, drawFlyer, drawFlag, drawPickup,
     };
 })(typeof window !== 'undefined' ? window : globalThis);
