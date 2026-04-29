@@ -76,7 +76,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 if(MSVC)
-    add_compile_options(/MP /permissive- /utf-8)
+    # Scope to CXX so these don't leak into nvcc-driven CUDA compilation
+    # (brogameagent's optional GPU backend). /MP in particular collides with
+    # nvcc's single-input-per-output model.
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:/MP>
+        $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+    )
 else()
     # Embedded JS bundles contain UTF-8 bytes > 127; require unsigned char
     # so string literals don't trip narrowing-conversion errors on platforms
