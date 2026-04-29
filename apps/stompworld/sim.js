@@ -57,10 +57,10 @@
     const STOMP_BOUNCE_VY = -380;
 
     // Reward shaping.
-    const REW_PER_PIXEL  = 0.0005;
+    const REW_PER_PIXEL  = 0.005;
     const REW_STOMP      = 1.0;
     const REW_BEAM_STOMP = 1.0;
-    const REW_BEAM_FLYER = 3.0;
+    const REW_BEAM_FLYER = 10.0;
     const REW_PICKUP     = 3.0;
     const REW_FLAG       = 1.5;
     const REW_DEATH      = -0.5;
@@ -292,6 +292,12 @@
             beamStompKillsTotal: 0,
             beamFlyerKillsTotal: 0,
 
+            // Beam segments fired during the most recent step(). Cleared
+            // at the start of each step; populated by fireOneBeam. Not
+            // part of the snapshot/restore contract — this is render-only
+            // ephemera consumed by the live worker after step() returns.
+            recentBeams: [],
+
             // Phase tracking & shaping.
             phase: 0,                    // 0 = pre-pickup, 1 = backtrack, 2 = flag-rush
             prevPhi: 0,                  // last potential value (for γΦ' − Φ)
@@ -367,6 +373,7 @@
             state.pixelsDestroyed = 0;
             state.beamStompKillsTotal = 0;
             state.beamFlyerKillsTotal = 0;
+            state.recentBeams.length = 0;
             tilemap.resetDamage();
             recomputePhase();
             state.prevPhi = computePhi();
@@ -473,15 +480,53 @@
             state.stalledOut = !!snap.stalledOut;
         }
 
-        // ── Beam fire (called per physics tick during a fire decision) ─────
-        function fireOneBeam(angleRel) {
+        // Pick a fire direction. Priority: nearest live enemy whose center
+        // lies within BEAM_LENGTH (auto-aim for kills). If no enemy in range,
+        // fall back to firing forward along facing — this is how the agent
+        // carves terrain. Cooldown is consumed either way, so wasting fires
+        // into empty space costs the agent.
+        function pickFireTarget() {
             const p = state.player;
+            const px = p.x + p.w / 2;
+            const py = p.y + p.h / 2;
+            let bestD2 = BEAM_LENGTH * BEAM_LENGTH;
+            let bestDx = 0, bestDy = 0;
+            let found = false;
+            const consider = (e) => {
+                if (!e.alive) return;
+                const dx = (e.x + e.w / 2) - px;
+                const dy = (e.y + e.h / 2) - py;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < bestD2) { bestD2 = d2; bestDx = dx; bestDy = dy; found = true; }
+            };
+            for (const s of state.stompers) consider(s);
+            for (const f of state.flyers) consider(f);
+            if (found) {
+                const d = Math.sqrt(bestD2) || 1;
+                return { ux: bestDx / d, uy: bestDy / d };
+            }
             const facing = p.facing < 0 ? -1 : 1;
-            // angleRel ∈ [ARC_THETA0, ARC_THETA1]; horizontal direction
-            // mirrors with facing. Up = negative y, so keep angle as-is for
-            // y component (cos/sin convention).
-            const ux = Math.cos(angleRel) * facing;
-            const uy = Math.sin(angleRel);
+            return { ux: facing, uy: 0 };
+        }
+
+        // ── Beam fire (called once per fire decision) ─────────────────────
+        // dir is a unit vector chosen by pickFireTarget — the player faces
+        // along its sign and the beam fires straight at the target.
+        //
+        // No bitmask carving here: traceBeam finds the hit point read-only,
+        // then the beam (and explosion if any) get pushed onto the tilemap's
+        // overlay list. solidAtPixel honors overlays, so subsequent physics
+        // and beam traces in the same step / same MCTS rollout see the
+        // carve-out without the bitmask actually being mutated. The caller
+        // (live/mcts worker) calls tilemap.commitOverlays() after the real
+        // applyAction to bake them in for rendering & persistence — that's
+        // the one place pixel iteration happens for fires.
+        function fireOneBeam(dir) {
+            const p = state.player;
+            const ux = dir.ux;
+            const uy = dir.uy;
+            if (ux > 0) p.facing = 1;
+            else if (ux < 0) p.facing = -1;
             const px = p.x + p.w / 2;
             const py = p.y + p.h / 2;
             const startOff = p.w / 2 + 2;
@@ -489,11 +534,21 @@
             const y0 = py + uy * startOff;
             const x1 = px + ux * BEAM_LENGTH;
             const y1 = py + uy * BEAM_LENGTH;
-            const r = tilemap.damageBeam(x0, y0, x1, y1, BEAM_THICKNESS, true);
+            const r = tilemap.traceBeam(x0, y0, x1, y1);
             const hx = r.hitX, hy = r.hitY;
+            tilemap.pushOverlayBeam(x0, y0, hx, hy, BEAM_THICKNESS);
             const explosionR = r.hit ? EXPLOSION_R : 0;
-            let cleared = r.cleared | 0;
-            if (explosionR > 0) cleared += tilemap.damageCircle(hx, hy, explosionR) | 0;
+            if (explosionR > 0) tilemap.pushOverlayCircle(hx, hy, explosionR);
+            // Approximate cleared-pixel count from shape area (the exact
+            // count would require a pixel scan we explicitly want to skip).
+            // The agent's reward signal points the right direction — long
+            // beams + explosions → bigger cleared, short / no-hit beams →
+            // smaller — without the per-pixel cost.
+            let cleared = (r.len * BEAM_THICKNESS) | 0;
+            if (explosionR > 0) cleared += (Math.PI * explosionR * explosionR) | 0;
+            // Stash this shot's segment for the live worker to ferry over
+            // to the renderer.
+            state.recentBeams.push({ x0, y0, x1: hx, y1: hy });
             const half = BEAM_THICKNESS / 2 + 2;
             let stompKills = 0, flyerKills = 0;
             for (const s of state.stompers) {
@@ -541,7 +596,14 @@
         function step(action) {
             if (!state.alive || state.won) return { reward: 0, done: true };
 
-            const isFire = (action === 6) && state.hasWeapon && state.weaponCooldown <= 0;
+            // Reset render-only beam buffer for this decision. fireOneBeam
+            // pushes one entry per shot below; the live worker reads it
+            // after step() to ship beams to the main thread.
+            state.recentBeams.length = 0;
+
+            const fireDir = (action === 6 && state.hasWeapon && state.weaponCooldown <= 0)
+                ? pickFireTarget() : null;
+            const isFire = !!fireDir;
             let stompKills = 0;
             let died  = false;
             let won   = false;
@@ -558,12 +620,10 @@
                 state.timeLeft -= FIXED_DT_MS / 1000;
                 stompKills += ev.kills | 0;
                 if (ev.killed) { died = true; break; }
-                if (isFire) {
-                    // Sweep angle: linearly interpolated across the FRAME_SKIP
-                    // ticks. With 4 ticks the four shots cover the full arc.
-                    const u = FRAME_SKIP > 1 ? (t / (FRAME_SKIP - 1)) : 0.5;
-                    const ang = ARC_THETA0 + (ARC_THETA1 - ARC_THETA0) * u;
-                    const r = fireOneBeam(ang);
+                if (isFire && t === 0) {
+                    // One beam per fire decision, auto-aimed at the nearest
+                    // live enemy chosen above. Cooldown gates re-fire.
+                    const r = fireOneBeam(fireDir);
                     pixelsThis += r.cleared;
                     beamStomps += r.stompKills;
                     beamFlyers += r.flyerKills;
@@ -678,6 +738,7 @@
             get weaponCooldown() { return state.weaponCooldown; },
             get pixelsDestroyed(){ return state.pixelsDestroyed; },
             get phase()          { return state.phase; },
+            get recentBeams()    { return state.recentBeams; },
             tile: TILE,
             frameSkip: FRAME_SKIP,
             numActions: 7,

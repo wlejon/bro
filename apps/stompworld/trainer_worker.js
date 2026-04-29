@@ -69,7 +69,7 @@ function safeReadText(path) {
 // during MCTS rollouts and BC episodes; without it, fire actions are
 // silently no-ops on the trainer side.
 function buildAgent() {
-    const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
+    const lvl = Level.buildLevel({ tileSize: TILE, destructible: true, trackDamagedTiles: false });
     const sim = SwSim.create({
         tilemap: lvl.tilemap,
         spawn: lvl.spawn,

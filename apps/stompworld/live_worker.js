@@ -2,16 +2,18 @@
 // best-crop substrate that the main thread feeds it.
 //
 // One worker, one sim. Per decision:
-//   1. Build a coarse state signature for the failure tape.
-//   2. MCTS-decide using the current network weights, with the failure
-//      tape biasing the prior away from recent fatal actions at this sig.
+//   1. Build a coarse state signature for the history tapes.
+//   2. MCTS-decide using the current network weights, with both history
+//      tapes (failure + success) biasing the prior away from previously-
+//      walked (sig, action) pairs so search keeps probing alternatives.
 //   3. Step the sim, append a (obs, visits, reward) tuple, post a render
 //      snapshot to main.
 // On terminal:
 //   - Post tuples + trajectory metadata to main (which forwards tuples
 //     to the trainer worker and ingests the trajectory into the pool).
-//   - If the terminal was a death/stall/timeout, splice the last K
-//     decisions into the failure tape so we don't repeat the line.
+//   - Splice the last K decisions into the failure tape on death/stall/
+//     timeout, or into the success tape on flag — either way, identical
+//     replays of that line are suppressed in future searches.
 //   - Apply the next pending seed (if any) and start a fresh episode.
 //
 // Pacing: a wall-clock target period (~67 ms per decision = the same
@@ -40,7 +42,7 @@ for (const p of SHARED) {
 const TILE = 32;
 
 function buildSim() {
-    const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
+    const lvl = Level.buildLevel({ tileSize: TILE, destructible: true, trackDamagedTiles: false });
     const sim = SwSim.create({
         tilemap: lvl.tilemap,
         spawn: lvl.spawn,
@@ -58,13 +60,22 @@ function buildSim() {
 
 const { sim, baseSpawnY, defaultSpawnX } = buildSim();
 
-// FailureTape from the brogameagent grid kit. Records (sig, action) pairs
-// from the tail of failed episodes; emits a per-action multiplier capped
-// between `floor` and 1.0 that we apply to the network prior at every
-// MCTS expansion (via play_agent's priorAdjust hook). Caller computes the
-// signature string — we use a coarse (col, row, onGround, vxSign) tuple
-// so distinct micro-positions hash to the same line.
-const tape = bro.ai.game.grid.createFailureTape({
+// Two FailureTapes from the grid kit, used as a "history tape" pair —
+// one records the tail of failed episodes, the other records the tail of
+// flag-success episodes. Both apply the same suppression mechanic
+// (per-action prior multiplier capped between `floor` and 1.0). The intent
+// is novelty pressure: every search at a familiar (sig, action) is biased
+// away from the recorded line regardless of whether that line ended in
+// death OR success, so MCTS keeps probing alternatives instead of grinding
+// the same trajectory. That gives the trainer richer policy targets across
+// episodes.
+const failureTape = bro.ai.game.grid.createFailureTape({
+    tapeDepth:    8,
+    ringCapacity: 200,
+    penalty:      0.1,
+    floor:        0.001,
+});
+const successTape = bro.ai.game.grid.createFailureTape({
     tapeDepth:    8,
     ringCapacity: 200,
     penalty:      0.1,
@@ -94,7 +105,13 @@ const agent = PlayAgent.create({
     dirichletAlpha: 0.0,
     dirichletEpsilon: 0.0,
     sigFn: buildSig,
-    priorAdjust: (sig, prior) => tape.applyPriors(sig, prior),
+    // Apply both tapes' multipliers. applyPriors returns a renormalized
+    // copy after multiplying; chain so the final prior is multiplied by
+    // failure-tape × success-tape suppressors.
+    priorAdjust: (sig, prior) => {
+        const a = failureTape.applyPriors(sig, prior);
+        return successTape.applyPriors(sig, a);
+    },
 });
 
 let pendingSeed = null;     // {startSnap, prefixActions?} or {spawnCol}
@@ -168,6 +185,13 @@ function makeSnap(extra) {
     // [wordIdx, value, ...] pairs — a few KB at most even after heavy
     // carving.
     const dmg = sim.tilemap.damageDiff();
+    // Beams fired this decision (0–FRAME_SKIP entries). Plain shape so
+    // structured-clone is cheap; main holds them on its own ttl timer
+    // for visual decay across multiple render frames.
+    const recent = sim.recentBeams;
+    const beams = recent.length
+        ? recent.map((b) => ({ x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 }))
+        : null;
     return Object.assign({
         tick: sim.tick,
         player: {
@@ -181,11 +205,12 @@ function makeSnap(extra) {
         weaponCooldown: sim.weaponCooldown | 0,
         phase: sim.phase | 0,
         damageDiff: dmg ? new Int32Array(dmg) : null,
+        beams,
         episodes, lastReason,
         bestX: bestXEpisode,
         decisions: decisionsTotal,
-        tapeSize: tape.size,
-        tapeCapacity: tape.capacity,
+        tapeSize: failureTape.size + successTape.size,
+        tapeCapacity: failureTape.capacity + successTape.capacity,
         netVersion: agent.netVersion,
         timeLeft: sim.timeLeft,
     }, extra || {});
@@ -203,16 +228,21 @@ function startEpisode() {
 const TAPE_LOOKBACK = 8;
 function endEpisode(reason) {
     const result = agent.endEpisode(reason);
-    if (reason === 'death' || reason === 'stall' || reason === 'timeout') {
-        // Build the tail of (sig, action) pairs from the parallel buffers
-        // and hand it to the grid-kit tape, which dedupes + ages internally.
+    // Route the tail to the appropriate history tape. Failures suppress
+    // the same fatal line; successes suppress the same winning line so
+    // future searches must find a *different* path to the flag.
+    const targetTape =
+        (reason === 'death' || reason === 'stall' || reason === 'timeout') ? failureTape :
+        (reason === 'flag') ? successTape :
+        null;
+    if (targetTape) {
         const len = Math.min(sigList.length, result.actions.length);
         const start = Math.max(0, len - TAPE_LOOKBACK);
         const tail = [];
         for (let i = start; i < len; i++) {
             tail.push({ sig: sigList[i], action: result.actions[i] });
         }
-        if (tail.length) tape.recordFailure(tail);
+        if (tail.length) targetTape.recordFailure(tail);
     }
     self.postMessage({
         type: 'tuples',
@@ -279,7 +309,8 @@ self.onmessage = (e) => {
     } else if (m.type === 'seed') {
         pendingSeed = m;
     } else if (m.type === 'clear_failures') {
-        tape.clear();
+        failureTape.clear();
+        successTape.clear();
     } else if (m.type === 'stop') {
         running = false;
     }

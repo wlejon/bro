@@ -153,6 +153,7 @@
             // can't blast through it. Bricks/pipes/Q-blocks are still fair game.
             indestructibleIds: [1],
             destructible,
+            trackDamagedTiles: !(opts && opts.trackDamagedTiles === false),
         });
 
         const entities = [];

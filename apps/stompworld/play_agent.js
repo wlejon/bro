@@ -156,6 +156,11 @@
             const obs = SwAgentObs.build(sim).slice();
             mcts.reset();
             const action = mcts.search();
+            // Drop any overlays MCTS may have pushed during search — its
+            // env.restore at the end of each iteration already truncated to
+            // the saved count, but be explicit so the next applyAction
+            // starts from a clean overlay slate before pushing real shapes.
+            if (sim.tilemap.clearOverlays) sim.tilemap.clearOverlays();
             const visits = mcts.rootVisits();
             pending.push({ obs, policyTarget: visits, reward: 0 });
             return action;
@@ -163,6 +168,10 @@
 
         function applyAction(action) {
             const out = sim.step(action);
+            // Bake the real action's overlay shapes (if any) into the
+            // bitmask. This is the one place per decision that pixel
+            // iteration runs for fires; MCTS rollouts pay zero pixel cost.
+            if (sim.tilemap.commitOverlays) sim.tilemap.commitOverlays();
             if (pending.length) pending[pending.length - 1].reward = out.reward;
             actionLog.push(action);
             totalReward += out.reward;
@@ -174,6 +183,7 @@
         // prefix from the best-crop pool before taking over with searches).
         function applyActionNoSearch(action) {
             const out = sim.step(action);
+            if (sim.tilemap.commitOverlays) sim.tilemap.commitOverlays();
             actionLog.push(action);
             totalReward += out.reward;
             if (sim.player.x > bestX) bestX = sim.player.x;

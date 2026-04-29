@@ -58,6 +58,13 @@
         const indestructible = new Uint8Array(256);
         for (const id of (opts.indestructibleIds || [])) indestructible[id] = 1;
         const destructible = !!opts.destructible;
+        // Renderer-side bookkeeping. The damagedTiles Set drives the scratch-
+        // canvas pass in draw(); workers never render, so they can opt out
+        // and skip the per-bit Set.add and the per-restore rebuild scan.
+        // This is a major MCTS perf lever once the agent starts firing —
+        // saveDamageSnapshot/restoreDamageSnapshot run 24× per decision in
+        // the live worker and rebuilding tile sets each time is wasted work.
+        const trackDamagedTiles = opts.trackDamagedTiles !== false;
         const widthPx  = cols * tileSize;
         const heightPx = rows * tileSize;
         const wordsPerRow = (widthPx + 31) >> 5;
@@ -72,6 +79,18 @@
         let scratchCanvas = null;  // Main thread only — reused per damaged tile
         let scratchCtx   = null;
         let pixelsCleared = 0;
+
+        // Overlay shapes — "negative regions" treated as cleared on top of
+        // the bitmask. fireOneBeam pushes here instead of carving pixels;
+        // saveOverlaySnapshot/restoreOverlaySnapshot are O(1) (record/truncate
+        // the count) so MCTS save/restore doesn't iterate any pixels. After a
+        // real (non-rollout) action the caller commitOverlays(), which bakes
+        // the shapes into the bitmask in a single pass — pixel iteration cost
+        // is paid once per real fire instead of once per MCTS iteration.
+        // Each entry has shape-specific fields plus precomputed query helpers.
+        const overlays = [];        // pool reused across episodes
+        let overlayCount = 0;       // logical length (entries [0..overlayCount-1])
+        let overlaySaveCount = 0;   // saved length for MCTS save/restore
 
         function idx(c, r) { return r * cols + c; }
         function get(c, r) {
@@ -104,7 +123,29 @@
             }
             const ipx = px | 0, ipy = py | 0;
             const w = bitmask[ipy * wordsPerRow + (ipx >> 5)];
-            return ((w >>> (ipx & 31)) & 1) !== 0;
+            if (((w >>> (ipx & 31)) & 1) === 0) return false;
+            // Overlay scan: if any pending negative shape covers this pixel,
+            // treat it as cleared. Count is small (MCTS rolls back via
+            // truncateOverlays; commit bakes them into the bitmask).
+            for (let i = 0; i < overlayCount; i++) {
+                const ov = overlays[i];
+                if (ov.kind === 0) {
+                    // circle
+                    const dx = ipx - ov.cx;
+                    const dy = ipy - ov.cy;
+                    if (dx * dx + dy * dy <= ov.r2) return false;
+                } else {
+                    // beam: rotated rectangle (length × 2*halfThickness)
+                    const rx = ipx - ov.x0;
+                    const ry = ipy - ov.y0;
+                    const along = rx * ov.ux + ry * ov.uy;
+                    if (along < 0 || along > ov.len) continue;
+                    const perp = rx * ov.nx + ry * ov.ny;
+                    if (perp < -ov.half || perp > ov.half) continue;
+                    return false;
+                }
+            }
+            return true;
         }
 
         function setRows(rowStrings, charMap) {
@@ -143,7 +184,7 @@
             }
             pristineMask = new Uint32Array(bitmask);
             damagedWords = new Map();
-            damagedTiles = new Set();
+            damagedTiles = trackDamagedTiles ? new Set() : null;
             pixelsCleared = 0;
         }
 
@@ -160,6 +201,7 @@
         // after applyDamageDiff/resetDamage, where a wholesale change makes
         // incremental tracking infeasible. Cost scales with damaged words.
         function rebuildDamagedTiles() {
+            if (!damagedTiles) return;
             damagedTiles.clear();
             if (!damagedWords) return;
             for (const [wIdx, cur] of damagedWords) {
@@ -199,7 +241,7 @@
             bitmask[wIdx] = next;
             if (next === pristineMask[wIdx]) damagedWords.delete(wIdx);
             else damagedWords.set(wIdx, next >>> 0);
-            damagedTiles.add(tr * cols + tc);
+            if (damagedTiles) damagedTiles.add(tr * cols + tc);
             return true;
         }
 
@@ -320,42 +362,106 @@
             return (((v + (v >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
         }
 
-        // ── MCTS damage slot ───────────────────────────────────────────────
-        // Keeps a saved copy of damagedWords in this tilemap so MCTS searches
-        // can roll back per-iteration without serializing the damage state
-        // through the FFI as a JS Int32Array each snapshot/restore. One slot
-        // is enough — only one search runs at a time per worker.
-        let savedDamage = null;   // Map<wordIdx, value> | null
+        // ── Overlay shapes (deferred-carve) ────────────────────────────────
+        // Push circle/beam shapes onto the overlay list instead of carving
+        // bitmask pixels. solidAtPixel honors them (treats covered pixels as
+        // cleared). MCTS save/restore is just record/truncate the count.
+        // commitOverlays bakes them into the bitmask in one pass — pixel
+        // iteration cost is paid once per real fire instead of 24× / decision.
 
-        function saveDamageSnapshot() {
-            if (!destructible) return;
-            savedDamage = damagedWords.size > 0
-                ? new Map(damagedWords)
-                : new Map();
-        }
-
-        function restoreDamageSnapshot() {
-            if (!destructible || savedDamage === null) return;
-            for (const k of damagedWords.keys()) bitmask[k] = pristineMask[k];
-            damagedWords.clear();
-            pixelsCleared = 0;
-            for (const [k, v] of savedDamage) {
-                bitmask[k] = v;
-                damagedWords.set(k, v);
-                pixelsCleared += popcount(pristineMask[k] & ~v);
+        // Read-only centerline ray-march. Returns { hit, hitX, hitY, len }
+        // where (hitX, hitY) is the first solid-pixel impact (overlay-aware
+        // via solidAtPixel) along the segment, or the segment endpoint if no
+        // hit. Cheap (~len reads) — used by fireOneBeam to size the overlay.
+        function traceBeam(x0, y0, x1, y1) {
+            const dx = x1 - x0, dy = y1 - y0;
+            const len = Math.hypot(dx, dy);
+            if (len < 1) return { hit: false, hitX: x0, hitY: y0, len: 0 };
+            const ux = dx / len, uy = dy / len;
+            for (let s = 0; s <= len; s++) {
+                const cx = x0 + ux * s;
+                const cy = y0 + uy * s;
+                if (solidAtPixel(cx, cy)) {
+                    return { hit: true, hitX: cx, hitY: cy, len: s };
+                }
             }
-            rebuildDamagedTiles();
+            return { hit: false, hitX: x1, hitY: y1, len };
         }
 
-        function clearDamageSnapshot() { savedDamage = null; }
+        function pushOverlayCircle(cx, cy, r) {
+            if (!destructible) return;
+            // Reuse pooled entries if present; otherwise allocate.
+            let ov = overlays[overlayCount];
+            if (!ov) { ov = {}; overlays.push(ov); }
+            ov.kind = 0;
+            ov.cx = cx; ov.cy = cy; ov.r2 = r * r; ov.r = r;
+            overlayCount++;
+        }
+
+        function pushOverlayBeam(x0, y0, x1, y1, thickness) {
+            if (!destructible) return;
+            const dx = x1 - x0, dy = y1 - y0;
+            const len = Math.hypot(dx, dy);
+            if (len < 1) return;
+            let ov = overlays[overlayCount];
+            if (!ov) { ov = {}; overlays.push(ov); }
+            ov.kind = 1;
+            ov.x0 = x0; ov.y0 = y0;
+            ov.ux = dx / len; ov.uy = dy / len;
+            ov.nx = -ov.uy;   ov.ny = ov.ux;
+            ov.len = len;
+            ov.half = Math.max(1, thickness * 0.5);
+            ov.thickness = thickness;
+            overlayCount++;
+        }
+
+        // O(1). Used by MCTS env.snapshot — record where to truncate back to.
+        function saveOverlaySnapshot() { overlaySaveCount = overlayCount; }
+        // O(1). Used by MCTS env.restore — drop everything pushed since save.
+        function restoreOverlaySnapshot() { overlayCount = overlaySaveCount; }
+        function getOverlayCount() { return overlayCount; }
+
+        // Commit: bake current overlays into the bitmask using the existing
+        // pixel-precise damageBeam/damageCircle (which clear bits and update
+        // damagedWords for damageDiff). Returns total pixels actually cleared
+        // (sum of newly-flipped bits) so the caller can compute reward. This
+        // is the ONE place pixel iteration happens for fires.
+        function commitOverlays() {
+            if (!destructible || overlayCount === 0) return 0;
+            let total = 0;
+            for (let i = 0; i < overlayCount; i++) {
+                const ov = overlays[i];
+                if (ov.kind === 0) {
+                    total += damageCircle(ov.cx, ov.cy, ov.r) | 0;
+                } else {
+                    const x1 = ov.x0 + ov.ux * ov.len;
+                    const y1 = ov.y0 + ov.uy * ov.len;
+                    const r = damageBeam(ov.x0, ov.y0, x1, y1, ov.thickness, false);
+                    total += r.cleared | 0;
+                }
+            }
+            overlayCount = 0;
+            overlaySaveCount = 0;
+            return total;
+        }
+
+        function clearOverlays() { overlayCount = 0; overlaySaveCount = 0; }
+
+        // Backwards-compat aliases for existing call sites in play_agent /
+        // workers — same names, overlay-backed semantics.
+        function saveDamageSnapshot()    { saveOverlaySnapshot(); }
+        function restoreDamageSnapshot() { restoreOverlaySnapshot(); }
+        function clearDamageSnapshot()   { clearOverlays(); }
 
         // Reset all damage to pristine. Used on episode reset.
         function resetDamage() {
             if (!destructible) return;
             for (const k of damagedWords.keys()) bitmask[k] = pristineMask[k];
             damagedWords.clear();
-            damagedTiles.clear();
+            if (damagedTiles) damagedTiles.clear();
             pixelsCleared = 0;
+            overlayCount = 0;
+            overlaySaveCount = 0;
         }
 
         // ── Drawing ────────────────────────────────────────────────────────
@@ -437,9 +543,12 @@
             get, set, setRows,
             solidAt, solidAtPx, solidAtPixel,
             draw,
-            damageBeam, damageCircle,
+            damageBeam, damageCircle, traceBeam,
             damageDiff, applyDamageDiff, resetDamage,
             saveDamageSnapshot, restoreDamageSnapshot, clearDamageSnapshot,
+            pushOverlayCircle, pushOverlayBeam,
+            saveOverlaySnapshot, restoreOverlaySnapshot,
+            commitOverlays, clearOverlays, getOverlayCount,
             get pixelsCleared() { return pixelsCleared; },
             get damagedWordCount() { return damagedWords ? damagedWords.size : 0; },
             setSolid(id, isSolid) { solid[id] = isSolid ? 1 : 0; },

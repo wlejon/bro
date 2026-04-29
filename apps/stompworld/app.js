@@ -883,6 +883,11 @@
             episodes: 0, lastReason: 'fresh', bestX: 0,
             decisions: 0, tapeSize: 0, tapeCapacity: 0,
         },
+        // Beam visuals fired by the worker, decayed by ttl on the main
+        // thread. The worker reports each beam's segment endpoints once
+        // (the decision they fired); we keep them alive ~80 ms locally
+        // so they're visible across several render frames.
+        trainingBeams: [],
         mctsStats: [],
         warmupInfo: null,
         poolTopReturn: 0,
@@ -1031,6 +1036,25 @@
                 if (s.decisions   != null) this.liveStats.decisions   = s.decisions;
                 if (s.tapeSize     != null) this.liveStats.tapeSize     = s.tapeSize;
                 if (s.tapeCapacity != null) this.liveStats.tapeCapacity = s.tapeCapacity;
+                // Apply the damage diff exactly once per fresh snap. Doing
+                // this in update() instead burned 60 fps on a wholesale
+                // rebuildDamagedTiles every frame even when the diff hadn't
+                // changed — the hot path during heavy beam fire.
+                if (this.lvlTilemap && this.lvlTilemap.destructible) {
+                    this.lvlTilemap.applyDamageDiff(s.damageDiff || null);
+                }
+                // Pull any beams the worker fired this decision into the
+                // main-thread visual list. Each beam carries its own ttl
+                // so they decay across the next several frames regardless
+                // of when the next snap arrives.
+                if (s.beams && s.beams.length) {
+                    for (const b of s.beams) {
+                        this.trainingBeams.push({
+                            x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
+                            ttl: Game.BEAM_TTL_MS, ttlMax: Game.BEAM_TTL_MS,
+                        });
+                    }
+                }
             } else if (m.type === 'tuples') {
                 this.routeTuples(m);
             } else if (m.type === 'trajectory') {
@@ -1150,12 +1174,10 @@
                     this.snap.player.x + this.snap.player.w / 2, VIEW_H / 2);
                 this.diffSnapAudio(dt);
             }
-            // Mirror destruction onto our local tilemap. The live worker
-            // ships a sparse Int32Array diff in each render snap; applying
-            // it here resets to pristine and re-applies, so the diff is
-            // authoritative even across episode resets (which ship null).
-            if (this.snap && this.lvlTilemap.destructible) {
-                this.lvlTilemap.applyDamageDiff(this.snap.damageDiff || null);
+            // Decay any in-flight beam visuals fired by the worker.
+            if (this.trainingBeams.length) {
+                for (const b of this.trainingBeams) b.ttl -= dt;
+                this.trainingBeams = this.trainingBeams.filter((b) => b.ttl > 0);
             }
         },
 
@@ -1198,6 +1220,7 @@
                 // every frame when the agent hugs a flyer.
                 if (this.flyerCooldown <= 0 && cur.flyers) {
                     for (const f of cur.flyers) {
+                        if (!f.alive) continue;
                         const dx = (f.x + f.w / 2) - (b.x + b.w / 2);
                         const dy = (f.y + f.h / 2) - (b.y + b.h / 2);
                         if (dx * dx + dy * dy < 80 * 80) {
@@ -1237,11 +1260,32 @@
                         Math.round(s.y - this.cam.y), fr);
                 }
                 for (const fl of this.snap.flyers) {
+                    if (!fl.alive) continue;
                     if (!this.cam.visible(fl.x, fl.y, fl.w, fl.h)) continue;
                     const fr = (Math.floor(fl.animT / 150) % 2);
                     Art.drawFlyer(ctx,
                         Math.round(fl.x - this.cam.x),
                         Math.round(fl.y - this.cam.y), fr, fl.vx > 0);
+                }
+                // Beam visuals fired by the worker. Same look as play-mode
+                // beams (yellow outer + white-hot core, ttl-faded).
+                for (const b of this.trainingBeams) {
+                    const a = Math.max(0, b.ttl / b.ttlMax);
+                    ctx.save();
+                    ctx.lineCap = 'round';
+                    ctx.strokeStyle = 'rgba(255, 220, 80, ' + (a * 0.85).toFixed(3) + ')';
+                    ctx.lineWidth = Game.BEAM_THICKNESS + 6;
+                    ctx.beginPath();
+                    ctx.moveTo(b.x0 - this.cam.x, b.y0 - this.cam.y);
+                    ctx.lineTo(b.x1 - this.cam.x, b.y1 - this.cam.y);
+                    ctx.stroke();
+                    ctx.strokeStyle = 'rgba(255, 255, 240, ' + a.toFixed(3) + ')';
+                    ctx.lineWidth = Math.max(1, Game.BEAM_THICKNESS - 4);
+                    ctx.beginPath();
+                    ctx.moveTo(b.x0 - this.cam.x, b.y0 - this.cam.y);
+                    ctx.lineTo(b.x1 - this.cam.x, b.y1 - this.cam.y);
+                    ctx.stroke();
+                    ctx.restore();
                 }
                 const p = this.snap.player;
                 let frame = 0;
@@ -1364,6 +1408,9 @@
             if (key === 'c' || key === 'C') {
                 if (this.live) {
                     try { this.live.postMessage({ type: 'clear_failures' }); } catch (_) {}
+                }
+                for (const w of this.mctsWorkers || []) {
+                    try { w.postMessage({ type: 'clear_failures' }); } catch (_) {}
                 }
             }
         },
