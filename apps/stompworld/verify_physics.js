@@ -49,14 +49,14 @@
         for (let t = 0; t < 200; t++) {
             const cur = Math.floor(sim.player.x / TILE);
             if (cur >= runUntilCol) break;
-            sim.step(2);
+            sim.step(2 * 117);   // h0=2 (right), canonical flat encoding
             if (!sim.alive) break;
         }
         if (!sim.alive) return { ok: false, where: 'pre-jump death', col: Math.floor(sim.player.x / TILE) };
         // Fire jump-right for `jumpsToFire` decisions, then R repeatedly.
         let maxCol = Math.floor(sim.player.x / TILE);
         for (let t = 0; t < 60; t++) {
-            const a = t < jumpsToFire ? 5 : 2;
+            const a = (t < jumpsToFire ? 5 : 2) * 117;   // canonical flat encoding
             const out = sim.step(a);
             const c = Math.floor(sim.player.x / TILE);
             if (c > maxCol) maxCol = c;

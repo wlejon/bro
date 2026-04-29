@@ -33,6 +33,13 @@
 //   [9]  pickupCollected            {0, 1}
 //   [10] weaponCooldown / cooldownMax  clamp [0, 1]
 //   [11] phase / 2                  {0, 0.5, 1}
+//   [12] dx_to_seen_left  / 800     signed (≤ 0), 0 if no remembered enemy left
+//   [13] dx_to_seen_right / 800     signed (≥ 0), 0 if no remembered enemy right
+//
+// "Seen" = an enemy whose center has been within SEEN_RADIUS_PX of the
+// player at any point this episode. Persisted on each entity until the
+// episode ends. Lets the agent remember enemies it walked past pre-pickup
+// and navigate back to engage them after picking up the gun.
 
 (function (global) {
     'use strict';
@@ -45,7 +52,7 @@
     const ROWS_UP     = 4;
     const ROWS_DOWN   = 4;
 
-    const SELF_BLOCK_SIZE = 12;
+    const SELF_BLOCK_SIZE = 14;
 
     const RUN_SPEED   = 240;
     const MAX_FALL    = 900;
@@ -157,6 +164,28 @@
         _selfBuf[9] = sim.pickupCollected ? 1 : 0;
         _selfBuf[10] = clamp(sim.weaponCooldown / cooldownMax, 0, 1);
         _selfBuf[11] = (sim.phase || 0) / 2;
+
+        // Remembered-enemy compass. Scan every alive seen enemy and pick
+        // the closest one on each side of the player. Encoded as signed
+        // dx / 800 like the pickup/flag features so the network sees a
+        // consistent gradient. 0 means "nothing remembered on that side."
+        let nearestLeftDx  = 0;     // most-negative dx (closest left enemy)
+        let nearestRightDx = 0;     // smallest-positive dx (closest right enemy)
+        const px = p.x;
+        for (const s of sim.stompers) {
+            if (!s.alive || !s.seen) continue;
+            const dx = (s.x + s.w / 2) - (px + p.w / 2);
+            if (dx < 0 && (nearestLeftDx === 0 || dx > nearestLeftDx)) nearestLeftDx = dx;
+            if (dx > 0 && (nearestRightDx === 0 || dx < nearestRightDx)) nearestRightDx = dx;
+        }
+        for (const f of sim.flyers) {
+            if (!f.alive || !f.seen) continue;
+            const dx = (f.x + f.w / 2) - (px + p.w / 2);
+            if (dx < 0 && (nearestLeftDx === 0 || dx > nearestLeftDx)) nearestLeftDx = dx;
+            if (dx > 0 && (nearestRightDx === 0 || dx < nearestRightDx)) nearestRightDx = dx;
+        }
+        _selfBuf[12] = clamp(nearestLeftDx  / 800, -1, 0);
+        _selfBuf[13] = clamp(nearestRightDx / 800,  0, 1);
 
         const egoCol = Math.floor((p.x + p.w / 2) / TILE);
         const egoRow = Math.floor((p.y + p.h / 2) / TILE);

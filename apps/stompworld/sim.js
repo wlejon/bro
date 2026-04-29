@@ -2,22 +2,27 @@
 // physics. Used both by the live game (when driven by an AI agent) and as
 // the MCTS rollout substrate.
 //
-// Action space (7 discrete actions, indexed 0..6):
-//   0 idle
-//   1 left
-//   2 right
-//   3 jump (no horizontal)
-//   4 jump-left
-//   5 jump-right
-//   6 fire arc beam   (pickup-gated; no-op pre-pickup or while cooling down)
+// Action space — factored, 3 heads:
+//   head 0 (size 7): movement / fire mode
+//      0 idle, 1 left, 2 right, 3 jump, 4 jump-left, 5 jump-right,
+//      6 fire-at-target  (pickup-gated; no-op pre-pickup or while cooling)
+//   head 1 (size 13): fire-target column offset = h1 - 6   (range -6..+6)
+//   head 2 (size 9):  fire-target row    offset = h2 - 4   (range -4..+4)
 //
-// One env.step(action) advances FRAME_SKIP physics ticks at FIXED_DT_MS each.
-// For movement actions, jumpHeld stays true across ticks for jump actions and
-// jumpPressed pulses on the first tick (matches Platformer's tap semantics).
-// The fire action suppresses player movement input for the decision and
-// instead fires one beam shot per physics tick along an arc that sweeps
-// from ARC_THETA0 to ARC_THETA1 relative to facing direction. Cooldown
-// then locks fire for WEAPON_COOLDOWN_DECISIONS decisions.
+// Flat (row-major) action index:  flat = h0*117 + h1*9 + h2  (819 total).
+// When h0 != 6 the fire-target heads are don't-cares; the canonical legal
+// action is (h0, 0, 0) → flat = h0 * 117. When h0 == 6 every (h1, h2)
+// pair is legal. Useful action count = 6 + 117 = 123 (returned by
+// legalActions()); the trainer's per-head softmax handles the don't-cares
+// without ever needing to enumerate the full 819.
+//
+// One env.step(flatAction) advances FRAME_SKIP physics ticks at FIXED_DT_MS
+// each. For movement actions, jumpHeld stays true across ticks for jump
+// actions and jumpPressed pulses on the first tick (matches Platformer's
+// tap semantics). The fire action suppresses player movement input for the
+// decision and instead fires one beam shot at the targeted tile center
+// (offset (h1-6, h2-4) tiles from the agent's center). Cooldown then locks
+// fire for WEAPON_COOLDOWN_DECISIONS decisions.
 //
 // Pickup: a one-shot pickup tile at level col 115 grants the beam weapon
 // when the player AABB first overlaps it. Pre-pickup, action 6 is idle.
@@ -52,6 +57,17 @@
     const TILE         = 32;
     const FIXED_DT_MS  = 1000 / 60;     // 16.67 ms — matches the live engine
     const FRAME_SKIP   = 4;             // physics ticks per decision (~67 ms)
+
+    // Factored action space. Three heads: movement(7) × fire-col(13) × fire-row(9).
+    const HEAD_SIZES        = [7, 13, 9];
+    const HEAD_OFFSETS      = [0, 7, 20, 29];     // per-head policy_target layout
+    const PER_HEAD_TOTAL    = 29;                 // sum(HEAD_SIZES)
+    const FLAT_NUM_ACTIONS  = 7 * 13 * 9;         // 819
+    const STRIDE_H0         = 13 * 9;             // 117
+    const STRIDE_H1         = 9;
+    const ACT_FIRE          = 6;                  // h0 == 6 → fire-at-target
+    const FIRE_COL_CENTER   = 6;                  // h1 = 6 → same column
+    const FIRE_ROW_CENTER   = 4;                  // h2 = 4 → same row
 
     // Player stomp impulse; mirrors app.js handleStompers.
     const STOMP_BOUNCE_VY = -380;
@@ -91,21 +107,37 @@
     const ARC_THETA1     =  30 * Math.PI / 180;   // slightly down-and-forward
     const WEAPON_COOLDOWN_DECISIONS = 4;          // ~270 ms between sweeps
 
-    // Action → input flags. The fire action returns null inputs (player
+    // Range within which an enemy is marked as "seen" (persisted in state
+    // until episode end). Tuned to roughly the agent's obs window so the
+    // memory matches what the agent could plausibly observe directly. Once
+    // an enemy is seen, the obs exposes its current x even after the agent
+    // walks away, so post-pickup the agent can navigate back to engage.
+    const SEEN_RADIUS_PX = 240;                   // ~7.5 tiles
+
+    // h0 → input flags. The fire action returns null inputs (player
     // is locked into idle for the duration of the sweep; gravity still
     // applies via the platformer step).
-    function actionToInput(action, isFirstTick, prevJumpHeld) {
-        if (action === 6) {
+    function actionToInput(h0, isFirstTick, prevJumpHeld) {
+        if (h0 === ACT_FIRE) {
             return { left: false, right: false, jumpHeld: false, jumpPressed: false };
         }
-        const left  = action === 1 || action === 4;
-        const right = action === 2 || action === 5;
-        const jump  = action === 3 || action === 4 || action === 5;
+        const left  = h0 === 1 || h0 === 4;
+        const right = h0 === 2 || h0 === 5;
+        const jump  = h0 === 3 || h0 === 4 || h0 === 5;
         return {
             left, right,
             jumpHeld:    jump,
             jumpPressed: jump && !prevJumpHeld && isFirstTick,
         };
+    }
+
+    // Flat → (h0, h1, h2) using row-major strides matching HEAD_SIZES.
+    function decodeFlat(flat) {
+        const h0 = (flat / STRIDE_H0) | 0;
+        const r  = flat - h0 * STRIDE_H0;
+        const h1 = (r / STRIDE_H1) | 0;
+        const h2 = r - h1 * STRIDE_H1;
+        return [h0, h1, h2];
     }
 
     // ── Stomper update (lifted from app.js, made pure on (s, tilemap)) ──────
@@ -252,12 +284,16 @@
         const timeLimit = level.timeLimit != null ? level.timeLimit : 600;
         const stallDecisions = level.stallDecisions != null ? level.stallDecisions : 0;
         // Stall epsilon: how far past the agent's lifetime x-extents it has
-        // to reach for a step to count as "exploring new ground." Tracking
-        // both max and min extents lets legitimate backtracking (e.g. for
-        // the pickup) refresh the counter while still catching cyclic
-        // motion — once the agent has visited the full reachable range,
-        // bouncing between two flyers stops growing either extent.
-        const stallEpsilonPx = level.stallEpsilonPx != null ? level.stallEpsilonPx : 8;
+        // Stall detector tunables.
+        //  - stallEpsilonPx: how much the stall score must climb above its
+        //    episode-best to count as progress.
+        //  - FREE_BACKWALK_PX: tactical retreat window. While the player is
+        //    within this many pixels of peakX, the stall score uses peakX
+        //    instead of player.x (i.e. backwalk inside the window doesn't
+        //    drop the score). This lets the agent step back a few tiles to
+        //    dodge a flyer without immediately dropping below its best.
+        const stallEpsilonPx   = level.stallEpsilonPx   != null ? level.stallEpsilonPx   : 8;
+        const FREE_BACKWALK_PX = level.freeBackwalkPx   != null ? level.freeBackwalkPx   : 160;
 
         let spawnX = level.spawn.x;
         let spawnY = level.spawn.y - 4;
@@ -305,11 +341,14 @@
             // Stall detection (kept inline rather than via grid kit's
             // StallDetector — that one has no snapshot/restore which the
             // MCTS environment contract requires).
-            stallMaxX: 0,
-            stallMinX: 0,
-            stallBestPhi: 0,
+            stallBestScore: 0,
             stallSince: 0,
             stalledOut: false,
+            // Tracks the rightmost x reached this episode. The stall
+            // detector treats anything within FREE_BACKWALK_PX of peakX as
+            // "still at the frontier" so short tactical retreats (e.g.
+            // backing off to dodge a flyer) don't drop the stall score.
+            peakX: 0,
         };
 
         // ── Distances / phase / potential ──────────────────────────────────
@@ -357,9 +396,14 @@
                 x: spawnX, y: spawnY, w: 24, h: 30, cfg: playerCfg,
             });
             state.player.facing = 1;
-            state.stompers = stomperTemplates.map((s) => ({ ...s }));
+            // `seen` tracks whether the agent has encountered each enemy at
+            // close range this episode. Drives the "remembered enemy"
+            // features in obs so the agent can navigate back toward
+            // previously-seen targets after pickup. Persists across an
+            // episode (no decay) — once seen, the position stays in memory.
+            state.stompers = stomperTemplates.map((s) => ({ ...s, seen: false }));
             state.flyers   = flyerTemplates.map((f) => ({
-                ...f, bobT: 0, animT: 0, alive: true,
+                ...f, bobT: 0, animT: 0, alive: true, seen: false,
             }));
             state.score = 0;
             state.alive = true;
@@ -377,9 +421,8 @@
             tilemap.resetDamage();
             recomputePhase();
             state.prevPhi = computePhi();
-            state.stallMaxX = state.player.x;
-            state.stallMinX = state.player.x;
-            state.stallBestPhi = state.prevPhi;
+            state.peakX = state.player.x;
+            state.stallBestScore = state.player.x + state.score;
             state.stallSince = 0;
             state.stalledOut = false;
         }
@@ -410,6 +453,7 @@
                     x: s.x, y: s.y, w: s.w, h: s.h,
                     vx: s.vx, vy: s.vy, onGround: s.onGround,
                     alive: s.alive, squashTimer: s.squashTimer, animT: s.animT,
+                    seen: !!s.seen,
                 })),
                 flyers: state.flyers.map((f) => ({
                     x: f.x, y: f.y, w: f.w, h: f.h,
@@ -418,6 +462,7 @@
                     patrolRange: f.patrolRange,
                     bobAmp: f.bobAmp, bobFreq: f.bobFreq, bobT: f.bobT,
                     animT: f.animT, alive: f.alive,
+                    seen: !!f.seen,
                 })),
                 score: state.score,
                 alive: state.alive,
@@ -433,11 +478,10 @@
                 beamFlyerKillsTotal: state.beamFlyerKillsTotal,
                 phase: state.phase,
                 prevPhi: state.prevPhi,
-                stallMaxX: state.stallMaxX,
-                stallMinX: state.stallMinX,
-                stallBestPhi: state.stallBestPhi,
+                stallBestScore: state.stallBestScore,
                 stallSince: state.stallSince,
                 stalledOut: state.stalledOut,
+                peakX: state.peakX,
             };
         }
 
@@ -473,40 +517,61 @@
             state.beamFlyerKillsTotal = snap.beamFlyerKillsTotal | 0;
             state.phase = snap.phase | 0;
             state.prevPhi = snap.prevPhi != null ? snap.prevPhi : computePhi();
-            state.stallMaxX = snap.stallMaxX != null ? snap.stallMaxX : state.player.x;
-            state.stallMinX = snap.stallMinX != null ? snap.stallMinX : state.player.x;
-            state.stallBestPhi = snap.stallBestPhi != null ? snap.stallBestPhi : state.prevPhi;
+            state.stallBestScore = snap.stallBestScore != null
+                ? snap.stallBestScore
+                : (state.player.x + state.score);
             state.stallSince = snap.stallSince != null ? snap.stallSince : 0;
+            state.peakX = snap.peakX != null ? snap.peakX : state.player.x;
             state.stalledOut = !!snap.stalledOut;
         }
 
-        // Pick a fire direction. Priority: nearest live enemy whose center
-        // lies within BEAM_LENGTH (auto-aim for kills). If no enemy in range,
-        // fall back to firing forward along facing — this is how the agent
-        // carves terrain. Cooldown is consumed either way, so wasting fires
-        // into empty space costs the agent.
-        function pickFireTarget() {
+        // Mark enemies whose center is within SEEN_RADIUS of the player as
+        // seen. Once flagged, stays seen for the rest of the episode so the
+        // obs can carry "remembered enemy x" features even after the agent
+        // walks away. Uses squared distance so the inner loop has no sqrt.
+        function markSeenEnemies() {
+            const p = state.player;
+            const px = p.x + p.w * 0.5;
+            const py = p.y + p.h * 0.5;
+            const r2 = SEEN_RADIUS_PX * SEEN_RADIUS_PX;
+            for (const s of state.stompers) {
+                if (s.seen || !s.alive) continue;
+                const dx = (s.x + s.w * 0.5) - px;
+                const dy = (s.y + s.h * 0.5) - py;
+                if (dx * dx + dy * dy <= r2) s.seen = true;
+            }
+            for (const f of state.flyers) {
+                if (f.seen || !f.alive) continue;
+                const dx = (f.x + f.w * 0.5) - px;
+                const dy = (f.y + f.h * 0.5) - py;
+                if (dx * dx + dy * dy <= r2) f.seen = true;
+            }
+        }
+
+        // Build a fire direction from the (h1, h2) target offsets. Targets
+        // the tile center at (playerCol + h1-6, playerRow + h2-4). If the
+        // offset is exactly (0, 0) the agent is "firing into its own cell" —
+        // ambiguous direction, so fall back to firing along facing. The
+        // beam itself is always length BEAM_LENGTH (fireOneBeam handles
+        // capping via tilemap.traceBeam), so distant targets just mean a
+        // direction; the beam stops at first hit either way.
+        function fireAtTile(h1, h2) {
             const p = state.player;
             const px = p.x + p.w / 2;
             const py = p.y + p.h / 2;
-            let bestD2 = BEAM_LENGTH * BEAM_LENGTH;
-            let bestDx = 0, bestDy = 0;
-            let found = false;
-            const consider = (e) => {
-                if (!e.alive) return;
-                const dx = (e.x + e.w / 2) - px;
-                const dy = (e.y + e.h / 2) - py;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < bestD2) { bestD2 = d2; bestDx = dx; bestDy = dy; found = true; }
-            };
-            for (const s of state.stompers) consider(s);
-            for (const f of state.flyers) consider(f);
-            if (found) {
-                const d = Math.sqrt(bestD2) || 1;
-                return { ux: bestDx / d, uy: bestDy / d };
+            const dCol = h1 - FIRE_COL_CENTER;
+            const dRow = h2 - FIRE_ROW_CENTER;
+            if (dCol === 0 && dRow === 0) {
+                const facing = p.facing < 0 ? -1 : 1;
+                return { ux: facing, uy: 0 };
             }
-            const facing = p.facing < 0 ? -1 : 1;
-            return { ux: facing, uy: 0 };
+            const targetCol = Math.floor(px / TILE) + dCol;
+            const targetRow = Math.floor(py / TILE) + dRow;
+            const tx = targetCol * TILE + TILE / 2;
+            const ty = targetRow * TILE + TILE / 2;
+            const dx = tx - px, dy = ty - py;
+            const d  = Math.sqrt(dx * dx + dy * dy) || 1;
+            return { ux: dx / d, uy: dy / d };
         }
 
         // ── Beam fire (called once per fire decision) ─────────────────────
@@ -592,8 +657,10 @@
             return true;
         }
 
-        // Public step(action). Advances FRAME_SKIP ticks. Returns {reward, done}.
-        function step(action) {
+        // Public step(flatAction). Advances FRAME_SKIP ticks. Returns
+        // {reward, done}. flatAction is the row-major encoding of
+        // (h0, h1, h2) — see decodeFlat / HEAD_SIZES at the top of the file.
+        function step(flatAction) {
             if (!state.alive || state.won) return { reward: 0, done: true };
 
             // Reset render-only beam buffer for this decision. fireOneBeam
@@ -601,8 +668,10 @@
             // after step() to ship beams to the main thread.
             state.recentBeams.length = 0;
 
-            const fireDir = (action === 6 && state.hasWeapon && state.weaponCooldown <= 0)
-                ? pickFireTarget() : null;
+            const dec = decodeFlat(flatAction | 0);
+            const h0 = dec[0], h1 = dec[1], h2 = dec[2];
+            const fireDir = (h0 === ACT_FIRE && state.hasWeapon && state.weaponCooldown <= 0)
+                ? fireAtTile(h1, h2) : null;
             const isFire = !!fireDir;
             let stompKills = 0;
             let died  = false;
@@ -612,8 +681,14 @@
             let beamStomps = 0;
             let beamFlyers = 0;
 
+            // Mark enemies within SEEN_RADIUS as remembered. Run once per
+            // step (not per FRAME_SKIP tick) — enemies don't move fast
+            // enough for sub-decision granularity to matter, and the obs
+            // is built per decision anyway.
+            markSeenEnemies();
+
             for (let t = 0; t < FRAME_SKIP; t++) {
-                const input = actionToInput(isFire ? 0 : action, t === 0, state.prevJumpHeld);
+                const input = actionToInput(isFire ? 0 : h0, t === 0, state.prevJumpHeld);
                 const ev = tickPhysics(input, FIXED_DT_MS);
                 state.prevJumpHeld = !!input.jumpHeld;
                 state.tick++;
@@ -645,14 +720,10 @@
             else if (state.weaponCooldown > 0) state.weaponCooldown--;
 
             // Phase + potential-based shaping bonus (γΦ' − Φ).
-            const prevPhase = state.phase;
             recomputePhase();
             const phi = computePhi();
             const shapingBonus = PBRS_GAMMA * phi - state.prevPhi;
             state.prevPhi = phi;
-            // Phi units change with phase (distance to a different target),
-            // so the goal-progress baseline resets on every transition.
-            if (state.phase !== prevPhase) state.stallBestPhi = phi;
 
             let reward = REW_PER_PIXEL * pixelsThis
                        + REW_STOMP * stompKills
@@ -661,45 +732,42 @@
                        + (pickupHit ? REW_PICKUP : 0)
                        + shapingBonus;
 
-            // Stall: counter resets when any of three signals fire —
-            //   1. lifetime x-extents grew (covered new ground)
-            //   2. Φ improved past its phase-best (closer to current
-            //      target — pickup, spawn, or flag depending on phase)
-            //   3. a productive action landed (kill, pickup, beam hit, win)
-            // Each signal covers the others' blind spots. Extents handle
-            // exploration; Φ-progress handles return trips through already-
-            // explored ground (e.g. walking back to the flag after clearing
-            // terrain — neither extent grows, but distance-to-flag improves
-            // every step). Productive actions cover destroying terrain in
-            // place. Pure cyclic motion (oscillating between two flyers,
-            // jumping in place) refreshes none of these and the counter
-            // accumulates until the episode is terminated.
-            const productiveAction =
-                pixelsThis > 0
-                || stompKills > 0
-                || beamStomps > 0
-                || beamFlyers > 0
-                || pickupHit
-                || won;
-            let exploredNew = false;
-            if (state.player.x > state.stallMaxX + stallEpsilonPx) {
-                state.stallMaxX = state.player.x;
-                exploredNew = true;
+            state.score += stompKills * 100 + beamStomps * 100 + beamFlyers * 200
+                        + Math.floor(pixelsThis * 0.05)
+                        + (pickupHit ? 300 : 0)
+                        + (won ? 1000 : 0);
+
+            // Stall detector: a single scalar "stall score" =
+            //   effectiveX + state.score
+            // resets the counter whenever it beats its episode-best. score
+            // is monotonic (only grows: cleared × 0.05, stomp/beam kills,
+            // pickup, win), so the stall score grows from forward motion
+            // OR productive activity and only shrinks from leftward motion
+            // *outside the free-backwalk window*.
+            //
+            // effectiveX clamps at peakX while the player is within
+            // FREE_BACKWALK_PX of the rightmost x reached this episode —
+            // a 5-tile tactical retreat (e.g. backing off to dodge a
+            // flyer) doesn't drop the stall score. Outside the window,
+            // effectiveX = player.x, so deeper retreats start eating
+            // budget as before.
+            //
+            // Walking right past peak: peakX grows, stall score climbs.
+            // Brief retreat in window: stall score flat (held by peakX).
+            // Deep retreat with productive fires/kills: offset keeps score
+            //   climbing past prior max.
+            // Deep retreat with nothing to destroy: stall score drops,
+            //   counter accumulates → terminates.
+            if (state.player.x > state.peakX) state.peakX = state.player.x;
+            const inFreeZone = state.player.x >= state.peakX - FREE_BACKWALK_PX;
+            const effectiveX = inFreeZone ? state.peakX : state.player.x;
+            const stallScore = effectiveX + state.score;
+            if (stallScore > state.stallBestScore + stallEpsilonPx) {
+                state.stallBestScore = stallScore;
+                state.stallSince = 0;
+            } else {
+                state.stallSince++;
             }
-            if (state.player.x < state.stallMinX - stallEpsilonPx) {
-                state.stallMinX = state.player.x;
-                exploredNew = true;
-            }
-            // Φ improvement threshold: 1 tile of progress toward target.
-            // (PBRS_SCALE is per-tile, so 1 × PBRS_SCALE = 1 tile.)
-            const phiEps = PBRS_SCALE;
-            let goalProgress = false;
-            if (phi > state.stallBestPhi + phiEps) {
-                state.stallBestPhi = phi;
-                goalProgress = true;
-            }
-            if (exploredNew || goalProgress || productiveAction) state.stallSince = 0;
-            else state.stallSince++;
             const stalled = stallDecisions > 0 && state.stallSince >= stallDecisions;
 
             let done = false;
@@ -707,17 +775,28 @@
             else if (died)      { reward += REW_DEATH;   done = true; state.alive = false; }
             else if (state.timeLeft <= 0) { reward += REW_TIMEOUT; done = true; state.alive = false; }
             else if (stalled)             { reward += REW_TIMEOUT; done = true; state.alive = false; state.stalledOut = true; }
-            state.score += stompKills * 100 + beamStomps * 100 + beamFlyers * 200
-                        + Math.floor(pixelsThis * 0.05)
-                        + (pickupHit ? 300 : 0)
-                        + (won ? 1000 : 0);
             return { reward, done };
         }
 
-        // All 7 actions are technically legal; fire becomes a no-op pre-pickup
-        // or while cooling down, but MCTS still benefits from seeing it as a
-        // legal option (the policy net learns when it's worth a no-op slot).
-        const _legal = new Int32Array([0, 1, 2, 3, 4, 5, 6]);
+        // Canonical legal flat indices: 6 movement actions (h0 ∈ 0..5,
+        // h1=h2=0 → flat = h0 * 117) plus all 117 fire combinations
+        // (h0=6, h1 ∈ 0..12, h2 ∈ 0..8 → flat = 6*117 + h1*9 + h2). 123
+        // total. Don't-care fire-target heads on movement actions are
+        // collapsed to (0, 0) so MCTS doesn't enumerate equivalent
+        // duplicates. Fire is gated at step time (no-op pre-pickup or
+        // while cooling down) but stays legal so the policy can learn
+        // when to wait for it.
+        const _legal = (() => {
+            const out = new Int32Array(6 + STRIDE_H0);
+            let k = 0;
+            for (let h0 = 0; h0 < ACT_FIRE; h0++) out[k++] = h0 * STRIDE_H0;
+            for (let h1 = 0; h1 < HEAD_SIZES[1]; h1++) {
+                for (let h2 = 0; h2 < HEAD_SIZES[2]; h2++) {
+                    out[k++] = ACT_FIRE * STRIDE_H0 + h1 * STRIDE_H1 + h2;
+                }
+            }
+            return out;
+        })();
         function legalActions() { return _legal; }
 
         return {
@@ -741,7 +820,8 @@
             get recentBeams()    { return state.recentBeams; },
             tile: TILE,
             frameSkip: FRAME_SKIP,
-            numActions: 7,
+            numActions: FLAT_NUM_ACTIONS,
+            headSizes: HEAD_SIZES,
             reset, snapshot, restore, step, legalActions, setSpawn,
         };
     }
@@ -753,5 +833,8 @@
         REW_PICKUP, REW_FLAG, REW_DEATH, REW_TIMEOUT,
         ARC_THETA0, ARC_THETA1, BEAM_LENGTH, BEAM_THICKNESS, EXPLOSION_R,
         WEAPON_COOLDOWN_DECISIONS,
+        HEAD_SIZES, HEAD_OFFSETS, PER_HEAD_TOTAL, FLAT_NUM_ACTIONS,
+        ACT_FIRE, FIRE_COL_CENTER, FIRE_ROW_CENTER,
+        decodeFlat,
     };
 })(typeof window !== 'undefined' ? window : globalThis);

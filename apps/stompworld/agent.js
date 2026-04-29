@@ -16,7 +16,7 @@
         if (!sim) throw new Error('SwAgent.create requires {sim}');
 
         const obsDim = SwAgentObs.OBS_DIM;
-        const numActions = sim.numActions;
+        const headSizes = SwSim.HEAD_SIZES;
         // Buffer is large enough to retain many recent episodes; with the
         // shorter (~20s) training horizon used in trainer_worker.js this
         // amounts to dozens of trajectories instead of just one.
@@ -28,7 +28,7 @@
             inDim: obsDim,
             hidden: opts.hidden || [128, 128],
             valueHidden: opts.valueHidden || 64,
-            numActions,
+            headSizes,
             seed: opts.seed != null ? opts.seed : 0xA11CE5n,
         });
         const handle = NN.createWeightsHandle();

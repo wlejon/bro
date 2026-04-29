@@ -1413,6 +1413,16 @@
                     try { w.postMessage({ type: 'clear_failures' }); } catch (_) {}
                 }
             }
+            // Manual kill — useful for shimming bad shaped-reward conditions
+            // we haven't gotten right yet (e.g. agent sitting in a stuck
+            // pattern that the stall detector misses). Ends the live episode
+            // as a 'death' so the failure tape captures the tail and the
+            // next episode reseeds.
+            if (key === 'k' || key === 'K') {
+                if (this.live) {
+                    try { this.live.postMessage({ type: 'kill' }); } catch (_) {}
+                }
+            }
         },
     };
 

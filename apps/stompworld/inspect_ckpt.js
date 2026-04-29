@@ -52,22 +52,52 @@
     const net = NN.createPolicyValueNet({
         inDim: SwAgentObs.OBS_DIM,
         hidden: [128, 128], valueHidden: 64,
-        numActions: sim.numActions,
+        headSizes: SwSim.HEAD_SIZES,
         seed: 0xA11CE5n,
     });
     net.load(bytes);
 
     const xT  = NN.createTensor(SwAgentObs.OBS_DIM);
-    const lgT = NN.createTensor(sim.numActions);
+    // Per-head concatenated logits (29 = 7+13+9), not flat (819).
+    const lgT = NN.createTensor(SwSim.PER_HEAD_TOTAL);
 
-    function softmax(arr) {
+    // Per-head softmax over a slice [off, off+size). Returns a Float32Array.
+    function softmaxSlice(arr, off, size) {
         let m = -Infinity;
-        for (const v of arr) if (v > m) m = v;
-        const out = new Float32Array(arr.length);
+        for (let i = 0; i < size; i++) if (arr[off + i] > m) m = arr[off + i];
+        const out = new Float32Array(size);
         let s = 0;
-        for (let i = 0; i < arr.length; i++) { out[i] = Math.exp(arr[i] - m); s += out[i]; }
-        for (let i = 0; i < arr.length; i++) out[i] /= s;
+        for (let i = 0; i < size; i++) { out[i] = Math.exp(arr[off + i] - m); s += out[i]; }
+        for (let i = 0; i < size; i++) out[i] /= s;
         return out;
+    }
+    // Argmax flat action: per-head argmax, then encode (h0, h1, h2) → flat.
+    // For movement actions (h0 != 6) the fire-target heads collapse to 0.
+    function argmaxFlat(logits) {
+        const HS = SwSim.HEAD_SIZES, HO = SwSim.HEAD_OFFSETS;
+        const heads = [0, 0, 0];
+        for (let k = 0; k < 3; k++) {
+            let best = 0, bv = -Infinity;
+            for (let i = 0; i < HS[k]; i++) {
+                const v = logits[HO[k] + i];
+                if (v > bv) { bv = v; best = i; }
+            }
+            heads[k] = best;
+        }
+        if (heads[0] !== SwSim.ACT_FIRE) { heads[1] = 0; heads[2] = 0; }
+        return heads[0] * 13 * 9 + heads[1] * 9 + heads[2];
+    }
+    function sampleFlat(logits, rng) {
+        const HS = SwSim.HEAD_SIZES, HO = SwSim.HEAD_OFFSETS;
+        const heads = [0, 0, 0];
+        for (let k = 0; k < 3; k++) {
+            const probs = softmaxSlice(logits, HO[k], HS[k]);
+            let r = rng(), acc = 0, h = 0;
+            for (let i = 0; i < HS[k]; i++) { acc += probs[i]; if (r <= acc) { h = i; break; } }
+            heads[k] = h;
+        }
+        if (heads[0] !== SwSim.ACT_FIRE) { heads[1] = 0; heads[2] = 0; }
+        return heads[0] * 13 * 9 + heads[1] * 9 + heads[2];
     }
 
     function inspectAt(label, col, opts) {
@@ -82,9 +112,9 @@
         xT.fromArray(obs);
         const value = net.forward(xT, lgT);
         const logits = lgT.toArray();
-        const probs = softmax(logits);
+        const h0probs = softmaxSlice(logits, SwSim.HEAD_OFFSETS[0], SwSim.HEAD_SIZES[0]);
 
-        const names = ['idle', 'L  ', 'R  ', 'J  ', 'JL ', 'JR '];
+        const names = ['idle', 'L  ', 'R  ', 'J  ', 'JL ', 'JR ', 'FIRE'];
         const p = sim.player;
         console.log(
             '  col=' + String(col).padStart(3) +
@@ -94,12 +124,11 @@
             '   ' + label
         );
         let line = '    ';
-        for (let i = 0; i < probs.length; i++) {
-            line += names[i] + '=' + probs[i].toFixed(3) + '  ';
+        for (let i = 0; i < h0probs.length; i++) {
+            line += names[i] + '=' + h0probs[i].toFixed(3) + '  ';
         }
-        // mark argmax
         let am = 0;
-        for (let i = 1; i < probs.length; i++) if (probs[i] > probs[am]) am = i;
+        for (let i = 1; i < h0probs.length; i++) if (h0probs[i] > h0probs[am]) am = i;
         line += '  → ' + names[am].trim();
         console.log(line);
     }
@@ -134,9 +163,7 @@
             const obs = SwAgentObs.build(sim);
             xT.fromArray(obs);
             net.forward(xT, lgT);
-            const probs = softmax(lgT.toArray());
-            let am = 0;
-            for (let i = 1; i < probs.length; i++) if (probs[i] > probs[am]) am = i;
+            const am = argmaxFlat(lgT.toArray());
             const out = sim.step(am);
             totalR += out.reward; decisions++;
             if (sim.player.x > maxX) maxX = sim.player.x;
@@ -167,9 +194,7 @@
                 const obs = SwAgentObs.build(sim);
                 xT.fromArray(obs);
                 net.forward(xT, lgT);
-                const probs = softmax(lgT.toArray());
-                let r = rng(), acc = 0, a = 0;
-                for (let i = 0; i < probs.length; i++) { acc += probs[i]; if (r <= acc) { a = i; break; } }
+                const a = sampleFlat(lgT.toArray(), rng);
                 const out = sim.step(a);
                 if (sim.player.x > bestX) bestX = sim.player.x;
                 if (out.done) break;

@@ -53,7 +53,10 @@ function buildSim() {
         // pure travel plus aim/destroy stalls. 600 s gives plenty of
         // room to demonstrate the full loop without timing out.
         timeLimit: 600,
-        stallDecisions: 50,
+        // 120 decisions ≈ 8 s at the 67 ms cadence. Generous enough that
+        // the agent can step back, wait for a flyer to pass, and reposition
+        // without the run getting cut for a tactical retreat.
+        stallDecisions: 120,
     });
     return { sim, baseSpawnY: lvl.spawn.y, defaultSpawnX: lvl.spawn.x };
 }
@@ -311,6 +314,11 @@ self.onmessage = (e) => {
     } else if (m.type === 'clear_failures') {
         failureTape.clear();
         successTape.clear();
+    } else if (m.type === 'kill') {
+        // User-triggered kill (K key in main). Seal the episode as a
+        // death so the failure tape captures the tail, then next doStep
+        // applies any pending seed and starts fresh.
+        if (inEpisode) endEpisode('death');
     } else if (m.type === 'stop') {
         running = false;
     }
