@@ -835,8 +835,16 @@
         running: false,
 
         // Static level data for rendering — sims live in the workers.
+        // The mob templates (lvlStompers, lvlFlyers) are kept so that during
+        // the trainer's pretrain hold — before the live worker has spawned
+        // the agent and started shipping render snaps — we can still draw
+        // a non-empty world (tiles, flag, pickup, mobs at their starting
+        // positions) under the loading overlay. Player stays hidden until
+        // the first real snap arrives.
         lvlTilemap: null,
         lvlFlag: null,
+        lvlStompers: null,
+        lvlFlyers: null,
 
         // Worker-config knobs. Two MCTS data workers at very different
         // search depths so the trainer sees a mix of cheap/diverse and
@@ -899,9 +907,11 @@
             // applyDamageDiff() lands; the live worker ships a sparse diff
             // every render frame and we mirror it before draw().
             const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
-            this.lvlTilemap = lvl.tilemap;
-            this.lvlFlag    = lvl.flag;
-            this.lvlPickup  = lvl.pickup;
+            this.lvlTilemap  = lvl.tilemap;
+            this.lvlFlag     = lvl.flag;
+            this.lvlPickup   = lvl.pickup;
+            this.lvlStompers = lvl.stompers;
+            this.lvlFlyers   = lvl.flyers;
             this.pickupAnimT = 0;
 
             this.cam = Camera2D.create({
@@ -1267,23 +1277,28 @@
                     Math.round(pk.y - this.cam.y),
                     this.pickupAnimT);
             }
+            // Draw mobs even before the live worker boots — pulls from the
+            // snap once it exists, otherwise from the level templates so
+            // the warmup screen shows a populated world (just no player).
+            const stomperList = this.snap ? this.snap.stompers : (this.lvlStompers || []);
+            const flyerList   = this.snap ? this.snap.flyers   : (this.lvlFlyers   || []);
+            for (const s of stomperList) {
+                if (!this.cam.visible(s.x, s.y, s.w, s.h)) continue;
+                const fr = !s.alive ? 2 : (Math.floor((s.animT || 0) / 200) % 2);
+                Art.drawStomper(ctx,
+                    Math.round(s.x - this.cam.x),
+                    Math.round(s.y - this.cam.y), fr);
+            }
+            for (const fl of flyerList) {
+                if (fl.alive === false) continue;
+                if (!this.cam.visible(fl.x, fl.y, fl.w, fl.h)) continue;
+                const fr = (Math.floor((fl.animT || 0) / 150) % 2);
+                Art.drawFlyer(ctx,
+                    Math.round(fl.x - this.cam.x),
+                    Math.round(fl.y - this.cam.y), fr, (fl.vx || 0) > 0);
+            }
             if (!this.snap) this.drawLoading();
             if (this.snap) {
-                for (const s of this.snap.stompers) {
-                    if (!this.cam.visible(s.x, s.y, s.w, s.h)) continue;
-                    const fr = !s.alive ? 2 : (Math.floor(s.animT / 200) % 2);
-                    Art.drawStomper(ctx,
-                        Math.round(s.x - this.cam.x),
-                        Math.round(s.y - this.cam.y), fr);
-                }
-                for (const fl of this.snap.flyers) {
-                    if (!fl.alive) continue;
-                    if (!this.cam.visible(fl.x, fl.y, fl.w, fl.h)) continue;
-                    const fr = (Math.floor(fl.animT / 150) % 2);
-                    Art.drawFlyer(ctx,
-                        Math.round(fl.x - this.cam.x),
-                        Math.round(fl.y - this.cam.y), fr, fl.vx > 0);
-                }
                 // Beam visuals fired by the worker. Same look as play-mode
                 // beams (yellow outer + white-hot core, ttl-faded).
                 for (const b of this.trainingBeams) {
