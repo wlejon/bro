@@ -17,13 +17,8 @@
 
         const obsDim = SwAgentObs.OBS_DIM;
         const headSizes = SwSim.HEAD_SIZES;
-        // Buffer is large enough to retain many recent episodes; with the
-        // shorter (~20s) training horizon used in trainer_worker.js this
-        // amounts to dozens of trajectories instead of just one.
         const bufCap = opts.bufferCapacity != null ? opts.bufferCapacity : 50000;
 
-        // Bigger trunk (128×128 vs 64×64) and a wider value head — raw
-        // policy capacity is the lever, MCTS just polishes on top.
         const net = NN.createPolicyValueNet({
             inDim: obsDim,
             hidden: opts.hidden || [128, 128],

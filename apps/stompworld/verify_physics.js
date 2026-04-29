@@ -49,14 +49,14 @@
         for (let t = 0; t < 200; t++) {
             const cur = Math.floor(sim.player.x / TILE);
             if (cur >= runUntilCol) break;
-            sim.step(2 * 117);   // h0=2 (right), canonical flat encoding
+            sim.step(2);   // 2 = right (movement-only action space)
             if (!sim.alive) break;
         }
         if (!sim.alive) return { ok: false, where: 'pre-jump death', col: Math.floor(sim.player.x / TILE) };
         // Fire jump-right for `jumpsToFire` decisions, then R repeatedly.
         let maxCol = Math.floor(sim.player.x / TILE);
         for (let t = 0; t < 60; t++) {
-            const a = (t < jumpsToFire ? 5 : 2) * 117;   // canonical flat encoding
+            const a = t < jumpsToFire ? 5 : 2;   // 5 = jump-right, 2 = right
             const out = sim.step(a);
             const c = Math.floor(sim.player.x / TILE);
             if (c > maxCol) maxCol = c;
@@ -87,8 +87,7 @@
         let stomps = 0;
         const startScore = sim.score;
         for (let t = 0; t < 600; t++) {
-            const obs = SwAgentObs.build(sim);
-            const a = SwBcWarmup.heuristicAction(obs, () => 0.99);
+            const a = SwBcWarmup.heuristicAction(sim, () => 0.99);
             const out = sim.step(a);
             const c = Math.floor(sim.player.x / TILE);
             if (c > maxCol) maxCol = c;
@@ -134,7 +133,7 @@
             sim.reset();
             for (let t = 0; t < 600; t++) {
                 const obs = SwAgentObs.build(sim);
-                const a = SwBcWarmup.heuristicAction(obs, rng);
+                const a = SwBcWarmup.heuristicAction(sim, rng);
                 const out = sim.step(a);
                 if (out.done) break;
             }
@@ -150,8 +149,7 @@
         sim.setSpawn(78 * TILE + 2, spawn.y - 4);
         sim.reset();
         for (let t = 0; t < 600; t++) {
-            const obs = SwAgentObs.build(sim);
-            const a = SwBcWarmup.heuristicAction(obs, () => 0.99);
+            const a = SwBcWarmup.heuristicAction(sim, () => 0.99);
             const out = sim.step(a);
             if (out.done) break;
         }
@@ -165,7 +163,7 @@
     sim.reset();
     for (let t = 0; t < 18; t++) {
         const obs = SwAgentObs.build(sim);
-        const a = SwBcWarmup.heuristicAction(obs, () => 0.99);
+        const a = SwBcWarmup.heuristicAction(sim, () => 0.99);
         const f0v = obs[63] > 0.5;
         const f0dx = obs[64].toFixed(2);
         const f0dy = obs[65].toFixed(2);
@@ -184,7 +182,7 @@
     sim.reset();
     for (let t = 0; t < 25; t++) {
         const obs = SwAgentObs.build(sim);
-        const a = SwBcWarmup.heuristicAction(obs, () => 0.99);
+        const a = SwBcWarmup.heuristicAction(sim, () => 0.99);
         const p = sim.player;
         const pcol = Math.floor((p.x + p.w/2) / TILE);
         // Find flyer at col 86 if visible
@@ -205,7 +203,7 @@
     sim.reset();
     for (let t = 0; t < 35; t++) {
         const obs = SwAgentObs.build(sim);
-        const a = SwBcWarmup.heuristicAction(obs, () => 0.99);
+        const a = SwBcWarmup.heuristicAction(sim, () => 0.99);
         const p = sim.player;
         const pcol = Math.floor((p.x + p.w/2) / TILE);
         const pitAhead = !(obs[8 + 3*8 + 2] > 0.5);

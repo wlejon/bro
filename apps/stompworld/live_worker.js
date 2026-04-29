@@ -90,10 +90,8 @@ function buildSig() {
     const row = Math.floor(p.y / TILE);
     const og  = p.onGround ? 1 : 0;
     const vxSign = p.vx > 8 ? 1 : (p.vx < -8 ? -1 : 0);
-    // Include the weapon-cooldown bucket so the same line with a hot
-    // beam vs a cool beam isn't treated as identical state.
-    const wc = sim.weaponCooldown > 0 ? 1 : 0;
-    return col + ',' + row + ',' + og + ',' + vxSign + ',' + wc;
+    const hw = sim.hasWeapon ? 1 : 0;
+    return col + ',' + row + ',' + og + ',' + vxSign + ',' + hw;
 }
 
 // Live MCTS depth is sized to fit comfortably inside one decision period
@@ -206,7 +204,6 @@ function makeSnap(extra) {
         pickupCollected: !!sim.pickupCollected,
         hasWeapon: !!sim.hasWeapon,
         weaponCooldown: sim.weaponCooldown | 0,
-        phase: sim.phase | 0,
         damageDiff: dmg ? new Int32Array(dmg) : null,
         beams,
         episodes, lastReason,

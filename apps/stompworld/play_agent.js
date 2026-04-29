@@ -31,18 +31,6 @@
     const NN = bro.ai.game.nn;
 
     function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
-    function softmax(logits, mask) {
-        const n = logits.length;
-        const out = new Float32Array(n);
-        let m = -Infinity;
-        for (let i = 0; i < n; i++) if (!mask || mask[i]) if (logits[i] > m) m = logits[i];
-        let s = 0;
-        for (let i = 0; i < n; i++) {
-            if (!mask || mask[i]) { const e = Math.exp(logits[i] - m); out[i] = e; s += e; }
-        }
-        if (s > 0) for (let i = 0; i < n; i++) out[i] /= s;
-        return out;
-    }
 
     function create(opts) {
         opts = opts || {};
@@ -50,10 +38,9 @@
         if (!sim) throw new Error('PlayAgent.create requires {sim}');
 
         const obsDim     = SwAgentObs.OBS_DIM;
-        const numActions = sim.numActions;       // flat action count (819)
+        const numActions = sim.numActions;       // 6 (movement-only)
         const headSizes  = SwSim.HEAD_SIZES;
         const perHeadTotal = SwSim.PER_HEAD_TOTAL;
-        const flatPriorBuf = new Float32Array(numActions);
         const iterations   = opts.iterations   != null ? opts.iterations   : 64;
         const cPuct        = opts.cPuct        != null ? opts.cPuct        : 1.5;
         const gamma        = opts.gamma        != null ? opts.gamma        : 0.99;
@@ -72,9 +59,8 @@
             seed: opts.seed != null ? BigInt(opts.seed) : 0xA11CE5n,
         });
         const xT  = NN.createTensor(obsDim);
-        // Net policy output is the per-head concatenated logits (29 floats),
-        // not the 819-flat distribution. We expand to flat via
-        // bro.ai.game.nn.factoredToFlat in priorFn so MCTS sees a flat prior.
+        // Single-head movement-only policy: net outputs `numActions` logits
+        // directly (perHeadTotal === numActions === 6).
         const lgT = NN.createTensor(perHeadTotal);
 
         let netVersion = 0n;
@@ -93,17 +79,20 @@
         function priorFn(obs, legal) {
             xT.fromArray(obs);
             net.forward(xT, lgT);
-            // Expand the 29-dim per-head logits into a 819-dim flat prior
-            // (per-head softmax × outer product). headMasks=null: per-head
-            // masking isn't needed because the legality mask below is a
-            // flat-action mask that already drops illegal flat indices.
-            NN.factoredToFlat(lgT.toArray(), headSizes, flatPriorBuf, null);
+            // Single-head softmax over the 6 movement actions, masked to
+            // the legal set (which is currently always all 6).
+            const logits = lgT.toArray();
+            let m = -Infinity;
+            for (let i = 0; i < legal.length; i++) {
+                const v = logits[legal[i]];
+                if (v > m) m = v;
+            }
             const probs = new Float32Array(numActions);
             let s = 0;
             for (let i = 0; i < legal.length; i++) {
                 const a = legal[i];
-                const v = flatPriorBuf[a];
-                probs[a] = v; s += v;
+                const e = Math.exp(logits[a] - m);
+                probs[a] = e; s += e;
             }
             if (s > 0) for (let i = 0; i < legal.length; i++) probs[legal[i]] /= s;
             if (priorAdjust && sigFn) {

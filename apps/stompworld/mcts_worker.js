@@ -43,10 +43,9 @@ for (const p of SHARED) {
 }
 
 const TILE = 32;
-// Includes col 100 (near the pickup at col 115) so a fraction of episodes
-// can capture full pickup → backtrack-and-destroy → flag arcs within the
-// training horizon. The lower spawns still feed local-skill data (jumping,
-// stomping, beam against terrain).
+// Spawn curriculum: episodes start at one of these columns so the trainer
+// sees data from the full traversal (early game from col 2, later sections
+// from col 78/100 where the pickup lives at col 115 and the flag at 118).
 const SPAWN_COLS = [2, 32, 48, 78, 100];
 const TRAIN_TIME_LIMIT = 30;
 
@@ -64,15 +63,15 @@ function buildSim() {
 }
 
 // Coarse state signature shared with the history tapes. Same shape as
-// live_worker's: (col, row, onGround, vxSign, weaponCooldown-bucket).
+// live_worker's: (col, row, onGround, vxSign, hasWeapon).
 function buildSig(s) {
     const p = s.player;
     const col = Math.floor(p.x / TILE);
     const row = Math.floor(p.y / TILE);
     const og  = p.onGround ? 1 : 0;
     const vxSign = p.vx > 8 ? 1 : (p.vx < -8 ? -1 : 0);
-    const wc = s.weaponCooldown > 0 ? 1 : 0;
-    return col + ',' + row + ',' + og + ',' + vxSign + ',' + wc;
+    const hw = s.hasWeapon ? 1 : 0;
+    return col + ',' + row + ',' + og + ',' + vxSign + ',' + hw;
 }
 
 let workerId = 0;

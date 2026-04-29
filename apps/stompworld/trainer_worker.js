@@ -37,10 +37,7 @@ for (const p of SHARED) {
 const TILE = 32;
 
 // ── Checkpoints ─────────────────────────────────────────────────────────────
-// Bumped to ckpt2 when the obs layout + action space changed (added beam
-// fire action, swapped per-entity floats for grid-rasterized obs window).
-// Old ckpt/ files are shape-incompatible with the new net.
-const CKPT_DIR = 'apps/stompworld/ckpt2';
+const CKPT_DIR = 'apps/stompworld/ckpt';
 const CKPT_RING_SIZE = 10;
 const CKPT_BEST_WINDOW = 20;
 let ckptRingIdx = 0;
@@ -156,48 +153,11 @@ if (!resumedFromCheckpoint) {
 self.postMessage({ type: 'warmup', stats: warmupStats });
 
 // ── Tuple ingestion + train loop ────────────────────────────────────────────
-// With factored heads, policyTarget is a 29-element per-head concatenation
-// (shape: [head0(7), head1(13), head2(9)]). Each head's mask is all-1s —
-// the trainer treats an empty mask as "all legal", so we just pass an empty
-// Float32Array. (The flat-action illegality mask the play agent uses is
-// a *flat* mask, not a per-head mask; per-head softmax in the trainer
-// always sees a valid distribution per head, so masking is unnecessary.)
-const HEAD_SIZES   = SwSim.HEAD_SIZES;
-const HEAD_OFFSETS = SwSim.HEAD_OFFSETS;
+// Single-head movement-only policy: policyTarget is a 6-element distribution
+// (one entry per movement action). MCTS rootVisits and BC one-hots both
+// arrive in this same shape, so no marginalization step is needed.
 const PER_HEAD_TOTAL = SwSim.PER_HEAD_TOTAL;
-const STRIDES = (() => {
-    // row-major strides matching sim.js decodeFlat: [h0_stride, h1_stride, h2_stride].
-    const s = new Array(HEAD_SIZES.length);
-    let acc = 1;
-    for (let i = HEAD_SIZES.length - 1; i >= 0; i--) { s[i] = acc; acc *= HEAD_SIZES[i]; }
-    return s;
-})();
 const ACTION_MASK = new Float32Array(0);
-
-// Marginalize a 819-flat visit-prob distribution into a 29-element
-// per-head concatenated target. For each flat action f with mass m,
-// decode to (h0, h1, h2) and add m to target[head_offset[k] + hk] for
-// each head k. Sum across the flat distribution and the per-head
-// targets each sum to 1 (when the input does), giving a valid per-head
-// softmax target.
-function marginalizeToPerHead(flat) {
-    const out = new Float32Array(PER_HEAD_TOTAL);
-    const N = flat.length | 0;
-    const s0 = STRIDES[0], s1 = STRIDES[1];
-    const off0 = HEAD_OFFSETS[0], off1 = HEAD_OFFSETS[1], off2 = HEAD_OFFSETS[2];
-    for (let f = 0; f < N; f++) {
-        const m = flat[f];
-        if (m === 0) continue;
-        const h0 = (f / s0) | 0;
-        const r  = f - h0 * s0;
-        const h1 = (r / s1) | 0;
-        const h2 = r - h1 * s1;
-        out[off0 + h0] += m;
-        out[off1 + h1] += m;
-        out[off2 + h2] += m;
-    }
-    return out;
-}
 
 let totalIngested = 0;
 let totalTrainSteps = 0;
@@ -211,15 +171,9 @@ function ingestTuples(tuples, weight) {
     let n = 0;
     for (let k = 0; k < repeats; k++) {
         for (const t of tuples) {
-            // Tuples may arrive with either a 29-dim per-head target
-            // (BC warmup) or a 819-dim flat target (MCTS rootVisits).
-            // Marginalize on the fly when needed.
-            const pt = (t.policyTarget && t.policyTarget.length === PER_HEAD_TOTAL)
-                ? t.policyTarget
-                : marginalizeToPerHead(t.policyTarget);
             agent.buffer.push({
                 obs: t.obs,
-                policyTarget: pt,
+                policyTarget: t.policyTarget,
                 actionMask: ACTION_MASK,
                 valueTarget: +t.valueTarget || 0,
             });

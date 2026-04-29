@@ -699,6 +699,8 @@
         drawSky();
         if (S.name() === 'training' && Training.lvlTilemap) {
             Training.draw();
+        } else if (S.name() === 'demo') {
+            demoCtl.draw();
         } else if (Game.tilemap) {
             Game.tilemap.draw(ctx, Game.cam.x, Game.cam.y, VIEW_W, VIEW_H);
             drawFlag();
@@ -715,6 +717,7 @@
     // ── Update ───────────────────────────────────────────────────────────────
     function update(dt) {
         if (S.name() === 'training') { Training.update(dt); return; }
+        if (S.name() === 'demo')     { demoCtl.update(dt);  return; }
         if (S.name() !== 'playing') return;
 
         // Tick visuals + ragdolls every frame regardless of win/death anim
@@ -1473,6 +1476,8 @@
             Game.startRun(); S.switchTo('playing');
         } else if (action === 'train') {
             S.switchTo('training');
+        } else if (action === 'demo') {
+            S.switchTo('demo');
         } else if (action === 'resume') {
             S.switchTo('playing');
         } else if (action === 'howtoplay') {
@@ -1511,6 +1516,26 @@
             Training.start();
         },
         keydown(key) { Training.keydown(key); },
+    });
+
+    // ── AI Demo ──────────────────────────────────────────────────────────────
+    // Loads ckpt/best.bin, drives sim with greedy argmax until pickup, then
+    // hands off to a scripted controller that backtracks to spawn and runs
+    // back to the flag. SwDemo lives in demo.js.
+    const demoCtl = SwDemo.create({
+        ctx, Art, Camera2D, Game,
+    });
+    S.define('demo', {
+        enter() {
+            S.hideOverlay();
+            demoCtl.start();
+        },
+        keydown(key) {
+            if (key === 'Escape' || key === 'Esc' || key === 'q' || key === 'Q') {
+                demoCtl.stop();
+                S.switchTo('title');
+            }
+        },
     });
 
     window.addEventListener('keydown', (e) => S.keydown(e.key));
