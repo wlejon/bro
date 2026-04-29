@@ -19,6 +19,7 @@
 #include <brogameagent/nn/heads.h>
 #include <brogameagent/nn/net.h>
 #include <brogameagent/nn/policy_value_net.h>
+#include <brogameagent/nn/factored.h>
 
 #include <cstring>
 #include <memory>
@@ -473,6 +474,25 @@ static void registerClasses(JSContext* ctx) {
             .get("numActions",  [](PolicyValueNetData* d) -> int { return d->net ? d->net->num_actions() : 0; })
             .get("trunkDim",    [](PolicyValueNetData* d) -> int { return d->net ? d->net->trunk_dim() : 0; })
             .get("numParams",   [](PolicyValueNetData* d) -> int { return d->net ? d->net->num_params() : 0; })
+            .get("numHeads",    [](PolicyValueNetData* d) -> int { return d->net ? d->net->num_heads() : 0; })
+            .method("headSizes",
+                [](PolicyValueNetData* d, JSContext* ctx) -> JSValue {
+                    if (!d->net) return JS_NewArray(ctx);
+                    const auto& sizes = d->net->head_sizes();
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < sizes.size(); ++i)
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, sizes[i]));
+                    return arr;
+                })
+            .method("headOffsets",
+                [](PolicyValueNetData* d, JSContext* ctx) -> JSValue {
+                    if (!d->net) return JS_NewArray(ctx);
+                    const auto& offs = d->net->head_offsets();
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < offs.size(); ++i)
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, offs[i]));
+                    return arr;
+                })
             .method("forward",
                 [](PolicyValueNetData* d, JSContext* ctx, JSValueConst x, JSValueConst logits) -> JSValue {
                     if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
@@ -647,6 +667,29 @@ static JSValue js_createWeightsHandle(JSContext* ctx, JSValueConst, int, JSValue
         new WeightsHandleData{ std::make_shared<nn::WeightsHandle>() });
 }
 
+// Read an array of positive ints from prop `name` on `obj`. Empty/absent
+// → empty vector; entries ≤ 0 are skipped silently.
+static std::vector<int> readIntArray(JSContext* ctx, JSValueConst obj, const char* name) {
+    std::vector<int> out;
+    JSValue v = JS_GetPropertyStr(ctx, obj, name);
+    if (JS_IsArray(v)) {
+        uint32_t len = 0;
+        JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+        JS_ToUint32(ctx, &len, lv);
+        JS_FreeValue(ctx, lv);
+        out.reserve(len);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue ev = JS_GetPropertyUint32(ctx, v, i);
+            int32_t w = 0;
+            JS_ToInt32(ctx, &w, ev);
+            JS_FreeValue(ctx, ev);
+            if (w > 0) out.push_back(w);
+        }
+    }
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
 static JSValue js_createPolicyValueNet(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     nn::PolicyValueNet::Config cfg{};
     if (argc >= 1 && JS_IsObject(argv[0])) {
@@ -654,34 +697,23 @@ static JSValue js_createPolicyValueNet(JSContext* ctx, JSValueConst, int argc, J
         cfg.num_actions  = getInt(ctx, argv[0], "numActions",  cfg.num_actions);
         cfg.value_hidden = getInt(ctx, argv[0], "valueHidden", cfg.value_hidden);
 
-        // hidden: array of ints. If absent, keep the default {64, 64}.
-        JSValue hv = JS_GetPropertyStr(ctx, argv[0], "hidden");
-        if (JS_IsArray(hv)) {
-            uint32_t len = 0;
-            JSValue lv = JS_GetPropertyStr(ctx, hv, "length");
-            JS_ToUint32(ctx, &len, lv);
-            JS_FreeValue(ctx, lv);
-            std::vector<int> hidden;
-            hidden.reserve(len);
-            for (uint32_t i = 0; i < len; ++i) {
-                JSValue ev = JS_GetPropertyUint32(ctx, hv, i);
-                int32_t w = 0;
-                JS_ToInt32(ctx, &w, ev);
-                JS_FreeValue(ctx, ev);
-                if (w > 0) hidden.push_back(w);
-            }
-            if (!hidden.empty()) cfg.hidden = std::move(hidden);
-        }
-        JS_FreeValue(ctx, hv);
+        auto hidden = readIntArray(ctx, argv[0], "hidden");
+        if (!hidden.empty()) cfg.hidden = std::move(hidden);
+
+        // headSizes (optional): factored policy heads. When provided,
+        // numActions auto-derives from sum if 0; otherwise must match.
+        cfg.head_sizes = readIntArray(ctx, argv[0], "headSizes");
 
         JSValue seedV = JS_GetPropertyStr(ctx, argv[0], "seed");
         cfg.seed = readSeed(ctx, seedV, cfg.seed);
         JS_FreeValue(ctx, seedV);
     }
-    if (cfg.in_dim <= 0 || cfg.num_actions <= 0 || cfg.hidden.empty() || cfg.value_hidden <= 0) {
+    // numActions can be 0 if headSizes provided — init() will derive it.
+    const bool actions_ok = cfg.num_actions > 0 || !cfg.head_sizes.empty();
+    if (cfg.in_dim <= 0 || !actions_ok || cfg.hidden.empty() || cfg.value_hidden <= 0) {
         return JS_ThrowTypeError(ctx,
-            "createPolicyValueNet({inDim,numActions,hidden:[...],valueHidden,seed?}) — "
-            "inDim, numActions, hidden[], valueHidden are required");
+            "createPolicyValueNet({inDim,numActions|headSizes,hidden:[...],valueHidden,seed?}) — "
+            "inDim, hidden[], valueHidden are required, plus one of numActions or headSizes");
     }
     auto net = std::make_shared<nn::PolicyValueNet>();
     net->init(cfg);
@@ -838,6 +870,94 @@ static JSValue js_factoredXent(JSContext* ctx, JSValueConst, int argc, JSValueCo
     return JS_NewFloat64(ctx, loss);
 }
 
+// ─── Factored multi-head policy helpers ──────────────────────────────────
+//
+// Wraps nn::factored_to_flat and friends. The JS layer passes head_sizes as
+// a JS array of ints; offsets are derived internally to keep the call site
+// simple. Logits / flat_prior / masks are Float32 arrays (TypedArray, not
+// Tensor wrappers — this matches how the trainer worker shuffles data).
+
+static std::vector<int> readJSIntArray(JSContext* ctx, JSValueConst arr) {
+    std::vector<int> out;
+    if (!JS_IsArray(arr)) return out;
+    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lv);
+    JS_FreeValue(ctx, lv);
+    out.reserve(len);
+    for (uint32_t i = 0; i < len; ++i) {
+        JSValue ev = JS_GetPropertyUint32(ctx, arr, i);
+        int32_t v = 0;
+        JS_ToInt32(ctx, &v, ev);
+        JS_FreeValue(ctx, ev);
+        out.push_back(v);
+    }
+    return out;
+}
+
+static std::vector<int> offsetsFromSizes(const std::vector<int>& sizes) {
+    std::vector<int> offs;
+    offs.reserve(sizes.size() + 1);
+    int o = 0;
+    for (int s : sizes) { offs.push_back(o); o += s; }
+    offs.push_back(o);
+    return offs;
+}
+
+static JSValue js_factoredToFlat(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3)
+        return JS_ThrowTypeError(ctx, "factoredToFlat(logits, headSizes, flatPrior, headMasks?)");
+    size_t lN = 0; float* logits = getFloatArrayPtr(ctx, argv[0], lN);
+    if (!logits) return JS_ThrowTypeError(ctx, "logits must be Float32Array");
+    auto sizes = readJSIntArray(ctx, argv[1]);
+    if (sizes.empty()) return JS_ThrowTypeError(ctx, "headSizes must be a non-empty int array");
+    auto offsets = offsetsFromSizes(sizes);
+    if ((int)lN < offsets.back())
+        return JS_ThrowTypeError(ctx, "logits shorter than sum(headSizes)");
+    size_t fN = 0; float* flat = getFloatArrayPtr(ctx, argv[2], fN);
+    if (!flat) return JS_ThrowTypeError(ctx, "flatPrior must be Float32Array");
+    const int total = nn::flat_action_count(sizes);
+    if ((int)fN < total)
+        return JS_ThrowTypeError(ctx, "flatPrior shorter than prod(headSizes)");
+    size_t mN = 0;
+    float* masks = (argc >= 4 && !JS_IsUndefined(argv[3]) && !JS_IsNull(argv[3]))
+                   ? getFloatArrayPtr(ctx, argv[3], mN) : nullptr;
+    if (masks && (int)mN < offsets.back())
+        return JS_ThrowTypeError(ctx, "headMasks shorter than sum(headSizes)");
+    nn::factored_to_flat(logits, sizes, offsets, flat, masks);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_flatActionCount(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "flatActionCount(headSizes)");
+    auto sizes = readJSIntArray(ctx, argv[0]);
+    return JS_NewInt32(ctx, nn::flat_action_count(sizes));
+}
+
+static JSValue js_decodeFlatAction(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "decodeFlatAction(flat, headSizes)");
+    int32_t flat = 0; JS_ToInt32(ctx, &flat, argv[0]);
+    auto sizes = readJSIntArray(ctx, argv[1]);
+    if (sizes.empty()) return JS_ThrowTypeError(ctx, "headSizes must be non-empty");
+    auto strides = nn::head_strides(sizes);
+    std::vector<int> out(sizes.size());
+    nn::decode_flat_action(flat, sizes, strides, out.data());
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < out.size(); ++i)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, out[i]));
+    return arr;
+}
+
+static JSValue js_encodeFlatAction(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "encodeFlatAction(perHead, headSizes)");
+    auto perHead = readJSIntArray(ctx, argv[0]);
+    auto sizes = readJSIntArray(ctx, argv[1]);
+    if (sizes.empty() || perHead.size() != sizes.size())
+        return JS_ThrowTypeError(ctx, "perHead/headSizes length mismatch");
+    auto strides = nn::head_strides(sizes);
+    return JS_NewInt32(ctx, nn::encode_flat_action(perHead.data(), strides, (int)sizes.size()));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
@@ -875,6 +995,12 @@ void installNNBindings(JSContext* ctx, JSValue gameObj) {
     JS_SetPropertyStr(ctx, nnObj, "xavierInit",       JS_NewCFunction(ctx, js_xavierInit, "xavierInit", 2));
     JS_SetPropertyStr(ctx, nnObj, "factoredSoftmax",  JS_NewCFunction(ctx, js_factoredSoftmax, "factoredSoftmax", 4));
     JS_SetPropertyStr(ctx, nnObj, "factoredXent",     JS_NewCFunction(ctx, js_factoredXent, "factoredXent", 8));
+
+    // Multi-head policy helpers (PolicyValueNet head_sizes / nn::factored_to_flat).
+    JS_SetPropertyStr(ctx, nnObj, "factoredToFlat",   JS_NewCFunction(ctx, js_factoredToFlat, "factoredToFlat", 4));
+    JS_SetPropertyStr(ctx, nnObj, "flatActionCount",  JS_NewCFunction(ctx, js_flatActionCount, "flatActionCount", 1));
+    JS_SetPropertyStr(ctx, nnObj, "decodeFlatAction", JS_NewCFunction(ctx, js_decodeFlatAction, "decodeFlatAction", 2));
+    JS_SetPropertyStr(ctx, nnObj, "encodeFlatAction", JS_NewCFunction(ctx, js_encodeFlatAction, "encodeFlatAction", 2));
 
     // Constants (mirrored here for policy-head shape discovery)
     JS_SetPropertyStr(ctx, nnObj, "N_MOVE",    JS_NewInt32(ctx, nn::FactoredPolicyHead::N_MOVE));
