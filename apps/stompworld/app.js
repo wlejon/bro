@@ -992,17 +992,26 @@
         // hand them off zero-copy via the transferList. Cloning the small
         // weights blob N times costs less than the cross-thread copy
         // postMessage would otherwise do for N recipients.
+        //
+        // Live worker is held back until trainer pretraining is complete
+        // (warmupInfo arrives). This keeps the user-visible agent off-screen
+        // during the 5000-step pretrain so they see the loading overlay
+        // instead of a half-trained net repeatedly choosing the same bad
+        // action. MCTS workers still get every publish — they're producing
+        // training data, not display.
+        sendWeightsTo(worker, bytes, version) {
+            const copy = new Uint8Array(bytes.length);
+            copy.set(bytes);
+            try {
+                worker.postMessage({
+                    type: 'weights', bytes: copy, version,
+                }, [copy.buffer]);
+            } catch (_) {}
+        },
         broadcastWeights(bytes, version) {
-            const recipients = [this.live, ...this.mctsWorkers].filter(Boolean);
-            for (let i = 0; i < recipients.length; i++) {
-                const copy = new Uint8Array(bytes.length);
-                copy.set(bytes);
-                try {
-                    recipients[i].postMessage({
-                        type: 'weights', bytes: copy, version,
-                    }, [copy.buffer]);
-                } catch (_) {}
-            }
+            const recipients = [...this.mctsWorkers].filter(Boolean);
+            if (this.live && this.warmupInfo) recipients.push(this.live);
+            for (const r of recipients) this.sendWeightsTo(r, bytes, version);
         },
 
         onTrainerMessage(m) {
@@ -1022,6 +1031,14 @@
                 // Anything produced during warmup was dropped on the main
                 // side to keep the trainer's inbox empty.
                 this.trainerReady = true;
+                // Pretraining is fully done. Push the most recent weights
+                // we've buffered to the live worker so it can spawn the
+                // agent. This is the catch-up send for everything we held
+                // back during pretrain (see broadcastWeights).
+                if (this.live && this.lastWeightsBytes) {
+                    this.sendWeightsTo(this.live,
+                        this.lastWeightsBytes, this.lastWeightsVersion);
+                }
             }
         },
 
@@ -1300,19 +1317,20 @@
         },
 
         drawLoading() {
-            // Shown until the live worker posts its first render snap. The
-            // play workers run concurrently with the trainer's BC warmup,
-            // so the first snap typically arrives well before warmup ends —
-            // this overlay just bridges the live worker's boot + first
-            // decision (loading shared libs, building net, first MCTS run).
-            // The trainer's warmup status is surfaced separately in the HUD
-            // line, so the agent can be visible-and-playing while training
-            // is still warming up.
-            const sub = this.warmupInfo
-                ? 'Booting live worker'
-                : 'Booting workers (trainer warmup runs in background)';
+            // Shown until the live worker posts its first render snap.
+            // Live worker weights are gated on the trainer's 'warmup'
+            // message (see broadcastWeights), so during the trainer's BC
+            // warmup + 5000-step pretrain the agent stays off-screen and
+            // this overlay tells the user something is happening. After
+            // warmup the live worker spawns and the overlay is dropped on
+            // the next snap.
             const dots = '.'.repeat(1 + ((Date.now() / 400) | 0) % 3);
-            const title = 'Loading training' + dots;
+            const title = this.warmupInfo
+                ? 'Spawning agent' + dots
+                : 'Pretraining the agent' + dots;
+            const sub = this.warmupInfo
+                ? 'Live worker booting'
+                : 'Behavior cloning + 5000-step pretrain in progress';
             ctx.save();
             ctx.fillStyle = 'rgba(0,0,0,0.65)';
             const boxW = 520, boxH = 110;
