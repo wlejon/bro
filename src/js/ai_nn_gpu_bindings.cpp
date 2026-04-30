@@ -64,14 +64,7 @@ static float* getFloatArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outCoun
     return reinterpret_cast<float*>(ptr + byteOff);
 }
 
-static JSValue makeFloat32ArrayCopy(JSContext* ctx, const float* data, int count) {
-    size_t bytes = (size_t)count * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, (const uint8_t*)data, bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
+using qjsbind::make_float32_array;
 
 // Unwrap the host AITensor wrapper. We don't have its struct definition here;
 // instead we duplicate just enough to peek at it using qjsbind's class id by
@@ -187,7 +180,7 @@ static void registerClasses(JSContext* ctx) {
                 }
                 nn::Tensor host(d->t.rows, d->t.cols);
                 nngpu::download(d->t, host);
-                return makeFloat32ArrayCopy(ctx, host.ptr(), host.size());
+                return make_float32_array(ctx, host.ptr(), host.size());
             }, 1);
 }
 

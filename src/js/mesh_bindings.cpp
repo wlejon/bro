@@ -167,14 +167,7 @@ static bool readUint8ArrayVal(JSContext* ctx, JSValueConst v, std::vector<uint8_
     return true;
 }
 
-static JSValue makeFloat32Array(JSContext* ctx, const std::vector<float>& vec) {
-    size_t bytes = vec.size() * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(vec.data()), bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
+using qjsbind::make_float32_array;
 
 static JSValue makeUint32Array(JSContext* ctx, const std::vector<uint32_t>& vec) {
     size_t bytes = vec.size() * sizeof(uint32_t);
@@ -198,7 +191,7 @@ static JSValue makeTextureBuffer(JSContext* ctx, const bromesh::TextureBuffer& t
     JS_SetPropertyStr(ctx, obj, "width",    JS_NewInt32(ctx, tb.width));
     JS_SetPropertyStr(ctx, obj, "height",   JS_NewInt32(ctx, tb.height));
     JS_SetPropertyStr(ctx, obj, "channels", JS_NewInt32(ctx, tb.channels));
-    JS_SetPropertyStr(ctx, obj, "pixels",   makeFloat32Array(ctx, tb.pixels));
+    JS_SetPropertyStr(ctx, obj, "pixels",   make_float32_array(ctx, tb.pixels));
     return obj;
 }
 
@@ -528,28 +521,28 @@ void MeshBindings::install(JSContext* ctx) {
     // ── TypedArray properties (getter + setter) ─────────────────────────
     .prop("positions",
         [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? makeFloat32Array(ctx, w->data->positions) : JS_UNDEFINED;
+            return w->data ? make_float32_array(ctx, w->data->positions) : JS_UNDEFINED;
         },
         [](MW* w, JSContext* ctx, JSValue val) {
             if (w->data) readFloatArrayVal(ctx, val, w->data->positions);
         })
     .prop("normals",
         [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? makeFloat32Array(ctx, w->data->normals) : JS_UNDEFINED;
+            return w->data ? make_float32_array(ctx, w->data->normals) : JS_UNDEFINED;
         },
         [](MW* w, JSContext* ctx, JSValue val) {
             if (w->data) readFloatArrayVal(ctx, val, w->data->normals);
         })
     .prop("uvs",
         [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? makeFloat32Array(ctx, w->data->uvs) : JS_UNDEFINED;
+            return w->data ? make_float32_array(ctx, w->data->uvs) : JS_UNDEFINED;
         },
         [](MW* w, JSContext* ctx, JSValue val) {
             if (w->data) readFloatArrayVal(ctx, val, w->data->uvs);
         })
     .prop("colors",
         [](MW* w, JSContext* ctx) -> JSValue {
-            return w->data ? makeFloat32Array(ctx, w->data->colors) : JS_UNDEFINED;
+            return w->data ? make_float32_array(ctx, w->data->colors) : JS_UNDEFINED;
         },
         [](MW* w, JSContext* ctx, JSValue val) {
             if (w->data) readFloatArrayVal(ctx, val, w->data->colors);
@@ -684,7 +677,7 @@ void MeshBindings::install(JSContext* ctx) {
 
     .method("computeTangents", [](MW* w, JSContext* ctx) -> JSValue {
         if (!w->data) return JS_UNDEFINED;
-        return makeFloat32Array(ctx, bromesh::computeTangents(*w->data));
+        return make_float32_array(ctx, bromesh::computeTangents(*w->data));
     })
 
     // ── Simplification ──────────────────────────────────────────────────
@@ -950,7 +943,7 @@ void MeshBindings::install(JSContext* ctx) {
 
     .method("triangleAreas", [](MW* w, JSContext* ctx) -> JSValue {
         if (!w->data) return JS_UNDEFINED;
-        return makeFloat32Array(ctx, bromesh::computeTriangleAreas(*w->data));
+        return make_float32_array(ctx, bromesh::computeTriangleAreas(*w->data));
     })
 
     // ── Vertex-space baking ─────────────────────────────────────────────
@@ -1665,8 +1658,8 @@ void MeshBindings::install(JSContext* ctx) {
         if (!w->pm) return JS_NULL;
         auto t = w->pm->tessellate();
         JSValue obj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, obj, "positions", makeFloat32Array(ctx, t.positions));
-        JS_SetPropertyStr(ctx, obj, "normals",   makeFloat32Array(ctx, t.normals));
+        JS_SetPropertyStr(ctx, obj, "positions", make_float32_array(ctx, t.positions));
+        JS_SetPropertyStr(ctx, obj, "normals",   make_float32_array(ctx, t.normals));
         JS_SetPropertyStr(ctx, obj, "indices",   makeUint32Array(ctx, t.indices));
         // triToFace + triToGroup as Int32-typed arrays via Uint32 storage
         // (downstream JS just reads them as numeric arrays).

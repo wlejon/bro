@@ -127,22 +127,9 @@ std::vector<int> readIntArray(JSContext* ctx, JSValueConst val) {
     return out;
 }
 
-JSValue makeFloat32Array(JSContext* ctx, const std::vector<float>& v) {
-    JSValue ab = JS_NewArrayBufferCopy(ctx,
-        reinterpret_cast<const uint8_t*>(v.data()), v.size() * sizeof(float));
-    JSValue args[3] = { ab, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, ab);
-    return arr;
-}
-
-JSValue makeInt32Array(JSContext* ctx, const std::vector<int>& v) {
-    JSValue ab = JS_NewArrayBufferCopy(ctx,
-        reinterpret_cast<const uint8_t*>(v.data()), v.size() * sizeof(int32_t));
-    JSValue args[3] = { ab, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_INT32);
-    JS_FreeValue(ctx, ab);
-    return arr;
+using qjsbind::make_float32_array;
+static inline JSValue make_int32_array_from_ints(JSContext* ctx, const std::vector<int>& v) {
+    return qjsbind::make_int32_array(ctx, reinterpret_cast<const int32_t*>(v.data()), v.size());
 }
 
 double getDouble(JSContext* ctx, JSValueConst obj, const char* k, double d) {
@@ -483,9 +470,9 @@ static mcts_ns::GenericEnv buildEnvFromJs(JsEnvCallbacks* cb) {
 
 static JSValue situationToJs(JSContext* ctx, const learn::GenericSituation& s) {
     JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "obs",          makeFloat32Array(ctx, s.obs));
-    JS_SetPropertyStr(ctx, o, "policyTarget", makeFloat32Array(ctx, s.policy_target));
-    JS_SetPropertyStr(ctx, o, "actionMask",   makeFloat32Array(ctx, s.action_mask));
+    JS_SetPropertyStr(ctx, o, "obs",          make_float32_array(ctx, s.obs));
+    JS_SetPropertyStr(ctx, o, "policyTarget", make_float32_array(ctx, s.policy_target));
+    JS_SetPropertyStr(ctx, o, "actionMask",   make_float32_array(ctx, s.action_mask));
     JS_SetPropertyStr(ctx, o, "valueTarget",  JS_NewFloat64(ctx, s.value_target));
     return o;
 }
@@ -546,8 +533,8 @@ static JSValue js_generateBC(JSContext* ctx, JSValueConst, int argc, JSValueCons
 
     grid::HeuristicPolicyFn policy = [ctx, heuristicV](const std::vector<float>& obs,
                                                        const std::vector<int>&   legal) {
-        JSValue ov = makeFloat32Array(ctx, obs);
-        JSValue lv = makeInt32Array(ctx, legal);
+        JSValue ov = make_float32_array(ctx, obs);
+        JSValue lv = make_int32_array_from_ints(ctx, legal);
         JSValueConst args[2] = { ov, lv };
         JSValue r = JS_Call(ctx, heuristicV, JS_UNDEFINED, 2, args);
         JS_FreeValue(ctx, ov); JS_FreeValue(ctx, lv);
@@ -813,7 +800,7 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
                 if (argc >= 3) self = readFloat32Array(ctx, argv[2]);
                 std::vector<float> out(static_cast<size_t>(d->win->out_dim()), 0.0f);
                 d->win->build(ec, er, self.empty() ? nullptr : self.data(), self.size(), out.data());
-                return makeFloat32Array(ctx, out);
+                return make_float32_array(ctx, out);
             }, 3);
 
     JS_SetPropertyStr(ctx, gridObj, "createObsWindow",
@@ -836,8 +823,8 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
                 return JS_UNDEFINED;
             }, 1)
         .method("read", [](FrameStackData* d, JSContext* ctx) -> JSValue {
-            if (!d || !d->fs) return makeFloat32Array(ctx, {});
-            return makeFloat32Array(ctx, d->fs->read());
+            if (!d || !d->fs) return make_float32_array(ctx, {});
+            return make_float32_array(ctx, d->fs->read());
         });
     JS_SetPropertyStr(ctx, gridObj, "createFrameStack",
         JS_NewCFunction(ctx, js_createFrameStack, "createFrameStack", 1));
@@ -867,21 +854,21 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
         .method_raw("multipliers",
             [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                 auto* d = qjsbind::unwrap<FailureTapeData>(ctx, this_val);
-                if (!d || !d->tape || argc < 2) return makeFloat32Array(ctx, {});
+                if (!d || !d->tape || argc < 2) return make_float32_array(ctx, {});
                 const char* sigC = JS_ToCString(ctx, argv[0]);
                 std::string sig = sigC ? sigC : ""; if (sigC) JS_FreeCString(ctx, sigC);
                 int32_t n = 0; JS_ToInt32(ctx, &n, argv[1]);
-                return makeFloat32Array(ctx, d->tape->multipliers(sig, n));
+                return make_float32_array(ctx, d->tape->multipliers(sig, n));
             }, 2)
         .method_raw("applyPriors",
             [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                 auto* d = qjsbind::unwrap<FailureTapeData>(ctx, this_val);
-                if (!d || !d->tape || argc < 2) return makeFloat32Array(ctx, {});
+                if (!d || !d->tape || argc < 2) return make_float32_array(ctx, {});
                 const char* sigC = JS_ToCString(ctx, argv[0]);
                 std::string sig = sigC ? sigC : ""; if (sigC) JS_FreeCString(ctx, sigC);
                 auto prior = readFloat32Array(ctx, argv[1]);
                 d->tape->apply_priors(sig, prior.data(), static_cast<int>(prior.size()));
-                return makeFloat32Array(ctx, prior);
+                return make_float32_array(ctx, prior);
             }, 2)
         .method("clear", [](FailureTapeData* d) { if (d && d->tape) d->tape->clear(); });
     JS_SetPropertyStr(ctx, gridObj, "createFailureTape",
@@ -915,7 +902,7 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
                 }
             }
             JS_SetPropertyStr(ctx, o, "snapshot", snap);
-            JS_SetPropertyStr(ctx, o, "prefix", makeInt32Array(ctx, seed.prefix));
+            JS_SetPropertyStr(ctx, o, "prefix", make_int32_array_from_ints(ctx, seed.prefix));
             return o;
         })
         .method("clear", [](BestCropData* d) { if (d && d->pool) d->pool->clear(); });

@@ -103,14 +103,7 @@ static bool readUint8ArrayVal(JSContext* ctx, JSValueConst v, std::vector<uint8_
     return true;
 }
 
-static JSValue makeFloat32Array(JSContext* ctx, const std::vector<float>& vec) {
-    size_t bytes = vec.size() * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(vec.data()), bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
+using qjsbind::make_float32_array;
 
 static JSValue makeUint32Array(JSContext* ctx, const std::vector<uint32_t>& vec) {
     size_t bytes = vec.size() * sizeof(uint32_t);
@@ -229,8 +222,8 @@ static JSValue makeChannel(JSContext* ctx, const bromesh::AnimChannel& c) {
     JS_SetPropertyStr(ctx, obj, "boneIndex", JS_NewInt32(ctx, c.boneIndex));
     JS_SetPropertyStr(ctx, obj, "path",      JS_NewString(ctx, pathToString(c.path)));
     JS_SetPropertyStr(ctx, obj, "interp",    JS_NewString(ctx, interpToString(c.interp)));
-    JS_SetPropertyStr(ctx, obj, "times",     makeFloat32Array(ctx, c.times));
-    JS_SetPropertyStr(ctx, obj, "values",    makeFloat32Array(ctx, c.values));
+    JS_SetPropertyStr(ctx, obj, "times",     make_float32_array(ctx, c.times));
+    JS_SetPropertyStr(ctx, obj, "values",    make_float32_array(ctx, c.values));
     return obj;
 }
 
@@ -903,7 +896,7 @@ void RiggingBindings::install(JSContext* ctx) {
     // ── TypedArray properties (getter + setter) ─────────────────────────
     .prop("boneWeights",
         [](SDW* w, JSContext* ctx) -> JSValue {
-            return w->data ? makeFloat32Array(ctx, w->data->boneWeights) : JS_UNDEFINED;
+            return w->data ? make_float32_array(ctx, w->data->boneWeights) : JS_UNDEFINED;
         },
         [](SDW* w, JSContext* ctx, JSValue val) {
             if (w->data) readFloatArrayVal(ctx, val, w->data->boneWeights);
@@ -917,7 +910,7 @@ void RiggingBindings::install(JSContext* ctx) {
         })
     .prop("inverseBindMatrices",
         [](SDW* w, JSContext* ctx) -> JSValue {
-            return w->data ? makeFloat32Array(ctx, w->data->inverseBindMatrices) : JS_UNDEFINED;
+            return w->data ? make_float32_array(ctx, w->data->inverseBindMatrices) : JS_UNDEFINED;
         },
         [](SDW* w, JSContext* ctx, JSValue val) {
             if (w->data) readFloatArrayVal(ctx, val, w->data->inverseBindMatrices);
@@ -1088,7 +1081,7 @@ void RiggingBindings::install(JSContext* ctx) {
 
     .prop("data",
         [](PW* w, JSContext* ctx) -> JSValue {
-            return w->pose ? makeFloat32Array(ctx, w->pose->data) : JS_UNDEFINED;
+            return w->pose ? make_float32_array(ctx, w->pose->data) : JS_UNDEFINED;
         },
         [](PW* w, JSContext* ctx, JSValue val) {
             if (w->pose) readFloatArrayVal(ctx, val, w->pose->data);
@@ -1109,7 +1102,7 @@ void RiggingBindings::install(JSContext* ctx) {
         if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "argument must be a Skeleton");
         std::vector<float> out;
         bromesh::computeWorldMatrices(*sk->skel, *w->pose, out);
-        return makeFloat32Array(ctx, out);
+        return make_float32_array(ctx, out);
     })
 
     .method("computeSkinningMatrices", [](PW* w, JSContext* ctx, JSValue skelVal) -> JSValue {
@@ -1118,7 +1111,7 @@ void RiggingBindings::install(JSContext* ctx) {
         if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "argument must be a Skeleton");
         std::vector<float> out;
         bromesh::computeSkinningMatrices(*sk->skel, *w->pose, out);
-        return makeFloat32Array(ctx, out);
+        return make_float32_array(ctx, out);
     })
 
     .method("socketWorld", [](PW* w, JSContext* ctx, JSValue skelVal, std::string name) -> JSValue {
@@ -1128,7 +1121,7 @@ void RiggingBindings::install(JSContext* ctx) {
         float m[16];
         if (!bromesh::socketWorldMatrix(*sk->skel, *w->pose, name, m)) return JS_NULL;
         std::vector<float> v(m, m + 16);
-        return makeFloat32Array(ctx, v);
+        return make_float32_array(ctx, v);
     })
 
     .static_method("blend", [](JSContext* ctx, JSValue aVal, JSValue bVal, double weight,

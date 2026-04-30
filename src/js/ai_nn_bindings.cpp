@@ -81,14 +81,7 @@ static float* getFloatArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outCoun
     return reinterpret_cast<float*>(ptr + byteOff);
 }
 
-static JSValue makeFloat32ArrayCopy(JSContext* ctx, const float* data, int count) {
-    size_t bytes = (size_t)count * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, (const uint8_t*)data, bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
+using qjsbind::make_float32_array;
 
 static JSValue makeUint8ArrayCopy(JSContext* ctx, const uint8_t* data, size_t count) {
     JSValue abuf = JS_NewArrayBufferCopy(ctx, data, count);
@@ -129,7 +122,7 @@ static void registerClasses(JSContext* ctx) {
                 })
             .method("toArray",
                 [](TensorData* d, JSContext* ctx) -> JSValue {
-                    return makeFloat32ArrayCopy(ctx, d->t.ptr(), d->t.size());
+                    return make_float32_array(ctx, d->t.ptr(), d->t.size());
                 })
             .method_raw("fromArray",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {

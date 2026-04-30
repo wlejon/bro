@@ -85,14 +85,7 @@ static int32_t getInt(JSContext* ctx, JSValueConst obj, const char* k, int32_t d
     return out;
 }
 
-static JSValue makeFloat32ArrayCopy(JSContext* ctx, const float* data, int count) {
-    size_t bytes = (size_t)count * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, (const uint8_t*)data, bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
+using qjsbind::make_float32_array;
 
 // Copy floats out of a typed-array property into a destination array.
 // Returns true iff the source was a Float32Array (or compatible) with at least
@@ -119,17 +112,17 @@ static bool copyFloatProp(JSContext* ctx, JSValueConst obj, const char* key,
 static JSValue makeSituationObject(JSContext* ctx, const learn::Situation& s) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "obs",
-        makeFloat32ArrayCopy(ctx, s.obs.data(), (int)s.obs.size()));
+        make_float32_array(ctx, s.obs.data(), (int)s.obs.size()));
     JS_SetPropertyStr(ctx, o, "atkMask",
-        makeFloat32ArrayCopy(ctx, s.atk_mask.data(), (int)s.atk_mask.size()));
+        make_float32_array(ctx, s.atk_mask.data(), (int)s.atk_mask.size()));
     JS_SetPropertyStr(ctx, o, "abilMask",
-        makeFloat32ArrayCopy(ctx, s.abil_mask.data(), (int)s.abil_mask.size()));
+        make_float32_array(ctx, s.abil_mask.data(), (int)s.abil_mask.size()));
     JS_SetPropertyStr(ctx, o, "targetMove",
-        makeFloat32ArrayCopy(ctx, s.target_move.data(), (int)s.target_move.size()));
+        make_float32_array(ctx, s.target_move.data(), (int)s.target_move.size()));
     JS_SetPropertyStr(ctx, o, "targetAttack",
-        makeFloat32ArrayCopy(ctx, s.target_attack.data(), (int)s.target_attack.size()));
+        make_float32_array(ctx, s.target_attack.data(), (int)s.target_attack.size()));
     JS_SetPropertyStr(ctx, o, "targetAbility",
-        makeFloat32ArrayCopy(ctx, s.target_ability.data(), (int)s.target_ability.size()));
+        make_float32_array(ctx, s.target_ability.data(), (int)s.target_ability.size()));
     JS_SetPropertyStr(ctx, o, "valueTarget", JS_NewFloat64(ctx, s.value_target));
     return o;
 }
@@ -151,9 +144,6 @@ static bool readSituation(JSContext* ctx, JSValueConst v, learn::Situation& out)
 // JS shape: { obs: Float32Array, policyTarget: Float32Array,
 //             actionMask?: Float32Array, valueTarget: number }
 
-static JSValue makeFloat32ArrayCopyVec(JSContext* ctx, const std::vector<float>& v) {
-    return makeFloat32ArrayCopy(ctx, v.data(), (int)v.size());
-}
 
 static bool readFloatVec(JSContext* ctx, JSValueConst obj, const char* key,
                          std::vector<float>& out, bool required) {
@@ -184,9 +174,9 @@ static bool readFloatVec(JSContext* ctx, JSValueConst obj, const char* key,
 
 static JSValue makeGenericSituationObject(JSContext* ctx, const learn::GenericSituation& s) {
     JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "obs",          makeFloat32ArrayCopyVec(ctx, s.obs));
-    JS_SetPropertyStr(ctx, o, "policyTarget", makeFloat32ArrayCopyVec(ctx, s.policy_target));
-    JS_SetPropertyStr(ctx, o, "actionMask",   makeFloat32ArrayCopyVec(ctx, s.action_mask));
+    JS_SetPropertyStr(ctx, o, "obs",          make_float32_array(ctx, s.obs));
+    JS_SetPropertyStr(ctx, o, "policyTarget", make_float32_array(ctx, s.policy_target));
+    JS_SetPropertyStr(ctx, o, "actionMask",   make_float32_array(ctx, s.action_mask));
     JS_SetPropertyStr(ctx, o, "valueTarget",  JS_NewFloat64(ctx, s.value_target));
     return o;
 }
@@ -606,9 +596,9 @@ static JSValue js_targetsFromMcts(JSContext* ctx, JSValueConst, int argc, JSValu
     float tb[nn::FactoredPolicyHead::N_ABILITY] = {};
     learn::targets_from_root(*root, tm, ta, tb);
     JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "move",    makeFloat32ArrayCopy(ctx, tm, nn::FactoredPolicyHead::N_MOVE));
-    JS_SetPropertyStr(ctx, obj, "attack",  makeFloat32ArrayCopy(ctx, ta, nn::FactoredPolicyHead::N_ATTACK));
-    JS_SetPropertyStr(ctx, obj, "ability", makeFloat32ArrayCopy(ctx, tb, nn::FactoredPolicyHead::N_ABILITY));
+    JS_SetPropertyStr(ctx, obj, "move",    make_float32_array(ctx, tm, nn::FactoredPolicyHead::N_MOVE));
+    JS_SetPropertyStr(ctx, obj, "attack",  make_float32_array(ctx, ta, nn::FactoredPolicyHead::N_ATTACK));
+    JS_SetPropertyStr(ctx, obj, "ability", make_float32_array(ctx, tb, nn::FactoredPolicyHead::N_ABILITY));
     return obj;
 }
 
@@ -635,9 +625,9 @@ static JSValue js_gumbelImprovedPolicy(JSContext* ctx, JSValueConst, int argc, J
     float tb[9] = {};  // N_ABILITY_SLOTS + 1 (MAX_ABILITIES=8)
     learn::gumbel_improved_policy(*root, tm, ta, tb);
     JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "move",    makeFloat32ArrayCopy(ctx, tm, 9));
-    JS_SetPropertyStr(ctx, obj, "attack",  makeFloat32ArrayCopy(ctx, ta, 6));
-    JS_SetPropertyStr(ctx, obj, "ability", makeFloat32ArrayCopy(ctx, tb, 9));
+    JS_SetPropertyStr(ctx, obj, "move",    make_float32_array(ctx, tm, 9));
+    JS_SetPropertyStr(ctx, obj, "attack",  make_float32_array(ctx, ta, 6));
+    JS_SetPropertyStr(ctx, obj, "ability", make_float32_array(ctx, tb, 9));
     return obj;
 }
 
