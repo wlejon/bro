@@ -8,7 +8,7 @@ namespace brogameagent {
     class Agent;
     class World;
     class NavGrid;
-    namespace nn { class SingleHeroNet; class PolicyValueNet; class WeightsHandle; namespace gpu { struct GpuTensor; } }
+    namespace nn { class SingleHeroNet; class PolicyValueNet; class SingleHeroNetTX; class WeightsHandle; namespace gpu { struct GpuTensor; } }
     namespace mcts { class Mcts; class IPrior; class IEvaluator; class ITeamEvaluator; class IRolloutPolicy; }
 }
 
@@ -71,6 +71,9 @@ brogameagent::nn::WeightsHandle* nnWeightsHandleFromJS(JSContext* ctx, JSValueCo
 brogameagent::nn::PolicyValueNet* nnPolicyValueNetFromJS(JSContext* ctx, JSValueConst v);
 std::shared_ptr<brogameagent::nn::PolicyValueNet>
 nnPolicyValueNetSharedFromJS(JSContext* ctx, JSValueConst v);
+brogameagent::nn::SingleHeroNetTX* nnSingleHeroNetTXFromJS(JSContext* ctx, JSValueConst v);
+std::shared_ptr<brogameagent::nn::SingleHeroNetTX>
+nnSingleHeroNetTXSharedFromJS(JSContext* ctx, JSValueConst v);
 brogameagent::mcts::Mcts*        mctsFromJS(JSContext* ctx, JSValueConst v);
 
 // ── Learn bindings (implemented in ai_learn_bindings.cpp) ──

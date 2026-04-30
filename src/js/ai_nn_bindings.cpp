@@ -19,6 +19,7 @@
 #include <brogameagent/nn/heads.h>
 #include <brogameagent/nn/net.h>
 #include <brogameagent/nn/policy_value_net.h>
+#include <brogameagent/nn/net_tx.h>
 #include <brogameagent/nn/factored.h>
 
 #include <cctype>
@@ -41,6 +42,7 @@ struct ValueHeadData             { nn::ValueHead v; };
 struct FactoredPolicyHeadData    { nn::FactoredPolicyHead h; };
 struct SingleHeroNetData         { std::shared_ptr<nn::SingleHeroNet> net; };
 struct PolicyValueNetData        { std::shared_ptr<nn::PolicyValueNet> net; };
+struct SingleHeroNetTXData       { std::shared_ptr<nn::SingleHeroNetTX> net; };
 struct WeightsHandleData         { std::shared_ptr<nn::WeightsHandle> handle; };
 
 // ─── Small helpers ─────────────────────────────────────────────────────────
@@ -549,6 +551,97 @@ static void registerClasses(JSContext* ctx) {
                 }, 1);
     }
 
+    // ── SingleHeroNetTX ────────────────────────────────────────────────────
+    // Transformer-based per-hero net. Mirrors AIPolicyValueNet's surface so
+    // it can drop into the same trainer / inference plumbing — see
+    // ai_learn_bindings.cpp setNet(...) which accepts either net.
+    {
+        qjsbind::Class<SingleHeroNetTXData>(ctx, "AISingleHeroNetTX", qjsbind::NoGlobal)
+            .get("inDim",      [](SingleHeroNetTXData* d) -> int { return d->net ? d->net->in_dim() : 0; })
+            .get("numActions", [](SingleHeroNetTXData* d) -> int { return d->net ? d->net->num_actions() : 0; })
+            .get("numHeads",   [](SingleHeroNetTXData* d) -> int { return d->net ? d->net->num_heads() : 0; })
+            .get("numParams",  [](SingleHeroNetTXData* d) -> int { return d->net ? d->net->num_params() : 0; })
+            .method("headSizes",
+                [](SingleHeroNetTXData* d, JSContext* ctx) -> JSValue {
+                    if (!d->net) return JS_NewArray(ctx);
+                    const auto& s = d->net->head_sizes();
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < s.size(); ++i)
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, s[i]));
+                    return arr;
+                })
+            .method("headOffsets",
+                [](SingleHeroNetTXData* d, JSContext* ctx) -> JSValue {
+                    if (!d->net) return JS_NewArray(ctx);
+                    const auto& o = d->net->head_offsets();
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < o.size(); ++i)
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, o[i]));
+                    return arr;
+                })
+            .method("forward",
+                [](SingleHeroNetTXData* d, JSContext* ctx, JSValueConst x, JSValueConst logits) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    auto* xt = tensorFromJS(ctx, x); auto* lt = tensorFromJS(ctx, logits);
+                    if (!xt || !lt) return JS_ThrowTypeError(ctx, "SingleHeroNetTX.forward(x,logits)");
+                    float v = 0.0f;
+                    d->net->forward(*xt, v, *lt);
+                    return JS_NewFloat64(ctx, v);
+                })
+            .method("backward",
+                [](SingleHeroNetTXData* d, JSContext* ctx, double dValue, JSValueConst dLogits) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    auto* dl = tensorFromJS(ctx, dLogits);
+                    if (!dl) return JS_ThrowTypeError(ctx, "SingleHeroNetTX.backward(dValue,dLogits)");
+                    d->net->backward((float)dValue, *dl);
+                    return JS_UNDEFINED;
+                })
+            .method("zeroGrad", [](SingleHeroNetTXData* d) { if (d->net) d->net->zero_grad(); })
+            .method("sgdStep",  [](SingleHeroNetTXData* d, double lr, double m) { if (d->net) d->net->sgd_step((float)lr, (float)m); })
+            .method("adamStep",
+                [](SingleHeroNetTXData* d, double lr, double b1, double b2, double eps, int32_t step) {
+                    if (d->net) d->net->adam_step((float)lr, (float)b1, (float)b2, (float)eps, step);
+                })
+            .method("to",
+                [](SingleHeroNetTXData* d, JSContext* ctx, JSValueConst devV) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    const char* s = JS_ToCString(ctx, devV);
+                    std::string dev = s ? s : "";
+                    if (s) JS_FreeCString(ctx, s);
+                    for (auto& c : dev) c = (char)std::tolower((unsigned char)c);
+                    nn::Device target = (dev == "gpu") ? nn::Device::GPU : nn::Device::CPU;
+                    try { d->net->to(target); }
+                    catch (const std::exception& e) { return JS_ThrowInternalError(ctx, "%s", e.what()); }
+                    return JS_UNDEFINED;
+                })
+            .get("device",
+                [](SingleHeroNetTXData* d) -> std::string {
+                    if (!d->net) return std::string("cpu");
+                    return d->net->device() == nn::Device::GPU ? std::string("gpu") : std::string("cpu");
+                })
+            .method("save",
+                [](SingleHeroNetTXData* d, JSContext* ctx) -> JSValue {
+                    if (!d->net) return makeUint8ArrayCopy(ctx, nullptr, 0);
+                    auto blob = d->net->save();
+                    return makeUint8ArrayCopy(ctx, blob.data(), blob.size());
+                })
+            .method_raw("load",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<SingleHeroNetTXData>(ctx, this_val);
+                    if (!d || !d->net || argc < 1) return JS_UNDEFINED;
+                    size_t byteOff = 0, viewLen = 0;
+                    JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
+                    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return JS_ThrowTypeError(ctx, "expected TypedArray"); }
+                    size_t abufLen = 0;
+                    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+                    JS_FreeValue(ctx, abuf);
+                    if (!raw) return JS_ThrowTypeError(ctx, "bad buffer");
+                    std::vector<uint8_t> blob(raw + byteOff, raw + byteOff + viewLen);
+                    d->net->load(blob);
+                    return JS_UNDEFINED;
+                }, 1);
+    }
+
     // ── WeightsHandle ──────────────────────────────────────────────────────
     {
         qjsbind::Class<WeightsHandleData>(ctx, "AIWeightsHandle", qjsbind::NoGlobal)
@@ -732,6 +825,26 @@ static JSValue js_createPolicyValueNet(JSContext* ctx, JSValueConst, int argc, J
     auto net = std::make_shared<nn::PolicyValueNet>();
     net->init(cfg);
     return qjsbind::wrap<PolicyValueNetData>(ctx, new PolicyValueNetData{ std::move(net) });
+}
+
+static JSValue js_createSingleHeroNetTX(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    nn::SingleHeroNetTX::Config cfg{};
+    if (argc >= 1 && JS_IsObject(argv[0])) {
+        cfg.self_hidden  = getInt(ctx, argv[0], "selfHidden",  cfg.self_hidden);
+        cfg.slot_proj    = getInt(ctx, argv[0], "slotProj",    cfg.slot_proj);
+        cfg.d_model      = getInt(ctx, argv[0], "dModel",      cfg.d_model);
+        cfg.d_ff         = getInt(ctx, argv[0], "dFf",         cfg.d_ff);
+        cfg.num_heads    = getInt(ctx, argv[0], "numHeads",    cfg.num_heads);
+        cfg.num_blocks   = getInt(ctx, argv[0], "numBlocks",   cfg.num_blocks);
+        cfg.trunk_hidden = getInt(ctx, argv[0], "trunkHidden", cfg.trunk_hidden);
+        cfg.value_hidden = getInt(ctx, argv[0], "valueHidden", cfg.value_hidden);
+        JSValue seedV = JS_GetPropertyStr(ctx, argv[0], "seed");
+        cfg.seed = readSeed(ctx, seedV, cfg.seed);
+        JS_FreeValue(ctx, seedV);
+    }
+    auto net = std::make_shared<nn::SingleHeroNetTX>();
+    net->init(cfg);
+    return qjsbind::wrap<SingleHeroNetTXData>(ctx, new SingleHeroNetTXData{ std::move(net) });
 }
 
 // ─── Ops ───────────────────────────────────────────────────────────────────
@@ -991,6 +1104,7 @@ void installNNBindings(JSContext* ctx, JSValue gameObj) {
     JS_SetPropertyStr(ctx, nnObj, "createFactoredPolicyHead", JS_NewCFunction(ctx, js_createFactoredPolicyHead, "createFactoredPolicyHead", 2));
     JS_SetPropertyStr(ctx, nnObj, "createSingleHeroNet",      JS_NewCFunction(ctx, js_createSingleHeroNet, "createSingleHeroNet", 1));
     JS_SetPropertyStr(ctx, nnObj, "createPolicyValueNet",     JS_NewCFunction(ctx, js_createPolicyValueNet, "createPolicyValueNet", 1));
+    JS_SetPropertyStr(ctx, nnObj, "createSingleHeroNetTX",    JS_NewCFunction(ctx, js_createSingleHeroNetTX, "createSingleHeroNetTX", 1));
     JS_SetPropertyStr(ctx, nnObj, "createWeightsHandle",      JS_NewCFunction(ctx, js_createWeightsHandle, "createWeightsHandle", 0));
 
     // Ops
@@ -1049,6 +1163,14 @@ nn::PolicyValueNet* nnPolicyValueNetFromJS(JSContext* ctx, JSValueConst v) {
 std::shared_ptr<nn::PolicyValueNet> nnPolicyValueNetSharedFromJS(JSContext* ctx, JSValueConst v) {
     auto* d = qjsbind::unwrap<PolicyValueNetData>(ctx, v);
     return d ? d->net : std::shared_ptr<nn::PolicyValueNet>{};
+}
+nn::SingleHeroNetTX* nnSingleHeroNetTXFromJS(JSContext* ctx, JSValueConst v) {
+    auto* d = qjsbind::unwrap<SingleHeroNetTXData>(ctx, v);
+    return d && d->net ? d->net.get() : nullptr;
+}
+std::shared_ptr<nn::SingleHeroNetTX> nnSingleHeroNetTXSharedFromJS(JSContext* ctx, JSValueConst v) {
+    auto* d = qjsbind::unwrap<SingleHeroNetTXData>(ctx, v);
+    return d ? d->net : std::shared_ptr<nn::SingleHeroNetTX>{};
 }
 
 } // namespace bro::js

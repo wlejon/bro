@@ -64,7 +64,10 @@ struct GenericReplayBufferData {
 
 struct GenericExItTrainerData {
     std::unique_ptr<learn::GenericExItTrainer>      trainer;
-    std::shared_ptr<nn::PolicyValueNet>             netRef;
+    // Lifetime anchors for whichever net the trainer is currently driving.
+    // Exactly one is set after setNet(); the other stays null.
+    std::shared_ptr<nn::PolicyValueNet>             pvnRef;
+    std::shared_ptr<nn::SingleHeroNetTX>            txRef;
     std::shared_ptr<nn::WeightsHandle>              handleRef;
     std::shared_ptr<learn::GenericReplayBuffer>     bufRef;
 };
@@ -415,10 +418,21 @@ static void registerClasses(JSContext* ctx) {
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* d = qjsbind::unwrap<GenericExItTrainerData>(ctx, this_val);
                     if (!d || !d->trainer || argc < 1) return JS_UNDEFINED;
-                    auto netShared = nnPolicyValueNetSharedFromJS(ctx, argv[0]);
-                    if (!netShared) return JS_ThrowTypeError(ctx, "setNet(net): expected PolicyValueNet");
-                    d->netRef = netShared;
-                    d->trainer->set_net(netShared.get());
+                    // Try PolicyValueNet first, then SingleHeroNetTX. Whichever
+                    // matches anchors a shared_ptr in the wrapper to keep the
+                    // raw pointer the trainer holds alive.
+                    if (auto pvn = nnPolicyValueNetSharedFromJS(ctx, argv[0])) {
+                        d->pvnRef = pvn;
+                        d->txRef.reset();
+                        d->trainer->set_net(pvn.get());
+                    } else if (auto tx = nnSingleHeroNetTXSharedFromJS(ctx, argv[0])) {
+                        d->txRef = tx;
+                        d->pvnRef.reset();
+                        d->trainer->set_net(tx.get());
+                    } else {
+                        return JS_ThrowTypeError(ctx,
+                            "setNet(net): expected PolicyValueNet or SingleHeroNetTX");
+                    }
                     JS_SetPropertyStr(ctx, this_val, "__net", JS_DupValue(ctx, argv[0]));
                     return JS_UNDEFINED;
                 }, 1)
