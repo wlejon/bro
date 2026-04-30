@@ -83,13 +83,18 @@ let decisionsSinceStats = 0;
 const STATS_EVERY_DECISIONS = 200;
 const DECISIONS_PER_TICK = 32;
 
-// History tapes — same shape as the prior live worker's pair. Failure tape records
-// death/stall/timeout tails; success tape records flag-success tails.
-// Both suppress identical (sig, action) replays via priorAdjust below.
-let failureTape = null;
-let successTape = null;
+// History tape — single shared mask across ALL workers. Failure-like
+// terminals (death / stall / timeout) push the (sig, action) tail onto
+// the tape so the next MCTS search at the same coarse state down-weights
+// the recorded action. Flag-successes do NOT go on the tape: masking
+// wins drove the agent away from winning lines and left stalls as the
+// best-return trajectory in the visualizer. Workers post each recorded
+// trace to main as 'tape_record'; main fans it out to every other worker
+// as 'tape_apply' so a deep worker's failure pattern constrains shallow
+// workers' priors and vice versa. The local recordFailure call on
+// episode end is the source's own copy (no self-broadcast).
+let historyTape = null;
 const sigList = [];
-const TAPE_LOOKBACK = 8;
 
 function pickSpawn() {
     sim.setSpawn(SPAWN_COL * TILE + 2, baseSpawnY - 4);
@@ -105,21 +110,24 @@ function startEpisode() {
 
 function endEpisode(reason) {
     const r = agent.endEpisode(reason);
-    // Splice the tail into the matching history tape so MCTS searches
-    // on subsequent episodes can't repeat the exact same line at the
-    // exact same coarse state.
-    const targetTape =
-        (reason === 'death' || reason === 'stall' || reason === 'timeout') ? failureTape :
-        (reason === 'flag') ? successTape :
-        null;
-    if (targetTape) {
-        const len = Math.min(sigList.length, r.actions.length);
-        const start = Math.max(0, len - TAPE_LOOKBACK);
-        const tail = [];
-        for (let i = start; i < len; i++) {
-            tail.push({ sig: sigList[i], action: r.actions[i] });
+    // Only failure-like outcomes go on the tape. Masking flag-successes
+    // pushed the agent away from winning lines, leaving stalls as the
+    // best-return trajectory in the visualizer's ring. The NN training
+    // path still reinforces wins via supervised tuples; the tape's job
+    // is purely to nudge MCTS away from re-trying losing tails.
+    const isFailure = reason === 'death' || reason === 'stall' || reason === 'timeout';
+    const len = Math.min(sigList.length, r.actions.length);
+    if (isFailure && len > 0) {
+        const trace = new Array(len);
+        for (let i = 0; i < len; i++) {
+            trace[i] = { sig: sigList[i], action: r.actions[i] };
         }
-        if (tail.length) targetTape.recordFailure(tail);
+        historyTape.recordFailure(trace);
+        try {
+            self.postMessage({
+                type: 'tape_record', source: 'mcts', workerId, trace,
+            });
+        } catch (_) {}
     }
     self.postMessage({
         type: 'tuples', source: 'mcts', workerId, reason,
@@ -169,6 +177,8 @@ function runBatch() {
                 episodes, lastReason,
                 iterations: agent.iterations,
                 netVersion: agent.netVersion,
+                tapeSize:     historyTape ? historyTape.size     : 0,
+                tapeCapacity: historyTape ? historyTape.capacity : 0,
             });
             decisionsSinceStats = 0;
         }
@@ -185,20 +195,15 @@ self.onmessage = (e) => {
         workerId = m.workerId | 0;
         const built = buildSim();
         sim = built.sim; baseSpawnY = built.baseSpawnY;
-        // Per-worker history tapes. Each MCTS worker carries its own
-        // local tape state — no cross-worker sharing — but with N
-        // workers all pushing independently into the trainer, the
-        // aggregate diversity of recorded tuples is still substantially
-        // higher than the single-tape live worker delivered.
-        failureTape = bro.ai.game.grid.createFailureTape({
-            tapeDepth:    8,
-            ringCapacity: 200,
-            penalty:      0.1,
-            floor:        0.001,
-        });
-        successTape = bro.ai.game.grid.createFailureTape({
-            tapeDepth:    8,
-            ringCapacity: 200,
+        // Single tape per worker. Main keeps every worker's tape in sync
+        // by broadcasting each finished trace to peers — the local store
+        // here mirrors that union. tapeDepth is high so a long episode is
+        // recorded in full (the C++ tape truncates to the last tapeDepth
+        // entries internally); ringCapacity caps the live (sig, action)
+        // entries across all recorded traces.
+        historyTape = bro.ai.game.grid.createFailureTape({
+            tapeDepth:    1024,
+            ringCapacity: 500,
             penalty:      0.1,
             floor:        0.001,
         });
@@ -210,10 +215,7 @@ self.onmessage = (e) => {
             dirichletEpsilon: m.dirichletEpsilon != null ? m.dirichletEpsilon : 0.25,
             seed: BigInt(m.workerId | 0) * 0x9E3779B1n ^ 0xA11CE5n,
             sigFn: () => buildSig(sim),
-            priorAdjust: (sig, prior) => {
-                const a = failureTape.applyPriors(sig, prior);
-                return successTape.applyPriors(sig, a);
-            },
+            priorAdjust: (sig, prior) => historyTape.applyPriors(sig, prior),
         });
         if (m.bytes) agent.setWeights(new Uint8Array(m.bytes), m.version);
         running = true;
@@ -221,9 +223,14 @@ self.onmessage = (e) => {
         self.postMessage({ type: 'ready', source: 'mcts', workerId });
     } else if (m.type === 'weights') {
         if (agent) agent.setWeights(new Uint8Array(m.bytes), m.version);
-    } else if (m.type === 'clear_failures') {
-        if (failureTape) failureTape.clear();
-        if (successTape) successTape.clear();
+    } else if (m.type === 'tape_apply') {
+        // A peer worker just finished an episode; main forwarded the
+        // trace here so our priors mirror the union.
+        if (historyTape && m.trace && m.trace.length) {
+            historyTape.recordFailure(m.trace);
+        }
+    } else if (m.type === 'clear_tape') {
+        if (historyTape) historyTape.clear();
     } else if (m.type === 'tick') {
         runBatch();
     } else if (m.type === 'stop') {

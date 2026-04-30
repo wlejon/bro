@@ -850,8 +850,8 @@
         // search depths so the trainer sees a mix of cheap/diverse and
         // deep/confident visit distributions.
         NUM_MCTS_WORKERS: 5,
-        MCTS_DEPTHS:  [12, 18, 24, 48, 64],
-        MCTS_ROLLOUT: [4, 6, 8, 10, 12],
+        MCTS_DEPTHS:  [40, 80, 100, 100, 100],
+        MCTS_ROLLOUT: [4, 4, 4, 6, 10],
 
         // ── Replay state ─────────────────────────────────────────────────
         // Ring buffer of the last N trajectories from any worker. We
@@ -1025,6 +1025,17 @@
                 this.routeTuples(m);
             } else if (m.type === 'trajectory') {
                 this.ingestTrajectory(m);
+            } else if (m.type === 'tape_record') {
+                // Fan out to every other mcts worker so they all share a
+                // single union tape. Source already recorded its own copy.
+                for (let i = 0; i < this.mctsWorkers.length; i++) {
+                    if (i === idx) continue;
+                    const w = this.mctsWorkers[i];
+                    if (!w) continue;
+                    try {
+                        w.postMessage({ type: 'tape_apply', trace: m.trace });
+                    } catch (_) {}
+                }
             } else if (m.type === 'stats') {
                 this.mctsStats[idx] = m;
             } else if (m.type === 'ready') {
@@ -1391,9 +1402,19 @@
         drawHud() {
             const w = this.workerStats;
             const pr = this.primary;
+            // All workers mirror the same shared tape; pick any worker's
+            // reported size as the aggregate.
+            let tapeSize = 0, tapeCapacity = 0;
+            for (const ms of this.mctsStats) {
+                if (ms && ms.tapeSize != null) {
+                    tapeSize = ms.tapeSize;
+                    tapeCapacity = ms.tapeCapacity || 0;
+                    break;
+                }
+            }
             const lines = [
                 'TRAINING — F = fast' + (this.fast ? ' [ON]' : '')
-                    + '   C = clear failures   Esc = quit',
+                    + '   C = clear tape   Esc = quit',
                 'replay: ep ' + this.episodesPlayed
                     + '   ring ' + this.trajRing.length + '/' + this.TRAJ_RING_SIZE
                     + '   ghosts ' + this.ghostTracks.length
@@ -1401,6 +1422,7 @@
                         ? ('   primary: ' + pr.reason + ' R=' + pr.totalReturn.toFixed(2)
                            + ' bestX=' + (pr.bestX | 0))
                         : '   [waiting for first trajectory]'),
+                'history tape: ' + tapeSize + '/' + tapeCapacity + ' (shared across workers)',
                 'pool: ' + this.pool.size + '/' + this.poolCapacity
                     + '   top return ' + this.poolTopReturn.toFixed(2)
                     + '   accepted ' + this.poolAccepted,
@@ -1460,7 +1482,7 @@
             if (key === 'f' || key === 'F') this.fast = !this.fast;
             if (key === 'c' || key === 'C') {
                 for (const w of this.mctsWorkers || []) {
-                    try { w.postMessage({ type: 'clear_failures' }); } catch (_) {}
+                    try { w.postMessage({ type: 'clear_tape' }); } catch (_) {}
                 }
             }
         },
