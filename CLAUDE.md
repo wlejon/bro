@@ -129,6 +129,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
+| `docs/ai-game-gpu-api.js` | `bro.ai.game.nn.gpu` — CUDA-backed primitives: GpuTensor, dense/elementwise/softmax/layernorm/attention/MHA/embedding/concat/optim ops, batched inference variants |
 | `docs/brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals (fetch, crypto, WebSocket, streams, storage, etc.) |
 | `docs/physics-api.js` | `Physics` — Jolt rigid bodies, shapes, raycasts, contact events (paired with PhysicsNode) |
 | `docs/terrain-api.js` | `scene.createTerrain` — voxel terrain: noise config, chunk streaming, voxel edits, raycast |
