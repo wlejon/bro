@@ -800,9 +800,9 @@ static JSValue js_audioctx_setBusEffectOrder(JSContext* ctx, JSValueConst this_v
     JS_ToInt32(ctx, &len, lenVal);
     JS_FreeValue(ctx, lenVal);
 
-    if (len <= 0 || len > 6) return JS_UNDEFINED;
+    if (len <= 0 || len > 7) return JS_UNDEFINED;
 
-    broaudio::EffectSlot order[6];
+    broaudio::EffectSlot order[7];
     for (int32_t i = 0; i < len; i++) {
         JSValue elem = JS_GetPropertyUint32(ctx, argv[1], i);
         const char* str = JS_ToCString(ctx, elem);
@@ -813,6 +813,7 @@ static JSValue js_audioctx_setBusEffectOrder(JSContext* ctx, JSValueConst this_v
             else if (strcmp(str, "chorus") == 0) order[i] = broaudio::EffectSlot::Chorus;
             else if (strcmp(str, "reverb") == 0) order[i] = broaudio::EffectSlot::Reverb;
             else if (strcmp(str, "equalizer") == 0) order[i] = broaudio::EffectSlot::Equalizer;
+            else if (strcmp(str, "distortion") == 0) order[i] = broaudio::EffectSlot::Distortion;
             else order[i] = static_cast<broaudio::EffectSlot>(i);
             JS_FreeCString(ctx, str);
         }
@@ -1735,6 +1736,27 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, int busId, int band, double v) { d->engine->setBusEqBandGain(busId, band, static_cast<float>(v)); })
             .method("setBusEqMasterGain",
                 [](AudioCtxData* d, int busId, double v) { d->engine->setBusEqMasterGain(busId, static_cast<float>(v)); })
+            .method("setBusDistortionEnabled",
+                [](AudioCtxData* d, int busId, bool v) { d->engine->setBusDistortionEnabled(busId, v); })
+            .method("setBusDistortionMode",
+                [](AudioCtxData* d, int busId, std::string mode) {
+                    broaudio::DistortionMode m = broaudio::DistortionMode::SoftClip;
+                    if (mode == "softclip") m = broaudio::DistortionMode::SoftClip;
+                    else if (mode == "hardclip") m = broaudio::DistortionMode::HardClip;
+                    else if (mode == "foldback") m = broaudio::DistortionMode::Foldback;
+                    else if (mode == "bitcrush") m = broaudio::DistortionMode::Bitcrush;
+                    d->engine->setBusDistortionMode(busId, m);
+                })
+            .method("setBusDistortionDrive",
+                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionDrive(busId, static_cast<float>(v)); })
+            .method("setBusDistortionMix",
+                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionMix(busId, static_cast<float>(v)); })
+            .method("setBusDistortionOutputGain",
+                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionOutputGain(busId, static_cast<float>(v)); })
+            .method("setBusDistortionCrushBits",
+                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionCrushBits(busId, static_cast<float>(v)); })
+            .method("setBusDistortionCrushRate",
+                [](AudioCtxData* d, int busId, double v) { d->engine->setBusDistortionCrushRate(busId, static_cast<float>(v)); })
             .method("setBusCompressorSidechain",
                 [](AudioCtxData* d, int busId, int scBusId) { d->engine->setBusCompressorSidechain(busId, scBusId); })
 

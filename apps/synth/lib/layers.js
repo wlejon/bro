@@ -62,6 +62,7 @@
             chorus: { enabled: false, rate: 1.0, depth: 0.003, mix: 0.3, feedback: 0, baseDelay: 0.007 },
             compressor: { enabled: false, threshold: -12, ratio: 4, attack: 10, release: 100, sidechainBusId: -1 },
             eq: { enabled: false, masterGain: 0, bands: [0, 0, 0, 0, 0, 0, 0] },
+            distortion: { enabled: false, mode: 'softclip', drive: 2.5, mix: 1.0, outputGain: 0.7, crushBits: 8, crushRate: 0.5 },
             lfo: { enabled: false, rate: 2, depth: 0.3, waveform: 'sine', target: 'pitch' }
         };
     }
@@ -119,7 +120,7 @@
                 detune: p.unison ? val(p.unison.detune, 0.15) : 0.15,
                 stereoWidth: p.unison ? val(p.unison.stereoWidth, 0.7) : 0.7
             },
-            effectOrder: p.effectOrder ? p.effectOrder.slice() : ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer'],
+            effectOrder: p.effectOrder ? p.effectOrder.slice() : ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer', 'distortion'],
             filter: {
                 enabled: p.filter ? (p.filter.enabled || false) : false,
                 type: p.filter ? (p.filter.type || 'lowpass') : 'lowpass',
@@ -159,6 +160,15 @@
                 enabled: p.eq ? (p.eq.enabled || false) : false,
                 masterGain: p.eq ? val(p.eq.masterGain, 0) : 0,
                 bands: p.eq && p.eq.bands ? p.eq.bands.slice() : [0, 0, 0, 0, 0, 0, 0]
+            },
+            distortion: {
+                enabled: p.distortion ? (p.distortion.enabled || false) : false,
+                mode: p.distortion ? (p.distortion.mode || 'softclip') : 'softclip',
+                drive: p.distortion ? val(p.distortion.drive, 2.5) : 2.5,
+                mix: p.distortion ? val(p.distortion.mix, 1.0) : 1.0,
+                outputGain: p.distortion ? val(p.distortion.outputGain, 0.7) : 0.7,
+                crushBits: p.distortion ? val(p.distortion.crushBits, 8) : 8,
+                crushRate: p.distortion ? val(p.distortion.crushRate, 0.5) : 0.5
             },
             lfo: {
                 enabled: p.lfo ? (p.lfo.enabled || false) : false,
@@ -253,7 +263,8 @@
                 effectOrder: src.effectOrder.slice(), filter: cloneObj(src.filter),
                 delay: cloneObj(src.delay), reverb: cloneObj(src.reverb),
                 chorus: cloneObj(src.chorus), compressor: cloneObj(src.compressor),
-                eq: cloneObj(src.eq), lfo: cloneObj(src.lfo),
+                eq: cloneObj(src.eq), distortion: cloneObj(src.distortion),
+                lfo: cloneObj(src.lfo),
                 automation: cloneObj(src.automation)
             });
             dup.id = layers.length;
@@ -310,13 +321,14 @@
                 busId: busId,
                 name: 'Mic',
                 color: '#ff4444',
-                effectOrder: ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer'],
+                effectOrder: ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer', 'distortion'],
                 filter: defaults.filter,
                 delay: defaults.delay,
                 reverb: defaults.reverb,
                 chorus: defaults.chorus,
                 compressor: defaults.compressor,
                 eq: defaults.eq,
+                distortion: defaults.distortion,
                 lfo: defaults.lfo
             };
             Synth.SignalChain.applyParams(busId, micSignal);
@@ -380,7 +392,8 @@
                     effectOrder: l.effectOrder.slice(), filter: cloneObj(l.filter),
                     delay: cloneObj(l.delay), reverb: cloneObj(l.reverb),
                     chorus: cloneObj(l.chorus), compressor: cloneObj(l.compressor),
-                    eq: cloneObj(l.eq), lfo: cloneObj(l.lfo),
+                    eq: cloneObj(l.eq), distortion: cloneObj(l.distortion),
+                    lfo: cloneObj(l.lfo),
                     automation: cloneObj(l.automation), steps: l.steps.slice()
                 });
             }

@@ -151,6 +151,7 @@
             chorus: JSON.parse(JSON.stringify(layer.chorus)),
             compressor: JSON.parse(JSON.stringify(layer.compressor)),
             eq: JSON.parse(JSON.stringify(layer.eq)),
+            distortion: JSON.parse(JSON.stringify(layer.distortion)),
             lfo: JSON.parse(JSON.stringify(layer.lfo))
         };
     }
@@ -213,6 +214,15 @@
                 layer.eq.enabled = state.eq.enabled || false;
                 layer.eq.masterGain = state.eq.masterGain || 0;
                 layer.eq.bands = state.eq.bands ? state.eq.bands.slice() : [0, 0, 0, 0, 0, 0, 0];
+            }
+            if (state.distortion && layer.distortion) {
+                layer.distortion.enabled = state.distortion.enabled || false;
+                layer.distortion.mode = state.distortion.mode || 'softclip';
+                layer.distortion.drive = state.distortion.drive !== undefined ? state.distortion.drive : 2.5;
+                layer.distortion.mix = state.distortion.mix !== undefined ? state.distortion.mix : 1.0;
+                layer.distortion.outputGain = state.distortion.outputGain !== undefined ? state.distortion.outputGain : 0.7;
+                layer.distortion.crushBits = state.distortion.crushBits !== undefined ? state.distortion.crushBits : 8;
+                layer.distortion.crushRate = state.distortion.crushRate !== undefined ? state.distortion.crushRate : 0.5;
             }
             if (state.lfo) {
                 layer.lfo.enabled = state.lfo.enabled || false;

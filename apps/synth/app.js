@@ -91,6 +91,7 @@
         'chorus-toggle': 'panel-chorus',
         'comp-toggle': 'panel-compressor',
         'eq-toggle': 'panel-eq',
+        'dist-toggle': 'panel-distortion',
         'lfo-toggle': 'panel-lfo'
     };
 
@@ -103,6 +104,7 @@
             ['panel-chorus', signal.chorus && signal.chorus.enabled],
             ['panel-compressor', signal.compressor && signal.compressor.enabled],
             ['panel-eq', signal.eq && signal.eq.enabled],
+            ['panel-distortion', signal.distortion && signal.distortion.enabled],
             ['panel-lfo', signal.lfo && signal.lfo.enabled]
         ];
         for (var i = 0; i < pairs.length; i++) {
@@ -344,6 +346,54 @@
     });
 
     // -----------------------------------------------------------------------
+    // Distortion sliders
+    // -----------------------------------------------------------------------
+    sliders.distDrive = Synth.Slider(document.getElementById('dist-drive-slider'), {
+        min: 10, max: 500, value: 25, step: 1, defaultValue: 25,
+        format: function(v) { return (v / 10).toFixed(1) + 'x'; },
+        onChange: function(v) {
+            signalParam('distortion.drive', v / 10);
+            Synth.SignalChain.setDistortionDrive(activeBusId(), v / 10);
+        }
+    });
+
+    sliders.distMix = Synth.Slider(document.getElementById('dist-mix-slider'), {
+        min: 0, max: 100, value: 100, step: 1, defaultValue: 100,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            signalParam('distortion.mix', v / 100);
+            Synth.SignalChain.setDistortionMix(activeBusId(), v / 100);
+        }
+    });
+
+    sliders.distOutput = Synth.Slider(document.getElementById('dist-output-slider'), {
+        min: 0, max: 200, value: 70, step: 1, defaultValue: 70,
+        format: function(v) { return (v / 100).toFixed(2) + 'x'; },
+        onChange: function(v) {
+            signalParam('distortion.outputGain', v / 100);
+            Synth.SignalChain.setDistortionOutputGain(activeBusId(), v / 100);
+        }
+    });
+
+    sliders.distBits = Synth.Slider(document.getElementById('dist-bits-slider'), {
+        min: 1, max: 16, value: 8, step: 1, defaultValue: 8,
+        format: function(v) { return v + ' bit'; },
+        onChange: function(v) {
+            signalParam('distortion.crushBits', v);
+            Synth.SignalChain.setDistortionCrushBits(activeBusId(), v);
+        }
+    });
+
+    sliders.distRate = Synth.Slider(document.getElementById('dist-rate-slider'), {
+        min: 1, max: 100, value: 50, step: 1, defaultValue: 50,
+        format: function(v) { return v + '%'; },
+        onChange: function(v) {
+            signalParam('distortion.crushRate', v / 100);
+            Synth.SignalChain.setDistortionCrushRate(activeBusId(), v / 100);
+        }
+    });
+
+    // -----------------------------------------------------------------------
     // Sidechain select
     // -----------------------------------------------------------------------
     var sidechainSelect = document.getElementById('comp-sidechain-select');
@@ -547,6 +597,30 @@
     });
 
     // -----------------------------------------------------------------------
+    // Distortion toggle + mode
+    // -----------------------------------------------------------------------
+    var distToggle = document.getElementById('dist-toggle');
+    distToggle.addEventListener('click', function() {
+        var signal = Synth.Layers.getActiveSignal();
+        if (!signal || !signal.distortion) return;
+        var enabled = !signal.distortion.enabled;
+        signal.distortion.enabled = enabled;
+        Synth.SignalChain.setDistortionEnabled(activeBusId(), enabled);
+        updateToggle(distToggle, enabled);
+        if (enabled) document.getElementById('panel-distortion').classList.remove('collapsed');
+    });
+
+    $$('#dist-mode-btns .btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            $$('#dist-mode-btns .btn').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            var mode = btn.getAttribute('data-mode');
+            signalParam('distortion.mode', mode);
+            Synth.SignalChain.setDistortionMode(activeBusId(), mode);
+        });
+    });
+
+    // -----------------------------------------------------------------------
     // LFO toggle & target
     // -----------------------------------------------------------------------
     var lfoToggle = document.getElementById('lfo-toggle');
@@ -573,8 +647,8 @@
     // -----------------------------------------------------------------------
     // Effect Order — draggable reorder list
     // -----------------------------------------------------------------------
-    var EFFECT_NAMES = ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer'];
-    var EFFECT_LABELS = { filter: 'Filter', delay: 'Delay', compressor: 'Compressor', chorus: 'Chorus', reverb: 'Reverb', equalizer: 'Equalizer' };
+    var EFFECT_NAMES = ['filter', 'delay', 'compressor', 'chorus', 'reverb', 'equalizer', 'distortion'];
+    var EFFECT_LABELS = { filter: 'Filter', delay: 'Delay', compressor: 'Compressor', chorus: 'Chorus', reverb: 'Reverb', equalizer: 'Equalizer', distortion: 'Distortion' };
 
     function buildEffectOrderList() {
         var container = document.getElementById('effect-order-list');
@@ -758,6 +832,19 @@
             sliders.eqBands[bi].setValue(signal.eq.bands[bi], true);
         }
         sliders.eqMaster.setValue(signal.eq.masterGain, true);
+
+        // Distortion
+        if (signal.distortion) {
+            updateToggle(distToggle, signal.distortion.enabled);
+            $$('#dist-mode-btns .btn').forEach(function(b) {
+                b.classList.toggle('active', b.getAttribute('data-mode') === signal.distortion.mode);
+            });
+            sliders.distDrive.setValue(Math.round(signal.distortion.drive * 10), true);
+            sliders.distMix.setValue(Math.round(signal.distortion.mix * 100), true);
+            sliders.distOutput.setValue(Math.round(signal.distortion.outputGain * 100), true);
+            sliders.distBits.setValue(Math.round(signal.distortion.crushBits), true);
+            sliders.distRate.setValue(Math.round(signal.distortion.crushRate * 100), true);
+        }
 
         // LFO
         updateToggle(lfoToggle, signal.lfo.enabled);

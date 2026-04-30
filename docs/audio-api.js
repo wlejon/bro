@@ -239,10 +239,23 @@ class AudioContext {
   /** @param {number} busId @param {number} dB */ setBusEqMasterGain(busId, dB) {}
   /** @param {number} busId @param {number} band @param {number} dB */ setBusEqBandGain(busId, band, dB) {}
 
+  // Per-bus Distortion (waveshaper / bitcrusher)
+  /** @param {number} busId @param {boolean} enabled */ setBusDistortionEnabled(busId, enabled) {}
+  /**
+   * @param {number} busId
+   * @param {string} mode - "softclip" (tanh) | "hardclip" | "foldback" | "bitcrush"
+   */
+  setBusDistortionMode(busId, mode) {}
+  /** @param {number} busId @param {number} drive - 1.0 = unity, higher = more saturation */ setBusDistortionDrive(busId, drive) {}
+  /** @param {number} busId @param {number} mix - 0=dry, 1=full wet */ setBusDistortionMix(busId, mix) {}
+  /** @param {number} busId @param {number} gain - post-distortion output gain compensation */ setBusDistortionOutputGain(busId, gain) {}
+  /** @param {number} busId @param {number} bits - bit depth for "bitcrush" mode (1-16) */ setBusDistortionCrushBits(busId, bits) {}
+  /** @param {number} busId @param {number} rate - sample-rate factor for "bitcrush" (0.01-1.0) */ setBusDistortionCrushRate(busId, rate) {}
+
   /**
    * Set the effect processing order for a bus.
    * @param {number} busId
-   * @param {string[]} order - e.g. ["filter", "delay", "compressor", "chorus", "reverb", "equalizer"]
+   * @param {string[]} order - e.g. ["filter", "delay", "compressor", "chorus", "reverb", "equalizer", "distortion"]
    */
   setBusEffectOrder(busId, order) {}
 

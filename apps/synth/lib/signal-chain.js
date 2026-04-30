@@ -86,6 +86,17 @@
                 }
                 SC.setEqEnabled(busId, params.eq.enabled);
             }
+
+            // Distortion
+            if (params.distortion) {
+                SC.setDistortionMode(busId, params.distortion.mode);
+                SC.setDistortionDrive(busId, params.distortion.drive);
+                SC.setDistortionMix(busId, params.distortion.mix);
+                SC.setDistortionOutputGain(busId, params.distortion.outputGain);
+                SC.setDistortionCrushBits(busId, params.distortion.crushBits);
+                SC.setDistortionCrushRate(busId, params.distortion.crushRate);
+                SC.setDistortionEnabled(busId, params.distortion.enabled);
+            }
         },
 
         // --- Effect chain order ---
@@ -194,6 +205,30 @@
         },
         setEqMasterGain: function(busId, gainDB) {
             var c = ctx(); if (c) c.setBusEqMasterGain(busId, gainDB);
+        },
+
+        // --- Distortion ---
+
+        setDistortionEnabled: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDistortionEnabled(busId, v);
+        },
+        setDistortionMode: function(busId, mode) {
+            var c = ctx(); if (c) c.setBusDistortionMode(busId, mode || 'softclip');
+        },
+        setDistortionDrive: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDistortionDrive(busId, v);
+        },
+        setDistortionMix: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDistortionMix(busId, v);
+        },
+        setDistortionOutputGain: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDistortionOutputGain(busId, v);
+        },
+        setDistortionCrushBits: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDistortionCrushBits(busId, v);
+        },
+        setDistortionCrushRate: function(busId, v) {
+            var c = ctx(); if (c) c.setBusDistortionCrushRate(busId, v);
         },
 
         // --- Metering ---

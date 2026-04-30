@@ -163,6 +163,27 @@
                         </div>
                     </div>
 
+                    <!-- Distortion -->
+                    <div class="panel panel-collapsible collapsed" id="panel-distortion">
+                        <div class="panel-header" data-panel="panel-distortion">
+                            <div class="panel-title">Distortion</div>
+                            <button id="dist-toggle" class="btn btn-toggle">Off</button>
+                        </div>
+                        <div class="panel-body">
+                            <div id="dist-mode-btns" class="btn-group full-width">
+                                <button class="btn active" data-mode="softclip">Soft</button>
+                                <button class="btn" data-mode="hardclip">Hard</button>
+                                <button class="btn" data-mode="foldback">Fold</button>
+                                <button class="btn" data-mode="bitcrush">Crush</button>
+                            </div>
+                            <div class="slider-row"><label>Drive</label><div class="fancy-slider" id="dist-drive-slider"></div></div>
+                            <div class="slider-row"><label>Mix</label><div class="fancy-slider" id="dist-mix-slider"></div></div>
+                            <div class="slider-row"><label>Output</label><div class="fancy-slider" id="dist-output-slider"></div></div>
+                            <div class="slider-row"><label>Bits</label><div class="fancy-slider" id="dist-bits-slider"></div></div>
+                            <div class="slider-row"><label>Rate</label><div class="fancy-slider" id="dist-rate-slider"></div></div>
+                        </div>
+                    </div>
+
                     <!-- LFO -->
                     <div class="panel panel-collapsible collapsed" id="panel-lfo">
                         <div class="panel-header" data-panel="panel-lfo">
