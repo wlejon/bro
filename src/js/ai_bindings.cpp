@@ -51,24 +51,58 @@ struct ReplayReaderData {
     brogameagent::ReplayReader reader;
 };
 
+// Mixin so wrappers that hold DupValue'd JSValue callbacks expose them to
+// QuickJS's cycle GC. Without this, a JS closure captured as e.g. an Option
+// step() that transitively references the wrapper handle forms a cycle the
+// GC can't see — JS_FreeRuntime then asserts on shutdown. Each wrapper
+// struct holds a std::shared_ptr<JsCallbackHolder> vector populated at
+// create-time, then walks it in its registered .gc_mark() trampoline.
+struct JsCallbackHolder {
+    virtual ~JsCallbackHolder() = default;
+    virtual void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const = 0;
+};
+
+template<class T>
+static std::shared_ptr<T> track_jcb(std::vector<std::shared_ptr<JsCallbackHolder>>& v,
+                                    std::shared_ptr<T> sp) {
+    if (sp) {
+        if (auto j = std::dynamic_pointer_cast<JsCallbackHolder>(sp)) {
+            v.push_back(std::move(j));
+        }
+    }
+    return sp;
+}
+
+// gc_mark trampoline for any wrapper struct that has a `jcb` vector.
+template<class T>
+static void mark_jcb(T* d, JSRuntime* rt, JS_MarkFunc* mark) {
+    if (!d) return;
+    for (const auto& sp : d->jcb) if (sp) sp->gc_mark(rt, mark);
+}
+
 struct MctsData {
     brogameagent::mcts::Mcts mcts;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 struct DecoupledMctsData {
     brogameagent::mcts::DecoupledMcts mcts;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 struct TeamMctsData {
     brogameagent::mcts::TeamMcts mcts;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 struct TacticMctsData {
     brogameagent::mcts::TacticMcts mcts;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 struct LayeredPlannerData {
     brogameagent::mcts::LayeredPlanner planner;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 struct OptionData {
@@ -85,11 +119,13 @@ struct OptionMctsData {
     // even if the JS wrapper is collected. set_options() on the C++ engine
     // stores the same shared_ptrs but this is a defence-in-depth anchor.
     std::vector<std::shared_ptr<brogameagent::mcts::Option>> options;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 struct TeamOptionMctsData {
     brogameagent::mcts::TeamOptionMcts mcts;
     std::vector<std::shared_ptr<brogameagent::mcts::TeamOption>> options;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 struct CommanderData {
@@ -98,6 +134,7 @@ struct CommanderData {
     // internal role list — defence-in-depth against option lifetime bugs
     // when JS-authored options hold JSValue refs.
     std::vector<std::shared_ptr<brogameagent::mcts::Option>> option_refs;
+    std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -532,11 +569,15 @@ parseCombatActionArray(JSContext* ctx, JSValueConst arr);
 
 namespace {
 
-class JsRolloutPolicy : public brogameagent::mcts::IRolloutPolicy {
+class JsRolloutPolicy : public brogameagent::mcts::IRolloutPolicy,
+                        public JsCallbackHolder {
 public:
     JsRolloutPolicy(JSContext* ctx, JSValue fn)
         : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
     ~JsRolloutPolicy() override { JS_FreeValue(ctx_, fn_); }
+    void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const override {
+        JS_MarkValue(rt, fn_, mark);
+    }
 
     brogameagent::mcts::CombatAction choose(
         brogameagent::Agent& self, brogameagent::World& world) const override {
@@ -559,11 +600,15 @@ private:
     JSValue    fn_;
 };
 
-class JsPrior : public brogameagent::mcts::IPrior {
+class JsPrior : public brogameagent::mcts::IPrior,
+                public JsCallbackHolder {
 public:
     JsPrior(JSContext* ctx, JSValue fn)
         : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
     ~JsPrior() override { JS_FreeValue(ctx_, fn_); }
+    void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const override {
+        JS_MarkValue(rt, fn_, mark);
+    }
 
     std::vector<float> score(
         const brogameagent::Agent& self, const brogameagent::World& world,
@@ -604,11 +649,15 @@ private:
     JSValue    fn_;
 };
 
-class JsEvaluator : public brogameagent::mcts::IEvaluator {
+class JsEvaluator : public brogameagent::mcts::IEvaluator,
+                    public JsCallbackHolder {
 public:
     JsEvaluator(JSContext* ctx, JSValue fn)
         : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
     ~JsEvaluator() override { JS_FreeValue(ctx_, fn_); }
+    void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const override {
+        JS_MarkValue(rt, fn_, mark);
+    }
 
     float evaluate(const brogameagent::World& world, int heroId) const override {
         JSValue worldV = buildWorldView(ctx_, world);
@@ -632,11 +681,15 @@ private:
     JSValue    fn_;
 };
 
-class JsTeamEvaluator : public brogameagent::mcts::ITeamEvaluator {
+class JsTeamEvaluator : public brogameagent::mcts::ITeamEvaluator,
+                        public JsCallbackHolder {
 public:
     JsTeamEvaluator(JSContext* ctx, JSValue fn)
         : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
     ~JsTeamEvaluator() override { JS_FreeValue(ctx_, fn_); }
+    void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const override {
+        JS_MarkValue(rt, fn_, mark);
+    }
 
     float evaluate(const brogameagent::World& world, int teamId) const override {
         JSValue worldV = buildWorldView(ctx_, world);
@@ -665,7 +718,8 @@ private:
 //   canInitiate     : (selfView, worldView) -> boolean
 //   step            : (selfView, worldView, ticksInOption) -> CombatAction
 //   shouldTerminate : (selfView, worldView, ticksInOption) -> boolean
-class JsOption : public brogameagent::mcts::Option {
+class JsOption : public brogameagent::mcts::Option,
+                 public JsCallbackHolder {
 public:
     JsOption(JSContext* ctx, std::string name,
              JSValue canInit, JSValue step, JSValue shouldTerm)
@@ -677,6 +731,11 @@ public:
         JS_FreeValue(ctx_, can_init_);
         JS_FreeValue(ctx_, step_);
         JS_FreeValue(ctx_, should_term_);
+    }
+    void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const override {
+        JS_MarkValue(rt, can_init_, mark);
+        JS_MarkValue(rt, step_,     mark);
+        JS_MarkValue(rt, should_term_, mark);
     }
     const std::string& name() const override { return name_; }
 
@@ -733,7 +792,8 @@ private:
 
 // JS-authored team option. Signatures are analogous to JsOption but the
 // hero arg becomes an array and step returns an array of CombatActions.
-class JsTeamOption : public brogameagent::mcts::TeamOption {
+class JsTeamOption : public brogameagent::mcts::TeamOption,
+                     public JsCallbackHolder {
 public:
     JsTeamOption(JSContext* ctx, std::string name,
                  JSValue canInit, JSValue step, JSValue shouldTerm)
@@ -745,6 +805,11 @@ public:
         JS_FreeValue(ctx_, can_init_);
         JS_FreeValue(ctx_, step_);
         JS_FreeValue(ctx_, should_term_);
+    }
+    void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const override {
+        JS_MarkValue(rt, can_init_, mark);
+        JS_MarkValue(rt, step_,     mark);
+        JS_MarkValue(rt, should_term_, mark);
     }
     const std::string& name() const override { return name_; }
 
@@ -814,11 +879,14 @@ private:
 
 // JS-authored Commander role-assignment callback. Signature:
 //   assign(heroesView[], worldView) -> number[] of role indices
-class JsAssigner {
+class JsAssigner : public JsCallbackHolder {
 public:
     JsAssigner(JSContext* ctx, JSValue fn)
         : ctx_(ctx), fn_(JS_DupValue(ctx, fn)) {}
-    ~JsAssigner() { JS_FreeValue(ctx_, fn_); }
+    ~JsAssigner() override { JS_FreeValue(ctx_, fn_); }
+    void gc_mark(JSRuntime* rt, JS_MarkFunc* mark) const override {
+        JS_MarkValue(rt, fn_, mark);
+    }
 
     std::vector<int> operator()(const std::vector<brogameagent::Agent*>& heroes,
                                  const brogameagent::World& world) const {
@@ -1097,10 +1165,13 @@ static JSValue js_createMcts(JSContext* ctx, JSValueConst, int argc, JSValueCons
     if (argc >= 1 && JS_IsObject(argv[0])) {
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
-        if (auto p = parseRolloutPolicy(ctx, opts))   data->mcts.set_rollout_policy(std::move(p));
+        if (auto p = track_jcb(data->jcb, parseRolloutPolicy(ctx, opts)))
+            data->mcts.set_rollout_policy(std::move(p));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
-        if (auto pr = parsePrior(ctx, opts))          data->mcts.set_prior(std::move(pr));
-        if (auto ev = parseHeroEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+        if (auto pr = track_jcb(data->jcb, parsePrior(ctx, opts)))
+            data->mcts.set_prior(std::move(pr));
+        if (auto ev = track_jcb(data->jcb, parseHeroEvaluator(ctx, opts)))
+            data->mcts.set_evaluator(std::move(ev));
     }
     return qjsbind::wrap<MctsData>(ctx, data);
 }
@@ -1113,9 +1184,12 @@ static JSValue js_createDecoupledMcts(JSContext* ctx, JSValueConst, int argc, JS
     if (argc >= 1 && JS_IsObject(argv[0])) {
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
-        if (auto p = parseRolloutPolicy(ctx, opts))  data->mcts.set_rollout_policy(std::move(p));
-        if (auto pr = parsePrior(ctx, opts))         data->mcts.set_prior(std::move(pr));
-        if (auto ev = parseHeroEvaluator(ctx, opts)) data->mcts.set_evaluator(std::move(ev));
+        if (auto p = track_jcb(data->jcb, parseRolloutPolicy(ctx, opts)))
+            data->mcts.set_rollout_policy(std::move(p));
+        if (auto pr = track_jcb(data->jcb, parsePrior(ctx, opts)))
+            data->mcts.set_prior(std::move(pr));
+        if (auto ev = track_jcb(data->jcb, parseHeroEvaluator(ctx, opts)))
+            data->mcts.set_evaluator(std::move(ev));
     }
     return qjsbind::wrap<DecoupledMctsData>(ctx, data);
 }
@@ -1127,10 +1201,13 @@ static JSValue js_createTeamMcts(JSContext* ctx, JSValueConst, int argc, JSValue
     if (argc >= 1 && JS_IsObject(argv[0])) {
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
-        if (auto p = parseRolloutPolicy(ctx, opts))   data->mcts.set_rollout_policy(std::move(p));
+        if (auto p = track_jcb(data->jcb, parseRolloutPolicy(ctx, opts)))
+            data->mcts.set_rollout_policy(std::move(p));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
-        if (auto pr = parsePrior(ctx, opts))          data->mcts.set_prior(std::move(pr));
-        if (auto ev = parseTeamEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+        if (auto pr = track_jcb(data->jcb, parsePrior(ctx, opts)))
+            data->mcts.set_prior(std::move(pr));
+        if (auto ev = track_jcb(data->jcb, parseTeamEvaluator(ctx, opts)))
+            data->mcts.set_evaluator(std::move(ev));
     }
     return qjsbind::wrap<TeamMctsData>(ctx, data);
 }
@@ -1143,7 +1220,8 @@ static JSValue js_createTacticMcts(JSContext* ctx, JSValueConst, int argc, JSVal
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
-        if (auto ev = parseTeamEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+        if (auto ev = track_jcb(data->jcb, parseTeamEvaluator(ctx, opts)))
+            data->mcts.set_evaluator(std::move(ev));
     }
     return qjsbind::wrap<TacticMctsData>(ctx, data);
 }
@@ -1183,9 +1261,11 @@ static JSValue js_createLayeredPlanner(JSContext* ctx, JSValueConst, int argc, J
 
         data->planner.set_config(cfg);
 
-        if (auto p = parseRolloutPolicy(ctx, opts))   data->planner.set_rollout_policy(std::move(p));
+        if (auto p = track_jcb(data->jcb, parseRolloutPolicy(ctx, opts)))
+            data->planner.set_rollout_policy(std::move(p));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->planner.set_opponent_policy(std::move(op));
-        if (auto ev = parseTeamEvaluator(ctx, opts))  data->planner.set_team_evaluator(std::move(ev));
+        if (auto ev = track_jcb(data->jcb, parseTeamEvaluator(ctx, opts)))
+            data->planner.set_team_evaluator(std::move(ev));
     }
     return qjsbind::wrap<LayeredPlannerData>(ctx, data);
 }
@@ -1276,8 +1356,10 @@ static JSValue js_createOptionMcts(JSContext* ctx, JSValueConst, int argc, JSVal
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
-        if (auto ev = parseHeroEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+        if (auto ev = track_jcb(data->jcb, parseHeroEvaluator(ctx, opts)))
+            data->mcts.set_evaluator(std::move(ev));
         data->options = parseOptionArray<OptionData, brogameagent::mcts::Option>(ctx, opts);
+        for (auto& sp : data->options) track_jcb(data->jcb, sp);
         if (!data->options.empty()) {
             auto copy = data->options;
             data->mcts.set_options(std::move(copy));
@@ -1294,8 +1376,10 @@ static JSValue js_createTeamOptionMcts(JSContext* ctx, JSValueConst, int argc, J
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
-        if (auto ev = parseTeamEvaluator(ctx, opts))  data->mcts.set_evaluator(std::move(ev));
+        if (auto ev = track_jcb(data->jcb, parseTeamEvaluator(ctx, opts)))
+            data->mcts.set_evaluator(std::move(ev));
         data->options = parseOptionArray<TeamOptionData, brogameagent::mcts::TeamOption>(ctx, opts);
+        for (auto& sp : data->options) track_jcb(data->jcb, sp);
         if (!data->options.empty()) {
             auto copy = data->options;
             data->mcts.set_options(std::move(copy));
@@ -1328,7 +1412,8 @@ static JSValue js_createCommander(JSContext* ctx, JSValueConst, int argc, JSValu
     data->commander.set_config(cfg);
 
     if (auto op = parseOpponentPolicy(ctx, opts)) data->commander.set_opponent_policy(std::move(op));
-    if (auto ev = parseHeroEvaluator(ctx, opts))  data->commander.set_default_evaluator(std::move(ev));
+    if (auto ev = track_jcb(data->jcb, parseHeroEvaluator(ctx, opts)))
+        data->commander.set_default_evaluator(std::move(ev));
 
     // Roles array.
     JSValue rolesArr = JS_GetPropertyStr(ctx, opts, "roles");
@@ -1341,8 +1426,11 @@ static JSValue js_createCommander(JSContext* ctx, JSValueConst, int argc, JSValu
             if (JS_IsObject(r)) {
                 std::string name = readStringProp(ctx, r, "name");
                 auto opts_vec = parseOptionArray<OptionData, brogameagent::mcts::Option>(ctx, r);
-                auto role_eval = parseHeroEvaluator(ctx, r);
-                for (auto& sp : opts_vec) data->option_refs.push_back(sp);
+                auto role_eval = track_jcb(data->jcb, parseHeroEvaluator(ctx, r));
+                for (auto& sp : opts_vec) {
+                    data->option_refs.push_back(sp);
+                    track_jcb(data->jcb, sp);
+                }
                 data->commander.add_role(std::move(name), std::move(opts_vec),
                                           std::move(role_eval));
             }
@@ -1353,10 +1441,12 @@ static JSValue js_createCommander(JSContext* ctx, JSValueConst, int argc, JSValu
 
     // Optional JS assigner. Stored via shared_ptr so the Commander's
     // std::function captures ownership and the JSValue lives as long as
-    // the Commander does.
+    // the Commander does. Also tracked in jcb so gc_mark exposes its
+    // JSValue callback to QuickJS's cycle GC.
     JSValue assignFn = JS_GetPropertyStr(ctx, opts, "assign");
     if (JS_IsFunction(ctx, assignFn)) {
         auto sp = std::make_shared<JsAssigner>(ctx, assignFn);
+        data->jcb.push_back(sp);
         data->commander.set_assigner(
             [sp](const std::vector<brogameagent::Agent*>& heroes,
                  const brogameagent::World& world) {
@@ -2351,6 +2441,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── Mcts class ────────────────────────────────────────────────────
     {
         qjsbind::Class<MctsData>(ctx, "AIMcts", qjsbind::NoGlobal)
+            .gc_mark([](MctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* md = qjsbind::unwrap<MctsData>(ctx, this_val);
@@ -2388,6 +2481,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── DecoupledMcts class ───────────────────────────────────────────
     {
         qjsbind::Class<DecoupledMctsData>(ctx, "AIDecoupledMcts", qjsbind::NoGlobal)
+            .gc_mark([](DecoupledMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* md = qjsbind::unwrap<DecoupledMctsData>(ctx, this_val);
@@ -2421,6 +2517,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── TeamMcts class ────────────────────────────────────────────────
     {
         qjsbind::Class<TeamMctsData>(ctx, "AITeamMcts", qjsbind::NoGlobal)
+            .gc_mark([](TeamMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* md = qjsbind::unwrap<TeamMctsData>(ctx, this_val);
@@ -2456,6 +2555,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── TacticMcts class ──────────────────────────────────────────────
     {
         qjsbind::Class<TacticMctsData>(ctx, "AITacticMcts", qjsbind::NoGlobal)
+            .gc_mark([](TacticMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* md = qjsbind::unwrap<TacticMctsData>(ctx, this_val);
@@ -2484,6 +2586,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── LayeredPlanner class ──────────────────────────────────────────
     {
         qjsbind::Class<LayeredPlannerData>(ctx, "AILayeredPlanner", qjsbind::NoGlobal)
+            .gc_mark([](LayeredPlannerData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("decide",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* pd = qjsbind::unwrap<LayeredPlannerData>(ctx, this_val);
@@ -2530,6 +2635,11 @@ void AIBindings::install(JSContext* ctx) {
     // ─── Option class (handle for JS-authored options) ─────────────────
     {
         qjsbind::Class<OptionData>(ctx, "AIOption", qjsbind::NoGlobal)
+            .gc_mark([](OptionData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                if (!d || !d->option) return;
+                if (auto* j = dynamic_cast<JsCallbackHolder*>(d->option.get()))
+                    j->gc_mark(rt, mark);
+            })
             .get("name",
                 [](OptionData* d, JSContext* ctx) -> JSValue {
                     if (!d->option) return JS_NULL;
@@ -2540,6 +2650,11 @@ void AIBindings::install(JSContext* ctx) {
     // ─── TeamOption class ─────────────────────────────────────────────
     {
         qjsbind::Class<TeamOptionData>(ctx, "AITeamOption", qjsbind::NoGlobal)
+            .gc_mark([](TeamOptionData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                if (!d || !d->option) return;
+                if (auto* j = dynamic_cast<JsCallbackHolder*>(d->option.get()))
+                    j->gc_mark(rt, mark);
+            })
             .get("name",
                 [](TeamOptionData* d, JSContext* ctx) -> JSValue {
                     if (!d->option) return JS_NULL;
@@ -2550,6 +2665,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── OptionMcts class ─────────────────────────────────────────────
     {
         qjsbind::Class<OptionMctsData>(ctx, "AIOptionMcts", qjsbind::NoGlobal)
+            .gc_mark([](OptionMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* md = qjsbind::unwrap<OptionMctsData>(ctx, this_val);
@@ -2606,6 +2724,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── TeamOptionMcts class ─────────────────────────────────────────
     {
         qjsbind::Class<TeamOptionMctsData>(ctx, "AITeamOptionMcts", qjsbind::NoGlobal)
+            .gc_mark([](TeamOptionMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* md = qjsbind::unwrap<TeamOptionMctsData>(ctx, this_val);
@@ -2662,6 +2783,9 @@ void AIBindings::install(JSContext* ctx) {
     // ─── Commander class ──────────────────────────────────────────────
     {
         qjsbind::Class<CommanderData>(ctx, "AICommander", qjsbind::NoGlobal)
+            .gc_mark([](CommanderData* d, JSRuntime* rt, JS_MarkFunc* mark) {
+                mark_jcb(d, rt, mark);
+            })
             .method_raw("decide",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* cd = qjsbind::unwrap<CommanderData>(ctx, this_val);
