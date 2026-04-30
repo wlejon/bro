@@ -16,22 +16,13 @@ namespace {
 std::atomic<bool> g_interrupted{false};
 std::atomic<bool> g_handlerInstalled{false};
 
-void requestInterrupt() {
-    // Second Ctrl+C: hard exit. JS is probably misbehaving.
-    if (g_interrupted.exchange(true)) {
-        LOG_ERROR("Second interrupt received — forcing exit.");
-        std::_Exit(130);
-    }
-    LOG_INFO("Interrupt requested (Ctrl+C) — stopping JS.");
-}
-
 #ifdef _WIN32
 BOOL WINAPI consoleHandler(DWORD type) {
     switch (type) {
         case CTRL_C_EVENT:
         case CTRL_BREAK_EVENT:
         case CTRL_CLOSE_EVENT:
-            requestInterrupt();
+            ::bro::util::requestInterrupt();
             return TRUE;
         default:
             return FALSE;
@@ -39,7 +30,7 @@ BOOL WINAPI consoleHandler(DWORD type) {
 }
 #else
 void sigintHandler(int /*sig*/) {
-    requestInterrupt();
+    ::bro::util::requestInterrupt();
 }
 #endif
 
@@ -51,6 +42,15 @@ int jsInterruptHandler(JSRuntime* /*rt*/, void* /*opaque*/) {
 
 bool interrupted() {
     return g_interrupted.load(std::memory_order_relaxed);
+}
+
+void requestInterrupt() {
+    // Second hit: hard exit. JS is probably misbehaving.
+    if (g_interrupted.exchange(true)) {
+        LOG_ERROR("Second interrupt received — forcing exit.");
+        std::_Exit(130);
+    }
+    LOG_INFO("Interrupt requested — stopping JS.");
 }
 
 void installSignalHandler() {

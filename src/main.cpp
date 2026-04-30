@@ -1,6 +1,8 @@
 #include "engine/engine.h"
 #include "util/interrupt.h"
 #include "util/log.h"
+
+#include "broaudio/log.h"
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -12,6 +14,9 @@
 #include <cstdio>
 #include <io.h>
 #include <fcntl.h>
+#include <share.h>
+#include <sys/stat.h>
+#include <process.h>
 #else
 #include <unistd.h>
 #include <climits>
@@ -20,24 +25,60 @@
 #include <mach-o/dyld.h>
 #endif
 
-#ifdef _WIN32
-// bro.exe is linked as /SUBSYSTEM:WINDOWS so double-clicking it doesn't pop a
-// console. When launched from a terminal, attach to the parent's console and
-// reopen stdio so printf/fprintf still reach the user.
+// bro.exe is /SUBSYSTEM:WINDOWS, so stdout/stderr go nowhere by default. Send
+// them to bro.log in the current working directory — the place the user ran
+// bro from — so LOG_* and console.* output is captured side-by-side with the
+// invocation.
 //
-// Caveat: cmd.exe/PowerShell don't wait for GUI-subsystem processes, so the
-// prompt returns immediately and later output interleaves with the next
-// command. Users who care should invoke via `start /wait bro.exe ...`.
-static void attachParentConsole() {
-    if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
-    FILE* dummy;
-    freopen_s(&dummy, "CONOUT$", "w", stdout);
-    freopen_s(&dummy, "CONOUT$", "w", stderr);
-    freopen_s(&dummy, "CONIN$",  "r", stdin);
-    setvbuf(stdout, nullptr, _IONBF, 0);
-    setvbuf(stderr, nullptr, _IONBF, 0);
-}
+// The launcher app spawns child bro processes with the same cwd, so multiple
+// bro.exe instances race for bro.log. We open with exclusive write sharing:
+// the first instance wins bro.log, and any concurrent instance falls back to
+// bro-<pid>.log so its logs aren't lost and stderr stays valid (a failed
+// freopen would close stderr and any subsequent stdio call would crash).
+//
+// One file descriptor is dup'd to both stderr and stdout so the two streams
+// share a kernel write position and don't fight over file size.
+static void redirectLogToFile() {
+#ifdef _WIN32
+    // bro.exe is /SUBSYSTEM:WINDOWS; when launched from a non-console parent
+    // (PowerShell Start-Process, the launcher's CreateProcess, double-click,
+    // etc.) stderr/stdout have no backing fd — _fileno returns -2 and a
+    // subsequent _dup2 silently fails. Reopen them onto NUL first so they
+    // have valid fds we can _dup2 over.
+    FILE* dummy = nullptr;
+    freopen_s(&dummy, "NUL", "w", stderr);
+    freopen_s(&dummy, "NUL", "w", stdout);
+
+    // _SH_DENYWR: refuse the open if another writer already has the file.
+    // Falls back to bro-<pid>.log on contention so launcher children don't
+    // clobber the launcher's log.
+    int fd = _sopen("bro.log", _O_WRONLY | _O_CREAT | _O_TRUNC, _SH_DENYWR, _S_IREAD | _S_IWRITE);
+    if (fd < 0) {
+        char fallback[64];
+        std::snprintf(fallback, sizeof(fallback), "bro-%lu.log", static_cast<unsigned long>(_getpid()));
+        fd = _sopen(fallback, _O_WRONLY | _O_CREAT | _O_TRUNC, _SH_DENYWR, _S_IREAD | _S_IWRITE);
+        if (fd < 0) return;
+    }
+    _dup2(fd, _fileno(stderr));
+    _dup2(fd, _fileno(stdout));
+    _close(fd);
+
+    // Mirror at the Win32 API level so anything bypassing CRT stdio
+    // (OutputDebugString-free SDL paths, third-party libs that call
+    // GetStdHandle directly) lands in the same file.
+    HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stderr)));
+    if (h != INVALID_HANDLE_VALUE) {
+        SetStdHandle(STD_ERROR_HANDLE, h);
+        SetStdHandle(STD_OUTPUT_HANDLE, h);
+    }
+#else
+    FILE* f = freopen("bro.log", "w", stderr);
+    if (!f) return;
+    dup2(fileno(stderr), fileno(stdout));
 #endif
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+}
 
 // Get the directory containing the current executable.
 static std::string exeDir() {
@@ -218,9 +259,7 @@ static void printUsage() {
 }
 
 int main(int argc, char* argv[]) {
-#ifdef _WIN32
-    attachParentConsole();
-#endif
+    redirectLogToFile();
 
     if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         printUsage();
@@ -228,6 +267,16 @@ int main(int argc, char* argv[]) {
     }
 
     bro::util::installSignalHandler();
+
+    // Route broaudio's diagnostics through our logger so they land in bro.log
+    // alongside everything else, instead of SDL_Log's default console sink.
+    broaudio::setLogCallback([](broaudio::LogLevel level, const char* msg) {
+        switch (level) {
+            case broaudio::LogLevel::Info:  LOG_INFO("%s", msg);  break;
+            case broaudio::LogLevel::Warn:  LOG_WARN("%s", msg);  break;
+            case broaudio::LogLevel::Error: LOG_ERROR("%s", msg); break;
+        }
+    });
 
     bro::engine::EngineConfig config;
 

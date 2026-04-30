@@ -1,4 +1,5 @@
 #include "platform/event_loop.h"
+#include "util/interrupt.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -10,6 +11,10 @@ void EventLoop::pollEvents() {
     while (SDL_PollEvent(&event)) {
         switch (event.type) {
             case SDL_EVENT_QUIT:
+                // Treat the window close button like Ctrl+C: tell JS to bail
+                // out immediately. A second close request hard-exits via the
+                // same path Ctrl+C uses.
+                ::bro::util::requestInterrupt();
                 m_quit = true;
                 if (onQuit) onQuit();
                 break;

@@ -22,6 +22,11 @@ namespace bro::util {
 /// Returns true once the user has requested interruption.
 bool interrupted();
 
+/// Request interruption. First call sets the flag (JS bails out at the next
+/// interrupt poll, event loops drop out); a second call hard-exits the
+/// process. Same path as Ctrl+C / SIGTERM / window close.
+void requestInterrupt();
+
 /// Install the platform signal handler (SIGINT on Unix,
 /// SetConsoleCtrlHandler on Windows). Idempotent.
 void installSignalHandler();
