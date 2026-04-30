@@ -18,6 +18,21 @@ if(NOT TARGET FastNoise)
     endif()
     add_subdirectory("${_BROKIT_ROOT}/third_party/FastNoise2"
                      "${CMAKE_BINARY_DIR}/FastNoise2" EXCLUDE_FROM_ALL)
+
+    # Workaround: FastNoise2's CMake sets CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY to
+    # pdb-files/ without a per-config subdir. The VS generator emits
+    # <ProgramDataBaseFileName>pdb-files\Debug</ProgramDataBaseFileName> (no .pdb)
+    # for FastSIMD, while the FastNoise target creates an actual pdb-files\Debug\
+    # directory. The Copy PDB task then sees a directory at the path it expects
+    # to be a file and fails with MSB3025. Give each target a per-config
+    # subdir + explicit name so the basenames don't collide.
+    foreach(_fn_target FastNoise FastSIMD FastSIMD_FastNoise)
+        if(TARGET ${_fn_target})
+            set_target_properties(${_fn_target} PROPERTIES
+                COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/FastNoise2/pdb-files/$<CONFIG>"
+                COMPILE_PDB_NAME ${_fn_target})
+        endif()
+    endforeach()
 endif()
 
 # --- brokit (JS runtime APIs) ---

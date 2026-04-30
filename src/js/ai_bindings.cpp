@@ -288,7 +288,8 @@ static JSValue js_createAgent(JSContext* ctx, JSValueConst, int argc, JSValueCon
         double maxTurnRate = getDoubleProp(ctx, opts, "maxTurnRate", -1);
         if (maxTurnRate >= 0) h->agent.setMaxTurnRate((float)maxTurnRate);
 
-        // navGrid
+        // navGrid — pin onto the agent JS object below so the JS NavGrid
+        // outlives the agent (Agent holds a raw NavGrid* pointer).
         JSValue navGridVal = JS_GetPropertyStr(ctx, opts, "navGrid");
         if (JS_IsObject(navGridVal)) {
             auto* gridData = qjsbind::unwrap<NavGridData>(ctx, navGridVal);
@@ -296,7 +297,13 @@ static JSValue js_createAgent(JSContext* ctx, JSValueConst, int argc, JSValueCon
                 h->agent.setNavGrid(gridData->grid.get());
             }
         }
+
+        JSValue agentVal = qjsbind::wrap<AgentData>(ctx, h);
+        if (JS_IsObject(navGridVal)) {
+            JS_SetPropertyStr(ctx, agentVal, "__navGrid", JS_DupValue(ctx, navGridVal));
+        }
         JS_FreeValue(ctx, navGridVal);
+        return agentVal;
     }
 
     return qjsbind::wrap<AgentData>(ctx, h);
