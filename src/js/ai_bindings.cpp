@@ -172,25 +172,8 @@ static JSValue makeSteeringOutput(JSContext* ctx, const brogameagent::SteeringOu
     return obj;
 }
 
-// Create a Float32Array from a float buffer
-static JSValue makeFloat32Array(JSContext* ctx, const float* data, int count) {
-    size_t bytes = count * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
-
-// Create an Int32Array from an int buffer
-static JSValue makeInt32Array(JSContext* ctx, const int* data, int count) {
-    size_t bytes = count * sizeof(int);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_INT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
+using qjsbind::make_float32_array;
+using qjsbind::make_int32_array;
 
 // Parse DamageKind from string
 static brogameagent::DamageKind parseDamageKind(const char* str) {
@@ -390,7 +373,7 @@ static JSValue js_buildObservation(JSContext* ctx, JSValueConst, int argc, JSVal
 
     float buf[brogameagent::observation::TOTAL];
     brogameagent::observation::build(ad->agent, wd->world, buf);
-    return makeFloat32Array(ctx, buf, brogameagent::observation::TOTAL);
+    return make_float32_array(ctx, buf, brogameagent::observation::TOTAL);
 }
 
 // bro.ai.game.buildActionMask(agent, world)
@@ -405,8 +388,8 @@ static JSValue js_buildActionMask(JSContext* ctx, JSValueConst, int argc, JSValu
     brogameagent::action_mask::build(ad->agent, wd->world, mask, enemyIds);
 
     JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "mask", makeFloat32Array(ctx, mask, brogameagent::action_mask::TOTAL));
-    JS_SetPropertyStr(ctx, obj, "enemyIds", makeInt32Array(ctx, enemyIds, brogameagent::action_mask::N_ENEMY_SLOTS));
+    JS_SetPropertyStr(ctx, obj, "mask", make_float32_array(ctx, mask, brogameagent::action_mask::TOTAL));
+    JS_SetPropertyStr(ctx, obj, "enemyIds", make_int32_array(ctx, reinterpret_cast<const int32_t*>(enemyIds), brogameagent::action_mask::N_ENEMY_SLOTS));
     return obj;
 }
 

@@ -163,21 +163,9 @@ static brogameagent::AgentAction parseAgentAction(JSContext* ctx, JSValueConst o
     return a;
 }
 
-static JSValue makeFloat32ArrayCopy(JSContext* ctx, const float* data, int count) {
-    size_t bytes = (size_t)count * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, (const uint8_t*)data, bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
-static JSValue makeInt32ArrayCopy(JSContext* ctx, const int* data, int count) {
-    size_t bytes = (size_t)count * sizeof(int);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, (const uint8_t*)data, bytes);
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_INT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
+using qjsbind::make_float32_array;
+static inline JSValue make_int32_array_from_ints(JSContext* ctx, const int* data, size_t count) {
+    return qjsbind::make_int32_array(ctx, reinterpret_cast<const int32_t*>(data), count);
 }
 
 // ─── Extractors for MCTS shared objects ───────────────────────────────────
@@ -260,7 +248,7 @@ static void registerClasses(JSContext* ctx) {
                 int total = N * brogameagent::observation::TOTAL;
                 std::vector<float> buf(total);
                 d->sim->observe(agentId, buf.data());
-                return makeFloat32ArrayCopy(ctx, buf.data(), total);
+                return make_float32_array(ctx, buf.data(), total);
             })
         .method("actionMask",
             [](VecSimulationData* d, JSContext* ctx, int agentId) -> JSValue {
@@ -270,8 +258,8 @@ static void registerClasses(JSContext* ctx) {
                 std::vector<int>   ids((size_t)N * brogameagent::action_mask::N_ENEMY_SLOTS);
                 d->sim->actionMask(agentId, mask.data(), ids.data());
                 JSValue obj = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, obj, "mask",     makeFloat32ArrayCopy(ctx, mask.data(), (int)mask.size()));
-                JS_SetPropertyStr(ctx, obj, "enemyIds", makeInt32ArrayCopy(ctx, ids.data(), (int)ids.size()));
+                JS_SetPropertyStr(ctx, obj, "mask",     make_float32_array(ctx, mask.data(), (int)mask.size()));
+                JS_SetPropertyStr(ctx, obj, "enemyIds", make_int32_array_from_ints(ctx, ids.data(), (int)ids.size()));
                 return obj;
             })
         .method_raw("applyActions",
@@ -301,8 +289,8 @@ static void registerClasses(JSContext* ctx) {
                 std::vector<int> done(N), win(N);
                 d->sim->dones(done.data(), win.data());
                 JSValue obj = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, obj, "done",   makeInt32ArrayCopy(ctx, done.data(), N));
-                JS_SetPropertyStr(ctx, obj, "winner", makeInt32ArrayCopy(ctx, win.data(),  N));
+                JS_SetPropertyStr(ctx, obj, "done",   make_int32_array_from_ints(ctx, done.data(), N));
+                JS_SetPropertyStr(ctx, obj, "winner", make_int32_array_from_ints(ctx, win.data(),  N));
                 return obj;
             })
         .method("rewards",
@@ -312,8 +300,8 @@ static void registerClasses(JSContext* ctx) {
                 std::vector<float> rh(N), ro(N);
                 d->sim->rewards(rh.data(), ro.data());
                 JSValue obj = JS_NewObject(ctx);
-                JS_SetPropertyStr(ctx, obj, "hero",     makeFloat32ArrayCopy(ctx, rh.data(), N));
-                JS_SetPropertyStr(ctx, obj, "opponent", makeFloat32ArrayCopy(ctx, ro.data(), N));
+                JS_SetPropertyStr(ctx, obj, "hero",     make_float32_array(ctx, rh.data(), N));
+                JS_SetPropertyStr(ctx, obj, "opponent", make_float32_array(ctx, ro.data(), N));
                 return obj;
             })
         .method("stepCounts",
@@ -322,7 +310,7 @@ static void registerClasses(JSContext* ctx) {
                 int N = d->sim->numEnvs();
                 std::vector<int> v(N);
                 d->sim->stepCounts(v.data());
-                return makeInt32ArrayCopy(ctx, v.data(), N);
+                return make_int32_array_from_ints(ctx, v.data(), N);
             })
         .method("episodeCounts",
             [](VecSimulationData* d, JSContext* ctx) -> JSValue {
@@ -330,7 +318,7 @@ static void registerClasses(JSContext* ctx) {
                 int N = d->sim->numEnvs();
                 std::vector<int> v(N);
                 d->sim->episodeCounts(v.data());
-                return makeInt32ArrayCopy(ctx, v.data(), N);
+                return make_int32_array_from_ints(ctx, v.data(), N);
             });
 
     // ── MCTS primitive wrappers — no methods, constructed via factories.

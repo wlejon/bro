@@ -63,82 +63,14 @@ struct JsValueHolder {
     }
 };
 
-// ─── Helpers for marshalling typed-array results out of JS ─────────────────
+using qjsbind::read_float32_array;
+using qjsbind::read_int32_array;
+using qjsbind::make_float32_array;
 
-// Read a Float32Array (or any view backed by floats) into a std::vector<float>.
-// Returns empty vector if the value isn't a typed-array view.
-std::vector<float> readFloat32Array(JSContext* ctx, JSValueConst val) {
-    std::vector<float> out;
-    if (JS_IsUndefined(val) || JS_IsNull(val)) return out;
-    size_t byte_off = 0, view_len = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, val, &byte_off, &view_len, nullptr);
-    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return out; }
-    size_t abuf_len = 0;
-    uint8_t* raw = JS_GetArrayBuffer(ctx, &abuf_len, abuf);
-    JS_FreeValue(ctx, abuf);
-    if (!raw) return out;
-    const size_t n = view_len / sizeof(float);
-    out.resize(n);
-    if (n > 0) std::memcpy(out.data(), raw + byte_off, n * sizeof(float));
-    return out;
-}
-
-// Read either a typed integer array (Int32Array) or a plain JS array of
-// numbers into std::vector<int>.
-std::vector<int> readIntArray(JSContext* ctx, JSValueConst val) {
-    std::vector<int> out;
-    if (JS_IsUndefined(val) || JS_IsNull(val)) return out;
-
-    // Try typed array first.
-    size_t byte_off = 0, view_len = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, val, &byte_off, &view_len, nullptr);
-    if (!JS_IsException(abuf)) {
-        size_t abuf_len = 0;
-        uint8_t* raw = JS_GetArrayBuffer(ctx, &abuf_len, abuf);
-        JS_FreeValue(ctx, abuf);
-        if (raw) {
-            const size_t n = view_len / sizeof(int32_t);
-            out.resize(n);
-            if (n > 0) std::memcpy(out.data(), raw + byte_off, n * sizeof(int32_t));
-            return out;
-        }
-    } else {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-    }
-
-    // Fall back to plain Array<number>.
-    if (!JS_IsArray(val)) return out;
-    JSValue len_v = JS_GetPropertyStr(ctx, val, "length");
-    uint32_t len = 0;
-    JS_ToUint32(ctx, &len, len_v);
-    JS_FreeValue(ctx, len_v);
-    out.reserve(len);
-    for (uint32_t i = 0; i < len; ++i) {
-        JSValue elem = JS_GetPropertyUint32(ctx, val, i);
-        int32_t x = 0;
-        JS_ToInt32(ctx, &x, elem);
-        JS_FreeValue(ctx, elem);
-        out.push_back(x);
-    }
-    return out;
-}
-
-JSValue makeFloat32Array(JSContext* ctx, const std::vector<float>& v) {
-    JSValue abuf = JS_NewArrayBufferCopy(
-        ctx, reinterpret_cast<const uint8_t*>(v.data()), v.size() * sizeof(float));
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
-
-JSValue makeInt32Array(JSContext* ctx, const std::vector<int>& v) {
-    JSValue abuf = JS_NewArrayBufferCopy(
-        ctx, reinterpret_cast<const uint8_t*>(v.data()), v.size() * sizeof(int32_t));
-    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
-    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_INT32);
-    JS_FreeValue(ctx, abuf);
-    return arr;
+// std::vector<int>-flavored Int32Array builder (bro stores legal moves as int).
+inline JSValue make_int32_array(JSContext* ctx, const std::vector<int>& v) {
+    return qjsbind::make_int32_array(
+        ctx, reinterpret_cast<const int32_t*>(v.data()), v.size());
 }
 
 double getDouble(JSContext* ctx, JSValueConst obj, const char* k, double def) {
@@ -243,7 +175,7 @@ static mcts::GenericEnv makeGenericEnv(GenericMctsData* d) {
     env.legal_actions_fn = [d, ctx]() -> std::vector<int> {
         JSValue r = JS_Call(ctx, d->legal_fn, d->env_obj, 0, nullptr);
         if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
-        auto out = readIntArray(ctx, r);
+        auto out = read_int32_array(ctx, r);
         JS_FreeValue(ctx, r);
         return out;
     };
@@ -251,7 +183,7 @@ static mcts::GenericEnv makeGenericEnv(GenericMctsData* d) {
     env.observe_fn = [d, ctx]() -> std::vector<float> {
         JSValue r = JS_Call(ctx, d->observe_fn, d->env_obj, 0, nullptr);
         if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
-        auto out = readFloat32Array(ctx, r);
+        auto out = read_float32_array(ctx, r);
         JS_FreeValue(ctx, r);
         return out;
     };
@@ -268,14 +200,14 @@ static void rewirePrior(GenericMctsData* d) {
         d->m->set_prior_fn([d, ctx](const std::vector<float>& obs,
                                      const std::vector<int>& legal)
                            -> std::vector<float> {
-            JSValue obs_v = makeFloat32Array(ctx, obs);
-            JSValue leg_v = makeInt32Array(ctx, legal);
+            JSValue obs_v = make_float32_array(ctx, obs);
+            JSValue leg_v = make_int32_array(ctx, legal);
             JSValueConst args[2] = { obs_v, leg_v };
             JSValue r = JS_Call(ctx, d->prior_fn, JS_UNDEFINED, 2, args);
             JS_FreeValue(ctx, obs_v);
             JS_FreeValue(ctx, leg_v);
             if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
-            auto out = readFloat32Array(ctx, r);
+            auto out = read_float32_array(ctx, r);
             JS_FreeValue(ctx, r);
             return out;
         });
@@ -288,7 +220,7 @@ static void rewireValue(GenericMctsData* d) {
     JSContext* ctx = d->ctx;
     if (JS_IsFunction(ctx, d->value_fn)) {
         d->m->set_value_fn([d, ctx](const std::vector<float>& obs) -> float {
-            JSValue obs_v = makeFloat32Array(ctx, obs);
+            JSValue obs_v = make_float32_array(ctx, obs);
             JSValueConst args[1] = { obs_v };
             JSValue r = JS_Call(ctx, d->value_fn, JS_UNDEFINED, 1, args);
             JS_FreeValue(ctx, obs_v);
@@ -443,8 +375,8 @@ void installGenericMctsBindings(JSContext* ctx, JSValue gameObj) {
             }, 0)
         .method("rootVisits",
             [](GenericMctsData* d, JSContext* ctx) -> JSValue {
-                if (!d || !d->m) return makeFloat32Array(ctx, {});
-                return makeFloat32Array(ctx, d->m->root_visits());
+                if (!d || !d->m) return make_float32_array(ctx, {});
+                return make_float32_array(ctx, d->m->root_visits());
             })
         .method("advanceRoot",
             [](GenericMctsData* d, int action) {
