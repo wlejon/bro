@@ -1223,25 +1223,11 @@ static JSValue js_getUserMedia(JSContext* ctx, JSValueConst this_val,
         JSValue err = JS_NewError(ctx);
         JS_SetPropertyStr(ctx, err, "message",
                           JS_NewString(ctx, "Failed to access microphone"));
-        JSValue resolving[2];
-        JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-        JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, &err);
-        JS_FreeValue(ctx, resolving[0]);
-        JS_FreeValue(ctx, resolving[1]);
-        JS_FreeValue(ctx, err);
-        return promise;
+        return qjsbind::make_rejected_promise(ctx, err);
     }
 
     JSValue stream = qjsbind::wrap<MicStreamData>(ctx, new MicStreamData{s_audioEngine});
-
-    JSValue resolving[2];
-    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-    JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &stream);
-    JS_FreeValue(ctx, resolving[0]);
-    JS_FreeValue(ctx, resolving[1]);
-    JS_FreeValue(ctx, stream);
-
-    return promise;
+    return qjsbind::make_resolved_promise(ctx, stream);
 }
 
 // --- Sequence raw methods that need string parsing ---

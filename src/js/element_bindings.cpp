@@ -693,13 +693,7 @@ static JSValue js_element_video_play(JSContext* ctx, JSValueConst this_val,
     }
     // HTMLMediaElement.play() returns Promise<void>. Callers may or may not
     // await; returning a resolved promise covers both shapes.
-    JSValue resolving[2];
-    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-    JSValue r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 0, nullptr);
-    JS_FreeValue(ctx, r);
-    JS_FreeValue(ctx, resolving[0]);
-    JS_FreeValue(ctx, resolving[1]);
-    return promise;
+    return qjsbind::make_resolved_promise(ctx, JS_UNDEFINED);
 }
 
 static JSValue js_element_video_pause(JSContext* ctx, JSValueConst this_val,
