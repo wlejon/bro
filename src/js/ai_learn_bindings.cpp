@@ -18,9 +18,11 @@
 #include <brogameagent/nn/net.h>
 #include <brogameagent/nn/policy_value_net.h>
 
+#include <cctype>
 #include <cstring>
 #include <memory>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace bro::js {
@@ -470,6 +472,17 @@ static void registerClasses(JSContext* ctx) {
                         c.rng_seed = (uint64_t)s;
                     }
                     JS_FreeValue(ctx, sv);
+                    // Where compute happens. "gpu" requires net.to('gpu') first.
+                    JSValue dv = JS_GetPropertyStr(ctx, cfgV, "device");
+                    if (JS_IsString(dv)) {
+                        const char* s = JS_ToCString(ctx, dv);
+                        std::string dev = s ? s : "";
+                        if (s) JS_FreeCString(ctx, s);
+                        for (auto& ch : dev) ch = (char)std::tolower((unsigned char)ch);
+                        c.device = (dev == "gpu") ? brogameagent::nn::Device::GPU
+                                                  : brogameagent::nn::Device::CPU;
+                    }
+                    JS_FreeValue(ctx, dv);
                     d->trainer->set_config(c);
                 })
             .method("step",

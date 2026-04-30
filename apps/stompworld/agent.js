@@ -26,6 +26,15 @@
             headSizes,
             seed: opts.seed != null ? opts.seed : 0xA11CE5n,
         });
+
+        // Trainer device: prefer GPU when the runtime has CUDA compiled in.
+        // Inference workers build their own nets and stay on CPU — the trainer
+        // publishes downloaded weights through the WeightsHandle, so consumers
+        // are unaffected by where training runs.
+        const wantGpu = opts.device !== 'cpu'
+                     && bro.ai.game.nn.gpu && bro.ai.game.nn.gpu.available;
+        if (wantGpu) net.to('gpu');
+
         const handle = NN.createWeightsHandle();
         const buf    = LEARN.createGenericReplayBuffer(bufCap);
         const trainer = LEARN.createGenericExItTrainer();
@@ -40,6 +49,7 @@
             policyWeight: 1.0, valueWeight: 1.0,
             publishEvery: 25,
             rngSeed: 0x1234n,
+            device: wantGpu ? 'gpu' : 'cpu',
         });
 
         return { net, buffer: buf, trainer, handle };

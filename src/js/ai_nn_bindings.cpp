@@ -21,8 +21,10 @@
 #include <brogameagent/nn/policy_value_net.h>
 #include <brogameagent/nn/factored.h>
 
+#include <cctype>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace bro::js {
@@ -512,6 +514,25 @@ static void registerClasses(JSContext* ctx) {
                 })
             .method("zeroGrad", [](PolicyValueNetData* d) { if (d->net) d->net->zero_grad(); })
             .method("sgdStep",  [](PolicyValueNetData* d, double lr, double m) { if (d->net) d->net->sgd_step((float)lr, (float)m); })
+            // Device migration. Pass "gpu" or "cpu" (case-insensitive). Throws
+            // a JS error on a CPU-only build when "gpu" is requested.
+            .method("to",
+                [](PolicyValueNetData* d, JSContext* ctx, JSValueConst devV) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    const char* s = JS_ToCString(ctx, devV);
+                    std::string dev = s ? s : "";
+                    if (s) JS_FreeCString(ctx, s);
+                    for (auto& c : dev) c = (char)std::tolower((unsigned char)c);
+                    nn::Device target = (dev == "gpu") ? nn::Device::GPU : nn::Device::CPU;
+                    try { d->net->to(target); }
+                    catch (const std::exception& e) { return JS_ThrowInternalError(ctx, "%s", e.what()); }
+                    return JS_UNDEFINED;
+                })
+            .get("device",
+                [](PolicyValueNetData* d) -> std::string {
+                    if (!d->net) return std::string("cpu");
+                    return d->net->device() == nn::Device::GPU ? std::string("gpu") : std::string("cpu");
+                })
             .method("save",
                 [](PolicyValueNetData* d, JSContext* ctx) -> JSValue {
                     if (!d->net) return makeUint8ArrayCopy(ctx, nullptr, 0);
