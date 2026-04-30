@@ -2,7 +2,7 @@
 // trainer + WeightsHandle, all stitched together. The trainer worker is
 // the only consumer; it pulls .net / .buffer / .trainer / .handle off the
 // returned object. Self-play and MCTS live in play_agent.js (used by
-// live_worker and mcts_worker); they don't go through here.
+// mcts_worker); they don't go through here.
 
 (function (global) {
     'use strict';

@@ -220,37 +220,37 @@
             sim.tilemap.draw(ctx, cam.x, cam.y, VIEW_W, VIEW_H);
             if (lvlFlag) {
                 Art.drawFlag(ctx,
-                    Math.round(lvlFlag.x - cam.x),
-                    Math.round(lvlFlag.y - cam.y));
+                    lvlFlag.x - cam.x,
+                    lvlFlag.y - cam.y);
             }
             if (lvlPickup && !sim.pickupCollected) {
                 Art.drawPickup(ctx,
-                    Math.round(lvlPickup.x - cam.x),
-                    Math.round(lvlPickup.y - cam.y),
+                    lvlPickup.x - cam.x,
+                    lvlPickup.y - cam.y,
                     pickupAnimT);
             }
             for (const s of sim.stompers) {
                 if (!cam.visible(s.x, s.y, s.w, s.h)) continue;
                 const fr = !s.alive ? 2 : (Math.floor((s.animT || 0) / 200) % 2);
                 Art.drawStomper(ctx,
-                    Math.round(s.x - cam.x),
-                    Math.round(s.y - cam.y), fr);
+                    s.x - cam.x,
+                    s.y - cam.y, fr);
             }
             for (const f of sim.flyers) {
                 if (!f.alive) continue;
                 if (!cam.visible(f.x, f.y, f.w, f.h)) continue;
                 const fr = (Math.floor((f.animT || 0) / 150) % 2);
                 Art.drawFlyer(ctx,
-                    Math.round(f.x - cam.x),
-                    Math.round(f.y - cam.y), fr, (f.vx || 0) > 0);
+                    f.x - cam.x,
+                    f.y - cam.y, fr, (f.vx || 0) > 0);
             }
             const p = sim.player;
             let frame = 0;
             if (!p.onGround) frame = 3;
             else if (Math.abs(p.vx) > 8) frame = 1 + (((sim.tick / 8) | 0) % 2);
             Art.drawHero(ctx,
-                Math.round(p.x - cam.x),
-                Math.round(p.y - cam.y - 2),
+                p.x - cam.x,
+                p.y - cam.y - 2,
                 frame, p.facing < 0);
             drawBeams();
             drawHud();

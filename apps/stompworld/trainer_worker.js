@@ -1,14 +1,13 @@
 // trainer_worker.js — pure trainer.
 //
-// In:   tuples from main (sourced from mcts_worker × N + live_worker), and
+// In:   tuples from main (sourced from mcts_worker × N), and
 //       trajectory_end signals (used only for the trailing-mean checkpoint
 //       metric and the last_n ring rotation).
-// Out:  weights (broadcast to all play workers via main), stats for the HUD.
+// Out:  weights (broadcast to all mcts workers via main), stats for the HUD.
 //
-// Self-play and MCTS are NOT here anymore. They live in `mcts_worker.js`
-// (data generators at varying iter depths) and `live_worker.js` (the
-// display agent). This worker owns the network, the replay buffer, the
-// SGD trainer, and the on-disk checkpoint ring + best.bin.
+// Self-play and MCTS are NOT here. They live in `mcts_worker.js` (data
+// generators at varying iter depths). This worker owns the network, the
+// replay buffer, the SGD trainer, and the on-disk checkpoint ring + best.bin.
 //
 // Startup: load shared libs, build the trainer wiring (net + buffer +
 // trainer + handle). Resume from `ckpt/best.bin` if present; otherwise

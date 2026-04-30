@@ -510,7 +510,7 @@
             return { ...r, fired: true };
         }
 
-        function tickPhysics(input, dt) {
+        function runPhysicsStep(input, dt) {
             const ev = Platformer.step(state.player, input, tilemap, dt);
             for (const s of state.stompers) stepStomper(s, dt, tilemap);
             for (const f of state.flyers) stepFlyer(f, dt);
@@ -534,37 +534,66 @@
             return true;
         }
 
-        // Public step(action). action ∈ [0, 6).
-        function step(action) {
-            if (!state.alive || state.won) return { reward: 0, done: true };
+        // Per-decision accumulators. Set up by beginDecision(), consumed by
+        // endDecision(). Tracked outside `state` so they don't pollute the
+        // snapshot — they're only meaningful between begin/end and a caller
+        // that snapshots mid-decision is misusing the API.
+        let curStompKills = 0;
+        let curDied = false;
+        let curWon  = false;
+        let curPickupHit = false;
+        let curOpen = false;
+
+        // Open a new decision window. Call once before the first tickPhysics
+        // for this decision. Resets per-decision state and the recent-beam
+        // log (auto-fire in endDecision will repopulate it).
+        function beginDecision() {
             state.recentBeams.length = 0;
+            curStompKills = 0;
+            curDied = false;
+            curWon = false;
+            curPickupHit = false;
+            curOpen = true;
+        }
 
+        // Advance one physics tick (FIXED_DT_MS = 16.67 ms). `tickIdx` is
+        // 0..FRAME_SKIP-1 within the current decision; the first tick pulses
+        // jumpPressed (matching Platformer's tap semantics). Returns true if
+        // this tick ended the decision early (death / flag / timeout) — the
+        // caller should stop ticking and call endDecision().
+        function tickPhysics(action, tickIdx) {
+            if (!curOpen) return true;
+            if (!state.alive || state.won) { curDied = !state.alive && !state.won; return true; }
             const a = action | 0;
-            let stompKills = 0;
-            let died  = false;
-            let won   = false;
-            let pickupHit = false;
-
-            for (let t = 0; t < FRAME_SKIP; t++) {
-                const input = actionToInput(a, t === 0, state.prevJumpHeld);
-                const ev = tickPhysics(input, FIXED_DT_MS);
-                state.prevJumpHeld = !!input.jumpHeld;
-                state.tick++;
-                state.timeLeft -= FIXED_DT_MS / 1000;
-                stompKills += ev.kills | 0;
-                if (ev.killed) { died = true; break; }
-                if (checkPickup()) pickupHit = true;
-                if (flag && !state.won) {
-                    const p = state.player;
-                    if (p.x + p.w >= flag.x + 8 && p.x <= flag.x + flag.w - 8) {
-                        state.won = true; won = true; break;
-                    }
+            const input = actionToInput(a, tickIdx === 0, state.prevJumpHeld);
+            const ev = runPhysicsStep(input, FIXED_DT_MS);
+            state.prevJumpHeld = !!input.jumpHeld;
+            state.tick++;
+            state.timeLeft -= FIXED_DT_MS / 1000;
+            curStompKills += ev.kills | 0;
+            if (ev.killed) { curDied = true; return true; }
+            if (checkPickup()) curPickupHit = true;
+            if (flag && !state.won) {
+                const p = state.player;
+                if (p.x + p.w >= flag.x + 8 && p.x <= flag.x + flag.w - 8) {
+                    state.won = true; curWon = true; return true;
                 }
-                if (state.timeLeft <= 0) break;
             }
+            if (state.timeLeft <= 0) return true;
+            return false;
+        }
 
-            // Auto-fire pass: scripted, post-physics, once per decision.
-            // Cooldown decrements first if no shot is taken.
+        // Close the decision: auto-fire pass, reward shaping, score, stall
+        // check, terminal flags. Returns {reward, done}.
+        function endDecision() {
+            if (!curOpen) return { reward: 0, done: !state.alive || state.won };
+            curOpen = false;
+
+            const died = curDied;
+            const won = curWon;
+            const pickupHit = curPickupHit;
+            const stompKills = curStompKills;
+
             let pixelsThis = 0, beamStomps = 0, beamFlyers = 0;
             if (!died && !won) {
                 const af = autoFire();
@@ -617,6 +646,22 @@
             return { reward, done };
         }
 
+        // Public step(action): the original decision-level API. One call =
+        // FRAME_SKIP physics ticks + post-physics auto-fire / reward / stall.
+        // Used by play_agent and the MCTS data workers. The tick-level API
+        // (beginDecision / tickPhysics / endDecision) above lets a renderer
+        // step physics one wall-clock tick at a time so the displayed world
+        // moves smoothly between decision boundaries instead of jumping in
+        // 4-tick chunks.
+        function step(action) {
+            if (!state.alive || state.won) return { reward: 0, done: true };
+            beginDecision();
+            for (let t = 0; t < FRAME_SKIP; t++) {
+                if (tickPhysics(action, t)) break;
+            }
+            return endDecision();
+        }
+
         const _legal = (() => {
             const out = new Int32Array(FLAT_NUM_ACTIONS);
             for (let i = 0; i < FLAT_NUM_ACTIONS; i++) out[i] = i;
@@ -647,6 +692,7 @@
             numActions: FLAT_NUM_ACTIONS,
             headSizes: HEAD_SIZES,
             reset, snapshot, restore, step, legalActions, setSpawn,
+            beginDecision, tickPhysics, endDecision,
         };
     }
 

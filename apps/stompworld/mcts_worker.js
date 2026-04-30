@@ -43,10 +43,7 @@ for (const p of SHARED) {
 }
 
 const TILE = 32;
-// Spawn curriculum: episodes start at one of these columns so the trainer
-// sees data from the full traversal (early game from col 2, later sections
-// from col 78/100 where the pickup lives at col 115 and the flag at 118).
-const SPAWN_COLS = [2, 32, 48, 78, 100];
+const SPAWN_COL = 2;
 const TRAIN_TIME_LIMIT = 30;
 
 function buildSim() {
@@ -63,7 +60,7 @@ function buildSim() {
 }
 
 // Coarse state signature shared with the history tapes. Same shape as
-// live_worker's: (col, row, onGround, vxSign, hasWeapon).
+// the prior live worker's: (col, row, onGround, vxSign, hasWeapon).
 function buildSig(s) {
     const p = s.player;
     const col = Math.floor(p.x / TILE);
@@ -86,7 +83,7 @@ let decisionsSinceStats = 0;
 const STATS_EVERY_DECISIONS = 200;
 const DECISIONS_PER_TICK = 32;
 
-// History tapes — same shape as live_worker's pair. Failure tape records
+// History tapes — same shape as the prior live worker's pair. Failure tape records
 // death/stall/timeout tails; success tape records flag-success tails.
 // Both suppress identical (sig, action) replays via priorAdjust below.
 let failureTape = null;
@@ -95,8 +92,7 @@ const sigList = [];
 const TAPE_LOOKBACK = 8;
 
 function pickSpawn() {
-    const idx = Math.floor(Math.random() * SPAWN_COLS.length);
-    sim.setSpawn(SPAWN_COLS[idx] * TILE + 2, baseSpawnY - 4);
+    sim.setSpawn(SPAWN_COL * TILE + 2, baseSpawnY - 4);
 }
 
 function startEpisode() {

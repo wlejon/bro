@@ -564,8 +564,8 @@
             frame = 1 + (Math.floor(Game.runAccum) % 2);
         }
         Art.drawHero(ctx,
-                     Math.round(p.x - Game.cam.x),
-                     Math.round(p.y - Game.cam.y - 2),
+                     p.x - Game.cam.x,
+                     p.y - Game.cam.y - 2,
                      frame, p.facing < 0);
     }
 
@@ -573,8 +573,8 @@
         for (const s of Game.stompers) {
             if (!Game.cam.visible(s.x, s.y, s.w, s.h)) continue;
             const frame = !s.alive ? 2 : (Math.floor(s.animT / 200) % 2);
-            const dx = Math.round(s.x - Game.cam.x);
-            const dy = Math.round(s.y - Game.cam.y);
+            const dx = s.x - Game.cam.x;
+            const dy = s.y - Game.cam.y;
             if (s.ragdoll) {
                 ctx.save();
                 ctx.translate(dx + s.w / 2, dy + s.h / 2);
@@ -591,8 +591,8 @@
         for (const f of Game.flyers) {
             if (!Game.cam.visible(f.x, f.y, f.w, f.h)) continue;
             const frame = (Math.floor(f.animT / 150) % 2);
-            const dx = Math.round(f.x - Game.cam.x);
-            const dy = Math.round(f.y - Game.cam.y);
+            const dx = f.x - Game.cam.x;
+            const dy = f.y - Game.cam.y;
             if (f.ragdoll) {
                 ctx.save();
                 ctx.translate(dx + f.w / 2, dy + f.h / 2);
@@ -664,15 +664,15 @@
     function drawFlag() {
         if (!Game.flag) return;
         const f = Game.flag;
-        Art.drawFlag(ctx, Math.round(f.x - Game.cam.x), Math.round(f.y - Game.cam.y));
+        Art.drawFlag(ctx, f.x - Game.cam.x, f.y - Game.cam.y);
     }
 
     function drawPickup() {
         if (!Game.pickup) return;
         const pk = Game.pickup;
         Art.drawPickup(ctx,
-            Math.round(pk.x - Game.cam.x),
-            Math.round(pk.y - Game.cam.y),
+            pk.x - Game.cam.x,
+            pk.y - Game.cam.y,
             Game.pickupAnimT);
     }
 
@@ -800,88 +800,80 @@
     }
 
     // ── Training mode ────────────────────────────────────────────────────────
-    // Layered architecture, all heavy work off the main thread:
+    // The visualizer is a *replay* of recently-completed trajectories, not a
+    // live agent. Training itself runs entirely in workers:
     //
-    //   trainer_worker      owns net + buffer + SGD; ingests tuples,
-    //                       publishes weights, persists checkpoints.
-    //   mcts_worker × N     pure self-play data generators at varying
-    //                       search depths (Dirichlet exploration on).
-    //                       No render, no failure memory.
-    //   live_worker         owns the displayed sim. Runs MCTS on top of
-    //                       the best-crop pool's seeds, biased away from
-    //                       recently-failed lines via FailureTape. Posts
-    //                       a render snapshot per decision.
+    //   trainer_worker      owns net + buffer + SGD; ingests tuples from the
+    //                       mcts workers, publishes weights, persists ckpts.
+    //   mcts_worker × N     self-play data generators at varying search
+    //                       depths. Each posts {tuples, trajectory} per
+    //                       episode end.
     //
     // Main thread:
-    //   - routes: tuples (any worker → trainer), weights (trainer → all
-    //     play workers), trajectory_end (any → trainer for ckpt metric).
-    //   - holds the BestCrop pool: every trajectory from any worker is
-    //     ingested and ranked. Periodically (~SEED_PERIOD_MS) main picks
-    //     a top entry and seeds the live worker with either the start
-    //     state alone or a replayed prefix of its action sequence — so
-    //     the display agent runs MCTS on top of the best raw data we
-    //     have, not from scratch.
-    //   - draws from the latest render snapshot at 60 fps regardless of
-    //     how slow any individual MCTS search runs.
+    //   - routes tuples + trajectory_end to the trainer; broadcasts weights
+    //     back to the mcts workers.
+    //   - keeps a ring of the last 10 trajectories. Each playback cycle:
+    //       primary  = best-by-return of the latest 10 (replayed by stepping
+    //                  this thread's sim from the trajectory's startSnap +
+    //                  actions, full world state).
+    //       ghosts   = the other 9 trajectories' player tracks (extracted
+    //                  once on selection by replaying through a throwaway
+    //                  sim and capturing per-tick {x, y, facing, frame}),
+    //                  rendered as translucent hero sprites only.
+    //     Tier: ≥10 trajectories → 1 primary + 9 ghosts; ≥5 → 1 + 4; <5 → 1
+    //     (just the primary, no ghosts).
+    //   - steps the primary sim at 60 Hz (FIXED_DT_MS = 16.67 ms) on the main
+    //     thread — one wall-clock tick per call to sim.tickPhysics — so the
+    //     world moves continuously instead of jumping per decision.
     //
-    // Controls: F = bump live decision rate, C = clear failure tape,
+    // Controls: F = fast (8× playback), C = clear failure tapes on workers,
     //           Esc = back to title.
     const Training = {
         trainer: null,
-        live: null,
         mctsWorkers: [],
         pool: null,
         cam: null,
-        snap: null,
+        sim: null,                    // main-thread sim, stepped during primary playback
         fast: false,
         FAST_MULT: 8,
         running: false,
 
-        // Static level data for rendering — sims live in the workers.
-        // The mob templates (lvlStompers, lvlFlyers) are kept so that during
-        // the trainer's pretrain hold — before the live worker has spawned
-        // the agent and started shipping render snaps — we can still draw
-        // a non-empty world (tiles, flag, pickup, mobs at their starting
-        // positions) under the loading overlay. Player stays hidden until
-        // the first real snap arrives.
+        // Level data shared with this.sim — tilemap mutations from the sim's
+        // auto-fire pass appear directly on the rendered world. Templates
+        // (lvlStompers, lvlFlyers) are unused at draw time now that the sim
+        // owns mob state, but kept for reference.
         lvlTilemap: null,
         lvlFlag: null,
-        lvlStompers: null,
-        lvlFlyers: null,
+        lvlPickup: null,
 
         // Worker-config knobs. Two MCTS data workers at very different
         // search depths so the trainer sees a mix of cheap/diverse and
         // deep/confident visit distributions.
-        NUM_MCTS_WORKERS: 2,
-        MCTS_DEPTHS:  [50, 200],
-        MCTS_ROLLOUT: [6, 10],
+        NUM_MCTS_WORKERS: 5,
+        MCTS_DEPTHS:  [12, 18, 24, 48, 64],
+        MCTS_ROLLOUT: [4, 6, 8, 10, 12],
 
-        // Seed pump: how often main hands the live worker a fresh
-        // start-state from the best-crop pool.
-        seedAccum: 0,
-        SEED_PERIOD_MS: 500,
+        // ── Replay state ─────────────────────────────────────────────────
+        // Ring buffer of the last N trajectories from any worker. We
+        // re-select the primary + ghost set on each playback boundary,
+        // not on each new trajectory arrival, so a run plays through to
+        // its end before we swap.
+        TRAJ_RING_SIZE: 10,
+        trajRing: [],
+        primary: null,                // currently-playing trajectory
+        actionIdx: 0,                 // index into primary.actions
+        tickInDecision: 0,            // 0..FRAME_SKIP-1 within current decision
+        tickAcc: 0,                   // wall-clock ms accumulator for 60 Hz physics
+        primaryDone: false,           // playback exhausted; next update() re-selects
+        primaryStartTick: 0,          // sim.tick at start of current playback
+        episodesPlayed: 0,            // how many primaries we've shown
+        ghostTracks: [],              // [{frames: [{tick,x,y,facing,frame}]}, ...]
 
-        // Live decision pump (main → live worker). Both workers self-clock
-        // via 'ready' messages and main answers with 'step' (live) or
-        // 'tick' (mcts). For live we also enforce wall-clock pacing — if
-        // a 'ready' arrives before LIVE_PERIOD_MS has elapsed since the
-        // last decision, we hold the credit until the period passes so
-        // the displayed agent runs in real time. Fast mode shrinks the
-        // period.
-        LIVE_PERIOD_MS: 1000 / 60 * 4,    // matches sim FRAME_SKIP
-        liveLastStep: 0,
-        liveCredits: 0,
-
-        // mcts workers are self-clocking: they post 'ready' after each
-        // batch, and main responds with another 'tick'.
-        mctsReady: [],
-
-        // Audio diff state — compare last vs current render snap to fire
-        // sounds on transitions (stomp, land, jump, death/win episode end).
-        // Skipped while fast mode is on so we don't spray at 8x speed.
-        prevAudioSnap: null,
-        prevEpisodes: 0,
-        prevReason: 'fresh',
+        // Audio diff state — compare prev/current sim state at each
+        // decision boundary. Mute in fast mode so 8× playback doesn't
+        // machine-gun the speakers.
+        prevPlayer: null,
+        prevStomperAlive: null,
         flyerCooldown: 0,
 
         // HUD aggregates.
@@ -890,14 +882,9 @@
             lossValue: 0, lossPolicy: 0,
             netVersion: 0n, bestMean: 0, meanReturn: 0, resumed: 0,
         },
-        liveStats: {
-            episodes: 0, lastReason: 'fresh', bestX: 0,
-            decisions: 0, tapeSize: 0, tapeCapacity: 0,
-        },
-        // Beam visuals fired by the worker, decayed by ttl on the main
-        // thread. The worker reports each beam's segment endpoints once
-        // (the decision they fired); we keep them alive ~80 ms locally
-        // so they're visible across several render frames.
+        // Beam visuals fired by the sim on its auto-fire passes; decayed
+        // by ttl across the next several frames so a single shot stays
+        // visible regardless of where in the playback we are.
         trainingBeams: [],
         mctsStats: [],
         warmupInfo: null,
@@ -905,17 +892,21 @@
         poolCapacity: 32,
 
         start() {
-            // The Training-mode renderer mirrors the live worker's sim
-            // visually. We need a destructible tilemap on this side too so
-            // applyDamageDiff() lands; the live worker ships a sparse diff
-            // every render frame and we mirror it before draw().
+            // The level provides the tilemap, mob templates, flag and pickup.
+            // We hand the same tilemap to the sim so its auto-fire damage
+            // shows up on the rendered world directly — no diff protocol.
             const lvl = Level.buildLevel({ tileSize: TILE, destructible: true });
-            this.lvlTilemap  = lvl.tilemap;
-            this.lvlFlag     = lvl.flag;
-            this.lvlPickup   = lvl.pickup;
-            this.lvlStompers = lvl.stompers;
-            this.lvlFlyers   = lvl.flyers;
+            this.lvlTilemap = lvl.tilemap;
+            this.lvlFlag    = lvl.flag;
+            this.lvlPickup  = lvl.pickup;
             this.pickupAnimT = 0;
+
+            this.sim = SwSim.create({
+                tilemap: lvl.tilemap, spawn: lvl.spawn,
+                stompers: lvl.stompers, flyers: lvl.flyers,
+                flag: lvl.flag, pickup: lvl.pickup,
+                timeLimit: 600,
+            });
 
             this.cam = Camera2D.create({
                 viewW: VIEW_W, viewH: VIEW_H,
@@ -925,11 +916,20 @@
             });
             this.cam.snapTo(VIEW_W / 2, VIEW_H / 2);
 
-            this.snap = null;
-            this.prevAudioSnap = null;
-            this.prevEpisodes = 0;
-            this.prevReason = 'fresh';
+            this.trajRing = [];
+            this.primary = null;
+            this.actionIdx = 0;
+            this.tickInDecision = 0;
+            this.tickAcc = 0;
+            this.primaryDone = false;
+            this.primaryStartTick = 0;
+            this.episodesPlayed = 0;
+            this.ghostTracks = [];
+
+            this.prevPlayer = null;
+            this.prevStomperAlive = null;
             this.flyerCooldown = 0;
+
             this.pool = bro.ai.game.grid.createBestCrop({
                 capacity: this.poolCapacity,
                 depthBonus: 0.001, ageDecay: 0.0001,
@@ -939,38 +939,21 @@
             this.poolAccepted = 0;
             this.fast = false;
             this.warmupInfo = null;
+            this.trainingBeams = [];
             this.mctsStats = [];
-            this.mctsReady = [];
-            this.seedAccum = 0;
-            this.liveLastStep = 0;
-            this.liveCredits = 0;
-            for (let i = 0; i < this.NUM_MCTS_WORKERS; i++) {
-                this.mctsStats.push({});
-                this.mctsReady.push(false);
-            }
+            for (let i = 0; i < this.NUM_MCTS_WORKERS; i++) this.mctsStats.push({});
 
-            // Spawn all workers up front. The play workers run concurrently
-            // with the trainer's synchronous BC warmup so the user sees
-            // motion immediately (against the trainer's initial random or
-            // checkpoint-loaded weights, which it publishes before warmup).
-            //
-            // The original "hold play workers until warmup" gate was added
-            // to fix a memory pile-up: tuples posted to a busy trainer queue
-            // up in its inbox (its onmessage doesn't run during synchronous
-            // warmup), keeping obs + policyTarget Float32Arrays alive. Fix
-            // that here on the main side instead — `trainerReady` gates the
-            // tuple/trajectory_end forwarding in routeTuples / ingestTrajectory,
-            // so during warmup the workers' produced tuples are dropped on
-            // the floor on main rather than queuing in the trainer.
+            // Spawn workers up front. They run concurrently with the
+            // trainer's synchronous BC warmup. A trainerReady gate in
+            // routeTuples / ingestTrajectory drops tuples on main during
+            // warmup so they don't pile up in the trainer's inbox holding
+            // Float32Arrays alive while it's busy with pretrain.
             this.lastWeightsBytes   = null;
             this.lastWeightsVersion = 0n;
             this.trainerReady       = false;
             this.droppedTuples      = 0;
             this.trainer = new Worker('trainer_worker.js');
             this.trainer.onmessage = (e) => this.onTrainerMessage(e && e.data);
-
-            this.live = new Worker('live_worker.js');
-            this.live.onmessage = (e) => this.onLiveMessage(e && e.data);
 
             this.mctsWorkers = [];
             for (let i = 0; i < this.NUM_MCTS_WORKERS; i++) {
@@ -990,28 +973,19 @@
 
         stop() {
             this.running = false;
-            const all = [this.trainer, this.live, ...(this.mctsWorkers || [])]
-                .filter(Boolean);
+            const all = [this.trainer, ...(this.mctsWorkers || [])].filter(Boolean);
             for (const w of all) {
                 try { w.postMessage({ type: 'stop' }); } catch (_) {}
                 try { w.terminate(); } catch (_) {}
             }
             this.trainer = null;
-            this.live = null;
             this.mctsWorkers = [];
         },
 
-        // Each play-worker recipient needs its own ArrayBuffer so we can
-        // hand them off zero-copy via the transferList. Cloning the small
-        // weights blob N times costs less than the cross-thread copy
-        // postMessage would otherwise do for N recipients.
-        //
-        // Live worker is held back until trainer pretraining is complete
-        // (warmupInfo arrives). This keeps the user-visible agent off-screen
-        // during the 5000-step pretrain so they see the loading overlay
-        // instead of a half-trained net repeatedly choosing the same bad
-        // action. MCTS workers still get every publish — they're producing
-        // training data, not display.
+        // Each recipient needs its own ArrayBuffer so we can hand them off
+        // zero-copy via the transferList. Cloning the small weights blob N
+        // times costs less than the cross-thread copy postMessage would
+        // otherwise do for N recipients.
         sendWeightsTo(worker, bytes, version) {
             const copy = new Uint8Array(bytes.length);
             copy.set(bytes);
@@ -1022,16 +996,14 @@
             } catch (_) {}
         },
         broadcastWeights(bytes, version) {
-            const recipients = [...this.mctsWorkers].filter(Boolean);
-            if (this.live && this.warmupInfo) recipients.push(this.live);
-            for (const r of recipients) this.sendWeightsTo(r, bytes, version);
+            for (const r of this.mctsWorkers) {
+                if (r) this.sendWeightsTo(r, bytes, version);
+            }
         },
 
         onTrainerMessage(m) {
             if (!m) return;
             if (m.type === 'weights') {
-                // Cache so we can prime late-spawned play workers without
-                // waiting for the trainer's next publish.
                 this.lastWeightsBytes   = m.bytes;
                 this.lastWeightsVersion = m.version;
                 this.broadcastWeights(m.bytes, m.version);
@@ -1041,74 +1013,10 @@
             } else if (m.type === 'warmup') {
                 this.warmupInfo = m.stats || {};
                 // Trainer is responsive now — start streaming tuples through.
-                // Anything produced during warmup was dropped on the main
-                // side to keep the trainer's inbox empty.
+                // Anything produced during warmup was dropped on main to keep
+                // the trainer's inbox empty.
                 this.trainerReady = true;
-                // Pretraining is fully done. Push the most recent weights
-                // we've buffered to the live worker so it can spawn the
-                // agent. This is the catch-up send for everything we held
-                // back during pretrain (see broadcastWeights).
-                if (this.live && this.lastWeightsBytes) {
-                    this.sendWeightsTo(this.live,
-                        this.lastWeightsBytes, this.lastWeightsVersion);
-                }
             }
-        },
-
-        onLiveMessage(m) {
-            if (!m) return;
-            if (m.type === 'render') {
-                this.snap = m.snap;
-                const s = m.snap;
-                if (s.episodes    != null) this.liveStats.episodes    = s.episodes;
-                if (s.lastReason  != null) this.liveStats.lastReason  = s.lastReason;
-                if (s.bestX       != null) this.liveStats.bestX       = s.bestX | 0;
-                if (s.decisions   != null) this.liveStats.decisions   = s.decisions;
-                if (s.tapeSize     != null) this.liveStats.tapeSize     = s.tapeSize;
-                if (s.tapeCapacity != null) this.liveStats.tapeCapacity = s.tapeCapacity;
-                // Apply the damage diff exactly once per fresh snap. Doing
-                // this in update() instead burned 60 fps on a wholesale
-                // rebuildDamagedTiles every frame even when the diff hadn't
-                // changed — the hot path during heavy beam fire.
-                if (this.lvlTilemap && this.lvlTilemap.destructible) {
-                    this.lvlTilemap.applyDamageDiff(s.damageDiff || null);
-                }
-                // Pull any beams the worker fired this decision into the
-                // main-thread visual list. Each beam carries its own ttl
-                // so they decay across the next several frames regardless
-                // of when the next snap arrives.
-                if (s.beams && s.beams.length) {
-                    for (const b of s.beams) {
-                        this.trainingBeams.push({
-                            x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
-                            ttl: Game.BEAM_TTL_MS, ttlMax: Game.BEAM_TTL_MS,
-                        });
-                    }
-                }
-            } else if (m.type === 'tuples') {
-                this.routeTuples(m);
-            } else if (m.type === 'trajectory') {
-                this.ingestTrajectory(m);
-            } else if (m.type === 'ready') {
-                // Worker finished a decision (or stalled on no-weights).
-                // We grant a 'step' as soon as the LIVE_PERIOD_MS pacing
-                // budget allows. If not yet, increment credits and let
-                // pumpLive flush them when wall time catches up.
-                this.liveCredits++;
-                this.tryReleaseLiveCredit();
-            }
-        },
-
-        tryReleaseLiveCredit() {
-            if (!this.live || this.liveCredits <= 0) return;
-            const period = this.fast
-                ? this.LIVE_PERIOD_MS / this.FAST_MULT
-                : this.LIVE_PERIOD_MS;
-            const now = Date.now();
-            if (now - this.liveLastStep < period) return;
-            this.liveLastStep = now;
-            this.liveCredits--;
-            try { this.live.postMessage({ type: 'step' }); } catch (_) {}
         },
 
         onMctsMessage(m, idx) {
@@ -1154,11 +1062,8 @@
         },
 
         ingestTrajectory(m) {
-            // bro.ai.game.grid.createBestCrop wants {snapshot, prefix, score,
-            // depth}; ranks internally with the configured depthBonus +
-            // ageDecay weights. Top-return / accepted-count are tracked here
-            // since the pool no longer surfaces them directly. Pool ingest
-            // happens regardless of trainerReady (it's main-local).
+            // BestCrop pool: kept for stats / future use. Ranks by
+            // {snapshot, prefix, score, depth} with depthBonus + ageDecay.
             this.pool.push({
                 snapshot: m.startSnap,
                 prefix:   m.actions,
@@ -1167,10 +1072,6 @@
             });
             this.poolAccepted++;
             if (m.totalReturn > this.poolTopReturn) this.poolTopReturn = m.totalReturn;
-            // Skip forwarding trajectory_end until trainer is responsive,
-            // for the same inbox-pile-up reason as routeTuples. The trainer
-            // only uses this for the trailing-mean checkpoint metric, which
-            // is a no-op during warmup anyway.
             if (this.trainer && this.trainerReady) {
                 try {
                     this.trainer.postMessage({
@@ -1180,79 +1081,189 @@
                     });
                 } catch (_) {}
             }
+            // Visualizer ring: every trajectory enters. All workers spawn at
+            // col 2 now, so totalReturn is comparable across workers and the
+            // ring rotates fast enough that the primary keeps changing.
+            this.trajRing.push({
+                startSnap:   m.startSnap,
+                actions:     m.actions,
+                totalReturn: m.totalReturn,
+                reason:      m.reason,
+                decisions:   m.decisions,
+                bestX:       m.bestX,
+                workerId:    m.workerId,
+                searchDepth: m.searchDepth,
+            });
+            while (this.trajRing.length > this.TRAJ_RING_SIZE) this.trajRing.shift();
         },
 
-        // The live worker always starts at the level's default spawn
-        // (col 2). The pool keeps collecting trajectories from all
-        // workers as training data, but we don't use it to teleport
-        // the displayed agent — the user wants every visible run to
-        // start at the beginning of the map. The "search on top of
-        // search" layering still happens implicitly: the trainer pulls
-        // tuples from the deep mcts workers and republishes weights,
-        // and the live agent's shallow MCTS refines on top of those
-        // weights. Just no state-restore funny business.
+        // Pick the primary + ghost set for the next playback cycle. Tier:
+        //   ≥10 trajectories → window of last 10, primary + 9 ghosts
+        //   ≥5              → window of last 5,  primary + 4 ghosts
+        //   ≥1              → just the primary  (no ghosts)
+        // Primary = highest totalReturn in the window.
+        selectPrimaryAndGhosts() {
+            const ring = this.trajRing;
+            if (ring.length === 0) return null;
+            let window;
+            if (ring.length >= 10)     window = ring.slice(-10);
+            else if (ring.length >= 5) window = ring.slice(-5);
+            else                       window = ring.slice(-1);
+            let bestIdx = 0;
+            for (let i = 1; i < window.length; i++) {
+                if (window[i].totalReturn > window[bestIdx].totalReturn) bestIdx = i;
+            }
+            const ghosts = [];
+            for (let i = 0; i < window.length; i++) {
+                if (i !== bestIdx) ghosts.push(window[i]);
+            }
+            return { primary: window[bestIdx], ghosts };
+        },
+
+        // Replay a trajectory through a throwaway sim and capture per-tick
+        // (x, y, facing, frame). Tick numbers are zero-based at startSnap so
+        // they index directly with the primary's relative tick at draw time.
+        // Throwaway sim doesn't share the rendered tilemap.
+        extractGhostTrack(traj) {
+            const lvl = Level.buildLevel({
+                tileSize: TILE, destructible: true, trackDamagedTiles: false,
+            });
+            const tmp = SwSim.create({
+                tilemap: lvl.tilemap, spawn: lvl.spawn,
+                stompers: lvl.stompers, flyers: lvl.flyers,
+                flag: lvl.flag, pickup: lvl.pickup,
+                timeLimit: 600,
+            });
+            tmp.restore(traj.startSnap);
+            const frames = [];
+            const FS = SwSim.FRAME_SKIP;
+            outer: for (let i = 0; i < traj.actions.length; i++) {
+                tmp.beginDecision();
+                for (let t = 0; t < FS; t++) {
+                    const ended = tmp.tickPhysics(traj.actions[i], t);
+                    const p = tmp.player;
+                    frames.push({
+                        tick: i * FS + t,
+                        x: p.x, y: p.y, facing: p.facing,
+                        frame: heroFrame(p, i * FS + t),
+                    });
+                    if (ended) { tmp.endDecision(); break outer; }
+                }
+                const out = tmp.endDecision();
+                if (out.done) break;
+            }
+            return { frames };
+        },
+
+        // Set up the sim and ghost tracks for a fresh playback. Resets the
+        // shared tilemap's damage state via sim.reset() so the world starts
+        // visually clean for the new run.
+        startPrimaryPlayback() {
+            const sel = this.selectPrimaryAndGhosts();
+            if (!sel) return false;
+            this.primary = sel.primary;
+            this.ghostTracks = sel.ghosts.map((t) => this.extractGhostTrack(t));
+            this.actionIdx = 0;
+            this.tickInDecision = 0;
+            this.tickAcc = 0;
+            this.primaryDone = false;
+            this.sim.reset();
+            this.sim.restore(this.primary.startSnap);
+            this.primaryStartTick = this.sim.tick;
+            this.sim.beginDecision();
+            this.episodesPlayed++;
+            this.prevPlayer = null;
+            this.prevStomperAlive = this.sim.stompers.map((s) => s.alive);
+            this.trainingBeams.length = 0;
+            return true;
+        },
+
         update(dt) {
             if (!this.running) return;
-            // Try to release any banked live-decision credits now that
-            // wall time has advanced. Credits only accumulate when the
-            // worker is faster than the period; if MCTS is slower than
-            // real time the worker can't keep up and we just don't send.
-            this.tryReleaseLiveCredit();
             this.pickupAnimT += dt;
-            if (this.snap && this.snap.player) {
-                this.cam.follow(
-                    this.snap.player.x + this.snap.player.w / 2, VIEW_H / 2);
-                this.diffSnapAudio(dt);
+            if (this.flyerCooldown > 0) this.flyerCooldown -= dt;
+
+            // No primary yet, or current one is exhausted — try to (re)start.
+            if (!this.primary || this.primaryDone) {
+                if (!this.startPrimaryPlayback()) {
+                    // No trajectories in the ring yet; nothing to play.
+                    return;
+                }
             }
-            // Decay any in-flight beam visuals fired by the worker.
+
+            // Step the sim at 60 Hz wall-clock (FAST_MULT× in fast mode).
+            // Cap the accumulator to avoid spiral-of-death after a hitch.
+            const FIXED_DT_MS = SwSim.FIXED_DT_MS;
+            const FRAME_SKIP  = SwSim.FRAME_SKIP;
+            this.tickAcc += dt * (this.fast ? this.FAST_MULT : 1);
+            if (this.tickAcc > 200) this.tickAcc = 200;
+            while (this.tickAcc >= FIXED_DT_MS && !this.primaryDone) {
+                const action = this.primary.actions[this.actionIdx];
+                const ended = this.sim.tickPhysics(action, this.tickInDecision);
+                this.tickInDecision++;
+                this.tickAcc -= FIXED_DT_MS;
+                if (this.tickInDecision >= FRAME_SKIP || ended) {
+                    const out = this.sim.endDecision();
+                    // Bake the auto-fire damage so it shows on the rendered
+                    // tilemap. Capture beam visuals fired this decision and
+                    // diff sim state for audio cues. Then advance / wrap.
+                    if (this.lvlTilemap.commitOverlays) {
+                        this.lvlTilemap.commitOverlays();
+                    }
+                    for (const b of this.sim.recentBeams) {
+                        this.trainingBeams.push({
+                            x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
+                            ttl: Game.BEAM_TTL_MS, ttlMax: Game.BEAM_TTL_MS,
+                        });
+                    }
+                    this.diffSimAudio();
+                    this.tickInDecision = 0;
+                    this.actionIdx++;
+                    if (out.done || this.actionIdx >= this.primary.actions.length) {
+                        this.primaryDone = true;
+                        if (!this.fast) {
+                            if (this.primary.reason === 'flag')       Audio.win();
+                            else if (this.primary.reason === 'death') Audio.die();
+                        }
+                        break;
+                    }
+                    this.sim.beginDecision();
+                }
+            }
+
+            // Camera follow on the *interpolated* primary player position.
+            const p = this.sim.player;
+            this.cam.follow(p.x + p.w / 2, VIEW_H / 2);
+
+            // Decay beam visuals.
             if (this.trainingBeams.length) {
                 for (const b of this.trainingBeams) b.ttl -= dt;
                 this.trainingBeams = this.trainingBeams.filter((b) => b.ttl > 0);
             }
         },
 
-        // Snapshot diffing on the main thread is the cheap path: the live
-        // worker doesn't know about audio, so we infer events by comparing
-        // the most recent two render snaps. Fast mode mutes this entirely
-        // so 8× playback doesn't machine-gun the speakers.
-        diffSnapAudio(dt) {
-            if (this.fast) { this.prevAudioSnap = this.snap; return; }
-            const cur = this.snap;
-            const prev = this.prevAudioSnap;
-            if (this.flyerCooldown > 0) this.flyerCooldown -= dt;
+        // Diff prev/current sim state at decision boundaries to fire audio.
+        // Fast mode mutes everything to avoid 8× spam.
+        diffSimAudio() {
+            if (this.fast) { this.prevPlayer = null; return; }
+            const p = this.sim.player;
+            const prev = this.prevPlayer;
+            if (prev) {
+                if (!prev.onGround && p.onGround) Audio.land();
+                else if (prev.onGround && !p.onGround && p.vy < -200) Audio.jump();
 
-            // Episode boundary — episodes counter ticked since last frame.
-            // cur.lastReason is the reason the *previous* episode ended,
-            // posted on the spawn frame of the new one.
-            if (cur.episodes !== this.prevEpisodes) {
-                if (cur.lastReason === 'flag')      Audio.win();
-                else if (cur.lastReason === 'death') Audio.die();
-                this.prevEpisodes = cur.episodes;
-                this.prevAudioSnap = cur;
-                return;
-            }
-
-            if (prev && prev.player && cur.player) {
-                const a = prev.player, b = cur.player;
-                if (!a.onGround && b.onGround) Audio.land();
-                else if (a.onGround && !b.onGround && b.vy < -200) Audio.jump();
-
-                // Stomper kills: any stomper that flipped alive → dead.
-                const ps = prev.stompers || [];
-                const cs = cur.stompers || [];
-                const n = Math.min(ps.length, cs.length);
+                const stomps = this.sim.stompers;
+                const prevAlive = this.prevStomperAlive;
+                const n = Math.min(stomps.length, prevAlive ? prevAlive.length : 0);
                 for (let i = 0; i < n; i++) {
-                    if (ps[i].alive && !cs[i].alive) { Audio.stomp(); break; }
+                    if (prevAlive[i] && !stomps[i].alive) { Audio.stomp(); break; }
                 }
 
-                // Flyer proximity warning — quiet noise blip when one
-                // gets close to the player. Cooldown so it doesn't loop
-                // every frame when the agent hugs a flyer.
-                if (this.flyerCooldown <= 0 && cur.flyers) {
-                    for (const f of cur.flyers) {
+                if (this.flyerCooldown <= 0) {
+                    for (const f of this.sim.flyers) {
                         if (!f.alive) continue;
-                        const dx = (f.x + f.w / 2) - (b.x + b.w / 2);
-                        const dy = (f.y + f.h / 2) - (b.y + b.h / 2);
+                        const dx = (f.x + f.w / 2) - (p.x + p.w / 2);
+                        const dy = (f.y + f.h / 2) - (p.y + p.h / 2);
                         if (dx * dx + dy * dy < 80 * 80) {
                             Audio.flyer();
                             this.flyerCooldown = 350;
@@ -1261,7 +1272,8 @@
                     }
                 }
             }
-            this.prevAudioSnap = cur;
+            this.prevPlayer = { x: p.x, y: p.y, vx: p.vx, vy: p.vy, onGround: p.onGround };
+            this.prevStomperAlive = this.sim.stompers.map((s) => s.alive);
         },
 
         draw() {
@@ -1269,85 +1281,92 @@
             this.lvlTilemap.draw(ctx, this.cam.x, this.cam.y, VIEW_W, VIEW_H);
             if (this.lvlFlag) {
                 const f = this.lvlFlag;
-                Art.drawFlag(ctx,
-                    Math.round(f.x - this.cam.x),
-                    Math.round(f.y - this.cam.y));
+                Art.drawFlag(ctx, f.x - this.cam.x, f.y - this.cam.y);
             }
-            if (this.lvlPickup && (!this.snap || !this.snap.pickupCollected)) {
+            if (this.lvlPickup && this.sim && !this.sim.pickupCollected) {
                 const pk = this.lvlPickup;
                 Art.drawPickup(ctx,
-                    Math.round(pk.x - this.cam.x),
-                    Math.round(pk.y - this.cam.y),
+                    pk.x - this.cam.x, pk.y - this.cam.y,
                     this.pickupAnimT);
             }
-            // Draw mobs even before the live worker boots — pulls from the
-            // snap once it exists, otherwise from the level templates so
-            // the warmup screen shows a populated world (just no player).
-            const stomperList = this.snap ? this.snap.stompers : (this.lvlStompers || []);
-            const flyerList   = this.snap ? this.snap.flyers   : (this.lvlFlyers   || []);
-            for (const s of stomperList) {
+            if (!this.primary) {
+                this.drawLoading();
+                this.drawHud();
+                return;
+            }
+
+            // Stompers / flyers come from the sim (mutated as primary plays).
+            for (const s of this.sim.stompers) {
                 if (!this.cam.visible(s.x, s.y, s.w, s.h)) continue;
                 const fr = !s.alive ? 2 : (Math.floor((s.animT || 0) / 200) % 2);
                 Art.drawStomper(ctx,
-                    Math.round(s.x - this.cam.x),
-                    Math.round(s.y - this.cam.y), fr);
+                    s.x - this.cam.x, s.y - this.cam.y, fr);
             }
-            for (const fl of flyerList) {
-                if (fl.alive === false) continue;
+            for (const fl of this.sim.flyers) {
+                if (!fl.alive) continue;
                 if (!this.cam.visible(fl.x, fl.y, fl.w, fl.h)) continue;
                 const fr = (Math.floor((fl.animT || 0) / 150) % 2);
                 Art.drawFlyer(ctx,
-                    Math.round(fl.x - this.cam.x),
-                    Math.round(fl.y - this.cam.y), fr, (fl.vx || 0) > 0);
+                    fl.x - this.cam.x, fl.y - this.cam.y, fr, (fl.vx || 0) > 0);
             }
-            if (!this.snap) this.drawLoading();
-            if (this.snap) {
-                // Beam visuals fired by the worker. Same look as play-mode
-                // beams (yellow outer + white-hot core, ttl-faded).
-                for (const b of this.trainingBeams) {
-                    const a = Math.max(0, b.ttl / b.ttlMax);
-                    ctx.save();
-                    ctx.lineCap = 'round';
-                    ctx.strokeStyle = 'rgba(255, 220, 80, ' + (a * 0.85).toFixed(3) + ')';
-                    ctx.lineWidth = Game.BEAM_THICKNESS + 6;
-                    ctx.beginPath();
-                    ctx.moveTo(b.x0 - this.cam.x, b.y0 - this.cam.y);
-                    ctx.lineTo(b.x1 - this.cam.x, b.y1 - this.cam.y);
-                    ctx.stroke();
-                    ctx.strokeStyle = 'rgba(255, 255, 240, ' + a.toFixed(3) + ')';
-                    ctx.lineWidth = Math.max(1, Game.BEAM_THICKNESS - 4);
-                    ctx.beginPath();
-                    ctx.moveTo(b.x0 - this.cam.x, b.y0 - this.cam.y);
-                    ctx.lineTo(b.x1 - this.cam.x, b.y1 - this.cam.y);
-                    ctx.stroke();
-                    ctx.restore();
-                }
-                const p = this.snap.player;
-                let frame = 0;
-                if (!p.onGround) frame = 3;
-                else if (Math.abs(p.vx) > 8) frame = 1 + (((this.snap.tick / 8) | 0) % 2);
+
+            // Beam visuals fired by the sim's auto-fire pass. Yellow outer +
+            // white-hot core, ttl-faded — same look as play mode.
+            for (const b of this.trainingBeams) {
+                const a = Math.max(0, b.ttl / b.ttlMax);
+                ctx.save();
+                ctx.lineCap = 'round';
+                ctx.strokeStyle = 'rgba(255, 220, 80, ' + (a * 0.85).toFixed(3) + ')';
+                ctx.lineWidth = Game.BEAM_THICKNESS + 6;
+                ctx.beginPath();
+                ctx.moveTo(b.x0 - this.cam.x, b.y0 - this.cam.y);
+                ctx.lineTo(b.x1 - this.cam.x, b.y1 - this.cam.y);
+                ctx.stroke();
+                ctx.strokeStyle = 'rgba(255, 255, 240, ' + a.toFixed(3) + ')';
+                ctx.lineWidth = Math.max(1, Game.BEAM_THICKNESS - 4);
+                ctx.beginPath();
+                ctx.moveTo(b.x0 - this.cam.x, b.y0 - this.cam.y);
+                ctx.lineTo(b.x1 - this.cam.x, b.y1 - this.cam.y);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Ghost player sprites at low alpha. Their tracks are zero-based
+            // tick numbers; primary's relative tick = sim.tick - startTick.
+            const curTick = this.sim.tick - this.primaryStartTick;
+            ctx.save();
+            ctx.globalAlpha = 0.30;
+            for (const g of this.ghostTracks) {
+                const f = lookupGhostFrame(g.frames, curTick);
+                if (!f) continue;
                 Art.drawHero(ctx,
-                    Math.round(p.x - this.cam.x),
-                    Math.round(p.y - this.cam.y - 2),
-                    frame, p.facing < 0);
+                    f.x - this.cam.x, f.y - this.cam.y - 2,
+                    f.frame, f.facing < 0);
             }
+            ctx.restore();
+
+            // Primary hero on top.
+            const p = this.sim.player;
+            Art.drawHero(ctx,
+                p.x - this.cam.x, p.y - this.cam.y - 2,
+                heroFrame(p, this.sim.tick), p.facing < 0);
+
             this.drawHud();
         },
 
         drawLoading() {
-            // Shown until the live worker posts its first render snap.
-            // Live worker weights are gated on the trainer's 'warmup'
-            // message (see broadcastWeights), so during the trainer's BC
-            // warmup + 5000-step pretrain the agent stays off-screen and
-            // this overlay tells the user something is happening. After
-            // warmup the live worker spawns and the overlay is dropped on
-            // the next snap.
+            // Shown until the first trajectory arrives in the ring. During
+            // BC warmup + the 5000-step pretrain the trainer is too busy
+            // to publish weights, the mcts workers stall on no-weights, and
+            // no trajectories complete — so this overlay tells the user
+            // something is happening. Once a worker finishes its first
+            // episode, primary playback starts and the overlay drops.
             const dots = '.'.repeat(1 + ((Date.now() / 400) | 0) % 3);
             const title = this.warmupInfo
-                ? 'Spawning agent' + dots
+                ? 'Waiting for first run' + dots
                 : 'Pretraining the agent' + dots;
             const sub = this.warmupInfo
-                ? 'Live worker booting'
+                ? 'Workers warming up after weights publish'
                 : 'Behavior cloning + 5000-step pretrain in progress';
             ctx.save();
             ctx.fillStyle = 'rgba(0,0,0,0.65)';
@@ -1371,15 +1390,17 @@
 
         drawHud() {
             const w = this.workerStats;
-            const l = this.liveStats;
+            const pr = this.primary;
             const lines = [
                 'TRAINING — F = fast' + (this.fast ? ' [ON]' : '')
                     + '   C = clear failures   Esc = quit',
-                'live: ep ' + l.episodes + '   bestX ' + (l.bestX | 0)
-                    + '   last: ' + l.lastReason
-                    + '   decisions ' + l.decisions
-                    + (this.snap ? '' : '   [waiting for first snap]'),
-                'failure tape: ' + l.tapeSize + '/' + l.tapeCapacity,
+                'replay: ep ' + this.episodesPlayed
+                    + '   ring ' + this.trajRing.length + '/' + this.TRAJ_RING_SIZE
+                    + '   ghosts ' + this.ghostTracks.length
+                    + (pr
+                        ? ('   primary: ' + pr.reason + ' R=' + pr.totalReturn.toFixed(2)
+                           + ' bestX=' + (pr.bestX | 0))
+                        : '   [waiting for first trajectory]'),
                 'pool: ' + this.pool.size + '/' + this.poolCapacity
                     + '   top return ' + this.poolTopReturn.toFixed(2)
                     + '   accepted ' + this.poolAccepted,
@@ -1436,31 +1457,38 @@
                 S.switchTo('title');
                 return;
             }
-            if (key === 'f' || key === 'F') {
-                this.fast = !this.fast;
-                // Pacing happens in main's pumpLive via FAST_MULT;
-                // worker doesn't need to know.
-            }
+            if (key === 'f' || key === 'F') this.fast = !this.fast;
             if (key === 'c' || key === 'C') {
-                if (this.live) {
-                    try { this.live.postMessage({ type: 'clear_failures' }); } catch (_) {}
-                }
                 for (const w of this.mctsWorkers || []) {
                     try { w.postMessage({ type: 'clear_failures' }); } catch (_) {}
                 }
             }
-            // Manual kill — useful for shimming bad shaped-reward conditions
-            // we haven't gotten right yet (e.g. agent sitting in a stuck
-            // pattern that the stall detector misses). Ends the live episode
-            // as a 'death' so the failure tape captures the tail and the
-            // next episode reseeds.
-            if (key === 'k' || key === 'K') {
-                if (this.live) {
-                    try { this.live.postMessage({ type: 'kill' }); } catch (_) {}
-                }
-            }
         },
     };
+
+    // Hero animation frame from sim player state. `tick` cycles the run
+    // animation (one swap every 8 ticks ≈ every 133 ms at 60 Hz).
+    function heroFrame(p, tick) {
+        if (!p.onGround) return 3;
+        if (Math.abs(p.vx) > 8) return 1 + (((tick / 8) | 0) % 2);
+        return 0;
+    }
+
+    // Binary search for the ghost frame at-or-just-before `tick`. Returns
+    // null if the ghost's track ends before `tick` so it vanishes at its
+    // death point instead of freezing visible.
+    function lookupGhostFrame(frames, tick) {
+        if (frames.length === 0 || tick < 0) return null;
+        const last = frames[frames.length - 1];
+        if (tick > last.tick) return null;
+        if (tick <= frames[0].tick) return frames[0];
+        let lo = 0, hi = frames.length - 1;
+        while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (frames[mid].tick <= tick) lo = mid; else hi = mid;
+        }
+        return frames[lo];
+    }
 
     // ── Screens ──────────────────────────────────────────────────────────────
     const S = Screens.create({

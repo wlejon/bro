@@ -486,8 +486,8 @@
                 for (let c = c0; c <= c1; c++) {
                     const id = data[idx(c, r)];
                     if (!id) continue;
-                    const dx = Math.round(c * tileSize - camX);
-                    const dy = Math.round(r * tileSize - camY);
+                    const dx = c * tileSize - camX;
+                    const dy = r * tileSize - camY;
                     if (useScratch && scratchCtx && damagedTiles.has(r * cols + c)) {
                         drawDamagedTile(ctx, c, r, id, dx, dy);
                     } else {
