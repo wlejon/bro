@@ -117,36 +117,38 @@ function buildLeafAtlas(size = 256) {
         ['#c2502a', '#5a1d10'],
     ];
 
-    // Each leaf fills ~its full cell. Sparse cells + alpha cutoff + mipmap
-    // averaging drops the leaf below the cutoff at distance, so the leaf
-    // disappears entirely. Dense cells + a soft-but-narrow alpha edge keep
-    // the average alpha above 0.5 across most mip levels.
+    // Important: the radial gradient is constructed in *current* canvas
+    // space, so it must be created *after* any translate/rotate — otherwise
+    // the gradient sits at canvas origin but the ellipse is drawn in the
+    // transformed frame, and the leaf samples a near-transparent edge of
+    // the gradient instead of its solid centre.
     for (let i = 0; i < 4; i++) {
         const cx = (i % 2) * cell + cell * 0.5;
         const cy = Math.floor(i / 2) * cell + cell * 0.5;
-        const rx = cell * 0.48;
-        const ry = cell * 0.46;
+        const rx = cell * 0.42;
+        const ry = cell * 0.30;
 
         const [hi, lo] = palette[i];
-        const grad = ctx.createRadialGradient(cx, cy - ry * 0.2, 0, cx, cy, rx);
-        grad.addColorStop(0.0, hi);
-        grad.addColorStop(0.85, lo);
-        grad.addColorStop(0.95, lo);
-        grad.addColorStop(1.0, 'rgba(0,0,0,0)');
 
         ctx.save();
         ctx.translate(cx, cy);
         ctx.rotate((i - 1.5) * 0.15);
+
+        const grad = ctx.createRadialGradient(0, -ry * 0.2, 0, 0, 0, rx);
+        grad.addColorStop(0.0, hi);
+        grad.addColorStop(0.7, lo);
+        grad.addColorStop(1.0, 'rgba(0,0,0,0)');
+
         ctx.beginPath();
         ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
         ctx.fillStyle = grad;
         ctx.fill();
 
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-        ctx.lineWidth = Math.max(1, cell * 0.015);
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.lineWidth = Math.max(1, cell * 0.012);
         ctx.beginPath();
-        ctx.moveTo(-rx * 0.92, 0);
-        ctx.lineTo(rx * 0.92, 0);
+        ctx.moveTo(-rx * 0.85, 0);
+        ctx.lineTo(rx * 0.85, 0);
         ctx.stroke();
         ctx.restore();
     }
@@ -189,10 +191,7 @@ const seedIn  = document.getElementById('seed');
 const ageVal  = document.getElementById('ageVal');
 const regenBtn = document.getElementById('regen');
 
-// Larger quads fight the same atlas-shrinks-below-cutoff problem from the
-// other direction: a leaf that's a few pixels on screen can't survive 256x256
-// atlas LOD averaging. 0.4 puts each leaf well above the cutoff.
-const leafQuad = Mesh.plane(0.4, 0.4);
+const leafQuad = Mesh.plane(0.15, 0.15);
 
 let trunk = null;
 let leaves = null;
