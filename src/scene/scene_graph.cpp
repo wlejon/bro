@@ -537,12 +537,13 @@ void main() {
 // runtime so the two shaders cannot drift apart accidentally.
 static std::string makeMeshInstancedFragSrc() {
     std::string s = kMeshFragSrc;
-    // Add vInstColor input + uAtlasGrid uniform alongside the existing varyings.
+    // Add vInstColor input + uAtlasGrid + uAlphaCutoff uniforms alongside
+    // the existing varyings.
     const std::string anchor1 = "in vec3 vBitangentW;";
     auto p = s.find(anchor1);
     if (p != std::string::npos) {
         s.insert(p + anchor1.size(),
-                 "\nin vec4 vInstColor;\nuniform vec2 uAtlasGrid;");
+                 "\nin vec4 vInstColor;\nuniform vec2 uAtlasGrid;\nuniform float uAlphaCutoff;");
     }
     // Replace the baseColor texture sample so it can pick a sub-rect of the
     // texture when uAtlasGrid > 1. Only the baseColor sampler uses atlas UV;
@@ -575,7 +576,8 @@ static std::string makeMeshInstancedFragSrc() {
     p = s.find(anchor3);
     if (p != std::string::npos) {
         s.insert(p + anchor3.size(),
-                 "    baseColor *= vInstColor.rgb;\n");
+                 "    baseColor *= vInstColor.rgb;\n"
+                 "    if (uAlphaCutoff > 0.0 && baseAlpha < uAlphaCutoff) discard;\n");
     }
     return s;
 }
@@ -1629,6 +1631,7 @@ void SceneGraph::ensureInstancedMeshPipeline() {
     uInstAmbient_         = getU("uAmbient");
     uInstUnlit_           = getU("uUnlit");
     uInstAtlasGrid_       = getU("uAtlasGrid");
+    uInstAlphaCutoff_     = getU("uAlphaCutoff");
 
     meshInstLocs_.lightCount           = getU("uLightCount");
     meshInstLocs_.lightType            = getU("uLightType");
@@ -3762,6 +3765,10 @@ void SceneGraph::renderInstancedMeshNode(InstancedMeshNode* mesh) {
     if (uInstHasEmissiveMap_ >= 0) glUniform1i(uInstHasEmissiveMap_, hasEM ? 1 : 0);
     if (uInstReceivesShadow_ >= 0) glUniform1i(uInstReceivesShadow_, mesh->receivesShadow() ? 1 : 0);
     if (uInstAtlasGrid_      >= 0) glUniform2f(uInstAtlasGrid_, (float)mesh->atlasCols(), (float)mesh->atlasRows());
+    if (uInstAlphaCutoff_    >= 0) glUniform1f(uInstAlphaCutoff_, mesh->alphaCutoff());
+
+    bool ds = mesh->doubleSided();
+    if (ds) glDisable(GL_CULL_FACE);
 
     float pf = mesh->depthBiasFactor();
     float pu = mesh->depthBiasUnits();
@@ -3789,6 +3796,8 @@ void SceneGraph::renderInstancedMeshNode(InstancedMeshNode* mesh) {
         glDisable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(0.0f, 0.0f);
     }
+
+    if (ds) glEnable(GL_CULL_FACE);
 }
 
 // ---------------------------------------------------------------------------

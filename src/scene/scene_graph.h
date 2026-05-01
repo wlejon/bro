@@ -501,6 +501,7 @@ private:
     GLint uInstIBLPrefilterMaxLOD_ = -1;
     GLint uInstCameraEye_ = -1;
     GLint uInstAtlasGrid_ = -1;
+    GLint uInstAlphaCutoff_ = -1;
 
     // Mesh FBO
     GLuint meshFBO_ = 0;

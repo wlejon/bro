@@ -95,6 +95,17 @@ public:
     void setUnlit(bool u) { unlit_ = u; }
     bool unlit() const { return unlit_; }
 
+    /// Alpha-test cutoff. > 0 enables `discard` for fragments whose final
+    /// alpha is below the threshold (used for leaf cards and similar
+    /// cutout textures). 0 disables the test.
+    void  setAlphaCutoff(float c) { alphaCutoff_ = c; }
+    float alphaCutoff() const { return alphaCutoff_; }
+
+    /// Disable back-face culling for this node. Required for double-sided
+    /// foliage so the back face of a leaf card is also visible.
+    void setDoubleSided(bool b) { doubleSided_ = b; }
+    bool doubleSided() const { return doubleSided_; }
+
     void setMetallic(float m) { metallic_ = m; }
     float metallic() const { return metallic_; }
 
@@ -199,6 +210,8 @@ private:
     float metallic_ = 0.0f;
     float roughness_ = 0.7f;
     bool  unlit_ = false;
+    float alphaCutoff_ = 0.0f;
+    bool  doubleSided_ = false;
 
     float depthBiasFactor_ = 0.0f;
     float depthBiasUnits_ = 0.0f;

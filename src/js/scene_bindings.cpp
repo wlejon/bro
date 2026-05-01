@@ -1680,6 +1680,14 @@ static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         if (!JS_IsUndefined(unlitVal)) node->setUnlit(JS_ToBool(ctx, unlitVal) == 1);
         JS_FreeValue(ctx, unlitVal);
 
+        JSValue acV = JS_GetPropertyStr(ctx, opts, "alphaCutoff");
+        if (!JS_IsUndefined(acV)) node->setAlphaCutoff((float)jsNum(ctx, acV));
+        JS_FreeValue(ctx, acV);
+
+        JSValue dsV = JS_GetPropertyStr(ctx, opts, "doubleSided");
+        if (!JS_IsUndefined(dsV)) node->setDoubleSided(JS_ToBool(ctx, dsV) == 1);
+        JS_FreeValue(ctx, dsV);
+
         JSValue csVal = JS_GetPropertyStr(ctx, opts, "castsShadow");
         if (!JS_IsUndefined(csVal)) node->setCastsShadow(JS_ToBool(ctx, csVal) == 1);
         JS_FreeValue(ctx, csVal);
@@ -1831,6 +1839,24 @@ static JSValue js_node_setAtlasGrid(JSContext* ctx, JSValueConst this_val,
     JS_ToInt32(ctx, &cols, argv[0]);
     JS_ToInt32(ctx, &rows, argv[1]);
     static_cast<scene::InstancedMeshNode*>(w->node)->setAtlasGrid(cols, rows);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_setAlphaCutoff(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
+    static_cast<scene::InstancedMeshNode*>(w->node)->setAlphaCutoff((float)jsNum(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_setDoubleSided(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
+    static_cast<scene::InstancedMeshNode*>(w->node)->setDoubleSided(JS_ToBool(ctx, argv[0]) == 1);
     return JS_UNDEFINED;
 }
 
@@ -2490,6 +2516,26 @@ void SceneBindings::install(JSContext* ctx) {
                 return static_cast<scene::InstancedMeshNode*>(w->node)->atlasRows();
             return 0;
         })
+        .prop("alphaCutoff",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::InstancedMeshNode*>(w->node)->alphaCutoff());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                    static_cast<scene::InstancedMeshNode*>(w->node)->setAlphaCutoff((float)val);
+            })
+        .prop("doubleSided",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                    return JS_NewBool(ctx, static_cast<scene::InstancedMeshNode*>(w->node)->doubleSided() ? 1 : 0);
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, bool val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                    static_cast<scene::InstancedMeshNode*>(w->node)->setDoubleSided(val);
+            })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_UNDEFINED;
             switch (w->node->type()) {
@@ -3067,6 +3113,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("updateInstance", js_node_updateInstance, 2)
         .method_raw("setInstancedMesh", js_node_setInstancedMesh, 1)
         .method_raw("setAtlasGrid", js_node_setAtlasGrid, 2)
+        .method_raw("setAlphaCutoff", js_node_setAlphaCutoff, 1)
+        .method_raw("setDoubleSided", js_node_setDoubleSided, 1)
         .method_raw("setBaseColorTexture", js_node_setBaseColorTexture, 1)
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
