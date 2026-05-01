@@ -1735,6 +1735,16 @@ static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         applyTex("metallicRoughnessTexture", &scene::InstancedMeshNode::setMetallicRoughnessTexture);
         applyTex("occlusionTexture",         &scene::InstancedMeshNode::setOcclusionTexture);
         applyTex("emissiveTexture",          &scene::InstancedMeshNode::setEmissiveTexture);
+
+        JSValue acVal = JS_GetPropertyStr(ctx, opts, "atlasCols");
+        JSValue arVal = JS_GetPropertyStr(ctx, opts, "atlasRows");
+        if (!JS_IsUndefined(acVal) || !JS_IsUndefined(arVal)) {
+            int ac = JS_IsUndefined(acVal) ? 1 : (int)jsNum(ctx, acVal);
+            int ar = JS_IsUndefined(arVal) ? 1 : (int)jsNum(ctx, arVal);
+            node->setAtlasGrid(ac, ar);
+        }
+        JS_FreeValue(ctx, acVal);
+        JS_FreeValue(ctx, arVal);
     }
 
     return wrapNode(ctx, node, g);
@@ -1809,6 +1819,18 @@ static JSValue js_node_updateInstance(JSContext* ctx, JSValueConst this_val,
         static_cast<scene::InstancedMeshNode*>(w->node)->updateInstance((size_t)idx, data);
     }
     JS_FreeValue(ctx, ab);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_setAtlasGrid(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (argc < 2) return JS_UNDEFINED;
+    int32_t cols = 1, rows = 1;
+    JS_ToInt32(ctx, &cols, argv[0]);
+    JS_ToInt32(ctx, &rows, argv[1]);
+    static_cast<scene::InstancedMeshNode*>(w->node)->setAtlasGrid(cols, rows);
     return JS_UNDEFINED;
 }
 
@@ -2458,6 +2480,16 @@ void SceneBindings::install(JSContext* ctx) {
                 return (int)static_cast<scene::InstancedMeshNode*>(w->node)->instanceCount();
             return 0;
         })
+        .get("atlasCols", [](NodeWrapper* w) -> int {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                return static_cast<scene::InstancedMeshNode*>(w->node)->atlasCols();
+            return 0;
+        })
+        .get("atlasRows", [](NodeWrapper* w) -> int {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                return static_cast<scene::InstancedMeshNode*>(w->node)->atlasRows();
+            return 0;
+        })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_UNDEFINED;
             switch (w->node->type()) {
@@ -3034,6 +3066,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setInstancesFromTransforms", js_node_setInstancesFromTransforms, 1)
         .method_raw("updateInstance", js_node_updateInstance, 2)
         .method_raw("setInstancedMesh", js_node_setInstancedMesh, 1)
+        .method_raw("setAtlasGrid", js_node_setAtlasGrid, 2)
         .method_raw("setBaseColorTexture", js_node_setBaseColorTexture, 1)
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)

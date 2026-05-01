@@ -348,6 +348,7 @@ private:
     // directional/spot, 6 for point cube faces, N for CSM cascades). All
     // mesh fragments sample from one sampler2DShadow keyed by per-light slot.
     void ensureShadowPipeline();
+    void ensureShadowInstancedPipeline();
     void ensureShadowAtlas();
     void destroyShadowAtlas();
 
@@ -499,6 +500,7 @@ private:
     GLint uInstIBLRotation_ = -1;
     GLint uInstIBLPrefilterMaxLOD_ = -1;
     GLint uInstCameraEye_ = -1;
+    GLint uInstAtlasGrid_ = -1;
 
     // Mesh FBO
     GLuint meshFBO_ = 0;
@@ -551,6 +553,8 @@ private:
 
     GLuint shadowProgram_ = 0;
     GLint  shadowUMVP_ = -1;
+    GLuint shadowInstancedProgram_ = 0;
+    GLint  shadowInstULightVP_ = -1;
     GLuint shadowAtlasFBO_ = 0;
     GLuint shadowAtlasTex_ = 0;
     int    shadowAtlasAllocated_ = 0;  // current tex side; 0 if none
@@ -578,6 +582,7 @@ private:
 
     // Cache per-frame shadow caster list; rebuilt at top of prepareShadows.
     std::vector<MeshNode*> shadowCasters_;
+    std::vector<InstancedMeshNode*> shadowInstancedCasters_;
 
     // Mesh shader uniform locations for shadow data.
     GLint uShadowAtlas_ = -1;

@@ -115,13 +115,32 @@ public:
     void setNearClipDist(float d) { nearClipDist_ = d; }
     float nearClipDist() const { return nearClipDist_; }
 
-    /// Default false — instanced shadow casting is a follow-up. Setting true
-    /// is a no-op for now (the regular shadow pass only walks MeshNode).
     void setCastsShadow(bool b) { castsShadow_ = b; }
     bool castsShadow() const { return castsShadow_; }
 
     void setReceivesShadow(bool b) { receivesShadow_ = b; }
     bool receivesShadow() const { return receivesShadow_; }
+
+    /// Atlas grid for the baseColor texture. (cols, rows) = (1, 1) means no
+    /// atlas — the texture is sampled normally. With cols > 1 or rows > 1 the
+    /// texture is treated as a cols x rows grid of cells, and each instance
+    /// samples the cell selected by variantIndex packed into color.a by
+    /// setInstancesFromPosQuatScale().
+    void setAtlasGrid(int cols, int rows) {
+        atlasCols_ = cols < 1 ? 1 : cols;
+        atlasRows_ = rows < 1 ? 1 : rows;
+    }
+    int atlasCols() const { return atlasCols_; }
+    int atlasRows() const { return atlasRows_; }
+
+    /// Bind VAO and issue a depth-only instanced draw — used by the shadow
+    /// caster pass. Returns true if anything drew.
+    bool drawRawInstancedDepth();
+
+    /// Compute the world-space AABB enclosing every instance's transformed
+    /// local mesh bounds. Used by shadow frustum fitting. Returns false if
+    /// there are no instances or the mesh is empty.
+    bool computeWorldInstanceBounds(float outMin[3], float outMax[3]) const;
 
     bool hasVertexColors() const { return hasVertexColors_; }
 
@@ -185,8 +204,11 @@ private:
     float depthBiasUnits_ = 0.0f;
     float nearClipDist_ = 0.0f;
 
-    bool castsShadow_ = false;
+    bool castsShadow_ = true;
     bool receivesShadow_ = true;
+
+    int atlasCols_ = 1;
+    int atlasRows_ = 1;
 };
 
 } // namespace bro::scene

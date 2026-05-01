@@ -301,4 +301,42 @@ bool InstancedMeshNode::drawRawInstanced() {
     return true;
 }
 
+bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax[3]) const {
+    if (mesh_.empty() || instanceCount_ == 0) return false;
+    bool any = false;
+    outMin[0] = outMin[1] = outMin[2] =  1e30f;
+    outMax[0] = outMax[1] = outMax[2] = -1e30f;
+    const float lx0 = bounds_.min[0], ly0 = bounds_.min[1], lz0 = bounds_.min[2];
+    const float lx1 = bounds_.max[0], ly1 = bounds_.max[1], lz1 = bounds_.max[2];
+    for (size_t i = 0; i < instanceCount_; ++i) {
+        const float* o = instanceData_.data() + i * 16;
+        // Row-major 4x3: o[0..3] = row0 (m00 m01 m02 tx), etc.
+        for (int c = 0; c < 8; ++c) {
+            float lp[3] = {
+                (c & 1) ? lx1 : lx0,
+                (c & 2) ? ly1 : ly0,
+                (c & 4) ? lz1 : lz0,
+            };
+            float wx = o[ 0] * lp[0] + o[ 1] * lp[1] + o[ 2] * lp[2] + o[ 3];
+            float wy = o[ 4] * lp[0] + o[ 5] * lp[1] + o[ 6] * lp[2] + o[ 7];
+            float wz = o[ 8] * lp[0] + o[ 9] * lp[1] + o[10] * lp[2] + o[11];
+            if (wx < outMin[0]) outMin[0] = wx;
+            if (wy < outMin[1]) outMin[1] = wy;
+            if (wz < outMin[2]) outMin[2] = wz;
+            if (wx > outMax[0]) outMax[0] = wx;
+            if (wy > outMax[1]) outMax[1] = wy;
+            if (wz > outMax[2]) outMax[2] = wz;
+            any = true;
+        }
+    }
+    return any;
+}
+
+bool InstancedMeshNode::drawRawInstancedDepth() {
+    // Same VAO as the forward pass — the depth-only shader reads aPos
+    // (location 0) and the per-instance matrix attributes (8..10). Other
+    // vertex attributes are simply unused.
+    return drawRawInstanced();
+}
+
 } // namespace bro::scene

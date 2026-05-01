@@ -532,24 +532,49 @@ void main() {
 )";
 
 // Build the instanced fragment shader by mutating the regular kMeshFragSrc:
-// add `in vec4 vInstColor;` and multiply baseColor/baseAlpha by it. Done at
+// add `in vec4 vInstColor;`, an optional atlas-grid UV remap on the base
+// color sample, and multiply baseColor by the instance RGB tint. Done at
 // runtime so the two shaders cannot drift apart accidentally.
 static std::string makeMeshInstancedFragSrc() {
     std::string s = kMeshFragSrc;
-    // Add vInstColor input alongside the existing varyings.
+    // Add vInstColor input + uAtlasGrid uniform alongside the existing varyings.
     const std::string anchor1 = "in vec3 vBitangentW;";
     auto p = s.find(anchor1);
     if (p != std::string::npos) {
-        s.insert(p + anchor1.size(), "\nin vec4 vInstColor;");
+        s.insert(p + anchor1.size(),
+                 "\nin vec4 vInstColor;\nuniform vec2 uAtlasGrid;");
     }
-    // Multiply the resolved baseColor by the instance tint right after the
-    // base-color/alpha resolution block.
-    const std::string anchor2 = "        baseAlpha = uColor.a;\n    }\n";
+    // Replace the baseColor texture sample so it can pick a sub-rect of the
+    // texture when uAtlasGrid > 1. Only the baseColor sampler uses atlas UV;
+    // normal/MR/AO/emissive textures keep the raw vUV (leaf cards usually
+    // have a baseColor only). The cell index is read from vInstColor.a as
+    // packed by setInstancesFromPosQuatScale: cell = int(a * 256).
+    const std::string anchor2 = "vec4 tex = texture(uBaseColorTex, vUV);";
     p = s.find(anchor2);
     if (p != std::string::npos) {
-        // Per-instance RGB tint multiplied with material baseColor. Alpha
-        // channel is reserved for future atlas-index packing — left untouched.
-        s.insert(p + anchor2.size(),
+        s.replace(p, anchor2.size(),
+                  "vec2 uvForBase = vUV;\n"
+                  "        if (uAtlasGrid.x > 1.0 || uAtlasGrid.y > 1.0) {\n"
+                  "            int cell = int(vInstColor.a * 256.0);\n"
+                  "            int cols = int(uAtlasGrid.x); if (cols < 1) cols = 1;\n"
+                  "            int rows = int(uAtlasGrid.y); if (rows < 1) rows = 1;\n"
+                  "            int total = cols * rows;\n"
+                  "            if (cell < 0) cell = 0;\n"
+                  "            if (cell >= total) cell = total - 1;\n"
+                  "            int cx = cell - (cell / cols) * cols;\n"
+                  "            int cy = cell / cols;\n"
+                  "            vec2 cellSize = vec2(1.0 / float(cols), 1.0 / float(rows));\n"
+                  "            uvForBase = (vec2(float(cx), float(cy)) + fract(vUV)) * cellSize;\n"
+                  "        }\n"
+                  "        vec4 tex = texture(uBaseColorTex, uvForBase);");
+    }
+    // Multiply the resolved baseColor by the instance RGB tint right after
+    // the base-color/alpha resolution block. Alpha is reserved for the atlas
+    // index — never multiplied into baseAlpha.
+    const std::string anchor3 = "        baseAlpha = uColor.a;\n    }\n";
+    p = s.find(anchor3);
+    if (p != std::string::npos) {
+        s.insert(p + anchor3.size(),
                  "    baseColor *= vInstColor.rgb;\n");
     }
     return s;
@@ -994,6 +1019,28 @@ static const char* kShadowFragSrc = R"(
 void main() { }
 )";
 
+// Depth-only instanced VS for the shadow caster pass. Same per-instance
+// 4x3 affine layout as kMeshInstancedVertSrc, but projects with absolute
+// world positions (no camera-relative offset — shadows live in light space).
+static const char* kShadowInstancedVertSrc = R"(
+#version 330 core
+layout(location = 0)  in vec3 aPos;
+layout(location = 8)  in vec4 aInstRow0;
+layout(location = 9)  in vec4 aInstRow1;
+layout(location = 10) in vec4 aInstRow2;
+uniform mat4 uLightVP;
+void main() {
+    mat3 R = mat3(
+        vec3(aInstRow0.x, aInstRow1.x, aInstRow2.x),
+        vec3(aInstRow0.y, aInstRow1.y, aInstRow2.y),
+        vec3(aInstRow0.z, aInstRow1.z, aInstRow2.z)
+    );
+    vec3 trans = vec3(aInstRow0.w, aInstRow1.w, aInstRow2.w);
+    vec3 worldPos = R * aPos + trans;
+    gl_Position = uLightVP * vec4(worldPos, 1.0);
+}
+)";
+
 // ---------------------------------------------------------------------------
 // Billboard shader sources — a single camera-facing textured/filled quad.
 // The vertex shader places a unit quad at a world anchor using camera basis
@@ -1123,6 +1170,7 @@ SceneGraph::~SceneGraph() {
     if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
+    if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }
     clearEnvironment();
     if (envConvertProgram_) { glDeleteProgram(envConvertProgram_); envConvertProgram_ = 0; }
     if (envConvertVBO_) { glDeleteBuffers(1, &envConvertVBO_); envConvertVBO_ = 0; }
@@ -1580,6 +1628,7 @@ void SceneGraph::ensureInstancedMeshPipeline() {
     uInstNearClip_        = getU("uNearClip");
     uInstAmbient_         = getU("uAmbient");
     uInstUnlit_           = getU("uUnlit");
+    uInstAtlasGrid_       = getU("uAtlasGrid");
 
     meshInstLocs_.lightCount           = getU("uLightCount");
     meshInstLocs_.lightType            = getU("uLightType");
@@ -2657,6 +2706,33 @@ void SceneGraph::ensureShadowPipeline() {
     }
 }
 
+void SceneGraph::ensureShadowInstancedPipeline() {
+    if (shadowInstancedProgram_) return;
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kShadowInstancedVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kShadowFragSrc);
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+    shadowInstancedProgram_ = glCreateProgram();
+    glAttachShader(shadowInstancedProgram_, vs);
+    glAttachShader(shadowInstancedProgram_, fs);
+    glLinkProgram(shadowInstancedProgram_);
+    GLint ok = 0;
+    glGetProgramiv(shadowInstancedProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512]; glGetProgramInfoLog(shadowInstancedProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Instanced shadow program link error: %s", log);
+        glDeleteProgram(shadowInstancedProgram_);
+        shadowInstancedProgram_ = 0;
+    }
+    glDeleteShader(vs); glDeleteShader(fs);
+    if (shadowInstancedProgram_) {
+        shadowInstULightVP_ = glGetUniformLocation(shadowInstancedProgram_, "uLightVP");
+    }
+}
+
 void SceneGraph::ensureShadowAtlas() {
     if (shadowAtlasTex_ && shadowAtlasAllocated_ == shadowAtlasSize_ && !shadowAtlasDirty_) return;
     destroyShadowAtlas();
@@ -2708,6 +2784,22 @@ SceneGraph::WorldAABB SceneGraph::computeShadowCasterBounds() const {
     out.min[0] = out.min[1] = out.min[2] =  1e30f;
     out.max[0] = out.max[1] = out.max[2] = -1e30f;
 
+    auto expand = [&](const float lo[3], const float hi[3]) {
+        for (int c = 0; c < 8; ++c) {
+            float p[3] = {
+                (c & 1) ? hi[0] : lo[0],
+                (c & 2) ? hi[1] : lo[1],
+                (c & 4) ? hi[2] : lo[2],
+            };
+            out.min[0] = std::min(out.min[0], p[0]);
+            out.min[1] = std::min(out.min[1], p[1]);
+            out.min[2] = std::min(out.min[2], p[2]);
+            out.max[0] = std::max(out.max[0], p[0]);
+            out.max[1] = std::max(out.max[1], p[1]);
+            out.max[2] = std::max(out.max[2], p[2]);
+            out.empty = false;
+        }
+    };
     auto walk = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->visible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
@@ -2715,7 +2807,6 @@ SceneGraph::WorldAABB SceneGraph::computeShadowCasterBounds() const {
             if (!m->unlit() && !m->mesh().empty()) {
                 const auto& bb = m->localBounds();
                 const Mat4& M = m->worldMatrix();
-                // Transform the eight corners of the local AABB to world.
                 for (int c = 0; c < 8; ++c) {
                     Vec3 lp{
                         (c & 1) ? bb.max[0] : bb.min[0],
@@ -2732,6 +2823,12 @@ SceneGraph::WorldAABB SceneGraph::computeShadowCasterBounds() const {
                     out.empty = false;
                 }
             }
+        } else if (n->type() == SceneNode::Type::InstancedMesh) {
+            auto* m = static_cast<InstancedMeshNode*>(n);
+            float wlo[3], whi[3];
+            if (m->computeWorldInstanceBounds(wlo, whi)) {
+                expand(wlo, whi);
+            }
         }
         for (auto* c : n->children()) self(self, c);
     };
@@ -2743,6 +2840,7 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
     // Reset per-frame shadow state. Default every light to "no shadow".
     shadowTileCount_ = 0;
     shadowCasters_.clear();
+    shadowInstancedCasters_.clear();
     for (int i = 0; i < 32; ++i) {
         lightShadowSlot_[i] = -1;
         lightShadowSlotCount_[i] = 0;
@@ -2764,11 +2862,15 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
             auto* m = static_cast<MeshNode*>(n);
             if (!m->unlit() && m->castsShadow() && !m->mesh().empty())
                 shadowCasters_.push_back(m);
+        } else if (n->type() == SceneNode::Type::InstancedMesh) {
+            auto* m = static_cast<InstancedMeshNode*>(n);
+            if (!m->unlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
+                shadowInstancedCasters_.push_back(m);
         }
         for (auto* c : n->children()) self(self, c);
     };
     gather(gather, root_.get());
-    if (shadowCasters_.empty()) return;
+    if (shadowCasters_.empty() && shadowInstancedCasters_.empty()) return;
 
     // Scene bounds for fitting directional frustums. CSM uses view-frustum
     // slices instead — added in a follow-up commit.
@@ -3034,6 +3136,8 @@ void SceneGraph::renderShadowPass() {
     ensureShadowPipeline();
     ensureShadowAtlas();
     if (!shadowProgram_ || !shadowAtlasFBO_) return;
+    const bool hasInstancedCasters = !shadowInstancedCasters_.empty();
+    if (hasInstancedCasters) ensureShadowInstancedPipeline();
 
     glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
     glViewport(0, 0, shadowAtlasSize_, shadowAtlasSize_);
@@ -3080,6 +3184,15 @@ void SceneGraph::renderShadowPass() {
             Mat4 mvp = lightVP * mesh->worldMatrix();
             glUniformMatrix4fv(shadowUMVP_, 1, GL_FALSE, mvp.data());
             mesh->drawRaw();
+        }
+
+        if (hasInstancedCasters && shadowInstancedProgram_) {
+            glUseProgram(shadowInstancedProgram_);
+            glUniformMatrix4fv(shadowInstULightVP_, 1, GL_FALSE, lightVP.data());
+            for (auto* m : shadowInstancedCasters_) {
+                m->drawRawInstancedDepth();
+            }
+            glUseProgram(shadowProgram_);
         }
     }
 
@@ -3648,6 +3761,7 @@ void SceneGraph::renderInstancedMeshNode(InstancedMeshNode* mesh) {
     if (uInstHasAOMap_       >= 0) glUniform1i(uInstHasAOMap_,       hasAO ? 1 : 0);
     if (uInstHasEmissiveMap_ >= 0) glUniform1i(uInstHasEmissiveMap_, hasEM ? 1 : 0);
     if (uInstReceivesShadow_ >= 0) glUniform1i(uInstReceivesShadow_, mesh->receivesShadow() ? 1 : 0);
+    if (uInstAtlasGrid_      >= 0) glUniform2f(uInstAtlasGrid_, (float)mesh->atlasCols(), (float)mesh->atlasRows());
 
     float pf = mesh->depthBiasFactor();
     float pu = mesh->depthBiasUnits();
