@@ -131,11 +131,182 @@ function buildBlob(center, radius, seed, opts) {
     return m;
 }
 
+// ─── Canopy shape catalogue ───────────────────────────────────────────────
+//
+// Tree canopies are composed of one or more noise-displaced "blobs" arranged
+// to fit a named silhouette. Each shape is a function of (R, H, seed, ...)
+// and produces an array of blob descriptors (local-space offset, scale,
+// noise sub level, blob radius). The tree() recipe materialises them.
+//
+// Shapes:
+//   round       - single oblate sphere (oak-like default)
+//   oval        - vertically elongated ellipsoid (poplar/birch)
+//   columnar    - tall, narrow, multi-stack (Lombardy poplar)
+//   umbrella    - wide flat top, thin disc-like (acacia, parasol pine)
+//   weeping     - round head + drooping streamer blobs (willow)
+//   vase        - inverted cone, wider at the top (elm)
+//   spreading   - flat wide canopy with side lobes (live oak)
+//   irregular   - asymmetric multi-blob cluster (windswept / mature oak)
+
+const CANOPY_SHAPES = ['round', 'oval', 'columnar', 'umbrella', 'weeping', 'vase', 'spreading', 'irregular'];
+
+// Build canopy blob parts for a given shape.
+//   ctx.center      - canopy centroid in world space
+//   ctx.radius      - nominal horizontal canopy radius (R)
+//   ctx.height      - canopy vertical extent (H)
+//   ctx.color       - canopy color
+//   ctx.seed        - rng seed
+//   ctx.shift       - [dx,dy,dz] world-space shift (canopy lean for sharing)
+//   ctx.asymmetry   - 0..1 strength of side-of-shift squash (forest sharing)
+//   ctx.blobCount   - hint for irregular shape
+function buildTreeCanopy(shape, ctx) {
+    const center = ctx.center;
+    const R = ctx.radius;
+    const H = ctx.height;
+    const color = ctx.color;
+    const seed = (ctx.seed | 0) || 1;
+    const shift = ctx.shift || [0, 0, 0];
+    const asym = Math.max(0, Math.min(1, ctx.asymmetry ?? 0));
+    const blobCount = Math.max(1, ctx.blobCount ?? 1);
+    const rng = mulberry32(seed);
+
+    const sLen = Math.sqrt(shift[0]*shift[0] + shift[2]*shift[2]);
+    const sdir = sLen > 1e-6 ? [shift[0]/sLen, 0, shift[2]/sLen] : null;
+
+    const parts = [];
+    const aabb = emptyAabb();
+
+    // Apply per-blob asymmetric squash: blobs on the side OPPOSITE to shift
+    // (that is, leaning INTO a neighbor's canopy) shrink; blobs on the same
+    // side as shift (away from neighbor, into open light) grow slightly.
+    function asymScale(localOff) {
+        if (!sdir || asym === 0) return 1;
+        const offLen = Math.sqrt(localOff[0]*localOff[0] + localOff[2]*localOff[2]);
+        if (offLen < 1e-6) return 1;
+        const d = (localOff[0]*sdir[0] + localOff[2]*sdir[2]) / Math.max(R, 1e-6);
+        return Math.max(0.25, 1 + asym * d * 0.7);
+    }
+
+    function pushBlob(localOff, r, sx, sy, sz, blobSeed, nsub) {
+        const k = asymScale(localOff);
+        const sxF = sx * k, szF = sz * k;
+        const c = [
+            center[0] + localOff[0] + shift[0],
+            center[1] + localOff[1] + shift[1],
+            center[2] + localOff[2] + shift[2],
+        ];
+        const m = buildBlob(c, r, blobSeed, { nsub, sx: sxF, sy: sy, sz: szF });
+        parts.push({ mesh: m, color, metallic: 0, roughness: 0.85 });
+        const ms = Math.max(sxF, sy, szF);
+        aabbInclude(aabb, c, r * ms * 1.15);
+    }
+
+    switch (shape) {
+        case 'oval':
+            pushBlob([0, R * 0.18, 0], R * 0.95, 0.85, 1.45, 0.85, seed ^ 0x1002, 3);
+            pushBlob([0, -R * 0.25, 0], R * 0.55, 0.7, 1.0, 0.7, seed ^ 0x2002, 2);
+            break;
+        case 'columnar': {
+            const stacks = 4;
+            const totalH = Math.max(R * 1.5, H * 0.75);
+            for (let i = 0; i < stacks; i++) {
+                const t = i / (stacks - 1);
+                const widen = 0.55 + 0.15 * Math.sin(Math.PI * t);
+                pushBlob(
+                    [(rng() - 0.5) * R * 0.05, (t - 0.5) * totalH, (rng() - 0.5) * R * 0.05],
+                    R * 0.6,
+                    widen, 1.0, widen,
+                    (seed * 13 + i * 41) ^ 0x1003,
+                    2
+                );
+            }
+            break;
+        }
+        case 'umbrella':
+            pushBlob([0, R * 0.10, 0], R * 1.30, 1.1, 0.40, 1.1, seed ^ 0x1004, 3);
+            for (let i = 0; i < 5; i++) {
+                const a = TAU * i / 5 + rng() * 0.35;
+                pushBlob(
+                    [Math.cos(a) * R * 0.95, -R * 0.06, Math.sin(a) * R * 0.95],
+                    R * 0.42, 1.0, 0.42, 1.0,
+                    (seed * 7 + i * 23) ^ 0x1104, 2
+                );
+            }
+            break;
+        case 'weeping':
+            pushBlob([0, R * 0.10, 0], R * 1.00, 1.05, 0.90, 1.05, seed ^ 0x1005, 3);
+            for (let i = 0; i < 7; i++) {
+                const a = TAU * i / 7 + rng() * 0.5;
+                const off = R * (0.65 + rng() * 0.25);
+                const drop = R * (0.55 + rng() * 0.65);
+                pushBlob(
+                    [Math.cos(a) * off, -drop, Math.sin(a) * off],
+                    R * 0.20 * (0.8 + rng() * 0.4),
+                    0.55, 1.55, 0.55,
+                    (seed * 19 + i * 17) ^ 0x1105, 1
+                );
+            }
+            break;
+        case 'vase': {
+            const tiers = 3;
+            for (let i = 0; i < tiers; i++) {
+                const t = i / (tiers - 1);
+                const ringR = R * (0.30 + 0.85 * t);
+                const y = (t - 0.45) * H * 0.6;
+                const n = i === tiers - 1 ? 5 : 3;
+                for (let k = 0; k < n; k++) {
+                    const a = TAU * k / n + i * 0.6 + rng() * 0.3;
+                    pushBlob(
+                        [Math.cos(a) * ringR * 0.65, y, Math.sin(a) * ringR * 0.65],
+                        ringR * 0.45 * (0.85 + rng() * 0.30),
+                        1.0, 0.95, 1.0,
+                        (seed * 23 + i * 31 + k * 11) ^ 0x1006, 2
+                    );
+                }
+            }
+            break;
+        }
+        case 'spreading':
+            pushBlob([0, 0, 0], R * 1.30, 1.0, 0.55, 1.0, seed ^ 0x1007, 3);
+            for (let i = 0; i < 4; i++) {
+                const a = TAU * i / 4 + rng() * 0.4;
+                const off = R * 0.80;
+                pushBlob(
+                    [Math.cos(a) * off, -R * 0.08, Math.sin(a) * off],
+                    R * 0.55, 1.0, 0.55, 1.0,
+                    (seed * 11 + i * 29) ^ 0x1107, 2
+                );
+            }
+            break;
+        case 'irregular': {
+            const n = Math.max(3, blobCount);
+            for (let i = 0; i < n; i++) {
+                const a = TAU * i / n + rng() * 0.45;
+                const off = R * 0.55 * (0.65 + rng() * 0.55);
+                const yj = (rng() - 0.5) * H * 0.35;
+                pushBlob(
+                    [Math.cos(a) * off, yj, Math.sin(a) * off],
+                    R * 0.50 * (0.75 + rng() * 0.55),
+                    1.0, 1.0, 1.0,
+                    (seed * 17 + i * 31) ^ 0x1008, 2
+                );
+            }
+            pushBlob([0, 0, 0], R * 0.85, 1.0, 0.85, 1.0, seed ^ 0x2008, 2);
+            break;
+        }
+        case 'round':
+        default:
+            pushBlob([0, 0, 0], R * 1.15, 1.0, 0.92, 1.0, seed ^ 0x1001, 3);
+            break;
+    }
+
+    return { parts, aabb };
+}
+
 // ─── Recipe: tree (broadleaf) ─────────────────────────────────────────────
-// Stylized lollipop: trunk + a few stubby branches + 1-3 noise-displaced
-// green blobs forming the canopy. The skeleton from space colonization is
-// trimmed to its inner thicker core so branches don't poke through the
-// canopy ellipsoid.
+// Stylized: trunk + branches + canopy of one of several named shapes.
+// The skeleton from space colonization is trimmed to its thicker core so
+// branches don't poke through the foliage envelope.
 
 function tree(opts) {
     opts = opts || {};
@@ -146,6 +317,21 @@ function tree(opts) {
     const CR = opts.canopyRadius ?? 3;
     const blobCount = Math.max(1, opts.blobCount ?? 3);
     const canopyColor = opts.canopyColor || COLORS.canopyOak;
+    const canopyShape = opts.canopyShape || 'round';
+    const canopyShift = opts.canopyShift || [0, 0, 0];
+    const canopyAsymmetry = opts.canopyAsymmetry ?? 0;
+    // Per-shape biases on the canopy/trunk envelope.
+    const shapeBias = {
+        round:     { yPlace: 0.55, vSpan: 0.50, branchUp: 0.30, scaffold: 0.30 },
+        oval:      { yPlace: 0.62, vSpan: 0.65, branchUp: 0.45, scaffold: 0.32 },
+        columnar:  { yPlace: 0.65, vSpan: 0.85, branchUp: 0.65, scaffold: 0.36 },
+        umbrella:  { yPlace: 0.62, vSpan: 0.30, branchUp: 0.20, scaffold: 0.28 },
+        weeping:   { yPlace: 0.58, vSpan: 0.45, branchUp: 0.25, scaffold: 0.30 },
+        vase:      { yPlace: 0.60, vSpan: 0.55, branchUp: 0.18, scaffold: 0.30 },
+        spreading: { yPlace: 0.50, vSpan: 0.30, branchUp: 0.10, scaffold: 0.28 },
+        irregular: { yPlace: 0.55, vSpan: 0.55, branchUp: 0.30, scaffold: 0.30 },
+    };
+    const bias = shapeBias[canopyShape] || shapeBias.round;
 
     // Effective height/radius scale with age so a young tree is small.
     const Heff = H * Math.max(0.1, age01);
@@ -156,11 +342,13 @@ function tree(opts) {
     const aabb = emptyAabb();
 
     // ── Trunk + main branches via space colonization ────────────────────
-    // Attractor cloud is intentionally smaller than the canopy blob so
-    // branches stay tucked inside. The blob hides everything thinner than
-    // the "scaffold" radius.
-    const canopyBase = Heff * 0.45;
-    const canopyTop = Heff * 0.95;
+    // Attractor cloud is intentionally smaller than the canopy envelope so
+    // branches stay tucked inside. The canopy hides everything thinner
+    // than the "scaffold" radius. Span varies by canopy shape so columnar
+    // trees get an elongated scaffold while spreading trees stay shallow.
+    const canopyMidY = Heff * bias.yPlace;
+    const canopyBase = Math.max(Heff * 0.18, canopyMidY - Heff * bias.vSpan * 0.5);
+    const canopyTop  = canopyMidY + Heff * bias.vSpan * 0.5;
     const attractorCount = 120;
     const attractors = [];
     while (attractors.length < attractorCount) {
@@ -192,7 +380,7 @@ function tree(opts) {
         segmentLength: segLen,
         maxIterations: 80,
         tropism: [0, 1, 0],
-        tropismWeight: 0.3,
+        tropismWeight: bias.branchUp,
     });
     const offset = segs.length - 1;
     for (let i = 1; i < grown.length; i++) {
@@ -212,8 +400,8 @@ function tree(opts) {
     }
 
     // Trim segments thinner than a "scaffold" threshold — these would be
-    // the fuzzy twigs that poke through the blob and ruin the silhouette.
-    const scaffoldR = Math.max(0.01, trunkRadius * 0.30);
+    // the fuzzy twigs that poke through the foliage and ruin the silhouette.
+    const scaffoldR = Math.max(0.01, trunkRadius * bias.scaffold);
     const keepIdx = new Array(thick.length).fill(false);
     for (let i = 0; i < thick.length; i++) {
         if (thick[i].radius >= scaffoldR) keepIdx[i] = true;
@@ -241,44 +429,26 @@ function tree(opts) {
     }
     for (const s of kept) { aabbInclude(aabb, s.from); aabbInclude(aabb, s.to); }
 
-    // ── Canopy blobs ─────────────────────────────────────────────────────
-    // Place 1-3 noise-displaced spheres in the upper canopy region. For
-    // single-blob trees (oak-like), one large blob centered on the canopy.
-    // For multi-blob (maple/cottonwood-like), several smaller blobs at
-    // jittered positions around the canopy centroid.
+    // ── Canopy ───────────────────────────────────────────────────────────
     const canopyCenter = [0, (canopyBase + canopyTop) * 0.5, 0];
-    if (blobCount === 1) {
-        const blob = buildBlob(canopyCenter, CReff * 1.15, seed ^ 0x1001,
-            { nsub: 3, sy: 0.95 });
-        parts.push({
-            mesh: blob, color: canopyColor,
-            metallic: 0, roughness: 0.85,
-        });
-        aabbInclude(aabb, canopyCenter, CReff * 1.2);
-    } else {
-        for (let i = 0; i < blobCount; i++) {
-            const a = TAU * i / blobCount + rng() * 0.3;
-            const r = CReff * 0.45 * (0.8 + rng() * 0.5);
-            const off = CReff * 0.55 * (0.7 + rng() * 0.4);
-            const c = [
-                Math.cos(a) * off,
-                canopyCenter[1] + (rng() - 0.5) * Heff * 0.18,
-                Math.sin(a) * off,
-            ];
-            const blob = buildBlob(c, r, (seed * 17 + i * 31) ^ 0x1001,
-                { nsub: 2 });
-            parts.push({
-                mesh: blob, color: canopyColor,
-                metallic: 0, roughness: 0.85,
-            });
-            aabbInclude(aabb, c, r * 1.15);
-        }
-        // One dominant central blob to unify the silhouette.
-        const big = buildBlob(canopyCenter, CReff * 0.9, seed ^ 0x2002,
-            { nsub: 2, sy: 0.85 });
-        parts.push({ mesh: big, color: canopyColor, metallic: 0, roughness: 0.85 });
-        aabbInclude(aabb, canopyCenter, CReff * 0.95);
-    }
+    const canopyH = Math.max(CReff * 0.5, canopyTop - canopyBase);
+    const canopy = buildTreeCanopy(canopyShape, {
+        center: canopyCenter,
+        radius: CReff,
+        height: canopyH,
+        color: canopyColor,
+        seed,
+        shift: canopyShift,
+        asymmetry: canopyAsymmetry,
+        blobCount,
+    });
+    for (const p of canopy.parts) parts.push(p);
+    aabb.min[0] = Math.min(aabb.min[0], canopy.aabb.min[0]);
+    aabb.min[1] = Math.min(aabb.min[1], canopy.aabb.min[1]);
+    aabb.min[2] = Math.min(aabb.min[2], canopy.aabb.min[2]);
+    aabb.max[0] = Math.max(aabb.max[0], canopy.aabb.max[0]);
+    aabb.max[1] = Math.max(aabb.max[1], canopy.aabb.max[1]);
+    aabb.max[2] = Math.max(aabb.max[2], canopy.aabb.max[2]);
 
     if (!isFinite(aabb.min[0])) { aabb.min = [0,0,0]; aabb.max = [0, Heff, 0]; }
     return { parts, aabbMin: aabb.min, aabbMax: aabb.max };
@@ -663,6 +833,7 @@ function succulent(opts) {
 
 root.Recipes = {
     tree, conifer, shrub, vine, fern, grassTuft, succulent,
+    CANOPY_SHAPES,
 };
 
 })(this);
