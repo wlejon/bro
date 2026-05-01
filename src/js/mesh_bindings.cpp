@@ -55,14 +55,7 @@
 #include <bromesh/optimization/spatial_hash.h>
 #include <bromesh/procedural/lsystem.h>
 #include <bromesh/procedural/space_colonization.h>
-#include <bromesh/procedural/plants/plant_result.h>
-#include <bromesh/procedural/plants/tree.h>
-#include <bromesh/procedural/plants/conifer.h>
-#include <bromesh/procedural/plants/shrub.h>
-#include <bromesh/procedural/plants/grass_tuft.h>
-#include <bromesh/procedural/plants/vine.h>
-#include <bromesh/procedural/plants/fern.h>
-#include <bromesh/procedural/plants/succulent.h>
+#include <bromesh/procedural/branches.h>
 
 #include <cstdio>
 #include <cstring>
@@ -658,40 +651,6 @@ static JSValue makeVec3Array(JSContext* ctx, bromesh::Vec3 v) {
     return a;
 }
 
-// Pack leaves into a single Float32Array. Layout per leaf (9 floats):
-//   px py pz  qx qy qz qw  scale  variantIndex
-// variantIndex is stored as a float; integer values up to 2^24 round-trip.
-static JSValue makeLeavesBuffer(JSContext* ctx,
-                                const std::vector<bromesh::LeafInstance>& leaves) {
-    std::vector<float> flat;
-    flat.reserve(leaves.size() * 9);
-    for (const auto& L : leaves) {
-        flat.push_back(L.position.x);
-        flat.push_back(L.position.y);
-        flat.push_back(L.position.z);
-        flat.push_back(L.orientation.x);
-        flat.push_back(L.orientation.y);
-        flat.push_back(L.orientation.z);
-        flat.push_back(L.orientation.w);
-        flat.push_back(L.scale);
-        flat.push_back((float)L.variantIndex);
-    }
-    return qjsbind::make_float32_array(ctx, flat);
-}
-
-static JSValue makePlantResult(JSContext* ctx, bromesh::PlantResult&& pr) {
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "mesh",
-        wrapMesh(ctx, std::move(pr.branchMesh)));
-    JS_SetPropertyStr(ctx, obj, "leaves",
-        makeLeavesBuffer(ctx, pr.leaves));
-    JS_SetPropertyStr(ctx, obj, "leafCount",
-        JS_NewInt32(ctx, (int32_t)pr.leaves.size()));
-    JS_SetPropertyStr(ctx, obj, "aabbMin", makeVec3Array(ctx, pr.aabbMin));
-    JS_SetPropertyStr(ctx, obj, "aabbMax", makeVec3Array(ctx, pr.aabbMax));
-    return obj;
-}
-
 static JSValue makeBranchSegments(JSContext* ctx,
                                   const std::vector<bromesh::BranchSegment>& segs) {
     JSValue arr = JS_NewArray(ctx);
@@ -813,95 +772,22 @@ static JSValue js_sweep(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     return wrapMesh(ctx, bromesh::sweep(profile, path, opts));
 }
 
-static JSValue js_tree(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    bromesh::TreeParams p;
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        p.seed           = objU64(ctx, argv[0], "seed",           p.seed);
-        p.height         = (float)objNum(ctx, argv[0], "height",        p.height);
-        p.trunkRadius    = (float)objNum(ctx, argv[0], "trunkRadius",   p.trunkRadius);
-        p.canopyRadius   = (float)objNum(ctx, argv[0], "canopyRadius",  p.canopyRadius);
-        p.attractorCount = objInt(ctx, argv[0], "attractorCount", p.attractorCount);
-        p.age01          = (float)objNum(ctx, argv[0], "age01",         p.age01);
+static JSValue js_meshBranches(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx,
+            "meshBranches requires (segments[, sides])");
     }
-    return makePlantResult(ctx, bromesh::buildTree(p));
-}
-
-static JSValue js_conifer(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    bromesh::ConiferParams p;
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        p.seed             = objU64(ctx, argv[0], "seed",             p.seed);
-        p.height           = (float)objNum(ctx, argv[0], "height",          p.height);
-        p.baseRadius       = (float)objNum(ctx, argv[0], "baseRadius",      p.baseRadius);
-        p.whorlCount       = objInt(ctx, argv[0], "whorlCount",       p.whorlCount);
-        p.branchesPerWhorl = objInt(ctx, argv[0], "branchesPerWhorl", p.branchesPerWhorl);
-        p.age01            = (float)objNum(ctx, argv[0], "age01",           p.age01);
+    std::vector<bromesh::BranchSegment> segs;
+    if (!readBranchSegments(ctx, argv[0], segs)) {
+        return JS_ThrowTypeError(ctx, "segments must be an array of branch segment objects");
     }
-    return makePlantResult(ctx, bromesh::buildConifer(p));
-}
-
-static JSValue js_shrub(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    bromesh::ShrubParams p;
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        p.seed           = objU64(ctx, argv[0], "seed",           p.seed);
-        p.height         = (float)objNum(ctx, argv[0], "height",        p.height);
-        p.radius         = (float)objNum(ctx, argv[0], "radius",        p.radius);
-        p.stemCount      = objInt(ctx, argv[0], "stemCount",      p.stemCount);
-        p.attractorCount = objInt(ctx, argv[0], "attractorCount", p.attractorCount);
-        p.age01          = (float)objNum(ctx, argv[0], "age01",         p.age01);
+    int sides = 8;
+    if (argc > 1) {
+        int32_t s = 8;
+        JS_ToInt32(ctx, &s, argv[1]);
+        if (s >= 3) sides = s;
     }
-    return makePlantResult(ctx, bromesh::buildShrub(p));
-}
-
-static JSValue js_grassTuft(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    bromesh::GrassTuftParams p;
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        p.seed       = objU64(ctx, argv[0], "seed",       p.seed);
-        p.bladeCount = objInt(ctx, argv[0], "bladeCount", p.bladeCount);
-        p.height     = (float)objNum(ctx, argv[0], "height",     p.height);
-        p.baseRadius = (float)objNum(ctx, argv[0], "baseRadius", p.baseRadius);
-        p.bladeWidth = (float)objNum(ctx, argv[0], "bladeWidth", p.bladeWidth);
-        p.bend       = (float)objNum(ctx, argv[0], "bend",       p.bend);
-    }
-    return makePlantResult(ctx, bromesh::buildGrassTuft(p));
-}
-
-static JSValue js_vine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    bromesh::VineParams p;
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        p.seed        = objU64(ctx, argv[0], "seed",        p.seed);
-        p.length      = (float)objNum(ctx, argv[0], "length",      p.length);
-        p.radius      = (float)objNum(ctx, argv[0], "radius",      p.radius);
-        p.helixRadius = (float)objNum(ctx, argv[0], "helixRadius", p.helixRadius);
-        p.turns       = (float)objNum(ctx, argv[0], "turns",       p.turns);
-        p.leafDensity = (float)objNum(ctx, argv[0], "leafDensity", p.leafDensity);
-    }
-    return makePlantResult(ctx, bromesh::buildVine(p));
-}
-
-static JSValue js_fern(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    bromesh::FernParams p;
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        p.seed          = objU64(ctx, argv[0], "seed",          p.seed);
-        p.leafletPairs  = objInt(ctx, argv[0], "leafletPairs",  p.leafletPairs);
-        p.length        = (float)objNum(ctx, argv[0], "length",        p.length);
-        p.stemRadius    = (float)objNum(ctx, argv[0], "stemRadius",    p.stemRadius);
-        p.leafletLength = (float)objNum(ctx, argv[0], "leafletLength", p.leafletLength);
-        p.curvature     = (float)objNum(ctx, argv[0], "curvature",     p.curvature);
-    }
-    return makePlantResult(ctx, bromesh::buildFern(p));
-}
-
-static JSValue js_succulent(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    bromesh::SucculentParams p;
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        p.seed          = objU64(ctx, argv[0], "seed",          p.seed);
-        p.leafCount     = objInt(ctx, argv[0], "leafCount",     p.leafCount);
-        p.leafLength    = (float)objNum(ctx, argv[0], "leafLength",    p.leafLength);
-        p.leafWidth     = (float)objNum(ctx, argv[0], "leafWidth",     p.leafWidth);
-        p.leafThickness = (float)objNum(ctx, argv[0], "leafThickness", p.leafThickness);
-        p.tilt          = (float)objNum(ctx, argv[0], "tilt",          p.tilt);
-    }
-    return makePlantResult(ctx, bromesh::buildSucculent(p));
+    return wrapMesh(ctx, bromesh::meshBranches(segs, sides));
 }
 
 static JSValue js_spaceColonize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1947,22 +1833,13 @@ void MeshBindings::install(JSContext* ctx) {
     // ── Static: Sweep along a path ──────────────────────────────────────
     .static_raw("sweep", js_sweep, 2)
 
-    // ── Static: Plant archetype builders ────────────────────────────────
-    // Each returns { mesh: Mesh, leaves: Float32Array, leafCount: int,
-    //                aabbMin: [x,y,z], aabbMax: [x,y,z] }
-    // Leaves layout: 9 floats per leaf —
-    //   [px, py, pz,  qx, qy, qz, qw,  scale,  variantIndex]
-    .static_raw("tree",       js_tree,       1)
-    .static_raw("conifer",    js_conifer,    1)
-    .static_raw("shrub",      js_shrub,      1)
-    .static_raw("grassTuft",  js_grassTuft,  1)
-    .static_raw("vine",       js_vine,       1)
-    .static_raw("fern",       js_fern,       1)
-    .static_raw("succulent",  js_succulent,  1)
-
-    // ── Static: Space colonization & pipe-model thickening ─────────────
+    // ── Static: Branch-tree primitives ─────────────────────────────────
+    // spaceColonize → BranchSegment[]; thickenBranches assigns radii via
+    // pipe model; meshBranches sweeps the tree as a single merged mesh.
+    // Plant archetypes are assembled in JS on top of these primitives.
     .static_raw("spaceColonize",   js_spaceColonize,   3)
     .static_raw("thickenBranches", js_thickenBranches, 1)
+    .static_raw("meshBranches",    js_meshBranches,    1)
 
     // ── Static: L-system module parsing helper ─────────────────────────
     .static_raw("parseLSystem", js_parseLSystem, 1)
