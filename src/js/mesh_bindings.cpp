@@ -51,7 +51,20 @@
 #include <bromesh/io/stl.h>
 #include <bromesh/io/vox.h>
 #include <bromesh/reconstruction/reconstruct.h>
+#include <bromesh/manipulation/sweep.h>
+#include <bromesh/optimization/spatial_hash.h>
+#include <bromesh/procedural/lsystem.h>
+#include <bromesh/procedural/space_colonization.h>
+#include <bromesh/procedural/plants/plant_result.h>
+#include <bromesh/procedural/plants/tree.h>
+#include <bromesh/procedural/plants/conifer.h>
+#include <bromesh/procedural/plants/shrub.h>
+#include <bromesh/procedural/plants/grass_tuft.h>
+#include <bromesh/procedural/plants/vine.h>
+#include <bromesh/procedural/plants/fern.h>
+#include <bromesh/procedural/plants/succulent.h>
 
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <memory>
@@ -497,6 +510,477 @@ static JSValue js_reconstruct(JSContext* ctx, JSValueConst, int argc, JSValueCon
     }
     return wrapMesh(ctx, bromesh::reconstructFromPointCloud(*w->data, params));
 }
+
+// ---------------------------------------------------------------------------
+// Helpers — procedural / plant bindings (object property reads, vec lists)
+// ---------------------------------------------------------------------------
+
+static double objNum(JSContext* ctx, JSValueConst obj, const char* name, double dflt) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, name);
+    double r = dflt;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) JS_ToFloat64(ctx, &r, v);
+    JS_FreeValue(ctx, v);
+    return r;
+}
+
+static int objInt(JSContext* ctx, JSValueConst obj, const char* name, int dflt) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, name);
+    int32_t r = (int32_t)dflt;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) JS_ToInt32(ctx, &r, v);
+    JS_FreeValue(ctx, v);
+    return (int)r;
+}
+
+static bool objBool(JSContext* ctx, JSValueConst obj, const char* name, bool dflt) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, name);
+    bool r = dflt;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) r = JS_ToBool(ctx, v) > 0;
+    JS_FreeValue(ctx, v);
+    return r;
+}
+
+static uint64_t objU64(JSContext* ctx, JSValueConst obj, const char* name, uint64_t dflt) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, name);
+    uint64_t r = dflt;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+        int64_t s = 0; JS_ToInt64(ctx, &s, v); r = (uint64_t)s;
+    }
+    JS_FreeValue(ctx, v);
+    return r;
+}
+
+// Read a Vec3 from a JS value that is either [x,y,z] or {x,y,z} or has 3
+// indexable numeric properties.
+static bromesh::Vec3 readBmVec3(JSContext* ctx, JSValueConst v) {
+    bromesh::Vec3 r{};
+    if (JS_IsObject(v)) {
+        if (JS_IsArray(v)) {
+            JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, v, 2);
+            double a=0,b=0,c=0;
+            JS_ToFloat64(ctx, &a, e0); JS_ToFloat64(ctx, &b, e1); JS_ToFloat64(ctx, &c, e2);
+            r = { (float)a, (float)b, (float)c };
+            JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1); JS_FreeValue(ctx, e2);
+        } else {
+            r.x = (float)objNum(ctx, v, "x", 0.0);
+            r.y = (float)objNum(ctx, v, "y", 0.0);
+            r.z = (float)objNum(ctx, v, "z", 0.0);
+        }
+    }
+    return r;
+}
+
+// Read a list of Vec3 from either a Float32Array of length 3N, or a JS Array
+// of [x,y,z] sub-arrays.
+static bool readVec3List(JSContext* ctx, JSValueConst v,
+                         std::vector<bromesh::Vec3>& out) {
+    out.clear();
+    if (!JS_IsObject(v)) return false;
+
+    size_t off = 0, blen = 0, bpe = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, &bpe);
+    if (!JS_IsException(ab)) {
+        size_t ablen = 0;
+        uint8_t* raw = JS_GetArrayBuffer(ctx, &ablen, ab);
+        JS_FreeValue(ctx, ab);
+        if (raw && bpe == 4 && blen % 12 == 0) {
+            const float* f = reinterpret_cast<const float*>(raw + off);
+            size_t n = blen / 12;
+            out.resize(n);
+            for (size_t i = 0; i < n; i++) {
+                out[i] = { f[3*i+0], f[3*i+1], f[3*i+2] };
+            }
+            return true;
+        }
+    } else {
+        JS_FreeValue(ctx, ab);
+    }
+
+    if (!JS_IsArray(v)) return false;
+    JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+    int32_t n = 0; JS_ToInt32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    out.resize((size_t)n);
+    for (int32_t i = 0; i < n; i++) {
+        JSValue row = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+        out[(size_t)i] = readBmVec3(ctx, row);
+        JS_FreeValue(ctx, row);
+    }
+    return true;
+}
+
+// Read a list of Vec2 from either a Float32Array of length 2N, or a JS Array
+// of [x,y] sub-arrays.
+static bool readVec2List(JSContext* ctx, JSValueConst v,
+                         std::vector<bromesh::Vec2>& out) {
+    out.clear();
+    if (!JS_IsObject(v)) return false;
+
+    size_t off = 0, blen = 0, bpe = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &blen, &bpe);
+    if (!JS_IsException(ab)) {
+        size_t ablen = 0;
+        uint8_t* raw = JS_GetArrayBuffer(ctx, &ablen, ab);
+        JS_FreeValue(ctx, ab);
+        if (raw && bpe == 4 && blen % 8 == 0) {
+            const float* f = reinterpret_cast<const float*>(raw + off);
+            size_t n = blen / 8;
+            out.resize(n);
+            for (size_t i = 0; i < n; i++) out[i] = { f[2*i+0], f[2*i+1] };
+            return true;
+        }
+    } else {
+        JS_FreeValue(ctx, ab);
+    }
+
+    if (!JS_IsArray(v)) return false;
+    JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+    int32_t n = 0; JS_ToInt32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    out.resize((size_t)n);
+    for (int32_t i = 0; i < n; i++) {
+        JSValue row = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+        double x = 0, y = 0;
+        JSValue e0 = JS_GetPropertyUint32(ctx, row, 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, row, 1);
+        JS_ToFloat64(ctx, &x, e0); JS_ToFloat64(ctx, &y, e1);
+        out[(size_t)i] = { (float)x, (float)y };
+        JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1);
+        JS_FreeValue(ctx, row);
+    }
+    return true;
+}
+
+static JSValue makeVec3Array(JSContext* ctx, bromesh::Vec3 v) {
+    JSValue a = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, a, 0, JS_NewFloat64(ctx, v.x));
+    JS_SetPropertyUint32(ctx, a, 1, JS_NewFloat64(ctx, v.y));
+    JS_SetPropertyUint32(ctx, a, 2, JS_NewFloat64(ctx, v.z));
+    return a;
+}
+
+// Pack leaves into a single Float32Array. Layout per leaf (9 floats):
+//   px py pz  qx qy qz qw  scale  variantIndex
+// variantIndex is stored as a float; integer values up to 2^24 round-trip.
+static JSValue makeLeavesBuffer(JSContext* ctx,
+                                const std::vector<bromesh::LeafInstance>& leaves) {
+    std::vector<float> flat;
+    flat.reserve(leaves.size() * 9);
+    for (const auto& L : leaves) {
+        flat.push_back(L.position.x);
+        flat.push_back(L.position.y);
+        flat.push_back(L.position.z);
+        flat.push_back(L.orientation.x);
+        flat.push_back(L.orientation.y);
+        flat.push_back(L.orientation.z);
+        flat.push_back(L.orientation.w);
+        flat.push_back(L.scale);
+        flat.push_back((float)L.variantIndex);
+    }
+    return qjsbind::make_float32_array(ctx, flat);
+}
+
+static JSValue makePlantResult(JSContext* ctx, bromesh::PlantResult&& pr) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "mesh",
+        wrapMesh(ctx, std::move(pr.branchMesh)));
+    JS_SetPropertyStr(ctx, obj, "leaves",
+        makeLeavesBuffer(ctx, pr.leaves));
+    JS_SetPropertyStr(ctx, obj, "leafCount",
+        JS_NewInt32(ctx, (int32_t)pr.leaves.size()));
+    JS_SetPropertyStr(ctx, obj, "aabbMin", makeVec3Array(ctx, pr.aabbMin));
+    JS_SetPropertyStr(ctx, obj, "aabbMax", makeVec3Array(ctx, pr.aabbMax));
+    return obj;
+}
+
+static JSValue makeBranchSegments(JSContext* ctx,
+                                  const std::vector<bromesh::BranchSegment>& segs) {
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < segs.size(); i++) {
+        const auto& s = segs[i];
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "parent", JS_NewInt32(ctx, s.parent));
+        JS_SetPropertyStr(ctx, o, "from",   makeVec3Array(ctx, s.from));
+        JS_SetPropertyStr(ctx, o, "to",     makeVec3Array(ctx, s.to));
+        JS_SetPropertyStr(ctx, o, "radius", JS_NewFloat64(ctx, s.radius));
+        JS_SetPropertyStr(ctx, o, "depth",  JS_NewInt32(ctx, s.depth));
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+    }
+    return arr;
+}
+
+static bool readBranchSegments(JSContext* ctx, JSValueConst v,
+                               std::vector<bromesh::BranchSegment>& out) {
+    out.clear();
+    if (!JS_IsArray(v)) return false;
+    JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+    int32_t n = 0; JS_ToInt32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    out.resize((size_t)n);
+    for (int32_t i = 0; i < n; i++) {
+        JSValue o = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+        bromesh::BranchSegment s{};
+        s.parent = objInt(ctx, o, "parent", -1);
+        s.depth  = objInt(ctx, o, "depth", 0);
+        s.radius = (float)objNum(ctx, o, "radius", 0.0);
+        JSValue f = JS_GetPropertyStr(ctx, o, "from");
+        JSValue t = JS_GetPropertyStr(ctx, o, "to");
+        s.from = readBmVec3(ctx, f);
+        s.to   = readBmVec3(ctx, t);
+        JS_FreeValue(ctx, f); JS_FreeValue(ctx, t);
+        out[(size_t)i] = s;
+        JS_FreeValue(ctx, o);
+    }
+    return true;
+}
+
+// Re-encode an L-system module sequence as the compact text form parseable
+// by bromesh::parseModules. Modules with no params emit just the symbol;
+// modules with params append "(p1,p2,...)".
+static std::string serializeLSystemModules(const std::vector<bromesh::Module>& mods) {
+    std::string s;
+    s.reserve(mods.size() * 2);
+    char buf[64];
+    for (const auto& m : mods) {
+        s.push_back(m.symbol);
+        if (!m.params.empty()) {
+            s.push_back('(');
+            for (size_t i = 0; i < m.params.size(); i++) {
+                if (i) s.push_back(',');
+                std::snprintf(buf, sizeof(buf), "%g", (double)m.params[i]);
+                s += buf;
+            }
+            s.push_back(')');
+        }
+    }
+    return s;
+}
+
+static JSValue makeModulesArray(JSContext* ctx, const std::vector<bromesh::Module>& mods) {
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < mods.size(); i++) {
+        JSValue o = JS_NewObject(ctx);
+        char sym[2] = { mods[i].symbol, 0 };
+        JS_SetPropertyStr(ctx, o, "symbol", JS_NewString(ctx, sym));
+        JSValue p = JS_NewArray(ctx);
+        for (size_t j = 0; j < mods[i].params.size(); j++) {
+            JS_SetPropertyUint32(ctx, p, (uint32_t)j,
+                JS_NewFloat64(ctx, mods[i].params[j]));
+        }
+        JS_SetPropertyStr(ctx, o, "params", p);
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+    }
+    return arr;
+}
+
+// ---------------------------------------------------------------------------
+// Static raw functions — sweep, plant builders, space colonization
+// ---------------------------------------------------------------------------
+
+static JSValue js_sweep(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx,
+            "sweep requires (profile, path[, opts])");
+    }
+    std::vector<bromesh::Vec2> profile;
+    std::vector<bromesh::Vec3> path;
+    if (!readVec2List(ctx, argv[0], profile)) {
+        return JS_ThrowTypeError(ctx,
+            "profile must be Float32Array(2N) or [[x,y],...]");
+    }
+    if (!readVec3List(ctx, argv[1], path)) {
+        return JS_ThrowTypeError(ctx,
+            "path must be Float32Array(3N) or [[x,y,z],...]");
+    }
+
+    bromesh::SweepOptions opts;
+    if (argc > 2 && JS_IsObject(argv[2])) {
+        opts.closeProfile = objBool(ctx, argv[2], "closeProfile", true);
+        opts.capStart     = objBool(ctx, argv[2], "capStart",     true);
+        opts.capEnd       = objBool(ctx, argv[2], "capEnd",       true);
+        opts.miterJoints  = objBool(ctx, argv[2], "miterJoints",  true);
+
+        JSValue ps = JS_GetPropertyStr(ctx, argv[2], "profileScale");
+        if (!JS_IsUndefined(ps) && !JS_IsNull(ps)) {
+            readFloatLikeVal(ctx, ps, opts.profileScale);
+        }
+        JS_FreeValue(ctx, ps);
+
+        JSValue tw = JS_GetPropertyStr(ctx, argv[2], "twist");
+        if (!JS_IsUndefined(tw) && !JS_IsNull(tw)) {
+            readFloatLikeVal(ctx, tw, opts.twist);
+        }
+        JS_FreeValue(ctx, tw);
+    }
+    return wrapMesh(ctx, bromesh::sweep(profile, path, opts));
+}
+
+static JSValue js_tree(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::TreeParams p;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        p.seed           = objU64(ctx, argv[0], "seed",           p.seed);
+        p.height         = (float)objNum(ctx, argv[0], "height",        p.height);
+        p.trunkRadius    = (float)objNum(ctx, argv[0], "trunkRadius",   p.trunkRadius);
+        p.canopyRadius   = (float)objNum(ctx, argv[0], "canopyRadius",  p.canopyRadius);
+        p.attractorCount = objInt(ctx, argv[0], "attractorCount", p.attractorCount);
+        p.age01          = (float)objNum(ctx, argv[0], "age01",         p.age01);
+    }
+    return makePlantResult(ctx, bromesh::buildTree(p));
+}
+
+static JSValue js_conifer(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::ConiferParams p;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        p.seed             = objU64(ctx, argv[0], "seed",             p.seed);
+        p.height           = (float)objNum(ctx, argv[0], "height",          p.height);
+        p.baseRadius       = (float)objNum(ctx, argv[0], "baseRadius",      p.baseRadius);
+        p.whorlCount       = objInt(ctx, argv[0], "whorlCount",       p.whorlCount);
+        p.branchesPerWhorl = objInt(ctx, argv[0], "branchesPerWhorl", p.branchesPerWhorl);
+        p.age01            = (float)objNum(ctx, argv[0], "age01",           p.age01);
+    }
+    return makePlantResult(ctx, bromesh::buildConifer(p));
+}
+
+static JSValue js_shrub(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::ShrubParams p;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        p.seed           = objU64(ctx, argv[0], "seed",           p.seed);
+        p.height         = (float)objNum(ctx, argv[0], "height",        p.height);
+        p.radius         = (float)objNum(ctx, argv[0], "radius",        p.radius);
+        p.stemCount      = objInt(ctx, argv[0], "stemCount",      p.stemCount);
+        p.attractorCount = objInt(ctx, argv[0], "attractorCount", p.attractorCount);
+        p.age01          = (float)objNum(ctx, argv[0], "age01",         p.age01);
+    }
+    return makePlantResult(ctx, bromesh::buildShrub(p));
+}
+
+static JSValue js_grassTuft(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::GrassTuftParams p;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        p.seed       = objU64(ctx, argv[0], "seed",       p.seed);
+        p.bladeCount = objInt(ctx, argv[0], "bladeCount", p.bladeCount);
+        p.height     = (float)objNum(ctx, argv[0], "height",     p.height);
+        p.baseRadius = (float)objNum(ctx, argv[0], "baseRadius", p.baseRadius);
+        p.bladeWidth = (float)objNum(ctx, argv[0], "bladeWidth", p.bladeWidth);
+        p.bend       = (float)objNum(ctx, argv[0], "bend",       p.bend);
+    }
+    return makePlantResult(ctx, bromesh::buildGrassTuft(p));
+}
+
+static JSValue js_vine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::VineParams p;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        p.seed        = objU64(ctx, argv[0], "seed",        p.seed);
+        p.length      = (float)objNum(ctx, argv[0], "length",      p.length);
+        p.radius      = (float)objNum(ctx, argv[0], "radius",      p.radius);
+        p.helixRadius = (float)objNum(ctx, argv[0], "helixRadius", p.helixRadius);
+        p.turns       = (float)objNum(ctx, argv[0], "turns",       p.turns);
+        p.leafDensity = (float)objNum(ctx, argv[0], "leafDensity", p.leafDensity);
+    }
+    return makePlantResult(ctx, bromesh::buildVine(p));
+}
+
+static JSValue js_fern(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::FernParams p;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        p.seed          = objU64(ctx, argv[0], "seed",          p.seed);
+        p.leafletPairs  = objInt(ctx, argv[0], "leafletPairs",  p.leafletPairs);
+        p.length        = (float)objNum(ctx, argv[0], "length",        p.length);
+        p.stemRadius    = (float)objNum(ctx, argv[0], "stemRadius",    p.stemRadius);
+        p.leafletLength = (float)objNum(ctx, argv[0], "leafletLength", p.leafletLength);
+        p.curvature     = (float)objNum(ctx, argv[0], "curvature",     p.curvature);
+    }
+    return makePlantResult(ctx, bromesh::buildFern(p));
+}
+
+static JSValue js_succulent(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::SucculentParams p;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        p.seed          = objU64(ctx, argv[0], "seed",          p.seed);
+        p.leafCount     = objInt(ctx, argv[0], "leafCount",     p.leafCount);
+        p.leafLength    = (float)objNum(ctx, argv[0], "leafLength",    p.leafLength);
+        p.leafWidth     = (float)objNum(ctx, argv[0], "leafWidth",     p.leafWidth);
+        p.leafThickness = (float)objNum(ctx, argv[0], "leafThickness", p.leafThickness);
+        p.tilt          = (float)objNum(ctx, argv[0], "tilt",          p.tilt);
+    }
+    return makePlantResult(ctx, bromesh::buildSucculent(p));
+}
+
+static JSValue js_spaceColonize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) {
+        return JS_ThrowTypeError(ctx,
+            "spaceColonize requires (attractors, seedPoints, initialDirection[, opts])");
+    }
+    std::vector<bromesh::Vec3> attractors, seeds;
+    if (!readVec3List(ctx, argv[0], attractors)) {
+        return JS_ThrowTypeError(ctx, "attractors must be Vec3 list");
+    }
+    if (!readVec3List(ctx, argv[1], seeds)) {
+        return JS_ThrowTypeError(ctx, "seedPoints must be Vec3 list");
+    }
+    bromesh::Vec3 initDir = readBmVec3(ctx, argv[2]);
+
+    bromesh::SpaceColonizationOptions opts;
+    if (argc > 3 && JS_IsObject(argv[3])) {
+        opts.attractionRadius = (float)objNum(ctx, argv[3], "attractionRadius", opts.attractionRadius);
+        opts.killRadius       = (float)objNum(ctx, argv[3], "killRadius",       opts.killRadius);
+        opts.segmentLength    = (float)objNum(ctx, argv[3], "segmentLength",    opts.segmentLength);
+        opts.maxIterations    = objInt(ctx, argv[3], "maxIterations",    opts.maxIterations);
+        opts.tropismWeight    = (float)objNum(ctx, argv[3], "tropismWeight",    opts.tropismWeight);
+        JSValue tv = JS_GetPropertyStr(ctx, argv[3], "tropism");
+        if (!JS_IsUndefined(tv) && !JS_IsNull(tv)) opts.tropism = readBmVec3(ctx, tv);
+        JS_FreeValue(ctx, tv);
+    }
+    auto segs = bromesh::spaceColonize(attractors, seeds, initDir, opts);
+    return makeBranchSegments(ctx, segs);
+}
+
+static JSValue js_thickenBranches(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx,
+            "thickenBranches requires (segments[, leafRadius[, pipeExp]])");
+    }
+    std::vector<bromesh::BranchSegment> segs;
+    if (!readBranchSegments(ctx, argv[0], segs)) {
+        return JS_ThrowTypeError(ctx, "segments must be an array of branch segment objects");
+    }
+    double leafR = 0.02, pipeExp = 2.5;
+    if (argc > 1) JS_ToFloat64(ctx, &leafR,   argv[1]);
+    if (argc > 2) JS_ToFloat64(ctx, &pipeExp, argv[2]);
+    bromesh::thickenBranches(segs, (float)leafR, (float)pipeExp);
+    return makeBranchSegments(ctx, segs);
+}
+
+static JSValue js_parseLSystem(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsString(argv[0])) {
+        return JS_ThrowTypeError(ctx, "parseLSystem requires (text)");
+    }
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (!s) return JS_EXCEPTION;
+    auto mods = bromesh::parseModules(std::string_view(s));
+    JS_FreeCString(ctx, s);
+    return makeModulesArray(ctx, mods);
+}
+
+// ---------------------------------------------------------------------------
+// LSystem wrapper — string-rule API for stochastic L-systems. Parametric
+// rules with conditions are not exposed at the JS layer; the native plant
+// builders cover those use cases. parseLSystem on the Mesh class returns
+// modules-with-params if callers want to interpret derive() output.
+// ---------------------------------------------------------------------------
+
+struct LSystemWrapper {
+    std::unique_ptr<bromesh::LSystem> ls;
+    std::vector<bromesh::Module> axiom;
+    LSystemWrapper() : ls(std::make_unique<bromesh::LSystem>()) {}
+};
+
+struct SpatialHashWrapper {
+    std::unique_ptr<bromesh::SpatialHash3D> sh;
+    SpatialHashWrapper(float cellSize)
+        : sh(std::make_unique<bromesh::SpatialHash3D>(cellSize)) {}
+};
+
+using LSW = LSystemWrapper;
+using SHW = SpatialHashWrapper;
 
 // ---------------------------------------------------------------------------
 // Install
@@ -1459,6 +1943,29 @@ void MeshBindings::install(JSContext* ctx) {
         auto list = bromesh::unstripify(strip, (uint32_t)restartIdx.value_or((int)0xFFFFFFFF));
         return makeUint32Array(ctx, list);
     })
+
+    // ── Static: Sweep along a path ──────────────────────────────────────
+    .static_raw("sweep", js_sweep, 2)
+
+    // ── Static: Plant archetype builders ────────────────────────────────
+    // Each returns { mesh: Mesh, leaves: Float32Array, leafCount: int,
+    //                aabbMin: [x,y,z], aabbMax: [x,y,z] }
+    // Leaves layout: 9 floats per leaf —
+    //   [px, py, pz,  qx, qy, qz, qw,  scale,  variantIndex]
+    .static_raw("tree",       js_tree,       1)
+    .static_raw("conifer",    js_conifer,    1)
+    .static_raw("shrub",      js_shrub,      1)
+    .static_raw("grassTuft",  js_grassTuft,  1)
+    .static_raw("vine",       js_vine,       1)
+    .static_raw("fern",       js_fern,       1)
+    .static_raw("succulent",  js_succulent,  1)
+
+    // ── Static: Space colonization & pipe-model thickening ─────────────
+    .static_raw("spaceColonize",   js_spaceColonize,   3)
+    .static_raw("thickenBranches", js_thickenBranches, 1)
+
+    // ── Static: L-system module parsing helper ─────────────────────────
+    .static_raw("parseLSystem", js_parseLSystem, 1)
     ; // end of Class<MW>
 
     // =======================================================================
@@ -1777,6 +2284,84 @@ void MeshBindings::install(JSContext* ctx) {
         }
         return arr;
     })
+    ;
+
+    // =======================================================================
+    // LSystem — string-rule stochastic L-system rewriter
+    // =======================================================================
+    qjsbind::Class<LSW>(ctx, "LSystem")
+    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> LSW* {
+        auto* w = new LSW();
+        if (argc > 0 && JS_IsString(argv[0])) {
+            const char* s = JS_ToCString(ctx, argv[0]);
+            if (s) {
+                w->axiom = bromesh::parseModules(std::string_view(s));
+                w->ls->setAxiom(w->axiom);
+                JS_FreeCString(ctx, s);
+            }
+        }
+        return w;
+    })
+    .method("setAxiom", [](LSW* w, JSContext* ctx, std::string text) {
+        w->axiom = bromesh::parseModules(std::string_view(text));
+        w->ls->setAxiom(w->axiom);
+    }, qjsbind::returns_this)
+    .method("addRule", [](LSW* w, std::string predecessor, std::string successor,
+                          std::optional<double> weight) {
+        if (predecessor.empty()) return;
+        bromesh::ProductionRule rule;
+        rule.predecessor = predecessor[0];
+        rule.weight = (float)weight.value_or(1.0);
+        auto mods = bromesh::parseModules(std::string_view(successor));
+        rule.successor = [mods](const std::vector<float>&) { return mods; };
+        w->ls->addRule(std::move(rule));
+    }, qjsbind::returns_this)
+    .method("derive", [](LSW* w, JSContext* ctx, int iterations,
+                          std::optional<int64_t> seed) -> JSValue {
+        auto mods = w->ls->derive(iterations, (uint64_t)seed.value_or(0));
+        return JS_NewString(ctx, serializeLSystemModules(mods).c_str());
+    })
+    .method("deriveModules", [](LSW* w, JSContext* ctx, int iterations,
+                                 std::optional<int64_t> seed) -> JSValue {
+        auto mods = w->ls->derive(iterations, (uint64_t)seed.value_or(0));
+        return makeModulesArray(ctx, mods);
+    })
+    ;
+
+    // =======================================================================
+    // SpatialHash3D — uniform-grid 3D point hash for radius / nearest queries
+    // =======================================================================
+    qjsbind::Class<SHW>(ctx, "SpatialHash3D")
+    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> SHW* {
+        double cs = 1.0;
+        if (argc > 0) JS_ToFloat64(ctx, &cs, argv[0]);
+        return new SHW((float)cs);
+    })
+    .method("reset", [](SHW* w, double cellSize) {
+        w->sh->reset((float)cellSize);
+    }, qjsbind::returns_this)
+    .method("clear", [](SHW* w) { w->sh->clear(); }, qjsbind::returns_this)
+    .method("insert", [](SHW* w, double x, double y, double z, int id) {
+        w->sh->insert({(float)x, (float)y, (float)z}, (int32_t)id);
+    }, qjsbind::returns_this)
+    .method("remove", [](SHW* w, int id) {
+        w->sh->remove((int32_t)id);
+    }, qjsbind::returns_this)
+    .method("radiusQuery", [](SHW* w, JSContext* ctx, double x, double y, double z,
+                               double radius) -> JSValue {
+        std::vector<int32_t> ids;
+        w->sh->radiusQuery({(float)x, (float)y, (float)z}, (float)radius, ids);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < ids.size(); i++) {
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, ids[i]));
+        }
+        return arr;
+    })
+    .method("nearest", [](SHW* w, double x, double y, double z, double maxRadius) -> int {
+        return (int)w->sh->nearest({(float)x, (float)y, (float)z}, (float)maxRadius);
+    })
+    .get("size",     [](SHW* w) { return (int)w->sh->size(); })
+    .get("cellSize", [](SHW* w) -> double { return (double)w->sh->cellSize(); })
     ;
 }
 
