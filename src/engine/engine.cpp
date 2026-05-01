@@ -1408,10 +1408,11 @@ Engine::~Engine() {
         }
 
         // Clean up global properties (prevents leaked references).
-        // Delete document BEFORE elem_map — the map holds JS refs to elements
-        // whose finalizers call freeNode(); deleting the map first can free
-        // elements that are still referenced by the document tree, causing
-        // use-after-free when the document wrapper is subsequently collected.
+        // Delete document and elem_map first, in that order — the map holds JS
+        // refs to elements whose finalizers call freeNode(); deleting the map
+        // first can free elements still referenced by the document tree,
+        // causing use-after-free when the document wrapper is subsequently
+        // collected.
         JSValue global = JS_GetGlobalObject(ctx);
         JSAtom a1 = JS_NewAtom(ctx, "document");
         JSAtom a2 = JS_NewAtom(ctx, "__bro_elem_map");
@@ -1422,6 +1423,26 @@ Engine::~Engine() {
         JS_FreeAtom(ctx, a1);
         JS_FreeAtom(ctx, a2);
         JS_FreeAtom(ctx, a3);
+
+        // Delete every remaining own property on globalThis. App code pins
+        // game state on `window.foo = ...` (e.g. stompworld's window.__SW),
+        // and those refs transitively keep C++-bound wrappers (BestCrop pools,
+        // etc.) alive past JS_FreeRuntime's leak check. Clearing the globals
+        // lets the cycle GC sweep it all before we tear the runtime down.
+        // Skip standard JS built-ins (Object/Array/Function/etc. — anything
+        // owned by the engine itself) by only touching enumerable strings.
+        {
+            JSPropertyEnum* props = nullptr;
+            uint32_t len = 0;
+            if (JS_GetOwnPropertyNames(ctx, &props, &len, global,
+                                       JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+                for (uint32_t i = 0; i < len; ++i) {
+                    JS_DeleteProperty(ctx, global, props[i].atom, 0);
+                    JS_FreeAtom(ctx, props[i].atom);
+                }
+                js_free(ctx, props);
+            }
+        }
         JS_FreeValue(ctx, global);
 
         js::DomBindings::cleanup(ctx);
