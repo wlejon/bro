@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Flora — procedural plant viewer</title>
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; background: #0b0d10; overflow: hidden; }
+        canvas#stage { display: block; width: 100vw; height: 100vh; }
+
+        #panel {
+            position: absolute;
+            left: 12px; bottom: 12px;
+            background: rgba(0,0,0,0.65);
+            color: #d8e0e8;
+            font: 12px system-ui, sans-serif;
+            padding: 10px 14px;
+            border-radius: 6px;
+            min-width: 240px;
+        }
+        #panel h1 { margin: 0 0 8px 0; font-size: 13px; color: #fff; }
+        #panel label { display: block; margin: 4px 0; }
+        #panel input[type=range] { width: 150px; vertical-align: middle; }
+        #panel input[type=number] { width: 70px; background: #111; color: #d8e0e8; border: 1px solid #333; padding: 1px 4px; }
+        #panel button { background: #1c2229; color: #d8e0e8; border: 1px solid #3a4452; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+        #panel button:hover { background: #28303a; }
+        #panel span.v { color: #7bed9f; display: inline-block; min-width: 36px; text-align: right; }
+        #stats { color: #7d8794; font-size: 11px; margin-top: 6px; }
+    </style>
+</head>
+<body>
+    <canvas id="stage"></canvas>
+    <div id="panel">
+        <h1>Flora</h1>
+        <label>Type:
+            <select id="archetype">
+                <option value="tree" selected>tree</option>
+                <option value="conifer">conifer</option>
+                <option value="shrub">shrub</option>
+                <option value="grassTuft">grass tuft</option>
+                <option value="vine">vine</option>
+                <option value="fern">fern</option>
+                <option value="succulent">succulent</option>
+            </select>
+        </label>
+        <label>Age: <input id="age" type="range" min="0" max="1" step="0.01" value="1.0">
+            <span class="v" id="ageVal">1.00</span></label>
+        <label>Seed: <input id="seed" type="number" min="0" step="1" value="1">
+            <button id="regen">Regenerate</button></label>
+        <div id="stats">—</div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
