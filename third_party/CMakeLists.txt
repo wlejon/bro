@@ -4,6 +4,10 @@ set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
 add_subdirectory(quickjs EXCLUDE_FROM_ALL)
 
+# Enable QuickJS leak/diagnostic dumps in Debug so JS_SetDumpFlags(JS_DUMP_LEAKS)
+# actually prints leaked GC objects before JS_FreeRuntime asserts.
+target_compile_definitions(qjs PRIVATE $<$<CONFIG:Debug>:ENABLE_DUMPS>)
+
 # --- FastNoise2 (SIMD noise generation) ---
 # Used directly by bro's terrain system. The source lives inside brokit's
 # third_party; brokit guards its own add_subdirectory with if(NOT TARGET FastNoise)

@@ -89,6 +89,13 @@ Runtime::Runtime()
     // since workers construct their own Runtime on their thread).
     bro::util::installJsInterruptHandler(rt_);
 
+#ifndef NDEBUG
+    // Print leaked GC objects + atoms before JS_FreeRuntime asserts on shutdown.
+    // Requires ENABLE_DUMPS in the qjs build (set in third_party/CMakeLists.txt
+    // for Debug). No-op in Release.
+    JS_SetDumpFlags(rt_, JS_DUMP_LEAKS | JS_DUMP_ATOM_LEAKS);
+#endif
+
     ctx_ = JS_NewContext(rt_);
     if (!ctx_) {
         LOG_ERROR("Failed to create QuickJS context");

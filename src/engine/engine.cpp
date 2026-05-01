@@ -1459,6 +1459,11 @@ Engine::~Engine() {
     // would otherwise see a dead JSContext (and the runtime would abort
     // with a leak-detected assertion before reaching that point).
     if (gizmo_) gizmo_->clearCallbacks();
+    // Tear down scene graphs before the JS runtime — AgentBinding owns
+    // JsThinkHook which holds JS_DupValue'd refs to world/agent JS objects.
+    // If the runtime dies first, those JS_FreeValue calls run on a dead
+    // context, refs never release, and JS_FreeRuntime asserts on leaks.
+    sceneGraphs_.clear();
     // Destroy JS runtime BEFORE document — JS_FreeRuntime() runs GC finalizers
     // that dereference Element pointers, so elements must still be alive.
     // Audio engine must also outlive JS runtime because VoiceAllocator/MidiInput
