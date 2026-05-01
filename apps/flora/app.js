@@ -206,6 +206,17 @@ let mode = 'single';
 const state = {};      // current parameter values
 const inputs = {};     // DOM input refs by key
 
+function mulberry32(seed) {
+    let s = (seed >>> 0) || 1;
+    return function () {
+        s = (s + 0x6D2B79F5) >>> 0;
+        let t = s;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
 function hexToRgb(hex) {
     const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     if (!m) return [0.4, 0.6, 0.3];
@@ -406,10 +417,182 @@ function fitCameraToBounds(min, max) {
     applyCamera();
 }
 
-// Forest mode is implemented in the next commit; this stub regenerates a
-// single plant so the tab stays functional.
+// --- Forest mode -----------------------------------------------------------
+//
+// Places `count` plants on a jittered grid of side `patchSize`. For tree-
+// like archetypes (tree, conifer) each instance gets per-tree variation in
+// height, trunk radius, canopy radius, shape, and a "canopy lean" computed
+// from neighbor positions: each tree's canopy shifts away from the
+// weighted-mean direction of its neighbors and the side facing into the
+// crowd is squashed (canopyAsymmetry) — readable phototropism / crown
+// shyness without a physical simulation.
+
+const TREE_LIKE = new Set(['tree', 'conifer', 'shrub']);
+const BROADLEAF_SHAPES = ['round', 'oval', 'umbrella', 'vase', 'spreading', 'irregular', 'weeping'];
+
+let groundNode = groundPlane;
+function resizeGroundFor(patch) {
+    const half = Math.max(10, patch * 0.7);
+    if (groundNode && groundNode.destroy) groundNode.destroy();
+    groundNode = scene.createMesh({
+        mesh: 'plane',
+        halfW: half, halfD: half,
+        y: 0,
+        color: '#9aa18f',
+        metallic: 0.0,
+        roughness: 0.95,
+        receivesShadow: true,
+    });
+}
+
+function pickShape(rng, mix) {
+    if (mix === 'round-only') return 'round';
+    const list = mix === 'all-shapes' ? Recipes.CANOPY_SHAPES : BROADLEAF_SHAPES;
+    return list[(rng() * list.length) | 0];
+}
+
 function regenerateForest() {
-    return regenerateSingle();
+    destroyNodes();
+    const archetype = state.archetype;
+    const count = Math.max(1, state.count | 0);
+    const patch = state.patchSize;
+    const jitter = state.jitter;
+    const sharing = state.sharing;
+    const sizeJitter = state.sizeJitter;
+    const shapeMix = state.shapeMix;
+    const baseSeed = state.seed | 0;
+    const age = state.age;
+
+    resizeGroundFor(patch);
+
+    // ── Place positions on a jittered grid ────────────────────────────────
+    const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const rows = Math.max(1, Math.ceil(count / cols));
+    const cellX = patch / cols;
+    const cellZ = patch / rows;
+    const placeRng = mulberry32(baseSeed * 7919);
+    const positions = [];
+    for (let r = 0; r < rows && positions.length < count; r++) {
+        for (let c = 0; c < cols && positions.length < count; c++) {
+            const cx = -patch * 0.5 + cellX * (c + 0.5);
+            const cz = -patch * 0.5 + cellZ * (r + 0.5);
+            positions.push([
+                cx + (placeRng() - 0.5) * cellX * jitter,
+                cz + (placeRng() - 0.5) * cellZ * jitter,
+            ]);
+        }
+    }
+
+    // ── Per-tree base parameters ──────────────────────────────────────────
+    const baseHeight =
+        archetype === 'tree' ? 6 :
+        archetype === 'conifer' ? 8 :
+        archetype === 'shrub' ? 1.5 : 4;
+    const baseTrunk =
+        archetype === 'conifer' ? 0.15 :
+        archetype === 'shrub' ? 0.06 : 0.18;
+    const baseCanopy =
+        archetype === 'tree' ? 3.0 :
+        archetype === 'conifer' ? 2.5 :
+        archetype === 'shrub' ? 1.2 : 1.5;
+
+    const trees = positions.map((pos, i) => {
+        const r = mulberry32(baseSeed * 31 + i * 1009 + 17);
+        const heightK = 1 + (r() - 0.5) * sizeJitter * 0.9;
+        const trunkK  = 1 + (r() - 0.5) * sizeJitter * 0.7;
+        const canopyK = 1 + (r() - 0.5) * sizeJitter * 0.6;
+        return {
+            x: pos[0], z: pos[1],
+            height: Math.max(0.5, baseHeight * heightK),
+            trunkRadius: Math.max(0.03, baseTrunk * trunkK),
+            canopyRadius: Math.max(0.4, baseCanopy * canopyK),
+            shape: pickShape(r, shapeMix),
+            blobCount: 2 + ((r() * 4) | 0),
+            seed: (baseSeed * 17 + i * 113 + 1) | 0,
+            colorJ: (r() - 0.5) * 0.08,
+            shiftX: 0, shiftZ: 0, asym: 0,
+        };
+    });
+
+    // ── Canopy sharing: lean each tree away from neighbor centroid ────────
+    if (TREE_LIKE.has(archetype)) {
+        for (let i = 0; i < trees.length; i++) {
+            const t = trees[i];
+            let lx = 0, lz = 0, w = 0;
+            for (let j = 0; j < trees.length; j++) {
+                if (i === j) continue;
+                const o = trees[j];
+                const dx = t.x - o.x, dz = t.z - o.z;
+                const d = Math.sqrt(dx * dx + dz * dz);
+                const reach = (t.canopyRadius + o.canopyRadius) * 0.95;
+                if (d <= 1e-3 || d >= reach) continue;
+                const wt = 1 - d / reach;
+                lx += (dx / d) * wt;
+                lz += (dz / d) * wt;
+                w += wt;
+            }
+            const llen = Math.sqrt(lx * lx + lz * lz);
+            if (llen > 1e-6 && w > 0) {
+                const k = Math.min(1, w);
+                const mag = t.canopyRadius * 0.45 * sharing * k;
+                t.shiftX = (lx / llen) * mag;
+                t.shiftZ = (lz / llen) * mag;
+                t.asym = sharing * Math.min(1, k);
+            }
+        }
+    }
+
+    // ── Build + place ─────────────────────────────────────────────────────
+    const aabb = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+    const t0 = performance.now();
+    let totalParts = 0;
+    const baseColor = state.canopyColor ? hexToRgb(state.canopyColor) : null;
+    for (const t of trees) {
+        const opts = {
+            seed: t.seed, age01: age,
+            height: t.height,
+            trunkRadius: t.trunkRadius,
+            canopyRadius: t.canopyRadius,
+            canopyShape: t.shape,
+            blobCount: t.blobCount,
+            canopyShift: [t.shiftX, 0, t.shiftZ],
+            canopyAsymmetry: t.asym,
+            radius: t.canopyRadius,  // shrub uses .radius
+        };
+        // Slight per-tree color drift on green channel.
+        if (TREE_LIKE.has(archetype)) {
+            const c = baseColor || [0.30, 0.55, 0.22];
+            opts.canopyColor = [
+                Math.max(0, Math.min(1, c[0] + t.colorJ * 0.4)),
+                Math.max(0, Math.min(1, c[1] + t.colorJ)),
+                Math.max(0, Math.min(1, c[2] + t.colorJ * 0.5)),
+            ];
+        }
+        const result = Recipes[archetype](opts);
+        if (!result.parts) continue;
+        for (const p of result.parts) {
+            const node = spawnPart(p, t.x, 0, t.z);
+            if (node) { plantNodes.push(node); totalParts++; }
+        }
+        const mn = result.aabbMin, mx = result.aabbMax;
+        if (mn && mx) {
+            if (t.x + mn[0] < aabb.min[0]) aabb.min[0] = t.x + mn[0];
+            if (t.z + mn[2] < aabb.min[2]) aabb.min[2] = t.z + mn[2];
+            if (mn[1]       < aabb.min[1]) aabb.min[1] = mn[1];
+            if (t.x + mx[0] > aabb.max[0]) aabb.max[0] = t.x + mx[0];
+            if (t.z + mx[2] > aabb.max[2]) aabb.max[2] = t.z + mx[2];
+            if (mx[1]       > aabb.max[1]) aabb.max[1] = mx[1];
+        }
+    }
+    const ms = performance.now() - t0;
+    document.getElementById('stats').textContent =
+        `forest · ${count} ${archetype}${count === 1 ? '' : 's'} · ${ms.toFixed(0)} ms · ${totalParts} parts`;
+
+    if (!isFinite(aabb.min[0])) {
+        aabb.min = [-patch * 0.5, 0, -patch * 0.5];
+        aabb.max = [patch * 0.5, baseHeight, patch * 0.5];
+    }
+    return { aabbMin: aabb.min, aabbMax: aabb.max };
 }
 
 let regenTimer = null;
