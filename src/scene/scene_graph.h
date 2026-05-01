@@ -5,6 +5,7 @@
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
+#include "scene/instanced_mesh_node.h"
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
@@ -43,6 +44,7 @@ public:
     SpriteNode* createSprite(const std::string& name = "");
     PhysicsNode* createPhysicsNode(const std::string& name = "");
     MeshNode* createMesh(const std::string& name = "");
+    InstancedMeshNode* createInstancedMesh(const std::string& name = "");
     HtmlNode* createHtml(const std::string& name = "");
     LightNode* createLight(const std::string& name = "");
     ParticleNode* createParticles(const std::string& name = "");
@@ -284,6 +286,8 @@ public:
 private:
     void renderNode(SceneNode* node);
     void renderMeshNode(MeshNode* mesh);
+    void renderInstancedMeshNode(InstancedMeshNode* mesh);
+    void ensureInstancedMeshPipeline();
     void renderBillboardNode(SceneNode* node);
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
 
@@ -303,7 +307,40 @@ private:
 
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
-    void uploadLights(const std::vector<LightNode*>& lights);
+
+    // Bundle of uniform locations the lighting/shadow/IBL upload pokes at.
+    // One instance is filled in for the regular mesh program and another for
+    // the instanced mesh program, so uploadLights can target either.
+    struct MeshProgramLocs {
+        GLint lightCount = -1;
+        GLint lightType = -1;
+        GLint lightPos = -1;
+        GLint lightDir = -1;
+        GLint lightColor = -1;
+        GLint lightIntensity = -1;
+        GLint lightRange = -1;
+        GLint lightSpotCos = -1;
+        GLint lightShadowSlot = -1;
+        GLint lightShadowSlotCount = -1;
+        GLint lightCascadeSplit = -1;
+        GLint shadowAtlas = -1;
+        GLint shadowMatrix = -1;
+        GLint shadowAtlasRect = -1;
+        GLint shadowBias = -1;
+        GLint shadowAtlasTexel = -1;
+        GLint shadowPCFTaps = -1;
+        GLint iblEnabled = -1;
+        GLint iblIrradiance = -1;
+        GLint iblPrefilter = -1;
+        GLint iblBRDF = -1;
+        GLint iblIntensity = -1;
+        GLint iblRotation = -1;
+        GLint iblPrefilterMaxLOD = -1;
+    };
+    MeshProgramLocs meshLocs_;
+    MeshProgramLocs meshInstLocs_;
+    void uploadLights(const std::vector<LightNode*>& lights,
+                      const MeshProgramLocs& locs);
 
     // --- Shadow pipeline (lazy init) ---
     // Atlas-tiled shadow maps: a single big depth texture sub-divided into N
@@ -406,6 +443,62 @@ private:
     GLint uLightIntensity_ = -1;
     GLint uLightRange_ = -1;
     GLint uLightSpotCos_ = -1;
+
+    // Instanced mesh program (vertex shader reads model matrix from per-instance
+    // attributes; fragment shader is shared with the regular mesh program). Only
+    // a small subset of uniforms differ — uVPInst_ replaces the per-mesh uMVP_
+    // and uModel_ since the model matrix lives in the vertex stream.
+    GLuint meshInstancedProgram_ = 0;
+    GLint uInstVP_ = -1;
+    GLint uInstColor_ = -1;
+    GLint uInstEmissive_ = -1;
+    GLint uInstEmissiveColor_ = -1;
+    GLint uInstMetallic_ = -1;
+    GLint uInstRoughness_ = -1;
+    GLint uInstUseVertexColor_ = -1;
+    GLint uInstUseTexture_ = -1;
+    GLint uInstBaseColorTex_ = -1;
+    GLint uInstHasTangent_ = -1;
+    GLint uInstHasNormalMap_ = -1;
+    GLint uInstHasMRMap_ = -1;
+    GLint uInstHasAOMap_ = -1;
+    GLint uInstHasEmissiveMap_ = -1;
+    GLint uInstNormalMap_ = -1;
+    GLint uInstMRMap_ = -1;
+    GLint uInstAOMap_ = -1;
+    GLint uInstEmissiveMap_ = -1;
+    GLint uInstReceivesShadow_ = -1;
+    GLint uInstFogStart_ = -1;
+    GLint uInstFogEnd_ = -1;
+    GLint uInstFogColor_ = -1;
+    GLint uInstNearClip_ = -1;
+    GLint uInstAmbient_ = -1;
+    GLint uInstUnlit_ = -1;
+    GLint uInstLightCount_ = -1;
+    GLint uInstLightType_ = -1;
+    GLint uInstLightPos_ = -1;
+    GLint uInstLightDirArr_ = -1;
+    GLint uInstLightColor_ = -1;
+    GLint uInstLightIntensity_ = -1;
+    GLint uInstLightRange_ = -1;
+    GLint uInstLightSpotCos_ = -1;
+    GLint uInstLightShadowSlot_ = -1;
+    GLint uInstLightShadowSlotCount_ = -1;
+    GLint uInstLightCascadeSplit_ = -1;
+    GLint uInstShadowAtlas_ = -1;
+    GLint uInstShadowMatrix_ = -1;
+    GLint uInstShadowAtlasRect_ = -1;
+    GLint uInstShadowBiasArr_ = -1;
+    GLint uInstShadowAtlasTexel_ = -1;
+    GLint uInstShadowPCFTaps_ = -1;
+    GLint uInstIBLEnabled_ = -1;
+    GLint uInstIBLIrradiance_ = -1;
+    GLint uInstIBLPrefilter_ = -1;
+    GLint uInstIBLBRDF_ = -1;
+    GLint uInstIBLIntensity_ = -1;
+    GLint uInstIBLRotation_ = -1;
+    GLint uInstIBLPrefilterMaxLOD_ = -1;
+    GLint uInstCameraEye_ = -1;
 
     // Mesh FBO
     GLuint meshFBO_ = 0;

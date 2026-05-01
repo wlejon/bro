@@ -5,6 +5,7 @@ add_library(bro_scene STATIC
     sprite_node.cpp
     physics_node.cpp
     mesh_node.cpp
+    instanced_mesh_node.cpp
     html_node.cpp
     light_node.cpp
     particle_node.cpp

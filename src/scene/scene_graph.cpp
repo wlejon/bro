@@ -473,6 +473,88 @@ void main() {
 }
 )";
 
+// ---------------------------------------------------------------------------
+// Instanced mesh vertex shader. Reads the per-instance 4x3 model transform
+// + RGBA tint from instance attributes (locations 8..11) and emits the same
+// varyings as kMeshVertSrc (camera-relative world position, world-space
+// normal+tangent frame, UV, vertex color, distance to camera) plus an extra
+// vInstColor that the instanced fragment shader multiplies into baseColor.
+// uCameraEye lets the VS bake camera-relative positions on the GPU rather
+// than forcing the CPU to rebuild every instance row each frame.
+// ---------------------------------------------------------------------------
+
+static const char* kMeshInstancedVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+layout(location = 3) in vec4 aColor;
+layout(location = 4) in vec4 aTangent;
+layout(location = 8)  in vec4 aInstRow0;
+layout(location = 9)  in vec4 aInstRow1;
+layout(location = 10) in vec4 aInstRow2;
+layout(location = 11) in vec4 aInstColor;
+
+uniform mat4 uVP;          // projection * view (no translation; camera-relative)
+uniform vec3 uCameraEye;   // world-space eye, subtracted from instance translation
+uniform int  uUseVertexColor;
+
+out vec3 vWorldPos;
+out vec3 vNormal;
+out vec2 vUV;
+out vec4 vColor;
+out float vCamDist;
+out vec3 vTangentW;
+out vec3 vBitangentW;
+out vec4 vInstColor;
+
+void main() {
+    // 4x3 row-major affine. Last column of each row holds translation.
+    mat3 R = mat3(
+        vec3(aInstRow0.x, aInstRow1.x, aInstRow2.x),
+        vec3(aInstRow0.y, aInstRow1.y, aInstRow2.y),
+        vec3(aInstRow0.z, aInstRow1.z, aInstRow2.z)
+    );
+    vec3 trans = vec3(aInstRow0.w, aInstRow1.w, aInstRow2.w);
+    vec3 worldPos = R * aPos + trans;
+    vec3 camRel = worldPos - uCameraEye;
+
+    vWorldPos = camRel;
+    vNormal = R * aNormal;
+    vTangentW   = R * aTangent.xyz;
+    vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
+    vUV = aUV;
+    vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
+    vCamDist = length(camRel);
+    vInstColor = aInstColor;
+    gl_Position = uVP * vec4(camRel, 1.0);
+}
+)";
+
+// Build the instanced fragment shader by mutating the regular kMeshFragSrc:
+// add `in vec4 vInstColor;` and multiply baseColor/baseAlpha by it. Done at
+// runtime so the two shaders cannot drift apart accidentally.
+static std::string makeMeshInstancedFragSrc() {
+    std::string s = kMeshFragSrc;
+    // Add vInstColor input alongside the existing varyings.
+    const std::string anchor1 = "in vec3 vBitangentW;";
+    auto p = s.find(anchor1);
+    if (p != std::string::npos) {
+        s.insert(p + anchor1.size(), "\nin vec4 vInstColor;");
+    }
+    // Multiply the resolved baseColor by the instance tint right after the
+    // base-color/alpha resolution block.
+    const std::string anchor2 = "        baseAlpha = uColor.a;\n    }\n";
+    p = s.find(anchor2);
+    if (p != std::string::npos) {
+        // Per-instance RGB tint multiplied with material baseColor. Alpha
+        // channel is reserved for future atlas-index packing — left untouched.
+        s.insert(p + anchor2.size(),
+                 "    baseColor *= vInstColor.rgb;\n");
+    }
+    return s;
+}
+
 // -----------------------------------------------------------------------------
 // Tonemap pass: HDR float mesh FBO -> LDR RGBA8 output texture.
 // -----------------------------------------------------------------------------
@@ -1032,6 +1114,7 @@ SceneGraph::~SceneGraph() {
     destroyMeshFBO();
     destroyTonemapFBO();
     if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
+    if (meshInstancedProgram_) { glDeleteProgram(meshInstancedProgram_); meshInstancedProgram_ = 0; }
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
     if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
     if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
@@ -1084,6 +1167,13 @@ PhysicsNode* SceneGraph::createPhysicsNode(const std::string& name) {
 
 MeshNode* SceneGraph::createMesh(const std::string& name) {
     auto node = std::make_unique<MeshNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+InstancedMeshNode* SceneGraph::createInstancedMesh(const std::string& name) {
+    auto node = std::make_unique<InstancedMeshNode>(name);
     auto* ptr = node.get();
     nodes_[ptr->id()] = std::move(node);
     return ptr;
@@ -1401,7 +1491,120 @@ void SceneGraph::ensureMeshPipeline() {
         // Legacy — no longer declared in the shader, fine if -1.
         uLightDir_ = -1;
         uCameraPos_ = -1;
+
+        // Mirror into the shared MeshProgramLocs struct so uploadLights can
+        // target either program from a single code path.
+        meshLocs_.lightCount           = uLightCount_;
+        meshLocs_.lightType            = uLightType_;
+        meshLocs_.lightPos             = uLightPos_;
+        meshLocs_.lightDir             = uLightDirArr_;
+        meshLocs_.lightColor           = uLightColor_;
+        meshLocs_.lightIntensity       = uLightIntensity_;
+        meshLocs_.lightRange           = uLightRange_;
+        meshLocs_.lightSpotCos         = uLightSpotCos_;
+        meshLocs_.lightShadowSlot      = uLightShadowSlot_;
+        meshLocs_.lightShadowSlotCount = uLightShadowSlotCount_;
+        meshLocs_.lightCascadeSplit    = uLightCascadeSplit_;
+        meshLocs_.shadowAtlas          = uShadowAtlas_;
+        meshLocs_.shadowMatrix         = uShadowMatrix_;
+        meshLocs_.shadowAtlasRect      = uShadowAtlasRect_;
+        meshLocs_.shadowBias           = uShadowBiasArr_;
+        meshLocs_.shadowAtlasTexel     = uShadowAtlasTexel_;
+        meshLocs_.shadowPCFTaps        = uShadowPCFTaps_;
+        meshLocs_.iblEnabled           = uIBLEnabled_;
+        meshLocs_.iblIrradiance        = uIBLIrradiance_;
+        meshLocs_.iblPrefilter         = uIBLPrefilter_;
+        meshLocs_.iblBRDF              = uIBLBRDF_;
+        meshLocs_.iblIntensity         = uIBLIntensity_;
+        meshLocs_.iblRotation          = uIBLRotation_;
+        meshLocs_.iblPrefilterMaxLOD   = uIBLPrefilterMaxLOD_;
     }
+}
+
+void SceneGraph::ensureInstancedMeshPipeline() {
+    if (meshInstancedProgram_) return;
+
+    std::string fragSrc = makeMeshInstancedFragSrc();
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kMeshInstancedVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragSrc.c_str());
+    if (!vs || !fs) {
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        return;
+    }
+
+    meshInstancedProgram_ = glCreateProgram();
+    glAttachShader(meshInstancedProgram_, vs);
+    glAttachShader(meshInstancedProgram_, fs);
+    glLinkProgram(meshInstancedProgram_);
+
+    GLint ok = 0;
+    glGetProgramiv(meshInstancedProgram_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(meshInstancedProgram_, sizeof(log), nullptr, log);
+        LOG_ERROR("Instanced mesh program link error: %s", log);
+        glDeleteProgram(meshInstancedProgram_);
+        meshInstancedProgram_ = 0;
+    }
+
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    if (!meshInstancedProgram_) return;
+
+    auto getU = [&](const char* n) { return glGetUniformLocation(meshInstancedProgram_, n); };
+    uInstVP_              = getU("uVP");
+    uInstCameraEye_       = getU("uCameraEye");
+    uInstColor_           = getU("uColor");
+    uInstEmissive_        = getU("uEmissive");
+    uInstEmissiveColor_   = getU("uEmissiveColor");
+    uInstMetallic_        = getU("uMetallic");
+    uInstRoughness_       = getU("uRoughness");
+    uInstUseVertexColor_  = getU("uUseVertexColor");
+    uInstUseTexture_      = getU("uUseTexture");
+    uInstBaseColorTex_    = getU("uBaseColorTex");
+    uInstHasTangent_      = getU("uHasTangent");
+    uInstHasNormalMap_    = getU("uHasNormalMap");
+    uInstHasMRMap_        = getU("uHasMRMap");
+    uInstHasAOMap_        = getU("uHasAOMap");
+    uInstHasEmissiveMap_  = getU("uHasEmissiveMap");
+    uInstNormalMap_       = getU("uNormalMap");
+    uInstMRMap_           = getU("uMRMap");
+    uInstAOMap_           = getU("uAOMap");
+    uInstEmissiveMap_     = getU("uEmissiveMap");
+    uInstReceivesShadow_  = getU("uReceivesShadow");
+    uInstFogStart_        = getU("uFogStart");
+    uInstFogEnd_          = getU("uFogEnd");
+    uInstFogColor_        = getU("uFogColor");
+    uInstNearClip_        = getU("uNearClip");
+    uInstAmbient_         = getU("uAmbient");
+    uInstUnlit_           = getU("uUnlit");
+
+    meshInstLocs_.lightCount           = getU("uLightCount");
+    meshInstLocs_.lightType            = getU("uLightType");
+    meshInstLocs_.lightPos             = getU("uLightPos");
+    meshInstLocs_.lightDir             = getU("uLightDir");
+    meshInstLocs_.lightColor           = getU("uLightColor");
+    meshInstLocs_.lightIntensity       = getU("uLightIntensity");
+    meshInstLocs_.lightRange           = getU("uLightRange");
+    meshInstLocs_.lightSpotCos         = getU("uLightSpotCos");
+    meshInstLocs_.lightShadowSlot      = getU("uLightShadowSlot");
+    meshInstLocs_.lightShadowSlotCount = getU("uLightShadowSlotCount");
+    meshInstLocs_.lightCascadeSplit    = getU("uLightCascadeSplit");
+    meshInstLocs_.shadowAtlas          = getU("uShadowAtlas");
+    meshInstLocs_.shadowMatrix         = getU("uShadowMatrix");
+    meshInstLocs_.shadowAtlasRect      = getU("uShadowAtlasRect");
+    meshInstLocs_.shadowBias           = getU("uShadowBias");
+    meshInstLocs_.shadowAtlasTexel     = getU("uShadowAtlasTexel");
+    meshInstLocs_.shadowPCFTaps        = getU("uShadowPCFTaps");
+    meshInstLocs_.iblEnabled           = getU("uIBLEnabled");
+    meshInstLocs_.iblIrradiance        = getU("uIBLIrradiance");
+    meshInstLocs_.iblPrefilter         = getU("uIBLPrefilter");
+    meshInstLocs_.iblBRDF              = getU("uIBLBRDF");
+    meshInstLocs_.iblIntensity         = getU("uIBLIntensity");
+    meshInstLocs_.iblRotation          = getU("uIBLRotation");
+    meshInstLocs_.iblPrefilterMaxLOD   = getU("uIBLPrefilterMaxLOD");
 }
 
 void SceneGraph::ensureFallbackTextures() {
@@ -2290,18 +2493,19 @@ void SceneGraph::collectLights(std::vector<LightNode*>& out) const {
     }
 }
 
-void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
+void SceneGraph::uploadLights(const std::vector<LightNode*>& lights,
+                              const MeshProgramLocs& locs) {
     const int count = std::min((int)lights.size(), 32);
-    glUniform1i(uLightCount_, count);
+    glUniform1i(locs.lightCount, count);
 
     // Always upload shadow uniforms (even when no lights / no shadows): the
     // shader unconditionally indexes them per-iteration. Texel + tap config
     // is global so set them once per draw regardless of light count.
-    if (uShadowAtlasTexel_ >= 0) {
+    if (locs.shadowAtlasTexel >= 0) {
         float texel = (shadowAtlasSize_ > 0) ? (1.0f / (float)shadowAtlasSize_) : 0.0f;
-        glUniform1f(uShadowAtlasTexel_, texel);
+        glUniform1f(locs.shadowAtlasTexel, texel);
     }
-    if (uShadowPCFTaps_ >= 0) glUniform1i(uShadowPCFTaps_, shadowPCFTaps_);
+    if (locs.shadowPCFTaps >= 0) glUniform1i(locs.shadowPCFTaps, shadowPCFTaps_);
 
     // Ensure valid texture objects exist for every sampler unit this program
     // references. macOS GL 4.1 core profile rejects draws (GL_INVALID_OPERATION)
@@ -2312,10 +2516,10 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
     // Bind the shadow atlas to a fixed texture unit (1; unit 0 is baseColor).
     // sampler2DShadow performs the depth comparison via the texture's
     // GL_TEXTURE_COMPARE_MODE state set in ensureShadowAtlas().
-    if (uShadowAtlas_ >= 0) {
+    if (locs.shadowAtlas >= 0) {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_ ? shadowAtlasTex_ : fallbackShadow_);
-        glUniform1i(uShadowAtlas_, 1);
+        glUniform1i(locs.shadowAtlas, 1);
         glActiveTexture(GL_TEXTURE0);
     }
 
@@ -2328,50 +2532,50 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
     // meshes, which re-bind unit 0 only.
     bool iblOn = (envIrradianceCube_ != 0) && (envPrefilterCube_ != 0)
               && (brdfLUT_ != 0);
-    if (uIBLEnabled_ >= 0) glUniform1i(uIBLEnabled_, iblOn ? 1 : 0);
-    if (uIBLIntensity_ >= 0)       glUniform1f(uIBLIntensity_, iblOn ? envIntensity_ : 0.0f);
-    if (uIBLRotation_ >= 0)        glUniform1f(uIBLRotation_, envRotation_);
-    if (uIBLPrefilterMaxLOD_ >= 0) glUniform1f(uIBLPrefilterMaxLOD_,
-                                               iblOn ? (float)(envPrefilterMips_ - 1) : 0.0f);
+    if (locs.iblEnabled >= 0) glUniform1i(locs.iblEnabled, iblOn ? 1 : 0);
+    if (locs.iblIntensity >= 0)       glUniform1f(locs.iblIntensity, iblOn ? envIntensity_ : 0.0f);
+    if (locs.iblRotation >= 0)        glUniform1f(locs.iblRotation, envRotation_);
+    if (locs.iblPrefilterMaxLOD >= 0) glUniform1f(locs.iblPrefilterMaxLOD,
+                                                  iblOn ? (float)(envPrefilterMips_ - 1) : 0.0f);
 
     // Bind IBL textures unconditionally — use fallbacks when IBL is off so the
     // sampler units always have a valid texture of the matching type.
-    if (uIBLIrradiance_ >= 0) {
+    if (locs.iblIrradiance >= 0) {
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_CUBE_MAP, iblOn ? envIrradianceCube_ : fallbackCube_);
-        glUniform1i(uIBLIrradiance_, 2);
+        glUniform1i(locs.iblIrradiance, 2);
     }
-    if (uIBLPrefilter_ >= 0) {
+    if (locs.iblPrefilter >= 0) {
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_CUBE_MAP, iblOn ? envPrefilterCube_ : fallbackCube_);
-        glUniform1i(uIBLPrefilter_, 3);
+        glUniform1i(locs.iblPrefilter, 3);
     }
-    if (uIBLBRDF_ >= 0) {
+    if (locs.iblBRDF >= 0) {
         glActiveTexture(GL_TEXTURE4);
         glBindTexture(GL_TEXTURE_2D, iblOn ? brdfLUT_ : fallback2D_);
-        glUniform1i(uIBLBRDF_, 4);
+        glUniform1i(locs.iblBRDF, 4);
     }
     glActiveTexture(GL_TEXTURE0);
 
-    if (uShadowMatrix_ >= 0 && shadowTileCount_ > 0) {
-        glUniformMatrix4fv(uShadowMatrix_, shadowTileCount_, GL_FALSE,
+    if (locs.shadowMatrix >= 0 && shadowTileCount_ > 0) {
+        glUniformMatrix4fv(locs.shadowMatrix, shadowTileCount_, GL_FALSE,
                            &shadowMatrixCamRel_[0][0]);
     }
-    if (uShadowAtlasRect_ >= 0 && shadowTileCount_ > 0) {
-        glUniform4fv(uShadowAtlasRect_, shadowTileCount_, &shadowAtlasRect_[0][0]);
+    if (locs.shadowAtlasRect >= 0 && shadowTileCount_ > 0) {
+        glUniform4fv(locs.shadowAtlasRect, shadowTileCount_, &shadowAtlasRect_[0][0]);
     }
-    if (uShadowBiasArr_ >= 0 && shadowTileCount_ > 0) {
-        glUniform2fv(uShadowBiasArr_, shadowTileCount_, &shadowBias_[0][0]);
+    if (locs.shadowBias >= 0 && shadowTileCount_ > 0) {
+        glUniform2fv(locs.shadowBias, shadowTileCount_, &shadowBias_[0][0]);
     }
-    if (uLightShadowSlot_ >= 0) {
+    if (locs.lightShadowSlot >= 0) {
         // Always send 32 slots so any light index is safe to read; -1 default.
-        glUniform1iv(uLightShadowSlot_, 32, lightShadowSlot_);
+        glUniform1iv(locs.lightShadowSlot, 32, lightShadowSlot_);
     }
-    if (uLightShadowSlotCount_ >= 0) {
-        glUniform1iv(uLightShadowSlotCount_, 32, lightShadowSlotCount_);
+    if (locs.lightShadowSlotCount >= 0) {
+        glUniform1iv(locs.lightShadowSlotCount, 32, lightShadowSlotCount_);
     }
-    if (uLightCascadeSplit_ >= 0) {
-        glUniform4fv(uLightCascadeSplit_, 32, &lightCascadeSplit_[0][0]);
+    if (locs.lightCascadeSplit >= 0) {
+        glUniform4fv(locs.lightCascadeSplit, 32, &lightCascadeSplit_[0][0]);
     }
 
     if (count == 0) return;
@@ -2413,13 +2617,13 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights) {
         spotCos[i*2+1] = std::cos(L->outerAngle());
     }
 
-    glUniform1iv(uLightType_, count, type);
-    glUniform3fv(uLightPos_, count, pos);
-    glUniform3fv(uLightDirArr_, count, dir);
-    glUniform3fv(uLightColor_, count, col);
-    glUniform1fv(uLightIntensity_, count, intensity);
-    glUniform1fv(uLightRange_, count, range);
-    glUniform2fv(uLightSpotCos_, count, spotCos);
+    if (locs.lightType >= 0)      glUniform1iv(locs.lightType, count, type);
+    if (locs.lightPos >= 0)       glUniform3fv(locs.lightPos, count, pos);
+    if (locs.lightDir >= 0)       glUniform3fv(locs.lightDir, count, dir);
+    if (locs.lightColor >= 0)     glUniform3fv(locs.lightColor, count, col);
+    if (locs.lightIntensity >= 0) glUniform1fv(locs.lightIntensity, count, intensity);
+    if (locs.lightRange >= 0)     glUniform1fv(locs.lightRange, count, range);
+    if (locs.lightSpotCos >= 0)   glUniform2fv(locs.lightSpotCos, count, spotCos);
 }
 
 // ---------------------------------------------------------------------------
@@ -2909,14 +3113,15 @@ void SceneGraph::render() {
     // Both render into the mesh FBO (depth-tested against each other) so
     // they share the same setup path.
     bool hasMeshNodes = false;
+    bool hasInstancedMeshNodes = false;
     bool hasBillboardNodes = false;
     bool hasLightIcons = false;
     for (auto& [id, node] : nodes_) {
         if (!node->visible()) continue;
         if (node->type() == SceneNode::Type::Mesh) hasMeshNodes = true;
+        else if (node->type() == SceneNode::Type::InstancedMesh) hasInstancedMeshNodes = true;
         else if (node->hasWorldAnchor())           hasBillboardNodes = true;
         else if (showLightIcons_ && node->type() == SceneNode::Type::Light) hasLightIcons = true;
-        if (hasMeshNodes && hasBillboardNodes && hasLightIcons) break;
     }
 
     // Resolve the gizmo overlay up-front so it can force the 3D pass even
@@ -2925,7 +3130,7 @@ void SceneGraph::render() {
     if (gizmoProvider_) gizmoMeshes = gizmoProvider_(this);
     const bool hasGizmo = !gizmoMeshes.empty();
 
-    const bool has3D = (hasMeshNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
+    const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
                        && canvasWidth_ > 0 && canvasHeight_ > 0;
 
     if (has3D) {
@@ -2989,7 +3194,7 @@ void SceneGraph::render() {
                 glUniform1f(uFogEnd_, fogEnd_);
                 glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
                 glUniform3f(uAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
-                uploadLights(activeLights);
+                uploadLights(activeLights, meshLocs_);
 
                 std::function<void(SceneNode*)> walkMesh = [&](SceneNode* n) {
                     if (!n->visible()) return;
@@ -3003,6 +3208,45 @@ void SceneGraph::render() {
                 walkMesh(root_.get());
 
                 glDisable(GL_CULL_FACE);
+            }
+
+            // --- Instanced mesh pass ----------------------------------------
+            // Same camera/lighting state as the regular pass, but the model
+            // matrix lives in per-instance attributes (no uModel uniform), so
+            // there's a dedicated program. Walks the same node tree filtered
+            // by InstancedMesh type.
+            if (hasInstancedMeshNodes) {
+                ensureInstancedMeshPipeline();
+                if (meshInstancedProgram_) {
+                    glEnable(GL_CULL_FACE);
+                    glCullFace(GL_BACK);
+                    glUseProgram(meshInstancedProgram_);
+
+                    Mat4 viewRot = viewMatrix_;
+                    viewRot.m[3][0] = 0.0f;
+                    viewRot.m[3][1] = 0.0f;
+                    viewRot.m[3][2] = 0.0f;
+                    Mat4 vp = projectionMatrix_ * viewRot;
+                    glUniformMatrix4fv(uInstVP_, 1, GL_FALSE, vp.data());
+                    glUniform3f(uInstCameraEye_, cameraEye_.x, cameraEye_.y, cameraEye_.z);
+
+                    glUniform1f(uInstFogStart_, fogStart_);
+                    glUniform1f(uInstFogEnd_, fogEnd_);
+                    glUniform3f(uInstFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
+                    glUniform3f(uInstAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+                    uploadLights(activeLights, meshInstLocs_);
+
+                    std::function<void(SceneNode*)> walkInst = [&](SceneNode* n) {
+                        if (!n->visible()) return;
+                        if (n->type() == SceneNode::Type::InstancedMesh) {
+                            renderInstancedMeshNode(static_cast<InstancedMeshNode*>(n));
+                        }
+                        for (auto* c : n->children()) walkInst(c);
+                    };
+                    walkInst(root_.get());
+
+                    glDisable(GL_CULL_FACE);
+                }
             }
 
             // --- Billboard pass --------------------------------------------
@@ -3086,7 +3330,7 @@ void SceneGraph::render() {
                 glUniform3f(uAmbient_, 0.0f, 0.0f, 0.0f);
                 // uUnlit is set per-mesh by renderMeshNode; still need light
                 // uniforms uploaded (shader accesses count even if unused).
-                uploadLights(activeLights);
+                uploadLights(activeLights, meshLocs_);
 
                 for (MeshNode* mn : unlitMeshes) {
                     renderMeshNode(mn);
@@ -3337,6 +3581,81 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     // occlude each other; opaque meshes still occlude translucent ones via
     // the unchanged depth test. Separate alpha function ensures the final
     // FBO stays composable over the 2D backdrop (standard "over" operator).
+    bool translucent = mesh->color()[3] < 1.0f;
+    if (translucent) {
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE,       GL_ONE_MINUS_SRC_ALPHA);
+        glDepthMask(GL_FALSE);
+    }
+
+    mesh->onRender(*this);
+
+    if (translucent) {
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+    }
+
+    if (pf != 0.0f || pu != 0.0f) {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(0.0f, 0.0f);
+    }
+}
+
+void SceneGraph::renderInstancedMeshNode(InstancedMeshNode* mesh) {
+    glUniform4fv(uInstColor_, 1, mesh->color());
+    glUniform1f(uInstEmissive_, mesh->emissive());
+    glUniform3fv(uInstEmissiveColor_, 1, mesh->emissiveColor());
+    glUniform1f(uInstMetallic_, mesh->metallic());
+    glUniform1f(uInstRoughness_, mesh->roughness());
+    if (uInstUnlit_ >= 0) glUniform1i(uInstUnlit_, mesh->unlit() ? 1 : 0);
+    glUniform1i(uInstUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
+    glUniform1f(uInstNearClip_, mesh->nearClipDist());
+
+    bool bindTex = mesh->hasBaseColorTexture();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, bindTex ? mesh->baseColorTextureId() : fallback2D_);
+    glUniform1i(uInstBaseColorTex_, 0);
+    glUniform1i(uInstUseTexture_, bindTex ? 1 : 0);
+
+    bool hasNM = mesh->hasNormalTexture();
+    bool hasMR = mesh->hasMetallicRoughnessTexture();
+    bool hasAO = mesh->hasOcclusionTexture();
+    bool hasEM = mesh->hasEmissiveTexture();
+    if (hasNM) {
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D, mesh->normalTextureId());
+        if (uInstNormalMap_ >= 0) glUniform1i(uInstNormalMap_, 5);
+    }
+    if (hasMR) {
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, mesh->metallicRoughnessTextureId());
+        if (uInstMRMap_ >= 0) glUniform1i(uInstMRMap_, 6);
+    }
+    if (hasAO) {
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D, mesh->occlusionTextureId());
+        if (uInstAOMap_ >= 0) glUniform1i(uInstAOMap_, 7);
+    }
+    if (hasEM) {
+        glActiveTexture(GL_TEXTURE8);
+        glBindTexture(GL_TEXTURE_2D, mesh->emissiveTextureId());
+        if (uInstEmissiveMap_ >= 0) glUniform1i(uInstEmissiveMap_, 8);
+    }
+    if (uInstHasTangent_     >= 0) glUniform1i(uInstHasTangent_,     mesh->mesh().hasTangents() ? 1 : 0);
+    if (uInstHasNormalMap_   >= 0) glUniform1i(uInstHasNormalMap_,   hasNM ? 1 : 0);
+    if (uInstHasMRMap_       >= 0) glUniform1i(uInstHasMRMap_,       hasMR ? 1 : 0);
+    if (uInstHasAOMap_       >= 0) glUniform1i(uInstHasAOMap_,       hasAO ? 1 : 0);
+    if (uInstHasEmissiveMap_ >= 0) glUniform1i(uInstHasEmissiveMap_, hasEM ? 1 : 0);
+    if (uInstReceivesShadow_ >= 0) glUniform1i(uInstReceivesShadow_, mesh->receivesShadow() ? 1 : 0);
+
+    float pf = mesh->depthBiasFactor();
+    float pu = mesh->depthBiasUnits();
+    if (pf != 0.0f || pu != 0.0f) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(pf, pu);
+    }
+
     bool translucent = mesh->color()[3] < 1.0f;
     if (translucent) {
         glEnable(GL_BLEND);

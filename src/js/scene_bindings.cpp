@@ -10,6 +10,7 @@
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
+#include "scene/instanced_mesh_node.h"
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
@@ -1596,6 +1597,221 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
     return wrapNode(ctx, node, g);
 }
 
+// createInstancedMesh({mesh, instances|instancesFromTransforms, color, ...})
+// Mirrors createMesh's material + texture surface but renders N copies of
+// `mesh` in a single draw via hardware instancing. Per-instance state is
+// either:
+//   - `instances`: Float32Array of 16*count floats (canonical layout —
+//     4x3 affine transform rows + RGBA tint), or
+//   - `instancesFromTransforms`: Float32Array of 9*count floats
+//     (px py pz, qx qy qz qw, scale, variantIndex), converted internally.
+static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createInstancedMesh();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        double x = jsGetProp(ctx, opts, "x", 0);
+        double y = jsGetProp(ctx, opts, "y", 0);
+        double z = jsGetProp(ctx, opts, "z", 0);
+        node->setPosition((float)x, (float)y, (float)z);
+
+        // Color
+        JSValue colorVal = JS_GetPropertyStr(ctx, opts, "color");
+        if (JS_IsString(colorVal)) {
+            uint8_t r, g2, b, a;
+            if (parseColor(jsStr(ctx, colorVal), r, g2, b, a)) {
+                node->setColor(r/255.0f, g2/255.0f, b/255.0f, a/255.0f);
+            }
+        } else if (JS_IsArray(colorVal)) {
+            double cr = 1, cg = 1, cb = 1, ca = 1;
+            JSValue e0 = JS_GetPropertyUint32(ctx, colorVal, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, colorVal, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, colorVal, 2);
+            JSValue e3 = JS_GetPropertyUint32(ctx, colorVal, 3);
+            JS_ToFloat64(ctx, &cr, e0); JS_ToFloat64(ctx, &cg, e1);
+            JS_ToFloat64(ctx, &cb, e2);
+            if (!JS_IsUndefined(e3)) JS_ToFloat64(ctx, &ca, e3);
+            node->setColor((float)cr, (float)cg, (float)cb, (float)ca);
+            JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1);
+            JS_FreeValue(ctx, e2); JS_FreeValue(ctx, e3);
+        }
+        JS_FreeValue(ctx, colorVal);
+
+        double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
+        node->setEmissive((float)emissive);
+
+        JSValue emColVal = JS_GetPropertyStr(ctx, opts, "emissiveColor");
+        if (JS_IsString(emColVal)) {
+            uint8_t er, eg, eb, ea;
+            if (parseColor(jsStr(ctx, emColVal), er, eg, eb, ea))
+                node->setEmissiveColor(er/255.0f, eg/255.0f, eb/255.0f);
+        } else if (JS_IsArray(emColVal)) {
+            double er = 1, eg = 1, eb = 1;
+            JSValue e0 = JS_GetPropertyUint32(ctx, emColVal, 0);
+            JSValue e1 = JS_GetPropertyUint32(ctx, emColVal, 1);
+            JSValue e2 = JS_GetPropertyUint32(ctx, emColVal, 2);
+            JS_ToFloat64(ctx, &er, e0); JS_ToFloat64(ctx, &eg, e1); JS_ToFloat64(ctx, &eb, e2);
+            node->setEmissiveColor((float)er, (float)eg, (float)eb);
+            JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1); JS_FreeValue(ctx, e2);
+        } else if (emissive > 0.0) {
+            const float* c = node->color();
+            node->setEmissiveColor(c[0], c[1], c[2]);
+        }
+        JS_FreeValue(ctx, emColVal);
+
+        JSValue mv = JS_GetPropertyStr(ctx, opts, "metallic");
+        if (!JS_IsUndefined(mv)) node->setMetallic((float)jsNum(ctx, mv));
+        JS_FreeValue(ctx, mv);
+        JSValue rv = JS_GetPropertyStr(ctx, opts, "roughness");
+        if (!JS_IsUndefined(rv)) node->setRoughness((float)jsNum(ctx, rv));
+        JS_FreeValue(ctx, rv);
+
+        JSValue unlitVal = JS_GetPropertyStr(ctx, opts, "unlit");
+        if (!JS_IsUndefined(unlitVal)) node->setUnlit(JS_ToBool(ctx, unlitVal) == 1);
+        JS_FreeValue(ctx, unlitVal);
+
+        JSValue csVal = JS_GetPropertyStr(ctx, opts, "castsShadow");
+        if (!JS_IsUndefined(csVal)) node->setCastsShadow(JS_ToBool(ctx, csVal) == 1);
+        JS_FreeValue(ctx, csVal);
+        JSValue rsVal = JS_GetPropertyStr(ctx, opts, "receivesShadow");
+        if (!JS_IsUndefined(rsVal)) node->setReceivesShadow(JS_ToBool(ctx, rsVal) == 1);
+        JS_FreeValue(ctx, rsVal);
+
+        // Mesh source — accept a Mesh handle from MeshBindings.
+        bool transfer = jsGetBool(ctx, opts, "transfer", false);
+        JSValue meshVal = JS_GetPropertyStr(ctx, opts, "mesh");
+        if (!JS_IsUndefined(meshVal) && MeshBindings::getMeshData(ctx, meshVal)) {
+            if (transfer) {
+                if (auto taken = MeshBindings::takeMeshData(ctx, meshVal))
+                    node->setMesh(std::move(*taken));
+            } else {
+                node->setMesh(*MeshBindings::getMeshData(ctx, meshVal));
+            }
+        }
+        JS_FreeValue(ctx, meshVal);
+
+        // Instance buffer.
+        std::vector<float> raw;
+        if (jsReadFloatArray(ctx, opts, "instances", raw)) {
+            size_t count = raw.size() / 16;
+            node->setInstances(raw.data(), count);
+        } else if (jsReadFloatArray(ctx, opts, "instancesFromTransforms", raw)) {
+            size_t count = raw.size() / 9;
+            node->setInstancesFromPosQuatScale(raw.data(), count);
+        }
+
+        // Texture maps — same shape as createMesh.
+        auto applyTex = [&](const char* key, void (scene::InstancedMeshNode::*setter)(int, int, const uint8_t*)) {
+            JSValue tex = JS_GetPropertyStr(ctx, opts, key);
+            if (JS_IsObject(tex)) {
+                int w = (int)jsGetProp(ctx, tex, "width",  0);
+                int h = (int)jsGetProp(ctx, tex, "height", 0);
+                JSValue dataVal = JS_GetPropertyStr(ctx, tex, "data");
+                size_t bytes = 0, off = 0, len = 0;
+                JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
+                if (!JS_IsException(ab)) {
+                    uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+                    if (base && w > 0 && h > 0 && len >= (size_t)w * (size_t)h * 4) {
+                        (node->*setter)(w, h, base + off);
+                    }
+                    JS_FreeValue(ctx, ab);
+                }
+                JS_FreeValue(ctx, dataVal);
+            }
+            JS_FreeValue(ctx, tex);
+        };
+        applyTex("texture",                  &scene::InstancedMeshNode::setBaseColorTexture);
+        applyTex("normalTexture",            &scene::InstancedMeshNode::setNormalTexture);
+        applyTex("metallicRoughnessTexture", &scene::InstancedMeshNode::setMetallicRoughnessTexture);
+        applyTex("occlusionTexture",         &scene::InstancedMeshNode::setOcclusionTexture);
+        applyTex("emissiveTexture",          &scene::InstancedMeshNode::setEmissiveTexture);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// Per-node setters for InstancedMeshNode — setMesh / setInstances /
+// setInstancesFromTransforms / updateInstance.
+static JSValue js_node_setInstancedMesh(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
+    auto* node = static_cast<scene::InstancedMeshNode*>(w->node);
+    if (MeshBindings::getMeshData(ctx, argv[0])) {
+        node->setMesh(*MeshBindings::getMeshData(ctx, argv[0]));
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_setInstances(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
+    size_t off = 0, len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[0], &off, &len, nullptr);
+    if (JS_IsException(ab)) { JS_FreeValue(ctx, ab); return JS_UNDEFINED; }
+    size_t bytes = 0;
+    uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+    if (base) {
+        const float* data = reinterpret_cast<const float*>(base + off);
+        size_t count = (len / sizeof(float)) / 16;
+        static_cast<scene::InstancedMeshNode*>(w->node)->setInstances(data, count);
+    }
+    JS_FreeValue(ctx, ab);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_setInstancesFromTransforms(JSContext* ctx, JSValueConst this_val,
+                                                  int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
+    size_t off = 0, len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[0], &off, &len, nullptr);
+    if (JS_IsException(ab)) { JS_FreeValue(ctx, ab); return JS_UNDEFINED; }
+    size_t bytes = 0;
+    uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+    if (base) {
+        const float* data = reinterpret_cast<const float*>(base + off);
+        size_t count = (len / sizeof(float)) / 9;
+        static_cast<scene::InstancedMeshNode*>(w->node)->setInstancesFromPosQuatScale(data, count);
+    }
+    JS_FreeValue(ctx, ab);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_node_updateInstance(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (argc < 2) return JS_UNDEFINED;
+    int32_t idx = 0;
+    JS_ToInt32(ctx, &idx, argv[0]);
+    size_t off = 0, len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[1], &off, &len, nullptr);
+    if (JS_IsException(ab)) { JS_FreeValue(ctx, ab); return JS_UNDEFINED; }
+    size_t bytes = 0;
+    uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+    if (base && len >= sizeof(float) * 16 && idx >= 0) {
+        const float* data = reinterpret_cast<const float*>(base + off);
+        static_cast<scene::InstancedMeshNode*>(w->node)->updateInstance((size_t)idx, data);
+    }
+    JS_FreeValue(ctx, ab);
+    return JS_UNDEFINED;
+}
+
 // findById(id) → SceneNode | null
 static JSValue js_sg_findById(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -2237,10 +2453,16 @@ void SceneBindings::install(JSContext* ctx) {
         .get("childCount", [](NodeWrapper* w) -> int {
             return (w && w->node) ? (int)w->node->children().size() : 0;
         })
+        .get("instanceCount", [](NodeWrapper* w) -> int {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                return (int)static_cast<scene::InstancedMeshNode*>(w->node)->instanceCount();
+            return 0;
+        })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_UNDEFINED;
             switch (w->node->type()) {
                 case scene::SceneNode::Type::Mesh:    return JS_NewString(ctx, "mesh");
+                case scene::SceneNode::Type::InstancedMesh: return JS_NewString(ctx, "instancedMesh");
                 case scene::SceneNode::Type::Light:   return JS_NewString(ctx, "light");
                 case scene::SceneNode::Type::Shape:   return JS_NewString(ctx, "shape");
                 case scene::SceneNode::Type::Sprite:  return JS_NewString(ctx, "sprite");
@@ -2808,6 +3030,10 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("localToWorld", js_node_localToWorld, 2)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
         .method_raw("updateMesh", js_node_updateMesh, 1)
+        .method_raw("setInstances", js_node_setInstances, 1)
+        .method_raw("setInstancesFromTransforms", js_node_setInstancesFromTransforms, 1)
+        .method_raw("updateInstance", js_node_updateInstance, 2)
+        .method_raw("setInstancedMesh", js_node_setInstancedMesh, 1)
         .method_raw("setBaseColorTexture", js_node_setBaseColorTexture, 1)
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
@@ -2850,6 +3076,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createSprite", js_sg_createSprite, 1)
         .method_raw("createPhysicsNode", js_sg_createPhysicsNode, 1)
         .method_raw("createMesh", js_sg_createMesh, 1)
+        .method_raw("createInstancedMesh", js_sg_createInstancedMesh, 1)
         .method_raw("createHtmlNode", js_sg_createHtml, 1)
         .method_raw("createLight", js_sg_createLight, 1)
         .method_raw("createParticles", js_sg_createParticles, 1)

@@ -1,0 +1,192 @@
+#pragma once
+
+#include "scene/scene_node.h"
+#include <bromesh/mesh_data.h>
+#include <bromesh/analysis/bbox.h>
+#include <glad/gl.h>
+
+#include <vector>
+#include <cstdint>
+
+namespace bro::scene {
+
+/// Renders many copies of one mesh in a single draw call via glDrawElementsInstanced.
+/// One mesh + one material is shared across all instances; per-instance state is a
+/// 4x3 affine model transform plus an RGBA color tint, packed as 16 floats:
+///
+///   [m00 m01 m02 tx]
+///   [m10 m11 m12 ty]
+///   [m20 m21 m22 tz]
+///   [r   g   b   a ]
+///
+/// The instance color is multiplied with the material baseColor in the fragment
+/// shader. The alpha channel is reserved for future per-instance atlas indexing.
+class InstancedMeshNode : public SceneNode {
+public:
+    explicit InstancedMeshNode(const std::string& name = "");
+    ~InstancedMeshNode() override;
+
+    InstancedMeshNode(const InstancedMeshNode&) = delete;
+    InstancedMeshNode& operator=(const InstancedMeshNode&) = delete;
+
+    Type type() const override { return Type::InstancedMesh; }
+    void onRender(SceneGraph& graph) override;
+
+    // --- Mesh ---
+
+    void setMesh(const bromesh::MeshData& mesh);
+    void setMesh(bromesh::MeshData&& mesh);
+    const bromesh::MeshData& mesh() const { return mesh_; }
+    const bromesh::BBox& localBounds() const { return bounds_; }
+
+    // --- Instances ---
+
+    /// Set the per-instance buffer directly. `data` must point at exactly
+    /// `count * 16` floats in the canonical layout. Bytes are copied; the
+    /// caller's buffer can be freed immediately after this returns.
+    void setInstances(const float* data, size_t count);
+
+    /// Convenience: build the instance buffer from a 9-floats-per-instance
+    /// (px py pz, qx qy qz qw, scale, variantIndex) array. variantIndex is
+    /// packed into color.a (0..255 → 0..1); RGB defaults to white. Color
+    /// can be overridden per-instance later via updateInstance().
+    void setInstancesFromPosQuatScale(const float* data, size_t count);
+
+    /// Replace one instance's 16-float record in place.
+    void updateInstance(size_t i, const float* data16);
+
+    size_t instanceCount() const { return instanceCount_; }
+
+    // --- Material (mirrors MeshNode) ---
+
+    void setColor(float r, float g, float b, float a = 1.0f) {
+        color_[0] = r; color_[1] = g; color_[2] = b; color_[3] = a;
+    }
+    const float* color() const { return color_; }
+
+    void setBaseColorTexture(int width, int height, const uint8_t* rgba);
+    void clearBaseColorTexture();
+    bool hasBaseColorTexture() const { return texture_ != 0; }
+    GLuint baseColorTextureId() const { return texture_; }
+
+    void setNormalTexture(int width, int height, const uint8_t* rgba);
+    void clearNormalTexture();
+    bool hasNormalTexture() const { return normalTex_ != 0; }
+    GLuint normalTextureId() const { return normalTex_; }
+
+    void setMetallicRoughnessTexture(int width, int height, const uint8_t* rgba);
+    void clearMetallicRoughnessTexture();
+    bool hasMetallicRoughnessTexture() const { return mrTex_ != 0; }
+    GLuint metallicRoughnessTextureId() const { return mrTex_; }
+
+    void setOcclusionTexture(int width, int height, const uint8_t* rgba);
+    void clearOcclusionTexture();
+    bool hasOcclusionTexture() const { return aoTex_ != 0; }
+    GLuint occlusionTextureId() const { return aoTex_; }
+
+    void setEmissiveTexture(int width, int height, const uint8_t* rgba);
+    void clearEmissiveTexture();
+    bool hasEmissiveTexture() const { return emissiveTex_ != 0; }
+    GLuint emissiveTextureId() const { return emissiveTex_; }
+
+    void setEmissive(float e) { emissive_ = e; }
+    float emissive() const { return emissive_; }
+
+    void setUnlit(bool u) { unlit_ = u; }
+    bool unlit() const { return unlit_; }
+
+    void setMetallic(float m) { metallic_ = m; }
+    float metallic() const { return metallic_; }
+
+    void setRoughness(float r) { roughness_ = r; }
+    float roughness() const { return roughness_; }
+
+    void setEmissiveColor(float r, float g, float b) {
+        emissiveColor_[0] = r; emissiveColor_[1] = g; emissiveColor_[2] = b;
+    }
+    const float* emissiveColor() const { return emissiveColor_; }
+
+    void setDepthBias(float factor, float units) {
+        depthBiasFactor_ = factor; depthBiasUnits_ = units;
+    }
+    float depthBiasFactor() const { return depthBiasFactor_; }
+    float depthBiasUnits() const { return depthBiasUnits_; }
+
+    void setNearClipDist(float d) { nearClipDist_ = d; }
+    float nearClipDist() const { return nearClipDist_; }
+
+    /// Default false — instanced shadow casting is a follow-up. Setting true
+    /// is a no-op for now (the regular shadow pass only walks MeshNode).
+    void setCastsShadow(bool b) { castsShadow_ = b; }
+    bool castsShadow() const { return castsShadow_; }
+
+    void setReceivesShadow(bool b) { receivesShadow_ = b; }
+    bool receivesShadow() const { return receivesShadow_; }
+
+    bool hasVertexColors() const { return hasVertexColors_; }
+
+    /// Bind VAO and issue glDrawElementsInstanced. Used by the forward pass
+    /// after the caller has already bound the appropriate program and uploaded
+    /// material/camera uniforms. Returns true if anything drew.
+    bool drawRawInstanced();
+
+    void releaseGL();
+
+    // Same staged-upload pattern as MeshNode (kept private — texture setters
+    // stage on the calling thread, uploadMeshToGPU() flushes on the GL thread).
+    struct PendingTex {
+        std::vector<uint8_t> data;
+        int w = 0;
+        int h = 0;
+        bool dirty = false;
+    };
+
+private:
+    void uploadMeshToGPU();
+    void uploadInstancesToGPU();
+
+    bromesh::MeshData mesh_;
+    bool meshDirty_ = false;
+    bromesh::BBox bounds_;
+
+    std::vector<float> instanceData_;
+    size_t instanceCount_ = 0;
+    bool instancesDirty_ = false;
+
+    // GL resources
+    GLuint vao_ = 0;
+    GLuint vbo_ = 0;       // mesh vertex buffer
+    GLuint ibo_ = 0;       // index buffer
+    GLuint instVbo_ = 0;   // per-instance interleaved buffer
+    size_t instVboCapacity_ = 0;  // bytes currently allocated on GPU
+    GLuint texture_ = 0;
+    GLuint normalTex_ = 0;
+    GLuint mrTex_ = 0;
+    GLuint aoTex_ = 0;
+    GLuint emissiveTex_ = 0;
+    GLsizei indexCount_ = 0;
+
+    PendingTex pendingBase_;
+    PendingTex pendingNormal_;
+    PendingTex pendingMR_;
+    PendingTex pendingAO_;
+    PendingTex pendingEmissive_;
+
+    // Material
+    bool hasVertexColors_ = false;
+    float color_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float emissive_ = 0.0f;
+    float emissiveColor_[3] = {1.0f, 1.0f, 1.0f};
+    float metallic_ = 0.0f;
+    float roughness_ = 0.7f;
+    bool  unlit_ = false;
+
+    float depthBiasFactor_ = 0.0f;
+    float depthBiasUnits_ = 0.0f;
+    float nearClipDist_ = 0.0f;
+
+    bool castsShadow_ = false;
+    bool receivesShadow_ = true;
+};
+
+} // namespace bro::scene
