@@ -207,18 +207,35 @@ function buildTreeCanopy(shape, ctx) {
     }
 
     switch (shape) {
-        case 'oval':
+        case 'oval': {
+            // Vertical ellipsoid; for big trees, ring of side blobs around
+            // the spine to read as a tall multi-clustered crown.
             pushBlob([0, R * 0.18, 0], R * 0.95, 0.85, 1.45, 0.85, seed ^ 0x1002, 3);
             pushBlob([0, -R * 0.25, 0], R * 0.55, 0.7, 1.0, 0.7, seed ^ 0x2002, 2);
+            const sideN = Math.max(0, Math.min(8, Math.round(R * 0.5 - 1)));
+            for (let i = 0; i < sideN; i++) {
+                const a = TAU * i / sideN + rng() * 0.4;
+                const off = R * 0.55;
+                const yj = (rng() - 0.5) * R * 0.8;
+                pushBlob(
+                    [Math.cos(a) * off, R * 0.1 + yj, Math.sin(a) * off],
+                    R * (0.28 + rng() * 0.10),
+                    0.85, 1.0, 0.85,
+                    (seed * 11 + i * 23) ^ 0x1102, 2
+                );
+            }
             break;
+        }
         case 'columnar': {
-            const stacks = 4;
+            // Stack count grows with vertical extent so a 60m Lombardy
+            // poplar has more visible foliage strata than a sapling.
+            const stacks = Math.max(4, Math.min(10, Math.round(H * 0.4 + 3)));
             const totalH = Math.max(R * 1.5, H * 0.75);
             for (let i = 0; i < stacks; i++) {
                 const t = i / (stacks - 1);
                 const widen = 0.55 + 0.15 * Math.sin(Math.PI * t);
                 pushBlob(
-                    [(rng() - 0.5) * R * 0.05, (t - 0.5) * totalH, (rng() - 0.5) * R * 0.05],
+                    [(rng() - 0.5) * R * 0.10, (t - 0.5) * totalH, (rng() - 0.5) * R * 0.10],
                     R * 0.6,
                     widen, 1.0, widen,
                     (seed * 13 + i * 41) ^ 0x1003,
@@ -227,17 +244,33 @@ function buildTreeCanopy(shape, ctx) {
             }
             break;
         }
-        case 'umbrella':
-            pushBlob([0, R * 0.10, 0], R * 1.30, 1.1, 0.40, 1.1, seed ^ 0x1004, 3);
-            for (let i = 0; i < 5; i++) {
-                const a = TAU * i / 5 + rng() * 0.35;
+        case 'umbrella': {
+            // Disc + perimeter ring; for big trees the ring grows in count
+            // and gets a second outer ring of smaller pads, like a mature
+            // acacia spread by major branches.
+            pushBlob([0, R * 0.10, 0], R * 1.10, 1.1, 0.40, 1.1, seed ^ 0x1004, 3);
+            const ringN = Math.max(5, Math.min(10, Math.round(R * 0.6 + 3)));
+            for (let i = 0; i < ringN; i++) {
+                const a = TAU * i / ringN + rng() * 0.30;
                 pushBlob(
                     [Math.cos(a) * R * 0.95, -R * 0.06, Math.sin(a) * R * 0.95],
                     R * 0.42, 1.0, 0.42, 1.0,
                     (seed * 7 + i * 23) ^ 0x1104, 2
                 );
             }
+            if (R > 5) {
+                const outerN = Math.round(ringN * 0.7);
+                for (let i = 0; i < outerN; i++) {
+                    const a = TAU * (i + 0.5) / outerN + rng() * 0.25;
+                    pushBlob(
+                        [Math.cos(a) * R * 1.20, -R * 0.10, Math.sin(a) * R * 1.20],
+                        R * 0.28, 1.0, 0.40, 1.0,
+                        (seed * 19 + i * 17) ^ 0x1204, 2
+                    );
+                }
+            }
             break;
+        }
         case 'weeping': {
             pushBlob([0, R * 0.10, 0], R * 1.00, 1.05, 0.90, 1.05, seed ^ 0x1005, 3);
             // Streamers hang from the canopy underside but are clamped so
@@ -278,20 +311,40 @@ function buildTreeCanopy(shape, ctx) {
             }
             break;
         }
-        case 'spreading':
-            pushBlob([0, 0, 0], R * 1.30, 1.0, 0.55, 1.0, seed ^ 0x1007, 3);
-            for (let i = 0; i < 4; i++) {
-                const a = TAU * i / 4 + rng() * 0.4;
-                const off = R * 0.80;
+        case 'spreading': {
+            // Wide flat crown; lobe count grows with size to read as a
+            // mature live oak with many heavy lateral limbs.
+            pushBlob([0, 0, 0], R * 1.10, 1.0, 0.55, 1.0, seed ^ 0x1007, 3);
+            const lobesN = Math.max(4, Math.min(10, Math.round(R * 0.55 + 2)));
+            for (let i = 0; i < lobesN; i++) {
+                const a = TAU * i / lobesN + rng() * 0.35;
+                const off = R * (0.75 + rng() * 0.15);
                 pushBlob(
-                    [Math.cos(a) * off, -R * 0.08, Math.sin(a) * off],
-                    R * 0.55, 1.0, 0.55, 1.0,
+                    [Math.cos(a) * off, -R * 0.08 + (rng() - 0.5) * R * 0.12, Math.sin(a) * off],
+                    R * (0.45 + rng() * 0.15), 1.0, 0.55, 1.0,
                     (seed * 11 + i * 29) ^ 0x1107, 2
                 );
             }
+            if (R > 5) {
+                // Sub-lobes between primaries — sagging clusters that
+                // give live-oak-like weight at the canopy edge.
+                for (let i = 0; i < lobesN; i++) {
+                    const a = TAU * (i + 0.5) / lobesN + rng() * 0.25;
+                    const off = R * (0.95 + rng() * 0.20);
+                    pushBlob(
+                        [Math.cos(a) * off, -R * 0.18, Math.sin(a) * off],
+                        R * (0.25 + rng() * 0.10), 1.0, 0.55, 1.0,
+                        (seed * 23 + i * 31) ^ 0x1207, 2
+                    );
+                }
+            }
             break;
+        }
         case 'irregular': {
-            const n = Math.max(3, blobCount);
+            // Irregular cluster — count is the user-provided blobCount but
+            // floored by canopy size so a 15m crown isn't 3 huge blobs.
+            const sizeFloor = Math.max(3, Math.round(R * 0.7 + 1));
+            const n = Math.max(blobCount, sizeFloor);
             for (let i = 0; i < n; i++) {
                 const a = TAU * i / n + rng() * 0.45;
                 const off = R * 0.55 * (0.65 + rng() * 0.55);
@@ -308,22 +361,45 @@ function buildTreeCanopy(shape, ctx) {
         }
         case 'round':
         default: {
-            // 1 dominant central blob + a ring of 5 lobes around it, so
-            // big trees show real branching and small trees still read as
-            // a rounded crown. Lobe radii overlap the central by ~30% so
-            // the surface reads continuous from a distance but breaks up
-            // into branch-tip clusters up close.
-            pushBlob([0, R * 0.05, 0], R * 0.85, 1.0, 0.95, 1.0, seed ^ 0x1001, 3);
-            for (let i = 0; i < 5; i++) {
-                const a = TAU * i / 5 + rng() * 0.35;
+            // Anchor count grows with canopy size: a sapling gets a
+            // central blob + 4 lobes, a mature broadleaf adds more lobes
+            // around the perimeter, and a big tree (R > 4) has every
+            // primary lobe split into 2 secondary mini-lobes. The result
+            // reads as a fractal — small trees look small, big trees look
+            // big *because they have more visible structure*, not because
+            // the same shape is uniformly scaled up.
+            const primaryN = Math.max(4, Math.min(10, Math.round(R * 0.6 + 2)));
+            const useSecondaries = R > 4;
+            // Central blob — slightly oblate, dominates the silhouette.
+            pushBlob([0, R * 0.05, 0],
+                useSecondaries ? R * 0.65 : R * 0.85,
+                1.0, 0.95, 1.0, seed ^ 0x1001, 3);
+            for (let i = 0; i < primaryN; i++) {
+                const ang = TAU * i / primaryN + rng() * 0.30;
                 const off = R * (0.55 + rng() * 0.18);
-                const yj = (rng() - 0.4) * R * 0.30;
-                pushBlob(
-                    [Math.cos(a) * off, yj, Math.sin(a) * off],
-                    R * (0.50 + rng() * 0.10),
-                    1.0, 0.95, 1.0,
-                    (seed * 13 + i * 23) ^ 0x1101, 2
-                );
+                const yj  = (rng() - 0.4) * R * 0.30;
+                const primC = [Math.cos(ang) * off, yj, Math.sin(ang) * off];
+                const primR = useSecondaries
+                    ? R * (0.32 + rng() * 0.10)
+                    : R * (0.50 + rng() * 0.10);
+                pushBlob(primC, primR, 1.0, 0.95, 1.0,
+                    (seed * 13 + i * 23) ^ 0x1101, 2);
+                if (useSecondaries) {
+                    // Two secondary mini-lobes flanking each primary,
+                    // pushed slightly outward and angularly offset.
+                    for (let j = 0; j < 2; j++) {
+                        const dAng = (j === 0 ? -1 : 1) * (0.32 + rng() * 0.25);
+                        const subAng = ang + dAng;
+                        const subOff = off + R * (0.18 + rng() * 0.18);
+                        const subY  = primC[1] + (rng() - 0.5) * R * 0.18;
+                        pushBlob(
+                            [Math.cos(subAng) * subOff, subY, Math.sin(subAng) * subOff],
+                            R * (0.20 + rng() * 0.10),
+                            1.0, 0.95, 1.0,
+                            (seed * 17 + i * 31 + j * 11) ^ 0x1201, 2
+                        );
+                    }
+                }
             }
             break;
         }
@@ -389,52 +465,134 @@ function tree(opts) {
         blobCount,
     });
 
-    // ── Trunk + branches ─────────────────────────────────────────────────
-    // Trunk is a tapered cylinder from ground to the fork point (just below
-    // canopy base). One primary branch fans out from the fork to each
-    // canopy anchor with linear taper.
+    // ── Trunk + recursive (fractal) branching ────────────────────────────
+    // Trunk runs from ground to a fork point near the canopy base. From
+    // the fork the canopy anchors are split into angular clusters; each
+    // cluster gets one "main" branch out to a junction, then re-clusters
+    // recursively. The recursion depth scales with tree size so saplings
+    // stay simple (1 level, matching the current branchy look) and mature
+    // trees show 2-3 visible branching levels with diminishing radii — a
+    // big maple's primary branches each fork into secondaries instead of
+    // looking like a scaled-up sapling.
     const forkY = Math.max(trunkRadius * 2.0, canopyBase * 0.75);
     const trunkSteps = Math.max(2, Math.round(forkY / Math.max(0.3, Heff * 0.10)));
     const segs = [];
     let prevIdx = -1;
-    let prevPos = [0, 0, 0];
     for (let i = 1; i <= trunkSteps; i++) {
         const t0 = (i - 1) / trunkSteps;
         const t1 = i / trunkSteps;
         const from = [0, t0 * forkY, 0];
         const to   = [0, t1 * forkY, 0];
-        // Slight taper toward the fork; bottom is the full trunkRadius.
         const r = trunkRadius * (1 - t1 * 0.20);
         segs.push({ parent: prevIdx, from, to, radius: r });
         prevIdx = segs.length - 1;
-        prevPos = to;
     }
     const forkIdx = prevIdx;
 
-    const branchBaseR = Math.max(0.04, trunkRadius * 0.55);
-    const branchTipR  = Math.max(0.025, trunkRadius * 0.20);
-    for (const a of canopy.anchors) {
-        const dx = a[0] - 0;
-        const dy = a[1] - forkY;
-        const dz = a[2] - 0;
+    // Branch step length: scales with tree size, not branch length, so
+    // small trees stay coarse and big trees subdivide enough for the
+    // tapered tube to look smooth.
+    const branchStep = Math.max(0.4, Math.min(CReff * 0.25, Heff * 0.15));
+
+    // Per-level radius profile, in fractions of trunkRadius. The tip of
+    // level N matches the base of level N+1 closely so the joints read
+    // continuous. Final foliage-sided tip is intentionally non-zero so
+    // the branch-tip cap is visible inside the blob.
+    const levelR = [
+        [0.55, 0.34],   // level 0 (primary): trunk → main fork
+        [0.32, 0.18],   // level 1 (secondary)
+        [0.17, 0.09],   // level 2 (tertiary / twig-class)
+        [0.09, 0.05],   // level 3 (extreme — only big trees with many anchors)
+    ];
+
+    // Recursion depth chosen by tree size + anchor count. Saplings end up
+    // with maxLevel = 0 (direct branches); mature broadleaves get 1; big
+    // trees with rich canopies get 2; sequoia-class trees with many
+    // anchors can use 3 if the anchor budget allows.
+    const N = canopy.anchors.length;
+    let maxLevel;
+    if (CReff < 2.0 || N <= 2)        maxLevel = 0;
+    else if (CReff < 5.0 || N <= 4)   maxLevel = 1;
+    else if (CReff < 10.0)            maxLevel = 2;
+    else                              maxLevel = 3;
+
+    function addChain(parentIdx, fromPos, toPos, baseR, tipR) {
+        const dx = toPos[0] - fromPos[0];
+        const dy = toPos[1] - fromPos[1];
+        const dz = toPos[2] - fromPos[2];
         const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
-        if (dist < 1e-3) continue;
-        // Step length scales with the tree size, not the branch length, so
-        // small trees stay coarse and big trees subdivide enough for the
-        // tapered tube to look smooth.
-        const step = Math.max(0.4, Math.min(CReff * 0.25, Heff * 0.15));
-        const branchSteps = Math.max(2, Math.round(dist / step));
-        let bParent = forkIdx;
-        let from = [0, forkY, 0];
-        for (let s = 1; s <= branchSteps; s++) {
-            const t = s / branchSteps;
-            const to = [dx * t, forkY + dy * t, dz * t];
-            const r = branchBaseR + (branchTipR - branchBaseR) * t;
-            segs.push({ parent: bParent, from, to, radius: r });
+        if (dist < 1e-3) return parentIdx;
+        const steps = Math.max(2, Math.round(dist / branchStep));
+        let bParent = parentIdx;
+        let cur = fromPos;
+        for (let s = 1; s <= steps; s++) {
+            const t = s / steps;
+            const nxt = [fromPos[0] + dx*t, fromPos[1] + dy*t, fromPos[2] + dz*t];
+            const r = baseR + (tipR - baseR) * t;
+            segs.push({ parent: bParent, from: cur, to: nxt, radius: r });
             bParent = segs.length - 1;
-            from = to;
+            cur = nxt;
+        }
+        return bParent;
+    }
+
+    // Split anchors into K contiguous angular slices around `fromPos`.
+    function angularCluster(items, fromPos, K) {
+        if (items.length <= 1) return [items.slice()];
+        const enriched = items.map((a) => ({
+            a,
+            ang: Math.atan2(a[2] - fromPos[2], a[0] - fromPos[0]),
+        }));
+        enriched.sort((p, q) => p.ang - q.ang);
+        const per = Math.ceil(enriched.length / K);
+        const groups = [];
+        for (let g = 0; g < K; g++) {
+            const start = g * per;
+            const end = Math.min(start + per, enriched.length);
+            if (start < end) groups.push(enriched.slice(start, end).map((x) => x.a));
+        }
+        return groups;
+    }
+
+    function buildRec(parentIdx, fromPos, group, level) {
+        if (group.length === 0) return;
+        const ri = Math.min(level, levelR.length - 1);
+        const baseR = Math.max(0.025, trunkRadius * levelR[ri][0]);
+        const tipR  = Math.max(0.018, trunkRadius * levelR[ri][1]);
+
+        // Terminal: at max level, or single anchor — just connect.
+        if (group.length === 1 || level >= maxLevel) {
+            for (const a of group) addChain(parentIdx, fromPos, a, baseR, tipR);
+            return;
+        }
+        // Split into K clusters by angle, then recurse.
+        const K = Math.max(2, Math.min(4, Math.ceil(group.length / 2)));
+        const clusters = angularCluster(group, fromPos, K);
+        // If clustering didn't actually split (degenerate angular layout),
+        // bail out to direct branches so we don't spin.
+        if (clusters.length < 2) {
+            for (const a of group) addChain(parentIdx, fromPos, a, baseR, tipR);
+            return;
+        }
+        for (const c of clusters) {
+            if (c.length === 0) continue;
+            // Centroid of the cluster.
+            let cx = 0, cy = 0, cz = 0;
+            for (const a of c) { cx += a[0]; cy += a[1]; cz += a[2]; }
+            cx /= c.length; cy /= c.length; cz /= c.length;
+            // Junction at 55% from from-pos to centroid; the remaining 45%
+            // is covered by the next-level branches.
+            const jct = [
+                fromPos[0] + (cx - fromPos[0]) * 0.55,
+                fromPos[1] + (cy - fromPos[1]) * 0.55,
+                fromPos[2] + (cz - fromPos[2]) * 0.55,
+            ];
+            const junctionIdx = addChain(parentIdx, fromPos, jct, baseR, tipR);
+            buildRec(junctionIdx, jct, c, level + 1);
         }
     }
+
+    buildRec(forkIdx, [0, forkY, 0], canopy.anchors, 0);
 
     if (segs.length > 0) {
         const trunkMesh = Mesh.meshBranches(segs, 8);
