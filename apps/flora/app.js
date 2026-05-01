@@ -191,7 +191,12 @@ const seedIn  = document.getElementById('seed');
 const ageVal  = document.getElementById('ageVal');
 const regenBtn = document.getElementById('regen');
 
-const leafQuad = Mesh.plane(0.15, 0.15);
+// Half-extents — actual quad is 0.6x0.6 in mesh space, then scaled per
+// instance by the procedural plant builder. Bigger than a real leaf so
+// each instance reads as a small "cluster card" of foliage rather than a
+// single needle, which keeps the canopy visible from a comfortable
+// orbit distance.
+const leafQuad = Mesh.plane(0.3, 0.3);
 
 let trunk = null;
 let leaves = null;
