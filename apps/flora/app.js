@@ -194,7 +194,7 @@ const forestSchema = [
       options: Object.keys(archetypeSchema), default: 'tree' },
     { key: 'count',        label: 'count', type: 'int', min: 1, max: 250, default: 32 },
     { key: 'patchSize',    label: 'patch size', type: 'range', min: 6, max: 300, step: 1, default: 60, fmt: fmt2 },
-    { key: 'jitter',       label: 'jitter', type: 'range', min: 0, max: 1, step: 0.02, default: 0.55, fmt: fmt2 },
+    { key: 'jitter',       label: 'packing', type: 'range', min: 0, max: 1, step: 0.02, default: 0.55, fmt: fmt2 },
     { key: 'sharing',      label: 'canopy sharing', type: 'range', min: 0, max: 1, step: 0.02, default: 0.85, fmt: fmt2 },
     { key: 'canopyGap',    label: 'canopy gap', type: 'range', min: 0, max: 2, step: 0.05, default: 0.4, fmt: fmt2 },
     { key: 'maxCanopyR',   label: 'max canopy R', type: 'range', min: 1, max: 25, step: 0.2, default: 9, fmt: fmt2 },
@@ -483,53 +483,87 @@ function regenerateForest() {
 
     resizeGroundFor(patch);
 
-    // ── Place positions on a jittered grid ────────────────────────────────
-    const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
-    const rows = Math.max(1, Math.ceil(count / cols));
-    const cellX = patch / cols;
-    const cellZ = patch / rows;
-    const placeRng = mulberry32(baseSeed * 7919);
-    const positions = [];
-    for (let r = 0; r < rows && positions.length < count; r++) {
-        for (let c = 0; c < cols && positions.length < count; c++) {
-            const cx = -patch * 0.5 + cellX * (c + 0.5);
-            const cz = -patch * 0.5 + cellZ * (r + 0.5);
-            positions.push([
-                cx + (placeRng() - 0.5) * cellX * jitter,
-                cz + (placeRng() - 0.5) * cellZ * jitter,
-            ]);
-        }
-    }
-
-    // ── Per-tree base parameters ──────────────────────────────────────────
-    // Trees, conifers and shrubs read their base height/trunk from the
-    // forest controls so the user can dial in maple- vs sequoia-class
-    // groves directly. Other archetypes fall back to per-archetype
-    // defaults.
+    // ── Per-archetype base parameters ────────────────────────────────────
     const useForestSize = TREE_LIKE.has(archetype);
     const baseHeight = useForestSize ? state.baseHeight :
         archetype === 'shrub' ? 1.5 : 4;
     const baseTrunk = useForestSize ? state.baseTrunkR :
         archetype === 'shrub' ? 0.06 : 0.18;
-    // Desired canopy is the forest-wide ceiling — actual radius after
-    // tessellation may be smaller (packing-constrained) or grow up to
-    // this value when there is open sky.
-    const desiredCanopy = useForestSize ? maxCanopyR :
+    // Desired canopy is the forest-wide ceiling; per-tree desired radii
+    // are sampled from a size distribution biased toward smaller (most
+    // trees in a forest are not the biggest).
+    const maxR = useForestSize ? maxCanopyR :
         archetype === 'shrub' ? 1.2 : 1.5;
+
+    // ── Poisson-style placement ──────────────────────────────────────────
+    // Each candidate gets a desired canopy radius up-front; placement
+    // requires the candidate to be at least (r_i + r_j) * 0.85 + gap from
+    // every previously-placed tree, so big trees claim more space and the
+    // small ones fill the gaps. Trees never spawn inside another tree's
+    // canopy footprint — that's the "no growth in shade" rule. The later
+    // Voronoi tessellation only does fine adjustments to crown radii.
+    const placeRng = mulberry32(baseSeed * 7919);
+    const placeGap = gapWidth + maxR * 0.05;
+    const minDesired = useForestSize ? 0.45 : 0.7;  // fraction of maxR
+    // Sort desired radii biggest-first so the layout is dominated by big
+    // trees and small ones backfill — matches how a real forest is read.
+    const desired = [];
+    for (let i = 0; i < count; i++) {
+        const sizeT = Math.pow(placeRng(), 1.4);            // bias toward smaller
+        const sizeFrac = 1 - sizeT * (1 - minDesired);      // [minDesired, 1] of maxR
+        const sjit = 1 + (placeRng() - 0.5) * sizeJitter * 0.5;
+        desired.push(Math.max(0.4, maxR * sizeFrac * sjit));
+    }
+    // jitter slider now controls how willing big trees are to share space:
+    // jitter=0 → strictly Poisson (big gaps), jitter=1 → tighter packing.
+    const overlapAllow = 0.7 + jitter * 0.25; // 0.70..0.95 of (r_i + r_j)
+    desired.sort((a, b) => b - a);
+
+    const positions = [];
+    const placedR = [];
+    for (const r of desired) {
+        if (positions.length >= count) break;
+        let placed = false;
+        // Number of attempts per size grows for smaller trees so they
+        // can hunt for gaps. Bigger trees give up sooner and we move on.
+        const maxAttempts = 40;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const x = (placeRng() - 0.5) * patch;
+            const z = (placeRng() - 0.5) * patch;
+            let ok = true;
+            for (let i = 0; i < positions.length; i++) {
+                const dx = x - positions[i][0];
+                const dz = z - positions[i][1];
+                const d = Math.sqrt(dx * dx + dz * dz);
+                if (d < (r + placedR[i]) * overlapAllow + placeGap) {
+                    ok = false; break;
+                }
+            }
+            if (ok) {
+                positions.push([x, z]);
+                placedR.push(r);
+                placed = true;
+                break;
+            }
+        }
+        // If we couldn't place this radius the patch is full at this size
+        // — silently skip; smaller radii later in the list will still fit.
+    }
 
     const trees = positions.map((pos, i) => {
         const r = mulberry32(baseSeed * 31 + i * 1009 + 17);
-        const heightK = 1 + (r() - 0.5) * sizeJitter * 0.9;
-        const trunkK  = 1 + (r() - 0.5) * sizeJitter * 0.7;
-        const canopyK = 1 + (r() - 0.5) * sizeJitter * 0.6;
+        // Height correlates loosely with canopy size (bigger trees tend to
+        // be taller in a real forest), then per-tree jitter on top.
+        const sizeFrac = placedR[i] / Math.max(0.001, maxR);
+        const corrH = 0.55 + 0.45 * sizeFrac;       // 0.55..1.0 of base
+        const heightK = corrH * (1 + (r() - 0.5) * sizeJitter * 0.4);
+        const trunkK  = corrH * (1 + (r() - 0.5) * sizeJitter * 0.3);
         return {
             x: pos[0], z: pos[1],
             height: Math.max(0.5, baseHeight * heightK),
             trunkRadius: Math.max(0.03, baseTrunk * trunkK),
-            // desiredR is the canopy the tree would grow to with no
-            // neighbors; canopyRadius is the post-packing effective value.
-            desiredR: Math.max(0.4, desiredCanopy * canopyK),
-            canopyRadius: Math.max(0.4, desiredCanopy * canopyK),
+            desiredR: placedR[i],
+            canopyRadius: placedR[i],
             shape: pickShape(r, shapeMix),
             blobCount: 2 + ((r() * 4) | 0),
             seed: (baseSeed * 17 + i * 113 + 1) | 0,
