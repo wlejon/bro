@@ -2024,6 +2024,11 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
 
 void AudioBindings::cleanup(JSContext*)
 {
+    // No central JS-ref registry — every wrapper (VoiceAllocatorData,
+    // MidiInputData, SequenceData, etc.) frees its own JSValue callbacks in
+    // its destructor when qjsbind finalizes it. We just drop the engine
+    // pointer + wavetable bank cache here; the per-wrapper finalizers run as
+    // the runtime tears down.
     s_audioEngine = nullptr;
     s_wavetables.clear();
     s_nextWavetableId = 1;

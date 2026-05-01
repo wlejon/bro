@@ -753,6 +753,8 @@ void CanvasBindings::install(JSContext* ctx) {
 }
 
 void CanvasBindings::cleanup(JSContext*) {
+    // No persistent JSValue/atom storage in this binding — qjsbind finalizers
+    // handle Ctx2DWrapper lifecycle.
 }
 
 JSValue CanvasBindings::wrapContext2D(JSContext* ctx, canvas::CanvasScene* scene) {

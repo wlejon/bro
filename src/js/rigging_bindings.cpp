@@ -1378,7 +1378,10 @@ void RiggingBindings::install(JSContext* ctx) {
     }
 }
 
-void RiggingBindings::cleanup(JSContext*) {}
+void RiggingBindings::cleanup(JSContext*) {
+    // No persistent JSValue/atom storage in this binding — qjsbind finalizers
+    // handle SkinData/Skeleton/Pose/Animation wrappers.
+}
 
 // ---------------------------------------------------------------------------
 // Public API

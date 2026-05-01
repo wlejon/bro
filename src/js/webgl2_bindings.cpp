@@ -428,7 +428,8 @@ JSValue WebGL2Bindings::wrapContext(JSContext* ctx, webgl::WebGL2RenderingContex
 }
 
 void WebGL2Bindings::cleanup(JSContext*) {
-    // Prototype is owned by the class and freed when JSRuntime is destroyed
+    // No persistent JSValue/atom storage in this binding — qjsbind owns the
+    // class registration and prototype, freed when the JSRuntime is destroyed.
 }
 
 } // namespace bro::js

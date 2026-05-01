@@ -131,6 +131,21 @@ void ServerBindings::installWorker(JSContext* ctx, Worker* worker) {
 }
 
 void ServerBindings::cleanup(JSContext* ctx) {
+    // Drop bro.server so the getter/setter JSValues and the "tickrate" /
+    // "uptime" atoms held by its property shape are released before the
+    // runtime is freed.
+    if (ctx) {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+        if (JS_IsObject(broObj)) {
+            JSAtom serverAtom = JS_NewAtom(ctx, "server");
+            JS_DeleteProperty(ctx, broObj, serverAtom, 0);
+            JS_FreeAtom(ctx, serverAtom);
+        }
+        JS_FreeValue(ctx, broObj);
+        JS_FreeValue(ctx, global);
+    }
+
     // Clear whichever backend is bound on this thread. On the main thread
     // this clears s_engine; on a worker thread it clears its own s_worker.
     if (s_worker) {

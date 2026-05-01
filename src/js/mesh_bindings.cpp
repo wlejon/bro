@@ -2243,10 +2243,14 @@ void MeshBindings::install(JSContext* ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// Cleanup — no-op with qjsbind (destructor handles lifecycle)
+// Cleanup
 // ---------------------------------------------------------------------------
 
-void MeshBindings::cleanup(JSContext*) {}
+void MeshBindings::cleanup(JSContext*) {
+    // No persistent JSValue/atom storage in this binding — qjsbind owns the
+    // class registrations + finalizers, and bro.mesh is reached from globalThis
+    // (cleared by the engine-level globalThis sweep before the runtime dies).
+}
 
 // ---------------------------------------------------------------------------
 // Public API — used by worker thread transfer and scene_bindings

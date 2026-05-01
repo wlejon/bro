@@ -3043,7 +3043,8 @@ void AIBindings::install(JSContext* ctx) {
 }
 
 void AIBindings::cleanup(JSContext*) {
-    // qjsbind handles finalizers automatically
+    // No persistent JSValue/atom storage in this binding — qjsbind finalizers
+    // handle wrappers and the engine-level globalThis sweep drops bro.ai.
 }
 
 // ─── Cross-module helpers ──────────────────────────────────────────────────

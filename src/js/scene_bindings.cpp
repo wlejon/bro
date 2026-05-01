@@ -3198,7 +3198,8 @@ JSValue SceneBindings::wrapSceneGraph(JSContext* ctx, scene::SceneGraph* graph) 
 }
 
 void SceneBindings::cleanup(JSContext* ctx) {
-    // qjsbind handles class registration; no manual proto cleanup needed.
+    // No persistent JSValue/atom storage in this binding — qjsbind finalizers
+    // handle wrappers and the engine-level globalThis sweep drops bro.scene.
     (void)ctx;
 }
 
