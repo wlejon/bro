@@ -175,6 +175,10 @@ function buildTreeCanopy(shape, ctx) {
 
     const parts = [];
     const aabb = emptyAabb();
+    // Anchor points are world-space blob centres; the tree() recipe builds
+    // a primary branch from the trunk fork to each anchor so foliage and
+    // structure stay coupled (no twigs poking out beyond the leaves).
+    const anchors = [];
 
     // Apply per-blob asymmetric squash: blobs on the side OPPOSITE to shift
     // (that is, leaning INTO a neighbor's canopy) shrink; blobs on the same
@@ -197,6 +201,7 @@ function buildTreeCanopy(shape, ctx) {
         ];
         const m = buildBlob(c, r, blobSeed, { nsub, sx: sxF, sy: sy, sz: szF });
         parts.push({ mesh: m, color, metallic: 0, roughness: 0.85 });
+        anchors.push([c[0], c[1], c[2]]);
         const ms = Math.max(sxF, sy, szF);
         aabbInclude(aabb, c, r * ms * 1.15);
     }
@@ -302,18 +307,38 @@ function buildTreeCanopy(shape, ctx) {
             break;
         }
         case 'round':
-        default:
-            pushBlob([0, 0, 0], R * 1.15, 1.0, 0.92, 1.0, seed ^ 0x1001, 3);
+        default: {
+            // 1 dominant central blob + a ring of 5 lobes around it, so
+            // big trees show real branching and small trees still read as
+            // a rounded crown. Lobe radii overlap the central by ~30% so
+            // the surface reads continuous from a distance but breaks up
+            // into branch-tip clusters up close.
+            pushBlob([0, R * 0.05, 0], R * 0.85, 1.0, 0.95, 1.0, seed ^ 0x1001, 3);
+            for (let i = 0; i < 5; i++) {
+                const a = TAU * i / 5 + rng() * 0.35;
+                const off = R * (0.55 + rng() * 0.18);
+                const yj = (rng() - 0.4) * R * 0.30;
+                pushBlob(
+                    [Math.cos(a) * off, yj, Math.sin(a) * off],
+                    R * (0.50 + rng() * 0.10),
+                    1.0, 0.95, 1.0,
+                    (seed * 13 + i * 23) ^ 0x1101, 2
+                );
+            }
             break;
+        }
     }
 
-    return { parts, aabb };
+    return { parts, aabb, anchors };
 }
 
 // ─── Recipe: tree (broadleaf) ─────────────────────────────────────────────
-// Stylized: trunk + branches + canopy of one of several named shapes.
-// The skeleton from space colonization is trimmed to its thicker core so
-// branches don't poke through the foliage envelope.
+// Trunk + per-anchor primary branches + per-anchor foliage blobs. The
+// canopy shape lays out N anchor points (one per blob); the trunk runs
+// up to a fork point near the canopy base, and one tapered branch goes
+// from the fork to each anchor. Foliage envelopes the branch tip by
+// construction so there are no exposed twigs even when the canopy is
+// shrunken or asymmetrically squashed by forest sharing.
 
 function tree(opts) {
     opts = opts || {};
@@ -327,118 +352,32 @@ function tree(opts) {
     const canopyShape = opts.canopyShape || 'round';
     const canopyShift = opts.canopyShift || [0, 0, 0];
     const canopyAsymmetry = opts.canopyAsymmetry ?? 0;
-    // Per-shape biases on the canopy/trunk envelope.
+    // Per-shape biases on the canopy envelope position within the tree.
     const shapeBias = {
-        round:     { yPlace: 0.55, vSpan: 0.50, branchUp: 0.30, scaffold: 0.30 },
-        oval:      { yPlace: 0.62, vSpan: 0.65, branchUp: 0.45, scaffold: 0.32 },
-        columnar:  { yPlace: 0.65, vSpan: 0.85, branchUp: 0.65, scaffold: 0.36 },
-        umbrella:  { yPlace: 0.62, vSpan: 0.30, branchUp: 0.20, scaffold: 0.28 },
-        weeping:   { yPlace: 0.58, vSpan: 0.45, branchUp: 0.25, scaffold: 0.30 },
-        vase:      { yPlace: 0.60, vSpan: 0.55, branchUp: 0.18, scaffold: 0.30 },
-        spreading: { yPlace: 0.50, vSpan: 0.30, branchUp: 0.10, scaffold: 0.28 },
-        irregular: { yPlace: 0.55, vSpan: 0.55, branchUp: 0.30, scaffold: 0.30 },
+        round:     { yPlace: 0.65, vSpan: 0.55 },
+        oval:      { yPlace: 0.65, vSpan: 0.70 },
+        columnar:  { yPlace: 0.55, vSpan: 1.10 },
+        umbrella:  { yPlace: 0.78, vSpan: 0.30 },
+        weeping:   { yPlace: 0.72, vSpan: 0.50 },
+        vase:      { yPlace: 0.65, vSpan: 0.60 },
+        spreading: { yPlace: 0.58, vSpan: 0.30 },
+        irregular: { yPlace: 0.62, vSpan: 0.55 },
     };
     const bias = shapeBias[canopyShape] || shapeBias.round;
 
-    // Effective height/radius scale with age so a young tree is small.
     const Heff = H * Math.max(0.1, age01);
     const CReff = CR * Math.max(0.15, age01 * 0.7 + 0.3);
 
-    const rng = mulberry32(seed);
     const parts = [];
     const aabb = emptyAabb();
 
-    // ── Trunk + main branches via space colonization ────────────────────
-    // Attractor cloud is intentionally smaller than the canopy envelope so
-    // branches stay tucked inside. The canopy hides everything thinner
-    // than the "scaffold" radius. Span varies by canopy shape so columnar
-    // trees get an elongated scaffold while spreading trees stay shallow.
     const canopyMidY = Heff * bias.yPlace;
     const canopyBase = Math.max(Heff * 0.18, canopyMidY - Heff * bias.vSpan * 0.5);
     const canopyTop  = canopyMidY + Heff * bias.vSpan * 0.5;
-    const attractorCount = 120;
-    const attractors = [];
-    while (attractors.length < attractorCount) {
-        const px = rng() * 2 - 1, py = rng() * 2 - 1, pz = rng() * 2 - 1;
-        if (px*px + py*py + pz*pz > 1) continue;
-        attractors.push([
-            px * CReff * 0.55,
-            canopyBase + rng() * (canopyTop - canopyBase),
-            pz * CReff * 0.55,
-        ]);
-    }
-
-    const segLen = Math.max(0.1, Heff * 0.06);
-    const trunkTopY = canopyBase * 0.95;
-    const trunkSegCount = Math.max(1, Math.round(trunkTopY / segLen));
-    const segs = [];
-    segs.push({ parent: -1, from: [0,0,0], to: [0,0,0], radius: trunkRadius, depth: 0 });
-    let prev = [0, 0, 0];
-    for (let i = 1; i <= trunkSegCount; i++) {
-        const to = [0, i * segLen, 0];
-        segs.push({ parent: segs.length - 1, from: prev, to, radius: 0, depth: i });
-        prev = to;
-    }
-    const trunkTopIdx = segs.length - 1;
-
-    const grown = Mesh.spaceColonize(attractors, [prev], [0, 1, 0], {
-        attractionRadius: CReff * 0.7,
-        killRadius: Math.max(trunkRadius * 1.5, CReff * 0.10),
-        segmentLength: segLen,
-        maxIterations: 80,
-        tropism: [0, 1, 0],
-        tropismWeight: bias.branchUp,
-    });
-    const offset = segs.length - 1;
-    for (let i = 1; i < grown.length; i++) {
-        const s = grown[i];
-        let p = s.parent;
-        if (p === 0) p = trunkTopIdx;
-        else if (p > 0) p = p + offset;
-        segs.push({ parent: p, from: s.from, to: s.to, radius: 0, depth: s.depth + offset });
-    }
-
-    let thick = Mesh.thickenBranches(segs, Math.max(0.01, trunkRadius * 0.18), 2.4);
-    let maxR = 0;
-    for (const s of thick) if (s.radius > maxR) maxR = s.radius;
-    if (maxR > trunkRadius && maxR > 1e-6) {
-        const k = trunkRadius / maxR;
-        for (const s of thick) s.radius *= k;
-    }
-
-    // Trim segments thinner than a "scaffold" threshold — these would be
-    // the fuzzy twigs that poke through the foliage and ruin the silhouette.
-    const scaffoldR = Math.max(0.01, trunkRadius * bias.scaffold);
-    const keepIdx = new Array(thick.length).fill(false);
-    for (let i = 0; i < thick.length; i++) {
-        if (thick[i].radius >= scaffoldR) keepIdx[i] = true;
-    }
-    // A segment must have a kept ancestor chain, so reproject parents.
-    const remap = new Array(thick.length).fill(-1);
-    const kept = [];
-    for (let i = 0; i < thick.length; i++) {
-        if (!keepIdx[i]) continue;
-        const s = thick[i];
-        const p = s.parent >= 0 ? remap[s.parent] : -1;
-        if (s.parent >= 0 && p === -1) continue; // ancestor was trimmed
-        kept.push({ parent: p, from: s.from, to: s.to, radius: s.radius, depth: s.depth });
-        remap[i] = kept.length - 1;
-    }
-
-    if (kept.length > 0) {
-        const trunkMesh = Mesh.meshBranches(kept, 8);
-        if (trunkMesh) parts.push({
-            mesh: trunkMesh,
-            color: COLORS.bark,
-            metallic: 0,
-            roughness: 0.95,
-        });
-    }
-    for (const s of kept) { aabbInclude(aabb, s.from); aabbInclude(aabb, s.to); }
-
-    // ── Canopy ───────────────────────────────────────────────────────────
-    const canopyCenter = [0, (canopyBase + canopyTop) * 0.5, 0];
+    const canopyCenter = [0, canopyMidY, 0];
     const canopyH = Math.max(CReff * 0.5, canopyTop - canopyBase);
+
+    // Build the canopy first; we need the anchor points to build branches.
     const canopy = buildTreeCanopy(canopyShape, {
         center: canopyCenter,
         radius: CReff,
@@ -449,6 +388,69 @@ function tree(opts) {
         asymmetry: canopyAsymmetry,
         blobCount,
     });
+
+    // ── Trunk + branches ─────────────────────────────────────────────────
+    // Trunk is a tapered cylinder from ground to the fork point (just below
+    // canopy base). One primary branch fans out from the fork to each
+    // canopy anchor with linear taper.
+    const forkY = Math.max(trunkRadius * 2.0, canopyBase * 0.75);
+    const trunkSteps = Math.max(2, Math.round(forkY / Math.max(0.3, Heff * 0.10)));
+    const segs = [];
+    let prevIdx = -1;
+    let prevPos = [0, 0, 0];
+    for (let i = 1; i <= trunkSteps; i++) {
+        const t0 = (i - 1) / trunkSteps;
+        const t1 = i / trunkSteps;
+        const from = [0, t0 * forkY, 0];
+        const to   = [0, t1 * forkY, 0];
+        // Slight taper toward the fork; bottom is the full trunkRadius.
+        const r = trunkRadius * (1 - t1 * 0.20);
+        segs.push({ parent: prevIdx, from, to, radius: r });
+        prevIdx = segs.length - 1;
+        prevPos = to;
+    }
+    const forkIdx = prevIdx;
+
+    const branchBaseR = Math.max(0.04, trunkRadius * 0.55);
+    const branchTipR  = Math.max(0.025, trunkRadius * 0.20);
+    for (const a of canopy.anchors) {
+        const dx = a[0] - 0;
+        const dy = a[1] - forkY;
+        const dz = a[2] - 0;
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist < 1e-3) continue;
+        // Step length scales with the tree size, not the branch length, so
+        // small trees stay coarse and big trees subdivide enough for the
+        // tapered tube to look smooth.
+        const step = Math.max(0.4, Math.min(CReff * 0.25, Heff * 0.15));
+        const branchSteps = Math.max(2, Math.round(dist / step));
+        let bParent = forkIdx;
+        let from = [0, forkY, 0];
+        for (let s = 1; s <= branchSteps; s++) {
+            const t = s / branchSteps;
+            const to = [dx * t, forkY + dy * t, dz * t];
+            const r = branchBaseR + (branchTipR - branchBaseR) * t;
+            segs.push({ parent: bParent, from, to, radius: r });
+            bParent = segs.length - 1;
+            from = to;
+        }
+    }
+
+    if (segs.length > 0) {
+        const trunkMesh = Mesh.meshBranches(segs, 8);
+        if (trunkMesh) parts.push({
+            mesh: trunkMesh,
+            color: COLORS.bark,
+            metallic: 0,
+            roughness: 0.95,
+        });
+        for (const s of segs) {
+            aabbInclude(aabb, s.from, s.radius);
+            aabbInclude(aabb, s.to,   s.radius);
+        }
+    }
+
+    // ── Canopy parts ─────────────────────────────────────────────────────
     for (const p of canopy.parts) parts.push(p);
     aabb.min[0] = Math.min(aabb.min[0], canopy.aabb.min[0]);
     aabb.min[1] = Math.min(aabb.min[1], canopy.aabb.min[1]);
