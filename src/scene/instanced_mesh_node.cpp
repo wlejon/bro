@@ -123,16 +123,95 @@ void InstancedMeshNode::clearOcclusionTexture() { stage(pendingAO_, 0, 0, nullpt
 void InstancedMeshNode::setEmissiveTexture(int w, int h, const uint8_t* rgba) { stage(pendingEmissive_, w, h, rgba); }
 void InstancedMeshNode::clearEmissiveTexture() { stage(pendingEmissive_, 0, 0, nullptr); }
 
+// Upload mipmaps that preserve alpha-tested coverage. Without this, a
+// sparse alpha-cutout atlas (foliage cards, sprites, decals) loses its
+// thresholded silhouette as LOD increases — the box-filter average of
+// many transparent pixels falls below the cutoff and the cutout vanishes
+// entirely. Castano's technique: pick a per-level alpha scale so each
+// mip's coverage at cutoff 0.5 matches level 0's. For fully-opaque
+// textures this collapses to scale = 1, so it's a safe default for all
+// RGBA inputs.
+static void uploadAlphaCoverageMipmaps(int w0, int h0, const uint8_t* base) {
+    constexpr float kCutoff = 0.5f * 255.0f;
+    auto coverage = [&](const std::vector<uint8_t>& lvl, int w, int h, float scale) {
+        size_t over = 0;
+        const size_t n = (size_t)w * (size_t)h;
+        for (size_t i = 0; i < n; ++i) {
+            float a = (float)lvl[i * 4 + 3] * scale;
+            if (a >= kCutoff) ++over;
+        }
+        return (float)over / (float)n;
+    };
+
+    std::vector<uint8_t> lvl(base, base + (size_t)w0 * (size_t)h0 * 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w0, h0, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, lvl.data());
+    const float baseCov = coverage(lvl, w0, h0, 1.0f);
+
+    int w = w0, h = h0, mip = 0;
+    std::vector<uint8_t> next, scaled;
+    while (w > 1 || h > 1) {
+        const int nw = std::max(1, w / 2);
+        const int nh = std::max(1, h / 2);
+        next.resize((size_t)nw * (size_t)nh * 4);
+        for (int y = 0; y < nh; ++y) {
+            const int sy0 = std::min(y * 2, h - 1);
+            const int sy1 = std::min(y * 2 + 1, h - 1);
+            for (int x = 0; x < nw; ++x) {
+                const int sx0 = std::min(x * 2, w - 1);
+                const int sx1 = std::min(x * 2 + 1, w - 1);
+                for (int c = 0; c < 4; ++c) {
+                    int s = lvl[(sy0 * w + sx0) * 4 + c]
+                          + lvl[(sy0 * w + sx1) * 4 + c]
+                          + lvl[(sy1 * w + sx0) * 4 + c]
+                          + lvl[(sy1 * w + sx1) * 4 + c];
+                    next[(y * nw + x) * 4 + c] = (uint8_t)((s + 2) / 4);
+                }
+            }
+        }
+        // Binary-search scale that matches base coverage (only meaningful
+        // when 0 < baseCov < 1; otherwise scale stays at 1).
+        float scale = 1.0f;
+        if (baseCov > 0.0f && baseCov < 1.0f) {
+            // Upper bound generous enough for sparse atlases where deep
+            // mips average alpha well below the cutoff (4 was too tight
+            // for foliage cards — small leaves washed out at distance).
+            float lo = 0.0f, hi = 64.0f;
+            for (int it = 0; it < 18; ++it) {
+                const float mid = (lo + hi) * 0.5f;
+                if (coverage(next, nw, nh, mid) > baseCov) hi = mid;
+                else lo = mid;
+            }
+            scale = (lo + hi) * 0.5f;
+        }
+        scaled = next;
+        if (scale != 1.0f) {
+            const size_t n = (size_t)nw * (size_t)nh;
+            for (size_t i = 0; i < n; ++i) {
+                float a = (float)scaled[i * 4 + 3] * scale;
+                if (a > 255.0f) a = 255.0f;
+                scaled[i * 4 + 3] = (uint8_t)a;
+            }
+        }
+        ++mip;
+        glTexImage2D(GL_TEXTURE_2D, mip, GL_RGBA8, nw, nh, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, scaled.data());
+        // Continue downsampling from the un-scaled chain so each level's
+        // alpha derives from the original base rather than compounding.
+        lvl = std::move(next);
+        w = nw; h = nh;
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, mip);
+}
+
 static void flushTex(InstancedMeshNode::PendingTex& p, GLuint& glTex) {
     if (!p.dirty) return;
     if (p.w > 0 && p.h > 0 && !p.data.empty()) {
         if (!glTex) glGenTextures(1, &glTex);
         glBindTexture(GL_TEXTURE_2D, glTex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
-                     p.w, p.h, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, p.data.data());
-        glGenerateMipmap(GL_TEXTURE_2D);
+        uploadAlphaCoverageMipmaps(p.w, p.h, p.data.data());
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
