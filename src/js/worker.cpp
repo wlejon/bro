@@ -64,13 +64,12 @@ void Worker::start()
 
 void Worker::terminate()
 {
-    if (!alive_.load(std::memory_order_acquire))
-        return;
-
     terminated_.store(true, std::memory_order_release);
     wakeup_.fetch_add(1, std::memory_order_release);
     wakeup_.notify_one();
 
+    // threadFunc clears alive_ before returning, so alive_ can be false while
+    // the thread handle is still joinable — always join based on the handle.
     if (thread_.joinable())
         thread_.join();
 
