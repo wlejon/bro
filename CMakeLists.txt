@@ -63,6 +63,13 @@ endforeach()
 
 project(bro VERSION 0.1.0 LANGUAGES C CXX)
 
+# Enable Objective-C++ at top level when brogameagent's Metal backend is on,
+# since enable_language() inside add_subdirectory doesn't reliably populate
+# the CMAKE_OBJCXX_* variables for downstream targets.
+if(APPLE AND BROGAMEAGENT_WITH_METAL)
+    enable_language(OBJCXX)
+endif()
+
 # Unify executable output. Multi-config (Visual Studio) auto-appends the
 # config subdir → build/Debug/, build/Release/. Single-config (Ninja) drops
 # binaries directly in build/. All targets (bro, bro-headless, bro-server)

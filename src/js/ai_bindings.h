@@ -54,9 +54,10 @@ JSValue graphDetachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 /// Install bro.ai.game.nn namespace (Tensor, circuits, heads, net, WeightsHandle, ops).
 void installNNBindings(JSContext* ctx, JSValue gameObj);
 
-/// Install bro.ai.game.nn.gpu sub-namespace (CUDA-backed primitives).
-/// Implemented in ai_nn_gpu_bindings.cpp; gated on BGA_HAS_CUDA at build time.
-/// When CUDA is unavailable, installs a stub `{ available: false }`.
+/// Install bro.ai.game.nn.gpu sub-namespace (GPU-backed primitives).
+/// Implemented in ai_nn_gpu_bindings.cpp; gated on BGA_HAS_GPU at build time
+/// (real bindings when CUDA or Metal is enabled). When neither backend is
+/// available, installs a stub `{ available: false }`.
 void installNNGpuBindings(JSContext* ctx, JSValue nnObj);
 
 /// Unwrap an AIGpuTensor JS value to the underlying GpuTensor*. Returns

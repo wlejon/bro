@@ -1,19 +1,20 @@
-// JS bindings for brogameagent::nn::gpu — CUDA backend.
+// JS bindings for brogameagent::nn::gpu — CUDA or Metal backend.
 //
 // Installed onto bro.ai.game.nn.gpu by installNNGpuBindings(), which is called
 // from ai_nn_bindings.cpp after the host nn namespace is set up.
 //
 // Compilation gating:
-//   When brogameagent is built with BROGAMEAGENT_WITH_CUDA=ON, the public
-//   header propagates BGA_HAS_CUDA=1. We use that to conditionally compile
-//   the real bindings; otherwise installNNGpuBindings publishes a stub
-//   namespace with `available: false` so JS code can detect availability.
+//   brogameagent publishes the umbrella BGA_HAS_GPU=1 when either CUDA or
+//   Metal is enabled (BGA_HAS_CUDA / BGA_HAS_METAL identify the specific
+//   backend). The public nn::gpu API surface is identical across backends, so
+//   we gate on the umbrella define here. Without GPU support installNNGpuBindings
+//   publishes a stub namespace with `available: false` so JS code can detect it.
 
 #include "js/ai_bindings.h"
 
 #include <qjsbind/qjsbind.h>
 
-#ifdef BGA_HAS_CUDA
+#ifdef BGA_HAS_GPU
 
 #include <brogameagent/nn/tensor.h>
 #include <brogameagent/nn/gpu/runtime.h>
@@ -741,7 +742,7 @@ nngpu::GpuTensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v) {
 
 } // namespace bro::js
 
-#else // !BGA_HAS_CUDA
+#else // !BGA_HAS_GPU
 
 namespace brogameagent::nn::gpu { struct GpuTensor; }
 
@@ -759,4 +760,4 @@ brogameagent::nn::gpu::GpuTensor* gpuTensorFromJS(JSContext*, JSValueConst) {
 
 } // namespace bro::js
 
-#endif // BGA_HAS_CUDA
+#endif // BGA_HAS_GPU
