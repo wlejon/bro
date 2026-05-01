@@ -16,7 +16,7 @@ const cam = {
     radius: 14,
     fov:    50,
     near:   0.1,
-    far:    400,
+    far:    2000,
 };
 
 function applyCamera() {
@@ -128,19 +128,22 @@ const fmt2 = (v) => v.toFixed(2);
 const fmt3 = (v) => v.toFixed(3);
 
 const archetypeSchema = {
+    // Ranges span sapling → mature redwood. Defaults stay sapling-friendly
+    // so the single-plant view loads at a useful framing; sliders go all
+    // the way out for sequoia-class trees (height 80m, trunk 4m, canopy 25m).
     tree: [
-        { key: 'height',         label: 'height',         type: 'range', min: 1.5, max: 14, step: 0.1,  default: 6,    fmt: fmt2 },
-        { key: 'trunkRadius',    label: 'trunk radius',   type: 'range', min: 0.05, max: 0.6, step: 0.01, default: 0.18, fmt: fmt2 },
-        { key: 'canopyRadius',   label: 'canopy radius',  type: 'range', min: 0.5, max: 6, step: 0.1,   default: 3,    fmt: fmt2 },
+        { key: 'height',         label: 'height',         type: 'range', min: 1.5, max: 80, step: 0.5,  default: 6,    fmt: fmt2 },
+        { key: 'trunkRadius',    label: 'trunk radius',   type: 'range', min: 0.05, max: 4, step: 0.05, default: 0.18, fmt: fmt2 },
+        { key: 'canopyRadius',   label: 'canopy radius',  type: 'range', min: 0.5, max: 25, step: 0.2, default: 3,    fmt: fmt2 },
         { key: 'canopyShape',    label: 'canopy shape',   type: 'select', options: Recipes.CANOPY_SHAPES, default: 'round' },
         { key: 'blobCount',      label: 'blob count',     type: 'int',   min: 1, max: 7, default: 3 },
         { key: 'canopyColor',    label: 'canopy color',   type: 'color', default: '#4f8c39' },
     ],
     conifer: [
-        { key: 'height',           label: 'height',          type: 'range', min: 2, max: 16, step: 0.1, default: 8, fmt: fmt2 },
-        { key: 'trunkRadius',      label: 'trunk radius',    type: 'range', min: 0.04, max: 0.4, step: 0.01, default: 0.15, fmt: fmt2 },
-        { key: 'layers',           label: 'cone layers',     type: 'int',   min: 3, max: 12, default: 7 },
-        { key: 'baseCanopyRadius', label: 'base radius',     type: 'range', min: 0.5, max: 5, step: 0.1, default: 2.5, fmt: fmt2 },
+        { key: 'height',           label: 'height',          type: 'range', min: 2, max: 110, step: 0.5, default: 8, fmt: fmt2 },
+        { key: 'trunkRadius',      label: 'trunk radius',    type: 'range', min: 0.04, max: 4, step: 0.05, default: 0.15, fmt: fmt2 },
+        { key: 'layers',           label: 'cone layers',     type: 'int',   min: 3, max: 16, default: 7 },
+        { key: 'baseCanopyRadius', label: 'base radius',     type: 'range', min: 0.5, max: 18, step: 0.2, default: 2.5, fmt: fmt2 },
         { key: 'canopyColor',      label: 'needle color',    type: 'color', default: '#2e6633' },
     ],
     shrub: [
@@ -187,17 +190,21 @@ const commonSchema = [
 ];
 
 const forestSchema = [
-    { key: 'archetype', label: 'type',  type: 'select',
+    { key: 'archetype',    label: 'type',  type: 'select',
       options: Object.keys(archetypeSchema), default: 'tree' },
-    { key: 'count',     label: 'count', type: 'int', min: 1, max: 80, default: 18 },
-    { key: 'patchSize', label: 'patch size', type: 'range', min: 6, max: 50, step: 0.5, default: 18, fmt: fmt2 },
-    { key: 'jitter',    label: 'jitter', type: 'range', min: 0, max: 1, step: 0.02, default: 0.7, fmt: fmt2 },
-    { key: 'sharing',   label: 'canopy sharing', type: 'range', min: 0, max: 1, step: 0.02, default: 0.6, fmt: fmt2 },
-    { key: 'sizeJitter',label: 'size jitter', type: 'range', min: 0, max: 1, step: 0.02, default: 0.5, fmt: fmt2 },
-    { key: 'shapeMix',  label: 'shape mix', type: 'select',
+    { key: 'count',        label: 'count', type: 'int', min: 1, max: 250, default: 32 },
+    { key: 'patchSize',    label: 'patch size', type: 'range', min: 6, max: 300, step: 1, default: 60, fmt: fmt2 },
+    { key: 'jitter',       label: 'jitter', type: 'range', min: 0, max: 1, step: 0.02, default: 0.55, fmt: fmt2 },
+    { key: 'sharing',      label: 'canopy sharing', type: 'range', min: 0, max: 1, step: 0.02, default: 0.85, fmt: fmt2 },
+    { key: 'canopyGap',    label: 'canopy gap', type: 'range', min: 0, max: 2, step: 0.05, default: 0.4, fmt: fmt2 },
+    { key: 'maxCanopyR',   label: 'max canopy R', type: 'range', min: 1, max: 25, step: 0.2, default: 9, fmt: fmt2 },
+    { key: 'baseHeight',   label: 'tree height', type: 'range', min: 2, max: 60, step: 0.5, default: 14, fmt: fmt2 },
+    { key: 'baseTrunkR',   label: 'trunk radius', type: 'range', min: 0.05, max: 3, step: 0.05, default: 0.45, fmt: fmt2 },
+    { key: 'sizeJitter',   label: 'size jitter', type: 'range', min: 0, max: 1, step: 0.02, default: 0.45, fmt: fmt2 },
+    { key: 'shapeMix',     label: 'shape mix', type: 'select',
       options: ['round-only', 'broadleaf-mix', 'all-shapes'], default: 'broadleaf-mix' },
-    { key: 'age',       label: 'age',   type: 'range', min: 0, max: 1, step: 0.01, default: 1, fmt: fmt2 },
-    { key: 'seed',      label: 'seed',  type: 'int',   min: 0, max: 99999, default: 1 },
+    { key: 'age',          label: 'age',   type: 'range', min: 0, max: 1, step: 0.01, default: 1, fmt: fmt2 },
+    { key: 'seed',         label: 'seed',  type: 'int',   min: 0, max: 99999, default: 1 },
 ];
 
 // --- Mode + parameter state -----------------------------------------------
@@ -393,6 +400,15 @@ function regenerateSingle() {
     const t0 = performance.now();
     const opts = buildSinglePlantOpts();
     const result = Recipes[state.archetype](opts);
+    // Resize ground to fit the plant footprint so big trees don't float
+    // off a tiny tile.
+    if (result.aabbMin && result.aabbMax) {
+        const footprint = Math.max(
+            Math.abs(result.aabbMin[0]), Math.abs(result.aabbMax[0]),
+            Math.abs(result.aabbMin[2]), Math.abs(result.aabbMax[2]),
+        );
+        resizeGroundFor(Math.max(10, footprint * 3));
+    }
     const ms = performance.now() - t0;
     let partCount = 0;
     if (result.parts) {
@@ -458,6 +474,8 @@ function regenerateForest() {
     const patch = state.patchSize;
     const jitter = state.jitter;
     const sharing = state.sharing;
+    const gapWidth = state.canopyGap;
+    const maxCanopyR = state.maxCanopyR;
     const sizeJitter = state.sizeJitter;
     const shapeMix = state.shapeMix;
     const baseSeed = state.seed | 0;
@@ -484,16 +502,19 @@ function regenerateForest() {
     }
 
     // ── Per-tree base parameters ──────────────────────────────────────────
-    const baseHeight =
-        archetype === 'tree' ? 6 :
-        archetype === 'conifer' ? 8 :
+    // Trees, conifers and shrubs read their base height/trunk from the
+    // forest controls so the user can dial in maple- vs sequoia-class
+    // groves directly. Other archetypes fall back to per-archetype
+    // defaults.
+    const useForestSize = TREE_LIKE.has(archetype);
+    const baseHeight = useForestSize ? state.baseHeight :
         archetype === 'shrub' ? 1.5 : 4;
-    const baseTrunk =
-        archetype === 'conifer' ? 0.15 :
+    const baseTrunk = useForestSize ? state.baseTrunkR :
         archetype === 'shrub' ? 0.06 : 0.18;
-    const baseCanopy =
-        archetype === 'tree' ? 3.0 :
-        archetype === 'conifer' ? 2.5 :
+    // Desired canopy is the forest-wide ceiling — actual radius after
+    // tessellation may be smaller (packing-constrained) or grow up to
+    // this value when there is open sky.
+    const desiredCanopy = useForestSize ? maxCanopyR :
         archetype === 'shrub' ? 1.2 : 1.5;
 
     const trees = positions.map((pos, i) => {
@@ -505,7 +526,10 @@ function regenerateForest() {
             x: pos[0], z: pos[1],
             height: Math.max(0.5, baseHeight * heightK),
             trunkRadius: Math.max(0.03, baseTrunk * trunkK),
-            canopyRadius: Math.max(0.4, baseCanopy * canopyK),
+            // desiredR is the canopy the tree would grow to with no
+            // neighbors; canopyRadius is the post-packing effective value.
+            desiredR: Math.max(0.4, desiredCanopy * canopyK),
+            canopyRadius: Math.max(0.4, desiredCanopy * canopyK),
             shape: pickShape(r, shapeMix),
             blobCount: 2 + ((r() * 4) | 0),
             seed: (baseSeed * 17 + i * 113 + 1) | 0,
@@ -514,8 +538,54 @@ function regenerateForest() {
         };
     });
 
-    // ── Canopy sharing: lean each tree away from neighbor centroid ────────
-    if (TREE_LIKE.has(archetype)) {
+    // ── Canopy tessellation (Voronoi-style packing) ────────────────────────
+    // Each tree's effective horizontal canopy radius is bounded by the
+    // distance to the nearest neighbor's canopy edge minus a small gap
+    // (crown shyness). We iterate because the bound is mutual: tree i's
+    // allowed radius depends on j's, and vice versa. After ~6 sweeps the
+    // values converge to a non-overlapping packing — canopies grow toward
+    // open sky and stop just shy of touching.
+    //
+    // The `sharing` slider blends between unconstrained desired radii
+    // (sharing=0) and the fully-packed solution (sharing=1).
+    if (TREE_LIKE.has(archetype) && trees.length > 1) {
+        const minR = 0.3;
+        const cur = trees.map((t) => t.desiredR);
+        for (let iter = 0; iter < 6; iter++) {
+            const next = new Array(trees.length);
+            for (let i = 0; i < trees.length; i++) {
+                let avail = Infinity;
+                for (let j = 0; j < trees.length; j++) {
+                    if (i === j) continue;
+                    const dx = trees[i].x - trees[j].x;
+                    const dz = trees[i].z - trees[j].z;
+                    const d = Math.sqrt(dx * dx + dz * dz);
+                    const a = d - cur[j] - gapWidth;
+                    if (a < avail) avail = a;
+                }
+                if (!isFinite(avail)) avail = trees[i].desiredR;
+                // The packed value is min(desired, avail) — never grow
+                // beyond the user-supplied ceiling, but always shrink to
+                // fit a closer neighbor.
+                next[i] = Math.max(minR, Math.min(trees[i].desiredR, avail));
+            }
+            // Damped update to avoid oscillation when neighbors swap roles.
+            for (let i = 0; i < trees.length; i++) {
+                cur[i] = cur[i] + (next[i] - cur[i]) * 0.7;
+            }
+        }
+        for (let i = 0; i < trees.length; i++) {
+            const desired = trees[i].desiredR;
+            // Lerp from desired toward packed by sharing strength.
+            trees[i].canopyRadius = Math.max(minR, desired + (cur[i] - desired) * sharing);
+        }
+
+        // ── Secondary lean: shift canopy toward open sky ──────────────────
+        // After packing, compute each tree's "open direction" — the
+        // weighted-mean direction AWAY from close neighbors. The recipe
+        // applies this as a centre offset plus a gentle squash on the
+        // crowded side. Magnitude is small (≤ 25% of canopy radius) so it
+        // never breaks the packing.
         for (let i = 0; i < trees.length; i++) {
             const t = trees[i];
             let lx = 0, lz = 0, w = 0;
@@ -524,7 +594,7 @@ function regenerateForest() {
                 const o = trees[j];
                 const dx = t.x - o.x, dz = t.z - o.z;
                 const d = Math.sqrt(dx * dx + dz * dz);
-                const reach = (t.canopyRadius + o.canopyRadius) * 0.95;
+                const reach = (t.canopyRadius + o.canopyRadius) * 1.4;
                 if (d <= 1e-3 || d >= reach) continue;
                 const wt = 1 - d / reach;
                 lx += (dx / d) * wt;
@@ -533,11 +603,10 @@ function regenerateForest() {
             }
             const llen = Math.sqrt(lx * lx + lz * lz);
             if (llen > 1e-6 && w > 0) {
-                const k = Math.min(1, w);
-                const mag = t.canopyRadius * 0.45 * sharing * k;
+                const mag = t.canopyRadius * 0.18 * sharing;
                 t.shiftX = (lx / llen) * mag;
                 t.shiftZ = (lz / llen) * mag;
-                t.asym = sharing * Math.min(1, k);
+                t.asym = sharing * 0.6 * Math.min(1, w);
             }
         }
     }
@@ -628,7 +697,11 @@ document.querySelectorAll('.tab').forEach((t) => {
     });
 });
 
-document.getElementById('regen').addEventListener('click', () => regenerate(false));
+document.getElementById('regen').addEventListener('click', () => regenerate(true));
+document.getElementById('fit').addEventListener('click', () => {
+    needFitCamera = true;
+    regenerate(true);
+});
 document.getElementById('reseed').addEventListener('click', () => {
     state.seed = (Math.random() * 99999) | 0;
     if (inputs.seed) inputs.seed.value = state.seed;
