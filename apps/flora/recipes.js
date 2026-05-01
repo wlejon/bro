@@ -233,20 +233,27 @@ function buildTreeCanopy(shape, ctx) {
                 );
             }
             break;
-        case 'weeping':
+        case 'weeping': {
             pushBlob([0, R * 0.10, 0], R * 1.00, 1.05, 0.90, 1.05, seed ^ 0x1005, 3);
+            // Streamers hang from the canopy underside but are clamped so
+            // the lowest blob centre stays above the ground plane (the
+            // canopy is at world Y = center[1]; streamer Y = center[1] +
+            // dy, must be > ~0.4 to avoid clipping into the floor).
+            const minDy = -Math.max(0, center[1] - 0.5);
             for (let i = 0; i < 7; i++) {
                 const a = TAU * i / 7 + rng() * 0.5;
                 const off = R * (0.65 + rng() * 0.25);
-                const drop = R * (0.55 + rng() * 0.65);
+                let dy = -R * (0.45 + rng() * 0.45);
+                if (dy < minDy) dy = minDy;
                 pushBlob(
-                    [Math.cos(a) * off, -drop, Math.sin(a) * off],
+                    [Math.cos(a) * off, dy, Math.sin(a) * off],
                     R * 0.20 * (0.8 + rng() * 0.4),
                     0.55, 1.55, 0.55,
                     (seed * 19 + i * 17) ^ 0x1105, 1
                 );
             }
             break;
+        }
         case 'vase': {
             const tiers = 3;
             for (let i = 0; i < tiers; i++) {
