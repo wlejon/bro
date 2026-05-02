@@ -270,6 +270,10 @@ int main(int argc, char* argv[]) {
             }
         } else if (fileExists(dir + "/index.html")) {
             config.appDir = dir;
+        } else if (fileExists(dir + "/system/projects/index.html")) {
+            // No app next to the exe — fall back to the built-in project
+            // manager. Ships under system/projects/ in every release.
+            config.appDir = dir + "/system/projects";
         } else {
             printUsage();
             return 1;

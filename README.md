@@ -74,7 +74,9 @@ See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands
 
 ## Usage
 
-Checkout the [broworkshop](https://github.com/wlejon/broworkshop) repo in the parent folder to follow along. 
+Double-clicking `bro` (or running it with no arguments) opens the **project manager**: a built-in home screen for creating new projects from skeletons, opening existing project folders, and drag-and-drop importing folders or .zip files. Project paths are persisted to a per-user registry (`%APPDATA%/bro/projects.json` on Windows, `~/Library/Application Support/bro/projects.json` on macOS, `~/.local/share/bro/projects.json` on Linux). See [docs/projects.md](docs/projects.md).
+
+To run a specific app directly, pass its path:
 
 ### Windowed mode
 

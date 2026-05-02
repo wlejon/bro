@@ -1,0 +1,93 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #1b1d23;
+    color: #e8e8ea;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+main {
+    max-width: 520px;
+    margin: 48px auto;
+    padding: 24px;
+}
+
+h1 {
+    margin: 0 0 4px;
+    font-size: 28px;
+}
+
+.hint {
+    margin: 0 0 24px;
+    color: #8a8d96;
+    font-size: 13px;
+}
+
+#add-form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+#entry {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid #3a3d45;
+    background: #24262d;
+    color: #e8e8ea;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+#entry:focus {
+    outline: none;
+    border-color: #6c8cff;
+}
+
+button {
+    padding: 10px 16px;
+    border: none;
+    background: #6c8cff;
+    color: #fff;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #8aa0ff;
+}
+
+ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+li {
+    padding: 10px 12px;
+    background: #24262d;
+    border: 1px solid #3a3d45;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background 120ms, transform 120ms;
+}
+
+li:hover {
+    background: #2e3038;
+    transform: translateX(2px);
+}
+
+li.empty {
+    background: transparent;
+    border: 1px dashed #3a3d45;
+    color: #6a6d77;
+    text-align: center;
+    cursor: default;
+}
+
+li.empty:hover {
+    background: transparent;
+    transform: none;
+}

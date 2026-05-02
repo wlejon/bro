@@ -158,6 +158,11 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
 
     for (const auto& entry : fs::directory_iterator(dirPath, ec)) {
         if (entry.is_directory()) {
+            // A subdirectory containing its own bro.json is a self-contained
+            // bro app shipped under system/ (e.g. system/projects/, the
+            // built-in project manager, and system/skeletons/<name>/), not
+            // an overlay panel. Skip it so its DOM/JS aren't loaded twice.
+            if (fs::exists(entry.path() / "bro.json", ec)) continue;
             std::string subName = entry.path().filename().string();
             std::string subRel = relPath.empty() ? subName : relPath + "/" + subName;
             scanSystemPanelDir(baseDir, subRel);

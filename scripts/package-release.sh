@@ -88,7 +88,7 @@ OUT_DIR="dist/$OUT_NAME"
 
 echo ">>> Packaging $OUT_NAME"
 rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR/apps"
+mkdir -p "$OUT_DIR"
 
 # --- Executables -----------------------------------------------------------
 for src in "$BRO_EXE" "$BRO_HEADLESS_EXE" "$BRO_SERVER_EXE"; do
@@ -111,26 +111,18 @@ for bin in "$BRO_EXE" "$BRO_HEADLESS_EXE" "$BRO_SERVER_EXE"; do
 done
 shopt -u nullglob
 
-# --- Root bro.json: double-click bro -> launcher --------------------------
-cat > "$OUT_DIR/bro.json" <<'JSON'
-{
-    "app": "apps/launcher",
-    "title": "Bro",
-    "width": 1100,
-    "height": 720
-}
-JSON
-
 # --- README + LICENSE -----------------------------------------------------
+# Double-clicking bro with no app argument falls through to the built-in
+# project manager at system/projects/, so no root bro.json is needed.
 cp LICENSE "$OUT_DIR/"
 if [[ "$PLATFORM" == "macos" ]]; then
     cat > "$OUT_DIR/README.txt" <<EOF
 Bro ${VERSION} (${PLATFORM}-${ARCH})
 
 Run:
-  open Bro.app                              # launcher (double-clickable)
-  Bro.app/Contents/MacOS/bro apps/tetris    # specific app from terminal
-  ./bro-headless apps/example test.js       # CLI, headless mode
+  open Bro.app                              # opens the project manager
+  Bro.app/Contents/MacOS/bro path/to/app    # runs a specific app from terminal
+  ./bro-headless path/to/app script.js      # CLI, headless mode
 
 Unsigned build
 --------------
@@ -149,72 +141,18 @@ else
 Bro ${VERSION} (${PLATFORM}-${ARCH})
 
 Run:
-  ./bro${EXE}                    # opens the launcher
-  ./bro${EXE} apps/tetris        # runs a specific app
-  ./bro-headless${EXE} apps/example test.js
+  ./bro${EXE}                    # opens the project manager
+  ./bro${EXE} path/to/app        # runs a specific app
+  ./bro-headless${EXE} path/to/app script.js
 EOF
 fi
 
-# --- system/ (global system panels: splash, menu, nav, perf, settings) ---
-# Resolved by the engine as a relative path from cwd, which is the release
-# root when bro.exe is launched from its own folder.
+# --- system/ (global UI: splash, menu, nav, perf, settings, project manager,
+#     skeletons) ----------------------------------------------------------
+# Resolved by the engine as a relative path from the exe directory.
+# system/projects/ is the no-args fallback shown on naked bro.exe; it lists
+# user projects and creates new ones from system/skeletons/<name>/.
 cp -a system "$OUT_DIR/"
-
-# --- Apps from broworkshop ------------------------------------------------
-# Apps now live in the sibling broworkshop repo. The launcher and every app
-# it references are copied into OUT_DIR/apps/ so the release layout matches
-# what the launcher expects (apps/<category>/<app>/...).
-WORKSHOP="${WORKSHOP:-../broworkshop}"
-if [[ ! -d "$WORKSHOP/launcher" ]]; then
-    echo "error: broworkshop not found at $WORKSHOP" >&2
-    echo "       set WORKSHOP=<path> or clone broworkshop next to bro/" >&2
-    exit 1
-fi
-
-APPS=(launcher $(python3 -c "
-import json, sys
-with open('$WORKSHOP/launcher/apps.json') as f:
-    print(' '.join(a['dir'] for a in json.load(f)['apps']))
-" 2>/dev/null || node -e "
-const m = require('$WORKSHOP/launcher/apps.json');
-console.log(m.apps.map(a=>a.dir).join(' '));
-"))
-
-# Shared sibling dirs that apps load via ../<dir>/... — not in apps.json
-# but required at runtime. Add here as the shared surface grows.
-for shared in lib; do
-    [[ -d "$WORKSHOP/$shared" ]] && APPS+=("$shared")
-done
-
-# Exclude patterns: dev tests, scene-editor screenshots, transient caches.
-EXCLUDES=(
-    --exclude='test_*.js'
-    --exclude='tests'
-    --exclude='node_modules'
-    --exclude='.cache'
-    --exclude='.bro_settings.json'
-    --exclude='_*.png'
-    --exclude='.DS_Store'
-)
-
-for app in "${APPS[@]}"; do
-    src="$WORKSHOP/$app"
-    dst="$OUT_DIR/apps/$app"
-    if [[ ! -d "$src" ]]; then
-        echo "warning: $src not found, skipping" >&2
-        continue
-    fi
-    mkdir -p "$dst"
-    # rsync if available, else tar-pipe fallback.
-    if command -v rsync >/dev/null 2>&1; then
-        rsync -a "${EXCLUDES[@]}" "$src/" "$dst/"
-    else
-        (cd "$src" && tar --exclude='test_*.js' --exclude='tests' \
-            --exclude='node_modules' --exclude='.cache' \
-            --exclude='.bro_settings.json' --exclude='_*.png' \
-            --exclude='.DS_Store' -cf - .) | (cd "$dst" && tar -xf -)
-    fi
-done
 
 # --- macOS .app bundle ----------------------------------------------------
 # Finder launches a Mach-O binary in Terminal; wrap everything in a bundle so
@@ -288,7 +226,7 @@ echo ""
 echo "Next: verify by running"
 if [[ "$PLATFORM" == "macos" ]]; then
     echo "  open $OUT_DIR/Bro.app"
-    echo "  $OUT_DIR/bro-headless apps/example   # CLI tools stay outside the bundle"
+    echo "  $OUT_DIR/bro-headless path/to/app script.js   # CLI tools stay outside the bundle"
 else
     echo "  (cd $OUT_DIR && ./bro$EXE)"
 fi

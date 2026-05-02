@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Bro</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <input id="filter" type="text" placeholder="Filter projects…" autocomplete="off">
+        <button id="btn-new" class="primary">New project</button>
+        <button id="btn-open">Open existing</button>
+    </header>
+
+    <main id="grid">
+        <div class="empty-state" id="empty">
+            <h2>No projects yet</h2>
+            <p>Create a new project, open an existing one, or drop a folder or .zip onto this window.</p>
+        </div>
+    </main>
+
+    <footer>
+        <span id="status"></span>
+        <span id="user-dir-hint"></span>
+    </footer>
+
+    <!-- New project modal -->
+    <div id="modal-new" class="modal hidden">
+        <div class="modal-card">
+            <h2>New project</h2>
+            <label>
+                <span>Name</span>
+                <input id="new-name" type="text" placeholder="my-app" autocomplete="off">
+            </label>
+            <label>
+                <span>Skeleton</span>
+                <div id="skeleton-list"></div>
+            </label>
+            <label>
+                <span>Parent folder</span>
+                <div class="row">
+                    <input id="new-parent" type="text" readonly placeholder="(pick a folder)">
+                    <button id="new-parent-pick">Pick…</button>
+                </div>
+            </label>
+            <div id="new-error" class="error"></div>
+            <div class="modal-actions">
+                <button id="new-cancel">Cancel</button>
+                <button id="new-create" class="primary">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Drop overlay -->
+    <div id="drop-overlay" class="hidden">
+        <div class="drop-card">
+            <h2>Drop folder or .zip</h2>
+            <p>A folder must contain a <code>bro.json</code> or <code>index.html</code>.</p>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

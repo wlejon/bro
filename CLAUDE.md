@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Apps live in a sibling repo** — `../broworkshop/` holds the launcher and starter apps (`games/`, `tools/`, `demos/`, `ai/`). bro is the runtime only; no apps are bundled here. Run any app by passing its directory to `bro` or `bro-headless`.
 
+**Naked `bro` opens the built-in project manager** at `system/projects/` (the no-args fallback in `src/main.cpp`). New projects are seeded from `system/skeletons/<name>/`. Registry persists at the OS user-data dir (`%APPDATA%/bro/projects.json` etc.). See [docs/projects.md](docs/projects.md). System-panel scanning (`src/engine/system_panels.cpp`) skips any `system/<dir>/` containing a `bro.json` so these self-contained apps aren't double-loaded as overlay panels.
+
 **Windows** uses the Visual Studio multi-config generator — one build dir, pick the config at build time:
 ```bash
 cmake -B build                                 # configure (do not use MinGW)

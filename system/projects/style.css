@@ -1,0 +1,326 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #14161b;
+    color: #e8e8ea;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Header ───────────────────────────────────────────────────────────── */
+
+header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background: #1b1d23;
+    border-bottom: 1px solid #2a2d35;
+}
+
+#filter {
+    flex: 1;
+    padding: 8px 12px;
+    background: #24262d;
+    border: 1px solid #3a3d45;
+    color: #e8e8ea;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+#filter:focus {
+    outline: none;
+    border-color: #6c8cff;
+}
+
+button {
+    padding: 8px 14px;
+    background: #2a2d35;
+    color: #e8e8ea;
+    border: 1px solid #3a3d45;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+button:hover { background: #34373f; }
+
+button.primary {
+    background: #6c8cff;
+    border-color: #6c8cff;
+    color: #fff;
+}
+
+button.primary:hover { background: #8aa0ff; }
+
+/* ── Grid ─────────────────────────────────────────────────────────────── */
+
+main {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-auto-rows: min-content;
+    gap: 12px;
+    align-content: start;
+}
+
+.empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: #6a6d77;
+    padding: 80px 20px;
+}
+
+.empty-state h2 {
+    margin: 0 0 8px;
+    font-weight: 500;
+    color: #8a8d96;
+}
+
+.empty-state p {
+    margin: 0;
+    font-size: 13px;
+}
+
+.tile {
+    position: relative;
+    padding: 14px 16px;
+    background: #1b1d23;
+    border: 1px solid #2a2d35;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 120ms, background 120ms, transform 120ms;
+}
+
+.tile:hover {
+    border-color: #6c8cff;
+    background: #1f222a;
+}
+
+.tile.launching { transform: scale(0.98); }
+
+.tile.missing {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.tile.missing:hover {
+    border-color: #2a2d35;
+    background: #1b1d23;
+}
+
+.tile .name {
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.tile .path {
+    font-size: 11px;
+    color: #6a6d77;
+    word-break: break-all;
+    margin-bottom: 8px;
+}
+
+.tile .meta {
+    font-size: 11px;
+    color: #8a8d96;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    background: #2a2d35;
+    color: #a8abb5;
+}
+
+.badge.running { background: #2c4a2c; color: #9ed99e; }
+.badge.missing { background: #4a2c2c; color: #d99e9e; }
+
+.tile .remove {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    line-height: 20px;
+    border-radius: 4px;
+    background: transparent;
+    color: #6a6d77;
+    border: 1px solid transparent;
+    opacity: 0;
+    transition: opacity 120ms;
+}
+
+.tile:hover .remove { opacity: 1; }
+.tile .remove:hover { background: #4a2c2c; color: #fff; border-color: #4a2c2c; }
+
+/* ── Footer ───────────────────────────────────────────────────────────── */
+
+footer {
+    flex: 0 0 auto;
+    padding: 8px 16px;
+    background: #1b1d23;
+    border-top: 1px solid #2a2d35;
+    color: #6a6d77;
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+}
+
+/* ── Modal ────────────────────────────────────────────────────────────── */
+
+.modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.modal.hidden { display: none; }
+
+.modal-card {
+    background: #1b1d23;
+    border: 1px solid #3a3d45;
+    border-radius: 10px;
+    padding: 24px;
+    width: 460px;
+    max-width: 90vw;
+}
+
+.modal-card h2 {
+    margin: 0 0 16px;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.modal-card label {
+    display: block;
+    margin-bottom: 14px;
+    font-size: 12px;
+    color: #8a8d96;
+}
+
+.modal-card label span {
+    display: block;
+    margin-bottom: 6px;
+}
+
+.modal-card input[type="text"] {
+    width: 100%;
+    padding: 8px 10px;
+    background: #24262d;
+    border: 1px solid #3a3d45;
+    color: #e8e8ea;
+    border-radius: 6px;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+
+.modal-card input[type="text"]:focus {
+    outline: none;
+    border-color: #6c8cff;
+}
+
+.row {
+    display: flex;
+    gap: 8px;
+}
+
+.row input { flex: 1; }
+
+#skeleton-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+}
+
+.skel {
+    padding: 8px 10px;
+    background: #24262d;
+    border: 1px solid #3a3d45;
+    border-radius: 6px;
+    cursor: pointer;
+    color: #e8e8ea;
+    font-size: 12px;
+}
+
+.skel:hover { background: #2a2d35; }
+.skel.selected { border-color: #6c8cff; background: #2a3050; }
+
+.skel .skel-name { font-weight: 500; margin-bottom: 2px; }
+.skel .skel-desc { color: #8a8d96; font-size: 10px; }
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.error {
+    color: #d99e9e;
+    font-size: 12px;
+    min-height: 16px;
+}
+
+/* ── Drop overlay ─────────────────────────────────────────────────────── */
+
+#drop-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(108, 140, 255, 0.18);
+    border: 3px dashed #6c8cff;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    pointer-events: none;
+}
+
+#drop-overlay.hidden { display: none; }
+
+.drop-card {
+    background: #1b1d23;
+    border: 1px solid #6c8cff;
+    border-radius: 10px;
+    padding: 28px 36px;
+    text-align: center;
+}
+
+.drop-card h2 {
+    margin: 0 0 6px;
+    font-weight: 500;
+}
+
+.drop-card p {
+    margin: 0;
+    color: #8a8d96;
+    font-size: 12px;
+}
+
+.drop-card code {
+    background: #24262d;
+    padding: 1px 5px;
+    border-radius: 3px;
+}

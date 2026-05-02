@@ -1,0 +1,23 @@
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #0e1014;
+    overflow: hidden;
+}
+
+#stage {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+#hud {
+    position: absolute;
+    left: 16px;
+    bottom: 16px;
+    color: #6a7084;
+    font: 12px -apple-system, "Segoe UI", monospace;
+    pointer-events: none;
+}
