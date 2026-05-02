@@ -229,24 +229,24 @@ int main(int argc, char* argv[]) {
                 config.appDir = targetDir;
             }
         } else {
-            // Directory target.
-            config.appDir = target;
+            // Directory target. Don't preset config.appDir before parseConfig
+            // — the empty-check guard in config_loader skips default_app when
+            // appDir is already set.
             std::string broJson = target + "/bro.json";
             if (fileExists(broJson)) {
                 bool isProject = false;
                 parseConfig(broJson, config, &isProject);
                 if (isProject) {
                     config.projectRoot = target;
-                    // appDir field (or default_app) resolves against project root.
-                    if (config.appDir.empty() || config.appDir == target) {
-                        config.appDir = target;
-                    } else if (!isAbsolute(config.appDir)) {
-                        config.appDir = target + "/" + config.appDir;
-                    }
+                    if (config.appDir.empty()) config.appDir = target;
+                    else if (!isAbsolute(config.appDir)) config.appDir = target + "/" + config.appDir;
                 } else {
-                    // Plain app bro.json — preserve explicit dir over `"app"` field.
+                    // Plain app bro.json — its dir is the appDir.
                     config.appDir = target;
                 }
+            } else {
+                // No bro.json — treat directory as the app dir directly.
+                config.appDir = target;
             }
         }
     } else {

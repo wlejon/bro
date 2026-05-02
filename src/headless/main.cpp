@@ -232,7 +232,6 @@ int main(int argc, char* argv[]) {
 
     try {
         bro::engine::EngineConfig config;
-        config.appDir = appDir;
         std::string settingsDir = exeDir();
         config.settingsPath = settingsDir + "/.bro_settings.json";
 
@@ -260,33 +259,36 @@ int main(int argc, char* argv[]) {
                                       (p.size() >= 2 && p[1] == ':'));
             };
 
-            if (isJsonFile(config.appDir) && std::ifstream(config.appDir).good()) {
-                std::string targetDir = dirOf(config.appDir);
+            // Don't preset config.appDir — parseConfig fills it from
+            // "app"/"default_app". Presetting would make the empty-check at
+            // config_loader skip default_app, then concat the original argv
+            // path back onto its own dir (../broworkshop/../broworkshop/bro.json).
+            if (isJsonFile(appDir) && std::ifstream(appDir).good()) {
+                std::string targetDir = dirOf(appDir);
                 bool isProject = false;
-                parseConfig(config.appDir, config, &isProject);
+                parseConfig(appDir, config, &isProject);
                 if (isProject) {
                     config.projectRoot = targetDir;
-                    if (config.appDir.empty() || config.appDir == ".") config.appDir = targetDir;
+                    if (config.appDir.empty()) config.appDir = targetDir;
                     else if (!isAbsolute(config.appDir)) config.appDir = targetDir + "/" + config.appDir;
                 } else {
+                    // App manifest pointed to directly — its dir is the appDir.
                     config.appDir = targetDir;
                 }
             } else {
-                std::string broJson = config.appDir + "/bro.json";
+                std::string broJson = appDir + "/bro.json";
                 if (std::ifstream(broJson).good()) {
                     bool isProject = false;
                     parseConfig(broJson, config, &isProject);
-                    std::string target = appDir;
                     if (isProject) {
-                        config.projectRoot = target;
-                        if (config.appDir.empty() || config.appDir == target) {
-                            config.appDir = target;
-                        } else if (!isAbsolute(config.appDir)) {
-                            config.appDir = target + "/" + config.appDir;
-                        }
+                        config.projectRoot = appDir;
+                        if (config.appDir.empty()) config.appDir = appDir;
+                        else if (!isAbsolute(config.appDir)) config.appDir = appDir + "/" + config.appDir;
                     } else {
-                        config.appDir = target;
+                        config.appDir = appDir;
                     }
+                } else {
+                    config.appDir = appDir;
                 }
             }
 
