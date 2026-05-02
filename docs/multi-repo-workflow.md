@@ -2,6 +2,8 @@
 
 bro depends on six sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
+A seventh sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
 | **qjsbind** | `../qjsbind` | `third_party/qjsbind` |
@@ -28,7 +30,8 @@ D:/projects/
 ├── htmlayout/                    # standalone repo (preferred for dev)
 ├── broaudio/                     # standalone repo (preferred for dev)
 ├── bromesh/                      # standalone repo (preferred for dev)
-└── brogameagent/                 # standalone repo (preferred for dev)
+├── brogameagent/                 # standalone repo (preferred for dev)
+└── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
 ```
 
 ## How It Works
@@ -124,3 +127,28 @@ Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
 cmake -B build -DQJSBIND_DIR=none -DBROKIT_DIR=none -DHTMLAYOUT_DIR=none \
                -DBROAUDIO_DIR=none -DBROMESH_DIR=none -DBROGAMEAGENT_DIR=none
 ```
+
+## Apps tree
+
+Apps live in [broworkshop](https://github.com/wlejon/broworkshop) at `../broworkshop` — a sibling repo, not a CMake dependency. Its layout:
+
+```
+broworkshop/
+├── bro.json                  # project manifest (default_app, lib, system)
+├── lib/                      # shared JS modules — apps load via "/lib/foo.js"
+├── launcher/                 # the default app (bro grid launcher)
+├── games/                    # blockfall, snake, asteroids, ...
+├── tools/                    # synth, mesh-viewer, scene-editor, ...
+├── demos/                    # terrain, lighting-demo, flora, ...
+└── thumbnails/               # launcher tile images (in launcher/)
+```
+
+Run any app three equivalent ways:
+
+```bash
+bro ../broworkshop                       # project root → default_app
+bro ../broworkshop/bro.json              # explicit project manifest
+bro ../broworkshop/games/snake           # specific app
+```
+
+The first two read `default_app: "launcher"` from the workshop's `bro.json` and set up `/lib` + `/system` mounts. The third inherits the project root via `BRO_PROJECT_ROOT` only if the parent process exported it (e.g. when launched from the launcher itself).

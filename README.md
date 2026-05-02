@@ -27,7 +27,7 @@ None of this is new, it's just a reconfiguration that works better for coding ag
 ## Hello world
 
 ```html
-<!-- apps/hello/index.html -->
+<!-- hello/index.html -->
 <h1 id="msg">Hello</h1>
 <button id="btn">Click me</button>
 <script>
@@ -108,11 +108,13 @@ See [docs/headless.md](docs/headless.md) for full documentation.
 An app is a directory containing at minimum an `index.html`:
 
 ```
-apps/myapp/
+myapp/
   index.html      # required
   style.css       # linked via <link rel="stylesheet">
   app.js          # loaded via <script src="...">
 ```
+
+For more elaborate setups — multiple apps under a project root with shared `lib/` and `system/` directories — see [broworkshop](../broworkshop) for the layout pattern (project-level `bro.json` with `default_app`, `lib`, `system`).
 
 ## JS API reference
 

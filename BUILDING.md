@@ -84,3 +84,21 @@ cmake --build build --config Release
 ```
 
 On Windows this uses the Visual Studio multi-config generator. On Linux and macOS it defaults to a single-config generator; set `CMAKE_BUILD_TYPE` at configure time or pass `-G Ninja`.
+
+## Running
+
+bro ships no apps of its own — the launcher and starter apps live in the sibling [broworkshop](https://github.com/wlejon/broworkshop) repo. Clone it next to bro and point bro at it:
+
+```bash
+cd ..
+git clone https://github.com/wlejon/broworkshop
+cd bro
+
+# Windows
+./build/Release/bro.exe ../broworkshop          # → launcher (default_app)
+./build/Release/bro.exe ../broworkshop/games/snake
+
+# Linux / macOS
+./build/bro ../broworkshop
+./build/bro ../broworkshop/games/snake
+```
