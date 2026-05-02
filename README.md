@@ -74,7 +74,7 @@ See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands
 
 ## Usage
 
-Checkout the [broworkshop] repo in the parent folder to follow along. 
+Checkout the [broworkshop](https://github.com/wlejon/broworkshop) repo in the parent folder to follow along. 
 
 ### Windowed mode
 
