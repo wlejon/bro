@@ -210,7 +210,7 @@ scene.setAmbient([0.03, 0.03, 0.035]);
 // ~few hundred million texture taps but happens once per HDR — runtime
 // shading is just three texture samples per fragment.
 
-scene.setEnvironment({ hdr: "apps/lighting-demo/hdri/venice_sunset_1k.hdr" });
+scene.setEnvironment({ hdr: "hdri/venice_sunset_1k.hdr" });
 
 // `intensity` multiplies all IBL contributions (skybox + irradiance +
 // prefilter). 1.0 = neutral. Decoupled from sun intensity so you can
@@ -232,7 +232,7 @@ scene.setEnvironment({ intensity: 2.0 });
 scene.setEnvironment(null);
 
 // Compatible with any Radiance .hdr (top-down, RGBE-encoded). The 12
-// CC0 environments under apps/lighting-demo/hdri/ are good starting
+// CC0 environments under broworkshop's demos/lighting-demo/hdri/ are good starting
 // points; more available at polyhaven.com/hdris (all CC0).
 
 
@@ -279,7 +279,7 @@ scene.setEnvironment(null);
 // For directional lights, translate gizmos are meaningless (position
 // doesn't affect shading). Use rotate mode and apply the quaternion delta
 // to `node.direction`; for point/spot use translate and bump node.x/y/z.
-// See apps/lighting-demo/app.js for a full implementation.
+// See broworkshop's demos/lighting-demo/app.js for a full implementation.
 
 
 // -----------------------------------------------------------------------------

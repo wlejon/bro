@@ -1,8 +1,8 @@
 // Test coverage analyzer for bro.
-// Runs via: bro-headless --no-gpu apps/dashboard tests/coverage.js
+// Runs via: bro-headless --no-gpu ../broworkshop/demos/example tests/coverage.js
 //
 // Scans src/js/*_bindings.cpp for the JS API surface (.method/.function/.getter/.property),
-// then scans all test files (tests/**\/test_*.js + apps/**\/test*.js) for usage.
+// then scans all test files (tests/**\/test_*.js + ../broworkshop/**\/test*.js) for usage.
 // Outputs a per-binding-file coverage report.
 
 var fs = globalThis.__brokit_fs;
@@ -12,7 +12,7 @@ var fs = globalThis.__brokit_fs;
 // ---------------------------------------------------------------------------
 
 var SRC_DIR   = 'src/js';
-var TEST_DIRS = ['tests', 'apps'];
+var TEST_DIRS = ['tests', '../broworkshop'];
 
 // Patterns that register JS-visible names in the C++ bindings
 // Matches: .method("name"   .function("name"   .getter("name"   .property("name"

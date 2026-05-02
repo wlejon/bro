@@ -87,7 +87,7 @@ The `bro.settings` API is available in headless mode for reading and writing per
 ### Interactive REPL
 
 ```
-> bro-headless apps/dashboard
+> bro-headless ../broworkshop/demos/example
 
 bro> document.querySelector('#sidebar').className
 sidebar hidden-left
@@ -106,7 +106,7 @@ bro> quit
 ### Inline expressions
 
 ```bash
-bro-headless apps/dashboard -e "advanceTime(2000)" -e "screenshot('out.png')"
+bro-headless ../broworkshop/demos/example -e "advanceTime(2000)" -e "screenshot('out.png')"
 ```
 
 Multiple `-e` flags are concatenated and evaluated together.
@@ -121,7 +121,7 @@ screenshot('after.png');
 ```
 
 ```bash
-bro-headless apps/dashboard test.js
+bro-headless ../broworkshop/demos/example test.js
 ```
 
 Exit code is 0 on success, 1 if any assertion fails or an uncaught exception occurs.

@@ -198,11 +198,11 @@ This file is engine-global (shared across all apps). It is written automatically
 
 The engine ships a standard Preferences dialog reachable via **Edit → Preferences** or however the app rebinds `system_toggle_settings`. It's a modal: backdrop click or **ESC** dismisses it.
 
-Default panels are `Graphics`, `Audio`, and `Input`, covering the keys in the tables above. Apps extend the dialog by dropping HTML files into `apps/<app>/system/settings/`. The engine scans that directory at startup and the nav auto-populates tabs from whatever it finds — no registration step.
+Default panels are `Graphics`, `Audio`, and `Input`, covering the keys in the tables above. Apps extend the dialog by dropping HTML files into `<app-dir>/system/settings/`. The engine scans that directory at startup and the nav auto-populates tabs from whatever it finds — no registration step.
 
 ### Adding an app panel
 
-Create `apps/<app>/system/settings/gameplay.html`:
+Create `<app-dir>/system/settings/gameplay.html`:
 
 ```html
 <!DOCTYPE html>

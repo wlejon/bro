@@ -1,7 +1,0 @@
-{
-  "kind": "tileset",
-  "src": "terrain.png",
-  "tileSize": 16,
-  "cols": 8,
-  "tileCount": 9
-}

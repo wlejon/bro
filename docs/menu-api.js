@@ -104,7 +104,7 @@ bro.menu.hide();
 
 // ── Replace the look entirely ───────────────────────────────────────────────
 //
-// Drop your own renderer at apps/<your-app>/system/menu.html. The engine
+// Drop your own renderer at <your-app>/system/menu.html. The engine
 // prefers app-local system panels over the global ones — same mechanism
 // as perf.html / settings/*.html overrides. Your replacement has the same
 // __bro bridge: __bro.getMenu() returns the current tree, __bro.menuClick(id)

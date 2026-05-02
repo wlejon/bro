@@ -291,7 +291,7 @@ bro.ai.game.registerCapability("kite", {
 
 /**
  * Drive a brogameagent::World from the engine frame loop at a fixed step.
- * Replaces the JS-side accumulator pattern (see apps/ai-arena's main.js).
+ * Replaces the JS-side accumulator pattern (see broworkshop's ai/ai-arena/main.js).
  *
  * @param {AIWorld} world
  * @param {Object}  [opts]

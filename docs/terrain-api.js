@@ -152,7 +152,7 @@ class Terrain {
 
 
 // -----------------------------------------------------------------------------
-// Typical usage (from apps/terrain/app.js)
+// Typical usage (from broworkshop's demos/terrain/app.js)
 // -----------------------------------------------------------------------------
 
 const canvas  = document.getElementById('c');

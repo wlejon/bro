@@ -4,24 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
+**Apps live in a sibling repo** — `../broworkshop/` holds the launcher and starter apps (`games/`, `tools/`, `demos/`, `ai/`). bro is the runtime only; no apps are bundled here. Run any app by passing its directory to `bro` or `bro-headless`.
+
 **Windows** uses the Visual Studio multi-config generator — one build dir, pick the config at build time:
 ```bash
 cmake -B build                                 # configure (do not use MinGW)
 cmake --build build --config Debug
 cmake --build build --config Release
-./build/Debug/bro.exe apps/example
-./build/Release/bro.exe apps/example          # bro-headless.exe lives alongside
+./build/Debug/bro.exe ../broworkshop/demos/example
+./build/Release/bro.exe ../broworkshop/demos/example          # bro-headless.exe lives alongside
 ```
 
 **Linux / macOS** use Ninja (single-config) — `--config` is ignored, so use a separate build dir per config:
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Debug        # debug
 cmake --build build
-./build/bro apps/example
+./build/bro ../broworkshop/demos/example
 
 cmake -B build-release -DCMAKE_BUILD_TYPE=Release   # release
 cmake --build build-release
-./build-release/bro apps/example
+./build-release/bro ../broworkshop/demos/example
 ```
 
 For `scripts/package-release.sh` on Linux/macOS, pass `--build-dir build-release` so it picks up the Release binaries (the script's `--config Release` default is the Windows-style config selector and is a no-op for Ninja).
@@ -29,16 +31,16 @@ For `scripts/package-release.sh` on Linux/macOS, pass `--build-dir build-release
 **Common headless invocations** (paths differ per platform as above):
 ```bash
 # Interactive JS REPL (GPU — default)
-bro-headless apps/example
+bro-headless ../broworkshop/demos/example
 
 # JS script file
-bro-headless apps/example test.js
+bro-headless ../broworkshop/demos/example test.js
 
 # Inline JS expression
-bro-headless apps/example -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
+bro-headless ../broworkshop/demos/example -e "document.querySelector('#btn').click()" -e "screenshot('out.png')"
 
 # CPU-only, no GPU/WebGL
-bro-headless --no-gpu apps/example
+bro-headless --no-gpu ../broworkshop/demos/example
 ```
 
 Submodules must be initialized: `git submodule update --init`

@@ -46,5 +46,3 @@ build.bat
 # Test scratch dir (rigging glTF round-trip etc.)
 tests/tmp/
 
-# Headless screenshots written by app test.js scripts
-apps/*/screenshot*.png

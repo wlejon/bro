@@ -3,6 +3,7 @@
 #include "util/log.h"
 
 #include "broaudio/log.h"
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -241,7 +242,7 @@ static void printUsage() {
         "next to the executable to run without arguments.\n"
         "\n"
         "Example:\n"
-        "  bro apps/dashboard\n"
+        "  bro ../broworkshop/demos/example\n"
         "\n"
         "bro.json format:\n"
         "  {\"app\": \".\", \"title\": \"My App\", \"width\": 1200, \"height\": 800}\n"
@@ -344,6 +345,23 @@ int main(int argc, char* argv[]) {
     // CLI splash overrides — applied last so they win over bro.json.
     if (cliNoSplash) config.showSplash = false;
     if (cliSplash)   config.showSplash = true;
+
+    // Expose the resolved app directory to JS (process.env.BRO_APP_DIR) so the
+    // launcher and other meta-apps can locate themselves and their siblings on
+    // disk without guessing from cwd. Resolved to an absolute path.
+    {
+#ifdef _WIN32
+        char abs[MAX_PATH];
+        const char* appDirAbs = _fullpath(abs, config.appDir.c_str(), MAX_PATH)
+                                ? abs : config.appDir.c_str();
+        _putenv_s("BRO_APP_DIR", appDirAbs);
+#else
+        char abs[PATH_MAX];
+        const char* appDirAbs = realpath(config.appDir.c_str(), abs)
+                                ? abs : config.appDir.c_str();
+        setenv("BRO_APP_DIR", appDirAbs, 1);
+#endif
+    }
 
     try {
         bro::engine::Engine engine(config);

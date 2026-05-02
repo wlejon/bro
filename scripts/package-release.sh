@@ -160,21 +160,30 @@ fi
 # root when bro.exe is launched from its own folder.
 cp -a system "$OUT_DIR/"
 
-# --- Apps -----------------------------------------------------------------
-# Copy the launcher and every app it references, excluding dev artifacts.
+# --- Apps from broworkshop ------------------------------------------------
+# Apps now live in the sibling broworkshop repo. The launcher and every app
+# it references are copied into OUT_DIR/apps/ so the release layout matches
+# what the launcher expects (apps/<category>/<app>/...).
+WORKSHOP="${WORKSHOP:-../broworkshop}"
+if [[ ! -d "$WORKSHOP/launcher" ]]; then
+    echo "error: broworkshop not found at $WORKSHOP" >&2
+    echo "       set WORKSHOP=<path> or clone broworkshop next to bro/" >&2
+    exit 1
+fi
+
 APPS=(launcher $(python3 -c "
 import json, sys
-with open('apps/launcher/apps.json') as f:
+with open('$WORKSHOP/launcher/apps.json') as f:
     print(' '.join(a['dir'] for a in json.load(f)['apps']))
 " 2>/dev/null || node -e "
-const m = require('./apps/launcher/apps.json');
+const m = require('$WORKSHOP/launcher/apps.json');
 console.log(m.apps.map(a=>a.dir).join(' '));
 "))
 
 # Shared sibling dirs that apps load via ../<dir>/... — not in apps.json
 # but required at runtime. Add here as the shared surface grows.
 for shared in lib; do
-    [[ -d "apps/$shared" ]] && APPS+=("$shared")
+    [[ -d "$WORKSHOP/$shared" ]] && APPS+=("$shared")
 done
 
 # Exclude patterns: dev tests, scene-editor screenshots, transient caches.
@@ -189,7 +198,7 @@ EXCLUDES=(
 )
 
 for app in "${APPS[@]}"; do
-    src="apps/$app"
+    src="$WORKSHOP/$app"
     dst="$OUT_DIR/apps/$app"
     if [[ ! -d "$src" ]]; then
         echo "warning: $src not found, skipping" >&2

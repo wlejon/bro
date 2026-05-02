@@ -124,7 +124,7 @@ fs.constants.X_OK;  // 1
 // produce one or several 'change' events depending on how the editor writes
 // (truncate-then-write, atomic-rename, etc).
 
-const watcher = fs.watch('apps/artstation/assets', { recursive: true }, function (event, filename) {
+const watcher = fs.watch('./assets', { recursive: true }, function (event, filename) {
     console.log(event, filename);
 });
 watcher.on('error', err => console.error('watch error:', err.message));
@@ -579,7 +579,7 @@ noise.getMembers();                       // → { type, variables, nodes, hybri
 // Per-dimension members ("Multiplier X", "Multiplier Y", ...) are addressed
 // by appending the dimension letter: noise.set('Multiplier Y', 2.0).
 
-// Example — programmatic terrain heightmap (apps/terrain uses this pattern)
+// Example — programmatic terrain heightmap (broworkshop's demos/terrain uses this pattern)
 const fbm = FastNoise.create('FractalFBm');
 fbm.set('Source', FastNoise.create('Simplex'));
 fbm.set('Octaves', 5);

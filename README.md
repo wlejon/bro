@@ -6,9 +6,11 @@ Note from the co-pilot: i am a career programmer but this and its sister reposit
 
 ## Launcher
 
->bro apps/launcher
+>bro ../broworkshop/launcher
 
 ![launcher](docs/launcher.png)
+
+The launcher and a curated set of starter apps live in the sibling [broworkshop](../broworkshop) repo — games, tools, demos, and AI/research apps you can clone and reshape for your own thing. bro is the runtime; the workshop is where the patterns are worked out.
 
 ## Why
 
@@ -32,10 +34,10 @@ None of this is new, it's just a reconfiguration that works better for coding ag
 ```
 
 ```bash
-bro apps/hello
+bro path/to/hello
 ```
 
-see apps/ for more examples 
+See the sibling [broworkshop](../broworkshop) repo for the launcher and a categorized set of starter apps (games, tools, demos, ai).
 
 ## What you get
 
@@ -72,10 +74,10 @@ See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands
 
 ```bash
 # Windows
-./build/Debug/bro.exe apps/example
+./build/Debug/bro.exe ../broworkshop/demos/example
 
 # Linux / macOS
-./build/bro apps/example
+./build/bro ../broworkshop/demos/example
 ```
 
 Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a window.
@@ -83,10 +85,10 @@ Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a
 ### Headless mode
 
 ```bash
-bro-headless apps/example                                   # interactive REPL
-bro-headless apps/example test.js                           # script file
-bro-headless apps/example -e "document.querySelector('#btn').click()"
-bro-headless --no-gpu apps/example                          # CPU-only (CI)
+bro-headless ../broworkshop/demos/example                                   # interactive REPL
+bro-headless ../broworkshop/demos/example test.js                           # script file
+bro-headless ../broworkshop/demos/example -e "document.querySelector('#btn').click()"
+bro-headless --no-gpu ../broworkshop/demos/example                          # CPU-only (CI)
 ```
 
 On Linux without a display server, use `--no-gpu`. 
