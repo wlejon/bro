@@ -1,4 +1,7 @@
 #include "engine/engine.h"
+#include "engine/config_loader.h"
+
+using bro::engine::parseConfig;
 #include "js/headless_bindings.h"
 #include "js/runtime.h"
 #include "util/interrupt.h"
@@ -239,6 +242,60 @@ int main(int argc, char* argv[]) {
 #else
         setenv("BRO_EXE_DIR", settingsDir.c_str(), 1);
 #endif
+
+        // Project root resolution: same model as bro main.cpp. If appDir is a
+        // .json, treat as project bro.json; if it's a directory containing a
+        // bro.json with project keys, treat that as project. Else inherit
+        // from BRO_PROJECT_ROOT env if set.
+        {
+            auto isJsonFile = [](const std::string& s) {
+                return s.size() >= 5 && s.substr(s.size() - 5) == ".json";
+            };
+            auto dirOf = [](const std::string& p) -> std::string {
+                size_t i = p.find_last_of("/\\");
+                return (i == std::string::npos) ? std::string(".") : p.substr(0, i);
+            };
+            auto isAbsolute = [](const std::string& p) {
+                return !p.empty() && (p[0] == '/' || p[0] == '\\' ||
+                                      (p.size() >= 2 && p[1] == ':'));
+            };
+
+            if (isJsonFile(config.appDir) && std::ifstream(config.appDir).good()) {
+                std::string targetDir = dirOf(config.appDir);
+                bool isProject = false;
+                parseConfig(config.appDir, config, &isProject);
+                if (isProject) {
+                    config.projectRoot = targetDir;
+                    if (config.appDir.empty() || config.appDir == ".") config.appDir = targetDir;
+                    else if (!isAbsolute(config.appDir)) config.appDir = targetDir + "/" + config.appDir;
+                } else {
+                    config.appDir = targetDir;
+                }
+            } else {
+                std::string broJson = config.appDir + "/bro.json";
+                if (std::ifstream(broJson).good()) {
+                    bool isProject = false;
+                    parseConfig(broJson, config, &isProject);
+                    std::string target = appDir;
+                    if (isProject) {
+                        config.projectRoot = target;
+                        if (config.appDir.empty() || config.appDir == target) {
+                            config.appDir = target;
+                        } else if (!isAbsolute(config.appDir)) {
+                            config.appDir = target + "/" + config.appDir;
+                        }
+                    } else {
+                        config.appDir = target;
+                    }
+                }
+            }
+
+            if (config.projectRoot.empty()) {
+                if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
+                    if (*env) config.projectRoot = env;
+                }
+            }
+        }
         config.displayMode = bro::engine::DisplayMode::Headless;
         config.graphics.width = width;
         config.graphics.height = height;

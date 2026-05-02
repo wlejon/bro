@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/config_loader.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -112,122 +113,7 @@ static bool fileExists(const std::string& path) {
     return f.good();
 }
 
-// Minimal JSON parser for bro.json — extracts string and integer values.
-static bool parseConfig(const std::string& path, bro::engine::EngineConfig& config) {
-    std::ifstream file(path);
-    if (!file.is_open()) return false;
-
-    std::ostringstream ss;
-    ss << file.rdbuf();
-    std::string content = ss.str();
-
-    // Helper: extract a JSON string value for a given key.
-    auto getString = [&](const char* key) -> std::string {
-        std::string needle = std::string("\"") + key + "\"";
-        size_t pos = content.find(needle);
-        if (pos == std::string::npos) return {};
-        pos += needle.size();
-        // Skip whitespace and colon
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '\n' || content[pos] == '\r' || content[pos] == ':')) pos++;
-        if (pos >= content.size() || content[pos] != '"') return {};
-        pos++; // skip opening quote
-        std::string result;
-        while (pos < content.size() && content[pos] != '"') {
-            if (content[pos] == '\\' && pos + 1 < content.size()) {
-                pos++;
-                result += content[pos];
-            } else {
-                result += content[pos];
-            }
-            pos++;
-        }
-        return result;
-    };
-
-    // Helper: extract an integer value for a given key.
-    auto getInt = [&](const char* key, int defaultVal) -> int {
-        std::string needle = std::string("\"") + key + "\"";
-        size_t pos = content.find(needle);
-        if (pos == std::string::npos) return defaultVal;
-        pos += needle.size();
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '\n' || content[pos] == '\r' || content[pos] == ':')) pos++;
-        if (pos >= content.size()) return defaultVal;
-        // Parse integer (possibly negative)
-        std::string num;
-        if (content[pos] == '-') { num += '-'; pos++; }
-        while (pos < content.size() && content[pos] >= '0' && content[pos] <= '9') {
-            num += content[pos++];
-        }
-        if (num.empty() || num == "-") return defaultVal;
-        return std::stoi(num);
-    };
-
-    // Helper: extract a boolean value for a given key (-1 = not found).
-    auto getBool = [&](const char* key) -> int {
-        std::string needle = std::string("\"") + key + "\"";
-        size_t pos = content.find(needle);
-        if (pos == std::string::npos) return -1;
-        pos += needle.size();
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '\n' || content[pos] == '\r' || content[pos] == ':')) pos++;
-        if (pos + 4 <= content.size() && content.substr(pos, 4) == "true") return 1;
-        if (pos + 5 <= content.size() && content.substr(pos, 5) == "false") return 0;
-        return -1;
-    };
-
-    // Helper: extract a float value for a given key.
-    auto getFloat = [&](const char* key, float defaultVal) -> float {
-        std::string needle = std::string("\"") + key + "\"";
-        size_t pos = content.find(needle);
-        if (pos == std::string::npos) return defaultVal;
-        pos += needle.size();
-        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '\n' || content[pos] == '\r' || content[pos] == ':')) pos++;
-        if (pos >= content.size()) return defaultVal;
-        std::string num;
-        if (content[pos] == '-') { num += '-'; pos++; }
-        while (pos < content.size() && (content[pos] >= '0' && content[pos] <= '9' || content[pos] == '.')) {
-            num += content[pos++];
-        }
-        if (num.empty() || num == "-") return defaultVal;
-        return std::stof(num);
-    };
-
-    std::string app = getString("app");
-    if (!app.empty()) config.appDir = app;
-
-    std::string title = getString("title");
-    if (!title.empty()) config.title = title;
-
-    // Graphics settings
-    int w = getInt("width", 0);
-    if (w > 0) config.graphics.width = w;
-
-    int h = getInt("height", 0);
-    if (h > 0) config.graphics.height = h;
-
-    int vsync = getBool("vsync");
-    if (vsync >= 0) config.graphics.vsync = (vsync == 1);
-
-    int resizable = getBool("resizable");
-    if (resizable >= 0) config.graphics.resizable = (resizable == 1);
-
-    int splash = getBool("splash");
-    if (splash >= 0) config.showSplash = (splash == 1);
-
-    float maxFps = getFloat("maxFps", 0);
-    if (maxFps > 0) config.graphics.maxFrameIntervalMs = 1000.0 / maxFps;
-
-    // Input settings
-    float scrollSpeed = getFloat("scrollSpeed", 0);
-    if (scrollSpeed > 0) config.input.scrollSpeed = scrollSpeed;
-
-    float dblClickTime = getFloat("doubleClickThreshold", 0);
-    if (dblClickTime > 0) config.input.doubleClickThresholdMs = static_cast<double>(dblClickTime);
-
-    float dblClickDist = getFloat("doubleClickDistance", 0);
-    if (dblClickDist > 0) config.input.doubleClickDistancePx = dblClickDist;
-
-    return true;
-}
+using bro::engine::parseConfig;
 
 static void printUsage() {
     fprintf(stderr,
@@ -305,21 +191,66 @@ int main(int argc, char* argv[]) {
     setenv("BRO_EXE_DIR", settingsDir.c_str(), 1);
 #endif
 
-    if (!posArgs.empty()) {
-        // Explicit app directory argument
-        config.appDir = posArgs[0];
+    // Resolve launch target → projectRoot + appDir. Three modes:
+    //   bro                          (no args) — exe dir is the target
+    //   bro <path>                   path is either an app dir, a project dir,
+    //                                or a project bro.json file
+    //   bro <project.json> --app X   (future, not parsed here yet)
+    //
+    // A bro.json with `default_app`, `lib`, or `system` keys is treated as a
+    // project manifest: its directory becomes the projectRoot, and `app`/
+    // `default_app` resolves against it.
+    auto isJsonFile = [](const std::string& s) {
+        return s.size() >= 5 && s.substr(s.size() - 5) == ".json";
+    };
+    auto dirOf = [](const std::string& p) -> std::string {
+        size_t i = p.find_last_of("/\\");
+        return (i == std::string::npos) ? std::string(".") : p.substr(0, i);
+    };
+    auto isAbsolute = [](const std::string& p) {
+        return !p.empty() && (p[0] == '/' || p[0] == '\\' ||
+                              (p.size() >= 2 && p[1] == ':'));
+    };
 
-        // Load bro.json from the app directory if present
-        std::string appConfig = config.appDir + "/bro.json";
-        if (fileExists(appConfig)) {
-            parseConfig(appConfig, config);
-            config.appDir = posArgs[0]; // preserve explicit appDir over bro.json "app" field
+    if (!posArgs.empty()) {
+        std::string target = posArgs[0];
+
+        if (isJsonFile(target) && fileExists(target)) {
+            // Explicit project (or app) bro.json launch.
+            bool isProject = false;
+            parseConfig(target, config, &isProject);
+            std::string targetDir = dirOf(target);
+            if (isProject) {
+                config.projectRoot = targetDir;
+                if (config.appDir.empty()) config.appDir = targetDir;
+                else if (!isAbsolute(config.appDir)) config.appDir = targetDir + "/" + config.appDir;
+            } else {
+                // App manifest pointed to directly — its dir is the appDir.
+                config.appDir = targetDir;
+            }
+        } else {
+            // Directory target.
+            config.appDir = target;
+            std::string broJson = target + "/bro.json";
+            if (fileExists(broJson)) {
+                bool isProject = false;
+                parseConfig(broJson, config, &isProject);
+                if (isProject) {
+                    config.projectRoot = target;
+                    // appDir field (or default_app) resolves against project root.
+                    if (config.appDir.empty() || config.appDir == target) {
+                        config.appDir = target;
+                    } else if (!isAbsolute(config.appDir)) {
+                        config.appDir = target + "/" + config.appDir;
+                    }
+                } else {
+                    // Plain app bro.json — preserve explicit dir over `"app"` field.
+                    config.appDir = target;
+                }
+            }
         }
     } else {
-        // No arguments — auto-detect app from exe directory.
-        // Also chdir there so that relative paths in bro.json ("app": "apps/…")
-        // and engine-relative resolution (system/ panels, etc.) work when the
-        // binary is launched from Finder / the macOS .app bundle (cwd = "/").
+        // No arguments — auto-detect from exe directory.
         std::string dir = exeDir();
 #ifndef _WIN32
         if (!dir.empty() && dir != ".") chdir(dir.c_str());
@@ -327,11 +258,14 @@ int main(int argc, char* argv[]) {
         std::string configPath = dir + "/bro.json";
 
         if (fileExists(configPath)) {
-            parseConfig(configPath, config);
-            // Resolve relative app dir against exe directory
+            bool isProject = false;
+            parseConfig(configPath, config, &isProject);
+            if (isProject) {
+                config.projectRoot = dir;
+            }
             if (config.appDir.empty()) {
                 config.appDir = dir;
-            } else if (config.appDir[0] != '/' && !(config.appDir.size() >= 2 && config.appDir[1] == ':')) {
+            } else if (!isAbsolute(config.appDir)) {
                 config.appDir = dir + "/" + config.appDir;
             }
         } else if (fileExists(dir + "/index.html")) {
@@ -342,26 +276,58 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Inherit projectRoot from a parent bro process when this app was spawned
+    // from a launcher running inside a project.
+    if (config.projectRoot.empty()) {
+        if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
+            if (*env) config.projectRoot = env;
+        }
+    }
+
+    // When launching via a project bro.json, the app's own bro.json also
+    // provides per-app overrides (title, width, height, etc.). Parse it
+    // after the project manifest so app-level keys take precedence. Preserve
+    // the resolved appDir against the app manifest's `"app": "."` field.
+    if (!config.projectRoot.empty() && !config.appDir.empty()) {
+        std::string appBroJson = config.appDir + "/bro.json";
+        if (fileExists(appBroJson) && appBroJson != config.projectRoot + "/bro.json") {
+            std::string preservedAppDir = config.appDir;
+            parseConfig(appBroJson, config, nullptr);
+            config.appDir = preservedAppDir;
+        }
+    }
+
     // CLI splash overrides — applied last so they win over bro.json.
     if (cliNoSplash) config.showSplash = false;
     if (cliSplash)   config.showSplash = true;
 
-    // Expose the resolved app directory to JS (process.env.BRO_APP_DIR) so the
-    // launcher and other meta-apps can locate themselves and their siblings on
-    // disk without guessing from cwd. Resolved to an absolute path.
-    {
+    // Expose the resolved app directory and project root to JS / child
+    // processes (process.env.BRO_APP_DIR, BRO_PROJECT_ROOT) so the launcher
+    // and other meta-apps can locate themselves and their siblings on disk
+    // without guessing from cwd, and so spawned children inherit the project
+    // context. Resolved to absolute paths.
+    auto absolutize = [&](const std::string& p) -> std::string {
+        if (p.empty()) return p;
 #ifdef _WIN32
         char abs[MAX_PATH];
-        const char* appDirAbs = _fullpath(abs, config.appDir.c_str(), MAX_PATH)
-                                ? abs : config.appDir.c_str();
-        _putenv_s("BRO_APP_DIR", appDirAbs);
+        return _fullpath(abs, p.c_str(), MAX_PATH) ? std::string(abs) : p;
 #else
         char abs[PATH_MAX];
-        const char* appDirAbs = realpath(config.appDir.c_str(), abs)
-                                ? abs : config.appDir.c_str();
-        setenv("BRO_APP_DIR", appDirAbs, 1);
+        return realpath(p.c_str(), abs) ? std::string(abs) : p;
 #endif
-    }
+    };
+
+    config.appDir = absolutize(config.appDir);
+    if (!config.projectRoot.empty()) config.projectRoot = absolutize(config.projectRoot);
+
+#ifdef _WIN32
+    _putenv_s("BRO_APP_DIR", config.appDir.c_str());
+    _putenv_s("BRO_PROJECT_ROOT", config.projectRoot.c_str());
+#else
+    setenv("BRO_APP_DIR", config.appDir.c_str(), 1);
+    if (!config.projectRoot.empty()) setenv("BRO_PROJECT_ROOT", config.projectRoot.c_str(), 1);
+    else unsetenv("BRO_PROJECT_ROOT");
+#endif
 
     try {
         bro::engine::Engine engine(config);

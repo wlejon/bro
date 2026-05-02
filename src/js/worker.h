@@ -12,6 +12,7 @@ extern "C" {
 }
 
 namespace bro::net { class NetService; }
+namespace bro::util { class AssetMounts; }
 
 namespace bro::js {
 
@@ -28,7 +29,8 @@ public:
     /// If netService is non-null, the worker installs bro.net bindings
     /// against it (own subscriber, polled on the worker's event loop).
     Worker(const std::string& scriptPath, const std::string& basePath,
-           net::NetService* netService);
+           net::NetService* netService,
+           const util::AssetMounts* mounts = nullptr);
     ~Worker();
 
     // Non-copyable, non-movable
@@ -81,6 +83,7 @@ private:
     std::string scriptPath_;
     std::string basePath_;
     net::NetService* netService_ = nullptr;
+    const util::AssetMounts* mounts_ = nullptr;
     std::thread thread_;
 
     // Lock-free message queues (SPSC ring buffers)
@@ -109,7 +112,8 @@ private:
 /// bro.net bindings installed on their JS context.
 /// Must be called after brokit APIs are installed.
 void installWorkerBindings(JSContext* ctx, const std::string& appBasePath,
-                           net::NetService* netService);
+                           net::NetService* netService,
+                           const util::AssetMounts* mounts = nullptr);
 
 /// Clean up worker bindings state for a context (call before freeing context).
 void cleanupWorkerBindings(JSContext* ctx);

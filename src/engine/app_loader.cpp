@@ -1,4 +1,5 @@
 #include "engine/app_loader.h"
+#include "util/asset_mounts.h"
 #include "util/log.h"
 #include <fstream>
 #include <sstream>
@@ -17,25 +18,39 @@ std::string AppLoader::loadFile(const std::string& path) {
     return ss.str();
 }
 
-std::string AppLoader::resolveRelativePath(const std::string& base, const std::string& relative) {
-    if (relative.empty()) return base;
+std::string AppLoader::resolvePath(const std::string& base,
+                                   const std::string& path,
+                                   const util::AssetMounts* mounts)
+{
+    if (path.empty()) return base;
 
-    // If relative is already an absolute path, return as-is.
-    if (relative.size() >= 2 && relative[1] == ':') return relative;   // Windows absolute
-    if (relative[0] == '/') return relative;                            // Unix absolute
+    // Drive-letter absolute (Windows) — pass through.
+    if (path.size() >= 2 && path[1] == ':') return path;
 
+    // `/`-prefixed: try engine mounts first; otherwise treat as filesystem
+    // absolute. Mounts take precedence so `/lib/foo.js` resolves through
+    // the mount table even when `/lib` exists on disk.
+    if (path[0] == '/' || path[0] == '\\') {
+        if (mounts) {
+            std::string m = mounts->resolve(path);
+            if (!m.empty()) return m;
+        }
+        return path;
+    }
+
+    // Bare relative — append to base.
     std::string result = base;
     if (!result.empty() && result.back() != '/' && result.back() != '\\') {
         result += '/';
     }
-    result += relative;
+    result += path;
     return result;
 }
 
-AppManifest AppLoader::loadApp(const std::string& appDir) {
+AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMounts* mounts) {
     AppManifest manifest;
     manifest.basePath = appDir;
-    manifest.htmlPath = resolveRelativePath(appDir, "index.html");
+    manifest.htmlPath = resolvePath(appDir, "index.html", mounts);
 
     std::string html = loadFile(manifest.htmlPath);
     if (html.empty()) {
@@ -51,7 +66,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir) {
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
             std::string href = (*it)[1].str();
-            manifest.stylePaths.push_back(resolveRelativePath(appDir, href));
+            manifest.stylePaths.push_back(resolvePath(appDir, href, mounts));
         }
     }
 
@@ -63,7 +78,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir) {
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
             std::string href = (*it)[1].str();
-            std::string resolved = resolveRelativePath(appDir, href);
+            std::string resolved = resolvePath(appDir, href, mounts);
             // Avoid duplicates
             bool found = false;
             for (auto& existing : manifest.stylePaths) {
@@ -89,7 +104,7 @@ AppManifest AppLoader::loadApp(const std::string& appDir) {
             std::smatch srcMatch;
             if (std::regex_search(attrs, srcMatch, srcRe)) {
                 // External script
-                std::string resolved = resolveRelativePath(appDir, srcMatch[1].str());
+                std::string resolved = resolvePath(appDir, srcMatch[1].str(), mounts);
                 manifest.scripts.push_back({resolved, {}});
             } else if (!body.empty()) {
                 // Inline script

@@ -4,6 +4,7 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include "util/asset_mounts.h"
 #include "util/log.h"
 
 #include <stb_image.h>
@@ -15,6 +16,7 @@
 namespace bro::js {
 
 static std::string s_basePath;  // App directory for resolving relative paths
+static const util::AssetMounts* s_mounts = nullptr;
 
 struct ImageData {
     int width = 0;
@@ -28,12 +30,16 @@ struct ImageData {
 
 using ID = ImageData;
 
-// Resolve an image src path against the app base directory.
+// Resolve an image src path against the app base directory and engine mounts.
 static std::string resolvePath(const std::string& src) {
-    // Already absolute?
     if (src.size() >= 2 && src[1] == ':') return src;   // Windows C:\...
-    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) return src;
-    // Relative — join with base
+    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) {
+        if (s_mounts) {
+            std::string m = s_mounts->resolve(src);
+            if (!m.empty()) return m;
+        }
+        return src;
+    }
     if (s_basePath.empty()) return src;
     std::string path = s_basePath;
     if (path.back() != '/' && path.back() != '\\') path += '/';
@@ -132,8 +138,10 @@ static JSValue js_image_removeEventListener(JSContext* ctx, JSValueConst this_va
 // Install
 // -------------------------------------------------------------------------
 
-void ImageBindings::install(JSContext* ctx, const std::string& basePath) {
+void ImageBindings::install(JSContext* ctx, const std::string& basePath,
+                            const util::AssetMounts* mounts) {
     s_basePath = basePath;
+    s_mounts = mounts;
 
     qjsbind::Class<ID>(ctx, "Image")
         .constructor([](JSContext* ctx, int /*argc*/, JSValueConst* /*argv*/) -> ID* {

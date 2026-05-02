@@ -5,6 +5,7 @@
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
 
+#include <filesystem>
 #include <fstream>
 
 #include "observer_check.js.h"
@@ -115,6 +116,34 @@ Engine::Engine(const EngineConfig& config)
 
     splashEnabled_ = config.showSplash;
 
+    // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
+    // Project-root mounts come first; app-local overrides applied after the
+    // app dir is known to exist.
+    {
+        namespace fs = std::filesystem;
+        auto tryMount = [&](const std::string& prefix, const std::string& dirName) {
+            // App-local override has highest priority.
+            if (!config.appDir.empty()) {
+                fs::path appLocal = fs::path(config.appDir) / dirName;
+                std::error_code ec;
+                if (fs::is_directory(appLocal, ec)) {
+                    assetMounts_.addMount("/" + prefix, fs::absolute(appLocal, ec).string());
+                    return;
+                }
+            }
+            // Project-root mount.
+            if (!config.projectRoot.empty()) {
+                fs::path rootLocal = fs::path(config.projectRoot) / dirName;
+                std::error_code ec;
+                if (fs::is_directory(rootLocal, ec)) {
+                    assetMounts_.addMount("/" + prefix, fs::absolute(rootLocal, ec).string());
+                }
+            }
+        };
+        tryMount("lib",    config.libDirName.empty()    ? "lib"    : config.libDirName);
+        tryMount("system", config.systemDirName.empty() ? "system" : config.systemDirName);
+    }
+
     // === Settings system ===
     settings_ = std::make_unique<Settings>(config.settingsPath);
 
@@ -205,10 +234,14 @@ Engine::Engine(const EngineConfig& config)
         // Register app directory as base path for fetch and fs
         brokit::api::addFetchBasePath(jsRuntime_->getContext(), config.appDir);
         brokit::api::addFsBasePath(jsRuntime_->getContext(), config.appDir);
+        for (const auto& [prefix, target] : assetMounts_.mounts()) {
+            brokit::api::addFsPrefixMount(jsRuntime_->getContext(), prefix, target);
+            brokit::api::addFetchPrefixMount(jsRuntime_->getContext(), prefix, target);
+        }
 
         // Worker bindings
         js::installWorkerBindings(jsRuntime_->getContext(), config.appDir,
-                                  netService_.get());
+                                  netService_.get(), &assetMounts_);
 
         LOG_INFO("Server mode initialized (no rendering, no DOM, no audio)");
         return;
@@ -336,7 +369,7 @@ Engine::Engine(const EngineConfig& config)
     textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get(), &fontManager_);
 
     // 6. Load the application
-    manifest_ = AppLoader::loadApp(config.appDir);
+    manifest_ = AppLoader::loadApp(config.appDir, &assetMounts_);
     std::string html = AppLoader::loadFile(manifest_.htmlPath);
     if (html.empty()) {
         throw std::runtime_error("Failed to load index.html from " + config.appDir);
@@ -412,7 +445,7 @@ Engine::Engine(const EngineConfig& config)
 
     // 9c. Install Canvas 2D bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());
-    js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+    js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath, &assetMounts_);
     js::VideoBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     // screenshotCanvas works on both GPU-backed (windowed) and raster
     // (headless) Skia surfaces, so it's installed in both modes — apps can
@@ -422,6 +455,13 @@ Engine::Engine(const EngineConfig& config)
     // Register app directory as base path for fetch and fs (overlay: last added = checked first)
     brokit::api::addFetchBasePath(jsRuntime_->getContext(), manifest_.basePath);
     brokit::api::addFsBasePath(jsRuntime_->getContext(), manifest_.basePath);
+
+    // Register engine-supplied prefix mounts (/lib, /system, ...) so fs and
+    // fetch resolve them ahead of basePath.
+    for (const auto& [prefix, target] : assetMounts_.mounts()) {
+        brokit::api::addFsPrefixMount(jsRuntime_->getContext(), prefix, target);
+        brokit::api::addFetchPrefixMount(jsRuntime_->getContext(), prefix, target);
+    }
 
     if (gl_) {
         // GPU path: WebGL2 + full canvas factory (windowed or GPU headless)
@@ -600,7 +640,7 @@ Engine::Engine(const EngineConfig& config)
 
     // 9d. Install Worker bindings
     js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath,
-                              netService_.get());
+                              netService_.get(), &assetMounts_);
 
     // 10. Load and execute scripts (external + inline, in document order)
     for (auto& script : manifest_.scripts) {
@@ -729,11 +769,7 @@ void Engine::loadCustomFonts() {
     std::string basePath = document_->basePath();
 
     for (auto& ff : fontFaces) {
-        // Resolve relative URL against app base path
-        std::string path = ff.src;
-        if (!path.empty() && path[0] != '/' && path.find(':') == std::string::npos) {
-            path = basePath + "/" + path;
-        }
+        std::string path = AppLoader::resolvePath(basePath, ff.src, &assetMounts_);
 
         // Read font file
         std::ifstream file(path, std::ios::binary | std::ios::ate);

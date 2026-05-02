@@ -33,6 +33,7 @@ add_library(bro_engine STATIC
     overflow.cpp
     scrollbar.cpp
     app_loader.cpp
+    config_loader.cpp
     replaced_elements.cpp
     system_panels.cpp
     settings.cpp

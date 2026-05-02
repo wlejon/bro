@@ -1,4 +1,5 @@
 #include "js/worker.h"
+#include "util/asset_mounts.h"
 #include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/message_serializer.h"
@@ -30,10 +31,12 @@ namespace bro::js {
 // ============================================================================
 
 Worker::Worker(const std::string& scriptPath, const std::string& basePath,
-               net::NetService* netService)
+               net::NetService* netService,
+               const util::AssetMounts* mounts)
     : scriptPath_(scriptPath)
     , basePath_(basePath)
     , netService_(netService)
+    , mounts_(mounts)
 {
 }
 
@@ -198,6 +201,15 @@ void Worker::threadFunc()
     brokit::api::installAll(ctx);
     brokit::api::addFetchBasePath(ctx, basePath_);
     brokit::api::addFsBasePath(ctx, basePath_);
+
+    // Inherit engine prefix mounts (/lib, /system, ...) from the parent
+    // bindings state so a worker can `require('/lib/foo.js')` etc.
+    if (mounts_) {
+        for (const auto& [prefix, target] : mounts_->mounts()) {
+            brokit::api::addFsPrefixMount(ctx, prefix, target);
+            brokit::api::addFetchPrefixMount(ctx, prefix, target);
+        }
+    }
 
     // --- 3. Install own Timers ---
     auto timers = std::make_unique<Timers>();
@@ -420,6 +432,7 @@ struct WorkerBindingsState {
     std::string basePath;
     std::vector<Worker*> workers;  // all workers created from this context
     net::NetService* netService = nullptr;
+    const util::AssetMounts* mounts = nullptr;
 };
 
 static std::unordered_map<JSContext*, WorkerBindingsState> s_workerState;
@@ -453,8 +466,15 @@ static JSValue js_worker_ctor(JSContext* ctx, JSValueConst new_target,
     std::string scriptPath(path);
     JS_FreeCString(ctx, path);
 
+    // Engine-supplied mounts (e.g. /lib/foo.js) take precedence over basePath.
+    if (it->second.mounts) {
+        std::string resolved = it->second.mounts->resolve(scriptPath);
+        if (!resolved.empty()) scriptPath = resolved;
+    }
+
     // Create C++ Worker
-    auto* worker = new Worker(scriptPath, it->second.basePath, it->second.netService);
+    auto* worker = new Worker(scriptPath, it->second.basePath,
+                              it->second.netService, it->second.mounts);
     it->second.workers.push_back(worker);
 
     // Create JS object
@@ -504,7 +524,8 @@ static JSValue js_worker_terminate(JSContext* ctx, JSValueConst this_val,
 }
 
 void installWorkerBindings(JSContext* ctx, const std::string& appBasePath,
-                           net::NetService* netService)
+                           net::NetService* netService,
+                           const util::AssetMounts* mounts)
 {
     // Register class and prototype via qjsbind (NoGlobal — we set a custom constructor below)
     qjsbind::Class<WorkerOpaque>(ctx, "Worker", qjsbind::NoGlobal,
@@ -524,7 +545,7 @@ void installWorkerBindings(JSContext* ctx, const std::string& appBasePath,
     JS_FreeValue(ctx, global);
 
     // Per-context state
-    s_workerState[ctx] = WorkerBindingsState{appBasePath, {}, netService};
+    s_workerState[ctx] = WorkerBindingsState{appBasePath, {}, netService, mounts};
 }
 
 void cleanupWorkerBindings(JSContext* ctx)

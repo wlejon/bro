@@ -1,6 +1,7 @@
 #pragma once
 
 #include "engine/app_loader.h"
+#include "util/asset_mounts.h"
 #include "engine/css_transitions.h"
 #include "engine/gizmo.h"
 #include "engine/menu_bar.h"
@@ -119,6 +120,20 @@ struct EngineConfig {
     std::string appDir;
     std::string title;   // window title override (empty = use <title> from HTML)
     std::string settingsPath; // path to .bro_settings.json (empty = auto-detect)
+
+    /// Project root for engine-supplied asset mounts (`/lib`, `/system`, ...).
+    /// Empty when launched with just an app dir; populated from a project
+    /// bro.json or the BRO_PROJECT_ROOT env var (set by parent bro processes
+    /// when spawning child apps).
+    std::string projectRoot;
+
+    /// Names of the engine-supplied mount directories under projectRoot.
+    /// Defaults are "lib" and "system"; override via project bro.json keys.
+    /// The mounts are exposed as `/lib` and `/system` (or whatever the names
+    /// are) regardless of disk directory name.
+    std::string libDirName    = "lib";
+    std::string systemDirName = "system";
+
     DisplayMode displayMode = DisplayMode::Windowed;
     /// Show the startup splash screen (system/splash.html). Defaults to true
     /// for windowed, false for headless (splash is visual-only and its matrix
@@ -528,6 +543,7 @@ private:
     // Pre-compiled observer check function (avoids JS_Eval parse per frame)
     JSValue observerCheckFn_ = JS_UNDEFINED;
     AppManifest manifest_;
+    util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
 
     // WebGL contexts (owned by engine, associated with canvas elements)

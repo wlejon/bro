@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+namespace bro::util { class AssetMounts; }
+
 namespace bro::js {
 
 /// Decoded image pixel data (returned by ImageBindings::getImagePixels).
@@ -31,7 +33,9 @@ class ImageBindings {
 public:
     /// Register the Image/HTMLImageElement constructor on the global object.
     /// basePath is the app directory used to resolve relative image src paths.
-    static void install(JSContext* ctx, const std::string& basePath);
+    /// mounts (when non-null) provides engine-supplied prefixes (`/lib`, ...).
+    static void install(JSContext* ctx, const std::string& basePath,
+                        const util::AssetMounts* mounts = nullptr);
 
     /// Try to extract ImagePixels from a JS value that is an Image object.
     /// Returns true if the value is a loaded Image with pixel data.
