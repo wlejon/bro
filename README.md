@@ -4,9 +4,13 @@ An HTML/CSS/JS runtime for desktop apps and games — QuickJS, a custom layout e
 
 Note from the co-pilot: i am a career programmer but this and its sister repositories are vibe coded. use at your own risk.
 
-## Launcher
+** this is pre-release, pre-alpha **
 
->bro ../broworkshop/launcher
+## Broworkshop
+
+[broworkshop](https://github.com/wlejon/broworkshop) houses the apps built with bro used to demonstrate the functionality.
+
+>bro broworkshop/bro.json
 
 ![launcher](docs/launcher.png)
 
@@ -14,9 +18,9 @@ The launcher and a curated set of starter apps live in the sibling [broworkshop]
 
 ## Why
 
-Coding agents build web UIs really well. While they can build native UIs, in my experience, there's a lot more debugging happening to get something working. Electron/Tauri/etc solve that, but only for what the web platform natively supports.
+Coding agents build web UIs really well. While they can build native UIs, in my experience, there's a lot more debugging happening to get something working. Electron solves that, but only for what the web platform natively supports.
 
-Bro is a different path. HTML/CSS/JS is the UI/app layer like Electron but the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a 3D scene graph, Jolt physics, a real-time audio engine, mesh generation and CSG, navmesh pathfinding, game networking over GNS, native file dialogs, menu bars. All exposed to JS, all running in one process, no IPC to a Chromium renderer.
+In bro, HTML/CSS/JS is the UI/app layer like Electron but the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a 3D scene graph, Jolt physics, a real-time audio engine, mesh generation and CSG, navmesh pathfinding, game networking over GNS, native file dialogs, menu bars. All exposed to JS, all running in one process, no IPC to a Chromium renderer.
 
 None of this is new, it's just a reconfiguration that works better for coding agents.
 
@@ -37,7 +41,7 @@ None of this is new, it's just a reconfiguration that works better for coding ag
 bro path/to/hello
 ```
 
-See the sibling [broworkshop](../broworkshop) repo for the launcher and a categorized set of starter apps (games, tools, demos, ai).
+See [broworkshop](https://github.com/wlejon/broworkshop) for example applications. 
 
 ## What you get
 
@@ -70,14 +74,16 @@ See [BUILDING.md](BUILDING.md) for prerequisites, Skia setup, and build commands
 
 ## Usage
 
+Checkout the [broworkshop] repo in the parent folder to follow along. 
+
 ### Windowed mode
 
 ```bash
 # Windows
-./build/Debug/bro.exe ../broworkshop/demos/example
+./build/Debug/bro.exe ../broworkshop/bro.json
 
 # Linux / macOS
-./build/bro ../broworkshop/demos/example
+./build/bro ../broworkshop/bro.json
 ```
 
 Loads the app's `index.html`, applies stylesheets, executes scripts, and opens a window.
