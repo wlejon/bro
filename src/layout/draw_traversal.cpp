@@ -601,36 +601,38 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     }
 
     if (visible) {
-        // Box shadows (drawn before background, behind the element).
-        // Supports multiple comma-separated shadows.  CSS spec: first shadow
-        // in the list is drawn on top (closest to element), so we draw in
-        // reverse order.
+        // Box shadows. CSS paint order:
+        //   1. outset shadows (drawn before background, behind the element)
+        //   2. background
+        //   3. inset shadows (drawn over background, under content/border)
+        // Within outset/inset groups, the first shadow in the list paints on
+        // top of later ones, so we draw in reverse list order.
         auto bsIt = style.find("box-shadow");
-        if (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none") {
-            render::Radii radii = getRadii(style, bw, bh);
+        std::vector<std::string> shadows;
+        render::Radii shadowRadii = {{0,0,0,0},{0,0,0,0}};
+        bool hasShadows = (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none");
+        if (hasShadows) {
+            shadowRadii = getRadii(style, bw, bh);
 
             // Split on commas, respecting parentheses (for rgb()/rgba())
-            std::vector<std::string> shadows;
-            {
-                const auto& full = bsIt->second;
-                int depth = 0;
-                size_t start = 0;
-                for (size_t i = 0; i <= full.size(); ++i) {
-                    if (i < full.size() && full[i] == '(') ++depth;
-                    else if (i < full.size() && full[i] == ')') --depth;
-                    else if ((i == full.size() || full[i] == ',') && depth <= 0) {
-                        std::string s = full.substr(start, i - start);
-                        // Trim leading/trailing whitespace
-                        size_t a = s.find_first_not_of(" \t");
-                        size_t b = s.find_last_not_of(" \t");
-                        if (a != std::string::npos)
-                            shadows.push_back(s.substr(a, b - a + 1));
-                        start = i + 1;
-                    }
+            const auto& full = bsIt->second;
+            int depth = 0;
+            size_t start = 0;
+            for (size_t i = 0; i <= full.size(); ++i) {
+                if (i < full.size() && full[i] == '(') ++depth;
+                else if (i < full.size() && full[i] == ')') --depth;
+                else if ((i == full.size() || full[i] == ',') && depth <= 0) {
+                    std::string s = full.substr(start, i - start);
+                    size_t a = s.find_first_not_of(" \t");
+                    size_t b = s.find_last_not_of(" \t");
+                    if (a != std::string::npos)
+                        shadows.push_back(s.substr(a, b - a + 1));
+                    start = i + 1;
                 }
             }
+        }
 
-            // Draw in reverse order (last shadow = furthest from element = drawn first)
+        auto drawShadows = [&](bool wantInset) {
             for (int si = static_cast<int>(shadows.size()) - 1; si >= 0; --si) {
                 std::string val = shadows[si];
                 bool inset = false;
@@ -639,6 +641,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                     inset = true;
                     val.erase(ipos, 5);
                 }
+                if (inset != wantInset) continue;
                 std::istringstream iss(val);
                 std::vector<float> nums;
                 std::string colorStr;
@@ -659,11 +662,14 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                     float sspread = nums.size() >= 4 ? nums[3] : 0;
                     render::Color sc = {0, 0, 0, 80};
                     if (!colorStr.empty()) tryParseColor(colorStr, sc);
-                    renderer_->drawBoxShadowRadii(bx, by, bw, bh, radii,
+                    renderer_->drawBoxShadowRadii(bx, by, bw, bh, shadowRadii,
                                             sdx, sdy, sblur, sspread, sc, inset);
                 }
             }
-        }
+        };
+
+        // Outset shadows first (behind background).
+        if (hasShadows) drawShadows(false);
 
         // For html/body elements, background covers the entire viewport (CSS2.1 spec).
         // viewportTop_ offsets for engine-reserved insets (e.g. menu bar).
@@ -675,6 +681,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         } else {
             drawBackground(elem, bx, by, bw, bh);
         }
+
+        // Inset shadows after background (so they're visible on top of it).
+        if (hasShadows) drawShadows(true);
 
         // Draw borders
         drawBorders(elem, bx, by, bw, bh);
