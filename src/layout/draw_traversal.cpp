@@ -1227,10 +1227,16 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
         return it == style.end() || it->second != "none";
     };
 
-    // When all borders have the same color and width, draw as a single rounded/rect stroke
+    // When all four borders have the same color AND the same width, draw as a
+    // single rounded/rect stroke.  If only some sides are present (or widths
+    // differ), fall through to per-side drawing — otherwise the stroke would
+    // paint phantom borders on the missing sides.
     bool allSameColor = true;
+    bool allSameWidth = true;
+    bool allFourVisible = true;
     bool anyVisible = false;
     render::Color firstColor = {0, 0, 0, 255};
+    float firstWidth = 0.0f;
     float sides[] = {box.border.top, box.border.right, box.border.bottom, box.border.left};
     const char* colorProps[] = {"border-top-color", "border-right-color",
                                 "border-bottom-color", "border-left-color"};
@@ -1238,20 +1244,23 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
                                 "border-bottom-style", "border-left-style"};
     bool firstSet = false;
     for (int i = 0; i < 4; ++i) {
-        if (sides[i] > 0 && isBorderVisible(styleProps[i])) {
-            auto c = getBorderColor(colorProps[i]);
-            if (!firstSet) { firstColor = c; firstSet = true; }
-            else if (c.r != firstColor.r || c.g != firstColor.g ||
-                     c.b != firstColor.b || c.a != firstColor.a) {
+        bool visible = (sides[i] > 0 && isBorderVisible(styleProps[i]));
+        if (!visible) { allFourVisible = false; continue; }
+        auto c = getBorderColor(colorProps[i]);
+        if (!firstSet) { firstColor = c; firstWidth = sides[i]; firstSet = true; }
+        else {
+            if (c.r != firstColor.r || c.g != firstColor.g ||
+                c.b != firstColor.b || c.a != firstColor.a) {
                 allSameColor = false;
             }
-            anyVisible = true;
+            if (std::abs(sides[i] - firstWidth) > 0.01f) allSameWidth = false;
         }
+        anyVisible = true;
     }
 
     if (!anyVisible) return;
 
-    if (rounded && allSameColor) {
+    if (rounded && allSameColor && allSameWidth && allFourVisible) {
         // Draw a single rounded rect outline. Inset by half the (averaged)
         // border width so the centerline of the stroke lies on the border box
         // edge, matching CSS border placement.
