@@ -889,11 +889,57 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
         clipped = true;
     }
 
-    // Background image
+    // Helper: split CSS multi-value at top-level commas (paren/quote-aware).
+    auto splitLayers = [](const std::string& v) {
+        std::vector<std::string> out;
+        std::string cur;
+        int depth = 0;
+        bool inQ = false;
+        char qc = 0;
+        for (char c : v) {
+            if (inQ) { cur += c; if (c == qc) inQ = false; continue; }
+            if (c == '"' || c == '\'') { inQ = true; qc = c; cur += c; continue; }
+            if (c == '(') { ++depth; cur += c; continue; }
+            if (c == ')') { --depth; cur += c; continue; }
+            if (c == ',' && depth == 0) {
+                while (!cur.empty() && std::isspace(static_cast<unsigned char>(cur.front()))) cur.erase(cur.begin());
+                while (!cur.empty() && std::isspace(static_cast<unsigned char>(cur.back()))) cur.pop_back();
+                out.push_back(cur);
+                cur.clear();
+                continue;
+            }
+            cur += c;
+        }
+        while (!cur.empty() && std::isspace(static_cast<unsigned char>(cur.front()))) cur.erase(cur.begin());
+        while (!cur.empty() && std::isspace(static_cast<unsigned char>(cur.back()))) cur.pop_back();
+        if (!cur.empty() || !out.empty()) out.push_back(cur);
+        return out;
+    };
+
+    // Build per-layer values for each background sub-property.
+    auto getLayerProp = [&](const char* name, const std::string& fallback) {
+        auto it = style.find(name);
+        if (it == style.end() || it->second.empty()) return std::vector<std::string>{fallback};
+        auto v = splitLayers(it->second);
+        if (v.empty()) v.push_back(fallback);
+        return v;
+    };
+
     auto imgIt = style.find("background-image");
     if (imgIt != style.end() && !imgIt->second.empty() && imgIt->second != "none") {
-        // Handle url(...) and gradients
-        const std::string& val = imgIt->second;
+        auto images   = splitLayers(imgIt->second);
+        auto positions= getLayerProp("background-position", "0% 0%");
+        auto sizes    = getLayerProp("background-size", "auto");
+        auto repeats  = getLayerProp("background-repeat", "repeat");
+
+        // Paint layers from last to first (CSS: first listed is on top).
+        for (size_t li = images.size(); li-- > 0; ) {
+            const std::string& val = images[li];
+            if (val.empty() || val == "none") continue;
+            const std::string layerPosition = li < positions.size() ? positions[li] : positions.back();
+            const std::string layerSize     = li < sizes.size()     ? sizes[li]     : sizes.back();
+            const std::string layerRepeat   = li < repeats.size()   ? repeats[li]   : repeats.back();
+
         if (val.substr(0, 4) == "url(") {
             // Extract URL
             size_t start = val.find('(') + 1;
@@ -912,9 +958,8 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     float drawH = imgH > 0 ? imgH : h;
 
                     // background-size
-                    auto bsIt2 = style.find("background-size");
-                    if (bsIt2 != style.end()) {
-                        const auto& bs = bsIt2->second;
+                    {
+                        const auto& bs = layerSize;
                         if (bs == "cover" && imgW > 0 && imgH > 0) {
                             float scale = std::max(w / imgW, h / imgH);
                             drawW = imgW * scale; drawH = imgH * scale;
@@ -938,9 +983,8 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
 
                     // background-position
                     float posX = x, posY = y;
-                    auto bpIt = style.find("background-position");
-                    if (bpIt != style.end() && !bpIt->second.empty()) {
-                        const auto& bp = bpIt->second;
+                    if (!layerPosition.empty()) {
+                        const auto& bp = layerPosition;
                         if (bp == "center") {
                             posX = x + (w - drawW) / 2;
                             posY = y + (h - drawH) / 2;
@@ -959,8 +1003,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     }
 
                     // background-repeat
-                    auto brIt2 = style.find("background-repeat");
-                    std::string repeat = (brIt2 != style.end()) ? brIt2->second : "repeat";
+                    std::string repeat = layerRepeat.empty() ? "repeat" : layerRepeat;
 
                     if (repeat == "no-repeat") {
                         renderer_->drawImage(imgCacheIt->second.data.data(),
@@ -1134,6 +1177,81 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 }
 
                 if (stops.size() >= 2) {
+                    // Compute per-cell box from background-size + position +
+                    // repeat. Gradient is drawn into this cell, tiled per
+                    // background-repeat.
+                    float cellW = w, cellH = h;
+                    {
+                        const auto& bs = layerSize;
+                        if (!bs.empty() && bs != "auto" && bs != "cover" && bs != "contain") {
+                            std::istringstream iss(bs);
+                            std::string ws, hs;
+                            iss >> ws; iss >> hs;
+                            if (!ws.empty() && ws != "auto") cellW = parseLengthPx(ws, w);
+                            if (!hs.empty() && hs != "auto") cellH = parseLengthPx(hs, h);
+                            else if (!ws.empty() && ws != "auto") cellH = cellW;
+                        }
+                    }
+                    if (cellW < 0.5f) cellW = 0.5f;
+                    if (cellH < 0.5f) cellH = 0.5f;
+
+                    float originX = x, originY = y;
+                    if (!layerPosition.empty() && layerPosition != "0% 0%") {
+                        const auto& bp = layerPosition;
+                        if (bp == "center") {
+                            originX = x + (w - cellW) / 2;
+                            originY = y + (h - cellH) / 2;
+                        } else {
+                            std::istringstream iss(bp);
+                            std::string ps1, ps2;
+                            iss >> ps1; iss >> ps2;
+                            auto resolvePos = [&](const std::string& tok, bool isX, float box, float cell) -> float {
+                                if (tok == "left") return 0;
+                                if (tok == "right") return box - cell;
+                                if (tok == "top") return 0;
+                                if (tok == "bottom") return box - cell;
+                                if (tok == "center") return (box - cell) / 2;
+                                if (!tok.empty() && tok.back() == '%') {
+                                    float p = std::strtof(tok.c_str(), nullptr) / 100.0f;
+                                    return p * (box - cell);
+                                }
+                                return parseLengthPx(tok, box);
+                            };
+                            if (!ps1.empty()) originX = x + resolvePos(ps1, true,  w, cellW);
+                            if (!ps2.empty()) originY = y + resolvePos(ps2, false, h, cellH);
+                            else originY = y + resolvePos(ps1, false, h, cellH);
+                        }
+                    }
+
+                    bool tileX = (layerRepeat == "repeat" || layerRepeat == "repeat-x");
+                    bool tileY = (layerRepeat == "repeat" || layerRepeat == "repeat-y");
+                    bool needTile = tileX || tileY;
+                    bool needClip = needTile || cellW < w || cellH < h ||
+                                    originX > x || originY > y ||
+                                    originX + cellW < x + w || originY + cellH < y + h;
+
+                    // Build the tile list (for repeat, populate spans across the box).
+                    struct Cell { float gx, gy, gw, gh; };
+                    std::vector<Cell> cells;
+                    if (needTile) {
+                        float startX = tileX ? x - std::fmod(originX - x, cellW) - cellW : originX;
+                        float startY = tileY ? y - std::fmod(originY - y, cellH) - cellH : originY;
+                        float endX = tileX ? x + w : originX + cellW;
+                        float endY = tileY ? y + h : originY + cellH;
+                        for (float iy = startY; iy < endY; iy += cellH)
+                            for (float ix = startX; ix < endX; ix += cellW)
+                                cells.push_back({ix, iy, cellW, cellH});
+                    } else {
+                        cells.push_back({originX, originY, cellW, cellH});
+                    }
+
+                    if (needClip) {
+                        renderer_->save();
+                        renderer_->setClip(x, y, w, h);
+                    }
+
+                    for (const auto& cl : cells) {
+                    float gx = cl.gx, gy = cl.gy, gw = cl.gw, gh = cl.gh;
                     if (val.find("linear-gradient") != std::string::npos) {
                         // CSS linear-gradient: gradient line passes through the
                         // center, with length = |W·sin(angle)| + |H·cos(angle)|.
@@ -1142,19 +1260,19 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         // Endpoints are in canvas space, so add the box origin.
                         float rad = angleDeg * 3.14159265f / 180.0f;
                         float sa = std::sin(rad), ca = -std::cos(rad);
-                        float cx2 = x + w / 2, cy2 = y + h / 2;
-                        float lineLen = std::abs(w * std::sin(rad)) +
-                                        std::abs(h * std::cos(rad));
+                        float cx2 = gx + gw / 2, cy2 = gy + gh / 2;
+                        float lineLen = std::abs(gw * std::sin(rad)) +
+                                        std::abs(gh * std::cos(rad));
                         float dx = sa * lineLen / 2.0f;
                         float dy = ca * lineLen / 2.0f;
-                        renderer_->fillLinearGradient(x, y, w, h,
+                        renderer_->fillLinearGradient(gx, gy, gw, gh,
                             cx2 - dx, cy2 - dy, cx2 + dx, cy2 + dy, stops);
                     } else if (isRadial) {
-                        float rcx = radCxFrac * w;
-                        float rcy = radCyFrac * h;
+                        float rcx = radCxFrac * gw;
+                        float rcy = radCyFrac * gh;
                         // Distances to each side from center.
-                        float dL = rcx, dR = w - rcx;
-                        float dT = rcy, dB = h - rcy;
+                        float dL = rcx, dR = gw - rcx;
+                        float dT = rcy, dB = gh - rcy;
                         float closestSideX = std::min(dL, dR);
                         float closestSideY = std::min(dT, dB);
                         float farthestSideX = std::max(dL, dR);
@@ -1197,15 +1315,18 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         }
                         if (rx < 0.001f) rx = 0.001f;
                         if (ry < 0.001f) ry = 0.001f;
-                        renderer_->fillRadialGradient(x, y, w, h,
-                            x + rcx, y + rcy, rx, ry, stops);
+                        renderer_->fillRadialGradient(gx, gy, gw, gh,
+                            gx + rcx, gy + rcy, rx, ry, stops);
                     } else if (val.find("conic-gradient") != std::string::npos) {
-                        renderer_->fillConicGradient(x, y, w, h,
-                            x + w/2, y + h/2, 0, stops);
+                        renderer_->fillConicGradient(gx, gy, gw, gh,
+                            gx + gw/2, gy + gh/2, 0, stops);
                     }
+                    } // per-cell loop
+                    if (needClip) renderer_->restore();
                 }
             }
         }
+        } // for layer
     }
 
     if (clipped) renderer_->restore();
