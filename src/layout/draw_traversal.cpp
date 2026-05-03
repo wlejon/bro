@@ -4,6 +4,7 @@
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
+#include "svg/svg_renderer.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
@@ -859,6 +860,37 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         auto* videoCtrl = elem->videoControl();
         if (videoCtrl) {
             videoCtrl->draw(renderer_, elem, box, offsetX, offsetY);
+        }
+        // <img> replaced content. Layout already sized the box via
+        // intrinsicSize() in layout_node_adapter; here we paint the raster
+        // bytes (or SVG markup) into the content rect.
+        const std::string& tag = elem->tagName();
+        if (tag == "img" || tag == "IMG") {
+            std::string src = elem->getAttribute("src");
+            if (!src.empty()) {
+                loadImage(src, basePath_);
+                auto it = imageCache_.find(src);
+                if (it != imageCache_.end() && !it->second.data.empty()) {
+                    float ix = box.contentRect.x + offsetX;
+                    float iy = box.contentRect.y + offsetY;
+                    float iw = box.contentRect.width;
+                    float ih = box.contentRect.height;
+                    if (iw > 0 && ih > 0) {
+                        if (it->second.isSvg) {
+                            // Re-parse and render the SVG markup at content rect.
+                            svg::renderSvgMarkup(
+                                renderer_,
+                                reinterpret_cast<const char*>(it->second.data.data()),
+                                it->second.data.size(),
+                                ix, iy, iw, ih);
+                        } else {
+                            renderer_->drawImage(it->second.data.data(),
+                                                 it->second.data.size(),
+                                                 ix, iy, iw, ih);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1955,8 +1987,134 @@ uint64_t DrawTraversal::getFontHandle(dom::Element* elem) {
     return fontManager_->createFont(renderer_, family, size, weight, italic);
 }
 
+// Decode a single percent-encoded (URL-encoded) string in place semantics.
+// SVG/utf8 data URLs may percent-encode the markup (e.g. %3C for '<').
+static std::string urlDecode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+                if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+                return -1;
+            };
+            int hi = hex(s[i+1]);
+            int lo = hex(s[i+2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
+// Decode standard base64 (RFC 4648). Tolerates whitespace and missing padding.
+static std::vector<uint8_t> base64Decode(const std::string& s) {
+    static const int8_t T[256] = {
+        // initialized below
+        -1
+    };
+    static int8_t table[256];
+    static bool init = false;
+    if (!init) {
+        for (int i = 0; i < 256; ++i) table[i] = -1;
+        const char* alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; ++i) table[(unsigned char)alpha[i]] = (int8_t)i;
+        init = true;
+    }
+    (void)T;
+    std::vector<uint8_t> out;
+    out.reserve(s.size() * 3 / 4);
+    uint32_t buf = 0;
+    int bits = 0;
+    for (unsigned char c : s) {
+        if (c == '=' || c <= ' ') continue;
+        int v = table[c];
+        if (v < 0) continue;
+        buf = (buf << 6) | (uint32_t)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back((uint8_t)((buf >> bits) & 0xff));
+        }
+    }
+    return out;
+}
+
 void DrawTraversal::loadImage(const std::string& url, const std::string& basePath) {
     if (imageCache_.count(url)) return;
+
+    // data: URL — inline image content. Three forms we care about:
+    //   data:image/svg+xml,<svg...>            (utf8 percent-encoded, with or without explicit ;utf8)
+    //   data:image/svg+xml;utf8,<svg...>
+    //   data:image/<type>;base64,<bytes>       (PNG/JPG/etc, base64-encoded)
+    if (url.compare(0, 5, "data:") == 0) {
+        auto comma = url.find(',');
+        if (comma == std::string::npos) {
+            imageCache_[url] = CachedImage{};
+            return;
+        }
+        std::string meta = url.substr(5, comma - 5);   // e.g. "image/svg+xml;utf8"
+        std::string body = url.substr(comma + 1);
+        bool isBase64 = meta.find(";base64") != std::string::npos;
+        bool isSvgXml = meta.find("image/svg+xml") != std::string::npos;
+
+        CachedImage img;
+        if (isSvgXml) {
+            std::string markup = isBase64
+                ? std::string(reinterpret_cast<const char*>(base64Decode(body).data()),
+                              base64Decode(body).size())
+                : urlDecode(body);
+            img.isSvg = true;
+            img.data.assign(markup.begin(), markup.end());
+            // Parse intrinsic size from <svg width=... height=...>
+            auto svgPos = markup.find("<svg");
+            if (svgPos != std::string::npos) {
+                auto endPos = markup.find('>', svgPos);
+                if (endPos != std::string::npos) {
+                    std::string tag = markup.substr(svgPos, endPos - svgPos);
+                    auto attr = [&](const char* name) -> int {
+                        std::string needle = std::string(" ") + name + "=";
+                        auto p = tag.find(needle);
+                        if (p == std::string::npos) return 0;
+                        p += needle.size();
+                        if (p >= tag.size()) return 0;
+                        char q = tag[p];
+                        if (q != '"' && q != '\'') return 0;
+                        ++p;
+                        auto eq = tag.find(q, p);
+                        if (eq == std::string::npos) return 0;
+                        return (int)std::strtof(tag.substr(p, eq - p).c_str(), nullptr);
+                    };
+                    img.width = attr("width");
+                    img.height = attr("height");
+                }
+            }
+            imageCache_[url] = std::move(img);
+            return;
+        }
+        // Raster data URL — base64 or percent-encoded body
+        std::vector<uint8_t> bytes = isBase64
+            ? base64Decode(body)
+            : [&]() {
+                std::string d = urlDecode(body);
+                return std::vector<uint8_t>(d.begin(), d.end());
+            }();
+        int w = 0, h = 0, comp = 0;
+        if (!bytes.empty() &&
+            stbi_info_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &comp)) {
+            img.width = w;
+            img.height = h;
+        }
+        img.data = std::move(bytes);
+        imageCache_[url] = std::move(img);
+        return;
+    }
 
     // Strip URL query/fragment so `thumbnails/foo.png?v=12345` (standard
     // cache-bust) resolves to the file on disk.

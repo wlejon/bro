@@ -55,9 +55,10 @@ struct StackingContext {
 
 // Image cache entry for background-image / <img> rendering
 struct CachedImage {
-    std::vector<uint8_t> data;
+    std::vector<uint8_t> data;  // raster bytes (PNG/JPG/etc) OR raw SVG markup when isSvg
     int width = 0;
     int height = 0;
+    bool isSvg = false;
 };
 
 // Walks the DOM tree with layout boxes and issues Renderer draw calls.
