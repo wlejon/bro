@@ -971,10 +971,18 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
 
                 if (stops.size() >= 2) {
                     if (val.find("linear-gradient") != std::string::npos) {
+                        // CSS linear-gradient: gradient line passes through the
+                        // center, with length = |W·sin(angle)| + |H·cos(angle)|.
+                        // Direction is (sin(angle), -cos(angle)) so that
+                        // 0deg = up, 90deg = right (CSS convention).
+                        // Endpoints are in canvas space, so add the box origin.
                         float rad = angleDeg * 3.14159265f / 180.0f;
-                        float cx2 = w / 2, cy2 = h / 2;
-                        float dx = std::sin(rad) * cx2;
-                        float dy = -std::cos(rad) * cy2;
+                        float sa = std::sin(rad), ca = -std::cos(rad);
+                        float cx2 = x + w / 2, cy2 = y + h / 2;
+                        float lineLen = std::abs(w * std::sin(rad)) +
+                                        std::abs(h * std::cos(rad));
+                        float dx = sa * lineLen / 2.0f;
+                        float dy = ca * lineLen / 2.0f;
                         renderer_->fillLinearGradient(x, y, w, h,
                             cx2 - dx, cy2 - dy, cx2 + dx, cy2 + dy, stops);
                     } else if (isRadial) {
@@ -1026,10 +1034,10 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         if (rx < 0.001f) rx = 0.001f;
                         if (ry < 0.001f) ry = 0.001f;
                         renderer_->fillRadialGradient(x, y, w, h,
-                            rcx, rcy, rx, ry, stops);
+                            x + rcx, y + rcy, rx, ry, stops);
                     } else if (val.find("conic-gradient") != std::string::npos) {
                         renderer_->fillConicGradient(x, y, w, h,
-                            w/2, h/2, 0, stops);
+                            x + w/2, y + h/2, 0, stops);
                     }
                 }
             }
