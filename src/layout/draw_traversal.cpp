@@ -403,9 +403,14 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     float bw = box.fullWidth();
     float bh = box.fullHeight();
 
-    // CSS Transform: wrap entire element drawing in a transform
+    // CSS Transform / opacity / filter: wrap entire element drawing.
+    // For stacking-context roots, paintStackingContext has already wrapped
+    // these around the full SC subtree (so positioned descendants inherit the
+    // transform); skip re-applying them here in that case.
+    bool skipWrap = scRootSkipWrap_.count(elem) > 0;
+
     bool hasTransform = false;
-    {
+    if (!skipWrap) {
         auto trIt = style.find("transform");
         if (trIt != style.end() && !trIt->second.empty() && trIt->second != "none") {
             auto mat = htmlayout::css::parseTransform(trIt->second, bw, bh);
@@ -428,18 +433,20 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
 
     // Opacity: wrap entire element in a layer
     bool hasOpacity = false;
-    auto opIt = style.find("opacity");
-    if (opIt != style.end()) {
-        float opacity = std::clamp(std::strtof(opIt->second.c_str(), nullptr), 0.0f, 1.0f);
-        if (opacity < 1.0f) {
-            hasOpacity = true;
-            renderer_->saveLayerAlpha(static_cast<uint8_t>(opacity * 255));
+    if (!skipWrap) {
+        auto opIt = style.find("opacity");
+        if (opIt != style.end()) {
+            float opacity = std::clamp(std::strtof(opIt->second.c_str(), nullptr), 0.0f, 1.0f);
+            if (opacity < 1.0f) {
+                hasOpacity = true;
+                renderer_->saveLayerAlpha(static_cast<uint8_t>(opacity * 255));
+            }
         }
     }
 
     // CSS filter: wrap element drawing in a filter layer
     bool hasFilter = false;
-    {
+    if (!skipWrap) {
         auto fIt = style.find("filter");
         if (fIt != style.end() && !fIt->second.empty() && fIt->second != "none") {
             auto filter = parseCSSFilter(fIt->second);
@@ -1885,6 +1892,70 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
 void DrawTraversal::paintStackingContext(StackingContext* sc) {
     if (!sc || !sc->root) return;
 
+    // The SC root's transform/opacity/filter must wrap ALL of its descendants'
+    // painting — not just step 1 (the in-flow walk). Positioned descendants
+    // and nested stacking contexts are part of the same SC subtree and must
+    // inherit the SC root's transform. drawElementContent applies these on its
+    // own around step 1 only; we need them active for steps 2–7 as well.
+    //
+    // Strategy: pre-apply the SC root's transform/opacity/filter here, tell
+    // drawElementContent to skip its own application, and tear them down after
+    // all steps complete.
+    auto& rootStyle = sc->root->computedStyle();
+    auto& rootBox = sc->root->layoutBox();
+    float rbx = rootBox.contentRect.x + sc->offsetX -
+                rootBox.padding.left - rootBox.border.left;
+    float rby = rootBox.contentRect.y + sc->offsetY -
+                rootBox.padding.top - rootBox.border.top;
+    float rbw = rootBox.fullWidth();
+    float rbh = rootBox.fullHeight();
+
+    bool wrappedTransform = false;
+    {
+        auto trIt = rootStyle.find("transform");
+        if (trIt != rootStyle.end() && !trIt->second.empty() && trIt->second != "none") {
+            auto mat = htmlayout::css::parseTransform(trIt->second, rbw, rbh);
+            if (!mat.isIdentity()) {
+                wrappedTransform = true;
+                float ox, oy;
+                auto toIt = rootStyle.find("transform-origin");
+                std::string_view originVal = (toIt != rootStyle.end())
+                    ? std::string_view(toIt->second) : std::string_view();
+                htmlayout::css::parseTransformOrigin(originVal, rbw, rbh, ox, oy);
+                renderer_->save();
+                renderer_->translate(rbx + ox, rby + oy);
+                renderer_->concat(mat.a, mat.b, mat.c, mat.d, mat.e, mat.f);
+                renderer_->translate(-(rbx + ox), -(rby + oy));
+            }
+        }
+    }
+    bool wrappedOpacity = false;
+    {
+        auto opIt = rootStyle.find("opacity");
+        if (opIt != rootStyle.end()) {
+            float opacity = std::clamp(std::strtof(opIt->second.c_str(), nullptr),
+                                       0.0f, 1.0f);
+            if (opacity < 1.0f) {
+                wrappedOpacity = true;
+                renderer_->saveLayerAlpha(static_cast<uint8_t>(opacity * 255));
+            }
+        }
+    }
+    bool wrappedFilter = false;
+    {
+        auto fIt = rootStyle.find("filter");
+        if (fIt != rootStyle.end() && !fIt->second.empty() && fIt->second != "none") {
+            auto filter = parseCSSFilter(fIt->second);
+            if (filter) {
+                wrappedFilter = true;
+                renderer_->saveLayerWithFilter(filter.get(),
+                    rbx - 50, rby - 50, rbw + 100, rbh + 100);
+            }
+        }
+    }
+    bool didWrap = wrappedTransform || wrappedOpacity || wrappedFilter;
+    if (didWrap) scRootSkipWrap_.insert(sc->root);
+
     // Step 1: paint the SC root itself — its background, borders, and in-flow
     // non-positioned non-SC descendants — via the normal walker. The walker
     // consults skipSet_ to avoid descending into SC roots and positioned
@@ -1937,6 +2008,13 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
         return a->treeOrder < b->treeOrder;
     });
     for (auto* c : posSCs) paintStackingContext(c);
+
+    if (didWrap) {
+        scRootSkipWrap_.erase(sc->root);
+        if (wrappedFilter) renderer_->restore();
+        if (wrappedOpacity) renderer_->restore();
+        if (wrappedTransform) renderer_->restore();
+    }
 }
 
 } // namespace bro::layout

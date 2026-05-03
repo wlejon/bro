@@ -124,6 +124,12 @@ private:
     // step-6 bucket).
     std::unordered_set<dom::Element*> skipSet_;
 
+    // Stacking-context roots whose transform/opacity/filter wrappers have
+    // already been applied by paintStackingContext so all descendants (not
+    // only step-1 in-flow content) inherit them. drawElementContent skips
+    // re-applying them for these roots.
+    std::unordered_set<dom::Element*> scRootSkipWrap_;
+
 public:
     // Color parsing helper (public for shared use by element controls)
     static render::Color parseColor(const std::string& color);
