@@ -357,22 +357,162 @@ static float parseLengthPx(const std::string& val, float ref = 0) {
     return v; // px or unitless
 }
 
-// Get the border-radius for an element. Returns the average of all four corners
-// (simplified — full per-corner elliptical radii would need renderer changes).
-static float getBorderRadius(const htmlayout::css::ComputedStyle& style) {
-    auto brIt = style.find("border-radius");
-    if (brIt != style.end() && !brIt->second.empty()) {
-        float v = parseLengthPx(brIt->second);
-        if (v > 0) return v;
+// Parse one corner radius value: "12px" -> (12, 12) or "30% 50%" -> (30%w, 50%h).
+// Also handles a full slashed shorthand like "30% / 50%" which the htmlayout
+// expansion stores verbatim on each corner property (see properties.cpp).
+static void parseCornerRadius(const std::string& val, float boxW, float boxH,
+                              float& outX, float& outY) {
+    outX = outY = 0;
+    if (val.empty()) return;
+    // Split on '/' (slash form: horizontal / vertical lists)
+    auto slash = val.find('/');
+    if (slash != std::string::npos) {
+        // Take first token from each side. The shorthand can have up to 4
+        // values per side; for a single corner we want the first value of
+        // each side. (Per CSS, htmlayout writes the whole shorthand string
+        // onto each corner — picking the first token approximates the
+        // top-left, which is good enough for the common 1/1 case. The
+        // full per-corner mapping is handled by the per-side fallback in
+        // parseRadii below, which calls this function with already-split
+        // single values.)
+        std::string h = val.substr(0, slash);
+        std::string v = val.substr(slash + 1);
+        // Trim leading whitespace + take first whitespace-separated token
+        auto firstToken = [](const std::string& s) {
+            size_t a = 0;
+            while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+            size_t b = a;
+            while (b < s.size() && !std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+            return s.substr(a, b - a);
+        };
+        outX = parseLengthPx(firstToken(h), boxW);
+        outY = parseLengthPx(firstToken(v), boxH);
+        return;
     }
-    float sum = 0; int count = 0;
-    for (const char* prop : {"border-top-left-radius", "border-top-right-radius",
-                             "border-bottom-left-radius", "border-bottom-right-radius"}) {
-        auto it = style.find(prop);
-        if (it != style.end()) {
-            float v = parseLengthPx(it->second);
-            if (v > 0) { sum += v; ++count; }
+    // Either "12px" or "h v" (two values, h then v)
+    std::string s = val;
+    size_t a = 0;
+    while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+    size_t b = a;
+    while (b < s.size() && !std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    std::string t1 = s.substr(a, b - a);
+    while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
+    size_t c = b;
+    while (c < s.size() && !std::isspace(static_cast<unsigned char>(s[c]))) ++c;
+    std::string t2 = (b < c) ? s.substr(b, c - b) : std::string();
+    outX = parseLengthPx(t1, boxW);
+    outY = t2.empty() ? outX : parseLengthPx(t2, boxH);
+}
+
+// Resolve full per-corner border radii for an element of size (boxW, boxH).
+// Per CSS spec, applies the corner-overlap scaling so adjacent corners on a
+// side don't sum to more than the side length.
+static render::Radii getRadii(const htmlayout::css::ComputedStyle& style,
+                              float boxW, float boxH) {
+    render::Radii r;
+    // Order: TL, TR, BR, BL — matches SkRRect::Corner enum
+    const char* props[4] = {
+        "border-top-left-radius",
+        "border-top-right-radius",
+        "border-bottom-right-radius",
+        "border-bottom-left-radius",
+    };
+    // First, check for the slashed border-radius shorthand stored verbatim on
+    // each corner — htmlayout writes the full "h-list / v-list" string onto
+    // every corner property when the slash form is used. Detect that and
+    // expand into per-corner h and v values.
+    bool slashShorthand = false;
+    std::string slashVal;
+    auto tlIt = style.find("border-top-left-radius");
+    if (tlIt != style.end() && tlIt->second.find('/') != std::string::npos) {
+        // Confirm all four corners share the same value (i.e. slash form, not
+        // user-set individual longhand).
+        slashShorthand = true;
+        slashVal = tlIt->second;
+        for (int i = 1; i < 4; ++i) {
+            auto it = style.find(props[i]);
+            if (it == style.end() || it->second != slashVal) {
+                slashShorthand = false;
+                break;
+            }
         }
+    }
+
+    auto parseList = [](const std::string& s, std::vector<std::string>& out) {
+        out.clear();
+        size_t i = 0;
+        while (i < s.size()) {
+            while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+            size_t j = i;
+            while (j < s.size() && !std::isspace(static_cast<unsigned char>(s[j]))) ++j;
+            if (j > i) out.push_back(s.substr(i, j - i));
+            i = j;
+        }
+    };
+    auto fillBoxValues = [](std::vector<std::string>& v) {
+        // CSS box shorthand: 1->all, 2->v/h, 3->t,h,b, 4->t,r,b,l. For
+        // border-radius corners (TL,TR,BR,BL): 1->all, 2->TL/BR, TR/BL,
+        // 3->TL, TR/BL, BR, 4->TL,TR,BR,BL.
+        if (v.empty()) v.push_back("0");
+        std::string a = v.size() >= 1 ? v[0] : v[0];
+        std::string b = v.size() >= 2 ? v[1] : a;
+        std::string c = v.size() >= 3 ? v[2] : a;
+        std::string d = v.size() >= 4 ? v[3] : b;
+        v = {a, b, c, d};
+    };
+
+    if (slashShorthand) {
+        auto slashPos = slashVal.find('/');
+        std::vector<std::string> hList, vList;
+        parseList(slashVal.substr(0, slashPos), hList);
+        parseList(slashVal.substr(slashPos + 1), vList);
+        fillBoxValues(hList);
+        fillBoxValues(vList);
+        for (int i = 0; i < 4; ++i) {
+            r.x[i] = parseLengthPx(hList[i], boxW);
+            r.y[i] = parseLengthPx(vList[i], boxH);
+        }
+    } else {
+        for (int i = 0; i < 4; ++i) {
+            auto it = style.find(props[i]);
+            if (it == style.end() || it->second.empty()) continue;
+            parseCornerRadius(it->second, boxW, boxH, r.x[i], r.y[i]);
+        }
+    }
+
+    // CSS spec: if sum of two adjacent corners exceeds the side, scale all
+    // radii by the same factor so they fit. Apply per side, take min factor.
+    auto sideFactor = [](float a, float b, float side) {
+        if (a + b <= side || side <= 0) return 1.0f;
+        return side / (a + b);
+    };
+    float fTop    = sideFactor(r.x[0], r.x[1], boxW);
+    float fRight  = sideFactor(r.y[1], r.y[2], boxH);
+    float fBottom = sideFactor(r.x[3], r.x[2], boxW);
+    float fLeft   = sideFactor(r.y[0], r.y[3], boxH);
+    float f = std::min({fTop, fRight, fBottom, fLeft});
+    if (f < 1.0f) {
+        for (int i = 0; i < 4; ++i) {
+            r.x[i] *= f;
+            r.y[i] *= f;
+        }
+    }
+    // Clamp tiny negatives from float math to 0
+    for (int i = 0; i < 4; ++i) {
+        if (r.x[i] < 0) r.x[i] = 0;
+        if (r.y[i] < 0) r.y[i] = 0;
+    }
+    return r;
+}
+
+// Legacy single-value radius helper (kept for places that still want a scalar
+// fallback — only the "is there any rounding?" question, not actual drawing).
+static float getBorderRadius(const htmlayout::css::ComputedStyle& style) {
+    auto r = getRadii(style, 0, 0);
+    float sum = 0; int count = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (r.x[i] > 0) { sum += r.x[i]; ++count; }
+        if (r.y[i] > 0) { sum += r.y[i]; ++count; }
     }
     return count > 0 ? sum / count : 0;
 }
@@ -466,7 +606,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         // reverse order.
         auto bsIt = style.find("box-shadow");
         if (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none") {
-            float radius = getBorderRadius(style);
+            render::Radii radii = getRadii(style, bw, bh);
 
             // Split on commas, respecting parentheses (for rgb()/rgba())
             std::vector<std::string> shadows;
@@ -518,7 +658,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                     float sspread = nums.size() >= 4 ? nums[3] : 0;
                     render::Color sc = {0, 0, 0, 80};
                     if (!colorStr.empty()) tryParseColor(colorStr, sc);
-                    renderer_->drawBoxShadow(bx, by, bw, bh, radius, radius,
+                    renderer_->drawBoxShadowRadii(bx, by, bw, bh, radii,
                                             sdx, sdy, sblur, sspread, sc, inset);
                 }
             }
@@ -609,7 +749,11 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (overflow == "hidden" || overflow == "scroll" || overflow == "auto") {
         needsClip = true;
         renderer_->save();
-        renderer_->setClip(bx, by, bw, bh);
+        render::Radii clipRadii = getRadii(style, bw, bh);
+        if (!clipRadii.isZero())
+            renderer_->setClipRRect(bx, by, bw, bh, clipRadii);
+        else
+            renderer_->setClip(bx, by, bw, bh);
     }
 
     // SVG elements render their own children via the SVG pipeline — skip DOM traversal
@@ -718,18 +862,30 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
 
 void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w, float h) {
     auto& style = elem->computedStyle();
-    float radius = getBorderRadius(style);
+    render::Radii radii = getRadii(style, w, h);
+    bool rounded = !radii.isZero();
 
     // Background color
     auto bgIt = style.find("background-color");
     if (bgIt != style.end() && !bgIt->second.empty()) {
         render::Color c;
         if (tryParseColor(bgIt->second, c) && c.a > 0) {
-            if (radius > 0)
-                renderer_->fillRoundRect(x, y, w, h, radius, radius, c);
+            if (rounded)
+                renderer_->fillRoundRectRadii(x, y, w, h, radii, c);
             else
                 renderer_->fillRect(x, y, w, h, c);
         }
+    }
+
+    // For background image / gradient, clip to rounded bounds. Save the
+    // canvas state and pop after drawing the image/gradient.
+    bool clipped = false;
+    auto imgItCheck = style.find("background-image");
+    if (rounded && imgItCheck != style.end() && !imgItCheck->second.empty() &&
+        imgItCheck->second != "none") {
+        renderer_->save();
+        renderer_->setClipRRect(x, y, w, h, radii);
+        clipped = true;
     }
 
     // Background image
@@ -1050,12 +1206,15 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
             }
         }
     }
+
+    if (clipped) renderer_->restore();
 }
 
 void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, float h) {
     auto& box = elem->layoutBox();
     auto& style = elem->computedStyle();
-    float radius = getBorderRadius(style);
+    render::Radii radii = getRadii(style, w, h);
+    bool rounded = !radii.isZero();
 
     auto getBorderColor = [&](const char* prop) -> render::Color {
         render::Color c = {0, 0, 0, 255};
@@ -1092,15 +1251,23 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
 
     if (!anyVisible) return;
 
-    if (radius > 0 && allSameColor) {
-        // Draw a single rounded rect outline
+    if (rounded && allSameColor) {
+        // Draw a single rounded rect outline. Inset by half the (averaged)
+        // border width so the centerline of the stroke lies on the border box
+        // edge, matching CSS border placement.
         float avgWidth = 0; int count = 0;
         for (float s : sides) { if (s > 0) { avgWidth += s; ++count; } }
         if (count > 0) avgWidth /= count;
-        // Inset by half the border width so the stroke aligns with the border box edge
         float half = avgWidth / 2;
-        renderer_->drawRoundRect(x + half, y + half, w - avgWidth, h - avgWidth,
-                                 radius, radius, firstColor);
+        // Shrink each corner radius by half the border width so the stroke
+        // centerline traces a path with the requested outer radius.
+        render::Radii inner = radii;
+        for (int i = 0; i < 4; ++i) {
+            inner.x[i] = std::max(0.0f, radii.x[i] - half);
+            inner.y[i] = std::max(0.0f, radii.y[i] - half);
+        }
+        renderer_->drawRoundRectRadii(x + half, y + half, w - avgWidth, h - avgWidth,
+                                      inner, avgWidth, firstColor);
         return;
     }
 

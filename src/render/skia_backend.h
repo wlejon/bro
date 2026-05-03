@@ -49,6 +49,15 @@ public:
     void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) override;
     void fillRect(float x, float y, float w, float h, Color color) override;
     void fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) override;
+    void fillRoundRectRadii(float x, float y, float w, float h,
+                            const Radii& r, Color color) override;
+    void drawRoundRectRadii(float x, float y, float w, float h,
+                            const Radii& r, float strokeWidth, Color color) override;
+    void setClipRRect(float x, float y, float w, float h, const Radii& r) override;
+    void drawBoxShadowRadii(float x, float y, float w, float h, const Radii& r,
+                            float offsetX, float offsetY,
+                            float blur, float spread,
+                            Color color, bool inset) override;
 
     void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) override;
     void drawTextEx(std::string_view text, float x, float y,

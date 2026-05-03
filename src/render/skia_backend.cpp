@@ -308,6 +308,104 @@ void SkiaRenderer::fillRoundRect(float x, float y, float w, float h, float rx, f
     canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(x, y, w, h), rx, ry), paint);
 }
 
+// Build an SkRRect with per-corner radii. Order in Radii: TL, TR, BR, BL —
+// matches SkRRect::Corner enum.
+static SkRRect makeRRect(float x, float y, float w, float h, const Radii& r) {
+    SkVector radii[4] = {
+        {r.x[0], r.y[0]}, {r.x[1], r.y[1]},
+        {r.x[2], r.y[2]}, {r.x[3], r.y[3]}
+    };
+    SkRRect rr;
+    rr.setRectRadii(SkRect::MakeXYWH(x, y, w, h), radii);
+    return rr;
+}
+
+void SkiaRenderer::fillRoundRectRadii(float x, float y, float w, float h,
+                                      const Radii& r, Color color) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStyle(SkPaint::kFill_Style);
+    paint.setAntiAlias(true);
+    canvas_->drawRRect(makeRRect(x, y, w, h, r), paint);
+}
+
+void SkiaRenderer::drawRoundRectRadii(float x, float y, float w, float h,
+                                      const Radii& r, float strokeWidth, Color color) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setColor(toSkColor(color));
+    paint.setStyle(SkPaint::kStroke_Style);
+    paint.setStrokeWidth(strokeWidth);
+    paint.setAntiAlias(true);
+    canvas_->drawRRect(makeRRect(x, y, w, h, r), paint);
+}
+
+void SkiaRenderer::setClipRRect(float x, float y, float w, float h, const Radii& r) {
+    if (!canvas_) return;
+    canvas_->clipRRect(makeRRect(x, y, w, h, r), true /*antialias*/);
+}
+
+void SkiaRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
+                                      const Radii& r,
+                                      float offsetX, float offsetY,
+                                      float blur, float spread,
+                                      Color color, bool inset) {
+    if (!canvas_) return;
+    if (r.isZero()) {
+        drawBoxShadow(x, y, w, h, 0, 0, offsetX, offsetY, blur, spread, color, inset);
+        return;
+    }
+    if (inset) {
+        canvas_->save();
+        canvas_->clipRRect(makeRRect(x, y, w, h, r), true);
+
+        float ix = x + offsetX + spread;
+        float iy = y + offsetY + spread;
+        float iw = w - spread * 2;
+        float ih = h - spread * 2;
+        Radii ir = r;
+        for (int i = 0; i < 4; ++i) {
+            ir.x[i] = std::max(0.0f, r.x[i] - spread);
+            ir.y[i] = std::max(0.0f, r.y[i] - spread);
+        }
+
+        float pad = blur * 2 + 100;
+        SkRect outerRect = SkRect::MakeXYWH(x - pad, y - pad, w + pad * 2, h + pad * 2);
+
+        SkPathBuilder pb;
+        pb.addRect(outerRect);
+        pb.addRRect(makeRRect(ix, iy, iw, ih, ir));
+        pb.setFillType(SkPathFillType::kEvenOdd);
+        SkPath path = pb.detach();
+
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+        if (blur > 0)
+            paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+        canvas_->drawPath(path, paint);
+        canvas_->restore();
+        return;
+    }
+    // Outer shadow: shift, expand by spread, expand corner radii similarly.
+    float sx = x + offsetX - spread;
+    float sy = y + offsetY - spread;
+    float sw = w + spread * 2;
+    float sh = h + spread * 2;
+    Radii sr = r;
+    for (int i = 0; i < 4; ++i) {
+        sr.x[i] = std::max(0.0f, r.x[i] + spread);
+        sr.y[i] = std::max(0.0f, r.y[i] + spread);
+    }
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+    if (blur > 0)
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    canvas_->drawRRect(makeRRect(sx, sy, sw, sh, sr), paint);
+}
+
 void SkiaRenderer::drawCircle(float cx, float cy, float r,
                                Color fill, Color stroke, float strokeWidth) {
     if (!canvas_) return;

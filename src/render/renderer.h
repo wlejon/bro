@@ -54,6 +54,18 @@ struct PointF {
     float y = 0;
 };
 
+// Per-corner border radii (CSS border-radius). Each corner has independent
+// horizontal (x) and vertical (y) radii. Order matches SkRRect corner enum:
+// [0]=top-left, [1]=top-right, [2]=bottom-right, [3]=bottom-left.
+struct Radii {
+    float x[4] = {0, 0, 0, 0};
+    float y[4] = {0, 0, 0, 0};
+    bool isZero() const {
+        return x[0] == 0 && x[1] == 0 && x[2] == 0 && x[3] == 0 &&
+               y[0] == 0 && y[1] == 0 && y[2] == 0 && y[3] == 0;
+    }
+};
+
 struct ColorStop {
     float offset;   // 0.0–1.0
     Color color;
@@ -69,6 +81,38 @@ public:
     virtual void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) = 0;
     virtual void fillRect(float x, float y, float w, float h, Color color) = 0;
     virtual void fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) = 0;
+
+    // Per-corner asymmetric variants (CSS border-radius full support).
+    // Default forwards to the symmetric path using the average corner radius
+    // so backends can adopt incrementally.
+    virtual void fillRoundRectRadii(float x, float y, float w, float h,
+                                    const Radii& r, Color color) {
+        float avg = (r.x[0] + r.x[1] + r.x[2] + r.x[3] +
+                     r.y[0] + r.y[1] + r.y[2] + r.y[3]) / 8.0f;
+        fillRoundRect(x, y, w, h, avg, avg, color);
+    }
+    virtual void drawRoundRectRadii(float x, float y, float w, float h,
+                                    const Radii& r, float strokeWidth, Color color) {
+        (void)strokeWidth;
+        float avg = (r.x[0] + r.x[1] + r.x[2] + r.x[3] +
+                     r.y[0] + r.y[1] + r.y[2] + r.y[3]) / 8.0f;
+        drawRoundRect(x, y, w, h, avg, avg, color);
+    }
+    // Clip subsequent draw calls to a rounded rect (caller must save/restore).
+    virtual void setClipRRect(float x, float y, float w, float h, const Radii& r) {
+        (void)r;
+        setClip(x, y, w, h);
+    }
+    // Box shadow with per-corner radii. Default forwards to symmetric path.
+    virtual void drawBoxShadowRadii(float x, float y, float w, float h,
+                                    const Radii& r,
+                                    float offsetX, float offsetY,
+                                    float blur, float spread,
+                                    Color color, bool inset) {
+        float avg = (r.x[0] + r.x[1] + r.x[2] + r.x[3] +
+                     r.y[0] + r.y[1] + r.y[2] + r.y[3]) / 8.0f;
+        drawBoxShadow(x, y, w, h, avg, avg, offsetX, offsetY, blur, spread, color, inset);
+    }
 
     virtual void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) = 0;
     virtual TextMetrics measureText(std::string_view text, uint64_t font_handle) = 0;
