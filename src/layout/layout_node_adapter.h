@@ -132,6 +132,72 @@ public:
             h = ha.empty() ? 150.0f : std::strtof(ha.c_str(), nullptr);
             return true;
         }
+        // <img> is a replaced element. Resolve intrinsic dimensions from:
+        //   1. width/height HTML attributes (presentational hints)
+        //   2. SVG data URL: parse <svg width=... height=...> from the src
+        //   3. aspect-ratio derivation when only one axis is specified
+        if (elem_->tagName() == "img" || elem_->tagName() == "IMG") {
+            std::string wa = elem_->getAttribute("width");
+            std::string ha = elem_->getAttribute("height");
+            float attrW = wa.empty() ? -1.0f : std::strtof(wa.c_str(), nullptr);
+            float attrH = ha.empty() ? -1.0f : std::strtof(ha.c_str(), nullptr);
+            float intrW = -1.0f, intrH = -1.0f;
+            std::string src = elem_->getAttribute("src");
+            // Extract intrinsic w/h from an SVG data URL by string-parsing the
+            // outer <svg ...> width/height attributes. We don't render the SVG
+            // here; we just need its declared intrinsic size for layout.
+            if (src.rfind("data:image/svg+xml", 0) == 0) {
+                auto pos = src.find(',');
+                if (pos != std::string::npos) {
+                    std::string body = src.substr(pos + 1);
+                    auto svgPos = body.find("<svg");
+                    if (svgPos != std::string::npos) {
+                        auto end = body.find('>', svgPos);
+                        if (end != std::string::npos) {
+                            std::string tag = body.substr(svgPos, end - svgPos);
+                            auto extractAttr = [&](const char* name) -> float {
+                                std::string needle = std::string(" ") + name + "=";
+                                auto p = tag.find(needle);
+                                if (p == std::string::npos) return -1.0f;
+                                p += needle.size();
+                                if (p >= tag.size()) return -1.0f;
+                                char quote = tag[p];
+                                if (quote != '"' && quote != '\'') return -1.0f;
+                                p++;
+                                auto endQ = tag.find(quote, p);
+                                if (endQ == std::string::npos) return -1.0f;
+                                std::string v = tag.substr(p, endQ - p);
+                                return std::strtof(v.c_str(), nullptr);
+                            };
+                            intrW = extractAttr("width");
+                            intrH = extractAttr("height");
+                        }
+                    }
+                }
+            }
+            // Resolve final intrinsic size:
+            //   - Explicit attrs on both axes win.
+            //   - Single attr derives the other axis from intrinsic aspect ratio.
+            //   - Otherwise use the SVG's intrinsic dimensions if known.
+            float aspect = (intrW > 0 && intrH > 0) ? (intrW / intrH) : 0.0f;
+            if (attrW >= 0 && attrH >= 0) { w = attrW; h = attrH; return true; }
+            if (attrW >= 0) {
+                w = attrW;
+                h = (aspect > 0) ? (attrW / aspect) : (intrH > 0 ? intrH : 0.0f);
+                return true;
+            }
+            if (attrH >= 0) {
+                h = attrH;
+                w = (aspect > 0) ? (attrH * aspect) : (intrW > 0 ? intrW : 0.0f);
+                return true;
+            }
+            if (intrW > 0 || intrH > 0) {
+                w = intrW > 0 ? intrW : 0.0f;
+                h = intrH > 0 ? intrH : 0.0f;
+                return true;
+            }
+            return false;
+        }
         return false;
     }
 
