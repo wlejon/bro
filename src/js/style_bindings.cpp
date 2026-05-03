@@ -311,7 +311,7 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
         }
         if (v >= 0) {
             char buf[32];
-            snprintf(buf, sizeof(buf), "%.4gpx", v);
+            snprintf(buf, sizeof(buf), "%.6gpx", v);
             return buf;
         }
     }
@@ -338,7 +338,7 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
             else if (prop == "margin-bottom")  v = box.margin.bottom;
             else if (prop == "margin-left")    v = box.margin.left;
             char buf[32];
-            snprintf(buf, sizeof(buf), "%.4gpx", v);
+            snprintf(buf, sizeof(buf), "%.6gpx", v);
             return buf;
         }
     }
