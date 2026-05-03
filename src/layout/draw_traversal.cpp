@@ -848,9 +848,73 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 }
                 if (!cur.empty()) parts.push_back(cur);
 
-                // Parse direction/angle for linear-gradient
+                // Parse direction/angle for linear-gradient, or shape/extent/
+                // position prefix for radial-gradient.
                 float angleDeg = 180; // default: to bottom
                 size_t colorStart = 0;
+
+                // Radial-gradient defaults: ellipse, farthest-corner, center.
+                bool radialIsCircle = false;
+                enum RadExtent { RAD_FARTHEST_CORNER, RAD_FARTHEST_SIDE,
+                                 RAD_CLOSEST_CORNER,  RAD_CLOSEST_SIDE };
+                RadExtent radExtent = RAD_FARTHEST_CORNER;
+                float radCxFrac = 0.5f, radCyFrac = 0.5f; // fraction of (w, h)
+                bool isRadial = (val.find("radial-gradient") != std::string::npos);
+
+                if (isRadial && !parts.empty()) {
+                    std::string first = parts[0];
+                    while (!first.empty() && first.front() == ' ') first.erase(first.begin());
+                    while (!first.empty() && first.back() == ' ') first.pop_back();
+                    // The prefix (if present) ends before the first color stop.
+                    // Heuristic: if the first part contains shape/extent keywords
+                    // or starts with "at ", treat it as the prefix.
+                    bool looksPrefix =
+                        first.find("circle") != std::string::npos ||
+                        first.find("ellipse") != std::string::npos ||
+                        first.find("at ") != std::string::npos ||
+                        first.find("closest") != std::string::npos ||
+                        first.find("farthest") != std::string::npos;
+                    if (looksPrefix) {
+                        if (first.find("circle") != std::string::npos) radialIsCircle = true;
+                        if (first.find("closest-side") != std::string::npos) radExtent = RAD_CLOSEST_SIDE;
+                        else if (first.find("closest-corner") != std::string::npos) radExtent = RAD_CLOSEST_CORNER;
+                        else if (first.find("farthest-side") != std::string::npos) radExtent = RAD_FARTHEST_SIDE;
+                        else if (first.find("farthest-corner") != std::string::npos) radExtent = RAD_FARTHEST_CORNER;
+                        // Position: "at <x> <y>"
+                        auto atPos = first.find("at ");
+                        if (atPos != std::string::npos) {
+                            std::string posStr = first.substr(atPos + 3);
+                            while (!posStr.empty() && posStr.front() == ' ') posStr.erase(posStr.begin());
+                            // Tokenize on spaces
+                            std::vector<std::string> toks;
+                            std::string t;
+                            for (char c : posStr) {
+                                if (c == ' ') { if (!t.empty()) { toks.push_back(t); t.clear(); } }
+                                else t += c;
+                            }
+                            if (!t.empty()) toks.push_back(t);
+                            auto resolveAxis = [](const std::string& tok, bool isX, float& outFrac) {
+                                if (tok == "left") { if (isX) outFrac = 0.0f; }
+                                else if (tok == "right") { if (isX) outFrac = 1.0f; }
+                                else if (tok == "top") { if (!isX) outFrac = 0.0f; }
+                                else if (tok == "bottom") { if (!isX) outFrac = 1.0f; }
+                                else if (tok == "center") { outFrac = 0.5f; }
+                                else if (!tok.empty() && tok.back() == '%') {
+                                    outFrac = std::strtof(tok.c_str(), nullptr) / 100.0f;
+                                }
+                            };
+                            if (toks.size() == 1) {
+                                resolveAxis(toks[0], true, radCxFrac);
+                                resolveAxis(toks[0], false, radCyFrac);
+                            } else if (toks.size() >= 2) {
+                                resolveAxis(toks[0], true, radCxFrac);
+                                resolveAxis(toks[1], false, radCyFrac);
+                            }
+                        }
+                        colorStart = 1;
+                    }
+                }
+
                 if (val.find("linear-gradient") != std::string::npos && !parts.empty()) {
                     std::string first = parts[0];
                     // Trim
@@ -913,9 +977,56 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         float dy = -std::cos(rad) * cy2;
                         renderer_->fillLinearGradient(x, y, w, h,
                             cx2 - dx, cy2 - dy, cx2 + dx, cy2 + dy, stops);
-                    } else if (val.find("radial-gradient") != std::string::npos) {
+                    } else if (isRadial) {
+                        float rcx = radCxFrac * w;
+                        float rcy = radCyFrac * h;
+                        // Distances to each side from center.
+                        float dL = rcx, dR = w - rcx;
+                        float dT = rcy, dB = h - rcy;
+                        float closestSideX = std::min(dL, dR);
+                        float closestSideY = std::min(dT, dB);
+                        float farthestSideX = std::max(dL, dR);
+                        float farthestSideY = std::max(dT, dB);
+                        float rx = 0, ry = 0;
+                        if (radialIsCircle) {
+                            // Circle: pick a single radius based on distances.
+                            switch (radExtent) {
+                                case RAD_CLOSEST_SIDE:
+                                    rx = ry = std::min(closestSideX, closestSideY); break;
+                                case RAD_CLOSEST_CORNER:
+                                    rx = ry = std::sqrt(closestSideX*closestSideX +
+                                                        closestSideY*closestSideY); break;
+                                case RAD_FARTHEST_SIDE:
+                                    rx = ry = std::max(farthestSideX, farthestSideY); break;
+                                case RAD_FARTHEST_CORNER:
+                                default:
+                                    rx = ry = std::sqrt(farthestSideX*farthestSideX +
+                                                        farthestSideY*farthestSideY); break;
+                            }
+                        } else {
+                            // Ellipse: rx, ry computed independently per CSS spec.
+                            switch (radExtent) {
+                                case RAD_CLOSEST_SIDE:
+                                    rx = closestSideX; ry = closestSideY; break;
+                                case RAD_FARTHEST_SIDE:
+                                    rx = farthestSideX; ry = farthestSideY; break;
+                                case RAD_CLOSEST_CORNER: {
+                                    // Ellipse with same aspect as closest-side, passing
+                                    // through closest corner.
+                                    float k = std::sqrt(2.0f);
+                                    rx = closestSideX * k; ry = closestSideY * k; break;
+                                }
+                                case RAD_FARTHEST_CORNER:
+                                default: {
+                                    float k = std::sqrt(2.0f);
+                                    rx = farthestSideX * k; ry = farthestSideY * k; break;
+                                }
+                            }
+                        }
+                        if (rx < 0.001f) rx = 0.001f;
+                        if (ry < 0.001f) ry = 0.001f;
                         renderer_->fillRadialGradient(x, y, w, h,
-                            w/2, h/2, w/2, h/2, stops);
+                            rcx, rcy, rx, ry, stops);
                     } else if (val.find("conic-gradient") != std::string::npos) {
                         renderer_->fillConicGradient(x, y, w, h,
                             w/2, h/2, 0, stops);
