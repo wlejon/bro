@@ -3,14 +3,55 @@
 #include "layout/font_manager.h"
 #include "render/renderer.h"
 #include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::canvas { class CanvasScene; }
 namespace bro::dom { class Element; class Node; }
 
 namespace bro::layout {
+
+// One entry in the stacking-context tree (CSS 2.1 Appendix E).
+// Each SC root collects its descendant elements partitioned by the seven
+// painting steps. Offsets are absolute in the output surface.
+struct StackingContext {
+    dom::Element* root = nullptr;
+    float offsetX = 0;       // absolute offset to be passed to drawElementContent
+    float offsetY = 0;
+    int   zIndex = 0;        // resolved z-index (auto -> 0 for ordering)
+    bool  zIsAuto = true;    // true when z-index is 'auto' (treated as 0 but participates in step 6)
+
+    // Step 3+5 merged: in-flow, non-positioned descendants painted in tree order
+    // alongside step 4 (floats). These are descendants whose nearest SC ancestor is
+    // this SC and which are not themselves SC roots, not positioned, not floats.
+    // We use a single "in-flow" list painted in tree order via the normal
+    // drawElementContent walk, with a stop-set for nested SC roots and positioned
+    // non-SC descendants so those subtrees are skipped during the normal walk.
+    // (Floats are not separately tracked; they'll fall into in-flow tree order.)
+
+    // Step 6: positioned descendants that are NOT themselves stacking-context roots
+    // (i.e. position:relative/absolute with z-index:auto, or sticky without SC trigger).
+    // Painted in tree order alongside z-index:auto child SCs. Each entry records
+    // the absolute offset to draw at.
+    struct PositionedEntry {
+        dom::Element* elem;
+        float offsetX;
+        float offsetY;
+        int   tieBreaker; // tree-order tie-breaker (DFS index)
+    };
+    std::vector<PositionedEntry> positionedNonSC;
+
+    // Child stacking contexts (each painted recursively). Sorted by z-index then
+    // tree order at paint time:
+    //   step 2: zIndex < 0
+    //   step 6: zIsAuto (interleaved with positionedNonSC by tree order)
+    //   step 7: zIndex > 0  (and zIndex == 0 with !zIsAuto)
+    std::vector<std::unique_ptr<StackingContext>> children;
+    int treeOrder = 0; // DFS index assigned when first encountered (for stable sort)
+};
 
 // Image cache entry for background-image / <img> rendering
 struct CachedImage {
@@ -68,6 +109,20 @@ private:
     void drawText(dom::Node* textNode, dom::Element* parent, float offsetX, float offsetY);
     void drawPseudo(dom::Element* host, const std::string& which,
                     float offsetX, float offsetY);
+
+    // CSS 2.1 Appendix E painting (stacking contexts + z-index order).
+    // buildStackingContextTree walks the DOM accumulating absolute offsets and
+    // partitions descendants into the nearest SC ancestor's buckets.
+    // paintStackingContext does the seven-step paint order recursively.
+    std::unique_ptr<StackingContext> buildStackingContextTree(
+        dom::Element* root, float scrollX, float scrollY);
+    void paintStackingContext(StackingContext* sc);
+
+    // While drawElementContent walks children, it consults skipSet_ to avoid
+    // descending into elements that will be painted separately by the SC walker
+    // (their own SC, or a positioned non-SC descendant in some ancestor SC's
+    // step-6 bucket).
+    std::unordered_set<dom::Element*> skipSet_;
 
 public:
     // Color parsing helper (public for shared use by element controls)

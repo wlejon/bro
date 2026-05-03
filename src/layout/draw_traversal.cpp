@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <sstream>
 #include <stb_image.h>
 
@@ -220,13 +221,106 @@ static std::string getOverflowY(const htmlayout::css::ComputedStyle& style) {
 DrawTraversal::DrawTraversal(render::Renderer* renderer, FontManager* fontManager)
     : renderer_(renderer), fontManager_(fontManager) {}
 
+// ---------------------------------------------------------------------------
+// Stacking-context helpers (CSS 2.1 Appendix E)
+// ---------------------------------------------------------------------------
+namespace {
+
+const std::string& styleProp(const htmlayout::css::ComputedStyle& s,
+                             const char* name, const std::string& fallback) {
+    auto it = s.find(name);
+    return (it != s.end()) ? it->second : fallback;
+}
+
+bool isPositioned(const htmlayout::css::ComputedStyle& s) {
+    auto it = s.find("position");
+    if (it == s.end()) return false;
+    const std::string& p = it->second;
+    return p == "relative" || p == "absolute" || p == "fixed" || p == "sticky";
+}
+
+// Returns true if z-index is the literal keyword 'auto' (or absent).
+// Out-parameter outZ holds the parsed integer (0 when auto/absent/invalid).
+bool getZIndex(const htmlayout::css::ComputedStyle& s, int& outZ) {
+    auto it = s.find("z-index");
+    if (it == s.end() || it->second.empty() || it->second == "auto") {
+        outZ = 0;
+        return true; // is auto
+    }
+    char* end = nullptr;
+    long v = std::strtol(it->second.c_str(), &end, 10);
+    if (end == it->second.c_str()) {
+        outZ = 0;
+        return true;
+    }
+    outZ = static_cast<int>(v);
+    return false;
+}
+
+// Returns true if this element creates a new stacking context.
+// CSS 2.1 + commonly-implemented CSS3 triggers, restricted to what parity
+// tests exercise. v1 punts on: will-change, contain:layout/paint, container-type.
+bool createsStackingContext(dom::Element* elem, bool isRoot) {
+    if (isRoot) return true; // root element always creates SC
+    auto& s = elem->computedStyle();
+
+    // position: fixed / sticky → always SC
+    auto posIt = s.find("position");
+    std::string pos = (posIt != s.end()) ? posIt->second : "static";
+    if (pos == "fixed" || pos == "sticky") return true;
+
+    // position: relative/absolute with z-index != auto → SC
+    if (pos == "relative" || pos == "absolute") {
+        int z; bool isAuto = getZIndex(s, z);
+        if (!isAuto) return true;
+    }
+
+    // opacity < 1
+    auto opIt = s.find("opacity");
+    if (opIt != s.end() && !opIt->second.empty()) {
+        float op = std::strtof(opIt->second.c_str(), nullptr);
+        if (op < 1.0f) return true;
+    }
+
+    // transform != none
+    auto trIt = s.find("transform");
+    if (trIt != s.end() && !trIt->second.empty() && trIt->second != "none")
+        return true;
+
+    // filter != none
+    auto fIt = s.find("filter");
+    if (fIt != s.end() && !fIt->second.empty() && fIt->second != "none")
+        return true;
+
+    // isolation: isolate
+    auto isoIt = s.find("isolation");
+    if (isoIt != s.end() && isoIt->second == "isolate") return true;
+
+    // mix-blend-mode != normal
+    auto mbIt = s.find("mix-blend-mode");
+    if (mbIt != s.end() && !mbIt->second.empty() && mbIt->second != "normal")
+        return true;
+
+    return false;
+}
+
+} // namespace
+
 void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
                          int viewportW, int viewportH, int viewportTop) {
     if (!root || !renderer_) return;
     viewportW_ = viewportW;
     viewportH_ = viewportH;
     viewportTop_ = viewportTop;
-    drawElement(root, scrollX, scrollY);
+
+    // Build the stacking-context tree (CSS 2.1 Appendix E), then paint in the
+    // seven-step order. Each SC root paints its own box first, then recurses
+    // into negative-z children, then in-flow descendants (via the normal
+    // walker, with positioned/SC descendants skipped via skipSet_), then
+    // positioned-non-SC descendants and z:auto SC children in tree order,
+    // then positive-z child SCs.
+    auto rootSC = buildStackingContextTree(root, scrollX, scrollY);
+    if (rootSC) paintStackingContext(rootSC.get());
 }
 
 void DrawTraversal::drawElement(dom::Element* elem, float offsetX, float offsetY) {
@@ -238,7 +332,13 @@ void DrawTraversal::drawNode(dom::Node* node, float offsetX, float offsetY) {
     if (!node) return;
 
     if (node->nodeType() == dom::NodeType::Element) {
-        drawElementContent(static_cast<dom::Element*>(node), offsetX, offsetY);
+        // CSS 2.1 Appendix E: subtrees rooted at a child stacking context or at
+        // a positioned non-SC descendant are painted out-of-order by the SC
+        // walker — skip them when reached via the normal in-flow walk so they
+        // don't paint twice (or at the wrong z order).
+        auto* el = static_cast<dom::Element*>(node);
+        if (skipSet_.count(el)) return;
+        drawElementContent(el, offsetX, offsetY);
     } else if (node->nodeType() == dom::NodeType::Text) {
         auto* parent = node->parentNode();
         if (parent && parent->nodeType() == dom::NodeType::Element) {
@@ -1542,6 +1642,175 @@ render::Color DrawTraversal::parseColor(const std::string& color) {
     render::Color c = {0, 0, 0, 255};
     tryParseColor(color, c);
     return c;
+}
+
+// ---------------------------------------------------------------------------
+// CSS 2.1 Appendix E painting: stacking-context tree construction + paint walk
+// ---------------------------------------------------------------------------
+
+std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
+    dom::Element* root, float scrollX, float scrollY) {
+    auto rootSC = std::make_unique<StackingContext>();
+    rootSC->root = root;
+    rootSC->offsetX = scrollX;
+    rootSC->offsetY = scrollY;
+    rootSC->zIndex = 0;
+    rootSC->zIsAuto = true;
+    rootSC->treeOrder = 0;
+
+    int dfsCounter = 1;
+
+    // Recursive collector. `currentSC` is the nearest SC ancestor whose buckets
+    // descendants populate. (offsetX, offsetY) is the absolute draw offset for
+    // `elem` (i.e. the offset its parent passed to drawElementContent in the
+    // legacy single-pass walk).
+    std::function<void(dom::Element*, StackingContext*, float, float)> visit;
+    visit = [&](dom::Element* elem, StackingContext* currentSC,
+                float offX, float offY) {
+        if (!elem) return;
+        auto& style = elem->computedStyle();
+
+        // display:none → don't paint, don't descend
+        auto dispIt = style.find("display");
+        if (dispIt != style.end() && dispIt->second == "none") return;
+
+        // Compute child offset using the same logic as drawElementContent
+        auto& box = elem->layoutBox();
+        float x = box.contentRect.x + offX;
+        float y = box.contentRect.y + offY;
+        float maxST = std::max(0.0f, box.naturalHeight - box.contentRect.height);
+        float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxST);
+        float childOffX = x;
+        float childOffY = y - scrollTop;
+
+        bool isThisRoot = (elem == root);
+        bool isSC = createsStackingContext(elem, isThisRoot);
+        bool positioned = isPositioned(style);
+
+        StackingContext* descendantSC = currentSC;
+
+        if (isSC && !isThisRoot) {
+            // Create a child SC entry on currentSC.
+            auto sc = std::make_unique<StackingContext>();
+            sc->root = elem;
+            sc->offsetX = offX;
+            sc->offsetY = offY;
+            sc->zIsAuto = getZIndex(style, sc->zIndex);
+            sc->treeOrder = dfsCounter++;
+            descendantSC = sc.get();
+            currentSC->children.push_back(std::move(sc));
+            // The SC root itself is painted by paintStackingContext (its own
+            // drawElementContent call), and the legacy walker will skip it.
+            skipSet_.insert(elem);
+        } else if (positioned && !isThisRoot) {
+            // Positioned but does not create an SC (z-index:auto on
+            // relative/absolute). Goes into step 6 of nearest SC.
+            StackingContext::PositionedEntry pe;
+            pe.elem = elem;
+            pe.offsetX = offX;
+            pe.offsetY = offY;
+            pe.tieBreaker = dfsCounter++;
+            currentSC->positionedNonSC.push_back(pe);
+            skipSet_.insert(elem);
+        }
+
+        // Recurse into composed children. If this element became an SC root,
+        // descendants accumulate into IT; otherwise they accumulate into the
+        // same currentSC. For positioned non-SC, descendants ALSO go to the
+        // same currentSC (positioning doesn't open a new SC), but we still
+        // skip the element in the normal walker — the positioned-entry paint
+        // path will descend into it through drawElementContent.
+        // BUT: when we paint a positioned-non-SC element via drawElementContent,
+        // its children will be walked too, and if those children are themselves
+        // SC roots or positioned, we'd want them skipped from THAT inner walk
+        // — which they are, since skipSet_ persists.
+        for (auto* child : elem->composedChildNodes()) {
+            if (child && child->nodeType() == dom::NodeType::Element) {
+                visit(static_cast<dom::Element*>(child),
+                      descendantSC, childOffX, childOffY);
+            }
+        }
+    };
+
+    // Root: descendants belong to rootSC.
+    auto& rootStyle = root->computedStyle();
+    auto rDisp = rootStyle.find("display");
+    if (rDisp != rootStyle.end() && rDisp->second == "none") return nullptr;
+
+    // The root itself is the SC root (painted by paintStackingContext); we
+    // recurse into its children directly so the root isn't double-skipped.
+    auto& rbox = root->layoutBox();
+    float rx = rbox.contentRect.x + scrollX;
+    float ry = rbox.contentRect.y + scrollY;
+    float rMaxST = std::max(0.0f, rbox.naturalHeight - rbox.contentRect.height);
+    float rScrollTop = std::clamp(root->scrollTopValue(), 0.0f, rMaxST);
+    float rChildOffX = rx;
+    float rChildOffY = ry - rScrollTop;
+    for (auto* child : root->composedChildNodes()) {
+        if (child && child->nodeType() == dom::NodeType::Element) {
+            visit(static_cast<dom::Element*>(child),
+                  rootSC.get(), rChildOffX, rChildOffY);
+        }
+    }
+
+    return rootSC;
+}
+
+void DrawTraversal::paintStackingContext(StackingContext* sc) {
+    if (!sc || !sc->root) return;
+
+    // Step 1: paint the SC root itself — its background, borders, and in-flow
+    // non-positioned non-SC descendants — via the normal walker. The walker
+    // consults skipSet_ to avoid descending into SC roots and positioned
+    // non-SC descendants (they paint separately below).
+    drawElementContent(sc->root, sc->offsetX, sc->offsetY);
+
+    // Step 2: child SCs with z-index < 0, sorted by zIndex then tree order.
+    std::vector<StackingContext*> negSCs, autoSCs, posSCs;
+    for (auto& c : sc->children) {
+        if (!c->zIsAuto && c->zIndex < 0) negSCs.push_back(c.get());
+        else if (c->zIsAuto || c->zIndex == 0) autoSCs.push_back(c.get());
+        else posSCs.push_back(c.get());
+    }
+    std::sort(negSCs.begin(), negSCs.end(), [](auto* a, auto* b) {
+        if (a->zIndex != b->zIndex) return a->zIndex < b->zIndex;
+        return a->treeOrder < b->treeOrder;
+    });
+    for (auto* c : negSCs) paintStackingContext(c);
+
+    // Steps 3-5 are folded into step 1 above (in-flow descendants paint via
+    // drawElementContent in tree order — this gives correct ordering for the
+    // common case; perfect block-then-float-then-inline separation would need
+    // a deeper layout-tree split that bro doesn't currently materialize).
+
+    // Step 6: positioned non-SC descendants AND child SCs with z-index:auto/0,
+    // interleaved in tree order.
+    struct Step6Item {
+        int tieBreaker;
+        std::function<void()> paint;
+    };
+    std::vector<Step6Item> step6;
+    for (auto& pe : sc->positionedNonSC) {
+        step6.push_back({pe.tieBreaker, [this, pe]() {
+            drawElementContent(pe.elem, pe.offsetX, pe.offsetY);
+        }});
+    }
+    for (auto* c : autoSCs) {
+        step6.push_back({c->treeOrder, [this, c]() {
+            paintStackingContext(c);
+        }});
+    }
+    std::sort(step6.begin(), step6.end(), [](const Step6Item& a, const Step6Item& b) {
+        return a.tieBreaker < b.tieBreaker;
+    });
+    for (auto& item : step6) item.paint();
+
+    // Step 7: child SCs with positive z-index.
+    std::sort(posSCs.begin(), posSCs.end(), [](auto* a, auto* b) {
+        if (a->zIndex != b->zIndex) return a->zIndex < b->zIndex;
+        return a->treeOrder < b->treeOrder;
+    });
+    for (auto* c : posSCs) paintStackingContext(c);
 }
 
 } // namespace bro::layout
