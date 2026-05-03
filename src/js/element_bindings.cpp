@@ -2665,6 +2665,25 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     auto* el = getElement(this_val);
     auto& box = getLayoutBox(el);
 
+    // display:none elements have no box at all — match Chromium and return
+    // {0,0,0,0} rather than inheriting the parent's accumulated position.
+    if (el) {
+        auto& cs = el->computedStyle();
+        auto dIt = cs.find("display");
+        if (dIt != cs.end() && dIt->second == "none") {
+            JSValue rect0 = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, rect0, "x",      JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, rect0, "y",      JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, rect0, "width",  JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, rect0, "height", JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, rect0, "top",    JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, rect0, "left",   JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, rect0, "bottom", JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, rect0, "right",  JS_NewFloat64(ctx, 0));
+            return rect0;
+        }
+    }
+
     // Accumulate absolute position by walking up the layout parent chain.
     // Layout positions are parent-relative (content area origin), where the
     // parent is determined by the composed tree (including shadow DOM wrappers
