@@ -90,11 +90,16 @@ button, input[type="button"], input[type="submit"], input[type="reset"] {
 
 input, textarea, select {
     display: inline-block;
-    padding: 2px 4px;
-    border: 1px solid #767676;
+    padding: 1px 2px;
+    border: 2px solid #767676;
     background-color: #fff;
     color: #000;
-    font-size: 14px;
+    font-size: 13.333px;
+}
+
+input {
+    width: 169px;
+    height: 15px;
 }
 
 input[type="checkbox"], input[type="radio"] {
