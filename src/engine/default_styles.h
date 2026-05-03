@@ -79,12 +79,13 @@ br { display: inline; }
 
 button, input[type="button"], input[type="submit"], input[type="reset"] {
     display: inline-block;
-    padding: 2px 8px;
-    border: 1px solid #767676;
+    box-sizing: border-box;
+    padding: 1px 6px;
+    border: 2px solid #767676;
     border-radius: 3px;
     background-color: #f0f0f0;
     color: #000;
-    font-size: 14px;
+    font-size: 13.333px;
     cursor: pointer;
 }
 
