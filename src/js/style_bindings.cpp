@@ -267,6 +267,23 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
     // Resolve width/height to used values from layout box (matches Chrome getComputedStyle)
     if ((prop == "width" || prop == "height") &&
         (value == "auto" || value.empty())) {
+        // Per CSSOM resolved-value, non-replaced inline elements report
+        // width/height as "auto" (not the used pixel size).
+        auto dIt = style.find("display");
+        std::string disp = (dIt != style.end()) ? dIt->second : "inline";
+        const std::string& tag = el->tagName();
+        bool isReplaced =
+            tag == "img" || tag == "IMG" ||
+            tag == "video" || tag == "VIDEO" ||
+            tag == "canvas" || tag == "CANVAS" ||
+            tag == "iframe" || tag == "IFRAME" ||
+            tag == "input" || tag == "INPUT" ||
+            tag == "embed" || tag == "EMBED" ||
+            tag == "object" || tag == "OBJECT" ||
+            tag == "svg" || tag == "SVG";
+        if (disp == "inline" && !isReplaced) {
+            return "auto";
+        }
         auto& box = el->layoutBox();
         float v = (prop == "width")
             ? box.contentRect.width
