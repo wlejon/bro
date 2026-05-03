@@ -264,11 +264,15 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
         }
     }
 
-    // Resolve width/height to used values from layout box (matches Chrome getComputedStyle)
-    if ((prop == "width" || prop == "height") &&
-        (value == "auto" || value.empty())) {
-        // Per CSSOM resolved-value, non-replaced inline elements report
-        // width/height as "auto" (not the used pixel size).
+    // Resolve width/height to used values from layout box (matches Chrome
+    // getComputedStyle). Always pull from the layout box rather than the
+    // specified value so:
+    //   - `box-sizing: border-box` reports the border-box dimension
+    //     (Chrome behavior; CSSOM spec is content-box but Chrome diverges).
+    //   - `auto` resolves to the used pixel size.
+    //   - non-replaced inline elements still report "auto" since they have no
+    //     CSS-meaningful width/height.
+    if (prop == "width" || prop == "height") {
         auto dIt = style.find("display");
         std::string disp = (dIt != style.end()) ? dIt->second : "inline";
         const std::string& tag = el->tagName();
@@ -284,11 +288,55 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
         if (disp == "inline" && !isReplaced) {
             return "auto";
         }
+        // display:none — Chrome returns the specified value, not the laid-out
+        // (zero) used value.
+        if (disp == "none") {
+            return value.empty() ? std::string("auto") : value;
+        }
         auto& box = el->layoutBox();
         float v = (prop == "width")
             ? box.contentRect.width
             : box.contentRect.height;
+        // For border-box, include padding + border on the relevant axis so
+        // getComputedStyle reflects the box-sizing-aware dimension Chrome
+        // exposes (and that broparity expects).
+        auto bsIt = style.find("box-sizing");
+        if (bsIt != style.end() && bsIt->second == "border-box") {
+            if (prop == "width")
+                v += box.padding.left + box.padding.right
+                   + box.border.left + box.border.right;
+            else
+                v += box.padding.top + box.padding.bottom
+                   + box.border.top + box.border.bottom;
+        }
         if (v >= 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.4gpx", v);
+            return buf;
+        }
+    }
+
+    // Resolve padding-* and margin-* to pixel values when the specified value
+    // is `auto` or a percentage. Chrome reports these as resolved px while
+    // length values stay as specified (so margin-collapse adjustments don't
+    // leak into getComputedStyle output).
+    if (prop == "padding-top" || prop == "padding-right" ||
+        prop == "padding-bottom" || prop == "padding-left" ||
+        prop == "margin-top" || prop == "margin-right" ||
+        prop == "margin-bottom" || prop == "margin-left") {
+        bool isPct = !value.empty() && value.back() == '%';
+        bool isAuto = value == "auto";
+        if (isPct || isAuto) {
+            auto& box = el->layoutBox();
+            float v = 0;
+            if (prop == "padding-top")    v = box.padding.top;
+            else if (prop == "padding-right")  v = box.padding.right;
+            else if (prop == "padding-bottom") v = box.padding.bottom;
+            else if (prop == "padding-left")   v = box.padding.left;
+            else if (prop == "margin-top")     v = box.margin.top;
+            else if (prop == "margin-right")   v = box.margin.right;
+            else if (prop == "margin-bottom")  v = box.margin.bottom;
+            else if (prop == "margin-left")    v = box.margin.left;
             char buf[32];
             snprintf(buf, sizeof(buf), "%.4gpx", v);
             return buf;
