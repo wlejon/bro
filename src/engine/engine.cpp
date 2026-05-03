@@ -447,6 +447,7 @@ Engine::Engine(const EngineConfig& config)
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath, &assetMounts_);
     js::VideoBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+    js::SceneBindings::setAppContext(manifest_.basePath, &assetMounts_);
     // screenshotCanvas works on both GPU-backed (windowed) and raster
     // (headless) Skia surfaces, so it's installed in both modes — apps can
     // use it for in-app capture / save flows without a headless drive.

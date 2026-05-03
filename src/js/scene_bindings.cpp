@@ -19,6 +19,7 @@
 #include "physics/physics_world.h"
 #include "canvas/canvas_scene.h"
 #include "js/runtime.h"
+#include "util/asset_mounts.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -37,6 +38,29 @@
 JPH_SUPPRESS_WARNINGS
 
 namespace bro::js {
+
+// App-relative path resolution context (set per app load by the engine).
+static std::string s_basePath;
+static const util::AssetMounts* s_mounts = nullptr;
+
+// Resolve a path against the app base directory and engine mounts. Mirrors
+// the rules used by image_bindings: absolute paths and Windows drive paths
+// pass through; leading-slash paths consult mounts; everything else is taken
+// relative to the app directory.
+static std::string resolveAppPath(const std::string& src) {
+    if (src.size() >= 2 && src[1] == ':') return src;
+    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) {
+        if (s_mounts) {
+            std::string m = s_mounts->resolve(src);
+            if (!m.empty()) return m;
+        }
+        return src;
+    }
+    if (s_basePath.empty()) return src;
+    std::string path = s_basePath;
+    if (path.back() != '/' && path.back() != '\\') path += '/';
+    return path + src;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2333,7 +2357,7 @@ static JSValue js_sg_setEnvironment(JSContext* ctx, JSValueConst this_val,
     if (JS_IsString(hdrVal)) {
         const char* path = JS_ToCString(ctx, hdrVal);
         if (path && path[0]) {
-            ok = g->loadEnvironment(path);
+            ok = g->loadEnvironment(resolveAppPath(path));
         } else {
             g->clearEnvironment();
         }
@@ -2486,6 +2510,12 @@ static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int ar
 // ---------------------------------------------------------------------------
 // Install / Cleanup
 // ---------------------------------------------------------------------------
+
+void SceneBindings::setAppContext(const std::string& basePath,
+                                  const util::AssetMounts* mounts) {
+    s_basePath = basePath;
+    s_mounts = mounts;
+}
 
 void SceneBindings::install(JSContext* ctx) {
     // --- SceneNode class ---
