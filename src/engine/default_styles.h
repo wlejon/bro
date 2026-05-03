@@ -148,17 +148,13 @@ hr {
 
 /* ---------- Code / preformatted ---------- */
 
-code, pre, kbd, samp {
+code, kbd, samp {
     font-family: monospace;
-    font-size: 14px;
 }
 
 pre {
+    font-family: monospace;
     white-space: pre;
-    background-color: #f5f5f5;
-    padding: 8px;
-    border: 1px solid #ddd;
-    overflow: auto;
     margin-top: 1em;
     margin-bottom: 1em;
 }
