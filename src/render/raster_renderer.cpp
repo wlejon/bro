@@ -36,6 +36,15 @@
 
 namespace bro::render {
 
+// CSS gradient interpolation: premultiplied sRGB so opaque-color → transparent
+// fades through the color's hue (browser default), not through gray. See
+// skia_backend.cpp for details.
+static const SkGradient::Interpolation kCSSGradInterp = {
+    SkGradient::Interpolation::InPremul::kYes,
+    SkGradient::Interpolation::ColorSpace::kDestination,
+    SkGradient::Interpolation::HueMethod::kShorter,
+};
+
 // Helper: build SkGradient::Colors from our ColorStop span
 static SkGradient::Colors buildGradColors(std::span<const ColorStop> stops) {
     thread_local std::vector<SkColor4f> colors;
@@ -549,7 +558,7 @@ void RasterRenderer::fillLinearGradient(float x, float y, float w, float h,
                                          std::span<const ColorStop> stops) {
     if (!canvas_ || stops.empty()) return;
     SkPoint pts[2] = { {startX, startY}, {endX, endY} };
-    auto shader = SkShaders::LinearGradient(pts, SkGradient(buildGradColors(stops), {}));
+    auto shader = SkShaders::LinearGradient(pts, SkGradient(buildGradColors(stops), kCSSGradInterp));
     SkPaint paint;
     paint.setShader(shader);
     paint.setStyle(SkPaint::kFill_Style);
@@ -580,14 +589,14 @@ void RasterRenderer::fillRadialGradient(float x, float y, float w, float h,
         canvas_->scale(1.0f, ry / rx);
         canvas_->translate(-cx, -cy);
         paint.setShader(SkShaders::RadialGradient({cx, cy}, rx,
-            SkGradient(buildGradColors(stops), {})));
+            SkGradient(buildGradColors(stops), kCSSGradInterp)));
         float invS = rx / ry;
         float pyTop    = cy + (y - cy) * invS;
         float pyBottom = cy + ((y + h) - cy) * invS;
         canvas_->drawRect(SkRect::MakeLTRB(x, pyTop, x + w, pyBottom), paint);
     } else {
         paint.setShader(SkShaders::RadialGradient({cx, cy}, r,
-            SkGradient(buildGradColors(stops), {})));
+            SkGradient(buildGradColors(stops), kCSSGradInterp)));
         canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
     }
     canvas_->restore();
@@ -599,7 +608,7 @@ void RasterRenderer::fillConicGradient(float x, float y, float w, float h,
     if (!canvas_ || stops.empty()) return;
     float startAngle = angleDeg - 90.0f;
     auto shader = SkShaders::SweepGradient({cx, cy}, startAngle, startAngle + 360.0f,
-        SkGradient(buildGradColors(stops), {}));
+        SkGradient(buildGradColors(stops), kCSSGradInterp));
     SkPaint paint;
     paint.setShader(shader);
     paint.setStyle(SkPaint::kFill_Style);
