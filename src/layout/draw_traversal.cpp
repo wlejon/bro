@@ -18,6 +18,7 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <span>
 #include <sstream>
 #include <stb_image.h>
 
@@ -1280,25 +1281,56 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
         return;
     }
 
-    // Fallback: draw each border as a filled rect
-    if (box.border.top > 0 && isBorderVisible("border-top-style")) {
-        auto c = getBorderColor("border-top-color");
-        renderer_->fillRect(x, y, w, box.border.top, c);
+    float L = box.border.left;
+    float R = box.border.right;
+    float T = box.border.top;
+    float B = box.border.bottom;
+
+    // Uniform non-rounded borders (all four sides same color, same width):
+    // emit axis-aligned rects to match prior antialiasing exactly. Trapezoid
+    // edges along the corner diagonals would otherwise produce subtle AA
+    // seams across the table/box-grid corpus.
+    if (!rounded && allSameColor && allSameWidth && allFourVisible) {
+        if (T > 0) renderer_->fillRect(x, y, w, T, firstColor);
+        if (B > 0) renderer_->fillRect(x, y + h - B, w, B, firstColor);
+        if (L > 0) renderer_->fillRect(x, y + T, L, h - T - B, firstColor);
+        if (R > 0) renderer_->fillRect(x + w - R, y + T, R, h - T - B, firstColor);
+        return;
     }
-    if (box.border.bottom > 0 && isBorderVisible("border-bottom-style")) {
-        auto c = getBorderColor("border-bottom-color");
-        renderer_->fillRect(x, y + h - box.border.bottom, w, box.border.bottom, c);
-    }
-    if (box.border.left > 0 && isBorderVisible("border-left-style")) {
-        auto c = getBorderColor("border-left-color");
-        renderer_->fillRect(x, y + box.border.top, box.border.left,
-                           h - box.border.top - box.border.bottom, c);
-    }
-    if (box.border.right > 0 && isBorderVisible("border-right-style")) {
-        auto c = getBorderColor("border-right-color");
-        renderer_->fillRect(x + w - box.border.right, y + box.border.top,
-                           box.border.right, h - box.border.top - box.border.bottom, c);
-    }
+
+    // General case: draw each border as a trapezoid quad spanning from the two
+    // outer corners of the border-box edge to the corresponding two inner
+    // corners (i.e., padding-box corners). This matches CSS spec: when
+    // adjacent sides have different colors/widths the seam runs diagonally
+    // from outer corner to inner corner. With width/height collapsed to 0
+    // (the classic CSS triangle trick) this yields the expected triangles.
+    float ox0 = x,       oy0 = y;
+    float ox1 = x + w,   oy1 = y + h;
+    float ix0 = x + L,   iy0 = y + T;
+    float ix1 = x + w - R, iy1 = y + h - B;
+
+    auto drawSide = [&](const char* colorProp, const char* styleProp,
+                        float w0, render::PointF p0, render::PointF p1,
+                        render::PointF p2, render::PointF p3) {
+        if (w0 <= 0 || !isBorderVisible(styleProp)) return;
+        auto c = getBorderColor(colorProp);
+        render::PointF pts[4] = {p0, p1, p2, p3};
+        renderer_->drawPolygon(std::span<const render::PointF>(pts, 4),
+                               c, render::Color{0,0,0,0}, 0.0f);
+    };
+
+    // Top: outer TL, outer TR, inner TR, inner TL
+    drawSide("border-top-color", "border-top-style", T,
+             {ox0, oy0}, {ox1, oy0}, {ix1, iy0}, {ix0, iy0});
+    // Right: outer TR, outer BR, inner BR, inner TR
+    drawSide("border-right-color", "border-right-style", R,
+             {ox1, oy0}, {ox1, oy1}, {ix1, iy1}, {ix1, iy0});
+    // Bottom: outer BR, outer BL, inner BL, inner BR
+    drawSide("border-bottom-color", "border-bottom-style", B,
+             {ox1, oy1}, {ox0, oy1}, {ix0, iy1}, {ix1, iy1});
+    // Left: outer BL, outer TL, inner TL, inner BL
+    drawSide("border-left-color", "border-left-style", L,
+             {ox0, oy1}, {ox0, oy0}, {ix0, iy0}, {ix0, iy1});
 }
 
 // Apply text-transform to a string
