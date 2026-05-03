@@ -1,11 +1,15 @@
 #include "js/dom_bindings_internal.h"
 #include "css/properties.h"
 #include "css/color.h"
+#include "layout/formatting_context.h"
+#include "layout/skia_text_metrics.h"
+#include "engine/engine.h"
 
 #include <qjsbind/qjsbind.h>
 
 #include <algorithm>
 #include <sstream>
+#include <cstdio>
 
 namespace bro::js {
 
@@ -218,7 +222,22 @@ static std::string resolveColorToRgb(const std::string& value) {
     }
 }
 
-static std::string getComputedProperty(bro::dom::Element* el, const std::string& prop) {
+static bro::engine::Engine* getEngineFromCtx(JSContext* ctx) {
+    if (!ctx) return nullptr;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue val = JS_GetPropertyStr(ctx, global, "__bro_engine_ptr");
+    bro::engine::Engine* e = nullptr;
+    if (JS_IsNumber(val)) {
+        int64_t ptr = 0;
+        JS_ToInt64(ctx, &ptr, val);
+        e = reinterpret_cast<bro::engine::Engine*>(static_cast<intptr_t>(ptr));
+    }
+    JS_FreeValue(ctx, val);
+    JS_FreeValue(ctx, global);
+    return e;
+}
+
+static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, const std::string& prop) {
     if (!el) return "";
     auto& style = el->computedStyle();
     std::string value;
@@ -255,6 +274,35 @@ static std::string getComputedProperty(bro::dom::Element* el, const std::string&
         if (v >= 0) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%.4gpx", v);
+            return buf;
+        }
+    }
+
+    // Resolve line-height to used px value (matches browser getComputedStyle behavior).
+    // Per CSSOM, the resolved value of line-height is the used value in px,
+    // except for "normal" which serializes as "normal".
+    if (prop == "line-height" && !value.empty() && value != "normal") {
+        // Get font-size from the same computed style (may itself need resolution)
+        std::string fs;
+        auto fsIt = style.find("font-size");
+        if (fsIt != style.end()) fs = fsIt->second;
+        float fontSize = htmlayout::layout::resolveLength(fs, 16.0f, 16.0f);
+        if (fontSize <= 0) fontSize = 16.0f;
+
+        bro::layout::SkiaTextMetrics* tm = nullptr;
+        auto* eng = getEngineFromCtx(ctx);
+        if (eng) tm = eng->textMetrics();
+
+        std::string ff, fw;
+        auto ffIt = style.find("font-family");
+        if (ffIt != style.end()) ff = ffIt->second;
+        auto fwIt = style.find("font-weight");
+        if (fwIt != style.end()) fw = fwIt->second;
+
+        float lh = htmlayout::layout::resolveLineHeight(value, fontSize, ff, fw, tm);
+        if (lh > 0) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.4gpx", lh);
             return buf;
         }
     }
@@ -315,7 +363,7 @@ static int js_computed_get_own_property(JSContext* ctx,
     if (!(first >= 'a' && first <= 'z')) return 0;
 
     std::string cssName = camelToKebab(nameStr);
-    std::string val = getComputedProperty(el, cssName);
+    std::string val = getComputedProperty(ctx, el, cssName);
 
     if (desc) {
         desc->flags = JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE;
@@ -341,7 +389,7 @@ static JSValue js_computed_getPropertyValue(JSContext* ctx,
         JS_GetOpaque(this_val, js_computed_class_id));
     if (!el || argc < 1) return JS_NewString(ctx, "");
     std::string name = jsToStdString(ctx, argv[0]);
-    return JS_NewString(ctx, getComputedProperty(el, name).c_str());
+    return JS_NewString(ctx, getComputedProperty(ctx, el, name).c_str());
 }
 
 static JSValue js_computed_setProperty(JSContext* ctx,
