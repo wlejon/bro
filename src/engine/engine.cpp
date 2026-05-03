@@ -992,7 +992,8 @@ void Engine::buildAppLayers(render::SkiaRenderer* renderer,
                 : inspector_.selected;
             if (highlight) {
                 drawInspectorHighlight(renderer, highlight, scrollY,
-                                       /*insetLeft=*/0, insetTop);
+                                       /*insetLeft=*/0, insetTop,
+                                       contentW, contentH);
             }
         }
     }

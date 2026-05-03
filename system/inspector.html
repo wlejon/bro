@@ -105,8 +105,12 @@ html, body {
     // expanded[id] = true means children are expanded in the UI. Survives
     // across __onInspectorChanged but ids reset every getAppDOMTree() call,
     // so we key by stable signature (tag + idAttr + classes + path) instead.
-    var expanded = {};   // key by signature
+    var expanded = {};   // key by path-string ("0>1>3")
     var selectedId = -1;
+    // Set true by the engine-selection path so the next render() walks the
+    // tree, expands every ancestor of the selection, and scrolls to it.
+    // Cleared after that one render so user-driven collapses stick.
+    var revealOnNextRender = false;
     var rootNode = null;
 
     function escapeHtml(s) {
@@ -145,10 +149,41 @@ html, body {
         btnDockB.className = 'btn' + (info.dock === 'bottom' ? ' active' : '');
     }
 
+    // Locate the node with `id` in the in-memory tree and return the index
+    // path from root to that node, or null if not found.
+    function findPath(node, id, path) {
+        if (!node) return null;
+        if (node.id === id) return path.slice();
+        if (!node.children) return null;
+        for (var i = 0; i < node.children.length; i++) {
+            path.push(i);
+            var p = findPath(node.children[i], id, path);
+            if (p) return p;
+            path.pop();
+        }
+        return null;
+    }
+
     function render() {
         rootNode = __bro.getAppDOMTree();
         var sel = __bro.inspectorGetSelected();
         selectedId = sel ? sel.id : -1;
+
+        // Auto-expand every ancestor of the current selection — only when the
+        // engine just changed the selection (picker click, programmatic),
+        // never on plain re-renders, otherwise the user's collapses would
+        // snap back open.
+        var scrollAfter = false;
+        if (revealOnNextRender && selectedId >= 0) {
+            var path = findPath(rootNode, selectedId, [0]);
+            if (path) {
+                for (var i = 1; i <= path.length; i++) {
+                    expanded[nodeKey(path.slice(0, i))] = true;
+                }
+            }
+            revealOnNextRender = false;
+            scrollAfter = true;
+        }
 
         var html = '';
         function emit(node, depth, path) {
@@ -180,6 +215,27 @@ html, body {
         var rows = treeEl.getElementsByClassName('row');
         for (var i = 0; i < rows.length; i++) {
             rows[i].addEventListener('click', onRowClick);
+        }
+
+        // Bring the selected row into view (covers the picker-mode case
+        // where selection just jumped to a node deep in the tree). Only do
+        // this on first render after the selection changed — we don't want
+        // every tree refresh to yank the user back to the selected row.
+        if (scrollAfter && selectedId >= 0) {
+            for (var j = 0; j < rows.length; j++) {
+                if (parseInt(rows[j].getAttribute('data-id'), 10) === selectedId) {
+                    var rowTop = rows[j].offsetTop;
+                    var rowH = rows[j].offsetHeight;
+                    var viewTop = treeEl.scrollTop;
+                    var viewH = treeEl.clientHeight;
+                    if (rowTop < viewTop) {
+                        treeEl.scrollTop = rowTop;
+                    } else if (rowTop + rowH > viewTop + viewH) {
+                        treeEl.scrollTop = rowTop + rowH - viewH;
+                    }
+                    break;
+                }
+            }
         }
     }
 
@@ -215,7 +271,11 @@ html, body {
     });
 
     window.__onResize = function() { applyLayout(); render(); };
-    window.__onInspectorChanged = function() { applyLayout(); render(); };
+    window.__onInspectorChanged = function() {
+        revealOnNextRender = true;
+        applyLayout();
+        render();
+    };
 
     applyLayout();
     render();
