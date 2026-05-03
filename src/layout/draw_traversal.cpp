@@ -1569,7 +1569,14 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
 }
 
 bool DrawTraversal::tryParseColor(const std::string& colorStr, render::Color& out) {
-    if (colorStr.empty() || colorStr == "transparent") return false;
+    if (colorStr.empty()) return false;
+    if (colorStr == "transparent") {
+        // CSS transparent = rgba(0,0,0,0). Returning false would leave the
+        // caller's `out` unchanged (often opaque black), so gradient stops
+        // and similar uses of "transparent" would paint as solid black.
+        out = {0, 0, 0, 0};
+        return true;
+    }
 
     // Hex color
     if (colorStr[0] == '#') {
