@@ -1,5 +1,6 @@
 #include "layout/font_manager.h"
 #include "render/renderer.h"
+#include <cmath>
 
 namespace bro::layout {
 
@@ -19,7 +20,9 @@ uint64_t FontManager::createFont(render::Renderer* renderer,
     FontMetrics fm;
     fm.ascent = lm.ascent;
     fm.descent = lm.descent;
-    fm.height = lm.lineHeight();
+    // Match Chromium's GetHeight() rounding of line-height:normal to integer
+    // pixels for table cell row heights (closes ~0.125px per row drift).
+    fm.height = std::round(lm.ascent + lm.descent);
     // x_height: measure 'x' specifically
     auto xm = renderer->measureText("x", handle);
     fm.x_height = xm.height * 0.7f;
