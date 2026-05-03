@@ -30,7 +30,11 @@ public:
         std::vector<Item> children;
     };
 
-    bool visible = true;
+    // Hidden by default — apps that want a menu bar (tools, editors, the
+    // built-in project manager) opt in with bro.menu.show() at startup.
+    // bro-headless additionally suppresses the bar regardless of this flag
+    // so screenshots match a no-menu viewport.
+    bool visible = false;
     // Height in CSS pixels. Must match #menu-bar height in system/menu.html.
     int height = 28;
     std::vector<Item> roots;

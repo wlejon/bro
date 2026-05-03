@@ -2727,7 +2727,9 @@ float Engine::docContentOffsetY() const {
 
 Engine::ContentInsets Engine::contentInsets() const {
     ContentInsets c;
-    c.top = menuBar_.visible ? menuBar_.height : 0;
+    const bool menuShown = menuBar_.visible
+                        && displayMode_ != DisplayMode::Headless;
+    c.top = menuShown ? menuBar_.height : 0;
     if (inspector_.visible) {
         if (inspector_.dock == InspectorDock::Right) {
             c.right = inspector_.width;

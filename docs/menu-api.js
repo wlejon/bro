@@ -2,8 +2,10 @@
  * bro.menu — Standard application menu bar
  *
  * A horizontal menu bar rendered by the engine's system panel
- * (system/menu.html). Visible by default — apps opt out with
- * bro.menu.hide() at startup if they want a fullscreen experience.
+ * (system/menu.html). Hidden by default — tooling apps that want a
+ * menu (project manager, editors, IDE-like tools) call bro.menu.show()
+ * at startup. bro-headless suppresses the bar regardless of state so
+ * screenshots match a clean no-menu viewport.
  *
  * Actions prefixed with "__system." are engine-handled:
  *   __system.quit         — close the app (sets running=false)

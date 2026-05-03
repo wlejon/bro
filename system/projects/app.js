@@ -3,6 +3,10 @@
 // creating projects from skeletons, opening existing project folders, and
 // drag-drop import of folders or .zip files.
 
+// The engine menu bar is hidden by default; tooling apps like this one
+// opt in explicitly.
+bro.menu.show();
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
