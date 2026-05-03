@@ -570,16 +570,26 @@ void RasterRenderer::fillRadialGradient(float x, float y, float w, float h,
     canvas_->save();
     canvas_->clipRect(SkRect::MakeXYWH(x, y, w, h));
     if (std::abs(rx - ry) > 0.001f && rx > 0 && ry > 0) {
+        // Ellipse gradient: scale the canvas vertically around the center so a
+        // circle of radius rx draws as an ellipse with vertical radius ry. The
+        // drawRect runs AFTER the scale, so its Y range must be expanded by
+        // the inverse scale factor to still cover the entire (clipped) box.
+        // Without this, the rect ends up vertically shrunk and corners are
+        // not filled by the gradient.
         canvas_->translate(cx, cy);
         canvas_->scale(1.0f, ry / rx);
         canvas_->translate(-cx, -cy);
         paint.setShader(SkShaders::RadialGradient({cx, cy}, rx,
             SkGradient(buildGradColors(stops), {})));
+        float invS = rx / ry;
+        float pyTop    = cy + (y - cy) * invS;
+        float pyBottom = cy + ((y + h) - cy) * invS;
+        canvas_->drawRect(SkRect::MakeLTRB(x, pyTop, x + w, pyBottom), paint);
     } else {
         paint.setShader(SkShaders::RadialGradient({cx, cy}, r,
             SkGradient(buildGradColors(stops), {})));
+        canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
     }
-    canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
     canvas_->restore();
 }
 
