@@ -11,6 +11,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_video.h"
 #include "canvas/canvas_scene.h"
+#include "css/transform.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -2690,27 +2691,114 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     // that contain <slot> elements). We must walk this composed/layout parent
     // chain rather than the DOM parent chain to correctly account for shadow
     // DOM wrapper elements like .screen-content, .body, .tab-content.
-    float x = box.contentRect.x - box.padding.left - box.border.left;
-    float y = box.contentRect.y - box.padding.top - box.border.top;
-    for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
-        auto& pb = lp->layoutBox();
-        x += pb.contentRect.x;
-        y += pb.contentRect.y;
-        // Account for element scroll (same as draw traversal)
-        y -= lp->scrollTopValue();
+    //
+    // While walking, also collect each ancestor's absolute border-box rect so
+    // we can apply CSS transforms (per CSSOM, getBoundingClientRect() returns
+    // the rect after all transforms in the ancestor chain are applied).
+    struct Frame {
+        bro::dom::Element* el;
+        float bx, by, bw, bh; // absolute border-box top-left + size
+    };
+    std::vector<Frame> chain; // leaf-first: chain[0] = self
+
+    // Walk up collecting raw layout-box info, then convert to absolute coords.
+    struct Raw {
+        bro::dom::Element* el;
+        float cx, cy;        // contentRect origin in parent's content-area coords
+        float padL, padT, borL, borT;
+        float fullW, fullH;
+        float scrollY;       // scrollTop this element applies to its children
+    };
+    std::vector<Raw> raws;
+    for (auto* lp = el; lp; lp = lp->layoutParent()) {
+        auto& lb = lp->layoutBox();
+        raws.push_back({lp, lb.contentRect.x, lb.contentRect.y,
+                        lb.padding.left, lb.padding.top,
+                        lb.border.left, lb.border.top,
+                        lb.fullWidth(), lb.fullHeight(),
+                        lp->scrollTopValue()});
+    }
+    // Accumulate root-down: parent's content-area origin in absolute coords is
+    // (accX, accY); element border-box = (accX + cx - padL - borL, ...).
+    chain.resize(raws.size());
+    {
+        float accX = 0.0f, accY = 0.0f;
+        for (int i = (int)raws.size() - 1; i >= 0; --i) {
+            const Raw& r = raws[i];
+            float bx = accX + r.cx - r.padL - r.borL;
+            float by = accY + r.cy - r.padT - r.borT;
+            chain[i] = {r.el, bx, by, r.fullW, r.fullH};
+            accX += r.cx;
+            accY += r.cy - r.scrollY;
+        }
     }
 
+    // Apply transforms inside-out: combined = T_root * T_parent * ... * T_self.
+    // For each element with a transform, the matrix acts about its own border
+    // box in absolute coords: full = T(bx+ox, by+oy) * M * T(-(bx+ox), -(by+oy)).
+    // Compose by multiplying each ancestor's full transform on the LEFT (since
+    // ancestor transforms apply to the already-transformed descendant point).
+    htmlayout::css::Matrix2D combined; // identity
+    bool hasAnyTransform = false;
+    // chain[0] is self, chain[size-1] is root. Ancestors apply outside-in, so
+    // combined = root * ... * parent * self.
+    for (int i = (int)chain.size() - 1; i >= 0; --i) {
+        const Frame& f = chain[i];
+        if (!f.el) continue;
+        auto& cs = f.el->computedStyle();
+        auto trIt = cs.find("transform");
+        if (trIt == cs.end() || trIt->second.empty() || trIt->second == "none")
+            continue;
+        auto mat = htmlayout::css::parseTransform(trIt->second, f.bw, f.bh);
+        if (mat.isIdentity()) continue;
+        float ox = 0.0f, oy = 0.0f;
+        auto toIt = cs.find("transform-origin");
+        std::string_view originVal = (toIt != cs.end())
+            ? std::string_view(toIt->second) : std::string_view();
+        htmlayout::css::parseTransformOrigin(originVal, f.bw, f.bh, ox, oy);
+        htmlayout::css::Matrix2D toOrigin{1,0,0,1, f.bx+ox, f.by+oy};
+        htmlayout::css::Matrix2D fromOrigin{1,0,0,1, -(f.bx+ox), -(f.by+oy)};
+        htmlayout::css::Matrix2D full = toOrigin * mat * fromOrigin;
+        combined = combined * full;
+        hasAnyTransform = true;
+    }
+
+    float bx = chain[0].bx, by = chain[0].by;
+    float bw = chain[0].bw, bh = chain[0].bh;
+
     JSValue rect = JS_NewObject(ctx);
-    float w = box.fullWidth();
-    float h = box.fullHeight();
-    JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, x));
-    JS_SetPropertyStr(ctx, rect, "y",      JS_NewFloat64(ctx, y));
-    JS_SetPropertyStr(ctx, rect, "width",  JS_NewFloat64(ctx, w));
-    JS_SetPropertyStr(ctx, rect, "height", JS_NewFloat64(ctx, h));
-    JS_SetPropertyStr(ctx, rect, "top",    JS_NewFloat64(ctx, y));
-    JS_SetPropertyStr(ctx, rect, "left",   JS_NewFloat64(ctx, x));
-    JS_SetPropertyStr(ctx, rect, "bottom", JS_NewFloat64(ctx, y + h));
-    JS_SetPropertyStr(ctx, rect, "right",  JS_NewFloat64(ctx, x + w));
+    float outX, outY, outW, outH;
+    if (hasAnyTransform) {
+        // Transform 4 corners of border box, take AABB.
+        auto apply = [&](float px, float py, float& rx, float& ry) {
+            rx = combined.a * px + combined.c * py + combined.e;
+            ry = combined.b * px + combined.d * py + combined.f;
+        };
+        float cx[4], cy[4];
+        apply(bx,      by,      cx[0], cy[0]);
+        apply(bx + bw, by,      cx[1], cy[1]);
+        apply(bx + bw, by + bh, cx[2], cy[2]);
+        apply(bx,      by + bh, cx[3], cy[3]);
+        float minX = cx[0], maxX = cx[0], minY = cy[0], maxY = cy[0];
+        for (int i = 1; i < 4; ++i) {
+            if (cx[i] < minX) minX = cx[i];
+            if (cx[i] > maxX) maxX = cx[i];
+            if (cy[i] < minY) minY = cy[i];
+            if (cy[i] > maxY) maxY = cy[i];
+        }
+        outX = minX; outY = minY;
+        outW = maxX - minX; outH = maxY - minY;
+    } else {
+        outX = bx; outY = by; outW = bw; outH = bh;
+    }
+    JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, outX));
+    JS_SetPropertyStr(ctx, rect, "y",      JS_NewFloat64(ctx, outY));
+    JS_SetPropertyStr(ctx, rect, "width",  JS_NewFloat64(ctx, outW));
+    JS_SetPropertyStr(ctx, rect, "height", JS_NewFloat64(ctx, outH));
+    JS_SetPropertyStr(ctx, rect, "top",    JS_NewFloat64(ctx, outY));
+    JS_SetPropertyStr(ctx, rect, "left",   JS_NewFloat64(ctx, outX));
+    JS_SetPropertyStr(ctx, rect, "bottom", JS_NewFloat64(ctx, outY + outH));
+    JS_SetPropertyStr(ctx, rect, "right",  JS_NewFloat64(ctx, outX + outW));
     return rect;
 }
 
