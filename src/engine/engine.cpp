@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/inspector_highlight.h"
 #include "engine/key_mapping.h"
 #include "layout/box.h"
 #include "layout/layout_node_adapter.h"
@@ -354,8 +355,15 @@ Engine::Engine(const EngineConfig& config)
         prefs.id = "__system.preferences"; prefs.label = "Preferences...";
         edit.children.push_back(std::move(prefs));
 
+        MenuBar::Item view;
+        view.id = "view"; view.label = "View";
+        MenuBar::Item insp;
+        insp.id = "__system.inspector"; insp.label = "Inspector";
+        view.children.push_back(std::move(insp));
+
         menuBar_.roots.push_back(std::move(file));
         menuBar_.roots.push_back(std::move(edit));
+        menuBar_.roots.push_back(std::move(view));
         menuBar_.dirty = true;
     }
 
@@ -386,7 +394,7 @@ Engine::Engine(const EngineConfig& config)
 
     // Set the base path so relative paths work.
     drawTraversal_->setBasePath(manifest_.basePath);
-    drawTraversal_->setViewport(viewportWidth_, contentHeight(), contentTop());
+    drawTraversal_->setViewport(contentWidth(), contentHeight(), contentTop());
 
     // Load user stylesheets separately from UA defaults.
     // UA defaults use UserAgent origin (lowest priority) so any author
@@ -902,11 +910,14 @@ void Engine::buildAppLayers(render::SkiaRenderer* renderer,
                             layout::DrawTraversal& traversal,
                             std::vector<render::SkiaRenderer::GPUSurface>& pool,
                             int& poolW, int& poolH,
-                            int vpW, int vpH, int insetTop, float scrollY,
+                            int vpW, int vpH,
+                            int insetTop, int insetRight, int insetBottom,
+                            float scrollY,
                             std::vector<UILayer>& outLayers) {
     if (!renderer || !renderer->grContext()) return;
 
-    int contentH = vpH - insetTop;
+    int contentW = vpW - insetRight;
+    int contentH = vpH - insetTop - insetBottom;
 
     // Invalidate pool on viewport resize.
     if (poolW != vpW || poolH != vpH) {
@@ -965,24 +976,38 @@ void Engine::buildAppLayers(render::SkiaRenderer* renderer,
         traversal.setBasePath(document_->basePath());
         traversal.draw(document_->documentElement(),
                        0, static_cast<float>(insetTop) - scrollY,
-                       vpW, contentH, insetTop);
+                       contentW, contentH, insetTop);
 
         // Selection highlight overlay sits above text. Reads
         // selectionSnapshot_ (built on main thread before we run).
         drawSelectionHighlight(renderer,
                                static_cast<float>(insetTop) - scrollY);
+
+        // Inspector box-model overlay. The picker hover wins over the static
+        // selection while picker mode is active so the user can preview boxes
+        // before clicking.
+        if (inspector_.visible) {
+            dom::Element* highlight = inspector_.pickerMode && inspector_.pickerHover
+                ? inspector_.pickerHover
+                : inspector_.selected;
+            if (highlight) {
+                drawInspectorHighlight(renderer, highlight, scrollY,
+                                       /*insetLeft=*/0, insetTop);
+            }
+        }
     }
 
     // App-context overlay (dropdown / color picker / etc.)
     overlayMgr_.drawIfContext(OverlayContext::App, renderer);
 
-    // Viewport scrollbar in the content area below the menu bar
+    // Viewport scrollbar at the right edge of the app content area (which is
+    // contentW, not vpW, when the inspector is docked on the right).
     if (document_) {
         float ct = static_cast<float>(insetTop);
         float vh = static_cast<float>(contentH);
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
-            static_cast<float>(vpW) - vs.width - vs.margin,
+            static_cast<float>(contentW) - vs.width - vs.margin,
             ct, vh, documentHeight_, vh, scrollY);
         viewportScrollbar_.draw(renderer, m);
 
@@ -1609,8 +1634,10 @@ void Engine::layoutThreadFunc() {
             // performLayout() rebuilds the persistent layout tree when
             // structureDirty_ is set and clears the flag itself.
             int insetTop = layoutShared_.insetTop.load(std::memory_order_relaxed);
-            document_->performLayout(static_cast<float>(vpW),
-                                     static_cast<float>(vpH - insetTop),
+            int insetRight = layoutShared_.insetRight.load(std::memory_order_relaxed);
+            int insetBottom = layoutShared_.insetBottom.load(std::memory_order_relaxed);
+            document_->performLayout(static_cast<float>(vpW - insetRight),
+                                     static_cast<float>(vpH - insetTop - insetBottom),
                                      layoutTextMetrics);
             document_->clearDirty();
         }
@@ -1684,7 +1711,9 @@ void Engine::rasterThreadFunc() {
         int vpW = rasterShared_.vpWidth.load(std::memory_order_relaxed);
         int vpH = rasterShared_.vpHeight.load(std::memory_order_relaxed);
         int insetTop = rasterShared_.insetTop.load(std::memory_order_relaxed);
-        int contentH = vpH - insetTop;
+        int insetRight = rasterShared_.insetRight.load(std::memory_order_relaxed);
+        int insetBottom = rasterShared_.insetBottom.load(std::memory_order_relaxed);
+        int contentH = vpH - insetTop - insetBottom;
         float scrollY = std::bit_cast<float>(
             rasterShared_.scrollYBits.load(std::memory_order_relaxed));
 
@@ -1703,7 +1732,7 @@ void Engine::rasterThreadFunc() {
         // App layers (HTML interleaved with canvas/WebGL/scene-graph)
         buildAppLayers(rasterRenderer.get(), *rasterDrawTraversal,
                        htmlSurfacePool_, htmlSurfacePoolW_, htmlSurfacePoolH_,
-                       vpW, vpH, insetTop, scrollY,
+                       vpW, vpH, insetTop, insetRight, insetBottom, scrollY,
                        backBuf.appLayers);
 
         // System panel layers (menu bar / preferences / splash) on top of
@@ -2261,6 +2290,8 @@ void Engine::run() {
             layoutShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
             layoutShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
             layoutShared_.insetTop.store(contentTop(), std::memory_order_relaxed);
+            layoutShared_.insetRight.store(contentRight(), std::memory_order_relaxed);
+            layoutShared_.insetBottom.store(contentBottom(), std::memory_order_relaxed);
             layoutShared_.hoveredElement.store(hoveredElement_, std::memory_order_relaxed);
             layoutShared_.state.store(kLayoutDomStable, std::memory_order_release);
             layoutShared_.state.notify_one();
@@ -2433,6 +2464,8 @@ void Engine::run() {
                     rasterShared_.vpWidth.store(viewportWidth_, std::memory_order_relaxed);
                     rasterShared_.vpHeight.store(viewportHeight_, std::memory_order_relaxed);
                     rasterShared_.insetTop.store(contentTop(), std::memory_order_relaxed);
+                    rasterShared_.insetRight.store(contentRight(), std::memory_order_relaxed);
+                    rasterShared_.insetBottom.store(contentBottom(), std::memory_order_relaxed);
                     rasterShared_.scrollYBits.store(std::bit_cast<uint32_t>(scrollY_),
                                                      std::memory_order_relaxed);
                     rasterShared_.state.store(kRasterDomStable, std::memory_order_release);
@@ -2537,16 +2570,17 @@ void Engine::handleResize(int w, int h) {
     viewportHeight_ = h;
     uiDirty_ = true;
     hasRenderedOnce_ = false;
-    drawTraversal_->setViewport(w, contentHeight(), contentTop());
+    drawTraversal_->setViewport(contentWidth(), contentHeight(), contentTop());
     // WebGL canvases resize based on element layout, not viewport — handled per-frame
     {
         resizeSystemPanels(w, h);
     }
+    int cw = contentWidth();
     int ch = contentHeight();
     if (document_) {
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
         document_->resolveStyles();
-        document_->performLayout(static_cast<float>(w), static_cast<float>(ch), *textMetrics_);
+        document_->performLayout(static_cast<float>(cw), static_cast<float>(ch), *textMetrics_);
         if (document_->documentElement()) {
             auto& box = document_->documentElement()->layoutBox();
             documentHeight_ = box.marginBox().height;
@@ -2561,9 +2595,9 @@ void Engine::handleResize(int w, int h) {
         JSContext* ctx = jsRuntime_->getContext();
         JSValue global = JS_GetGlobalObject(ctx);
 
-        // Update innerWidth / innerHeight (innerHeight excludes the menu inset
-        // so apps see a web-like viewport that matches their layout area).
-        JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, w));
+        // Update innerWidth / innerHeight (excludes engine-reserved insets so
+        // apps see a web-like viewport that matches their layout area).
+        JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, cw));
         JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, ch));
 
         // Auto-size every <canvas> that didn't declare a fixed buffer size.
@@ -2579,7 +2613,7 @@ void Engine::handleResize(int w, int h) {
                     continue;
                 auto* cs = static_cast<bro::canvas::CanvasScene*>(el->canvasScene());
                 if (!cs) continue;
-                cs->setIntrinsicWidth(w);
+                cs->setIntrinsicWidth(cw);
                 cs->setIntrinsicHeight(ch);
                 cs->reset();
             }
@@ -2688,6 +2722,19 @@ static bool inContenteditableHost(bro::dom::Node* node) {
 
 float Engine::docContentOffsetY() const {
     return static_cast<float>(contentTop()) - scrollY_;
+}
+
+Engine::ContentInsets Engine::contentInsets() const {
+    ContentInsets c;
+    c.top = menuBar_.visible ? menuBar_.height : 0;
+    if (inspector_.visible) {
+        if (inspector_.dock == InspectorDock::Right) {
+            c.right = inspector_.width;
+        } else {
+            c.bottom = inspector_.height;
+        }
+    }
+    return c;
 }
 
 void Engine::updateSelectionSnapshot() {

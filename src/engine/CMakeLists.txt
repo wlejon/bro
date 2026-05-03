@@ -43,6 +43,7 @@ add_library(bro_engine STATIC
     gizmo.cpp
     gizmo_routing.cpp
     menu_bar.cpp
+    inspector_highlight.cpp
     ${GENERATED_HEADERS}
 )
 target_include_directories(bro_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)

@@ -380,7 +380,7 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     skia->beginFrame(w, h);
     buildAppLayers(skia, *drawTraversal_,
                    screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
-                   w, h, contentTop(), scrollY_,
+                   w, h, contentTop(), contentRight(), contentBottom(), scrollY_,
                    appLayers);
     buildSystemPanelLayers(skia, *drawTraversal_, &fontManager_,
                            screenshotSystemPool_, screenshotSystemPoolW_,
@@ -474,7 +474,7 @@ bool Engine::screenshot(const std::string& path) {
     // Render HTML/CSS overlay on top
     drawTraversal_->draw(document_->documentElement(),
                          0, static_cast<float>(contentTop()),
-                         viewportWidth_, contentHeight(), contentTop());
+                         contentWidth(), contentHeight(), contentTop());
 
     // Selection highlight on top of HTML text.
     updateSelectionSnapshot();
@@ -535,7 +535,7 @@ std::vector<uint8_t> Engine::capturePixels() {
 
     drawTraversal_->draw(document_->documentElement(),
                          0, static_cast<float>(contentTop()),
-                         viewportWidth_, contentHeight(), contentTop());
+                         contentWidth(), contentHeight(), contentTop());
 
     overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
 

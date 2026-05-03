@@ -4,6 +4,7 @@
 #include "util/asset_mounts.h"
 #include "engine/css_transitions.h"
 #include "engine/gizmo.h"
+#include "engine/inspector_state.h"
 #include "engine/menu_bar.h"
 #include "engine/overlay.h"
 #include "engine/replaced_elements.h"
@@ -19,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <glad/gl.h>
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
@@ -296,12 +298,46 @@ public:
     int viewportWidth() const { return viewportWidth_; }
     int viewportHeight() const { return viewportHeight_; }
 
-    /// Top inset reserved for the standard menu bar (0 when hidden).
-    /// The app document lays out into (viewportWidth, viewportHeight - contentTop())
-    /// and is drawn translated down by this amount; system panels outside the
-    /// menu (e.g. nav/settings) read it to position themselves below the bar.
-    int contentTop() const { return menuBar_.visible ? menuBar_.height : 0; }
-    int contentHeight() const { return viewportHeight_ - contentTop(); }
+    /// Insets reserved by engine UI around the app document. Top is the menu
+    /// bar; right/bottom are the inspector when docked. The app document lays
+    /// out into (contentLeft, contentTop, contentWidth, contentHeight) and is
+    /// drawn translated by (contentLeft, contentTop). System panels keep using
+    /// the full viewport — only the app document is inset.
+    struct ContentInsets { int top = 0, right = 0, bottom = 0, left = 0; };
+    ContentInsets contentInsets() const;
+    int contentTop() const { return contentInsets().top; }
+    int contentLeft() const { return contentInsets().left; }
+    int contentRight() const { return contentInsets().right; }
+    int contentBottom() const { return contentInsets().bottom; }
+    int contentWidth() const {
+        auto i = contentInsets(); return viewportWidth_ - i.left - i.right;
+    }
+    int contentHeight() const {
+        auto i = contentInsets(); return viewportHeight_ - i.top - i.bottom;
+    }
+
+    /// Inspector overlay (View → Inspector). Read-only access for bindings/
+    /// callers; mutation happens through the inspector* methods below.
+    InspectorState& inspector() { return inspector_; }
+    const InspectorState& inspector() const { return inspector_; }
+    void toggleInspector();
+    void inspectorSetDock(InspectorDock dock);
+    void inspectorSetSize(int sizePx);
+    void inspectorSetPickerMode(bool on);
+    void inspectorPickElement(dom::Element* el);
+    /// Resolve `id` against the most recent tree/children fetch, then update
+    /// `inspector_.selected`. Invalid ids are silently ignored.
+    void inspectorSelectById(int id);
+    /// Build a JS tree representation of the app document, rebuilding the
+    /// per-fetch nodeId map. `maxDepth` < 0 means unlimited. Returns the
+    /// root-element node object (with nested `children` arrays).
+    JSValue inspectorBuildTreeJS(JSContext* ctx, int maxDepth);
+    /// One level of children for a previously assigned nodeId. Each child
+    /// gets a fresh id minted into the existing map.
+    JSValue inspectorChildrenJS(JSContext* ctx, int parentId);
+    /// `{ id, tag, idAttr, classes }` for the currently selected element, or
+    /// JS null if there is no live selection.
+    JSValue inspectorSelectedJS(JSContext* ctx);
 
     /// Get virtual time (headless mode).
     double virtualTime() const { return virtualTime_; }
@@ -392,7 +428,9 @@ private:
                         layout::DrawTraversal& traversal,
                         std::vector<render::SkiaRenderer::GPUSurface>& pool,
                         int& poolW, int& poolH,
-                        int vpW, int vpH, int insetTop, float scrollY,
+                        int vpW, int vpH,
+                        int insetTop, int insetRight, int insetBottom,
+                        float scrollY,
                         std::vector<UILayer>& outLayers);
 
     /// Build per-system-panel HTML surface layers. Mirrors the raster
@@ -561,6 +599,8 @@ private:
         std::atomic<int> vpWidth{0};
         std::atomic<int> vpHeight{0};
         std::atomic<int> insetTop{0};               // top inset reserved for menu bar
+        std::atomic<int> insetRight{0};             // right inset (inspector dock)
+        std::atomic<int> insetBottom{0};            // bottom inset (inspector dock)
         std::atomic<uint32_t> scrollYBits{0};      // float via bit_cast
         std::atomic<int> frontBuffer{0};            // 0 or 1
     };
@@ -575,6 +615,8 @@ private:
         std::atomic<int> vpWidth{0};
         std::atomic<int> vpHeight{0};
         std::atomic<int> insetTop{0};
+        std::atomic<int> insetRight{0};
+        std::atomic<int> insetBottom{0};
         std::atomic<bool> animationsActive{false};
         std::atomic<dom::Element*> hoveredElement{nullptr};
     };
@@ -613,6 +655,12 @@ private:
 
     CrosshairConfig crosshair_;
     MenuBar menuBar_;
+    InspectorState inspector_;
+    // Per-tree-fetch element ↔ id map. Rebuilt every getAppDOMTree() so ids
+    // never outlive a fetch. Selection survives by re-resolving the element
+    // pointer to a fresh id when the panel re-fetches.
+    std::unordered_map<int, dom::Element*> inspectorNodeMap_;
+    int inspectorNextId_ = 0;
     std::unique_ptr<GizmoManager> gizmo_;
     OverlayManager overlayMgr_;
     std::unique_ptr<Settings> settings_;

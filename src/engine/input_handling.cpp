@@ -381,6 +381,30 @@ void Engine::handleMouseDown(float x, float y, int button) {
         return;
     }
 
+    // Inspector picker mode: a click in the app viewport selects the hovered
+    // element instead of dispatching to the app. Only the primary button picks;
+    // other buttons fall through (so right-click context menus etc. still work
+    // even when picker is on, though that's an unlikely combo).
+    if (inspector_.pickerMode && inspector_.visible && button == 0) {
+        dom::Element* hit = inspector_.pickerHover ? inspector_.pickerHover : hitTest(docX, docY);
+        if (hit) inspectorPickElement(hit);
+        inspectorSetPickerMode(false);
+        // Notify the panel UI so it refreshes (selection + button state).
+        for (auto& doc : systemDocs_) {
+            if (doc.name != "inspector" || !doc.jsCtx) continue;
+            JSValue global = JS_GetGlobalObject(doc.jsCtx);
+            JSValue fn = JS_GetPropertyStr(doc.jsCtx, global, "__onInspectorChanged");
+            if (JS_IsFunction(doc.jsCtx, fn)) {
+                JSValue r = JS_Call(doc.jsCtx, fn, global, 0, nullptr);
+                JS_FreeValue(doc.jsCtx, r);
+            }
+            JS_FreeValue(doc.jsCtx, fn);
+            JS_FreeValue(doc.jsCtx, global);
+        }
+        pressedButtons_ |= domButtonMask(button);
+        return;
+    }
+
     // Engine-level 3D gizmo — sits between modal UI and DOM. Consumes only
     // when a handle is hit; otherwise falls through to DOM / canvas.
     if (gizmoHandleMouseDown(docX, docY, button)) {
@@ -712,6 +736,20 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // strays outside the panel, so fall through in that case.
     if (isSystemVisible() && !elementScrollbar_.isDragging() &&
         systemHandleMouseMove(x, y)) {
+        lastMouseX_ = x;
+        lastMouseY_ = y;
+        return;
+    }
+
+    // Inspector picker mode: hit-test the app document, update pickerHover so
+    // the box-model overlay redraws on the new element, then suppress the rest
+    // of the move (no app hover/JS dispatch while picking).
+    if (inspector_.pickerMode && inspector_.visible) {
+        dom::Element* hit = hitTest(docX, docY);
+        if (hit != inspector_.pickerHover) {
+            inspector_.pickerHover = hit;
+            uiDirty_ = true;
+        }
         lastMouseX_ = x;
         lastMouseY_ = y;
         return;
@@ -1108,6 +1146,24 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     if (overlayMgr_.handleKeyDown(keycode, mod)) {
+        uiDirty_ = true;
+        return;
+    }
+
+    // Esc cancels inspector picker mode without dismissing the panel itself.
+    if (inspector_.pickerMode && keycode == SDLK_ESCAPE && !repeat) {
+        inspectorSetPickerMode(false);
+        for (auto& doc : systemDocs_) {
+            if (doc.name != "inspector" || !doc.jsCtx) continue;
+            JSValue global = JS_GetGlobalObject(doc.jsCtx);
+            JSValue fn = JS_GetPropertyStr(doc.jsCtx, global, "__onInspectorChanged");
+            if (JS_IsFunction(doc.jsCtx, fn)) {
+                JSValue r = JS_Call(doc.jsCtx, fn, global, 0, nullptr);
+                JS_FreeValue(doc.jsCtx, r);
+            }
+            JS_FreeValue(doc.jsCtx, fn);
+            JS_FreeValue(doc.jsCtx, global);
+        }
         uiDirty_ = true;
         return;
     }

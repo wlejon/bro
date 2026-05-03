@@ -44,6 +44,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <regex>
 
 extern "C" {
@@ -198,6 +199,9 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         } else if (fullRel == "menu") {
             doc.tabLabel = "";
             doc.group = "menu";
+        } else if (fullRel == "inspector") {
+            doc.tabLabel = "";
+            doc.group = "inspector";
         } else if (fullRel == "splash") {
             doc.tabLabel = "";
             doc.group = "splash";
@@ -549,6 +553,149 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 0, 0, 1, &ptrVal));
 
+    // ── Inspector API ───────────────────────────────────────────────────
+    // Used by system/inspector.html to read/write inspector state and to
+    // walk the app document tree.
+
+    // __bro.getInspectorLayout() — { visible, dock, width, height,
+    //     viewportWidth, viewportHeight, menuTop }.
+    JS_SetPropertyStr(ctx, bro, "getInspectorLayout",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            JSValue o = JS_NewObject(cx);
+            if (!self) return o;
+            const auto& i = self->inspector();
+            JS_SetPropertyStr(cx, o, "visible", JS_NewBool(cx, i.visible));
+            JS_SetPropertyStr(cx, o, "dock",
+                JS_NewString(cx, i.dock == InspectorDock::Right ? "right" : "bottom"));
+            JS_SetPropertyStr(cx, o, "width", JS_NewInt32(cx, i.width));
+            JS_SetPropertyStr(cx, o, "height", JS_NewInt32(cx, i.height));
+            JS_SetPropertyStr(cx, o, "pickerMode", JS_NewBool(cx, i.pickerMode));
+            JS_SetPropertyStr(cx, o, "viewportWidth", JS_NewInt32(cx, self->viewportWidth()));
+            JS_SetPropertyStr(cx, o, "viewportHeight", JS_NewInt32(cx, self->viewportHeight()));
+            JS_SetPropertyStr(cx, o, "menuTop", JS_NewInt32(cx, self->contentTop()));
+            return o;
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.getAppDOMTree(maxDepth?) — full tree from documentElement, or
+    // up to maxDepth levels deep. Resets the per-fetch nodeId map.
+    JS_SetPropertyStr(ctx, bro, "getAppDOMTree",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || !self->document() || !self->document()->documentElement())
+                return JS_NULL;
+            int32_t maxDepth = -1;
+            if (argc >= 1 && JS_IsNumber(argv[0])) JS_ToInt32(cx, &maxDepth, argv[0]);
+            return self->inspectorBuildTreeJS(cx, maxDepth);
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.getAppDOMChildren(nodeId) — one level of children.
+    JS_SetPropertyStr(ctx, bro, "getAppDOMChildren",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_NewArray(cx);
+            int32_t id = -1;
+            JS_ToInt32(cx, &id, argv[0]);
+            return self->inspectorChildrenJS(cx, id);
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.inspectorSelect(nodeId)
+    JS_SetPropertyStr(ctx, bro, "inspectorSelect",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_UNDEFINED;
+            int32_t id = -1;
+            JS_ToInt32(cx, &id, argv[0]);
+            self->inspectorSelectById(id);
+            return JS_UNDEFINED;
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.inspectorSetDock("right"|"bottom")
+    JS_SetPropertyStr(ctx, bro, "inspectorSetDock",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_UNDEFINED;
+            const char* s = JS_ToCString(cx, argv[0]);
+            if (!s) return JS_UNDEFINED;
+            self->inspectorSetDock(std::string(s) == "bottom"
+                ? InspectorDock::Bottom : InspectorDock::Right);
+            JS_FreeCString(cx, s);
+            return JS_UNDEFINED;
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.inspectorSetSize(px)
+    JS_SetPropertyStr(ctx, bro, "inspectorSetSize",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_UNDEFINED;
+            int32_t v = 0;
+            JS_ToInt32(cx, &v, argv[0]);
+            self->inspectorSetSize(v);
+            return JS_UNDEFINED;
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.inspectorSetPickerMode(bool)
+    JS_SetPropertyStr(ctx, bro, "inspectorSetPickerMode",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_UNDEFINED;
+            self->inspectorSetPickerMode(JS_ToBool(cx, argv[0]) != 0);
+            return JS_UNDEFINED;
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.inspectorGetSelected() — { id, tag } | null. The id is from the
+    // most recent getAppDOMTree() / getAppDOMChildren() fetch.
+    JS_SetPropertyStr(ctx, bro, "inspectorGetSelected",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self) return JS_NULL;
+            return self->inspectorSelectedJS(cx);
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.toggleInspector() — same effect as the View → Inspector menu.
+    JS_SetPropertyStr(ctx, bro, "toggleInspector",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (self) self->toggleInspector();
+            return JS_UNDEFINED;
+        }, 0, 0, 1, &ptrVal));
+
     JS_SetPropertyStr(ctx, global, "__bro", bro);
     doc.broPerfObj = JS_DupValue(ctx, perf);
     JS_FreeValue(ctx, global);
@@ -561,7 +708,77 @@ void Engine::installBroObject(SystemDocument& doc) {
 void Engine::triggerMenuAction(const std::string& id) {
     if (id == "__system.preferences") { toggleSystemSettings(); return; }
     if (id == "__system.quit") { running_ = false; return; }
+    if (id == "__system.inspector") { toggleInspector(); return; }
     menuBar_.triggerHandler(id);
+}
+
+// ---------------------------------------------------------------------------
+// Inspector
+// ---------------------------------------------------------------------------
+
+void Engine::toggleInspector() {
+    inspector_.visible = !inspector_.visible;
+    if (!inspector_.visible) {
+        inspector_.pickerMode = false;
+        inspector_.pickerHover = nullptr;
+    }
+
+    // View → Inspector item shows a checkmark when the panel is open.
+    if (auto* item = menuBar_.find("__system.inspector")) {
+        item->checked = inspector_.visible;
+        menuBar_.dirty = true;
+        onMenuChanged();
+    }
+
+    // Re-layout the app document into the new content area.
+    handleResize(viewportWidth_, viewportHeight_);
+    systemDirty_ = true;
+
+    // Tell the inspector panel JS to refresh (visibility / docking changed).
+    for (auto& doc : systemDocs_) {
+        if (doc.name != "inspector" || !doc.jsCtx) continue;
+        JSContext* ctx = doc.jsCtx;
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue fn = JS_GetPropertyStr(ctx, global, "__onInspectorChanged");
+        if (JS_IsFunction(ctx, fn)) {
+            JSValue r = JS_Call(ctx, fn, global, 0, nullptr);
+            if (JS_IsException(r)) {
+                JSValue ex = JS_GetException(ctx);
+                const char* s = JS_ToCString(ctx, ex);
+                if (s) { LOG_ERROR("__onInspectorChanged: %s", s); JS_FreeCString(ctx, s); }
+                JS_FreeValue(ctx, ex);
+            }
+            JS_FreeValue(ctx, r);
+        }
+        JS_FreeValue(ctx, fn);
+        JS_FreeValue(ctx, global);
+    }
+}
+
+void Engine::inspectorSetDock(InspectorDock dock) {
+    if (inspector_.dock == dock) return;
+    inspector_.dock = dock;
+    if (inspector_.visible) handleResize(viewportWidth_, viewportHeight_);
+    systemDirty_ = true;
+}
+
+void Engine::inspectorSetSize(int sizePx) {
+    if (sizePx < 120) sizePx = 120;
+    if (inspector_.dock == InspectorDock::Right) inspector_.width = sizePx;
+    else inspector_.height = sizePx;
+    if (inspector_.visible) handleResize(viewportWidth_, viewportHeight_);
+    systemDirty_ = true;
+}
+
+void Engine::inspectorSetPickerMode(bool on) {
+    inspector_.pickerMode = on;
+    if (!on) inspector_.pickerHover = nullptr;
+    systemDirty_ = true;
+}
+
+void Engine::inspectorPickElement(dom::Element* el) {
+    inspector_.selected = el;
+    systemDirty_ = true;
 }
 
 void Engine::onMenuChanged() {
@@ -600,12 +817,14 @@ bool Engine::isSystemDocVisible(const SystemDocument& doc) const {
     if (doc.group == "nav") return systemSettingsVisible_;
     if (doc.group == "settings") return systemSettingsVisible_ && doc.active;
     if (doc.group == "menu") return menuBar_.visible;
+    if (doc.group == "inspector") return inspector_.visible;
     if (doc.group == "splash") return splashVisible_;
     return false;
 }
 
 bool Engine::isSystemVisible() const {
-    return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible || splashVisible_;
+    return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible
+        || inspector_.visible || splashVisible_;
 }
 
 void Engine::toggleSystemPerf() {
@@ -1158,6 +1377,108 @@ bool Engine::systemHandleKeyUp(int keycode, int scancode, int mod, bool repeat) 
         if (evt.defaultPrevented()) prevented = true;
     }
     return prevented;
+}
+
+// ---------------------------------------------------------------------------
+// Inspector DOM tree helpers
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Walks parents up to a known root. Used to validate that a stashed element
+// pointer still belongs to the live document tree before we dereference it.
+bool elementInTree(dom::Element* el, dom::Element* root) {
+    while (el) {
+        if (el == root) return true;
+        el = el->parentElement();
+    }
+    return false;
+}
+
+JSValue makeNodeJS(JSContext* ctx, int id, dom::Element* el, bool hasChildren) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "id", JS_NewInt32(ctx, id));
+    JS_SetPropertyStr(ctx, o, "tag", JS_NewString(ctx, el->tagName().c_str()));
+    std::string idAttr = el->getAttribute("id");
+    JS_SetPropertyStr(ctx, o, "idAttr", JS_NewString(ctx, idAttr.c_str()));
+    std::string cls = el->getAttribute("class");
+    JS_SetPropertyStr(ctx, o, "classes", JS_NewString(ctx, cls.c_str()));
+    JS_SetPropertyStr(ctx, o, "hasChildren", JS_NewBool(ctx, hasChildren));
+    return o;
+}
+
+} // namespace
+
+JSValue Engine::inspectorBuildTreeJS(JSContext* ctx, int maxDepth) {
+    inspectorNodeMap_.clear();
+    inspectorNextId_ = 0;
+    auto* root = document_ ? document_->documentElement() : nullptr;
+    if (!root) return JS_NULL;
+
+    // Recursive walk. Each visited element gets a fresh integer id mapped to
+    // its pointer so later inspectorSelect() calls can resolve back to it.
+    std::function<JSValue(dom::Element*, int)> walk;
+    walk = [&](dom::Element* el, int depth) -> JSValue {
+        int id = inspectorNextId_++;
+        inspectorNodeMap_[id] = el;
+        auto kids = el->children();
+        bool emitChildren = (maxDepth < 0 || depth < maxDepth);
+        JSValue node = makeNodeJS(ctx, id, el, !kids.empty());
+        if (emitChildren && !kids.empty()) {
+            JSValue arr = JS_NewArray(ctx);
+            uint32_t i = 0;
+            for (auto* k : kids) {
+                if (!k) continue;
+                JS_SetPropertyUint32(ctx, arr, i++, walk(k, depth + 1));
+            }
+            JS_SetPropertyStr(ctx, node, "children", arr);
+        }
+        return node;
+    };
+    return walk(root, 0);
+}
+
+JSValue Engine::inspectorChildrenJS(JSContext* ctx, int parentId) {
+    auto it = inspectorNodeMap_.find(parentId);
+    JSValue arr = JS_NewArray(ctx);
+    if (it == inspectorNodeMap_.end() || !it->second) return arr;
+    auto* root = document_ ? document_->documentElement() : nullptr;
+    if (!root || !elementInTree(it->second, root)) return arr;
+    auto kids = it->second->children();
+    uint32_t i = 0;
+    for (auto* k : kids) {
+        if (!k) continue;
+        int id = inspectorNextId_++;
+        inspectorNodeMap_[id] = k;
+        JS_SetPropertyUint32(ctx, arr, i++,
+            makeNodeJS(ctx, id, k, !k->children().empty()));
+    }
+    return arr;
+}
+
+void Engine::inspectorSelectById(int id) {
+    auto it = inspectorNodeMap_.find(id);
+    if (it == inspectorNodeMap_.end()) return;
+    auto* root = document_ ? document_->documentElement() : nullptr;
+    if (!root || !elementInTree(it->second, root)) return;
+    inspector_.selected = it->second;
+    systemDirty_ = true;
+}
+
+JSValue Engine::inspectorSelectedJS(JSContext* ctx) {
+    auto* el = inspector_.selected;
+    auto* root = document_ ? document_->documentElement() : nullptr;
+    if (!el || !root || !elementInTree(el, root)) {
+        inspector_.selected = nullptr;
+        return JS_NULL;
+    }
+    // Find the id (if any) currently mapped to this element. This lets the
+    // panel UI keep its tree row highlighted across re-fetches.
+    int id = -1;
+    for (auto& [k, v] : inspectorNodeMap_) {
+        if (v == el) { id = k; break; }
+    }
+    return makeNodeJS(ctx, id, el, !el->children().empty());
 }
 
 // ---------------------------------------------------------------------------

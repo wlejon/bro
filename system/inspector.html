@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #d0d0d0;
+}
+
+#panel {
+    position: absolute;
+    background: #1a1a1a;
+    border-left: 1px solid #333;
+    border-top: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+}
+
+.header {
+    flex: 0 0 28px;
+    background: #222;
+    border-bottom: 1px solid #333;
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    line-height: 28px;
+    user-select: none;
+}
+
+.title {
+    color: #999;
+    flex: 1;
+}
+
+.btn {
+    display: inline-block;
+    padding: 0 8px;
+    margin: 4px 0;
+    height: 20px;
+    line-height: 20px;
+    color: #aaa;
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    cursor: pointer;
+    margin-left: 4px;
+}
+.btn:hover { background: #333; color: #fff; }
+.btn.active { background: #2e4a8a; color: #fff; border-color: #4a6aaa; }
+
+.tree {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px 0;
+}
+
+.row {
+    padding: 1px 6px 1px 0;
+    white-space: nowrap;
+    cursor: pointer;
+    line-height: 16px;
+}
+.row:hover { background: #2a2a2a; }
+.row.selected { background: #2e4a8a; color: #fff; }
+
+.toggle {
+    display: inline-block;
+    width: 12px;
+    text-align: center;
+    color: #777;
+    cursor: pointer;
+    user-select: none;
+}
+.toggle.empty { color: transparent; cursor: default; }
+
+.tag    { color: #6c9ef8; }
+.idAttr { color: #d19a66; }
+.cls    { color: #98c379; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="header">
+    <span class="title">Inspector</span>
+    <span class="btn" id="btn-pick">pick</span>
+    <span class="btn" id="btn-dock-right">⊟ right</span>
+    <span class="btn" id="btn-dock-bottom">⊟ bottom</span>
+    <span class="btn" id="btn-close">×</span>
+  </div>
+  <div class="tree" id="tree"></div>
+</div>
+
+<script>
+(function() {
+    var panel = document.getElementById('panel');
+    var treeEl = document.getElementById('tree');
+    var btnPick = document.getElementById('btn-pick');
+    var btnDockR = document.getElementById('btn-dock-right');
+    var btnDockB = document.getElementById('btn-dock-bottom');
+    var btnClose = document.getElementById('btn-close');
+
+    // expanded[id] = true means children are expanded in the UI. Survives
+    // across __onInspectorChanged but ids reset every getAppDOMTree() call,
+    // so we key by stable signature (tag + idAttr + classes + path) instead.
+    var expanded = {};   // key by signature
+    var selectedId = -1;
+    var rootNode = null;
+
+    function escapeHtml(s) {
+        return String(s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function nodeKey(path) {
+        // Path-based key so collapse state is stable across re-fetches.
+        return path.join('>');
+    }
+
+    function applyLayout() {
+        var info = __bro.getInspectorLayout();
+        if (!info.visible) {
+            panel.style.display = 'none';
+            return;
+        }
+        panel.style.display = 'flex';
+
+        if (info.dock === 'right') {
+            panel.style.top = info.menuTop + 'px';
+            panel.style.left = (info.viewportWidth - info.width) + 'px';
+            panel.style.width = info.width + 'px';
+            panel.style.height = (info.viewportHeight - info.menuTop) + 'px';
+        } else {
+            panel.style.top = (info.viewportHeight - info.height) + 'px';
+            panel.style.left = '0';
+            panel.style.width = info.viewportWidth + 'px';
+            panel.style.height = info.height + 'px';
+        }
+
+        btnPick.className = 'btn' + (info.pickerMode ? ' active' : '');
+        btnDockR.className = 'btn' + (info.dock === 'right' ? ' active' : '');
+        btnDockB.className = 'btn' + (info.dock === 'bottom' ? ' active' : '');
+    }
+
+    function render() {
+        rootNode = __bro.getAppDOMTree();
+        var sel = __bro.inspectorGetSelected();
+        selectedId = sel ? sel.id : -1;
+
+        var html = '';
+        function emit(node, depth, path) {
+            var key = nodeKey(path);
+            var isOpen = expanded[key];
+            var hasChildren = node.hasChildren;
+            var pad = 'padding-left:' + (depth * 12 + 4) + 'px';
+            var label = '<span class="tag">&lt;' + escapeHtml(node.tag);
+            if (node.idAttr) label += ' <span class="idAttr">id="' + escapeHtml(node.idAttr) + '"</span>';
+            if (node.classes) label += ' <span class="cls">class="' + escapeHtml(node.classes) + '"</span>';
+            label += '&gt;</span>';
+            var rowCls = 'row' + (node.id === selectedId ? ' selected' : '');
+            var toggleCls = 'toggle' + (hasChildren ? '' : ' empty');
+            var toggleCh = hasChildren ? (isOpen ? '▼' : '▶') : '·';
+            html += '<div class="' + rowCls + '" data-id="' + node.id + '" data-key="' + escapeHtml(key) + '" style="' + pad + '">'
+                  + '<span class="' + toggleCls + '" data-action="toggle" data-key="' + escapeHtml(key) + '">' + toggleCh + '</span>'
+                  + label + '</div>';
+            if (hasChildren && isOpen && node.children) {
+                for (var i = 0; i < node.children.length; i++) {
+                    emit(node.children[i], depth + 1, path.concat([i]));
+                }
+            }
+        }
+        emit(rootNode, 0, [0]);
+        treeEl.innerHTML = html;
+
+        // Wire row clicks. Toggle handle expands/collapses; the rest of the
+        // row selects the node and updates the engine highlight.
+        var rows = treeEl.getElementsByClassName('row');
+        for (var i = 0; i < rows.length; i++) {
+            rows[i].addEventListener('click', onRowClick);
+        }
+    }
+
+    function onRowClick(e) {
+        var key = this.getAttribute('data-key');
+        var id = parseInt(this.getAttribute('data-id'), 10);
+        // The toggle is inside the row, but only acts when its own span is hit.
+        if (e.target && e.target.getAttribute('data-action') === 'toggle') {
+            expanded[key] = !expanded[key];
+            render();
+            return;
+        }
+        selectedId = id;
+        __bro.inspectorSelect(id);
+        render();
+    }
+
+    btnPick.addEventListener('click', function() {
+        var info = __bro.getInspectorLayout();
+        __bro.inspectorSetPickerMode(!info.pickerMode);
+        applyLayout();
+    });
+    btnDockR.addEventListener('click', function() {
+        __bro.inspectorSetDock('right');
+        applyLayout();
+    });
+    btnDockB.addEventListener('click', function() {
+        __bro.inspectorSetDock('bottom');
+        applyLayout();
+    });
+    btnClose.addEventListener('click', function() {
+        __bro.toggleInspector();
+    });
+
+    window.__onResize = function() { applyLayout(); render(); };
+    window.__onInspectorChanged = function() { applyLayout(); render(); };
+
+    applyLayout();
+    render();
+})();
+</script>
+</body>
+</html>
