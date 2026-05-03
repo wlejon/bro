@@ -122,12 +122,9 @@ void Timers::tick(double currentTimeMs)
         bool repeating = it->second.repeating;
         double intervalMs = it->second.intervalMs;
 
-        JSValue ret = JS_Call(ctx, callback, JS_UNDEFINED, 0, nullptr);
-        if (Runtime::checkException(ctx, ret)) {
-            // Exception already logged
-        } else {
-            JS_FreeValue(ctx, ret);
-        }
+        JSValue ret = Runtime::callJs(ctx, callback, JS_UNDEFINED, 0, nullptr,
+                                      ErrorOrigin::timer(id, repeating));
+        JS_FreeValue(ctx, ret);
 
         JS_FreeValue(ctx, callback);
 
@@ -180,13 +177,10 @@ void Timers::fireAnimationFrames(double timestampMs)
 
     for (auto& entry : current) {
         JSValue ts = JS_NewFloat64(entry.ctx, timestampMs);
-        JSValue ret = JS_Call(entry.ctx, entry.callback, JS_UNDEFINED, 1, &ts);
+        JSValue ret = Runtime::callJs(entry.ctx, entry.callback, JS_UNDEFINED, 1, &ts,
+                                      ErrorOrigin::raf());
         JS_FreeValue(entry.ctx, ts);
-        if (Runtime::checkException(entry.ctx, ret)) {
-            // Exception already logged
-        } else {
-            JS_FreeValue(entry.ctx, ret);
-        }
+        JS_FreeValue(entry.ctx, ret);
         JS_FreeValue(entry.ctx, entry.callback);
     }
 }

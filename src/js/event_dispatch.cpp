@@ -15,6 +15,25 @@ extern "C" {
 
 namespace bro::js {
 
+// Build a short "click on #my-id" / "click on div.foo" / "click on div"
+// description used in JS error log lines for listener invocations.
+static std::string describeListener(const std::string& evtType,
+                                    const bro::dom::Element* el) {
+    std::string out = evtType + " on ";
+    if (!el) { out += "(detached)"; return out; }
+    std::string id = el->getAttribute("id");
+    if (!id.empty()) { out += "#"; out += id; return out; }
+    out += el->tagName();
+    std::string cls = el->getAttribute("class");
+    if (!cls.empty()) {
+        out += ".";
+        // First class only — keeps the label short.
+        size_t sp = cls.find_first_of(" \t");
+        out += (sp == std::string::npos) ? cls : cls.substr(0, sp);
+    }
+    return out;
+}
+
 // C-function methods for plain JS event objects.  They set flag properties
 // on the JS object which are read back after each listener call and
 // propagated to the C++ Event.
@@ -579,10 +598,8 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
                 if (shouldInvoke) {
                     JSValue cb = JS_GetPropertyStr(ctx, entry, "cb");
                     if (JS_IsFunction(ctx, cb)) {
-                        JSValue result = JS_Call(ctx, cb, jsElem, 1, &jsEvent);
-                        if (JS_IsException(result)) {
-                            Runtime::checkException(ctx, result);
-                        }
+                        JSValue result = Runtime::callJs(ctx, cb, jsElem, 1, &jsEvent,
+                            ErrorOrigin::listener(describeListener(event.type(), current)));
                         JS_FreeValue(ctx, result);
                     }
                     JS_FreeValue(ctx, cb);
@@ -654,10 +671,8 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     if ((phase == AT_TARGET || phase == BUBBLING_PHASE) && !event.propagationStopped()) {
         JSValue propHandler = JS_GetPropertyStr(ctx, jsElem, attrName.c_str());
         if (JS_IsFunction(ctx, propHandler)) {
-            JSValue result = JS_Call(ctx, propHandler, jsElem, 1, &jsEvent);
-            if (JS_IsException(result)) {
-                Runtime::checkException(ctx, result);
-            }
+            JSValue result = Runtime::callJs(ctx, propHandler, jsElem, 1, &jsEvent,
+                ErrorOrigin::listener(describeListener(event.type(), current) + " (." + attrName + ")"));
             if (JS_IsBool(result) && !JS_ToBool(ctx, result)) {
                 event.preventDefault();
             }
@@ -690,17 +705,15 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
             JSValue func = JS_Eval(ctx, funcSource.c_str(), funcSource.size(),
                                    attrName.c_str(), JS_EVAL_TYPE_GLOBAL);
             if (JS_IsFunction(ctx, func)) {
-                JSValue result = JS_Call(ctx, func, jsElem, 1, &jsEvent);
-                if (JS_IsException(result)) {
-                    Runtime::checkException(ctx, result);
-                }
+                JSValue result = Runtime::callJs(ctx, func, jsElem, 1, &jsEvent,
+                    ErrorOrigin::listener(describeListener(event.type(), current) + " (" + attrName + " attr)"));
                 // onclick returning false means preventDefault
                 if (JS_IsBool(result) && !JS_ToBool(ctx, result)) {
                     event.preventDefault();
                 }
                 JS_FreeValue(ctx, result);
             } else if (JS_IsException(func)) {
-                Runtime::checkException(ctx, func);
+                Runtime::checkException(ctx, func, ErrorOrigin::eval(attrName));
             }
             JS_FreeValue(ctx, func);
 
@@ -779,8 +792,8 @@ static void dispatchToWindow(JSContext* ctx, bro::dom::Element* target,
     JSValue typeStr = JS_NewString(ctx, event.type().c_str());
     JSValue captureArg = JS_NewBool(ctx, isCapture);
     JSValue args[3] = { typeStr, jsEvent, captureArg };
-    JSValue ret = JS_Call(ctx, dispatch, global, 3, args);
-    if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
+    JSValue ret = Runtime::callJs(ctx, dispatch, global, 3, args,
+        ErrorOrigin::listener(event.type() + " on window"));
     JS_FreeValue(ctx, ret);
 
     // Read back propagation/defaultPrevented flags set by JS listeners.
