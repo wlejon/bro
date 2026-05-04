@@ -42,6 +42,36 @@
 #include <include/gpu/ganesh/gl/GrGLBackendSurface.h>
 #include <include/gpu/ganesh/gl/GrGLDirectContext.h>
 #include <include/gpu/ganesh/gl/GrGLInterface.h>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <dlfcn.h>
+#include <include/gpu/ganesh/gl/GrGLAssembleInterface.h>
+#include <SDL3/SDL_video.h>
+namespace {
+// Resolver used by GrGLMakeAssembledGLInterface on Linux. Tries SDL first
+// (handles extension procs after a context is current), then dlsym for core
+// GL entry points that some loaders won't return via getProcAddress.
+GrGLFuncPtr linuxGLProc(void*, const char* name) {
+    // Skia probes for eglQueryString / eglGetCurrentDisplay to harvest EGL
+    // extensions. If we resolve those (libEGL.so happens to be in scope),
+    // Skia then calls queryString(EGL_EXTENSIONS) and feeds the result into
+    // its extension list — but the resulting strings are bogus when the
+    // active context isn't actually owned by libEGL, and the subsequent
+    // sort/strcmp segfaults. Mirror Skia's own GLX path: refuse EGL procs.
+    if (strncmp(name, "egl", 3) == 0) return nullptr;
+
+    // libglvnd's libGLdispatch routes core entry points through the active
+    // context. Prefer dlsym so we get those dispatch stubs; SDL's vendor
+    // procaddr can return mismatched function pointers.
+    if (auto* p = dlsym(RTLD_DEFAULT, name)) {
+        return reinterpret_cast<GrGLFuncPtr>(p);
+    }
+    if (auto* p = reinterpret_cast<void*>(SDL_GL_GetProcAddress(name))) {
+        return reinterpret_cast<GrGLFuncPtr>(p);
+    }
+    return nullptr;
+}
+}  // namespace
+#endif
 
 namespace bro::render {
 
@@ -49,8 +79,27 @@ namespace bro::render {
 // SkiaRenderer — Skia raster rendering + OpenGL display
 // ===========================================================================
 
+
 sk_sp<GrDirectContext> SkiaRenderer::createGrContext() {
-    auto glInterface = GrGLMakeNativeInterface();
+    sk_sp<const GrGLInterface> glInterface;
+#if defined(__linux__) && !defined(__ANDROID__)
+    // Force libGL.so.1 into the global symbol namespace so dlsym(RTLD_DEFAULT)
+    // resolves core GL entry points (glGetString, glGetIntegerv, etc.) for
+    // the assembled fallback below — SDL_GL_GetProcAddress may return null
+    // for these on some loaders.
+    static void* glHandle = dlopen("libGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+    (void)glHandle;
+
+    // Skia's GrGLMakeNativeInterface() on Linux uses GLX. Under WSL / Wayland
+    // / EGL there's no current GLX context, so MakeGLX returns null.
+    glInterface = GrGLMakeNativeInterface();
+    if (!glInterface) {
+        glInterface = GrGLMakeAssembledGLInterface(nullptr, &linuxGLProc);
+        if (glInterface && !glInterface->validate()) glInterface.reset();
+    }
+#else
+    glInterface = GrGLMakeNativeInterface();
+#endif
     if (!glInterface) return nullptr;
     return GrDirectContexts::MakeGL(glInterface);
 }

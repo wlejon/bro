@@ -5,3 +5,12 @@ target_link_libraries(bro_render PUBLIC bro_platform skia bro_util glad stb_imag
 
 find_package(OpenGL REQUIRED)
 target_link_libraries(bro_render PUBLIC OpenGL::GL)
+
+# On Linux, bro doesn't reference libGL symbols directly (glad uses dlsym, SDL
+# loads GL), so --as-needed drops the libGL.so DT_NEEDED entry. Skia's
+# GrGLMakeNativeInterface() relies on dlsym(RTLD_DEFAULT, ...) finding GL
+# entry points, which fails when libGL is unloaded. Force the link.
+if(UNIX AND NOT APPLE)
+    target_link_options(bro_render INTERFACE
+        "LINKER:--no-as-needed,-lGL,--as-needed")
+endif()
