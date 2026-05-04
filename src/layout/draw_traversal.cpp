@@ -466,6 +466,15 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     viewportH_ = viewportH;
     viewportTop_ = viewportTop;
 
+    // skipSet_ is rebuilt per draw() — buildStackingContextTree inserts every
+    // element that's an SC root or positioned-non-SC for the *current* frame.
+    // Without clearing, entries from prior frames stick: an element that was
+    // an SC last frame (e.g. .tile-inner with an active scale animation) but
+    // isn't this frame (animation completed, transform fell back to none)
+    // would remain in skipSet_ and be skipped by the in-flow walker even
+    // though it's no longer in the SC tree — its content would vanish.
+    skipSet_.clear();
+
     // Build the stacking-context tree (CSS 2.1 Appendix E), then paint in the
     // seven-step order. Each SC root paints its own box first, then recurses
     // into negative-z children, then in-flow descendants (via the normal
