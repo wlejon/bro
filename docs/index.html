@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bro — HTML/CSS/JS runtime for desktop apps and games</title>
+<meta name="description" content="Bro is a desktop app and game runtime that renders HTML/CSS/JS with its own pipeline — Skia, SDL_GPU, QuickJS — and wires 3D, physics, audio, and game networking straight into the DOM.">
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fafafa; color: #1a1a1a; line-height: 1.55; }
+a { color: #1f6feb; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px; }
+header { margin-bottom: 36px; }
+h1 { font-size: 38px; margin: 0 0 6px; letter-spacing: -0.01em; }
+.tag { color: #606060; font-size: 16px; }
+.warn { display: inline-block; background: #fff5e6; border: 1px solid #ffd699; color: #804000; font-size: 12px; padding: 4px 10px; border-radius: 999px; margin-top: 14px; }
+section { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 22px 24px; margin-bottom: 18px; }
+section h2 { margin: 0 0 12px; font-size: 18px; }
+section p { margin: 0 0 12px; }
+section p:last-child { margin: 0; }
+.lede { font-size: 15px; }
+.shot { display: block; max-width: 100%; height: auto; margin: 14px 0 4px; border: 1px solid #d0d0d0; border-radius: 6px; }
+.shot-cap { font-size: 12px; color: #808080; text-align: center; margin-top: 6px; }
+pre { background: #f4f4f4; border: 1px solid #e8e8e8; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 13px; line-height: 1.45; margin: 8px 0; }
+code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+section p code, li code { background: #f4f4f4; padding: 1px 5px; border-radius: 3px; }
+ul { margin: 0; padding-left: 20px; }
+li { margin-bottom: 4px; }
+.parity { background: linear-gradient(180deg, #fff 0%, #f7f9ff 100%); border-color: #c8d6f0; }
+.parity .stat { display: flex; gap: 24px; margin: 12px 0 16px; flex-wrap: wrap; }
+.parity .stat .m { min-width: 140px; }
+.parity .stat .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.parity .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #707070; }
+.parity .cta { display: inline-block; background: #1f6feb; color: #fff; padding: 10px 18px; border-radius: 6px; font-weight: 500; margin-top: 4px; }
+.parity .cta:hover { background: #1858c4; text-decoration: none; }
+.docgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 6px; }
+.docgrid a { display: block; background: #fafafa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 10px 12px; color: inherit; }
+.docgrid a:hover { border-color: #1f6feb; text-decoration: none; }
+.docgrid .n { font-size: 13px; font-weight: 600; color: #1f6feb; font-family: "SF Mono", Menlo, Consolas, monospace; }
+.docgrid .d { font-size: 12px; color: #606060; margin-top: 2px; }
+footer { margin-top: 32px; color: #909090; font-size: 12px; text-align: center; }
+footer a { color: #707070; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Bro</h1>
+  <div class="tag">An HTML/CSS/JS runtime for desktop apps and games — QuickJS, a custom layout engine, Skia, and SDL_GPU, with 3D, physics, audio, and game networking wired straight into the DOM.</div>
+  <div class="warn">pre-release · pre-alpha · vibe-coded</div>
+</header>
+
+<section>
+  <h2>What it is</h2>
+  <p class="lede">Coding agents build web UIs really well. Native UIs take more debugging to get right. Electron solves that, but only for what the web platform natively supports.</p>
+  <p>In bro, HTML/CSS/JS is the UI/app layer like Electron, but the rendering pipeline is ours — which means we can plug in whatever we want underneath. And we have: a 3D scene graph, Jolt physics, a real-time audio engine, mesh generation and CSG, navmesh pathfinding, game networking over GNS, native file dialogs, menu bars. All exposed to JS, all running in one process, no IPC to a Chromium renderer.</p>
+  <p>None of this is new. It's a reconfiguration that works better for coding agents.</p>
+</section>
+
+<section class="parity">
+  <h2>Rendering parity vs Chromium</h2>
+  <p>Bro renders HTML and CSS with its own engine — not by embedding Chromium. <a href="https://github.com/wlejon/broparity">Broparity</a> is a side-by-side test suite that compares bro's output to Chromium pixel-by-pixel and structurally, on a curated set of layout cases.</p>
+  <div class="stat">
+    <div class="m"><div class="v">Live</div><div class="l">per-platform reports</div></div>
+    <div class="m"><div class="v">Windows · macOS</div><div class="l">tracked separately</div></div>
+    <div class="m"><div class="v">Open</div><div class="l">add a case, run the diff</div></div>
+  </div>
+  <p><a class="cta" href="https://wlejon.github.io/broparity/">View live parity report →</a></p>
+</section>
+
+<section>
+  <h2>Hello world</h2>
+<pre><code>&lt;!-- hello/index.html --&gt;
+&lt;h1 id="msg"&gt;Hello&lt;/h1&gt;
+&lt;button id="btn"&gt;Click me&lt;/button&gt;
+&lt;script&gt;
+  document.getElementById('btn').addEventListener('click', () =&gt; {
+    document.getElementById('msg').textContent = 'Hello, bro';
+  });
+&lt;/script&gt;</code></pre>
+<pre><code>bro path/to/hello</code></pre>
+  <p>Naked <code>bro</code> opens the built-in project manager. The launcher and a curated set of starter apps live in the sibling <a href="https://github.com/wlejon/broworkshop">broworkshop</a> repo — games, tools, demos, and AI/research apps you can clone and reshape.</p>
+  <img class="shot" src="launcher.png" alt="bro project launcher">
+  <div class="shot-cap">The built-in project launcher, opened by running <code>bro</code> with no args.</div>
+</section>
+
+<section>
+  <h2>What you get</h2>
+  <p><b>Web platform</b> — HTML5 parsing, CSS (flexbox, gradients, border radius, overflow/scroll), SVG, Canvas 2D, WebGL 2.0, Web Components with Shadow DOM, Web Workers, Fetch, localStorage, form controls with real text editing. three.js and jQuery work.</p>
+  <p><b>Beyond the web</b> — 3D scene graph with mesh rendering and terrain (<code>bro.scene</code>), Jolt rigid-body physics with contact events, Web Audio with synthesis / effects / spatial / MIDI, mesh generation and CSG, navmesh and A* pathfinding (<code>bro.ai.game</code>), game networking over GameNetworkingSockets (<code>bro.net</code>), native file dialogs, native menu bars, 3D transform gizmos, native crosshair overlay.</p>
+  <p><b>For development</b> — Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing.</p>
+</section>
+
+<section>
+  <h2>API reference</h2>
+  <p>Each API surface is documented as an annotated <code>.js</code> file with JSDoc and usage examples.</p>
+  <div class="docgrid">
+    <a href="audio-api.js"><div class="n">audio-api.js</div><div class="d">AudioContext, Web Audio nodes, synth, sequencing, spatial, mix buses</div></a>
+    <a href="scene-api.js"><div class="n">scene-api.js</div><div class="d">3D scene graph: shapes, sprites, meshes, physics nodes</div></a>
+    <a href="lighting-api.js"><div class="n">lighting-api.js</div><div class="d">PBR lighting: dir/point/spot lights, materials, tonemap, ambient</div></a>
+    <a href="mesh-api.js"><div class="n">mesh-api.js</div><div class="d">bro.mesh — primitives, CSG, simplification, UV, import/export</div></a>
+    <a href="terrain-api.js"><div class="n">terrain-api.js</div><div class="d">Voxel terrain: noise config, chunk streaming, voxel edits, raycast</div></a>
+    <a href="physics-api.js"><div class="n">physics-api.js</div><div class="d">Jolt rigid bodies, shapes, raycasts, contact events</div></a>
+    <a href="noise-api.js"><div class="n">noise-api.js</div><div class="d">bro.noise — FastNoise2 SIMD noise generation</div></a>
+    <a href="net-api.js"><div class="n">net-api.js</div><div class="d">bro.net — game networking (host/connect/send/broadcast) via GNS</div></a>
+    <a href="ai-game-api.js"><div class="n">ai-game-api.js</div><div class="d">bro.ai.game — navmesh, pathfinding, steering, perception, agents</div></a>
+    <a href="ai-game-gpu-api.js"><div class="n">ai-game-gpu-api.js</div><div class="d">CUDA-backed primitives: tensors, dense, attention, MHA, optim</div></a>
+    <a href="brokit-api.js"><div class="n">brokit-api.js</div><div class="d">brokit runtime — fs, path, fetch, crypto, WebSocket, streams, storage</div></a>
+    <a href="worker-api.js"><div class="n">worker-api.js</div><div class="d">Worker — web worker threads</div></a>
+    <a href="dialogs-api.js"><div class="n">dialogs-api.js</div><div class="d">Native open/save file and folder dialogs (SDL3-backed)</div></a>
+    <a href="menu-api.js"><div class="n">menu-api.js</div><div class="d">bro.menu — native menu bar</div></a>
+    <a href="gizmo-api.js"><div class="n">gizmo-api.js</div><div class="d">3D transform handles for scene editing (translate/rotate/scale)</div></a>
+    <a href="crosshair-api.js"><div class="n">crosshair-api.js</div><div class="d">Engine-level crosshair overlay (cross/dot/circle/crossdot)</div></a>
+    <a href="video-api.js"><div class="n">video-api.js</div><div class="d">VideoEncoder (WebM/VP9) and GifEncoder — RGBA in, file out</div></a>
+  </div>
+</section>
+
+<section>
+  <h2>Guides</h2>
+  <div class="docgrid">
+    <a href="headless.md"><div class="n">headless.md</div><div class="d">Headless mode: globals, input simulation, virtual time, deterministic testing</div></a>
+    <a href="settings.md"><div class="n">settings.md</div><div class="d">Settings system: defaults, app overrides, user overrides, action binding</div></a>
+    <a href="inspect.md"><div class="n">inspect.md</div><div class="d">DOM inspector — useful in headless</div></a>
+    <a href="projects.md"><div class="n">projects.md</div><div class="d">Built-in project manager and skeletons</div></a>
+    <a href="multi-repo-workflow.md"><div class="n">multi-repo-workflow.md</div><div class="d">Working across bro and its sibling library repos</div></a>
+  </div>
+</section>
+
+<section>
+  <h2>Architecture</h2>
+  <p>QuickJS for JS · qjsbind for C++/JS bindings · brokit for web/system APIs · htmlayout for HTML parsing, CSS, and layout · broaudio for audio · bromesh for meshes · brogameagent for game AI · Jolt for physics · Skia for raster rendering · SDL3 for windowing and GPU display.</p>
+  <p>Each piece lives in its own sibling repo so it can be used independently of bro: <a href="https://github.com/wlejon/qjsbind">qjsbind</a>, <a href="https://github.com/wlejon/brokit">brokit</a>, <a href="https://github.com/wlejon/htmlayout">htmlayout</a>, <a href="https://github.com/wlejon/broaudio">broaudio</a>, <a href="https://github.com/wlejon/bromesh">bromesh</a>, <a href="https://github.com/wlejon/brogameagent">brogameagent</a>.</p>
+</section>
+
+<footer>
+  <a href="https://github.com/wlejon/bro">github.com/wlejon/bro</a> · MIT
+</footer>
+
+</div>
+</body>
+</html>
