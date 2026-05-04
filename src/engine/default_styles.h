@@ -52,7 +52,7 @@ p { margin-top: 1em; margin-bottom: 1em; }
 ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; }
 li { display: list-item; }
 
-table { display: table; border-collapse: separate; border-spacing: 2px; }
+table { display: table; border-collapse: separate; border-spacing: 2px; box-sizing: border-box; }
 thead { display: table-header-group; }
 tbody { display: table-row-group; }
 tfoot { display: table-footer-group; }
