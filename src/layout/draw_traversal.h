@@ -14,6 +14,16 @@ namespace bro::dom { class Element; class Node; }
 
 namespace bro::layout {
 
+// Border-box clip recorded for an ancestor between an SC root and one of its
+// step-2/6/7 paintees. paintStackingContext re-applies these around each such
+// paint so that overflow clips set by non-SC ancestors during the in-flow walk
+// (which save/restore within drawElementContent) still cover positioned
+// descendants painted out-of-line.
+struct ClipRect {
+    float bx, by, bw, bh;
+    render::Radii radii;
+};
+
 // One entry in the stacking-context tree (CSS 2.1 Appendix E).
 // Each SC root collects its descendant elements partitioned by the seven
 // painting steps. Offsets are absolute in the output surface.
@@ -23,6 +33,10 @@ struct StackingContext {
     float offsetY = 0;
     int   zIndex = 0;        // resolved z-index (auto -> 0 for ordering)
     bool  zIsAuto = true;    // true when z-index is 'auto' (treated as 0 but participates in step 6)
+    // Clip chain (outermost-first) inherited from the parent SC root down to
+    // but not including this SC root. Re-applied around the paintStackingContext
+    // call for this child SC.
+    std::vector<ClipRect> ancestorClips;
 
     // Step 3+5 merged: in-flow, non-positioned descendants painted in tree order
     // alongside step 4 (floats). These are descendants whose nearest SC ancestor is
@@ -41,6 +55,9 @@ struct StackingContext {
         float offsetX;
         float offsetY;
         int   tieBreaker; // tree-order tie-breaker (DFS index)
+        // Clip chain from the SC root (exclusive) down to this entry (exclusive),
+        // outermost-first. Re-applied around the entry's drawElementContent call.
+        std::vector<ClipRect> ancestorClips;
     };
     std::vector<PositionedEntry> positionedNonSC;
 

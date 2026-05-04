@@ -2759,13 +2759,35 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
 
     int dfsCounter = 1;
 
+    // Compute the border-box clip rect contributed by `elem` if it has overflow
+    // clipping on either axis. Mirrors the in-flow walker at lines ~966-983.
+    auto elementClipRect = [](dom::Element* elem, float offX, float offY,
+                              ClipRect& out) -> bool {
+        auto& style = elem->computedStyle();
+        auto axisClips = [](const std::string& v) {
+            return v == "hidden" || v == "scroll" || v == "auto" || v == "clip";
+        };
+        std::string ox = getOverflowX(style);
+        std::string oy = getOverflowY(style);
+        if (!axisClips(ox) && !axisClips(oy)) return false;
+        auto& box = elem->layoutBox();
+        out.bx = box.contentRect.x + offX - box.padding.left - box.border.left;
+        out.by = box.contentRect.y + offY - box.padding.top - box.border.top;
+        out.bw = box.fullWidth();
+        out.bh = box.fullHeight();
+        out.radii = getRadii(style, out.bw, out.bh);
+        return true;
+    };
+
     // Recursive collector. `currentSC` is the nearest SC ancestor whose buckets
     // descendants populate. (offsetX, offsetY) is the absolute draw offset for
-    // `elem` (i.e. the offset its parent passed to drawElementContent in the
-    // legacy single-pass walk).
-    std::function<void(dom::Element*, StackingContext*, float, float)> visit;
+    // `elem`. `ancestorClips` is the clip chain accumulated from the current SC
+    // root (exclusive) down to (but not including) `elem` — outermost-first.
+    std::function<void(dom::Element*, StackingContext*, float, float,
+                       const std::vector<ClipRect>&)> visit;
     visit = [&](dom::Element* elem, StackingContext* currentSC,
-                float offX, float offY) {
+                float offX, float offY,
+                const std::vector<ClipRect>& ancestorClips) {
         if (!elem) return;
         auto& style = elem->computedStyle();
 
@@ -2796,6 +2818,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
             sc->offsetY = offY;
             sc->zIsAuto = getZIndex(style, sc->zIndex);
             sc->treeOrder = dfsCounter++;
+            sc->ancestorClips = ancestorClips;
             descendantSC = sc.get();
             currentSC->children.push_back(std::move(sc));
             // The SC root itself is painted by paintStackingContext (its own
@@ -2809,8 +2832,27 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
             pe.offsetX = offX;
             pe.offsetY = offY;
             pe.tieBreaker = dfsCounter++;
-            currentSC->positionedNonSC.push_back(pe);
+            pe.ancestorClips = ancestorClips;
+            currentSC->positionedNonSC.push_back(std::move(pe));
             skipSet_.insert(elem);
+        }
+
+        // Build the clip chain to pass to descendants. At an SC boundary the
+        // chain resets — descendants of a child SC paint inside that SC's own
+        // paintStackingContext call, which separately re-applies the SC's
+        // captured ancestorClips. Within an SC's subtree the chain propagates
+        // and accumulates each ancestor's overflow clip.
+        std::vector<ClipRect> childClips;
+        ClipRect selfClip;
+        bool selfClips = elementClipRect(elem, offX, offY, selfClip);
+        if (isSC && !isThisRoot) {
+            // SC root's own clip still applies to its step-6 descendants
+            // (drawElementContent's step-1 save/restore is balanced and gone
+            // by the time step 6 runs).
+            if (selfClips) childClips.push_back(selfClip);
+        } else {
+            childClips = ancestorClips;
+            if (selfClips) childClips.push_back(selfClip);
         }
 
         // Recurse into composed children. If this element became an SC root,
@@ -2819,14 +2861,10 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         // same currentSC (positioning doesn't open a new SC), but we still
         // skip the element in the normal walker — the positioned-entry paint
         // path will descend into it through drawElementContent.
-        // BUT: when we paint a positioned-non-SC element via drawElementContent,
-        // its children will be walked too, and if those children are themselves
-        // SC roots or positioned, we'd want them skipped from THAT inner walk
-        // — which they are, since skipSet_ persists.
         for (auto* child : elem->composedChildNodes()) {
             if (child && child->nodeType() == dom::NodeType::Element) {
                 visit(static_cast<dom::Element*>(child),
-                      descendantSC, childOffX, childOffY);
+                      descendantSC, childOffX, childOffY, childClips);
             }
         }
     };
@@ -2845,10 +2883,15 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     float rScrollTop = std::clamp(root->scrollTopValue(), 0.0f, rMaxST);
     float rChildOffX = rx;
     float rChildOffY = ry - rScrollTop;
+    std::vector<ClipRect> rootClips;
+    {
+        ClipRect cr;
+        if (elementClipRect(root, scrollX, scrollY, cr)) rootClips.push_back(cr);
+    }
     for (auto* child : root->composedChildNodes()) {
         if (child && child->nodeType() == dom::NodeType::Element) {
             visit(static_cast<dom::Element*>(child),
-                  rootSC.get(), rChildOffX, rChildOffY);
+                  rootSC.get(), rChildOffX, rChildOffY, rootClips);
         }
     }
 
@@ -2970,7 +3013,23 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
         if (a->zIndex != b->zIndex) return a->zIndex < b->zIndex;
         return a->treeOrder < b->treeOrder;
     });
-    for (auto* c : negSCs) paintStackingContext(c);
+    auto pushClips = [this](const std::vector<ClipRect>& clips) {
+        for (auto& c : clips) {
+            renderer_->save();
+            if (!c.radii.isZero())
+                renderer_->setClipRRect(c.bx, c.by, c.bw, c.bh, c.radii);
+            else
+                renderer_->setClip(c.bx, c.by, c.bw, c.bh);
+        }
+    };
+    auto popClips = [this](const std::vector<ClipRect>& clips) {
+        for (size_t i = 0; i < clips.size(); ++i) renderer_->restore();
+    };
+    for (auto* c : negSCs) {
+        pushClips(c->ancestorClips);
+        paintStackingContext(c);
+        popClips(c->ancestorClips);
+    }
 
     // Steps 3-5 are folded into step 1 above (in-flow descendants paint via
     // drawElementContent in tree order — this gives correct ordering for the
@@ -2985,13 +3044,17 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     };
     std::vector<Step6Item> step6;
     for (auto& pe : sc->positionedNonSC) {
-        step6.push_back({pe.tieBreaker, [this, pe]() {
+        step6.push_back({pe.tieBreaker, [this, &pe, &pushClips, &popClips]() {
+            pushClips(pe.ancestorClips);
             drawElementContent(pe.elem, pe.offsetX, pe.offsetY);
+            popClips(pe.ancestorClips);
         }});
     }
     for (auto* c : autoSCs) {
-        step6.push_back({c->treeOrder, [this, c]() {
+        step6.push_back({c->treeOrder, [this, c, &pushClips, &popClips]() {
+            pushClips(c->ancestorClips);
             paintStackingContext(c);
+            popClips(c->ancestorClips);
         }});
     }
     std::sort(step6.begin(), step6.end(), [](const Step6Item& a, const Step6Item& b) {
@@ -3004,7 +3067,11 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
         if (a->zIndex != b->zIndex) return a->zIndex < b->zIndex;
         return a->treeOrder < b->treeOrder;
     });
-    for (auto* c : posSCs) paintStackingContext(c);
+    for (auto* c : posSCs) {
+        pushClips(c->ancestorClips);
+        paintStackingContext(c);
+        popClips(c->ancestorClips);
+    }
 
     if (didWrap) {
         scRootSkipWrap_.erase(sc->root);
