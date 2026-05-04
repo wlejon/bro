@@ -20,9 +20,9 @@ uint64_t FontManager::createFont(render::Renderer* renderer,
     FontMetrics fm;
     fm.ascent = lm.ascent;
     fm.descent = lm.descent;
-    // Match Chromium's GetHeight() rounding of line-height:normal to integer
-    // pixels for table cell row heights (closes ~0.125px per row drift).
-    fm.height = std::round(lm.ascent + lm.descent);
+    // CSS line-height:normal = font's recommended line spacing (ascent + descent + leading).
+    // Skia's fLeading is the OS/2 lineGap; matches Chromium's "normal" line height.
+    fm.height = std::round(lm.ascent + lm.descent + lm.leading);
     // x_height: measure 'x' specifically
     auto xm = renderer->measureText("x", handle);
     fm.x_height = xm.height * 0.7f;

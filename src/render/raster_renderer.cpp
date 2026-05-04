@@ -271,7 +271,7 @@ TextMetrics RasterRenderer::measureText(std::string_view text, uint64_t font_han
     const SkFont& primary = *fe.font;
     SkFontMetrics fm;
     primary.getMetrics(&fm);
-    if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent };
+    if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading };
     auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     float width = 0.0f;
@@ -282,7 +282,7 @@ TextMetrics RasterRenderer::measureText(std::string_view text, uint64_t font_han
         width += run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &b);
         if (b.height() > maxH) maxH = b.height();
     }
-    return { width, maxH, -fm.fAscent, fm.fDescent };
+    return { width, maxH, -fm.fAscent, fm.fDescent, fm.fLeading };
 }
 
 SkFontMgr* RasterRenderer::ensureFontMgr() {
@@ -312,6 +312,13 @@ uint64_t RasterRenderer::createFont(std::string_view family, float size, int wei
         if (name == "cursive")     return "Comic Sans MS";
         if (name == "fantasy")     return "Impact";
         if (name == "system-ui")   return "Segoe UI";
+#elif defined(__APPLE__)
+        if (name == "sans-serif")  return "Arial";
+        if (name == "serif")       return "Times New Roman";
+        if (name == "monospace")   return "Menlo";
+        if (name == "cursive")     return "Apple Chancery";
+        if (name == "fantasy")     return "Papyrus";
+        if (name == "system-ui")   return "Helvetica Neue";
 #else
         if (name == "sans-serif")  return "Liberation Sans";
         if (name == "serif")       return "Liberation Serif";

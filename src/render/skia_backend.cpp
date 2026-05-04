@@ -195,7 +195,7 @@ TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handl
     SkFontMetrics fm;
     primary.getMetrics(&fm);
     if (text.empty()) {
-        return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent };
+        return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading };
     }
     auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
                                       fe.style, fallbackCache_);
@@ -207,7 +207,7 @@ TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handl
         width += run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &bounds);
         if (bounds.height() > maxH) maxH = bounds.height();
     }
-    return { width, maxH, -fm.fAscent, fm.fDescent };
+    return { width, maxH, -fm.fAscent, fm.fDescent, fm.fLeading };
 }
 
 SkFontMgr* SkiaRenderer::ensureFontMgr() {
@@ -240,6 +240,17 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
         if (name == "cursive")     return "Comic Sans MS";
         if (name == "fantasy")     return "Impact";
         if (name == "system-ui")   return "Segoe UI";
+#elif defined(__APPLE__)
+        // macOS: prefer Arial/Times for sans-serif/serif because Skia's
+        // CoreText backend reports OS/2 metrics that match Chromium's
+        // line-height: normal exactly. Helvetica's hhea-derived metrics
+        // come back tighter and break parity.
+        if (name == "sans-serif")  return "Arial";
+        if (name == "serif")       return "Times New Roman";
+        if (name == "monospace")   return "Menlo";
+        if (name == "cursive")     return "Apple Chancery";
+        if (name == "fantasy")     return "Papyrus";
+        if (name == "system-ui")   return "Helvetica Neue";
 #else
         if (name == "sans-serif")  return "Liberation Sans";
         if (name == "serif")       return "Liberation Serif";
