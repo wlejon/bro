@@ -314,11 +314,17 @@ private:
                     continue;
                 }
 
-                // Skip display:none elements
-                auto& style = childElem->computedStyle();
-                auto it = style.find("display");
-                if (it != style.end() && it->second == "none") continue;
-
+                // Include display:none subtrees in the layout tree.
+                // layoutNode() zero-sizes them and skips children, and the
+                // various layout containers (block, flex, grid, table)
+                // re-check display dynamically before measuring children.
+                // Skipping at build time would mean a `display:none` →
+                // `display:block` transition (e.g. a collapsible panel
+                // expanding) leaves the subtree without LayoutNodes — its
+                // computed style updates correctly but layout never runs,
+                // so descendants stay 0×0 and absolutely-positioned ones
+                // resolve their containing block up past the now-orphan
+                // ancestors to the viewport, painting full-width streaks.
                 auto child = std::make_unique<LayoutNodeAdapter>(childElem);
                 child->parent_ = parent;
                 buildChildren(child.get(), childElem);
