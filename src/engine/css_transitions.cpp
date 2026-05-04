@@ -513,6 +513,7 @@ void TransitionManager::onStyleChange(dom::Element* elem,
 
 bool TransitionManager::tick(double currentTime) {
     bool anyActive = false;
+    bool anyCompleted = false;
 
     for (auto it = elements_.begin(); it != elements_.end(); ) {
         auto& et = it->second;
@@ -527,7 +528,7 @@ bool TransitionManager::tick(double currentTime) {
             }
         }
 
-        // Remove completed transitions
+        size_t sizeBefore = et.active.size();
         et.active.erase(
             std::remove_if(et.active.begin(), et.active.end(),
                 [currentTime](const Transition& tr) {
@@ -535,23 +536,27 @@ bool TransitionManager::tick(double currentTime) {
                     return elapsed >= tr.duration;
                 }),
             et.active.end());
+        bool justCompleted = et.active.size() < sizeBefore;
 
         if (et.active.empty()) {
-            // Last transition just ended. Mark dirty so the cascade re-runs and
-            // computedStyle settles to the inline value — without this the
-            // element keeps the previous frame's interpolated value forever
-            // (visible as ~0.7px drift with cubic-bezier easing).
-            elem->markDirty();
+            if (justCompleted) {
+                // Re-cascade once next frame so applyOverrides (now bailing)
+                // stops writing the last interpolated value into computedStyle
+                // — without this, the element keeps the final-frame value
+                // (e.g. ~0.7px drift with cubic-bezier easing) until some
+                // unrelated DOM mutation re-dirties it.
+                elem->markDirty();
+                anyCompleted = true;
+            }
             it = elements_.erase(it);
         } else {
-            // Mark element dirty so it gets re-resolved with updated overrides
             elem->markDirty();
             anyActive = true;
             ++it;
         }
     }
 
-    return anyActive;
+    return anyActive || anyCompleted;
 }
 
 void TransitionManager::applyOverrides(dom::Element* elem,
@@ -715,6 +720,7 @@ void AnimationManager::onStyleChange(dom::Element* elem,
 
 bool AnimationManager::tick(double currentTime) {
     bool anyActive = false;
+    bool anyCompleted = false;
 
     for (auto it = elements_.begin(); it != elements_.end(); ) {
         auto& ea = it->second;
@@ -747,6 +753,7 @@ bool AnimationManager::tick(double currentTime) {
             }
         }
 
+        size_t sizeBefore = ea.active.size();
         ea.active.erase(
             std::remove_if(ea.active.begin(), ea.active.end(),
                 [currentTime](const Animation& a) {
@@ -755,18 +762,22 @@ bool AnimationManager::tick(double currentTime) {
                     return elapsed >= a.duration * a.iterationCount;
                 }),
             ea.active.end());
+        bool justCompleted = ea.active.size() < sizeBefore;
 
         if (ea.active.empty()) {
-            // Last animation just ended. Mark dirty so the cascade re-runs and
-            // any animation-overridden properties settle to the underlying
-            // computed value (matches TransitionManager::tick behavior).
-            //
-            // Keep the element's entry in the map (don't erase) so previousName
-            // persists — that memo is what prevents the cascade from
-            // re-registering the same animation on the very next layout while
-            // animation-name is still in computed style. Erasing here would
-            // restart the animation forever.
-            elem->markDirty();
+            if (justCompleted) {
+                // Re-cascade once next frame so applyOverrides (now bailing
+                // because active is empty) lets computedStyle settle to the
+                // post-animation cascade default — otherwise the element
+                // keeps the final-frame interpolated value (e.g. tile-pop-in
+                // leaves scale(~1.0025) instead of the true scale(1)).
+                elem->markDirty();
+                anyCompleted = true;
+            }
+            // Keep the element's entry so previousName persists — that memo
+            // prevents the cascade from re-registering the same animation
+            // while animation-name is still in computed style. Erasing here
+            // would restart forever.
             ++it;
         } else {
             elem->markDirty();
@@ -775,7 +786,7 @@ bool AnimationManager::tick(double currentTime) {
         }
     }
 
-    return anyActive;
+    return anyActive || anyCompleted;
 }
 
 void AnimationManager::applyOverrides(dom::Element* elem,

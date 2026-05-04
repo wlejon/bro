@@ -1625,13 +1625,17 @@ void Engine::layoutThreadFunc() {
             auto& kfs = document_->cascade().keyframes();
             animationManager_.setKeyframes(&kfs);
             document_->setAnimationManager(&animationManager_);
+            // resolveStyles() must run BEFORE tick(): animations and transitions
+            // are *registered* inside the cascade (onStyleChange), so a tick
+            // that runs first wouldn't see the entry an event-driven frame just
+            // created — animActive would publish as false, the main loop would
+            // skip signalling layout the following frame, and the animation
+            // would freeze on its first applied value (e.g. 2048's tile-pop-in
+            // stuck at scale(0), tiles invisible). Re-trigger after completion
+            // is prevented by the previousName memo in AnimationManager.
             document_->resolveStyles();
-            // If transitions or animations are active, keep re-rendering
             bool animActive = transitionManager_.tick(now) | animationManager_.tick(now);
             layoutShared_.animationsActive.store(animActive, std::memory_order_relaxed);
-            if (animActive) {
-                document_->markDirty();
-            }
             // performLayout() rebuilds the persistent layout tree when
             // structureDirty_ is set and clears the flag itself.
             int insetTop = layoutShared_.insetTop.load(std::memory_order_relaxed);
