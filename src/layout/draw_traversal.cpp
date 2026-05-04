@@ -211,10 +211,62 @@ static sk_sp<SkImageFilter> parseCSSFilter(const std::string& val) {
     return result;
 }
 
+/// Parse a CSS `clip-path: polygon(...)` value into vertex points (border-box
+/// relative). Returns empty when the value is none/auto/empty/unrecognized.
+/// Supports `polygon(<x1> <y1>, <x2> <y2>, ...)` with px or % units. Skips a
+/// leading `<fill-rule>,` (nonzero|evenodd) since we treat the path as a
+/// simple polygon outline.
+static std::vector<render::PointF> parseClipPathPolygon(
+    const std::string& val, float refW, float refH) {
+    std::vector<render::PointF> out;
+    if (val.empty() || val == "none") return out;
+    auto skip = [](const char*& p) {
+        while (*p && std::isspace(static_cast<unsigned char>(*p))) ++p;
+    };
+    const char* p = val.c_str();
+    skip(p);
+    if (std::strncmp(p, "polygon(", 8) != 0) return out;
+    p += 8;
+    skip(p);
+    // Optional fill-rule prefix.
+    if (std::strncmp(p, "nonzero", 7) == 0 || std::strncmp(p, "evenodd", 7) == 0) {
+        p += 7;
+        skip(p);
+        if (*p == ',') { ++p; skip(p); }
+    }
+    auto parseLen = [&](float ref) -> float {
+        skip(p);
+        char* end = nullptr;
+        float v = std::strtof(p, &end);
+        if (end == p) return 0.0f;
+        p = end;
+        if (*p == '%') { v = v * ref / 100.0f; ++p; }
+        else if (std::strncmp(p, "px", 2) == 0) { p += 2; }
+        return v;
+    };
+    while (*p && *p != ')') {
+        float xv = parseLen(refW);
+        float yv = parseLen(refH);
+        out.push_back({xv, yv});
+        skip(p);
+        if (*p == ',') { ++p; skip(p); }
+    }
+    return out;
+}
+
 /// Get the effective vertical overflow value, checking overflow-y then overflow.
 static std::string getOverflowY(const htmlayout::css::ComputedStyle& style) {
     auto oyIt = style.find("overflow-y");
     if (oyIt != style.end()) return oyIt->second;
+    auto oIt = style.find("overflow");
+    if (oIt != style.end()) return oIt->second;
+    return "visible";
+}
+
+/// Get the effective horizontal overflow value, checking overflow-x then overflow.
+static std::string getOverflowX(const htmlayout::css::ComputedStyle& style) {
+    auto oxIt = style.find("overflow-x");
+    if (oxIt != style.end()) return oxIt->second;
     auto oIt = style.find("overflow");
     if (oIt != style.end()) return oIt->second;
     return "visible";
@@ -601,6 +653,20 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         }
     }
 
+    // CSS clip-path: clip the entire element (background, border, content,
+    // descendants) to the specified shape. Restored after children paint.
+    bool hasClipPath = false;
+    auto cpIt = style.find("clip-path");
+    if (cpIt != style.end() && !cpIt->second.empty() && cpIt->second != "none") {
+        auto pts = parseClipPathPolygon(cpIt->second, bw, bh);
+        if (!pts.empty()) {
+            for (auto& pt : pts) { pt.x += bx; pt.y += by; }
+            hasClipPath = true;
+            renderer_->save();
+            renderer_->setClipPolygon(pts);
+        }
+    }
+
     if (visible) {
         // Box shadows. CSS paint order:
         //   1. outset shadows (drawn before background, behind the element)
@@ -754,10 +820,16 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         }
     }
 
-    // Check for overflow clipping
+    // Check for overflow clipping. Per CSS spec, when one axis is non-visible
+    // and the other is visible, the visible axis is treated as auto — i.e. both
+    // axes effectively clip. So clip if EITHER axis is non-visible.
     bool needsClip = false;
-    std::string overflow = getOverflowY(style);
-    if (overflow == "hidden" || overflow == "scroll" || overflow == "auto") {
+    std::string overflowY = getOverflowY(style);
+    std::string overflowX = getOverflowX(style);
+    auto axisClips = [](const std::string& v) {
+        return v == "hidden" || v == "scroll" || v == "auto" || v == "clip";
+    };
+    if (axisClips(overflowX) || axisClips(overflowY)) {
         needsClip = true;
         renderer_->save();
         render::Radii clipRadii = getRadii(style, bw, bh);
@@ -776,6 +848,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         if (needsClip) {
             renderer_->restore();
         }
+        if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
         if (hasTransform) renderer_->restore();
@@ -797,6 +870,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             layerBreakCb_(scene, 0, x, y, w, h);
         }
         if (needsClip) renderer_->restore();
+        if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
         if (hasTransform) renderer_->restore();
@@ -808,6 +882,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             layerBreakCb_(scene, 0, x, y, w, h);
         }
         if (needsClip) renderer_->restore();
+        if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
         if (hasTransform) renderer_->restore();
@@ -819,6 +894,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             layerBreakCb_(nullptr, webglCtx->colorTexture(), x, y, w, h);
         }
         if (needsClip) renderer_->restore();
+        if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
         if (hasTransform) renderer_->restore();
@@ -897,6 +973,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (needsClip) {
         renderer_->restore();
     }
+    if (hasClipPath) renderer_->restore();
     if (hasFilter) renderer_->restore();
     if (hasOpacity) renderer_->restore();
     if (hasTransform) renderer_->restore();

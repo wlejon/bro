@@ -192,6 +192,11 @@ public:
     virtual void setClip(float x, float y, float w, float h) = 0;
     virtual void resetClip() = 0;
 
+    // Clip subsequent draw calls to an arbitrary polygon (caller must save/restore).
+    // Default implementation is a no-op so backends can adopt incrementally —
+    // callers should still see un-clipped output rather than a crash.
+    virtual void setClipPolygon(std::span<const PointF> /*points*/) {}
+
     // Gradient fills (color stops must be sorted by offset 0..1)
     virtual void fillLinearGradient(float x, float y, float w, float h,
                                     float startX, float startY, float endX, float endY,

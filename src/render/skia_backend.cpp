@@ -705,6 +705,17 @@ void SkiaRenderer::resetClip() {
     canvas_->save();
 }
 
+void SkiaRenderer::setClipPolygon(std::span<const render::PointF> points) {
+    if (!canvas_ || points.empty()) return;
+    SkPathBuilder pb;
+    pb.moveTo(points[0].x, points[0].y);
+    for (size_t i = 1; i < points.size(); ++i) {
+        pb.lineTo(points[i].x, points[i].y);
+    }
+    pb.close();
+    canvas_->clipPath(pb.detach(), SkClipOp::kIntersect, /*doAntiAlias=*/true);
+}
+
 // CSS spec: gradient color interpolation is in premultiplied sRGB by
 // default. Without premul, fading from an opaque color to `transparent`
 // (rgba(0,0,0,0)) interpolates each RGB channel toward 0 — so a blue→

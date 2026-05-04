@@ -105,6 +105,7 @@ public:
 
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;
+    void setClipPolygon(std::span<const render::PointF> points) override;
 
     void fillLinearGradient(float x, float y, float w, float h,
                             float startX, float startY, float endX, float endY,

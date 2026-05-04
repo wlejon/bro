@@ -553,6 +553,17 @@ void RasterRenderer::resetClip() {
     canvas_->save();
 }
 
+void RasterRenderer::setClipPolygon(std::span<const render::PointF> points) {
+    if (!canvas_ || points.empty()) return;
+    SkPathBuilder pb;
+    pb.moveTo(points[0].x, points[0].y);
+    for (size_t i = 1; i < points.size(); ++i) {
+        pb.lineTo(points[i].x, points[i].y);
+    }
+    pb.close();
+    canvas_->clipPath(pb.detach(), SkClipOp::kIntersect, /*doAntiAlias=*/true);
+}
+
 void RasterRenderer::fillLinearGradient(float x, float y, float w, float h,
                                          float startX, float startY, float endX, float endY,
                                          std::span<const ColorStop> stops) {
