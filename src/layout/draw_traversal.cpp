@@ -29,7 +29,101 @@
 namespace bro::layout {
 
 // CSS transform and transform-origin parsing live in htmlayout
-// (htmlayout::css::parseTransform, parseTransformOrigin, Matrix2D).
+// (htmlayout::css::parseTransform, parseTransformOrigin, Matrix2D / Matrix3D).
+
+namespace {
+
+// Return true if a CSS `transform` value uses any 3D function (rotateX/Y/3d,
+// translateZ/3d, scaleZ/3d, perspective(), matrix3d). Cheap substring scan —
+// false positives only mean we take the 4x4 path unnecessarily.
+bool transformHas3D(const std::string& v) {
+    if (v.empty() || v == "none") return false;
+    // Quickly look for any of the 3D function tokens.
+    static constexpr const char* kKeys[] = {
+        "rotateX", "rotateY", "rotate3d", "rotateZ",
+        "translateZ", "translate3d", "scaleZ", "scale3d",
+        "matrix3d", "perspective("
+    };
+    for (auto* k : kKeys) {
+        if (v.find(k) != std::string::npos) return true;
+    }
+    return false;
+}
+
+// Walk to the element's layout parent and read its `perspective` value (length
+// or 0 for "none"). Returns 0 if no ancestor sets perspective or the element
+// has no parent.
+float parentPerspective(bro::dom::Element* elem) {
+    if (!elem) return 0.0f;
+    auto* p = elem->layoutParent();
+    if (!p) return 0.0f;
+    auto& cs = p->computedStyle();
+    auto it = cs.find("perspective");
+    if (it == cs.end()) return 0.0f;
+    return htmlayout::css::parsePerspective(it->second);
+}
+
+void parsePerspectiveOrigin(const htmlayout::css::ComputedStyle& cs,
+                             float refW, float refH, float& ox, float& oy) {
+    ox = refW * 0.5f;
+    oy = refH * 0.5f;
+    auto it = cs.find("perspective-origin");
+    if (it == cs.end() || it->second.empty()) return;
+    htmlayout::css::parseTransformOrigin(it->second, refW, refH, ox, oy);
+}
+
+// Build the full 4x4 transform to wrap the element with, including ancestor
+// perspective if any. bx/by/bw/bh = element border box in absolute coords.
+// pbx/pby/pbw/pbh = perspective container's border box in the same absolute
+// coords (only meaningful if persp > 0). Returns identity if no transform.
+// Sets `is3D` when the resulting matrix has any 3D component.
+htmlayout::css::Matrix3D buildElementTransform4x4(
+        const htmlayout::css::ComputedStyle& style,
+        float bx, float by, float bw, float bh,
+        float persp,
+        float pbx, float pby, float pbw, float pbh,
+        const htmlayout::css::ComputedStyle* perspStyle,
+        bool& has3D) {
+    using htmlayout::css::Matrix3D;
+    has3D = false;
+    Matrix3D result; // identity
+
+    auto trIt = style.find("transform");
+    bool hasT = (trIt != style.end() && !trIt->second.empty()
+                 && trIt->second != "none");
+    bool wants3D = (persp > 0) || (hasT && transformHas3D(trIt->second));
+    if (!wants3D) return result;
+
+    // Element transform about transform-origin (3D form).
+    if (hasT) {
+        Matrix3D mat = htmlayout::css::parseTransform3D(trIt->second, bw, bh);
+        float ox = bw * 0.5f, oy = bh * 0.5f, oz = 0.0f;
+        auto toIt = style.find("transform-origin");
+        std::string_view originVal = (toIt != style.end())
+            ? std::string_view(toIt->second) : std::string_view();
+        htmlayout::css::parseTransformOrigin3D(originVal, bw, bh, ox, oy, oz);
+        Matrix3D toOrigin;     toOrigin.m[12] = bx + ox; toOrigin.m[13] = by + oy; toOrigin.m[14] = oz;
+        Matrix3D fromOrigin;   fromOrigin.m[12] = -(bx + ox); fromOrigin.m[13] = -(by + oy); fromOrigin.m[14] = -oz;
+        result = toOrigin * mat * fromOrigin;
+    }
+
+    // Apply ancestor perspective P = T(po_abs) * persp(d) * T(-po_abs).
+    if (persp > 0 && perspStyle) {
+        float pox = pbw * 0.5f, poy = pbh * 0.5f;
+        parsePerspectiveOrigin(*perspStyle, pbw, pbh, pox, poy);
+        float ax = pbx + pox, ay = pby + poy;
+        Matrix3D persp_m = htmlayout::css::makePerspectiveMatrix(persp);
+        Matrix3D toPO;     toPO.m[12] = ax;  toPO.m[13] = ay;
+        Matrix3D fromPO;   fromPO.m[12] = -ax; fromPO.m[13] = -ay;
+        Matrix3D P = toPO * persp_m * fromPO;
+        result = P * result;
+    }
+
+    has3D = !result.is2D();
+    return result;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // CSS filter parsing → Skia SkImageFilter chain
@@ -606,7 +700,39 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     bool hasTransform = false;
     if (!skipWrap) {
         auto trIt = style.find("transform");
-        if (trIt != style.end() && !trIt->second.empty() && trIt->second != "none") {
+        bool hasT = (trIt != style.end() && !trIt->second.empty()
+                     && trIt->second != "none");
+        float persp = parentPerspective(elem);
+        bool wants3D = (persp > 0) || (hasT && transformHas3D(trIt->second));
+
+        if (wants3D) {
+            // 4x4 path (3D transforms or ancestor perspective).
+            // Parent border box in absolute coords:
+            float pbx = 0, pby = 0, pbw = 0, pbh = 0;
+            const htmlayout::css::ComputedStyle* perspStyle = nullptr;
+            if (auto* parent = elem->layoutParent()) {
+                auto& pb = parent->layoutBox();
+                pbx = offsetX - pb.padding.left - pb.border.left;
+                pby = offsetY - pb.padding.top - pb.border.top;
+                pbw = pb.fullWidth();
+                pbh = pb.fullHeight();
+                perspStyle = &parent->computedStyle();
+            }
+            bool is3D = false;
+            auto m4 = buildElementTransform4x4(style, bx, by, bw, bh,
+                                               persp, pbx, pby, pbw, pbh,
+                                               perspStyle, is3D);
+            if (!m4.isIdentity()) {
+                hasTransform = true;
+                renderer_->save();
+                if (is3D) {
+                    renderer_->concat4x4(m4.m);
+                } else {
+                    auto m2 = m4.to2D();
+                    renderer_->concat(m2.a, m2.b, m2.c, m2.d, m2.e, m2.f);
+                }
+            }
+        } else if (hasT) {
             auto mat = htmlayout::css::parseTransform(trIt->second, bw, bh);
             if (!mat.isIdentity()) {
                 hasTransform = true;
@@ -2562,7 +2688,38 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     bool wrappedTransform = false;
     {
         auto trIt = rootStyle.find("transform");
-        if (trIt != rootStyle.end() && !trIt->second.empty() && trIt->second != "none") {
+        bool hasT = (trIt != rootStyle.end() && !trIt->second.empty()
+                     && trIt->second != "none");
+        float persp = parentPerspective(sc->root);
+        bool wants3D = (persp > 0) || (hasT && transformHas3D(trIt->second));
+
+        if (wants3D) {
+            float pbx = 0, pby = 0, pbw = 0, pbh = 0;
+            const htmlayout::css::ComputedStyle* perspStyle = nullptr;
+            if (auto* parent = sc->root->layoutParent()) {
+                auto& pb = parent->layoutBox();
+                // sc->offsetX/Y is the parent's content-area absolute origin.
+                pbx = sc->offsetX - pb.padding.left - pb.border.left;
+                pby = sc->offsetY - pb.padding.top - pb.border.top;
+                pbw = pb.fullWidth();
+                pbh = pb.fullHeight();
+                perspStyle = &parent->computedStyle();
+            }
+            bool is3D = false;
+            auto m4 = buildElementTransform4x4(rootStyle, rbx, rby, rbw, rbh,
+                                               persp, pbx, pby, pbw, pbh,
+                                               perspStyle, is3D);
+            if (!m4.isIdentity()) {
+                wrappedTransform = true;
+                renderer_->save();
+                if (is3D)
+                    renderer_->concat4x4(m4.m);
+                else {
+                    auto m2 = m4.to2D();
+                    renderer_->concat(m2.a, m2.b, m2.c, m2.d, m2.e, m2.f);
+                }
+            }
+        } else if (hasT) {
             auto mat = htmlayout::css::parseTransform(trIt->second, rbw, rbh);
             if (!mat.isIdentity()) {
                 wrappedTransform = true;

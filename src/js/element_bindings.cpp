@@ -2738,27 +2738,72 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     // box in absolute coords: full = T(bx+ox, by+oy) * M * T(-(bx+ox), -(by+oy)).
     // Compose by multiplying each ancestor's full transform on the LEFT (since
     // ancestor transforms apply to the already-transformed descendant point).
-    htmlayout::css::Matrix2D combined; // identity
+    // Compose ancestor transforms as a 4x4 (covers 3D + perspective). For the
+    // common all-2D case the result reduces to a 2D affine and we still take
+    // a fast path below.
+    htmlayout::css::Matrix3D combined; // identity 4x4
     bool hasAnyTransform = false;
-    // chain[0] is self, chain[size-1] is root. Ancestors apply outside-in, so
-    // combined = root * ... * parent * self.
     for (int i = (int)chain.size() - 1; i >= 0; --i) {
         const Frame& f = chain[i];
         if (!f.el) continue;
         auto& cs = f.el->computedStyle();
+
+        // Ancestor perspective on this element's parent.
+        float persp = 0.0f;
+        const htmlayout::css::ComputedStyle* perspStyle = nullptr;
+        float pbx = 0, pby = 0, pbw = 0, pbh = 0;
+        if (auto* parent = f.el->layoutParent()) {
+            auto& pcs = parent->computedStyle();
+            auto pit = pcs.find("perspective");
+            if (pit != pcs.end()) persp = htmlayout::css::parsePerspective(pit->second);
+            if (persp > 0) {
+                perspStyle = &pcs;
+                // Find parent's frame in the chain to get its bx/by/bw/bh.
+                for (int j = i + 1; j < (int)chain.size(); ++j) {
+                    if (chain[j].el == parent) {
+                        pbx = chain[j].bx; pby = chain[j].by;
+                        pbw = chain[j].bw; pbh = chain[j].bh;
+                        break;
+                    }
+                }
+            }
+        }
+
         auto trIt = cs.find("transform");
-        if (trIt == cs.end() || trIt->second.empty() || trIt->second == "none")
-            continue;
-        auto mat = htmlayout::css::parseTransform(trIt->second, f.bw, f.bh);
-        if (mat.isIdentity()) continue;
-        float ox = 0.0f, oy = 0.0f;
+        bool hasT = (trIt != cs.end() && !trIt->second.empty()
+                     && trIt->second != "none");
+        if (!hasT && persp <= 0) continue;
+
+        htmlayout::css::Matrix3D mat;
+        if (hasT) mat = htmlayout::css::parseTransform3D(trIt->second, f.bw, f.bh);
+        if (mat.isIdentity() && persp <= 0) continue;
+
+        float ox = f.bw * 0.5f, oy = f.bh * 0.5f, oz = 0.0f;
         auto toIt = cs.find("transform-origin");
         std::string_view originVal = (toIt != cs.end())
             ? std::string_view(toIt->second) : std::string_view();
-        htmlayout::css::parseTransformOrigin(originVal, f.bw, f.bh, ox, oy);
-        htmlayout::css::Matrix2D toOrigin{1,0,0,1, f.bx+ox, f.by+oy};
-        htmlayout::css::Matrix2D fromOrigin{1,0,0,1, -(f.bx+ox), -(f.by+oy)};
-        htmlayout::css::Matrix2D full = toOrigin * mat * fromOrigin;
+        htmlayout::css::parseTransformOrigin3D(originVal, f.bw, f.bh, ox, oy, oz);
+
+        htmlayout::css::Matrix3D toOrigin;
+        toOrigin.m[12] = f.bx + ox; toOrigin.m[13] = f.by + oy; toOrigin.m[14] = oz;
+        htmlayout::css::Matrix3D fromOrigin;
+        fromOrigin.m[12] = -(f.bx + ox); fromOrigin.m[13] = -(f.by + oy); fromOrigin.m[14] = -oz;
+        htmlayout::css::Matrix3D full = toOrigin * mat * fromOrigin;
+
+        if (persp > 0 && perspStyle) {
+            float pox = pbw * 0.5f, poy = pbh * 0.5f;
+            auto poIt = perspStyle->find("perspective-origin");
+            std::string_view poVal = (poIt != perspStyle->end())
+                ? std::string_view(poIt->second) : std::string_view();
+            htmlayout::css::parseTransformOrigin(poVal, pbw, pbh, pox, poy);
+            float ax = pbx + pox, ay = pby + poy;
+            htmlayout::css::Matrix3D persp_m = htmlayout::css::makePerspectiveMatrix(persp);
+            htmlayout::css::Matrix3D toPO;     toPO.m[12] = ax; toPO.m[13] = ay;
+            htmlayout::css::Matrix3D fromPO;   fromPO.m[12] = -ax; fromPO.m[13] = -ay;
+            htmlayout::css::Matrix3D P = toPO * persp_m * fromPO;
+            full = P * full;
+        }
+
         combined = combined * full;
         hasAnyTransform = true;
     }
@@ -2769,10 +2814,10 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     JSValue rect = JS_NewObject(ctx);
     float outX, outY, outW, outH;
     if (hasAnyTransform) {
-        // Transform 4 corners of border box, take AABB.
+        // Project 4 corners of border box through the 4x4 (homogeneous divide
+        // when perspective is present), take 2D AABB.
         auto apply = [&](float px, float py, float& rx, float& ry) {
-            rx = combined.a * px + combined.c * py + combined.e;
-            ry = combined.b * px + combined.d * py + combined.f;
+            combined.project2D(px, py, 0.0f, rx, ry);
         };
         float cx[4], cy[4];
         apply(bx,      by,      cx[0], cy[0]);
