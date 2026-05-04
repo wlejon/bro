@@ -47,13 +47,25 @@ if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
     fi
 fi
 
-# Platform detection
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) PLATFORM="win" ; EXE=".exe" ; LIB_GLOB="*.dll" ;;
-    Darwin)               PLATFORM="macos" ; EXE=""     ; LIB_GLOB="*.dylib" ;;
-    Linux)                PLATFORM="linux" ; EXE=""     ; LIB_GLOB="*.so*" ;;
-    *) echo "unsupported platform: $(uname -s)" >&2; exit 1 ;;
-esac
+# Platform detection: prefer the *build's* generator over the host shell's
+# uname so this works whether you run it from git-bash, WSL, or Cygwin against
+# the same Windows build. WSL bash on Windows reports `uname -s = Linux` but
+# the binaries it's packaging are .exe + .dll under build/<config>/.
+PLATFORM=""
+if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
+    CACHED_GEN="$(grep -E '^CMAKE_GENERATOR:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2)"
+    if [[ "$CACHED_GEN" == "Visual Studio"* ]]; then
+        PLATFORM="win" ; EXE=".exe" ; LIB_GLOB="*.dll"
+    fi
+fi
+if [[ -z "$PLATFORM" ]]; then
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) PLATFORM="win" ; EXE=".exe" ; LIB_GLOB="*.dll" ;;
+        Darwin)               PLATFORM="macos" ; EXE=""     ; LIB_GLOB="*.dylib" ;;
+        Linux)                PLATFORM="linux" ; EXE=""     ; LIB_GLOB="*.so*" ;;
+        *) echo "unsupported platform: $(uname -s)" >&2; exit 1 ;;
+    esac
+fi
 
 case "$(uname -m)" in
     x86_64|amd64)       ARCH="x64" ;;
