@@ -1616,6 +1616,25 @@ static bool isCellInCollapsedTable(dom::Element* elem) {
     return false;
 }
 
+// Find the enclosing collapsed-mode table for a cell. Returns nullptr if not
+// in a collapsed table.
+static dom::Element* enclosingCollapsedTable(dom::Element* elem) {
+    if (!elem) return nullptr;
+    auto* p = elem->layoutParent();
+    while (p) {
+        auto& ps = p->computedStyle();
+        auto pdIt = ps.find("display");
+        const std::string& pd = (pdIt != ps.end()) ? pdIt->second : std::string{};
+        if (pd == "table" || pd == "inline-table") {
+            auto bcIt = ps.find("border-collapse");
+            if (bcIt != ps.end() && bcIt->second == "collapse") return p;
+            return nullptr;
+        }
+        p = p->layoutParent();
+    }
+    return nullptr;
+}
+
 // Return true if `elem` is a table with `border-collapse: collapse`. The
 // table's own borders are painted centered on its border-box outer edge to
 // "win" against adjacent cell borders when the table border is thicker.
@@ -1712,14 +1731,35 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
             renderer_->fillRect(sx, sy, sw, sh, c);
         };
 
+        // For cells: only paint top + left. The shared bottom/right edges with
+        // neighbors are painted by the next row/column's top/left — painting
+        // both sides would double the gridline. The table's outer bottom/right
+        // are painted by the table itself (post-children pass). The cell's
+        // outer top/left edges are also handled by the table when this cell
+        // sits flush against the table's content area, so we suppress those
+        // to avoid stacking with the table's outer paint.
+        // For tables: paint all four outer sides.
+        bool suppressTop  = false;
+        bool suppressLeft = false;
+        if (cellCollapse) {
+            if (auto* tbl = enclosingCollapsedTable(elem)) {
+                const auto& tcr = tbl->layoutBox().contentRect;
+                const float eps = 0.5f;
+                if (std::abs(y - tcr.y) < eps) suppressTop = true;
+                if (std::abs(x - tcr.x) < eps) suppressLeft = true;
+            }
+        }
         // Top
-        paintStripe(0, x - L * 0.5f, y - T * 0.5f, w + (L + R) * 0.5f, T);
-        // Bottom
-        paintStripe(2, x - L * 0.5f, y + h - B * 0.5f, w + (L + R) * 0.5f, B);
+        if (!suppressTop)
+            paintStripe(0, x - L * 0.5f, y - T * 0.5f, w + (L + R) * 0.5f, T);
         // Left
-        paintStripe(3, x - L * 0.5f, y - T * 0.5f, L, h + (T + B) * 0.5f);
-        // Right
-        paintStripe(1, x + w - R * 0.5f, y - T * 0.5f, R, h + (T + B) * 0.5f);
+        if (!suppressLeft)
+            paintStripe(3, x - L * 0.5f, y - T * 0.5f, L, h + (T + B) * 0.5f);
+        // Tables: also paint bottom + right outer edges (cells never paint these).
+        if (tableCollapse) {
+            paintStripe(2, x - L * 0.5f, y + h - B * 0.5f, w + (L + R) * 0.5f, B);
+            paintStripe(1, x + w - R * 0.5f, y - T * 0.5f, R, h + (T + B) * 0.5f);
+        }
         return;
     }
     // --- end border-collapse painting ---------------------------------------
