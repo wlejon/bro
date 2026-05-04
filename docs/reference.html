@@ -112,7 +112,6 @@ const GUIDES = [
   ["projects.md", "Built-in project manager and skeletons"],
   ["multi-repo-workflow.md", "Working across bro and its sibling library repos"],
 ];
-const REPO_RAW_BASE = "https://github.com/wlejon/bro/blob/main/docs/";
 
 function buildList(elId, items) {
   const ul = document.getElementById(elId);
@@ -132,7 +131,7 @@ async function loadDoc(file) {
   const isJs = file.endsWith(".js");
   document.getElementById("doc-title").textContent = file;
   document.getElementById("doc-meta").innerHTML =
-    `<a href="${REPO_RAW_BASE}${file}" target="_blank" rel="noopener">view on github →</a>`;
+    `<a href="${file}" target="_blank" rel="noopener">view raw →</a>`;
   const content = document.getElementById("content");
   content.className = "loading";
   content.textContent = "Loading…";
