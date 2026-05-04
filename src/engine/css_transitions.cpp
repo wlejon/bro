@@ -537,6 +537,11 @@ bool TransitionManager::tick(double currentTime) {
             et.active.end());
 
         if (et.active.empty()) {
+            // Last transition just ended. Mark dirty so the cascade re-runs and
+            // computedStyle settles to the inline value — without this the
+            // element keeps the previous frame's interpolated value forever
+            // (visible as ~0.7px drift with cubic-bezier easing).
+            elem->markDirty();
             it = elements_.erase(it);
         } else {
             // Mark element dirty so it gets re-resolved with updated overrides
@@ -613,8 +618,14 @@ void AnimationManager::onStyleChange(dom::Element* elem,
     } else {
         // Try shorthand: animation: name duration timing delay iteration direction fill
         auto aIt = newStyle.find("animation");
-        if (aIt == newStyle.end() || aIt->second.empty() || aIt->second == "none")
+        if (aIt == newStyle.end() || aIt->second.empty() || aIt->second == "none") {
+            // animation-name has been cleared. Reset the previousName memo so
+            // that re-applying the same animation later (e.g. by re-adding a
+            // class) triggers a fresh start, per CSS Animations §4.2.
+            auto eit = elements_.find(elem);
+            if (eit != elements_.end()) eit->second.previousName.clear();
             return;
+        }
         // Parse shorthand
         std::istringstream iss(aIt->second);
         std::string tok;
@@ -649,10 +660,24 @@ void AnimationManager::onStyleChange(dom::Element* elem,
         if (animName.empty()) return;
     }
 
-    // Check if we already have this animation running on this element
     auto& ea = elements_[elem];
+
+    // Per CSS Animations §4.2: an animation only (re)starts when
+    // animation-name *changes*. Once it has run to completion, the
+    // animation does not re-trigger just because animation-name is
+    // still the same value in the cascade. We track the previously-
+    // seen name and bail if it's unchanged — without this guard, every
+    // post-completion re-cascade of an unchanged animation-name would
+    // register a fresh Animation, locking the element into an infinite
+    // loop of restarting animations.
+    if (ea.previousName == animName) return;
+    ea.previousName = animName;
+
+    // Belt-and-braces: if the same name is somehow already in the
+    // active list (e.g. previousName was cleared mid-flight), don't
+    // duplicate it.
     for (auto& a : ea.active) {
-        if (a.name == animName) return; // already running
+        if (a.name == animName) return;
     }
 
     if (!findKeyframes(animName)) return; // no keyframes defined
@@ -732,7 +757,17 @@ bool AnimationManager::tick(double currentTime) {
             ea.active.end());
 
         if (ea.active.empty()) {
-            it = elements_.erase(it);
+            // Last animation just ended. Mark dirty so the cascade re-runs and
+            // any animation-overridden properties settle to the underlying
+            // computed value (matches TransitionManager::tick behavior).
+            //
+            // Keep the element's entry in the map (don't erase) so previousName
+            // persists — that memo is what prevents the cascade from
+            // re-registering the same animation on the very next layout while
+            // animation-name is still in computed style. Erasing here would
+            // restart the animation forever.
+            elem->markDirty();
+            ++it;
         } else {
             elem->markDirty();
             anyActive = true;
@@ -747,7 +782,7 @@ void AnimationManager::applyOverrides(dom::Element* elem,
                                       htmlayout::css::ComputedStyle& style,
                                       double currentTime) const {
     auto it = elements_.find(elem);
-    if (it == elements_.end()) return;
+    if (it == elements_.end() || it->second.active.empty()) return;
 
     for (auto& anim : it->second.active) {
         auto* kf = findKeyframes(anim.name);

@@ -119,6 +119,10 @@ struct Animation {
 
 struct ElementAnimations {
     std::vector<Animation> active;
+    // Last-seen animation-name from the cascade. Used to detect when
+    // animation-name actually changes vs. when it's just being re-cascaded
+    // with the same value — only the former should (re)start an animation.
+    std::string previousName;
 };
 
 class AnimationManager {
