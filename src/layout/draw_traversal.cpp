@@ -28,6 +28,11 @@
 
 namespace bro::layout {
 
+// Forward declarations of file-local border-collapse helpers (defined later in
+// the file alongside drawBorders).
+static bool isCollapsedTable(dom::Element* elem);
+static bool isCellInCollapsedTable(dom::Element* elem);
+
 // CSS transform and transform-origin parsing live in htmlayout
 // (htmlayout::css::parseTransform, parseTransformOrigin, Matrix2D / Matrix3D).
 
@@ -878,8 +883,11 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         // Inset shadows after background (so they're visible on top of it).
         if (hasShadows) drawShadows(true);
 
-        // Draw borders
-        drawBorders(elem, bx, by, bw, bh);
+        // Draw borders (skipped here for border-collapse tables — they
+        // repaint after children so the table border wins on the gridline)
+        if (!isCollapsedTable(elem)) {
+            drawBorders(elem, bx, by, bw, bh);
+        }
 
         // Draw outline (outside the border box)
         auto olwIt = style.find("outline-width");
@@ -1094,6 +1102,15 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                 }
             }
         }
+    }
+
+    // For tables in border-collapse mode, repaint the table's outer border
+    // AFTER cells so it wins on the gridline (per CSS 17.6.2 paint order:
+    // cells, then rows, then row-groups, then cols, then col-groups, then
+    // table — last in the list paints on top). drawBorders() handles the
+    // collapsed-mode centering when isCollapsedTable() is true.
+    if (visible && isCollapsedTable(elem)) {
+        drawBorders(elem, bx, by, bw, bh);
     }
 
     if (needsClip) {
@@ -1576,11 +1593,136 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
     if (clipped) renderer_->restore();
 }
 
+// Return true if `elem` is a table-cell whose enclosing table has
+// `border-collapse: collapse`. In that case, borders are painted centered on
+// the cell's border-box edge so adjacent cells share a single grid line.
+static bool isCellInCollapsedTable(dom::Element* elem) {
+    if (!elem) return false;
+    auto& cs = elem->computedStyle();
+    auto dIt = cs.find("display");
+    if (dIt == cs.end() || dIt->second != "table-cell") return false;
+    // Walk up looking for the enclosing table.
+    auto* p = elem->layoutParent();
+    while (p) {
+        auto& ps = p->computedStyle();
+        auto pdIt = ps.find("display");
+        const std::string& pd = (pdIt != ps.end()) ? pdIt->second : std::string{};
+        if (pd == "table" || pd == "inline-table") {
+            auto bcIt = ps.find("border-collapse");
+            return (bcIt != ps.end() && bcIt->second == "collapse");
+        }
+        p = p->layoutParent();
+    }
+    return false;
+}
+
+// Return true if `elem` is a table with `border-collapse: collapse`. The
+// table's own borders are painted centered on its border-box outer edge to
+// "win" against adjacent cell borders when the table border is thicker.
+static bool isCollapsedTable(dom::Element* elem) {
+    if (!elem) return false;
+    auto& cs = elem->computedStyle();
+    auto dIt = cs.find("display");
+    if (dIt == cs.end()) return false;
+    const std::string& d = dIt->second;
+    if (d != "table" && d != "inline-table") return false;
+    auto bcIt = cs.find("border-collapse");
+    return (bcIt != cs.end() && bcIt->second == "collapse");
+}
+
+// Read a length from the style map, treating empty/none as 0.
+static float styleLengthPx(const htmlayout::css::ComputedStyle& cs, const char* prop) {
+    auto it = cs.find(prop);
+    if (it == cs.end() || it->second.empty() || it->second == "none") return 0.0f;
+    // Simple px parse — collapse-mode borders are always concrete lengths.
+    char* end = nullptr;
+    float v = std::strtof(it->second.c_str(), &end);
+    return v;
+}
+
 void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, float h) {
     auto& box = elem->layoutBox();
     auto& style = elem->computedStyle();
     render::Radii radii = getRadii(style, w, h);
     bool rounded = !radii.isZero();
+
+    // --- border-collapse: collapse painting ---------------------------------
+    // Table cells in collapsed mode paint each side centered on the cell's
+    // border-box edge so adjacent cells share a single grid line. The table
+    // itself paints its outer border the same way (its layout box.border has
+    // been zeroed by the table layout — we read widths from the style).
+    bool cellCollapse  = isCellInCollapsedTable(elem);
+    bool tableCollapse = isCollapsedTable(elem);
+    if (cellCollapse || tableCollapse) {
+        struct Side { float wpx; std::string color; std::string st; };
+        const char* widthProps[4] = {"border-top-width", "border-right-width",
+                                     "border-bottom-width", "border-left-width"};
+        const char* styleProps2[4] = {"border-top-style", "border-right-style",
+                                      "border-bottom-style", "border-left-style"};
+        const char* colorProps2[4] = {"border-top-color", "border-right-color",
+                                      "border-bottom-color", "border-left-color"};
+        Side sides4[4];
+        for (int i = 0; i < 4; ++i) {
+            auto stIt = style.find(styleProps2[i]);
+            sides4[i].st = (stIt == style.end()) ? "solid" : stIt->second;
+            sides4[i].wpx = (sides4[i].st == "none") ? 0.0f
+                                                     : styleLengthPx(style, widthProps[i]);
+            auto cIt = style.find(colorProps2[i]);
+            sides4[i].color = (cIt == style.end()) ? "" : cIt->second;
+        }
+        // Cells in collapsed mode: the layout `box.border` for cells is still
+        // their full unmerged border. Use box values to keep sub-px parity
+        // with what the cell would have drawn pre-collapse-fix.
+        if (cellCollapse) {
+            sides4[0].wpx = box.border.top;
+            sides4[1].wpx = box.border.right;
+            sides4[2].wpx = box.border.bottom;
+            sides4[3].wpx = box.border.left;
+        }
+        auto parseColor = [&](const std::string& s) -> render::Color {
+            render::Color c{0,0,0,255};
+            if (!s.empty()) tryParseColor(s, c);
+            return c;
+        };
+        // Each side: rect spans from outer half-line to inner half-line,
+        // centered on the cell's border-box edge.
+        float T = sides4[0].wpx, R = sides4[1].wpx,
+              B = sides4[2].wpx, L = sides4[3].wpx;
+
+        auto paintStripe = [&](int idx, float sx, float sy, float sw, float sh) {
+            if (sides4[idx].st == "none" || sides4[idx].wpx <= 0) return;
+            render::Color c = parseColor(sides4[idx].color);
+            const std::string& st = sides4[idx].st;
+            bool horizontal = (idx == 0 || idx == 2);
+            float w0 = horizontal ? sh : sw; // border thickness
+            if (st == "double") {
+                // Two strokes each ~floor(width/3), separated by a gap.
+                float t = std::max(1.0f, std::floor(w0 / 3.0f));
+                if (horizontal) {
+                    renderer_->fillRect(sx, sy, sw, t, c);
+                    renderer_->fillRect(sx, sy + sh - t, sw, t, c);
+                } else {
+                    renderer_->fillRect(sx, sy, t, sh, c);
+                    renderer_->fillRect(sx + sw - t, sy, t, sh, c);
+                }
+                return;
+            }
+            // Solid (and unknown-style fallback) — for collapsed-mode parity
+            // dashed/dotted are rare; fall back to solid for now.
+            renderer_->fillRect(sx, sy, sw, sh, c);
+        };
+
+        // Top
+        paintStripe(0, x - L * 0.5f, y - T * 0.5f, w + (L + R) * 0.5f, T);
+        // Bottom
+        paintStripe(2, x - L * 0.5f, y + h - B * 0.5f, w + (L + R) * 0.5f, B);
+        // Left
+        paintStripe(3, x - L * 0.5f, y - T * 0.5f, L, h + (T + B) * 0.5f);
+        // Right
+        paintStripe(1, x + w - R * 0.5f, y - T * 0.5f, R, h + (T + B) * 0.5f);
+        return;
+    }
+    // --- end border-collapse painting ---------------------------------------
 
     auto getBorderColor = [&](const char* prop) -> render::Color {
         render::Color c = {0, 0, 0, 255};
