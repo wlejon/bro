@@ -30,6 +30,7 @@
 #include <include/ports/SkFontMgr_mac_ct.h>
 #else
 #include <include/ports/SkFontMgr_fontconfig.h>
+#include <include/ports/SkFontScanner_FreeType.h>
 #endif
 
 #include <glad/gl.h>
@@ -711,7 +712,7 @@ void CanvasScene::applyFont() {
 #elif defined(__APPLE__)
     auto mgr = SkFontMgr_New_CoreText(nullptr);
 #else
-    auto mgr = SkFontMgr_New_FontConfig(nullptr);
+    auto mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #endif
 
     // Resolve CSS generic family names to platform font names

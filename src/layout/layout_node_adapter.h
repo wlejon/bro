@@ -88,10 +88,6 @@ public:
         return empty;
     }
 
-    std::string attribute(const std::string& name) const override {
-        return elem_ ? elem_->getAttribute(name) : std::string{};
-    }
-
     LayoutNode* pseudoBefore() const override { return ensurePseudo("before"); }
     LayoutNode* pseudoAfter()  const override { return ensurePseudo("after");  }
 

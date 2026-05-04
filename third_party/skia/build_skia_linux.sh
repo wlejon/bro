@@ -44,6 +44,7 @@ build_config() {
         skia_use_system_harfbuzz=false
         skia_use_gl=true
         skia_enable_ganesh=true
+        skia_enable_pdf=false
         skia_enable_svg=true
         skia_use_expat=true
         skia_use_x11=false
@@ -62,12 +63,17 @@ build_config() {
     "
 
     bin/gn gen "out/$config" --args="$args"
-    ninja -C "out/$config" skia
+    ninja -C "out/$config" skia pathops
 
-    # Place the built library where CMake expects it
+    # Place the built library where CMake expects it. Skia's GN "skia" target
+    # excludes pathops; bro's SVG module needs SkPathOps::Op so merge the
+    # pathops objects into the archive.
     local dest="$SCRIPT_DIR/lib/$config"
     mkdir -p "$dest"
     cp "out/$config/libskia.a" "$dest/"
+    if compgen -G "out/$config/obj/src/pathops/*.o" > /dev/null; then
+        ar rs "$dest/libskia.a" out/"$config"/obj/src/pathops/*.o
+    fi
     echo "=== Installed libskia.a to $dest ==="
 }
 
