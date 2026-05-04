@@ -1,6 +1,7 @@
 #include "render/raster_renderer.h"
 
 #include <include/core/SkBitmap.h>
+#include <include/core/SkM44.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkData.h>
 #include <include/core/SkFont.h>
@@ -541,6 +542,17 @@ void RasterRenderer::concat(float a, float b, float c, float d, float e, float f
     if (!canvas_) return;
     SkMatrix m = SkMatrix::MakeAll(a, c, e, b, d, f, 0, 0, 1);
     canvas_->concat(m);
+}
+
+void RasterRenderer::concat4x4(const float m[16]) {
+    if (!canvas_) return;
+    // Input is column-major (m[0..3] = col 0, ...). SkM44 takes 16 scalars in
+    // ROW-major order via its 16-arg constructor.
+    SkM44 mat(m[0], m[4], m[ 8], m[12],
+              m[1], m[5], m[ 9], m[13],
+              m[2], m[6], m[10], m[14],
+              m[3], m[7], m[11], m[15]);
+    canvas_->concat(mat);
 }
 
 void RasterRenderer::setClip(float x, float y, float w, float h) {

@@ -76,6 +76,7 @@ public:
     void scale(float sx, float sy) override;
     void rotate(float degrees) override;
     void concat(float a, float b, float c, float d, float e, float f) override;
+    void concat4x4(const float m[16]) override;
     void saveLayerWithFilter(SkImageFilter* filter,
                              float x, float y, float w, float h) override;
 

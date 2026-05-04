@@ -183,6 +183,10 @@ public:
     // c,d = second col, e,f = translation).  Maps to CSS matrix(a,b,c,d,e,f).
     virtual void concat(float a, float b, float c, float d, float e, float f) = 0;
 
+    // Concatenate a 4x4 matrix in column-major form (16 floats; m[0..3] = col 0,
+    // m[4..7] = col 1, ...). Used for CSS 3D transforms with perspective.
+    virtual void concat4x4(const float m[16]) = 0;
+
     // Save a layer with a CSS image filter applied. Everything drawn until
     // the matching restore() passes through the filter.  Takes ownership of
     // the filter reference.  If filter is null, behaves like save().

@@ -10,6 +10,7 @@
 #include <cmath>
 
 #include <include/core/SkBitmap.h>
+#include <include/core/SkM44.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkRRect.h>
@@ -634,6 +635,15 @@ void SkiaRenderer::saveLayerWithFilter(SkImageFilter* filter, float x, float y, 
     paint.setImageFilter(sk_ref_sp(filter));
     SkRect bounds = SkRect::MakeXYWH(x, y, w, h);
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
+}
+
+void SkiaRenderer::concat4x4(const float m[16]) {
+    if (!canvas_) return;
+    SkM44 mat(m[0], m[4], m[ 8], m[12],
+              m[1], m[5], m[ 9], m[13],
+              m[2], m[6], m[10], m[14],
+              m[3], m[7], m[11], m[15]);
+    canvas_->concat(mat);
 }
 
 void SkiaRenderer::concat(float a, float b, float c, float d, float e, float f) {
