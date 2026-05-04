@@ -33,8 +33,13 @@ li { margin-bottom: 4px; }
 .parity .stat .m { min-width: 140px; }
 .parity .stat .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .parity .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #707070; }
-.parity .cta { display: inline-block; background: #1f6feb; color: #fff; padding: 10px 18px; border-radius: 6px; font-weight: 500; margin-top: 4px; }
-.parity .cta:hover { background: #1858c4; text-decoration: none; }
+.cta { display: inline-block; background: #1f6feb; color: #fff; padding: 10px 18px; border-radius: 6px; font-weight: 500; margin-top: 4px; }
+.cta:hover { background: #1858c4; text-decoration: none; }
+.cta:visited { color: #fff; }
+.parity .stat .m.plat { min-width: 200px; }
+.parity .stat .m.plat .v { font-size: 22px; }
+.parity .stat .m.plat .sub { font-size: 11px; color: #909090; margin-top: 2px; }
+.parity .err { color: #909090; font-size: 13px; }
 .docgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 6px; }
 .docgrid a { display: block; background: #fafafa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 10px 12px; color: inherit; }
 .docgrid a:hover { border-color: #1f6feb; text-decoration: none; }
@@ -62,11 +67,9 @@ footer a { color: #707070; }
 
 <section class="parity">
   <h2>Rendering parity vs Chromium</h2>
-  <p>Bro renders HTML and CSS with its own engine — not by embedding Chromium. <a href="https://github.com/wlejon/broparity">Broparity</a> is a side-by-side test suite that compares bro's output to Chromium pixel-by-pixel and structurally, on a curated set of layout cases.</p>
-  <div class="stat">
-    <div class="m"><div class="v">Live</div><div class="l">per-platform reports</div></div>
-    <div class="m"><div class="v">Windows · macOS</div><div class="l">tracked separately</div></div>
-    <div class="m"><div class="v">Open</div><div class="l">add a case, run the diff</div></div>
+  <p>Bro renders HTML and CSS with its own engine — not by embedding Chromium. <a href="https://github.com/wlejon/broparity">Broparity</a> is a side-by-side test suite that compares bro's output to Chromium pixel-by-pixel and structurally, on a curated set of layout cases. Latest published numbers, by host platform:</p>
+  <div class="stat" id="parity-stats">
+    <div class="m"><div class="v">…</div><div class="l">loading</div></div>
   </div>
   <p><a class="cta" href="https://wlejon.github.io/broparity/">View live parity report →</a></p>
 </section>
@@ -83,8 +86,8 @@ footer a { color: #707070; }
 &lt;/script&gt;</code></pre>
 <pre><code>bro path/to/hello</code></pre>
   <p>Naked <code>bro</code> opens the built-in project manager. The launcher and a curated set of starter apps live in the sibling <a href="https://github.com/wlejon/broworkshop">broworkshop</a> repo — games, tools, demos, and AI/research apps you can clone and reshape.</p>
-  <img class="shot" src="launcher.png" alt="bro project launcher">
-  <div class="shot-cap">The built-in project launcher, opened by running <code>bro</code> with no args.</div>
+  <img class="shot" src="launcher.png" alt="bro launcher with broworkshop loaded">
+  <div class="shot-cap">The launcher with <a href="https://github.com/wlejon/broworkshop">broworkshop</a> loaded — games, tools, demos.</div>
 </section>
 
 <section>
@@ -95,38 +98,9 @@ footer a { color: #707070; }
 </section>
 
 <section>
-  <h2>API reference</h2>
-  <p>Each API surface is documented as an annotated <code>.js</code> file with JSDoc and usage examples.</p>
-  <div class="docgrid">
-    <a href="audio-api.js"><div class="n">audio-api.js</div><div class="d">AudioContext, Web Audio nodes, synth, sequencing, spatial, mix buses</div></a>
-    <a href="scene-api.js"><div class="n">scene-api.js</div><div class="d">3D scene graph: shapes, sprites, meshes, physics nodes</div></a>
-    <a href="lighting-api.js"><div class="n">lighting-api.js</div><div class="d">PBR lighting: dir/point/spot lights, materials, tonemap, ambient</div></a>
-    <a href="mesh-api.js"><div class="n">mesh-api.js</div><div class="d">bro.mesh — primitives, CSG, simplification, UV, import/export</div></a>
-    <a href="terrain-api.js"><div class="n">terrain-api.js</div><div class="d">Voxel terrain: noise config, chunk streaming, voxel edits, raycast</div></a>
-    <a href="physics-api.js"><div class="n">physics-api.js</div><div class="d">Jolt rigid bodies, shapes, raycasts, contact events</div></a>
-    <a href="noise-api.js"><div class="n">noise-api.js</div><div class="d">bro.noise — FastNoise2 SIMD noise generation</div></a>
-    <a href="net-api.js"><div class="n">net-api.js</div><div class="d">bro.net — game networking (host/connect/send/broadcast) via GNS</div></a>
-    <a href="ai-game-api.js"><div class="n">ai-game-api.js</div><div class="d">bro.ai.game — navmesh, pathfinding, steering, perception, agents</div></a>
-    <a href="ai-game-gpu-api.js"><div class="n">ai-game-gpu-api.js</div><div class="d">CUDA-backed primitives: tensors, dense, attention, MHA, optim</div></a>
-    <a href="brokit-api.js"><div class="n">brokit-api.js</div><div class="d">brokit runtime — fs, path, fetch, crypto, WebSocket, streams, storage</div></a>
-    <a href="worker-api.js"><div class="n">worker-api.js</div><div class="d">Worker — web worker threads</div></a>
-    <a href="dialogs-api.js"><div class="n">dialogs-api.js</div><div class="d">Native open/save file and folder dialogs (SDL3-backed)</div></a>
-    <a href="menu-api.js"><div class="n">menu-api.js</div><div class="d">bro.menu — native menu bar</div></a>
-    <a href="gizmo-api.js"><div class="n">gizmo-api.js</div><div class="d">3D transform handles for scene editing (translate/rotate/scale)</div></a>
-    <a href="crosshair-api.js"><div class="n">crosshair-api.js</div><div class="d">Engine-level crosshair overlay (cross/dot/circle/crossdot)</div></a>
-    <a href="video-api.js"><div class="n">video-api.js</div><div class="d">VideoEncoder (WebM/VP9) and GifEncoder — RGBA in, file out</div></a>
-  </div>
-</section>
-
-<section>
-  <h2>Guides</h2>
-  <div class="docgrid">
-    <a href="headless.md"><div class="n">headless.md</div><div class="d">Headless mode: globals, input simulation, virtual time, deterministic testing</div></a>
-    <a href="settings.md"><div class="n">settings.md</div><div class="d">Settings system: defaults, app overrides, user overrides, action binding</div></a>
-    <a href="inspect.md"><div class="n">inspect.md</div><div class="d">DOM inspector — useful in headless</div></a>
-    <a href="projects.md"><div class="n">projects.md</div><div class="d">Built-in project manager and skeletons</div></a>
-    <a href="multi-repo-workflow.md"><div class="n">multi-repo-workflow.md</div><div class="d">Working across bro and its sibling library repos</div></a>
-  </div>
+  <h2>Reference</h2>
+  <p>Each API surface — audio, scene, physics, mesh, networking, AI, and the rest — is documented as an annotated <code>.js</code> file with JSDoc and usage examples. Guides cover headless mode, settings, the DOM inspector, projects, and multi-repo workflow.</p>
+  <p style="margin-top: 14px;"><a class="cta" href="reference.html">Browse the reference →</a></p>
 </section>
 
 <section>
@@ -140,5 +114,33 @@ footer a { color: #707070; }
 </footer>
 
 </div>
+
+<script>
+(async function loadParity() {
+  const el = document.getElementById("parity-stats");
+  if (!el) return;
+  try {
+    const res = await fetch("https://wlejon.github.io/broparity/manifest.json", { cache: "no-cache" });
+    if (!res.ok) throw new Error(res.status);
+    const data = await res.json();
+    const platforms = Object.entries(data.platforms || {}).sort(([a], [b]) => a.localeCompare(b));
+    if (!platforms.length) { el.innerHTML = `<div class="err">No platforms published yet.</div>`; return; }
+    el.innerHTML = platforms.map(([slug, p]) => {
+      const layout = ((p.overall?.layoutScore ?? 0) * 100).toFixed(1);
+      const pixel = ((p.overall?.pixelScore ?? 0) * 100).toFixed(1);
+      const cases = p.overall?.caseCount ?? 0;
+      const osLabel = p.system?.os || slug;
+      return `<div class="m plat">
+        <div class="v">${layout}% <span style="font-size:13px;color:#707070;font-weight:400;">layout</span></div>
+        <div class="l">${osLabel}</div>
+        <div class="sub">${pixel}% pixels · ${cases} cases</div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="err">Couldn't load live parity numbers — see the <a href="https://wlejon.github.io/broparity/">parity site</a> for current data.</div>`;
+  }
+})();
+</script>
+
 </body>
 </html>

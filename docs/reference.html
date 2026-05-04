@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bro — reference</title>
+<meta name="description" content="API references and guides for bro.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fafafa; color: #1a1a1a; line-height: 1.55; display: grid; grid-template-columns: 280px 1fr; }
+a { color: #1f6feb; text-decoration: none; }
+a:hover { text-decoration: underline; }
+nav { background: #fff; border-right: 1px solid #e0e0e0; height: 100vh; overflow-y: auto; padding: 20px 0; position: sticky; top: 0; }
+nav .home { padding: 0 20px 16px; border-bottom: 1px solid #f0f0f0; margin-bottom: 12px; }
+nav .home a { color: #1a1a1a; font-weight: 600; font-size: 16px; }
+nav .home .crumb { font-size: 11px; color: #909090; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+nav h3 { margin: 16px 20px 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #707070; font-weight: 600; }
+nav ul { list-style: none; margin: 0; padding: 0; }
+nav li a { display: block; padding: 6px 20px; color: #303030; font-size: 13px; border-left: 3px solid transparent; }
+nav li a:hover { background: #f4f4f4; text-decoration: none; }
+nav li a.active { background: #eaf2ff; border-left-color: #1f6feb; color: #1f6feb; font-weight: 500; }
+nav li .desc { display: block; font-size: 11px; color: #808080; margin-top: 1px; line-height: 1.4; }
+main { padding: 32px 40px 80px; max-width: 980px; min-width: 0; }
+.bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; padding-bottom: 12px; border-bottom: 1px solid #e8e8e8; }
+.bar h1 { margin: 0; font-size: 22px; font-family: "SF Mono", Menlo, Consolas, monospace; }
+.bar .meta { font-size: 12px; color: #707070; }
+.bar .meta a { margin-left: 12px; }
+#content { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 0; overflow: hidden; }
+#content.md { padding: 28px 32px; }
+#content pre { margin: 0; }
+#content pre code.hljs { padding: 24px 28px; font-size: 13px; line-height: 1.55; background: #fff; }
+/* markdown */
+.md h1 { font-size: 28px; margin: 0 0 14px; }
+.md h2 { font-size: 20px; margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #f0f0f0; }
+.md h3 { font-size: 16px; margin: 22px 0 8px; }
+.md h4 { font-size: 14px; margin: 18px 0 6px; }
+.md p { margin: 0 0 12px; }
+.md ul, .md ol { margin: 0 0 12px; padding-left: 24px; }
+.md li { margin-bottom: 4px; }
+.md code { background: #f4f4f4; padding: 1px 5px; border-radius: 3px; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+.md pre { background: #f6f8fa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 14px 16px; overflow-x: auto; margin: 0 0 14px; }
+.md pre code { background: transparent; padding: 0; font-size: 13px; }
+.md blockquote { margin: 0 0 12px; padding: 8px 14px; border-left: 4px solid #d0d0d0; color: #505050; background: #f8f8f8; }
+.md table { border-collapse: collapse; margin: 0 0 14px; }
+.md th, .md td { border: 1px solid #e0e0e0; padding: 6px 12px; text-align: left; font-size: 13px; }
+.md th { background: #f4f4f4; }
+.md a { color: #1f6feb; }
+.loading { padding: 40px; text-align: center; color: #909090; font-size: 14px; }
+.error { padding: 28px 32px; color: #b04000; }
+@media (max-width: 800px) {
+  body { grid-template-columns: 1fr; }
+  nav { position: static; height: auto; max-height: 50vh; }
+  main { padding: 20px; }
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="home">
+    <a href="./">← Bro</a>
+    <div class="crumb">Reference</div>
+  </div>
+  <h3>API references</h3>
+  <ul id="api-list"></ul>
+  <h3>Guides</h3>
+  <ul id="guide-list"></ul>
+</nav>
+
+<main>
+  <div class="bar">
+    <h1 id="doc-title">Reference</h1>
+    <div class="meta" id="doc-meta"></div>
+  </div>
+  <div id="content" class="loading">Pick a document from the sidebar.</div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/json.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/xml.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/css.min.js"></script>
+<script>
+const APIS = [
+  ["audio-api.js", "AudioContext, Web Audio nodes, synth, sequencing, spatial"],
+  ["scene-api.js", "3D scene graph: shapes, sprites, meshes, physics nodes"],
+  ["lighting-api.js", "PBR lighting: dir/point/spot lights, materials, tonemap"],
+  ["mesh-api.js", "bro.mesh — primitives, CSG, simplification, UV, I/O"],
+  ["terrain-api.js", "Voxel terrain: noise, chunk streaming, voxel edits, raycast"],
+  ["physics-api.js", "Jolt rigid bodies, shapes, raycasts, contact events"],
+  ["noise-api.js", "bro.noise — FastNoise2 SIMD noise generation"],
+  ["net-api.js", "bro.net — game networking via GNS"],
+  ["ai-game-api.js", "bro.ai.game — navmesh, pathfinding, steering, perception"],
+  ["ai-game-gpu-api.js", "CUDA-backed primitives: tensors, dense, attention"],
+  ["brokit-api.js", "brokit runtime — fs, fetch, crypto, WebSocket, streams"],
+  ["worker-api.js", "Worker — web worker threads"],
+  ["dialogs-api.js", "Native open/save file and folder dialogs"],
+  ["menu-api.js", "bro.menu — native menu bar"],
+  ["gizmo-api.js", "3D transform handles for scene editing"],
+  ["crosshair-api.js", "Engine-level crosshair overlay"],
+  ["video-api.js", "VideoEncoder (WebM/VP9) and GifEncoder"],
+];
+const GUIDES = [
+  ["headless.md", "Headless mode: globals, input sim, virtual time"],
+  ["settings.md", "Settings system: defaults, overrides, action binding"],
+  ["inspect.md", "DOM inspector — useful in headless"],
+  ["projects.md", "Built-in project manager and skeletons"],
+  ["multi-repo-workflow.md", "Working across bro and its sibling library repos"],
+];
+const REPO_RAW_BASE = "https://github.com/wlejon/bro/blob/main/docs/";
+
+function buildList(elId, items) {
+  const ul = document.getElementById(elId);
+  ul.innerHTML = items.map(([file, desc]) =>
+    `<li><a href="#${file}" data-file="${file}">${file}<span class="desc">${desc}</span></a></li>`
+  ).join("");
+}
+
+function setActive(file) {
+  document.querySelectorAll("nav a[data-file]").forEach(a => {
+    a.classList.toggle("active", a.dataset.file === file);
+  });
+}
+
+async function loadDoc(file) {
+  const isMd = file.endsWith(".md");
+  const isJs = file.endsWith(".js");
+  document.getElementById("doc-title").textContent = file;
+  document.getElementById("doc-meta").innerHTML =
+    `<a href="${REPO_RAW_BASE}${file}" target="_blank" rel="noopener">view on github →</a>`;
+  const content = document.getElementById("content");
+  content.className = "loading";
+  content.textContent = "Loading…";
+  try {
+    const res = await fetch(file);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const text = await res.text();
+    if (isMd) {
+      content.className = "md";
+      content.innerHTML = marked.parse(text);
+      content.querySelectorAll("pre code").forEach(el => {
+        try { hljs.highlightElement(el); } catch {}
+      });
+    } else if (isJs) {
+      content.className = "";
+      const code = document.createElement("code");
+      code.className = "language-javascript hljs";
+      code.textContent = text;
+      const pre = document.createElement("pre");
+      pre.appendChild(code);
+      content.innerHTML = "";
+      content.appendChild(pre);
+      try { hljs.highlightElement(code); } catch {}
+    } else {
+      content.className = "md";
+      content.textContent = text;
+    }
+  } catch (e) {
+    content.className = "error";
+    content.textContent = `Failed to load ${file}: ${e.message}`;
+  }
+  setActive(file);
+}
+
+function fileFromHash() {
+  const h = location.hash.replace(/^#/, "");
+  if (!h) return null;
+  if ([...APIS, ...GUIDES].some(([f]) => f === h)) return h;
+  return null;
+}
+
+function init() {
+  buildList("api-list", APIS);
+  buildList("guide-list", GUIDES);
+  const initial = fileFromHash() || APIS[0][0];
+  loadDoc(initial);
+  window.addEventListener("hashchange", () => {
+    const f = fileFromHash();
+    if (f) loadDoc(f);
+  });
+  document.querySelector("nav").addEventListener("click", e => {
+    const a = e.target.closest("a[data-file]");
+    if (!a) return;
+    e.preventDefault();
+    const f = a.dataset.file;
+    if (location.hash.replace(/^#/, "") === f) loadDoc(f);
+    else location.hash = f;
+  });
+}
+init();
+</script>
+</body>
+</html>
