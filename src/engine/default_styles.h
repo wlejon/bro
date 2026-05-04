@@ -57,7 +57,7 @@ thead { display: table-header-group; }
 tbody { display: table-row-group; }
 tfoot { display: table-footer-group; }
 tr { display: table-row; }
-td, th { display: table-cell; padding: 1px; }
+td, th { display: table-cell; padding: 1px; vertical-align: middle; }
 th { font-weight: bold; text-align: center; }
 caption { display: table-caption; text-align: center; }
 colgroup { display: table-column-group; }
