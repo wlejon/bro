@@ -23,8 +23,6 @@
 #include <sstream>
 #include <stb_image.h>
 
-#include <include/core/SkColorFilter.h>
-#include <include/effects/SkImageFilters.h>
 
 namespace bro::layout {
 
@@ -131,12 +129,13 @@ htmlayout::css::Matrix3D buildElementTransform4x4(
 } // namespace
 
 // ---------------------------------------------------------------------------
-// CSS filter parsing → Skia SkImageFilter chain
+// CSS `filter:` parsing → list of CssFilterParams descriptors. Backends
+// translate descriptors into native filter objects (see render::filter_chain).
 // Supports: blur, brightness, contrast, grayscale, sepia, saturate,
 //           hue-rotate, invert, opacity, drop-shadow
 // ---------------------------------------------------------------------------
-static sk_sp<SkImageFilter> parseCSSFilter(const std::string& val) {
-    sk_sp<SkImageFilter> result;
+static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& val) {
+    std::vector<render::CssFilterParams> result;
     size_t pos = 0;
     while (pos < val.size()) {
         while (pos < val.size() && (val[pos] == ' ' || val[pos] == '\t'))
@@ -146,151 +145,69 @@ static sk_sp<SkImageFilter> parseCSSFilter(const std::string& val) {
         size_t nameStart = pos;
         while (pos < val.size() && val[pos] != '(') ++pos;
         std::string func = val.substr(nameStart, pos - nameStart);
-        // Trim trailing whitespace from function name
         while (!func.empty() && func.back() == ' ') func.pop_back();
         if (pos >= val.size()) break;
         ++pos; // skip '('
 
-        // Parse the argument(s)
         auto readFloat = [&]() -> float {
             while (pos < val.size() && (val[pos] == ' ' || val[pos] == ','))
                 ++pos;
             char* end = nullptr;
             float v = std::strtof(val.c_str() + pos, &end);
             pos = static_cast<size_t>(end - val.c_str());
-            // Handle % suffix
             if (pos < val.size() && val[pos] == '%') {
                 v /= 100.0f;
                 ++pos;
             }
-            // Skip unit suffixes (px, deg, rad, turn)
             while (pos < val.size() && std::isalpha(static_cast<unsigned char>(val[pos])))
                 ++pos;
             return v;
         };
 
+        render::CssFilterParams f{};
+        bool keep = true;
+
         if (func == "blur") {
-            float sigma = readFloat();
-            result = SkImageFilters::Blur(sigma, sigma, std::move(result));
+            f.kind = render::CssFilterParams::Blur;
+            f.a = readFloat();
         } else if (func == "brightness") {
-            float v = readFloat();
-            // brightness: multiply RGB by v
-            float m[20] = {
-                v, 0, 0, 0, 0,
-                0, v, 0, 0, 0,
-                0, 0, v, 0, 0,
-                0, 0, 0, 1, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+            f.kind = render::CssFilterParams::Brightness;
+            f.a = readFloat();
         } else if (func == "contrast") {
-            float v = readFloat();
-            // contrast: scale RGB around 0.5
-            float t = 0.5f * (1.0f - v);
-            float m[20] = {
-                v, 0, 0, 0, t,
-                0, v, 0, 0, t,
-                0, 0, v, 0, t,
-                0, 0, 0, 1, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+            f.kind = render::CssFilterParams::Contrast;
+            f.a = readFloat();
         } else if (func == "grayscale") {
-            float v = readFloat();
-            v = std::clamp(v, 0.0f, 1.0f);
-            float inv = 1.0f - v;
-            // ITU-R BT.601 luma coefficients
-            float m[20] = {
-                0.2126f + 0.7874f * inv, 0.7152f - 0.7152f * inv, 0.0722f - 0.0722f * inv, 0, 0,
-                0.2126f - 0.2126f * inv, 0.7152f + 0.2848f * inv, 0.0722f - 0.0722f * inv, 0, 0,
-                0.2126f - 0.2126f * inv, 0.7152f - 0.7152f * inv, 0.0722f + 0.9278f * inv, 0, 0,
-                0, 0, 0, 1, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+            f.kind = render::CssFilterParams::Grayscale;
+            f.a = readFloat();
         } else if (func == "sepia") {
-            float v = readFloat();
-            v = std::clamp(v, 0.0f, 1.0f);
-            float inv = 1.0f - v;
-            float m[20] = {
-                0.393f + 0.607f * inv, 0.769f - 0.769f * inv, 0.189f - 0.189f * inv, 0, 0,
-                0.349f - 0.349f * inv, 0.686f + 0.314f * inv, 0.168f - 0.168f * inv, 0, 0,
-                0.272f - 0.272f * inv, 0.534f - 0.534f * inv, 0.131f + 0.869f * inv, 0, 0,
-                0, 0, 0, 1, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+            f.kind = render::CssFilterParams::Sepia;
+            f.a = readFloat();
         } else if (func == "saturate") {
-            float v = readFloat();
-            // Same as grayscale but inverted: v=1 is identity, v=0 is full grayscale
-            float m[20] = {
-                0.2126f + 0.7874f * v, 0.7152f - 0.7152f * v, 0.0722f - 0.0722f * v, 0, 0,
-                0.2126f - 0.2126f * v, 0.7152f + 0.2848f * v, 0.0722f - 0.0722f * v, 0, 0,
-                0.2126f - 0.2126f * v, 0.7152f - 0.7152f * v, 0.0722f + 0.9278f * v, 0, 0,
-                0, 0, 0, 1, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+            f.kind = render::CssFilterParams::Saturate;
+            f.a = readFloat();
         } else if (func == "hue-rotate") {
-            // Read angle in degrees
+            f.kind = render::CssFilterParams::HueRotate;
             while (pos < val.size() && (val[pos] == ' ')) ++pos;
             char* end = nullptr;
-            float deg = std::strtof(val.c_str() + pos, &end);
+            f.a = std::strtof(val.c_str() + pos, &end);
             pos = static_cast<size_t>(end - val.c_str());
-            // Skip unit
             while (pos < val.size() && std::isalpha(static_cast<unsigned char>(val[pos])))
                 ++pos;
-            float rad = deg * 3.14159265f / 180.0f;
-            float cosA = std::cos(rad), sinA = std::sin(rad);
-            // Hue rotation matrix (rotate in RGB color space around the gray axis)
-            float m[20] = {
-                0.213f + cosA * 0.787f - sinA * 0.213f,
-                0.715f - cosA * 0.715f - sinA * 0.715f,
-                0.072f - cosA * 0.072f + sinA * 0.928f, 0, 0,
-                0.213f - cosA * 0.213f + sinA * 0.143f,
-                0.715f + cosA * 0.285f + sinA * 0.140f,
-                0.072f - cosA * 0.072f - sinA * 0.283f, 0, 0,
-                0.213f - cosA * 0.213f - sinA * 0.787f,
-                0.715f - cosA * 0.715f + sinA * 0.715f,
-                0.072f + cosA * 0.928f + sinA * 0.072f, 0, 0,
-                0, 0, 0, 1, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
         } else if (func == "invert") {
-            float v = readFloat();
-            v = std::clamp(v, 0.0f, 1.0f);
-            // invert: lerp between identity and full inversion
-            float s = 1.0f - 2.0f * v; // scale: 1 at v=0, -1 at v=1
-            float t = v;               // translate: 0 at v=0, 1 at v=1
-            float m[20] = {
-                s, 0, 0, 0, t,
-                0, s, 0, 0, t,
-                0, 0, s, 0, t,
-                0, 0, 0, 1, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+            f.kind = render::CssFilterParams::Invert;
+            f.a = readFloat();
         } else if (func == "opacity") {
-            float v = readFloat();
-            float m[20] = {
-                1, 0, 0, 0, 0,
-                0, 1, 0, 0, 0,
-                0, 0, 1, 0, 0,
-                0, 0, 0, v, 0
-            };
-            auto cf = SkColorFilters::Matrix(m);
-            result = SkImageFilters::ColorFilter(std::move(cf), std::move(result));
+            f.kind = render::CssFilterParams::Opacity;
+            f.a = readFloat();
         } else if (func == "drop-shadow") {
-            float dx = readFloat();
-            float dy = readFloat();
-            float blur = readFloat();
-            // Try to parse color (remaining tokens before ')')
+            f.kind = render::CssFilterParams::DropShadow;
+            f.dx = readFloat();
+            f.dy = readFloat();
+            f.blur = readFloat();
             render::Color sc = {0, 0, 0, 255};
             size_t colorStart = pos;
             while (pos < val.size() && val[pos] != ')') ++pos;
             std::string colorStr = val.substr(colorStart, pos - colorStart);
-            // Trim
             size_t ca = colorStr.find_first_not_of(" \t");
             if (ca != std::string::npos) {
                 colorStr = colorStr.substr(ca);
@@ -298,12 +215,13 @@ static sk_sp<SkImageFilter> parseCSSFilter(const std::string& val) {
                 if (cb != std::string::npos) colorStr = colorStr.substr(0, cb + 1);
                 DrawTraversal::tryParseColor(colorStr, sc);
             }
-            SkColor skc = SkColorSetARGB(sc.a, sc.r, sc.g, sc.b);
-            auto shadow = SkImageFilters::DropShadow(dx, dy, blur / 2.0f, blur / 2.0f, skc, std::move(result));
-            result = std::move(shadow);
+            f.shadowColor = sc;
+        } else {
+            keep = false;
         }
 
-        // Skip to closing paren
+        if (keep) result.push_back(f);
+
         while (pos < val.size() && val[pos] != ')') ++pos;
         if (pos < val.size()) ++pos;
     }
@@ -783,11 +701,11 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (!skipWrap) {
         auto fIt = style.find("filter");
         if (fIt != style.end() && !fIt->second.empty() && fIt->second != "none") {
-            auto filter = parseCSSFilter(fIt->second);
-            if (filter) {
+            auto filters = parseCSSFilter(fIt->second);
+            if (!filters.empty()) {
                 hasFilter = true;
                 // Use a generous bounds that includes blur/shadow overflow
-                renderer_->saveLayerWithFilter(filter.get(),
+                renderer_->saveLayerWithFilter(filters,
                     bx - 50, by - 50, bw + 100, bh + 100);
             }
         }
@@ -2985,10 +2903,10 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     {
         auto fIt = rootStyle.find("filter");
         if (fIt != rootStyle.end() && !fIt->second.empty() && fIt->second != "none") {
-            auto filter = parseCSSFilter(fIt->second);
-            if (filter) {
+            auto filters = parseCSSFilter(fIt->second);
+            if (!filters.empty()) {
                 wrappedFilter = true;
-                renderer_->saveLayerWithFilter(filter.get(),
+                renderer_->saveLayerWithFilter(filters,
                     rbx - 50, rby - 50, rbw + 100, rbh + 100);
             }
         }

@@ -98,7 +98,7 @@ public:
     void rotate(float degrees) override;
     void concat(float a, float b, float c, float d, float e, float f) override;
     void concat4x4(const float m[16]) override;
-    void saveLayerWithFilter(SkImageFilter* filter,
+    void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                              float x, float y, float w, float h) override;
     bool registerCustomFont(const std::string& family,
                             const void* data, size_t len,

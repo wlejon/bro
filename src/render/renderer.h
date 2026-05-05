@@ -8,7 +8,6 @@
 #include <vector>
 
 class SkCanvas;
-class SkImageFilter;
 class SkSurface;
 
 namespace bro::render {
@@ -72,6 +71,32 @@ struct Radii {
 struct ColorStop {
     float offset;   // 0.0–1.0
     Color color;
+};
+
+// CSS filter primitive — a single function in a `filter:` chain. The list is
+// applied in order to produce the final image filter. Backends are responsible
+// for translating these descriptors into their native filter representation
+// (e.g. SkImageFilter on Skia backends). DrawTraversal records descriptors
+// only; it does not construct backend filter objects.
+struct CssFilterParams {
+    enum Kind {
+        Blur,         // a = sigma (px)
+        Brightness,   // a = factor
+        Contrast,     // a = factor
+        Grayscale,    // a = amount [0..1]
+        Sepia,        // a = amount [0..1]
+        Saturate,     // a = factor
+        HueRotate,    // a = degrees
+        Invert,       // a = amount [0..1]
+        Opacity,      // a = amount [0..1]
+        DropShadow,   // dx, dy, blur (px); shadowColor
+    };
+    Kind kind = Blur;
+    float a = 0;
+    float dx = 0;
+    float dy = 0;
+    float blur = 0;
+    Color shadowColor = {0, 0, 0, 255};
 };
 
 class Renderer {
@@ -190,10 +215,11 @@ public:
     // m[4..7] = col 1, ...). Used for CSS 3D transforms with perspective.
     virtual void concat4x4(const float m[16]) = 0;
 
-    // Save a layer with a CSS image filter applied. Everything drawn until
-    // the matching restore() passes through the filter.  Takes ownership of
-    // the filter reference.  If filter is null, behaves like save().
-    virtual void saveLayerWithFilter(SkImageFilter* filter,
+    // Save a layer with a CSS filter chain applied. Everything drawn until the
+    // matching restore() passes through the filter. The backend constructs the
+    // native filter from the descriptor list. An empty span behaves like
+    // save().
+    virtual void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                                      float x, float y, float w, float h) = 0;
 
     virtual void setClip(float x, float y, float w, float h) = 0;

@@ -1,4 +1,5 @@
 #include "render/raster_renderer.h"
+#include "render/filter_chain.h"
 
 #include <include/core/SkBitmap.h>
 #include <include/core/SkM44.h>
@@ -538,10 +539,11 @@ void RasterRenderer::saveLayerAlpha(uint8_t alpha) {
 void RasterRenderer::translate(float dx, float dy) { if (canvas_) canvas_->translate(dx, dy); }
 void RasterRenderer::scale(float sx, float sy) { if (canvas_) canvas_->scale(sx, sy); }
 void RasterRenderer::rotate(float degrees) { if (canvas_) canvas_->rotate(degrees); }
-void RasterRenderer::saveLayerWithFilter(SkImageFilter* filter, float x, float y, float w, float h) {
+void RasterRenderer::saveLayerWithFilter(std::span<const CssFilterParams> filters,
+                                         float x, float y, float w, float h) {
     if (!canvas_) return;
     SkPaint paint;
-    paint.setImageFilter(sk_ref_sp(filter));
+    paint.setImageFilter(BuildSkImageFilterChain(filters));
     SkRect bounds = SkRect::MakeXYWH(x, y, w, h);
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
 }
