@@ -2,6 +2,7 @@
 
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
+#include "engine/engine.h"
 #include "js/dom_bindings_internal.h"
 #include "video/gif_encoder.h"
 #include "video/webm_encoder.h"
@@ -16,6 +17,25 @@
 namespace bro::js {
 
 namespace {
+
+// Engine pointer stash key, mirroring the one used by headless_bindings /
+// installCanvasSnapshotBinding. We only read it; whoever installs the engine
+// (engine_init in both modes, headless main in headless mode) is the writer.
+constexpr const char* kEngineKey = "__bro_engine_ptr";
+
+engine::Engine* getEngineForCtx(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue val = JS_GetPropertyStr(ctx, global, kEngineKey);
+    engine::Engine* e = nullptr;
+    if (JS_IsNumber(val)) {
+        int64_t ptr = 0;
+        JS_ToInt64(ctx, &ptr, val);
+        e = reinterpret_cast<engine::Engine*>(static_cast<intptr_t>(ptr));
+    }
+    JS_FreeValue(ctx, val);
+    JS_FreeValue(ctx, global);
+    return e;
+}
 
 video::WebmEncoder::Quality parseQuality(const std::string& s) {
     if (s == "realtime") return video::WebmEncoder::Quality::Realtime;
@@ -166,6 +186,39 @@ JSValue js_videoEncoder_addCanvasFrame(JSContext* ctx, JSValueConst this_val,
     if (!d->enc->addFrameRGBA(pixels.data(), w * 4)) {
         d->lastErr = d->enc->lastError();
         return JS_ThrowInternalError(ctx, "addCanvasFrame: encode failed: %s",
+                                     d->lastErr.c_str());
+    }
+    return JS_TRUE;
+}
+
+// JS: enc.addViewportFrame()
+//   Captures the full composited viewport (canvas scene layers + HTML/CSS
+//   overlay) — same pixel source as screenshot() — and encodes it. Use this
+//   when the app draws part of its UI as DOM elements that addCanvasFrame
+//   would miss. Viewport size must match encoder size.
+JSValue js_videoEncoder_addViewportFrame(JSContext* ctx, JSValueConst this_val,
+                                         int /*argc*/, JSValueConst* /*argv*/) {
+    auto* d = qjsbind::unwrap<ED>(ctx, this_val);
+    if (!d || !d->enc) return JS_ThrowInternalError(ctx, "encoder closed");
+
+    auto* engine = getEngineForCtx(ctx);
+    if (!engine) {
+        return JS_ThrowInternalError(ctx, "addViewportFrame: engine not available");
+    }
+    const int w = engine->viewportWidth();
+    const int h = engine->viewportHeight();
+    if (w != d->width || h != d->height) {
+        return JS_ThrowRangeError(ctx,
+            "addViewportFrame: viewport %dx%d does not match encoder %dx%d",
+            w, h, d->width, d->height);
+    }
+    auto pixels = engine->capturePixels();
+    if (pixels.empty()) {
+        return JS_ThrowInternalError(ctx, "addViewportFrame: pixel read failed");
+    }
+    if (!d->enc->addFrameRGBA(pixels.data(), w * 4)) {
+        d->lastErr = d->enc->lastError();
+        return JS_ThrowInternalError(ctx, "addViewportFrame: encode failed: %s",
                                      d->lastErr.c_str());
     }
     return JS_TRUE;
@@ -391,6 +444,7 @@ void VideoBindings::install(JSContext* ctx, const std::string& /*basePath*/) {
         })
         .method_raw("addFrameRGBA",       js_videoEncoder_addFrameRGBA, 1)
         .method_raw("addCanvasFrame",     js_videoEncoder_addCanvasFrame, 1)
+        .method_raw("addViewportFrame",   js_videoEncoder_addViewportFrame, 0)
         .method_raw("addAudioFramesPCM",  js_videoEncoder_addAudioFramesPCM, 1)
         .method_raw("finish",             js_videoEncoder_finish, 0);
 
