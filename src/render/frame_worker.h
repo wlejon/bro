@@ -87,6 +87,20 @@ public:
         }
     }
 
+    /// Block until the worker is not actively touching shared state — i.e.
+    /// not Requested and not Busy. Returns once the state is Idle,
+    /// ResultReady, or Shutdown. Unlike waitUntilIdle this does NOT claim a
+    /// pending result; ResultReady is treated as "done with shared state, just
+    /// holding a fence" and is safe to proceed past. Use before mutating data
+    /// the worker reads (e.g. the DOM, before dispatching JS event handlers).
+    void waitUntilNotBusy() {
+        for (;;) {
+            uint32_t s = state_.load(std::memory_order_acquire);
+            if (s != Requested && s != Busy) return;
+            state_.wait(s, std::memory_order_acquire);
+        }
+    }
+
     bool isIdle() const {
         return state_.load(std::memory_order_acquire) == Idle;
     }

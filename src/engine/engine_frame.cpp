@@ -271,6 +271,31 @@ void Engine::run() {
         // main thread since QuickJS isn't thread-safe.
         pumpVideoEvents();
 
+        // 0b. Wait for the raster thread to finish reading the DOM. The
+        //     previous frame signalled raster just before swapBuffers, so it
+        //     ran in parallel with vsync and is normally already ResultReady
+        //     by now (a wait-free fast path); the wait only blocks when raster
+        //     is genuinely slower than vsync. Without this barrier, JS
+        //     handlers run while DrawTraversal is still reading
+        //     composedChildNodes(), TextNode::data(), computedStyle(),
+        //     attributes — apps with active CSS transitions/animations *and*
+        //     per-event DOM churn (notably 2048: per-keypress innerHTML
+        //     rebuild + class flips while transitions are in flight) trip
+        //     this race reliably on macOS/ARM64. One wait here covers
+        //     pollEvents, timers, RAF, pending-jobs, and post-layout event
+        //     dispatch — raster only re-enters reads when *we* signal it
+        //     just before the composite block below.
+        framePresenter_->waitUntilRasterNotReadingDom();
+
+        // 0c. Claim the previous frame's raster result now that the worker is
+        //     idle. This was previously at "step 5a" — moved to the top of the
+        //     frame so the front buffer is stable for the entire frame and
+        //     the raster signal can move to just before composite (giving it
+        //     vsync to run in). consumeIfReady is non-blocking; if the worker
+        //     somehow isn't ResultReady, layers stays as the last claimed view.
+        framePresenter_->consumeIfReady();
+        auto layers = framePresenter_->currentLayers();
+
         // 1. Poll platform events
         eventLoop_->pollEvents();
         if (eventLoop_->shouldQuit()) {
@@ -433,9 +458,10 @@ void Engine::run() {
             }
         }
 
-        // 4. Signal layout thread when DOM is dirty. Layout runs in parallel
-        //    with composite + swap below. Only signal when both layout + raster
-        //    are idle so reads don't overlap with JS mutations.
+        // 4. Signal layout thread when DOM is dirty. Layout is awaited just
+        //    below (step 5a) so the raster signal at 5a2 sees a fully resolved
+        //    tree. Only signal when both layout + raster are idle so reads
+        //    don't overlap with JS mutations.
         double tLayout = tJs;
         bool layoutIdle = layoutPipeline_->isIdle();
         bool layoutSignaled = false;
@@ -468,77 +494,18 @@ void Engine::run() {
         accumLayoutMs_ += util::currentTimeMs() - tJs;
 
         // === GPU FRAME (threaded rasterization + main-thread compositing) ===
-        // Layout thread runs in parallel with composite + swap below.
+        // Raster thread runs in parallel with composite + swap below
+        // (signaled at step 5a2 once layout has been claimed).
 
         double tRaster = util::currentTimeMs();
 
-        // 5a. Try to claim any new raster output BEFORE doing anything else.
-        //     This is the only path that flips the front index, so once it
-        //     returns, the LayerView from currentLayers() is stable for the
-        //     entire frame — fixing the historical "stale frontLayers across
-        //     mid-frame flip" race.
-        framePresenter_->consumeIfReady();
-        auto layers = framePresenter_->currentLayers();
-        bool rasterIdle = framePresenter_->isRasterIdle();
-
-        // 5b. Signal canvas threads using the now-stable layer view.
-        for (auto& layer : layers.appLayers) {
-            if (layer.type == UILayer::Canvas && layer.canvasScene) {
-                layer.canvasScene->prepareAndSignal();
-            }
-        }
-
-        // 5b2. Wait for canvas-thread fences before compositing the same view.
-        for (auto& layer : layers.appLayers) {
-            if (layer.type == UILayer::Canvas && layer.canvasScene) {
-                layer.canvasScene->consumeFence();
-            }
-        }
-        accumRasterMs_ += util::currentTimeMs() - tRaster;
-
-        double tGpu = util::currentTimeMs();
-
-        // 5d. Update canvas scene scroll + clean up detached.
-        for (auto& cs : canvasScenes_) {
-            cs->setViewportScroll(scrollY_);
-            cs->checkDetached();
-        }
-        canvasScenes_.erase(
-            std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
-                [](auto& cs) { return cs->isDetached(); }),
-            canvasScenes_.end());
-
-        // 5e. Set viewport and clear.
-        glViewport(0, 0, viewportWidth_, viewportHeight_);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        // 5f. Composite app UI layers in DOM order. HTML layers (cached
-        //     textures from the raster thread) interleaved with canvas layers
-        //     (freshly rasterized on canvas threads).
-        compositeLayers(layers.appLayers);
-
-        // 5g. Tick + draw crosshair overlay (full frame rate, after app content)
-        crosshair_.tick(static_cast<float>(totalFrameMs_ * 0.001));
-        drawCrosshairGL();
-
-        // 5h. Composite system panel layers (menu bar / preferences / splash)
-        //     on top of crosshair.
-        compositeLayers(layers.systemLayers);
-
-        // Restore WebGL shadow state so apps with internal caches (three.js)
-        // see the same GL state they left on the previous frame.
-        if (activeWebGL) activeWebGL->restoreState();
-
-        // Measure GPU work before swap (swap includes vsync wait).
-        accumGpuMs_ += util::currentTimeMs() - tGpu;
-
-        // Swap buffers (may block on vsync — not counted as GPU work).
-        gl_->swapBuffers();
-
-        // 5j. Wait for layout thread and consume results. Layout ran in
-        //     parallel with composite + swap above.
+        // 5a. Wait for the layout thread and consume results. Layout was
+        //     signaled in step 4 and ran in parallel with the JS phase
+        //     wrap-up + scene/canvas updates above. We must complete layout
+        //     and any post-layout JS *before* signaling raster so the worker
+        //     reads a fully resolved tree. (Trade-off: layout no longer
+        //     overlaps with composite + swap; raster does. Raster is the
+        //     heavier of the two and benefits more from the vsync window.)
         if (layoutSignaled) {
             if (layoutPipeline_->waitClaimDone()) {
                 if (document_ && document_->documentElement()) {
@@ -596,9 +563,12 @@ void Engine::run() {
             }
         }
 
-        // Signal raster — single code path with a fully populated snapshot,
-        // so the historical "no-layout branch forgot to write insets" bug
-        // can't recur.
+        // 5a2. Signal raster — single code path with a fully populated
+        //      snapshot, so the historical "no-layout branch forgot to write
+        //      insets" bug can't recur. This is the latest point we can
+        //      signal: post-layout JS may have mutated the DOM, so we must
+        //      be past it. Composite + swap below run in parallel with the
+        //      worker.
         if (framePresenter_->isRasterIdle()) {
             bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
             if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
@@ -610,6 +580,63 @@ void Engine::run() {
                 lastUIRenderMs_ = now;
             }
         }
+
+        // 5b. Signal canvas threads using the now-stable layer view.
+        for (auto& layer : layers.appLayers) {
+            if (layer.type == UILayer::Canvas && layer.canvasScene) {
+                layer.canvasScene->prepareAndSignal();
+            }
+        }
+
+        // 5b2. Wait for canvas-thread fences before compositing the same view.
+        for (auto& layer : layers.appLayers) {
+            if (layer.type == UILayer::Canvas && layer.canvasScene) {
+                layer.canvasScene->consumeFence();
+            }
+        }
+        accumRasterMs_ += util::currentTimeMs() - tRaster;
+
+        double tGpu = util::currentTimeMs();
+
+        // 5d. Update canvas scene scroll + clean up detached.
+        for (auto& cs : canvasScenes_) {
+            cs->setViewportScroll(scrollY_);
+            cs->checkDetached();
+        }
+        canvasScenes_.erase(
+            std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
+                [](auto& cs) { return cs->isDetached(); }),
+            canvasScenes_.end());
+
+        // 5e. Set viewport and clear.
+        glViewport(0, 0, viewportWidth_, viewportHeight_);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // 5f. Composite app UI layers in DOM order. HTML layers (cached
+        //     textures from the raster thread) interleaved with canvas layers
+        //     (freshly rasterized on canvas threads).
+        compositeLayers(layers.appLayers);
+
+        // 5g. Tick + draw crosshair overlay (full frame rate, after app content)
+        crosshair_.tick(static_cast<float>(totalFrameMs_ * 0.001));
+        drawCrosshairGL();
+
+        // 5h. Composite system panel layers (menu bar / preferences / splash)
+        //     on top of crosshair.
+        compositeLayers(layers.systemLayers);
+
+        // Restore WebGL shadow state so apps with internal caches (three.js)
+        // see the same GL state they left on the previous frame.
+        if (activeWebGL) activeWebGL->restoreState();
+
+        // Measure GPU work before swap (swap includes vsync wait).
+        accumGpuMs_ += util::currentTimeMs() - tGpu;
+
+        // Swap buffers (may block on vsync — not counted as GPU work).
+        // Raster thread runs in parallel here (signaled at step 5a2 above).
+        gl_->swapBuffers();
 
         // 6. Frame time tracking.
         totalFrameMs_ = util::currentTimeMs() - frameStart;

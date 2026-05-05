@@ -78,6 +78,12 @@ public:
     bool isRasterIdle() const { return worker_.isIdle(); }
     bool isRasterBusyOrRequested() const { return worker_.isBusyOrRequested(); }
 
+    /// Block until the raster worker is not reading shared state (DOM). Safe
+    /// to call from the main thread before dispatching JS handlers that may
+    /// mutate the DOM — without this, Release builds race textContent /
+    /// removeChild / etc. against DrawTraversal mid-paint.
+    void waitUntilRasterNotReadingDom() { worker_.waitUntilNotBusy(); }
+
     // ---- worker (raster) thread ----
 
     /// Block until either a request arrives or shutdown is signaled.
