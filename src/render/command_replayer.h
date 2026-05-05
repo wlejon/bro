@@ -24,10 +24,15 @@ public:
     using LayerBreakHandler = std::function<void(int kind, void* canvasScene,
                                                   unsigned int directTexture,
                                                   float x, float y, float w, float h)>;
+    using BlitCanvasInlineHandler = std::function<void(void* canvasScene,
+                                                        float x, float y, float w, float h)>;
 
     explicit CommandReplayer(Renderer* dst);
 
     void setLayerBreakHandler(LayerBreakHandler h) { onLayerBreak_ = std::move(h); }
+    void setBlitCanvasInlineHandler(BlitCanvasInlineHandler h) {
+        onBlitCanvasInline_ = std::move(h);
+    }
 
     // Replay every command in the buffer in order against `dst`.
     void replay(const CommandBuffer& buffer);
@@ -43,9 +48,10 @@ private:
         uint64_t    handle;
     };
 
-    Renderer*              dst_;
-    std::vector<FontEntry> fontCache_;
-    LayerBreakHandler      onLayerBreak_;
+    Renderer*               dst_;
+    std::vector<FontEntry>  fontCache_;
+    LayerBreakHandler       onLayerBreak_;
+    BlitCanvasInlineHandler onBlitCanvasInline_;
 };
 
 } // namespace bro::render

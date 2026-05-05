@@ -8,28 +8,33 @@
 
 namespace bro::render {
 
-// Implements `render::Renderer` by appending a `DrawCommand` for each call
-// into a target `CommandBuffer`. Variable-length payloads (text, gradient
-// stops, polygons, images, filter chains) are copied into the buffer's arena
-// so the buffer is self-contained — the caller can drop the original data
-// after the call returns.
+// Implements `render::Renderer` with two modes:
+//   1. Recording mode (buffer != null): every mutating call appends a
+//      `DrawCommand` to the bound `CommandBuffer`. Variable-length payloads
+//      (text, gradient stops, polygons, images, filter chains) are copied
+//      into the buffer's arena so it is self-contained.
+//   2. Passthrough mode (buffer == null): every call forwards to
+//      `measureRenderer` directly. Used by the headless CPU path which
+//      shares one DrawTraversal but sometimes paints straight to a Skia
+//      surface without going through record/replay.
+//
+// Query calls (measureText, createFont, deleteFont, registerCustomFont)
+// always delegate to `measureRenderer` — DrawTraversal needs real font
+// metrics to lay out text, and FontManager wants real handles.
+//
+// Each Cmd_DrawText embeds the full font descriptor (family/size/weight/
+// italic) — handles aren't transferable across threads, so the replayer
+// re-creates fonts on its own renderer.
 //
 // Thread-safe to record on one thread and replay on another, provided the
 // caller does not mutate the buffer during replay (typical pattern: ping-pong
 // two buffers, swap pointers under an atomic publish).
-//
-// Implements text and font as descriptors (family/size/weight/italic) rather
-// than handles, because font handles are per-FontManager and FontManager is
-// per-thread. The replayer resolves descriptors against its renderer's
-// FontManager.
-//
-// Returns dummy values from synchronous query methods (measureText, getCanvas,
-// surface, capturePixels) — DrawTraversal does not call those during the paint
-// walk. createFont/deleteFont also no-op, since text commands carry the full
-// font descriptor.
 class RecordingRenderer final : public Renderer {
 public:
-    explicit RecordingRenderer(CommandBuffer* buffer);
+    // `buffer` receives recorded commands (variable-length payloads copied
+    // into its arena). `measureRenderer` services synchronous queries and
+    // owns the real font handles — must outlive this RecordingRenderer.
+    RecordingRenderer(CommandBuffer* buffer, Renderer* measureRenderer);
 
     // Reset the binding to a different buffer (e.g. when the engine swaps
     // back/front buffers between frames).
@@ -124,21 +129,27 @@ public:
     void recordLayerBreak(int kind, void* canvasScene, unsigned int directTexture,
                           float x, float y, float w, float h);
 
+    // Inline canvas blit — system panels composite their canvas scene onto
+    // the current surface instead of breaking into a separate layer.
+    void recordBlitCanvasInline(void* canvasScene, float x, float y, float w, float h);
+
 private:
-    // FontManager calls createFont() to register fonts and gets back synthetic
-    // handles (1, 2, 3, ...). Later, drawText() receives those handles and
-    // must record the full descriptor in the command so the replay-side
-    // renderer can resolve it through its own FontManager.
+    // FontManager calls createFont() to register fonts and gets back handles
+    // from the measure renderer. We track each handle's descriptor so
+    // drawText() can embed the full descriptor in the recorded command.
     struct FontDesc {
+        uint64_t    handle;
         std::string family;
-        float size;
-        int   weight;
-        bool  italic;
+        float       size;
+        int         weight;
+        bool        italic;
     };
 
-    CommandBuffer* buffer_;
-    std::vector<FontDesc> fonts_;  // index = handle - 1
-    uint64_t nextFontHandle_ = 1;
+    const FontDesc* findFont(uint64_t handle) const;
+
+    CommandBuffer*        buffer_;
+    Renderer*             measureRenderer_;
+    std::vector<FontDesc> fonts_;
 };
 
 } // namespace bro::render

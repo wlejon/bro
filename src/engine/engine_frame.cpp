@@ -271,28 +271,13 @@ void Engine::run() {
         // main thread since QuickJS isn't thread-safe.
         pumpVideoEvents();
 
-        // 0b. Wait for the raster thread to finish reading the DOM. The
-        //     previous frame signalled raster just before swapBuffers, so it
-        //     ran in parallel with vsync and is normally already ResultReady
-        //     by now (a wait-free fast path); the wait only blocks when raster
-        //     is genuinely slower than vsync. Without this barrier, JS
-        //     handlers run while DrawTraversal is still reading
-        //     composedChildNodes(), TextNode::data(), computedStyle(),
-        //     attributes — apps with active CSS transitions/animations *and*
-        //     per-event DOM churn (notably 2048: per-keypress innerHTML
-        //     rebuild + class flips while transitions are in flight) trip
-        //     this race reliably on macOS/ARM64. One wait here covers
-        //     pollEvents, timers, RAF, pending-jobs, and post-layout event
-        //     dispatch — raster only re-enters reads when *we* signal it
-        //     just before the composite block below.
-        framePresenter_->waitUntilRasterNotReadingDom();
-
-        // 0c. Claim the previous frame's raster result now that the worker is
-        //     idle. This was previously at "step 5a" — moved to the top of the
-        //     frame so the front buffer is stable for the entire frame and
-        //     the raster signal can move to just before composite (giving it
-        //     vsync to run in). consumeIfReady is non-blocking; if the worker
-        //     somehow isn't ResultReady, layers stays as the last claimed view.
+        // 0b. Claim the previous frame's raster result if the worker has
+        //     published one. The worker never reads the DOM (it only replays
+        //     the command buffer recorded last frame on this thread), so JS
+        //     can mutate freely from here on without racing paint. No wait
+        //     needed; consumeIfReady is non-blocking. If the worker is still
+        //     busy (rare — only when raster outpaces a slow main thread),
+        //     `layers` stays as the last claimed view and we composite that.
         framePresenter_->consumeIfReady();
         auto layers = framePresenter_->currentLayers();
 
@@ -563,18 +548,30 @@ void Engine::run() {
             }
         }
 
-        // 5a2. Signal raster — single code path with a fully populated
-        //      snapshot, so the historical "no-layout branch forgot to write
-        //      insets" bug can't recur. This is the latest point we can
-        //      signal: post-layout JS may have mutated the DOM, so we must
-        //      be past it. Composite + swap below run in parallel with the
-        //      worker.
+        // 5a2. Record draw commands into the back command buffer, then signal
+        //      raster with a fully-populated snapshot. The raster thread will
+        //      replay the buffer against its own Skia/GL context — it never
+        //      reads the DOM, so there is no race with the next frame's JS.
+        //      Composite + swap below run in parallel with the worker.
         if (framePresenter_->isRasterIdle()) {
             bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
             if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
                 stageSystemPanelCanvases();
                 updateSelectionSnapshot();
-                framePresenter_->signalRender(buildRasterSnapshot());
+
+                // Record into the same slot the worker will pick up — the
+                // state machine release/acquire ordering on signalRender
+                // makes these writes visible before the worker's read.
+                auto& backBuf = framePresenter_->backBuffer();
+                auto rsnap = buildRasterSnapshot();
+                recordAppLayers(backBuf.appCommands,
+                                rsnap.vpWidth, rsnap.vpHeight,
+                                rsnap.insetTop, rsnap.insetRight, rsnap.insetBottom,
+                                rsnap.scrollY);
+                recordSystemPanelLayers(backBuf.systemCommands,
+                                        rsnap.vpWidth, rsnap.vpHeight);
+
+                framePresenter_->signalRender(rsnap);
                 uiDirty_ = false;
                 hasRenderedOnce_ = true;
                 lastUIRenderMs_ = now;

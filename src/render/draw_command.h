@@ -75,10 +75,21 @@ struct Cmd_EndFrame   {};
 // `canvasScene` is an opaque pointer (canvas::CanvasScene*) that survives the
 // emit→replay window — CanvasScenes are owned by the engine across frames.
 struct Cmd_LayerBreak {
-    enum LayerKind { Canvas2D, WebGL };
+    enum LayerKind {
+        Canvas2D,        // flush surface + push HTML layer + push Canvas2D layer + new surface
+        WebGL,           // flush surface + push HTML layer + push WebGL layer + new surface
+        HtmlSurface,     // flush surface + push HTML layer + new surface (panel boundary)
+    };
     int kind;                    // LayerKind
     void* canvasScene;           // canvas::CanvasScene* when kind==Canvas2D
     unsigned int directTexture;  // GL texture id when kind==WebGL
+    float x, y, w, h;            // ignored for HtmlSurface
+};
+
+// System-panel canvas: composite the canvas scene's snapshot onto the current
+// surface (no layer split). Replayer: scene->flushStaged(), snapshot, drawImage.
+struct Cmd_BlitCanvasInline {
+    void* canvasScene;           // canvas::CanvasScene*
     float x, y, w, h;
 };
 
@@ -119,7 +130,8 @@ using DrawCommand = std::variant<
     Cmd_FillConicGradient,
     Cmd_BeginFrame,
     Cmd_EndFrame,
-    Cmd_LayerBreak
+    Cmd_LayerBreak,
+    Cmd_BlitCanvasInline
 >;
 
 } // namespace bro::render

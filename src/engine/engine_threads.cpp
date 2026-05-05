@@ -82,9 +82,9 @@ void Engine::layoutThreadFunc() {
 }
 
 // ---------------------------------------------------------------------------
-// Raster thread — owns HTML draw traversal + GPU surface pool. Reads layout
-// data (read-only after main thread layout completes), produces GPU textures,
-// signals main thread via FramePresenter (state + GL fence).
+// Raster thread — owns the GPU surface pool + Skia/Ganesh context. Replays
+// command buffers recorded by the main thread; never reads the DOM. Produces
+// GPU textures and signals the main thread via FramePresenter.
 // ---------------------------------------------------------------------------
 
 void Engine::rasterThreadFunc() {
@@ -107,20 +107,14 @@ void Engine::rasterThreadFunc() {
                                            font.data.size(), font.weight, font.italic);
     }
 
-    // Separate FontManager so font handles are created against the raster
-    // renderer. The shared FontManager caches handles for the main thread's
-    // renderer — those handles are invalid on the raster thread's SkiaRenderer.
-    layout::FontManager rasterFontManager;
-    auto rasterDrawTraversal = std::make_unique<layout::DrawTraversal>(
-        rasterRenderer.get(), &rasterFontManager);
-
     LOG_INFO("Raster thread started");
 
     while (framePresenter_->waitForRequest()) {
         framePresenter_->markBusy();
         auto snap = framePresenter_->loadSnapshot();
 
-        // Back buffer to fill (FramePresenter knows which one).
+        // Same slot the main thread wrote command buffers into (1 - front_).
+        // The state machine guarantees main's writes happened-before this read.
         auto& backBuf = framePresenter_->backBuffer();
         backBuf.appLayers.clear();
         backBuf.systemLayers.clear();
@@ -128,23 +122,16 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->grContext()->resetContext();
         rasterRenderer->beginFrame(snap.vpWidth, snap.vpHeight);
 
-        // App layers (HTML interleaved with canvas/WebGL/scene-graph)
-        buildAppLayers(rasterRenderer.get(), *rasterDrawTraversal,
-                       htmlSurfacePool_, htmlSurfacePoolW_, htmlSurfacePoolH_,
-                       snap.vpWidth, snap.vpHeight,
-                       snap.insetTop, snap.insetRight, snap.insetBottom,
-                       snap.scrollY,
-                       backBuf.appLayers);
+        replayAppLayers(rasterRenderer.get(), backBuf.appCommands,
+                        htmlSurfacePool_, htmlSurfacePoolW_, htmlSurfacePoolH_,
+                        snap.vpWidth, snap.vpHeight,
+                        backBuf.appLayers);
 
-        // System panel layers (menu bar / preferences / splash). Layout runs
-        // on the raster thread too — safe because system DOM mutations happen
-        // on the main thread during JS phase.
-        buildSystemPanelLayers(rasterRenderer.get(), *rasterDrawTraversal,
-                               &rasterFontManager,
-                               systemSurfacePool_, systemSurfacePoolW_,
-                               systemSurfacePoolH_,
-                               snap.vpWidth, snap.vpHeight,
-                               backBuf.systemLayers);
+        replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
+                                systemSurfacePool_, systemSurfacePoolW_,
+                                systemSurfacePoolH_,
+                                snap.vpWidth, snap.vpHeight,
+                                backBuf.systemLayers);
 
         rasterRenderer->endFrame();
 

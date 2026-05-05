@@ -135,6 +135,10 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                     onLayerBreak_(c.kind, c.canvasScene, c.directTexture,
                                   c.x, c.y, c.w, c.h);
                 }
+            } else if constexpr (std::is_same_v<T, Cmd_BlitCanvasInline>) {
+                if (onBlitCanvasInline_) {
+                    onBlitCanvasInline_(c.canvasScene, c.x, c.y, c.w, c.h);
+                }
             }
         }, cmd);
     }

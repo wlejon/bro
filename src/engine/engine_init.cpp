@@ -16,6 +16,7 @@
 #include "platform/event_loop.h"
 #include "render/renderer.h"
 #include "render/raster_renderer.h"
+#include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "js/runtime.h"
@@ -335,8 +336,13 @@ Engine::Engine(const EngineConfig& config)
     gizmo_ = std::make_unique<GizmoManager>();
     js::GizmoBindings::install(jsRuntime_->getContext(), this);
 
-    // 5. Layout helpers
-    drawTraversal_ = std::make_unique<layout::DrawTraversal>(renderer_.get(), &fontManager_);
+    // 5. Layout helpers. drawTraversal_ writes through a RecordingRenderer
+    //    (wraps renderer_ for measurement + font handle issuance) so the paint
+    //    walk emits commands into a CommandBuffer instead of issuing Skia
+    //    work — the raster thread replays the buffer without touching the DOM.
+    //    textMetrics_ stays bound to renderer_ since it only does measurement.
+    recordingRenderer_ = std::make_unique<render::RecordingRenderer>(nullptr, renderer_.get());
+    drawTraversal_ = std::make_unique<layout::DrawTraversal>(recordingRenderer_.get(), &fontManager_);
     textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get(), &fontManager_);
 
     // 6. Load the application

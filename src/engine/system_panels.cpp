@@ -14,6 +14,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include "render/renderer.h"
+#include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include <include/gpu/ganesh/GrDirectContext.h>
@@ -995,19 +996,27 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
     if (!renderer || !doc.document) return;
 
     // System panels want 2D canvas children composited inline (the canvas
-    // *is* the panel). Install a layer-break callback that blits the canvas
-    // scene's surface straight onto the current target Skia canvas — no
-    // separate GPU texture layer for system canvases. If the renderer has
-    // a Ganesh context, bind the scene to it so Skia renders directly on
-    // the GPU and the snapshot→blit stays GPU→GPU (no CPU upload).
+    // *is* the panel). Emit a Cmd_BlitCanvasInline so the replayer performs
+    // the snapshot+drawImageRect on the raster thread's Skia context — at
+    // record time we don't have a target SkCanvas to draw onto, only a
+    // recording renderer that's accumulating commands. If the renderer
+    // happens to be a RecordingRenderer, route through it directly; otherwise
+    // (headless's direct path) fall back to inline Skia work.
+    auto* recorder = dynamic_cast<render::RecordingRenderer*>(renderer);
     auto* skiaRenderer = dynamic_cast<render::SkiaRenderer*>(renderer);
     GrDirectContext* panelGr = skiaRenderer ? skiaRenderer->grContext() : nullptr;
 
     traversal.setLayerBreakCallback(
-        [renderer, panelGr](canvas::CanvasScene* scene, unsigned int /*tex*/,
-                   float x, float y, float w, float h) {
+        [renderer, recorder, panelGr](canvas::CanvasScene* scene,
+                                       unsigned int /*tex*/,
+                                       float x, float y, float w, float h) {
             if (!scene || !renderer) return;
             if (w <= 0 || h <= 0) return;
+            if (recorder) {
+                recorder->recordBlitCanvasInline(scene, x, y, w, h);
+                return;
+            }
+            // Direct path (no command buffer between caller and Skia).
             if (panelGr) scene->setGrContext(panelGr);
             scene->flushStaged();
             auto* src = scene->surface();
@@ -1025,10 +1034,6 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
     traversal.draw(doc.document->documentElement(), 0, 0,
                    static_cast<float>(vpW), static_cast<float>(vpH));
 
-    // Scrollbar thumbs for overflow:auto|scroll descendants. Done after the
-    // content pass so thumbs render above element backgrounds, and always
-    // runs — one call site means decorations like this never go missing on
-    // one of the two render paths.
     drawElementScrollbars(renderer, doc.document->documentElement(),
                           0.0f, 0.0f);
 

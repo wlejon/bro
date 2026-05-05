@@ -30,7 +30,13 @@
 typedef struct SDL_GLContextState* SDL_GLContext;
 
 namespace bro::layout { struct KeyHandleResult; }
-namespace bro::render { class GLContext; class RasterRenderer; }
+namespace bro::render {
+    class GLContext;
+    class RasterRenderer;
+    class RecordingRenderer;
+    class CommandReplayer;
+    class CommandBuffer;
+}
 namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
@@ -395,31 +401,41 @@ private:
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
     void compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO = 0);
 
-    /// Build the app document's UI layer list — one HTML surface per
-    /// inter-canvas/WebGL/scene-graph slice, plus per-canvas Canvas entries.
-    /// Same routine as the windowed raster thread (uses the layer-break
-    /// callback). `pool` is the caller-owned surface pool (raster thread or
-    /// screenshot path). `poolW`/`poolH` track the pool's surface size for
-    /// invalidation on viewport resize.
-    void buildAppLayers(render::SkiaRenderer* renderer,
-                        layout::DrawTraversal& traversal,
-                        std::vector<render::SkiaRenderer::GPUSurface>& pool,
-                        int& poolW, int& poolH,
-                        int vpW, int vpH,
-                        int insetTop, int insetRight, int insetBottom,
-                        float scrollY,
-                        std::vector<UILayer>& outLayers);
+    /// Walk the app document and emit draw commands into `outBuffer`.
+    /// Run on the main thread after layout. The buffer is then handed to the
+    /// raster thread to replay against its Skia renderer. Layer-break and
+    /// inline-canvas commands sit inline in the buffer; the replayer's
+    /// handlers manage GPU surface pools at replay time.
+    void recordAppLayers(render::CommandBuffer& outBuffer,
+                         int vpW, int vpH,
+                         int insetTop, int insetRight, int insetBottom,
+                         float scrollY);
 
-    /// Build per-system-panel HTML surface layers. Mirrors the raster
-    /// thread's system panel block — one GPU-backed Skia surface per
-    /// visible panel, drawSystemPanelDoc into each, then push HTML layer.
-    void buildSystemPanelLayers(render::SkiaRenderer* renderer,
-                                layout::DrawTraversal& traversal,
-                                layout::FontManager* fontManager,
-                                std::vector<render::SkiaRenderer::GPUSurface>& pool,
-                                int& poolW, int& poolH,
-                                int vpW, int vpH,
-                                std::vector<UILayer>& outLayers);
+    /// Replay the previously-recorded app command buffer against `renderer`,
+    /// producing UILayers as a side-effect of layer-break commands. Run on
+    /// the raster thread (windowed) or main thread (headless).
+    void replayAppLayers(render::SkiaRenderer* renderer,
+                         const render::CommandBuffer& buffer,
+                         std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                         int& poolW, int& poolH,
+                         int vpW, int vpH,
+                         std::vector<UILayer>& outLayers);
+
+    /// Walk the visible system-panel documents and emit draw commands.
+    /// One bundle of commands per visible panel, separated by Cmd_LayerBreak
+    /// (kind=HTMLPanel) so the replayer can split them onto separate GPU
+    /// surfaces. Inline canvas blits use Cmd_BlitCanvasInline.
+    void recordSystemPanelLayers(render::CommandBuffer& outBuffer,
+                                 int vpW, int vpH);
+
+    /// Replay system-panel commands against `renderer`, producing one HTML
+    /// UILayer per panel.
+    void replaySystemPanelLayers(render::SkiaRenderer* renderer,
+                                 const render::CommandBuffer& buffer,
+                                 std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                                 int& poolW, int& poolH,
+                                 int vpW, int vpH,
+                                 std::vector<UILayer>& outLayers);
     void drawCrosshairGL();                  // windowed/headless GPU path
     void drawCrosshairSkia(SkCanvas* canvas); // headless CPU path
     void ensureReplacedElements(dom::Element* elem);
@@ -535,6 +551,12 @@ private:
         bool italic;
     };
     std::vector<LoadedFont> loadedFonts_;
+    // Recorder for the main-thread paint walk. Wraps renderer_ for synchronous
+    // queries (measureText, createFont) but appends mutating calls to a
+    // CommandBuffer instead of issuing Skia work. drawTraversal_ paints
+    // through this so the raster thread can replay the buffer without
+    // touching the DOM.
+    std::unique_ptr<render::RecordingRenderer> recordingRenderer_;
     std::unique_ptr<layout::DrawTraversal> drawTraversal_;
     std::unique_ptr<layout::SkiaTextMetrics> textMetrics_;
     layout::FontManager fontManager_;

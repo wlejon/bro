@@ -25,6 +25,7 @@
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
 #include "render/skia_backend.h"
+#include "render/recording_renderer.h"
 #include "scene/scene_graph.h"
 #include "physics/physics_world.h"
 #include "net/net_service.h"

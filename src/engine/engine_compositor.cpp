@@ -9,8 +9,16 @@
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "platform/sdl_window.h"
+#include "render/command_buffer.h"
+#include "render/command_replayer.h"
 #include "render/gl_context.h"
+#include "render/recording_renderer.h"
 #include "render/skia_backend.h"
+
+#include <include/core/SkCanvas.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkSamplingOptions.h>
+#include <include/core/SkSurface.h>
 
 #include <glad/gl.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
@@ -126,41 +134,103 @@ void Engine::drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-void Engine::buildAppLayers(render::SkiaRenderer* renderer,
-                            layout::DrawTraversal& traversal,
-                            std::vector<render::SkiaRenderer::GPUSurface>& pool,
-                            int& poolW, int& poolH,
-                            int vpW, int vpH,
-                            int insetTop, int insetRight, int insetBottom,
-                            float scrollY,
-                            std::vector<UILayer>& outLayers) {
-    if (!renderer || !renderer->grContext()) return;
+void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
+                             int vpW, int vpH,
+                             int insetTop, int insetRight, int insetBottom,
+                             float scrollY) {
+    if (!recordingRenderer_ || !drawTraversal_) return;
 
     int contentW = vpW - insetRight;
     int contentH = vpH - insetTop - insetBottom;
 
-    // Invalidate pool on viewport resize.
+    outBuffer.clear();
+    recordingRenderer_->setBuffer(&outBuffer);
+
+    // Layer-break callback emits Cmd_LayerBreak. The replayer's handler does
+    // the actual GPU surface management.
+    drawTraversal_->setLayerBreakCallback(
+        [this](canvas::CanvasScene* scene, unsigned int directTexture,
+               float x, float y, float w, float h) {
+            int kind = scene ? render::Cmd_LayerBreak::Canvas2D
+                             : render::Cmd_LayerBreak::WebGL;
+            recordingRenderer_->recordLayerBreak(
+                kind, scene, directTexture, x, y, w, h);
+        });
+
+    if (document_ && document_->documentElement()) {
+        drawTraversal_->setBasePath(document_->basePath());
+        drawTraversal_->draw(document_->documentElement(),
+                             0, static_cast<float>(insetTop) - scrollY,
+                             contentW, contentH, insetTop);
+
+        drawSelectionHighlight(recordingRenderer_.get(),
+                               static_cast<float>(insetTop) - scrollY);
+
+        if (inspector_.visible) {
+            dom::Element* highlight = inspector_.pickerMode && inspector_.pickerHover
+                ? inspector_.pickerHover
+                : inspector_.selected;
+            if (highlight) {
+                drawInspectorHighlight(recordingRenderer_.get(), highlight, scrollY,
+                                       /*insetLeft=*/0, insetTop,
+                                       contentW, contentH);
+            }
+        }
+    }
+
+    overlayMgr_.drawIfContext(OverlayContext::App, recordingRenderer_.get());
+
+    if (document_) {
+        float ct = static_cast<float>(insetTop);
+        float vh = static_cast<float>(contentH);
+        auto& vs = viewportScrollbar_.style();
+        auto m = viewportScrollbar_.layout(
+            static_cast<float>(contentW) - vs.width - vs.margin,
+            ct, vh, documentHeight_, vh, scrollY);
+        viewportScrollbar_.draw(recordingRenderer_.get(), m);
+
+        drawElementScrollbars(recordingRenderer_.get(),
+                              document_->documentElement(),
+                              0.0f, static_cast<float>(insetTop) - scrollY);
+    }
+
+    drawTraversal_->setLayerBreakCallback(nullptr);
+    recordingRenderer_->setBuffer(nullptr);
+}
+
+void Engine::replayAppLayers(render::SkiaRenderer* renderer,
+                             const render::CommandBuffer& buffer,
+                             std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                             int& poolW, int& poolH,
+                             int vpW, int vpH,
+                             std::vector<UILayer>& outLayers) {
+    if (!renderer || !renderer->grContext()) return;
+
     if (poolW != vpW || poolH != vpH) {
         for (auto& ps : pool) renderer->destroyGPUSurface(ps);
         pool.clear();
         poolW = vpW;
         poolH = vpH;
     }
+    if (pool.empty()) {
+        pool.push_back(renderer->createGPUSurface(vpW, vpH));
+    }
+    for (auto& ps : pool) {
+        renderer->rewrapGPUSurface(ps, vpW, vpH);
+    }
 
     int htmlLayerIdx = 0;
+    auto origSurface = renderer->switchSurface(pool[0].surface);
 
-    // Layer-break callback fires on canvas/WebGL/scene-graph elements
-    // encountered during the draw traversal. Each break: emit the current
-    // HTML layer (texture from pool[prev]), emit the canvas/WebGL/scene
-    // layer, switch the renderer to a fresh pool surface for subsequent
-    // HTML content.
-    traversal.setLayerBreakCallback(
-        [&](canvas::CanvasScene* scene, unsigned int directTexture,
+    render::CommandReplayer replayer(renderer);
+    replayer.setLayerBreakHandler(
+        [&](int kind, void* scenePtr, unsigned int directTexture,
             float x, float y, float w, float h) {
             int prevIdx = htmlLayerIdx;
             htmlLayerIdx++;
             while (htmlLayerIdx >= static_cast<int>(pool.size())) {
                 pool.push_back(renderer->createGPUSurface(vpW, vpH));
+                renderer->rewrapGPUSurface(pool.back(), vpW, vpH);
             }
             renderer->switchSurface(pool[htmlLayerIdx].surface);
 
@@ -171,96 +241,69 @@ void Engine::buildAppLayers(render::SkiaRenderer* renderer,
 
             UILayer canvasLayer;
             canvasLayer.type = UILayer::Canvas;
-            canvasLayer.canvasScene = scene;
-            canvasLayer.texture = directTexture;  // non-zero for WebGL/scene-graph
+            canvasLayer.canvasScene = static_cast<canvas::CanvasScene*>(scenePtr);
+            canvasLayer.texture = directTexture;
             canvasLayer.cx = x; canvasLayer.cy = y;
             canvasLayer.cw = w; canvasLayer.ch = h;
             outLayers.push_back(std::move(canvasLayer));
+            (void)kind;
         });
 
-    // Ensure pool has a GPU surface for HTML layer 0
-    if (pool.empty()) {
-        pool.push_back(renderer->createGPUSurface(vpW, vpH));
-    }
-    // Rewrap existing pool surfaces with fresh Skia wrappers
-    for (auto& ps : pool) {
-        renderer->rewrapGPUSurface(ps, vpW, vpH);
-    }
-    // Switch to pool surface for HTML layer 0
-    auto origSurface = renderer->switchSurface(pool[0].surface);
+    replayer.replay(buffer);
 
-    // Draw traversal — reads layout boxes and computed styles (read-only).
-    // App content is translated down by insetTop so the top strip is
-    // reserved for the engine-owned menu bar.
-    if (document_ && document_->documentElement()) {
-        traversal.setBasePath(document_->basePath());
-        traversal.draw(document_->documentElement(),
-                       0, static_cast<float>(insetTop) - scrollY,
-                       contentW, contentH, insetTop);
-
-        // Selection highlight overlay sits above text. Reads
-        // selectionSnapshot_ (built on main thread before we run).
-        drawSelectionHighlight(renderer,
-                               static_cast<float>(insetTop) - scrollY);
-
-        // Inspector box-model overlay. The picker hover wins over the static
-        // selection while picker mode is active so the user can preview boxes
-        // before clicking.
-        if (inspector_.visible) {
-            dom::Element* highlight = inspector_.pickerMode && inspector_.pickerHover
-                ? inspector_.pickerHover
-                : inspector_.selected;
-            if (highlight) {
-                drawInspectorHighlight(renderer, highlight, scrollY,
-                                       /*insetLeft=*/0, insetTop,
-                                       contentW, contentH);
-            }
-        }
-    }
-
-    // App-context overlay (dropdown / color picker / etc.)
-    overlayMgr_.drawIfContext(OverlayContext::App, renderer);
-
-    // Viewport scrollbar at the right edge of the app content area (which is
-    // contentW, not vpW, when the inspector is docked on the right).
-    if (document_) {
-        float ct = static_cast<float>(insetTop);
-        float vh = static_cast<float>(contentH);
-        auto& vs = viewportScrollbar_.style();
-        auto m = viewportScrollbar_.layout(
-            static_cast<float>(contentW) - vs.width - vs.margin,
-            ct, vh, documentHeight_, vh, scrollY);
-        viewportScrollbar_.draw(renderer, m);
-
-        drawElementScrollbars(renderer,
-                              document_->documentElement(),
-                              0.0f, static_cast<float>(insetTop) - scrollY);
-    }
-
-    // Capture the last HTML layer
+    // Capture the trailing HTML layer.
     renderer->switchSurface(origSurface);
     UILayer lastHtml;
     lastHtml.type = UILayer::HTML;
     lastHtml.texture = pool[htmlLayerIdx].texture;
     outLayers.push_back(std::move(lastHtml));
 
-    // Flush each pool surface's deferred Ganesh ops
+    // Flush each pool surface's deferred Ganesh ops.
     for (int i = 0; i <= htmlLayerIdx; ++i) {
         if (pool[i].surface && renderer->grContext()) {
             renderer->grContext()->flush(pool[i].surface.get());
         }
     }
-    traversal.setLayerBreakCallback(nullptr);
 }
 
-void Engine::buildSystemPanelLayers(render::SkiaRenderer* renderer,
-                                    layout::DrawTraversal& traversal,
-                                    layout::FontManager* fontManager,
-                                    std::vector<render::SkiaRenderer::GPUSurface>& pool,
-                                    int& poolW, int& poolH,
-                                    int vpW, int vpH,
-                                    std::vector<UILayer>& outLayers) {
-    if (!renderer || !renderer->grContext() || !isSystemVisible()) return;
+void Engine::recordSystemPanelLayers(render::CommandBuffer& outBuffer,
+                                     int vpW, int vpH) {
+    outBuffer.clear();
+    if (!recordingRenderer_ || !drawTraversal_ || !isSystemVisible()) return;
+
+    // Layout still runs on main thread using textMetrics_ (paired with
+    // renderer_, which the recording renderer also delegates to).
+    layoutSystemPanels(*textMetrics_);
+
+    recordingRenderer_->setBuffer(&outBuffer);
+
+    bool first = true;
+    for (auto& sdoc : systemDocs_) {
+        if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
+
+        // Between panels, emit an HtmlSurface boundary so the replayer
+        // captures the current panel into a UILayer and starts a new surface.
+        if (!first) {
+            recordingRenderer_->recordLayerBreak(
+                render::Cmd_LayerBreak::HtmlSurface, nullptr, 0, 0, 0, 0, 0);
+        }
+        first = false;
+
+        drawSystemPanelDoc(recordingRenderer_.get(), *drawTraversal_, sdoc, vpW, vpH);
+    }
+
+    recordingRenderer_->setBuffer(nullptr);
+    systemDirty_ = false;
+}
+
+void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
+                                     const render::CommandBuffer& buffer,
+                                     std::vector<render::SkiaRenderer::GPUSurface>& pool,
+                                     int& poolW, int& poolH,
+                                     int vpW, int vpH,
+                                     std::vector<UILayer>& outLayers) {
+    if (!renderer || !renderer->grContext()) return;
+    if (buffer.commandCount() == 0) return;
 
     if (poolW != vpW || poolH != vpH) {
         for (auto& ps : pool) renderer->destroyGPUSurface(ps);
@@ -269,33 +312,64 @@ void Engine::buildSystemPanelLayers(render::SkiaRenderer* renderer,
         poolH = vpH;
     }
 
-    layout::SkiaTextMetrics sysMetrics(renderer, fontManager);
-    layoutSystemPanels(sysMetrics);
+    auto ensurePoolAt = [&](size_t idx) {
+        while (idx >= pool.size()) {
+            pool.push_back(renderer->createGPUSurface(vpW, vpH));
+            renderer->rewrapGPUSurface(pool.back(), vpW, vpH);
+        }
+    };
 
     size_t panelIdx = 0;
-    for (auto& sdoc : systemDocs_) {
-        if (!isSystemDocVisible(sdoc) || !sdoc.document) continue;
+    ensurePoolAt(panelIdx);
+    renderer->rewrapGPUSurface(pool[panelIdx], vpW, vpH);
+    auto origSurface = renderer->switchSurface(pool[panelIdx].surface);
 
-        while (panelIdx >= pool.size()) {
-            pool.push_back(renderer->createGPUSurface(vpW, vpH));
-        }
-        renderer->rewrapGPUSurface(pool[panelIdx], vpW, vpH);
-        auto prev = renderer->switchSurface(pool[panelIdx].surface);
+    auto* grCtx = renderer->grContext();
 
-        drawSystemPanelDoc(renderer, traversal, sdoc, vpW, vpH);
+    render::CommandReplayer replayer(renderer);
+    replayer.setLayerBreakHandler(
+        [&](int kind, void* /*scene*/, unsigned int /*tex*/,
+            float, float, float, float) {
+            if (kind != render::Cmd_LayerBreak::HtmlSurface) return;
+            // Capture current panel into a UILayer, advance to next surface.
+            if (grCtx) grCtx->flush(pool[panelIdx].surface.get());
+            UILayer panelLayer;
+            panelLayer.type = UILayer::HTML;
+            panelLayer.texture = pool[panelIdx].texture;
+            outLayers.push_back(std::move(panelLayer));
 
-        UILayer panelLayer;
-        panelLayer.type = UILayer::HTML;
-        panelLayer.texture = pool[panelIdx].texture;
-        outLayers.push_back(std::move(panelLayer));
+            panelIdx++;
+            ensurePoolAt(panelIdx);
+            renderer->rewrapGPUSurface(pool[panelIdx], vpW, vpH);
+            renderer->switchSurface(pool[panelIdx].surface);
+        });
+    replayer.setBlitCanvasInlineHandler(
+        [&](void* scenePtr, float x, float y, float w, float h) {
+            auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
+            if (!scene || w <= 0 || h <= 0) return;
+            if (grCtx) scene->setGrContext(grCtx);
+            scene->flushStaged();
+            auto* src = scene->surface();
+            if (!src) return;
+            auto img = src->makeImageSnapshot();
+            if (!img) return;
+            auto* c = renderer->getCanvas();
+            if (!c) return;
+            SkRect dst = SkRect::MakeXYWH(x, y, w, h);
+            c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
+            scene->clearDirty();
+        });
 
-        if (renderer->grContext()) {
-            renderer->grContext()->flush(pool[panelIdx].surface.get());
-        }
-        renderer->switchSurface(prev);
-        panelIdx++;
-    }
-    systemDirty_ = false;
+    replayer.replay(buffer);
+
+    // Capture the final panel.
+    if (grCtx) grCtx->flush(pool[panelIdx].surface.get());
+    UILayer panelLayer;
+    panelLayer.type = UILayer::HTML;
+    panelLayer.texture = pool[panelIdx].texture;
+    outLayers.push_back(std::move(panelLayer));
+
+    renderer->switchSurface(origSurface);
 }
 
 void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO) {

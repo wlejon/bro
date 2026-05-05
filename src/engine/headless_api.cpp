@@ -10,6 +10,7 @@
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
+#include "render/command_buffer.h"
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
@@ -375,18 +376,22 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     //    isDirty so it's safe to call ahead).
     if (isSystemVisible()) tickSystemPanels(virtualTime_);
 
-    // 5. Build the layer list — same routine the raster thread uses.
+    // 5. Record commands on this (main) thread, then replay against the live
+    //    Skia renderer — same record/replay split the windowed raster thread
+    //    uses, just both halves on one thread.
     std::vector<UILayer> appLayers, systemLayers;
+    render::CommandBuffer appCmds, sysCmds;
     skia->beginFrame(w, h);
-    buildAppLayers(skia, *drawTraversal_,
-                   screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
-                   w, h, contentTop(), contentRight(), contentBottom(), scrollY_,
-                   appLayers);
-    buildSystemPanelLayers(skia, *drawTraversal_, &fontManager_,
-                           screenshotSystemPool_, screenshotSystemPoolW_,
-                           screenshotSystemPoolH_,
-                           w, h,
-                           systemLayers);
+    recordAppLayers(appCmds, w, h,
+                    contentTop(), contentRight(), contentBottom(), scrollY_);
+    recordSystemPanelLayers(sysCmds, w, h);
+    replayAppLayers(skia, appCmds,
+                    screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
+                    w, h, appLayers);
+    replaySystemPanelLayers(skia, sysCmds,
+                            screenshotSystemPool_, screenshotSystemPoolW_,
+                            screenshotSystemPoolH_,
+                            w, h, systemLayers);
     skia->endFrame();
 
     // 6. Compositing FBO target.
