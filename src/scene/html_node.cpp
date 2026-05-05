@@ -3,7 +3,6 @@
 #include "dom/element.h"
 #include "render/skia_backend.h"
 #include "layout/draw_traversal.h"
-#include "layout/font_manager.h"
 #include "layout/skia_text_metrics.h"
 #include "util/log.h"
 
@@ -71,9 +70,8 @@ void HtmlNode::setPxPerUnit(float p) {
     pxPerUnit_ = (p > 0.0f) ? p : 100.0f;
 }
 
-void HtmlNode::materializePending(render::SkiaRenderer* renderer,
-                                   layout::FontManager* fontMgr) {
-    if (!doc_ || !renderer || !fontMgr) return;
+void HtmlNode::materializePending(render::SkiaRenderer* renderer) {
+    if (!doc_ || !renderer) return;
     // Imperative JS edits via node.root bump Document::dirty_ directly
     // without touching ours — pick that up here.
     if (!dirty_ && !doc_->isDirty()) return;
@@ -81,7 +79,7 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer,
     int w = std::max(1, (int)std::ceil(layoutW_));
     int h = std::max(1, (int)std::ceil(layoutH_));
 
-    layout::SkiaTextMetrics metrics(renderer, fontMgr);
+    layout::SkiaTextMetrics metrics(renderer);
     doc_->resolveStyles();
     doc_->performLayout((float)w, (float)h, metrics);
     doc_->clearDirty();
@@ -100,7 +98,7 @@ void HtmlNode::materializePending(render::SkiaRenderer* renderer,
     // Hand the caller's renderer our surface for this draw pass, then restore.
     sk_sp<SkSurface> prev = renderer->switchSurface(cpuSurface);
     {
-        layout::DrawTraversal dt(renderer, fontMgr);
+        layout::DrawTraversal dt(renderer);
         dom::Element* drawRoot = doc_->documentElement();
         if (drawRoot) dt.draw(drawRoot, 0.0f, 0.0f, w, h);
     }

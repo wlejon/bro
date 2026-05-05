@@ -255,11 +255,8 @@ void ElInput::getContentSize(float& w, float& h, float maxWidth) {
         if (elem_ && renderer_) {
             std::string val = elem_->getAttribute("value");
             if (!val.empty()) {
-                auto fh = getFontHandle();
-                if (fh) {
-                    auto tm = renderer_->measureText(val, fh);
-                    labelW = tm.width;
-                }
+                auto tm = renderer_->measureText(val, getFontRef());
+                labelW = tm.width;
             }
         }
         w = std::max(80.0f, std::ceil(labelW));
@@ -270,13 +267,12 @@ void ElInput::getContentSize(float& w, float& h, float maxWidth) {
     h = 20;
 }
 
-uint64_t ElInput::getFontHandle() const {
-    if (!elem_ || !renderer_) return 0;
-    if (cachedFontHandle_) return cachedFontHandle_;
+render::FontRef ElInput::getFontRef() const {
+    if (!elem_) return {std::string_view{"Arial"}, 16.0f, 400, false};
 
     auto& style = elem_->computedStyle();
 
-    std::string family = "Arial";
+    std::string_view family = "Arial";
     auto it = style.find("font-family");
     if (it != style.end() && !it->second.empty()) family = it->second;
 
@@ -288,8 +284,7 @@ uint64_t ElInput::getFontHandle() const {
         if (end != sit->second.c_str() && v > 0) size = v;
     }
 
-    cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
-    return cachedFontHandle_;
+    return render::FontRef{family, size, 400, false};
 }
 
 void ElInput::draw(render::Renderer* renderer,
@@ -302,10 +297,7 @@ void ElInput::draw(render::Renderer* renderer,
     // e.g. raster thread has its own SkiaRenderer). Leave it set — the
     // raster thread is idle when the main thread uses control methods,
     // so no race condition.
-    if (renderer != renderer_) {
-        renderer_ = renderer;
-        cachedFontHandle_ = 0;  // invalidate — handle belongs to old renderer
-    }
+    renderer_ = renderer;
 
     float x = box.contentRect.x + offsetX;
     float y = box.contentRect.y + offsetY;
@@ -345,10 +337,8 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         isPlaceholder = true;
     }
 
-    uint64_t fontHandle = getFontHandle();
-    if (!fontHandle) return;
-
-    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
+    render::FontRef fontRef = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
     float textY = lm.baselineY(y, h);
     float drawX = x;
 
@@ -370,7 +360,7 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         }
         render::Color color = isPlaceholder ? render::Color{128, 128, 128, 180}
                                             : textColor;
-        renderer_->drawText(text, drawX, textY, fontHandle, color);
+        renderer_->drawText(text, drawX, textY, fontRef, color);
     }
 
     if (focused_ && isTextType(nullptr)) {
@@ -390,7 +380,7 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         std::string beforeCursor = val.substr(0, cpos);
         float cursorX = drawX;
         if (!beforeCursor.empty()) {
-            auto ctm = renderer_->measureText(beforeCursor, fontHandle);
+            auto ctm = renderer_->measureText(beforeCursor, fontRef);
             cursorX += ctm.width;
         }
         float cursorTop = textY - lm.ascent;

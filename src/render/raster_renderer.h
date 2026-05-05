@@ -38,14 +38,11 @@ public:
                             float blur, float spread,
                             Color color, bool inset) override;
 
-    void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color c) override;
+    void drawText(std::string_view text, float x, float y, FontRef font, Color c) override;
     void drawTextEx(std::string_view text, float x, float y,
-                    uint64_t font_handle, Color c,
+                    FontRef font, Color c,
                     float letterSpacing, float blur) override;
-    TextMetrics measureText(std::string_view text, uint64_t font_handle) override;
-
-    uint64_t createFont(std::string_view family, float size, int weight, bool italic) override;
-    void deleteFont(uint64_t h) override;
+    TextMetrics measureText(std::string_view text, FontRef font) override;
 
     void drawLine(float x1, float y1, float x2, float y2, Color c, float thickness) override;
     void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
@@ -110,11 +107,31 @@ private:
         std::unique_ptr<SkFont> font;
         SkFontStyle style;
     };
+    struct FontKey {
+        std::string family;
+        float size;
+        int weight;
+        bool italic;
+        bool operator==(const FontKey&) const = default;
+    };
+    struct FontKeyHash {
+        size_t operator()(const FontKey& k) const noexcept {
+            size_t h = std::hash<std::string>{}(k.family);
+            auto mix = [&](size_t v) {
+                h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            };
+            mix(std::hash<float>{}(k.size));
+            mix(std::hash<int>{}(k.weight));
+            mix(std::hash<bool>{}(k.italic));
+            return h;
+        }
+    };
 
     sk_sp<SkSurface> surface_;
     SkCanvas* canvas_ = nullptr;
-    std::unordered_map<uint64_t, FontEntry> fonts_;
-    uint64_t nextHandle_ = 1;
+    std::unordered_map<FontKey, FontEntry, FontKeyHash> fonts_;
+
+    const FontEntry* getOrCreateFont(FontRef font);
 
     sk_sp<SkFontMgr> fontMgr_;
     FontFallbackCache fallbackCache_;

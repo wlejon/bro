@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -289,8 +290,8 @@ static std::string getOverflowX(const htmlayout::css::ComputedStyle& style) {
     return "visible";
 }
 
-DrawTraversal::DrawTraversal(render::Renderer* renderer, FontManager* fontManager)
-    : renderer_(renderer), fontManager_(fontManager) {}
+DrawTraversal::DrawTraversal(render::Renderer* renderer)
+    : renderer_(renderer) {}
 
 // ---------------------------------------------------------------------------
 // Stacking-context helpers (CSS 2.1 Appendix E)
@@ -871,11 +872,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                         }
                     }
                     std::string num = std::to_string(idx) + ".";
-                    uint64_t font = getFontHandle(elem);
-                    if (font) {
-                        auto tm = renderer_->measureText(num, font);
-                        renderer_->drawText(num, markerX - tm.width, markerY + tm.ascent / 2, font, mc);
-                    }
+                    render::FontRef font = getFontRef(elem);
+                    auto tm = renderer_->measureText(num, font);
+                    renderer_->drawText(num, markerX - tm.width, markerY + tm.ascent / 2, font, mc);
                 }
             }
         }
@@ -1981,13 +1980,15 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
             if (text.empty()) return;
         }
     }
-    uint64_t fontHandle = getFontHandle(parent);
-    if (!fontHandle) return;
+    render::FontRef fontRef = getFontRef(parent);
 
-    auto metrics = fontManager_->getMetrics(fontHandle);
-    float ascent = metrics.ascent;
-    float descent = metrics.descent;
-    float lineH = metrics.height;
+    // Pull vertical metrics straight from the renderer (empty-text measureText
+    // returns just font metrics, no glyph shaping).
+    auto baseMetrics = renderer_->measureText("", fontRef);
+    float ascent  = baseMetrics.ascent;
+    float descent = baseMetrics.descent;
+    float lineH   = std::round(baseMetrics.ascent + baseMetrics.descent + baseMetrics.leading);
+    if (lineH <= 0) lineH = fontRef.size * 1.2f;
 
     // Apply text-transform
     auto ttIt = style.find("text-transform");
@@ -2047,7 +2048,7 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
         auto& pbox = parent->layoutBox();
         float availW = pbox.contentRect.width;
         if (availW > 0) {
-            auto tm = renderer_->measureText(text, fontHandle);
+            auto tm = renderer_->measureText(text, fontRef);
             if (taIt->second == "center")
                 textAlignOffset = (availW - tm.width) / 2.0f;
             else
@@ -2073,23 +2074,23 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
 
     // Helper to draw a single line of text with shadow and decoration
     auto drawLine = [&](std::string_view line, float lx, float ly) {
-        auto tm = renderer_->measureText(line, fontHandle);
+        auto tm = renderer_->measureText(line, fontRef);
 
         // Draw text shadow first (behind text). drawTextEx applies the blur
         // mask filter to the shadow paint so a non-zero blur radius produces
         // a real Gaussian halo instead of a sharp colored copy.
         if (hasShadow) {
             renderer_->drawTextEx(line, lx + shadow.dx, ly + shadow.dy,
-                                  fontHandle, shadow.color,
+                                  fontRef, shadow.color,
                                   letterSpacing, shadow.blur);
         }
 
         // Draw the text. Letter-spacing is applied here so visible glyph
         // advances match the widths the layout assumed.
         if (letterSpacing != 0.0f) {
-            renderer_->drawTextEx(line, lx, ly, fontHandle, color, letterSpacing, 0.0f);
+            renderer_->drawTextEx(line, lx, ly, fontRef, color, letterSpacing, 0.0f);
         } else {
-            renderer_->drawText(line, lx, ly, fontHandle, color);
+            renderer_->drawText(line, lx, ly, fontRef, color);
         }
 
         // Draw text-decoration
@@ -2198,10 +2199,8 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
     if (styleIt != style.end()) {
         italic = (styleIt->second == "italic" || styleIt->second == "oblique");
     }
-    uint64_t fontHandle = fontManager_->createFont(renderer_, family, size, weight, italic);
-    if (!fontHandle) return;
-
-    auto fm = fontManager_->getMetrics(fontHandle);
+    render::FontRef fontRef{family, size, weight, italic};
+    auto fm = renderer_->measureText("", fontRef);
     float ascent = fm.ascent;
 
     render::Color color = {0, 0, 0, 255};
@@ -2244,27 +2243,36 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
         float ly = baseY + run.y + ascent;
         if (hasShadow) {
             renderer_->drawTextEx(run.text, lx + shadow.dx, ly + shadow.dy,
-                                  fontHandle, shadow.color,
+                                  fontRef, shadow.color,
                                   letterSpacing, shadow.blur);
         }
         if (letterSpacing != 0.0f) {
-            renderer_->drawTextEx(run.text, lx, ly, fontHandle, color, letterSpacing, 0.0f);
+            renderer_->drawTextEx(run.text, lx, ly, fontRef, color, letterSpacing, 0.0f);
         } else {
-            renderer_->drawText(run.text, lx, ly, fontHandle, color);
+            renderer_->drawText(run.text, lx, ly, fontRef, color);
         }
     }
 }
 
-uint64_t DrawTraversal::getFontHandle(dom::Element* elem) {
+render::FontRef DrawTraversal::getFontRef(dom::Element* elem) {
     auto& style = elem->computedStyle();
 
-    std::string family = "Arial";
+    // Family: borrow the string from computedStyle. Quoted forms get unquoted
+    // into a side string stashed on the element so the string_view stays
+    // valid until the next style resolution.
+    std::string_view family = "Arial";
     auto famIt = style.find("font-family");
     if (famIt != style.end() && !famIt->second.empty()) {
-        family = famIt->second;
-        // Remove quotes
-        if (family.front() == '"' || family.front() == '\'') {
-            family = family.substr(1, family.size() - 2);
+        const std::string& v = famIt->second;
+        if (!v.empty() && (v.front() == '"' || v.front() == '\'')) {
+            // Strip surrounding quotes via a substring view — the underlying
+            // string in computedStyle is stable for the draw pass.
+            if (v.size() >= 2 && v.back() == v.front())
+                family = std::string_view(v).substr(1, v.size() - 2);
+            else
+                family = v;
+        } else {
+            family = v;
         }
     }
 
@@ -2296,7 +2304,7 @@ uint64_t DrawTraversal::getFontHandle(dom::Element* elem) {
         italic = (styleIt->second == "italic" || styleIt->second == "oblique");
     }
 
-    return fontManager_->createFont(renderer_, family, size, weight, italic);
+    return render::FontRef{family, size, weight, italic};
 }
 
 // Decode a single percent-encoded (URL-encoded) string in place semantics.

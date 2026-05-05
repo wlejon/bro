@@ -18,13 +18,12 @@ namespace bro::render {
 //      shares one DrawTraversal but sometimes paints straight to a Skia
 //      surface without going through record/replay.
 //
-// Query calls (measureText, createFont, deleteFont, registerCustomFont)
-// always delegate to `measureRenderer` — DrawTraversal needs real font
-// metrics to lay out text, and FontManager wants real handles.
+// Query calls (measureText, registerCustomFont) always delegate to
+// `measureRenderer` — DrawTraversal needs real font metrics to lay out text.
 //
 // Each Cmd_DrawText embeds the full font descriptor (family/size/weight/
-// italic) — handles aren't transferable across threads, so the replayer
-// re-creates fonts on its own renderer.
+// italic). The replayer re-resolves it against its own renderer's font cache,
+// so font state never has to cross thread boundaries.
 //
 // Thread-safe to record on one thread and replay on another, provided the
 // caller does not mutate the buffer during replay (typical pattern: ping-pong
@@ -61,14 +60,12 @@ public:
                             Color color, bool inset) override;
 
     void drawText(std::string_view text, float x, float y,
-                  uint64_t font_handle, Color color) override;
-    TextMetrics measureText(std::string_view text, uint64_t font_handle) override;
+                  FontRef font, Color color) override;
+    TextMetrics measureText(std::string_view text, FontRef font) override;
     void drawTextEx(std::string_view text, float x, float y,
-                    uint64_t font_handle, Color color,
+                    FontRef font, Color color,
                     float letterSpacing, float blur) override;
 
-    uint64_t createFont(std::string_view family, float size, int weight, bool italic) override;
-    void deleteFont(uint64_t font_handle) override;
     bool registerCustomFont(const std::string& family,
                             const void* data, size_t len,
                             int weight, bool italic) override;
@@ -134,22 +131,8 @@ public:
     void recordBlitCanvasInline(void* canvasScene, float x, float y, float w, float h);
 
 private:
-    // FontManager calls createFont() to register fonts and gets back handles
-    // from the measure renderer. We track each handle's descriptor so
-    // drawText() can embed the full descriptor in the recorded command.
-    struct FontDesc {
-        uint64_t    handle;
-        std::string family;
-        float       size;
-        int         weight;
-        bool        italic;
-    };
-
-    const FontDesc* findFont(uint64_t handle) const;
-
-    CommandBuffer*        buffer_;
-    Renderer*             measureRenderer_;
-    std::vector<FontDesc> fonts_;
+    CommandBuffer* buffer_;
+    Renderer*      measureRenderer_;
 };
 
 } // namespace bro::render

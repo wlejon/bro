@@ -400,7 +400,7 @@ void Engine::run() {
         //      same thread that reads it during style resolution + layout.
         if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
             for (auto& sg : sceneGraphs_) {
-                if (sg.graph) sg.graph->materializeHtmlNodes(skia, &fontManager_);
+                if (sg.graph) sg.graph->materializeHtmlNodes(skia);
             }
         }
 

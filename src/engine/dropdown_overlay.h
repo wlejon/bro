@@ -45,7 +45,7 @@ private:
     float fontSize_;
     SelectCallback onSelect_;
 
-    uint64_t fontHandle_ = 0;
+    bool metricsResolved_ = false;
     float lineH_ = 20.0f;
     float ascent_ = 16.0f;
 };

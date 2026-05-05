@@ -86,9 +86,8 @@ private:
     int hexCursor_ = 0;
     bool hexFocused_ = false;
 
-    // Cached font
-    uint64_t font_ = 0;
-    uint64_t fontSmall_ = 0;
+    // Cached line metrics (resolved on first paint).
+    bool fontMetricsResolved_ = false;
     float fontAscent_ = 0.0f;
     float fontSmallAscent_ = 0.0f;
 

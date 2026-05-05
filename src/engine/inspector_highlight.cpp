@@ -133,8 +133,8 @@ void drawInspectorHighlight(render::Renderer* renderer, dom::Element* el,
 
     // Numeric edge labels for margin and padding sides — only drawn when the
     // strip is fat enough to actually fit the digits without overflowing into
-    // the next ring. Skia caches typeface lookups so creating per-frame is OK.
-    uint64_t edgeFont = renderer->createFont("Consolas", kEdgeFontSize, 400, false);
+    // the next ring.
+    render::FontRef edgeFont{std::string_view{"Consolas"}, kEdgeFontSize, 400, false};
     auto strLabel = [&](float x, float y, const std::string& s, render::Color c) {
         renderer->drawText(s, x, y, edgeFont, c);
     };
@@ -170,7 +170,7 @@ void drawInspectorHighlight(render::Renderer* renderer, dom::Element* el,
 
     // Header label: <tag.classes#id>  W × H px. Anchored above the border
     // rect when there's room, otherwise below it.
-    uint64_t labelFont = renderer->createFont("Consolas", kLabelFontSize, 600, false);
+    render::FontRef labelFont{std::string_view{"Consolas"}, kLabelFontSize, 600, false};
     std::string tag = el->tagName();
     for (auto& c : tag) c = static_cast<char>(std::tolower(c));
     std::string idAttr = el->getAttribute("id");
@@ -205,9 +205,6 @@ void drawInspectorHighlight(render::Renderer* renderer, dom::Element* el,
     renderer->drawText(tagText, labelX + 7.0f, textY, labelFont, kLabelTagFg);
     renderer->drawText(dimText, labelX + 7.0f + tagM.width, textY,
                        labelFont, kLabelDimFg);
-
-    renderer->deleteFont(labelFont);
-    renderer->deleteFont(edgeFont);
 }
 
 } // namespace bro::engine

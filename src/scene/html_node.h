@@ -9,7 +9,6 @@
 
 namespace bro::dom { class Document; class Element; }
 namespace bro::render { class SkiaRenderer; }
-namespace bro::layout { class FontManager; }
 
 namespace bro::scene {
 
@@ -57,9 +56,8 @@ public:
 
     /// If dirty, resolve styles + layout + paint the subtree and upload the
     /// pixels into the GL texture. Must run on the main/GL thread with a
-    /// Skia renderer + FontManager registered on that thread.
-    void materializePending(render::SkiaRenderer* renderer,
-                            layout::FontManager* fontMgr);
+    /// Skia renderer registered on that thread.
+    void materializePending(render::SkiaRenderer* renderer);
 
     GLuint textureId() const { return texture_; }
     int textureWidth() const { return texW_; }

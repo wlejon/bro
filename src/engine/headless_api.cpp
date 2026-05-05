@@ -128,7 +128,7 @@ void Engine::flush() {
     // size is zero.
     if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
         for (auto& sg : sceneGraphs_) {
-            if (sg.graph) sg.graph->materializeHtmlNodes(skia, &fontManager_);
+            if (sg.graph) sg.graph->materializeHtmlNodes(skia);
         }
     }
     for (auto& sg : sceneGraphs_) {
@@ -275,7 +275,7 @@ void Engine::advanceTime(double ms) {
         if (skia) {
             for (auto& sg : sceneGraphs_) {
                 if (sg.graph) {
-                    sg.graph->materializeHtmlNodes(skia, &fontManager_);
+                    sg.graph->materializeHtmlNodes(skia);
                 }
             }
         }
@@ -355,7 +355,7 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     // 2. Materialize HtmlNodes + render scene graphs (windowed path runs both
     //    on the main thread before signaling raster).
     for (auto& sg : sceneGraphs_) {
-        if (sg.graph) sg.graph->materializeHtmlNodes(skia, &fontManager_);
+        if (sg.graph) sg.graph->materializeHtmlNodes(skia);
     }
     for (auto& sg : sceneGraphs_) {
         if (sg.graph) sg.graph->render();

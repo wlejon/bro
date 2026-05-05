@@ -15,7 +15,7 @@
 #include <vector>
 #include <functional>
 
-namespace bro::layout { class FontManager; class LayoutNodeAdapter; }
+namespace bro::layout { class LayoutNodeAdapter; }
 namespace bro::render { class Renderer; }
 namespace bro::engine { class TransitionManager; class AnimationManager; }
 

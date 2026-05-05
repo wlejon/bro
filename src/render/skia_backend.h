@@ -59,14 +59,11 @@ public:
                             float blur, float spread,
                             Color color, bool inset) override;
 
-    void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) override;
+    void drawText(std::string_view text, float x, float y, FontRef font, Color color) override;
     void drawTextEx(std::string_view text, float x, float y,
-                    uint64_t font_handle, Color color,
+                    FontRef font, Color color,
                     float letterSpacing, float blur) override;
-    TextMetrics measureText(std::string_view text, uint64_t font_handle) override;
-
-    uint64_t createFont(std::string_view family, float size, int weight, bool italic) override;
-    void deleteFont(uint64_t font_handle) override;
+    TextMetrics measureText(std::string_view text, FontRef font) override;
 
     void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) override;
     void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
@@ -156,11 +153,6 @@ public:
     /// Access the UI overlay GL texture (BGRA8, premultiplied alpha).
     GLuint getUITexture() const { return uiTexture_; }
 
-    /// Render text to a GL texture (for scene-layer text).
-    /// Caller does NOT own the texture — it is cached internally.
-    GLuint renderTextToTexture(std::string_view text, uint64_t font_handle,
-                               Color color, int& outW, int& outH);
-
     GLContext* gl() const { return gl_; }
 
     SkCanvas* getCanvas() const override { return canvas_; }
@@ -189,10 +181,33 @@ private:
         std::unique_ptr<SkFont> font;
         SkFontStyle style;
     };
-    std::unordered_map<uint64_t, FontEntry> fonts_;
-    uint64_t next_font_handle_ = 1;
+    struct FontKey {
+        std::string family;
+        float size;
+        int weight;
+        bool italic;
+        bool operator==(const FontKey&) const = default;
+    };
+    struct FontKeyHash {
+        size_t operator()(const FontKey& k) const noexcept {
+            size_t h = std::hash<std::string>{}(k.family);
+            auto mix = [&](size_t v) {
+                h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            };
+            mix(std::hash<float>{}(k.size));
+            mix(std::hash<int>{}(k.weight));
+            mix(std::hash<bool>{}(k.italic));
+            return h;
+        }
+    };
+    std::unordered_map<FontKey, FontEntry, FontKeyHash> fonts_;
 
-    // Persistent system font manager — shared by createFont and the font-
+    // Resolve a FontRef to a cached FontEntry. Builds the SkFont on first miss
+    // (consults customFonts_ + the platform font manager). Always returns a
+    // pointer into the cache; the entry stays valid for the renderer's life.
+    const FontEntry* getOrCreateFont(FontRef font);
+
+    // Persistent system font manager — shared by font creation and the font-
     // fallback path so per-glyph matchFamilyStyleCharacter lookups reuse it.
     sk_sp<SkFontMgr> fontMgr_;
     FontFallbackCache fallbackCache_;
@@ -206,10 +221,6 @@ private:
         sk_sp<SkTypeface> typeface;
     };
     std::vector<CustomFont> customFonts_;
-
-    // Cached text textures for scene-layer rendering
-    struct TextCacheEntry { GLuint tex; int w; int h; };
-    std::unordered_map<std::string, TextCacheEntry> textTexCache_;
 
     // Pending pixel data for upload
     bool pixelsPending_ = false;

@@ -23,7 +23,6 @@
 namespace bro::canvas { class CanvasScene; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::render { class SkiaRenderer; }
-namespace bro::layout { class FontManager; }
 namespace brogameagent { class World; }
 
 namespace bro::scene {
@@ -276,8 +275,7 @@ public:
     /// Iterate all HtmlNodes and run dirty layout/paint/GL upload. Runs on
     /// the main/GL thread before scene render so the detached Documents stay
     /// serialized with JS mutations.
-    void materializeHtmlNodes(render::SkiaRenderer* renderer,
-                              layout::FontManager* fontManager);
+    void materializeHtmlNodes(render::SkiaRenderer* renderer);
 
     /// True if any HtmlNode's DOM subtree is dirty. Read on main thread to
     /// force a frame when only scene-graph HTML content has changed.

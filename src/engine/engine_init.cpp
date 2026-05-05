@@ -342,8 +342,8 @@ Engine::Engine(const EngineConfig& config)
     //    work — the raster thread replays the buffer without touching the DOM.
     //    textMetrics_ stays bound to renderer_ since it only does measurement.
     recordingRenderer_ = std::make_unique<render::RecordingRenderer>(nullptr, renderer_.get());
-    drawTraversal_ = std::make_unique<layout::DrawTraversal>(recordingRenderer_.get(), &fontManager_);
-    textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get(), &fontManager_);
+    drawTraversal_ = std::make_unique<layout::DrawTraversal>(recordingRenderer_.get());
+    textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get());
 
     // 6. Load the application
     manifest_ = AppLoader::loadApp(config.appDir, &assetMounts_);

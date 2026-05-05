@@ -117,10 +117,6 @@ SkiaRenderer::SkiaRenderer(GLContext& gl) : gl_(&gl) {
 }
 
 SkiaRenderer::~SkiaRenderer() {
-    for (auto& [k, e] : textTexCache_) {
-        gl_->deleteTexture(e.tex);
-    }
-    textTexCache_.clear();
     fonts_.clear();
     surface_.reset();
     if (uiTexture_) gl_->deleteTexture(uiTexture_);
@@ -158,10 +154,10 @@ void SkiaRenderer::fillRect(float x, float y, float w, float h, Color color) {
     canvas_->drawRect(SkRect::MakeXYWH(x, y, w, h), paint);
 }
 
-void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) {
+void SkiaRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color color) {
     if (!canvas_ || text.empty()) return;
-    auto fontIt = fonts_.find(font_handle);
-    if (fontIt == fonts_.end()) return;
+    const FontEntry* fePtr = getOrCreateFont(font);
+    if (!fePtr) return;
 
     SkPaint paint;
     paint.setColor(toSkColor(color));
@@ -170,7 +166,7 @@ void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t fo
     // codepoints (e.g. &#x2B1A; in plain Arial). Split the string into runs
     // where each run is fully covered by one typeface, drawing each run
     // with its own advance.
-    const FontEntry& fe = fontIt->second;
+    const FontEntry& fe = *fePtr;
     auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     if (runs.empty()) return;
@@ -184,11 +180,11 @@ void SkiaRenderer::drawText(std::string_view text, float x, float y, uint64_t fo
 }
 
 void SkiaRenderer::drawTextEx(std::string_view text, float x, float y,
-                              uint64_t font_handle, Color color,
+                              FontRef font, Color color,
                               float letterSpacing, float blur) {
     if (!canvas_ || text.empty()) return;
-    auto fontIt = fonts_.find(font_handle);
-    if (fontIt == fonts_.end()) return;
+    const FontEntry* fePtr = getOrCreateFont(font);
+    if (!fePtr) return;
 
     SkPaint paint;
     paint.setColor(toSkColor(color));
@@ -199,7 +195,7 @@ void SkiaRenderer::drawTextEx(std::string_view text, float x, float y,
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     }
 
-    const FontEntry& fe = fontIt->second;
+    const FontEntry& fe = *fePtr;
     auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     if (runs.empty()) return;
@@ -237,10 +233,10 @@ void SkiaRenderer::drawTextEx(std::string_view text, float x, float y,
     }
 }
 
-TextMetrics SkiaRenderer::measureText(std::string_view text, uint64_t font_handle) {
-    auto it = fonts_.find(font_handle);
-    if (it == fonts_.end()) return {};
-    const FontEntry& fe = it->second;
+TextMetrics SkiaRenderer::measureText(std::string_view text, FontRef font) {
+    const FontEntry* fePtr = getOrCreateFont(font);
+    if (!fePtr) return {};
+    const FontEntry& fe = *fePtr;
     const SkFont& primary = *fe.font;
     SkFontMetrics fm;
     primary.getMetrics(&fm);
@@ -272,10 +268,14 @@ SkFontMgr* SkiaRenderer::ensureFontMgr() {
     return fontMgr_.get();
 }
 
-uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
-    SkFontStyle style(weight,
+const SkiaRenderer::FontEntry* SkiaRenderer::getOrCreateFont(FontRef ref) {
+    FontKey key{std::string(ref.family), ref.size, ref.weight, ref.italic};
+    auto it = fonts_.find(key);
+    if (it != fonts_.end()) return &it->second;
+
+    SkFontStyle style(ref.weight,
                       SkFontStyle::kNormal_Width,
-                      italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
+                      ref.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
 
     // Reuse the renderer-wide SkFontMgr so per-glyph fallback (matchFamily-
     // StyleCharacter in font_fallback.cpp) shares the same system manager.
@@ -313,8 +313,7 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
     };
 
     sk_sp<SkTypeface> typeface;
-    std::string families(family);
-    std::istringstream stream(families);
+    std::istringstream stream{std::string(ref.family)};
     std::string name;
     while (std::getline(stream, name, ',')) {
         while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
@@ -341,16 +340,12 @@ uint64_t SkiaRenderer::createFont(std::string_view family, float size, int weigh
         typeface = font_mgr->matchFamilyStyle(nullptr, SkFontStyle());
     }
 
-    auto sk_font = std::make_unique<SkFont>(typeface, size);
+    auto sk_font = std::make_unique<SkFont>(typeface, ref.size);
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
 
-    uint64_t handle = next_font_handle_++;
-    fonts_[handle] = FontEntry{std::move(typeface), std::move(sk_font), style};
-    return handle;
-}
-
-void SkiaRenderer::deleteFont(uint64_t font_handle) {
-    fonts_.erase(font_handle);
+    auto [ins, _] = fonts_.emplace(std::move(key),
+        FontEntry{std::move(typeface), std::move(sk_font), style});
+    return &ins->second;
 }
 
 void SkiaRenderer::drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) {
@@ -1038,98 +1033,6 @@ void SkiaRenderer::destroyGPUSurface(GPUSurface& surf) {
     surf.surface.reset();
     if (surf.fbo) { glDeleteFramebuffers(1, &surf.fbo); surf.fbo = 0; }
     if (surf.texture && gl_) { gl_->deleteTexture(surf.texture); surf.texture = 0; }
-}
-
-GLuint SkiaRenderer::renderTextToTexture(std::string_view text,
-                                          uint64_t font_handle,
-                                          Color color,
-                                          int& outW, int& outH) {
-    if (text.empty()) return 0;
-
-    // Cache key
-    char key[256];
-    std::snprintf(key, sizeof(key), "%.*s|%llu|%u%u%u%u",
-                  (int)text.size(), text.data(), (unsigned long long)font_handle,
-                  color.r, color.g, color.b, color.a);
-    std::string cacheKey(key);
-
-    auto it = textTexCache_.find(cacheKey);
-    if (it != textTexCache_.end()) {
-        outW = it->second.w;
-        outH = it->second.h;
-        return it->second.tex;
-    }
-
-    // Measure
-    auto fit = fonts_.find(font_handle);
-    if (fit == fonts_.end()) return 0;
-    const FontEntry& fe = fit->second;
-    const SkFont& font = *fe.font;
-
-    // Split into fallback runs, then measure the union bounds so glyphs
-    // from fallback typefaces (which may have different ascent/descent)
-    // are not clipped.
-    auto runs = splitTextForFallback(text, font, ensureFontMgr(),
-                                      fe.style, fallbackCache_);
-    if (runs.empty()) return 0;
-
-    float width = 0.0f;
-    SkRect unionBounds = SkRect::MakeEmpty();
-    std::vector<float> runWidths;
-    std::vector<SkRect> runBounds;
-    runWidths.reserve(runs.size());
-    runBounds.reserve(runs.size());
-    float cursor = 0.0f;
-    for (const auto& run : runs) {
-        const char* data = text.data() + run.start;
-        SkRect b;
-        float w = run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &b);
-        runWidths.push_back(w);
-        runBounds.push_back(b);
-        // Bounds are relative to drawing origin; translate by cursor for union.
-        SkRect placed = b; placed.offset(cursor, 0);
-        if (unionBounds.isEmpty()) unionBounds = placed;
-        else                       unionBounds.join(placed);
-        cursor += w;
-        width  += w;
-    }
-    int tw = (int)std::ceil(width) + 4;
-    int th = (int)std::ceil(unionBounds.height()) + 4;
-    if (tw <= 0 || th <= 0) return 0;
-
-    // Render to a temporary Skia surface
-    auto tmpSurface = SkSurfaces::Raster(SkImageInfo::MakeN32Premul(tw, th));
-    if (!tmpSurface) return 0;
-
-    auto* c = tmpSurface->getCanvas();
-    c->clear(SK_ColorTRANSPARENT);
-
-    SkPaint paint;
-    paint.setColor(toSkColor(color));
-    cursor = 0.0f;
-    for (std::size_t r = 0; r < runs.size(); ++r) {
-        const auto& run = runs[r];
-        const char* data = text.data() + run.start;
-        c->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
-                          -unionBounds.left() + 1 + cursor,
-                          -unionBounds.top()  + 1,
-                          run.font, paint);
-        cursor += runWidths[r];
-    }
-
-    // Create GL texture and upload
-    SkPixmap pixmap;
-    if (!tmpSurface->peekPixels(&pixmap)) return 0;
-
-    GLuint tex = gl_->createTexture2D(tw, th, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE);
-    if (!tex) return 0;
-
-    gl_->uploadTexture2D(tex, pixmap.addr(), tw, th, GL_BGRA, GL_UNSIGNED_BYTE);
-
-    textTexCache_[cacheKey] = {tex, tw, th};
-    outW = tw;
-    outH = th;
-    return tex;
 }
 
 bool SkiaRenderer::saveScreenshot(const std::string& path) {

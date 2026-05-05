@@ -13,7 +13,6 @@
 #include "engine/ui_layer.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
-#include "layout/font_manager.h"
 #include "render/skia_backend.h"
 #include <atomic>
 #include <bit>
@@ -443,8 +442,8 @@ private:
     // --- System panel management (implementation in system_panels.cpp) ---
     // System panels are ordinary HTML documents rendered through the same
     // layout/raster pipeline as the app document. They share the engine's
-    // fontManager_ + textMetrics_ for layout, and in windowed mode the raster
-    // thread draws each visible panel into its own GPU surface.
+    // textMetrics_ for layout, and in windowed mode the raster thread draws
+    // each visible panel into its own GPU surface.
     struct SystemDocument {
         std::string name;
         std::string tabLabel;
@@ -559,7 +558,6 @@ private:
     std::unique_ptr<render::RecordingRenderer> recordingRenderer_;
     std::unique_ptr<layout::DrawTraversal> drawTraversal_;
     std::unique_ptr<layout::SkiaTextMetrics> textMetrics_;
-    layout::FontManager fontManager_;
     std::unique_ptr<platform::EventLoop> eventLoop_;
 
     // Selection geometry snapshot — computed on the main thread from live

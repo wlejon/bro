@@ -6,19 +6,6 @@ namespace bro::render {
 
 CommandReplayer::CommandReplayer(Renderer* dst) : dst_(dst) {}
 
-uint64_t CommandReplayer::resolveFont(std::string_view family, float size,
-                                      int weight, bool italic) {
-    for (const auto& fe : fontCache_) {
-        if (fe.size == size && fe.weight == weight && fe.italic == italic
-            && fe.family == family) {
-            return fe.handle;
-        }
-    }
-    uint64_t handle = dst_->createFont(family, size, weight, italic);
-    fontCache_.push_back(FontEntry{std::string(family), size, weight, italic, handle});
-    return handle;
-}
-
 void CommandReplayer::replay(const CommandBuffer& buffer) {
     for (const auto& cmd : buffer.commands()) {
         std::visit([&](const auto& c) {
@@ -50,12 +37,12 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
             } else if constexpr (std::is_same_v<T, Cmd_DrawText>) {
                 std::string_view text = buffer.stringAt(c.textOffset, c.textLen);
                 std::string_view family = buffer.stringAt(c.familyOffset, c.familyLen);
-                uint64_t handle = resolveFont(family, c.fontSize, c.fontWeight, c.fontItalic);
+                FontRef font{family, c.fontSize, c.fontWeight, c.fontItalic};
                 if (c.letterSpacing != 0.0f || c.blur != 0.0f) {
-                    dst_->drawTextEx(text, c.x, c.y, handle, c.color,
+                    dst_->drawTextEx(text, c.x, c.y, font, c.color,
                                      c.letterSpacing, c.blur);
                 } else {
-                    dst_->drawText(text, c.x, c.y, handle, c.color);
+                    dst_->drawText(text, c.x, c.y, font, c.color);
                 }
 
             } else if constexpr (std::is_same_v<T, Cmd_DrawLine>) {

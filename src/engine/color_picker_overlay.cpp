@@ -217,20 +217,14 @@ static void drawCheckerboard(render::Renderer* r, float x, float y, float w, flo
 void ColorPickerOverlay::draw(render::Renderer* r) {
     if (!r) return;
 
-    // Lazy font init
-    if (!font_) {
-        font_ = r->createFont("Arial", 12.0f, 400, false);
-        if (font_) {
-            auto lm = render::LineMetrics::from(r->measureText("M", font_));
-            fontAscent_ = lm.ascent;
-        }
-    }
-    if (!fontSmall_) {
-        fontSmall_ = r->createFont("Arial", 10.0f, 400, false);
-        if (fontSmall_) {
-            auto lm = render::LineMetrics::from(r->measureText("M", fontSmall_));
-            fontSmallAscent_ = lm.ascent;
-        }
+    render::FontRef font{std::string_view{"Arial"}, 12.0f, 400, false};
+    render::FontRef fontSmall{std::string_view{"Arial"}, 10.0f, 400, false};
+
+    // Lazy line-metrics resolve.
+    if (!fontMetricsResolved_) {
+        fontAscent_      = render::LineMetrics::from(r->measureText("M", font)).ascent;
+        fontSmallAscent_ = render::LineMetrics::from(r->measureText("M", fontSmall)).ascent;
+        fontMetricsResolved_ = true;
     }
 
     // Background
@@ -350,15 +344,15 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
                     hexFocused_ ? render::Color{0, 120, 215, 255}
                                 : render::Color{80, 80, 90, 255});
 
-        if (font_) {
+        {
             float textX = hx + 6.0f;
             float textY = hy + (hh - (fontAscent_ * 1.25f)) / 2.0f + fontAscent_;
-            r->drawText(hexText_, textX, textY, font_, {30, 30, 30, 255});
+            r->drawText(hexText_, textX, textY, font, {30, 30, 30, 255});
 
             if (hexFocused_) {
                 std::string pre = hexText_.substr(0,
                     std::clamp(hexCursor_, 0, static_cast<int>(hexText_.size())));
-                float cx = textX + r->measureText(pre, font_).width;
+                float cx = textX + r->measureText(pre, font).width;
                 r->drawLine(cx, hy + 4.0f, cx, hy + hh - 4.0f,
                             {30, 30, 30, 255}, 1.0f);
             }
@@ -366,7 +360,7 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
     }
 
     // --- RGB(A) row ---
-    if (fontSmall_) {
+    {
         uint8_t rr, gg, bb;
         hsvToRgb(h_, s_, v_, rr, gg, bb);
         char buf[64];
@@ -379,7 +373,7 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         }
         float tx = originX_ + rRGBRow_.x;
         float ty = originY_ + rRGBRow_.y + fontSmallAscent_;
-        r->drawText(buf, tx, ty, fontSmall_, {200, 200, 205, 255});
+        r->drawText(buf, tx, ty, fontSmall, {200, 200, 205, 255});
     }
 
     // --- Presets ---

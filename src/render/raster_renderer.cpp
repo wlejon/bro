@@ -196,13 +196,13 @@ void RasterRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
     canvas_->drawRRect(makeRRectRaster(sx, sy, sw, sh, sr), paint);
 }
 
-void RasterRenderer::drawText(std::string_view text, float x, float y, uint64_t font_handle, Color c) {
+void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c) {
     if (!canvas_ || text.empty()) return;
-    auto it = fonts_.find(font_handle);
-    if (it == fonts_.end()) return;
+    const FontEntry* fePtr = getOrCreateFont(font);
+    if (!fePtr) return;
     SkPaint paint;
     paint.setColor(toSkColor(c));
-    const FontEntry& fe = it->second;
+    const FontEntry& fe = *fePtr;
     auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     if (runs.empty()) return;
@@ -216,18 +216,18 @@ void RasterRenderer::drawText(std::string_view text, float x, float y, uint64_t 
 }
 
 void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
-                                uint64_t font_handle, Color c,
+                                FontRef font, Color c,
                                 float letterSpacing, float blur) {
     if (!canvas_ || text.empty()) return;
-    auto it = fonts_.find(font_handle);
-    if (it == fonts_.end()) return;
+    const FontEntry* fePtr = getOrCreateFont(font);
+    if (!fePtr) return;
 
     SkPaint paint;
     paint.setColor(toSkColor(c));
     if (blur > 0) {
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     }
-    const FontEntry& fe = it->second;
+    const FontEntry& fe = *fePtr;
     auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     if (runs.empty()) return;
@@ -265,10 +265,10 @@ void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
     }
 }
 
-TextMetrics RasterRenderer::measureText(std::string_view text, uint64_t font_handle) {
-    auto it = fonts_.find(font_handle);
-    if (it == fonts_.end()) return {};
-    const FontEntry& fe = it->second;
+TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font) {
+    const FontEntry* fePtr = getOrCreateFont(font);
+    if (!fePtr) return {};
+    const FontEntry& fe = *fePtr;
     const SkFont& primary = *fe.font;
     SkFontMetrics fm;
     primary.getMetrics(&fm);
@@ -298,9 +298,13 @@ SkFontMgr* RasterRenderer::ensureFontMgr() {
     return fontMgr_.get();
 }
 
-uint64_t RasterRenderer::createFont(std::string_view family, float size, int weight, bool italic) {
-    SkFontStyle style(weight, SkFontStyle::kNormal_Width,
-                      italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
+const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
+    FontKey key{std::string(ref.family), ref.size, ref.weight, ref.italic};
+    auto it = fonts_.find(key);
+    if (it != fonts_.end()) return &it->second;
+
+    SkFontStyle style(ref.weight, SkFontStyle::kNormal_Width,
+                      ref.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
     SkFontMgr* mgrRaw = ensureFontMgr();
     sk_sp<SkFontMgr> mgr(sk_ref_sp(mgrRaw));
 
@@ -333,8 +337,7 @@ uint64_t RasterRenderer::createFont(std::string_view family, float size, int wei
 
     // CSS font-family is comma-separated — try each name in order.
     sk_sp<SkTypeface> typeface;
-    std::string families(family);
-    std::istringstream stream(families);
+    std::istringstream stream{std::string(ref.family)};
     std::string name;
     while (std::getline(stream, name, ',')) {
         while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
@@ -350,14 +353,12 @@ uint64_t RasterRenderer::createFont(std::string_view family, float size, int wei
         if (typeface) break;
     }
     if (!typeface) typeface = mgr->matchFamilyStyle(nullptr, SkFontStyle());
-    auto sk_font = std::make_unique<SkFont>(typeface, size);
+    auto sk_font = std::make_unique<SkFont>(typeface, ref.size);
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
-    uint64_t handle = nextHandle_++;
-    fonts_[handle] = { std::move(typeface), std::move(sk_font), style };
-    return handle;
+    auto [ins, _] = fonts_.emplace(std::move(key),
+        FontEntry{ std::move(typeface), std::move(sk_font), style });
+    return &ins->second;
 }
-
-void RasterRenderer::deleteFont(uint64_t h) { fonts_.erase(h); }
 
 void RasterRenderer::drawLine(float x1, float y1, float x2, float y2, Color c, float thickness) {
     if (!canvas_) return;

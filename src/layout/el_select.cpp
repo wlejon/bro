@@ -52,12 +52,10 @@ void ElSelect::initSelectedIndex() {
     }
 }
 
-uint64_t ElSelect::getFontHandle() const {
-    if (!elem_ || !renderer_) return 0;
-    if (cachedFontHandle_) return cachedFontHandle_;
-
+render::FontRef ElSelect::getFontRef() const {
+    if (!elem_) return {std::string_view{"Arial"}, 16.0f, 400, false};
     auto& style = elem_->computedStyle();
-    std::string family = "Arial";
+    std::string_view family = "Arial";
     auto it = style.find("font-family");
     if (it != style.end() && !it->second.empty()) family = it->second;
     float size = 16.0f;
@@ -67,29 +65,28 @@ uint64_t ElSelect::getFontHandle() const {
         float v = std::strtof(sit->second.c_str(), &end);
         if (end != sit->second.c_str() && v > 0) size = v;
     }
-    cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
-    return cachedFontHandle_;
+    return render::FontRef{family, size, 400, false};
 }
 
 void ElSelect::getContentSize(float& w, float& h) {
-    uint64_t fontHandle = getFontHandle();
-    if (fontHandle && renderer_) {
-        auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
-
-        auto opts = getOptions();
-        float maxW = 50.0f;
-        for (auto& opt : opts) {
-            if (!opt.text.empty()) {
-                auto tm = renderer_->measureText(opt.text, fontHandle);
-                maxW = std::max(maxW, tm.width);
-            }
-        }
-        w = maxW + 20; // extra space for dropdown arrow
-        h = lm.lineHeight();
-    } else {
+    if (!renderer_) {
         w = 120;
         h = 20;
+        return;
     }
+    render::FontRef fontRef = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
+
+    auto opts = getOptions();
+    float maxW = 50.0f;
+    for (auto& opt : opts) {
+        if (!opt.text.empty()) {
+            auto tm = renderer_->measureText(opt.text, fontRef);
+            maxW = std::max(maxW, tm.width);
+        }
+    }
+    w = maxW + 20; // extra space for dropdown arrow
+    h = lm.lineHeight();
 }
 
 void ElSelect::draw(render::Renderer* renderer,
@@ -99,10 +96,7 @@ void ElSelect::draw(render::Renderer* renderer,
     if (!renderer || !elem_) return;
 
     // Use the caller's renderer (raster thread has its own)
-    if (renderer != renderer_) {
-        renderer_ = renderer;
-        cachedFontHandle_ = 0;
-    }
+    renderer_ = renderer;
 
     float x = box.contentRect.x + offsetX;
     float y = box.contentRect.y + offsetY;
@@ -121,10 +115,8 @@ void ElSelect::draw(render::Renderer* renderer,
         box.fullHeight()
     };
 
-    uint64_t fontHandle = getFontHandle();
-    if (!fontHandle) return;
-
-    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
+    render::FontRef fontRef = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
 
     // Respect CSS `color` for selected-option text and the dropdown arrow,
     // so dark themes can read the selection. Falls back to black if unset.
@@ -147,7 +139,7 @@ void ElSelect::draw(render::Renderer* renderer,
     auto opts = getOptions();
     int idx = std::clamp(selectedIndex_, 0, std::max(0, static_cast<int>(opts.size()) - 1));
     if (!opts.empty() && idx < static_cast<int>(opts.size())) {
-        renderer_->drawText(opts[idx].text, x, textY, fontHandle, color);
+        renderer_->drawText(opts[idx].text, x, textY, fontRef, color);
     }
 
     // Dropdown arrow

@@ -2,7 +2,6 @@
 #include "canvas/canvas_scene.h"
 #include "physics/physics_world.h"
 #include "render/skia_backend.h"
-#include "layout/font_manager.h"
 #include "dom/document.h"
 #include "util/log.h"
 #include "brogameagent/world.h"
@@ -4044,13 +4043,12 @@ void SceneGraph::renderLightIcon(LightNode* light) {
 // so layout of the detached Documents stays serialized with JS mutations.
 // ---------------------------------------------------------------------------
 
-void SceneGraph::materializeHtmlNodes(render::SkiaRenderer* renderer,
-                                      layout::FontManager* fontManager) {
-    if (!renderer || !fontManager) return;
+void SceneGraph::materializeHtmlNodes(render::SkiaRenderer* renderer) {
+    if (!renderer) return;
     for (auto& [id, node] : nodes_) {
         if (node->type() == SceneNode::Type::Html) {
             auto* hn = static_cast<HtmlNode*>(node.get());
-            hn->materializePending(renderer, fontManager);
+            hn->materializePending(renderer);
             continue;
         }
         // World-anchored sprites participate in the same 3D billboard pass

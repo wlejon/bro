@@ -34,12 +34,10 @@ int ElTextarea::cols() const {
     return 20;
 }
 
-uint64_t ElTextarea::getFontHandle() const {
-    if (!elem_ || !renderer_) return 0;
-    if (cachedFontHandle_) return cachedFontHandle_;
-
+render::FontRef ElTextarea::getFontRef() const {
+    if (!elem_) return {std::string_view{"Arial"}, 16.0f, 400, false};
     auto& style = elem_->computedStyle();
-    std::string family = "Arial";
+    std::string_view family = "Arial";
     auto it = style.find("font-family");
     if (it != style.end() && !it->second.empty()) family = it->second;
     float size = 16.0f;
@@ -49,8 +47,7 @@ uint64_t ElTextarea::getFontHandle() const {
         float v = std::strtof(sit->second.c_str(), &end);
         if (end != sit->second.c_str() && v > 0) size = v;
     }
-    cachedFontHandle_ = renderer_->createFont(family, size, 400, false);
-    return cachedFontHandle_;
+    return render::FontRef{family, size, 400, false};
 }
 
 // ---------------------------------------------------------------------------
@@ -186,17 +183,16 @@ KeyHandleResult ElTextarea::handleTextInput(dom::Element* el, const std::string&
 }
 
 void ElTextarea::getContentSize(float& w, float& h) {
-    uint64_t fontHandle = getFontHandle();
-    if (fontHandle && renderer_) {
-        auto tm = renderer_->measureText("M", fontHandle);
-        float charW = tm.width;
-        float lineH = tm.height;
-        w = charW * cols();
-        h = lineH * rows();
-    } else {
+    if (!renderer_) {
         w = 173;
         h = 40;
+        return;
     }
+    auto tm = renderer_->measureText("M", getFontRef());
+    float charW = tm.width;
+    float lineH = tm.height;
+    w = charW * cols();
+    h = lineH * rows();
 }
 
 static std::vector<std::string> splitLines(const std::string& text) {
@@ -232,10 +228,7 @@ void ElTextarea::draw(render::Renderer* renderer,
     if (!renderer || !elem_) return;
 
     // Use the caller's renderer (raster thread has its own)
-    if (renderer != renderer_) {
-        renderer_ = renderer;
-        cachedFontHandle_ = 0;
-    }
+    renderer_ = renderer;
 
     float x = box.contentRect.x + offsetX;
     float y = box.contentRect.y + offsetY;
@@ -256,10 +249,8 @@ void ElTextarea::draw(render::Renderer* renderer,
         isPlaceholder = true;
     }
 
-    uint64_t fontHandle = getFontHandle();
-    if (!fontHandle) return;
-
-    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontHandle));
+    render::FontRef fontRef = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
     float lineHeight = lm.lineHeight();
 
     float contentH = h;
@@ -290,7 +281,7 @@ void ElTextarea::draw(render::Renderer* renderer,
         if (lineY + lineHeight < y) continue;
         if (lineY > y + h) break;
         if (!lines[i].empty()) {
-            renderer_->drawText(lines[i], baseX, lineY + lm.ascent, fontHandle, color);
+            renderer_->drawText(lines[i], baseX, lineY + lm.ascent, fontRef, color);
         }
     }
 
@@ -302,7 +293,7 @@ void ElTextarea::draw(render::Renderer* renderer,
         float cursorX = baseX;
         if (cursorCol > 0 && cursorLine < static_cast<int>(lines.size())) {
             std::string beforeCursor = lines[cursorLine].substr(0, cursorCol);
-            auto ctm = renderer_->measureText(beforeCursor, fontHandle);
+            auto ctm = renderer_->measureText(beforeCursor, fontRef);
             cursorX += ctm.width;
         }
 

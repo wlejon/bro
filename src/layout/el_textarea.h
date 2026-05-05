@@ -41,7 +41,7 @@ public:
     void getContentSize(float& w, float& h);
 
 private:
-    uint64_t getFontHandle() const;
+    render::FontRef getFontRef() const;
     std::string getAttr(const std::string& name) const;
 
     render::Renderer* renderer_;
@@ -49,7 +49,6 @@ private:
     int cursorPos_ = 0;
     bool focused_ = false;
     float scrollY_ = 0.0f;
-    mutable uint64_t cachedFontHandle_ = 0;
 };
 
 } // namespace bro::layout

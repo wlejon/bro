@@ -87,7 +87,7 @@ private:
     void drawColor_(float x, float y, float w, float h);
 
     std::string getAttr(const std::string& name) const;
-    uint64_t getFontHandle() const;
+    render::FontRef getFontRef() const;
 
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
@@ -97,7 +97,6 @@ private:
     bool focused_ = false;
     bool dragging_ = false;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
-    mutable uint64_t cachedFontHandle_ = 0;
 };
 
 } // namespace bro::layout

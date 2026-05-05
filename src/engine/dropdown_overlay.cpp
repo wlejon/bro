@@ -49,16 +49,16 @@ void DropdownOverlay::getBounds(float& x, float& y, float& w, float& h) const {
 void DropdownOverlay::draw(render::Renderer* r) {
     if (!r || options_.empty()) return;
 
-    // Lazy-init font + metrics
-    if (!fontHandle_) {
-        fontHandle_ = r->createFont(fontFamily_, fontSize_, 400, false);
-        if (fontHandle_) {
-            auto lm = render::LineMetrics::from(r->measureText("M", fontHandle_));
-            lineH_ = lm.lineHeight() + 8.0f; // line height + vertical padding
-            ascent_ = lm.ascent;
-        }
+    render::FontRef font{fontFamily_, fontSize_, 400, false};
+
+    // Lazy-resolve line metrics on the first paint — measureText("",...) gives
+    // us ascent/descent/leading without shaping any glyphs.
+    if (!metricsResolved_) {
+        auto lm = render::LineMetrics::from(r->measureText("M", font));
+        lineH_ = lm.lineHeight() + 8.0f; // line height + vertical padding
+        ascent_ = lm.ascent;
+        metricsResolved_ = true;
     }
-    if (!fontHandle_) return;
 
     float dropX = anchorX_;
     float dropY = anchorY_ + anchorH_;
@@ -76,11 +76,11 @@ void DropdownOverlay::draw(render::Renderer* r) {
             r->fillRect(dropX + 1, itemY, dropW - 2, lineH_,
                         {0, 120, 215, 255});
             r->drawText(options_[i].text, dropX + padX,
-                        itemY + padY + ascent_, fontHandle_,
+                        itemY + padY + ascent_, font,
                         {255, 255, 255, 255});
         } else {
             r->drawText(options_[i].text, dropX + padX,
-                        itemY + padY + ascent_, fontHandle_,
+                        itemY + padY + ascent_, font,
                         {0, 0, 0, 255});
         }
     }

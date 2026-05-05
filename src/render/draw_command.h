@@ -24,9 +24,10 @@ struct Cmd_DrawRoundRectRadii { float x, y, w, h; Radii r; float strokeWidth; Co
 struct Cmd_DrawBoxShadow      { float x, y, w, h, rx, ry, offsetX, offsetY, blur, spread; Color color; bool inset; };
 struct Cmd_DrawBoxShadowRadii { float x, y, w, h; Radii r; float offsetX, offsetY, blur, spread; Color color; bool inset; };
 
-// Text. The string and font family live in the arena. Font handle is NOT
-// transferable across threads (per-thread FontManager), so we record the
-// descriptor and the replayer resolves it via its own renderer.
+// Text. The string and font family live in the arena. The recording renderer
+// embeds the full font descriptor here so the raster thread can recreate the
+// font against its own renderer at replay time — fonts are never shared
+// across renderers.
 struct Cmd_DrawText {
     uint32_t textOffset, textLen;     // arena: char[]
     uint32_t familyOffset, familyLen; // arena: char[]

@@ -7,13 +7,6 @@ namespace bro::render {
 RecordingRenderer::RecordingRenderer(CommandBuffer* buffer, Renderer* measureRenderer)
     : buffer_(buffer), measureRenderer_(measureRenderer) {}
 
-const RecordingRenderer::FontDesc* RecordingRenderer::findFont(uint64_t handle) const {
-    for (const auto& fd : fonts_) {
-        if (fd.handle == handle) return &fd;
-    }
-    return nullptr;
-}
-
 void RecordingRenderer::clear(Color color) {
     if (!buffer_) { measureRenderer_->clear(color); return; }
     buffer_->append(Cmd_Clear{color});
@@ -77,19 +70,19 @@ void RecordingRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
 }
 
 void RecordingRenderer::drawText(std::string_view text, float x, float y,
-                                 uint64_t font_handle, Color color) {
+                                 FontRef font, Color color) {
     if (!buffer_) {
-        measureRenderer_->drawText(text, x, y, font_handle, color);
+        measureRenderer_->drawText(text, x, y, font, color);
         return;
     }
-    drawTextEx(text, x, y, font_handle, color, 0.0f, 0.0f);
+    drawTextEx(text, x, y, font, color, 0.0f, 0.0f);
 }
 
 void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
-                                   uint64_t font_handle, Color color,
+                                   FontRef font, Color color,
                                    float letterSpacing, float blur) {
     if (!buffer_) {
-        measureRenderer_->drawTextEx(text, x, y, font_handle, color,
+        measureRenderer_->drawTextEx(text, x, y, font, color,
                                      letterSpacing, blur);
         return;
     }
@@ -98,22 +91,12 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
     cmd.textOffset = tOff;
     cmd.textLen = tLen;
 
-    if (const auto* fd = findFont(font_handle)) {
-        auto [fOff, fLen] = buffer_->pushString(fd->family);
-        cmd.familyOffset = fOff;
-        cmd.familyLen = fLen;
-        cmd.fontSize = fd->size;
-        cmd.fontWeight = fd->weight;
-        cmd.fontItalic = fd->italic;
-    } else {
-        // Unknown handle — record an empty family; replayer falls back to
-        // platform default. Still better than dropping the text.
-        cmd.familyOffset = 0;
-        cmd.familyLen = 0;
-        cmd.fontSize = 14.0f;
-        cmd.fontWeight = 400;
-        cmd.fontItalic = false;
-    }
+    auto [fOff, fLen] = buffer_->pushString(font.family);
+    cmd.familyOffset = fOff;
+    cmd.familyLen = fLen;
+    cmd.fontSize = font.size;
+    cmd.fontWeight = font.weight;
+    cmd.fontItalic = font.italic;
 
     cmd.x = x; cmd.y = y;
     cmd.color = color;
@@ -122,25 +105,8 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
     buffer_->append(cmd);
 }
 
-TextMetrics RecordingRenderer::measureText(std::string_view text, uint64_t handle) {
-    return measureRenderer_->measureText(text, handle);
-}
-
-uint64_t RecordingRenderer::createFont(std::string_view family, float size,
-                                       int weight, bool italic) {
-    uint64_t handle = measureRenderer_->createFont(family, size, weight, italic);
-    // Record the descriptor side table if not already known under this handle.
-    if (!findFont(handle)) {
-        fonts_.push_back(FontDesc{handle, std::string(family), size, weight, italic});
-    }
-    return handle;
-}
-
-void RecordingRenderer::deleteFont(uint64_t handle) {
-    measureRenderer_->deleteFont(handle);
-    for (auto it = fonts_.begin(); it != fonts_.end(); ++it) {
-        if (it->handle == handle) { fonts_.erase(it); break; }
-    }
+TextMetrics RecordingRenderer::measureText(std::string_view text, FontRef font) {
+    return measureRenderer_->measureText(text, font);
 }
 
 bool RecordingRenderer::registerCustomFont(const std::string& family,

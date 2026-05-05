@@ -15,10 +15,10 @@ namespace bro::render {
 // compositor can flush the current Skia surface, push a Canvas/WebGL UILayer,
 // and start a fresh surface for subsequent HTML commands.
 //
-// Maintains its own (font descriptor → renderer font handle) cache so we
-// don't call dst_->createFont() per drawText. The cache lives across replay()
-// invocations on the same instance — typical use is one CommandReplayer per
-// raster thread, reused frame after frame.
+// Each Cmd_DrawText embeds the full font descriptor (family/size/weight/
+// italic). Replay reads that descriptor straight back into a FontRef and
+// hands it to `dst->drawText`; the destination renderer caches by content
+// internally, so no replayer-side font cache is needed.
 class CommandReplayer {
 public:
     using LayerBreakHandler = std::function<void(int kind, void* canvasScene,
@@ -38,18 +38,7 @@ public:
     void replay(const CommandBuffer& buffer);
 
 private:
-    uint64_t resolveFont(std::string_view family, float size, int weight, bool italic);
-
-    struct FontEntry {
-        std::string family;
-        float       size;
-        int         weight;
-        bool        italic;
-        uint64_t    handle;
-    };
-
     Renderer*               dst_;
-    std::vector<FontEntry>  fontCache_;
     LayerBreakHandler       onLayerBreak_;
     BlitCanvasInlineHandler onBlitCanvasInline_;
 };

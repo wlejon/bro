@@ -1,6 +1,5 @@
 #pragma once
 
-#include "layout/font_manager.h"
 #include "render/renderer.h"
 #include <functional>
 #include <memory>
@@ -81,7 +80,7 @@ struct CachedImage {
 // Walks the DOM tree with layout boxes and issues Renderer draw calls.
 class DrawTraversal {
 public:
-    DrawTraversal(render::Renderer* renderer, FontManager* fontManager);
+    explicit DrawTraversal(render::Renderer* renderer);
 
     // Draw the full document tree. `viewportTop` is the Y position in the
     // output surface where the content area begins (0 for apps without a
@@ -115,8 +114,6 @@ public:
         viewportW_ = w; viewportH_ = h; viewportTop_ = top;
     }
 
-    // Access font manager (for replaced elements that need text measurement)
-    FontManager* fontManager() { return fontManager_; }
     render::Renderer* renderer() { return renderer_; }
 
 private:
@@ -155,11 +152,12 @@ public:
 
 private:
 
-    // Font handle for an element's computed style
-    uint64_t getFontHandle(dom::Element* elem);
+    // FontRef for an element's computed style. The returned ref's `family`
+    // string_view borrows from the element's computedStyle map — valid for
+    // the duration of the draw pass.
+    render::FontRef getFontRef(dom::Element* elem);
 
     render::Renderer* renderer_;
-    FontManager* fontManager_;
     std::string basePath_;
     int viewportW_ = 0;
     int viewportH_ = 0;

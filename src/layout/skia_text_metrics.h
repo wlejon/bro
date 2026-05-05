@@ -1,7 +1,6 @@
 #pragma once
 
 #include "layout/box.h"
-#include "layout/font_manager.h"
 #include "render/renderer.h"
 #include <string>
 #include <cmath>
@@ -9,31 +8,37 @@
 
 namespace bro::layout {
 
-// Implements htmlayout::layout::TextMetrics using the Renderer's font system.
+// Implements htmlayout::layout::TextMetrics by building a render::FontRef from
+// the layout-supplied family/size/weight and forwarding to the Renderer.
+// The renderer caches by descriptor internally — no separate handle table.
 class SkiaTextMetrics : public htmlayout::layout::TextMetrics {
 public:
-    SkiaTextMetrics(render::Renderer* renderer, FontManager* fontManager)
-        : renderer_(renderer), fontManager_(fontManager) {}
+    explicit SkiaTextMetrics(render::Renderer* renderer)
+        : renderer_(renderer) {}
 
     float measureWidth(const std::string& text,
                        const std::string& fontFamily,
                        float fontSize,
                        const std::string& fontWeight) override {
-        uint64_t handle = getFont(fontFamily, fontSize, fontWeight);
-        auto tm = renderer_->measureText(text, handle);
+        auto tm = renderer_->measureText(text, makeRef(fontFamily, fontSize, fontWeight));
         return tm.width;
     }
 
     float lineHeight(const std::string& fontFamily,
                      float fontSize,
                      const std::string& fontWeight) override {
-        uint64_t handle = getFont(fontFamily, fontSize, fontWeight);
-        auto metrics = fontManager_->getMetrics(handle);
-        return metrics.height > 0 ? metrics.height : fontSize * 1.2f;
+        // Empty-text measureText returns just the font's vertical metrics —
+        // the renderer pulls these straight from SkFontMetrics, no glyph
+        // shaping needed.
+        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        // CSS line-height: normal = ascent + descent + leading (Chromium parity).
+        float h = std::round(tm.ascent + tm.descent + tm.leading);
+        return h > 0 ? h : fontSize * 1.2f;
     }
 
 private:
-    uint64_t getFont(const std::string& family, float size, const std::string& weight) {
+    render::FontRef makeRef(const std::string& family, float size,
+                            const std::string& weight) {
         int w = 400;
         if (weight == "bold" || weight == "700") w = 700;
         else if (weight == "lighter" || weight == "100") w = 100;
@@ -49,12 +54,12 @@ private:
             long v = std::strtol(weight.c_str(), &end, 10);
             if (end != weight.c_str() && v > 0) w = static_cast<int>(v);
         }
-        return fontManager_->createFont(renderer_,
-            family.empty() ? "Arial" : family, size > 0 ? size : 16.0f, w, false);
+        return render::FontRef{
+            family.empty() ? std::string_view{"Arial"} : std::string_view{family},
+            size > 0 ? size : 16.0f, w, false};
     }
 
     render::Renderer* renderer_;
-    FontManager* fontManager_;
 };
 
 } // namespace bro::layout

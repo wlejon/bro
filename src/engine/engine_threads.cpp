@@ -7,7 +7,6 @@
 #include "layout/draw_traversal.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
-#include "layout/font_manager.h"
 #include "platform/sdl_window.h"
 #include "render/raster_renderer.h"
 #include "render/skia_backend.h"
@@ -38,8 +37,7 @@ void Engine::layoutThreadFunc() {
                                            font.data.size(), font.weight, font.italic);
     }
 
-    layout::FontManager layoutFontManager;
-    layout::SkiaTextMetrics layoutTextMetrics(layoutRenderer.get(), &layoutFontManager);
+    layout::SkiaTextMetrics layoutTextMetrics(layoutRenderer.get());
 
     LOG_INFO("Layout thread started");
 

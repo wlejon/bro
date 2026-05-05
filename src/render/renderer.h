@@ -73,6 +73,20 @@ struct ColorStop {
     Color color;
 };
 
+// Value-typed font reference — replaces the opaque `uint64_t font_handle` that
+// drawText/measureText used to take. Each renderer caches by content
+// internally, so the same FontRef across calls hits the same cached SkFont
+// without needing a per-renderer handle to be threaded through layout. The
+// `family` view must outlive the call but does not need to outlive the
+// returned cache entry — renderer implementations copy the family into their
+// own keys on cache miss.
+struct FontRef {
+    std::string_view family;
+    float            size = 14.0f;
+    int              weight = 400;   // CSS numeric (400 = normal, 700 = bold)
+    bool             italic = false;
+};
+
 // CSS filter primitive — a single function in a `filter:` chain. The list is
 // applied in order to produce the final image filter. Backends are responsible
 // for translating these descriptors into their native filter representation
@@ -142,25 +156,22 @@ public:
         drawBoxShadow(x, y, w, h, avg, avg, offsetX, offsetY, blur, spread, color, inset);
     }
 
-    virtual void drawText(std::string_view text, float x, float y, uint64_t font_handle, Color color) = 0;
-    virtual TextMetrics measureText(std::string_view text, uint64_t font_handle) = 0;
+    virtual void drawText(std::string_view text, float x, float y, FontRef font, Color color) = 0;
+    virtual TextMetrics measureText(std::string_view text, FontRef font) = 0;
 
     // Extended text draw: letter-spacing applies a per-character advance on
     // top of the natural glyph advance (matching CSS letter-spacing). When
     // blur > 0 the glyphs are blurred — used to render text-shadow halos.
     // Default forwards to plain drawText so backends can adopt incrementally.
     virtual void drawTextEx(std::string_view text, float x, float y,
-                            uint64_t font_handle, Color color,
+                            FontRef font, Color color,
                             float letterSpacing, float blur) {
         (void)letterSpacing; (void)blur;
-        drawText(text, x, y, font_handle, color);
+        drawText(text, x, y, font, color);
     }
 
-    virtual uint64_t createFont(std::string_view family, float size, int weight, bool italic) = 0;
-    virtual void deleteFont(uint64_t font_handle) = 0;
-
     // Register a custom font from file data (for @font-face support).
-    // Returns true on success. The font will be used when createFont matches
+    // Returns true on success. The font will be used when a FontRef matches
     // the given family name, weight, and style.
     virtual bool registerCustomFont(const std::string& family,
                                     const void* data, size_t len,

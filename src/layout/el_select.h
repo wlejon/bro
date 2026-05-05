@@ -42,13 +42,12 @@ public:
     void getContentSize(float& w, float& h);
 
 private:
-    uint64_t getFontHandle() const;
+    render::FontRef getFontRef() const;
 
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
     int selectedIndex_ = 0;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
-    mutable uint64_t cachedFontHandle_ = 0;
 };
 
 } // namespace bro::layout
