@@ -2,6 +2,7 @@
 
 #include "canvas/canvas2d.h"
 #include "render/renderer.h"
+#include "render/frame_worker.h"
 
 #include <atomic>
 #include <string>
@@ -28,15 +29,6 @@ typedef struct SDL_GLContextState* SDL_GLContext;
 namespace bro::render { class GLContext; }
 
 namespace bro::canvas {
-
-/// Canvas thread state machine (atomics only, no mutexes).
-enum CanvasThreadState : uint32_t {
-    kCanvasIdle            = 0,  // Canvas thread waiting for work
-    kCanvasCommandsReady   = 1,  // Main thread: commands staged, go rasterize
-    kCanvasBusy            = 2,  // Canvas thread is processing
-    kCanvasTextureReady    = 3,  // Canvas thread: new texture + GL fence ready
-    kCanvasShutdown        = 4,  // Main thread: terminate canvas thread
-};
 
 /// Deferred canvas command — recorded during JS, replayed during rasterize().
 struct CanvasCmd {
@@ -448,18 +440,17 @@ private:
 
     // --- Canvas thread state ---
     bool threaded_ = false;
-    struct CanvasShared {
-        std::atomic<uint32_t> state{kCanvasIdle};
-        std::atomic<uintptr_t> fenceSync{0};
-        std::atomic<int> canvasWidth{0};
-        std::atomic<int> canvasHeight{0};
-        // Main thread sets before publishing kCanvasCommandsReady; worker
-        // reads under acquire and refreshes snapshot_/snapshotImage_ on the
-        // worker thread (where the surface's GrContext lives). Cleared by
-        // the worker once the snapshot has been written.
-        std::atomic<bool> snapshotRequested{false};
-    };
-    CanvasShared canvasShared_;
+    render::FrameWorker worker_;
+    // Snapshot fields the main thread publishes before signaling the worker.
+    // The FrameWorker state release/acquire pair orders these with respect
+    // to the worker reading them.
+    std::atomic<int> sharedCanvasWidth_{0};
+    std::atomic<int> sharedCanvasHeight_{0};
+    // Main thread sets before signaling; worker reads under acquire and
+    // refreshes snapshot_/snapshotImage_ on the worker thread (where the
+    // surface's GrContext lives). Cleared by the worker once the snapshot
+    // has been written.
+    std::atomic<bool> snapshotRequested_{false};
     std::atomic<bool> canvasReady_{false};
     std::thread canvasThread_;
     SDL_GLContext canvasGLContext_ = nullptr;

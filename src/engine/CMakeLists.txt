@@ -26,6 +26,12 @@ embed_js(observer_check.js  js_observer_check)
 
 add_library(bro_engine STATIC
     engine.cpp
+    engine_compositor.cpp
+    engine_crosshair.cpp
+    engine_init.cpp
+    engine_lifecycle.cpp
+    engine_threads.cpp
+    engine_frame.cpp
     css_transitions.cpp
     input_handling.cpp
     headless_api.cpp

@@ -94,7 +94,6 @@ void CanvasScene::startThread(SDL_GLContext glCtx, SDL_Window* win) {
     if (threaded_ || !glCtx || !win) return;
     canvasGLContext_ = glCtx;
     threaded_ = true;
-    canvasShared_.state.store(kCanvasIdle, std::memory_order_relaxed);
     canvasReady_.store(false, std::memory_order_relaxed);
 
     canvasThread_ = std::thread(&CanvasScene::canvasThreadFunc, this, win);
@@ -108,8 +107,7 @@ void CanvasScene::startThread(SDL_GLContext glCtx, SDL_Window* win) {
 
 void CanvasScene::stopThread() {
     if (!threaded_) return;
-    canvasShared_.state.store(kCanvasShutdown, std::memory_order_release);
-    canvasShared_.state.notify_one();
+    worker_.postShutdown();
     if (canvasThread_.joinable()) {
         canvasThread_.join();
     }
@@ -145,17 +143,11 @@ void CanvasScene::canvasThreadFunc(SDL_Window* win) {
 
     LOG_INFO("Canvas thread started");
 
-    while (true) {
-        canvasShared_.state.wait(kCanvasIdle, std::memory_order_acquire);
-        uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
+    while (worker_.waitForRequest()) {
+        worker_.markBusy();
 
-        if (s == kCanvasShutdown) break;
-        if (s != kCanvasCommandsReady) continue;
-
-        canvasShared_.state.store(kCanvasBusy, std::memory_order_relaxed);
-
-        int cw = canvasShared_.canvasWidth.load(std::memory_order_relaxed);
-        int ch = canvasShared_.canvasHeight.load(std::memory_order_relaxed);
+        int cw = sharedCanvasWidth_.load(std::memory_order_relaxed);
+        int ch = sharedCanvasHeight_.load(std::memory_order_relaxed);
 
         ensureSurface(cw, ch);
 
@@ -178,7 +170,7 @@ void CanvasScene::canvasThreadFunc(SDL_Window* win) {
         // this thread's GrContext — readPixels from the main thread would
         // cross GL contexts. The bytes copy into a portable raster SkImage
         // so destination scenes can blit it through their own GrContext.
-        if (canvasShared_.snapshotRequested.load(std::memory_order_acquire)) {
+        if (snapshotRequested_.load(std::memory_order_acquire)) {
             int sw = surfWidth_;
             int sh = surfHeight_;
             if (surface_ && sw > 0 && sh > 0) {
@@ -204,28 +196,14 @@ void CanvasScene::canvasThreadFunc(SDL_Window* win) {
                 snapshotValid_ = false;
                 snapshotImageValid_ = false;
             }
-            canvasShared_.snapshotRequested.store(false, std::memory_order_release);
+            snapshotRequested_.store(false, std::memory_order_release);
         }
 
-        // GL fence sync — ensures GPU commands complete before main thread
-        // samples the texture for compositing.
+        // GL fence — guarantees GPU commands complete before main thread
+        // samples the texture. FrameWorker handles publish + shutdown race.
         GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glFlush();
-
-        canvasShared_.fenceSync.store(reinterpret_cast<uintptr_t>(fence),
-                                       std::memory_order_relaxed);
-        // Transition to textureReady — use compare_exchange to avoid overwriting
-        // a pending kCanvasShutdown signal from the main thread.
-        uint32_t expected = kCanvasBusy;
-        if (canvasShared_.state.compare_exchange_strong(
-                expected, kCanvasTextureReady,
-                std::memory_order_release, std::memory_order_acquire)) {
-            canvasShared_.state.notify_one();
-        } else {
-            // State was changed (shutdown) — delete the fence and exit
-            glDeleteSync(fence);
-            break;
-        }
+        worker_.publishResult(fence);
     }
 
     // Cleanup GL resources on this thread's context
@@ -241,8 +219,7 @@ void CanvasScene::prepareAndSignal() {
     if (!threaded_) return;
 
     // Only signal when canvas thread is idle
-    uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
-    if (s != kCanvasIdle) return;
+    if (!worker_.isIdle()) return;
 
     // Check if element was removed from the DOM. Offscreen canvases (created
     // via document.createElement and never appended) read as orphaned from
@@ -282,30 +259,18 @@ void CanvasScene::prepareAndSignal() {
     // Swap commands to staged buffer (main thread only touches both when idle)
     std::swap(commands_, stagedCommands_);
 
-    // Publish dimensions and signal
-    canvasShared_.canvasWidth.store(canvasW, std::memory_order_relaxed);
-    canvasShared_.canvasHeight.store(canvasH, std::memory_order_relaxed);
-    canvasShared_.state.store(kCanvasCommandsReady, std::memory_order_release);
-    canvasShared_.state.notify_one();
+    sharedCanvasWidth_.store(canvasW, std::memory_order_relaxed);
+    sharedCanvasHeight_.store(canvasH, std::memory_order_relaxed);
+    worker_.postRequest();
 }
 
 void CanvasScene::consumeFence() {
     if (!threaded_) return;
-
-    uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
-    if (s == kCanvasTextureReady) {
-        auto fence = reinterpret_cast<GLsync>(
-            canvasShared_.fenceSync.exchange(0, std::memory_order_relaxed));
-        if (fence) {
-            glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(fence);
-        }
-        canvasShared_.state.store(kCanvasIdle, std::memory_order_release);
-    } else if (s == kCanvasBusy) {
-        // Canvas thread still working — wait for it to finish
-        canvasShared_.state.wait(kCanvasBusy, std::memory_order_acquire);
-        // Recurse once to consume the fence (now should be kCanvasTextureReady)
-        consumeFence();
+    if (worker_.isResultReady()) {
+        worker_.tryClaimResult();
+    } else if (worker_.isBusyOrRequested()) {
+        // Canvas thread still working — wait for it to finish, then claim.
+        worker_.waitUntilIdle();
     }
 }
 
@@ -315,35 +280,22 @@ void CanvasScene::flushSync() {
         return;
     }
 
-    // If canvas thread is busy, wait for it to finish first
-    uint32_t s = canvasShared_.state.load(std::memory_order_acquire);
-    if (s == kCanvasBusy) {
-        canvasShared_.state.wait(kCanvasBusy, std::memory_order_acquire);
-        s = canvasShared_.state.load(std::memory_order_acquire);
-    }
-    if (s == kCanvasTextureReady) {
-        consumeFence();
-        s = canvasShared_.state.load(std::memory_order_acquire);
-    }
+    // Wait for any in-flight work, then claim its result.
+    worker_.waitUntilIdle();
 
     // Now idle — swap commands and signal. Also signal when a snapshot has
     // been requested with no pending commands, so the worker can run the
     // readback on its own GrContext rather than the main thread reading a
     // surface owned by a different GL context.
-    bool snapshotPending = canvasShared_.snapshotRequested.load(std::memory_order_acquire);
-    if (s == kCanvasIdle && (!commands_.empty() || snapshotPending)) {
+    bool snapshotPending = snapshotRequested_.load(std::memory_order_acquire);
+    if (!commands_.empty() || snapshotPending) {
         int cw = queryLayoutWidth();
         int ch = queryLayoutHeight();
         if (!commands_.empty()) std::swap(commands_, stagedCommands_);
-        canvasShared_.canvasWidth.store(cw, std::memory_order_relaxed);
-        canvasShared_.canvasHeight.store(ch, std::memory_order_relaxed);
-        canvasShared_.state.store(kCanvasCommandsReady, std::memory_order_release);
-        canvasShared_.state.notify_one();
-
-        // Wait for completion
-        canvasShared_.state.wait(kCanvasCommandsReady, std::memory_order_acquire);
-        canvasShared_.state.wait(kCanvasBusy, std::memory_order_acquire);
-        consumeFence();
+        sharedCanvasWidth_.store(cw, std::memory_order_relaxed);
+        sharedCanvasHeight_.store(ch, std::memory_order_relaxed);
+        worker_.postRequest();
+        worker_.waitUntilIdle();
     }
 }
 
@@ -1176,7 +1128,7 @@ std::vector<uint8_t> CanvasScene::getImageData(int x, int y, int w, int h) {
         int sh = queryLayoutHeight();
         if (sw <= 0 || sh <= 0) return pixels;
         if (!snapshotValid_ || snapshotW_ != sw || snapshotH_ != sh) {
-            canvasShared_.snapshotRequested.store(true, std::memory_order_release);
+            snapshotRequested_.store(true, std::memory_order_release);
             flushSync();
         }
         if (!snapshotValid_ || snapshot_.empty()) return pixels;
@@ -1237,7 +1189,7 @@ sk_sp<SkImage> CanvasScene::snapshotImage() {
     if (threaded_) {
         // Worker reads pixels on its own GL/GrContext and builds a portable
         // raster SkImage in snapshotImage_. Round-trip via flushSync.
-        canvasShared_.snapshotRequested.store(true, std::memory_order_release);
+        snapshotRequested_.store(true, std::memory_order_release);
         flushSync();
         return snapshotImageValid_ ? snapshotImage_ : nullptr;
     }
@@ -1270,7 +1222,7 @@ const uint8_t* CanvasScene::snapshotPixels(int w, int h) {
     }
 
     if (threaded_) {
-        canvasShared_.snapshotRequested.store(true, std::memory_order_release);
+        snapshotRequested_.store(true, std::memory_order_release);
         flushSync();
         if (!snapshotValid_ || snapshotW_ != w || snapshotH_ != h || snapshot_.empty()) {
             return nullptr;

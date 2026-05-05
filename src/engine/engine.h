@@ -10,6 +10,7 @@
 #include "engine/replaced_elements.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
+#include "engine/ui_layer.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "layout/font_manager.h"
@@ -48,25 +49,10 @@ namespace bro::layout { class DrawTraversal; class SkiaTextMetrics; }
 
 namespace bro::engine {
 
+class FramePresenter;
+class LayoutPipeline;
+
 enum class DisplayMode { Windowed, Headless, Server };
-
-/// Raster thread state machine (atomics only, no mutexes).
-enum RasterState : uint32_t {
-    kRasterIdle          = 0,  // Raster thread waiting for work
-    kRasterDomStable     = 1,  // Main thread: DOM is stable, go rasterize
-    kRasterBusy          = 2,  // Raster thread is drawing
-    kRasterTexturesReady = 3,  // Raster thread: new textures + GL fence ready
-    kRasterShutdown      = 4,  // Main thread: terminate raster thread
-};
-
-/// Layout thread state machine (atomics only, no mutexes).
-enum LayoutState : uint32_t {
-    kLayoutIdle      = 0,  // Layout thread waiting for work
-    kLayoutDomStable = 1,  // Main thread: DOM is stable, go layout
-    kLayoutBusy      = 2,  // Layout thread computing styles + layout
-    kLayoutDone      = 3,  // Layout thread: results ready
-    kLayoutShutdown  = 4,  // Main thread: terminate layout thread
-};
 
 /// Graphics/display settings configurable per app.
 struct GraphicsConfig {
@@ -152,15 +138,6 @@ struct EngineConfig {
 
 class Engine {
 public:
-    // Compositing layer entry — built by the raster thread, consumed by the main thread.
-    struct UILayer {
-        enum Type { HTML, Canvas };
-        Type type;
-        GLuint texture = 0;
-        canvas::CanvasScene* canvasScene = nullptr;
-        float cx = 0, cy = 0, cw = 0, ch = 0;
-    };
-
     explicit Engine(const EngineConfig& config);
     ~Engine();
 
@@ -591,48 +568,20 @@ private:
     };
     std::vector<WebGLEntry> webglEntries_;
 
-    // --- Raster thread state ---
-    // Shared atomic communication between main and raster threads.
-    struct RasterShared {
-        std::atomic<uint32_t> state{kRasterIdle};
-        std::atomic<uintptr_t> fenceSync{0};      // GLsync handle
-        std::atomic<int> vpWidth{0};
-        std::atomic<int> vpHeight{0};
-        std::atomic<int> insetTop{0};               // top inset reserved for menu bar
-        std::atomic<int> insetRight{0};             // right inset (inspector dock)
-        std::atomic<int> insetBottom{0};            // bottom inset (inspector dock)
-        std::atomic<uint32_t> scrollYBits{0};      // float via bit_cast
-        std::atomic<int> frontBuffer{0};            // 0 or 1
-    };
-    RasterShared rasterShared_;
+    // --- Threaded rasterization / layout ---
+    // FramePresenter owns the raster thread's synchronization (state machine,
+    // fence handshake, double-buffered layer lists) and the snapshot atomics
+    // the main thread hands the worker each frame. LayoutPipeline does the
+    // same for the layout worker. Both forward-declared above so engine.h
+    // doesn't pull in the implementations — see frame_presenter.h /
+    // layout_pipeline.h.
+    std::unique_ptr<FramePresenter> framePresenter_;
+    std::unique_ptr<LayoutPipeline>  layoutPipeline_;
+
     std::atomic<bool> rasterReady_{false};
-    std::thread rasterThread_;
-    SDL_GLContext rasterGLContext_ = nullptr;
-
-    // --- Layout thread state ---
-    struct LayoutShared {
-        std::atomic<uint32_t> state{kLayoutIdle};
-        std::atomic<int> vpWidth{0};
-        std::atomic<int> vpHeight{0};
-        std::atomic<int> insetTop{0};
-        std::atomic<int> insetRight{0};
-        std::atomic<int> insetBottom{0};
-        std::atomic<bool> animationsActive{false};
-        std::atomic<dom::Element*> hoveredElement{nullptr};
-    };
-    LayoutShared layoutShared_;
-    std::thread layoutThread_;
-
-    // Double-buffered layer lists for lock-free handoff.
-    // Raster thread writes to back buffer, main reads front buffer.
-    // `appLayers` are composited first (with crosshair drawn between app and
-    // system), then `systemLayers` on top so menu bar / preferences / splash
-    // sit above app content + crosshair.
-    struct LayerBuffer {
-        std::vector<UILayer> appLayers;
-        std::vector<UILayer> systemLayers;
-    };
-    LayerBuffer layerBuffers_[2];
+    std::thread       rasterThread_;
+    std::thread       layoutThread_;
+    SDL_GLContext     rasterGLContext_ = nullptr;
 
     // Pool of reusable GPU-backed Skia surfaces for HTML layers.
     // Owned by the raster thread — FBOs are per-context but textures
