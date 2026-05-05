@@ -254,16 +254,17 @@ void Engine::run() {
             }
         }
 
-        // Destroy DOM nodes queued for deferred free while both layout + raster
-        // threads are confirmed not to be reading the DOM. Layout is idle by
-        // the wait above; raster is safe except while it's actively traversing
-        // (Requested/Busy). Also require structure-clean — the persistent
-        // layout tree may still hold LayoutNodeAdapter pointers at queued
-        // nodes, and hitTestText (called below during event polling) would
-        // return a dangling TextNode*.
-        if (document_ &&
-            !framePresenter_->isRasterBusyOrRequested() &&
-            !document_->isStructureDirty()) {
+        // Destroy DOM nodes queued for deferred free. The raster thread no
+        // longer reads the DOM (it replays a CommandBuffer that holds no
+        // dom::Node pointers — variable-length payloads are copied into the
+        // arena, and Cmd_LayerBreak/Cmd_BlitCanvasInline carry CanvasScene*
+        // which is owned by the engine, not by Elements). Layout is idle by
+        // the wait above. The remaining gate is structure-clean — the
+        // persistent layout tree's LayoutNodeAdapters point at live Nodes,
+        // and hitTestText (called below during event polling) would return
+        // a dangling TextNode* if we freed before the next layout pass
+        // refreshed the tree.
+        if (document_ && !document_->isStructureDirty()) {
             document_->drainPendingFrees();
         }
 
@@ -595,7 +596,16 @@ void Engine::run() {
 
         double tGpu = util::currentTimeMs();
 
-        // 5d. Update canvas scene scroll + clean up detached.
+        // 5d. Update canvas scene scroll + clean up detached. The raster
+        //     thread may be mid-replay holding CanvasScene* pointers from
+        //     this frame's recording. Erasing here is safe because:
+        //       (a) signalRender requires isRasterIdle, so the previous
+        //           replay is fully complete before we publish a new one,
+        //           and (b) any scene whose element was detached during this
+        //           frame's JS phase was skipped by DrawTraversal at record
+        //           time and so doesn't appear in the just-signaled buffer.
+        //     If a future change adds JS execution between record (5a2) and
+        //     this point, this invariant will need re-verification.
         for (auto& cs : canvasScenes_) {
             cs->setViewportScroll(scrollY_);
             cs->checkDetached();
