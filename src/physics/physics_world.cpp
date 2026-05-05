@@ -23,6 +23,7 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 
 #include "util/log.h"
@@ -297,6 +298,7 @@ void PhysicsWorld::shutdown() {
         // Remove constraints first
         for (auto& [h, c] : constraints_) {
             if (c.ref) physicsSystem_.RemoveConstraint(c.ref.GetPtr());
+            if (c.ref2) physicsSystem_.RemoveConstraint(c.ref2.GetPtr());
         }
         constraints_.clear();
 
@@ -374,6 +376,54 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
+        case BodyOptions::ShapeChain: {
+            // Polyline in XY plane → vertical wall (extruded along Z) as a
+            // single Jolt MeshShape. Front-face direction is the in-plane
+            // left-normal of the walking direction (rotate +90° CCW); set
+            // chainFlipNormal=true to swap. MeshShape culls back faces by
+            // default, giving one-sided collision.
+            //
+            // bromesh::sweep would be the natural fit here, but its
+            // parallel-transport frame doesn't reliably pin profile-local-Y
+            // to world-Z for planar paths — direct geometry construction is
+            // more predictable and ~30 LOC.
+            if (opts.chainPoints.size() < 2) return RefConst<Shape>();
+            const float halfDepth = opts.chainDepth * 0.5f;
+            const size_t n = opts.chainPoints.size();
+            const size_t nSeg = opts.chainClosed ? n : (n - 1);
+
+            VertexList verts;
+            verts.reserve(2 * (n + (opts.chainClosed ? 1 : 0)));
+            for (size_t i = 0; i < n; i++) {
+                const auto& p = opts.chainPoints[i];
+                verts.push_back(Float3(p.x, p.y, -halfDepth)); // bottom (z-)
+                verts.push_back(Float3(p.x, p.y, +halfDepth)); // top    (z+)
+            }
+            // For closed loops, wrap by indexing back to vertex 0/1.
+            auto botIdx = [&](size_t i) -> uint32_t { return uint32_t(2 * (i % n)); };
+            auto topIdx = [&](size_t i) -> uint32_t { return uint32_t(2 * (i % n) + 1); };
+
+            IndexedTriangleList tris;
+            tris.reserve(2 * nSeg);
+            for (size_t i = 0; i < nSeg; i++) {
+                uint32_t a_b = botIdx(i),     a_t = topIdx(i);
+                uint32_t b_b = botIdx(i + 1), b_t = topIdx(i + 1);
+                if (!opts.chainFlipNormal) {
+                    // Front face = in-plane left of the walking direction
+                    // (so a +X segment in XY has its front facing +Y).
+                    tris.push_back(IndexedTriangle(a_b, b_t, b_b, 0));
+                    tris.push_back(IndexedTriangle(a_b, a_t, b_t, 0));
+                } else {
+                    // Reverse winding → front face on the opposite side.
+                    tris.push_back(IndexedTriangle(a_b, b_b, b_t, 0));
+                    tris.push_back(IndexedTriangle(a_b, b_t, a_t, 0));
+                }
+            }
+
+            MeshShapeSettings s(std::move(verts), std::move(tris));
+            auto r = s.Create();
+            return r.HasError() ? RefConst<Shape>() : r.Get();
+        }
         case BodyOptions::ShapeCompound: {
             if (opts.compoundParts.empty()) return RefConst<Shape>();
             StaticCompoundShapeSettings s;
@@ -393,9 +443,9 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
     auto shape = buildShape(opts);
     if (!shape) return BodyID();
 
-    // Mesh shapes can only be static.
+    // Mesh / chain shapes can only be static.
     bool isStatic = opts.isStatic;
-    if (opts.shape == BodyOptions::ShapeMesh) isStatic = true;
+    if (opts.shape == BodyOptions::ShapeMesh || opts.shape == BodyOptions::ShapeChain) isStatic = true;
 
     int layer = opts.layer;
     if (layer < 0) layer = isStatic ? 0 : 1;
@@ -488,6 +538,7 @@ void PhysicsWorld::destroyBody(BodyID id) {
         }
         if (refsBody) {
             physicsSystem_.RemoveConstraint(it->second.ref.GetPtr());
+            if (it->second.ref2) physicsSystem_.RemoveConstraint(it->second.ref2.GetPtr());
             it = constraints_.erase(it);
         } else {
             ++it;
@@ -553,6 +604,7 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
     // Constraints first (so removing bodies doesn't trip Jolt's constraint asserts).
     for (auto& [h, c] : constraints_) {
         if (c.ref) physicsSystem_.RemoveConstraint(c.ref.GetPtr());
+        if (c.ref2) physicsSystem_.RemoveConstraint(c.ref2.GetPtr());
     }
     constraints_.clear();
 
@@ -626,6 +678,75 @@ uint64_t PhysicsWorld::getUserData(BodyID id) const {
 uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
     auto& bi = physicsSystem_.GetBodyInterface();
 
+    // Wheel = SixDOFConstraint configured Box2D-style: free translation along
+    // the suspension axis (with optional soft limits via spring), free rotation
+    // around the hinge axis (with optional motor); all other DOFs locked.
+    // Slider+Hinge composition was tried and over-constrains (each constraint
+    // fixes the DOF the other frees).
+    if (opts.type == ConstraintOptions::Wheel) {
+        Vec3 suspAxis  = opts.wheelSuspensionAxis.NormalizedOr(Vec3(0, 1, 0));
+        Vec3 hingeAxis = opts.wheelHingeAxis.NormalizedOr(Vec3(0, 0, 1));
+        // Build an orthonormal frame where local-Y = suspAxis, local-Z = hingeAxis.
+        Vec3 axisX = suspAxis.Cross(hingeAxis).NormalizedOr(Vec3::sAxisX());
+        Vec3 axisY = suspAxis;
+        // If the user-supplied axes weren't perfectly perpendicular, re-derive Y.
+        Vec3 axisZ = axisX.Cross(axisY).NormalizedOr(hingeAxis);
+        axisY = axisZ.Cross(axisX).NormalizedOr(suspAxis);
+
+        RVec3 hub = opts.point1;
+        if (hub == RVec3::sZero())
+            hub = bi.GetCenterOfMassPosition(opts.body2);
+
+        auto* s = new SixDOFConstraintSettings();
+        s->mSpace = EConstraintSpace::WorldSpace;
+        s->mPosition1 = hub;
+        s->mPosition2 = hub;
+        s->mAxisX1 = axisX; s->mAxisY1 = axisY;
+        s->mAxisX2 = axisX; s->mAxisY2 = axisY;
+
+        using EAxis = SixDOFConstraintSettings::EAxis;
+        // Lock everything by default, then free the two wheel DOFs.
+        s->MakeFixedAxis(EAxis::TranslationX);
+        s->MakeFixedAxis(EAxis::TranslationZ);
+        s->MakeFixedAxis(EAxis::RotationX);
+        s->MakeFixedAxis(EAxis::RotationY);
+        // Suspension along local Y.
+        if (opts.wheelHasTranslationLimits) {
+            s->SetLimitedAxis(EAxis::TranslationY,
+                              opts.wheelLowerTranslation,
+                              opts.wheelUpperTranslation);
+        } else {
+            s->MakeFreeAxis(EAxis::TranslationY);
+        }
+        if (opts.wheelHertz > 0.0f) {
+            s->mLimitsSpringSettings[EAxis::TranslationY].mMode = ESpringMode::FrequencyAndDamping;
+            s->mLimitsSpringSettings[EAxis::TranslationY].mFrequency = opts.wheelHertz;
+            s->mLimitsSpringSettings[EAxis::TranslationY].mDamping = opts.wheelDampingRatio;
+        }
+        // Wheel pin = rotation around local Z, always free.
+        s->MakeFreeAxis(EAxis::RotationZ);
+        if (opts.wheelEnableMotor) {
+            s->mMotorSettings[EAxis::RotationZ].SetTorqueLimit(opts.wheelMaxMotorTorque);
+        }
+        Ref<TwoBodyConstraintSettings> sRef = s;
+
+        TwoBodyConstraint* raw = bi.CreateConstraint(s, opts.body1, opts.body2);
+        if (!raw) return 0;
+        Ref<Constraint> c(raw);
+        physicsSystem_.AddConstraint(c.GetPtr());
+
+        if (opts.wheelEnableMotor) {
+            auto* sd = static_cast<SixDOFConstraint*>(c.GetPtr());
+            sd->SetMotorState(EAxis::RotationZ, EMotorState::Velocity);
+            // Target angular velocity is in constraint space; only Z component matters.
+            sd->SetTargetAngularVelocityCS(Vec3(0, 0, opts.wheelMotorSpeed));
+        }
+
+        uint32_t handle = nextConstraintHandle_++;
+        constraints_[handle] = ConstraintEntry{c};
+        return handle;
+    }
+
     TwoBodyConstraintSettings* settings = nullptr;
     Ref<TwoBodyConstraintSettings> settingsRef;
 
@@ -686,6 +807,9 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
             settings = s;
             break;
         }
+        case ConstraintOptions::Wheel:
+            // handled above; unreachable here.
+            return 0;
     }
 
     if (!settings) return 0;
@@ -711,9 +835,8 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
 void PhysicsWorld::destroyConstraint(uint32_t handle) {
     auto it = constraints_.find(handle);
     if (it == constraints_.end()) return;
-    if (it->second.ref) {
-        physicsSystem_.RemoveConstraint(it->second.ref.GetPtr());
-    }
+    if (it->second.ref) physicsSystem_.RemoveConstraint(it->second.ref.GetPtr());
+    if (it->second.ref2) physicsSystem_.RemoveConstraint(it->second.ref2.GetPtr());
     constraints_.erase(it);
 }
 
@@ -721,6 +844,18 @@ void PhysicsWorld::setConstraintEnabled(uint32_t handle, bool enabled) {
     auto it = constraints_.find(handle);
     if (it == constraints_.end() || !it->second.ref) return;
     it->second.ref->SetEnabled(enabled);
+    if (it->second.ref2) it->second.ref2->SetEnabled(enabled);
+}
+
+void PhysicsWorld::setWheelMotor(uint32_t handle, bool enabled, float speed, float maxTorque) {
+    auto it = constraints_.find(handle);
+    if (it == constraints_.end() || !it->second.ref) return;
+    auto* sd = dynamic_cast<SixDOFConstraint*>(it->second.ref.GetPtr());
+    if (!sd) return;
+    using EAxis = SixDOFConstraintSettings::EAxis;
+    sd->SetMotorState(EAxis::RotationZ, enabled ? EMotorState::Velocity : EMotorState::Off);
+    sd->SetTargetAngularVelocityCS(Vec3(0, 0, speed));
+    sd->GetMotorSettings(EAxis::RotationZ).SetTorqueLimit(maxTorque);
 }
 
 std::vector<uint32_t> PhysicsWorld::drainBrokenConstraints() {

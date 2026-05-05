@@ -176,6 +176,19 @@ Physics.createBody({
     ],
 });
 
+// 2D ground / chain (one-sided edge primitive). Polyline lives in the XY
+// plane; the engine extrudes a vertical wall along ±Z by `depth/2` and
+// triangulates so the in-plane left-normal of the walking direction is the
+// front face — back-face culling makes the chain one-sided. Set flipNormal
+// to swap. Always static.
+Physics.createBody({
+    shape: 'chain',
+    points: [-10, 0,  0, 0,  0, 10],   // flat [x0,y0,x1,y1,...] in 2D
+    depth: 4,                          // total Z thickness (for 2D-DOF bodies)
+    closed: false,                     // close loop: connects last→first
+    flipNormal: false,
+});
+
 /** Destroy a body and free its tag. Safely removes any constraints attached to it. */
 Physics.destroyBody(id);
 
@@ -274,10 +287,10 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  * is omitted). Returns a non-zero handle on success.
  *
  * @param {Object} opts
- * @param {string} opts.type      - "distance" | "point" | "hinge" | "fixed" | "slider"
+ * @param {string} opts.type      - "distance" | "point" | "hinge" | "fixed" | "slider" | "wheel"
  * @param {number} opts.body1     - first body tag
  * @param {number} [opts.body2]   - second body tag (omit / pass -1 to attach to world)
- * @param {{x,y,z}} [opts.point1] - world-space anchor on body1
+ * @param {{x,y,z}} [opts.point1] - world-space anchor on body1 (also: wheel hub)
  * @param {{x,y,z}} [opts.point2] - world-space anchor on body2
  * @param {number}  [opts.minDistance]   - distance: lower bound (negative = use rest length)
  * @param {number}  [opts.maxDistance]   - distance: upper bound
@@ -285,6 +298,17 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  * @param {number}  [opts.limitMin]      - hinge: min angle (rad); slider: min position
  * @param {number}  [opts.limitMax]      - hinge: max angle (rad); slider: max position
  * @param {boolean} [opts.collideConnected=false]
+ *
+ * Wheel-only fields (Box2D-style; backed by a SixDOFConstraint):
+ * @param {{x,y,z}} [opts.suspensionAxis={0,1,0}] - translation axis (suspension)
+ * @param {{x,y,z}} [opts.hingeAxis={0,0,1}]      - wheel rotation axis (2D = +Z)
+ * @param {number}  [opts.hertz=2]                - suspension spring frequency (Hz); 0 disables
+ * @param {number}  [opts.dampingRatio=0.7]       - 0=undamped, 1=critical
+ * @param {number}  [opts.lowerTranslation]       - optional suspension travel min (m)
+ * @param {number}  [opts.upperTranslation]       - optional suspension travel max (m)
+ * @param {boolean} [opts.enableMotor=false]      - enable angular motor on the wheel pin
+ * @param {number}  [opts.motorSpeed=0]           - target angular velocity (rad/s)
+ * @param {number}  [opts.maxMotorTorque=0]       - motor torque cap (N·m)
  * @returns {number} handle (truthy on success)
  */
 const j = Physics.createConstraint({
@@ -293,6 +317,22 @@ const j = Physics.createConstraint({
     point1: {x:0, y:5, z:0}, point2: {x:1, y:5, z:0},
     minDistance: 0.5, maxDistance: 1.5,
 });
+
+// Wheel: chassis + wheel pinned at the wheel hub, free to bounce on the
+// suspension axis (with hertz/dampingRatio spring) and free to spin around
+// the hinge axis (with optional motor).
+const wheel = Physics.createConstraint({
+    type: 'wheel',
+    body1: chassis, body2: wheelBody,
+    point1: {x:0, y:0, z:0},               // wheel hub (world)
+    suspensionAxis: {x:0, y:1, z:0},
+    hingeAxis:      {x:0, y:0, z:1},
+    hertz: 2.0, dampingRatio: 0.7,
+    enableMotor: true, motorSpeed: -10, maxMotorTorque: 50,
+});
+
+/** Adjust a wheel constraint's motor at runtime. No-op for non-wheel handles. */
+Physics.setWheelMotor(wheel, /*enabled*/ true, /*speed*/ -8.0, /*maxTorque*/ 60);
 
 /** Disable / enable a constraint without destroying it. */
 Physics.setConstraintEnabled(handle, true);

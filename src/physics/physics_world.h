@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <Jolt/Jolt.h>
+#include <Jolt/Math/Float2.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
@@ -55,6 +56,7 @@ struct BodyOptions {
         ShapeConvexHull,
         ShapeMesh,        // static only
         ShapeCompound,
+        ShapeChain,       // static only — 2D polyline thickened along Z
     };
 
     Shape shape = ShapeBox;
@@ -71,6 +73,13 @@ struct BodyOptions {
     // Mesh (static only)
     std::vector<JPH::Vec3> meshVertices;
     std::vector<uint32_t>  meshIndices;       // triangle list (multiple of 3)
+    // Chain (static only): a 2D polyline in the XY plane, thickened along Z
+    // into a one-sided collision strip via bromesh::sweep + Jolt MeshShape.
+    // Triangle winding determines which side is "front"; flipNormal swaps it.
+    std::vector<JPH::Float2> chainPoints;
+    float chainDepth = 20.0f;        // total Z thickness of the strip
+    bool  chainClosed = false;       // close loop (welds last segment back to first)
+    bool  chainFlipNormal = false;   // flip front-face direction
     // Compound: sub-parts (each carries its own shape + local transform)
     std::vector<BodyOptions> compoundParts;
     JPH::Vec3 localPosition{0, 0, 0};         // used only for compound sub-parts
@@ -102,6 +111,7 @@ struct ConstraintOptions {
         Hinge,
         Fixed,
         Slider,
+        Wheel,    // Box2D-style: suspension axis (slider + spring) + wheel pin (hinge + motor)
     };
     Type type = Distance;
     JPH::BodyID body1;
@@ -126,6 +136,18 @@ struct ConstraintOptions {
 
     // Collide-connected (default false — common to want no self-collision)
     bool collideConnected = false;
+
+    // Wheel-specific (Box2D v3 surface).
+    JPH::Vec3 wheelSuspensionAxis{0, 1, 0};   // suspension translation axis (world)
+    JPH::Vec3 wheelHingeAxis{0, 0, 1};        // wheel rotation axis (world; 2D = +Z)
+    float wheelHertz = 2.0f;                  // suspension spring frequency (Hz); 0 disables
+    float wheelDampingRatio = 0.7f;           // 0 = undamped, 1 = critical
+    bool  wheelHasTranslationLimits = false;
+    float wheelLowerTranslation = 0.0f;
+    float wheelUpperTranslation = 0.0f;
+    bool  wheelEnableMotor = false;
+    float wheelMotorSpeed = 0.0f;             // rad/s
+    float wheelMaxMotorTorque = 0.0f;         // N·m
 };
 
 class PhysicsWorld {
@@ -249,6 +271,8 @@ public:
     uint32_t createConstraint(const ConstraintOptions& opts);
     void destroyConstraint(uint32_t handle);
     void setConstraintEnabled(uint32_t handle, bool enabled);
+    /// Adjust a wheel constraint's motor at runtime (no-op for non-wheel handles).
+    void setWheelMotor(uint32_t handle, bool enabled, float speed, float maxTorque);
     /// Returns and clears any constraint-broken events accumulated since last call.
     std::vector<uint32_t> drainBrokenConstraints();
 
@@ -290,9 +314,11 @@ private:
     std::vector<bool> layerMatrix_;     // flat n*n
     int numLayers_ = 0;
 
-    // Constraint registry
+    // Constraint registry. Composite constraints (e.g. wheel) hold a primary
+    // ref + an optional secondary ref under one handle.
     struct ConstraintEntry {
         JPH::Ref<JPH::Constraint> ref;
+        JPH::Ref<JPH::Constraint> ref2;
     };
     std::unordered_map<uint32_t, ConstraintEntry> constraints_;
     uint32_t nextConstraintHandle_ = 1;

@@ -234,6 +234,7 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
     else if (shape == "convexHull") out.shape = physics::BodyOptions::ShapeConvexHull;
     else if (shape == "mesh")       out.shape = physics::BodyOptions::ShapeMesh;
     else if (shape == "compound")   out.shape = physics::BodyOptions::ShapeCompound;
+    else if (shape == "chain")      out.shape = physics::BodyOptions::ShapeChain;
     else { err = "unknown shape: " + shape; return false; }
 
     JSValue posVal = JS_GetPropertyStr(ctx, opts, "position");
@@ -332,6 +333,23 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
         for (size_t i = 0; i + 2 < verts.size(); i += 3)
             out.meshVertices.push_back(JPH::Vec3(verts[i], verts[i+1], verts[i+2]));
         out.meshIndices = std::move(idx);
+        out.isStatic = true;
+    }
+
+    if (out.shape == physics::BodyOptions::ShapeChain) {
+        JSValue ptsArr = JS_GetPropertyStr(ctx, opts, "points");
+        std::vector<float> pts;
+        readFloatArray(ctx, ptsArr, pts);
+        JS_FreeValue(ctx, ptsArr);
+        if (pts.size() < 4 || (pts.size() % 2) != 0) {
+            err = "chain requires points (flat [x0,y0,x1,y1,...]) with at least 2 points";
+            return false;
+        }
+        for (size_t i = 0; i + 1 < pts.size(); i += 2)
+            out.chainPoints.push_back(JPH::Float2(pts[i], pts[i+1]));
+        out.chainDepth = (float)jsGetNum(ctx, opts, "depth", 20.0);
+        out.chainClosed = jsGetBool(ctx, opts, "closed", false);
+        out.chainFlipNormal = jsGetBool(ctx, opts, "flipNormal", false);
         out.isStatic = true;
     }
 
@@ -491,7 +509,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
     else if (type == "hinge") cs.type = physics::ConstraintOptions::Hinge;
     else if (type == "fixed") cs.type = physics::ConstraintOptions::Fixed;
     else if (type == "slider") cs.type = physics::ConstraintOptions::Slider;
-    else return JS_ThrowTypeError(ctx, "constraint type required (distance|point|hinge|fixed|slider)");
+    else if (type == "wheel")  cs.type = physics::ConstraintOptions::Wheel;
+    else return JS_ThrowTypeError(ctx, "constraint type required (distance|point|hinge|fixed|slider|wheel)");
 
     JSValue b1v = JS_GetPropertyStr(ctx, o, "body1");
     JSValue b2v = JS_GetPropertyStr(ctx, o, "body2");
@@ -529,6 +548,30 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
 
     cs.breakingImpulse = (float)jsGetNum(ctx, o, "breakingImpulse", 0.0);
     cs.collideConnected = jsGetBool(ctx, o, "collideConnected", false);
+
+    if (cs.type == physics::ConstraintOptions::Wheel) {
+        JSValue sa = JS_GetPropertyStr(ctx, o, "suspensionAxis");
+        cs.wheelSuspensionAxis = readVec3(ctx, sa, JPH::Vec3(0, 1, 0));
+        JS_FreeValue(ctx, sa);
+        JSValue ha = JS_GetPropertyStr(ctx, o, "hingeAxis");
+        cs.wheelHingeAxis = readVec3(ctx, ha, JPH::Vec3(0, 0, 1));
+        JS_FreeValue(ctx, ha);
+        cs.wheelHertz = (float)jsGetNum(ctx, o, "hertz", 2.0);
+        cs.wheelDampingRatio = (float)jsGetNum(ctx, o, "dampingRatio", 0.7);
+        JSValue lo = JS_GetPropertyStr(ctx, o, "lowerTranslation");
+        JSValue hi = JS_GetPropertyStr(ctx, o, "upperTranslation");
+        if (!JS_IsUndefined(lo) && !JS_IsUndefined(hi)) {
+            double a, b;
+            JS_ToFloat64(ctx, &a, lo); JS_ToFloat64(ctx, &b, hi);
+            cs.wheelLowerTranslation = (float)a;
+            cs.wheelUpperTranslation = (float)b;
+            cs.wheelHasTranslationLimits = true;
+        }
+        JS_FreeValue(ctx, lo); JS_FreeValue(ctx, hi);
+        cs.wheelEnableMotor = jsGetBool(ctx, o, "enableMotor", false);
+        cs.wheelMotorSpeed = (float)jsGetNum(ctx, o, "motorSpeed", 0.0);
+        cs.wheelMaxMotorTorque = (float)jsGetNum(ctx, o, "maxMotorTorque", 0.0);
+    }
 
     uint32_t handle = w->world->createConstraint(cs);
     if (!handle) return JS_ThrowInternalError(ctx, "Failed to create constraint");
@@ -858,6 +901,18 @@ static JSValue js_physics_setConstraintEnabled(JSContext* ctx, JSValueConst, int
     uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
     bool en = JS_ToBool(ctx, argv[1]);
     s_defaultWorld->world->setConstraintEnabled(h, en);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_physics_setWheelMotor(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 4) return JS_ThrowTypeError(ctx, "setWheelMotor(handle, enabled, speed, maxTorque)");
+    uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
+    bool en = JS_ToBool(ctx, argv[1]);
+    double speed = 0, torque = 0;
+    JS_ToFloat64(ctx, &speed, argv[2]);
+    JS_ToFloat64(ctx, &torque, argv[3]);
+    s_defaultWorld->world->setWheelMotor(h, en, (float)speed, (float)torque);
     return JS_UNDEFINED;
 }
 
@@ -1254,7 +1309,8 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("getAllTransforms", js_physics_getAllTransforms, 0)
         .function("createConstraint", js_physics_createConstraint, 1)
         .function("destroyConstraint", js_physics_destroyConstraint, 1)
-        .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2);
+        .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)
+        .function("setWheelMotor", js_physics_setWheelMotor, 4);
 }
 
 void PhysicsBindings::cleanup(JSContext* ctx) {
