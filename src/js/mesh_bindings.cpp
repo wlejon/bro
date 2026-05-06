@@ -1847,9 +1847,11 @@ void MeshBindings::install(JSContext* ctx) {
     .static_method("octahedron",   [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::octahedron()); })
     .static_method("tetrahedron",  [](JSContext* ctx) -> JSValue { return wrapMesh(ctx, bromesh::tetrahedron()); })
     .static_method("cone", [](JSContext* ctx, std::optional<double> r, std::optional<double> h,
-                               std::optional<int> slices, std::optional<int> stacks) -> JSValue {
+                               std::optional<int> slices, std::optional<int> stacks,
+                               std::optional<bool> capBase) -> JSValue {
         return wrapMesh(ctx, bromesh::cone((float)r.value_or(0.5), (float)h.value_or(1.0),
-                                           slices.value_or(16), stacks.value_or(4)));
+                                           slices.value_or(16), stacks.value_or(4),
+                                           capBase.value_or(false)));
     })
     .static_method("disc", [](JSContext* ctx, std::optional<double> r, std::optional<int> slices) -> JSValue {
         return wrapMesh(ctx, bromesh::disc((float)r.value_or(0.5), slices.value_or(16)));

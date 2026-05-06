@@ -210,14 +210,16 @@ class Mesh {
 
   /**
    * Cone along the Y axis. Base disc sits at Y=0 with radius `radius`;
-   * apex sits at Y=`height`. Lateral surface only (no base cap).
+   * apex sits at Y=`height`. With `capBase=true` a fan cap is added at
+   * Y=0 facing -Y; otherwise the bottom is open.
    * @param {number} [radius=0.5]
    * @param {number} [height=1]
    * @param {number} [slices=16]
    * @param {number} [stacks=4]
+   * @param {boolean} [capBase=false]
    * @returns {Mesh}
    */
-  static cone(radius, height, slices, stacks) {}
+  static cone(radius, height, slices, stacks, capBase) {}
 
   /**
    * Disc (filled circle) in the XZ plane.
