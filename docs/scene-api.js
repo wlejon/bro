@@ -324,12 +324,26 @@ class SceneGraph {
    * @param {number} [opts.emissive=0] - emissive intensity (0 = none, >0 = self-lit)
    * @param {string|number[]} [opts.emissiveColor] - emissive tint (defaults to baseColor)
    * @param {Object} [opts.material] - {metallic, roughness} nested form
+   * @param {boolean} [opts.twoSided=false] - disable backface culling (leaves, fabric)
+   * @param {number} [opts.subsurface=0] - leaf-translucency wrap term [0..1]; takes effect when twoSided is true
    * @param {Float32Array} [opts.positions] - raw vertex positions (xyz, stride 3)
    * @param {Float32Array} [opts.normals] - raw vertex normals (xyz, stride 3)
    * @param {Uint32Array} [opts.indices] - raw triangle indices
    * @returns {SceneNode}
    */
   createMesh(opts) {}
+
+  /**
+   * Configure global wind sway. Per-vertex windBend (vertex color R, 0..1)
+   * modulates: pos += direction * sin(time*frequency + dot(pos.xz, k)) * strength * bend.
+   * The engine advances `windTime` from the per-frame virtual delta so offline
+   * captures stay deterministic.
+   * @param {Object} opts
+   * @param {number[]} [opts.direction=[1,0,0]] - sway direction [x,y,z]
+   * @param {number} [opts.strength=0] - displacement amplitude (world units)
+   * @param {number} [opts.frequency=1.5] - oscillation frequency (rad/s)
+   */
+  setWind(opts) {}
 
   /**
    * Create a physics body node and add it to the root.

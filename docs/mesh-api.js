@@ -1298,3 +1298,94 @@ class VoxelChunk {
 // mesh.saveGLTF(path, opts?) — opts: { skin?, skeleton?, animations? }
 //   Without opts, saves an unskinned mesh (back-compat).
 //   With opts.skeleton, animations may be supplied.
+
+// -----------------------------------------------------------------------------
+// Plant primitives — leafCard, flower, bezierSweep
+// -----------------------------------------------------------------------------
+//
+// Procedural plant shapes for foliage and bloom rendering. UVs on leafCard /
+// flower sample a 4x4 atlas grid (procedural generation up to the consumer);
+// cell mapping by shape:
+//
+//   'oval'    -> (col 0, row 0)
+//   'pointed' -> (col 1, row 0)
+//   'lobed'   -> (col 2, row 0)
+//   'needle'  -> (col 3, row 0)
+//   'frond'   -> (col 0, row 1)
+//   'petal'   -> (col 1, row 1)
+//
+// Vertex colors (R channel) carry per-vertex windBend [0..1] consumed by
+// scene.setWind — base of the leaf is anchored (0), the tip sways (1).
+
+/**
+ * Build a low-poly leaf or petal card lying in the XZ plane (Y is the card
+ * normal). Uses a (widthSegments+1)x(lengthSegments+1) grid so `bend` and
+ * `curl` look smooth; defaults are 4x8.
+ *
+ * @param {('oval'|'pointed'|'lobed'|'needle'|'frond'|'petal')} shape
+ * @param {Object}  [opts]
+ * @param {number}  [opts.width=0.4]
+ * @param {number}  [opts.length=1.0]
+ * @param {number}  [opts.bend=0]            radians of forward arc deflection
+ * @param {number}  [opts.curl=0]            radians of roll around length axis
+ * @param {boolean} [opts.stemOffset=true]   pivot at base when true
+ * @param {number}  [opts.widthSegments=4]
+ * @param {number}  [opts.lengthSegments=8]
+ * @returns {Mesh}
+ *
+ * @example
+ *   const leaf = Mesh.leafCard('oval', { width: 0.3, length: 0.8, bend: 0.4 });
+ */
+Mesh.leafCard = function(shape, opts) {};
+
+/**
+ * Build a radial flower: a small dome center with `petalCount` leaf cards
+ * arranged in `layers` rings. layers > 1 stacks rings with progressively
+ * smaller radii and `layerTwist` rotation between them.
+ *
+ * @param {Object} [opts]
+ * @param {number} [opts.petalCount=6]
+ * @param {string} [opts.petalShape='petal']
+ * @param {number} [opts.petalLength=0.5]
+ * @param {number} [opts.petalWidth=0.25]
+ * @param {number} [opts.petalCurl=0]
+ * @param {number} [opts.petalBend=0.6]
+ * @param {number} [opts.layers=1]
+ * @param {number} [opts.layerTwist=0.4]
+ * @param {number} [opts.centerRadius=0.08]
+ * @param {number} [opts.centerHeight=0.04]
+ * @param {number[]} [opts.centerColor=[1,0.85,0.2]]
+ * @returns {Mesh}
+ *
+ * @example
+ *   const rose = Mesh.flower({ petalCount: 8, layers: 3, layerTwist: 0.5 });
+ */
+Mesh.flower = function(opts) {};
+
+/**
+ * Sweep a 2D profile along a cubic-bezier polyline. controlPoints is treated
+ * as a sequence of cubic segments where every group of 4 points (P0,P1,P2,P3)
+ * defines one segment, and consecutive segments share their endpoint — for two
+ * segments pass 7 points (P0,P1,P2,P3=Q0,Q1,Q2,Q3). Length must satisfy
+ * (N-1) % 3 == 0 and N >= 4.
+ *
+ * @param {number[][]} controlPoints  [x,y,z] triples; (N-1) % 3 == 0
+ * @param {number[][]} profile        [x,y] pairs, swept perpendicular to path
+ * @param {Object} [opts]
+ * @param {number} [opts.samples=32]
+ * @param {number[]} [opts.profileScale]  resampled to length=samples
+ * @param {number[]} [opts.twist]         radians, resampled to length=samples
+ * @param {boolean} [opts.capStart=true]
+ * @param {boolean} [opts.capEnd=true]
+ * @param {boolean} [opts.closeProfile=true]
+ * @param {boolean} [opts.miterJoints=true]
+ * @returns {Mesh}
+ *
+ * @example
+ *   const stem = Mesh.bezierSweep(
+ *     [[0,0,0], [0.05,0.4,0], [-0.1,0.8,0], [0,1.2,0]],
+ *     [[0.03,0],[0,0.03],[-0.03,0],[0,-0.03]],
+ *     { samples: 32, profileScale: [1.0, 0.5] }
+ *   );
+ */
+Mesh.bezierSweep = function(controlPoints, profile, opts) {};

@@ -144,6 +144,17 @@ public:
     void setReceivesShadow(bool b) { receivesShadow_ = b; }
     bool receivesShadow() const { return receivesShadow_; }
 
+    /// Disable backface culling for this mesh (leaves, paper, fabric — anything
+    /// alpha-cut where you want to see both sides). Defaults to false.
+    void setTwoSided(bool b) { twoSided_ = b; }
+    bool twoSided() const { return twoSided_; }
+
+    /// Subsurface / wrap-lighting amount [0,1]. When > 0 AND twoSided is on,
+    /// the shader adds a cheap leaf-translucency term that lights the back
+    /// of the surface relative to the dominant directional light.
+    void setSubsurface(float s) { subsurface_ = s; }
+    float subsurface() const { return subsurface_; }
+
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
@@ -209,6 +220,8 @@ private:
 
     bool castsShadow_ = true;
     bool receivesShadow_ = true;
+    bool twoSided_ = false;
+    float subsurface_ = 0.0f;
 };
 
 } // namespace bro::scene

@@ -1473,6 +1473,18 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, unlitVal);
 
+        JSValue tsVal = JS_GetPropertyStr(ctx, opts, "twoSided");
+        if (!JS_IsUndefined(tsVal)) node->setTwoSided(JS_ToBool(ctx, tsVal) == 1);
+        JS_FreeValue(ctx, tsVal);
+
+        JSValue ssVal = JS_GetPropertyStr(ctx, opts, "subsurface");
+        if (!JS_IsUndefined(ssVal)) {
+            double s = 0;
+            JS_ToFloat64(ctx, &s, ssVal);
+            node->setSubsurface((float)s);
+        }
+        JS_FreeValue(ctx, ssVal);
+
         JSValue csVal = JS_GetPropertyStr(ctx, opts, "castsShadow");
         if (!JS_IsUndefined(csVal)) node->setCastsShadow(JS_ToBool(ctx, csVal) == 1);
         JS_FreeValue(ctx, csVal);
@@ -2325,6 +2337,18 @@ static JSValue js_sg_setAmbient(JSContext* ctx, JSValueConst this_val, int argc,
         JS_FreeValue(ctx, e2);
     }
     g->setAmbient(c.x, c.y, c.z);
+    return JS_UNDEFINED;
+}
+
+// setWind({direction:[x,y,z], strength, frequency}) — global wind sway.
+static JSValue js_sg_setWind(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+    scene::Vec3 d = jsGetVec3(ctx, argv[0], "direction", 1.0f, 0.0f, 0.0f);
+    double strength  = jsGetProp(ctx, argv[0], "strength",  0.0);
+    double frequency = jsGetProp(ctx, argv[0], "frequency", 1.5);
+    g->setWind(d.x, d.y, d.z, (float)strength, (float)frequency);
     return JS_UNDEFINED;
 }
 
@@ -3194,6 +3218,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createTilemap", js_sg_createTilemap, 1)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)
+        .method_raw("setWind", js_sg_setWind, 1)
         .method_raw("setShadowQuality", js_sg_setShadowQuality, 1)
         .method_raw("createTerrain", js_sg_createTerrain, 1)
         .method_raw("findById", js_sg_findById, 1)

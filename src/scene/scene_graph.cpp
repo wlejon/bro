@@ -33,6 +33,10 @@ layout(location = 4) in vec4 aTangent; // xyz = tangent, w = handedness
 uniform mat4 uMVP;
 uniform mat4 uModel;
 uniform int uUseVertexColor;
+uniform vec3  uWindDir;
+uniform float uWindStrength;
+uniform float uWindTime;
+uniform float uWindFreq;
 
 out vec3 vWorldPos;
 out vec3 vNormal;
@@ -44,18 +48,27 @@ out vec3 vBitangentW;
 
 void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
-    vWorldPos = worldPos.xyz;
     mat3 M3 = mat3(uModel);
+    vec3 swayedAPos = aPos;
+    if (uWindStrength > 0.0) {
+        float bend  = aColor.r;
+        float phase = sin(uWindTime * uWindFreq
+                          + dot(worldPos.xz, vec2(0.3, 0.5)));
+        vec3 deltaWorld = uWindDir * (phase * uWindStrength * bend);
+        // Push the world delta back into object space (orthonormal-rotation
+        // approximation of inverse(M3)) so the same uMVP can transform it.
+        vec3 deltaObj   = transpose(M3) * deltaWorld;
+        swayedAPos += deltaObj;
+        worldPos.xyz += deltaWorld;
+    }
+    vWorldPos = worldPos.xyz;
     vNormal = M3 * aNormal;
-    // Tangent frame. Safe to compute unconditionally: when the mesh has no
-    // tangents, aTangent defaults to vec4(0) (disabled attrib) and the shader
-    // branches on uHasTangent before touching vTangentW/vBitangentW.
     vTangentW   = M3 * aTangent.xyz;
     vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
     vUV = aUV;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
     vCamDist = length(worldPos.xyz);
-    gl_Position = uMVP * vec4(aPos, 1.0);
+    gl_Position = uMVP * vec4(swayedAPos, 1.0);
 }
 )";
 
@@ -113,6 +126,8 @@ uniform float uNearClip;
 
 uniform vec3 uAmbient;         // flat ambient (placeholder for IBL)
 uniform int uUnlit;            // 1 = skip lighting, output baseColor + emissive
+uniform int uTwoSided;         // 1 = backface culling disabled at the host
+uniform float uSubsurface;     // 0..1; >0 enables wrap-light leaf translucency
 
 uniform int uLightCount;
 uniform int   uLightType[MAX_LIGHTS];
@@ -422,6 +437,13 @@ void main() {
 
         vec3 radiance = uLightColor[i] * uLightIntensity[i] * atten;
         Lo += shadow * (diffuse + specular) * radiance * NdotL;
+
+        // Cheap wrap-light approximation for thin two-sided surfaces (leaves):
+        // adds back-side illumination relative to L. Gated on twoSided + subsurface.
+        if (uTwoSided == 1 && uSubsurface > 0.0) {
+            float wrap = max(0.0, dot(-N, L) + uSubsurface) * uSubsurface;
+            Lo += baseColor * radiance * wrap * 0.6;
+        }
     }
 
     vec3 ambient;
@@ -1264,6 +1286,7 @@ void SceneGraph::tickAnimations(float dtSec) {
         if (node) node->onTick(dtSec);
     }
     if (root_) root_->onTick(dtSec);
+    advanceWindTime(dtSec);
 }
 
 void SceneGraph::setCanvasSize(int w, int h) {
@@ -1511,6 +1534,12 @@ void SceneGraph::ensureMeshPipeline() {
         uNearClip_ = glGetUniformLocation(meshProgram_, "uNearClip");
         uAmbient_ = glGetUniformLocation(meshProgram_, "uAmbient");
         uUnlit_   = glGetUniformLocation(meshProgram_, "uUnlit");
+        uTwoSided_   = glGetUniformLocation(meshProgram_, "uTwoSided");
+        uSubsurface_ = glGetUniformLocation(meshProgram_, "uSubsurface");
+        uWindDir_      = glGetUniformLocation(meshProgram_, "uWindDir");
+        uWindStrength_ = glGetUniformLocation(meshProgram_, "uWindStrength");
+        uWindTime_     = glGetUniformLocation(meshProgram_, "uWindTime");
+        uWindFreq_     = glGetUniformLocation(meshProgram_, "uWindFreq");
         uLightCount_ = glGetUniformLocation(meshProgram_, "uLightCount");
         uLightType_ = glGetUniformLocation(meshProgram_, "uLightType");
         uLightPos_ = glGetUniformLocation(meshProgram_, "uLightPos");
@@ -3309,6 +3338,10 @@ void SceneGraph::render() {
                 glUniform1f(uFogEnd_, fogEnd_);
                 glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
                 glUniform3f(uAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+                if (uWindDir_      >= 0) glUniform3fv(uWindDir_, 1, windDir_);
+                if (uWindStrength_ >= 0) glUniform1f(uWindStrength_, windStrength_);
+                if (uWindTime_     >= 0) glUniform1f(uWindTime_, windTime_);
+                if (uWindFreq_     >= 0) glUniform1f(uWindFreq_, windFreq_);
                 uploadLights(activeLights, meshLocs_);
 
                 std::function<void(SceneNode*)> walkMesh = [&](SceneNode* n) {
@@ -3637,6 +3670,8 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniform1f(uMetallic_, mesh->metallic());
     glUniform1f(uRoughness_, mesh->roughness());
     if (uUnlit_ >= 0) glUniform1i(uUnlit_, mesh->unlit() ? 1 : 0);
+    if (uTwoSided_ >= 0)   glUniform1i(uTwoSided_, mesh->twoSided() ? 1 : 0);
+    if (uSubsurface_ >= 0) glUniform1f(uSubsurface_, mesh->subsurface());
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
     glUniform1f(uNearClip_, mesh->nearClipDist());
 
@@ -3691,6 +3726,9 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
         glPolygonOffset(pf, pu);
     }
 
+    bool ts = mesh->twoSided();
+    if (ts) glDisable(GL_CULL_FACE);
+
     // Alpha blending for translucent meshes (uniform color alpha < 1).
     // Depth writes are disabled so multiple translucent surfaces don't
     // occlude each other; opaque meshes still occlude translucent ones via
@@ -3710,6 +3748,8 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
         glDisable(GL_BLEND);
         glDepthMask(GL_TRUE);
     }
+
+    if (ts) glEnable(GL_CULL_FACE);
 
     if (pf != 0.0f || pu != 0.0f) {
         glDisable(GL_POLYGON_OFFSET_FILL);

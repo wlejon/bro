@@ -52,10 +52,12 @@
 #include <bromesh/io/vox.h>
 #include <bromesh/reconstruction/reconstruct.h>
 #include <bromesh/manipulation/sweep.h>
+#include <bromesh/manipulation/bezier_sweep.h>
 #include <bromesh/optimization/spatial_hash.h>
 #include <bromesh/procedural/lsystem.h>
 #include <bromesh/procedural/space_colonization.h>
 #include <bromesh/procedural/branches.h>
+#include <bromesh/procedural/plants.h>
 
 #include <cstdio>
 #include <cstring>
@@ -788,6 +790,101 @@ static JSValue js_meshBranches(JSContext* ctx, JSValueConst, int argc, JSValueCo
         if (s >= 3) sides = s;
     }
     return wrapMesh(ctx, bromesh::meshBranches(segs, sides));
+}
+
+static bromesh::LeafShape parseLeafShape(JSContext* ctx, JSValueConst v) {
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        bromesh::LeafShape r = bromesh::LeafShape::Oval;
+        if (s) {
+            if      (!std::strcmp(s, "oval"))    r = bromesh::LeafShape::Oval;
+            else if (!std::strcmp(s, "pointed")) r = bromesh::LeafShape::Pointed;
+            else if (!std::strcmp(s, "lobed"))   r = bromesh::LeafShape::Lobed;
+            else if (!std::strcmp(s, "needle"))  r = bromesh::LeafShape::Needle;
+            else if (!std::strcmp(s, "frond"))   r = bromesh::LeafShape::Frond;
+            else if (!std::strcmp(s, "petal"))   r = bromesh::LeafShape::Petal;
+            JS_FreeCString(ctx, s);
+        }
+        return r;
+    }
+    return bromesh::LeafShape::Oval;
+}
+
+static JSValue js_leafCard(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "leafCard requires (shape[, opts])");
+    }
+    bromesh::LeafShape shape = parseLeafShape(ctx, argv[0]);
+    bromesh::LeafCardOptions o;
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        o.width  = (float)objNum(ctx, argv[1], "width",  o.width);
+        o.length = (float)objNum(ctx, argv[1], "length", o.length);
+        o.bend   = (float)objNum(ctx, argv[1], "bend",   o.bend);
+        o.curl   = (float)objNum(ctx, argv[1], "curl",   o.curl);
+        o.stemOffset = objBool(ctx, argv[1], "stemOffset", o.stemOffset);
+        o.widthSegments  = objInt(ctx, argv[1], "widthSegments",  o.widthSegments);
+        o.lengthSegments = objInt(ctx, argv[1], "lengthSegments", o.lengthSegments);
+    }
+    return wrapMesh(ctx, bromesh::leafCard(shape, o));
+}
+
+static JSValue js_flower(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::FlowerOptions o;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        o.petalCount   = objInt(ctx, argv[0], "petalCount",   o.petalCount);
+        JSValue ps = JS_GetPropertyStr(ctx, argv[0], "petalShape");
+        if (!JS_IsUndefined(ps) && !JS_IsNull(ps)) o.petalShape = parseLeafShape(ctx, ps);
+        JS_FreeValue(ctx, ps);
+        o.petalLength  = (float)objNum(ctx, argv[0], "petalLength",  o.petalLength);
+        o.petalWidth   = (float)objNum(ctx, argv[0], "petalWidth",   o.petalWidth);
+        o.petalCurl    = (float)objNum(ctx, argv[0], "petalCurl",    o.petalCurl);
+        o.petalBend    = (float)objNum(ctx, argv[0], "petalBend",    o.petalBend);
+        o.layers       = objInt(ctx, argv[0], "layers",       o.layers);
+        o.layerTwist   = (float)objNum(ctx, argv[0], "layerTwist",   o.layerTwist);
+        o.centerRadius = (float)objNum(ctx, argv[0], "centerRadius", o.centerRadius);
+        o.centerHeight = (float)objNum(ctx, argv[0], "centerHeight", o.centerHeight);
+        JSValue cc = JS_GetPropertyStr(ctx, argv[0], "centerColor");
+        if (JS_IsArray(cc)) {
+            for (int i = 0; i < 3; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, cc, (uint32_t)i);
+                double d = 0; JS_ToFloat64(ctx, &d, e);
+                o.centerColor[i] = (float)d;
+                JS_FreeValue(ctx, e);
+            }
+        }
+        JS_FreeValue(ctx, cc);
+    }
+    return wrapMesh(ctx, bromesh::flower(o));
+}
+
+static JSValue js_bezierSweep(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx,
+            "bezierSweep requires (controlPoints, profile[, opts])");
+    }
+    std::vector<bromesh::Vec3> ctrl;
+    std::vector<bromesh::Vec2> profile;
+    if (!readVec3List(ctx, argv[0], ctrl)) {
+        return JS_ThrowTypeError(ctx, "controlPoints must be Vec3 list");
+    }
+    if (!readVec2List(ctx, argv[1], profile)) {
+        return JS_ThrowTypeError(ctx, "profile must be Vec2 list");
+    }
+    bromesh::BezierSweepOptions o;
+    if (argc > 2 && JS_IsObject(argv[2])) {
+        o.samples      = objInt(ctx, argv[2], "samples", o.samples);
+        o.capStart     = objBool(ctx, argv[2], "capStart", o.capStart);
+        o.capEnd       = objBool(ctx, argv[2], "capEnd", o.capEnd);
+        o.closeProfile = objBool(ctx, argv[2], "closeProfile", o.closeProfile);
+        o.miterJoints  = objBool(ctx, argv[2], "miterJoints", o.miterJoints);
+        JSValue ps = JS_GetPropertyStr(ctx, argv[2], "profileScale");
+        if (!JS_IsUndefined(ps) && !JS_IsNull(ps)) readFloatLikeVal(ctx, ps, o.profileScale);
+        JS_FreeValue(ctx, ps);
+        JSValue tw = JS_GetPropertyStr(ctx, argv[2], "twist");
+        if (!JS_IsUndefined(tw) && !JS_IsNull(tw)) readFloatLikeVal(ctx, tw, o.twist);
+        JS_FreeValue(ctx, tw);
+    }
+    return wrapMesh(ctx, bromesh::bezierSweep(ctrl, profile, o));
 }
 
 static JSValue js_spaceColonize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1832,6 +1929,11 @@ void MeshBindings::install(JSContext* ctx) {
 
     // ── Static: Sweep along a path ──────────────────────────────────────
     .static_raw("sweep", js_sweep, 2)
+    .static_raw("bezierSweep", js_bezierSweep, 2)
+
+    // ── Static: Plant primitives ───────────────────────────────────────
+    .static_raw("leafCard", js_leafCard, 1)
+    .static_raw("flower",   js_flower,   0)
 
     // ── Static: Branch-tree primitives ─────────────────────────────────
     // spaceColonize → BranchSegment[]; thickenBranches assigns radii via

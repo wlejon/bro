@@ -222,6 +222,21 @@ public:
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }
 
+    /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
+    /// `windBend` (vertex color R, 0..1) modulates the global displacement
+    /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.
+    void setWind(float dirX, float dirY, float dirZ,
+                 float strength, float frequency) {
+        windDir_[0] = dirX; windDir_[1] = dirY; windDir_[2] = dirZ;
+        windStrength_ = strength;
+        windFreq_ = frequency;
+    }
+    /// Advance the wind clock by `dt` seconds. Engine drives this with the
+    /// frame's virtual delta so offline renders stay deterministic.
+    void advanceWindTime(float dt) { windTime_ += dt; }
+    void resetWindTime() { windTime_ = 0.0f; }
+    float windTime() const { return windTime_; }
+
     // --- Shadow mapping ---
 
     /// Configure shadow atlas and quality. `atlasSize` is the side length of
@@ -434,6 +449,12 @@ private:
     GLint uEmissiveColor_ = -1;
     GLint uAmbient_ = -1;
     GLint uUnlit_ = -1;
+    GLint uTwoSided_ = -1;
+    GLint uSubsurface_ = -1;
+    GLint uWindDir_ = -1;
+    GLint uWindStrength_ = -1;
+    GLint uWindTime_ = -1;
+    GLint uWindFreq_ = -1;
     GLint uLightCount_ = -1;
     GLint uLightType_ = -1;
     GLint uLightPos_ = -1;
@@ -521,6 +542,12 @@ private:
     float exposure_ = 1.0f;
     float gamma_ = 2.2f;
     float ambientColor_[3] = {0.03f, 0.03f, 0.03f};
+
+    // Wind sway (vertex shader displacement)
+    float windDir_[3] = {1.0f, 0.0f, 0.0f};
+    float windStrength_ = 0.0f;
+    float windFreq_ = 1.5f;
+    float windTime_ = 0.0f;
 
     // Editor affordance: render a marker icon per LightNode and include
     // them in raycast results.
