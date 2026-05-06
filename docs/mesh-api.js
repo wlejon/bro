@@ -1647,6 +1647,41 @@ Mesh.placeLeavesOnBranches = function(segments, opts) {};
  */
 Mesh.scatterLeaves = function(segments, leaf, opts) {};
 
+/**
+ * High-level tree archetype: samples attractors uniformly inside a sphere
+ * around `canopyCenter`, runs space colonization from `base` toward them,
+ * thickens via the pipe model, and meshes the resulting tree as one merged
+ * tube. Foliage is the caller's responsibility — pass the returned
+ * `segments` into `Mesh.scatterLeaves` (or `Mesh.placeLeavesOnBranches`)
+ * with your own leaf mesh. Deterministic for a given `seed`.
+ *
+ * @param {Object} [opts]
+ * @param {number[]} [opts.base=[0,0,0]]
+ * @param {number[]} [opts.canopyCenter=[0,4,0]]
+ * @param {number}   [opts.canopyRadius=3]
+ * @param {number}   [opts.attractorCount=200]
+ * @param {number}   [opts.sides=8]                 tube ring resolution
+ * @param {number}   [opts.leafRadius=0.05]         tip radius for thickenBranches
+ * @param {number}   [opts.pipeExp=2.5]
+ * @param {number}   [opts.seed=1]
+ * @param {Object}   [opts.colonize]                forwarded to spaceColonize
+ *   { attractionRadius, killRadius, segmentLength, maxIterations,
+ *     tropism: [x,y,z], tropismWeight }
+ * @returns {{ segments: BranchSegment[], branches: Mesh }}
+ *
+ * @example
+ *   const { segments, branches } = Mesh.tree({
+ *     canopyCenter: [0, 5, 0], canopyRadius: 2.5,
+ *     attractorCount: 250, sides: 6,
+ *     colonize: { attractionRadius: 6, segmentLength: 0.25,
+ *                 tropism: [0,1,0], tropismWeight: 0.4 },
+ *     seed: 42,
+ *   });
+ *   const leaf = Mesh.leafCard('oval', { width: 0.1, length: 0.18 });
+ *   const foliage = Mesh.scatterLeaves(segments, leaf, { perUnitLength: 30 });
+ */
+Mesh.tree = function(opts) {};
+
 
 // -----------------------------------------------------------------------------
 // L-system rewriting

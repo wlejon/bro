@@ -1127,6 +1127,44 @@ static JSValue js_thickenBranches(JSContext* ctx, JSValueConst, int argc, JSValu
     return makeBranchSegments(ctx, segs);
 }
 
+// Mesh.tree(opts?) — wrap spaceColonize -> thickenBranches -> meshBranches.
+// Returns { segments, branches } so callers can post-process (e.g. pass
+// segments to scatterLeaves with their own leaf mesh).
+static JSValue js_tree(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::TreeOptions o;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValue bv = JS_GetPropertyStr(ctx, argv[0], "base");
+        if (!JS_IsUndefined(bv) && !JS_IsNull(bv)) o.base = readBmVec3(ctx, bv);
+        JS_FreeValue(ctx, bv);
+        JSValue cv = JS_GetPropertyStr(ctx, argv[0], "canopyCenter");
+        if (!JS_IsUndefined(cv) && !JS_IsNull(cv)) o.canopyCenter = readBmVec3(ctx, cv);
+        JS_FreeValue(ctx, cv);
+        o.canopyRadius    = (float)objNum(ctx, argv[0], "canopyRadius",    o.canopyRadius);
+        o.attractorCount  = objInt(ctx, argv[0], "attractorCount",  o.attractorCount);
+        o.sides           = objInt(ctx, argv[0], "sides",           o.sides);
+        o.leafRadius      = (float)objNum(ctx, argv[0], "leafRadius", o.leafRadius);
+        o.pipeExp         = (float)objNum(ctx, argv[0], "pipeExp",    o.pipeExp);
+        o.seed            = objInt(ctx, argv[0], "seed",            o.seed);
+        JSValue colv = JS_GetPropertyStr(ctx, argv[0], "colonize");
+        if (JS_IsObject(colv)) {
+            o.colonize.attractionRadius = (float)objNum(ctx, colv, "attractionRadius", o.colonize.attractionRadius);
+            o.colonize.killRadius       = (float)objNum(ctx, colv, "killRadius",       o.colonize.killRadius);
+            o.colonize.segmentLength    = (float)objNum(ctx, colv, "segmentLength",    o.colonize.segmentLength);
+            o.colonize.maxIterations    = objInt(ctx, colv, "maxIterations",    o.colonize.maxIterations);
+            o.colonize.tropismWeight    = (float)objNum(ctx, colv, "tropismWeight", o.colonize.tropismWeight);
+            JSValue tv = JS_GetPropertyStr(ctx, colv, "tropism");
+            if (!JS_IsUndefined(tv) && !JS_IsNull(tv)) o.colonize.tropism = readBmVec3(ctx, tv);
+            JS_FreeValue(ctx, tv);
+        }
+        JS_FreeValue(ctx, colv);
+    }
+    bromesh::TreeResult r = bromesh::tree(o);
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "segments", makeBranchSegments(ctx, r.segments));
+    JS_SetPropertyStr(ctx, out, "branches", wrapMesh(ctx, std::move(r.branches)));
+    return out;
+}
+
 static JSValue js_parseLSystem(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsString(argv[0])) {
         return JS_ThrowTypeError(ctx, "parseLSystem requires (text)");
@@ -2145,6 +2183,7 @@ void MeshBindings::install(JSContext* ctx) {
     .static_raw("meshBranches",    js_meshBranches,    1)
     .static_raw("placeLeavesOnBranches", js_placeLeavesOnBranches, 1)
     .static_raw("scatterLeaves",         js_scatterLeaves,         2)
+    .static_raw("tree",                  js_tree,                  0)
 
     // ── Static: L-system module parsing helper ─────────────────────────
     .static_raw("parseLSystem", js_parseLSystem, 1)
