@@ -1447,6 +1447,59 @@ Mesh.bezierSweep = function(controlPoints, profile, opts) {};
 Mesh.tube = function(path, radius, sides, opts) {};
 
 /**
+ * Sweep a 4-vertex diamond profile along `path`, producing a thin tapered
+ * blade-like ribbon with optional out-of-plane thickness. Convenience
+ * wrapper over `sweep` for grass blades, fern leaflets, succulent leaves —
+ * spares the caller the diamond-profile setup.
+ *
+ * `width` and `thickness` are half-extents along profile-X and profile-Y;
+ * `thickness: 0` collapses to a flat ribbon.
+ *
+ * @param {number[][]|Float32Array} path     Vec3 polyline (>= 2 points)
+ * @param {Object} [opts]
+ * @param {number}  [opts.width=0.05]
+ * @param {number}  [opts.thickness=0]
+ * @param {number[]} [opts.profileScale]   size 0/1 = constant; else length == path.length
+ * @param {number[]} [opts.twist]          radians per ring; size rules as profileScale
+ * @param {boolean} [opts.capStart=false]
+ * @param {boolean} [opts.capEnd=true]
+ * @param {boolean} [opts.miterJoints=true]
+ * @returns {Mesh}
+ *
+ * @example
+ *   const path = Mesh.bladePath({ length: 0.4, bend: 0.15, segments: 8 });
+ *   const blade = Mesh.bladeStrip(path, {
+ *     width: 0.012, thickness: 0.002,
+ *     profileScale: path.map((_, i) => 1 - i / (path.length - 1)),
+ *   });
+ */
+Mesh.bladeStrip = function(path, opts) {};
+
+/**
+ * Build a smooth path from `base` to `base + tipDir·length` using a
+ * quadratic Bezier. The control point sits at the midpoint, offset by
+ * `bend` on a lateral axis (world +X projected perpendicular to tipDir,
+ * falling back to +Z) and `lift` on world +Y. Returns segments+1 points
+ * consumable by `Mesh.bladeStrip` or `Mesh.sweep`.
+ *
+ * @param {Object} [opts]
+ * @param {number[]} [opts.base=[0,0,0]]
+ * @param {number[]} [opts.tipDir=[0,1,0]]   normalized internally
+ * @param {number}   [opts.length=1]
+ * @param {number}   [opts.bend=0]           lateral midpoint offset
+ * @param {number}   [opts.lift=0]           world +Y midpoint offset
+ * @param {number}   [opts.segments=8]
+ * @returns {number[][]}                     segments+1 [x,y,z] triples
+ *
+ * @example
+ *   const path = Mesh.bladePath({
+ *     base: [0, 0, 0], tipDir: [0, 1, 0],
+ *     length: 0.4, bend: 0.12, segments: 8,
+ *   });
+ */
+Mesh.bladePath = function(opts) {};
+
+/**
  * Sweep a 2D profile (in the local XY plane) along a 3D polyline `path` using
  * parallel-transport (rotation-minimizing) frames. The lower-level building
  * block that `bezierSweep` wraps — pass an arbitrary path rather than a

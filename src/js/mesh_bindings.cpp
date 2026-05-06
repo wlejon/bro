@@ -810,6 +810,63 @@ static JSValue js_tube(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     return wrapMesh(ctx, bromesh::tube(path, radii, opts));
 }
 
+// Mesh.bladeStrip(path, opts?) — sweep a 4-vertex diamond profile along
+// `path`. opts: { width, thickness, profileScale[], twist[], capStart,
+// capEnd, miterJoints }. Convenience for grass/fern/succulent blades.
+static JSValue js_bladeStrip(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "bladeStrip requires (path[, opts])");
+    }
+    std::vector<bromesh::Vec3> path;
+    if (!readVec3List(ctx, argv[0], path)) {
+        return JS_ThrowTypeError(ctx, "path must be a Vec3 list");
+    }
+    bromesh::BladeStripOptions o;
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        o.width       = (float)objNum(ctx, argv[1], "width",       o.width);
+        o.thickness   = (float)objNum(ctx, argv[1], "thickness",   o.thickness);
+        o.capStart    = objBool(ctx, argv[1], "capStart",    o.capStart);
+        o.capEnd      = objBool(ctx, argv[1], "capEnd",      o.capEnd);
+        o.miterJoints = objBool(ctx, argv[1], "miterJoints", o.miterJoints);
+        JSValue ps = JS_GetPropertyStr(ctx, argv[1], "profileScale");
+        if (!JS_IsUndefined(ps) && !JS_IsNull(ps)) readFloatLikeVal(ctx, ps, o.profileScale);
+        JS_FreeValue(ctx, ps);
+        JSValue tw = JS_GetPropertyStr(ctx, argv[1], "twist");
+        if (!JS_IsUndefined(tw) && !JS_IsNull(tw)) readFloatLikeVal(ctx, tw, o.twist);
+        JS_FreeValue(ctx, tw);
+    }
+    return wrapMesh(ctx, bromesh::bladeStrip(path, o));
+}
+
+// Mesh.bladePath(opts?) — quadratic-Bezier path generator for grass-style
+// blades. opts: { base[3], tipDir[3], length, bend, lift, segments }.
+// Returns a JS array of [x,y,z] triples consumable by sweep/bladeStrip.
+static JSValue js_bladePath(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    bromesh::BladePathOptions o;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValue bv = JS_GetPropertyStr(ctx, argv[0], "base");
+        if (!JS_IsUndefined(bv) && !JS_IsNull(bv)) o.base = readBmVec3(ctx, bv);
+        JS_FreeValue(ctx, bv);
+        JSValue tv = JS_GetPropertyStr(ctx, argv[0], "tipDir");
+        if (!JS_IsUndefined(tv) && !JS_IsNull(tv)) o.tipDir = readBmVec3(ctx, tv);
+        JS_FreeValue(ctx, tv);
+        o.length   = (float)objNum(ctx, argv[0], "length",   o.length);
+        o.bend     = (float)objNum(ctx, argv[0], "bend",     o.bend);
+        o.lift     = (float)objNum(ctx, argv[0], "lift",     o.lift);
+        o.segments = objInt(ctx, argv[0], "segments", o.segments);
+    }
+    auto pts = bromesh::bladePath(o);
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < pts.size(); ++i) {
+        JSValue p = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, p, 0, JS_NewFloat64(ctx, pts[i].x));
+        JS_SetPropertyUint32(ctx, p, 1, JS_NewFloat64(ctx, pts[i].y));
+        JS_SetPropertyUint32(ctx, p, 2, JS_NewFloat64(ctx, pts[i].z));
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, p);
+    }
+    return arr;
+}
+
 static JSValue js_meshBranches(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) {
         return JS_ThrowTypeError(ctx,
@@ -2074,8 +2131,10 @@ void MeshBindings::install(JSContext* ctx) {
     .static_raw("tube", js_tube, 2)
 
     // ── Static: Plant primitives ───────────────────────────────────────
-    .static_raw("leafCard", js_leafCard, 1)
-    .static_raw("flower",   js_flower,   0)
+    .static_raw("leafCard",   js_leafCard,   1)
+    .static_raw("flower",     js_flower,     0)
+    .static_raw("bladeStrip", js_bladeStrip, 1)
+    .static_raw("bladePath",  js_bladePath,  0)
 
     // ── Static: Branch-tree primitives ─────────────────────────────────
     // spaceColonize → BranchSegment[]; thickenBranches assigns radii via
