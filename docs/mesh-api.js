@@ -1420,6 +1420,31 @@ Mesh.flower = function(opts) {};
 Mesh.bezierSweep = function(controlPoints, profile, opts) {};
 
 /**
+ * Sweep a circular cross-section of `sides` vertices along `path`, scaled
+ * per-ring by `radius`. Convenience wrapper over `sweep` for the common
+ * branch / vine / stem case — equivalent to `sweep(circleProfile(sides),
+ * path, { profileScale: radius, ... })` but spares the caller the profile
+ * setup.
+ *
+ * @param {number[][]|Float32Array} path     Vec3 polyline (>= 2 points)
+ * @param {number|number[]}         radius   constant or per-vertex (length must == path.length)
+ * @param {number} [sides=8]                 ring resolution (>= 3)
+ * @param {Object} [opts]
+ * @param {boolean} [opts.capStart=true]
+ * @param {boolean} [opts.capEnd=true]
+ * @param {boolean} [opts.miterJoints=true]
+ * @returns {Mesh}
+ *
+ * @example
+ *   const stem = Mesh.tube(
+ *     [[0,0,0],[0,0.5,0],[0.1,1.0,0]],
+ *     [0.04, 0.03, 0.01],
+ *     6
+ *   );
+ */
+Mesh.tube = function(path, radius, sides, opts) {};
+
+/**
  * Sweep a 2D profile (in the local XY plane) along a 3D polyline `path` using
  * parallel-transport (rotation-minimizing) frames. The lower-level building
  * block that `bezierSweep` wraps — pass an arbitrary path rather than a

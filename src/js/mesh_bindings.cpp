@@ -775,6 +775,41 @@ static JSValue js_sweep(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     return wrapMesh(ctx, bromesh::sweep(profile, path, opts));
 }
 
+// Mesh.tube(path, radius, sides=8, opts?) — circular-cross-section sweep.
+//   path:   Vec3 list (>=2 points)
+//   radius: number (constant) or float-like list of length === path.length
+//   sides:  ring resolution (>=3, default 8)
+//   opts:   { capStart, capEnd, miterJoints }
+static JSValue js_tube(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx,
+            "tube requires (path, radius[, sides[, opts]])");
+    }
+    std::vector<bromesh::Vec3> path;
+    if (!readVec3List(ctx, argv[0], path)) {
+        return JS_ThrowTypeError(ctx, "path must be a Vec3 list");
+    }
+    std::vector<float> radii;
+    if (JS_IsNumber(argv[1])) {
+        double r = 1.0; JS_ToFloat64(ctx, &r, argv[1]);
+        radii.push_back((float)r);
+    } else if (!readFloatLikeVal(ctx, argv[1], radii)) {
+        return JS_ThrowTypeError(ctx, "radius must be a number or float list");
+    }
+
+    bromesh::TubeOptions opts;
+    if (argc > 2 && JS_IsNumber(argv[2])) {
+        int32_t s = 8; JS_ToInt32(ctx, &s, argv[2]);
+        opts.sides = s;
+    }
+    if (argc > 3 && JS_IsObject(argv[3])) {
+        opts.capStart    = objBool(ctx, argv[3], "capStart",    opts.capStart);
+        opts.capEnd      = objBool(ctx, argv[3], "capEnd",      opts.capEnd);
+        opts.miterJoints = objBool(ctx, argv[3], "miterJoints", opts.miterJoints);
+    }
+    return wrapMesh(ctx, bromesh::tube(path, radii, opts));
+}
+
 static JSValue js_meshBranches(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) {
         return JS_ThrowTypeError(ctx,
@@ -2034,6 +2069,7 @@ void MeshBindings::install(JSContext* ctx) {
     // ── Static: Sweep along a path ──────────────────────────────────────
     .static_raw("sweep", js_sweep, 2)
     .static_raw("bezierSweep", js_bezierSweep, 2)
+    .static_raw("tube", js_tube, 2)
 
     // ── Static: Plant primitives ───────────────────────────────────────
     .static_raw("leafCard", js_leafCard, 1)
