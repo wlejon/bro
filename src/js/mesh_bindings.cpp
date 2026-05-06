@@ -824,6 +824,7 @@ static JSValue js_leafCard(JSContext* ctx, JSValueConst, int argc, JSValueConst*
         o.stemOffset = objBool(ctx, argv[1], "stemOffset", o.stemOffset);
         o.widthSegments  = objInt(ctx, argv[1], "widthSegments",  o.widthSegments);
         o.lengthSegments = objInt(ctx, argv[1], "lengthSegments", o.lengthSegments);
+        o.fullUV = objBool(ctx, argv[1], "fullUV", o.fullUV);
     }
     return wrapMesh(ctx, bromesh::leafCard(shape, o));
 }

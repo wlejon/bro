@@ -122,6 +122,7 @@ uniform int       uReceivesShadow;
 uniform float uFogStart;
 uniform float uFogEnd;
 uniform vec3 uFogColor;
+uniform float uAlphaCutoff;     // 0 = no cutoff, >0 discards baseAlpha < cutoff
 uniform float uNearClip;
 
 uniform vec3 uAmbient;         // flat ambient (placeholder for IBL)
@@ -297,6 +298,8 @@ void main() {
         baseColor = uColor.rgb;
         baseAlpha = uColor.a;
     }
+
+    if (uAlphaCutoff > 0.0 && baseAlpha < uAlphaCutoff) discard;
 
     if (uUnlit == 1) {
         vec3 color = baseColor;
@@ -1531,6 +1534,7 @@ void SceneGraph::ensureMeshPipeline() {
         uFogStart_ = glGetUniformLocation(meshProgram_, "uFogStart");
         uFogEnd_ = glGetUniformLocation(meshProgram_, "uFogEnd");
         uFogColor_ = glGetUniformLocation(meshProgram_, "uFogColor");
+        uAlphaCutoff_ = glGetUniformLocation(meshProgram_, "uAlphaCutoff");
         uNearClip_ = glGetUniformLocation(meshProgram_, "uNearClip");
         uAmbient_ = glGetUniformLocation(meshProgram_, "uAmbient");
         uUnlit_   = glGetUniformLocation(meshProgram_, "uUnlit");
@@ -3672,6 +3676,7 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     if (uUnlit_ >= 0) glUniform1i(uUnlit_, mesh->unlit() ? 1 : 0);
     if (uTwoSided_ >= 0)   glUniform1i(uTwoSided_, mesh->twoSided() ? 1 : 0);
     if (uSubsurface_ >= 0) glUniform1f(uSubsurface_, mesh->subsurface());
+    if (uAlphaCutoff_ >= 0) glUniform1f(uAlphaCutoff_, mesh->alphaCutoff());
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
     glUniform1f(uNearClip_, mesh->nearClipDist());
 

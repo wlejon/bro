@@ -155,6 +155,12 @@ public:
     void setSubsurface(float s) { subsurface_ = s; }
     float subsurface() const { return subsurface_; }
 
+    /// Alpha cutoff threshold. 0 (default) disables. When >0, fragments with
+    /// baseAlpha (texture.a * uColor.a, or vColor.a) below this threshold
+    /// are discarded — for cut-out leaves/petals using straight-alpha textures.
+    void setAlphaCutoff(float c) { alphaCutoff_ = c; }
+    float alphaCutoff() const { return alphaCutoff_; }
+
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
@@ -222,6 +228,7 @@ private:
     bool receivesShadow_ = true;
     bool twoSided_ = false;
     float subsurface_ = 0.0f;
+    float alphaCutoff_ = 0.0f;
 };
 
 } // namespace bro::scene

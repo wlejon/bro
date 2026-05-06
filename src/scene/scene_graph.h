@@ -443,6 +443,7 @@ private:
     GLint uFogStart_ = -1;
     GLint uFogEnd_ = -1;
     GLint uFogColor_ = -1;
+    GLint uAlphaCutoff_ = -1;
     GLint uNearClip_ = -1;
     GLint uMetallic_ = -1;
     GLint uRoughness_ = -1;

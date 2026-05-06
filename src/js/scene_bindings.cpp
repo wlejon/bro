@@ -1485,6 +1485,14 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, ssVal);
 
+        JSValue acVal = JS_GetPropertyStr(ctx, opts, "alphaCutoff");
+        if (!JS_IsUndefined(acVal)) {
+            double s = 0;
+            JS_ToFloat64(ctx, &s, acVal);
+            node->setAlphaCutoff((float)s);
+        }
+        JS_FreeValue(ctx, acVal);
+
         JSValue csVal = JS_GetPropertyStr(ctx, opts, "castsShadow");
         if (!JS_IsUndefined(csVal)) node->setCastsShadow(JS_ToBool(ctx, csVal) == 1);
         JS_FreeValue(ctx, csVal);
@@ -2606,6 +2614,28 @@ void SceneBindings::install(JSContext* ctx) {
         })
 
         // Transform
+        .prop("position",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node) return JS_UNDEFINED;
+                const auto& p = w->node->position();
+                JSValue arr = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, p.x));
+                JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, p.y));
+                JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, p.z));
+                return arr;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node || !JS_IsArray(val)) return;
+                JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
+                JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
+                JSValue e2 = JS_GetPropertyUint32(ctx, val, 2);
+                double x=0, y=0, z=0;
+                JS_ToFloat64(ctx, &x, e0);
+                JS_ToFloat64(ctx, &y, e1);
+                JS_ToFloat64(ctx, &z, e2);
+                JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1); JS_FreeValue(ctx, e2);
+                w->node->setPosition((float)x, (float)y, (float)z);
+            })
         .prop("x",
             [](NodeWrapper* w) -> double { return w->node ? w->node->position().x : 0; },
             [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition((float)val, w->node->position().y, w->node->position().z); })
