@@ -209,7 +209,8 @@ class Mesh {
   static tetrahedron() {}
 
   /**
-   * Cone along Y axis.
+   * Cone along the Y axis. Base disc sits at Y=0 with radius `radius`;
+   * apex sits at Y=`height`. Lateral surface only (no base cap).
    * @param {number} [radius=0.5]
    * @param {number} [height=1]
    * @param {number} [slices=16]
@@ -234,6 +235,30 @@ class Mesh {
    * @returns {Mesh}
    */
   static rock(radius, seed, nsubdivisions) {}
+
+  /**
+   * Noise-displaced sphere with non-uniform scale and an optional center
+   * baked into the geometry. Equivalent to
+   *   Mesh.rock(radius, seed, nsub).scale(...).translate(...)
+   * but skips the intermediate copies and recomputes normals only when the
+   * scale is non-uniform.
+   *
+   * @param {Object} [opts]
+   * @param {number} [opts.radius=0.5]
+   * @param {number} [opts.seed=42]
+   * @param {number} [opts.nsub=2]
+   * @param {number|number[]} [opts.scale=1]   number = uniform; [x,y,z] = per-axis
+   * @param {number[]} [opts.center=[0,0,0]]
+   * @returns {Mesh}
+   *
+   * @example
+   *   const canopyBlob = Mesh.blob({
+   *     radius: 1.2, seed: 17, nsub: 2,
+   *     scale: [1.0, 0.7, 1.0],     // squashed sphere
+   *     center: [0, 4, 0],
+   *   });
+   */
+  static blob(opts) {}
 
   /**
    * Trefoil knot.

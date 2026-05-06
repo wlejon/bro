@@ -859,6 +859,41 @@ static JSValue js_scatterLeaves(JSContext* ctx, JSValueConst,
     return wrapMesh(ctx, bromesh::scatterLeaves(segs, *lw->data, opts));
 }
 
+// Mesh.blob({ radius, seed, nsub, scale, center }) — noise-displaced sphere
+// with non-uniform scale and translation baked in. `scale` accepts a single
+// number (uniform), [x,y,z], or {x,y,z}; `center` accepts [x,y,z] or {x,y,z}.
+static JSValue js_blob(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    double radius = 0.5;
+    int    seed   = 42;
+    int    nsub   = 2;
+    bromesh::Vec3 scale{1.0f, 1.0f, 1.0f};
+    bromesh::Vec3 center{0.0f, 0.0f, 0.0f};
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        radius = objNum(ctx, argv[0], "radius", radius);
+        seed   = objInt(ctx, argv[0], "seed",   seed);
+        nsub   = objInt(ctx, argv[0], "nsub",   nsub);
+
+        JSValue sv = JS_GetPropertyStr(ctx, argv[0], "scale");
+        if (!JS_IsUndefined(sv) && !JS_IsNull(sv)) {
+            if (JS_IsNumber(sv)) {
+                double s = 1.0; JS_ToFloat64(ctx, &s, sv);
+                scale = { (float)s, (float)s, (float)s };
+            } else {
+                scale = readBmVec3(ctx, sv);
+            }
+        }
+        JS_FreeValue(ctx, sv);
+
+        JSValue cv = JS_GetPropertyStr(ctx, argv[0], "center");
+        if (!JS_IsUndefined(cv) && !JS_IsNull(cv)) center = readBmVec3(ctx, cv);
+        JS_FreeValue(ctx, cv);
+    }
+    return wrapMesh(ctx, bromesh::blob((float)radius, seed, nsub,
+                                       scale.x, scale.y, scale.z,
+                                       center.x, center.y, center.z));
+}
+
 static bromesh::LeafShape parseLeafShape(JSContext* ctx, JSValueConst v) {
     if (JS_IsString(v)) {
         const char* s = JS_ToCString(ctx, v);
@@ -1787,6 +1822,7 @@ void MeshBindings::install(JSContext* ctx) {
     .static_method("rock", [](JSContext* ctx, std::optional<double> r, std::optional<int> seed, std::optional<int> nsub) -> JSValue {
         return wrapMesh(ctx, bromesh::rock((float)r.value_or(0.5), seed.value_or(42), nsub.value_or(2)));
     })
+    .static_raw("blob", js_blob, 1)
     .static_method("trefoilKnot", [](JSContext* ctx, std::optional<double> r, std::optional<int> slices, std::optional<int> stacks) -> JSValue {
         return wrapMesh(ctx, bromesh::trefoilKnot((float)r.value_or(1.0), slices.value_or(64), stacks.value_or(16)));
     })
