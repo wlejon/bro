@@ -13,6 +13,8 @@
 //                      Edit topology (extrude, translate, merge by group)
 //                      independent of triangulation; tessellate() on demand
 //                      to produce a render-ready triangle mesh.
+//   LSystem          — string-rule stochastic L-system rewriter (axiom +
+//                      production rules → derived module sequence).
 //
 //   Skeleton         — bones + sockets + bindPose.
 //   Pose             — flat array of local TRS per bone (stride 10).
@@ -1331,6 +1333,8 @@ class VoxelChunk {
  * @param {boolean} [opts.stemOffset=true]   pivot at base when true
  * @param {number}  [opts.widthSegments=4]
  * @param {number}  [opts.lengthSegments=8]
+ * @param {boolean} [opts.fullUV=false]      span UVs over [0,1] instead of an
+ *                                           atlas sub-cell; `shape` is ignored
  * @returns {Mesh}
  *
  * @example
@@ -1389,3 +1393,219 @@ Mesh.flower = function(opts) {};
  *   );
  */
 Mesh.bezierSweep = function(controlPoints, profile, opts) {};
+
+/**
+ * Sweep a 2D profile (in the local XY plane) along a 3D polyline `path` using
+ * parallel-transport (rotation-minimizing) frames. The lower-level building
+ * block that `bezierSweep` wraps — pass an arbitrary path rather than a
+ * cubic-bezier control polygon. Returns a triangulated mesh with smooth
+ * ring-averaged normals; caps assume the profile is convex (concave caps fan
+ * from the centroid and may overlap).
+ *
+ * @param {number[][]|Float32Array} profile  [x,y] pairs, swept perpendicular to path
+ * @param {number[][]|Float32Array} path     [x,y,z] triples; ring per point
+ * @param {Object}   [opts]
+ * @param {boolean}  [opts.closeProfile=true]
+ * @param {boolean}  [opts.capStart=true]
+ * @param {boolean}  [opts.capEnd=true]
+ * @param {boolean}  [opts.miterJoints=true]   bisector ring at interior path verts
+ * @param {number[]} [opts.profileScale]       size 0/1 = constant; else length == path.length
+ * @param {number[]} [opts.twist]              radians per ring; size rules as profileScale
+ * @returns {Mesh}
+ *
+ * @example
+ *   const tube = Mesh.sweep(
+ *     [[0.05,0],[0,0.05],[-0.05,0],[0,-0.05]],
+ *     [[0,0,0],[0,0.5,0],[0.2,1.0,0]]
+ *   );
+ */
+Mesh.sweep = function(profile, path, opts) {};
+
+
+// -----------------------------------------------------------------------------
+// Procedural branches — space colonization, pipe-model thickening, sweep mesh
+// -----------------------------------------------------------------------------
+//
+// Pipeline:
+//   1. spaceColonize(attractors, seeds, dir, opts) -> BranchSegment[]
+//   2. thickenBranches(segments, leafRadius, pipeExp) -> BranchSegment[]
+//   3. meshBranches(segments, sides) -> Mesh
+//   4. (optional) placeLeavesOnBranches / scatterLeaves to attach foliage
+//
+// BranchSegment shape:
+//   { parent: number,    // index of parent segment, or -1 for root
+//     from:   [x,y,z],
+//     to:     [x,y,z],
+//     radius: number,    // 0 until thickenBranches runs
+//     depth:  number }   // graph depth from root
+
+/**
+ * Runions-style space colonization. Grows branch segments toward a cloud of
+ * `attractors` from one or more `seedPoints`. Roots (one per seed) have
+ * `parent === -1` and `from === to === seedPoint`.
+ *
+ * @param {number[][]|Float32Array} attractors    [x,y,z] cloud of growth targets
+ * @param {number[][]|Float32Array} seedPoints    [x,y,z] root positions
+ * @param {number[]}                initialDirection  [x,y,z] starting growth direction
+ * @param {Object} [opts]
+ * @param {number} [opts.attractionRadius=5]
+ * @param {number} [opts.killRadius=0.5]
+ * @param {number} [opts.segmentLength=0.3]
+ * @param {number} [opts.maxIterations=200]
+ * @param {number[]} [opts.tropism=[0,0,0]]    biased direction added every step
+ * @param {number} [opts.tropismWeight=0]
+ * @returns {Array<BranchSegment>}
+ */
+Mesh.spaceColonize = function(attractors, seedPoints, initialDirection, opts) {};
+
+/**
+ * Pipe-model branch radii. Leaves get `leafRadius`; each parent's radius is
+ *   r_parent = (sum of r_child^pipeExp)^(1/pipeExp).
+ * Returns the same segment array with `radius` populated.
+ *
+ * @param {Array<BranchSegment>} segments
+ * @param {number} [leafRadius=0.02]
+ * @param {number} [pipeExp=2.5]
+ * @returns {Array<BranchSegment>}
+ */
+Mesh.thickenBranches = function(segments, leafRadius, pipeExp) {};
+
+/**
+ * Mesh a branch tree as one merged sweep. Each maximal chain of single-child
+ * segments shares parallel-transport orientation across rings, and forks blend
+ * via the parent's continuing radius (no flat disc capping at branch points).
+ *
+ * @param {Array<BranchSegment>} segments
+ * @param {number} [sides=8]   cross-section ring resolution (>= 3)
+ * @returns {Mesh}
+ *
+ * @example
+ *   const segs = Mesh.spaceColonize(cloud, [[0,0,0]], [0,1,0],
+ *                                   { tropism: [0,1,0], tropismWeight: 0.3 });
+ *   Mesh.thickenBranches(segs, 0.015, 2.5);
+ *   const trunk = Mesh.meshBranches(segs, 8);
+ */
+Mesh.meshBranches = function(segments, sides) {};
+
+
+// -----------------------------------------------------------------------------
+// Leaf scattering — attach leafCards / flowers to a branch tree
+// -----------------------------------------------------------------------------
+//
+// `placeLeavesOnBranches` returns instance transforms for GPU instancing.
+// `scatterLeaves` stamps a leaf mesh per placement and merges into one Mesh.
+// Both share the same LeafPlacementOptions:
+//
+//   maxRadius=0.05      skip branches thicker than this (keeps leaves off trunk)
+//   minDepth=1          skip segments with depth below this
+//   terminalOnly=false  only on chain tips
+//   perUnitLength=20    average leaves per unit of segment length
+//   densityFalloff=0    >0 biases samples toward the tip
+//   upBias=0.5          0 = radial-out, 1 = world-up forward (phototropism)
+//   tiltJitter=0.3      radians ± random pitch around branch tangent
+//   rollJitter=0.2      radians ± random roll around leaf forward
+//   baseScale=1
+//   scaleJitter=0.2     ± fraction of baseScale per leaf
+//   scaleByRadius=0     1 = scale linearly with (radius / maxRadius)
+//   dedupRadius=0       minimum distance between leaf origins
+//   seed=0              deterministic when nonzero
+//
+// Per-leaf local frame matches `leafCard`: +Z = tip, +Y = card normal, +X = side.
+
+/**
+ * Compute leaf-instance transforms along branch segments. Useful for GPU
+ * instancing (feed `transforms` to an instanced draw).
+ *
+ * @param {Array<BranchSegment>} segments
+ * @param {Object} [opts]   see LeafPlacementOptions table above
+ * @returns {{ count: number,
+ *             transforms: Float32Array,    // stride 16, column-major mat4 = T·R·S
+ *             branchRadius: Float32Array,  // 1 per leaf
+ *             branchDepth:  Int32Array }}  // 1 per leaf
+ */
+Mesh.placeLeavesOnBranches = function(segments, opts) {};
+
+/**
+ * Stamp `leaf` (in its local space) at every placement and return one merged
+ * mesh. Positions are transformed by the full 4x4; normals by the rotation
+ * part (uniform scale, so no inverse-transpose needed).
+ *
+ * @param {Array<BranchSegment>} segments
+ * @param {Mesh}   leaf
+ * @param {Object} [opts]   see LeafPlacementOptions table above
+ * @returns {Mesh}
+ *
+ * @example
+ *   const leaf = Mesh.leafCard('oval', { width: 0.08, length: 0.18 });
+ *   const foliage = Mesh.scatterLeaves(segs, leaf,
+ *                                      { maxRadius: 0.03, perUnitLength: 30 });
+ */
+Mesh.scatterLeaves = function(segments, leaf, opts) {};
+
+
+// -----------------------------------------------------------------------------
+// L-system rewriting
+// -----------------------------------------------------------------------------
+//
+// String-rule stochastic L-system. Produces a flat module sequence — turtle
+// interpretation and geometry building are caller concerns. Bracket symbols
+// `[` and `]` pass through unchanged when no rule matches them.
+//
+// Module shape: { symbol: string, params: number[] }
+//
+// Compact text form: `F(1.0)[+(25)F]F`. A symbol is any non-whitespace char
+// other than `(`, `)`, `,`. Each symbol may be followed by a parenthesized
+// comma-separated list of floats. Whitespace is ignored.
+
+/**
+ * Parse a compact L-system string into a module list. Returns [] on parse
+ * error.
+ *
+ * @param {string} text
+ * @returns {Array<{symbol: string, params: number[]}>}
+ */
+Mesh.parseLSystem = function(text) {};
+
+/**
+ * Stochastic string-rule L-system rewriter. For parametric rules with
+ * conditions, build geometry directly from `Mesh.spaceColonize` /
+ * `Mesh.meshBranches` instead.
+ */
+class LSystem {
+  /**
+   * @param {string} [axiom]   compact-form starting word (parsed via parseLSystem)
+   */
+  constructor(axiom) {}
+
+  /**
+   * Set the axiom from a compact string. Returns this.
+   * @param {string} text
+   */
+  setAxiom(text) {}
+
+  /**
+   * Add a production rule. Multiple rules sharing a predecessor are selected
+   * stochastically by `weight`. Returns this.
+   * @param {string} predecessor   single-character symbol
+   * @param {string} successor     compact-form replacement string
+   * @param {number} [weight=1]
+   */
+  addRule(predecessor, successor, weight) {}
+
+  /**
+   * Run `iterations` rewrite passes. Deterministic given `seed`.
+   * @param {number} iterations
+   * @param {number} [seed=0]
+   * @returns {string}   compact-form serialization of the derived module list
+   */
+  derive(iterations, seed) {}
+
+  /**
+   * Same as `derive` but returns the parsed module list directly instead of a
+   * compact-form string — saves a re-parse if you need the structured form.
+   * @param {number} iterations
+   * @param {number} [seed=0]
+   * @returns {Array<{symbol: string, params: number[]}>}
+   */
+  deriveModules(iterations, seed) {}
+}

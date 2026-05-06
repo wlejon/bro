@@ -57,6 +57,7 @@
 #include <bromesh/procedural/lsystem.h>
 #include <bromesh/procedural/space_colonization.h>
 #include <bromesh/procedural/branches.h>
+#include <bromesh/procedural/leaf_scatter.h>
 #include <bromesh/procedural/plants.h>
 
 #include <cstdio>
@@ -790,6 +791,72 @@ static JSValue js_meshBranches(JSContext* ctx, JSValueConst, int argc, JSValueCo
         if (s >= 3) sides = s;
     }
     return wrapMesh(ctx, bromesh::meshBranches(segs, sides));
+}
+
+static void readLeafPlacementOptions(JSContext* ctx, JSValueConst o,
+                                     bromesh::LeafPlacementOptions& opts) {
+    opts.maxRadius      = (float)objNum(ctx, o, "maxRadius",       opts.maxRadius);
+    opts.minDepth       =        objInt(ctx, o, "minDepth",        opts.minDepth);
+    opts.terminalOnly   =       objBool(ctx, o, "terminalOnly",    opts.terminalOnly);
+    opts.perUnitLength  = (float)objNum(ctx, o, "perUnitLength",   opts.perUnitLength);
+    opts.densityFalloff = (float)objNum(ctx, o, "densityFalloff",  opts.densityFalloff);
+    opts.upBias         = (float)objNum(ctx, o, "upBias",          opts.upBias);
+    opts.tiltJitter     = (float)objNum(ctx, o, "tiltJitter",      opts.tiltJitter);
+    opts.rollJitter     = (float)objNum(ctx, o, "rollJitter",      opts.rollJitter);
+    opts.baseScale      = (float)objNum(ctx, o, "baseScale",       opts.baseScale);
+    opts.scaleJitter    = (float)objNum(ctx, o, "scaleJitter",     opts.scaleJitter);
+    opts.scaleByRadius  = (float)objNum(ctx, o, "scaleByRadius",   opts.scaleByRadius);
+    opts.dedupRadius    = (float)objNum(ctx, o, "dedupRadius",     opts.dedupRadius);
+    opts.seed           = (uint64_t)objNum(ctx, o, "seed", (double)opts.seed);
+}
+
+static JSValue js_placeLeavesOnBranches(JSContext* ctx, JSValueConst,
+                                        int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx,
+            "placeLeavesOnBranches requires (segments[, opts])");
+    }
+    std::vector<bromesh::BranchSegment> segs;
+    if (!readBranchSegments(ctx, argv[0], segs)) {
+        return JS_ThrowTypeError(ctx, "segments must be an array of branch segment objects");
+    }
+    bromesh::LeafPlacementOptions opts;
+    if (argc > 1 && JS_IsObject(argv[1])) readLeafPlacementOptions(ctx, argv[1], opts);
+
+    auto p = bromesh::placeLeavesOnBranches(segs, opts);
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "count", JS_NewInt64(ctx, (int64_t)p.count()));
+    JS_SetPropertyStr(ctx, obj, "transforms",   make_float32_array(ctx, p.transforms));
+    JS_SetPropertyStr(ctx, obj, "branchRadius", make_float32_array(ctx, p.branchRadius));
+
+    size_t depthBytes = p.branchDepth.size() * sizeof(int32_t);
+    JSValue dab = JS_NewArrayBufferCopy(ctx,
+        reinterpret_cast<const uint8_t*>(p.branchDepth.data()), depthBytes);
+    JSValue dargs[3] = { dab, JS_UNDEFINED, JS_UNDEFINED };
+    JSValue darr = JS_NewTypedArray(ctx, 1, dargs, JS_TYPED_ARRAY_INT32);
+    JS_FreeValue(ctx, dab);
+    JS_SetPropertyStr(ctx, obj, "branchDepth", darr);
+    return obj;
+}
+
+static JSValue js_scatterLeaves(JSContext* ctx, JSValueConst,
+                                int argc, JSValueConst* argv) {
+    if (argc < 2) {
+        return JS_ThrowTypeError(ctx,
+            "scatterLeaves requires (segments, leaf[, opts])");
+    }
+    std::vector<bromesh::BranchSegment> segs;
+    if (!readBranchSegments(ctx, argv[0], segs)) {
+        return JS_ThrowTypeError(ctx, "segments must be an array of branch segment objects");
+    }
+    auto* lw = qjsbind::unwrap<MW>(ctx, argv[1]);
+    if (!lw || !lw->data) {
+        return JS_ThrowTypeError(ctx, "leaf must be a Mesh");
+    }
+    bromesh::LeafPlacementOptions opts;
+    if (argc > 2 && JS_IsObject(argv[2])) readLeafPlacementOptions(ctx, argv[2], opts);
+    return wrapMesh(ctx, bromesh::scatterLeaves(segs, *lw->data, opts));
 }
 
 static bromesh::LeafShape parseLeafShape(JSContext* ctx, JSValueConst v) {
@@ -1943,6 +2010,8 @@ void MeshBindings::install(JSContext* ctx) {
     .static_raw("spaceColonize",   js_spaceColonize,   3)
     .static_raw("thickenBranches", js_thickenBranches, 1)
     .static_raw("meshBranches",    js_meshBranches,    1)
+    .static_raw("placeLeavesOnBranches", js_placeLeavesOnBranches, 1)
+    .static_raw("scatterLeaves",         js_scatterLeaves,         2)
 
     // ── Static: L-system module parsing helper ─────────────────────────
     .static_raw("parseLSystem", js_parseLSystem, 1)
