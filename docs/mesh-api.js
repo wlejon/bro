@@ -1559,6 +1559,18 @@ Mesh.sweep = function(profile, path, opts) {};
  * @param {number} [opts.maxIterations=200]
  * @param {number[]} [opts.tropism=[0,0,0]]    biased direction added every step
  * @param {number} [opts.tropismWeight=0]
+ * @param {CapsuleField} [opts.obstacles]      growth steps that would land
+ *   inside an obstacle are rejected (or steered around — see below). Pass a
+ *   field built via `Mesh.capsuleFieldFromSegments(prevSegs)` to grow new
+ *   canes that avoid earlier ones; combine iteratively for self-avoiding
+ *   bushes.
+ * @param {number} [opts.obstacleClearance=0]  inflate every obstacle by this
+ *   much during the test (extra slack between growth and surfaces).
+ * @param {number} [opts.obstacleSteer=0]      radians; 0 = hard reject the
+ *   blocked step. >0 = rotate the growth direction up to that many radians
+ *   toward the obstacle's surface tangent before re-testing; if still
+ *   colliding, project the candidate outward along the local normal so the
+ *   tree slides past instead of stalling.
  * @returns {Array<BranchSegment>}
  */
 Mesh.spaceColonize = function(attractors, seedPoints, initialDirection, opts) {};
@@ -1594,6 +1606,132 @@ Mesh.meshBranches = function(segments, sides) {};
 
 
 // -----------------------------------------------------------------------------
+// CapsuleField — collision-aware placement substrate
+// -----------------------------------------------------------------------------
+//
+// Capsule + sphere occupancy lookup, built once per scatter / colonize pass
+// and queried during placement to avoid interpenetration. Backed by a spatial
+// hash; queries are local (O(k) in the obstacles near the query, not the
+// total count).
+//
+// Tag-based exclusion: every query takes an optional integer `excludeTag`.
+// When non-negative, capsules / spheres whose `tag` equals it are skipped.
+// This lets a leaf scattered along segment N ignore segment N's own capsule.
+// `Mesh.capsuleFieldFromSegments` assigns `tag = segment-index` automatically.
+//
+// Capsule shape:  { a: [x,y,z], b: [x,y,z], radius: number, tag?: number }
+// Sphere shape:   { center: [x,y,z], radius: number, tag?: number }
+
+/**
+ * Build a CapsuleField from explicit lists.
+ *
+ * @param {Capsule[]} capsules
+ * @param {Sphere[]}  [spheres]
+ * @param {number}    [cellSize=0]   0 = auto-pick from input radii / lengths
+ * @returns {CapsuleField}
+ */
+Mesh.capsuleField = function(capsules, spheres, cellSize) {};
+
+/**
+ * Build a CapsuleField from a BranchSegment list. Each segment with
+ * `radius > 0` becomes a capsule tagged with its segment index. Synthetic
+ * roots (from === to) are skipped.
+ *
+ * @param {Array<BranchSegment>} segments
+ * @param {number}    [radiusScale=1]   multiply every capsule radius by this
+ *                                      (>1 to inflate clearance, <1 to thin)
+ * @param {Sphere[]}  [extraSpheres]    appended to the field
+ * @returns {CapsuleField}
+ *
+ * @example
+ *   const skeleton = buildBushSkeleton();
+ *   const field    = Mesh.capsuleFieldFromSegments(skeleton.segs, 1.2);
+ *   const foliage  = Mesh.scatterLeaves(skeleton.segs, leaf,
+ *                                       { perUnitLength: 24, avoid: field });
+ */
+Mesh.capsuleFieldFromSegments = function(segments, radiusScale, extraSpheres) {};
+
+/**
+ * Greedy anchor picker for blooms / fruits / clustered foliage. Visits
+ * candidates in a seeded shuffled order and accepts each if it (a) is at
+ * least `minSpacing` from every previously-accepted anchor, (b) clears the
+ * obstacle field by `minObstacleDistance`, and (c) lies outside every
+ * `keepOut` sphere.
+ *
+ * @param {number[][]|Float32Array} candidates
+ * @param {Object} [opts]
+ * @param {number} [opts.minSpacing=0]
+ * @param {number} [opts.minObstacleDistance=0]
+ * @param {number} [opts.maxCount=0]            0 = unlimited
+ * @param {CapsuleField} [opts.avoid]
+ * @param {Sphere[]}     [opts.keepOut]
+ * @param {number} [opts.seed=0]
+ * @returns {Int32Array} indices into `candidates` in acceptance order
+ *
+ * @example
+ *   const tipPoints = terminals.map(t => t.p);
+ *   const idx = Mesh.packAnchors(tipPoints, {
+ *     minSpacing: 0.18,             // blooms can't crowd each other
+ *     avoid: skeletonField,         // and stay clear of stems
+ *     maxCount: 8,
+ *     seed: 42,
+ *   });
+ *   const bloomCenters = Array.from(idx).map(i => tipPoints[i]);
+ */
+Mesh.packAnchors = function(candidates, opts) {};
+
+/**
+ * @class CapsuleField
+ *
+ * Static occupancy lookup over capsules + spheres. Constructed via
+ * `Mesh.capsuleField(...)` or `Mesh.capsuleFieldFromSegments(...)`. Once
+ * built, the field is immutable; rebuild when the underlying geometry
+ * changes.
+ */
+class CapsuleField {
+  /**
+   * Construct directly from arrays (same as Mesh.capsuleField).
+   * @param {Capsule[]} [capsules]
+   * @param {Sphere[]}  [spheres]
+   * @param {number}    [cellSize=0]
+   */
+  constructor(capsules, spheres, cellSize) {}
+
+  /** @type {boolean} */ get empty() {}
+  /** @type {number}  */ get capsuleCount() {}
+  /** @type {number}  */ get sphereCount() {}
+  /** @type {number}  */ get cellSize() {}
+
+  /**
+   * Signed distance to the nearest obstacle surface. Negative inside,
+   * positive outside. +Infinity when the field is empty.
+   * @param {number[]} point
+   * @param {number}   [excludeTag=-1]
+   * @returns {number}
+   */
+  distance(point, excludeTag) {}
+
+  /**
+   * Closest surface point + outward normal + signed distance + tag.
+   * @param {number[]} point
+   * @param {number}   [excludeTag=-1]
+   * @returns {{ point: number[], normal: number[], distance: number, tag: number }}
+   */
+  nearest(point, excludeTag) {}
+
+  /**
+   * True iff a sphere centered at `center` with `radius` overlaps any
+   * obstacle (i.e. signed distance < radius).
+   * @param {number[]} center
+   * @param {number}   radius
+   * @param {number}   [excludeTag=-1]
+   * @returns {boolean}
+   */
+  intersectsSphere(center, radius, excludeTag) {}
+}
+
+
+// -----------------------------------------------------------------------------
 // Leaf scattering — attach leafCards / flowers to a branch tree
 // -----------------------------------------------------------------------------
 //
@@ -1614,6 +1752,22 @@ Mesh.meshBranches = function(segments, sides) {};
 //   scaleByRadius=0     1 = scale linearly with (radius / maxRadius)
 //   dedupRadius=0       minimum distance between leaf origins
 //   seed=0              deterministic when nonzero
+//
+//   avoid=null          CapsuleField; candidates whose origin lies within
+//                       obstacleClearance of any non-self capsule/sphere are
+//                       rejected. The candidate's own segment is excluded via
+//                       its segment index — build the field via
+//                       `Mesh.capsuleFieldFromSegments(segs)` for this to
+//                       work automatically.
+//   obstacleClearance=0 extra clearance applied to every avoid test.
+//   obstaclePushout=0   if >0, rejected candidates are pushed outward along
+//                       the nearest surface normal once and re-tested before
+//                       being dropped. Recovers some leaves that would have
+//                       been lost to grazing collisions.
+//   keepOut=[]          array of {center:[x,y,z], radius} spheres tested in
+//                       addition to `avoid` (no exclusion). Use to reserve
+//                       volume around bloom anchors so foliage doesn't pack
+//                       into the bloom.
 //
 // Per-leaf local frame matches `leafCard`: +Z = tip, +Y = card normal, +X = side.
 
@@ -1666,7 +1820,8 @@ Mesh.scatterLeaves = function(segments, leaf, opts) {};
  * @param {number}   [opts.seed=1]
  * @param {Object}   [opts.colonize]                forwarded to spaceColonize
  *   { attractionRadius, killRadius, segmentLength, maxIterations,
- *     tropism: [x,y,z], tropismWeight }
+ *     tropism: [x,y,z], tropismWeight,
+ *     obstacles: CapsuleField, obstacleClearance, obstacleSteer }
  * @returns {{ segments: BranchSegment[], branches: Mesh }}
  *
  * @example
@@ -1705,6 +1860,47 @@ Mesh.tree = function(opts) {};
  * @returns {Array<{symbol: string, params: number[]}>}
  */
 Mesh.parseLSystem = function(text) {};
+
+/**
+ * Interpret a flat L-system module sequence as a 3D turtle and return the
+ * branch segments it traces. The result is a `BranchSegment[]` matching the
+ * shape produced by `Mesh.spaceColonize`, so it drops straight into
+ * `Mesh.thickenBranches` / `Mesh.meshBranches` / `Mesh.scatterLeaves`.
+ *
+ * Recognised symbols (numeric params override defaults):
+ *   F(len?, r?)    forward; emit a segment from current pos to pos+heading*len.
+ *                  Optional second param sets THIS segment's radius (the
+ *                  active radius is unchanged).
+ *   G(len?), f(len?)
+ *                  forward without emitting a segment.
+ *   +(deg?), -(deg?)   yaw around `up`
+ *   &(deg?), ^(deg?)   pitch around the left axis (heading × up)
+ *   \(deg?), /(deg?)   roll around `heading`
+ *   |              turn 180° around `up`
+ *   !(r)           set the active radius for subsequent F segments
+ *   [, ]           push / pop turtle state (branching)
+ *
+ * Numeric params on rotation symbols are degrees; the `angle` option below
+ * is in radians and is used when a rotation symbol has no parameter.
+ * Unknown symbols are silently ignored so user grammars can carry their own
+ * annotations.
+ *
+ * @param {Array<{symbol: string, params: number[]}>} modules
+ * @param {Object} [opts]
+ * @param {number} [opts.stepLength=0.1]   default forward step (when F has no length)
+ * @param {number} [opts.angle=0.4363]     default rotation in radians (~25°)
+ * @param {number} [opts.radius=0.01]      default segment radius
+ * @param {number[]} [opts.position=[0,0,0]]
+ * @param {number[]} [opts.heading=[0,1,0]]    initial forward direction
+ * @param {number[]} [opts.up=[0,0,1]]         initial roll reference
+ * @returns {Array<BranchSegment>}
+ *
+ * @example
+ *   const mods = Mesh.parseLSystem('!(0.04)F[+(35)F!(0.02)F][-(35)F!(0.02)F]F');
+ *   const segs = Mesh.lsystemToBranches(mods, { stepLength: 0.5 });
+ *   const trunk = Mesh.meshBranches(segs, 6);
+ */
+Mesh.lsystemToBranches = function(modules, opts) {};
 
 /**
  * Stochastic string-rule L-system rewriter. For parametric rules with
