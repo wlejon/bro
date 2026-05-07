@@ -6,6 +6,10 @@ Note from the co-pilot: i am a career programmer but this and its sister reposit
 
 ** this is pre-release, pre-alpha **
 
+## What can I compare it to?
+
+I'm targeting feature parity with godot's engine (no editor) and rendering parity with chromium (html/css). It's not there yet, but that's the goal.
+
 ## Broworkshop
 
 [broworkshop](https://github.com/wlejon/broworkshop) houses the apps built with bro used to demonstrate the functionality.
