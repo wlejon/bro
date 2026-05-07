@@ -850,8 +850,8 @@ void PhysicsWorld::setConstraintEnabled(uint32_t handle, bool enabled) {
 void PhysicsWorld::setWheelMotor(uint32_t handle, bool enabled, float speed, float maxTorque) {
     auto it = constraints_.find(handle);
     if (it == constraints_.end() || !it->second.ref) return;
-    auto* sd = dynamic_cast<SixDOFConstraint*>(it->second.ref.GetPtr());
-    if (!sd) return;
+    if (it->second.ref->GetSubType() != EConstraintSubType::SixDOF) return;
+    auto* sd = static_cast<SixDOFConstraint*>(it->second.ref.GetPtr());
     using EAxis = SixDOFConstraintSettings::EAxis;
     sd->SetMotorState(EAxis::RotationZ, enabled ? EMotorState::Velocity : EMotorState::Off);
     sd->SetTargetAngularVelocityCS(Vec3(0, 0, speed));
