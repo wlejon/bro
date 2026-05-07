@@ -55,6 +55,8 @@
 #include <bromesh/manipulation/bezier_sweep.h>
 #include <bromesh/optimization/spatial_hash.h>
 #include <bromesh/procedural/lsystem.h>
+#include <bromesh/procedural/lsystem_turtle.h>
+#include <bromesh/procedural/obstacle_field.h>
 #include <bromesh/procedural/space_colonization.h>
 #include <bromesh/procedural/branches.h>
 #include <bromesh/procedural/leaf_scatter.h>
@@ -84,9 +86,14 @@ struct ProgressiveMeshWrapper {
     std::unique_ptr<bromesh::ProgressiveMesh> pm;
 };
 
+struct CapsuleFieldWrapper {
+    std::unique_ptr<bromesh::CapsuleField> field;
+};
+
 using MW  = MeshWrapper;
 using BVW = BVHWrapper;
 using PMW = ProgressiveMeshWrapper;
+using CFW = CapsuleFieldWrapper;
 
 // ---------------------------------------------------------------------------
 // Helpers — TypedArray I/O (domain-specific, not covered by qjsbind)
@@ -694,6 +701,107 @@ static bool readBranchSegments(JSContext* ctx, JSValueConst v,
     return true;
 }
 
+// Read an array of {a:[x,y,z], b:[x,y,z], radius, tag?} into a Capsule list.
+static bool readCapsules(JSContext* ctx, JSValueConst v,
+                         std::vector<bromesh::Capsule>& out) {
+    out.clear();
+    if (!JS_IsArray(v)) return false;
+    JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+    int32_t n = 0; JS_ToInt32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    out.resize((size_t)n);
+    for (int32_t i = 0; i < n; i++) {
+        JSValue o = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+        bromesh::Capsule c{};
+        JSValue a = JS_GetPropertyStr(ctx, o, "a");
+        JSValue b = JS_GetPropertyStr(ctx, o, "b");
+        c.a = readBmVec3(ctx, a);
+        c.b = readBmVec3(ctx, b);
+        JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
+        c.radius = (float)objNum(ctx, o, "radius", 0.0);
+        c.tag    = objInt(ctx, o, "tag", -1);
+        out[(size_t)i] = c;
+        JS_FreeValue(ctx, o);
+    }
+    return true;
+}
+
+// Read an array of {center:[x,y,z], radius, tag?} into a Sphere list.
+static bool readSpheres(JSContext* ctx, JSValueConst v,
+                        std::vector<bromesh::Sphere>& out) {
+    out.clear();
+    if (!JS_IsArray(v)) return false;
+    JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+    int32_t n = 0; JS_ToInt32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    out.resize((size_t)n);
+    for (int32_t i = 0; i < n; i++) {
+        JSValue o = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+        bromesh::Sphere s{};
+        JSValue c = JS_GetPropertyStr(ctx, o, "center");
+        s.center = readBmVec3(ctx, c);
+        JS_FreeValue(ctx, c);
+        s.radius = (float)objNum(ctx, o, "radius", 0.0);
+        s.tag    = objInt(ctx, o, "tag", -1);
+        out[(size_t)i] = s;
+        JS_FreeValue(ctx, o);
+    }
+    return true;
+}
+
+// Read [{symbol:'F', params:[...]}, ...] into a Module list (the inverse of
+// makeModulesArray).
+static bool readModulesArray(JSContext* ctx, JSValueConst v,
+                             std::vector<bromesh::Module>& out) {
+    out.clear();
+    if (!JS_IsArray(v)) return false;
+    JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+    int32_t n = 0; JS_ToInt32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+    out.resize((size_t)n);
+    for (int32_t i = 0; i < n; i++) {
+        JSValue o = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
+        bromesh::Module m{};
+        JSValue sv = JS_GetPropertyStr(ctx, o, "symbol");
+        if (JS_IsString(sv)) {
+            const char* s = JS_ToCString(ctx, sv);
+            if (s && s[0]) m.symbol = s[0];
+            if (s) JS_FreeCString(ctx, s);
+        }
+        JS_FreeValue(ctx, sv);
+        JSValue pv = JS_GetPropertyStr(ctx, o, "params");
+        if (JS_IsArray(pv)) {
+            JSValue plv = JS_GetPropertyStr(ctx, pv, "length");
+            int32_t pn = 0; JS_ToInt32(ctx, &pn, plv); JS_FreeValue(ctx, plv);
+            m.params.resize((size_t)pn);
+            for (int32_t j = 0; j < pn; j++) {
+                JSValue e = JS_GetPropertyUint32(ctx, pv, (uint32_t)j);
+                double d = 0; JS_ToFloat64(ctx, &d, e);
+                m.params[(size_t)j] = (float)d;
+                JS_FreeValue(ctx, e);
+            }
+        }
+        JS_FreeValue(ctx, pv);
+        out[(size_t)i] = std::move(m);
+        JS_FreeValue(ctx, o);
+    }
+    return true;
+}
+
+// Pull a CapsuleField pointer out of a JS option object's named property.
+// Returns nullptr if absent or not a CapsuleField. The CapsuleField's
+// lifetime is tied to the JS wrapper, which the caller's option object keeps
+// alive across the call.
+static const bromesh::CapsuleField* readAvoidField(JSContext* ctx,
+                                                   JSValueConst opts,
+                                                   const char* name) {
+    JSValue v = JS_GetPropertyStr(ctx, opts, name);
+    const bromesh::CapsuleField* out = nullptr;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+        auto* w = qjsbind::unwrap<CFW>(ctx, v);
+        if (w && w->field) out = w->field.get();
+    }
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
 // Re-encode an L-system module sequence as the compact text form parseable
 // by bromesh::parseModules. Modules with no params emit just the symbol;
 // modules with params append "(p1,p2,...)".
@@ -900,6 +1008,16 @@ static void readLeafPlacementOptions(JSContext* ctx, JSValueConst o,
     opts.scaleByRadius  = (float)objNum(ctx, o, "scaleByRadius",   opts.scaleByRadius);
     opts.dedupRadius    = (float)objNum(ctx, o, "dedupRadius",     opts.dedupRadius);
     opts.seed           = (uint64_t)objNum(ctx, o, "seed", (double)opts.seed);
+
+    // Obstacle / keep-out fields (see CapsuleField). The avoid pointer's
+    // lifetime is the JS wrapper's lifetime, which persists for the duration
+    // of the call because the option object holds a reference.
+    opts.avoid             = readAvoidField(ctx, o, "avoid");
+    opts.obstacleClearance = (float)objNum(ctx, o, "obstacleClearance", opts.obstacleClearance);
+    opts.obstaclePushout   = (float)objNum(ctx, o, "obstaclePushout",   opts.obstaclePushout);
+    JSValue ko = JS_GetPropertyStr(ctx, o, "keepOut");
+    if (JS_IsArray(ko)) readSpheres(ctx, ko, opts.keepOut);
+    JS_FreeValue(ctx, ko);
 }
 
 static JSValue js_placeLeavesOnBranches(JSContext* ctx, JSValueConst,
@@ -1016,9 +1134,11 @@ static JSValue js_leafCard(JSContext* ctx, JSValueConst, int argc, JSValueConst*
         o.bend   = (float)objNum(ctx, argv[1], "bend",   o.bend);
         o.curl   = (float)objNum(ctx, argv[1], "curl",   o.curl);
         o.stemOffset = objBool(ctx, argv[1], "stemOffset", o.stemOffset);
+        o.cup    = (float)objNum(ctx, argv[1], "cup",    o.cup);
         o.widthSegments  = objInt(ctx, argv[1], "widthSegments",  o.widthSegments);
         o.lengthSegments = objInt(ctx, argv[1], "lengthSegments", o.lengthSegments);
         o.fullUV = objBool(ctx, argv[1], "fullUV", o.fullUV);
+        o.shapedSilhouette = objBool(ctx, argv[1], "shapedSilhouette", o.shapedSilhouette);
     }
     return wrapMesh(ctx, bromesh::leafCard(shape, o));
 }
@@ -1038,6 +1158,13 @@ static JSValue js_flower(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
         o.layerTwist   = (float)objNum(ctx, argv[0], "layerTwist",   o.layerTwist);
         o.centerRadius = (float)objNum(ctx, argv[0], "centerRadius", o.centerRadius);
         o.centerHeight = (float)objNum(ctx, argv[0], "centerHeight", o.centerHeight);
+        o.outerTilt    = (float)objNum(ctx, argv[0], "outerTilt",    o.outerTilt);
+        o.innerTilt    = (float)objNum(ctx, argv[0], "innerTilt",    o.innerTilt);
+        o.layerScaleFalloff = (float)objNum(ctx, argv[0], "layerScaleFalloff", o.layerScaleFalloff);
+        o.outerYLift   = (float)objNum(ctx, argv[0], "outerYLift",   o.outerYLift);
+        o.innerYLift   = (float)objNum(ctx, argv[0], "innerYLift",   o.innerYLift);
+        o.petalCup     = (float)objNum(ctx, argv[0], "petalCup",     o.petalCup);
+        o.shapedPetals = objBool(ctx, argv[0], "shapedPetals", o.shapedPetals);
         JSValue cc = JS_GetPropertyStr(ctx, argv[0], "centerColor");
         if (JS_IsArray(cc)) {
             for (int i = 0; i < 3; ++i) {
@@ -1106,6 +1233,9 @@ static JSValue js_spaceColonize(JSContext* ctx, JSValueConst, int argc, JSValueC
         JSValue tv = JS_GetPropertyStr(ctx, argv[3], "tropism");
         if (!JS_IsUndefined(tv) && !JS_IsNull(tv)) opts.tropism = readBmVec3(ctx, tv);
         JS_FreeValue(ctx, tv);
+        opts.obstacles         = readAvoidField(ctx, argv[3], "obstacles");
+        opts.obstacleClearance = (float)objNum(ctx, argv[3], "obstacleClearance", opts.obstacleClearance);
+        opts.obstacleSteer     = (float)objNum(ctx, argv[3], "obstacleSteer",     opts.obstacleSteer);
     }
     auto segs = bromesh::spaceColonize(attractors, seeds, initDir, opts);
     return makeBranchSegments(ctx, segs);
@@ -1155,6 +1285,9 @@ static JSValue js_tree(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
             JSValue tv = JS_GetPropertyStr(ctx, colv, "tropism");
             if (!JS_IsUndefined(tv) && !JS_IsNull(tv)) o.colonize.tropism = readBmVec3(ctx, tv);
             JS_FreeValue(ctx, tv);
+            o.colonize.obstacles         = readAvoidField(ctx, colv, "obstacles");
+            o.colonize.obstacleClearance = (float)objNum(ctx, colv, "obstacleClearance", o.colonize.obstacleClearance);
+            o.colonize.obstacleSteer     = (float)objNum(ctx, colv, "obstacleSteer",     o.colonize.obstacleSteer);
         }
         JS_FreeValue(ctx, colv);
     }
@@ -1174,6 +1307,111 @@ static JSValue js_parseLSystem(JSContext* ctx, JSValueConst, int argc, JSValueCo
     auto mods = bromesh::parseModules(std::string_view(s));
     JS_FreeCString(ctx, s);
     return makeModulesArray(ctx, mods);
+}
+
+// Mesh.packAnchors(candidates, opts?) → Int32Array of accepted indices.
+// `candidates` is a Vec3 list (Float32Array of length 3N or Array of [x,y,z]).
+// `opts.avoid` (CapsuleField), `opts.keepOut` (Sphere[]), `opts.minSpacing`,
+// `opts.minObstacleDistance`, `opts.maxCount`, `opts.seed`.
+static JSValue js_packAnchors(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "packAnchors requires (candidates[, opts])");
+    }
+    std::vector<bromesh::Vec3> cand;
+    if (!readVec3List(ctx, argv[0], cand)) {
+        return JS_ThrowTypeError(ctx, "candidates must be a Vec3 list");
+    }
+    bromesh::AnchorPackOptions opts;
+    const bromesh::CapsuleField* avoid = nullptr;
+    std::vector<bromesh::Sphere> keepOut;
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        opts.minSpacing          = (float)objNum(ctx, argv[1], "minSpacing",          opts.minSpacing);
+        opts.minObstacleDistance = (float)objNum(ctx, argv[1], "minObstacleDistance", opts.minObstacleDistance);
+        opts.maxCount            =        objInt(ctx, argv[1], "maxCount",            opts.maxCount);
+        opts.seed                = (uint64_t)objNum(ctx, argv[1], "seed", (double)opts.seed);
+        avoid = readAvoidField(ctx, argv[1], "avoid");
+        JSValue ko = JS_GetPropertyStr(ctx, argv[1], "keepOut");
+        if (JS_IsArray(ko)) readSpheres(ctx, ko, keepOut);
+        JS_FreeValue(ctx, ko);
+    }
+    auto idx = bromesh::packAnchors(cand, avoid, keepOut, opts);
+    size_t n = idx.size();
+    JSValue ab = JS_NewArrayBufferCopy(ctx,
+        reinterpret_cast<const uint8_t*>(idx.data()), n * sizeof(int32_t));
+    JSValue dargs[3] = { ab, JS_UNDEFINED, JS_UNDEFINED };
+    JSValue arr = JS_NewTypedArray(ctx, 1, dargs, JS_TYPED_ARRAY_INT32);
+    JS_FreeValue(ctx, ab);
+    return arr;
+}
+
+// Mesh.lsystemToBranches(modules, opts?) → BranchSegment[].
+static JSValue js_lsystemToBranches(JSContext* ctx, JSValueConst,
+                                    int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx, "lsystemToBranches requires (modules[, opts])");
+    }
+    std::vector<bromesh::Module> mods;
+    if (!readModulesArray(ctx, argv[0], mods)) {
+        return JS_ThrowTypeError(ctx, "modules must be an array of {symbol, params}");
+    }
+    bromesh::TurtleOptions to;
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        to.stepLength = (float)objNum(ctx, argv[1], "stepLength", to.stepLength);
+        to.angle      = (float)objNum(ctx, argv[1], "angle",      to.angle);
+        to.radius     = (float)objNum(ctx, argv[1], "radius",     to.radius);
+        JSValue pv = JS_GetPropertyStr(ctx, argv[1], "position");
+        if (!JS_IsUndefined(pv) && !JS_IsNull(pv)) to.position = readBmVec3(ctx, pv);
+        JS_FreeValue(ctx, pv);
+        JSValue hv = JS_GetPropertyStr(ctx, argv[1], "heading");
+        if (!JS_IsUndefined(hv) && !JS_IsNull(hv)) to.heading = readBmVec3(ctx, hv);
+        JS_FreeValue(ctx, hv);
+        JSValue uv = JS_GetPropertyStr(ctx, argv[1], "up");
+        if (!JS_IsUndefined(uv) && !JS_IsNull(uv)) to.up = readBmVec3(ctx, uv);
+        JS_FreeValue(ctx, uv);
+    }
+    auto segs = bromesh::lsystemToBranches(mods, to);
+    return makeBranchSegments(ctx, segs);
+}
+
+// Mesh.capsuleField(capsules[, spheres[, cellSize]]) → CapsuleField.
+static JSValue js_capsuleField(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::vector<bromesh::Capsule> caps;
+    std::vector<bromesh::Sphere>  sphs;
+    if (argc >= 1 && JS_IsArray(argv[0])) readCapsules(ctx, argv[0], caps);
+    if (argc >= 2 && JS_IsArray(argv[1])) readSpheres(ctx, argv[1], sphs);
+    float cellSize = 0.0f;
+    if (argc >= 3 && JS_IsNumber(argv[2])) {
+        double d = 0; JS_ToFloat64(ctx, &d, argv[2]);
+        cellSize = (float)d;
+    }
+    auto field = std::make_unique<bromesh::CapsuleField>(
+        std::move(caps), std::move(sphs), cellSize);
+    return qjsbind::wrap<CFW>(ctx, new CFW{std::move(field)});
+}
+
+// Mesh.capsuleFieldFromSegments(segments[, radiusScale[, extraSpheres]]) → CapsuleField.
+static JSValue js_capsuleFieldFromSegments(JSContext* ctx, JSValueConst,
+                                           int argc, JSValueConst* argv) {
+    if (argc < 1) {
+        return JS_ThrowTypeError(ctx,
+            "capsuleFieldFromSegments requires (segments[, radiusScale[, spheres]])");
+    }
+    std::vector<bromesh::BranchSegment> segs;
+    if (!readBranchSegments(ctx, argv[0], segs)) {
+        return JS_ThrowTypeError(ctx, "segments must be a branch-segment array");
+    }
+    float radiusScale = 1.0f;
+    if (argc >= 2 && JS_IsNumber(argv[1])) {
+        double d = 1.0; JS_ToFloat64(ctx, &d, argv[1]);
+        radiusScale = (float)d;
+    }
+    std::vector<bromesh::Sphere> sphs;
+    if (argc >= 3 && JS_IsArray(argv[2])) readSpheres(ctx, argv[2], sphs);
+
+    auto caps = bromesh::CapsuleField::capsulesFromSegments(segs, radiusScale);
+    auto field = std::make_unique<bromesh::CapsuleField>(
+        std::move(caps), std::move(sphs), 0.0f);
+    return qjsbind::wrap<CFW>(ctx, new CFW{std::move(field)});
 }
 
 // ---------------------------------------------------------------------------
@@ -2185,8 +2423,16 @@ void MeshBindings::install(JSContext* ctx) {
     .static_raw("scatterLeaves",         js_scatterLeaves,         2)
     .static_raw("tree",                  js_tree,                  0)
 
-    // ── Static: L-system module parsing helper ─────────────────────────
-    .static_raw("parseLSystem", js_parseLSystem, 1)
+    // ── Static: collision-aware placement primitives ────────────────────
+    // CapsuleField is the shared occupancy substrate; packAnchors greedily
+    // selects spaced positions while respecting it.
+    .static_raw("capsuleField",             js_capsuleField,             1)
+    .static_raw("capsuleFieldFromSegments", js_capsuleFieldFromSegments, 1)
+    .static_raw("packAnchors",              js_packAnchors,              1)
+
+    // ── Static: L-system helpers ───────────────────────────────────────
+    .static_raw("parseLSystem",      js_parseLSystem,      1)
+    .static_raw("lsystemToBranches", js_lsystemToBranches, 1)
     ; // end of Class<MW>
 
     // =======================================================================
@@ -2227,6 +2473,63 @@ void MeshBindings::install(JSContext* ctx) {
         readVec3(ctx, origin, o);
         readVec3(ctx, direction, d);
         return JS_NewBool(ctx, w->bvh->raycastTest(*mw->data, o, d, (float)maxDist.value_or(0.0)));
+    })
+    ;
+
+    // =======================================================================
+    // CapsuleField — capsule + sphere occupancy lookup. Built once from
+    // existing geometry (typically branch segments) and queried during
+    // foliage / bloom / cane placement to avoid interpenetration.
+    // =======================================================================
+    qjsbind::Class<CFW>(ctx, "CapsuleField")
+    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> CFW* {
+        std::vector<bromesh::Capsule> caps;
+        std::vector<bromesh::Sphere>  sphs;
+        if (argc >= 1 && JS_IsArray(argv[0])) readCapsules(ctx, argv[0], caps);
+        if (argc >= 2 && JS_IsArray(argv[1])) readSpheres(ctx, argv[1], sphs);
+        float cellSize = 0.0f;
+        if (argc >= 3 && JS_IsNumber(argv[2])) {
+            double d = 0; JS_ToFloat64(ctx, &d, argv[2]);
+            cellSize = (float)d;
+        }
+        return new CFW{std::make_unique<bromesh::CapsuleField>(
+            std::move(caps), std::move(sphs), cellSize)};
+    })
+    .get("empty",        [](CFW* w) { return !w->field || w->field->empty(); })
+    .get("capsuleCount", [](CFW* w) { return (int)(w->field ? w->field->capsuleCount() : 0); })
+    .get("sphereCount",  [](CFW* w) { return (int)(w->field ? w->field->sphereCount()  : 0); })
+    .get("cellSize",     [](CFW* w) { return (double)(w->field ? w->field->cellSize() : 0.0f); })
+    .method("distance", [](CFW* w, JSContext* ctx, JSValue point,
+                           std::optional<int> excludeTag) -> JSValue {
+        if (!w->field) return JS_NewFloat64(ctx, 0.0);
+        bromesh::Vec3 p = readBmVec3(ctx, point);
+        return JS_NewFloat64(ctx, (double)w->field->distance(p, excludeTag.value_or(-1)));
+    })
+    .method("nearest", [](CFW* w, JSContext* ctx, JSValue point,
+                          std::optional<int> excludeTag) -> JSValue {
+        if (!w->field) return JS_NULL;
+        bromesh::Vec3 p = readBmVec3(ctx, point);
+        auto n = w->field->nearest(p, excludeTag.value_or(-1));
+        JSValue o = JS_NewObject(ctx);
+        JSValue pt = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, pt, 0, JS_NewFloat64(ctx, n.point.x));
+        JS_SetPropertyUint32(ctx, pt, 1, JS_NewFloat64(ctx, n.point.y));
+        JS_SetPropertyUint32(ctx, pt, 2, JS_NewFloat64(ctx, n.point.z));
+        JS_SetPropertyStr(ctx, o, "point", pt);
+        JSValue nm = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, nm, 0, JS_NewFloat64(ctx, n.normal.x));
+        JS_SetPropertyUint32(ctx, nm, 1, JS_NewFloat64(ctx, n.normal.y));
+        JS_SetPropertyUint32(ctx, nm, 2, JS_NewFloat64(ctx, n.normal.z));
+        JS_SetPropertyStr(ctx, o, "normal", nm);
+        JS_SetPropertyStr(ctx, o, "distance", JS_NewFloat64(ctx, n.distance));
+        JS_SetPropertyStr(ctx, o, "tag",      JS_NewInt32(ctx, n.tag));
+        return o;
+    })
+    .method("intersectsSphere", [](CFW* w, JSContext* ctx, JSValue center, double radius,
+                                    std::optional<int> excludeTag) -> JSValue {
+        if (!w->field) return JS_FALSE;
+        bromesh::Vec3 c = readBmVec3(ctx, center);
+        return JS_NewBool(ctx, w->field->intersectsSphere(c, (float)radius, excludeTag.value_or(-1)));
     })
     ;
 
