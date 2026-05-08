@@ -43,6 +43,7 @@ struct Cmd_DrawText {
 struct Cmd_DrawLine        { float x1, y1, x2, y2; Color color; float thickness; };
 struct Cmd_DrawImage       { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: encoded bytes
 struct Cmd_DrawPixelsRGBA  { uint32_t pixelsOffset; int srcW, srcH, stride; float x, y, w, h; }; // arena: rgba8
+struct Cmd_DrawSvgMarkup   { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: utf8 markup
 struct Cmd_DrawCircle      { float cx, cy, r; Color fill; Color stroke; float strokeWidth; };
 struct Cmd_DrawEllipse     { float cx, cy, rx, ry; Color fill; Color stroke; float strokeWidth; };
 struct Cmd_DrawPath        { uint32_t pathOffset, pathLen; Color fill; Color stroke; float strokeWidth; }; // arena: char[] (svg path)
@@ -108,6 +109,7 @@ using DrawCommand = std::variant<
     Cmd_DrawLine,
     Cmd_DrawImage,
     Cmd_DrawPixelsRGBA,
+    Cmd_DrawSvgMarkup,
     Cmd_DrawCircle,
     Cmd_DrawEllipse,
     Cmd_DrawPath,

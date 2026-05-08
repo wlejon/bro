@@ -75,6 +75,8 @@ public:
     void drawPixelsRGBA(const uint8_t* rgba,
                         int srcW, int srcH, int stride,
                         float x, float y, float w, float h) override;
+    void drawSvgMarkup(const char* data, size_t len,
+                       float x, float y, float w, float h) override;
 
     void drawCircle(float cx, float cy, float r,
                     Color fill, Color stroke, float strokeWidth) override;

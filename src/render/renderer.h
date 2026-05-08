@@ -188,6 +188,15 @@ public:
                                 int /*srcW*/, int /*srcH*/, int /*stride*/,
                                 float /*x*/, float /*y*/, float /*w*/, float /*h*/) {}
 
+    // Render SVG markup (an entire <svg>...</svg> document or fragment) into
+    // the rect (x, y, w, h). Backends parse via SkSVGDOM. The recording layer
+    // copies the bytes into its arena so replay on another thread is safe.
+    // Default implementation is a no-op so backends without SVG support don't
+    // need to implement this.
+    virtual void drawSvgMarkup(const char* /*data*/, size_t /*len*/,
+                               float /*x*/, float /*y*/,
+                               float /*w*/, float /*h*/) {}
+
     // SVG drawing primitives
     virtual void drawCircle(float cx, float cy, float r,
                             Color fill, Color stroke, float strokeWidth) = 0;

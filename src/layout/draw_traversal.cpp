@@ -4,7 +4,6 @@
 #include "layout/el_select.h"
 #include "layout/el_svg.h"
 #include "layout/el_video.h"
-#include "svg/svg_renderer.h"
 #include "canvas/canvas_scene.h"
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
@@ -1013,9 +1012,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                     float ih = box.contentRect.height;
                     if (iw > 0 && ih > 0) {
                         if (it->second.isSvg) {
-                            // Re-parse and render the SVG markup at content rect.
-                            svg::renderSvgMarkup(
-                                renderer_,
+                            // Recorded; replayer re-parses and draws the SVG markup at content rect.
+                            renderer_->drawSvgMarkup(
                                 reinterpret_cast<const char*>(it->second.data.data()),
                                 it->second.data.size(),
                                 ix, iy, iw, ih);

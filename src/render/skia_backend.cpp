@@ -1,6 +1,7 @@
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "render/filter_chain.h"
+#include "svg/svg_renderer.h"
 #include "util/log.h"
 
 #include <stb_image.h>
@@ -760,6 +761,12 @@ void SkiaRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int s
     auto image = bmp.asImage();
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+}
+
+void SkiaRenderer::drawSvgMarkup(const char* data, size_t len,
+                                 float x, float y, float w, float h) {
+    if (!canvas_) return;
+    bro::svg::renderSvgMarkupToCanvas(canvas_, data, len, x, y, w, h);
 }
 
 void SkiaRenderer::setClip(float x, float y, float w, float h) {

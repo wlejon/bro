@@ -131,6 +131,16 @@ void RecordingRenderer::drawImage(const void* data, size_t len,
     buffer_->append(cmd);
 }
 
+void RecordingRenderer::drawSvgMarkup(const char* data, size_t len,
+                                      float x, float y, float w, float h) {
+    if (!buffer_) { measureRenderer_->drawSvgMarkup(data, len, x, y, w, h); return; }
+    Cmd_DrawSvgMarkup cmd{};
+    cmd.dataOffset = buffer_->pushBytes(data, len);
+    cmd.dataLen = static_cast<uint32_t>(len);
+    cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
+    buffer_->append(cmd);
+}
+
 void RecordingRenderer::drawPixelsRGBA(const uint8_t* rgba,
                                        int srcW, int srcH, int stride,
                                        float x, float y, float w, float h) {

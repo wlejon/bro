@@ -50,6 +50,10 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
             } else if constexpr (std::is_same_v<T, Cmd_DrawImage>) {
                 dst_->drawImage(buffer.bytesAt(c.dataOffset), c.dataLen,
                                 c.x, c.y, c.w, c.h);
+            } else if constexpr (std::is_same_v<T, Cmd_DrawSvgMarkup>) {
+                dst_->drawSvgMarkup(reinterpret_cast<const char*>(
+                                        buffer.bytesAt(c.dataOffset)),
+                                    c.dataLen, c.x, c.y, c.w, c.h);
             } else if constexpr (std::is_same_v<T, Cmd_DrawPixelsRGBA>) {
                 dst_->drawPixelsRGBA(reinterpret_cast<const uint8_t*>(
                                          buffer.bytesAt(c.pixelsOffset)),

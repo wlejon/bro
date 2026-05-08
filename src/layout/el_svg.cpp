@@ -1,9 +1,9 @@
 #include "layout/el_svg.h"
-#include "svg/svg_renderer.h"
 #include "dom/element.h"
 #include "render/renderer.h"
 
 #include <cstdlib>
+#include <string>
 
 namespace bro::layout {
 
@@ -33,10 +33,14 @@ void ElSvg::draw(render::Renderer* renderer,
     float y = box.contentRect.y + offsetY;
     float w = box.contentRect.width;
     float h = box.contentRect.height;
+    if (w <= 0 || h <= 0) return;
 
-    if (w > 0 && h > 0) {
-        svg::renderSvg(renderer, elem, x, y, w, h);
-    }
+    // Serialize at record time — DrawTraversal records into a CommandBuffer
+    // that the raster thread replays without DOM access. The recording
+    // renderer copies the markup bytes into its arena.
+    std::string markup = elem->outerHTML();
+    if (markup.empty()) return;
+    renderer->drawSvgMarkup(markup.data(), markup.size(), x, y, w, h);
 }
 
 } // namespace bro::layout

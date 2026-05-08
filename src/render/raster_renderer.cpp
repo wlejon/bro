@@ -1,5 +1,6 @@
 #include "render/raster_renderer.h"
 #include "render/filter_chain.h"
+#include "svg/svg_renderer.h"
 
 #include <include/core/SkBitmap.h>
 #include <include/core/SkM44.h>
@@ -390,6 +391,12 @@ void RasterRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int
     auto image = bmp.asImage();
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
+}
+
+void RasterRenderer::drawSvgMarkup(const char* data, size_t len,
+                                   float x, float y, float w, float h) {
+    if (!canvas_) return;
+    bro::svg::renderSvgMarkupToCanvas(canvas_, data, len, x, y, w, h);
 }
 
 void RasterRenderer::drawCircle(float cx, float cy, float r,

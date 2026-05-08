@@ -1,5 +1,4 @@
 #include "svg/svg_renderer.h"
-#include "dom/element.h"
 #include "util/log.h"
 
 #include <cstdlib>
@@ -35,19 +34,20 @@ static sk_sp<SkFontMgr> getFontMgr() {
     return mgr;
 }
 
-void renderSvgMarkup(render::Renderer* renderer,
-                     const char* data, size_t len,
-                     float x, float y, float w, float h) {
-    if (!renderer || !data || len == 0) return;
-    SkCanvas* canvas = renderer->getCanvas();
-    if (!canvas) return;
+void renderSvgMarkupToCanvas(SkCanvas* canvas,
+                             const char* data, size_t len,
+                             float x, float y, float w, float h) {
+    if (!canvas || !data || len == 0) return;
 
     SkMemoryStream stream(data, len);
     auto dom = SkSVGDOM::Builder()
         .setFontManager(getFontMgr())
         .setTextShapingFactory(SkShapers::Primitive::Factory())
         .make(stream);
-    if (!dom) return;
+    if (!dom) {
+        LOG_WARN("SVG: failed to parse markup");
+        return;
+    }
 
     // Determine SVG intrinsic size so we can scale to fit the requested rect
     // when the SVG declares an explicit width/height with no viewBox (Skia
@@ -91,34 +91,6 @@ void renderSvgMarkup(render::Renderer* renderer,
     if (intrW > 0 && intrH > 0 && (intrW != w || intrH != h)) {
         canvas->scale(w / intrW, h / intrH);
     }
-    dom->render(canvas);
-    canvas->restore();
-}
-
-void renderSvg(render::Renderer* renderer, dom::Element* svgElement,
-               float x, float y, float w, float h) {
-    if (!renderer || !svgElement) return;
-
-    SkCanvas* canvas = renderer->getCanvas();
-    if (!canvas) return;
-
-    std::string markup = svgElement->outerHTML();
-    if (markup.empty()) return;
-
-    SkMemoryStream stream(markup.data(), markup.size());
-    auto dom = SkSVGDOM::Builder()
-        .setFontManager(getFontMgr())
-        .setTextShapingFactory(SkShapers::Primitive::Factory())
-        .make(stream);
-    if (!dom) {
-        LOG_WARN("SVG: failed to parse <svg> element");
-        return;
-    }
-
-    dom->setContainerSize(SkSize::Make(w, h));
-
-    canvas->save();
-    canvas->translate(x, y);
     dom->render(canvas);
     canvas->restore();
 }
