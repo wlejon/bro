@@ -3,6 +3,7 @@
 #include "layout/box.h"
 #include "render/renderer.h"
 #include <string>
+#include <string_view>
 #include <cmath>
 #include <cstdlib>
 
@@ -16,17 +17,17 @@ public:
     explicit SkiaTextMetrics(render::Renderer* renderer)
         : renderer_(renderer) {}
 
-    float measureWidth(const std::string& text,
-                       const std::string& fontFamily,
+    float measureWidth(std::string_view text,
+                       std::string_view fontFamily,
                        float fontSize,
-                       const std::string& fontWeight) override {
-        auto tm = renderer_->measureText(text, makeRef(fontFamily, fontSize, fontWeight));
+                       std::string_view fontWeight) override {
+        auto tm = renderer_->measureText(std::string{text}, makeRef(fontFamily, fontSize, fontWeight));
         return tm.width;
     }
 
-    float lineHeight(const std::string& fontFamily,
+    float lineHeight(std::string_view fontFamily,
                      float fontSize,
-                     const std::string& fontWeight) override {
+                     std::string_view fontWeight) override {
         // Empty-text measureText returns just the font's vertical metrics —
         // the renderer pulls these straight from SkFontMetrics, no glyph
         // shaping needed.
@@ -37,8 +38,8 @@ public:
     }
 
 private:
-    render::FontRef makeRef(const std::string& family, float size,
-                            const std::string& weight) {
+    render::FontRef makeRef(std::string_view family, float size,
+                            std::string_view weight) {
         int w = 400;
         if (weight == "bold" || weight == "700") w = 700;
         else if (weight == "lighter" || weight == "100") w = 100;
@@ -50,12 +51,13 @@ private:
         else if (weight == "900") w = 900;
         else if (weight == "normal" || weight.empty()) w = 400;
         else {
+            std::string ws{weight};
             char* end = nullptr;
-            long v = std::strtol(weight.c_str(), &end, 10);
-            if (end != weight.c_str() && v > 0) w = static_cast<int>(v);
+            long v = std::strtol(ws.c_str(), &end, 10);
+            if (end != ws.c_str() && v > 0) w = static_cast<int>(v);
         }
         return render::FontRef{
-            family.empty() ? std::string_view{"Arial"} : std::string_view{family},
+            family.empty() ? std::string_view{"Arial"} : family,
             size > 0 ? size : 16.0f, w, false};
     }
 

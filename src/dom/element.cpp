@@ -98,7 +98,7 @@ Element::Element(const std::string& tag)
     }
 }
 
-std::string Element::id() const {
+const std::string& Element::id() const {
     return getAttribute("id");
 }
 
@@ -106,7 +106,7 @@ void Element::setId(const std::string& val) {
     setAttribute("id", val);
 }
 
-std::string Element::className() const {
+const std::string& Element::className() const {
     return getAttribute("class");
 }
 
@@ -114,12 +114,13 @@ void Element::setClassName(const std::string& val) {
     setAttribute("class", val);
 }
 
-std::string Element::getAttribute(const std::string& name) const {
+const std::string& Element::getAttribute(const std::string& name) const {
     auto it = attributes_.find(name);
     if (it != attributes_.end()) {
         return it->second;
     }
-    return {};
+    static const std::string kEmpty;
+    return kEmpty;
 }
 
 bool Element::hasAttribute(const std::string& name) const {

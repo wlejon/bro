@@ -11,6 +11,8 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include <string>
+#include <string_view>
+#include <span>
 #include <vector>
 #include <memory>
 #include <unordered_map>
@@ -51,10 +53,10 @@ public:
     dom::Element* element() const { return elem_; }
     dom::TextNode* textNodePtr() const { return textNode_; }
 
-    std::string tagName() const override {
-        if (pseudoHost_) return pseudoIsText_ ? "#text" : ("::" + pseudoWhich_);
-        if (elem_) return elem_->tagName();
-        return "#text";
+    std::string_view tagName() const override {
+        if (pseudoHost_) return pseudoIsText_ ? std::string_view{"#text"} : std::string_view{pseudoTag_};
+        if (elem_) return std::string_view{elem_->tagName()};
+        return std::string_view{"#text"};
     }
 
     bool isTextNode() const override {
@@ -62,21 +64,21 @@ public:
         return textNode_ != nullptr;
     }
 
-    std::string textContent() const override {
-        if (pseudoHost_ && pseudoIsText_) return pseudoHost_->pseudoContent(pseudoWhich_);
-        if (textNode_) return textNode_->data();
-        return "";
+    std::string_view textContent() const override {
+        if (pseudoHost_ && pseudoIsText_) return std::string_view{pseudoHost_->pseudoContent(pseudoWhich_)};
+        if (textNode_) return std::string_view{textNode_->data()};
+        return {};
     }
 
     LayoutNode* parent() const override { return parent_; }
 
-    std::vector<LayoutNode*> children() const override {
-        std::vector<LayoutNode*> result;
-        result.reserve(children_.size());
+    std::span<LayoutNode* const> children() const override {
+        childrenView_.clear();
+        childrenView_.reserve(children_.size());
         for (auto& child : children_) {
-            result.push_back(child.get());
+            childrenView_.push_back(child.get());
         }
-        return result;
+        return std::span<LayoutNode* const>{childrenView_.data(), childrenView_.size()};
     }
 
     const htmlayout::css::ComputedStyle& computedStyle() const override {
@@ -250,7 +252,7 @@ public:
 private:
     // Private constructor for synthetic pseudo-element adapters.
     LayoutNodeAdapter(dom::Element* host, const std::string& which, bool isText)
-        : pseudoHost_(host), pseudoWhich_(which), pseudoIsText_(isText) {}
+        : pseudoHost_(host), pseudoWhich_(which), pseudoTag_("::" + which), pseudoIsText_(isText) {}
 
     // Lazily build / tear down the synthetic pseudo wrapper on each layout
     // pass. Pseudo content can appear or disappear when classes change (e.g.
@@ -365,6 +367,7 @@ private:
     dom::Element* parentElem_ = nullptr;  // for text nodes: their parent element
     LayoutNodeAdapter* parent_ = nullptr;
     std::vector<std::unique_ptr<LayoutNodeAdapter>> children_;
+    mutable std::vector<LayoutNode*> childrenView_;
 
     // Synthetic ::before / ::after wrappers (only set on element-kind adapters
     // whose host has resolved pseudo content). The wrappers live outside
@@ -377,6 +380,7 @@ private:
     // Pseudo-element identification (set on synthetic adapters only).
     dom::Element* pseudoHost_ = nullptr;
     std::string pseudoWhich_;       // "before" or "after"
+    std::string pseudoTag_;         // "::before" or "::after" (stable backing for tagName view)
     bool pseudoIsText_ = false;     // false: pseudo wrapper; true: pseudo's text child
 };
 

@@ -364,7 +364,9 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
         auto fwIt = style.find("font-weight");
         if (fwIt != style.end()) fw = fwIt->second;
 
-        float lh = htmlayout::layout::resolveLineHeight(value, fontSize, ff, fw, tm);
+        float lh = tm
+            ? htmlayout::layout::resolveLineHeight(value, fontSize, ff, fw, *tm)
+            : htmlayout::layout::resolveLineHeight(value, fontSize);
         if (lh > 0) {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%.4gpx", lh);

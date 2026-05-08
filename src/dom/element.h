@@ -33,13 +33,13 @@ public:
 
     // Tag and identity
     const std::string& tagName() const { return tag_; }
-    std::string id() const;
+    const std::string& id() const;
     void setId(const std::string& val);
-    std::string className() const;
+    const std::string& className() const;
     void setClassName(const std::string& val);
 
     // Attributes
-    std::string getAttribute(const std::string& name) const;
+    const std::string& getAttribute(const std::string& name) const;
     bool hasAttribute(const std::string& name) const;
     void setAttribute(const std::string& name, const std::string& val);
     void removeAttribute(const std::string& name);

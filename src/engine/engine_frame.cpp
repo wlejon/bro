@@ -23,6 +23,8 @@
 #include "platform/sdl_window.h"
 #include "render/gl_context.h"
 #include "render/skia_backend.h"
+
+#include <broaudio/engine.h>
 #include "scene/scene_graph.h"
 #include "webgl/webgl2_context.h"
 #include "util/interrupt.h"
@@ -99,6 +101,9 @@ void Engine::run() {
             pumpBrokit("__brokit_fetch_tick");
             pumpBrokit("__brokit_ws_tick");
             pumpBrokit("__brokit_fs_watch_tick");
+
+            // Reap finished audio voices off the audio thread.
+            if (audioEngine_) audioEngine_->update();
 
             jsRuntime_->executePendingJobs();
             js::tickWorkers(jsRuntime_->getContext());

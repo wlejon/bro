@@ -5,6 +5,8 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include <string>
+#include <string_view>
+#include <span>
 #include <vector>
 #include <unordered_map>
 
@@ -18,25 +20,26 @@ public:
 
     dom::Element* element() const { return elem_; }
 
-    std::string tagName() const override {
-        return elem_ ? elem_->tagName() : "";
+    std::string_view tagName() const override {
+        return elem_ ? std::string_view{elem_->tagName()} : std::string_view{};
     }
 
-    std::string id() const override {
-        return elem_ ? elem_->id() : "";
+    std::string_view id() const override {
+        return elem_ ? std::string_view{elem_->id()} : std::string_view{};
     }
 
-    std::string className() const override {
-        return elem_ ? elem_->className() : "";
+    std::string_view className() const override {
+        return elem_ ? std::string_view{elem_->className()} : std::string_view{};
     }
 
-    std::string getAttribute(const std::string& name) const override {
-        return elem_ ? elem_->getAttribute(name) : "";
+    std::string_view getAttribute(std::string_view name) const override {
+        if (!elem_) return {};
+        return std::string_view{elem_->getAttribute(std::string{name})};
     }
 
-    bool hasAttribute(const std::string& name) const override {
+    bool hasAttribute(std::string_view name) const override {
         if (!elem_) return false;
-        return elem_->attributes().count(name) > 0;
+        return elem_->attributes().count(std::string{name}) > 0;
     }
 
     ElementRef* parent() const override {
@@ -55,13 +58,13 @@ public:
         return getOrCreate(p);
     }
 
-    std::vector<ElementRef*> children() const override {
-        std::vector<ElementRef*> result;
-        if (!elem_) return result;
+    std::span<ElementRef* const> children() const override {
+        childrenView_.clear();
+        if (!elem_) return {};
         for (auto* child : elem_->children()) {
-            result.push_back(getOrCreate(child));
+            childrenView_.push_back(getOrCreate(child));
         }
-        return result;
+        return std::span<ElementRef* const>{childrenView_.data(), childrenView_.size()};
     }
 
     int childIndex() const override {
@@ -200,8 +203,9 @@ public:
         return getOrCreate(slot);
     }
 
-    std::string partName() const override {
-        return elem_ ? elem_->getAttribute("part") : "";
+    std::string_view partName() const override {
+        if (!elem_) return {};
+        return std::string_view{elem_->getAttribute("part")};
     }
 
     // Global state setters (called by Engine before style resolution)
@@ -223,6 +227,7 @@ public:
 
 private:
     dom::Element* elem_;
+    mutable std::vector<ElementRef*> childrenView_;
 
     static inline thread_local dom::Element* hoveredElement_ = nullptr;
     static inline thread_local dom::Element* activeElement_ = nullptr;
