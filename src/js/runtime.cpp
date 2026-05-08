@@ -3,6 +3,8 @@
 #include "util/log.h"
 #include "util/time.h"
 
+#include <api/api.h>  // brokit::api::uninstallFetch
+
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
@@ -463,6 +465,7 @@ Runtime::Runtime()
 Runtime::~Runtime()
 {
     if (ctx_) {
+        brokit::api::uninstallFetch(ctx_);
         JS_FreeContext(ctx_);
         ctx_ = nullptr;
     }
