@@ -3,9 +3,12 @@
 #include "webgl/webgl2_context.h"
 #include "webgl/webgl_objects.h"
 
+#include "image_gpu.js.h"   // generates `static const char js_image_gpu[] = ...`
+
 #include <quickjs.h>
 #include <qjsbind/qjsbind.h>
 #include <glad/gl.h>
+#include <cstring>
 
 namespace bro::js {
 
@@ -443,6 +446,22 @@ void WebGL2Bindings::install(JSContext* ctx) {
     JS_SetPropertyStr(ctx, global, "WebGL2RenderingContext", ctor);
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
+
+    // --- bro.image.gpu — WebGL2-backed colormap helpers. Extends bro.image
+    //     (installed by brokit) with `.gpu`. Lives here because it depends on
+    //     the WebGL2 API just registered above; only available in GPU mode. ---
+    JSValue r = JS_Eval(ctx, js_image_gpu, std::strlen(js_image_gpu),
+                        "<bro.image.gpu>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) {
+        JSValue exc = JS_GetException(ctx);
+        const char* msg = JS_ToCString(ctx, exc);
+        if (msg) {
+            JS_ThrowInternalError(ctx, "bro.image.gpu install failed: %s", msg);
+            JS_FreeCString(ctx, msg);
+        }
+        JS_FreeValue(ctx, exc);
+    }
+    JS_FreeValue(ctx, r);
 }
 
 JSValue WebGL2Bindings::wrapContext(JSContext* ctx, webgl::WebGL2RenderingContext* glCtx) {
