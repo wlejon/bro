@@ -32,6 +32,7 @@
 #include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
+#include "js/image_gpu_bindings.h"
 #include "js/video_bindings.h"
 #include "js/worker.h"
 #include "js/physics_bindings.h"
@@ -444,6 +445,7 @@ Engine::Engine(const EngineConfig& config)
     if (gl_) {
         // GPU path: WebGL2 + full canvas factory (windowed or GPU headless)
         js::WebGL2Bindings::install(jsRuntime_->getContext());
+        js::ImageGPUBindings::install(jsRuntime_->getContext());
         js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
             [this](JSContext* ctx, dom::Element* el, const std::string& type) -> JSValue {
                 if (type == "2d") {

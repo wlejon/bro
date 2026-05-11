@@ -227,6 +227,62 @@ const image = {
 
 
 // =============================================================================
+// bro.image.gpu — WebGL2-backed counterparts (lives in bro, not brokit)
+// =============================================================================
+//
+// V1 surface: colormap.
+//
+//   bro.image.gpu.colormap(canvas, src, lut, {lo, hi, srcW, srcH})
+//
+// Renders a 1-channel float field through a 1D RGBA8 LUT directly to a
+// canvas via a WebGL2 fragment shader. The noise is uploaded as a R32F
+// texture; the LUT as a 256x1 RGBA8 texture; one fullscreen-triangle
+// draw per frame.
+//
+// The canvas you pass MUST be backed by a webgl2 context. The first call
+// creates and caches the program / VAO / textures; subsequent calls only
+// reupload data (texSubImage2D) and redraw.
+//
+// Eliminates the per-frame ImageData allocation + putImageData CPU upload
+// that bottleneck the CPU lookup pipeline at large canvas sizes.
+
+const imageGpu = {
+
+  /**
+   * Colormap a scalar field to `canvas` via a fragment shader.
+   *
+   * @param {HTMLCanvasElement} canvas - must support webgl2
+   * @param {Float32Array}      src    - srcW * srcH scalar field
+   * @param {Uint8Array}        lut    - 4*K bytes (RGBA8); typically built
+   *                                     via bro.image.gradient()
+   * @param {{lo:number, hi:number, srcW:number, srcH:number}} params
+   *
+   * @example
+   *   const canvas = document.createElement('canvas');
+   *   document.body.appendChild(canvas);
+   *   canvas.width = 1280; canvas.height = 800;
+   *
+   *   const lut = bro.image.gradient([
+   *       [0.00,  10,  30,  80],
+   *       [0.45, 230, 220, 150],
+   *       [0.55, 100, 170,  90],
+   *       [0.75, 250, 250, 250],
+   *   ]);
+   *
+   *   function frame() {
+   *       const data = node.genUniformGrid2D(ox, oy, 1280, 800, freq, seed);
+   *       const {min, max} = bro.image.reduce(data, 'minmax');
+   *       bro.image.gpu.colormap(canvas, data, lut, {
+   *           lo: min, hi: max, srcW: 1280, srcH: 800
+   *       });
+   *       requestAnimationFrame(frame);
+   *   }
+   */
+  colormap(canvas, src, lut, params) {},
+};
+
+
+// =============================================================================
 // Recipes
 // =============================================================================
 //

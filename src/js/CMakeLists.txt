@@ -24,6 +24,7 @@ embed_js(dom_polyfills.js      js_dom_polyfills)
 embed_js(observer_polyfills.js js_observer_polyfills)
 embed_js(window_polyfill.js    js_window_polyfill)
 embed_js(dataset_proxy.js      js_dataset_proxy)
+embed_js(image_gpu.js          js_image_gpu)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ add_library(bro_js STATIC
     webgl2_bindings_framebuffers.cpp
     webgl2_bindings_queries.cpp
     image_bindings.cpp
+    image_gpu_bindings.cpp
     video_bindings.cpp
     physics_bindings.cpp
     scene_bindings.cpp
