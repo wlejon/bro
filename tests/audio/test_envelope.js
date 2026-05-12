@@ -30,10 +30,10 @@ console.log('release-mid(stop+60ms):', releaseMid);
 console.log('tail(stop+180ms):', tailPeak);
 
 // Attack peak is mid-ramp, post-attack peak is at top before decay
-assert(peakAfterAttack > attackPeak, 'post-attack peak > mid-attack peak (' + peakAfterAttack + ' > ' + attackPeak + ')'); // BUG: env-attack
+assert(peakAfterAttack > attackPeak, 'post-attack peak > mid-attack peak (' + peakAfterAttack + ' > ' + attackPeak + ')');
 // Sustain at 0.5 is below the post-attack peak (envelope started at 1.0)
-assert(sustainPeak < peakAfterAttack * 0.95, 'sustain (0.5) is below post-attack peak (1.0)'); // BUG: env-decay
-assert(sustainPeak > 0.005, 'sustain has meaningful amplitude (' + sustainPeak + ')'); // BUG: env-sustain-level
+assert(sustainPeak < peakAfterAttack * 0.95, 'sustain (0.5) is below post-attack peak (1.0)');
+assert(sustainPeak > 0.005, 'sustain has meaningful amplitude (' + sustainPeak + ')');
 // Release should bring level down
-assert(releaseMid < sustainPeak, 'release mid is quieter than sustain (' + releaseMid + ' < ' + sustainPeak + ')'); // BUG: env-release-shape
-assert(tailPeak < sustainPeak * 0.2, 'tail is much quieter than sustain (' + tailPeak + ' < 0.2*' + sustainPeak + ')'); // BUG: env-release-tail
+assert(releaseMid < sustainPeak, 'release mid is quieter than sustain (' + releaseMid + ' < ' + sustainPeak + ')');
+assert(tailPeak < sustainPeak * 0.2, 'tail is much quieter than sustain (' + tailPeak + ' < 0.2*' + sustainPeak + ')');

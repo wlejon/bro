@@ -62,5 +62,5 @@ const left  = panPeaks(-1.0);
 const right = panPeaks( 1.0);
 console.log('pan=-1 L:', left.l, 'R:', left.r);
 console.log('pan=+1 L:', right.l, 'R:', right.r);
-assert(left.l > left.r * 5, 'pan=-1 makes L >> R (L=' + left.l + ' R=' + left.r + ')'); // BUG: pan-left
-assert(right.r > right.l * 5, 'pan=+1 makes R >> L (L=' + right.l + ' R=' + right.r + ')'); // BUG: pan-right
+assert(left.l > left.r * 5, 'pan=-1 makes L >> R (L=' + left.l + ' R=' + left.r + ')');
+assert(right.r > right.l * 5, 'pan=+1 makes R >> L (L=' + right.l + ' R=' + right.r + ')');

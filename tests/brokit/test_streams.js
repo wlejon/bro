@@ -68,5 +68,5 @@ if (typeof TransformStream === 'function') {
     assert(pipeDone, 'transform pipe done');
     assert(outChunks[0] === 'HI', 'transform output: ' + outChunks[0]);
 } else {
-    console.warn('TransformStream not implemented'); // BUG: TransformStream-missing
+    console.warn('TransformStream not implemented');
 }

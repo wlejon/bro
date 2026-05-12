@@ -190,6 +190,13 @@ void Engine::advanceTime(double ms) {
         double step = std::min(remaining, 16.0);
         virtualTime_ += step;
         remaining -= step;
+
+        // Drain microtasks before firing any macrotask (timer callbacks).
+        // Without this, microtasks queued by the calling synchronous script
+        // (queueMicrotask, Promise.resolve().then) would run AFTER a 0-delay
+        // setTimeout, violating the HTML microtask-checkpoint ordering.
+        jsRuntime_->executePendingJobs();
+
         timers_->tick(virtualTime_);
 
         // Tick brokit fetch (pump pending HTTP requests)

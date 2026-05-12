@@ -28,7 +28,7 @@ function playToneOnBus(busId, ms) {
 // Create a bus
 const bus = ctx.createBus();
 console.log('createBus returned:', bus);
-assert(typeof bus === 'number' && bus >= 0, 'createBus returns a non-negative id, got ' + bus); // BUG: create-bus
+assert(typeof bus === 'number' && bus >= 0, 'createBus returns a non-negative id, got ' + bus);
 
 // Baseline: unmuted bus produces audio
 ctx.setBusGain(bus, 1.0);
@@ -44,8 +44,8 @@ playToneOnBus(bus, 120);
 const mutedRms = rms(ctx.stopRecording());
 
 console.log('bus unmuted rms:', unmutedRms, 'muted rms:', mutedRms);
-assert(unmutedRms > 0.001, 'unmuted bus is audible'); // BUG: bus-routing
-assert(mutedRms < unmutedRms * 0.05, 'mute really silences bus (muted=' + mutedRms + ', unmuted=' + unmutedRms + ')'); // BUG: bus-mute
+assert(unmutedRms > 0.001, 'unmuted bus is audible');
+assert(mutedRms < unmutedRms * 0.05, 'mute really silences bus (muted=' + mutedRms + ', unmuted=' + unmutedRms + ')');
 
 // Gain affects level proportionally
 ctx.setBusMuted(bus, false);
@@ -54,7 +54,7 @@ ctx.startRecording();
 playToneOnBus(bus, 120);
 const lowGainRms = rms(ctx.stopRecording());
 console.log('bus gain=0.25 rms:', lowGainRms);
-assert(lowGainRms < unmutedRms * 0.5, 'lower bus gain produces lower level (' + lowGainRms + ' < 0.5*' + unmutedRms + ')'); // BUG: bus-gain
+assert(lowGainRms < unmutedRms * 0.5, 'lower bus gain produces lower level (' + lowGainRms + ' < 0.5*' + unmutedRms + ')');
 
 // Metering API returns numbers
 ctx.setBusGain(bus, 1.0);
@@ -63,10 +63,10 @@ const pR = ctx.getBusPeakR(bus);
 const rL = ctx.getBusRmsL(bus);
 const rR = ctx.getBusRmsR(bus);
 console.log('meter L/R peak:', pL, pR, 'rms:', rL, rR);
-assert(typeof pL === 'number' && !isNaN(pL), 'getBusPeakL returns number, got ' + pL); // BUG: bus-meter
-assert(typeof rR === 'number' && !isNaN(rR), 'getBusRmsR returns number, got ' + rR); // BUG: bus-meter
+assert(typeof pL === 'number' && !isNaN(pL), 'getBusPeakL returns number, got ' + pL);
+assert(typeof rR === 'number' && !isNaN(rR), 'getBusRmsR returns number, got ' + rR);
 
 // deleteBus does not throw on valid id
 let threw = false;
 try { ctx.deleteBus(bus); } catch (e) { threw = true; console.log('deleteBus threw:', e.message); }
-assert(!threw, 'deleteBus does not throw on valid id'); // BUG: delete-bus
+assert(!threw, 'deleteBus does not throw on valid id');

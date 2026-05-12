@@ -45,7 +45,7 @@ function resetBus() {
 resetBus();
 const dryRms = rms(recordTone(onBus, 150));
 console.log('dry rms:', dryRms);
-assert(dryRms > 0.001, 'baseline tone is audible'); // BUG: bus-baseline
+assert(dryRms > 0.001, 'baseline tone is audible');
 
 function expectDifferent(name, modify, tolerance = 0.0005) {
     resetBus();
@@ -54,7 +54,7 @@ function expectDifferent(name, modify, tolerance = 0.0005) {
     const wetRms = rms(wetBuf);
     console.log(name, 'wet rms:', wetRms, 'dry rms:', dryRms, 'delta:', Math.abs(wetRms - dryRms));
     assert(Math.abs(wetRms - dryRms) > tolerance,
-           name + ' alters signal (wet=' + wetRms + ', dry=' + dryRms + ')'); // BUG: effect-noop
+           name + ' alters signal (wet=' + wetRms + ', dry=' + dryRms + ')');
 }
 
 expectDifferent('biquad-filter', () => {

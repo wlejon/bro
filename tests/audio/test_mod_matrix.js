@@ -37,15 +37,15 @@ console.log('mm.routeCount:', mm.routeCount);
 
 // All documented (source, dest) combos should be acceptable per audio-api.js.
 assert(failures.length === 0,
-       'all ' + (sources.length * dests.length) + ' documented source/dest combos accepted, got ' + failures.length + ' failures'); // BUG: route-cap
+       'all ' + (sources.length * dests.length) + ' documented source/dest combos accepted, got ' + failures.length + ' failures');
 
 // At minimum every source should be supported at least once.
 for (const s of sources) {
-    assert((succeededBySource[s] || 0) > 0, 'source "' + s + '" supports at least one destination'); // BUG: route-source-missing
+    assert((succeededBySource[s] || 0) > 0, 'source "' + s + '" supports at least one destination');
 }
 // And every destination should be supported.
 for (const d of dests) {
-    assert((succeededByDest[d] || 0) > 0, 'destination "' + d + '" supports at least one source'); // BUG: route-dest-missing
+    assert((succeededByDest[d] || 0) > 0, 'destination "' + d + '" supports at least one source');
 }
 
 // setRouteAmount / setRouteEnabled don't throw on a valid id
@@ -59,13 +59,13 @@ assert(id >= 0, 'baseline addRoute(lfo1,pitch) returns a valid id, got ' + id);
         mm.setRouteEnabled(id, false);
         mm.setRouteEnabled(id, true);
     } catch (e) { threw = true; console.log('route mut threw:', e.message); }
-    assert(!threw, 'route mutation does not throw'); // BUG: route-mut
+    assert(!threw, 'route mutation does not throw');
 }
 
 // removeRoute decrements count
 const before = mm.routeCount;
 mm.removeRoute(id);
-assert(mm.routeCount === before - 1, 'routeCount decreased by 1 after removeRoute: ' + before + ' -> ' + mm.routeCount); // BUG: route-remove
+assert(mm.routeCount === before - 1, 'routeCount decreased by 1 after removeRoute: ' + before + ' -> ' + mm.routeCount);
 
 // External mod sources
 {
@@ -74,7 +74,7 @@ assert(mm.routeCount === before - 1, 'routeCount decreased by 1 after removeRout
         mm.setModWheel(0.7);
         mm.setAftertouch(0.4);
     } catch (e) { threw = true; console.log('extmod threw:', e.message); }
-    assert(!threw, 'setModWheel/setAftertouch do not throw'); // BUG: extmod
+    assert(!threw, 'setModWheel/setAftertouch do not throw');
 }
 
 mm.clearAllRoutes();

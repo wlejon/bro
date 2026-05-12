@@ -14,7 +14,7 @@ const sr = ctx.sampleRate;
     const bins = 1024;
     const spec = ctx.getSpectrum(bins);
     console.log('spec type:', spec && spec.constructor.name, 'len:', spec && spec.length);
-    assert(spec && spec.length === bins, 'getSpectrum returns Float32Array length=' + bins + ', got ' + (spec && spec.length)); // BUG: getSpectrum-len
+    assert(spec && spec.length === bins, 'getSpectrum returns Float32Array length=' + bins + ', got ' + (spec && spec.length));
 
     // Find peak bin
     let maxBin = 0, maxVal = -Infinity;
@@ -28,18 +28,18 @@ const sr = ctx.sampleRate;
     console.log('peak bin:', maxBin, 'hzNyquist:', hzNyquist, 'hzFull:', hzFull, 'maxVal:', maxVal);
     // Accept either convention but flag the deviation: Web Audio convention says hzNyquist.
     assert(Math.abs(hzNyquist - 1000) < 100,
-           'spectrum peak near 1000Hz under Web Audio Nyquist convention, got ' + hzNyquist + 'Hz; under full-rate convention it is ' + hzFull + 'Hz'); // BUG: spectrum-bin-mapping
+           'spectrum peak near 1000Hz under Web Audio Nyquist convention, got ' + hzNyquist + 'Hz; under full-rate convention it is ' + hzFull + 'Hz');
     osc.stop();
 }
 
 // AnalyserNode API
 {
     const an = ctx.createAnalyser();
-    assert(an, 'createAnalyser returns node'); // BUG: createAnalyser
+    assert(an, 'createAnalyser returns node');
     an.fftSize = 1024;
     console.log('fftSize:', an.fftSize, 'binCount:', an.frequencyBinCount);
-    assert(an.fftSize === 1024, 'fftSize round-trips, got ' + an.fftSize); // BUG: an-fftsize
-    assert(an.frequencyBinCount === 512, 'frequencyBinCount = fftSize/2, got ' + an.frequencyBinCount); // BUG: an-bincount
+    assert(an.fftSize === 1024, 'fftSize round-trips, got ' + an.fftSize);
+    assert(an.frequencyBinCount === 512, 'frequencyBinCount = fftSize/2, got ' + an.frequencyBinCount);
 
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -54,6 +54,6 @@ const sr = ctx.sampleRate;
     const hzNyq = peakI * (sr / 2) / an.frequencyBinCount;
     const hzFul = peakI * sr / an.frequencyBinCount;
     console.log('analyser peak bin:', peakI, 'hzNyq:', hzNyq, 'hzFull:', hzFul, 'val:', peakV);
-    assert(Math.abs(hzNyq - 2000) < 300, 'analyser peak near 2000Hz under Web Audio convention, got ' + hzNyq + ' (full-rate would be ' + hzFul + ')'); // BUG: an-peak
+    assert(Math.abs(hzNyq - 2000) < 300, 'analyser peak near 2000Hz under Web Audio convention, got ' + hzNyq + ' (full-rate would be ' + hzFul + ')');
     osc.stop();
 }

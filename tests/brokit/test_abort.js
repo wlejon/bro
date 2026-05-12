@@ -37,7 +37,7 @@ if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'functi
     assert(sig.aborted === false, 'timeout signal not aborted yet');
     advanceTime(100);
     flush();
-    assert(sig.aborted === true, 'timeout signal aborted'); // BUG: AbortSignal.timeout-no-fire
+    assert(sig.aborted === true, 'timeout signal aborted');
 } else {
-    console.warn('AbortSignal.timeout missing'); // BUG: AbortSignal.timeout-missing
+    console.warn('AbortSignal.timeout missing');
 }

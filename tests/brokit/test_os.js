@@ -30,7 +30,7 @@ if (typeof os.hostname === 'function') {
     const hn = os.hostname();
     assert(typeof hn === 'string', 'hostname: ' + hn);
 } else {
-    console.warn('os.hostname missing'); // BUG: os.hostname-missing
+    console.warn('os.hostname missing');
 }
 
 // cpus (mentioned in user spec, not in docs)
@@ -39,5 +39,5 @@ if (typeof os.cpus === 'function') {
     assert(Array.isArray(c), 'cpus is array');
     assert(c.length > 0, 'cpus length > 0: ' + c.length);
 } else {
-    console.warn('os.cpus missing'); // BUG: os.cpus-missing
+    console.warn('os.cpus missing');
 }

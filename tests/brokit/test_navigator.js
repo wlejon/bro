@@ -14,7 +14,7 @@ if ('hardwareConcurrency' in navigator) {
     assert(typeof navigator.hardwareConcurrency === 'number', 'hardwareConcurrency number');
     assert(navigator.hardwareConcurrency > 0, 'hwc > 0: ' + navigator.hardwareConcurrency);
 } else {
-    console.warn('navigator.hardwareConcurrency missing'); // BUG: navigator.hardwareConcurrency-missing
+    console.warn('navigator.hardwareConcurrency missing');
 }
 
 // languages

@@ -10,7 +10,7 @@ for (let i = 0; i < 4; i++) {
     for (const s of shapes) {
         let threw = false;
         try { mm.setLfoShape(i, s); } catch (e) { threw = true; console.log('setLfoShape(' + i + ',' + s + ') threw:', e.message); }
-        assert(!threw, 'setLfoShape(' + i + ',' + s + ') does not throw'); // BUG: lfo-shape
+        assert(!threw, 'setLfoShape(' + i + ',' + s + ') does not throw');
     }
     let threw = false;
     try {
@@ -20,7 +20,7 @@ for (let i = 0; i < 4; i++) {
         mm.setLfoBipolar(i, true);
         mm.setLfoSync(i, false);
     } catch (e) { threw = true; console.log('LFO config' + i + ' threw:', e.message); }
-    assert(!threw, 'LFO ' + i + ' config does not throw'); // BUG: lfo-config
+    assert(!threw, 'LFO ' + i + ' config does not throw');
 }
 
 // Bad shape: should throw or silently ignore (not crash)
@@ -45,7 +45,7 @@ mm.setLfoDepth(0, 1.0);
 mm.setLfoBipolar(0, true);
 const routeIdx = mm.addRoute('lfo1', 'pitch', 200); // 200 cents of vibrato
 console.log('route idx:', routeIdx);
-assert(typeof routeIdx === 'number' && routeIdx >= 0, 'addRoute(lfo1,pitch) returns route idx, got ' + routeIdx); // BUG: lfo-route
+assert(typeof routeIdx === 'number' && routeIdx >= 0, 'addRoute(lfo1,pitch) returns route idx, got ' + routeIdx);
 
 mm.clearAllRoutes();
-assert(mm.routeCount === 0, 'clearAllRoutes resets count, got ' + mm.routeCount); // BUG: clear-routes
+assert(mm.routeCount === 0, 'clearAllRoutes resets count, got ' + mm.routeCount);

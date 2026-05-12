@@ -62,7 +62,7 @@ assert(dmgDealt > 0, 'damage dealt > 0, got ' + dmgDealt);
 
 const delta = tracker.consume(h, w);
 if (delta.damageTaken <= 0) {
-    // BUG: reward tracker did not report damage taken after world.dealDamage
+
     assert(false, 'BUG: reward tracker damageTaken=' + delta.damageTaken +
            ' after dealing ' + dmgDealt + ' damage to h');
 }

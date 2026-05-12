@@ -36,7 +36,7 @@ function isCombatAction(a) {
     const found = legals.some(l =>
         l.moveDir === a.moveDir && l.attackSlot === a.attackSlot && l.abilitySlot === a.abilitySlot);
     if (!found) {
-        // BUG: single MCTS returned an action not in legal set
+
         assert(false, 'BUG: MCTS action ' + JSON.stringify(a) + ' not in legal set (len=' + legals.length + ')');
     }
 

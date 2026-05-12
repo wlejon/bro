@@ -61,7 +61,7 @@ assert(G.hasLineOfSight(0, 0, 10, 0, block) === true,  'clear: line skirts small
     // Target moving 100 u/s away with projectile speed 1 — no intercept possible.
     // Spec: valid=false in this case.
     if (lead.valid === true) {
-        // BUG: lead-aim reports valid intercept for unreachable target
+
         assert(false, 'BUG: computeLeadAim claimed valid=true for target outrunning projectile');
     }
     assert(lead.valid === false, 'unreachable target: valid=false');

@@ -41,7 +41,7 @@ if (typeof cp.spawnSync === 'function') {
     if (stdout && typeof stdout !== 'string') stdout = stdout.toString();
     assert(stdout && stdout.indexOf('spawned') >= 0, 'spawnSync stdout: ' + stdout);
 } else {
-    console.warn('spawnSync missing'); // BUG: spawnSync-missing
+    console.warn('spawnSync missing');
 }
 
 // execFileSync
@@ -60,5 +60,5 @@ if (typeof cp.execFileSync === 'function') {
         assert(s2 && s2.indexOf('execfile') >= 0, 'execFileSync output: ' + s2);
     }
 } else {
-    console.warn('execFileSync missing'); // BUG: execFileSync-missing
+    console.warn('execFileSync missing');
 }

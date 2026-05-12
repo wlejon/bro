@@ -17,7 +17,7 @@ assert(typeof path_env === 'string' && path_env.length > 0, 'PATH exists: ' + (p
 if (Array.isArray(process.argv)) {
     assert(process.argv.length >= 1, 'argv length: ' + process.argv.length);
 } else {
-    console.warn('process.argv not an array'); // BUG: process.argv-missing
+    console.warn('process.argv not an array');
 }
 
 // 'in' operator

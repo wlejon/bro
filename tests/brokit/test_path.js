@@ -45,12 +45,12 @@ if (path.posix) {
     assert(path.posix.sep === '/', 'posix.sep: ' + path.posix.sep);
     assert(path.posix.join('a', 'b') === 'a/b', 'posix join: ' + path.posix.join('a', 'b'));
 } else {
-    console.warn('path.posix missing'); // BUG: path.posix-missing
+    console.warn('path.posix missing');
 }
 if (path.win32) {
     assert(path.win32.sep === '\\', 'win32.sep: ' + path.win32.sep);
 } else {
-    console.warn('path.win32 missing'); // BUG: path.win32-missing
+    console.warn('path.win32 missing');
 }
 
 // isAbsolute

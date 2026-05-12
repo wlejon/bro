@@ -33,7 +33,7 @@ if (typeof CustomEvent === 'function') {
     et.dispatchEvent(new CustomEvent('c', { detail: { a: 1 } }));
     assert(detail && detail.a === 1, 'CustomEvent detail: ' + JSON.stringify(detail));
 } else {
-    console.warn('CustomEvent missing'); // BUG: CustomEvent-missing
+    console.warn('CustomEvent missing');
 }
 
 // Multiple listeners for same type

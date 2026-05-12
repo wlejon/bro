@@ -49,13 +49,7 @@ assert(stats.bestAction === 0, 'lastStats.bestAction = 0, got ' + stats.bestActi
 state = 1;
 m.reset();
 const noop = m.search();
-// BUG: generic_mcts.search() only checks env.num_actions, not legalActions().
-// When legal set is empty but numActions > 0, it returns the default best
-// action (0) instead of -1 as documented.
-if (noop !== -1) {
-    console.log('BUG: GenericMcts.search returned ' + noop + ' for empty legal set (docs say -1)');
-}
-assert(noop === -1, 'BUG: search returns -1 on empty action space, got ' + noop);
+assert(noop === -1, 'search returns -1 on empty action space, got ' + noop);
 
 // reconfigure
 state = 0;
