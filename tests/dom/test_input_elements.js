@@ -159,17 +159,12 @@ const rTA = ta.getBoundingClientRect();
 click(rTA.left + 10, rTA.top + 10);
 
 textInput('line one');
-// bro stores textarea text in the `value` attribute; the `.value` JS getter
-// reads textContent, which lags until a render cycle syncs them. Read the
-// attribute directly to verify the keystroke pipeline.
-let taVal = ta.getAttribute('value') || ta.value;
-assert(taVal === 'line one', 'textarea typed, got: ' + taVal);
+assert(ta.value === 'line one', 'textarea typed, got: ' + ta.value);
 
 // Backspace works in textarea
 keyDown(SDLK_BACKSPACE);
 keyUp(SDLK_BACKSPACE);
-taVal = ta.getAttribute('value') || ta.value;
-assert(taVal === 'line on', 'backspace removes char, got: ' + taVal);
+assert(ta.value === 'line on', 'backspace removes char, got: ' + ta.value);
 
 // =========================================================================
 // Placeholder rendering (no error path — just exercise)

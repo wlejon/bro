@@ -16,6 +16,16 @@ std::string ElTextarea::getAttr(const std::string& name) const {
     return elem_ ? elem_->getAttribute(name) : "";
 }
 
+// Textarea text storage: typed/edited text lives in the "value" attribute
+// once any edit has occurred; before that, the initial content from HTML
+// (e.g. `<textarea>foo</textarea>`) lives in textContent. Readers must check
+// the attribute first, then fall back to textContent.
+static std::string readCurrentValue(dom::Element* el) {
+    if (!el) return "";
+    if (el->hasAttribute("value")) return el->getAttribute("value");
+    return el->textContent();
+}
+
 int ElTextarea::rows() const {
     std::string r = getAttr("rows");
     if (!r.empty()) {
@@ -81,7 +91,7 @@ static int lineLength(const std::string& val, int start) {
 
 KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod) {
     KeyHandleResult r;
-    std::string val = el->getAttribute("value");
+    std::string val = readCurrentValue(el);
     int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
 
     if (keycode == SDLK_BACKSPACE) {
@@ -169,7 +179,7 @@ KeyHandleResult ElTextarea::handleTextInput(dom::Element* el, const std::string&
     KeyHandleResult r;
     if (!focused_) return r;
 
-    std::string val = el->getAttribute("value");
+    std::string val = readCurrentValue(el);
     int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
     val.insert(pos, text);
     setCursorPos(pos + static_cast<int>(text.size()));
@@ -237,7 +247,7 @@ void ElTextarea::draw(render::Renderer* renderer,
 
     if (w <= 0 || h <= 0) return;
 
-    std::string val = getAttr("value");
+    std::string val = readCurrentValue(elem_);
     std::string placeholder = getAttr("placeholder");
     std::string text;
     bool isPlaceholder = false;

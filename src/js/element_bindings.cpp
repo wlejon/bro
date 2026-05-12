@@ -618,10 +618,13 @@ static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
             return JS_NewString(ctx, opts[idx].value.c_str());
         return JS_NewString(ctx, "");
     }
-    // <textarea> stores its current value in textContent, not the value attr
-    // (textareas don't have a value attribute per spec).
+    // <textarea>: the live value lives in the "value" attribute once any
+    // edit has happened; before that, fall back to textContent (initial
+    // content from HTML, e.g. `<textarea>foo</textarea>`).
     const std::string& tag = el->tagName();
     if (tag == "TEXTAREA" || tag == "textarea") {
+        if (el->hasAttribute("value"))
+            return JS_NewString(ctx, el->getAttribute("value").c_str());
         std::string t = el->textContent();
         return JS_NewString(ctx, t.c_str());
     }
@@ -663,9 +666,11 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
         }
         return JS_UNDEFINED;
     }
-    // <textarea> mirrors current value in textContent per spec.
+    // <textarea>: write to the "value" attribute, which is the storage
+    // shared with the typing pipeline (handleKeyDown / handleTextInput).
+    // textContent stays as the initial HTML content (defaultValue).
     if (el->tagName() == "TEXTAREA" || el->tagName() == "textarea") {
-        el->setTextContent(s);
+        el->setAttribute("value", s);
         return JS_UNDEFINED;
     }
     el->setAttribute("value", s);
@@ -2059,10 +2064,8 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
             auto* oldElem = static_cast<bro::dom::Element*>(oldChild);
             if (doc && !oldElem->id().empty())
                 doc->unregisterElementId(oldElem->id());
-            invalidateWrapper(ctx, oldElem);
         }
         el->removeChild(oldChild);
-        if (doc) doc->freeNode(oldChild);
         if (newChild->nodeType() == bro::dom::NodeType::Element) {
             JSValue w = DomBindings::wrapElement(ctx, newChild);
             fireConnectedCallback(ctx, w);
