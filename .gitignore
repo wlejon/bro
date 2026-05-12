@@ -4,6 +4,7 @@ build-debug/
 Build-release/
 out/
 cmake-build-*/
+*.bgar
 
 /node_modules/
 .shots
