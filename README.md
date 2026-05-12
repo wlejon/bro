@@ -53,7 +53,7 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 
 **Beyond the web** — 3D scene graph with mesh rendering and terrain (`bro.scene`), Jolt rigid-body physics with contact events, Web Audio with synthesis / effects / spatial / MIDI (broaudio), mesh generation and CSG (bromesh), navmesh and A* pathfinding (`bro.ai.game`), game networking over GameNetworkingSockets (`bro.net`), native file dialogs, native menu bars, 3D transform gizmos, native crosshair.
 
-**For development** — Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing. See [docs/headless.md](docs/headless.md).
+**For development** — Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing. See [docs/headless.md](docs/headless.md). Line-coverage reports via OpenCppCoverage are wired up for bro and every sibling — `pwsh scripts/coverage.ps1` in any repo. See [docs/coverage.md](docs/coverage.md).
 
 ## Architecture
 

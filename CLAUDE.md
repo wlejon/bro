@@ -143,7 +143,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/gizmo-api.js` | `bro.gizmo` — 3D transform handles (translate/rotate/scale) for scene editing |
 | `docs/video-api.js` | `VideoEncoder` (WebM/VP9 software) + `GifEncoder` (GIF89a, median-cut palette) — RGBA in, file out |
 
-Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system, including action binding/rebinding), `docs/inspect.md` (DOM inspector that's very useful in headless), `docs/multi-repo-workflow.md` (sibling library development).
+Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system, including action binding/rebinding), `docs/inspect.md` (DOM inspector that's very useful in headless), `docs/multi-repo-workflow.md` (sibling library development), `docs/coverage.md` (OpenCppCoverage line-coverage reports, Windows-only — `pwsh scripts/coverage.ps1` in any repo).
 
 ## Namespace
 
