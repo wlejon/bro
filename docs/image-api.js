@@ -302,6 +302,52 @@ const imageGpu = {
    *   bro.image.gpu.colormap(canvas, data, lut, { lo: min, hi: max });
    */
   colormap(canvas, src, lut, params) {},
+
+  /**
+   * Generate a 2D Simplex FBm field on the GPU and colormap it to `canvas`
+   * in one call. The scalar field never materializes on the CPU side — it
+   * lives only as an intermediate R32F texture between the FBm shader and
+   * the colormap shader.
+   *
+   * Use this instead of `FastNoise.create('Simplex')` +
+   * `genUniformGrid2DInto` + `colormap` when you don't need the field on
+   * the CPU. At large canvas sizes this eliminates the per-frame
+   * CPU→GPU upload (5 MB at 1280×800) and the Float32Array buffer
+   * entirely.
+   *
+   * V1 supports type === 'Simplex' only. SuperSimplex, Perlin, Value,
+   * CellularValue and CellularDistance are not implemented in shader form
+   * yet — stay on the CPU path for those types.
+   *
+   * @param {HTMLCanvasElement} canvas - webgl2-backed
+   * @param {Uint8Array} lut           - RGBA8 LUT (see gradient())
+   * @param {object} params
+   * @param {number} params.frequency
+   * @param {number} [params.octaves=1]      - 1..16
+   * @param {number} [params.gain=0.5]
+   * @param {number} [params.lacunarity=2]
+   * @param {number} [params.seed=0]
+   * @param {number} [params.ox=0]           - world offset x
+   * @param {number} [params.oy=0]           - world offset y
+   * @param {string} [params.type='Simplex'] - V1: only 'Simplex'
+   * @param {boolean} [params.autoRange]     - GPU min/max + EMA (see colormap)
+   * @param {number}  [params.ema=0.02]
+   * @param {number}  [params.lo] / [params.hi] - uniform-range mode
+   * @param {number}  [params.srcW] / [params.srcH]
+   *
+   * @example
+   *   // Animating FBm with autoRange — no CPU buffer, no reduce, no upload.
+   *   function frame() {
+   *       t += dt * scrollSpeed;
+   *       bro.image.gpu.fbm2D(canvas, lut, {
+   *           frequency: 0.05, octaves: 8, gain: 0.5, lacunarity: 2.0,
+   *           seed: 1337, ox: t, oy: 0,
+   *           autoRange: true,
+   *       });
+   *       requestAnimationFrame(frame);
+   *   }
+   */
+  fbm2D(canvas, lut, params) {},
 };
 
 

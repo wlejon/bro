@@ -356,62 +356,26 @@ void main() {
         st.hasRange = false;
     }
 
-    // ----- public colormap() ------------------------------------------------
-
-    /**
-     * Colormap a 1-channel float field through a 1D RGBA8 LUT, rendering
-     * directly to `canvas` via WebGL2.
-     *
-     * @param {HTMLCanvasElement} canvas - must support webgl2
-     * @param {Float32Array} src         - srcW * srcH scalar field
-     * @param {Uint8Array}   lut         - 4*K bytes (RGBA8)
-     * @param {object} params
-     * @param {number}  [params.lo]        - explicit low (uniform mode)
-     * @param {number}  [params.hi]        - explicit high (uniform mode)
-     * @param {boolean} [params.autoRange] - GPU min/max + EMA smoothing
-     * @param {number}  [params.ema=0.02]  - blend factor for autoRange
-     * @param {number}  [params.srcW]      - field width  (default canvas.width)
-     * @param {number}  [params.srcH]      - field height (default canvas.height)
-     */
-    bro.image.gpu.colormap = function colormap(canvas, src, lut, params) {
-        if (!canvas || canvas.nodeType !== 1)
-            throw new TypeError("bro.image.gpu.colormap: canvas required");
-        if (!(src instanceof Float32Array))
-            throw new TypeError("bro.image.gpu.colormap: src must be Float32Array");
-        if (!(lut instanceof Uint8Array) && !(lut instanceof Uint8ClampedArray))
-            throw new TypeError("bro.image.gpu.colormap: lut must be Uint8Array");
-        params = params || {};
-        const autoRange = !!params.autoRange;
-        const srcW = (params.srcW != null ? params.srcW : canvas.width) | 0;
-        const srcH = (params.srcH != null ? params.srcH : canvas.height) | 0;
-        if (srcW <= 0 || srcH <= 0)
-            throw new RangeError("bro.image.gpu.colormap: srcW/srcH must be positive");
-        if (src.length < srcW * srcH)
-            throw new RangeError("bro.image.gpu.colormap: src too small");
-        if ((lut.byteLength & 3) !== 0)
-            throw new RangeError("bro.image.gpu.colormap: lut length must be a multiple of 4");
-        const lutN = lut.byteLength >> 2;
-        if (lutN < 2)
-            throw new RangeError("bro.image.gpu.colormap: lut needs >= 2 entries");
-
-        const st = getState(canvas);
+    // Ensure noiseTex is allocated at (srcW, srcH) as R32F and FBO-attachable.
+    // Returns whether the texture was (re)allocated this call.
+    function ensureNoiseTex(st, srcW, srcH) {
         const gl = st.gl;
-        const cw = canvas.width | 0, ch = canvas.height | 0;
-
-        // Upload noise (R32F). Reallocate if size changed; otherwise subImage.
-        gl.activeTexture(gl.TEXTURE0);
+        if (srcW === st.srcW && srcH === st.srcH && st.noiseFbo) return false;
         gl.bindTexture(gl.TEXTURE_2D, st.noiseTex);
-        const sizeChanged = (srcW !== st.srcW || srcH !== st.srcH);
-        if (sizeChanged) {
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, srcW, srcH, 0,
-                          gl.RED, gl.FLOAT, src);
-            st.srcW = srcW; st.srcH = srcH;
-        } else {
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, srcW, srcH,
-                             gl.RED, gl.FLOAT, src);
-        }
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, srcW, srcH, 0,
+                      gl.RED, gl.FLOAT, null);
+        if (!st.noiseFbo) st.noiseFbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, st.noiseFbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+                                gl.TEXTURE_2D, st.noiseTex, 0);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        st.srcW = srcW; st.srcH = srcH;
+        return true;
+    }
 
-        // Upload LUT (RGBA8).
+    function uploadLut(st, lut) {
+        const gl = st.gl;
+        const lutN = lut.byteLength >> 2;
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, st.lutTex);
         if (lutN !== st.lutN) {
@@ -422,21 +386,35 @@ void main() {
             gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, lutN, 1,
                              gl.RGBA, gl.UNSIGNED_BYTE, lut);
         }
+    }
+
+    // Shared pipeline: given st.noiseTex is already populated (R32F, srcW×srcH)
+    // and lut is uploaded, render to `canvas` either in uniform-range or
+    // autoRange mode. sizeChanged signals whether the source dims just changed
+    // (used to invalidate the reduceChain).
+    function applyColormapToCanvas(st, canvas, params, sizeChanged) {
+        const gl = st.gl;
+        const cw = canvas.width | 0, ch = canvas.height | 0;
+        const autoRange = !!params.autoRange;
 
         gl.disable(gl.BLEND);
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.CULL_FACE);
 
         if (!autoRange) {
-            // ----- uniform-range path (original) -----
             buildUniformProgram(st);
             const lo = +params.lo;
             const hi = +params.hi;
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.viewport(0, 0, cw, ch);
             gl.useProgram(st.uniProg);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, st.noiseTex);
             gl.uniform1i(st.uniLocs.uNoise, 0);
-            gl.uniform1i(st.uniLocs.uLut,   1);
-            gl.uniform1f(st.uniLocs.uLo,    lo);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, st.lutTex);
+            gl.uniform1i(st.uniLocs.uLut, 1);
+            gl.uniform1f(st.uniLocs.uLo, lo);
             gl.uniform1f(st.uniLocs.uInvSpan, (hi > lo) ? 1.0 / (hi - lo) : 0.0);
             gl.bindVertexArray(st.uniVao);
             gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -444,26 +422,23 @@ void main() {
             return;
         }
 
-        // ----- autoRange path -----
         buildAutoPath(st);
         if (sizeChanged || st.reduceChain.length === 0) {
-            buildReduceChain(st, srcW, srcH);
+            buildReduceChain(st, st.srcW, st.srcH);
         }
         const ema = (params.ema != null) ? +params.ema : 0.02;
-        // First frame after a (re)build: seed the smoothed range directly
-        // from this frame's raw reduce instead of blending against stale data.
         const k = st.hasRange ? Math.max(0, Math.min(1, ema)) : 1.0;
 
-        // (1) Reduce: noise (R32F) → chain[0] → chain[1] → ... → chain[last] (1×1).
+        // (1) Reduce R32F noise → 1×1 RG32F (raw min,max).
         let srcTex = st.noiseTex;
-        let srcSizeW = srcW, srcSizeH = srcH;
-        let usingR = true;  // first hop reads from R32F; subsequent from RG32F.
+        let srcSizeW = st.srcW, srcSizeH = st.srcH;
+        let usingR = true;
         for (let i = 0; i < st.reduceChain.length; i++) {
             const lvl = st.reduceChain[i];
             gl.bindFramebuffer(gl.FRAMEBUFFER, lvl.fbo);
             gl.viewport(0, 0, lvl.w, lvl.h);
-            const prog  = usingR ? st.reduceR    : st.reduceRG;
-            const locs  = usingR ? st.reduceRLocs : st.reduceRGLocs;
+            const prog = usingR ? st.reduceR : st.reduceRG;
+            const locs = usingR ? st.reduceRLocs : st.reduceRGLocs;
             gl.useProgram(prog);
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, srcTex);
@@ -476,12 +451,8 @@ void main() {
             srcSizeH = lvl.h;
             usingR = false;
         }
-        // After the loop, srcTex == reduceChain[last].tex (the raw 1×1 range).
 
-        // (2) EMA blend: rangePing (prev) + raw → rangePong, then swap. On the
-        //     first frame we use k=1 so rangePong := raw directly, with rangePing
-        //     ignored. After the swap, rangePing holds the smoothed range used
-        //     by the colormap pass.
+        // (2) EMA blend.
         gl.bindFramebuffer(gl.FRAMEBUFFER, st.rangePong.fbo);
         gl.viewport(0, 0, 1, 1);
         gl.useProgram(st.emaProg);
@@ -489,16 +460,15 @@ void main() {
         gl.bindTexture(gl.TEXTURE_2D, st.rangePing.tex);
         gl.uniform1i(st.emaLocs.uPrev, 0);
         gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, srcTex);  // raw this-frame (min,max)
+        gl.bindTexture(gl.TEXTURE_2D, srcTex);
         gl.uniform1i(st.emaLocs.uNew, 1);
         gl.uniform1f(st.emaLocs.uK, k);
         gl.bindVertexArray(st.autoVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
-        // Swap so rangePing := smoothed result.
         const tmp = st.rangePing; st.rangePing = st.rangePong; st.rangePong = tmp;
         st.hasRange = true;
 
-        // (3) Colormap to the default framebuffer (the canvas).
+        // (3) Colormap to the canvas.
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, cw, ch);
         gl.useProgram(st.autoProg);
@@ -515,5 +485,225 @@ void main() {
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindVertexArray(null);
         gl.activeTexture(gl.TEXTURE0);
+    }
+
+    // ----- public colormap() ------------------------------------------------
+
+    /**
+     * Colormap a 1-channel float field through a 1D RGBA8 LUT, rendering
+     * directly to `canvas` via WebGL2.
+     */
+    bro.image.gpu.colormap = function colormap(canvas, src, lut, params) {
+        if (!canvas || canvas.nodeType !== 1)
+            throw new TypeError("bro.image.gpu.colormap: canvas required");
+        if (!(src instanceof Float32Array))
+            throw new TypeError("bro.image.gpu.colormap: src must be Float32Array");
+        if (!(lut instanceof Uint8Array) && !(lut instanceof Uint8ClampedArray))
+            throw new TypeError("bro.image.gpu.colormap: lut must be Uint8Array");
+        params = params || {};
+        const srcW = (params.srcW != null ? params.srcW : canvas.width) | 0;
+        const srcH = (params.srcH != null ? params.srcH : canvas.height) | 0;
+        if (srcW <= 0 || srcH <= 0)
+            throw new RangeError("bro.image.gpu.colormap: srcW/srcH must be positive");
+        if (src.length < srcW * srcH)
+            throw new RangeError("bro.image.gpu.colormap: src too small");
+        if ((lut.byteLength & 3) !== 0)
+            throw new RangeError("bro.image.gpu.colormap: lut length must be a multiple of 4");
+        if ((lut.byteLength >> 2) < 2)
+            throw new RangeError("bro.image.gpu.colormap: lut needs >= 2 entries");
+
+        const st = getState(canvas);
+        const gl = st.gl;
+        const sizeChanged = ensureNoiseTex(st, srcW, srcH);
+        // Upload the CPU-provided field into the noise texture.
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, st.noiseTex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, srcW, srcH,
+                         gl.RED, gl.FLOAT, src);
+        uploadLut(st, lut);
+        applyColormapToCanvas(st, canvas, params, sizeChanged);
+    };
+
+    // ----- FBm-on-GPU --------------------------------------------------------
+
+    // Stefan Gustavson / Ian McEwan (Ashima Arts) Simplex 2D — MIT/public.
+    // Driven by an additive seed offset; FBm sums octaves with gain/lacunarity.
+    // The summed result is *not* normalized by Σaᵢ (matches FastNoise2's
+    // FractalFBm shape; autoRange compensates).
+    const FBM_FS = `#version 300 es
+precision highp float;
+
+uniform vec2  uOrigin;        // world offset (ox, oy) at frequency 1
+uniform float uFrequency;     // base frequency
+uniform int   uOctaves;       // number of octaves
+uniform float uGain;
+uniform float uLacunarity;
+uniform float uSeed;          // additive seed offset (any float)
+
+in  vec2 vUv;     // ignored; we use gl_FragCoord
+out vec4 fragColor;
+
+vec3 mod289v3(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec2 mod289v2(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec3 permute(vec3 x)  { return mod289v3(((x * 34.0) + 1.0) * x); }
+
+float snoise(vec2 v) {
+    const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                       -0.577350269189626, 0.024390243902439);
+    vec2 i  = floor(v + dot(v, C.yy));
+    vec2 x0 = v -   i + dot(i, C.xx);
+    vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+    vec4 x12 = x0.xyxy + C.xxzz;
+    x12.xy -= i1;
+    i = mod289v2(i);
+    vec3 p = permute(permute(i.y + vec3(0.0, i1.y, 1.0))
+                  + i.x + vec3(0.0, i1.x, 1.0));
+    vec3 m = max(0.5 - vec3(dot(x0,x0),
+                            dot(x12.xy, x12.xy),
+                            dot(x12.zw, x12.zw)), 0.0);
+    m = m * m; m = m * m;
+    vec3 x  = 2.0 * fract(p * C.www) - 1.0;
+    vec3 h  = abs(x) - 0.5;
+    vec3 ox = floor(x + 0.5);
+    vec3 a0 = x - ox;
+    m *= 1.79284291400159 - 0.85373472095314 * (a0*a0 + h*h);
+    vec3 g;
+    g.x  = a0.x  * x0.x  + h.x  * x0.y;
+    g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+    return 130.0 * dot(m, g);
+}
+
+void main() {
+    // World position: (px + uOrigin) * uFrequency for the first octave.
+    // px = gl_FragCoord.xy - 0.5 so column 0 row 0 samples (0+ox, 0+oy).
+    vec2 px = gl_FragCoord.xy - vec2(0.5);
+    vec2 base = (px + uOrigin) * uFrequency;
+
+    // Seed offsets the lattice irrationally so different seeds give different
+    // fields (and lacunarity scaling doesn't pull all octaves through (0,0)).
+    vec2 seedOfs = vec2(uSeed * 17.0, uSeed * 31.0);
+
+    float total = 0.0;
+    float amp = 1.0;
+    float freq = 1.0;
+    for (int i = 0; i < 16; i++) {
+        if (i >= uOctaves) break;
+        total += amp * snoise(base * freq + seedOfs);
+        freq *= uLacunarity;
+        amp  *= uGain;
+    }
+    fragColor = vec4(total, 0.0, 0.0, 1.0);
+}`;
+
+    function buildFbmPath(st) {
+        if (st.fbmProg) return;
+        const gl = st.gl;
+        if (!gl.getExtension('EXT_color_buffer_float')) {
+            throw new Error(
+                "bro.image.gpu.fbm2D: EXT_color_buffer_float not supported"
+            );
+        }
+        st.fbmProg = buildProgram(gl, FULLSCREEN_VS, FBM_FS);
+        const aPos = gl.getAttribLocation(st.fbmProg, "aPos");
+        if (!st.fbmVao) {
+            st.fbmVao = gl.createVertexArray();
+            gl.bindVertexArray(st.fbmVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, st.vbo);
+            gl.enableVertexAttribArray(aPos);
+            gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+            gl.bindVertexArray(null);
+        }
+        st.fbmLocs = {
+            uOrigin:     gl.getUniformLocation(st.fbmProg, "uOrigin"),
+            uFrequency:  gl.getUniformLocation(st.fbmProg, "uFrequency"),
+            uOctaves:    gl.getUniformLocation(st.fbmProg, "uOctaves"),
+            uGain:       gl.getUniformLocation(st.fbmProg, "uGain"),
+            uLacunarity: gl.getUniformLocation(st.fbmProg, "uLacunarity"),
+            uSeed:       gl.getUniformLocation(st.fbmProg, "uSeed"),
+        };
+    }
+
+    /**
+     * Generate a 2D Simplex FBm field on the GPU and colormap it to `canvas`.
+     * The scalar field is never materialized on the CPU side — it lives only
+     * as an R32F texture, then feeds the existing autoRange / uniform-range
+     * colormap pipeline.
+     *
+     * V1 supports type === 'Simplex' (and treats no `type` as Simplex). Other
+     * FastNoise2 types (SuperSimplex, Perlin, Value, CellularValue,
+     * CellularDistance) are NOT implemented in shader form yet — callers that
+     * need them should keep the CPU `genUniformGrid2DInto` + colormap path.
+     *
+     * @param {HTMLCanvasElement} canvas      - webgl2-backed
+     * @param {Uint8Array} lut                - RGBA8 LUT
+     * @param {object} params
+     * @param {number}  params.frequency      - base frequency
+     * @param {number}  [params.octaves=1]    - FBm octave count (1..16)
+     * @param {number}  [params.gain=0.5]
+     * @param {number}  [params.lacunarity=2]
+     * @param {number}  [params.seed=0]
+     * @param {number}  [params.ox=0]         - world offset x
+     * @param {number}  [params.oy=0]         - world offset y
+     * @param {string}  [params.type='Simplex'] - currently only 'Simplex'
+     * @param {boolean} [params.autoRange]
+     * @param {number}  [params.ema=0.02]
+     * @param {number}  [params.lo] / [params.hi]
+     * @param {number}  [params.srcW] / [params.srcH]
+     */
+    bro.image.gpu.fbm2D = function fbm2D(canvas, lut, params) {
+        if (!canvas || canvas.nodeType !== 1)
+            throw new TypeError("bro.image.gpu.fbm2D: canvas required");
+        if (!(lut instanceof Uint8Array) && !(lut instanceof Uint8ClampedArray))
+            throw new TypeError("bro.image.gpu.fbm2D: lut must be Uint8Array");
+        params = params || {};
+        const type = params.type || 'Simplex';
+        if (type !== 'Simplex') {
+            throw new Error(
+                "bro.image.gpu.fbm2D: type '" + type + "' not implemented " +
+                "(V1 supports 'Simplex'). Use the CPU genUniformGrid2DInto + " +
+                "bro.image.gpu.colormap path for other types."
+            );
+        }
+        const srcW = (params.srcW != null ? params.srcW : canvas.width) | 0;
+        const srcH = (params.srcH != null ? params.srcH : canvas.height) | 0;
+        if (srcW <= 0 || srcH <= 0)
+            throw new RangeError("bro.image.gpu.fbm2D: srcW/srcH must be positive");
+        if ((lut.byteLength & 3) !== 0)
+            throw new RangeError("bro.image.gpu.fbm2D: lut length must be a multiple of 4");
+        if ((lut.byteLength >> 2) < 2)
+            throw new RangeError("bro.image.gpu.fbm2D: lut needs >= 2 entries");
+        const octaves = (params.octaves != null) ? (params.octaves | 0) : 1;
+        if (octaves < 1 || octaves > 16)
+            throw new RangeError("bro.image.gpu.fbm2D: octaves must be in [1,16]");
+
+        const st = getState(canvas);
+        const gl = st.gl;
+        buildFbmPath(st);
+        const sizeChanged = ensureNoiseTex(st, srcW, srcH);
+        if (sizeChanged) {
+            // Resizing invalidates the reduce chain and the smoothed range.
+            freeReduceChain(st);
+            st.hasRange = false;
+        }
+        uploadLut(st, lut);
+
+        gl.disable(gl.BLEND);
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.CULL_FACE);
+
+        // (0) FBm pass → noiseTex.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, st.noiseFbo);
+        gl.viewport(0, 0, srcW, srcH);
+        gl.useProgram(st.fbmProg);
+        gl.uniform2f(st.fbmLocs.uOrigin, +(params.ox || 0), +(params.oy || 0));
+        gl.uniform1f(st.fbmLocs.uFrequency, +params.frequency);
+        gl.uniform1i(st.fbmLocs.uOctaves, octaves);
+        gl.uniform1f(st.fbmLocs.uGain, params.gain != null ? +params.gain : 0.5);
+        gl.uniform1f(st.fbmLocs.uLacunarity, params.lacunarity != null ? +params.lacunarity : 2.0);
+        gl.uniform1f(st.fbmLocs.uSeed, +(params.seed || 0));
+        gl.bindVertexArray(st.fbmVao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+        applyColormapToCanvas(st, canvas, params, sizeChanged);
     };
 })();
