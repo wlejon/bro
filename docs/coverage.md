@@ -55,16 +55,4 @@ OpenCppCoverage.exe `
 
 bro has no native C++ unit tests — its tests are all JS-driven through `bro-headless`. So bro's coverage measures *engine code exercised by the JS test suite*. Uncovered C++ usually means "no JS test reaches this path," not "no test file exists." Adding coverage in bro means writing new headless JS tests under `tests/`, not C++ test exes.
 
-## Per-library coverage as of last full run
 
-| Repo | Coverage | Tests |
-|---|---|---|
-| qjsbind | 97% | 1 |
-| bromesh | 95.7% | 4315 assertions |
-| brogameagent | 92% | 34 |
-| htmlayout | 89% | 1604 |
-| brokit | 85% | 2732 assertions |
-| broaudio | 81% | 33 |
-| bro | 43% | 130 |
-
-Numbers move as code changes; re-run the script to refresh.
