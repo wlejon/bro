@@ -51,12 +51,17 @@ const image = {
    * @param {TypedArray} src
    * @param {string} op - 'minmax' | 'sum' | 'mean' | 'histogram'
    * @param {object} [params]
+   * @param {number} [params.stride=1] - visit every Nth element. Cheap
+   *        approximate range/sum for huge buffers driving smoothed estimators
+   *        (mean is the mean of the *visited* elements; histogram counts only
+   *        the visited elements).
    * @returns {{min:number,max:number} | number | Uint32Array}
    *
    * @example
-   *   bro.image.reduce(arr, 'minmax');         // {min, max}
-   *   bro.image.reduce(arr, 'sum');             // number
-   *   bro.image.reduce(arr, 'mean');            // number
+   *   bro.image.reduce(arr, 'minmax');                         // {min, max}
+   *   bro.image.reduce(arr, 'minmax', {stride: 8});            // ~8× cheaper
+   *   bro.image.reduce(arr, 'sum');                            // number
+   *   bro.image.reduce(arr, 'mean');                           // number
    *   bro.image.reduce(arr, 'histogram', {bins: 256, lo: 0, hi: 1});  // Uint32Array
    */
   reduce(src, op, params) {},
