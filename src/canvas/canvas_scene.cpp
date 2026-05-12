@@ -311,8 +311,58 @@ void CanvasScene::stageCommandsForRaster() {
     }
 }
 
+// Streaming-buffer canvas fast path. When a frame's command buffer consists
+// only of putImageData calls, the SkCanvas replay (paint setup, transform
+// save/restore, draw-image submission) is pure overhead — the final state of
+// the surface is just the bytes from the *last* putImageData. We can skip
+// directly to a bulk pixel upload via SkSurface::writePixels, which on a
+// Ganesh GPU surface hits a glTexSubImage2D-style path with no draw pipeline
+// activity. This is the dominant pattern for streaming visualizations
+// (noise fields, audio waveforms, spectrograms, voxel mini-maps).
+//
+// Conservative check: every command must be kPutImageData. If any other op
+// is present (paths, text, transforms, clears, etc.) we fall back to the
+// regular replay. The last putImageData must also fit within the surface;
+// partial-region writes are handled correctly by writePixels' offset args.
+//
+// Returns true if the fast path consumed the commands; the caller should
+// then clear the buffer and return without running the normal replay.
+static bool tryStreamingPutImageDataFastPath(SkSurface* surface,
+                                             std::vector<CanvasCmd>& cmds)
+{
+    if (!surface || cmds.empty()) return false;
+    int lastPut = -1;
+    for (size_t i = 0; i < cmds.size(); ++i) {
+        if (cmds[i].type != CanvasCmd::kPutImageData) return false;
+        lastPut = static_cast<int>(i);
+    }
+    if (lastPut < 0) return false;
+
+    const CanvasCmd& cmd = cmds[lastPut];
+    if (!cmd.img) return false;
+    SkPixmap pm;
+    if (!cmd.img->peekPixels(&pm)) return false;
+
+    const int dx = static_cast<int>(cmd.p[0]);
+    const int dy = static_cast<int>(cmd.p[1]);
+    const int sw = surface->width();
+    const int sh = surface->height();
+    // writePixels will clip silently to the surface, but reject obviously bad
+    // offsets so we don't bypass the spec-compliant replay for unusual cases.
+    if (dx <= -pm.width() || dy <= -pm.height() || dx >= sw || dy >= sh) {
+        return false;
+    }
+    surface->writePixels(pm, dx, dy);
+    return true;
+}
+
 void CanvasScene::flushStagedCommands() {
     if (stagedCommands_.empty()) return;
+
+    if (tryStreamingPutImageDataFastPath(surface_.get(), stagedCommands_)) {
+        stagedCommands_.clear();
+        return;
+    }
 
     auto* c = skCanvas();
     if (!c) { stagedCommands_.clear(); return; }
@@ -1291,14 +1341,21 @@ void CanvasScene::reset() {
 void CanvasScene::flushCommands() {
     if (commands_.empty()) return;
 
-    auto* c = skCanvas();
-    if (!c) { commands_.clear(); return; }
-
     // Re-sync Skia's GL state cache: external code (engine compositing,
     // screenshot paths) may have changed FBO/program bindings since the
     // last Ganesh draw. Without this, Skia draws against stale state and
-    // commands silently miss the canvas FBO.
+    // commands silently miss the canvas FBO. Do this BEFORE the fast path
+    // too — writePixels also goes through Ganesh and benefits from a clean
+    // state cache.
     if (grContext_) grContext_->resetContext();
+
+    if (tryStreamingPutImageDataFastPath(surface_.get(), commands_)) {
+        commands_.clear();
+        return;
+    }
+
+    auto* c = skCanvas();
+    if (!c) { commands_.clear(); return; }
 
     for (auto& cmd : commands_) {
         switch (cmd.type) {
