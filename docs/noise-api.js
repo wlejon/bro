@@ -124,6 +124,22 @@ class FastNoise {
   genUniformGrid2D(xOffset, yOffset, xSize, ySize, frequency, seed) {}
 
   /**
+   * In-place variant of genUniformGrid2D. Writes into a caller-supplied
+   * Float32Array (xSize*ySize floats minimum); no per-call allocation.
+   * Preferred on the per-frame path — pair with bro.image.alloc(w, h, 1).
+   *
+   * @param {Float32Array} dest - reusable buffer, length >= xSize*ySize
+   * @param {number} xOffset
+   * @param {number} yOffset
+   * @param {number} xSize
+   * @param {number} ySize
+   * @param {number} frequency
+   * @param {number} seed
+   * @returns {undefined}
+   */
+  genUniformGrid2DInto(dest, xOffset, yOffset, xSize, ySize, frequency, seed) {}
+
+  /**
    * Generate a 3D grid of noise values. Output: out[(z * ySize + y) * xSize + x]
    * @param {number} xOffset
    * @param {number} yOffset
@@ -136,6 +152,22 @@ class FastNoise {
    * @returns {Float32Array}
    */
   genUniformGrid3D(xOffset, yOffset, zOffset, xSize, ySize, zSize, frequency, seed) {}
+
+  /**
+   * In-place variant of genUniformGrid3D.
+   *
+   * @param {Float32Array} dest - reusable buffer, length >= xSize*ySize*zSize
+   * @param {number} xOffset
+   * @param {number} yOffset
+   * @param {number} zOffset
+   * @param {number} xSize
+   * @param {number} ySize
+   * @param {number} zSize
+   * @param {number} frequency
+   * @param {number} seed
+   * @returns {undefined}
+   */
+  genUniformGrid3DInto(dest, xOffset, yOffset, zOffset, xSize, ySize, zSize, frequency, seed) {}
 
   /**
    * Generate seamlessly tileable 2D noise. Maps onto a 4D hypertorus internally.

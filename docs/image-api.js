@@ -28,7 +28,8 @@
 //       [0.55, 100, 170,  90],
 //       [0.75, 250, 250, 250],
 //   ]);
-//   const noise = node.genUniformGrid2D(0, 0, w, h, freq, seed);
+//   const noise = bro.image.alloc(w, h, 1);            // once, reused
+//   node.genUniformGrid2DInto(noise, 0, 0, w, h, freq, seed);
 //   const {min, max} = bro.image.reduce(noise, 'minmax');
 //   bro.image.lookup(imgData.data, noise, lut, {lo: min, hi: max});
 //   ctx.putImageData(imgData, 0, 0);
@@ -255,7 +256,11 @@ const imageGpu = {
    * @param {Float32Array}      src    - srcW * srcH scalar field
    * @param {Uint8Array}        lut    - 4*K bytes (RGBA8); typically built
    *                                     via bro.image.gradient()
-   * @param {{lo:number, hi:number, srcW:number, srcH:number}} params
+   * srcW/srcH default to canvas.width/canvas.height when omitted (the 1:1
+   * case); pass them explicitly when the field is rendered at a different
+   * resolution than the canvas (e.g. lo-res field → hi-res display).
+   *
+   * @param {{lo:number, hi:number, srcW?:number, srcH?:number}} params
    *
    * @example
    *   const canvas = document.createElement('canvas');
@@ -268,13 +273,12 @@ const imageGpu = {
    *       [0.55, 100, 170,  90],
    *       [0.75, 250, 250, 250],
    *   ]);
+   *   const data = bro.image.alloc(1280, 800, 1);   // once, reused
    *
    *   function frame() {
-   *       const data = node.genUniformGrid2D(ox, oy, 1280, 800, freq, seed);
+   *       node.genUniformGrid2DInto(data, ox, oy, 1280, 800, freq, seed);
    *       const {min, max} = bro.image.reduce(data, 'minmax');
-   *       bro.image.gpu.colormap(canvas, data, lut, {
-   *           lo: min, hi: max, srcW: 1280, srcH: 800
-   *       });
+   *       bro.image.gpu.colormap(canvas, data, lut, { lo: min, hi: max });
    *       requestAnimationFrame(frame);
    *   }
    */

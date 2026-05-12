@@ -1,6 +1,7 @@
 // bro.image.gpu — hardware-accelerated counterparts to bro.image (CPU/brokit).
 //
-// V1 surface: colormap(canvas, src, lut, {lo, hi, srcW, srcH}).
+// V1 surface: colormap(canvas, src, lut, {lo, hi, srcW?, srcH?}).
+// srcW/srcH default to canvas.width/canvas.height when omitted (1:1 case).
 // Same shape as bro.image.lookup, but the colormap runs as a WebGL2 fragment
 // shader that samples the noise field as a R32F texture and the LUT as a
 // 256x1 RGBA8 texture. No CPU-side ImageData / putImageData path; the result
@@ -143,7 +144,8 @@ void main() {
      * @param {HTMLCanvasElement} canvas - must support webgl2
      * @param {Float32Array} src         - srcW * srcH scalar field
      * @param {Uint8Array}   lut         - 4*K bytes (RGBA8)
-     * @param {{lo:number, hi:number, srcW:number, srcH:number}} params
+     * @param {{lo:number, hi:number, srcW?:number, srcH?:number}} params
+     *        srcW/srcH default to canvas.width/canvas.height when omitted.
      */
     bro.image.gpu.colormap = function colormap(canvas, src, lut, params) {
         if (!canvas || canvas.nodeType !== 1)
@@ -154,10 +156,10 @@ void main() {
             throw new TypeError("bro.image.gpu.colormap: lut must be Uint8Array");
         const lo = +params.lo;
         const hi = +params.hi;
-        const srcW = params.srcW | 0;
-        const srcH = params.srcH | 0;
+        const srcW = (params.srcW != null ? params.srcW : canvas.width) | 0;
+        const srcH = (params.srcH != null ? params.srcH : canvas.height) | 0;
         if (srcW <= 0 || srcH <= 0)
-            throw new RangeError("bro.image.gpu.colormap: srcW/srcH required");
+            throw new RangeError("bro.image.gpu.colormap: srcW/srcH must be positive (canvas size or explicit)");
         if (src.length < srcW * srcH)
             throw new RangeError("bro.image.gpu.colormap: src too small");
         if ((lut.byteLength & 3) !== 0)
