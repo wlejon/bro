@@ -239,11 +239,12 @@ const image = {
 // V1 surface: colormap.
 //
 //   bro.image.gpu.colormap(canvas, src, lut, {lo, hi, srcW, srcH})
+//   bro.image.gpu.colormap(canvas, src, lut, {autoRange: true, ema, srcW, srcH})
 //
 // Renders a 1-channel float field through a 1D RGBA8 LUT directly to a
 // canvas via a WebGL2 fragment shader. The noise is uploaded as a R32F
-// texture; the LUT as a 256x1 RGBA8 texture; one fullscreen-triangle
-// draw per frame.
+// texture; the LUT as a K×1 RGBA8 texture; one fullscreen-triangle draw
+// per frame.
 //
 // The canvas you pass MUST be backed by a webgl2 context. The first call
 // creates and caches the program / VAO / textures; subsequent calls only
@@ -251,6 +252,14 @@ const image = {
 //
 // Eliminates the per-frame ImageData allocation + putImageData CPU upload
 // that bottleneck the CPU lookup pipeline at large canvas sizes.
+//
+// autoRange mode: the engine computes (min, max) via a parallel GPU
+// reduction over the noise texture, EMA-smooths it across frames in a 1×1
+// RG32F ping-pong, and the colormap shader samples that range. The CPU
+// never sees the values — no `bro.image.reduce`, no per-frame range
+// uniforms. EXT_color_buffer_float must be supported (it is on every
+// real-world WebGL2 implementation; the autoRange path throws cleanly if
+// not).
 
 const imageGpu = {
 
@@ -265,27 +274,32 @@ const imageGpu = {
    * case); pass them explicitly when the field is rendered at a different
    * resolution than the canvas (e.g. lo-res field → hi-res display).
    *
-   * @param {{lo:number, hi:number, srcW?:number, srcH?:number}} params
+   * @param {object} params
+   * @param {number}  [params.lo]        - explicit low (uniform-range mode)
+   * @param {number}  [params.hi]        - explicit high (uniform-range mode)
+   * @param {boolean} [params.autoRange] - if true, lo/hi are computed on the
+   *                                       GPU via parallel min/max reduction
+   *                                       and EMA-smoothed across frames.
+   *                                       lo/hi are ignored.
+   * @param {number}  [params.ema=0.02]  - blend factor for autoRange smoothing.
+   *                                       Higher = more responsive, lower = more
+   *                                       stable. 1.0 means "use this frame's
+   *                                       raw min/max directly."
+   * @param {number}  [params.srcW]      - field width  (default canvas.width)
+   * @param {number}  [params.srcH]      - field height (default canvas.height)
    *
    * @example
-   *   const canvas = document.createElement('canvas');
-   *   document.body.appendChild(canvas);
-   *   canvas.width = 1280; canvas.height = 800;
-   *
-   *   const lut = bro.image.gradient([
-   *       [0.00,  10,  30,  80],
-   *       [0.45, 230, 220, 150],
-   *       [0.55, 100, 170,  90],
-   *       [0.75, 250, 250, 250],
-   *   ]);
-   *   const data = bro.image.alloc(1280, 800, 1);   // once, reused
-   *
+   *   // autoRange: no reduce on CPU, no per-frame range uniforms.
    *   function frame() {
    *       node.genUniformGrid2DInto(data, ox, oy, 1280, 800, freq, seed);
-   *       const {min, max} = bro.image.reduce(data, 'minmax');
-   *       bro.image.gpu.colormap(canvas, data, lut, { lo: min, hi: max });
+   *       bro.image.gpu.colormap(canvas, data, lut, { autoRange: true });
    *       requestAnimationFrame(frame);
    *   }
+   *
+   * @example
+   *   // Explicit range (the original mode):
+   *   const {min, max} = bro.image.reduce(data, 'minmax');
+   *   bro.image.gpu.colormap(canvas, data, lut, { lo: min, hi: max });
    */
   colormap(canvas, src, lut, params) {},
 };
