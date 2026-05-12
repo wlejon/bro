@@ -15,6 +15,7 @@
 //                      to produce a render-ready triangle mesh.
 //   LSystem          — string-rule stochastic L-system rewriter (axiom +
 //                      production rules → derived module sequence).
+//   SpatialHash3D    — uniform-grid point hash for radius / nearest queries.
 //
 //   Skeleton         — bones + sockets + bindPose.
 //   Pose             — flat array of local TRS per bone (stride 10).
@@ -309,6 +310,45 @@ class Mesh {
    * @returns {Mesh}
    */
   static merge(meshes) {}
+
+  /**
+   * Triangulate a 2D polygon (with optional holes) into a mesh in the XY
+   * plane at z=`z`. Backed by manifold's Triangulate(); polygons with holes
+   * and multiple nested contours are supported. Outer contour wound CCW
+   * emits +Z-facing normals; CW emits -Z. Returns an empty Mesh on
+   * degenerate / self-intersecting input, or when manifold is unavailable.
+   *
+   * @param {Float32Array|number[]} outer  - flat x,y,x,y,... outer contour
+   * @param {Array<Float32Array|number[]>} [holes] - inner contours (each flat x,y,...);
+   *                                                 wind CW relative to the outer ring
+   * @param {number} [z=0]                 - Z coordinate for all emitted vertices
+   * @returns {Mesh}
+   *
+   * @example
+   *   // Square with a circular hole at z=0
+   *   const outer = [-1,-1,  1,-1,  1,1,  -1,1];
+   *   const hole  = [];
+   *   for (let i = 0; i < 32; i++) {
+   *     const a = -i / 32 * Math.PI * 2;  // CW
+   *     hole.push(0.4 * Math.cos(a), 0.4 * Math.sin(a));
+   *   }
+   *   const slab = Mesh.polygon2D(outer, [hole]);
+   */
+  static polygon2D(outer, holes, z) {}
+
+  /**
+   * Triangulate a planar 3D polygon. Points are projected onto a plane
+   * defined by `normal` (unit-length), triangulated in 2D, then indexed
+   * back to the original 3D vertices (positions are reused verbatim, no
+   * projection round-trip). Returned mesh has per-vertex normal = `normal`.
+   *
+   * @param {Float32Array|number[]} outer   - flat x,y,z,... outer contour, planar
+   * @param {Array<Float32Array|number[]>} holes - inner contours (flat x,y,z,...);
+   *                                               wind CW relative to outer
+   * @param {number[]} normal               - [nx, ny, nz] unit plane normal
+   * @returns {Mesh}
+   */
+  static polygon3D(outer, holes, normal) {}
 
 
   // --- Static: Isosurface / voxel -------------------------------------------
@@ -781,6 +821,44 @@ class Mesh {
    * @returns {TextureBuffer} 1-channel AO
    */
   bakeAOFromReference(reference, texWidth, texHeight, numRays, maxDistance) {}
+
+
+  // --- Skinning / morph (mutating, return this) ------------------------------
+
+  /**
+   * Apply a SkinData binding plus a flat array of skinning matrices to the
+   * mesh in-place. Positions (and normals, if present) are deformed by the
+   * weighted sum of bone transforms. Use the matrices returned by
+   * `Pose.computeSkinningMatrices(skeleton)`.
+   *
+   * @param {SkinData}     skin       - per-vertex weights/indices + inverse-binds
+   * @param {Float32Array} matrices   - flat column-major mat4 per bone (stride 16)
+   * @returns {this}
+   *
+   * @example
+   *   const pose      = animation.evaluate(skeleton, t);
+   *   const matrices  = pose.computeSkinningMatrices(skeleton);
+   *   skinnedMesh.applySkinning(skin, matrices);
+   */
+  applySkinning(skin, matrices) {}
+
+  /**
+   * Apply a single morph target (blend shape) to the mesh in-place, scaled
+   * by `weight`. Adds `weight * deltaPositions` (and `weight * deltaNormals`
+   * if present) to the mesh's positions/normals. Stride must match the
+   * mesh's vertex count.
+   *
+   * @param {Object}       morph
+   * @param {string}       [morph.name]
+   * @param {Float32Array} morph.deltaPositions       - xyz, stride 3
+   * @param {Float32Array} [morph.deltaNormals]       - xyz, stride 3
+   * @param {number}       weight                     - typically in [0,1]
+   * @returns {this}
+   *
+   * @example
+   *   smileMesh.applyMorphTarget({ deltaPositions: smileDeltas }, smileAmount);
+   */
+  applyMorphTarget(morph, weight) {}
 
 
   // --- File I/O (save) ------------------------------------------------------
@@ -1944,4 +2022,52 @@ class LSystem {
    * @returns {Array<{symbol: string, params: number[]}>}
    */
   deriveModules(iterations, seed) {}
+}
+
+
+// -----------------------------------------------------------------------------
+// SpatialHash3D
+// -----------------------------------------------------------------------------
+// Uniform-grid 3D point hash for fast radius / nearest-neighbour queries.
+// IDs are caller-assigned int32 handles; insert/remove are O(1) amortized
+// and radius queries scan only buckets intersecting the query sphere.
+//
+// Used internally by procedural placement (leaf scatter, anchor packing),
+// but exposed for any spatial query that doesn't justify a full BVH.
+
+class SpatialHash3D {
+  /**
+   * @param {number} [cellSize=1] - grid cell width; pick ~ typical query radius
+   */
+  constructor(cellSize) {}
+
+  /** Reset bucket grid to a new cell size and clear all entries. Returns this. */
+  reset(cellSize) {}
+
+  /** Remove all entries (keeps cell size). Returns this. */
+  clear() {}
+
+  /** Insert a point with caller-supplied id. Returns this. */
+  insert(x, y, z, id) {}
+
+  /** Remove a previously inserted id. Returns this. */
+  remove(id) {}
+
+  /**
+   * Return all ids whose stored position lies within `radius` of (x,y,z).
+   * @returns {number[]}
+   */
+  radiusQuery(x, y, z, radius) {}
+
+  /**
+   * Nearest id within `maxRadius`, or -1 if none.
+   * @returns {number}
+   */
+  nearest(x, y, z, maxRadius) {}
+
+  /** Number of inserted ids. */
+  get size() {}
+
+  /** Current cell size. */
+  get cellSize() {}
 }

@@ -234,10 +234,12 @@ class AudioContext {
   /** @param {number} busId @param {number} feedback */ setBusChorusFeedback(busId, feedback) {}
   /** @param {number} busId @param {number} seconds */ setBusChorusBaseDelay(busId, seconds) {}
 
-  // Per-bus EQ
+  // Per-bus 7-band parametric EQ
+  // Bands are fixed peaking filters at: 60, 170, 350, 1000, 3500, 10000, 16000 Hz.
+  // Band index is 0-6; gain is in dB (typical range -24..+24).
   /** @param {number} busId @param {boolean} enabled */ setBusEqEnabled(busId, enabled) {}
-  /** @param {number} busId @param {number} dB */ setBusEqMasterGain(busId, dB) {}
-  /** @param {number} busId @param {number} band @param {number} dB */ setBusEqBandGain(busId, band, dB) {}
+  /** @param {number} busId @param {number} dB - master output trim in dB */ setBusEqMasterGain(busId, dB) {}
+  /** @param {number} busId @param {number} band - 0..6 @param {number} dB */ setBusEqBandGain(busId, band, dB) {}
 
   // Per-bus Distortion (waveshaper / bitcrusher)
   /** @param {number} busId @param {boolean} enabled */ setBusDistortionEnabled(busId, enabled) {}
@@ -927,6 +929,26 @@ class MidiInput {
    * @param {(channel: number, value: number) => void} callback - value is -8192 to 8191
    */
   onPitchBend(callback) {}
+
+  /**
+   * Register a catch-all callback that receives every parsed MIDI event before
+   * type-specific dispatch (CC / pitch bend / note routing).
+   * Use this for aftertouch, channel pressure, program change, or to log raw input.
+   *
+   * The event object has shape:
+   *   {
+   *     type: "noteon"|"noteoff"|"controlchange"|"pitchbend"
+   *           |"programchange"|"aftertouch"|"channelpressure",
+   *     channel: number,    // 0-15
+   *     data1: number,      // note / cc / program / poly-key
+   *     data2: number,      // velocity / cc value / pressure
+   *     pitchBend: number,  // -8192..8191 (only valid when type === "pitchbend")
+   *     timestamp: number,  // engine seconds
+   *   }
+   *
+   * @param {(event: object) => void} callback
+   */
+  onRawEvent(callback) {}
 
   /** Poll and dispatch pending MIDI events. Call this each frame. */
   processEvents() {}

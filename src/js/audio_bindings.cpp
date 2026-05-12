@@ -620,6 +620,42 @@ static JSValue js_midi_onPitchBend(JSContext* ctx, JSValueConst this_val, int ar
     return JS_UNDEFINED;
 }
 
+// Map a MidiEvent::Type to its string label (matches the typed event types in broaudio/midi_input.h).
+static const char* midiEventTypeName(broaudio::MidiEvent::Type t) {
+    switch (t) {
+        case broaudio::MidiEvent::Type::NoteOn:          return "noteon";
+        case broaudio::MidiEvent::Type::NoteOff:         return "noteoff";
+        case broaudio::MidiEvent::Type::ControlChange:   return "controlchange";
+        case broaudio::MidiEvent::Type::PitchBend:       return "pitchbend";
+        case broaudio::MidiEvent::Type::ProgramChange:   return "programchange";
+        case broaudio::MidiEvent::Type::Aftertouch:      return "aftertouch";
+        case broaudio::MidiEvent::Type::ChannelPressure: return "channelpressure";
+    }
+    return "unknown";
+}
+
+static JSValue js_midi_onRawEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<MidiInputData>(ctx, this_val);
+    if (!d || argc < 1) return JS_UNDEFINED;
+    if (!JS_IsUndefined(d->rawCallback)) JS_FreeValue(ctx, d->rawCallback);
+    d->rawCallback = JS_DupValue(ctx, argv[0]);
+    JSValue cbRef = JS_DupValue(ctx, argv[0]);
+    JSContext* jsCtx = ctx;
+    d->midi->onRawEvent([jsCtx, cbRef](const broaudio::MidiEvent& ev) {
+        JSValue obj = JS_NewObject(jsCtx);
+        JS_SetPropertyStr(jsCtx, obj, "type", JS_NewString(jsCtx, midiEventTypeName(ev.type)));
+        JS_SetPropertyStr(jsCtx, obj, "channel", JS_NewInt32(jsCtx, ev.channel));
+        JS_SetPropertyStr(jsCtx, obj, "data1", JS_NewInt32(jsCtx, ev.data1));
+        JS_SetPropertyStr(jsCtx, obj, "data2", JS_NewInt32(jsCtx, ev.data2));
+        JS_SetPropertyStr(jsCtx, obj, "pitchBend", JS_NewInt32(jsCtx, ev.pitchBend));
+        JS_SetPropertyStr(jsCtx, obj, "timestamp", JS_NewFloat64(jsCtx, ev.timestamp));
+        JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 1, &obj);
+        JS_FreeValue(jsCtx, obj);
+        JS_FreeValue(jsCtx, ret);
+    });
+    return JS_UNDEFINED;
+}
+
 // --- Sequence raw methods ---
 
 static JSValue js_seq_addAutomationLane(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -1487,6 +1523,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method_raw("connectToAllocator", js_midi_connectToAllocator, 1)
             .method_raw("onControlChange", js_midi_onControlChange, 2)
             .method_raw("onPitchBend", js_midi_onPitchBend, 1)
+            .method_raw("onRawEvent", js_midi_onRawEvent, 1)
             .method("processEvents",
                 [](MidiInputData* d) { d->midi->processEvents(); })
             .get("isOpen",
