@@ -85,4 +85,27 @@ for (let i = 1; i < flatRs.length; i++) {
         'constant field renders uniformly (got mismatched corners: ' + flatRs + ')');
 }
 
+// ----- regenerate:false reuses the cached field (no src needed) -----
+// Re-do the autoRange render of the ramp with regenerate:false; we should
+// still get the spanning gradient because noiseTex still holds src.
+// First populate the cache via a regen call.
+bro.image.gpu.colormap(cv, src, lut, { autoRange: true, ema: 1.0 });
+flush();
+// Now skip upload and re-display.
+bro.image.gpu.colormap(cv, null, lut, { regenerate: false, autoRange: true });
+flush();
+assertSpansBlackToWhite('regenerate:false reuses cached field');
+
+// regenerate:false without a prior cache throws.
+const fresh = document.createElement('canvas');
+fresh.width = W; fresh.height = H;
+document.getElementById('root').appendChild(fresh);
+let threw = false;
+try {
+    bro.image.gpu.colormap(fresh, null, lut, { regenerate: false, autoRange: true });
+} catch (e) {
+    threw = /no cached/.test(e.message);
+}
+assert(threw, 'colormap: regenerate:false without cache throws');
+
 root.innerHTML = '';

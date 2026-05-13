@@ -290,6 +290,9 @@ const imageGpu = {
    * @param {{x,y,w,h}} [params.viewRect] - sub-rect of the source texture to
    *        display on the canvas. Lets you upload a wider field once and
    *        slide a window across it on subsequent calls. Default: full source.
+   * @param {boolean} [params.regenerate=true] - if false, skip the src upload
+   *        and reuse the cached noiseTex. `src` may be null. Throws if no
+   *        field has been uploaded for this canvas yet.
    *
    * @example
    *   // autoRange: no reduce on CPU, no per-frame range uniforms.

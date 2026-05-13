@@ -530,30 +530,41 @@ void main() {
     bro.image.gpu.colormap = function colormap(canvas, src, lut, params) {
         if (!canvas || canvas.nodeType !== 1)
             throw new TypeError("bro.image.gpu.colormap: canvas required");
-        if (!(src instanceof Float32Array))
-            throw new TypeError("bro.image.gpu.colormap: src must be Float32Array");
         if (!(lut instanceof Uint8Array) && !(lut instanceof Uint8ClampedArray))
             throw new TypeError("bro.image.gpu.colormap: lut must be Uint8Array");
         params = params || {};
-        const srcW = (params.srcW != null ? params.srcW : canvas.width) | 0;
-        const srcH = (params.srcH != null ? params.srcH : canvas.height) | 0;
-        if (srcW <= 0 || srcH <= 0)
-            throw new RangeError("bro.image.gpu.colormap: srcW/srcH must be positive");
-        if (src.length < srcW * srcH)
-            throw new RangeError("bro.image.gpu.colormap: src too small");
         if ((lut.byteLength & 3) !== 0)
             throw new RangeError("bro.image.gpu.colormap: lut length must be a multiple of 4");
         if ((lut.byteLength >> 2) < 2)
             throw new RangeError("bro.image.gpu.colormap: lut needs >= 2 entries");
 
+        const regenerate = (params.regenerate !== false);
         const st = getState(canvas);
-        const gl = st.gl;
-        const sizeChanged = ensureNoiseTex(st, srcW, srcH);
-        // Upload the CPU-provided field into the noise texture.
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, st.noiseTex);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, srcW, srcH,
-                         gl.RED, gl.FLOAT, src);
+        let sizeChanged = false;
+
+        if (regenerate) {
+            if (!(src instanceof Float32Array))
+                throw new TypeError("bro.image.gpu.colormap: src must be Float32Array");
+            const srcW = (params.srcW != null ? params.srcW : canvas.width) | 0;
+            const srcH = (params.srcH != null ? params.srcH : canvas.height) | 0;
+            if (srcW <= 0 || srcH <= 0)
+                throw new RangeError("bro.image.gpu.colormap: srcW/srcH must be positive");
+            if (src.length < srcW * srcH)
+                throw new RangeError("bro.image.gpu.colormap: src too small");
+            sizeChanged = ensureNoiseTex(st, srcW, srcH);
+            const gl = st.gl;
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, st.noiseTex);
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, srcW, srcH,
+                             gl.RED, gl.FLOAT, src);
+        } else {
+            if (st.srcW <= 0 || !st.noiseTex) {
+                throw new Error(
+                    "bro.image.gpu.colormap: regenerate:false but no cached " +
+                    "field for this canvas — call once with src first"
+                );
+            }
+        }
         uploadLut(st, lut);
         applyColormapToCanvas(st, canvas, params, sizeChanged);
     };
