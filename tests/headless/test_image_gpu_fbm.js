@@ -100,4 +100,55 @@ try {
 }
 assert(threw, 'fbm2D: unsupported type throws "not implemented"');
 
+// 6) viewRect: pre-render a wider tile, then slide a window across it.
+// Sized tile (3W × H), regenerated once. Each subsequent fbm2D call with
+// regenerate:false slides a viewRect across without rerunning the FBm.
+const TILE_W = W * 3;
+bro.image.gpu.fbm2D(cv, lut, {
+    frequency: 0.05, octaves: 1, seed: 1337,
+    srcW: TILE_W, srcH: H,
+    autoRange: true, ema: 1.0,
+    viewRect: { x: 0, y: 0, w: W, h: H },
+});
+flush();
+const fpAt0 = rowFingerprint();
+
+// Same tile, slide to x = W (one full canvas width across).
+bro.image.gpu.fbm2D(cv, lut, {
+    regenerate: false,
+    autoRange: true, ema: 1.0,
+    viewRect: { x: W, y: 0, w: W, h: H },
+});
+flush();
+const fpAtW = rowFingerprint();
+assert(fpAt0 !== fpAtW,
+    'viewRect slide reveals different sub-region of the tile (' +
+    fpAt0 + ' vs ' + fpAtW + ')');
+
+// Same tile, slide back to x=0 — should reproduce the original fingerprint
+// (the underlying noiseTex is unchanged; only the viewport moves).
+bro.image.gpu.fbm2D(cv, lut, {
+    regenerate: false,
+    autoRange: true, ema: 1.0,
+    viewRect: { x: 0, y: 0, w: W, h: H },
+});
+flush();
+const fpAt0Again = rowFingerprint();
+assert(fpAt0 === fpAt0Again,
+    'regenerate:false leaves the tile intact across slides');
+
+// 7) regenerate:false without a prior cached field throws clearly.
+const fresh = document.createElement('canvas');
+fresh.width = W; fresh.height = H;
+document.getElementById('root').appendChild(fresh);
+let regenThrew = false;
+try {
+    bro.image.gpu.fbm2D(fresh, lut, {
+        regenerate: false, autoRange: true,
+    });
+} catch (e) {
+    regenThrew = /no cached noise field/.test(e.message);
+}
+assert(regenThrew, 'fbm2D: regenerate:false without cache throws');
+
 document.getElementById('root').innerHTML = '';

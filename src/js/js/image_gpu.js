@@ -39,16 +39,23 @@ void main() {
 }`;
 
     // Original mode: lo/hi as uniforms.
+    // uViewScale / uViewOffset translate canvas vUv [0..1]² into a sub-rect
+    // of the source texture, so callers can scroll a pre-rendered tile across
+    // the visible canvas without re-running the gen pass. When omitted (full
+    // source = full canvas), scale=(1,1) offset=(0,0) → identical to before.
     const COLORMAP_UNIFORM_FS = `#version 300 es
 precision highp float;
 uniform sampler2D uNoise;
 uniform sampler2D uLut;
 uniform float uLo;
 uniform float uInvSpan;
+uniform vec2 uViewScale;
+uniform vec2 uViewOffset;
 in vec2 vUv;
 out vec4 fragColor;
 void main() {
-    float v = texture(uNoise, vUv).r;
+    vec2 srcUv = vUv * uViewScale + uViewOffset;
+    float v = texture(uNoise, srcUv).r;
     float t = (v - uLo) * uInvSpan;
     t = clamp(t, 0.0, 1.0);
     fragColor = texture(uLut, vec2(t, 0.5));
@@ -60,6 +67,8 @@ precision highp float;
 uniform sampler2D uNoise;
 uniform sampler2D uLut;
 uniform sampler2D uRange;
+uniform vec2 uViewScale;
+uniform vec2 uViewOffset;
 in vec2 vUv;
 out vec4 fragColor;
 void main() {
@@ -67,7 +76,8 @@ void main() {
     float lo = r.r;
     float hi = r.g;
     float invSpan = (hi > lo) ? (1.0 / (hi - lo)) : 0.0;
-    float v = texture(uNoise, vUv).r;
+    vec2 srcUv = vUv * uViewScale + uViewOffset;
+    float v = texture(uNoise, srcUv).r;
     float t = clamp((v - lo) * invSpan, 0.0, 1.0);
     fragColor = texture(uLut, vec2(t, 0.5));
 }`;
@@ -256,10 +266,12 @@ void main() {
         st.uniProg = program;
         st.uniVao = vao;
         st.uniLocs = {
-            uNoise:   gl.getUniformLocation(program, "uNoise"),
-            uLut:     gl.getUniformLocation(program, "uLut"),
-            uLo:      gl.getUniformLocation(program, "uLo"),
-            uInvSpan: gl.getUniformLocation(program, "uInvSpan"),
+            uNoise:      gl.getUniformLocation(program, "uNoise"),
+            uLut:        gl.getUniformLocation(program, "uLut"),
+            uLo:         gl.getUniformLocation(program, "uLo"),
+            uInvSpan:    gl.getUniformLocation(program, "uInvSpan"),
+            uViewScale:  gl.getUniformLocation(program, "uViewScale"),
+            uViewOffset: gl.getUniformLocation(program, "uViewOffset"),
         };
     }
 
@@ -285,9 +297,11 @@ void main() {
         gl.vertexAttribPointer(aPosA, 2, gl.FLOAT, false, 0, 0);
         gl.bindVertexArray(null);
         st.autoLocs = {
-            uNoise: gl.getUniformLocation(st.autoProg, "uNoise"),
-            uLut:   gl.getUniformLocation(st.autoProg, "uLut"),
-            uRange: gl.getUniformLocation(st.autoProg, "uRange"),
+            uNoise:      gl.getUniformLocation(st.autoProg, "uNoise"),
+            uLut:        gl.getUniformLocation(st.autoProg, "uLut"),
+            uRange:      gl.getUniformLocation(st.autoProg, "uRange"),
+            uViewScale:  gl.getUniformLocation(st.autoProg, "uViewScale"),
+            uViewOffset: gl.getUniformLocation(st.autoProg, "uViewOffset"),
         };
 
         // Reduce programs. They use gl_FragCoord, not aPos, but the VAO with
@@ -392,10 +406,26 @@ void main() {
     // and lut is uploaded, render to `canvas` either in uniform-range or
     // autoRange mode. sizeChanged signals whether the source dims just changed
     // (used to invalidate the reduceChain).
+    // Compute the (scale, offset) that maps canvas vUv [0..1]² into a sub-rect
+    // of the source noise texture. With no viewRect, this is the identity.
+    function computeViewTransform(st, params) {
+        if (!params.viewRect) return { sx: 1, sy: 1, ox: 0, oy: 0 };
+        const v = params.viewRect;
+        const sw = Math.max(1, st.srcW);
+        const sh = Math.max(1, st.srcH);
+        return {
+            sx: (+v.w) / sw,
+            sy: (+v.h) / sh,
+            ox: (+v.x) / sw,
+            oy: (+v.y) / sh,
+        };
+    }
+
     function applyColormapToCanvas(st, canvas, params, sizeChanged) {
         const gl = st.gl;
         const cw = canvas.width | 0, ch = canvas.height | 0;
         const autoRange = !!params.autoRange;
+        const vt = computeViewTransform(st, params);
 
         gl.disable(gl.BLEND);
         gl.disable(gl.DEPTH_TEST);
@@ -416,6 +446,8 @@ void main() {
             gl.uniform1i(st.uniLocs.uLut, 1);
             gl.uniform1f(st.uniLocs.uLo, lo);
             gl.uniform1f(st.uniLocs.uInvSpan, (hi > lo) ? 1.0 / (hi - lo) : 0.0);
+            gl.uniform2f(st.uniLocs.uViewScale,  vt.sx, vt.sy);
+            gl.uniform2f(st.uniLocs.uViewOffset, vt.ox, vt.oy);
             gl.bindVertexArray(st.uniVao);
             gl.drawArrays(gl.TRIANGLES, 0, 3);
             gl.bindVertexArray(null);
@@ -481,6 +513,8 @@ void main() {
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, st.rangePing.tex);
         gl.uniform1i(st.autoLocs.uRange, 2);
+        gl.uniform2f(st.autoLocs.uViewScale,  vt.sx, vt.sy);
+        gl.uniform2f(st.autoLocs.uViewOffset, vt.ox, vt.oy);
         gl.bindVertexArray(st.autoVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         gl.bindVertexArray(null);
@@ -656,6 +690,31 @@ void main() {
         if (!(lut instanceof Uint8Array) && !(lut instanceof Uint8ClampedArray))
             throw new TypeError("bro.image.gpu.fbm2D: lut must be Uint8Array");
         params = params || {};
+        const regenerate = (params.regenerate !== false);  // default true
+
+        const st = getState(canvas);
+        const gl = st.gl;
+
+        // regenerate:false reuses the cached noiseTex — the gen pass is
+        // skipped, only the colormap (and reduce/EMA if autoRange) runs.
+        // Lets callers pre-render a wider tile once per N frames and slide
+        // a viewRect across it cheaply in between.
+        if (!regenerate) {
+            if (st.srcW <= 0 || !st.noiseTex) {
+                throw new Error(
+                    "bro.image.gpu.fbm2D: regenerate:false but no cached noise " +
+                    "field for this canvas — call once with regenerate:true first"
+                );
+            }
+            if ((lut.byteLength & 3) !== 0)
+                throw new RangeError("bro.image.gpu.fbm2D: lut length must be a multiple of 4");
+            if ((lut.byteLength >> 2) < 2)
+                throw new RangeError("bro.image.gpu.fbm2D: lut needs >= 2 entries");
+            uploadLut(st, lut);
+            applyColormapToCanvas(st, canvas, params, /*sizeChanged*/ false);
+            return;
+        }
+
         const type = params.type || 'Simplex';
         if (type !== 'Simplex') {
             throw new Error(
@@ -676,8 +735,6 @@ void main() {
         if (octaves < 1 || octaves > 16)
             throw new RangeError("bro.image.gpu.fbm2D: octaves must be in [1,16]");
 
-        const st = getState(canvas);
-        const gl = st.gl;
         buildFbmPath(st);
         const sizeChanged = ensureNoiseTex(st, srcW, srcH);
         if (sizeChanged) {

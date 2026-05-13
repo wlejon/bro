@@ -287,6 +287,9 @@ const imageGpu = {
    *                                       raw min/max directly."
    * @param {number}  [params.srcW]      - field width  (default canvas.width)
    * @param {number}  [params.srcH]      - field height (default canvas.height)
+   * @param {{x,y,w,h}} [params.viewRect] - sub-rect of the source texture to
+   *        display on the canvas. Lets you upload a wider field once and
+   *        slide a window across it on subsequent calls. Default: full source.
    *
    * @example
    *   // autoRange: no reduce on CPU, no per-frame range uniforms.
@@ -334,6 +337,12 @@ const imageGpu = {
    * @param {number}  [params.ema=0.02]
    * @param {number}  [params.lo] / [params.hi] - uniform-range mode
    * @param {number}  [params.srcW] / [params.srcH]
+   * @param {{x,y,w,h}} [params.viewRect] - sub-rect of the noiseTex to display.
+   *        Combines naturally with regenerate:false for smooth scrolling
+   *        across a pre-rendered tile (see example).
+   * @param {boolean} [params.regenerate=true] - if false, skip the FBm gen
+   *        pass and just re-display the cached noiseTex via the colormap
+   *        pipeline. Throws if no field has been generated yet.
    *
    * @example
    *   // Animating FBm with autoRange — no CPU buffer, no reduce, no upload.
@@ -344,6 +353,37 @@ const imageGpu = {
    *           seed: 1337, ox: t, oy: 0,
    *           autoRange: true,
    *       });
+   *       requestAnimationFrame(frame);
+   *   }
+   *
+   * @example
+   *   // 1Hz tile regen with per-frame smooth scrolling. The FBm pass runs
+   *   // once per second; intervening frames are pure 1-quad colormaps with
+   *   // a translated viewRect.
+   *   const cw = canvas.width, ch = canvas.height;
+   *   const TILE_W = cw + 256;          // extra horizontal scroll buffer
+   *   let tileOx = 0, lastRegen = 0, t = 0;
+   *
+   *   function frame(now) {
+   *       t += dt * scrollSpeed;
+   *       const scrollPx = (t - tileOx) / freq;  // pixels into the tile
+   *       if (scrollPx > TILE_W - cw || now - lastRegen > 1000) {
+   *           tileOx = t;
+   *           lastRegen = now;
+   *           bro.image.gpu.fbm2D(canvas, lut, {
+   *               frequency: freq, octaves, gain, lacunarity, seed,
+   *               ox: tileOx, oy: 0,
+   *               srcW: TILE_W, srcH: ch,
+   *               autoRange: true,
+   *               viewRect: { x: 0, y: 0, w: cw, h: ch },
+   *           });
+   *       } else {
+   *           bro.image.gpu.fbm2D(canvas, lut, {
+   *               regenerate: false,
+   *               autoRange: true,
+   *               viewRect: { x: scrollPx, y: 0, w: cw, h: ch },
+   *           });
+   *       }
    *       requestAnimationFrame(frame);
    *   }
    */
