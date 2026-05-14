@@ -48,6 +48,25 @@ static bool inEditableHost(bro::dom::Node* node) {
     return false;
 }
 
+// Walk from `el` up to the root checking computed `user-select`. Returns true
+// if any ancestor (or el itself) has `user-select: none`, in which case the
+// engine should not initiate a text-selection drag for clicks landing on this
+// element. `auto` is treated as "look further up" so a top-level
+// `user-select: none` on <html> or <body> propagates without needing the
+// property explicitly set on every descendant.
+static bool isSelectionSuppressed(bro::dom::Element* el) {
+    for (auto* cur = el; cur; cur = cur->parentElement()) {
+        const auto& style = cur->computedStyle();
+        auto it = style.find("user-select");
+        if (it == style.end()) continue;
+        const std::string& v = it->second;
+        if (v == "none") return true;
+        if (v == "auto") continue;
+        return false;   // "text", "all", "contain" → allow selection
+    }
+    return false;
+}
+
 // Delete the content currently covered by the Selection's range, collapsing
 // it to the start position. Returns the post-deletion caret (node, offset).
 static void deleteRangeContents(bro::dom::Document* doc,
@@ -505,7 +524,10 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
         // Mouse-driven text selection. Left button only; bail out if the
         // click landed on a text-editing control (input/textarea manage
-        // their own caret via ElInput) or a button-like control.
+        // their own caret via ElInput), a button-like control, or any
+        // subtree with computed `user-select: none` (typical for app UI
+        // chrome — sliders, scene canvas wrappers, etc. — where dragging
+        // should pan/scrub rather than mark text).
         if (button == 0 && document_ && textMetrics_) {
             bool isEditableControl = false;
             if (target) {
@@ -515,7 +537,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     isEditableControl = true;
                 }
             }
-            if (!isEditableControl) {
+            bool suppressed = target && isSelectionSuppressed(target);
+            if (!isEditableControl && !suppressed) {
                 auto hit = layout::hitTestText(document_.get(), docX, docY, *textMetrics_);
                 auto* sel = document_->selection();
                 // Validate the hit textnode is still owned by the document.
