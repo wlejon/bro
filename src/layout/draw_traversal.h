@@ -147,8 +147,8 @@ private:
 
 public:
     // Color parsing helper (public for shared use by element controls)
-    static render::Color parseColor(const std::string& color);
-    static bool tryParseColor(const std::string& color, render::Color& out);
+    static bromath::Color parseColor(const std::string& color);
+    static bool tryParseColor(const std::string& color, bromath::Color& out);
 
 private:
 

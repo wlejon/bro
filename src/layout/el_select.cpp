@@ -10,6 +10,8 @@
 
 namespace bro::layout {
 
+using bromath::cfromColor8;
+
 ElSelect::ElSelect(render::Renderer* renderer)
     : renderer_(renderer) {}
 
@@ -120,12 +122,12 @@ void ElSelect::draw(render::Renderer* renderer,
 
     // Respect CSS `color` for selected-option text and the dropdown arrow,
     // so dark themes can read the selection. Falls back to black if unset.
-    render::Color color = {0, 0, 0, 255};
+    bromath::Color color = cfromColor8({0, 0, 0, 255});
     if (elem_) {
         auto& style = elem_->computedStyle();
         auto cIt = style.find("color");
         if (cIt != style.end() && !cIt->second.empty()) {
-            render::Color parsed;
+            bromath::Color parsed;
             if (DrawTraversal::tryParseColor(cIt->second, parsed)) {
                 color = parsed;
             }
@@ -151,7 +153,7 @@ void ElSelect::draw(render::Renderer* renderer,
         {arrowX + 4.0f, arrowY + 3.0f}
     };
     renderer_->drawPolygon(std::span<const render::PointF>(arrowPts, 3),
-                          color, {0, 0, 0, 0}, 0.0f);
+                          color, cfromColor8({0, 0, 0, 0}), 0.0f);
 
     renderer_->restore();
 }

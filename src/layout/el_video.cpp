@@ -14,6 +14,8 @@
 
 namespace bro::layout {
 
+using bromath::cfromColor8;
+
 // HTMLMediaElement spec allows 4–66 Hz. 250 ms of media time is well within
 // that range and matches Chromium's low-rate path.
 static constexpr double kTimeUpdateIntervalSec = 0.25;
@@ -230,7 +232,7 @@ void ElVideo::draw(render::Renderer* renderer,
     const float h = box.contentRect.height;
 
     if (!pipeline_) {
-        renderer->fillRect(x, y, w, h, render::Color{0, 0, 0, 255});
+        renderer->fillRect(x, y, w, h, cfromColor8({0, 0, 0, 255}));
         return;
     }
 
@@ -251,7 +253,7 @@ void ElVideo::draw(render::Renderer* renderer,
                                   pipeline_->frameWidth() * 4,
                                   x, y, w, h);
     } else {
-        renderer->fillRect(x, y, w, h, render::Color{0, 0, 0, 255});
+        renderer->fillRect(x, y, w, h, cfromColor8({0, 0, 0, 255}));
     }
 }
 

@@ -7,17 +7,16 @@
 #include <span>
 #include <vector>
 
+#include <bromath/color.h>
+
 class SkCanvas;
 class SkSurface;
 
 namespace bro::render {
 
-struct Color {
-    uint8_t r = 0;
-    uint8_t g = 0;
-    uint8_t b = 0;
-    uint8_t a = 255;
-};
+// Color is bromath::Color — linear-float RGBA in [0,1]. Per-namespace alias
+// would be a header-level `using` (banned). Spell `bromath::Color` everywhere
+// in headers; .cpp files may `using bromath::Color;` for ergonomics.
 
 struct TextMetrics {
     float width = 0.0f;
@@ -70,7 +69,7 @@ struct Radii {
 
 struct ColorStop {
     float offset;   // 0.0–1.0
-    Color color;
+    bromath::Color color;
 };
 
 // Value-typed font reference — replaces the opaque `uint64_t font_handle` that
@@ -110,31 +109,31 @@ struct CssFilterParams {
     float dx = 0;
     float dy = 0;
     float blur = 0;
-    Color shadowColor = {0, 0, 0, 255};
+    bromath::Color shadowColor = {0, 0, 0, 1};
 };
 
 class Renderer {
 public:
     virtual ~Renderer() = default;
 
-    virtual void clear(Color color) = 0;
+    virtual void clear(bromath::Color color) = 0;
 
-    virtual void drawRect(float x, float y, float w, float h, Color color) = 0;
-    virtual void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) = 0;
-    virtual void fillRect(float x, float y, float w, float h, Color color) = 0;
-    virtual void fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color color) = 0;
+    virtual void drawRect(float x, float y, float w, float h, bromath::Color color) = 0;
+    virtual void drawRoundRect(float x, float y, float w, float h, float rx, float ry, bromath::Color color) = 0;
+    virtual void fillRect(float x, float y, float w, float h, bromath::Color color) = 0;
+    virtual void fillRoundRect(float x, float y, float w, float h, float rx, float ry, bromath::Color color) = 0;
 
     // Per-corner asymmetric variants (CSS border-radius full support).
     // Default forwards to the symmetric path using the average corner radius
     // so backends can adopt incrementally.
     virtual void fillRoundRectRadii(float x, float y, float w, float h,
-                                    const Radii& r, Color color) {
+                                    const Radii& r, bromath::Color color) {
         float avg = (r.x[0] + r.x[1] + r.x[2] + r.x[3] +
                      r.y[0] + r.y[1] + r.y[2] + r.y[3]) / 8.0f;
         fillRoundRect(x, y, w, h, avg, avg, color);
     }
     virtual void drawRoundRectRadii(float x, float y, float w, float h,
-                                    const Radii& r, float strokeWidth, Color color) {
+                                    const Radii& r, float strokeWidth, bromath::Color color) {
         (void)strokeWidth;
         float avg = (r.x[0] + r.x[1] + r.x[2] + r.x[3] +
                      r.y[0] + r.y[1] + r.y[2] + r.y[3]) / 8.0f;
@@ -150,13 +149,13 @@ public:
                                     const Radii& r,
                                     float offsetX, float offsetY,
                                     float blur, float spread,
-                                    Color color, bool inset) {
+                                    bromath::Color color, bool inset) {
         float avg = (r.x[0] + r.x[1] + r.x[2] + r.x[3] +
                      r.y[0] + r.y[1] + r.y[2] + r.y[3]) / 8.0f;
         drawBoxShadow(x, y, w, h, avg, avg, offsetX, offsetY, blur, spread, color, inset);
     }
 
-    virtual void drawText(std::string_view text, float x, float y, FontRef font, Color color) = 0;
+    virtual void drawText(std::string_view text, float x, float y, FontRef font, bromath::Color color) = 0;
     virtual TextMetrics measureText(std::string_view text, FontRef font) = 0;
 
     // Extended text draw: letter-spacing applies a per-character advance on
@@ -164,7 +163,7 @@ public:
     // blur > 0 the glyphs are blurred — used to render text-shadow halos.
     // Default forwards to plain drawText so backends can adopt incrementally.
     virtual void drawTextEx(std::string_view text, float x, float y,
-                            FontRef font, Color color,
+                            FontRef font, bromath::Color color,
                             float letterSpacing, float blur) {
         (void)letterSpacing; (void)blur;
         drawText(text, x, y, font, color);
@@ -177,7 +176,7 @@ public:
                                     const void* data, size_t len,
                                     int weight, bool italic) { return false; }
 
-    virtual void drawLine(float x1, float y1, float x2, float y2, Color color, float thickness) = 0;
+    virtual void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) = 0;
     virtual void drawImage(const void* data, size_t len, float x, float y, float w, float h) = 0;
 
     // Draw a raw RGBA8 buffer. Unlike drawImage(), no codec decode happens —
@@ -199,22 +198,22 @@ public:
 
     // SVG drawing primitives
     virtual void drawCircle(float cx, float cy, float r,
-                            Color fill, Color stroke, float strokeWidth) = 0;
+                            bromath::Color fill, bromath::Color stroke, float strokeWidth) = 0;
     virtual void drawEllipse(float cx, float cy, float rx, float ry,
-                             Color fill, Color stroke, float strokeWidth) = 0;
+                             bromath::Color fill, bromath::Color stroke, float strokeWidth) = 0;
     virtual void drawPath(std::string_view svgPathData,
-                          Color fill, Color stroke, float strokeWidth) = 0;
+                          bromath::Color fill, bromath::Color stroke, float strokeWidth) = 0;
     virtual void drawPolygon(std::span<const PointF> points,
-                             Color fill, Color stroke, float strokeWidth) = 0;
+                             bromath::Color fill, bromath::Color stroke, float strokeWidth) = 0;
     virtual void drawPolyline(std::span<const PointF> points,
-                              Color stroke, float strokeWidth) = 0;
+                              bromath::Color stroke, float strokeWidth) = 0;
 
     // Box shadow: draw a shadow behind a rect (or rounded rect if rx > 0)
     virtual void drawBoxShadow(float x, float y, float w, float h,
                                float rx, float ry,
                                float offsetX, float offsetY,
                                float blur, float spread,
-                               Color color, bool inset) = 0;
+                               bromath::Color color, bool inset) = 0;
 
     // Canvas state (for SVG coordinate transforms)
     virtual void save() = 0;

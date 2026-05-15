@@ -23,28 +23,28 @@ public:
     RasterRenderer() = default;
     ~RasterRenderer() override = default;
 
-    void clear(Color c) override;
-    void drawRect(float x, float y, float w, float h, Color c) override;
-    void drawRoundRect(float x, float y, float w, float h, float rx, float ry, Color c) override;
-    void fillRect(float x, float y, float w, float h, Color c) override;
-    void fillRoundRect(float x, float y, float w, float h, float rx, float ry, Color c) override;
+    void clear(bromath::Color c) override;
+    void drawRect(float x, float y, float w, float h, bromath::Color c) override;
+    void drawRoundRect(float x, float y, float w, float h, float rx, float ry, bromath::Color c) override;
+    void fillRect(float x, float y, float w, float h, bromath::Color c) override;
+    void fillRoundRect(float x, float y, float w, float h, float rx, float ry, bromath::Color c) override;
     void fillRoundRectRadii(float x, float y, float w, float h,
-                            const Radii& r, Color color) override;
+                            const Radii& r, bromath::Color color) override;
     void drawRoundRectRadii(float x, float y, float w, float h,
-                            const Radii& r, float strokeWidth, Color color) override;
+                            const Radii& r, float strokeWidth, bromath::Color color) override;
     void setClipRRect(float x, float y, float w, float h, const Radii& r) override;
     void drawBoxShadowRadii(float x, float y, float w, float h, const Radii& r,
                             float offsetX, float offsetY,
                             float blur, float spread,
-                            Color color, bool inset) override;
+                            bromath::Color color, bool inset) override;
 
-    void drawText(std::string_view text, float x, float y, FontRef font, Color c) override;
+    void drawText(std::string_view text, float x, float y, FontRef font, bromath::Color c) override;
     void drawTextEx(std::string_view text, float x, float y,
-                    FontRef font, Color c,
+                    FontRef font, bromath::Color c,
                     float letterSpacing, float blur) override;
     TextMetrics measureText(std::string_view text, FontRef font) override;
 
-    void drawLine(float x1, float y1, float x2, float y2, Color c, float thickness) override;
+    void drawLine(float x1, float y1, float x2, float y2, bromath::Color c, float thickness) override;
     void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
     void drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
                         float x, float y, float w, float h) override;
@@ -52,21 +52,21 @@ public:
                        float x, float y, float w, float h) override;
 
     void drawCircle(float cx, float cy, float r,
-                    Color fill, Color stroke, float strokeWidth) override;
+                    bromath::Color fill, bromath::Color stroke, float strokeWidth) override;
     void drawEllipse(float cx, float cy, float rx, float ry,
-                     Color fill, Color stroke, float strokeWidth) override;
+                     bromath::Color fill, bromath::Color stroke, float strokeWidth) override;
     void drawPath(std::string_view svgPathData,
-                  Color fill, Color stroke, float strokeWidth) override;
+                  bromath::Color fill, bromath::Color stroke, float strokeWidth) override;
     void drawPolygon(std::span<const PointF> points,
-                     Color fill, Color stroke, float strokeWidth) override;
+                     bromath::Color fill, bromath::Color stroke, float strokeWidth) override;
     void drawPolyline(std::span<const PointF> points,
-                      Color stroke, float strokeWidth) override;
+                      bromath::Color stroke, float strokeWidth) override;
 
     void drawBoxShadow(float x, float y, float w, float h,
                        float rx, float ry,
                        float offsetX, float offsetY,
                        float blur, float spread,
-                       Color color, bool inset) override;
+                       bromath::Color color, bool inset) override;
 
     void save() override;
     void restore() override;
@@ -102,7 +102,7 @@ public:
     std::vector<uint8_t> capturePixels() override;
 
 private:
-    static SkColor toSkColor(Color c);
+    static SkColor toSkColor(bromath::Color c);
 
     struct FontEntry {
         sk_sp<SkTypeface> typeface;

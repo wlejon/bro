@@ -119,7 +119,7 @@ private:
 
     // Preset colors (8 fixed swatches), resolved once in the constructor.
     static const char* const kPresetHex[8];
-    std::array<render::Color, 8> presetColors_{};
+    std::array<bromath::Color, 8> presetColors_{};
 };
 
 } // namespace bro::engine

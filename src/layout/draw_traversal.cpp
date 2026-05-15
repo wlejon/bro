@@ -26,6 +26,8 @@
 
 namespace bro::layout {
 
+using bromath::cfromColor8;
+
 // Forward declarations of file-local border-collapse helpers (defined later in
 // the file alongside drawBorders).
 static bool isCollapsedTable(dom::Element* elem);
@@ -204,7 +206,7 @@ static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& va
             f.dx = readFloat();
             f.dy = readFloat();
             f.blur = readFloat();
-            render::Color sc = {0, 0, 0, 255};
+            bromath::Color sc = cfromColor8({0, 0, 0, 255});
             size_t colorStart = pos;
             while (pos < val.size() && val[pos] != ')') ++pos;
             std::string colorStr = val.substr(colorStart, pos - colorStart);
@@ -734,7 +736,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         // top of later ones, so we draw in reverse list order.
         auto bsIt = style.find("box-shadow");
         std::vector<std::string> shadows;
-        render::Radii shadowRadii = {{0,0,0,0},{0,0,0,0}};
+        render::Radii shadowRadii = {{0, 0, 0, 0}, {0, 0, 0, 0}};
         bool hasShadows = (bsIt != style.end() && !bsIt->second.empty() && bsIt->second != "none");
         if (hasShadows) {
             shadowRadii = getRadii(style, bw, bh);
@@ -785,7 +787,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                     float sdx = nums[0], sdy = nums[1];
                     float sblur = nums.size() >= 3 ? nums[2] : 0;
                     float sspread = nums.size() >= 4 ? nums[3] : 0;
-                    render::Color sc = {0, 0, 0, 80};
+                    bromath::Color sc = cfromColor8({0, 0, 0, 80});
                     if (!colorStr.empty()) tryParseColor(colorStr, sc);
                     renderer_->drawBoxShadowRadii(bx, by, bw, bh, shadowRadii,
                                             sdx, sdy, sblur, sspread, sc, inset);
@@ -822,7 +824,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         if (olwIt != style.end() && olsIt != style.end() && olsIt->second != "none") {
             float olw = parseLengthPx(olwIt->second);
             if (olw > 0) {
-                render::Color olc = {0, 0, 0, 255};
+                bromath::Color olc = cfromColor8({0, 0, 0, 255});
                 auto olcIt = style.find("outline-color");
                 if (olcIt != style.end()) tryParseColor(olcIt->second, olc);
                 float olOff = 0;
@@ -849,14 +851,14 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             if (listType != "none") {
                 float markerX = bx - 20.0f;
                 float markerY = by + bh / 2.0f;
-                render::Color mc = {0, 0, 0, 255};
+                bromath::Color mc = cfromColor8({0, 0, 0, 255});
                 auto mcIt = style.find("color");
                 if (mcIt != style.end()) tryParseColor(mcIt->second, mc);
 
                 if (listType == "disc") {
                     renderer_->drawCircle(markerX, markerY, 3.0f, mc, mc, 0);
                 } else if (listType == "circle") {
-                    render::Color none = {0,0,0,0};
+                    bromath::Color none = cfromColor8({0, 0, 0, 0});
                     renderer_->drawCircle(markerX, markerY, 3.0f, none, mc, 1.0f);
                 } else if (listType == "square") {
                     renderer_->fillRect(markerX - 3, markerY - 3, 6, 6, mc);
@@ -1054,7 +1056,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
     // Background color
     auto bgIt = style.find("background-color");
     if (bgIt != style.end() && !bgIt->second.empty()) {
-        render::Color c;
+        bromath::Color c;
         if (tryParseColor(bgIt->second, c) && c.a > 0) {
             if (rounded)
                 renderer_->fillRoundRectRadii(x, y, w, h, radii, c);
@@ -1340,7 +1342,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     while (!part.empty() && part.front() == ' ') part.erase(part.begin());
                     while (!part.empty() && part.back() == ' ') part.pop_back();
 
-                    render::Color sc = {0,0,0,255};
+                    bromath::Color sc = cfromColor8({0, 0, 0, 255});
                     float offset = -1;
                     // Try to extract a percentage at the end
                     auto pctPos = part.rfind('%');
@@ -1622,8 +1624,8 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
             sides4[2].wpx = box.border.bottom;
             sides4[3].wpx = box.border.left;
         }
-        auto parseColor = [&](const std::string& s) -> render::Color {
-            render::Color c{0,0,0,255};
+        auto parseColor = [&](const std::string& s) -> bromath::Color {
+            bromath::Color c = cfromColor8({0, 0, 0, 255});
             if (!s.empty()) tryParseColor(s, c);
             return c;
         };
@@ -1634,7 +1636,7 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
 
         auto paintStripe = [&](int idx, float sx, float sy, float sw, float sh) {
             if (sides4[idx].st == "none" || sides4[idx].wpx <= 0) return;
-            render::Color c = parseColor(sides4[idx].color);
+            bromath::Color c = parseColor(sides4[idx].color);
             const std::string& st = sides4[idx].st;
             bool horizontal = (idx == 0 || idx == 2);
             float w0 = horizontal ? sh : sw; // border thickness
@@ -1688,8 +1690,8 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     }
     // --- end border-collapse painting ---------------------------------------
 
-    auto getBorderColor = [&](const char* prop) -> render::Color {
-        render::Color c = {0, 0, 0, 255};
+    auto getBorderColor = [&](const char* prop) -> bromath::Color {
+        bromath::Color c = cfromColor8({0, 0, 0, 255});
         auto it = style.find(prop);
         if (it != style.end()) tryParseColor(it->second, c);
         return c;
@@ -1719,7 +1721,7 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     bool allSameWidth = true;
     bool allFourVisible = true;
     bool anyVisible = false;
-    render::Color firstColor = {0, 0, 0, 255};
+    bromath::Color firstColor = cfromColor8({0, 0, 0, 255});
     float firstWidth = 0.0f;
     float sides[] = {box.border.top, box.border.right, box.border.bottom, box.border.left};
     const char* colorProps[] = {"border-top-color", "border-right-color",
@@ -1809,7 +1811,7 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
         if (st == "solid" || st.empty()) {
             render::PointF pts[4] = {p0, p1, p2, p3};
             renderer_->drawPolygon(std::span<const render::PointF>(pts, 4),
-                                   c, render::Color{0,0,0,0}, 0.0f);
+                                   c, cfromColor8({0, 0, 0, 0}), 0.0f);
             return;
         }
 
@@ -1851,7 +1853,7 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
                     float cx, cy;
                     if (horizontal) { cx = sx + off + stamp * 0.5f; cy = sy + sh * 0.5f; }
                     else            { cx = sx + sw * 0.5f;          cy = sy + off + stamp * 0.5f; }
-                    renderer_->drawCircle(cx, cy, w0 * 0.5f, c, render::Color{0,0,0,0}, 0.0f);
+                    renderer_->drawCircle(cx, cy, w0 * 0.5f, c, cfromColor8({0, 0, 0, 0}), 0.0f);
                 } else {
                     if (horizontal) renderer_->fillRect(sx + off, sy, stamp, sh, c);
                     else            renderer_->fillRect(sx, sy + off, sw, stamp, c);
@@ -1863,7 +1865,7 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
         // Unknown style — fall back to solid trapezoid.
         render::PointF pts[4] = {p0, p1, p2, p3};
         renderer_->drawPolygon(std::span<const render::PointF>(pts, 4),
-                               c, render::Color{0,0,0,0}, 0.0f);
+                               c, cfromColor8({0, 0, 0, 0}), 0.0f);
     };
 
     // Top: outer TL, outer TR, inner TR, inner TL
@@ -1905,7 +1907,7 @@ static std::string applyTextTransform(const std::string& text, const std::string
 }
 
 // Parse text-shadow: offsetX offsetY [blur] color (simplified — single shadow only)
-struct TextShadow { float dx = 0, dy = 0, blur = 0; render::Color color = {0,0,0,128}; };
+struct TextShadow { float dx = 0, dy = 0, blur = 0; bromath::Color color = cfromColor8({0, 0, 0, 128}); };
 static bool parseTextShadow(const std::string& val, TextShadow& out) {
     if (val.empty() || val == "none") return false;
     // Try to parse numbers and a color from the value
@@ -1993,7 +1995,7 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     if (ttIt != style.end()) text = applyTextTransform(text, ttIt->second);
 
     // Get text color
-    render::Color color = {0, 0, 0, 255};
+    bromath::Color color = cfromColor8({0, 0, 0, 255});
     auto cIt = style.find("color");
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
@@ -2201,7 +2203,7 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
     auto fm = renderer_->measureText("", fontRef);
     float ascent = fm.ascent;
 
-    render::Color color = {0, 0, 0, 255};
+    bromath::Color color = cfromColor8({0, 0, 0, 255});
     auto cIt = style.find("color");
     if (cIt != style.end()) tryParseColor(cIt->second, color);
 
@@ -2473,13 +2475,13 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
     imageCache_[url] = std::move(img);
 }
 
-bool DrawTraversal::tryParseColor(const std::string& colorStr, render::Color& out) {
+bool DrawTraversal::tryParseColor(const std::string& colorStr, bromath::Color& out) {
     if (colorStr.empty()) return false;
     if (colorStr == "transparent") {
         // CSS transparent = rgba(0,0,0,0). Returning false would leave the
         // caller's `out` unchanged (often opaque black), so gradient stops
         // and similar uses of "transparent" would paint as solid black.
-        out = {0, 0, 0, 0};
+        out = cfromColor8({0, 0, 0, 0});
         return true;
     }
 
@@ -2491,17 +2493,19 @@ bool DrawTraversal::tryParseColor(const std::string& colorStr, render::Color& ou
         }
         if (hex.size() == 6 || hex.size() == 8) {
             unsigned long val = std::strtoul(hex.c_str(), nullptr, 16);
+            bromath::Color8 p;
             if (hex.size() == 6) {
-                out.r = (val >> 16) & 0xFF;
-                out.g = (val >> 8) & 0xFF;
-                out.b = val & 0xFF;
-                out.a = 255;
+                p = {static_cast<uint8_t>((val >> 16) & 0xFF),
+                     static_cast<uint8_t>((val >> 8) & 0xFF),
+                     static_cast<uint8_t>(val & 0xFF),
+                     255};
             } else {
-                out.r = (val >> 24) & 0xFF;
-                out.g = (val >> 16) & 0xFF;
-                out.b = (val >> 8) & 0xFF;
-                out.a = val & 0xFF;
+                p = {static_cast<uint8_t>((val >> 24) & 0xFF),
+                     static_cast<uint8_t>((val >> 16) & 0xFF),
+                     static_cast<uint8_t>((val >> 8) & 0xFF),
+                     static_cast<uint8_t>(val & 0xFF)};
             }
+            out = cfromColor8(p);
             return true;
         }
     }
@@ -2517,12 +2521,15 @@ bool DrawTraversal::tryParseColor(const std::string& colorStr, render::Color& ou
             float r, g, b, a = 1.0f;
             if (iss >> r >> g >> b) {
                 iss >> a;
-                out.r = static_cast<uint8_t>(std::clamp(r, 0.0f, 255.0f));
-                out.g = static_cast<uint8_t>(std::clamp(g, 0.0f, 255.0f));
-                out.b = static_cast<uint8_t>(std::clamp(b, 0.0f, 255.0f));
                 // If alpha is <= 1.0, treat as 0-1 range; otherwise as 0-255
                 if (a <= 1.0f) a *= 255.0f;
-                out.a = static_cast<uint8_t>(std::clamp(a, 0.0f, 255.0f));
+                bromath::Color8 p{
+                    static_cast<uint8_t>(std::clamp(r, 0.0f, 255.0f)),
+                    static_cast<uint8_t>(std::clamp(g, 0.0f, 255.0f)),
+                    static_cast<uint8_t>(std::clamp(b, 0.0f, 255.0f)),
+                    static_cast<uint8_t>(std::clamp(a, 0.0f, 255.0f))
+                };
+                out = cfromColor8(p);
                 return true;
             }
         }
@@ -2556,99 +2563,101 @@ bool DrawTraversal::tryParseColor(const std::string& colorStr, render::Color& ou
                     if (t < 2.0f/3) return p + (q-p)*(2.0f/3-t)*6;
                     return p;
                 };
+                bromath::Color8 p8;
                 if (s == 0) {
                     uint8_t v = static_cast<uint8_t>(l * 255);
-                    out.r = out.g = out.b = v;
+                    p8.r = p8.g = p8.b = v;
                 } else {
                     float q = l < 0.5f ? l*(1+s) : l+s-l*s;
                     float p = 2*l-q;
                     float hn = h/360.0f;
-                    out.r = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
-                    out.g = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
-                    out.b = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
+                    p8.r = static_cast<uint8_t>(hue2rgb(p, q, hn+1.0f/3)*255);
+                    p8.g = static_cast<uint8_t>(hue2rgb(p, q, hn)*255);
+                    p8.b = static_cast<uint8_t>(hue2rgb(p, q, hn-1.0f/3)*255);
                 }
-                out.a = static_cast<uint8_t>(std::clamp(a, 0.0f, 255.0f));
+                p8.a = static_cast<uint8_t>(std::clamp(a, 0.0f, 255.0f));
+                out = cfromColor8(p8);
                 return true;
             }
         }
     }
 
     // Named colors — full CSS Color Level 4 set
-    static const std::unordered_map<std::string, render::Color> named = {
-        {"aliceblue",{240,248,255,255}},{"antiquewhite",{250,235,215,255}},
-        {"aqua",{0,255,255,255}},{"aquamarine",{127,255,212,255}},
-        {"azure",{240,255,255,255}},{"beige",{245,245,220,255}},
-        {"bisque",{255,228,196,255}},{"black",{0,0,0,255}},
-        {"blanchedalmond",{255,235,205,255}},{"blue",{0,0,255,255}},
-        {"blueviolet",{138,43,226,255}},{"brown",{165,42,42,255}},
-        {"burlywood",{222,184,135,255}},{"cadetblue",{95,158,160,255}},
-        {"chartreuse",{127,255,0,255}},{"chocolate",{210,105,30,255}},
-        {"coral",{255,127,80,255}},{"cornflowerblue",{100,149,237,255}},
-        {"cornsilk",{255,248,220,255}},{"crimson",{220,20,60,255}},
-        {"cyan",{0,255,255,255}},{"darkblue",{0,0,139,255}},
-        {"darkcyan",{0,139,139,255}},{"darkgoldenrod",{184,134,11,255}},
-        {"darkgray",{169,169,169,255}},{"darkgreen",{0,100,0,255}},
-        {"darkgrey",{169,169,169,255}},{"darkkhaki",{189,183,107,255}},
-        {"darkmagenta",{139,0,139,255}},{"darkolivegreen",{85,107,47,255}},
-        {"darkorange",{255,140,0,255}},{"darkorchid",{153,50,204,255}},
-        {"darkred",{139,0,0,255}},{"darksalmon",{233,150,122,255}},
-        {"darkseagreen",{143,188,143,255}},{"darkslateblue",{72,61,139,255}},
-        {"darkslategray",{47,79,79,255}},{"darkslategrey",{47,79,79,255}},
-        {"darkturquoise",{0,206,209,255}},{"darkviolet",{148,0,211,255}},
-        {"deeppink",{255,20,147,255}},{"deepskyblue",{0,191,255,255}},
-        {"dimgray",{105,105,105,255}},{"dimgrey",{105,105,105,255}},
-        {"dodgerblue",{30,144,255,255}},{"firebrick",{178,34,34,255}},
-        {"floralwhite",{255,250,240,255}},{"forestgreen",{34,139,34,255}},
-        {"fuchsia",{255,0,255,255}},{"gainsboro",{220,220,220,255}},
-        {"ghostwhite",{248,248,255,255}},{"gold",{255,215,0,255}},
-        {"goldenrod",{218,165,32,255}},{"gray",{128,128,128,255}},
-        {"green",{0,128,0,255}},{"greenyellow",{173,255,47,255}},
-        {"grey",{128,128,128,255}},{"honeydew",{240,255,240,255}},
-        {"hotpink",{255,105,180,255}},{"indianred",{205,92,92,255}},
-        {"indigo",{75,0,130,255}},{"ivory",{255,255,240,255}},
-        {"khaki",{240,230,140,255}},{"lavender",{230,230,250,255}},
-        {"lavenderblush",{255,240,245,255}},{"lawngreen",{124,252,0,255}},
-        {"lemonchiffon",{255,250,205,255}},{"lightblue",{173,216,230,255}},
-        {"lightcoral",{240,128,128,255}},{"lightcyan",{224,255,255,255}},
-        {"lightgoldenrodyellow",{250,250,210,255}},{"lightgray",{211,211,211,255}},
-        {"lightgreen",{144,238,144,255}},{"lightgrey",{211,211,211,255}},
-        {"lightpink",{255,182,193,255}},{"lightsalmon",{255,160,122,255}},
-        {"lightseagreen",{32,178,170,255}},{"lightskyblue",{135,206,250,255}},
-        {"lightslategray",{119,136,153,255}},{"lightslategrey",{119,136,153,255}},
-        {"lightsteelblue",{176,196,222,255}},{"lightyellow",{255,255,224,255}},
-        {"lime",{0,255,0,255}},{"limegreen",{50,205,50,255}},
-        {"linen",{250,240,230,255}},{"magenta",{255,0,255,255}},
-        {"maroon",{128,0,0,255}},{"mediumaquamarine",{102,205,170,255}},
-        {"mediumblue",{0,0,205,255}},{"mediumorchid",{186,85,211,255}},
-        {"mediumpurple",{147,111,219,255}},{"mediumseagreen",{60,179,113,255}},
-        {"mediumslateblue",{123,104,238,255}},{"mediumspringgreen",{0,250,154,255}},
-        {"mediumturquoise",{72,209,204,255}},{"mediumvioletred",{199,21,133,255}},
-        {"midnightblue",{25,25,112,255}},{"mintcream",{245,255,250,255}},
-        {"mistyrose",{255,228,225,255}},{"moccasin",{255,228,181,255}},
-        {"navajowhite",{255,222,173,255}},{"navy",{0,0,128,255}},
-        {"oldlace",{253,245,230,255}},{"olive",{128,128,0,255}},
-        {"olivedrab",{107,142,35,255}},{"orange",{255,165,0,255}},
-        {"orangered",{255,69,0,255}},{"orchid",{218,112,214,255}},
-        {"palegoldenrod",{238,232,170,255}},{"palegreen",{152,251,152,255}},
-        {"paleturquoise",{175,238,238,255}},{"palevioletred",{219,112,147,255}},
-        {"papayawhip",{255,239,213,255}},{"peachpuff",{255,218,185,255}},
-        {"peru",{205,133,63,255}},{"pink",{255,192,203,255}},
-        {"plum",{221,160,221,255}},{"powderblue",{176,224,230,255}},
-        {"purple",{128,0,128,255}},{"rebeccapurple",{102,51,153,255}},
-        {"red",{255,0,0,255}},{"rosybrown",{188,143,143,255}},
-        {"royalblue",{65,105,225,255}},{"saddlebrown",{139,69,19,255}},
-        {"salmon",{250,128,114,255}},{"sandybrown",{244,164,96,255}},
-        {"seagreen",{46,139,87,255}},{"seashell",{255,245,238,255}},
-        {"sienna",{160,82,45,255}},{"silver",{192,192,192,255}},
-        {"skyblue",{135,206,235,255}},{"slateblue",{106,90,205,255}},
-        {"slategray",{112,128,144,255}},{"slategrey",{112,128,144,255}},
-        {"snow",{255,250,250,255}},{"springgreen",{0,255,127,255}},
-        {"steelblue",{70,130,180,255}},{"tan",{210,180,140,255}},
-        {"teal",{0,128,128,255}},{"thistle",{216,191,216,255}},
-        {"tomato",{255,99,71,255}},{"turquoise",{64,224,208,255}},
-        {"violet",{238,130,238,255}},{"wheat",{245,222,179,255}},
-        {"white",{255,255,255,255}},{"whitesmoke",{245,245,245,255}},
-        {"yellow",{255,255,0,255}},{"yellowgreen",{154,205,50,255}},
+    static const std::unordered_map<std::string, bromath::Color> named = {
+        {"aliceblue",cfromColor8({240, 248, 255, 255})},{"antiquewhite",cfromColor8({250, 235, 215, 255})},
+        {"aqua",cfromColor8({0, 255, 255, 255})},{"aquamarine",cfromColor8({127, 255, 212, 255})},
+        {"azure",cfromColor8({240, 255, 255, 255})},{"beige",cfromColor8({245, 245, 220, 255})},
+        {"bisque",cfromColor8({255, 228, 196, 255})},{"black",cfromColor8({0, 0, 0, 255})},
+        {"blanchedalmond",cfromColor8({255, 235, 205, 255})},{"blue",cfromColor8({0, 0, 255, 255})},
+        {"blueviolet",cfromColor8({138, 43, 226, 255})},{"brown",cfromColor8({165, 42, 42, 255})},
+        {"burlywood",cfromColor8({222, 184, 135, 255})},{"cadetblue",cfromColor8({95, 158, 160, 255})},
+        {"chartreuse",cfromColor8({127, 255, 0, 255})},{"chocolate",cfromColor8({210, 105, 30, 255})},
+        {"coral",cfromColor8({255, 127, 80, 255})},{"cornflowerblue",cfromColor8({100, 149, 237, 255})},
+        {"cornsilk",cfromColor8({255, 248, 220, 255})},{"crimson",cfromColor8({220, 20, 60, 255})},
+        {"cyan",cfromColor8({0, 255, 255, 255})},{"darkblue",cfromColor8({0, 0, 139, 255})},
+        {"darkcyan",cfromColor8({0, 139, 139, 255})},{"darkgoldenrod",cfromColor8({184, 134, 11, 255})},
+        {"darkgray",cfromColor8({169, 169, 169, 255})},{"darkgreen",cfromColor8({0, 100, 0, 255})},
+        {"darkgrey",cfromColor8({169, 169, 169, 255})},{"darkkhaki",cfromColor8({189, 183, 107, 255})},
+        {"darkmagenta",cfromColor8({139, 0, 139, 255})},{"darkolivegreen",cfromColor8({85, 107, 47, 255})},
+        {"darkorange",cfromColor8({255, 140, 0, 255})},{"darkorchid",cfromColor8({153, 50, 204, 255})},
+        {"darkred",cfromColor8({139, 0, 0, 255})},{"darksalmon",cfromColor8({233, 150, 122, 255})},
+        {"darkseagreen",cfromColor8({143, 188, 143, 255})},{"darkslateblue",cfromColor8({72, 61, 139, 255})},
+        {"darkslategray",cfromColor8({47, 79, 79, 255})},{"darkslategrey",cfromColor8({47, 79, 79, 255})},
+        {"darkturquoise",cfromColor8({0, 206, 209, 255})},{"darkviolet",cfromColor8({148, 0, 211, 255})},
+        {"deeppink",cfromColor8({255, 20, 147, 255})},{"deepskyblue",cfromColor8({0, 191, 255, 255})},
+        {"dimgray",cfromColor8({105, 105, 105, 255})},{"dimgrey",cfromColor8({105, 105, 105, 255})},
+        {"dodgerblue",cfromColor8({30, 144, 255, 255})},{"firebrick",cfromColor8({178, 34, 34, 255})},
+        {"floralwhite",cfromColor8({255, 250, 240, 255})},{"forestgreen",cfromColor8({34, 139, 34, 255})},
+        {"fuchsia",cfromColor8({255, 0, 255, 255})},{"gainsboro",cfromColor8({220, 220, 220, 255})},
+        {"ghostwhite",cfromColor8({248, 248, 255, 255})},{"gold",cfromColor8({255, 215, 0, 255})},
+        {"goldenrod",cfromColor8({218, 165, 32, 255})},{"gray",cfromColor8({128, 128, 128, 255})},
+        {"green",cfromColor8({0, 128, 0, 255})},{"greenyellow",cfromColor8({173, 255, 47, 255})},
+        {"grey",cfromColor8({128, 128, 128, 255})},{"honeydew",cfromColor8({240, 255, 240, 255})},
+        {"hotpink",cfromColor8({255, 105, 180, 255})},{"indianred",cfromColor8({205, 92, 92, 255})},
+        {"indigo",cfromColor8({75, 0, 130, 255})},{"ivory",cfromColor8({255, 255, 240, 255})},
+        {"khaki",cfromColor8({240, 230, 140, 255})},{"lavender",cfromColor8({230, 230, 250, 255})},
+        {"lavenderblush",cfromColor8({255, 240, 245, 255})},{"lawngreen",cfromColor8({124, 252, 0, 255})},
+        {"lemonchiffon",cfromColor8({255, 250, 205, 255})},{"lightblue",cfromColor8({173, 216, 230, 255})},
+        {"lightcoral",cfromColor8({240, 128, 128, 255})},{"lightcyan",cfromColor8({224, 255, 255, 255})},
+        {"lightgoldenrodyellow",cfromColor8({250, 250, 210, 255})},{"lightgray",cfromColor8({211, 211, 211, 255})},
+        {"lightgreen",cfromColor8({144, 238, 144, 255})},{"lightgrey",cfromColor8({211, 211, 211, 255})},
+        {"lightpink",cfromColor8({255, 182, 193, 255})},{"lightsalmon",cfromColor8({255, 160, 122, 255})},
+        {"lightseagreen",cfromColor8({32, 178, 170, 255})},{"lightskyblue",cfromColor8({135, 206, 250, 255})},
+        {"lightslategray",cfromColor8({119, 136, 153, 255})},{"lightslategrey",cfromColor8({119, 136, 153, 255})},
+        {"lightsteelblue",cfromColor8({176, 196, 222, 255})},{"lightyellow",cfromColor8({255, 255, 224, 255})},
+        {"lime",cfromColor8({0, 255, 0, 255})},{"limegreen",cfromColor8({50, 205, 50, 255})},
+        {"linen",cfromColor8({250, 240, 230, 255})},{"magenta",cfromColor8({255, 0, 255, 255})},
+        {"maroon",cfromColor8({128, 0, 0, 255})},{"mediumaquamarine",cfromColor8({102, 205, 170, 255})},
+        {"mediumblue",cfromColor8({0, 0, 205, 255})},{"mediumorchid",cfromColor8({186, 85, 211, 255})},
+        {"mediumpurple",cfromColor8({147, 111, 219, 255})},{"mediumseagreen",cfromColor8({60, 179, 113, 255})},
+        {"mediumslateblue",cfromColor8({123, 104, 238, 255})},{"mediumspringgreen",cfromColor8({0, 250, 154, 255})},
+        {"mediumturquoise",cfromColor8({72, 209, 204, 255})},{"mediumvioletred",cfromColor8({199, 21, 133, 255})},
+        {"midnightblue",cfromColor8({25, 25, 112, 255})},{"mintcream",cfromColor8({245, 255, 250, 255})},
+        {"mistyrose",cfromColor8({255, 228, 225, 255})},{"moccasin",cfromColor8({255, 228, 181, 255})},
+        {"navajowhite",cfromColor8({255, 222, 173, 255})},{"navy",cfromColor8({0, 0, 128, 255})},
+        {"oldlace",cfromColor8({253, 245, 230, 255})},{"olive",cfromColor8({128, 128, 0, 255})},
+        {"olivedrab",cfromColor8({107, 142, 35, 255})},{"orange",cfromColor8({255, 165, 0, 255})},
+        {"orangered",cfromColor8({255, 69, 0, 255})},{"orchid",cfromColor8({218, 112, 214, 255})},
+        {"palegoldenrod",cfromColor8({238, 232, 170, 255})},{"palegreen",cfromColor8({152, 251, 152, 255})},
+        {"paleturquoise",cfromColor8({175, 238, 238, 255})},{"palevioletred",cfromColor8({219, 112, 147, 255})},
+        {"papayawhip",cfromColor8({255, 239, 213, 255})},{"peachpuff",cfromColor8({255, 218, 185, 255})},
+        {"peru",cfromColor8({205, 133, 63, 255})},{"pink",cfromColor8({255, 192, 203, 255})},
+        {"plum",cfromColor8({221, 160, 221, 255})},{"powderblue",cfromColor8({176, 224, 230, 255})},
+        {"purple",cfromColor8({128, 0, 128, 255})},{"rebeccapurple",cfromColor8({102, 51, 153, 255})},
+        {"red",cfromColor8({255, 0, 0, 255})},{"rosybrown",cfromColor8({188, 143, 143, 255})},
+        {"royalblue",cfromColor8({65, 105, 225, 255})},{"saddlebrown",cfromColor8({139, 69, 19, 255})},
+        {"salmon",cfromColor8({250, 128, 114, 255})},{"sandybrown",cfromColor8({244, 164, 96, 255})},
+        {"seagreen",cfromColor8({46, 139, 87, 255})},{"seashell",cfromColor8({255, 245, 238, 255})},
+        {"sienna",cfromColor8({160, 82, 45, 255})},{"silver",cfromColor8({192, 192, 192, 255})},
+        {"skyblue",cfromColor8({135, 206, 235, 255})},{"slateblue",cfromColor8({106, 90, 205, 255})},
+        {"slategray",cfromColor8({112, 128, 144, 255})},{"slategrey",cfromColor8({112, 128, 144, 255})},
+        {"snow",cfromColor8({255, 250, 250, 255})},{"springgreen",cfromColor8({0, 255, 127, 255})},
+        {"steelblue",cfromColor8({70, 130, 180, 255})},{"tan",cfromColor8({210, 180, 140, 255})},
+        {"teal",cfromColor8({0, 128, 128, 255})},{"thistle",cfromColor8({216, 191, 216, 255})},
+        {"tomato",cfromColor8({255, 99, 71, 255})},{"turquoise",cfromColor8({64, 224, 208, 255})},
+        {"violet",cfromColor8({238, 130, 238, 255})},{"wheat",cfromColor8({245, 222, 179, 255})},
+        {"white",cfromColor8({255, 255, 255, 255})},{"whitesmoke",cfromColor8({245, 245, 245, 255})},
+        {"yellow",cfromColor8({255, 255, 0, 255})},{"yellowgreen",cfromColor8({154, 205, 50, 255})},
     };
     std::string lower = colorStr;
     for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -2661,8 +2670,8 @@ bool DrawTraversal::tryParseColor(const std::string& colorStr, render::Color& ou
     return false;
 }
 
-render::Color DrawTraversal::parseColor(const std::string& color) {
-    render::Color c = {0, 0, 0, 255};
+bromath::Color DrawTraversal::parseColor(const std::string& color) {
+    bromath::Color c = cfromColor8({0, 0, 0, 255});
     tryParseColor(color, c);
     return c;
 }

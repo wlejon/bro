@@ -170,15 +170,14 @@ void ParticleNode::onRender(SceneGraph& graph) {
         float size = sizeStart_ + (sizeEnd_ - sizeStart_) * u;
         if (size <= 0.0f) continue;
 
-        Color col;
-        col.r = lerpU8(colorStart_.r, colorEnd_.r, u);
-        col.g = lerpU8(colorStart_.g, colorEnd_.g, u);
-        col.b = lerpU8(colorStart_.b, colorEnd_.b, u);
-        col.a = lerpU8(colorStart_.a, colorEnd_.a, u);
-        if (col.a == 0) continue;
+        // Interpolate in linear space, encode to sRGB-uint8 at the canvas
+        // boundary (CanvasScene::setFillColor takes uint8 sRGB).
+        bromath::Color col = bromath::clerp(colorStart_, colorEnd_, u);
+        if (col.a <= 0.0f) continue;
 
-        cs->setGlobalAlpha(col.a / 255.0f);
-        cs->setFillColor(col.r, col.g, col.b, 255);
+        cs->setGlobalAlpha(col.a);
+        bromath::Color8 c8 = bromath::ctoColor8(bromath::Color{col.r, col.g, col.b, 1.0f});
+        cs->setFillColor(c8.r, c8.g, c8.b, 255);
 
         if (useTex) {
             // Translate + rotate via canvas transforms layered on top of the

@@ -52,7 +52,7 @@ public:
     }
     void setGravity(float gx, float gy) { gravX_ = gx; gravY_ = gy; }
     void setSize(float startSize, float endSize) { sizeStart_ = startSize; sizeEnd_ = endSize; }
-    void setColors(Color start, Color end) { colorStart_ = start; colorEnd_ = end; }
+    void setColors(bromath::Color start, bromath::Color end) { colorStart_ = start; colorEnd_ = end; }
     void setRotation(float startDeg, float spinSpeedDeg, float spinSpreadDeg) {
         rotStart_ = startDeg; spinSpeed_ = spinSpeedDeg; spinSpread_ = spinSpreadDeg;
     }
@@ -102,8 +102,8 @@ private:
     float speed_ = 100.0f, speedSpread_ = 50.0f;
     float gravX_ = 0.0f, gravY_ = 0.0f;
     float sizeStart_ = 6.0f, sizeEnd_ = 0.0f;
-    Color colorStart_{255, 255, 255, 255};
-    Color colorEnd_{255, 255, 255, 0};
+    bromath::Color colorStart_{1.0f, 1.0f, 1.0f, 1.0f};
+    bromath::Color colorEnd_{1.0f, 1.0f, 1.0f, 0.0f};
     float rotStart_ = 0.0f;
     float spinSpeed_ = 0.0f;
     float spinSpread_ = 0.0f;

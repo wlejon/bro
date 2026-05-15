@@ -4,6 +4,17 @@
 
 namespace bro::scene {
 
+// Bridge: shape colors are linear-float (bromath::Color); CanvasScene wants
+// sRGB uint8 per channel. Encode at the boundary.
+static inline void setFillC(canvas::CanvasScene* cs, bromath::Color c) {
+    bromath::Color8 p = bromath::ctoColor8(c);
+    cs->setFillColor(p.r, p.g, p.b, p.a);
+}
+static inline void setStrokeC(canvas::CanvasScene* cs, bromath::Color c) {
+    bromath::Color8 p = bromath::ctoColor8(c);
+    cs->setStrokeColor(p.r, p.g, p.b, p.a);
+}
+
 ShapeNode::ShapeNode(const std::string& name) : SceneNode(name) {}
 
 void ShapeNode::onRender(SceneGraph& graph) {
@@ -30,11 +41,11 @@ void ShapeNode::onRender(SceneGraph& graph) {
         ax = -width_ * anchorX_;
         ay = -height_ * anchorY_;
         if (hasFill_) {
-            cs->setFillColor(fillColor_.r, fillColor_.g, fillColor_.b, fillColor_.a);
+            setFillC(cs, fillColor_);
             cs->fillRect(ax, ay, width_, height_);
         }
         if (hasStroke_) {
-            cs->setStrokeColor(strokeColor_.r, strokeColor_.g, strokeColor_.b, strokeColor_.a);
+            setStrokeC(cs, strokeColor_);
             cs->setLineWidth(strokeWidth_);
             cs->strokeRect(ax, ay, width_, height_);
         }
@@ -42,13 +53,13 @@ void ShapeNode::onRender(SceneGraph& graph) {
     }
     case Shape::Circle: {
         if (hasFill_) {
-            cs->setFillColor(fillColor_.r, fillColor_.g, fillColor_.b, fillColor_.a);
+            setFillC(cs, fillColor_);
             cs->beginPath();
             cs->arc(0, 0, radius_, 0, 6.283185307f, false);
             cs->fill();
         }
         if (hasStroke_) {
-            cs->setStrokeColor(strokeColor_.r, strokeColor_.g, strokeColor_.b, strokeColor_.a);
+            setStrokeC(cs, strokeColor_);
             cs->setLineWidth(strokeWidth_);
             cs->beginPath();
             cs->arc(0, 0, radius_, 0, 6.283185307f, false);
@@ -58,13 +69,13 @@ void ShapeNode::onRender(SceneGraph& graph) {
     }
     case Shape::Ellipse: {
         if (hasFill_) {
-            cs->setFillColor(fillColor_.r, fillColor_.g, fillColor_.b, fillColor_.a);
+            setFillC(cs, fillColor_);
             cs->beginPath();
             cs->ellipse(0, 0, radiusX_, radiusY_, 0, 0, 6.283185307f, false);
             cs->fill();
         }
         if (hasStroke_) {
-            cs->setStrokeColor(strokeColor_.r, strokeColor_.g, strokeColor_.b, strokeColor_.a);
+            setStrokeC(cs, strokeColor_);
             cs->setLineWidth(strokeWidth_);
             cs->beginPath();
             cs->ellipse(0, 0, radiusX_, radiusY_, 0, 0, 6.283185307f, false);
@@ -81,11 +92,11 @@ void ShapeNode::onRender(SceneGraph& graph) {
         }
         cs->closePath();
         if (hasFill_) {
-            cs->setFillColor(fillColor_.r, fillColor_.g, fillColor_.b, fillColor_.a);
+            setFillC(cs, fillColor_);
             cs->fill();
         }
         if (hasStroke_) {
-            cs->setStrokeColor(strokeColor_.r, strokeColor_.g, strokeColor_.b, strokeColor_.a);
+            setStrokeC(cs, strokeColor_);
             cs->setLineWidth(strokeWidth_);
             cs->stroke();
         }
@@ -94,7 +105,7 @@ void ShapeNode::onRender(SceneGraph& graph) {
     case Shape::Line: {
         if (hasStroke_ || hasFill_) {
             auto c = hasStroke_ ? strokeColor_ : fillColor_;
-            cs->setStrokeColor(c.r, c.g, c.b, c.a);
+            setStrokeC(cs, c);
             cs->setLineWidth(strokeWidth_);
             cs->beginPath();
             cs->moveTo(lineX1_, lineY1_);

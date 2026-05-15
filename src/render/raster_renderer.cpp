@@ -39,6 +39,8 @@
 
 namespace bro::render {
 
+using bromath::Color;
+
 // CSS gradient interpolation: premultiplied sRGB so opaque-color → transparent
 // fades through the color's hue (browser default), not through gray. See
 // skia_backend.cpp for details.
@@ -55,15 +57,21 @@ static SkGradient::Colors buildGradColors(std::span<const ColorStop> stops) {
     colors.resize(stops.size());
     pos.resize(stops.size());
     for (size_t i = 0; i < stops.size(); i++) {
-        colors[i] = SkColor4f{stops[i].color.r / 255.0f, stops[i].color.g / 255.0f,
-                              stops[i].color.b / 255.0f, stops[i].color.a / 255.0f};
+        // Colors are linear-float; Skia gradient expects sRGB-float (kDestination
+        // = sRGB surface). Encode each channel back to sRGB at the boundary.
+        const auto& c = stops[i].color;
+        colors[i] = SkColor4f{bromath::clinearToSrgb(c.r),
+                              bromath::clinearToSrgb(c.g),
+                              bromath::clinearToSrgb(c.b),
+                              c.a};
         pos[i] = stops[i].offset;
     }
     return SkGradient::Colors(SkSpan(colors), SkSpan(pos), SkTileMode::kClamp);
 }
 
 SkColor RasterRenderer::toSkColor(Color c) {
-    return SkColorSetARGB(c.a, c.r, c.g, c.b);
+    bromath::Color8 p = bromath::ctoColor8(c);
+    return SkColorSetARGB(p.a, p.r, p.g, p.b);
 }
 
 void RasterRenderer::clear(Color c) {
@@ -173,7 +181,7 @@ void RasterRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
 
         SkPaint paint;
         paint.setAntiAlias(true);
-        paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+        paint.setColor(toSkColor(color));
         if (blur > 0)
             paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
         canvas_->drawPath(path, paint);
@@ -191,7 +199,7 @@ void RasterRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
     }
     SkPaint paint;
     paint.setAntiAlias(true);
-    paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+    paint.setColor(toSkColor(color));
     if (blur > 0)
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     canvas_->drawRRect(makeRRectRaster(sx, sy, sw, sh, sr), paint);
@@ -513,7 +521,7 @@ void RasterRenderer::drawBoxShadow(float x, float y, float w, float h,
         SkPath path = pb.detach();
         SkPaint paint;
         paint.setAntiAlias(true);
-        paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+        paint.setColor(toSkColor(color));
         if (blur > 0)
             paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
         canvas_->drawPath(path, paint);
@@ -527,7 +535,7 @@ void RasterRenderer::drawBoxShadow(float x, float y, float w, float h,
     float sh = h + spread * 2;
     SkPaint paint;
     paint.setAntiAlias(true);
-    paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+    paint.setColor(toSkColor(color));
     if (blur > 0)
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     if (rx > 0 || ry > 0)

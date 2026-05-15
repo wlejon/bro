@@ -4,6 +4,8 @@
 
 namespace bro::render {
 
+using bromath::Color;
+
 RecordingRenderer::RecordingRenderer(CommandBuffer* buffer, Renderer* measureRenderer)
     : buffer_(buffer), measureRenderer_(measureRenderer) {}
 

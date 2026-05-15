@@ -1,18 +1,14 @@
 #pragma once
 
 #include "scene/scene_node.h"
+#include <bromath/color.h>
 #include <cstdint>
 #include <vector>
 
 namespace bro::scene {
 
-/// Color with 8-bit RGBA components.
-struct Color {
-    uint8_t r = 255, g = 255, b = 255, a = 255;
-
-    Color() = default;
-    Color(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) : r(r), g(g), b(b), a(a) {}
-};
+// Color is bromath::Color (linear-float RGBA). Header refs must spell out
+// the full namespace; .cpp may `using bromath::Color;` for brevity.
 
 /// A renderable 2D shape (rect, circle, polygon) with fill and stroke.
 class ShapeNode : public SceneNode {
@@ -58,13 +54,13 @@ public:
 
     // --- Appearance ---
 
-    void setFillColor(Color c) { fillColor_ = c; hasFill_ = true; }
-    Color fillColor() const { return fillColor_; }
+    void setFillColor(bromath::Color c) { fillColor_ = c; hasFill_ = true; }
+    bromath::Color fillColor() const { return fillColor_; }
     bool hasFill() const { return hasFill_; }
     void setHasFill(bool v) { hasFill_ = v; }
 
-    void setStrokeColor(Color c) { strokeColor_ = c; hasStroke_ = true; }
-    Color strokeColor() const { return strokeColor_; }
+    void setStrokeColor(bromath::Color c) { strokeColor_ = c; hasStroke_ = true; }
+    bromath::Color strokeColor() const { return strokeColor_; }
     bool hasStroke() const { return hasStroke_; }
     void setHasStroke(bool v) { hasStroke_ = v; }
 
@@ -85,8 +81,8 @@ private:
     float lineX1_ = 0, lineY1_ = 0, lineX2_ = 50, lineY2_ = 0;
     std::vector<float> points_;
 
-    Color fillColor_{255, 255, 255, 255};
-    Color strokeColor_{0, 0, 0, 255};
+    bromath::Color fillColor_{1.0f, 1.0f, 1.0f, 1.0f};
+    bromath::Color strokeColor_{0.0f, 0.0f, 0.0f, 1.0f};
     float strokeWidth_ = 1.0f;
     bool hasFill_ = true;
     bool hasStroke_ = false;

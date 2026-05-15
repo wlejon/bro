@@ -3874,11 +3874,13 @@ struct BillboardDraw {
     float uvMax[2] = {1.0f, 1.0f};
 };
 
-static inline void color8(float* out, const Color& c) {
-    out[0] = c.r / 255.0f;
-    out[1] = c.g / 255.0f;
-    out[2] = c.b / 255.0f;
-    out[3] = c.a / 255.0f;
+static inline void color8(float* out, const bromath::Color& c) {
+    // Encode linear-float Color back to sRGB float for the billboard shader,
+    // which writes sRGB-encoded fragments to a non-linear framebuffer.
+    out[0] = bromath::clinearToSrgb(c.r);
+    out[1] = bromath::clinearToSrgb(c.g);
+    out[2] = bromath::clinearToSrgb(c.b);
+    out[3] = c.a;
 }
 
 static bool resolveBillboard(SceneNode* node, BillboardDraw& d) {

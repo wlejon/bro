@@ -5,6 +5,8 @@
 
 namespace bro::engine {
 
+using bromath::cfromColor8;
+
 Scrollbar::Scrollbar() : Scrollbar(Style{}) {}
 Scrollbar::Scrollbar(Style style) : style_(style) {}
 
@@ -47,7 +49,7 @@ void Scrollbar::drawWithState(render::Renderer* renderer, const ScrollbarMetrics
     renderer->fillRect(m.trackX, m.trackY, m.trackW, m.trackH, style_.trackColor);
 
     // Thumb — color depends on interaction state
-    render::Color thumbColor = style_.thumbColor;
+    bromath::Color thumbColor = style_.thumbColor;
     if (dragging) {
         thumbColor = style_.thumbDragColor;
     } else if (hovered) {

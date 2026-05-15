@@ -12,6 +12,9 @@
 
 namespace bro::layout {
 
+using bromath::Color;
+using bromath::cfromColor8;
+
 ElInput::ElInput(render::Renderer* renderer)
     : renderer_(renderer) {}
 
@@ -347,30 +350,30 @@ void ElInput::drawText_(float x, float y, float w, float h) {
 
     if (!text.empty()) {
         // Use the element's computed color for text (respects app themes)
-        render::Color textColor = {0, 0, 0, 255};
+        bromath::Color textColor = cfromColor8({0, 0, 0, 255});
         if (elem_) {
             auto& style = elem_->computedStyle();
             auto cIt = style.find("color");
             if (cIt != style.end() && !cIt->second.empty()) {
-                render::Color parsed;
+                bromath::Color parsed;
                 if (DrawTraversal::tryParseColor(cIt->second, parsed)) {
                     textColor = parsed;
                 }
             }
         }
-        render::Color color = isPlaceholder ? render::Color{128, 128, 128, 180}
+        bromath::Color color = isPlaceholder ? cfromColor8({128, 128, 128, 180})
                                             : textColor;
         renderer_->drawText(text, drawX, textY, fontRef, color);
     }
 
     if (focused_ && isTextType(nullptr)) {
         // Use computed color for cursor too
-        render::Color cursorColor = {0, 0, 0, 255};
+        bromath::Color cursorColor = cfromColor8({0, 0, 0, 255});
         if (elem_) {
             auto& style = elem_->computedStyle();
             auto cIt = style.find("color");
             if (cIt != style.end() && !cIt->second.empty()) {
-                render::Color parsed;
+                bromath::Color parsed;
                 if (DrawTraversal::tryParseColor(cIt->second, parsed)) {
                     cursorColor = parsed;
                 }
@@ -391,21 +394,21 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     if (inputType(nullptr) == InputType::Number) {
         float btnW = 16.0f;
         float bx = x + w - btnW;
-        renderer_->drawLine(bx, y, bx, y + h, {180, 180, 180, 255}, 1.0f);
-        renderer_->drawLine(bx, y + h / 2, bx + btnW, y + h / 2, {180, 180, 180, 255}, 1.0f);
+        renderer_->drawLine(bx, y, bx, y + h, cfromColor8({180, 180, 180, 255}), 1.0f);
+        renderer_->drawLine(bx, y + h / 2, bx + btnW, y + h / 2, cfromColor8({180, 180, 180, 255}), 1.0f);
 
         float cx = bx + btnW / 2;
         render::PointF upPts[3] = {
             {cx - 4, y + h / 4 + 2}, {cx + 4, y + h / 4 + 2}, {cx, y + h / 4 - 2}
         };
         renderer_->drawPolygon(std::span<const render::PointF>(upPts, 3),
-                              {80, 80, 80, 255}, {0, 0, 0, 0}, 0.0f);
+                              cfromColor8({80, 80, 80, 255}), cfromColor8({0, 0, 0, 0}), 0.0f);
 
         render::PointF downPts[3] = {
             {cx - 4, y + h * 3 / 4 - 2}, {cx + 4, y + h * 3 / 4 - 2}, {cx, y + h * 3 / 4 + 2}
         };
         renderer_->drawPolygon(std::span<const render::PointF>(downPts, 3),
-                              {80, 80, 80, 255}, {0, 0, 0, 0}, 0.0f);
+                              cfromColor8({80, 80, 80, 255}), cfromColor8({0, 0, 0, 0}), 0.0f);
     }
 
     renderer_->restore();
@@ -416,11 +419,11 @@ void ElInput::drawCheckbox_(float x, float y, float w, float h) {
     float bx = x + (w - sz) / 2;
     float by = y + (h - sz) / 2;
 
-    renderer_->fillRect(bx, by, sz, sz, {255, 255, 255, 255});
-    renderer_->drawRect(bx, by, sz, sz, {118, 118, 118, 255});
+    renderer_->fillRect(bx, by, sz, sz, cfromColor8({255, 255, 255, 255}));
+    renderer_->drawRect(bx, by, sz, sz, cfromColor8({118, 118, 118, 255}));
 
     if (focused_) {
-        renderer_->drawRect(bx - 1, by - 1, sz + 2, sz + 2, {0, 120, 215, 255});
+        renderer_->drawRect(bx - 1, by - 1, sz + 2, sz + 2, cfromColor8({0, 120, 215, 255}));
     }
 
     if (elem_ && elem_->hasAttribute("checked")) {
@@ -428,8 +431,8 @@ void ElInput::drawCheckbox_(float x, float y, float w, float h) {
         float x1 = bx + pad, y1 = by + sz * 0.5f;
         float x2 = bx + sz * 0.4f, y2 = by + sz - pad;
         float x3 = bx + sz - pad, y3 = by + pad;
-        renderer_->drawLine(x1, y1, x2, y2, {0, 0, 0, 255}, 2.0f);
-        renderer_->drawLine(x2, y2, x3, y3, {0, 0, 0, 255}, 2.0f);
+        renderer_->drawLine(x1, y1, x2, y2, cfromColor8({0, 0, 0, 255}), 2.0f);
+        renderer_->drawLine(x2, y2, x3, y3, cfromColor8({0, 0, 0, 255}), 2.0f);
     }
 }
 
@@ -438,12 +441,12 @@ void ElInput::drawRadio_(float x, float y, float w, float h) {
     float r = sz / 2;
     float cx = x + w / 2, cy = y + h / 2;
 
-    renderer_->drawCircle(cx, cy, r, {255, 255, 255, 255}, {118, 118, 118, 255}, 1.0f);
+    renderer_->drawCircle(cx, cy, r, cfromColor8({255, 255, 255, 255}), cfromColor8({118, 118, 118, 255}), 1.0f);
     if (focused_) {
-        renderer_->drawCircle(cx, cy, r + 1, {0, 0, 0, 0}, {0, 120, 215, 255}, 1.0f);
+        renderer_->drawCircle(cx, cy, r + 1, cfromColor8({0, 0, 0, 0}), cfromColor8({0, 120, 215, 255}), 1.0f);
     }
     if (elem_ && elem_->hasAttribute("checked")) {
-        renderer_->drawCircle(cx, cy, r * 0.45f, {0, 0, 0, 255}, {0, 0, 0, 0}, 0.0f);
+        renderer_->drawCircle(cx, cy, r * 0.45f, cfromColor8({0, 0, 0, 255}), cfromColor8({0, 0, 0, 0}), 0.0f);
     }
 }
 
@@ -466,7 +469,7 @@ void ElInput::drawRange_(float x, float y, float w, float h) {
 
     // Accent color — honor CSS accent-color for the filled track and thumb,
     // falling back to Windows-blue when unset.
-    render::Color accent = {0, 120, 215, 255};
+    bromath::Color accent = cfromColor8({0, 120, 215, 255});
     if (elem_) {
         auto& style = elem_->computedStyle();
         auto it = style.find("accent-color");
@@ -474,16 +477,15 @@ void ElInput::drawRange_(float x, float y, float w, float h) {
             accent = DrawTraversal::parseColor(it->second);
         }
     }
-    render::Color accentDark = {
-        static_cast<uint8_t>(accent.r * 0.82f),
-        static_cast<uint8_t>(accent.g * 0.82f),
-        static_cast<uint8_t>(accent.b * 0.82f),
-        accent.a
+    // Darken the accent ~18% in linear space (was uint8 *0.82 — equivalent
+    // multiplicative scale, now correctly applied in linear-light).
+    bromath::Color accentDark = {
+        accent.r * 0.82f, accent.g * 0.82f, accent.b * 0.82f, accent.a
     };
-    render::Color focusRing = {accent.r, accent.g, accent.b, 128};
+    bromath::Color focusRing = {accent.r, accent.g, accent.b, 128.0f/255.0f};
 
     renderer_->fillRoundRect(x + trackPad, trackY, w - trackPad * 2, trackH,
-                            2, 2, {200, 200, 200, 255});
+                            2, 2, cfromColor8({200, 200, 200, 255}));
 
     float mn = rangeMin(), mx = rangeMax();
     float val = rangeValue();
@@ -495,34 +497,26 @@ void ElInput::drawRange_(float x, float y, float w, float h) {
     renderer_->fillRoundRect(x + trackPad, trackY, thumbX - x - trackPad, trackH,
                             2, 2, accent);
 
-    render::Color thumbFill = dragging_ ? accentDark : accent;
-    renderer_->drawCircle(thumbX, thumbY, thumbR, thumbFill, {255, 255, 255, 255}, 1.5f);
+    bromath::Color thumbFill = dragging_ ? accentDark : accent;
+    renderer_->drawCircle(thumbX, thumbY, thumbR, thumbFill, cfromColor8({255, 255, 255, 255}), 1.5f);
 
     if (focused_) {
-        renderer_->drawCircle(thumbX, thumbY, thumbR + 2, {0, 0, 0, 0}, focusRing, 1.5f);
+        renderer_->drawCircle(thumbX, thumbY, thumbR + 2, cfromColor8({0, 0, 0, 0}), focusRing, 1.5f);
     }
 }
 
 void ElInput::drawColor_(float x, float y, float w, float h) {
     std::string val = getAttr("value");
-    render::Color swatch = {0, 0, 0, 255};
+    bromath::Color swatch = cfromColor8({0, 0, 0, 255});
     if (val.size() == 7 && val[0] == '#') {
-        auto hex = [](char c) -> uint8_t {
-            if (c >= '0' && c <= '9') return c - '0';
-            if (c >= 'a' && c <= 'f') return 10 + c - 'a';
-            if (c >= 'A' && c <= 'F') return 10 + c - 'A';
-            return 0;
-        };
-        swatch.r = hex(val[1]) * 16 + hex(val[2]);
-        swatch.g = hex(val[3]) * 16 + hex(val[4]);
-        swatch.b = hex(val[5]) * 16 + hex(val[6]);
+        swatch = bromath::cfromHex(val.c_str());
     }
 
     float pad = 3.0f;
-    renderer_->drawRect(x, y, w, h, {118, 118, 118, 255});
+    renderer_->drawRect(x, y, w, h, cfromColor8({118, 118, 118, 255}));
     renderer_->fillRect(x + pad, y + pad, w - pad * 2, h - pad * 2, swatch);
     if (focused_) {
-        renderer_->drawRect(x - 1, y - 1, w + 2, h + 2, {0, 120, 215, 255});
+        renderer_->drawRect(x - 1, y - 1, w + 2, h + 2, cfromColor8({0, 120, 215, 255}));
     }
 }
 

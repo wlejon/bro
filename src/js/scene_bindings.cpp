@@ -201,19 +201,19 @@ static void applyBillboardOpts(JSContext* ctx, JSValueConst opts, scene::SceneNo
     JS_FreeValue(ctx, bbVal);
 }
 
-static scene::Color parseColorProp(JSContext* ctx, JSValueConst obj, const char* prop) {
+static bromath::Color parseColorProp(JSContext* ctx, JSValueConst obj, const char* prop) {
     JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    scene::Color c;
+    bromath::Color8 p{255, 255, 255, 255};
     if (JS_IsString(v)) {
-        parseColor(jsStr(ctx, v), c.r, c.g, c.b, c.a);
+        parseColor(jsStr(ctx, v), p.r, p.g, p.b, p.a);
     } else if (JS_IsObject(v)) {
-        c.r = (uint8_t)jsGetProp(ctx, v, "r", 255);
-        c.g = (uint8_t)jsGetProp(ctx, v, "g", 255);
-        c.b = (uint8_t)jsGetProp(ctx, v, "b", 255);
-        c.a = (uint8_t)jsGetProp(ctx, v, "a", 255);
+        p.r = (uint8_t)jsGetProp(ctx, v, "r", 255);
+        p.g = (uint8_t)jsGetProp(ctx, v, "g", 255);
+        p.b = (uint8_t)jsGetProp(ctx, v, "b", 255);
+        p.a = (uint8_t)jsGetProp(ctx, v, "a", 255);
     }
     JS_FreeValue(ctx, v);
-    return c;
+    return bromath::cfromColor8(p);
 }
 
 // ---------------------------------------------------------------------------
@@ -547,11 +547,11 @@ static JSValue js_sprite_addAnimation(JSContext* ctx, JSValueConst this_val, int
 // Particle node helpers + methods
 // ---------------------------------------------------------------------------
 
-static scene::Color colorFromJS(JSContext* ctx, JSValueConst v, scene::Color def) {
+static bromath::Color colorFromJS(JSContext* ctx, JSValueConst v, bromath::Color def) {
     if (JS_IsString(v)) {
         uint8_t r, g, b, a;
         std::string s = jsStr(ctx, v);
-        if (parseColor(s, r, g, b, a)) return {r, g, b, a};
+        if (parseColor(s, r, g, b, a)) return bromath::cfromColor8({r, g, b, a});
     }
     return def;
 }
@@ -649,13 +649,13 @@ static void applyParticleOpts(JSContext* ctx, JSValueConst opts, scene::Particle
     if (JS_IsObject(colorVal)) {
         JSValue cs = JS_GetPropertyStr(ctx, colorVal, "start");
         JSValue ce = JS_GetPropertyStr(ctx, colorVal, "end");
-        scene::Color start = colorFromJS(ctx, cs, {255,255,255,255});
-        scene::Color end   = colorFromJS(ctx, ce, {start.r, start.g, start.b, 0});
+        bromath::Color start = colorFromJS(ctx, cs, bromath::cfromColor8({255,255,255,255}));
+        bromath::Color end   = colorFromJS(ctx, ce, bromath::Color{start.r, start.g, start.b, 0.0f});
         node->setColors(start, end);
         JS_FreeValue(ctx, cs); JS_FreeValue(ctx, ce);
     } else if (JS_IsString(colorVal)) {
-        scene::Color c = colorFromJS(ctx, colorVal, {255,255,255,255});
-        scene::Color end = c; end.a = 0;
+        bromath::Color c = colorFromJS(ctx, colorVal, bromath::cfromColor8({255,255,255,255}));
+        bromath::Color end = c; end.a = 0.0f;
         node->setColors(c, end);
     }
     JS_FreeValue(ctx, colorVal);
@@ -988,7 +988,7 @@ static JSValue js_sg_createShape(JSContext* ctx, JSValueConst this_val, int argc
         if (!JS_IsUndefined(fillVal)) {
             uint8_t r, g, b, a;
             if (JS_IsString(fillVal) && parseColor(jsStr(ctx, fillVal), r, g, b, a)) {
-                node->setFillColor({r, g, b, a});
+                node->setFillColor(bromath::cfromColor8({r, g, b, a}));
             }
         } else {
             node->setHasFill(true); // default white fill
@@ -1000,7 +1000,7 @@ static JSValue js_sg_createShape(JSContext* ctx, JSValueConst this_val, int argc
         if (!JS_IsUndefined(strokeVal)) {
             uint8_t r, g, b, a;
             if (JS_IsString(strokeVal) && parseColor(jsStr(ctx, strokeVal), r, g, b, a)) {
-                node->setStrokeColor({r, g, b, a});
+                node->setStrokeColor(bromath::cfromColor8({r, g, b, a}));
             }
         }
         JS_FreeValue(ctx, strokeVal);
@@ -2980,7 +2980,7 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
                     uint8_t r, g, b, a;
                     if (parseColor(jsStr(ctx, val), r, g, b, a))
-                        static_cast<scene::ShapeNode*>(w->node)->setFillColor({r, g, b, a});
+                        static_cast<scene::ShapeNode*>(w->node)->setFillColor(bromath::cfromColor8({r, g, b, a}));
                 }
             })
         .prop("strokeColor",
@@ -2997,7 +2997,7 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
                     uint8_t r, g, b, a;
                     if (parseColor(jsStr(ctx, val), r, g, b, a))
-                        static_cast<scene::ShapeNode*>(w->node)->setStrokeColor({r, g, b, a});
+                        static_cast<scene::ShapeNode*>(w->node)->setStrokeColor(bromath::cfromColor8({r, g, b, a}));
                 }
             })
         .prop("strokeWidth",

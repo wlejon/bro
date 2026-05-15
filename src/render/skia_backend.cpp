@@ -77,6 +77,8 @@ GrGLFuncPtr linuxGLProc(void*, const char* name) {
 
 namespace bro::render {
 
+using bromath::Color;
+
 // ===========================================================================
 // SkiaRenderer — Skia raster rendering + OpenGL display
 // ===========================================================================
@@ -124,7 +126,9 @@ SkiaRenderer::~SkiaRenderer() {
 }
 
 SkColor SkiaRenderer::toSkColor(Color c) const {
-    return SkColorSetARGB(c.a, c.r, c.g, c.b);
+    // Skia consumes sRGB-packed ARGB; convert from linear-float at the boundary.
+    bromath::Color8 p = bromath::ctoColor8(c);
+    return SkColorSetARGB(p.a, p.r, p.g, p.b);
 }
 
 void SkiaRenderer::clear(Color color) {
@@ -439,7 +443,7 @@ void SkiaRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
 
         SkPaint paint;
         paint.setAntiAlias(true);
-        paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+        paint.setColor(toSkColor(color));
         if (blur > 0)
             paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
         canvas_->drawPath(path, paint);
@@ -458,7 +462,7 @@ void SkiaRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
     }
     SkPaint paint;
     paint.setAntiAlias(true);
-    paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+    paint.setColor(toSkColor(color));
     if (blur > 0)
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     canvas_->drawRRect(makeRRect(sx, sy, sw, sh, sr), paint);
@@ -611,7 +615,7 @@ void SkiaRenderer::drawBoxShadow(float x, float y, float w, float h,
 
         SkPaint paint;
         paint.setAntiAlias(true);
-        paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+        paint.setColor(toSkColor(color));
         if (blur > 0)
             paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
         canvas_->drawPath(path, paint);
@@ -627,7 +631,7 @@ void SkiaRenderer::drawBoxShadow(float x, float y, float w, float h,
 
     SkPaint paint;
     paint.setAntiAlias(true);
-    paint.setColor(SkColorSetARGB(color.a, color.r, color.g, color.b));
+    paint.setColor(toSkColor(color));
     if (blur > 0) {
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     }
@@ -811,8 +815,11 @@ static SkGradient::Colors buildGradColors(std::span<const ColorStop> stops) {
     colors.resize(stops.size());
     pos.resize(stops.size());
     for (size_t i = 0; i < stops.size(); i++) {
-        colors[i] = SkColor4f{stops[i].color.r / 255.0f, stops[i].color.g / 255.0f,
-                              stops[i].color.b / 255.0f, stops[i].color.a / 255.0f};
+        const auto& c = stops[i].color;
+        colors[i] = SkColor4f{bromath::clinearToSrgb(c.r),
+                              bromath::clinearToSrgb(c.g),
+                              bromath::clinearToSrgb(c.b),
+                              c.a};
         pos[i] = stops[i].offset;
     }
     return SkGradient::Colors(SkSpan(colors), SkSpan(pos), SkTileMode::kClamp);

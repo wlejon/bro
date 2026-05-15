@@ -11,6 +11,8 @@
 
 namespace bro::engine {
 
+using bromath::cfromColor8;
+
 const char* const ColorPickerOverlay::kPresetHex[8] = {
     "#000000", "#ffffff", "#ff4136", "#ff851b",
     "#ffdc00", "#2ecc40", "#0074d9", "#b10dc9",
@@ -89,7 +91,7 @@ ColorPickerOverlay::ColorPickerOverlay(float anchorX, float anchorY,
 
     // Preset colors are constant — resolve once now instead of per-frame.
     for (size_t i = 0; i < presetColors_.size(); ++i) {
-        render::Color c{0, 0, 0, 255};
+        bromath::Color c = cfromColor8({0, 0, 0, 255});
         layout::DrawTraversal::tryParseColor(kPresetHex[i], c);
         presetColors_[i] = c;
     }
@@ -137,10 +139,12 @@ void ColorPickerOverlay::initRects() {
 
 bool ColorPickerOverlay::parseColor(const std::string& s,
                                     float& outH, float& outS, float& outV, float& outA) {
-    render::Color c{0, 0, 0, 255};
+    bromath::Color c = cfromColor8({0, 0, 0, 255});
     if (!layout::DrawTraversal::tryParseColor(s, c)) return false;
-    rgbToHsv(c.r, c.g, c.b, outH, outS, outV);
-    outA = c.a / 255.0f;
+    // HSV operates in sRGB space; round-trip through Color8 at the boundary.
+    bromath::Color8 c8 = bromath::ctoColor8(c);
+    rgbToHsv(c8.r, c8.g, c8.b, outH, outS, outV);
+    outA = c.a;
     return true;
 }
 
@@ -198,8 +202,8 @@ void ColorPickerOverlay::getBounds(float& x, float& y, float& w, float& h) const
 
 static void drawCheckerboard(render::Renderer* r, float x, float y, float w, float h,
                              float cell = 5.0f) {
-    r->fillRect(x, y, w, h, {220, 220, 220, 255});
-    render::Color dark = {170, 170, 170, 255};
+    r->fillRect(x, y, w, h, cfromColor8({220, 220, 220, 255}));
+    bromath::Color dark = cfromColor8({170, 170, 170, 255});
     int cols = static_cast<int>(std::ceil(w / cell));
     int rows = static_cast<int>(std::ceil(h / cell));
     for (int row = 0; row < rows; ++row) {
@@ -228,8 +232,8 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
     }
 
     // Background
-    r->fillRect(originX_, originY_, kPopupW, kPopupH, {40, 40, 44, 245});
-    r->drawRect(originX_, originY_, kPopupW, kPopupH, {120, 120, 130, 255});
+    r->fillRect(originX_, originY_, kPopupW, kPopupH, cfromColor8({40, 40, 44, 245}));
+    r->drawRect(originX_, originY_, kPopupW, kPopupH, cfromColor8({120, 120, 130, 255}));
 
     // --- SV square ---
     {
@@ -241,33 +245,33 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         // Base: pure hue color at full S=1, V=1
         uint8_t rr, gg, bb;
         hsvToRgb(h_, 1.0f, 1.0f, rr, gg, bb);
-        r->fillRect(x, y, w, h, {rr, gg, bb, 255});
+        r->fillRect(x, y, w, h, cfromColor8({rr, gg, bb, 255}));
 
         // White→transparent horizontal (saturates left→right)
         {
             std::array<render::ColorStop, 2> stops = {{
-                {0.0f, {255, 255, 255, 255}},
-                {1.0f, {255, 255, 255, 0}},
+                {0.0f, cfromColor8({255, 255, 255, 255})},
+                {1.0f, cfromColor8({255, 255, 255, 0})},
             }};
             r->fillLinearGradient(x, y, w, h, x, y, x + w, y, stops);
         }
         // Black→transparent vertical (top=1, bottom=0)
         {
             std::array<render::ColorStop, 2> stops = {{
-                {0.0f, {0, 0, 0, 0}},
-                {1.0f, {0, 0, 0, 255}},
+                {0.0f, cfromColor8({0, 0, 0, 0})},
+                {1.0f, cfromColor8({0, 0, 0, 255})},
             }};
             r->fillLinearGradient(x, y, w, h, x, y, x, y + h, stops);
         }
 
         // Border
-        r->drawRect(x, y, w, h, {80, 80, 90, 255});
+        r->drawRect(x, y, w, h, cfromColor8({80, 80, 90, 255}));
 
         // Selection ring
         float cx = x + s_ * w;
         float cy = y + (1.0f - v_) * h;
-        r->drawCircle(cx, cy, 5.0f, {0, 0, 0, 0}, {255, 255, 255, 255}, 2.0f);
-        r->drawCircle(cx, cy, 6.5f, {0, 0, 0, 0}, {0, 0, 0, 220}, 1.0f);
+        r->drawCircle(cx, cy, 5.0f, cfromColor8({0, 0, 0, 0}), cfromColor8({255, 255, 255, 255}), 2.0f);
+        r->drawCircle(cx, cy, 6.5f, cfromColor8({0, 0, 0, 0}), cfromColor8({0, 0, 0, 220}), 1.0f);
     }
 
     // --- Hue slider ---
@@ -278,20 +282,20 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         float h = rHue_.h;
 
         std::array<render::ColorStop, 7> stops = {{
-            {0.0f      , {255,   0,   0, 255}},
-            {1.0f / 6.0f, {255, 255,   0, 255}},
-            {2.0f / 6.0f, {  0, 255,   0, 255}},
-            {3.0f / 6.0f, {  0, 255, 255, 255}},
-            {4.0f / 6.0f, {  0,   0, 255, 255}},
-            {5.0f / 6.0f, {255,   0, 255, 255}},
-            {1.0f      , {255,   0,   0, 255}},
+            {0.0f      , cfromColor8({255, 0, 0, 255})},
+            {1.0f / 6.0f, cfromColor8({255, 255, 0, 255})},
+            {2.0f / 6.0f, cfromColor8({0, 255, 0, 255})},
+            {3.0f / 6.0f, cfromColor8({0, 255, 255, 255})},
+            {4.0f / 6.0f, cfromColor8({0, 0, 255, 255})},
+            {5.0f / 6.0f, cfromColor8({255, 0, 255, 255})},
+            {1.0f      , cfromColor8({255, 0, 0, 255})},
         }};
         r->fillLinearGradient(x, y, w, h, x, y, x, y + h, stops);
-        r->drawRect(x, y, w, h, {80, 80, 90, 255});
+        r->drawRect(x, y, w, h, cfromColor8({80, 80, 90, 255}));
 
         float hy = y + (h_ / 360.0f) * h;
-        r->drawLine(x - 2, hy, x + w + 2, hy, {255, 255, 255, 255}, 2.0f);
-        r->drawLine(x - 2, hy, x + w + 2, hy, {0, 0, 0, 220}, 1.0f);
+        r->drawLine(x - 2, hy, x + w + 2, hy, cfromColor8({255, 255, 255, 255}), 2.0f);
+        r->drawLine(x - 2, hy, x + w + 2, hy, cfromColor8({0, 0, 0, 220}), 1.0f);
     }
 
     // --- Alpha slider ---
@@ -306,16 +310,16 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         uint8_t rr, gg, bb;
         hsvToRgb(h_, s_, v_, rr, gg, bb);
         std::array<render::ColorStop, 2> stops = {{
-            {0.0f, {rr, gg, bb, 0}},
-            {1.0f, {rr, gg, bb, 255}},
+            {0.0f, cfromColor8({rr, gg, bb, 0})},
+            {1.0f, cfromColor8({rr, gg, bb, 255})},
         }};
         r->fillLinearGradient(x, y, w, h, x, y, x + w, y, stops);
-        r->drawRect(x, y, w, h, {80, 80, 90, 255});
+        r->drawRect(x, y, w, h, cfromColor8({80, 80, 90, 255}));
 
         if (hasAlpha_) {
             float ax = x + a_ * w;
-            r->drawLine(ax, y - 2, ax, y + h + 2, {255, 255, 255, 255}, 2.0f);
-            r->drawLine(ax, y - 2, ax, y + h + 2, {0, 0, 0, 220}, 1.0f);
+            r->drawLine(ax, y - 2, ax, y + h + 2, cfromColor8({255, 255, 255, 255}), 2.0f);
+            r->drawLine(ax, y - 2, ax, y + h + 2, cfromColor8({0, 0, 0, 220}), 1.0f);
         }
     }
 
@@ -330,8 +334,8 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         uint8_t rr, gg, bb;
         hsvToRgb(h_, s_, v_, rr, gg, bb);
         uint8_t a8 = static_cast<uint8_t>(std::round(a_ * 255.0f));
-        r->fillRect(px, py, pw, ph, {rr, gg, bb, a8});
-        r->drawRect(px, py, pw, ph, {80, 80, 90, 255});
+        r->fillRect(px, py, pw, ph, cfromColor8({rr, gg, bb, a8}));
+        r->drawRect(px, py, pw, ph, cfromColor8({80, 80, 90, 255}));
 
         // Hex text field
         float hx = originX_ + rHex_.x;
@@ -339,22 +343,22 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         float hw = rHex_.w;
         float hh = rHex_.h;
 
-        r->fillRect(hx, hy, hw, hh, {255, 255, 255, 255});
+        r->fillRect(hx, hy, hw, hh, cfromColor8({255, 255, 255, 255}));
         r->drawRect(hx, hy, hw, hh,
-                    hexFocused_ ? render::Color{0, 120, 215, 255}
-                                : render::Color{80, 80, 90, 255});
+                    hexFocused_ ? cfromColor8({0, 120, 215, 255})
+                                : cfromColor8({80, 80, 90, 255}));
 
         {
             float textX = hx + 6.0f;
             float textY = hy + (hh - (fontAscent_ * 1.25f)) / 2.0f + fontAscent_;
-            r->drawText(hexText_, textX, textY, font, {30, 30, 30, 255});
+            r->drawText(hexText_, textX, textY, font, cfromColor8({30, 30, 30, 255}));
 
             if (hexFocused_) {
                 std::string pre = hexText_.substr(0,
                     std::clamp(hexCursor_, 0, static_cast<int>(hexText_.size())));
                 float cx = textX + r->measureText(pre, font).width;
                 r->drawLine(cx, hy + 4.0f, cx, hy + hh - 4.0f,
-                            {30, 30, 30, 255}, 1.0f);
+                            cfromColor8({30, 30, 30, 255}), 1.0f);
             }
         }
     }
@@ -373,7 +377,7 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         }
         float tx = originX_ + rRGBRow_.x;
         float ty = originY_ + rRGBRow_.y + fontSmallAscent_;
-        r->drawText(buf, tx, ty, fontSmall, {200, 200, 205, 255});
+        r->drawText(buf, tx, ty, fontSmall, cfromColor8({200, 200, 205, 255}));
     }
 
     // --- Presets ---
@@ -383,7 +387,7 @@ void ColorPickerOverlay::draw(render::Renderer* r) {
         float w = rPresets_[i].w;
         float h = rPresets_[i].h;
         r->fillRect(x, y, w, h, presetColors_[i]);
-        r->drawRect(x, y, w, h, {80, 80, 90, 255});
+        r->drawRect(x, y, w, h, cfromColor8({80, 80, 90, 255}));
     }
 }
 

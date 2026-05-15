@@ -101,6 +101,8 @@
 
 namespace bro::engine {
 
+using bromath::cfromColor8;
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -278,12 +280,12 @@ void Engine::updateSelectionSnapshot() {
 void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {
     if (!renderer) return;
     // Accent with transparency — keeps underlying glyphs legible.
-    render::Color hl{0x33, 0x77, 0xff, 0x55};
+    bromath::Color hl{0x33, 0x77, 0xff, 0x55};
     for (const auto& r : selectionSnapshot_.rects) {
         renderer->fillRect(r.x, r.y + docOffsetY, r.w, r.h, hl);
     }
     if (selectionSnapshot_.hasCaret) {
-        render::Color caretColor{0xff, 0xff, 0xff, 0xff};
+        bromath::Color caretColor{0xff, 0xff, 0xff, 0xff};
         renderer->fillRect(selectionSnapshot_.caretX,
                            selectionSnapshot_.caretY + docOffsetY,
                            1.5f, selectionSnapshot_.caretHeight, caretColor);

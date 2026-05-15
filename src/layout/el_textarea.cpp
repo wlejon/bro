@@ -9,6 +9,8 @@
 
 namespace bro::layout {
 
+using bromath::cfromColor8;
+
 ElTextarea::ElTextarea(render::Renderer* renderer)
     : renderer_(renderer) {}
 
@@ -280,8 +282,8 @@ void ElTextarea::draw(render::Renderer* renderer,
     renderer_->save();
     renderer_->setClip(x, y, w, h);
 
-    render::Color color = isPlaceholder ? render::Color{128, 128, 128, 180}
-                                        : render::Color{0, 0, 0, 255};
+    bromath::Color color = isPlaceholder ? cfromColor8({128, 128, 128, 180})
+                                        : cfromColor8({0, 0, 0, 255});
 
     float baseX = x;
     float baseY = y - scrollY_;
@@ -309,7 +311,7 @@ void ElTextarea::draw(render::Renderer* renderer,
 
         float cursorTop = baseY + cursorLine * lineHeight;
         float cursorBottom = cursorTop + lineHeight;
-        renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, {0, 0, 0, 255}, 1.0f);
+        renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, cfromColor8({0, 0, 0, 255}), 1.0f);
     }
 
     renderer_->restore();

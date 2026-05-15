@@ -8,23 +8,25 @@
 
 namespace bro::engine {
 
+using bromath::cfromColor8;
+
 namespace {
 
-using render::Color;
+using bromath::Color;
 
 // Devtools-style colors. Margin/padding/content rings are translucent so
 // stacked layers visibly mix where they overlap.
-constexpr Color kMarginColor  {246, 178, 107, 110};
-constexpr Color kBorderColor  {255, 229, 153, 140};
-constexpr Color kPaddingColor {147, 196, 125, 130};
-constexpr Color kContentColor {111, 168, 220, 130};
-constexpr Color kOutlineColor {  0, 200, 255, 230};
-constexpr Color kGuideColor   {  0, 200, 255,  90};  // viewport guides
-constexpr Color kLabelBg      { 28,  28,  32, 235};
-constexpr Color kLabelFg      {255, 255, 255, 255};
-constexpr Color kLabelTagFg   {108, 158, 248, 255};
-constexpr Color kLabelDimFg   {200, 200, 200, 255};
-constexpr Color kEdgeNumFg    { 30,  30,  30, 235};
+const Color kMarginColor = cfromColor8({246, 178, 107, 110});
+const Color kBorderColor = cfromColor8({255, 229, 153, 140});
+const Color kPaddingColor = cfromColor8({147, 196, 125, 130});
+const Color kContentColor = cfromColor8({111, 168, 220, 130});
+const Color kOutlineColor = cfromColor8({0, 200, 255, 230});
+const Color kGuideColor = cfromColor8({0, 200, 255, 90});  // viewport guides
+const Color kLabelBg = cfromColor8({28, 28, 32, 235});
+const Color kLabelFg = cfromColor8({255, 255, 255, 255});
+const Color kLabelTagFg = cfromColor8({108, 158, 248, 255});
+const Color kLabelDimFg = cfromColor8({200, 200, 200, 255});
+const Color kEdgeNumFg = cfromColor8({30, 30, 30, 235});
 
 constexpr float kLabelFontSize = 11.0f;
 constexpr float kEdgeFontSize  = 10.0f;
@@ -135,7 +137,7 @@ void drawInspectorHighlight(render::Renderer* renderer, dom::Element* el,
     // strip is fat enough to actually fit the digits without overflowing into
     // the next ring.
     render::FontRef edgeFont{std::string_view{"Consolas"}, kEdgeFontSize, 400, false};
-    auto strLabel = [&](float x, float y, const std::string& s, render::Color c) {
+    auto strLabel = [&](float x, float y, const std::string& s, bromath::Color c) {
         renderer->drawText(s, x, y, edgeFont, c);
     };
     auto edgeLabel = [&](float v, float cx_, float cy_, float minDim) {
@@ -148,7 +150,7 @@ void drawInspectorHighlight(render::Renderer* renderer, dom::Element* el,
         renderer->fillRect(cx_ - m.width * 0.5f - 2.0f,
                            cy_ - m.height * 0.5f - 1.0f,
                            m.width + 4.0f, m.height + 2.0f,
-                           render::Color{255, 255, 255, 220});
+                           cfromColor8({255, 255, 255, 220}));
         strLabel(cx_ - m.width * 0.5f, cy_ + m.ascent * 0.5f, s, kEdgeNumFg);
     };
     // Margin strips (between border rect and margin rect).

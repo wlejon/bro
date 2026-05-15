@@ -14,15 +14,15 @@ namespace bro::render {
 // color stops, polygon points, filter chains, image bytes) is referenced by
 // (offset, len) into the buffer's side arena.
 
-struct Cmd_Clear              { Color color; };
-struct Cmd_FillRect           { float x, y, w, h; Color color; };
-struct Cmd_DrawRect           { float x, y, w, h; Color color; };
-struct Cmd_FillRoundRect      { float x, y, w, h, rx, ry; Color color; };
-struct Cmd_DrawRoundRect      { float x, y, w, h, rx, ry; Color color; };
-struct Cmd_FillRoundRectRadii { float x, y, w, h; Radii r; Color color; };
-struct Cmd_DrawRoundRectRadii { float x, y, w, h; Radii r; float strokeWidth; Color color; };
-struct Cmd_DrawBoxShadow      { float x, y, w, h, rx, ry, offsetX, offsetY, blur, spread; Color color; bool inset; };
-struct Cmd_DrawBoxShadowRadii { float x, y, w, h; Radii r; float offsetX, offsetY, blur, spread; Color color; bool inset; };
+struct Cmd_Clear              { bromath::Color color; };
+struct Cmd_FillRect           { float x, y, w, h; bromath::Color color; };
+struct Cmd_DrawRect           { float x, y, w, h; bromath::Color color; };
+struct Cmd_FillRoundRect      { float x, y, w, h, rx, ry; bromath::Color color; };
+struct Cmd_DrawRoundRect      { float x, y, w, h, rx, ry; bromath::Color color; };
+struct Cmd_FillRoundRectRadii { float x, y, w, h; Radii r; bromath::Color color; };
+struct Cmd_DrawRoundRectRadii { float x, y, w, h; Radii r; float strokeWidth; bromath::Color color; };
+struct Cmd_DrawBoxShadow      { float x, y, w, h, rx, ry, offsetX, offsetY, blur, spread; bromath::Color color; bool inset; };
+struct Cmd_DrawBoxShadowRadii { float x, y, w, h; Radii r; float offsetX, offsetY, blur, spread; bromath::Color color; bool inset; };
 
 // Text. The string and font family live in the arena. The recording renderer
 // embeds the full font descriptor here so the raster thread can recreate the
@@ -37,18 +37,18 @@ struct Cmd_DrawText {
     bool  fontItalic;
     float letterSpacing;              // 0 -> plain drawText path
     float blur;                       // text-shadow halo; 0 if none
-    Color color;
+    bromath::Color color;
 };
 
-struct Cmd_DrawLine        { float x1, y1, x2, y2; Color color; float thickness; };
+struct Cmd_DrawLine        { float x1, y1, x2, y2; bromath::Color color; float thickness; };
 struct Cmd_DrawImage       { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: encoded bytes
 struct Cmd_DrawPixelsRGBA  { uint32_t pixelsOffset; int srcW, srcH, stride; float x, y, w, h; }; // arena: rgba8
 struct Cmd_DrawSvgMarkup   { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: utf8 markup
-struct Cmd_DrawCircle      { float cx, cy, r; Color fill; Color stroke; float strokeWidth; };
-struct Cmd_DrawEllipse     { float cx, cy, rx, ry; Color fill; Color stroke; float strokeWidth; };
-struct Cmd_DrawPath        { uint32_t pathOffset, pathLen; Color fill; Color stroke; float strokeWidth; }; // arena: char[] (svg path)
-struct Cmd_DrawPolygon     { uint32_t pointsOffset, pointsLen; Color fill; Color stroke; float strokeWidth; }; // arena: PointF[]
-struct Cmd_DrawPolyline    { uint32_t pointsOffset, pointsLen; Color stroke; float strokeWidth; }; // arena: PointF[]
+struct Cmd_DrawCircle      { float cx, cy, r; bromath::Color fill; bromath::Color stroke; float strokeWidth; };
+struct Cmd_DrawEllipse     { float cx, cy, rx, ry; bromath::Color fill; bromath::Color stroke; float strokeWidth; };
+struct Cmd_DrawPath        { uint32_t pathOffset, pathLen; bromath::Color fill; bromath::Color stroke; float strokeWidth; }; // arena: char[] (svg path)
+struct Cmd_DrawPolygon     { uint32_t pointsOffset, pointsLen; bromath::Color fill; bromath::Color stroke; float strokeWidth; }; // arena: PointF[]
+struct Cmd_DrawPolyline    { uint32_t pointsOffset, pointsLen; bromath::Color stroke; float strokeWidth; }; // arena: PointF[]
 
 struct Cmd_Save              {};
 struct Cmd_Restore           {};

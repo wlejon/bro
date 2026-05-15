@@ -20,10 +20,10 @@ public:
         float width = 8.0f;
         float margin = 2.0f;
         float minThumbHeight = 24.0f;
-        render::Color trackColor{255, 255, 255, 32};
-        render::Color thumbColor{255, 255, 255, 128};
-        render::Color thumbHoverColor{255, 255, 255, 180};
-        render::Color thumbDragColor{255, 255, 255, 200};
+        bromath::Color trackColor{255, 255, 255, 32};
+        bromath::Color thumbColor{255, 255, 255, 128};
+        bromath::Color thumbHoverColor{255, 255, 255, 180};
+        bromath::Color thumbDragColor{255, 255, 255, 200};
     };
 
     Scrollbar();
