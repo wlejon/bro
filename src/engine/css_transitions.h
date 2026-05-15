@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bromath/curves.h>
 #include <css/cascade.h>
 
 #include <cstdint>
@@ -12,23 +13,10 @@ namespace bro::dom { class Element; }
 
 namespace bro::engine {
 
-// CSS cubic-bezier timing function.
-struct CubicBezier {
-    float x1, y1, x2, y2;
-
-    // Evaluate the timing function at progress t ∈ [0,1].
-    float evaluate(float t) const;
-
-    // Preset timing functions
-    static CubicBezier linear()    { return {0, 0, 1, 1}; }
-    static CubicBezier ease()      { return {0.25f, 0.1f, 0.25f, 1.0f}; }
-    static CubicBezier easeIn()    { return {0.42f, 0, 1, 1}; }
-    static CubicBezier easeOut()   { return {0, 0, 0.58f, 1}; }
-    static CubicBezier easeInOut() { return {0.42f, 0, 0.58f, 1}; }
-};
-
-// Parse a CSS timing-function string → CubicBezier.
-CubicBezier parseTimingFunction(const std::string& val);
+// Parse a CSS timing-function string → bromath::CubicEase.
+// Named easings map to standard control points; cubic-bezier(x1,y1,x2,y2) is
+// parsed directly. Unknown / empty → "ease".
+bromath::CubicEase parseTimingFunction(const std::string& val);
 
 // A single in-flight property transition.
 struct Transition {
@@ -38,7 +26,7 @@ struct Transition {
     double startTime;   // ms (engine time)
     double duration;    // ms
     double delay;       // ms
-    CubicBezier easing;
+    bromath::CubicEase easing;
 };
 
 // Per-element transition state.
@@ -108,7 +96,7 @@ struct Animation {
     std::string name;           // @keyframes name
     double duration;            // ms
     double delay;               // ms
-    CubicBezier easing;
+    bromath::CubicEase easing;
     int iterationCount;         // -1 = infinite
     bool alternate;             // direction: alternate
     bool reverse;               // direction: reverse

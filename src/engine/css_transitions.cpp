@@ -8,45 +8,27 @@
 
 namespace bro::engine {
 
+using bromath::CubicEase;
+using bromath::ccubicEase;
+
 // ---------------------------------------------------------------------------
-// CubicBezier evaluation (Newton-Raphson root finding on the X curve)
+// CSS timing-function presets (control points for bromath::CubicEase)
 // ---------------------------------------------------------------------------
+// Endpoints (0,0) and (1,1) are implicit. `linear` is a degenerate case
+// (CPs colinear with the endpoints) — ccubicEase returns the input.
 
-float CubicBezier::evaluate(float t) const {
-    if (x1 == 0 && y1 == 0 && x2 == 1 && y2 == 1)
-        return t; // linear shortcut
+static constexpr CubicEase kLinear    {0.0f,  0.0f,  1.0f,  1.0f};
+static constexpr CubicEase kEase      {0.25f, 0.1f,  0.25f, 1.0f};
+static constexpr CubicEase kEaseIn    {0.42f, 0.0f,  1.0f,  1.0f};
+static constexpr CubicEase kEaseOut   {0.0f,  0.0f,  0.58f, 1.0f};
+static constexpr CubicEase kEaseInOut {0.42f, 0.0f,  0.58f, 1.0f};
 
-    // Solve for the bezier parameter u where bezier_x(u) == t,
-    // then return bezier_y(u).
-    auto sampleX = [&](float u) {
-        return 3.0f * (1-u)*(1-u)*u*x1 + 3.0f*(1-u)*u*u*x2 + u*u*u;
-    };
-    auto sampleY = [&](float u) {
-        return 3.0f * (1-u)*(1-u)*u*y1 + 3.0f*(1-u)*u*u*y2 + u*u*u;
-    };
-    auto sampleDX = [&](float u) {
-        return 3.0f*(1-u)*(1-u)*x1 + 6.0f*(1-u)*u*(x2-x1) + 3.0f*u*u*(1-x2);
-    };
-
-    // Newton-Raphson
-    float u = t;
-    for (int i = 0; i < 8; ++i) {
-        float dx = sampleX(u) - t;
-        if (std::abs(dx) < 1e-6f) break;
-        float deriv = sampleDX(u);
-        if (std::abs(deriv) < 1e-6f) break;
-        u -= dx / deriv;
-    }
-    u = std::clamp(u, 0.0f, 1.0f);
-    return sampleY(u);
-}
-
-CubicBezier parseTimingFunction(const std::string& val) {
-    if (val.empty() || val == "ease") return CubicBezier::ease();
-    if (val == "linear") return CubicBezier::linear();
-    if (val == "ease-in") return CubicBezier::easeIn();
-    if (val == "ease-out") return CubicBezier::easeOut();
-    if (val == "ease-in-out") return CubicBezier::easeInOut();
+CubicEase parseTimingFunction(const std::string& val) {
+    if (val.empty() || val == "ease") return kEase;
+    if (val == "linear") return kLinear;
+    if (val == "ease-in") return kEaseIn;
+    if (val == "ease-out") return kEaseOut;
+    if (val == "ease-in-out") return kEaseInOut;
 
     // cubic-bezier(x1, y1, x2, y2)
     auto pos = val.find("cubic-bezier(");
@@ -60,7 +42,7 @@ CubicBezier parseTimingFunction(const std::string& val) {
         return {x1, y1, x2, y2};
     }
 
-    return CubicBezier::ease();
+    return kEase;
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +451,7 @@ void TransitionManager::onStyleChange(dom::Element* elem,
         double dur = parseDurationMs(durations[idx % durations.size()]);
         if (dur <= 0) continue;
 
-        CubicBezier easing = CubicBezier::ease();
+        CubicEase easing = kEase;
         if (!timingFuncs.empty())
             easing = parseTimingFunction(timingFuncs[idx % timingFuncs.size()]);
         double delay = 0;
@@ -488,7 +470,7 @@ void TransitionManager::onStyleChange(dom::Element* elem,
                     double elapsed = currentTime - tr.startTime - tr.delay;
                     if (elapsed > 0 && elapsed < tr.duration) {
                         float progress = static_cast<float>(elapsed / tr.duration);
-                        progress = tr.easing.evaluate(progress);
+                        progress = ccubicEase(tr.easing, progress);
                         tr.startValue = interpolate(tr.startValue, tr.endValue, progress, prop);
                     }
                     tr.endValue = newVal;
@@ -575,7 +557,7 @@ void TransitionManager::applyOverrides(dom::Element* elem,
             style[tr.property] = tr.endValue;
         } else {
             float progress = static_cast<float>(elapsed / tr.duration);
-            progress = tr.easing.evaluate(progress);
+            progress = ccubicEase(tr.easing, progress);
             style[tr.property] = interpolate(tr.startValue, tr.endValue, progress, tr.property);
         }
     }
@@ -691,7 +673,7 @@ void AnimationManager::onStyleChange(dom::Element* elem,
     double dur = parseDurationMs(durStr);
     if (dur <= 0) return;
 
-    CubicBezier easing = CubicBezier::ease();
+    CubicEase easing = kEase;
     if (!timingStr.empty()) easing = parseTimingFunction(timingStr);
 
     double delay = 0;
@@ -829,7 +811,7 @@ void AnimationManager::applyOverrides(dom::Element* elem,
             localProgress = 1.0f - localProgress;
 
         // Apply easing
-        localProgress = anim.easing.evaluate(localProgress);
+        localProgress = ccubicEase(anim.easing, localProgress);
 
         // Find bracketing keyframe stops
         float t = std::clamp(localProgress, 0.0f, 1.0f);
