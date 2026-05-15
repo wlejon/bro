@@ -40,6 +40,7 @@
 #include "js/menu_bindings.h"
 #include "js/gizmo_bindings.h"
 #include "js/mesh_bindings.h"
+#include "js/math_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
 #include "js/terrain_bindings.h"
@@ -165,6 +166,9 @@ Engine::Engine(const EngineConfig& config)
 
     // Mesh bindings (standalone Mesh class wrapping bromesh — all modes)
     js::MeshBindings::install(jsRuntime_->getContext());
+
+    // Math bindings (bro.math.* — SpatialHash3D and future bromath types)
+    js::MathBindings::install(jsRuntime_->getContext());
 
     // Rigging bindings (SkinData, VoxelChunk; later: Skeleton/Pose/Animation/IK/Rig)
     js::RiggingBindings::install(jsRuntime_->getContext());

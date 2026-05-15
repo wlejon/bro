@@ -15,7 +15,6 @@
 //                      to produce a render-ready triangle mesh.
 //   LSystem          — string-rule stochastic L-system rewriter (axiom +
 //                      production rules → derived module sequence).
-//   SpatialHash3D    — uniform-grid point hash for radius / nearest queries.
 //
 //   Skeleton         — bones + sockets + bindPose.
 //   Pose             — flat array of local TRS per bone (stride 10).
@@ -2022,52 +2021,4 @@ class LSystem {
    * @returns {Array<{symbol: string, params: number[]}>}
    */
   deriveModules(iterations, seed) {}
-}
-
-
-// -----------------------------------------------------------------------------
-// SpatialHash3D
-// -----------------------------------------------------------------------------
-// Uniform-grid 3D point hash for fast radius / nearest-neighbour queries.
-// IDs are caller-assigned int32 handles; insert/remove are O(1) amortized
-// and radius queries scan only buckets intersecting the query sphere.
-//
-// Used internally by procedural placement (leaf scatter, anchor packing),
-// but exposed for any spatial query that doesn't justify a full BVH.
-
-class SpatialHash3D {
-  /**
-   * @param {number} [cellSize=1] - grid cell width; pick ~ typical query radius
-   */
-  constructor(cellSize) {}
-
-  /** Reset bucket grid to a new cell size and clear all entries. Returns this. */
-  reset(cellSize) {}
-
-  /** Remove all entries (keeps cell size). Returns this. */
-  clear() {}
-
-  /** Insert a point with caller-supplied id. Returns this. */
-  insert(x, y, z, id) {}
-
-  /** Remove a previously inserted id. Returns this. */
-  remove(id) {}
-
-  /**
-   * Return all ids whose stored position lies within `radius` of (x,y,z).
-   * @returns {number[]}
-   */
-  radiusQuery(x, y, z, radius) {}
-
-  /**
-   * Nearest id within `maxRadius`, or -1 if none.
-   * @returns {number}
-   */
-  nearest(x, y, z, maxRadius) {}
-
-  /** Number of inserted ids. */
-  get size() {}
-
-  /** Current cell size. */
-  get cellSize() {}
 }

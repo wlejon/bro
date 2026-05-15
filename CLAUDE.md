@@ -127,6 +127,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 |------|-------------|
 | `docs/audio-api.js` | `AudioContext`, Web Audio-inspired nodes, synth, sequencing, spatial, mix buses |
 | `docs/mesh-api.js` | `bro.mesh` — primitives, CSG, simplification, UV, import/export |
+| `docs/math-api.js` | `bro.math` — bromath types surfaced to JS (currently `SpatialHash3D`) |
 | `docs/noise-api.js` | `bro.noise` — FastNoise2 SIMD noise generation |
 | `docs/image-api.js` | `bro.image` — composable typed-array kernels (reduce, map, combine, lookup, stencil, resample); `bro.image.gpu.colormap` (WebGL2 path) |
 | `docs/scene-api.js` | `bro.scene` — 3D scene graph, shapes, sprites, meshes, physics nodes |

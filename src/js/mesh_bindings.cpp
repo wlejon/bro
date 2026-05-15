@@ -57,7 +57,6 @@
 #include <bromesh/reconstruction/reconstruct.h>
 #include <bromesh/manipulation/sweep.h>
 #include <bromesh/manipulation/bezier_sweep.h>
-#include <bromesh/optimization/spatial_hash.h>
 #include <bromesh/procedural/lsystem.h>
 #include <bromesh/procedural/lsystem_turtle.h>
 #include <bromesh/procedural/obstacle_field.h>
@@ -1435,14 +1434,7 @@ struct LSystemWrapper {
     LSystemWrapper() : ls(std::make_unique<bromesh::LSystem>()) {}
 };
 
-struct SpatialHashWrapper {
-    std::unique_ptr<bromesh::SpatialHash3D> sh;
-    SpatialHashWrapper(float cellSize)
-        : sh(std::make_unique<bromesh::SpatialHash3D>(cellSize)) {}
-};
-
 using LSW = LSystemWrapper;
-using SHW = SpatialHashWrapper;
 
 // ---------------------------------------------------------------------------
 // Install
@@ -2861,41 +2853,6 @@ void MeshBindings::install(JSContext* ctx) {
     })
     ;
 
-    // =======================================================================
-    // SpatialHash3D — uniform-grid 3D point hash for radius / nearest queries
-    // =======================================================================
-    qjsbind::Class<SHW>(ctx, "SpatialHash3D")
-    .constructor([](JSContext* ctx, int argc, JSValueConst* argv) -> SHW* {
-        double cs = 1.0;
-        if (argc > 0) JS_ToFloat64(ctx, &cs, argv[0]);
-        return new SHW((float)cs);
-    })
-    .method("reset", [](SHW* w, double cellSize) {
-        w->sh->reset((float)cellSize);
-    }, qjsbind::returns_this)
-    .method("clear", [](SHW* w) { w->sh->clear(); }, qjsbind::returns_this)
-    .method("insert", [](SHW* w, double x, double y, double z, int id) {
-        w->sh->insert({(float)x, (float)y, (float)z}, (int32_t)id);
-    }, qjsbind::returns_this)
-    .method("remove", [](SHW* w, int id) {
-        w->sh->remove((int32_t)id);
-    }, qjsbind::returns_this)
-    .method("radiusQuery", [](SHW* w, JSContext* ctx, double x, double y, double z,
-                               double radius) -> JSValue {
-        std::vector<int32_t> ids;
-        w->sh->radiusQuery({(float)x, (float)y, (float)z}, (float)radius, ids);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < ids.size(); i++) {
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewInt32(ctx, ids[i]));
-        }
-        return arr;
-    })
-    .method("nearest", [](SHW* w, double x, double y, double z, double maxRadius) -> int {
-        return (int)w->sh->nearest({(float)x, (float)y, (float)z}, (float)maxRadius);
-    })
-    .get("size",     [](SHW* w) { return (int)w->sh->size(); })
-    .get("cellSize", [](SHW* w) -> double { return (double)w->sh->cellSize(); })
-    ;
 }
 
 // ---------------------------------------------------------------------------
