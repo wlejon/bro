@@ -1553,7 +1553,7 @@ void AIBindings::install(JSContext* ctx) {
                     for (size_t i = 0; i < path.size(); i++) {
                         JSValue pt = JS_NewObject(ctx);
                         JS_SetPropertyStr(ctx, pt, "x", JS_NewFloat64(ctx, path[i].x));
-                        JS_SetPropertyStr(ctx, pt, "z", JS_NewFloat64(ctx, path[i].z));
+                        JS_SetPropertyStr(ctx, pt, "z", JS_NewFloat64(ctx, path[i].y));
                         JS_SetPropertyUint32(ctx, arr, (uint32_t)i, pt);
                     }
                     return arr;
@@ -1796,7 +1796,7 @@ void AIBindings::install(JSContext* ctx) {
                     auto v = d->agent.velocity();
                     JSValue obj = JS_NewObject(ctx);
                     JS_SetPropertyStr(ctx, obj, "x", JS_NewFloat64(ctx, v.x));
-                    JS_SetPropertyStr(ctx, obj, "z", JS_NewFloat64(ctx, v.z));
+                    JS_SetPropertyStr(ctx, obj, "z", JS_NewFloat64(ctx, v.y));
                     return obj;
                 })
             .get("path",
@@ -1806,7 +1806,7 @@ void AIBindings::install(JSContext* ctx) {
                     for (size_t i = 0; i < path.size(); i++) {
                         JSValue pt = JS_NewObject(ctx);
                         JS_SetPropertyStr(ctx, pt, "x", JS_NewFloat64(ctx, path[i].x));
-                        JS_SetPropertyStr(ctx, pt, "z", JS_NewFloat64(ctx, path[i].z));
+                        JS_SetPropertyStr(ctx, pt, "z", JS_NewFloat64(ctx, path[i].y));
                         JS_SetPropertyUint32(ctx, arr, (uint32_t)i, pt);
                     }
                     return arr;

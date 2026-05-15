@@ -87,9 +87,9 @@ static JSValue makeAgentObservation(JSContext* ctx, const obs::AgentObservation&
     JS_SetPropertyStr(ctx, o, "id",              JS_NewInt32(ctx, a.id));
     JS_SetPropertyStr(ctx, o, "teamId",          JS_NewInt32(ctx, a.team_id));
     JS_SetPropertyStr(ctx, o, "x",               JS_NewFloat64(ctx, a.pos.x));
-    JS_SetPropertyStr(ctx, o, "z",               JS_NewFloat64(ctx, a.pos.z));
+    JS_SetPropertyStr(ctx, o, "z",               JS_NewFloat64(ctx, a.pos.y));
     JS_SetPropertyStr(ctx, o, "vx",              JS_NewFloat64(ctx, a.vel.x));
-    JS_SetPropertyStr(ctx, o, "vz",              JS_NewFloat64(ctx, a.vel.z));
+    JS_SetPropertyStr(ctx, o, "vz",              JS_NewFloat64(ctx, a.vel.y));
     JS_SetPropertyStr(ctx, o, "hp",              JS_NewFloat64(ctx, a.hp));
     JS_SetPropertyStr(ctx, o, "maxHp",           JS_NewFloat64(ctx, a.max_hp));
     JS_SetPropertyStr(ctx, o, "heading",         JS_NewFloat64(ctx, a.heading));
@@ -104,9 +104,9 @@ static obs::AgentObservation parseAgentObservation(JSContext* ctx, JSValueConst 
     a.id      = getInt(ctx, v, "id", 0);
     a.team_id = getInt(ctx, v, "teamId", 0);
     a.pos.x   = (float)getDouble(ctx, v, "x", 0);
-    a.pos.z   = (float)getDouble(ctx, v, "z", 0);
+    a.pos.y   = (float)getDouble(ctx, v, "z", 0);
     a.vel.x   = (float)getDouble(ctx, v, "vx", 0);
-    a.vel.z   = (float)getDouble(ctx, v, "vz", 0);
+    a.vel.y   = (float)getDouble(ctx, v, "vz", 0);
     a.hp      = (float)getDouble(ctx, v, "hp", 0);
     a.max_hp  = (float)getDouble(ctx, v, "maxHp", 0);
     a.heading = (float)getDouble(ctx, v, "heading", 0);
@@ -157,9 +157,9 @@ static obs::TeamObservation parseTeamObservation(JSContext* ctx, JSValueConst v)
 static JSValue makeEnemyParticle(JSContext* ctx, const belief::EnemyParticle& p) {
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "x",       JS_NewFloat64(ctx, p.pos.x));
-    JS_SetPropertyStr(ctx, o, "z",       JS_NewFloat64(ctx, p.pos.z));
+    JS_SetPropertyStr(ctx, o, "z",       JS_NewFloat64(ctx, p.pos.y));
     JS_SetPropertyStr(ctx, o, "vx",      JS_NewFloat64(ctx, p.vel.x));
-    JS_SetPropertyStr(ctx, o, "vz",      JS_NewFloat64(ctx, p.vel.z));
+    JS_SetPropertyStr(ctx, o, "vz",      JS_NewFloat64(ctx, p.vel.y));
     JS_SetPropertyStr(ctx, o, "hp",      JS_NewFloat64(ctx, p.hp));
     JS_SetPropertyStr(ctx, o, "heading", JS_NewFloat64(ctx, p.heading));
     JS_SetPropertyStr(ctx, o, "weight",  JS_NewFloat64(ctx, p.weight));
@@ -169,9 +169,9 @@ static JSValue makeEnemyParticle(JSContext* ctx, const belief::EnemyParticle& p)
 static belief::EnemyParticle parseEnemyParticle(JSContext* ctx, JSValueConst v) {
     belief::EnemyParticle p{};
     p.pos.x   = (float)getDouble(ctx, v, "x", 0);
-    p.pos.z   = (float)getDouble(ctx, v, "z", 0);
+    p.pos.y   = (float)getDouble(ctx, v, "z", 0);
     p.vel.x   = (float)getDouble(ctx, v, "vx", 0);
-    p.vel.z   = (float)getDouble(ctx, v, "vz", 0);
+    p.vel.y   = (float)getDouble(ctx, v, "vz", 0);
     p.hp      = (float)getDouble(ctx, v, "hp", 0);
     p.heading = (float)getDouble(ctx, v, "heading", 0);
     p.weight  = (float)getDouble(ctx, v, "weight", 1.0);
@@ -229,11 +229,11 @@ static void registerClasses(JSContext* ctx) {
                     if (!d || !d->b || argc < 2) return JS_UNDEFINED;
                     int32_t id = 0; JS_ToInt32(ctx, &id, argv[0]);
                     double maxHp = 0; JS_ToFloat64(ctx, &maxHp, argv[1]);
-                    brogameagent::Vec2 pos;
-                    const brogameagent::Vec2* posPtr = nullptr;
+                    bromath::Vec2 pos;
+                    const bromath::Vec2* posPtr = nullptr;
                     if (argc >= 3 && JS_IsObject(argv[2])) {
                         pos.x = (float)getDouble(ctx, argv[2], "x", 0);
-                        pos.z = (float)getDouble(ctx, argv[2], "z", 0);
+                        pos.y = (float)getDouble(ctx, argv[2], "z", 0);
                         posPtr = &pos;
                     }
                     d->b->register_enemy(id, (float)maxHp, posPtr);

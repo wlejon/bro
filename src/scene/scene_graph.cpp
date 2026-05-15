@@ -2845,9 +2845,9 @@ SceneGraph::WorldAABB SceneGraph::computeShadowCasterBounds() const {
                 const Mat4& M = m->worldMatrix();
                 for (int c = 0; c < 8; ++c) {
                     Vec3 lp{
-                        (c & 1) ? bb.max[0] : bb.min[0],
-                        (c & 2) ? bb.max[1] : bb.min[1],
-                        (c & 4) ? bb.max[2] : bb.min[2],
+                        (c & 1) ? bb.max.x : bb.min.x,
+                        (c & 2) ? bb.max.y : bb.min.y,
+                        (c & 4) ? bb.max.z : bb.min.z,
                     };
                     Vec3 wp = M.transformPoint(lp);
                     out.min[0] = std::min(out.min[0], wp.x);

@@ -730,9 +730,9 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
         float scale = nodeScl.x != 0.0f ? nodeScl.x : 1.0f;
         float localMaxDist = closestDist / scale;
 
-        const bromesh::BBox& lb = entry.meshNode->localBounds();
-        float bmin[3] = { lb.min[0], lb.min[1], lb.min[2] };
-        float bmax[3] = { lb.max[0], lb.max[1], lb.max[2] };
+        const bromath::AABB3& lb = entry.meshNode->localBounds();
+        float bmin[3] = { lb.min.x, lb.min.y, lb.min.z };
+        float bmax[3] = { lb.max.x, lb.max.y, lb.max.z };
         float invD[3];
         for (int a = 0; a < 3; ++a) {
             float dv = (&localDirN.x)[a];

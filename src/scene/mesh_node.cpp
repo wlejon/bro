@@ -28,7 +28,7 @@ void MeshNode::setMesh(const bromesh::MeshData& mesh) {
     ensureTangents(mesh_);
     gpuDirty_ = true;
     bvhDirty_ = true;
-    bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
+    bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
 }
 
 void MeshNode::setMesh(bromesh::MeshData&& mesh) {
@@ -36,7 +36,7 @@ void MeshNode::setMesh(bromesh::MeshData&& mesh) {
     ensureTangents(mesh_);
     gpuDirty_ = true;
     bvhDirty_ = true;
-    bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
+    bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
 }
 
 const bromesh::MeshBVH& MeshNode::bvh() const {

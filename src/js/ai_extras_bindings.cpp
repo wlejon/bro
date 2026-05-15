@@ -448,9 +448,9 @@ static JSValue js_patchSnapshotWithParticles(JSContext* ctx, JSValueConst, int a
                 JSValue val = JS_GetProperty(ctx, argv[1], props[i].atom);
                 belief::EnemyParticle p{};
                 p.pos.x   = (float)getDouble(ctx, val, "x", 0);
-                p.pos.z   = (float)getDouble(ctx, val, "z", 0);
+                p.pos.y   = (float)getDouble(ctx, val, "z", 0);
                 p.vel.x   = (float)getDouble(ctx, val, "vx", 0);
-                p.vel.z   = (float)getDouble(ctx, val, "vz", 0);
+                p.vel.y   = (float)getDouble(ctx, val, "vz", 0);
                 p.hp      = (float)getDouble(ctx, val, "hp", 0);
                 p.heading = (float)getDouble(ctx, val, "heading", 0);
                 p.weight  = (float)getDouble(ctx, val, "weight", 1.0);

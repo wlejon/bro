@@ -25,14 +25,14 @@ void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
     mesh_ = mesh;
     ensureTangents(mesh_);
     meshDirty_ = true;
-    bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
+    bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
 }
 
 void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
     mesh_ = std::move(mesh);
     ensureTangents(mesh_);
     meshDirty_ = true;
-    bounds_ = mesh_.empty() ? bromesh::BBox{} : bromesh::computeBBox(mesh_);
+    bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
 }
 
 void InstancedMeshNode::setInstances(const float* data, size_t count) {
@@ -385,8 +385,8 @@ bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax
     bool any = false;
     outMin[0] = outMin[1] = outMin[2] =  1e30f;
     outMax[0] = outMax[1] = outMax[2] = -1e30f;
-    const float lx0 = bounds_.min[0], ly0 = bounds_.min[1], lz0 = bounds_.min[2];
-    const float lx1 = bounds_.max[0], ly1 = bounds_.max[1], lz1 = bounds_.max[2];
+    const float lx0 = bounds_.min.x, ly0 = bounds_.min.y, lz0 = bounds_.min.z;
+    const float lx1 = bounds_.max.x, ly1 = bounds_.max.y, lz1 = bounds_.max.z;
     for (size_t i = 0; i < instanceCount_; ++i) {
         const float* o = instanceData_.data() + i * 16;
         // Row-major 4x3: o[0..3] = row0 (m00 m01 m02 tx), etc.

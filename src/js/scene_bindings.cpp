@@ -2010,9 +2010,9 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
 
         // Early-out: local-space AABB slab test
         {
-            const bromesh::BBox& lb = mn->localBounds();
-            float bmin[3] = { lb.min[0], lb.min[1], lb.min[2] };
-            float bmax[3] = { lb.max[0], lb.max[1], lb.max[2] };
+            const bromath::AABB3& lb = mn->localBounds();
+            float bmin[3] = { lb.min.x, lb.min.y, lb.min.z };
+            float bmax[3] = { lb.max.x, lb.max.y, lb.max.z };
             float invD[3];
             for (int a = 0; a < 3; ++a) {
                 float dv = (&localDirN.x)[a];

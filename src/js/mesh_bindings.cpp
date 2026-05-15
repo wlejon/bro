@@ -3,6 +3,10 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <bromath/vec.h>
+#include <bromath/quat.h>
+#include <bromath/mat.h>
+#include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/primitives/par_primitives.h>
@@ -244,22 +248,26 @@ static JSValue makeRayHit(JSContext* ctx, const bromesh::RayHit& h) {
     return obj;
 }
 
-static JSValue makeBBox(JSContext* ctx, const bromesh::BBox& bb) {
+static JSValue makeBBox(JSContext* ctx, const bromath::AABB3& bb) {
     JSValue obj = JS_NewObject(ctx);
     JSValue minArr = JS_NewArray(ctx);
     JSValue maxArr = JS_NewArray(ctx);
-    for (int i = 0; i < 3; i++) {
-        JS_SetPropertyUint32(ctx, minArr, i, JS_NewFloat64(ctx, bb.min[i]));
-        JS_SetPropertyUint32(ctx, maxArr, i, JS_NewFloat64(ctx, bb.max[i]));
-    }
+    JS_SetPropertyUint32(ctx, minArr, 0, JS_NewFloat64(ctx, bb.min.x));
+    JS_SetPropertyUint32(ctx, minArr, 1, JS_NewFloat64(ctx, bb.min.y));
+    JS_SetPropertyUint32(ctx, minArr, 2, JS_NewFloat64(ctx, bb.min.z));
+    JS_SetPropertyUint32(ctx, maxArr, 0, JS_NewFloat64(ctx, bb.max.x));
+    JS_SetPropertyUint32(ctx, maxArr, 1, JS_NewFloat64(ctx, bb.max.y));
+    JS_SetPropertyUint32(ctx, maxArr, 2, JS_NewFloat64(ctx, bb.max.z));
     JS_SetPropertyStr(ctx, obj, "min", minArr);
     JS_SetPropertyStr(ctx, obj, "max", maxArr);
-    JS_SetPropertyStr(ctx, obj, "centerX", JS_NewFloat64(ctx, bb.centerX()));
-    JS_SetPropertyStr(ctx, obj, "centerY", JS_NewFloat64(ctx, bb.centerY()));
-    JS_SetPropertyStr(ctx, obj, "centerZ", JS_NewFloat64(ctx, bb.centerZ()));
-    JS_SetPropertyStr(ctx, obj, "extentX", JS_NewFloat64(ctx, bb.extentX()));
-    JS_SetPropertyStr(ctx, obj, "extentY", JS_NewFloat64(ctx, bb.extentY()));
-    JS_SetPropertyStr(ctx, obj, "extentZ", JS_NewFloat64(ctx, bb.extentZ()));
+    bromath::Vec3 c = bromath::acenter(bb);
+    bromath::Vec3 e = bromath::aextent(bb);
+    JS_SetPropertyStr(ctx, obj, "centerX", JS_NewFloat64(ctx, c.x));
+    JS_SetPropertyStr(ctx, obj, "centerY", JS_NewFloat64(ctx, c.y));
+    JS_SetPropertyStr(ctx, obj, "centerZ", JS_NewFloat64(ctx, c.z));
+    JS_SetPropertyStr(ctx, obj, "extentX", JS_NewFloat64(ctx, e.x));
+    JS_SetPropertyStr(ctx, obj, "extentY", JS_NewFloat64(ctx, e.y));
+    JS_SetPropertyStr(ctx, obj, "extentZ", JS_NewFloat64(ctx, e.z));
     return obj;
 }
 
@@ -554,8 +562,8 @@ static uint64_t objU64(JSContext* ctx, JSValueConst obj, const char* name, uint6
 
 // Read a Vec3 from a JS value that is either [x,y,z] or {x,y,z} or has 3
 // indexable numeric properties.
-static bromesh::Vec3 readBmVec3(JSContext* ctx, JSValueConst v) {
-    bromesh::Vec3 r{};
+static bromath::Vec3 readBmVec3(JSContext* ctx, JSValueConst v) {
+    bromath::Vec3 r{};
     if (JS_IsObject(v)) {
         if (JS_IsArray(v)) {
             JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
@@ -577,7 +585,7 @@ static bromesh::Vec3 readBmVec3(JSContext* ctx, JSValueConst v) {
 // Read a list of Vec3 from either a Float32Array of length 3N, or a JS Array
 // of [x,y,z] sub-arrays.
 static bool readVec3List(JSContext* ctx, JSValueConst v,
-                         std::vector<bromesh::Vec3>& out) {
+                         std::vector<bromath::Vec3>& out) {
     out.clear();
     if (!JS_IsObject(v)) return false;
 
@@ -615,7 +623,7 @@ static bool readVec3List(JSContext* ctx, JSValueConst v,
 // Read a list of Vec2 from either a Float32Array of length 2N, or a JS Array
 // of [x,y] sub-arrays.
 static bool readVec2List(JSContext* ctx, JSValueConst v,
-                         std::vector<bromesh::Vec2>& out) {
+                         std::vector<bromath::Vec2>& out) {
     out.clear();
     if (!JS_IsObject(v)) return false;
 
@@ -653,7 +661,7 @@ static bool readVec2List(JSContext* ctx, JSValueConst v,
     return true;
 }
 
-static JSValue makeVec3Array(JSContext* ctx, bromesh::Vec3 v) {
+static JSValue makeVec3Array(JSContext* ctx, bromath::Vec3 v) {
     JSValue a = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, a, 0, JS_NewFloat64(ctx, v.x));
     JS_SetPropertyUint32(ctx, a, 1, JS_NewFloat64(ctx, v.y));
@@ -850,8 +858,8 @@ static JSValue js_sweep(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
         return JS_ThrowTypeError(ctx,
             "sweep requires (profile, path[, opts])");
     }
-    std::vector<bromesh::Vec2> profile;
-    std::vector<bromesh::Vec3> path;
+    std::vector<bromath::Vec2> profile;
+    std::vector<bromath::Vec3> path;
     if (!readVec2List(ctx, argv[0], profile)) {
         return JS_ThrowTypeError(ctx,
             "profile must be Float32Array(2N) or [[x,y],...]");
@@ -893,7 +901,7 @@ static JSValue js_tube(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
         return JS_ThrowTypeError(ctx,
             "tube requires (path, radius[, sides[, opts]])");
     }
-    std::vector<bromesh::Vec3> path;
+    std::vector<bromath::Vec3> path;
     if (!readVec3List(ctx, argv[0], path)) {
         return JS_ThrowTypeError(ctx, "path must be a Vec3 list");
     }
@@ -925,7 +933,7 @@ static JSValue js_bladeStrip(JSContext* ctx, JSValueConst, int argc, JSValueCons
     if (argc < 1) {
         return JS_ThrowTypeError(ctx, "bladeStrip requires (path[, opts])");
     }
-    std::vector<bromesh::Vec3> path;
+    std::vector<bromath::Vec3> path;
     if (!readVec3List(ctx, argv[0], path)) {
         return JS_ThrowTypeError(ctx, "path must be a Vec3 list");
     }
@@ -1076,8 +1084,8 @@ static JSValue js_blob(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     double radius = 0.5;
     int    seed   = 42;
     int    nsub   = 2;
-    bromesh::Vec3 scale{1.0f, 1.0f, 1.0f};
-    bromesh::Vec3 center{0.0f, 0.0f, 0.0f};
+    bromath::Vec3 scale{1.0f, 1.0f, 1.0f};
+    bromath::Vec3 center{0.0f, 0.0f, 0.0f};
 
     if (argc > 0 && JS_IsObject(argv[0])) {
         radius = objNum(ctx, argv[0], "radius", radius);
@@ -1184,8 +1192,8 @@ static JSValue js_bezierSweep(JSContext* ctx, JSValueConst, int argc, JSValueCon
         return JS_ThrowTypeError(ctx,
             "bezierSweep requires (controlPoints, profile[, opts])");
     }
-    std::vector<bromesh::Vec3> ctrl;
-    std::vector<bromesh::Vec2> profile;
+    std::vector<bromath::Vec3> ctrl;
+    std::vector<bromath::Vec2> profile;
     if (!readVec3List(ctx, argv[0], ctrl)) {
         return JS_ThrowTypeError(ctx, "controlPoints must be Vec3 list");
     }
@@ -1214,14 +1222,14 @@ static JSValue js_spaceColonize(JSContext* ctx, JSValueConst, int argc, JSValueC
         return JS_ThrowTypeError(ctx,
             "spaceColonize requires (attractors, seedPoints, initialDirection[, opts])");
     }
-    std::vector<bromesh::Vec3> attractors, seeds;
+    std::vector<bromath::Vec3> attractors, seeds;
     if (!readVec3List(ctx, argv[0], attractors)) {
         return JS_ThrowTypeError(ctx, "attractors must be Vec3 list");
     }
     if (!readVec3List(ctx, argv[1], seeds)) {
         return JS_ThrowTypeError(ctx, "seedPoints must be Vec3 list");
     }
-    bromesh::Vec3 initDir = readBmVec3(ctx, argv[2]);
+    bromath::Vec3 initDir = readBmVec3(ctx, argv[2]);
 
     bromesh::SpaceColonizationOptions opts;
     if (argc > 3 && JS_IsObject(argv[3])) {
@@ -1317,7 +1325,7 @@ static JSValue js_packAnchors(JSContext* ctx, JSValueConst, int argc, JSValueCon
     if (argc < 1) {
         return JS_ThrowTypeError(ctx, "packAnchors requires (candidates[, opts])");
     }
-    std::vector<bromesh::Vec3> cand;
+    std::vector<bromath::Vec3> cand;
     if (!readVec3List(ctx, argv[0], cand)) {
         return JS_ThrowTypeError(ctx, "candidates must be a Vec3 list");
     }
@@ -1555,7 +1563,8 @@ void MeshBindings::install(JSContext* ctx) {
     .method("center", [](MW* w) {
         if (!w->data || w->data->positions.empty()) return;
         auto bbox = bromesh::computeBBox(*w->data);
-        float cx = bbox.centerX(), cy = bbox.centerY(), cz = bbox.centerZ();
+        bromath::Vec3 _c = bromath::acenter(bbox);
+        float cx = _c.x, cy = _c.y, cz = _c.z;
         for (size_t i = 0; i < w->data->positions.size(); i += 3) {
             w->data->positions[i]     -= cx;
             w->data->positions[i + 1] -= cy;
@@ -2502,13 +2511,13 @@ void MeshBindings::install(JSContext* ctx) {
     .method("distance", [](CFW* w, JSContext* ctx, JSValue point,
                            std::optional<int> excludeTag) -> JSValue {
         if (!w->field) return JS_NewFloat64(ctx, 0.0);
-        bromesh::Vec3 p = readBmVec3(ctx, point);
+        bromath::Vec3 p = readBmVec3(ctx, point);
         return JS_NewFloat64(ctx, (double)w->field->distance(p, excludeTag.value_or(-1)));
     })
     .method("nearest", [](CFW* w, JSContext* ctx, JSValue point,
                           std::optional<int> excludeTag) -> JSValue {
         if (!w->field) return JS_NULL;
-        bromesh::Vec3 p = readBmVec3(ctx, point);
+        bromath::Vec3 p = readBmVec3(ctx, point);
         auto n = w->field->nearest(p, excludeTag.value_or(-1));
         JSValue o = JS_NewObject(ctx);
         JSValue pt = JS_NewArray(ctx);
@@ -2528,7 +2537,7 @@ void MeshBindings::install(JSContext* ctx) {
     .method("intersectsSphere", [](CFW* w, JSContext* ctx, JSValue center, double radius,
                                     std::optional<int> excludeTag) -> JSValue {
         if (!w->field) return JS_FALSE;
-        bromesh::Vec3 c = readBmVec3(ctx, center);
+        bromath::Vec3 c = readBmVec3(ctx, center);
         return JS_NewBool(ctx, w->field->intersectsSphere(c, (float)radius, excludeTag.value_or(-1)));
     })
     ;

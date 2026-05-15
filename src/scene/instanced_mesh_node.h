@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/scene_node.h"
+#include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bbox.h>
 #include <glad/gl.h>
@@ -37,7 +38,7 @@ public:
     void setMesh(const bromesh::MeshData& mesh);
     void setMesh(bromesh::MeshData&& mesh);
     const bromesh::MeshData& mesh() const { return mesh_; }
-    const bromesh::BBox& localBounds() const { return bounds_; }
+    const bromath::AABB3& localBounds() const { return bounds_; }
 
     // --- Instances ---
 
@@ -177,7 +178,7 @@ private:
 
     bromesh::MeshData mesh_;
     bool meshDirty_ = false;
-    bromesh::BBox bounds_;
+    bromath::AABB3 bounds_;
 
     std::vector<float> instanceData_;
     size_t instanceCount_ = 0;

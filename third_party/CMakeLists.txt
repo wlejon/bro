@@ -39,6 +39,20 @@ if(NOT TARGET FastNoise)
     endforeach()
 endif()
 
+# --- bromath (header-only math library) ---
+# Prefer the standalone repo at ../bromath for local development.
+# Guard against double-add — sibling libs (bromesh, brogameagent, etc.)
+# also pull bromath in. First-loader wins.
+if(NOT TARGET bromath)
+    set(BROMATH_DIR "${CMAKE_SOURCE_DIR}/../bromath" CACHE PATH "Path to standalone bromath repo")
+    if(EXISTS "${BROMATH_DIR}/CMakeLists.txt")
+        message(STATUS "bromath: using standalone repo at ${BROMATH_DIR}")
+        add_subdirectory("${BROMATH_DIR}" "${CMAKE_BINARY_DIR}/bromath" EXCLUDE_FROM_ALL)
+    else()
+        message(FATAL_ERROR "bromath not found at ${BROMATH_DIR}")
+    endif()
+endif()
+
 # --- brokit (JS runtime APIs) ---
 # Prefer the standalone repo at ../brokit for local development.
 # Falls back to the git submodule at third_party/brokit.

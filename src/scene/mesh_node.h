@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/scene_node.h"
+#include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/analysis/bvh.h>
 #include <glad/gl.h>
@@ -32,7 +33,7 @@ public:
 
     /// Local-space AABB of the current mesh. Cached; updated in setMesh.
     /// Returns an empty box for empty meshes.
-    const bromesh::BBox& localBounds() const { return bounds_; }
+    const bromath::AABB3& localBounds() const { return bounds_; }
 
     /// Lazily-built, cached BVH over the current mesh. Built on first call
     /// after setMesh and reused until the next setMesh. Used by scene.raycast
@@ -187,7 +188,7 @@ private:
 
     // Cached bounds + BVH. Both are invalidated (bvhDirty_ = true, bounds_
     // recomputed) on every setMesh call.
-    bromesh::BBox bounds_;
+    bromath::AABB3 bounds_;
     mutable bromesh::MeshBVH bvh_;
     mutable bool bvhDirty_ = true;
 

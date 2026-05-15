@@ -470,7 +470,7 @@ static void parseLaneWaypoints(JSContext* ctx, JSValueConst arr,
     if (!JS_IsArray(arr)) return;
     JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
     int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
-    std::vector<brogameagent::Vec2> wps;
+    std::vector<bromath::Vec2> wps;
     wps.reserve(len);
     for (int32_t i = 0; i < len; i++) {
         JSValue pt = JS_GetPropertyUint32(ctx, arr, i);
