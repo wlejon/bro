@@ -106,6 +106,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 |---------|--------|-------|
 | QuickJS | `qjs` | JS engine, built as library (submodule) |
 | qjsbind | `qjsbind` | Header-only C++20 QuickJS binding library (standalone or submodule) |
+| bromath | `bromath` | Header-only math: Vec/Quat/Mat, Color, AABB, easing — used transitively by most siblings (standalone or submodule) |
 | brokit | `brokit` | Web-standard + system APIs (fetch, streams, storage, fs, crypto, events) (standalone or submodule) |
 | htmlayout | `htmlayout` | HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, layout (standalone or submodule) |
 | broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) (standalone or submodule) |
