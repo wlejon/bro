@@ -1,11 +1,12 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on six sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
+bro depends on seven sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
-A seventh sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+An eighth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
+| **bromath** | `../bromath` | `third_party/bromath` |
 | **qjsbind** | `../qjsbind` | `third_party/qjsbind` |
 | **brokit** | `../brokit` | `third_party/brokit` |
 | **htmlayout** | `../htmlayout` | `third_party/htmlayout` |
@@ -19,12 +20,14 @@ A seventh sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `
 D:/projects/
 ├── bro/                          # main project
 │   └── third_party/
+│       ├── bromath/              # submodule (CI / fallback)
 │       ├── qjsbind/              # submodule (CI / fallback)
 │       ├── brokit/               # submodule (CI / fallback)
 │       ├── htmlayout/            # submodule (CI / fallback)
 │       ├── broaudio/             # submodule (CI / fallback)
 │       ├── bromesh/              # submodule (CI / fallback)
 │       └── brogameagent/         # submodule (CI / fallback)
+├── bromath/                      # standalone repo (preferred for dev)
 ├── qjsbind/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
 ├── htmlayout/                    # standalone repo (preferred for dev)
@@ -52,7 +55,9 @@ else()
 endif()
 ```
 
-The same pattern is used for qjsbind, htmlayout, broaudio, bromesh, and brogameagent.
+The same pattern is used for bromath, qjsbind, htmlayout, broaudio, bromesh, and brogameagent.
+
+Note: bromath is pulled in transitively by several siblings (bromesh, brogameagent, etc.). bro's `third_party/CMakeLists.txt` guards the `add_subdirectory` with `if(NOT TARGET bromath)` so the first loader wins — overriding `BROMATH_DIR` only takes effect if bro is the first to add it.
 
 ## Day-to-Day Development
 
@@ -105,7 +110,7 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, and `brogameagent`.
+Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, and `brogameagent`.
 
 ## Overriding Paths
 
@@ -113,6 +118,7 @@ To point at a different location for any sibling:
 
 ```bash
 cmake -B build \
+    -DBROMATH_DIR=/path/to/bromath \
     -DQJSBIND_DIR=/path/to/qjsbind \
     -DBROKIT_DIR=/path/to/brokit \
     -DHTMLAYOUT_DIR=/path/to/htmlayout \
@@ -124,8 +130,9 @@ cmake -B build \
 Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
 
 ```bash
-cmake -B build -DQJSBIND_DIR=none -DBROKIT_DIR=none -DHTMLAYOUT_DIR=none \
-               -DBROAUDIO_DIR=none -DBROMESH_DIR=none -DBROGAMEAGENT_DIR=none
+cmake -B build -DBROMATH_DIR=none -DQJSBIND_DIR=none -DBROKIT_DIR=none \
+               -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
+               -DBROGAMEAGENT_DIR=none
 ```
 
 ## Apps tree

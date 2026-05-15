@@ -25,3 +25,6 @@
 [submodule "third_party/brogameagent"]
 	path = third_party/brogameagent
 	url = https://github.com/wlejon/brogameagent.git
+[submodule "third_party/bromath"]
+	path = third_party/bromath
+	url = https://github.com/wlejon/bromath.git
