@@ -145,7 +145,7 @@ static bool parseColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& 
 
 // Parse a `worldAnchor: [x, y, z]` or `{x, y, z}` option into a Vec3.
 // Returns true if the option was present (even if partially specified).
-static bool parseWorldAnchor(JSContext* ctx, JSValueConst opts, scene::Vec3& out) {
+static bool parseWorldAnchor(JSContext* ctx, JSValueConst opts, bromath::Vec3& out) {
     JSValue v = JS_GetPropertyStr(ctx, opts, "worldAnchor");
     bool found = false;
     if (JS_IsArray(v)) {
@@ -184,7 +184,7 @@ static bool parseWorldAnchor(JSContext* ctx, JSValueConst opts, scene::Vec3& out
 static void applyBillboardOpts(JSContext* ctx, JSValueConst opts, scene::SceneNode* node) {
     if (!node) return;
 
-    scene::Vec3 anchor;
+    bromath::Vec3 anchor;
     if (parseWorldAnchor(ctx, opts, anchor)) {
         node->setWorldAnchor(anchor);
     }
@@ -1946,7 +1946,7 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 2) return JS_NULL;
 
-    auto parseVec3 = [&](JSValueConst v, scene::Vec3& out) -> bool {
+    auto parseVec3 = [&](JSValueConst v, bromath::Vec3& out) -> bool {
         if (!JS_IsArray(v)) return false;
         JSValue ex = JS_GetPropertyUint32(ctx, v, 0);
         JSValue ey = JS_GetPropertyUint32(ctx, v, 1);
@@ -1963,22 +1963,22 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         return true;
     };
 
-    scene::Vec3 origin, dir;
+    bromath::Vec3 origin, dir;
     if (!parseVec3(argv[0], origin)) return JS_ThrowTypeError(ctx, "raycast: origin must be [x,y,z]");
     if (!parseVec3(argv[1], dir))    return JS_ThrowTypeError(ctx, "raycast: direction must be [x,y,z]");
 
     double maxDist = 0.0;
     if (argc >= 3) JS_ToFloat64(ctx, &maxDist, argv[2]);
 
-    dir = dir.normalized();
-    if (dir.lengthSq() < 1e-12f) return JS_NULL;
+    dir = bromath::vnorm(dir);
+    if (bromath::vlen2(dir) < 1e-12f) return JS_NULL;
 
     float closestDist = (maxDist > 0.0) ? (float)maxDist : 1e30f;
     scene::MeshNode* closestNode = nullptr;
     scene::LightNode* closestLight = nullptr;
     bromesh::RayHit closestHit;
-    scene::Vec3 closestWorldPoint;
-    scene::Vec3 closestWorldNormal;
+    bromath::Vec3 closestWorldPoint;
+    bromath::Vec3 closestWorldNormal;
 
     g->root()->traverse([&](scene::SceneNode* node) {
         if (!node || node->type() != scene::SceneNode::Type::Mesh) return;
@@ -1987,24 +1987,24 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         const bromesh::MeshData& md = mn->mesh();
         if (md.positions.empty() || md.indices.empty()) return;
 
-        const scene::Vec3& nodePos = node->position();
-        const scene::Quat& nodeRot = node->rotation();
-        const scene::Vec3& nodeScl = node->scale();
+        const bromath::Vec3& nodePos = node->position();
+        const bromath::Quat& nodeRot = node->rotation();
+        const bromath::Vec3& nodeScl = node->scale();
 
-        scene::Vec3 localOrigin = origin - nodePos;
-        localOrigin = nodeRot.conjugate().rotate(localOrigin);
+        bromath::Vec3 localOrigin = origin - nodePos;
+        localOrigin = bromath::qrotate(bromath::qconjugate(nodeRot), localOrigin);
         if (nodeScl.x != 0.0f) localOrigin.x /= nodeScl.x;
         if (nodeScl.y != 0.0f) localOrigin.y /= nodeScl.y;
         if (nodeScl.z != 0.0f) localOrigin.z /= nodeScl.z;
 
-        scene::Vec3 localDir = nodeRot.conjugate().rotate(dir);
+        bromath::Vec3 localDir = bromath::qrotate(bromath::qconjugate(nodeRot), dir);
         if (nodeScl.x != 0.0f) localDir.x /= nodeScl.x;
         if (nodeScl.y != 0.0f) localDir.y /= nodeScl.y;
         if (nodeScl.z != 0.0f) localDir.z /= nodeScl.z;
 
-        float localDirLen = localDir.length();
+        float localDirLen = bromath::vlen(localDir);
         if (localDirLen < 1e-12f) return;
-        scene::Vec3 localDirN = localDir * (1.0f / localDirLen);
+        bromath::Vec3 localDirN = localDir * (1.0f / localDirLen);
         float scale = nodeScl.x != 0.0f ? nodeScl.x : 1.0f;
         float localMaxDist = closestDist / scale;
 
@@ -2037,18 +2037,18 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         bromesh::RayHit hit = mn->bvh().raycast(md, o, d, localMaxDist);
         if (!hit.hit) return;
 
-        scene::Vec3 localHit{hit.position[0], hit.position[1], hit.position[2]};
+        bromath::Vec3 localHit{hit.position[0], hit.position[1], hit.position[2]};
         localHit.x *= nodeScl.x;
         localHit.y *= nodeScl.y;
         localHit.z *= nodeScl.z;
-        scene::Vec3 worldHit = nodeRot.rotate(localHit) + nodePos;
+        bromath::Vec3 worldHit = bromath::qrotate(nodeRot, localHit) + nodePos;
 
-        scene::Vec3 toHit = worldHit - origin;
-        float worldDist = toHit.length();
+        bromath::Vec3 toHit = worldHit - origin;
+        float worldDist = bromath::vlen(toHit);
         if (worldDist >= closestDist) return;
 
-        scene::Vec3 localNormal{hit.normal[0], hit.normal[1], hit.normal[2]};
-        scene::Vec3 worldNormal = nodeRot.rotate(localNormal).normalized();
+        bromath::Vec3 localNormal{hit.normal[0], hit.normal[1], hit.normal[2]};
+        bromath::Vec3 worldNormal = bromath::vnorm(bromath::qrotate(nodeRot, localNormal));
 
         closestDist = worldDist;
         closestNode = mn;
@@ -2067,11 +2067,11 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
         g->root()->traverse([&](scene::SceneNode* node) {
             if (!node || node->type() != scene::SceneNode::Type::Light) return;
             if (!node->visible()) return;
-            const scene::Mat4& M = node->worldMatrix();
-            scene::Vec3 c{M.m[3][0], M.m[3][1], M.m[3][2]};
-            scene::Vec3 oc = origin - c;
-            float b = oc.dot(dir);
-            float disc = b * b - oc.dot(oc) + lightRadius * lightRadius;
+            const bromath::Mat4& M = node->worldMatrix();
+            bromath::Vec3 c{M.at(0, 3), M.at(1, 3), M.at(2, 3)};
+            bromath::Vec3 oc = origin - c;
+            float b = bromath::vdot(oc, dir);
+            float disc = b * b - bromath::vdot(oc, oc) + lightRadius * lightRadius;
             if (disc < 0.0f) return;
             float sq = std::sqrt(disc);
             float t = -b - sq;
@@ -2082,7 +2082,7 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
             closestLight = static_cast<scene::LightNode*>(node);
             closestNode = nullptr;
             closestWorldPoint = origin + dir * t;
-            closestWorldNormal = (closestWorldPoint - c).normalized();
+            closestWorldNormal = bromath::vnorm(closestWorldPoint - c);
         });
     }
 
@@ -2118,10 +2118,10 @@ static JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JS
 }
 
 // --- Helper: parse a [x, y, z] array into Vec3 ---
-static scene::Vec3 jsGetVec3(JSContext* ctx, JSValueConst obj, const char* prop,
+static bromath::Vec3 jsGetVec3(JSContext* ctx, JSValueConst obj, const char* prop,
                              float dx = 0, float dy = 0, float dz = 0) {
     JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    scene::Vec3 r{dx, dy, dz};
+    bromath::Vec3 r{dx, dy, dz};
     if (JS_IsArray(v)) {
         JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
         JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
@@ -2140,9 +2140,9 @@ static scene::Vec3 jsGetVec3(JSContext* ctx, JSValueConst obj, const char* prop,
 }
 
 // Parse a [x, y, z, w] array into Quat
-static scene::Quat jsGetQuat(JSContext* ctx, JSValueConst obj, const char* prop, bool& found) {
+static bromath::Quat jsGetQuat(JSContext* ctx, JSValueConst obj, const char* prop, bool& found) {
     JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    scene::Quat r{0, 0, 0, 1};
+    bromath::Quat r{0, 0, 0, 1};
     found = false;
     if (JS_IsArray(v)) {
         found = true;
@@ -2186,17 +2186,17 @@ static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, 
     }
     g->setCameraAspectFollowsCanvas(aspectFollowsCanvas);
 
-    scene::Vec3 position = jsGetVec3(ctx, opts, "position", 0, 5, -10);
+    bromath::Vec3 position = jsGetVec3(ctx, opts, "position", 0, 5, -10);
 
     bool hasQuat = false;
-    scene::Quat quat = jsGetQuat(ctx, opts, "quaternion", hasQuat);
+    bromath::Quat quat = jsGetQuat(ctx, opts, "quaternion", hasQuat);
 
     if (hasQuat) {
         g->setCameraQuat((float)fov, (float)aspect, (float)nearZ, (float)farZ,
-                         position, quat.normalized());
+                         position, bromath::qnorm(quat));
     } else {
-        scene::Vec3 target = jsGetVec3(ctx, opts, "target", 0, 0, 0);
-        scene::Vec3 up = jsGetVec3(ctx, opts, "up", 0, 1, 0);
+        bromath::Vec3 target = jsGetVec3(ctx, opts, "target", 0, 0, 0);
+        bromath::Vec3 up = jsGetVec3(ctx, opts, "up", 0, 1, 0);
 
         std::string mode = jsGetStr(ctx, opts, "mode", "perspective");
         if (mode == "orthographic" || mode == "ortho") {
@@ -2328,7 +2328,7 @@ static JSValue js_sg_setToneMap(JSContext* ctx, JSValueConst this_val, int argc,
 static JSValue js_sg_setAmbient(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1) return JS_UNDEFINED;
-    scene::Vec3 c{0.03f, 0.03f, 0.03f};
+    bromath::Vec3 c{0.03f, 0.03f, 0.03f};
     if (JS_IsObject(argv[0]) && !JS_IsArray(argv[0])) {
         c = jsGetVec3(ctx, argv[0], "color", 0.03f, 0.03f, 0.03f);
     } else if (JS_IsArray(argv[0])) {
@@ -2353,7 +2353,7 @@ static JSValue js_sg_setWind(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
-    scene::Vec3 d = jsGetVec3(ctx, argv[0], "direction", 1.0f, 0.0f, 0.0f);
+    bromath::Vec3 d = jsGetVec3(ctx, argv[0], "direction", 1.0f, 0.0f, 0.0f);
     double strength  = jsGetProp(ctx, argv[0], "strength",  0.0);
     double frequency = jsGetProp(ctx, argv[0], "frequency", 1.5);
     g->setWind(d.x, d.y, d.z, (float)strength, (float)frequency);
@@ -2424,7 +2424,7 @@ static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSV
     JSValueConst opts = argv[0];
     double start = jsGetProp(ctx, opts, "start", 0.0);
     double end = jsGetProp(ctx, opts, "end", 0.0);
-    scene::Vec3 color = jsGetVec3(ctx, opts, "color", 0.0f, 0.0f, 0.0f);
+    bromath::Vec3 color = jsGetVec3(ctx, opts, "color", 0.0f, 0.0f, 0.0f);
     g->setFog((float)start, (float)end, color.x, color.y, color.z);
     return JS_UNDEFINED;
 }
@@ -2436,7 +2436,7 @@ static JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int a
     double x = 0, y = 0;
     JS_ToFloat64(ctx, &x, argv[0]);
     JS_ToFloat64(ctx, &y, argv[1]);
-    scene::Vec3 origin, dir;
+    bromath::Vec3 origin, dir;
     if (!g->unprojectLocal((float)x, (float)y, origin, dir)) return JS_NULL;
     JSValue out = JS_NewObject(ctx);
     JSValue oArr = JS_NewArray(ctx);
@@ -2507,16 +2507,16 @@ static JSValue js_sg_captureFrame(JSContext* ctx, JSValueConst this_val,
     return buildImageDataFromPixels(ctx, pixels, rw, rh);
 }
 
-static JSValue mat4ToJSArray(JSContext* ctx, const scene::Mat4& mat) {
+static JSValue mat4ToJSArray(JSContext* ctx, const bromath::Mat4& mat) {
     JSValue arr = JS_NewArray(ctx);
     int idx = 0;
     for (int c = 0; c < 4; ++c)
         for (int r = 0; r < 4; ++r)
-            JS_SetPropertyUint32(ctx, arr, idx++, JS_NewFloat64(ctx, mat.m[c][r]));
+            JS_SetPropertyUint32(ctx, arr, idx++, JS_NewFloat64(ctx, mat.at(r, c)));
     return arr;
 }
 
-static JSValue vec3ToJSArray(JSContext* ctx, const scene::Vec3& v) {
+static JSValue vec3ToJSArray(JSContext* ctx, const bromath::Vec3& v) {
     JSValue arr = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, v.x));
     JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, v.y));
@@ -2646,29 +2646,29 @@ void SceneBindings::install(JSContext* ctx) {
             [](NodeWrapper* w) -> double { return w->node ? w->node->position().z : 0; },
             [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition(w->node->position().x, w->node->position().y, (float)val); })
         .prop("rotation",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().z : 0; },
+            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).z : 0; },
             [](NodeWrapper* w, double val) { if (w->node) w->node->setRotationZ((float)val); })
         .prop("rotationX",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().x : 0; },
+            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).x : 0; },
             [](NodeWrapper* w, double val) {
                 if (w->node) {
-                    auto e = w->node->rotation().toEuler();
+                    auto e = bromath::qtoEuler(w->node->rotation());
                     w->node->setRotationEuler((float)val, e.y, e.z);
                 }
             })
         .prop("rotationY",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().y : 0; },
+            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).y : 0; },
             [](NodeWrapper* w, double val) {
                 if (w->node) {
-                    auto e = w->node->rotation().toEuler();
+                    auto e = bromath::qtoEuler(w->node->rotation());
                     w->node->setRotationEuler(e.x, (float)val, e.z);
                 }
             })
         .prop("rotationZ",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->rotation().toEuler().z : 0; },
+            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).z : 0; },
             [](NodeWrapper* w, double val) {
                 if (w->node) {
-                    auto e = w->node->rotation().toEuler();
+                    auto e = bromath::qtoEuler(w->node->rotation());
                     w->node->setRotationEuler(e.x, e.y, (float)val);
                 }
             })
@@ -2703,8 +2703,8 @@ void SceneBindings::install(JSContext* ctx) {
                 JS_FreeValue(ctx, e1);
                 JS_FreeValue(ctx, e2);
                 JS_FreeValue(ctx, e3);
-                scene::Quat q{(float)qx, (float)qy, (float)qz, (float)qw};
-                w->node->setRotation(q.normalized());
+                bromath::Quat q{(float)qx, (float)qy, (float)qz, (float)qw};
+                w->node->setRotation(bromath::qnorm(q));
             })
         .prop("scaleX",
             [](NodeWrapper* w) -> double { return w->node ? w->node->scale().x : 1; },

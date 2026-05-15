@@ -95,9 +95,9 @@ bool TilemapNode::tileAtWorld(float worldX, float worldY, int& outCol, int& outR
     // uniform scale + Z rotation for the inversion; tilemaps with non-affine
     // 3D transforms aren't a real-world use case.
     const auto& wm = worldMatrix();
-    float a = wm.m[0][0], b = wm.m[0][1];
-    float c = wm.m[1][0], d = wm.m[1][1];
-    float tx = wm.m[3][0], ty = wm.m[3][1];
+    float a = wm.at(0, 0), b = wm.at(1, 0);
+    float c = wm.at(0, 1), d = wm.at(1, 1);
+    float tx = wm.at(0, 3), ty = wm.at(1, 3);
     float det = a * d - b * c;
     if (det == 0.0f) return false;
     float inv = 1.0f / det;
@@ -136,7 +136,7 @@ void TilemapNode::onRender(SceneGraph& graph) {
 
     const auto& wm = worldMatrix();
     cs->save();
-    cs->setTransform(wm.m[0][0], wm.m[0][1], wm.m[1][0], wm.m[1][1], wm.m[3][0], wm.m[3][1]);
+    cs->setTransform(wm.at(0, 0), wm.at(1, 0), wm.at(0, 1), wm.at(1, 1), wm.at(0, 3), wm.at(1, 3));
 
     // Layers render bottom-to-top (index 0 first).
     for (const auto& layer : layers_) {

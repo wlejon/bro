@@ -88,7 +88,7 @@ static JSValue js_gizmo_setOrientation(JSContext* ctx, JSValueConst, int argc, J
     JS_ToFloat64(ctx, &y, argv[1]);
     JS_ToFloat64(ctx, &z, argv[2]);
     JS_ToFloat64(ctx, &w, argv[3]);
-    e->gizmo().setOrientation(scene::Quat(static_cast<float>(x),
+    e->gizmo().setOrientation(bromath::Quat(static_cast<float>(x),
                                           static_cast<float>(y),
                                           static_cast<float>(z),
                                           static_cast<float>(w)));

@@ -19,7 +19,7 @@ void ShapeNode::onRender(SceneGraph& graph) {
     //   | a c e |     col-major Mat4: a=m[0][0], b=m[0][1], c=m[1][0], d=m[1][1], e=m[3][0], f=m[3][1]
     //   | b d f |
     //   | 0 0 1 |
-    cs->setTransform(wm.m[0][0], wm.m[0][1], wm.m[1][0], wm.m[1][1], wm.m[3][0], wm.m[3][1]);
+    cs->setTransform(wm.at(0, 0), wm.at(1, 0), wm.at(0, 1), wm.at(1, 1), wm.at(0, 3), wm.at(1, 3));
 
     // Compute anchor offset
     float ax, ay;

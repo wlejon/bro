@@ -12,7 +12,8 @@
 namespace bro::engine {
 
 using scene::SceneGraph;
-using scene::Vec3;
+using bromath::Vec3;
+using bromath::Quat;
 
 // Accumulate absolute top-left of `el` by walking layoutParent chain and
 // subtracting scrollTop at each step. Mirrors the logic used elsewhere to
@@ -121,7 +122,7 @@ bool Engine::gizmoHandleMouseMove(float x, float y) {
     Vec3 rayO, rayD;
     if (!g->unprojectLocal(lx, ly, rayO, rayD)) return true;
 
-    Vec3 dT; scene::Quat dR; Vec3 dS;
+    Vec3 dT; Quat dR; Vec3 dS;
     gizmo_->updateDrag(rayO, rayD, dT, dR, dS);
     uiDirty_ = true;
     return true;

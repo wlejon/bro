@@ -5,6 +5,9 @@ JPH_SUPPRESS_WARNINGS
 
 namespace bro::scene {
 
+using bromath::Quat;
+using bromath::Vec3;
+
 PhysicsNode::PhysicsNode(const std::string& name) : SceneNode(name) {}
 
 void PhysicsNode::syncFromPhysics(physics::PhysicsWorld* world) {

@@ -153,7 +153,7 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
 // Helper: parse [x, y, z] array
 // -------------------------------------------------------------------------
 
-static bool parseVec3(JSContext* ctx, JSValueConst val, scene::Vec3& out) {
+static bool parseVec3(JSContext* ctx, JSValueConst val, bromath::Vec3& out) {
     if (!JS_IsArray(val)) return false;
     JSValue ex = JS_GetPropertyUint32(ctx, val, 0);
     JSValue ey = JS_GetPropertyUint32(ctx, val, 1);
@@ -178,7 +178,7 @@ static JSValue js_terrain_raycast(JSContext* ctx, JSValueConst this_val, int arg
     if (!w || !w->manager) return JS_NULL;
     if (argc < 2) return JS_ThrowTypeError(ctx, "terrain.raycast(origin, dir[, maxDist])");
 
-    scene::Vec3 origin, dir;
+    bromath::Vec3 origin, dir;
     if (!parseVec3(ctx, argv[0], origin)) return JS_ThrowTypeError(ctx, "origin must be [x,y,z]");
     if (!parseVec3(ctx, argv[1], dir)) return JS_ThrowTypeError(ctx, "direction must be [x,y,z]");
 

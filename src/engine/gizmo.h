@@ -98,10 +98,10 @@ public:
     /// World-space pivot (attach point). Apps call this whenever the target's
     /// origin changes — or pass a target object in later phases.
     void setPosition(float x, float y, float z);
-    const scene::Vec3& position() const { return position_; }
+    const bromath::Vec3& position() const { return position_; }
 
     /// Orientation used when space==Local. Ignored for world-space.
-    void setOrientation(const scene::Quat& q) { orientation_ = q; }
+    void setOrientation(const bromath::Quat& q) { orientation_ = q; }
 
     GizmoConfig& config() { return config_; }
     const GizmoConfig& config() const { return config_; }
@@ -123,20 +123,20 @@ public:
     struct PickResult {
         GizmoAxis axis = GizmoAxis::None;
         float rayT = 0.0f;              // parameter along the ray at the hit
-        scene::Vec3 axisDir{0, 0, 0};    // world-space axis direction
-        scene::Vec3 hitPoint{0, 0, 0};   // world-space point on the handle
+        bromath::Vec3 axisDir{0, 0, 0};    // world-space axis direction
+        bromath::Vec3 hitPoint{0, 0, 0};   // world-space point on the handle
     };
 
     /// Ray-vs-current-mode pick. Returns axis=None if no handle is hit.
     /// Axes / rings / boxes are tested with a geometry-appropriate pick
     /// radius derived from the current screen-stable scale.
-    PickResult pick(const scene::Vec3& rayOrigin, const scene::Vec3& rayDir);
+    PickResult pick(const bromath::Vec3& rayOrigin, const bromath::Vec3& rayDir);
 
     /// Begin a drag along the picked handle. Captures the pivot + the
     /// initial ray parameter / angle so subsequent updateDrag() calls can
     /// produce cumulative world deltas.
     void beginDrag(const PickResult& hit,
-                   const scene::Vec3& rayOrigin, const scene::Vec3& rayDir);
+                   const bromath::Vec3& rayOrigin, const bromath::Vec3& rayDir);
 
     /// Update a drag with a new ray and return the per-frame delta for
     /// the active mode via out-params. Returns true if the gizmo is
@@ -145,10 +145,10 @@ public:
     ///   rotate:    outRotate    = axis-angle quaternion rotation applied
     ///                             since last call (world space)
     ///   scale:     outScale     = per-axis multiplicative factor
-    bool updateDrag(const scene::Vec3& rayOrigin, const scene::Vec3& rayDir,
-                    scene::Vec3& outTranslate,
-                    scene::Quat& outRotate,
-                    scene::Vec3& outScale);
+    bool updateDrag(const bromath::Vec3& rayOrigin, const bromath::Vec3& rayDir,
+                    bromath::Vec3& outTranslate,
+                    bromath::Quat& outRotate,
+                    bromath::Vec3& outScale);
 
     void endDrag();
     bool isDragging() const { return dragAxis_ != GizmoAxis::None; }
@@ -197,9 +197,9 @@ public:
     /// Calls CB_Translate if set; if the JS callback returns a truthy
     /// value the engine treats the drag as "consumed" and does not fall
     /// back to the default setPosition behavior.
-    void fireTranslate(const scene::Vec3& worldDelta);
-    void fireRotate(const scene::Quat& worldRot);
-    void fireScale(const scene::Vec3& factor);
+    void fireTranslate(const bromath::Vec3& worldDelta);
+    void fireRotate(const bromath::Quat& worldRot);
+    void fireScale(const bromath::Vec3& factor);
     void fireBegin();
     void fireEnd(bool committed);
     void fireHoverChange();
@@ -229,33 +229,33 @@ private:
     /// Axis basis in world space for picking + drag math, respecting
     /// world/local space. X = (1,0,0) world-space or rotated by orientation_
     /// in local-space mode.
-    void resolveAxes(scene::Vec3& ax, scene::Vec3& ay, scene::Vec3& az) const;
+    void resolveAxes(bromath::Vec3& ax, bromath::Vec3& ay, bromath::Vec3& az) const;
 
     /// Closest parameter t on the infinite line (pivot + t * axisDir)
     /// to the ray. Used for translate / scale drag math.
-    static float rayVsAxisParam(const scene::Vec3& rayO, const scene::Vec3& rayD,
-                                const scene::Vec3& pivot, const scene::Vec3& axisDir);
+    static float rayVsAxisParam(const bromath::Vec3& rayO, const bromath::Vec3& rayD,
+                                const bromath::Vec3& pivot, const bromath::Vec3& axisDir);
 
     /// Closest-distance-from-ray-to-finite-segment test (picks against
     /// arrows / scale handles). Returns dist + rayT + segT.
-    struct RaySegResult { float rayT; float segT; float dist; scene::Vec3 segPoint; };
-    static RaySegResult closestRayToSegment(const scene::Vec3& rayO, const scene::Vec3& rayD,
-                                            const scene::Vec3& A, const scene::Vec3& B);
+    struct RaySegResult { float rayT; float segT; float dist; bromath::Vec3 segPoint; };
+    static RaySegResult closestRayToSegment(const bromath::Vec3& rayO, const bromath::Vec3& rayD,
+                                            const bromath::Vec3& A, const bromath::Vec3& B);
 
     /// Intersect ray with the plane through `pivot` with normal `axis`.
     /// Returns false if ray is parallel to the plane. Used for rotate
     /// angle computation + plane-handle picking.
-    static bool rayVsPlane(const scene::Vec3& rayO, const scene::Vec3& rayD,
-                           const scene::Vec3& pivot, const scene::Vec3& normal,
-                           scene::Vec3& outPoint);
+    static bool rayVsPlane(const bromath::Vec3& rayO, const bromath::Vec3& rayD,
+                           const bromath::Vec3& pivot, const bromath::Vec3& normal,
+                           bromath::Vec3& outPoint);
 
     void ensureTranslateMeshes();
     void ensureRotateMeshes();
     void ensureScaleMeshes();
 
     GizmoConfig config_;
-    scene::Vec3 position_{0, 0, 0};
-    scene::Quat orientation_ = scene::Quat::identity();
+    bromath::Vec3 position_{0, 0, 0};
+    bromath::Quat orientation_ = bromath::qidentity();
     GizmoAxis hovered_ = GizmoAxis::None;
     float currentScale_ = 1.0f;   // last screen-stable scale (for pick radii)
 
@@ -296,15 +296,15 @@ private:
 
     // --- Drag state -------------------------------------------------------
     GizmoAxis dragAxis_ = GizmoAxis::None;
-    scene::Vec3 dragPivot_{0, 0, 0};
-    scene::Vec3 dragAxisDir_{1, 0, 0};
-    scene::Vec3 dragNormal_{0, 0, 1};     // plane normal (for rotate / plane handles)
+    bromath::Vec3 dragPivot_{0, 0, 0};
+    bromath::Vec3 dragAxisDir_{1, 0, 0};
+    bromath::Vec3 dragNormal_{0, 0, 1};     // plane normal (for rotate / plane handles)
     float       dragRefParam_ = 0.0f;     // axis-line parameter at grab-time
     float       dragRefAngle_ = 0.0f;     // rotate ring angle at grab-time
-    scene::Vec3 dragLastPoint_{0, 0, 0};
+    bromath::Vec3 dragLastPoint_{0, 0, 0};
     float       dragLastParam_ = 0.0f;
     float       dragLastAngle_ = 0.0f;
-    scene::Vec3 dragLastScale_{1, 1, 1};
+    bromath::Vec3 dragLastScale_{1, 1, 1};
 
     // --- JS callbacks -----------------------------------------------------
     JSContext* jsCtx_ = nullptr;
@@ -312,7 +312,7 @@ private:
     bool callbacksInited_ = false;
 
     /// Rotate axis-angle by `q` about `axisDir` through angle `delta`.
-    static scene::Quat quatAxisAngle(const scene::Vec3& axis, float radians);
+    static bromath::Quat quatAxisAngle(const bromath::Vec3& axis, float radians);
 };
 
 } // namespace bro::engine

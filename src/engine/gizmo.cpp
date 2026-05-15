@@ -11,16 +11,16 @@
 namespace bro::engine {
 
 using scene::MeshNode;
-using scene::Quat;
-using scene::Vec3;
+using bromath::Quat;
+using bromath::Vec3;
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
 inline float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
-inline float vlen(const Vec3& v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); }
-inline Vec3  vnorm(const Vec3& v) {
-    float l = vlen(v); return l > 1e-9f ? Vec3(v.x/l, v.y/l, v.z/l) : Vec3(1,0,0);
+inline float vlen_(const Vec3& v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); }
+inline Vec3  vnorm_(const Vec3& v) {
+    float l = vlen_(v); return l > 1e-9f ? Vec3(v.x/l, v.y/l, v.z/l) : Vec3(1,0,0);
 }
 } // namespace
 
@@ -420,10 +420,10 @@ float GizmoManager::screenStableScale(scene::SceneGraph* graph) const {
     if (ch <= 0) return 1.0f;
     Vec3 eye = graph->cameraEye();
     Vec3 d   = position_ - eye;
-    float dist = vlen(d);
+    float dist = vlen_(d);
     if (dist < 1e-4f) dist = 1e-4f;
     const auto& P = graph->projectionMatrix();
-    float m11 = P.m[1][1];
+    float m11 = P.at(1, 1);
     if (!std::isfinite(m11) || m11 <= 0.0f) return 1.0f;
     float tanHalfFov = 1.0f / m11;
     float worldPerPixel = (dist * 2.0f * tanHalfFov) / static_cast<float>(ch);
@@ -455,18 +455,18 @@ std::vector<MeshNode*> GizmoManager::meshesForRender(scene::SceneGraph* graph) {
     // world basis this reproduces the original phase-1 axis rotations.
     auto rotateFromXTo = [](const Vec3& target) -> Quat {
         Vec3 from(1, 0, 0);
-        Vec3 t = vnorm(target);
+        Vec3 t = vnorm_(target);
         float dot = from.x*t.x + from.y*t.y + from.z*t.z;
-        if (dot > 0.99999f) return Quat::identity();
+        if (dot > 0.99999f) return bromath::qidentity();
         if (dot < -0.99999f) {
             // 180°: rotate about any axis perpendicular to +X. Use +Y.
-            return Quat::fromAxisAngle(Vec3(0, 1, 0), kPi);
+            return bromath::qaxisAngle(Vec3(0, 1, 0), kPi);
         }
-        Vec3 axis = from.cross(t);
-        float len = vlen(axis);
+        Vec3 axis = bromath::vcross(from, t);
+        float len = vlen_(axis);
         if (len > 1e-9f) axis = Vec3(axis.x/len, axis.y/len, axis.z/len);
         float angle = std::acos(std::clamp(dot, -1.0f, 1.0f));
-        return Quat::fromAxisAngle(axis, angle);
+        return bromath::qaxisAngle(axis, angle);
     };
 
     auto place = [&](MeshNode* n, const Vec3& axis) {
@@ -501,7 +501,7 @@ std::vector<MeshNode*> GizmoManager::meshesForRender(scene::SceneGraph* graph) {
         if (scaleCenter_) {
             scaleCenter_->setPosition(position_);
             scaleCenter_->setScale(s, s, s);
-            scaleCenter_->setRotation(Quat::identity());
+            scaleCenter_->setRotation(bromath::qidentity());
         }
         out = { scaleX_.get(), scaleY_.get(), scaleZ_.get(), scaleCenter_.get() };
         break;
@@ -537,7 +537,7 @@ GizmoManager::closestRayToSegment(const Vec3& rayO, const Vec3& rayD,
     Vec3 segP = A + u * segT;
     Vec3 rayP = rayO + rayD * rayT;
     Vec3 diff = segP - rayP;
-    float dist = vlen(diff);
+    float dist = vlen_(diff);
     return { rayT, segT, dist, segP };
 }
 
@@ -572,7 +572,7 @@ bool GizmoManager::rayVsPlane(const Vec3& rayO, const Vec3& rayD,
 }
 
 Quat GizmoManager::quatAxisAngle(const Vec3& axis, float radians) {
-    return Quat::fromAxisAngle(vnorm(axis), radians);
+    return bromath::qaxisAngle(vnorm_(axis), radians);
 }
 
 // ---------------------------------------------------------------------------
@@ -634,7 +634,7 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             if (tProj > 0) {
                 Vec3 closest = rayO + rayD * tProj;
                 Vec3 dd = closest - position_;
-                if (vlen(dd) < rad && tProj < bestT) {
+                if (vlen_(dd) < rad && tProj < bestT) {
                     bestT = tProj;
                     out.axis = GizmoAxis::Center;
                     out.axisDir = Vec3(1, 1, 1);
@@ -653,7 +653,7 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             Vec3 hit;
             if (!rayVsPlane(rayO, rayD, position_, normal, hit)) continue;
             Vec3 rel = hit - position_;
-            float r = vlen(rel);
+            float r = vlen_(rel);
             if (std::fabs(r - majorR) > tube) continue;
             float t = (hit - rayO).x * rayD.x + (hit - rayO).y * rayD.y + (hit - rayO).z * rayD.z;
             if (t < 0) continue;
@@ -703,8 +703,8 @@ void GizmoManager::beginDrag(const PickResult& hit,
         Vec3 ref(1, 0, 0);
         if (std::fabs(dragNormal_.x) > 0.9f) ref = Vec3(0, 1, 0);
         Vec3 refInPlane = ref - dragNormal_ * (ref.x*dragNormal_.x + ref.y*dragNormal_.y + ref.z*dragNormal_.z);
-        refInPlane = vnorm(refInPlane);
-        Vec3 tangent = dragNormal_.cross(refInPlane);
+        refInPlane = vnorm_(refInPlane);
+        Vec3 tangent = bromath::vcross(dragNormal_, refInPlane);
         float ax = rel.x*refInPlane.x + rel.y*refInPlane.y + rel.z*refInPlane.z;
         float ay = rel.x*tangent.x    + rel.y*tangent.y    + rel.z*tangent.z;
         dragRefAngle_ = std::atan2(ay, ax);
@@ -722,7 +722,7 @@ void GizmoManager::beginDrag(const PickResult& hit,
 bool GizmoManager::updateDrag(const Vec3& rayO, const Vec3& rayD,
                               Vec3& outTranslate, Quat& outRotate, Vec3& outScale) {
     outTranslate = Vec3(0, 0, 0);
-    outRotate    = Quat::identity();
+    outRotate    = bromath::qidentity();
     outScale     = Vec3(1, 1, 1);
     if (!isDragging()) return false;
 
@@ -765,8 +765,8 @@ bool GizmoManager::updateDrag(const Vec3& rayO, const Vec3& rayD,
         Vec3 ref(1, 0, 0);
         if (std::fabs(dragNormal_.x) > 0.9f) ref = Vec3(0, 1, 0);
         Vec3 refInPlane = ref - dragNormal_ * (ref.x*dragNormal_.x + ref.y*dragNormal_.y + ref.z*dragNormal_.z);
-        refInPlane = vnorm(refInPlane);
-        Vec3 tangent = dragNormal_.cross(refInPlane);
+        refInPlane = vnorm_(refInPlane);
+        Vec3 tangent = bromath::vcross(dragNormal_, refInPlane);
         float ax = rel.x*refInPlane.x + rel.y*refInPlane.y + rel.z*refInPlane.z;
         float ay = rel.x*tangent.x    + rel.y*tangent.y    + rel.z*tangent.z;
         float ang = std::atan2(ay, ax);

@@ -3,6 +3,10 @@
 
 namespace bro::scene {
 
+using bromath::Vec3;
+using bromath::Quat;
+using bromath::Mat4;
+
 uint32_t SceneNode::s_nextId = 1;
 
 SceneNode::SceneNode(const std::string& name)
@@ -39,13 +43,13 @@ void SceneNode::setRotation(const Quat& q) {
 }
 
 void SceneNode::setRotationEuler(float rx, float ry, float rz) {
-    rotation_ = Quat::fromEuler(rx, ry, rz);
+    rotation_ = bromath::qfromEuler(rx, ry, rz);
     localDirty_ = true;
     markDirty();
 }
 
 void SceneNode::setRotationZ(float radians) {
-    rotation_ = Quat::fromAxisAngle({0, 0, 1}, radians);
+    rotation_ = bromath::qaxisAngle({0, 0, 1}, radians);
     localDirty_ = true;
     markDirty();
 }
@@ -94,7 +98,7 @@ const Mat4& SceneNode::worldMatrix() const {
 }
 
 Vec3 SceneNode::localToWorld(const Vec3& local) const {
-    return worldMatrix().transformPoint(local);
+    return bromath::mtransformPoint(worldMatrix(), local);
 }
 
 void SceneNode::traverse(const std::function<void(SceneNode*)>& fn) {
@@ -113,14 +117,14 @@ void SceneNode::markDirty() {
 }
 
 void SceneNode::updateLocalMatrix() const {
-    localMatrix_ = Mat4::trs(position_, rotation_, scale_);
+    localMatrix_ = bromath::mfromTRS(position_, rotation_, scale_);
     localDirty_ = false;
 }
 
 void SceneNode::updateWorldMatrix() const {
     if (localDirty_) updateLocalMatrix();
     if (parent_) {
-        worldMatrix_ = parent_->worldMatrix() * localMatrix_;
+        worldMatrix_ = bromath::mmul(parent_->worldMatrix(), localMatrix_);
     } else {
         worldMatrix_ = localMatrix_;
     }

@@ -14,6 +14,10 @@
 
 namespace bro::scene {
 
+using bromath::Vec3;
+using bromath::Quat;
+using bromath::Mat4;
+
 // -------------------------------------------------------------------------
 // NoiseState — wraps FastNoise2 node tree
 // -------------------------------------------------------------------------
@@ -316,8 +320,8 @@ Vec3 TerrainManager::sphereAnchor(float flatX, float flatZ) const {
     float R = config_.planetRadius;
     float lon = flatX / R;
     float lat = flatZ / R;
-    Quat q = Quat::fromAxisAngle({0, 0, 1}, -lon) * Quat::fromAxisAngle({1, 0, 0}, lat);
-    Vec3 p = q.rotate({0, R, 0});
+    Quat q = bromath::qmul(bromath::qaxisAngle({0, 0, 1}, -lon), bromath::qaxisAngle({1, 0, 0}, lat));
+    Vec3 p = bromath::qrotate(q, {0, R, 0});
     return {p.x, p.y - R, p.z};
 }
 
@@ -337,8 +341,8 @@ void TerrainManager::applyCurvatureToMesh(bromesh::MeshData& mesh,
         // Map each vertex onto the sphere and express relative to anchor
         float lon = (chunkCenterX + localX) / R;
         float lat = (chunkCenterZ + localZ) / R;
-        Quat q = Quat::fromAxisAngle({0, 0, 1}, -lon) * Quat::fromAxisAngle({1, 0, 0}, lat);
-        Vec3 spherePos = q.rotate({0, R + h, 0});
+        Quat q = bromath::qmul(bromath::qaxisAngle({0, 0, 1}, -lon), bromath::qaxisAngle({1, 0, 0}, lat));
+        Vec3 spherePos = bromath::qrotate(q, {0, R + h, 0});
 
         mesh.positions[i * 3 + 0] = spherePos.x - anchor.x;
         mesh.positions[i * 3 + 1] = (spherePos.y - R) - anchor.y;
@@ -692,8 +696,8 @@ int TerrainManager::update(float camX, float camY, float camZ) {
 TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float maxDist) const {
     TerrainHit result;
 
-    Vec3 ndir = dir.normalized();
-    if (ndir.lengthSq() < 1e-12f) return result;
+    Vec3 ndir = bromath::vnorm(dir);
+    if (bromath::vlen2(ndir) < 1e-12f) return result;
 
     float closestDist = (maxDist > 0.0f) ? maxDist : 1e30f;
     const MeshNode* closestNode = nullptr;
@@ -713,17 +717,17 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
         const Vec3& nodeScl = entry.meshNode->scale();
 
         Vec3 localOrigin = origin - nodePos;
-        localOrigin = nodeRot.conjugate().rotate(localOrigin);
+        localOrigin = bromath::qrotate(bromath::qconjugate(nodeRot), localOrigin);
         if (nodeScl.x != 0.0f) localOrigin.x /= nodeScl.x;
         if (nodeScl.y != 0.0f) localOrigin.y /= nodeScl.y;
         if (nodeScl.z != 0.0f) localOrigin.z /= nodeScl.z;
 
-        Vec3 localDir = nodeRot.conjugate().rotate(ndir);
+        Vec3 localDir = bromath::qrotate(bromath::qconjugate(nodeRot), ndir);
         if (nodeScl.x != 0.0f) localDir.x /= nodeScl.x;
         if (nodeScl.y != 0.0f) localDir.y /= nodeScl.y;
         if (nodeScl.z != 0.0f) localDir.z /= nodeScl.z;
 
-        float localDirLen = localDir.length();
+        float localDirLen = bromath::vlen(localDir);
         if (localDirLen < 1e-12f) continue;
         Vec3 localDirN = localDir * (1.0f / localDirLen);
 
@@ -760,9 +764,9 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
         localHit.x *= nodeScl.x;
         localHit.y *= nodeScl.y;
         localHit.z *= nodeScl.z;
-        Vec3 worldHit = nodeRot.rotate(localHit) + nodePos;
+        Vec3 worldHit = bromath::qrotate(nodeRot, localHit) + nodePos;
 
-        float worldDist = (worldHit - origin).length();
+        float worldDist = bromath::vlen(worldHit - origin);
         if (worldDist >= closestDist) continue;
 
         closestDist = worldDist;
@@ -770,7 +774,7 @@ TerrainHit TerrainManager::raycast(const Vec3& origin, const Vec3& dir, float ma
         closestWorldPos = worldHit;
 
         Vec3 localNormal{hit.normal[0], hit.normal[1], hit.normal[2]};
-        closestWorldNormal = nodeRot.rotate(localNormal).normalized();
+        closestWorldNormal = bromath::vnorm(bromath::qrotate(nodeRot, localNormal));
     }
 
     if (!closestNode) return result;

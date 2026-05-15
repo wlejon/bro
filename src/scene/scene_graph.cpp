@@ -15,6 +15,10 @@
 
 namespace bro::scene {
 
+using bromath::Vec3;
+using bromath::Quat;
+using bromath::Mat4;
+
 // ---------------------------------------------------------------------------
 // Mesh shader sources (GLSL 330 core)
 // ---------------------------------------------------------------------------
@@ -1303,7 +1307,7 @@ void SceneGraph::setCanvasSize(int w, int h) {
     if (cameraAspectFollowsCanvas_ && cameraIsPerspective_ && w > 0 && h > 0) {
         float aspect = static_cast<float>(w) / static_cast<float>(h);
         cameraAspect_ = aspect;
-        projectionMatrix_ = Mat4::perspective(cameraFovY_, aspect,
+        projectionMatrix_ = bromath::mperspective(cameraFovY_, aspect,
                                               cameraNearZ_, cameraFarZ_);
     }
 }
@@ -1346,8 +1350,8 @@ SceneNode* SceneGraph::findByName(const std::string& name) const {
 
 void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
                            const Vec3& eye, const Vec3& target, const Vec3& up) {
-    projectionMatrix_ = Mat4::perspective(fovY, aspect, nearZ, farZ);
-    viewMatrix_ = Mat4::lookAt(eye, target, up);
+    projectionMatrix_ = bromath::mperspective(fovY, aspect, nearZ, farZ);
+    viewMatrix_ = bromath::mlookAt(eye, target, up);
     cameraEye_ = eye;
     cameraNearZ_ = nearZ; cameraFarZ_ = farZ; cameraFovY_ = fovY; cameraAspect_ = aspect;
     cameraIsPerspective_ = true;
@@ -1355,15 +1359,15 @@ void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
 
 void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
                                const Vec3& eye, const Quat& orientation) {
-    projectionMatrix_ = Mat4::perspective(fovY, aspect, nearZ, farZ);
+    projectionMatrix_ = bromath::mperspective(fovY, aspect, nearZ, farZ);
     // View matrix = inverse camera transform. For unit quaternion, inverse = conjugate.
-    Quat inv = orientation.conjugate();
-    viewMatrix_ = Mat4::fromQuat(inv);
+    Quat inv = bromath::qconjugate(orientation);
+    viewMatrix_ = bromath::mfromQuat(inv);
     // Translate in rotated space: view translation = inv.rotate(-eye)
-    Vec3 negEye = inv.rotate({-eye.x, -eye.y, -eye.z});
-    viewMatrix_.m[3][0] = negEye.x;
-    viewMatrix_.m[3][1] = negEye.y;
-    viewMatrix_.m[3][2] = negEye.z;
+    Vec3 negEye = bromath::qrotate(inv, {-eye.x, -eye.y, -eye.z});
+    viewMatrix_.at(0, 3) = negEye.x;
+    viewMatrix_.at(1, 3) = negEye.y;
+    viewMatrix_.at(2, 3) = negEye.z;
     cameraEye_ = eye;
     cameraNearZ_ = nearZ; cameraFarZ_ = farZ; cameraFovY_ = fovY; cameraAspect_ = aspect;
     cameraIsPerspective_ = true;
@@ -1372,8 +1376,8 @@ void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ
 void SceneGraph::setCameraOrtho(float left, float right, float bottom, float top,
                                 float nearZ, float farZ,
                                 const Vec3& eye, const Vec3& target, const Vec3& up) {
-    projectionMatrix_ = Mat4::orthographic(left, right, bottom, top, nearZ, farZ);
-    viewMatrix_ = Mat4::lookAt(eye, target, up);
+    projectionMatrix_ = bromath::mortho(left, right, bottom, top, nearZ, farZ);
+    viewMatrix_ = bromath::mlookAt(eye, target, up);
     cameraEye_ = eye;
     cameraNearZ_ = nearZ; cameraFarZ_ = farZ;
     cameraIsPerspective_ = false;
@@ -2417,9 +2421,9 @@ void SceneGraph::renderSkyboxPass() {
     // is orthonormal (lookAt produces it), so its transpose is its inverse
     // and gives view→world. Pass that to the shader as a mat3.
     float viewToWorld[9] = {
-        viewMatrix_.m[0][0], viewMatrix_.m[0][1], viewMatrix_.m[0][2],
-        viewMatrix_.m[1][0], viewMatrix_.m[1][1], viewMatrix_.m[1][2],
-        viewMatrix_.m[2][0], viewMatrix_.m[2][1], viewMatrix_.m[2][2],
+        viewMatrix_.at(0, 0), viewMatrix_.at(1, 0), viewMatrix_.at(2, 0),
+        viewMatrix_.at(0, 1), viewMatrix_.at(1, 1), viewMatrix_.at(2, 1),
+        viewMatrix_.at(0, 2), viewMatrix_.at(1, 2), viewMatrix_.at(2, 2),
     };
     // GLSL mat3 columns are: column 0 = view→world basis vector for view-X.
     // viewMatrix's row 0 (m[0..2][0]) is the world-space camera-right vector,
@@ -2680,9 +2684,9 @@ void SceneGraph::uploadLights(const std::vector<LightNode*>& lights,
         // Light world position (column-major translation column), then
         // made camera-relative to match vWorldPos in the fragment shader.
         const Mat4& M = L->worldMatrix();
-        Vec3 rel { M.m[3][0] - cameraEye_.x,
-                   M.m[3][1] - cameraEye_.y,
-                   M.m[3][2] - cameraEye_.z };
+        Vec3 rel { M.at(0, 3) - cameraEye_.x,
+                   M.at(1, 3) - cameraEye_.y,
+                   M.at(2, 3) - cameraEye_.z };
 
         Vec3 d = L->direction();
         float dlen = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
@@ -2849,7 +2853,7 @@ SceneGraph::WorldAABB SceneGraph::computeShadowCasterBounds() const {
                         (c & 2) ? bb.max.y : bb.min.y,
                         (c & 4) ? bb.max.z : bb.min.z,
                     };
-                    Vec3 wp = M.transformPoint(lp);
+                    Vec3 wp = bromath::mtransformPoint(M, lp);
                     out.min[0] = std::min(out.min[0], wp.x);
                     out.min[1] = std::min(out.min[1], wp.y);
                     out.min[2] = std::min(out.min[2], wp.z);
@@ -2914,7 +2918,7 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
     if (bounds.empty) return;
 
     // Bias matrix maps NDC [-1,1] to UV [0,1] in all three dims.
-    Mat4 bias = Mat4::translate(0.5f, 0.5f, 0.5f) * Mat4::scale(0.5f, 0.5f, 0.5f);
+    Mat4 bias = bromath::mmul(bromath::mtranslate({0.5f, 0.5f, 0.5f}), bromath::mscale({0.5f, 0.5f, 0.5f}));
 
     // Allocate atlas tiles in a square grid: ceil(sqrt(MAX)) x ceil(sqrt(MAX)).
     // For MAX=16 this gives a clean 4x4. Each tile gets equal area.
@@ -2924,10 +2928,10 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
     auto bakeTile = [&](int slot, const Mat4& lightProjView, LightNode* L) {
         // shadowMatrixCamRel = bias * proj * view * translate(cameraEye)
         // so the FS can multiply directly against vWorldPos (camera-relative).
-        Mat4 t = Mat4::translate(cameraEye_.x, cameraEye_.y, cameraEye_.z);
-        Mat4 cam = bias * lightProjView * t;
-        std::memcpy(shadowMatrixCamRel_[slot], cam.data(), sizeof(float) * 16);
-        std::memcpy(shadowRenderMatrix_[slot], lightProjView.data(), sizeof(float) * 16);
+        Mat4 t = bromath::mtranslate({cameraEye_.x, cameraEye_.y, cameraEye_.z});
+        Mat4 cam = bromath::mmul(bromath::mmul(bias, lightProjView), t);
+        std::memcpy(shadowMatrixCamRel_[slot], cam.data, sizeof(float) * 16);
+        std::memcpy(shadowRenderMatrix_[slot], lightProjView.data, sizeof(float) * 16);
 
         int gx = slot % gridDim;
         int gy = slot / gridDim;
@@ -2958,9 +2962,9 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
 
             // Camera basis from view matrix (transposed columns: row 0 = right,
             // row 1 = up, row 2 = -forward). lookAt produces the same.
-            Vec3 sBasis{viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
-            Vec3 uBasis{viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
-            Vec3 fBasis{-viewMatrix_.m[0][2], -viewMatrix_.m[1][2], -viewMatrix_.m[2][2]};
+            Vec3 sBasis{viewMatrix_.at(0, 0), viewMatrix_.at(0, 1), viewMatrix_.at(0, 2)};
+            Vec3 uBasis{viewMatrix_.at(1, 0), viewMatrix_.at(1, 1), viewMatrix_.at(1, 2)};
+            Vec3 fBasis{-viewMatrix_.at(2, 0), -viewMatrix_.at(2, 1), -viewMatrix_.at(2, 2)};
 
             // Number of cascades. Cap to remaining tile budget so we don't
             // blow past the atlas — better to drop late cascades than to
@@ -3049,7 +3053,7 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
                           center.y - d.y * radius * 2.0f,
                           center.z - d.z * radius * 2.0f };
                 Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
-                Mat4 view = Mat4::lookAt(eye, center, up);
+                Mat4 view = bromath::mlookAt(eye, center, up);
 
                 // Texel-snap the cascade origin in light-space xy. Without
                 // this the shadow edges shimmer as the camera moves because
@@ -3057,13 +3061,13 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
                 // each frame. Snap the world center, not the projection.
                 int tilePx = shadowAtlasSize_ / 4;
                 float texelSize = (2.0f * radius) / (float)tilePx;
-                Vec3 centerLS = view.transformPoint(center);
+                Vec3 centerLS = bromath::mtransformPoint(view, center);
                 float snapX = std::floor(centerLS.x / texelSize) * texelSize;
                 float snapY = std::floor(centerLS.y / texelSize) * texelSize;
                 float dxLS = centerLS.x - snapX;
                 float dyLS = centerLS.y - snapY;
                 // Build ortho extents around the snapped origin.
-                Mat4 proj = Mat4::orthographic(
+                Mat4 proj = bromath::mortho(
                     -radius - dxLS, radius - dxLS,
                     -radius - dyLS, radius - dyLS,
                     -radius * 2.0f - radius, -(-radius * 2.0f) + radius);
@@ -3084,12 +3088,12 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
                                               boundsExt.y*boundsExt.y +
                                               boundsExt.z*boundsExt.z);
                 float depthExt = std::max(sceneRadius * 2.0f, radius * 4.0f);
-                proj = Mat4::orthographic(
+                proj = bromath::mortho(
                     -radius - dxLS, radius - dxLS,
                     -radius - dyLS, radius - dyLS,
                     0.0f, depthExt);
 
-                Mat4 projView = proj * view;
+                Mat4 projView = bromath::mmul(proj, view);
                 bakeTile(firstSlot + c, projView, L);
                 shadowTileCount_++;
             }
@@ -3105,7 +3109,7 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
             d.x /= dlen; d.y /= dlen; d.z /= dlen;
 
             const Mat4& M = L->worldMatrix();
-            Vec3 eye{M.m[3][0], M.m[3][1], M.m[3][2]};
+            Vec3 eye{M.at(0,3), M.at(1,3), M.at(2,3)};
             Vec3 target{eye.x + d.x, eye.y + d.y, eye.z + d.z};
             Vec3 up = (std::abs(d.y) > 0.99f) ? Vec3{0,0,1} : Vec3{0,1,0};
 
@@ -3115,9 +3119,9 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
             // Cap aperture below 180 deg so the perspective matrix stays sane.
             if (fov > 3.10f) fov = 3.10f;
 
-            Mat4 view = Mat4::lookAt(eye, target, up);
-            Mat4 proj = Mat4::perspective(fov, 1.0f, near, far);
-            Mat4 projView = proj * view;
+            Mat4 view = bromath::mlookAt(eye, target, up);
+            Mat4 proj = bromath::mperspective(fov, 1.0f, near, far);
+            Mat4 projView = bromath::mmul(proj, view);
             bakeTile(shadowTileCount_, projView, L);
             lightShadowSlot_[i] = shadowTileCount_;
             lightShadowSlotCount_[i] = 1;
@@ -3130,13 +3134,13 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
             if (shadowTileCount_ + 6 > kMaxShadowTiles) continue;
 
             const Mat4& M = L->worldMatrix();
-            Vec3 eye{M.m[3][0], M.m[3][1], M.m[3][2]};
+            Vec3 eye{M.at(0,3), M.at(1,3), M.at(2,3)};
             float far  = std::max(L->range(), 0.5f);
             float near = std::max(0.05f, far * 0.005f);
             // PI/2 + small fudge so the 6 frusta have a smidge of overlap
             // at the seams; eliminates a single-texel sliver of "no shadow"
             // at face boundaries.
-            Mat4 proj = Mat4::perspective(1.5708f, 1.0f, near, far);
+            Mat4 proj = bromath::mperspective(1.5708f, 1.0f, near, far);
 
             // Cube-face conventions (matches D3D / OpenGL cube map order).
             // Each entry is { forward.xyz, up.xyz }.
@@ -3158,8 +3162,8 @@ void SceneGraph::prepareShadows(const std::vector<LightNode*>& lights) {
                 Vec3 target{eye.x + forward[f].x,
                             eye.y + forward[f].y,
                             eye.z + forward[f].z};
-                Mat4 view = Mat4::lookAt(eye, target, upVec[f]);
-                Mat4 projView = proj * view;
+                Mat4 view = bromath::mlookAt(eye, target, upVec[f]);
+                Mat4 projView = bromath::mmul(proj, view);
                 bakeTile(firstSlot + f, projView, L);
                 shadowTileCount_++;
             }
@@ -3214,17 +3218,17 @@ void SceneGraph::renderShadowPass() {
         // shadowRenderMatrix_ holds lightProj*lightView in WORLD space.
         // Per-mesh: uMVP = renderMatrix * meshWorldModel.
         Mat4 lightVP;
-        std::memcpy(lightVP.data(), shadowRenderMatrix_[slot], sizeof(float) * 16);
+        std::memcpy(lightVP.data, shadowRenderMatrix_[slot], sizeof(float) * 16);
 
         for (auto* mesh : shadowCasters_) {
-            Mat4 mvp = lightVP * mesh->worldMatrix();
-            glUniformMatrix4fv(shadowUMVP_, 1, GL_FALSE, mvp.data());
+            Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
+            glUniformMatrix4fv(shadowUMVP_, 1, GL_FALSE, mvp.data);
             mesh->drawRaw();
         }
 
         if (hasInstancedCasters && shadowInstancedProgram_) {
             glUseProgram(shadowInstancedProgram_);
-            glUniformMatrix4fv(shadowInstULightVP_, 1, GL_FALSE, lightVP.data());
+            glUniformMatrix4fv(shadowInstULightVP_, 1, GL_FALSE, lightVP.data);
             for (auto* m : shadowInstancedCasters_) {
                 m->drawRawInstancedDepth();
             }
@@ -3294,7 +3298,7 @@ void SceneGraph::render() {
         collectLights(lights);
         static LightNode implicitSun;
         implicitSun.setKind(LightNode::Kind::Directional);
-        implicitSun.setDirection(Vec3(-0.3f, -1.0f, -0.5f).normalized());
+        implicitSun.setDirection(bromath::vnorm(Vec3(-0.3f, -1.0f, -0.5f)));
         implicitSun.setColor(1.0f, 0.98f, 0.95f);
         implicitSun.setIntensity(3.0f);
         std::vector<LightNode*> fallback;
@@ -3376,11 +3380,11 @@ void SceneGraph::render() {
                     glUseProgram(meshInstancedProgram_);
 
                     Mat4 viewRot = viewMatrix_;
-                    viewRot.m[3][0] = 0.0f;
-                    viewRot.m[3][1] = 0.0f;
-                    viewRot.m[3][2] = 0.0f;
-                    Mat4 vp = projectionMatrix_ * viewRot;
-                    glUniformMatrix4fv(uInstVP_, 1, GL_FALSE, vp.data());
+                    viewRot.at(0, 3) = 0.0f;
+                    viewRot.at(1, 3) = 0.0f;
+                    viewRot.at(2, 3) = 0.0f;
+                    Mat4 vp = bromath::mmul(projectionMatrix_, viewRot);
+                    glUniformMatrix4fv(uInstVP_, 1, GL_FALSE, vp.data);
                     glUniform3f(uInstCameraEye_, cameraEye_.x, cameraEye_.y, cameraEye_.z);
 
                     glUniform1f(uInstFogStart_, fogStart_);
@@ -3418,11 +3422,11 @@ void SceneGraph::render() {
                 // View-rotation-only matrix: in camera-relative space the eye
                 // is at origin, so only orientation remains.
                 Mat4 viewRot = viewMatrix_;
-                viewRot.m[3][0] = 0.0f;
-                viewRot.m[3][1] = 0.0f;
-                viewRot.m[3][2] = 0.0f;
-                Mat4 vp = projectionMatrix_ * viewRot;
-                glUniformMatrix4fv(bbUVP_, 1, GL_FALSE, vp.data());
+                viewRot.at(0, 3) = 0.0f;
+                viewRot.at(1, 3) = 0.0f;
+                viewRot.at(2, 3) = 0.0f;
+                Mat4 vp = bromath::mmul(projectionMatrix_, viewRot);
+                glUniformMatrix4fv(bbUVP_, 1, GL_FALSE, vp.data);
                 glBindVertexArray(bbVAO_);
 
                 std::function<void(SceneNode*)> walkBB = [&](SceneNode* n) {
@@ -3543,14 +3547,14 @@ bool SceneGraph::unprojectLocal(float localX, float localY,
     if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return false;
     const auto& P = projectionMatrix_;
     const auto& V = viewMatrix_;
-    float m11 = P.m[1][1];
+    float m11 = P.at(1, 1);
     if (!std::isfinite(m11) || m11 <= 0.0f) return false;
     float tanHalfFov = 1.0f / m11;
     // View rows (camera basis in world space).
     // Row 0 = right, row 1 = up, row 2 = -forward (camera looks along -Z).
-    Vec3 right  (V.m[0][0], V.m[1][0], V.m[2][0]);
-    Vec3 up     (V.m[0][1], V.m[1][1], V.m[2][1]);
-    Vec3 forward(-V.m[0][2], -V.m[1][2], -V.m[2][2]);
+    Vec3 right  (V.at(0, 0), V.at(0, 1), V.at(0, 2));
+    Vec3 up     (V.at(1, 0), V.at(1, 1), V.at(1, 2));
+    Vec3 forward(-V.at(2, 0), -V.at(2, 1), -V.at(2, 2));
 
     float aspect = static_cast<float>(canvasWidth_) / static_cast<float>(canvasHeight_);
     float nx = (2.0f * localX / static_cast<float>(canvasWidth_)) - 1.0f;
@@ -3559,7 +3563,7 @@ bool SceneGraph::unprojectLocal(float localX, float localY,
     Vec3 dir = forward
              + right * (nx * aspect * tanHalfFov)
              + up    * (ny * tanHalfFov);
-    outDir    = dir.normalized();
+    outDir    = bromath::vnorm(dir);
     outOrigin = cameraEye_;
     return true;
 }
@@ -3576,8 +3580,8 @@ bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
     // slightly off the picking quad when the camera nears vertical, but
     // full-face is the common case and full-face picking is consistent
     // with what the user sees most of the time.
-    const Vec3 camRight  {viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
-    const Vec3 camUp     {viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
+    const Vec3 camRight  {viewMatrix_.at(0, 0), viewMatrix_.at(0, 1), viewMatrix_.at(0, 2)};
+    const Vec3 camUp     {viewMatrix_.at(1, 0), viewMatrix_.at(1, 1), viewMatrix_.at(1, 2)};
     const Vec3 quadNormal{
         camRight.y * camUp.z - camRight.z * camUp.y,
         camRight.z * camUp.x - camRight.x * camUp.z,
@@ -3654,21 +3658,21 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     // Camera-relative rendering: offset model position by camera to avoid
     // float precision issues at large world coordinates (planet scale).
     Mat4 model = mesh->worldMatrix();
-    model.m[3][0] -= cameraEye_.x;
-    model.m[3][1] -= cameraEye_.y;
-    model.m[3][2] -= cameraEye_.z;
+    model.at(0, 3) -= cameraEye_.x;
+    model.at(1, 3) -= cameraEye_.y;
+    model.at(2, 3) -= cameraEye_.z;
 
     // View matrix without translation (rotation only) since model is now
     // camera-relative
     Mat4 viewRot = viewMatrix_;
-    viewRot.m[3][0] = 0.0f;
-    viewRot.m[3][1] = 0.0f;
-    viewRot.m[3][2] = 0.0f;
+    viewRot.at(0, 3) = 0.0f;
+    viewRot.at(1, 3) = 0.0f;
+    viewRot.at(2, 3) = 0.0f;
 
-    Mat4 mvp = projectionMatrix_ * viewRot * model;
+    Mat4 mvp = bromath::mmul(bromath::mmul(projectionMatrix_, viewRot), model);
 
-    glUniformMatrix4fv(uMVP_, 1, GL_FALSE, mvp.data());
-    glUniformMatrix4fv(uModel_, 1, GL_FALSE, model.data());
+    glUniformMatrix4fv(uMVP_, 1, GL_FALSE, mvp.data);
+    glUniformMatrix4fv(uModel_, 1, GL_FALSE, model.data);
     glUniform4fv(uColor_, 1, mesh->color());
     glUniform1f(uEmissive_, mesh->emissive());
     glUniform3fv(uEmissiveColor_, 1, mesh->emissiveColor());
@@ -3979,9 +3983,9 @@ void SceneGraph::renderBillboardNode(SceneNode* node) {
     const float az = anchor.z - cameraEye_.z;
 
     // Camera basis in world space from rows of view matrix (see renderMesh).
-    const Vec3 camRight   {viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
-    const Vec3 camUp      {viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
-    const Vec3 camForward { -viewMatrix_.m[0][2], -viewMatrix_.m[1][2], -viewMatrix_.m[2][2]};
+    const Vec3 camRight   {viewMatrix_.at(0, 0), viewMatrix_.at(0, 1), viewMatrix_.at(0, 2)};
+    const Vec3 camUp      {viewMatrix_.at(1, 0), viewMatrix_.at(1, 1), viewMatrix_.at(1, 2)};
+    const Vec3 camForward { -viewMatrix_.at(2, 0), -viewMatrix_.at(2, 1), -viewMatrix_.at(2, 2)};
 
     Vec3 right = camRight;
     Vec3 up    = camUp;
@@ -3992,7 +3996,7 @@ void SceneGraph::renderBillboardNode(SceneNode* node) {
         if (std::fabs(camForward.y) < 0.99f) {
             up = {0.0f, 1.0f, 0.0f};
             Vec3 flatRight{camRight.x, 0.0f, camRight.z};
-            float len = flatRight.length();
+            float len = bromath::vlen(flatRight);
             if (len > 1e-5f) {
                 right = flatRight * (1.0f / len);
             }
@@ -4028,13 +4032,13 @@ void SceneGraph::renderLightIcon(LightNode* light) {
     if (!light) return;
 
     const Mat4& M = light->worldMatrix();
-    const float ax = M.m[3][0] - cameraEye_.x;
-    const float ay = M.m[3][1] - cameraEye_.y;
-    const float az = M.m[3][2] - cameraEye_.z;
+    const float ax = M.at(0, 3) - cameraEye_.x;
+    const float ay = M.at(1, 3) - cameraEye_.y;
+    const float az = M.at(2, 3) - cameraEye_.z;
 
     // Full-billboard (camera-facing) — icons always face the camera.
-    const Vec3 camRight{viewMatrix_.m[0][0], viewMatrix_.m[1][0], viewMatrix_.m[2][0]};
-    const Vec3 camUp   {viewMatrix_.m[0][1], viewMatrix_.m[1][1], viewMatrix_.m[2][1]};
+    const Vec3 camRight{viewMatrix_.at(0, 0), viewMatrix_.at(0, 1), viewMatrix_.at(0, 2)};
+    const Vec3 camUp   {viewMatrix_.at(1, 0), viewMatrix_.at(1, 1), viewMatrix_.at(1, 2)};
 
     const Vec3& lc = light->color();
     // Keep icon visible even for lights with very dark configured colors.

@@ -152,7 +152,7 @@ void ParticleNode::onRender(SceneGraph& graph) {
     cs->save();
     // Particle simulation lives in node-local space; apply the node's world
     // transform once and draw each particle's offset relative to that.
-    cs->setTransform(wm.m[0][0], wm.m[0][1], wm.m[1][0], wm.m[1][1], wm.m[3][0], wm.m[3][1]);
+    cs->setTransform(wm.at(0, 0), wm.at(1, 0), wm.at(0, 1), wm.at(1, 1), wm.at(0, 3), wm.at(1, 3));
 
     int prevOp = cs->globalCompositeOperation();
     if (blend_ == Blend::Additive) {

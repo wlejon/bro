@@ -33,12 +33,12 @@ public:
 
     /// World-space direction for Directional and Spot lights. Does not need
     /// to be unit length; normalized on upload. Ignored for Point.
-    const Vec3& direction() const { return direction_; }
-    void setDirection(const Vec3& d) { direction_ = d; }
+    const bromath::Vec3& direction() const { return direction_; }
+    void setDirection(const bromath::Vec3& d) { direction_ = d; }
 
     /// Linear RGB in 0-1. Multiplied by `intensity` at shade time.
-    const Vec3& color() const { return color_; }
-    void setColor(const Vec3& c) { color_ = c; }
+    const bromath::Vec3& color() const { return color_; }
+    void setColor(const bromath::Vec3& c) { color_ = c; }
     void setColor(float r, float g, float b) { color_ = {r, g, b}; }
 
     float intensity() const { return intensity_; }
@@ -89,8 +89,8 @@ public:
 
 private:
     Kind kind_ = Kind::Directional;
-    Vec3 direction_{0.0f, -1.0f, 0.0f};
-    Vec3 color_{1.0f, 1.0f, 1.0f};
+    bromath::Vec3 direction_{0.0f, -1.0f, 0.0f};
+    bromath::Vec3 color_{1.0f, 1.0f, 1.0f};
     float intensity_ = 1.0f;
     float range_ = 10.0f;
     float innerAngle_ = 0.35f;  // ~20 deg

@@ -147,7 +147,7 @@ public:
     /// Set a full 3D camera (perspective projection + lookAt view).
     /// Call with fovY in radians, aspect ratio, near/far clip, eye position, look-at target.
     void setCamera(float fovY, float aspect, float nearZ, float farZ,
-                   const Vec3& eye, const Vec3& target, const Vec3& up = {0, 1, 0});
+                   const bromath::Vec3& eye, const bromath::Vec3& target, const bromath::Vec3& up = {0, 1, 0});
 
     /// When true, setCanvasSize() rebuilds the projection matrix using the
     /// new canvas aspect ratio (and the stored fovY/near/far). Use this when
@@ -159,19 +159,19 @@ public:
     /// Set a 3D camera from a quaternion orientation (no lookAt — avoids precision loss).
     /// The quaternion represents the camera's world-space orientation.
     void setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
-                       const Vec3& eye, const Quat& orientation);
+                       const bromath::Vec3& eye, const bromath::Quat& orientation);
 
     /// Set an orthographic camera.
     void setCameraOrtho(float left, float right, float bottom, float top,
                         float nearZ, float farZ,
-                        const Vec3& eye, const Vec3& target, const Vec3& up = {0, 1, 0});
+                        const bromath::Vec3& eye, const bromath::Vec3& target, const bromath::Vec3& up = {0, 1, 0});
 
     /// Direct matrix access (for Phase 4 MeshNode rendering).
-    const Mat4& viewMatrix() const { return viewMatrix_; }
-    const Mat4& projectionMatrix() const { return projectionMatrix_; }
+    const bromath::Mat4& viewMatrix() const { return viewMatrix_; }
+    const bromath::Mat4& projectionMatrix() const { return projectionMatrix_; }
 
     /// Camera eye position (for lighting calculations).
-    const Vec3& cameraEye() const { return cameraEye_; }
+    const bromath::Vec3& cameraEye() const { return cameraEye_; }
 
     /// Unproject canvas-local pixel coordinates to a world-space ray.
     /// `localX` / `localY` are in pixels relative to the canvas (top-left
@@ -180,7 +180,7 @@ public:
     /// and view matrix orientation to build the ray, so it works for both
     /// setCamera() and setCameraQuat() code paths.
     bool unprojectLocal(float localX, float localY,
-                        Vec3& outOrigin, Vec3& outDir) const;
+                        bromath::Vec3& outOrigin, bromath::Vec3& outDir) const;
 
     /// Pick the front-most world-anchored HtmlNode hit by a canvas-local
     /// ray. On hit, writes the HtmlNode pointer and the local CSS-pixel
@@ -394,9 +394,9 @@ private:
     physics::PhysicsWorld* physicsWorld_ = nullptr;
 
     // 3D camera matrices
-    Mat4 viewMatrix_;
-    Mat4 projectionMatrix_;
-    Vec3 cameraEye_;
+    bromath::Mat4 viewMatrix_;
+    bromath::Mat4 projectionMatrix_;
+    bromath::Vec3 cameraEye_;
 
     // Cached camera intrinsics — needed by CSM cascade fitting (which has to
     // walk the view-frustum corners). Set by every setCamera*() entry point.

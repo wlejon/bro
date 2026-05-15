@@ -64,7 +64,7 @@ struct TerrainConfig {
 
     // World-space origin of this terrain. Allows multiple terrains at
     // different positions (e.g. multiple planets).
-    Vec3 origin = {0, 0, 0};
+    bromath::Vec3 origin = {0, 0, 0};
 
     // Material palette: RGBA floats, 4 per material ID. Index 0 = air.
     std::vector<float> palette;
@@ -130,7 +130,7 @@ public:
     int update(float camX, float camY, float camZ);
 
     /// Terrain-specific raycast (LOD 0 only). Returns chunk + voxel info.
-    TerrainHit raycast(const Vec3& origin, const Vec3& dir, float maxDist) const;
+    TerrainHit raycast(const bromath::Vec3& origin, const bromath::Vec3& dir, float maxDist) const;
 
     /// Height sculpting at world coordinates. material=0 lowers, >0 raises.
     bool setVoxel(float wx, float wy, float wz, uint8_t material);
@@ -178,7 +178,7 @@ private:
     void generateHeightmap(ChunkEntry& entry, int cx, int cz, int lod);
     void buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod);
     void colorizeByHeight(bromesh::MeshData& mesh);
-    Vec3 sphereAnchor(float flatX, float flatZ) const;
+    bromath::Vec3 sphereAnchor(float flatX, float flatZ) const;
     void applyCurvatureToMesh(bromesh::MeshData& mesh, float chunkCenterX,
                               float chunkCenterZ) const;
     void loadChunk(int cx, int cz, int lod);
