@@ -23,6 +23,24 @@ public:
     Type type() const override { return Type::Mesh; }
     void onRender(SceneGraph& graph) override;
 
+    // --- Draw mode ---
+
+    /// What GL primitive the index buffer encodes. Triangles is the default
+    /// and matches every existing call site. Lines reinterprets `indices` as
+    /// pairs of endpoint indices and issues GL_LINES. Lines lack normals/UVs/
+    /// tangents, so switching to Lines also flips the node to unlit and
+    /// disables shadow casting (lines can't sensibly shadow anything).
+    enum class DrawMode { Triangles, Lines };
+
+    void setDrawMode(DrawMode m);
+    DrawMode drawMode() const { return drawMode_; }
+
+    /// Line width in pixels, forwarded to glLineWidth() before the draw.
+    /// Most core-profile drivers clamp to 1; values >1 are not guaranteed.
+    /// Ignored when drawMode == Triangles.
+    void setLineWidth(float w) { lineWidth_ = (w > 0.0f) ? w : 1.0f; }
+    float lineWidth() const { return lineWidth_; }
+
     // --- Mesh data ---
 
     /// Set mesh geometry. Uploads to GPU on next render and invalidates the
@@ -238,6 +256,9 @@ private:
     float subsurface_ = 0.0f;
     float alphaCutoff_ = 0.0f;
     float windMask_ = 0.0f;
+
+    DrawMode drawMode_ = DrawMode::Triangles;
+    float lineWidth_ = 1.0f;
 };
 
 } // namespace bro::scene

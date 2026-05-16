@@ -257,9 +257,24 @@ bool MeshNode::drawRaw() {
     if (!vao_ || indexCount_ == 0) return false;
 
     glBindVertexArray(vao_);
-    glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
+    if (drawMode_ == DrawMode::Lines) {
+        glLineWidth(lineWidth_);
+        glDrawElements(GL_LINES, indexCount_, GL_UNSIGNED_INT, nullptr);
+    } else {
+        glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
+    }
     glBindVertexArray(0);
     return true;
+}
+
+void MeshNode::setDrawMode(DrawMode m) {
+    drawMode_ = m;
+    if (m == DrawMode::Lines) {
+        // Line meshes have no normals/tangents, so PBR lighting would be
+        // garbage. Drop them to the unlit path and out of the shadow pass.
+        unlit_ = true;
+        castsShadow_ = false;
+    }
 }
 
 } // namespace bro::scene

@@ -1493,6 +1493,24 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, acVal);
 
+        // Draw mode — 'lines' switches to GL_LINES (indices = endpoint pairs)
+        // and flips the node to unlit + non-shadow-casting. Default 'triangles'.
+        // Set before castsShadow/unlit so explicit overrides win.
+        JSValue dmVal = JS_GetPropertyStr(ctx, opts, "drawMode");
+        if (JS_IsString(dmVal)) {
+            std::string s = jsStr(ctx, dmVal);
+            if (s == "lines" || s == "line")
+                node->setDrawMode(scene::MeshNode::DrawMode::Lines);
+            else
+                node->setDrawMode(scene::MeshNode::DrawMode::Triangles);
+        }
+        JS_FreeValue(ctx, dmVal);
+
+        JSValue lwVal = JS_GetPropertyStr(ctx, opts, "lineWidth");
+        if (!JS_IsUndefined(lwVal))
+            node->setLineWidth((float)jsNum(ctx, lwVal));
+        JS_FreeValue(ctx, lwVal);
+
         // Wind sway opt-in. Accepts a boolean (true → 1.0) or a [0,1] scalar.
         // Per-vertex bend is sourced from vertex-color R (matches Mesh.leafCard
         // output); this multiplier gates the whole mesh.
