@@ -111,6 +111,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | htmlayout | `htmlayout` | HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, layout (standalone or submodule) |
 | broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) (standalone or submodule) |
 | bromesh | `bromesh` | Mesh generation, manipulation, analysis, and I/O (standalone or submodule) |
+| broflora | `broflora` | Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms (standalone or submodule) |
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
@@ -127,6 +128,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 |------|-------------|
 | `docs/audio-api.js` | `AudioContext`, Web Audio-inspired nodes, synth, sequencing, spatial, mix buses |
 | `docs/mesh-api.js` | `bro.mesh` — primitives, CSG, simplification, UV, import/export |
+| `docs/flora-api.js` | `bro.flora` — broflora ecosystem sim: prototypes, plants, step, mesh/segment/foliage/bloom emit |
 | `docs/math-api.js` | `bro.math` — bromath types surfaced to JS (currently `SpatialHash3D`) |
 | `docs/noise-api.js` | `bro.noise` — FastNoise2 SIMD noise generation |
 | `docs/image-api.js` | `bro.image` — composable typed-array kernels (reduce, map, combine, lookup, stencil, resample); `bro.image.gpu.colormap` (WebGL2 path) |

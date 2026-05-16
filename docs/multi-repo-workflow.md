@@ -1,6 +1,6 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on seven sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
+bro depends on eight sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
 An eighth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
@@ -12,6 +12,7 @@ An eighth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `
 | **htmlayout** | `../htmlayout` | `third_party/htmlayout` |
 | **broaudio** | `../broaudio` | `third_party/broaudio` |
 | **bromesh** | `../bromesh` | `third_party/bromesh` |
+| **broflora** | `../broflora` | `third_party/broflora` |
 | **brogameagent** | `../brogameagent` | `third_party/brogameagent` |
 
 ## Directory Layout
@@ -26,6 +27,7 @@ D:/projects/
 │       ├── htmlayout/            # submodule (CI / fallback)
 │       ├── broaudio/             # submodule (CI / fallback)
 │       ├── bromesh/              # submodule (CI / fallback)
+│       ├── broflora/             # submodule (CI / fallback)
 │       └── brogameagent/         # submodule (CI / fallback)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── qjsbind/                      # standalone repo (preferred for dev)
@@ -33,6 +35,7 @@ D:/projects/
 ├── htmlayout/                    # standalone repo (preferred for dev)
 ├── broaudio/                     # standalone repo (preferred for dev)
 ├── bromesh/                      # standalone repo (preferred for dev)
+├── broflora/                     # standalone repo (preferred for dev)
 ├── brogameagent/                 # standalone repo (preferred for dev)
 └── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
 ```

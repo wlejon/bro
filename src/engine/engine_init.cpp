@@ -40,6 +40,7 @@
 #include "js/menu_bindings.h"
 #include "js/gizmo_bindings.h"
 #include "js/mesh_bindings.h"
+#include "js/flora_bindings.h"
 #include "js/math_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
@@ -166,6 +167,9 @@ Engine::Engine(const EngineConfig& config)
 
     // Mesh bindings (standalone Mesh class wrapping bromesh — all modes)
     js::MeshBindings::install(jsRuntime_->getContext());
+
+    // Flora bindings (broflora ecosystem sim — bro.flora.* — all modes)
+    js::FloraBindings::install(jsRuntime_->getContext());
 
     // Math bindings (bro.math.* — SpatialHash3D and future bromath types)
     js::MathBindings::install(jsRuntime_->getContext());

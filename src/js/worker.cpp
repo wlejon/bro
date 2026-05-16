@@ -2,6 +2,7 @@
 #include "util/asset_mounts.h"
 #include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
+#include "js/flora_bindings.h"
 #include "js/math_bindings.h"
 #include "js/message_serializer.h"
 #include "js/net_bindings.h"
@@ -221,6 +222,9 @@ void Worker::threadFunc()
 
     // --- 3b'. Install bro.math.* (SpatialHash3D, plus future bromath types) ---
     MathBindings::install(ctx);
+
+    // --- 3b''. Install bro.flora.* (broflora ecosystem sim) ---
+    FloraBindings::install(ctx);
 
     // --- 3b'. Install bro.ai.game (navmesh, pathfinding, LOS, steering).
     // No engine dependency; all state lives on JS-owned wrapper objects. ---
