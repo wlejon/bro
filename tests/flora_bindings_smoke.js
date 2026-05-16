@@ -107,4 +107,18 @@ assert(qOpen !== null && qOpen > 0.95,  'open cell reads ~full sun after step');
 assert(qCanopy !== null && qCanopy < qOpen, 'canopy cell darker than open cell');
 assert(qOut === null, 'sampleShadow OOB → null');
 
+// --- removePlant (swap-and-pop) -----------------------------------------
+const countBefore = world.plantCount;
+const lastIdx = countBefore - 1;
+const lastPlantInfo = world.plantInfo(lastIdx);
+// Remove index 0. The plant at lastIdx should move to slot 0.
+const ok = world.removePlant(0);
+assert(ok === true, 'removePlant(0) ok');
+assert(world.plantCount === countBefore - 1, 'plantCount decremented');
+const newInfo0 = world.plantInfo(0);
+assert(newInfo0.origin[0] === lastPlantInfo.origin[0], 'swap-and-pop: last plant moved to slot 0');
+assert(world.plantInfo(lastIdx) === null, 'last slot now empty');
+assert(world.removePlant(-1) === false, 'removePlant negative OOR fails');
+assert(world.removePlant(999) === false, 'removePlant positive OOR fails');
+
 console.log('flora_bindings_smoke ok');

@@ -302,6 +302,15 @@ static void installWorldClass(JSContext* ctx) {
         return (int)(w->world->plants.size() - 1);
     })
 
+    // -- remove plant (swap-and-pop) --
+    // Plant indices are not stable across removePlant or step — the
+    // sim's own senescence pass already invalidates indices when a
+    // plant fully dies. Callers must re-fetch indices after either.
+    .method("removePlant", [](FWW* w, int plantIdx) -> bool {
+        if (plantIdx < 0) return false;
+        return broflora::removePlant(*w->world, (uint32_t)plantIdx);
+    })
+
     // -- tick --
     .method("step", [](FWW* w, double dt) {
         broflora::step(*w->world, (float)dt);

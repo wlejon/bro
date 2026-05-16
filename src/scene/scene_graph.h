@@ -456,6 +456,7 @@ private:
     GLint uWindStrength_ = -1;
     GLint uWindTime_ = -1;
     GLint uWindFreq_ = -1;
+    GLint uWindMask_ = -1;
     GLint uLightCount_ = -1;
     GLint uLightType_ = -1;
     GLint uLightPos_ = -1;

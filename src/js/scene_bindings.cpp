@@ -1493,6 +1493,21 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, acVal);
 
+        // Wind sway opt-in. Accepts a boolean (true → 1.0) or a [0,1] scalar.
+        // Per-vertex bend is sourced from vertex-color R (matches Mesh.leafCard
+        // output); this multiplier gates the whole mesh.
+        JSValue wmVal = JS_GetPropertyStr(ctx, opts, "wind");
+        if (!JS_IsUndefined(wmVal)) {
+            if (JS_IsBool(wmVal)) {
+                node->setWindMask(JS_ToBool(ctx, wmVal) == 1 ? 1.0f : 0.0f);
+            } else {
+                double s = 0;
+                JS_ToFloat64(ctx, &s, wmVal);
+                node->setWindMask((float)s);
+            }
+        }
+        JS_FreeValue(ctx, wmVal);
+
         JSValue csVal = JS_GetPropertyStr(ctx, opts, "castsShadow");
         if (!JS_IsUndefined(csVal)) node->setCastsShadow(JS_ToBool(ctx, csVal) == 1);
         JS_FreeValue(ctx, csVal);

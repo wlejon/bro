@@ -162,6 +162,13 @@ public:
     void setAlphaCutoff(float c) { alphaCutoff_ = c; }
     float alphaCutoff() const { return alphaCutoff_; }
 
+    /// Wind sway opt-in [0,1]. The mesh VS multiplies the per-vertex bend
+    /// (sourced from vertex color R, 0..1) by this scalar before applying
+    /// the global wind delta. Defaults to 0 (no sway) so terrain and other
+    /// vertex-coloured meshes don't ripple. Flora meshes set this to 1.
+    void setWindMask(float m) { windMask_ = m; }
+    float windMask() const { return windMask_; }
+
     /// Release GPU resources (call before GL context is destroyed).
     void releaseGL();
 
@@ -230,6 +237,7 @@ private:
     bool twoSided_ = false;
     float subsurface_ = 0.0f;
     float alphaCutoff_ = 0.0f;
+    float windMask_ = 0.0f;
 };
 
 } // namespace bro::scene

@@ -119,6 +119,29 @@ world.addPlant({
 });
 
 /**
+ * Remove a plant by index. Swap-and-pop: the plant at the end of the
+ * internal vector is moved into the vacated slot, then the vector is
+ * shrunk. Returns true on success, false if `plantIdx` is out of range.
+ *
+ * Plant indices are NOT stable across `removePlant` or `step`. The
+ * simulation's senescence pass already erases fully-dead plants and
+ * appends new seedlings during `step`, so external code must not cache
+ * plant indices across either operation. Callers that maintain a
+ * mapping from world coordinates / chunks to plant indices should
+ * rebuild it after any sequence of `removePlant` or `step` calls.
+ *
+ * Modules inside plants reference only their plant's prototypes (by
+ * pointer) and other modules inside the same plant (by index), so the
+ * swap is safe — no cross-plant pointers exist.
+ *
+ * @param {number} plantIdx
+ * @returns {boolean}
+ */
+world.removePlant;
+
+world.removePlant(0);
+
+/**
  * Advance the simulation by `dt`. Internally runs light → basipetal/
  * acropetal vigor → development (age + tropism) → spawning → senescence.
  *

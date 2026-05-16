@@ -33,7 +33,6 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aColor;
 layout(location = 4) in vec4 aTangent;   // xyz = tangent, w = handedness
-layout(location = 5) in float aWindBend; // per-vertex sway weight (0 = static)
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
@@ -42,6 +41,9 @@ uniform vec3  uWindDir;
 uniform float uWindStrength;
 uniform float uWindTime;
 uniform float uWindFreq;
+uniform float uWindMask;   // per-mesh opt-in (0 = static, 1 = sway). Multiplied
+                           // into vertex-color R so flora opts in but terrain
+                           // (whose color R is per-vertex shade) stays still.
 
 out vec3 vWorldPos;
 out vec3 vNormal;
@@ -55,8 +57,8 @@ void main() {
     vec4 worldPos = uModel * vec4(aPos, 1.0);
     mat3 M3 = mat3(uModel);
     vec3 swayedAPos = aPos;
-    if (uWindStrength > 0.0) {
-        float bend  = aWindBend;
+    if (uWindStrength > 0.0 && uWindMask > 0.0) {
+        float bend  = aColor.r * uWindMask;
         float phase = sin(uWindTime * uWindFreq
                           + dot(worldPos.xz, vec2(0.3, 0.5)));
         vec3 deltaWorld = uWindDir * (phase * uWindStrength * bend);
@@ -1549,6 +1551,7 @@ void SceneGraph::ensureMeshPipeline() {
         uWindStrength_ = glGetUniformLocation(meshProgram_, "uWindStrength");
         uWindTime_     = glGetUniformLocation(meshProgram_, "uWindTime");
         uWindFreq_     = glGetUniformLocation(meshProgram_, "uWindFreq");
+        uWindMask_     = glGetUniformLocation(meshProgram_, "uWindMask");
         uLightCount_ = glGetUniformLocation(meshProgram_, "uLightCount");
         uLightType_ = glGetUniformLocation(meshProgram_, "uLightType");
         uLightPos_ = glGetUniformLocation(meshProgram_, "uLightPos");
@@ -3684,6 +3687,7 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     if (uAlphaCutoff_ >= 0) glUniform1f(uAlphaCutoff_, mesh->alphaCutoff());
     glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
     glUniform1f(uNearClip_, mesh->nearClipDist());
+    if (uWindMask_ >= 0) glUniform1f(uWindMask_, mesh->windMask());
 
     // Bind baseColor texture if present. Texture wins over vertex-color when
     // both are set — matches glTF PBR "baseColorTexture * baseColorFactor".
