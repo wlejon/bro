@@ -177,6 +177,102 @@ world.emitBloomAnchors;
 
 const blooms = world.emitBloomAnchors();
 
+// ── Per-plant emit ────────────────────────────────────────────────────
+// Same shapes as the world-level emit, restricted to one plant. Useful
+// for per-species rendering (assign each plant a colour, emit each
+// plant separately, merge per-species into one MeshNode) or for
+// inspector panels that need a single plant's geometry.
+//
+// All four return null when plantIdx is out of range; the array forms
+// return an empty array for valid plants that have nothing to emit yet
+// (no segments, pre-flowering, etc).
+
+/** @param {number} plantIdx
+ *  @param {number} [sides=6]
+ *  @returns {Mesh|null}                       */
+world.emitPlantMesh;
+
+/** @param {number} plantIdx
+ *  @returns {Array<BranchSegment>|null}       */
+world.emitPlantSegments;
+
+/** @param {number} plantIdx
+ *  @returns {Array<FoliageSample>|null}       */
+world.emitPlantFoliage;
+
+/** @param {number} plantIdx
+ *  @returns {Array<BloomAnchor>|null}         */
+world.emitPlantBloomAnchors;
+
+// ── Per-plant inspect ─────────────────────────────────────────────────
+/**
+ * Snapshot of one plant's runtime state plus a copy of every Species
+ * field. Returns null for out-of-range indices.
+ *
+ * @param {number} plantIdx
+ * @returns {{
+ *   origin: number[],
+ *   age: number,
+ *   flowering: boolean,
+ *   senescing: boolean,
+ *   moduleCount: number,
+ *   effectiveRootVigorMax: number,
+ *   rootVigor?: number,
+ *   rootLight?: number,
+ *   species: {
+ *     maxVigor:number, minVigor:number, rootVigorMax:number,
+ *     apicalControl:number, determinacy:number, shadeTolerance:number,
+ *     apicalControlMature:number, determinacyMature:number,
+ *     tropismDir:number[], tropismG1:number, tropismG2:number,
+ *     growthScale:number,
+ *     climateOptT:number, climateOptP:number, climateSigT:number, climateSigP:number,
+ *     maxAge:number, floweringAge:number, seedingRadius:number,
+ *     moduleMatureAge:number, pipeExp:number, leafDiameter:number,
+ *     terrainAnchorWeight:number, maxSeedingSlope:number,
+ *     distributionWeightCollisions:number, distributionWeightTropism:number,
+ *     tropismCosTarget:number
+ *   }
+ * }|null}
+ */
+world.plantInfo;
+
+const info = world.plantInfo(0);
+if (info && info.flowering) console.log('plant 0 has begun flowering');
+
+// ── Mid-sim mutators ─────────────────────────────────────────────────
+/**
+ * Update the world climate without rebuilding. The species adaptation
+ * factor σ(T, P) is computed on the fly each tick, so a UI slider can
+ * drive species succession in real time.
+ *
+ * Omitted fields keep their current value.
+ *
+ * @param {Object} opts
+ * @param {number} [opts.annualTempBase]
+ * @param {number} [opts.annualPrecip]
+ * @param {number} [opts.tempLapsePerUnit]
+ * @returns {FloraWorld}
+ */
+world.setClimate;
+
+world.setClimate({ annualTempBase: 5 });
+
+// ── Environment read ─────────────────────────────────────────────────
+/**
+ * Read the cell-centered Q_G value at world-space `[x,y,z]`. Returns
+ * null if the world has no shadow grid or the position falls outside.
+ * Nearest-cell lookup — matches the value the simulation itself uses
+ * when computing each module's incident light. The shadow grid is
+ * rebuilt every `step()`, so calling this between steps reflects the
+ * current canopy occlusion.
+ *
+ * @param {number[]} pos  world position [x,y,z]
+ * @returns {number|null}
+ */
+world.sampleShadow;
+
+const sun = world.sampleShadow([0, 5, 0]);   // ~1.0 above the canopy
+
 /**
  * Validate world invariants (topological order, prototype refs,
  * Voronoi indices). Returns null on success, an error string on

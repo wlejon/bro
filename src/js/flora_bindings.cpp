@@ -190,13 +190,17 @@ static bool buildPrototype(JSContext* ctx, JSValueConst spec,
 
 // ── Climate / shadow ───────────────────────────────────────────────────
 
+// Read climate fields straight off an object (used by setClimate).
+static void readClimateFields(JSContext* ctx, JSValueConst obj, broflora::GlobalClimate& c) {
+    if (!JS_IsObject(obj)) return;
+    readFloatField(ctx, obj, "annualTempBase",   c.annualTempBase);
+    readFloatField(ctx, obj, "annualPrecip",     c.annualPrecip);
+    readFloatField(ctx, obj, "tempLapsePerUnit", c.tempLapsePerUnit);
+}
+
 static void readClimate(JSContext* ctx, JSValueConst opts, broflora::GlobalClimate& c) {
     JSValue cv = JS_GetPropertyStr(ctx, opts, "climate");
-    if (JS_IsObject(cv)) {
-        readFloatField(ctx, cv, "annualTempBase",   c.annualTempBase);
-        readFloatField(ctx, cv, "annualPrecip",     c.annualPrecip);
-        readFloatField(ctx, cv, "tempLapsePerUnit", c.tempLapsePerUnit);
-    }
+    readClimateFields(ctx, cv, c);
     JS_FreeValue(ctx, cv);
 }
 
@@ -361,6 +365,156 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
         }
         return arr;
+    })
+
+    // -- per-plant emit (parallel to the world-level ones above) -----------
+    // All four return null when plantIdx is out of range; the array forms
+    // return an empty array for valid-but-empty plants (no segments yet,
+    // pre-flowering for blooms, etc).
+
+    .method("emitPlantMesh", [](FWW* w, JSContext* ctx, int plantIdx, int sides) -> JSValue {
+        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
+        uint32_t s = (sides >= 3) ? (uint32_t)sides : 6u;
+        auto md = std::make_unique<bromesh::MeshData>(
+            broflora::emitPlantMesh(w->world->plants[(size_t)plantIdx], s));
+        return MeshBindings::wrapMeshData(ctx, std::move(md));
+    })
+
+    .method("emitPlantSegments", [](FWW* w, JSContext* ctx, int plantIdx) -> JSValue {
+        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
+        auto segs = broflora::emitPlantSegments(w->world->plants[(size_t)plantIdx]);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < segs.size(); ++i) {
+            const auto& s = segs[i];
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "from",   makeVec3(ctx, s.from));
+            JS_SetPropertyStr(ctx, o, "to",     makeVec3(ctx, s.to));
+            JS_SetPropertyStr(ctx, o, "radius", JS_NewFloat64(ctx, s.radius));
+            JS_SetPropertyStr(ctx, o, "depth",  JS_NewInt32(ctx, (int32_t)s.depth));
+            JS_SetPropertyStr(ctx, o, "parent", JS_NewInt32(ctx, (int32_t)s.parent));
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+        }
+        return arr;
+    })
+
+    .method("emitPlantFoliage", [](FWW* w, JSContext* ctx, int plantIdx) -> JSValue {
+        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
+        auto samples = broflora::emitPlantFoliage(w->world->plants[(size_t)plantIdx]);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < samples.size(); ++i) {
+            const auto& s = samples[i];
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "mass",         JS_NewFloat64(ctx, s.mass));
+            JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, s.age01));
+            JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, s.vigor01));
+            JS_SetPropertyStr(ctx, o, "light01",      JS_NewFloat64(ctx, s.light01));
+            JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, s.senescence01));
+            JS_SetPropertyStr(ctx, o, "isTerminal",   JS_NewBool(ctx, s.isTerminal));
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+        }
+        return arr;
+    })
+
+    .method("emitPlantBloomAnchors", [](FWW* w, JSContext* ctx, int plantIdx) -> JSValue {
+        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
+        auto anchors = broflora::emitPlantBloomAnchors(w->world->plants[(size_t)plantIdx]);
+        JSValue arr = JS_NewArray(ctx);
+        for (size_t i = 0; i < anchors.size(); ++i) {
+            const auto& a = anchors[i];
+            JSValue o = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, o, "position",     makeVec3(ctx, a.position));
+            JS_SetPropertyStr(ctx, o, "normal",       makeVec3(ctx, a.normal));
+            JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, a.age01));
+            JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, a.vigor01));
+            JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, a.senescence01));
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+        }
+        return arr;
+    })
+
+    // -- per-plant inspect -------------------------------------------------
+    // Snapshot of a plant's runtime state + a copy of every Species field.
+    // Useful for inspector panels and per-species partitioning JS-side.
+    .method("plantInfo", [](FWW* w, JSContext* ctx, int plantIdx) -> JSValue {
+        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
+        const auto& p = w->world->plants[(size_t)plantIdx];
+
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "origin",                 makeVec3(ctx, p.origin));
+        JS_SetPropertyStr(ctx, o, "age",                    JS_NewFloat64(ctx, p.age));
+        JS_SetPropertyStr(ctx, o, "flowering",              JS_NewBool   (ctx, p.flowering));
+        JS_SetPropertyStr(ctx, o, "senescing",              JS_NewBool   (ctx, p.senescing));
+        JS_SetPropertyStr(ctx, o, "moduleCount",            JS_NewInt32  (ctx, (int32_t)p.modules.size()));
+        JS_SetPropertyStr(ctx, o, "effectiveRootVigorMax",  JS_NewFloat64(ctx, p.effectiveRootVigorMax));
+        if (!p.modules.empty()) {
+            JS_SetPropertyStr(ctx, o, "rootVigor", JS_NewFloat64(ctx, p.modules.front().vigor));
+            JS_SetPropertyStr(ctx, o, "rootLight", JS_NewFloat64(ctx, p.modules.front().light));
+        }
+
+        // Species — full snapshot. Kept flat to mirror addPlant's spec shape.
+        const auto& s = p.species;
+        JSValue sp = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, sp, "maxVigor",                    JS_NewFloat64(ctx, s.maxVigor));
+        JS_SetPropertyStr(ctx, sp, "minVigor",                    JS_NewFloat64(ctx, s.minVigor));
+        JS_SetPropertyStr(ctx, sp, "rootVigorMax",                JS_NewFloat64(ctx, s.rootVigorMax));
+        JS_SetPropertyStr(ctx, sp, "apicalControl",               JS_NewFloat64(ctx, s.apicalControl));
+        JS_SetPropertyStr(ctx, sp, "determinacy",                 JS_NewFloat64(ctx, s.determinacy));
+        JS_SetPropertyStr(ctx, sp, "shadeTolerance",              JS_NewFloat64(ctx, s.shadeTolerance));
+        JS_SetPropertyStr(ctx, sp, "apicalControlMature",         JS_NewFloat64(ctx, s.apicalControlMature));
+        JS_SetPropertyStr(ctx, sp, "determinacyMature",           JS_NewFloat64(ctx, s.determinacyMature));
+        JS_SetPropertyStr(ctx, sp, "tropismDir",                  makeVec3     (ctx, s.tropismDir));
+        JS_SetPropertyStr(ctx, sp, "tropismG1",                   JS_NewFloat64(ctx, s.tropismG1));
+        JS_SetPropertyStr(ctx, sp, "tropismG2",                   JS_NewFloat64(ctx, s.tropismG2));
+        JS_SetPropertyStr(ctx, sp, "growthScale",                 JS_NewFloat64(ctx, s.growthScale));
+        JS_SetPropertyStr(ctx, sp, "climateOptT",                 JS_NewFloat64(ctx, s.climateOptT));
+        JS_SetPropertyStr(ctx, sp, "climateOptP",                 JS_NewFloat64(ctx, s.climateOptP));
+        JS_SetPropertyStr(ctx, sp, "climateSigT",                 JS_NewFloat64(ctx, s.climateSigT));
+        JS_SetPropertyStr(ctx, sp, "climateSigP",                 JS_NewFloat64(ctx, s.climateSigP));
+        JS_SetPropertyStr(ctx, sp, "maxAge",                      JS_NewFloat64(ctx, s.maxAge));
+        JS_SetPropertyStr(ctx, sp, "floweringAge",                JS_NewFloat64(ctx, s.floweringAge));
+        JS_SetPropertyStr(ctx, sp, "seedingRadius",               JS_NewFloat64(ctx, s.seedingRadius));
+        JS_SetPropertyStr(ctx, sp, "moduleMatureAge",             JS_NewFloat64(ctx, s.moduleMatureAge));
+        JS_SetPropertyStr(ctx, sp, "pipeExp",                     JS_NewFloat64(ctx, s.pipeExp));
+        JS_SetPropertyStr(ctx, sp, "leafDiameter",                JS_NewFloat64(ctx, s.leafDiameter));
+        JS_SetPropertyStr(ctx, sp, "terrainAnchorWeight",         JS_NewFloat64(ctx, s.terrainAnchorWeight));
+        JS_SetPropertyStr(ctx, sp, "maxSeedingSlope",             JS_NewFloat64(ctx, s.maxSeedingSlope));
+        JS_SetPropertyStr(ctx, sp, "distributionWeightCollisions",JS_NewFloat64(ctx, s.distributionWeightCollisions));
+        JS_SetPropertyStr(ctx, sp, "distributionWeightTropism",   JS_NewFloat64(ctx, s.distributionWeightTropism));
+        JS_SetPropertyStr(ctx, sp, "tropismCosTarget",            JS_NewFloat64(ctx, s.tropismCosTarget));
+        JS_SetPropertyStr(ctx, o, "species", sp);
+
+        return o;
+    })
+
+    // -- climate mutation (no reset required) ------------------------------
+    // Climate change directly drives the species adaptation factor σ each
+    // tick, so a slider can show succession in real time.
+    .method("setClimate", [](FWW* w, JSContext* ctx, JSValue opts) {
+        readClimateFields(ctx, opts, w->world->climate);
+    }, qjsbind::returns_this)
+
+    // -- shadow grid read --------------------------------------------------
+    // Returns the cell-centered Q_G at world-space [x,y,z], or null if the
+    // grid has no cells or the sample falls outside. Nearest-cell lookup —
+    // matches what the sim itself reads when computing light per module.
+    .method("sampleShadow", [](FWW* w, JSContext* ctx, JSValue posV) -> JSValue {
+        const auto& g = w->world->shadow;
+        if (g.qg.empty() || g.width == 0 || g.height == 0 || g.depth == 0) return JS_NULL;
+        bromath::Vec3 p{};
+        if (!JS_IsArray(posV)) return JS_NULL;
+        for (int i = 0; i < 3; ++i) {
+            JSValue el = JS_GetPropertyUint32(ctx, posV, (uint32_t)i);
+            double d = 0; JS_ToFloat64(ctx, &d, el); JS_FreeValue(ctx, el);
+            (&p.x)[i] = (float)d;
+        }
+        const float inv = (g.cellSize > 0.0f) ? 1.0f / g.cellSize : 0.0f;
+        int ix = (int)((p.x - g.origin.x) * inv);
+        int iy = (int)((p.y - g.origin.y) * inv);
+        int iz = (int)((p.z - g.origin.z) * inv);
+        if (ix < 0 || iy < 0 || iz < 0) return JS_NULL;
+        if ((uint32_t)ix >= g.width || (uint32_t)iy >= g.height || (uint32_t)iz >= g.depth) return JS_NULL;
+        const uint32_t idx = broflora::shadowIndex(g, (uint32_t)ix, (uint32_t)iy, (uint32_t)iz);
+        return JS_NewFloat64(ctx, g.qg[idx]);
     })
 
     // -- validation --
