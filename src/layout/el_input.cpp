@@ -267,7 +267,18 @@ void ElInput::getContentSize(float& w, float& h, float maxWidth) {
         return;
     }
     w = (maxWidth > 0 && maxWidth < 200) ? maxWidth : 173;
-    h = 20;
+    // Text-input intrinsic height tracks `font-size` so the box grows with
+    // the chosen font — a fixed 20px clipped any text larger than ~14px to
+    // an unreadable sliver. Fall back to 16 only if we have no renderer to
+    // measure against.
+    h = 16.0f;
+    if (renderer_) {
+        // Use full line height (ascent + descent) — `tm.height` alone is the
+        // tight glyph box of "M" and clips descenders like j/g/p/y.
+        auto lm = render::LineMetrics::from(renderer_->measureText("M", getFontRef()));
+        float lh = lm.lineHeight();
+        if (lh > 0) h = lh;
+    }
 }
 
 render::FontRef ElInput::getFontRef() const {

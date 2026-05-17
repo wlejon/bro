@@ -100,7 +100,6 @@ input, textarea, select {
 
 input {
     width: 169px;
-    height: 15px;
 }
 
 input[type="checkbox"], input[type="radio"] {
