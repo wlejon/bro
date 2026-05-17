@@ -1,25 +1,27 @@
-// JS bindings for brogameagent::nn::gpu — CUDA or Metal backend.
+// JS bindings for brotensor — CUDA or Metal GPU tensor + ops.
 //
-// Installed onto bro.ai.game.nn.gpu by installNNGpuBindings(), which is called
-// from ai_nn_bindings.cpp after the host nn namespace is set up.
+// Installed onto bro.tensor.* by installTensorBindings(), called from
+// the engine's binding setup. Top-level on the bro object; no longer
+// sub-nested under bro.ai.game.nn.
 //
 // Compilation gating:
-//   brogameagent publishes the umbrella BGA_HAS_GPU=1 when either CUDA or
-//   Metal is enabled (BGA_HAS_CUDA / BGA_HAS_METAL identify the specific
-//   backend). The public nn::gpu API surface is identical across backends, so
-//   we gate on the umbrella define here. Without GPU support installNNGpuBindings
-//   publishes a stub namespace with `available: false` so JS code can detect it.
+//   brotensor publishes BROTENSOR_HAS_GPU=1 when either CUDA or Metal is
+//   enabled (BROTENSOR_HAS_CUDA / BROTENSOR_HAS_METAL identify the specific
+//   backend). The public op surface is identical across backends, so we
+//   gate on the umbrella define here. Without GPU support
+//   installTensorBindings publishes a stub namespace with `available: false`
+//   so JS code can detect it.
 
 #include "js/ai_bindings.h"
 
 #include <qjsbind/qjsbind.h>
 
-#ifdef BGA_HAS_GPU
+#ifdef BROTENSOR_HAS_GPU
 
 #include <brogameagent/nn/tensor.h>
-#include <brogameagent/nn/gpu/runtime.h>
-#include <brogameagent/nn/gpu/tensor.h>
-#include <brogameagent/nn/gpu/ops.h>
+#include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
+#include <brotensor/ops.h>
 
 #include <cstdint>
 #include <cstring>
@@ -28,7 +30,7 @@
 namespace bro::js {
 
 namespace nn    = brogameagent::nn;
-namespace nngpu = brogameagent::nn::gpu;
+namespace nngpu = brotensor;
 
 // ─── Wrapper struct (owning) ───────────────────────────────────────────────
 struct GpuTensorData { nngpu::GpuTensor t; };
@@ -147,26 +149,22 @@ static void registerClasses(JSContext* ctx) {
             [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                 auto* d = qjsbind::unwrap<GpuTensorData>(ctx, this_val);
                 if (!d || argc < 1) return JS_ThrowTypeError(ctx, "upload(src) — expected Tensor or Float32Array");
-                // Try host Tensor first.
+                // Host Tensor path.
                 if (auto* ht = tensorFromJS(ctx, argv[0])) {
-                    nngpu::upload(*ht, d->t);
+                    nngpu::upload(ht->ptr(), ht->rows, ht->cols, d->t);
                     return JS_UNDEFINED;
                 }
-                // Float32Array path.
+                // Float32Array path. Match destination shape if compatible, else (n, 1).
                 size_t n = 0;
                 float* src = getFloatArrayPtr(ctx, argv[0], n);
                 if (!src) return JS_ThrowTypeError(ctx, "upload(src) — expected Tensor or Float32Array");
-                // Build a temporary host Tensor matching this GpuTensor's shape if known,
-                // else use (n, 1). Then upload (which resizes dst on shape mismatch).
                 int r = d->t.rows, c = d->t.cols;
                 if (r * c != (int)n) { r = (int)n; c = 1; }
-                nn::Tensor host(r, c);
-                std::memcpy(host.ptr(), src, n * sizeof(float));
-                nngpu::upload(host, d->t);
+                nngpu::upload(src, r, c, d->t);
                 return JS_UNDEFINED;
             }, 1)
         // download(dst?): if dst is AITensor, download into it (auto-syncs);
-        // else sync, download to a temp host Tensor and return Float32Array.
+        // else sync, download to a Float32Array.
         .method_raw("download",
             [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                 auto* d = qjsbind::unwrap<GpuTensorData>(ctx, this_val);
@@ -174,14 +172,17 @@ static void registerClasses(JSContext* ctx) {
                 nngpu::cuda_sync();
                 if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
                     if (auto* ht = tensorFromJS(ctx, argv[0])) {
-                        nngpu::download(d->t, *ht);
+                        if (ht->rows != d->t.rows || ht->cols != d->t.cols) {
+                            ht->resize(d->t.rows, d->t.cols);
+                        }
+                        nngpu::download(d->t, ht->ptr());
                         return JS_UNDEFINED;
                     }
                     return JS_ThrowTypeError(ctx, "download(dst): dst must be a Tensor");
                 }
-                nn::Tensor host(d->t.rows, d->t.cols);
-                nngpu::download(d->t, host);
-                return make_float32_array(ctx, host.ptr(), host.size());
+                std::vector<float> host(static_cast<size_t>(d->t.size()));
+                nngpu::download(d->t, host.data());
+                return make_float32_array(ctx, host.data(), static_cast<int>(host.size()));
             }, 1);
 }
 
@@ -667,7 +668,7 @@ static JSValue js_addInplaceBatched(JSContext* ctx, JSValueConst, int argc, JSVa
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
-void installNNGpuBindings(JSContext* ctx, JSValue nnObj) {
+void installTensorBindings(JSContext* ctx) {
     registerClasses(ctx);
 
     JSValue gpuObj = JS_NewObject(ctx);
@@ -732,7 +733,17 @@ void installNNGpuBindings(JSContext* ctx, JSValue nnObj) {
     JS_SetPropertyStr(ctx, gpuObj, "tanhForwardBatched",   JS_NewCFunction(ctx, js_tanhForwardBatched,   "tanhForwardBatched",   2));
     JS_SetPropertyStr(ctx, gpuObj, "addInplaceBatched",    JS_NewCFunction(ctx, js_addInplaceBatched,    "addInplaceBatched",    2));
 
-    JS_SetPropertyStr(ctx, nnObj, "gpu", gpuObj);
+    // Install onto bro.tensor.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        JS_FreeValue(ctx, broObj);
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+    JS_SetPropertyStr(ctx, broObj, "tensor", gpuObj);
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
 }
 
 // Cross-binding unwrap helper (declared in ai_bindings.h).
@@ -742,22 +753,32 @@ nngpu::GpuTensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v) {
 
 } // namespace bro::js
 
-#else // !BGA_HAS_GPU
+#else // !BROTENSOR_HAS_GPU
 
-namespace brogameagent::nn::gpu { struct GpuTensor; }
+namespace brotensor { struct GpuTensor; }
 
 namespace bro::js {
 
-void installNNGpuBindings(JSContext* ctx, JSValue nnObj) {
+void installTensorBindings(JSContext* ctx) {
     JSValue gpuObj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, gpuObj, "available", JS_FALSE);
-    JS_SetPropertyStr(ctx, nnObj, "gpu", gpuObj);
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(broObj) || JS_IsException(broObj)) {
+        JS_FreeValue(ctx, broObj);
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+    JS_SetPropertyStr(ctx, broObj, "tensor", gpuObj);
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
 }
 
-brogameagent::nn::gpu::GpuTensor* gpuTensorFromJS(JSContext*, JSValueConst) {
+brotensor::GpuTensor* gpuTensorFromJS(JSContext*, JSValueConst) {
     return nullptr;
 }
 
 } // namespace bro::js
 
-#endif // BGA_HAS_GPU
+#endif // BROTENSOR_HAS_GPU

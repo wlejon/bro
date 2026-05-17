@@ -8,9 +8,11 @@ namespace brogameagent {
     class Agent;
     class World;
     class NavGrid;
-    namespace nn { class SingleHeroNet; class PolicyValueNet; class SingleHeroNetTX; class WeightsHandle; namespace gpu { struct GpuTensor; } }
+    namespace nn { class SingleHeroNet; class PolicyValueNet; class SingleHeroNetTX; class WeightsHandle; }
     namespace mcts { class Mcts; class IPrior; class IEvaluator; class ITeamEvaluator; class IRolloutPolicy; }
 }
+
+namespace brotensor { struct GpuTensor; }
 
 #include <memory>
 
@@ -54,15 +56,16 @@ JSValue graphDetachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 /// Install bro.ai.game.nn namespace (Tensor, circuits, heads, net, WeightsHandle, ops).
 void installNNBindings(JSContext* ctx, JSValue gameObj);
 
-/// Install bro.ai.game.nn.gpu sub-namespace (GPU-backed primitives).
-/// Implemented in ai_nn_gpu_bindings.cpp; gated on BGA_HAS_GPU at build time
-/// (real bindings when CUDA or Metal is enabled). When neither backend is
-/// available, installs a stub `{ available: false }`.
-void installNNGpuBindings(JSContext* ctx, JSValue nnObj);
+/// Install bro.tensor namespace (GPU tensor + ops via brotensor).
+/// Implemented in tensor_bindings.cpp; gated on BROTENSOR_HAS_GPU at build
+/// time (real bindings when CUDA or Metal is enabled). When neither backend
+/// is available, installs a stub `bro.tensor = { available: false }`.
+void installTensorBindings(JSContext* ctx);
 
 /// Unwrap an AIGpuTensor JS value to the underlying GpuTensor*. Returns
-/// nullptr if the value is not a GpuTensor wrapper or CUDA is unavailable.
-brogameagent::nn::gpu::GpuTensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v);
+/// nullptr if the value is not a GpuTensor wrapper or no GPU backend is
+/// available.
+::brotensor::GpuTensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v);
 
 /// Unwrap helpers for cross-binding use (learn/belief bindings).
 brogameagent::nn::SingleHeroNet* nnSingleHeroNetFromJS(JSContext* ctx, JSValueConst v);

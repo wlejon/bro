@@ -180,6 +180,10 @@ Engine::Engine(const EngineConfig& config)
     // AI bindings (game agent: navgrid, pathfinding, steering — all modes)
     js::AIBindings::install(jsRuntime_->getContext());
 
+    // bro.tensor (GPU tensor + ops via brotensor sibling). Real bindings when
+    // a backend is enabled at configure time; stub `{ available: false }` otherwise.
+    js::installTensorBindings(jsRuntime_->getContext());
+
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());
 

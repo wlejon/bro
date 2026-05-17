@@ -1135,11 +1135,6 @@ void installNNBindings(JSContext* ctx, JSValue gameObj) {
     JS_SetPropertyStr(ctx, nnObj, "N_ATTACK",  JS_NewInt32(ctx, nn::FactoredPolicyHead::N_ATTACK));
     JS_SetPropertyStr(ctx, nnObj, "N_ABILITY", JS_NewInt32(ctx, nn::FactoredPolicyHead::N_ABILITY));
 
-    // Install GPU sub-namespace (bro.ai.game.nn.gpu). Implemented in
-    // ai_nn_gpu_bindings.cpp; falls back to `{ available: false }` when
-    // brogameagent was built without CUDA.
-    installNNGpuBindings(ctx, nnObj);
-
     JS_SetPropertyStr(ctx, gameObj, "nn", nnObj);
 }
 

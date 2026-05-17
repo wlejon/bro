@@ -230,6 +230,9 @@ void Worker::threadFunc()
     // No engine dependency; all state lives on JS-owned wrapper objects. ---
     AIBindings::install(ctx);
 
+    // --- 3b''. Install bro.tensor (GPU tensor + ops, brotensor sibling). ---
+    installTensorBindings(ctx);
+
     // --- 3c. Install bro.net bindings (own subscriber against shared
     // NetService). The service is thread-safe by design — commands/events
     // are routed through lock-free per-subscriber queues. ---
