@@ -112,6 +112,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) (standalone or submodule) |
 | bromesh | `bromesh` | Mesh generation, manipulation, analysis, and I/O (standalone or submodule) |
 | broflora | `broflora` | Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms (standalone or submodule) |
+| brotensor | `brotensor` | GPU tensor + ops, CUDA + Metal backends behind a flat `brotensor::` namespace. Loaded transitively via brogameagent when a GPU backend is enabled |
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
@@ -138,7 +139,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
-| `docs/ai-game-gpu-api.js` | `bro.ai.game.nn.gpu` — CUDA-backed primitives: GpuTensor, dense/elementwise/softmax/layernorm/attention/MHA/embedding/concat/optim ops, batched inference variants |
+| `docs/tensor-api.js` | `bro.tensor` — GPU tensor + ops (brotensor sibling, CUDA / Metal): GpuTensor, dense/elementwise/softmax/layernorm/attention/MHA/embedding/concat/optim ops, batched inference variants |
 | `docs/brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals (fetch, crypto, WebSocket, streams, storage, etc.) |
 | `docs/physics-api.js` | `Physics` — Jolt rigid bodies, shapes, raycasts, contact events (paired with PhysicsNode) |
 | `docs/terrain-api.js` | `scene.createTerrain` — voxel terrain: noise config, chunk streaming, voxel edits, raycast |

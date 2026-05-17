@@ -1,8 +1,8 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on eight sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
+bro depends on nine sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/` (brotensor's submodule fallback will land once the GitHub repo exists).
 
-An eighth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A tenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -13,6 +13,7 @@ An eighth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `
 | **broaudio** | `../broaudio` | `third_party/broaudio` |
 | **bromesh** | `../bromesh` | `third_party/bromesh` |
 | **broflora** | `../broflora` | `third_party/broflora` |
+| **brotensor** | `../brotensor` | (pending) |
 | **brogameagent** | `../brogameagent` | `third_party/brogameagent` |
 
 ## Directory Layout

@@ -1,5 +1,5 @@
 // =============================================================================
-// bro.ai.game.nn.gpu — CUDA-backed neural-net primitives
+// bro.tensor — CUDA-backed neural-net primitives
 // =============================================================================
 //
 // CUDA backend for brogameagent's neural-net layer. Mirrors the CPU API on
@@ -9,7 +9,7 @@
 // batched inference variants).
 //
 // Availability:
-//   bro.ai.game.nn.gpu.available
+//   bro.tensor.available
 // is `true` only when bro was built against a brogameagent that defined
 // BGA_HAS_CUDA=1 (i.e. configured with -DBROGAMEAGENT_WITH_CUDA=ON). When
 // the flag is `false`, the rest of the namespace is absent — guard everything
@@ -39,20 +39,20 @@
  * other `gpu.*` symbol — otherwise you'll get `undefined` accesses.
  * @type {boolean}
  */
-bro.ai.game.nn.gpu.available;
+bro.tensor.available;
 
 /**
  * Idempotent. Selects CUDA device 0 (or the index in the env var
  * BGA_CUDA_DEVICE if set). Safe to call multiple times. Most ops auto-init,
  * but it's fine to call once at startup to surface device-init errors early.
  */
-bro.ai.game.nn.gpu.init();
+bro.tensor.init();
 
 /**
  * Wraps cudaDeviceSynchronize. Blocks until all queued kernels on the default
  * stream have completed. Throws on CUDA error.
  */
-bro.ai.game.nn.gpu.sync();
+bro.tensor.sync();
 
 
 // -----------------------------------------------------------------------------
@@ -66,7 +66,7 @@ bro.ai.game.nn.gpu.sync();
  * @param {number} [cols=1]
  * @returns {GpuTensor}
  */
-const t = bro.ai.game.nn.gpu.createTensor(3, 4);
+const t = bro.tensor.createTensor(3, 4);
 
 t.rows;          // 3
 t.cols;          // 4
