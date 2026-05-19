@@ -483,8 +483,8 @@ static void registerClasses(JSContext* ctx) {
                         std::string dev = s ? s : "";
                         if (s) JS_FreeCString(ctx, s);
                         for (auto& ch : dev) ch = (char)std::tolower((unsigned char)ch);
-                        c.device = (dev == "gpu") ? brogameagent::nn::Device::GPU
-                                                  : brogameagent::nn::Device::CPU;
+                        c.device = (dev == "gpu") ? brotensor::Device::GPU
+                                                  : brotensor::Device::CPU;
                     }
                     JS_FreeValue(ctx, dv);
                     d->trainer->set_config(c);

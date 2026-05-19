@@ -12,8 +12,8 @@
 #include "js/ai_bindings.h"
 
 #include <qjsbind/qjsbind.h>
-#include <brogameagent/nn/tensor.h>
-#include <brogameagent/nn/ops.h>
+#include <brotensor/tensor.h>
+#include <brotensor/ops_cpu.h>
 #include <brogameagent/nn/circuits.h>
 #include <brogameagent/nn/encoder.h>
 #include <brogameagent/nn/heads.h>
@@ -33,7 +33,7 @@ namespace bro::js {
 namespace nn = brogameagent::nn;
 
 // ─── Wrapper structs ───────────────────────────────────────────────────────
-struct TensorData                { nn::Tensor t; };
+struct TensorData                { brotensor::Tensor t; };
 struct LinearData                { nn::Linear l; };
 struct ReluData                  { nn::Relu r; };
 struct TanhData                  { nn::Tanh t; };
@@ -94,7 +94,7 @@ static JSValue makeUint8ArrayCopy(JSContext* ctx, const uint8_t* data, size_t co
 }
 
 // Unwrap TensorData* from JS value (returns nullptr on mismatch).
-static nn::Tensor* tensorFromJS(JSContext* ctx, JSValueConst v) {
+static brotensor::Tensor* tensorFromJS(JSContext* ctx, JSValueConst v) {
     auto* d = qjsbind::unwrap<TensorData>(ctx, v);
     return d ? &d->t : nullptr;
 }
@@ -518,7 +518,7 @@ static void registerClasses(JSContext* ctx) {
                     std::string dev = s ? s : "";
                     if (s) JS_FreeCString(ctx, s);
                     for (auto& c : dev) c = (char)std::tolower((unsigned char)c);
-                    nn::Device target = (dev == "gpu") ? nn::Device::GPU : nn::Device::CPU;
+                    brotensor::Device target = (dev == "gpu") ? brotensor::Device::GPU : brotensor::Device::CPU;
                     try { d->net->to(target); }
                     catch (const std::exception& e) { return JS_ThrowInternalError(ctx, "%s", e.what()); }
                     return JS_UNDEFINED;
@@ -526,7 +526,7 @@ static void registerClasses(JSContext* ctx) {
             .get("device",
                 [](PolicyValueNetData* d) -> std::string {
                     if (!d->net) return std::string("cpu");
-                    return d->net->device() == nn::Device::GPU ? std::string("gpu") : std::string("cpu");
+                    return d->net->device() == brotensor::Device::GPU ? std::string("gpu") : std::string("cpu");
                 })
             .method("save",
                 [](PolicyValueNetData* d, JSContext* ctx) -> JSValue {
@@ -609,7 +609,7 @@ static void registerClasses(JSContext* ctx) {
                     std::string dev = s ? s : "";
                     if (s) JS_FreeCString(ctx, s);
                     for (auto& c : dev) c = (char)std::tolower((unsigned char)c);
-                    nn::Device target = (dev == "gpu") ? nn::Device::GPU : nn::Device::CPU;
+                    brotensor::Device target = (dev == "gpu") ? brotensor::Device::GPU : brotensor::Device::CPU;
                     try { d->net->to(target); }
                     catch (const std::exception& e) { return JS_ThrowInternalError(ctx, "%s", e.what()); }
                     return JS_UNDEFINED;
@@ -617,7 +617,7 @@ static void registerClasses(JSContext* ctx) {
             .get("device",
                 [](SingleHeroNetTXData* d) -> std::string {
                     if (!d->net) return std::string("cpu");
-                    return d->net->device() == nn::Device::GPU ? std::string("gpu") : std::string("cpu");
+                    return d->net->device() == brotensor::Device::GPU ? std::string("gpu") : std::string("cpu");
                 })
             .method("save",
                 [](SingleHeroNetTXData* d, JSContext* ctx) -> JSValue {
@@ -691,7 +691,7 @@ static JSValue js_createTensor(JSContext* ctx, JSValueConst, int argc, JSValueCo
     if (argc >= 1) JS_ToInt32(ctx, &r, argv[0]);
     if (argc >= 2) JS_ToInt32(ctx, &c, argv[1]);
     if (r < 0 || c < 0) return JS_ThrowRangeError(ctx, "negative dim");
-    return qjsbind::wrap<TensorData>(ctx, new TensorData{ nn::Tensor(r, c) });
+    return qjsbind::wrap<TensorData>(ctx, new TensorData{ brotensor::Tensor(r, c) });
 }
 
 static JSValue js_createLinear(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -856,7 +856,7 @@ static JSValue js_linearForward(JSContext* ctx, JSValueConst, int argc, JSValueC
     auto* x = tensorFromJS(ctx, argv[2]);
     auto* y = tensorFromJS(ctx, argv[3]);
     if (!W || !b || !x || !y) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::linear_forward(*W, *b, *x, *y);
+    brotensor::linear_forward_cpu(*W, *b, *x, *y);
     return JS_UNDEFINED;
 }
 
@@ -869,7 +869,7 @@ static JSValue js_linearBackward(JSContext* ctx, JSValueConst, int argc, JSValue
     auto* dW = tensorFromJS(ctx, argv[4]);
     auto* dB = tensorFromJS(ctx, argv[5]);
     if (!W || !x || !dY || !dX || !dW || !dB) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::linear_backward(*W, *x, *dY, *dX, *dW, *dB);
+    brotensor::linear_backward_cpu(*W, *x, *dY, *dX, *dW, *dB);
     return JS_UNDEFINED;
 }
 
@@ -877,28 +877,28 @@ static JSValue js_reluForward(JSContext* ctx, JSValueConst, int argc, JSValueCon
     if (argc < 2) return JS_ThrowTypeError(ctx, "reluForward(x,y)");
     auto* x = tensorFromJS(ctx, argv[0]); auto* y = tensorFromJS(ctx, argv[1]);
     if (!x || !y) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::relu_forward(*x, *y);
+    brotensor::relu_forward_cpu(*x, *y);
     return JS_UNDEFINED;
 }
 static JSValue js_reluBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "reluBackward(x,dY,dX)");
     auto* x = tensorFromJS(ctx, argv[0]); auto* dY = tensorFromJS(ctx, argv[1]); auto* dX = tensorFromJS(ctx, argv[2]);
     if (!x || !dY || !dX) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::relu_backward(*x, *dY, *dX);
+    brotensor::relu_backward_cpu(*x, *dY, *dX);
     return JS_UNDEFINED;
 }
 static JSValue js_tanhForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "tanhForward(x,y)");
     auto* x = tensorFromJS(ctx, argv[0]); auto* y = tensorFromJS(ctx, argv[1]);
     if (!x || !y) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::tanh_forward(*x, *y);
+    brotensor::tanh_forward_cpu(*x, *y);
     return JS_UNDEFINED;
 }
 static JSValue js_tanhBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "tanhBackward(y,dY,dX)");
     auto* y = tensorFromJS(ctx, argv[0]); auto* dY = tensorFromJS(ctx, argv[1]); auto* dX = tensorFromJS(ctx, argv[2]);
     if (!y || !dY || !dX) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::tanh_backward(*y, *dY, *dX);
+    brotensor::tanh_backward_cpu(*y, *dY, *dX);
     return JS_UNDEFINED;
 }
 
@@ -908,7 +908,7 @@ static JSValue js_softmaxForward(JSContext* ctx, JSValueConst, int argc, JSValue
     if (!l || !p) return JS_ThrowTypeError(ctx, "expected Tensors");
     size_t mn = 0;
     float* mask = argc >= 3 ? getFloatArrayPtr(ctx, argv[2], mn) : nullptr;
-    nn::softmax_forward(*l, *p, mask);
+    brotensor::softmax_forward_cpu(*l, *p, mask);
     return JS_UNDEFINED;
 }
 
@@ -916,7 +916,7 @@ static JSValue js_softmaxBackward(JSContext* ctx, JSValueConst, int argc, JSValu
     if (argc < 3) return JS_ThrowTypeError(ctx, "softmaxBackward(probs,dProbs,dLogits)");
     auto* p = tensorFromJS(ctx, argv[0]); auto* dp = tensorFromJS(ctx, argv[1]); auto* dl = tensorFromJS(ctx, argv[2]);
     if (!p || !dp || !dl) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::softmax_backward(*p, *dp, *dl);
+    brotensor::softmax_backward_cpu(*p, *dp, *dl);
     return JS_UNDEFINED;
 }
 
@@ -927,7 +927,7 @@ static JSValue js_softmaxXent(JSContext* ctx, JSValueConst, int argc, JSValueCon
     if (!l || !t || !p || !dl) return JS_ThrowTypeError(ctx, "expected Tensors");
     size_t mn = 0;
     float* mask = argc >= 5 ? getFloatArrayPtr(ctx, argv[4], mn) : nullptr;
-    float loss = nn::softmax_xent(*l, *t, *p, *dl, mask);
+    float loss = brotensor::softmax_xent_cpu(*l, *t, *p, *dl, mask);
     return JS_NewFloat64(ctx, loss);
 }
 
@@ -937,7 +937,7 @@ static JSValue js_mseScalar(JSContext* ctx, JSValueConst, int argc, JSValueConst
     JS_ToFloat64(ctx, &pred, argv[0]);
     JS_ToFloat64(ctx, &target, argv[1]);
     float dPred = 0.0f;
-    float loss = nn::mse_scalar((float)pred, (float)target, dPred);
+    float loss = brotensor::mse_scalar_cpu((float)pred, (float)target, dPred);
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "loss", JS_NewFloat64(ctx, loss));
     JS_SetPropertyStr(ctx, obj, "dPred", JS_NewFloat64(ctx, dPred));
@@ -948,7 +948,7 @@ static JSValue js_addInplace(JSContext* ctx, JSValueConst, int argc, JSValueCons
     if (argc < 2) return JS_ThrowTypeError(ctx, "addInplace(y,x)");
     auto* y = tensorFromJS(ctx, argv[0]); auto* x = tensorFromJS(ctx, argv[1]);
     if (!x || !y) return JS_ThrowTypeError(ctx, "expected Tensors");
-    nn::add_inplace(*y, *x);
+    brotensor::add_inplace_cpu(*y, *x);
     return JS_UNDEFINED;
 }
 
@@ -957,7 +957,7 @@ static JSValue js_addScalarInplace(JSContext* ctx, JSValueConst, int argc, JSVal
     auto* y = tensorFromJS(ctx, argv[0]);
     if (!y) return JS_ThrowTypeError(ctx, "expected Tensor");
     double s = 0; JS_ToFloat64(ctx, &s, argv[1]);
-    nn::add_scalar_inplace(*y, (float)s);
+    brotensor::add_scalar_inplace_cpu(*y, (float)s);
     return JS_UNDEFINED;
 }
 
@@ -966,7 +966,7 @@ static JSValue js_xavierInit(JSContext* ctx, JSValueConst, int argc, JSValueCons
     auto* W = tensorFromJS(ctx, argv[0]);
     if (!W) return JS_ThrowTypeError(ctx, "expected Tensor");
     uint64_t s = argc >= 2 ? readSeed(ctx, argv[1], 0xC0DE1234ULL) : 0xC0DE1234ULL;
-    nn::xavier_init(*W, s);
+    brotensor::xavier_init_cpu(*W, s);
     return JS_NewBigInt64(ctx, (int64_t)s);
 }
 

@@ -22,7 +22,6 @@
 
 #include <qjsbind/qjsbind.h>
 
-#include <brogameagent/nn/tensor.h>
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 #include <brotensor/ops.h>
@@ -32,7 +31,6 @@
 
 namespace bro::js {
 
-namespace nn    = brogameagent::nn;
 namespace nngpu = brotensor;
 
 // ─── Wrapper structs (must match the registered class identity) ────────────
@@ -42,7 +40,7 @@ namespace nngpu = brotensor;
 // here. tensor_bindings.cpp registers the AIGpuTensor class; other TUs only
 // unwrap.
 struct GpuTensorData { nngpu::GpuTensor t; };
-struct TensorData    { nn::Tensor t; };
+struct TensorData    { brotensor::Tensor t; };
 
 // ─── Float32Array helpers ──────────────────────────────────────────────────
 inline float* getFloatArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outCount) {
@@ -75,7 +73,7 @@ inline uint8_t* getTypedArrayBytePtr(JSContext* ctx, JSValueConst arr, size_t& o
 }
 
 // ─── Unwrap helpers ────────────────────────────────────────────────────────
-inline nn::Tensor* tensorFromJS(JSContext* ctx, JSValueConst v) {
+inline brotensor::Tensor* tensorFromJS(JSContext* ctx, JSValueConst v) {
     auto* d = qjsbind::unwrap<TensorData>(ctx, v);
     return d ? &d->t : nullptr;
 }
