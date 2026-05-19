@@ -61,6 +61,11 @@ add_library(bro_js STATIC
     ai_binding_integration.cpp
     ai_nn_bindings.cpp
     tensor_bindings.cpp
+    tensor_bindings_activations.cpp
+    tensor_bindings_attention.cpp
+    tensor_bindings_conv.cpp
+    tensor_bindings_diffusion.cpp
+    tensor_bindings_int8.cpp
     ai_learn_bindings.cpp
     ai_belief_bindings.cpp
     ai_extras_bindings.cpp
