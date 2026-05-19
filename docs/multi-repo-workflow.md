@@ -1,6 +1,6 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on nine sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/` (brotensor's submodule fallback will land once the GitHub repo exists).
+bro depends on nine sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
 A tenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
@@ -13,7 +13,7 @@ A tenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `..
 | **broaudio** | `../broaudio` | `third_party/broaudio` |
 | **bromesh** | `../bromesh` | `third_party/bromesh` |
 | **broflora** | `../broflora` | `third_party/broflora` |
-| **brotensor** | `../brotensor` | (pending) |
+| **brotensor** | `../brotensor` | `third_party/brotensor` (transitive via brogameagent) |
 | **brogameagent** | `../brogameagent` | `third_party/brogameagent` |
 
 ## Directory Layout
@@ -29,6 +29,7 @@ D:/projects/
 │       ├── broaudio/             # submodule (CI / fallback)
 │       ├── bromesh/              # submodule (CI / fallback)
 │       ├── broflora/             # submodule (CI / fallback)
+│       ├── brotensor/            # submodule (CI / fallback, resolved via brogameagent)
 │       └── brogameagent/         # submodule (CI / fallback)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── qjsbind/                      # standalone repo (preferred for dev)
@@ -37,6 +38,7 @@ D:/projects/
 ├── broaudio/                     # standalone repo (preferred for dev)
 ├── bromesh/                      # standalone repo (preferred for dev)
 ├── broflora/                     # standalone repo (preferred for dev)
+├── brotensor/                    # standalone repo (preferred for dev)
 ├── brogameagent/                 # standalone repo (preferred for dev)
 └── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
 ```
@@ -62,6 +64,8 @@ endif()
 The same pattern is used for bromath, qjsbind, htmlayout, broaudio, bromesh, and brogameagent.
 
 Note: bromath is pulled in transitively by several siblings (bromesh, brogameagent, etc.). bro's `third_party/CMakeLists.txt` guards the `add_subdirectory` with `if(NOT TARGET bromath)` so the first loader wins — overriding `BROMATH_DIR` only takes effect if bro is the first to add it.
+
+**brotensor is resolved transitively by brogameagent**, not by bro directly. When `-DBROGAMEAGENT_WITH_CUDA=ON` (or `_WITH_METAL=ON`) is set, brogameagent's CMake adds `../brotensor` (or falls back to `third_party/brotensor`) and forces the matching `BROTENSOR_WITH_*` backend. brotensor owns the CUDA / OBJCXX language enables and the `BROTENSOR_HAS_CUDA` / `_HAS_METAL` / `_HAS_GPU` defines, which propagate to bro's `tensor_bindings.cpp`. Without a GPU backend selected, brotensor is not built and `bro.tensor` JS bindings compile out.
 
 ## Day-to-Day Development
 
@@ -114,7 +118,7 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, and `brogameagent`.
+Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `brotensor`, and `brogameagent`.
 
 ## Overriding Paths
 
@@ -128,15 +132,18 @@ cmake -B build \
     -DHTMLAYOUT_DIR=/path/to/htmlayout \
     -DBROAUDIO_DIR=/path/to/broaudio \
     -DBROMESH_DIR=/path/to/bromesh \
+    -DBROTENSOR_DIR=/path/to/brotensor \
     -DBROGAMEAGENT_DIR=/path/to/brogameagent
 ```
+
+`BROTENSOR_DIR` is only consulted when a GPU backend is enabled (`-DBROGAMEAGENT_WITH_CUDA=ON` or `_WITH_METAL=ON`).
 
 Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
 
 ```bash
 cmake -B build -DBROMATH_DIR=none -DQJSBIND_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
-               -DBROGAMEAGENT_DIR=none
+               -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none
 ```
 
 ## Apps tree
