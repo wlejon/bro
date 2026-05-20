@@ -6,8 +6,8 @@ extern "C" {
 
 namespace bro::js {
 
-// Install the `bro.diffusion` namespace — Stable Diffusion 1.5 inference via
-// the brodiffusion sibling library. Exposes the Pipeline / PipelineState
+// Install the `bro.diffusion` namespace — diffusion-model inference via the
+// brodiffusion sibling library. Exposes the Pipeline / PipelineState
 // opaque-handle classes plus createPipeline / init.
 //
 // Safe to call in the main JS context and in each worker context (a worker

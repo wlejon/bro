@@ -114,6 +114,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | broflora | `broflora` | Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms (standalone or submodule) |
 | brotensor | `brotensor` | Tensor + ops — one unified `brotensor::Tensor` (runtime `Device` tag), device-neutral ops behind a flat `brotensor::` namespace. CPU backend always built; CUDA + Metal additive/opt-in. Hard dependency of brogameagent (owns the Tensor type + CPU ops); loaded transitively |
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
+| brodiffusion | `brodiffusion` | Diffusion-model text-to-image inference: tokenizer + text encoder + U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. CPU FP32 by default; CUDA/Metal additive. Depends on bromath + brotensor (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
 | Skia | `skia` (imported) | Pre-built 2D rasterization binaries, auto-detected |
@@ -140,6 +141,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
 | `docs/tensor-api.js` | `bro.tensor` — GPU tensor + ops (brotensor sibling, CUDA / Metal): GpuTensor, dense/elementwise/softmax/layernorm/attention/MHA/embedding/concat/optim ops, batched inference variants |
+| `docs/diffusion-api.js` | `bro.diffusion` — diffusion-model inference (brodiffusion sibling): Pipeline, one-shot generate, step-wise prime/stepOnce/decode, cross-attention trace + logit-bias steering, LoRA |
 | `docs/brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals (fetch, crypto, WebSocket, streams, storage, etc.) |
 | `docs/physics-api.js` | `Physics` — Jolt rigid bodies, shapes, raycasts, contact events (paired with PhysicsNode) |
 | `docs/terrain-api.js` | `scene.createTerrain` — voxel terrain: noise config, chunk streaming, voxel edits, raycast |

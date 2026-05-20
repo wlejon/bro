@@ -1,9 +1,9 @@
-// JS bindings for brodiffusion — Stable Diffusion 1.5 text-to-image inference.
+// JS bindings for brodiffusion — diffusion-model text-to-image inference.
 //
 // Installed onto bro.diffusion.* by installDiffusionBindings(). The native
-// Pipeline (which owns the multi-GB CLIP/U-Net/VAE weights) lives behind an
-// opaque qjsbind handle — JS never holds or moves weight bytes, only the
-// handle. The same binding is installed in the main context and in each
+// Pipeline (which owns the multi-GB model weights) lives behind an opaque
+// qjsbind handle — JS never holds or moves weight bytes, only the handle.
+// The same binding is installed in the main context and in each
 // worker context; a worker owns its own Pipeline and only plain cloneable
 // data (prompt/opts in, {width,height,data} image out) crosses postMessage.
 //
@@ -250,7 +250,7 @@ static JSValue js_createPipeline(JSContext* ctx, JSValueConst, int argc,
         brotensor::init();
         bdc::Tokenizer tok = bdc::Tokenizer::load(vocabPath, mergesPath);
 
-        bdp::PipelineConfig cfg;  // SD1.5 defaults
+        bdp::PipelineConfig cfg;  // model defaults
         if (lcm) {
             cfg.scheduler = bdsch::LCMConfig{};
             if (lcmDistilled) cfg.unet.time_cond_proj_dim = 256;
@@ -273,7 +273,7 @@ static PipelineWrapper* pipelineSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<PipelineWrapper>(ctx, this_val);
 }
 
-// loadWeights(path)                              — single SD1.5 checkpoint
+// loadWeights(path)                              — single-file checkpoint
 // loadWeights(path, {textPrefix,unetPrefix,vaePrefix}) — single file, custom prefixes
 // loadWeights(textPath, unetPath, vaePath)       — diffusers 3-file export
 static JSValue js_pipeline_loadWeights(JSContext* ctx, JSValueConst this_val,
@@ -362,8 +362,8 @@ static JSValue js_pipeline_generate(JSContext* ctx, JSValueConst this_val,
     }
 }
 
-// numXAttnBlocks() -> number — cross-attention block count (16 for SD1.5).
-// Meaningful only after loadWeights(); returns 1 before.
+// numXAttnBlocks() -> number — cross-attention block count for the loaded
+// model. Meaningful only after loadWeights(); returns 1 before.
 static JSValue js_pipeline_numXAttnBlocks(JSContext* ctx, JSValueConst this_val,
                                           int, JSValueConst*) {
     auto* w = pipelineSelf(ctx, this_val);

@@ -185,7 +185,7 @@ Engine::Engine(const EngineConfig& config)
     // a backend is enabled at configure time; stub `{ available: false }` otherwise.
     js::installTensorBindings(jsRuntime_->getContext());
 
-    // bro.diffusion (Stable Diffusion 1.5 inference via brodiffusion sibling).
+    // bro.diffusion (diffusion-model inference via brodiffusion sibling).
     // Always real — brodiffusion's CPU backend is always built. Main thread
     // drives the step-wise inspection API; workers install the same binding
     // for fast full generation.

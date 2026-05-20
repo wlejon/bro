@@ -234,8 +234,9 @@ void Worker::threadFunc()
     // --- 3b''. Install bro.tensor (GPU tensor + ops, brotensor sibling). ---
     installTensorBindings(ctx);
 
-    // --- 3b'''. Install bro.diffusion (SD1.5 inference, brodiffusion sibling).
-    // Same binding as the main context; this worker owns its own Pipeline. ---
+    // --- 3b'''. Install bro.diffusion (diffusion-model inference, brodiffusion
+    // sibling). Same binding as the main context; this worker owns its own
+    // Pipeline. ---
     installDiffusionBindings(ctx);
 
     // --- 3c. Install bro.net bindings (own subscriber against shared
