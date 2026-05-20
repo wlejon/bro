@@ -31,3 +31,6 @@
 [submodule "third_party/brotensor"]
 	path = third_party/brotensor
 	url = git@github.com:wlejon/brotensor.git
+[submodule "third_party/brodiffusion"]
+	path = third_party/brodiffusion
+	url = git@github.com:wlejon/brodiffusion.git

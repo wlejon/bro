@@ -150,6 +150,23 @@ else()
     add_subdirectory(brogameagent EXCLUDE_FROM_ALL)
 endif()
 
+# --- brodiffusion (Stable Diffusion 1.5 text-to-image inference) ---
+# Prefer the standalone repo at ../brodiffusion for local development.
+# Falls back to the git submodule at third_party/brodiffusion.
+# MUST be added after brogameagent: brogameagent pulls in brotensor + bromath
+# transitively and (with BROGAMEAGENT_WITH_CUDA=ON) force-sets the
+# BROTENSOR_WITH_CUDA/_METAL cache vars. brodiffusion's CMake guards
+# bromath/brotensor with if(NOT TARGET ...) so it reuses those targets and
+# reads those cache vars instead of re-adding or defaulting them.
+set(BRODIFFUSION_DIR "${CMAKE_SOURCE_DIR}/../brodiffusion" CACHE PATH "Path to standalone brodiffusion repo")
+if(EXISTS "${BRODIFFUSION_DIR}/CMakeLists.txt")
+    message(STATUS "brodiffusion: using standalone repo at ${BRODIFFUSION_DIR}")
+    add_subdirectory("${BRODIFFUSION_DIR}" "${CMAKE_BINARY_DIR}/brodiffusion" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "brodiffusion: using submodule at third_party/brodiffusion")
+    add_subdirectory(brodiffusion EXCLUDE_FROM_ALL)
+endif()
+
 # --- Jolt Physics ---
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
 set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)          # don't clobber bro's flags
