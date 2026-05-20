@@ -115,6 +115,19 @@ Suppressor& suppressor() {
 
 thread_local int g_inHostHook = 0;
 
+// RAII guard for the host-hook recursion counter. The counter stops
+// window.onerror / window.onunhandledrejection from recursing if the handler
+// itself throws. It must be decremented even when JS_Call unwinds via a C++
+// exception (e.g. one thrown from a qjsbind native callback invoked by the
+// handler) — a bare manual decrement would be skipped on that path and wedge
+// the error hook permanently.
+struct HostHookGuard {
+    HostHookGuard()  { ++g_inHostHook; }
+    ~HostHookGuard() { --g_inHostHook; }
+    HostHookGuard(const HostHookGuard&) = delete;
+    HostHookGuard& operator=(const HostHookGuard&) = delete;
+};
+
 // Emit the "still failing" tail for an entry being closed/aged out. Caller
 // must have removed it from the map already; we just print.
 void emitTail(const SuppressEntry& e, double nowMs) {
@@ -245,9 +258,11 @@ bool dispatchHostHook(JSContext* ctx, const ErrorOrigin& origin,
                         return JS_UNDEFINED;
                     }, "preventDefault", 0));
 
-            g_inHostHook++;
-            JSValue ret = JS_Call(ctx, handler, global, 1, &evt);
-            g_inHostHook--;
+            JSValue ret;
+            {
+                HostHookGuard guard;
+                ret = JS_Call(ctx, handler, global, 1, &evt);
+            }
 
             if (JS_IsException(ret)) {
                 // Host hook itself threw — report it under a synthetic origin
@@ -308,9 +323,11 @@ bool dispatchHostHook(JSContext* ctx, const ErrorOrigin& origin,
                 JS_DupValue(ctx, exception),
             };
 
-            g_inHostHook++;
-            JSValue ret = JS_Call(ctx, handler, global, 5, args);
-            g_inHostHook--;
+            JSValue ret;
+            {
+                HostHookGuard guard;
+                ret = JS_Call(ctx, handler, global, 5, args);
+            }
 
             if (JS_IsException(ret)) {
                 JSValue secondary = JS_GetException(ctx);
