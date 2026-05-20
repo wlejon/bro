@@ -71,7 +71,8 @@ public:
                             int weight, bool italic) override;
 
     void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) override;
-    void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
+    void drawImage(const void* data, size_t len, float x, float y, float w, float h,
+                   uint64_t imageId = 0) override;
     void drawPixelsRGBA(const uint8_t* rgba,
                         int srcW, int srcH, int stride,
                         float x, float y, float w, float h) override;

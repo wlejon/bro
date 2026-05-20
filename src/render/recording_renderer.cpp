@@ -124,12 +124,14 @@ void RecordingRenderer::drawLine(float x1, float y1, float x2, float y2,
 }
 
 void RecordingRenderer::drawImage(const void* data, size_t len,
-                                  float x, float y, float w, float h) {
-    if (!buffer_) { measureRenderer_->drawImage(data, len, x, y, w, h); return; }
+                                  float x, float y, float w, float h,
+                                  uint64_t imageId) {
+    if (!buffer_) { measureRenderer_->drawImage(data, len, x, y, w, h, imageId); return; }
     Cmd_DrawImage cmd{};
     cmd.dataOffset = buffer_->pushBytes(data, len);
     cmd.dataLen = static_cast<uint32_t>(len);
     cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
+    cmd.imageId = imageId;
     buffer_->append(cmd);
 }
 

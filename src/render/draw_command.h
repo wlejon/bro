@@ -41,7 +41,7 @@ struct Cmd_DrawText {
 };
 
 struct Cmd_DrawLine        { float x1, y1, x2, y2; bromath::Color color; float thickness; };
-struct Cmd_DrawImage       { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: encoded bytes
+struct Cmd_DrawImage       { uint32_t dataOffset, dataLen; float x, y, w, h; uint64_t imageId; };  // arena: encoded bytes
 struct Cmd_DrawPixelsRGBA  { uint32_t pixelsOffset; int srcW, srcH, stride; float x, y, w, h; }; // arena: rgba8
 struct Cmd_DrawSvgMarkup   { uint32_t dataOffset, dataLen; float x, y, w, h; };  // arena: utf8 markup
 struct Cmd_DrawCircle      { float cx, cy, r; bromath::Color fill; bromath::Color stroke; float strokeWidth; };

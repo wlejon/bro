@@ -177,7 +177,14 @@ public:
                                     int weight, bool italic) { return false; }
 
     virtual void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) = 0;
-    virtual void drawImage(const void* data, size_t len, float x, float y, float w, float h) = 0;
+
+    // Draw an encoded image (PNG/JPEG/etc) into the rect (x, y, w, h).
+    // `imageId` is a stable, process-unique id for the source: backends that
+    // cache decoded images key on it so the bytes are decoded exactly once
+    // rather than on every frame. Pass 0 for one-off images that should not be
+    // retained (the bytes are then decoded fresh on each call).
+    virtual void drawImage(const void* data, size_t len, float x, float y, float w, float h,
+                           uint64_t imageId = 0) = 0;
 
     // Draw a raw RGBA8 buffer. Unlike drawImage(), no codec decode happens —
     // `rgba` must be tightly-packed or use `stride` for row padding. Used by

@@ -378,12 +378,11 @@ void RasterRenderer::drawLine(float x1, float y1, float x2, float y2, Color c, f
     canvas_->drawLine(x1, y1, x2, y2, paint);
 }
 
-void RasterRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h) {
+void RasterRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h,
+                               uint64_t imageId) {
     if (!canvas_) return;
-    auto sk_data = SkData::MakeWithoutCopy(data, len);
-    auto codec = SkCodec::MakeFromData(sk_data);
-    if (!codec) return;
-    auto [image, result] = codec->getImage();
+    // Decoding happens once per image id; subsequent frames reuse the SkImage.
+    sk_sp<SkImage> image = imageCache_.resolve(imageId, data, len);
     if (!image) return;
     canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
 }
@@ -672,6 +671,8 @@ void RasterRenderer::beginFrame(int width, int height) {
     }
     canvas_ = surface_->getCanvas();
     canvas_->save();
+
+    imageCache_.beginFrame();
 }
 
 void RasterRenderer::endFrame() {

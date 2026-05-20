@@ -13,6 +13,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -37,6 +38,15 @@ static bool isCellInCollapsedTable(dom::Element* elem);
 // (htmlayout::css::parseTransform, parseTransformOrigin, Matrix2D / Matrix3D).
 
 namespace {
+
+// Hand out a process-unique id for each newly cached image. The renderer's
+// DecodedImageCache keys on this so an image is decoded once, not every frame.
+// Ids are process-global (not per-DrawTraversal) so a rebuilt traversal after a
+// document reload can never collide with a stale renderer-side cache entry.
+uint64_t nextImageId() {
+    static std::atomic<uint64_t> counter{1};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+}
 
 // Return true if a CSS `transform` value uses any 3D function (rotateX/Y/3d,
 // translateZ/3d, scaleZ/3d, perspective(), matrix3d). Cheap substring scan —
@@ -1022,7 +1032,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                         } else {
                             renderer_->drawImage(it->second.data.data(),
                                                  it->second.data.size(),
-                                                 ix, iy, iw, ih);
+                                                 ix, iy, iw, ih,
+                                                 it->second.id);
                         }
                     }
                 }
@@ -1195,7 +1206,8 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     if (repeat == "no-repeat") {
                         renderer_->drawImage(imgCacheIt->second.data.data(),
                                             imgCacheIt->second.data.size(),
-                                            posX, posY, drawW, drawH);
+                                            posX, posY, drawW, drawH,
+                                            imgCacheIt->second.id);
                     } else {
                         // Tile the image
                         renderer_->save();
@@ -1210,7 +1222,8 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                             for (float ix = startX; ix < endX; ix += drawW) {
                                 renderer_->drawImage(imgCacheIt->second.data.data(),
                                                     imgCacheIt->second.data.size(),
-                                                    ix, iy, drawW, drawH);
+                                                    ix, iy, drawW, drawH,
+                                                    imgCacheIt->second.id);
                             }
                         }
                         renderer_->restore();
@@ -2385,6 +2398,7 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
         bool isSvgXml = meta.find("image/svg+xml") != std::string::npos;
 
         CachedImage img;
+        img.id = nextImageId();
         if (isSvgXml) {
             std::string markup = isBase64
                 ? std::string(reinterpret_cast<const char*>(base64Decode(body).data()),
@@ -2464,6 +2478,7 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
     auto fileSize = ifs.tellg();
     ifs.seekg(0);
     CachedImage img;
+    img.id = nextImageId();
     img.data.resize(static_cast<size_t>(fileSize));
     ifs.read(reinterpret_cast<char*>(img.data.data()), fileSize);
 

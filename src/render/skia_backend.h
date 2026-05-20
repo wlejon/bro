@@ -16,6 +16,7 @@
 #include <include/gpu/ganesh/GrDirectContext.h>
 
 #include "render/font_fallback.h"
+#include "render/image_cache.h"
 
 #include <glad/gl.h>
 
@@ -66,7 +67,8 @@ public:
     TextMetrics measureText(std::string_view text, FontRef font) override;
 
     void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) override;
-    void drawImage(const void* data, size_t len, float x, float y, float w, float h) override;
+    void drawImage(const void* data, size_t len, float x, float y, float w, float h,
+                   uint64_t imageId) override;
     void drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
                         float x, float y, float w, float h) override;
     void drawSvgMarkup(const char* data, size_t len,
@@ -203,6 +205,9 @@ private:
         }
     };
     std::unordered_map<FontKey, FontEntry, FontKeyHash> fonts_;
+
+    // Decoded-image cache — see DecodedImageCache. Swept once per beginFrame().
+    DecodedImageCache imageCache_;
 
     // Resolve a FontRef to a cached FontEntry. Builds the SkFont on first miss
     // (consults customFonts_ + the platform font manager). Always returns a

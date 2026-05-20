@@ -720,38 +720,14 @@ void SkiaRenderer::concat(float a, float b, float c, float d, float e, float f) 
     canvas_->concat(m);
 }
 
-void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h) {
+void SkiaRenderer::drawImage(const void* data, size_t len, float x, float y, float w, float h,
+                             uint64_t imageId) {
     if (!canvas_) return;
-
-    // Try Skia's built-in codecs first (fast path when available).
-    sk_sp<SkData> sk_data = SkData::MakeWithoutCopy(data, len);
-    auto codec = SkCodec::MakeFromData(sk_data);
-    if (codec) {
-        auto [image, result] = codec->getImage();
-        if (image) {
-            canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
-            return;
-        }
-    }
-
-    // Fallback: decode via stb_image. Our Skia build may not link PNG/JPEG codecs.
-    int iw = 0, ih = 0, comp = 0;
-    unsigned char* pixels = stbi_load_from_memory(
-        static_cast<const stbi_uc*>(data), static_cast<int>(len), &iw, &ih, &comp, 4);
-    if (!pixels) { LOG_WARN("drawImage: decode failed (len=%zu)", len); return; }
-
-    SkImageInfo info = SkImageInfo::Make(iw, ih, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-    SkBitmap bmp;
-    if (bmp.installPixels(info, pixels, iw * 4,
-            [](void* px, void*) { stbi_image_free(px); }, nullptr)) {
-        bmp.setImmutable();
-        auto image = bmp.asImage();
-        if (image) {
-            canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
-            return;
-        }
-    }
-    stbi_image_free(pixels);
+    // Decoding happens once per image id; subsequent frames reuse the SkImage
+    // (and, under Ganesh, the GPU texture Skia caches against it).
+    sk_sp<SkImage> image = imageCache_.resolve(imageId, data, len);
+    if (!image) return;
+    canvas_->drawImageRect(image, SkRect::MakeXYWH(x, y, w, h), SkSamplingOptions());
 }
 
 void SkiaRenderer::drawPixelsRGBA(const uint8_t* rgba, int srcW, int srcH, int stride,
@@ -939,6 +915,8 @@ void SkiaRenderer::beginFrame(int width, int height) {
     canvas_ = surface_->getCanvas();
     canvas_->clear(SK_ColorTRANSPARENT);
     canvas_->save();
+
+    imageCache_.beginFrame();
 }
 
 void SkiaRenderer::endFrame() {

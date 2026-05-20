@@ -49,7 +49,7 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 dst_->drawLine(c.x1, c.y1, c.x2, c.y2, c.color, c.thickness);
             } else if constexpr (std::is_same_v<T, Cmd_DrawImage>) {
                 dst_->drawImage(buffer.bytesAt(c.dataOffset), c.dataLen,
-                                c.x, c.y, c.w, c.h);
+                                c.x, c.y, c.w, c.h, c.imageId);
             } else if constexpr (std::is_same_v<T, Cmd_DrawSvgMarkup>) {
                 dst_->drawSvgMarkup(reinterpret_cast<const char*>(
                                         buffer.bytesAt(c.dataOffset)),

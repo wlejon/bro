@@ -7,6 +7,7 @@ add_library(bro_render STATIC
     filter_chain.cpp
     recording_renderer.cpp
     command_replayer.cpp
+    image_cache.cpp
 )
 target_include_directories(bro_render PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util glad stb_image)

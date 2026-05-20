@@ -1,6 +1,7 @@
 #pragma once
 
 #include "render/renderer.h"
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -75,6 +76,9 @@ struct CachedImage {
     int width = 0;
     int height = 0;
     bool isSvg = false;
+    // Process-unique id for the decoded-image cache in the renderer. Assigned
+    // when the entry is created; 0 means "uncacheable" (e.g. a failed load).
+    uint64_t id = 0;
 };
 
 // Walks the DOM tree with layout boxes and issues Renderer draw calls.
