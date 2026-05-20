@@ -66,6 +66,7 @@ add_library(bro_js STATIC
     tensor_bindings_conv.cpp
     tensor_bindings_diffusion.cpp
     tensor_bindings_int8.cpp
+    diffusion_bindings.cpp
     ai_learn_bindings.cpp
     ai_belief_bindings.cpp
     ai_extras_bindings.cpp

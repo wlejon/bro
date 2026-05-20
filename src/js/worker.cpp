@@ -1,6 +1,7 @@
 #include "js/worker.h"
 #include "util/asset_mounts.h"
 #include "js/ai_bindings.h"
+#include "js/diffusion_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/flora_bindings.h"
 #include "js/math_bindings.h"
@@ -233,6 +234,10 @@ void Worker::threadFunc()
     // --- 3b''. Install bro.tensor (GPU tensor + ops, brotensor sibling). ---
     installTensorBindings(ctx);
 
+    // --- 3b'''. Install bro.diffusion (SD1.5 inference, brodiffusion sibling).
+    // Same binding as the main context; this worker owns its own Pipeline. ---
+    installDiffusionBindings(ctx);
+
     // --- 3c. Install bro.net bindings (own subscriber against shared
     // NetService). The service is thread-safe by design — commands/events
     // are routed through lock-free per-subscriber queues. ---
@@ -390,6 +395,7 @@ void Worker::threadFunc()
     }
     AIBindings::cleanup(ctx);
     MeshBindings::cleanup(ctx);
+    cleanupDiffusionBindings(ctx);
     s_wcd = nullptr;
     JS_SetContextOpaque(ctx, nullptr);
 

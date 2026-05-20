@@ -44,6 +44,7 @@
 #include "js/math_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
+#include "js/diffusion_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
 #include "js/server_bindings.h"
@@ -183,6 +184,12 @@ Engine::Engine(const EngineConfig& config)
     // bro.tensor (GPU tensor + ops via brotensor sibling). Real bindings when
     // a backend is enabled at configure time; stub `{ available: false }` otherwise.
     js::installTensorBindings(jsRuntime_->getContext());
+
+    // bro.diffusion (Stable Diffusion 1.5 inference via brodiffusion sibling).
+    // Always real — brodiffusion's CPU backend is always built. Main thread
+    // drives the step-wise inspection API; workers install the same binding
+    // for fast full generation.
+    js::installDiffusionBindings(jsRuntime_->getContext());
 
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());
