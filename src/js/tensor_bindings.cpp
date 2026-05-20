@@ -961,6 +961,7 @@ void installTensorBindings(JSContext* ctx) {
     installTensorConvOps(ctx, gpuObj);
     installTensorDiffusionOps(ctx, gpuObj);
     installTensorInt8Ops(ctx, gpuObj);
+    installTensorSafetensorsOps(ctx, gpuObj);
 
     // Install onto bro.tensor.
     JSValue global = JS_GetGlobalObject(ctx);

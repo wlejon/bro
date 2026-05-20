@@ -20,7 +20,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include <brodiffusion/pipeline.h>
-#include <brodiffusion/safetensors.h>
+#include <brotensor/safetensors.h>
 #include <brodiffusion/scheduler.h>
 #include <brodiffusion/lcm_scheduler.h>
 #include <brodiffusion/tokenizer.h>
@@ -38,7 +38,7 @@
 #include <vector>
 
 namespace bdp   = brodiffusion::pipeline;
-namespace bds   = brodiffusion::safetensors;
+namespace bds   = brotensor::safetensors;
 namespace bdc   = brodiffusion::clip;
 namespace bdsch = brodiffusion::scheduler;
 

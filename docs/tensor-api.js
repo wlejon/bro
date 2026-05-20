@@ -765,3 +765,48 @@ gpu.flashAttentionQkvoInt8wFp16({
     Wo_int8, so, bo: null,
     mask: null, numHeads, causal: false, O,
 });
+
+
+// -----------------------------------------------------------------------------
+// safetensors — load / save
+// -----------------------------------------------------------------------------
+//
+// Read and write the huggingface safetensors container format. The reader
+// mmap's the file: opening a multi-GB checkpoint and inspecting only its
+// header() is cheap — no payload is faulted in until get() uploads a tensor.
+
+/**
+ * Open a .safetensors file. Returns an opaque handle that owns the mmap.
+ * Throws if the file is missing or malformed.
+ */
+const f = gpu.openSafetensors('/path/to/model.safetensors');
+
+/** Number of tensors in the file. */
+f.count;
+
+/** Tensor names, in file order. -> string[] */
+f.names();
+
+/**
+ * Per-tensor metadata — no payload read, so this is cheap on huge files.
+ * -> { name: { dtype: "F32"|"F16"|"BF16"|..., shape: number[], nbytes }, ... }
+ */
+const hdr = f.header();
+
+/**
+ * Upload one tensor as a GpuTensor. brotensor tensors are 2D; when rows/cols
+ * are omitted the N-D source is flattened to (shape[0], numel/shape[0]).
+ * Source dtype must be F16 or F32. Throws on an unknown name.
+ */
+const W = f.get('model.layers.0.self_attn.q_proj.weight');
+const W2 = f.get('embedding.weight', 1024, 768);   // explicit 2D shape
+
+/** Release the mmap early. Also released automatically on GC. */
+f.close();
+
+/**
+ * Write a set of GpuTensors to a .safetensors file. Each value must be a
+ * GpuTensor; FP32 and FP16 tensors are supported. Shape is stored as the
+ * tensor's (rows, cols).
+ */
+gpu.saveSafetensors('/path/to/out.safetensors', { weight: W, bias: b });
