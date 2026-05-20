@@ -363,6 +363,19 @@ static JSValue js_copyD2D(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     return JS_UNDEFINED;
 }
 
+// cast(src, dst, outDtype): dst = src converted to outDtype. dst is resized
+// (and dtype-set) to (src.rows, src.cols, outDtype) and lands on src's device.
+// Supports the FP32 <-> FP16 pair plus a same-dtype passthrough copy. outDtype
+// is a dtype string ("fp32" | "fp16" | "int8") or numeric Dtype enum value.
+static JSValue js_cast(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "cast(src,dst,outDtype)");
+    ENSURE_INIT();
+    GT(src, 0, "cast"); GT(dst, 1, "cast");
+    nngpu::Dtype dt = parseDtype(ctx, argv[2], nngpu::Dtype::FP32);
+    nngpu::cast(*src, *dst, dt);
+    return JS_UNDEFINED;
+}
+
 // ─── Softmax ──────────────────────────────────────────────────────────────
 
 static JSValue js_softmaxForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -887,6 +900,7 @@ void installTensorBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, gpuObj, "clamp",              JS_NewCFunction(ctx, js_clamp,              "clamp",              3));
     JS_SetPropertyStr(ctx, gpuObj, "buildSlotMask",      JS_NewCFunction(ctx, js_buildSlotMask,      "buildSlotMask",      5));
     JS_SetPropertyStr(ctx, gpuObj, "copyD2D",            JS_NewCFunction(ctx, js_copyD2D,            "copyD2D",            5));
+    JS_SetPropertyStr(ctx, gpuObj, "cast",               JS_NewCFunction(ctx, js_cast,               "cast",               3));
 
     // Softmax
     JS_SetPropertyStr(ctx, gpuObj, "softmaxForward",     JS_NewCFunction(ctx, js_softmaxForward,     "softmaxForward",     3));

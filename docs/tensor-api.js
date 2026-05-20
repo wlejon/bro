@@ -158,6 +158,15 @@ gpu.buildSlotMask(x, offset, K, stride, mask);
  */
 gpu.copyD2D(src, srcOff, dst, dstOff, n);
 
+/**
+ * Dtype cast: dst = src converted to outDtype. dst is resized (and dtype-set)
+ * to match src's shape, on src's device. Supports the FP32 <-> FP16 pair plus
+ * a same-dtype passthrough copy; other pairs throw. The standard
+ * mixed-precision primitive (FP16 weight <-> FP32 master copy).
+ *   outDtype: "fp32" | "fp16" | "int8" or a bro.tensor.dtype.* enum value.
+ */
+gpu.cast(src, dst, "fp16");
+
 
 // -----------------------------------------------------------------------------
 // Modern activations (transformer + diffusion stack)
