@@ -7,6 +7,26 @@
 <body>
     <div id="root"></div>
     <script>
+        // Document-lifecycle capture for tests/layout/test_load_geometry.js.
+        // Records readyState + #root geometry at each stage so a test can
+        // assert layout is complete before DOMContentLoaded/load fire.
+        window.__lifecycle = {
+            scriptEval: { readyState: document.readyState }
+        };
+        document.addEventListener('DOMContentLoaded', function () {
+            window.__lifecycle.domContentLoaded = {
+                readyState: document.readyState,
+                rootWidth: document.getElementById('root').clientWidth
+            };
+        });
+        window.addEventListener('load', function () {
+            window.__lifecycle.load = {
+                readyState: document.readyState,
+                rootWidth: document.getElementById('root').clientWidth
+            };
+        });
+    </script>
+    <script>
         // Hide the menu bar so innerHeight matches the configured viewport.
         // (Mouse coords from getBoundingClientRect work either way thanks
         // to the headless globals folding contentTop in automatically.)

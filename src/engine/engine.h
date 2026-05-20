@@ -184,6 +184,13 @@ public:
     void exitPointerLock();
     dom::Element* pointerLockElement() const { return lockedElement_; }
 
+    // --- Document lifecycle ---
+    // Tracks the HTML document.readyState. Progresses "loading" (during script
+    // execution) -> "interactive" (just before DOMContentLoaded) -> "complete"
+    // (just before load). Apps gate DOM measurement on this, so it must not
+    // report "complete" while scripts are still running and no layout exists.
+    const std::string& documentReadyState() const { return documentReadyState_; }
+
     // --- Page visibility / fullscreen notifications ---
     // Invoke the JS bridge to flip document.visibilityState / dispatch
     // visibilitychange / fullscreenchange. Safe to call before the JS runtime
@@ -701,6 +708,10 @@ private:
     dom::Element* lockedElement_ = nullptr;
     float lockedMouseX_ = 0.0f;
     float lockedMouseY_ = 0.0f;
+
+    // HTML document.readyState. Starts "loading" while user scripts execute,
+    // advances to "interactive"/"complete" as DOMContentLoaded/load dispatch.
+    std::string documentReadyState_ = "loading";
 
     // Per-document mouse dispatch state for the app doc (mousedown target +
     // rolling click/dblclick tracking). System docs carry their own instance.

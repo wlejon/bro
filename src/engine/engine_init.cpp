@@ -655,10 +655,40 @@ Engine::Engine(const EngineConfig& config)
         }
     }
 
-    // 10a. Dispatch DOMContentLoaded on document
+    // 10a. Load @font-face custom fonts, then run an initial style + layout
+    //      pass. This MUST happen before DOMContentLoaded/load dispatch:
+    //      browsers complete layout before those events, and apps measure the
+    //      DOM (clientWidth, getBoundingClientRect, ...) in load handlers — the
+    //      universal, correct idiom. Without a layout tree those reads return
+    //      pre-layout zeros. Layout needs font metrics, so loadCustomFonts()
+    //      runs first.
+    loadCustomFonts();
+    if (document_) {
+        ensureReplacedElements(document_->documentElement());
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
+        double now = (displayMode_ == DisplayMode::Headless)
+                         ? virtualTime_
+                         : util::currentTimeMs();
+        document_->setTransitionManager(&transitionManager_, now);
+        animationManager_.setKeyframes(&document_->cascade().keyframes());
+        document_->setAnimationManager(&animationManager_);
+        document_->resolveStyles();
+        document_->performLayout(static_cast<float>(viewportWidth_),
+                                 static_cast<float>(contentHeight()), *textMetrics_);
+        if (document_->documentElement()) {
+            auto& box = document_->documentElement()->layoutBox();
+            documentHeight_ = box.marginBox().height;
+        }
+    }
+
+    // 10b. Dispatch DOMContentLoaded on document
     {
         JSContext* ctx = jsRuntime_->getContext();
         JSValue global = JS_GetGlobalObject(ctx);
+        // Parsing + scripts + initial layout are done — the document is now
+        // "interactive". Set this before dispatching DOMContentLoaded so
+        // readyState reads correctly inside the handler.
+        documentReadyState_ = "interactive";
         // Fire DOMContentLoaded on documentElement so document.addEventListener
         // callers (the standard web idiom) receive it via bubbling.
         if (auto* root = document_ ? document_->documentElement() : nullptr) {
@@ -682,7 +712,8 @@ Engine::Engine(const EngineConfig& config)
             JS_FreeValue(ctx, dclType);
             JS_FreeValue(ctx, dclEvt);
 
-            // load
+            // load — the document is fully "complete" before this fires.
+            documentReadyState_ = "complete";
             JSValue loadType = JS_NewString(ctx, "load");
             JSValue loadEvt = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, loadEvt, "type", JS_NewString(ctx, "load"));
@@ -739,19 +770,10 @@ Engine::Engine(const EngineConfig& config)
         }
     }
 
-    // Load @font-face custom fonts from the cascade
-    loadCustomFonts();
-
-    // Headless: do initial layout + flush
+    // Headless: flush an initial frame. Style + layout already ran above
+    // (step 10a, before the load dispatch); flush() re-layouts only if a load
+    // handler dirtied the document, then rasterizes.
     if (displayMode_ == DisplayMode::Headless) {
-        ensureReplacedElements(document_->documentElement());
-        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
-        document_->setTransitionManager(&transitionManager_, virtualTime_);
-        animationManager_.setKeyframes(&document_->cascade().keyframes());
-        document_->setAnimationManager(&animationManager_);
-        document_->resolveStyles();
-        document_->performLayout(static_cast<float>(viewportWidth_),
-                                 static_cast<float>(contentHeight()), *textMetrics_);
         flush();
     }
     // User script has not run yet during construction. Arm media events so

@@ -166,22 +166,10 @@ void Engine::run() {
     eventLoop_->onFocusLost   = [this]() { exitPointerLock(); setPageVisibility(false); };
     eventLoop_->onFocusGained = [this]() { setPageVisibility(true); };
 
-    // Initial layout
-    if (document_) {
-        ensureReplacedElements(document_->documentElement());
-        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
-        double now = util::currentTimeMs();
-        document_->setTransitionManager(&transitionManager_, now);
-        animationManager_.setKeyframes(&document_->cascade().keyframes());
-        document_->setAnimationManager(&animationManager_);
-        document_->resolveStyles();
-        document_->performLayout(static_cast<float>(viewportWidth_),
-                                 static_cast<float>(contentHeight()), *textMetrics_);
-        if (document_->documentElement()) {
-            auto& box = document_->documentElement()->layoutBox();
-            documentHeight_ = box.marginBox().height;
-        }
-    }
+    // Initial style + layout already ran in the Engine constructor (step 10a,
+    // before DOMContentLoaded/load were dispatched, so apps can measure
+    // geometry in those handlers). The main loop below re-layouts on demand
+    // via dirty tracking, so there is nothing to lay out here.
 
     // Start canvas threads for any existing canvas scenes that weren't
     // threaded at addCanvasScene time. Main thread creates each shared

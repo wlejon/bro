@@ -235,7 +235,15 @@ void installDocumentBindings(JSContext* ctx) {
         })
         .get("nodeType", [](Doc*) -> int { return 9; })
         .get("nodeName", [](Doc*) -> std::string { return "#document"; })
-        .get("readyState", [](Doc*) -> std::string { return "complete"; })
+        .get("readyState", [](Doc*, JSContext* cx) -> std::string {
+            // Real lifecycle value: "loading" while user scripts run (no
+            // layout yet), then "interactive"/"complete". Apps gate DOM
+            // measurement on this, so it must not claim "complete" early.
+            auto it = s_ctx_engines.find(cx);
+            if (it == s_ctx_engines.end() || !it->second) return "complete";
+            auto* engine = static_cast<bro::engine::Engine*>(it->second);
+            return engine->documentReadyState();
+        })
         .get("defaultView", [](Doc*, JSContext* cx) -> JSValue {
             return JS_GetGlobalObject(cx);
         })
