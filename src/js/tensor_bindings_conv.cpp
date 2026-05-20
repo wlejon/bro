@@ -24,7 +24,7 @@ static JSValue js_conv2dForward(JSContext* ctx, JSValueConst, int argc, JSValueC
     ENSURE_INIT();
     GT(X,  0, "conv2dForward"); GT(Wt, 1, "conv2dForward");
     JSValue err = JS_UNDEFINED;
-    const nngpu::GpuTensor* bias = nullptr;
+    const nngpu::Tensor* bias = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[2], bias, err, "bias")) return err;
     int32_t N = 0, Cin = 0, H = 0, W = 0, Cout = 0, kH = 0, kW = 0;
     int32_t sH = 1, sW = 1, pH = 0, pW = 0, dH = 1, dW = 1, groups = 1;
@@ -43,7 +43,7 @@ static JSValue js_conv2dForward(JSContext* ctx, JSValueConst, int argc, JSValueC
     JS_ToInt32(ctx, &dW,   argv[15]);
     JS_ToInt32(ctx, &groups,argv[16]);
     GT(Y, 17, "conv2dForward");
-    nngpu::conv2d_forward_gpu(*X, *Wt, bias, N, Cin, H, W, Cout, kH, kW,
+    nngpu::conv2d_forward(*X, *Wt, bias, N, Cin, H, W, Cout, kH, kW,
                               sH, sW, pH, pW, dH, dW, groups, *Y);
     return JS_UNDEFINED;
 }
@@ -70,7 +70,7 @@ static JSValue js_conv2dBackwardInput(JSContext* ctx, JSValueConst, int argc, JS
     JS_ToInt32(ctx, &dW,   argv[14]);
     JS_ToInt32(ctx, &groups,argv[15]);
     GT(dX, 16, "conv2dBackwardInput");
-    nngpu::conv2d_backward_input_gpu(*Wt, *dY, N, Cin, H, W, Cout, kH, kW,
+    nngpu::conv2d_backward_input(*Wt, *dY, N, Cin, H, W, Cout, kH, kW,
                                      sH, sW, pH, pW, dH, dW, groups, *dX);
     return JS_UNDEFINED;
 }
@@ -97,7 +97,7 @@ static JSValue js_conv2dBackwardWeight(JSContext* ctx, JSValueConst, int argc, J
     JS_ToInt32(ctx, &dW,   argv[14]);
     JS_ToInt32(ctx, &groups,argv[15]);
     GT(dWt, 16, "conv2dBackwardWeight");
-    nngpu::conv2d_backward_weight_gpu(*X, *dY, N, Cin, H, W, Cout, kH, kW,
+    nngpu::conv2d_backward_weight(*X, *dY, N, Cin, H, W, Cout, kH, kW,
                                       sH, sW, pH, pW, dH, dW, groups, *dWt);
     return JS_UNDEFINED;
 }
@@ -113,7 +113,7 @@ static JSValue js_conv2dBackwardBias(JSContext* ctx, JSValueConst, int argc, JSV
     JS_ToInt32(ctx, &Hout, argv[3]);
     JS_ToInt32(ctx, &Wout, argv[4]);
     GT(dB, 5, "conv2dBackwardBias");
-    nngpu::conv2d_backward_bias_gpu(*dY, N, Cout, Hout, Wout, *dB);
+    nngpu::conv2d_backward_bias(*dY, N, Cout, Hout, Wout, *dB);
     return JS_UNDEFINED;
 }
 
@@ -155,9 +155,9 @@ static JSValue js_conv2dBackwardBias(JSContext* ctx, JSValueConst, int argc, JSV
         return JS_UNDEFINED;                                                    \
     }
 
-UPSAMPLE_FB(upsampleNearest2x,  upsample_nearest_2x_gpu,  upsample_nearest_2x_backward_gpu)
-UPSAMPLE_FB(upsampleBilinear2x, upsample_bilinear_2x_gpu, upsample_bilinear_2x_backward_gpu)
-UPSAMPLE_FB(downsampleAvg2x,    downsample_avg_2x_gpu,    downsample_avg_2x_backward_gpu)
+UPSAMPLE_FB(upsampleNearest2x,  upsample_nearest_2x,  upsample_nearest_2x_backward)
+UPSAMPLE_FB(upsampleBilinear2x, upsample_bilinear_2x, upsample_bilinear_2x_backward)
+UPSAMPLE_FB(downsampleAvg2x,    downsample_avg_2x,    downsample_avg_2x_backward)
 
 #undef UPSAMPLE_FB
 
@@ -173,7 +173,7 @@ static JSValue js_nchwToSequence(JSContext* ctx, JSValueConst, int argc, JSValue
     JS_ToInt32(ctx, &H, argv[3]);
     JS_ToInt32(ctx, &W, argv[4]);
     GT(Y, 5, "nchwToSequence");
-    nngpu::nchw_to_sequence_gpu(*X, N, C, H, W, *Y);
+    nngpu::nchw_to_sequence(*X, N, C, H, W, *Y);
     return JS_UNDEFINED;
 }
 
@@ -187,7 +187,7 @@ static JSValue js_sequenceToNchw(JSContext* ctx, JSValueConst, int argc, JSValue
     JS_ToInt32(ctx, &H, argv[3]);
     JS_ToInt32(ctx, &W, argv[4]);
     GT(Y, 5, "sequenceToNchw");
-    nngpu::sequence_to_nchw_gpu(*X, N, C, H, W, *Y);
+    nngpu::sequence_to_nchw(*X, N, C, H, W, *Y);
     return JS_UNDEFINED;
 }
 

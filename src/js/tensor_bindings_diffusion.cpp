@@ -21,7 +21,7 @@ static JSValue js_ddimStep(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     JS_ToFloat64(ctx, &ap, argv[3]);
     JS_ToFloat64(ctx, &st, argv[4]);
     GT(xp, 5, "ddimStep");
-    nngpu::ddim_step_gpu(*xt, *eps, (float)at, (float)ap, (float)st, *xp);
+    nngpu::ddim_step(*xt, *eps, (float)at, (float)ap, (float)st, *xp);
     return JS_UNDEFINED;
 }
 
@@ -35,7 +35,7 @@ static JSValue js_eulerStep(JSContext* ctx, JSValueConst, int argc, JSValueConst
     JS_ToFloat64(ctx, &st, argv[2]);
     JS_ToFloat64(ctx, &sp, argv[3]);
     GT(xp, 4, "eulerStep");
-    nngpu::euler_step_gpu(*xt, *eps, (float)st, (float)sp, *xp);
+    nngpu::euler_step(*xt, *eps, (float)st, (float)sp, *xp);
     return JS_UNDEFINED;
 }
 
@@ -53,7 +53,7 @@ static JSValue js_dpmpp2mStep(JSContext* ctx, JSValueConst, int argc, JSValueCon
     JS_ToFloat64(ctx, &c_x0t,    argv[5]);
     JS_ToFloat64(ctx, &c_x0prev, argv[6]);
     GT(xp, 7, "dpmpp2mStep"); GT(x0o, 8, "dpmpp2mStep");
-    nngpu::dpmpp_2m_step_gpu(*xt, *eps, *x0p, (float)st,
+    nngpu::dpmpp_2m_step(*xt, *eps, *x0p, (float)st,
                              (float)c_xt, (float)c_x0t, (float)c_x0prev,
                              *xp, *x0o);
     return JS_UNDEFINED;
@@ -69,7 +69,7 @@ static JSValue js_timestepEmbedding(JSContext* ctx, JSValueConst, int argc, JSVa
     JS_ToInt32(ctx, &dim, argv[1]);
     double maxPeriod = 10000.0; JS_ToFloat64(ctx, &maxPeriod, argv[2]);
     GT(Y, 3, "timestepEmbedding");
-    nngpu::timestep_embedding_gpu(*T, dim, (float)maxPeriod, *Y);
+    nngpu::timestep_embedding(*T, dim, (float)maxPeriod, *Y);
     return JS_UNDEFINED;
 }
 

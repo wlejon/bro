@@ -112,7 +112,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | broaudio | `broaudio` | Real-time audio engine (synthesis, effects, spatial, MIDI, mixing) (standalone or submodule) |
 | bromesh | `bromesh` | Mesh generation, manipulation, analysis, and I/O (standalone or submodule) |
 | broflora | `broflora` | Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms (standalone or submodule) |
-| brotensor | `brotensor` | GPU tensor + ops, CUDA + Metal backends behind a flat `brotensor::` namespace. Loaded transitively via brogameagent when a GPU backend is enabled |
+| brotensor | `brotensor` | Tensor + ops — one unified `brotensor::Tensor` (runtime `Device` tag), device-neutral ops behind a flat `brotensor::` namespace. CPU backend always built; CUDA + Metal additive/opt-in. Hard dependency of brogameagent (owns the Tensor type + CPU ops); loaded transitively |
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |

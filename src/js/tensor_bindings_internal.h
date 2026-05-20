@@ -39,7 +39,7 @@ namespace nngpu = brotensor;
 // to unwrap an AIGpuTensor / AITensor must use the *same* struct definition
 // here. tensor_bindings.cpp registers the AIGpuTensor class; other TUs only
 // unwrap.
-struct GpuTensorData { nngpu::GpuTensor t; };
+struct GpuTensorData { nngpu::Tensor t; };
 struct TensorData    { brotensor::Tensor t; };
 
 // ─── Float32Array helpers ──────────────────────────────────────────────────
@@ -78,7 +78,7 @@ inline brotensor::Tensor* tensorFromJS(JSContext* ctx, JSValueConst v) {
     return d ? &d->t : nullptr;
 }
 
-inline nngpu::GpuTensor* gpuTensorFromJSLocal(JSContext* ctx, JSValueConst v) {
+inline nngpu::Tensor* gpuTensorFromJSLocal(JSContext* ctx, JSValueConst v) {
     auto* d = qjsbind::unwrap<GpuTensorData>(ctx, v);
     return d ? &d->t : nullptr;
 }
@@ -96,7 +96,7 @@ inline bool resolveDeviceMask(JSContext* ctx, JSValueConst v,
         thrown_err = JS_ThrowTypeError(ctx, "mask must be null or a GpuTensor (device pointer)");
         return false;
     }
-    out_ptr = gt->data;
+    out_ptr = static_cast<const float*>(gt->data);
     return true;
 }
 
@@ -104,7 +104,7 @@ inline bool resolveDeviceMask(JSContext* ctx, JSValueConst v,
 // null/undefined → nullptr. GpuTensor → pointer to the underlying tensor.
 // Anything else throws TypeError.
 inline bool resolveOptionalGpuTensor(JSContext* ctx, JSValueConst v,
-                                     nngpu::GpuTensor*& out_ptr,
+                                     nngpu::Tensor*& out_ptr,
                                      JSValue& thrown_err,
                                      const char* label) {
     if (JS_IsUndefined(v) || JS_IsNull(v)) { out_ptr = nullptr; return true; }
@@ -120,10 +120,10 @@ inline bool resolveOptionalGpuTensor(JSContext* ctx, JSValueConst v,
 // Const variant for read-only optional args (e.g. forward inputs in backward
 // signatures that take `const GpuTensor*`).
 inline bool resolveOptionalConstGpuTensor(JSContext* ctx, JSValueConst v,
-                                          const nngpu::GpuTensor*& out_ptr,
+                                          const nngpu::Tensor*& out_ptr,
                                           JSValue& thrown_err,
                                           const char* label) {
-    nngpu::GpuTensor* m = nullptr;
+    nngpu::Tensor* m = nullptr;
     bool ok = resolveOptionalGpuTensor(ctx, v, m, thrown_err, label);
     out_ptr = m;
     return ok;
@@ -137,8 +137,8 @@ inline bool getBool(JSContext* ctx, JSValueConst v, bool def) {
 
 // Read a JS Array of GpuTensors. Returns true on success.
 inline bool readGpuTensorArray(JSContext* ctx, JSValueConst v,
-                               std::vector<const nngpu::GpuTensor*>& outConst,
-                               std::vector<nngpu::GpuTensor*>* outMut) {
+                               std::vector<const nngpu::Tensor*>& outConst,
+                               std::vector<nngpu::Tensor*>* outMut) {
     if (!JS_IsArray(v)) return false;
     uint32_t len = 0;
     JSValue lv = JS_GetPropertyStr(ctx, v, "length");
@@ -187,7 +187,7 @@ void installTensorInt8Ops(JSContext* ctx, JSValue gpuObj);
 // ─── Common macros used by every TU ────────────────────────────────────────
 // (defined here rather than in each TU so the conventions stay synchronised)
 
-#define BROTENSOR_ENSURE_INIT() do { ::brotensor::cuda_init(); } while (0)
+#define BROTENSOR_ENSURE_INIT() do { ::brotensor::init(); } while (0)
 
 // Fetch GpuTensor* from argv[idx] into `name`. Throws TypeError on failure.
 #define BROTENSOR_GT(name, idx, label)                                      \

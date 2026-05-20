@@ -34,10 +34,10 @@ namespace bro::js {
         return JS_UNDEFINED;                                                    \
     }
 
-UNARY_FB(silu,      silu_forward_gpu,        silu_backward_gpu)
-UNARY_FB(gelu,      gelu_forward_gpu,        gelu_backward_gpu)
-UNARY_FB(geluExact, gelu_exact_forward_gpu,  gelu_exact_backward_gpu)
-UNARY_FB(quickGelu, quick_gelu_forward_gpu,  quick_gelu_backward_gpu)
+UNARY_FB(silu,      silu_forward,        silu_backward)
+UNARY_FB(gelu,      gelu_forward,        gelu_backward)
+UNARY_FB(geluExact, gelu_exact_forward,  gelu_exact_backward)
+UNARY_FB(quickGelu, quick_gelu_forward,  quick_gelu_backward)
 
 #undef UNARY_FB
 
@@ -64,9 +64,9 @@ UNARY_FB(quickGelu, quick_gelu_forward_gpu,  quick_gelu_backward_gpu)
         return JS_UNDEFINED;                                                    \
     }
 
-GATED_FB(swiglu,     swiglu_forward_gpu,      swiglu_backward_gpu)
-GATED_FB(geglu,      geglu_forward_gpu,       geglu_backward_gpu)
-GATED_FB(gegluExact, geglu_exact_forward_gpu, geglu_exact_backward_gpu)
+GATED_FB(swiglu,     swiglu_forward,      swiglu_backward)
+GATED_FB(geglu,      geglu_forward,       geglu_backward)
+GATED_FB(gegluExact, geglu_exact_forward, geglu_exact_backward)
 
 #undef GATED_FB
 
@@ -78,7 +78,7 @@ static JSValue js_rmsNormForward(JSContext* ctx, JSValueConst, int argc, JSValue
     GT(X, 0, "rmsNormForward"); GT(g, 1, "rmsNormForward");
     double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[2]);
     GT(Y, 3, "rmsNormForward");
-    nngpu::rms_norm_forward_gpu(*X, *g, (float)eps, *Y);
+    nngpu::rms_norm_forward(*X, *g, (float)eps, *Y);
     return JS_UNDEFINED;
 }
 
@@ -90,7 +90,7 @@ static JSValue js_rmsNormBackward(JSContext* ctx, JSValueConst, int argc, JSValu
     GT(dY, 2, "rmsNormBackward");
     double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[3]);
     GT(dX, 4, "rmsNormBackward"); GT(dG, 5, "rmsNormBackward");
-    nngpu::rms_norm_backward_gpu(*X, *g, *dY, (float)eps, *dX, *dG);
+    nngpu::rms_norm_backward(*X, *g, *dY, (float)eps, *dX, *dG);
     return JS_UNDEFINED;
 }
 
@@ -115,7 +115,7 @@ static JSValue js_groupNormForward(JSContext* ctx, JSValueConst, int argc, JSVal
     JS_ToInt32(ctx, &ng, argv[7]);
     double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[8]);
     GT(Y, 9, "groupNormForward");
-    nngpu::group_norm_forward_gpu(*X, *g, *b, N, C, H, W, ng, (float)eps, *Y);
+    nngpu::group_norm_forward(*X, *g, *b, N, C, H, W, ng, (float)eps, *Y);
     return JS_UNDEFINED;
 }
 
@@ -134,7 +134,7 @@ static JSValue js_groupNormBackward(JSContext* ctx, JSValueConst, int argc, JSVa
     double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[8]);
     GT(dX, 9, "groupNormBackward"); GT(dG, 10, "groupNormBackward");
     GT(dB, 11, "groupNormBackward");
-    nngpu::group_norm_backward_gpu(*X, *g, *dY, N, C, H, W, ng, (float)eps,
+    nngpu::group_norm_backward(*X, *g, *dY, N, C, H, W, ng, (float)eps,
                                    *dX, *dG, *dB);
     return JS_UNDEFINED;
 }
@@ -145,7 +145,7 @@ static JSValue js_matmul(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     if (argc < 3) return JS_ThrowTypeError(ctx, "matmul(A,B,C)");
     ENSURE_INIT();
     GT(A, 0, "matmul"); GT(B, 1, "matmul"); GT(C, 2, "matmul");
-    nngpu::matmul_gpu(*A, *B, *C);
+    nngpu::matmul(*A, *B, *C);
     return JS_UNDEFINED;
 }
 
@@ -155,7 +155,7 @@ static JSValue js_matmulBackward(JSContext* ctx, JSValueConst, int argc, JSValue
     GT(A,  0, "matmulBackward"); GT(B,  1, "matmulBackward");
     GT(dC, 2, "matmulBackward"); GT(dA, 3, "matmulBackward");
     GT(dB, 4, "matmulBackward");
-    nngpu::matmul_backward_gpu(*A, *B, *dC, *dA, *dB);
+    nngpu::matmul_backward(*A, *B, *dC, *dA, *dB);
     return JS_UNDEFINED;
 }
 
@@ -172,7 +172,7 @@ static JSValue js_ropeForward(JSContext* ctx, JSValueConst, int argc, JSValueCon
     JS_ToInt32(ctx, &seqOffset, argv[3]);
     double thetaBase = 10000.0; JS_ToFloat64(ctx, &thetaBase, argv[4]);
     GT(Y, 5, "ropeForward");
-    nngpu::rope_forward_gpu(*X, headDim, numHeads, seqOffset, (float)thetaBase, *Y);
+    nngpu::rope_forward(*X, headDim, numHeads, seqOffset, (float)thetaBase, *Y);
     return JS_UNDEFINED;
 }
 
@@ -187,7 +187,7 @@ static JSValue js_ropeBackward(JSContext* ctx, JSValueConst, int argc, JSValueCo
     JS_ToInt32(ctx, &seqOffset, argv[3]);
     double thetaBase = 10000.0; JS_ToFloat64(ctx, &thetaBase, argv[4]);
     GT(dX, 5, "ropeBackward");
-    nngpu::rope_backward_gpu(*dY, headDim, numHeads, seqOffset, (float)thetaBase, *dX);
+    nngpu::rope_backward(*dY, headDim, numHeads, seqOffset, (float)thetaBase, *dX);
     return JS_UNDEFINED;
 }
 
@@ -200,7 +200,7 @@ static JSValue js_buildCausalMaskRow(JSContext* ctx, JSValueConst, int argc, JSV
     JS_ToInt32(ctx, &L, argv[0]);
     JS_ToInt32(ctx, &q, argv[1]);
     GT(mask, 2, "buildCausalMaskRow");
-    nngpu::build_causal_mask_row_gpu(L, q, *mask);
+    nngpu::build_causal_mask_row(L, q, *mask);
     return JS_UNDEFINED;
 }
 

@@ -17,6 +17,7 @@
 #include <brogameagent/learn/generic_trainer.h>
 #include <brogameagent/nn/net.h>
 #include <brogameagent/nn/policy_value_net.h>
+#include <brotensor/runtime.h>
 
 #include <cctype>
 #include <cstring>
@@ -483,8 +484,12 @@ static void registerClasses(JSContext* ctx) {
                         std::string dev = s ? s : "";
                         if (s) JS_FreeCString(ctx, s);
                         for (auto& ch : dev) ch = (char)std::tolower((unsigned char)ch);
-                        c.device = (dev == "gpu") ? brotensor::Device::GPU
-                                                  : brotensor::Device::CPU;
+                        if (dev == "gpu") {
+                            brotensor::init();
+                            c.device = brotensor::default_device();
+                        } else {
+                            c.device = brotensor::Device::CPU;
+                        }
                     }
                     JS_FreeValue(ctx, dv);
                     d->trainer->set_config(c);

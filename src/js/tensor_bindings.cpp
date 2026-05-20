@@ -82,9 +82,10 @@ static nngpu::Dtype parseDtype(JSContext* ctx, JSValueConst v, nngpu::Dtype def)
 
 static const char* dtypeName(nngpu::Dtype dt) {
     switch (dt) {
-        case nngpu::Dtype::FP32: return "fp32";
-        case nngpu::Dtype::FP16: return "fp16";
-        case nngpu::Dtype::INT8: return "int8";
+        case nngpu::Dtype::FP32:  return "fp32";
+        case nngpu::Dtype::FP16:  return "fp16";
+        case nngpu::Dtype::INT8:  return "int8";
+        case nngpu::Dtype::INT32: return "int32";
     }
     return "fp32";
 }
@@ -134,7 +135,7 @@ static void registerClasses(JSContext* ctx) {
                 auto* d = qjsbind::unwrap<GpuTensorData>(ctx, this_val);
                 if (!d || argc < 1) return JS_ThrowTypeError(ctx, "upload(src) — expected Tensor or Float32Array");
                 if (auto* ht = tensorFromJS(ctx, argv[0])) {
-                    nngpu::upload(ht->ptr(), ht->rows, ht->cols, d->t);
+                    d->t = nngpu::Tensor::from_host(ht->ptr(), ht->rows, ht->cols);
                     return JS_UNDEFINED;
                 }
                 size_t n = 0;
@@ -142,7 +143,7 @@ static void registerClasses(JSContext* ctx) {
                 if (!src) return JS_ThrowTypeError(ctx, "upload(src) — expected Tensor or Float32Array");
                 int r = d->t.rows, c = d->t.cols;
                 if (r * c != (int)n) { r = (int)n; c = 1; }
-                nngpu::upload(src, r, c, d->t);
+                d->t = nngpu::Tensor::from_host(src, r, c);
                 return JS_UNDEFINED;
             }, 1)
         // download(dst?): if dst is AITensor, download into it (auto-syncs);
@@ -152,19 +153,19 @@ static void registerClasses(JSContext* ctx) {
             [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                 auto* d = qjsbind::unwrap<GpuTensorData>(ctx, this_val);
                 if (!d) return JS_ThrowTypeError(ctx, "download() on non-GpuTensor");
-                nngpu::cuda_sync();
+                nngpu::sync_all();
                 if (argc >= 1 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
                     if (auto* ht = tensorFromJS(ctx, argv[0])) {
                         if (ht->rows != d->t.rows || ht->cols != d->t.cols) {
                             ht->resize(d->t.rows, d->t.cols);
                         }
-                        nngpu::download(d->t, ht->ptr());
+                        d->t.copy_to_host(ht->ptr());
                         return JS_UNDEFINED;
                     }
                     return JS_ThrowTypeError(ctx, "download(dst): dst must be a Tensor");
                 }
                 std::vector<float> host(static_cast<size_t>(d->t.size()));
-                nngpu::download(d->t, host.data());
+                d->t.copy_to_host(host.data());
                 return make_float32_array(ctx, host.data(), static_cast<int>(host.size()));
             }, 1)
         // uploadFp16(uint16Array): src holds the IEEE binary16 bit pattern.
@@ -180,7 +181,7 @@ static void registerClasses(JSContext* ctx) {
                 int n = static_cast<int>(bytes / sizeof(uint16_t));
                 int r = d->t.rows, c = d->t.cols;
                 if (r * c != n) { r = n; c = 1; }
-                nngpu::upload_fp16(reinterpret_cast<const uint16_t*>(p), r, c, d->t);
+                d->t = nngpu::Tensor::from_host_fp16(reinterpret_cast<const uint16_t*>(p), r, c);
                 return JS_UNDEFINED;
             }, 1)
         // downloadFp16(): sync + download FP16 bits into a fresh Uint16Array.
@@ -188,9 +189,9 @@ static void registerClasses(JSContext* ctx) {
             [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
                 auto* d = qjsbind::unwrap<GpuTensorData>(ctx, this_val);
                 if (!d) return JS_ThrowTypeError(ctx, "downloadFp16() on non-GpuTensor");
-                nngpu::cuda_sync();
+                nngpu::sync_all();
                 std::vector<uint16_t> host(static_cast<size_t>(d->t.size()));
-                nngpu::download_fp16(d->t, host.data());
+                d->t.copy_to_host_fp16(host.data());
                 JSValue abuf = JS_NewArrayBufferCopy(
                     ctx, reinterpret_cast<const uint8_t*>(host.data()),
                     host.size() * sizeof(uint16_t));
@@ -209,12 +210,12 @@ static void registerClasses(JSContext* ctx) {
 #define GT(name, idx, label) BROTENSOR_GT(name, idx, label)
 
 static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    nngpu::cuda_init();
+    nngpu::init();
     return JS_UNDEFINED;
 }
 
 static JSValue js_sync(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    nngpu::cuda_sync();
+    nngpu::sync_all();
     return JS_UNDEFINED;
 }
 
@@ -229,7 +230,7 @@ static JSValue js_createTensor(JSContext* ctx, JSValueConst, int argc, JSValueCo
     nngpu::Dtype dt = nngpu::Dtype::FP32;
     if (argc >= 3) dt = parseDtype(ctx, argv[2], nngpu::Dtype::FP32);
     auto* d = new GpuTensorData();
-    if (r > 0 && c > 0) d->t = nngpu::GpuTensor(r, c, dt);
+    if (r > 0 && c > 0) d->t = nngpu::Tensor::zeros(r, c, dt);
     return qjsbind::wrap<GpuTensorData>(ctx, d);
 }
 
@@ -240,7 +241,7 @@ static JSValue js_linearForward(JSContext* ctx, JSValueConst, int argc, JSValueC
     ENSURE_INIT();
     GT(W, 0, "linearForward"); GT(b, 1, "linearForward");
     GT(x, 2, "linearForward"); GT(y, 3, "linearForward");
-    nngpu::linear_forward_gpu(*W, *b, *x, *y);
+    nngpu::linear_forward(*W, *b, *x, *y);
     return JS_UNDEFINED;
 }
 
@@ -250,7 +251,7 @@ static JSValue js_linearBackward(JSContext* ctx, JSValueConst, int argc, JSValue
     GT(W,  0, "linearBackward"); GT(x,  1, "linearBackward");
     GT(dY, 2, "linearBackward"); GT(dX, 3, "linearBackward");
     GT(dW, 4, "linearBackward"); GT(dB, 5, "linearBackward");
-    nngpu::linear_backward_gpu(*W, *x, *dY, *dX, *dW, *dB);
+    nngpu::linear_backward(*W, *x, *dY, *dX, *dW, *dB);
     return JS_UNDEFINED;
 }
 
@@ -258,42 +259,42 @@ static JSValue js_reluForward(JSContext* ctx, JSValueConst, int argc, JSValueCon
     if (argc < 2) return JS_ThrowTypeError(ctx, "reluForward(x,y)");
     ENSURE_INIT();
     GT(x, 0, "reluForward"); GT(y, 1, "reluForward");
-    nngpu::relu_forward_gpu(*x, *y);
+    nngpu::relu_forward(*x, *y);
     return JS_UNDEFINED;
 }
 static JSValue js_reluBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "reluBackward(x,dY,dX)");
     ENSURE_INIT();
     GT(x, 0, "reluBackward"); GT(dY, 1, "reluBackward"); GT(dX, 2, "reluBackward");
-    nngpu::relu_backward_gpu(*x, *dY, *dX);
+    nngpu::relu_backward(*x, *dY, *dX);
     return JS_UNDEFINED;
 }
 static JSValue js_tanhForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "tanhForward(x,y)");
     ENSURE_INIT();
     GT(x, 0, "tanhForward"); GT(y, 1, "tanhForward");
-    nngpu::tanh_forward_gpu(*x, *y);
+    nngpu::tanh_forward(*x, *y);
     return JS_UNDEFINED;
 }
 static JSValue js_tanhBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "tanhBackward(y,dY,dX)");
     ENSURE_INIT();
     GT(y, 0, "tanhBackward"); GT(dY, 1, "tanhBackward"); GT(dX, 2, "tanhBackward");
-    nngpu::tanh_backward_gpu(*y, *dY, *dX);
+    nngpu::tanh_backward(*y, *dY, *dX);
     return JS_UNDEFINED;
 }
 static JSValue js_sigmoidForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "sigmoidForward(x,y)");
     ENSURE_INIT();
     GT(x, 0, "sigmoidForward"); GT(y, 1, "sigmoidForward");
-    nngpu::sigmoid_forward_gpu(*x, *y);
+    nngpu::sigmoid_forward(*x, *y);
     return JS_UNDEFINED;
 }
 static JSValue js_sigmoidBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "sigmoidBackward(y,dY,dX)");
     ENSURE_INIT();
     GT(y, 0, "sigmoidBackward"); GT(dY, 1, "sigmoidBackward"); GT(dX, 2, "sigmoidBackward");
-    nngpu::sigmoid_backward_gpu(*y, *dY, *dX);
+    nngpu::sigmoid_backward(*y, *dY, *dX);
     return JS_UNDEFINED;
 }
 
@@ -301,7 +302,7 @@ static JSValue js_addInplace(JSContext* ctx, JSValueConst, int argc, JSValueCons
     if (argc < 2) return JS_ThrowTypeError(ctx, "addInplace(y,x)");
     ENSURE_INIT();
     GT(y, 0, "addInplace"); GT(x, 1, "addInplace");
-    nngpu::add_inplace_gpu(*y, *x);
+    nngpu::add_inplace(*y, *x);
     return JS_UNDEFINED;
 }
 static JSValue js_addScalarInplace(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -309,7 +310,7 @@ static JSValue js_addScalarInplace(JSContext* ctx, JSValueConst, int argc, JSVal
     ENSURE_INIT();
     GT(y, 0, "addScalarInplace");
     double s = 0; JS_ToFloat64(ctx, &s, argv[1]);
-    nngpu::add_scalar_inplace_gpu(*y, (float)s);
+    nngpu::add_scalar_inplace(*y, (float)s);
     return JS_UNDEFINED;
 }
 static JSValue js_scaleInplace(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -317,14 +318,14 @@ static JSValue js_scaleInplace(JSContext* ctx, JSValueConst, int argc, JSValueCo
     ENSURE_INIT();
     GT(y, 0, "scaleInplace");
     double s = 0; JS_ToFloat64(ctx, &s, argv[1]);
-    nngpu::scale_inplace_gpu(*y, (float)s);
+    nngpu::scale_inplace(*y, (float)s);
     return JS_UNDEFINED;
 }
 static JSValue js_mulInplace(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "mulInplace(y,x)");
     ENSURE_INIT();
     GT(y, 0, "mulInplace"); GT(x, 1, "mulInplace");
-    nngpu::mul_inplace_gpu(*y, *x);
+    nngpu::mul_inplace(*y, *x);
     return JS_UNDEFINED;
 }
 static JSValue js_clamp(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -334,7 +335,7 @@ static JSValue js_clamp(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     double lo = 0, hi = 0;
     JS_ToFloat64(ctx, &lo, argv[1]);
     JS_ToFloat64(ctx, &hi, argv[2]);
-    nngpu::clamp_gpu(*y, (float)lo, (float)hi);
+    nngpu::clamp(*y, (float)lo, (float)hi);
     return JS_UNDEFINED;
 }
 static JSValue js_buildSlotMask(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -346,7 +347,7 @@ static JSValue js_buildSlotMask(JSContext* ctx, JSValueConst, int argc, JSValueC
     JS_ToInt32(ctx, &K,      argv[2]);
     JS_ToInt32(ctx, &stride, argv[3]);
     GT(mask, 4, "buildSlotMask");
-    nngpu::build_slot_mask_gpu(*x, offset, K, stride, *mask);
+    nngpu::build_slot_mask(*x, offset, K, stride, *mask);
     return JS_UNDEFINED;
 }
 static JSValue js_copyD2D(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -358,7 +359,7 @@ static JSValue js_copyD2D(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     GT(dst, 2, "copyD2D");
     JS_ToInt32(ctx, &dstOff, argv[3]);
     JS_ToInt32(ctx, &n,      argv[4]);
-    nngpu::copy_d2d_gpu(*src, srcOff, *dst, dstOff, n);
+    nngpu::copy_d2d(*src, srcOff, *dst, dstOff, n);
     return JS_UNDEFINED;
 }
 
@@ -373,7 +374,7 @@ static JSValue js_softmaxForward(JSContext* ctx, JSValueConst, int argc, JSValue
         JSValue err = JS_UNDEFINED;
         if (!resolveDeviceMask(ctx, argv[2], mask, err)) return err;
     }
-    nngpu::softmax_forward_gpu(*l, *p, mask);
+    nngpu::softmax_forward(*l, *p, mask);
     return JS_UNDEFINED;
 }
 
@@ -381,7 +382,7 @@ static JSValue js_softmaxBackward(JSContext* ctx, JSValueConst, int argc, JSValu
     if (argc < 3) return JS_ThrowTypeError(ctx, "softmaxBackward(probs,dProbs,dLogits)");
     ENSURE_INIT();
     GT(p, 0, "softmaxBackward"); GT(dp, 1, "softmaxBackward"); GT(dl, 2, "softmaxBackward");
-    nngpu::softmax_backward_gpu(*p, *dp, *dl);
+    nngpu::softmax_backward(*p, *dp, *dl);
     return JS_UNDEFINED;
 }
 
@@ -395,7 +396,7 @@ static JSValue js_layernormForward(JSContext* ctx, JSValueConst, int argc, JSVal
     GT(xhat, 4, "layernormForward");
     double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[5]);
     float mean = 0.f, rstd = 0.f;
-    nngpu::layernorm_forward_gpu(*x, *g, *b, *y, *xhat, mean, rstd, (float)eps);
+    nngpu::layernorm_forward(*x, *g, *b, *y, *xhat, mean, rstd, (float)eps);
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "mean", JS_NewFloat64(ctx, (double)mean));
     JS_SetPropertyStr(ctx, out, "rstd", JS_NewFloat64(ctx, (double)rstd));
@@ -411,7 +412,7 @@ static JSValue js_layernormBackward(JSContext* ctx, JSValueConst, int argc, JSVa
     double rstd = 0; JS_ToFloat64(ctx, &rstd, argv[3]);
     GT(dX,     4, "layernormBackward"); GT(dGamma, 5, "layernormBackward");
     GT(dBeta,  6, "layernormBackward");
-    nngpu::layernorm_backward_gpu(*dY, *xhat, *g, (float)rstd, *dX, *dGamma, *dBeta);
+    nngpu::layernorm_backward(*dY, *xhat, *g, (float)rstd, *dX, *dGamma, *dBeta);
     return JS_UNDEFINED;
 }
 
@@ -425,7 +426,7 @@ static JSValue js_layernormForwardInferenceBatched(JSContext* ctx, JSValueConst,
     GT(b, 2, "layernormForwardInferenceBatched");
     GT(Y, 3, "layernormForwardInferenceBatched");
     double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[4]);
-    nngpu::layernorm_forward_inference_batched_gpu(*X, *g, *b, *Y, (float)eps);
+    nngpu::layernorm_forward_inference_batched(*X, *g, *b, *Y, (float)eps);
     return JS_UNDEFINED;
 }
 static JSValue js_layernormForwardInferenceBatchedFp16(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -437,7 +438,7 @@ static JSValue js_layernormForwardInferenceBatchedFp16(JSContext* ctx, JSValueCo
     GT(b, 2, "layernormForwardInferenceBatchedFp16");
     GT(Y, 3, "layernormForwardInferenceBatchedFp16");
     double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[4]);
-    nngpu::layernorm_forward_inference_batched_fp16_gpu(*X, *g, *b, *Y, (float)eps);
+    nngpu::layernorm_forward_inference_batched_fp16(*X, *g, *b, *Y, (float)eps);
     return JS_UNDEFINED;
 }
 
@@ -455,7 +456,7 @@ static JSValue js_attentionForward(JSContext* ctx, JSValueConst, int argc, JSVal
     GT(Q,  6, "attentionForward"); GT(K,  7, "attentionForward");
     GT(V,  8, "attentionForward"); GT(A,  9, "attentionForward");
     GT(Yp, 10, "attentionForward"); GT(O,  11, "attentionForward");
-    nngpu::attention_forward_gpu(*X, *Wq, *Wk, *Wv, *Wo, mask, *Q, *K, *V, *A, *Yp, *O);
+    nngpu::attention_forward(*X, *Wq, *Wk, *Wv, *Wo, mask, *Q, *K, *V, *A, *Yp, *O);
     return JS_UNDEFINED;
 }
 
@@ -474,7 +475,7 @@ static JSValue js_attentionBackward(JSContext* ctx, JSValueConst, int argc, JSVa
     GT(dX,  12, "attentionBackward"); GT(dWq, 13, "attentionBackward");
     GT(dWk, 14, "attentionBackward"); GT(dWv, 15, "attentionBackward");
     GT(dWo, 16, "attentionBackward");
-    nngpu::attention_backward_gpu(*dO, *X, *Q, *K, *V, *A, *Yp,
+    nngpu::attention_backward(*dO, *X, *Q, *K, *V, *A, *Yp,
                                   *Wq, *Wk, *Wv, *Wo, mask,
                                   *dX, *dWq, *dWk, *dWv, *dWo);
     return JS_UNDEFINED;
@@ -495,7 +496,7 @@ static JSValue js_mhaForward(JSContext* ctx, JSValueConst, int argc, JSValueCons
     GT(Qh,    7,  "mhaForward"); GT(Kh,    8,  "mhaForward");
     GT(Vh,    9,  "mhaForward"); GT(Attnh, 10, "mhaForward");
     GT(Yc,    11, "mhaForward"); GT(O,     12, "mhaForward");
-    nngpu::mha_forward_gpu(*X, *Wq, *Wk, *Wv, *Wo, mask, numHeads,
+    nngpu::mha_forward(*X, *Wq, *Wk, *Wv, *Wo, mask, numHeads,
                            *Qh, *Kh, *Vh, *Attnh, *Yc, *O);
     return JS_UNDEFINED;
 }
@@ -516,7 +517,7 @@ static JSValue js_mhaBackward(JSContext* ctx, JSValueConst, int argc, JSValueCon
     GT(dX,   13, "mhaBackward"); GT(dWq,  14, "mhaBackward");
     GT(dWk,  15, "mhaBackward"); GT(dWv,  16, "mhaBackward");
     GT(dWo,  17, "mhaBackward");
-    nngpu::mha_backward_gpu(*dO, *X, *Qh, *Kh, *Vh, *Attnh, *Yc,
+    nngpu::mha_backward(*dO, *X, *Qh, *Kh, *Vh, *Attnh, *Yc,
                             *Wq, *Wk, *Wv, *Wo, mask, numHeads,
                             *dX, *dWq, *dWk, *dWv, *dWo);
     return JS_UNDEFINED;
@@ -531,7 +532,7 @@ static JSValue js_maskedMeanPoolForward(JSContext* ctx, JSValueConst, int argc, 
     const float* mask = nullptr; JSValue err = JS_UNDEFINED;
     if (!resolveDeviceMask(ctx, argv[1], mask, err)) return err;
     GT(y, 2, "maskedMeanPoolForward");
-    nngpu::masked_mean_pool_forward_gpu(*X, mask, *y);
+    nngpu::masked_mean_pool_forward(*X, mask, *y);
     return JS_UNDEFINED;
 }
 static JSValue js_maskedMeanPoolBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -542,7 +543,7 @@ static JSValue js_maskedMeanPoolBackward(JSContext* ctx, JSValueConst, int argc,
     if (!resolveDeviceMask(ctx, argv[1], mask, err)) return err;
     int32_t K = 0; JS_ToInt32(ctx, &K, argv[2]);
     GT(dX, 3, "maskedMeanPoolBackward");
-    nngpu::masked_mean_pool_backward_gpu(*dY, mask, K, *dX);
+    nngpu::masked_mean_pool_backward(*dY, mask, K, *dX);
     return JS_UNDEFINED;
 }
 
@@ -550,14 +551,14 @@ static JSValue js_mseVecForward(JSContext* ctx, JSValueConst, int argc, JSValueC
     if (argc < 2) return JS_ThrowTypeError(ctx, "mseVecForward(pred,target)");
     ENSURE_INIT();
     GT(p, 0, "mseVecForward"); GT(t, 1, "mseVecForward");
-    float loss = nngpu::mse_vec_forward_gpu(*p, *t);
+    float loss = nngpu::mse_vec_forward(*p, *t);
     return JS_NewFloat64(ctx, (double)loss);
 }
 static JSValue js_mseVecBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "mseVecBackward(pred,target,dPred)");
     ENSURE_INIT();
     GT(p, 0, "mseVecBackward"); GT(t, 1, "mseVecBackward"); GT(dp, 2, "mseVecBackward");
-    nngpu::mse_vec_backward_gpu(*p, *t, *dp);
+    nngpu::mse_vec_backward(*p, *t, *dp);
     return JS_UNDEFINED;
 }
 
@@ -568,7 +569,7 @@ static JSValue js_mseVecPerSample(JSContext* ctx, JSValueConst, int argc, JSValu
     ENSURE_INIT();
     GT(p,    0, "mseVecPerSample"); GT(t,    1, "mseVecPerSample");
     GT(dp,   2, "mseVecPerSample"); GT(lps,  3, "mseVecPerSample");
-    nngpu::mse_vec_per_sample_gpu(*p, *t, *dp, *lps);
+    nngpu::mse_vec_per_sample(*p, *t, *dp, *lps);
     return JS_UNDEFINED;
 }
 
@@ -580,7 +581,7 @@ static JSValue js_softmaxXentFused(JSContext* ctx, JSValueConst, int argc, JSVal
     const float* mask = nullptr; JSValue err = JS_UNDEFINED;
     if (!resolveDeviceMask(ctx, argv[2], mask, err)) return err;
     GT(p, 3, "softmaxXentFused"); GT(dl, 4, "softmaxXentFused");
-    float loss = nngpu::softmax_xent_fused_gpu(*l, *t, mask, *p, *dl);
+    float loss = nngpu::softmax_xent_fused(*l, *t, mask, *p, *dl);
     return JS_NewFloat64(ctx, (double)loss);
 }
 
@@ -599,7 +600,7 @@ static JSValue js_softmaxXentFusedBatched(JSContext* ctx, JSValueConst, int argc
     GT(P,   5, "softmaxXentFusedBatched"); GT(dL,  6, "softmaxXentFusedBatched");
     GT(lps, 7, "softmaxXentFusedBatched");
     const int* d_head = reinterpret_cast<const int*>(headOff->data);
-    nngpu::softmax_xent_fused_batched_gpu(*L, *T, mask, d_head, nHeads, *P, *dL, *lps);
+    nngpu::softmax_xent_fused_batched(*L, *T, mask, d_head, nHeads, *P, *dL, *lps);
     return JS_UNDEFINED;
 }
 
@@ -614,7 +615,7 @@ static JSValue js_embeddingLookupForward(JSContext* ctx, JSValueConst, int argc,
     int32_t B = 0; JS_ToInt32(ctx, &B, argv[2]);
     GT(out, 3, "embeddingLookupForward");
     const int32_t* d_idx = reinterpret_cast<const int32_t*>(idx->data);
-    nngpu::embedding_lookup_forward_gpu(*tbl, d_idx, B, *out);
+    nngpu::embedding_lookup_forward(*tbl, d_idx, B, *out);
     return JS_UNDEFINED;
 }
 static JSValue js_embeddingLookupBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -625,18 +626,18 @@ static JSValue js_embeddingLookupBackward(JSContext* ctx, JSValueConst, int argc
     int32_t B = 0; JS_ToInt32(ctx, &B, argv[2]);
     GT(dTbl, 3, "embeddingLookupBackward");
     const int32_t* d_idx = reinterpret_cast<const int32_t*>(idx->data);
-    nngpu::embedding_lookup_backward_gpu(*dOut, d_idx, B, *dTbl);
+    nngpu::embedding_lookup_backward(*dOut, d_idx, B, *dTbl);
     return JS_UNDEFINED;
 }
 
 static JSValue js_concatRows(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "concatRows([parts...], out)");
     ENSURE_INIT();
-    std::vector<const nngpu::GpuTensor*> parts;
+    std::vector<const nngpu::Tensor*> parts;
     if (!readGpuTensorArray(ctx, argv[0], parts, nullptr))
         return JS_ThrowTypeError(ctx, "concatRows: first arg must be array of GpuTensors");
     GT(out, 1, "concatRows");
-    nngpu::concat_rows_gpu(parts, *out);
+    nngpu::concat_rows(parts, *out);
     return JS_UNDEFINED;
 }
 
@@ -644,11 +645,11 @@ static JSValue js_splitRows(JSContext* ctx, JSValueConst, int argc, JSValueConst
     if (argc < 2) return JS_ThrowTypeError(ctx, "splitRows(in, [parts...])");
     ENSURE_INIT();
     GT(in, 0, "splitRows");
-    std::vector<const nngpu::GpuTensor*> partsConst;
-    std::vector<nngpu::GpuTensor*> partsMut;
+    std::vector<const nngpu::Tensor*> partsConst;
+    std::vector<nngpu::Tensor*> partsMut;
     if (!readGpuTensorArray(ctx, argv[1], partsConst, &partsMut))
         return JS_ThrowTypeError(ctx, "splitRows: second arg must be array of GpuTensors");
-    nngpu::split_rows_gpu(*in, partsMut);
+    nngpu::split_rows(*in, partsMut);
     return JS_UNDEFINED;
 }
 
@@ -656,11 +657,11 @@ static JSValue js_splitRows(JSContext* ctx, JSValueConst, int argc, JSValueConst
 static JSValue js_concatBatchedRows(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "concatBatchedRows([parts...], out)");
     ENSURE_INIT();
-    std::vector<const nngpu::GpuTensor*> parts;
+    std::vector<const nngpu::Tensor*> parts;
     if (!readGpuTensorArray(ctx, argv[0], parts, nullptr))
         return JS_ThrowTypeError(ctx, "concatBatchedRows: first arg must be array of GpuTensors");
     GT(out, 1, "concatBatchedRows");
-    nngpu::concat_batched_rows_gpu(parts, *out);
+    nngpu::concat_batched_rows(parts, *out);
     return JS_UNDEFINED;
 }
 
@@ -669,7 +670,7 @@ static JSValue js_concatNchwChannels(JSContext* ctx, JSValueConst, int argc, JSV
     if (argc < 6) return JS_ThrowTypeError(ctx,
         "concatNchwChannels([parts...], N, H, W, [C_per_part...], out)");
     ENSURE_INIT();
-    std::vector<const nngpu::GpuTensor*> parts;
+    std::vector<const nngpu::Tensor*> parts;
     if (!readGpuTensorArray(ctx, argv[0], parts, nullptr))
         return JS_ThrowTypeError(ctx, "concatNchwChannels: parts must be array of GpuTensors");
     int32_t N = 0, H = 0, W = 0;
@@ -680,7 +681,7 @@ static JSValue js_concatNchwChannels(JSContext* ctx, JSValueConst, int argc, JSV
     if (!readIntArray(ctx, argv[4], Cpp))
         return JS_ThrowTypeError(ctx, "concatNchwChannels: C_per_part must be array of ints");
     GT(out, 5, "concatNchwChannels");
-    nngpu::concat_nchw_channels_gpu(parts, N, H, W, Cpp, *out);
+    nngpu::concat_nchw_channels(parts, N, H, W, Cpp, *out);
     return JS_UNDEFINED;
 }
 
@@ -696,11 +697,11 @@ static JSValue js_concatNchwChannelsBackward(JSContext* ctx, JSValueConst, int a
     std::vector<int> Cpp;
     if (!readIntArray(ctx, argv[4], Cpp))
         return JS_ThrowTypeError(ctx, "concatNchwChannelsBackward: C_per_part must be array of ints");
-    std::vector<const nngpu::GpuTensor*> partsConst;
-    std::vector<nngpu::GpuTensor*> partsMut;
+    std::vector<const nngpu::Tensor*> partsConst;
+    std::vector<nngpu::Tensor*> partsMut;
     if (!readGpuTensorArray(ctx, argv[5], partsConst, &partsMut))
         return JS_ThrowTypeError(ctx, "concatNchwChannelsBackward: parts must be array of GpuTensors");
-    nngpu::concat_nchw_channels_backward_gpu(*dY, N, H, W, Cpp, partsMut);
+    nngpu::concat_nchw_channels_backward(*dY, N, H, W, Cpp, partsMut);
     return JS_UNDEFINED;
 }
 
@@ -713,7 +714,7 @@ static JSValue js_sgdStep(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     double lr = 0, m = 0;
     JS_ToFloat64(ctx, &lr, argv[3]);
     JS_ToFloat64(ctx, &m, argv[4]);
-    nngpu::sgd_step_gpu(*p, *g, *v, (float)lr, (float)m);
+    nngpu::sgd_step(*p, *g, *v, (float)lr, (float)m);
     return JS_UNDEFINED;
 }
 
@@ -728,7 +729,7 @@ static JSValue js_adamStep(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     JS_ToFloat64(ctx, &b2,  argv[6]);
     JS_ToFloat64(ctx, &eps, argv[7]);
     int32_t step = 1; JS_ToInt32(ctx, &step, argv[8]);
-    nngpu::adam_step_gpu(*p, *g, *m, *v, (float)lr, (float)b1, (float)b2, (float)eps, step);
+    nngpu::adam_step(*p, *g, *m, *v, (float)lr, (float)b1, (float)b2, (float)eps, step);
     return JS_UNDEFINED;
 }
 
@@ -739,7 +740,7 @@ static JSValue js_linearForwardBatched(JSContext* ctx, JSValueConst, int argc, J
     ENSURE_INIT();
     GT(W, 0, "linearForwardBatched"); GT(b, 1, "linearForwardBatched");
     GT(X, 2, "linearForwardBatched"); GT(Y, 3, "linearForwardBatched");
-    nngpu::linear_forward_batched_gpu(*W, *b, *X, *Y);
+    nngpu::linear_forward_batched(*W, *b, *X, *Y);
     return JS_UNDEFINED;
 }
 static JSValue js_linearForwardBatchedFp16(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -747,31 +748,31 @@ static JSValue js_linearForwardBatchedFp16(JSContext* ctx, JSValueConst, int arg
         "linearForwardBatchedFp16(W,bias|null,X_BD,Y_BD)");
     ENSURE_INIT();
     GT(W, 0, "linearForwardBatchedFp16");
-    const nngpu::GpuTensor* bias = nullptr; JSValue err = JS_UNDEFINED;
+    const nngpu::Tensor* bias = nullptr; JSValue err = JS_UNDEFINED;
     if (!resolveOptionalConstGpuTensor(ctx, argv[1], bias, err, "bias")) return err;
     GT(X, 2, "linearForwardBatchedFp16"); GT(Y, 3, "linearForwardBatchedFp16");
-    nngpu::linear_forward_batched_fp16_gpu(*W, bias, *X, *Y);
+    nngpu::linear_forward_batched_fp16(*W, bias, *X, *Y);
     return JS_UNDEFINED;
 }
 static JSValue js_reluForwardBatched(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "reluForwardBatched(X_BD,Y_BD)");
     ENSURE_INIT();
     GT(X, 0, "reluForwardBatched"); GT(Y, 1, "reluForwardBatched");
-    nngpu::relu_forward_batched_gpu(*X, *Y);
+    nngpu::relu_forward_batched(*X, *Y);
     return JS_UNDEFINED;
 }
 static JSValue js_tanhForwardBatched(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "tanhForwardBatched(X_BD,Y_BD)");
     ENSURE_INIT();
     GT(X, 0, "tanhForwardBatched"); GT(Y, 1, "tanhForwardBatched");
-    nngpu::tanh_forward_batched_gpu(*X, *Y);
+    nngpu::tanh_forward_batched(*X, *Y);
     return JS_UNDEFINED;
 }
 static JSValue js_addInplaceBatched(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "addInplaceBatched(Y_BD,X_BD)");
     ENSURE_INIT();
     GT(Y, 0, "addInplaceBatched"); GT(X, 1, "addInplaceBatched");
-    nngpu::add_inplace_batched_gpu(*Y, *X);
+    nngpu::add_inplace_batched(*Y, *X);
     return JS_UNDEFINED;
 }
 
@@ -784,7 +785,7 @@ static JSValue js_linearBackwardBatched(JSContext* ctx, JSValueConst, int argc, 
     GT(W,   0, "linearBackwardBatched"); GT(X,   1, "linearBackwardBatched");
     GT(dY,  2, "linearBackwardBatched"); GT(dX,  3, "linearBackwardBatched");
     GT(dW,  4, "linearBackwardBatched"); GT(dB,  5, "linearBackwardBatched");
-    nngpu::linear_backward_batched_gpu(*W, *X, *dY, *dX, *dW, *dB);
+    nngpu::linear_backward_batched(*W, *X, *dY, *dX, *dW, *dB);
     return JS_UNDEFINED;
 }
 static JSValue js_reluBackwardBatched(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -792,7 +793,7 @@ static JSValue js_reluBackwardBatched(JSContext* ctx, JSValueConst, int argc, JS
     ENSURE_INIT();
     GT(X, 0, "reluBackwardBatched"); GT(dY, 1, "reluBackwardBatched");
     GT(dX, 2, "reluBackwardBatched");
-    nngpu::relu_backward_batched_gpu(*X, *dY, *dX);
+    nngpu::relu_backward_batched(*X, *dY, *dX);
     return JS_UNDEFINED;
 }
 static JSValue js_tanhBackwardBatched(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -800,7 +801,7 @@ static JSValue js_tanhBackwardBatched(JSContext* ctx, JSValueConst, int argc, JS
     ENSURE_INIT();
     GT(Y, 0, "tanhBackwardBatched"); GT(dY, 1, "tanhBackwardBatched");
     GT(dX, 2, "tanhBackwardBatched");
-    nngpu::tanh_backward_batched_gpu(*Y, *dY, *dX);
+    nngpu::tanh_backward_batched(*Y, *dY, *dX);
     return JS_UNDEFINED;
 }
 
@@ -810,21 +811,21 @@ static JSValue js_sumRows(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     if (argc < 2) return JS_ThrowTypeError(ctx, "sumRows(X,Y)");
     ENSURE_INIT();
     GT(X, 0, "sumRows"); GT(Y, 1, "sumRows");
-    nngpu::sum_rows_gpu(*X, *Y);
+    nngpu::sum_rows(*X, *Y);
     return JS_UNDEFINED;
 }
 static JSValue js_sumCols(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "sumCols(X,Y)");
     ENSURE_INIT();
     GT(X, 0, "sumCols"); GT(Y, 1, "sumCols");
-    nngpu::sum_cols_gpu(*X, *Y);
+    nngpu::sum_cols(*X, *Y);
     return JS_UNDEFINED;
 }
 static JSValue js_argmaxRows(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "argmaxRows(X,Idx)");
     ENSURE_INIT();
     GT(X, 0, "argmaxRows"); GT(I, 1, "argmaxRows");
-    nngpu::argmax_rows_gpu(*X, *I);
+    nngpu::argmax_rows(*X, *I);
     return JS_UNDEFINED;
 }
 
@@ -961,7 +962,7 @@ void installTensorBindings(JSContext* ctx) {
 }
 
 // Cross-binding unwrap helper (declared in ai_bindings.h).
-nngpu::GpuTensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v) {
+nngpu::Tensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v) {
     return gpuTensorFromJSLocal(ctx, v);
 }
 
@@ -969,7 +970,7 @@ nngpu::GpuTensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v) {
 
 #else // !BROTENSOR_HAS_GPU
 
-namespace brotensor { struct GpuTensor; }
+namespace brotensor { struct Tensor; }
 
 namespace bro::js {
 
@@ -989,7 +990,7 @@ void installTensorBindings(JSContext* ctx) {
     JS_FreeValue(ctx, global);
 }
 
-brotensor::GpuTensor* gpuTensorFromJS(JSContext*, JSValueConst) {
+brotensor::Tensor* gpuTensorFromJS(JSContext*, JSValueConst) {
     return nullptr;
 }
 

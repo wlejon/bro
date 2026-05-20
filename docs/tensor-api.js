@@ -2,11 +2,13 @@
 // bro.tensor — GPU tensor + ops (brotensor: CUDA or Metal)
 // =============================================================================
 //
-// Wraps the brotensor sibling library. The op surface is identical across
-// CUDA (NVIDIA) and Metal (Apple) backends — code written against bro.tensor
-// runs unchanged on either. Mirrors brogameagent's CPU nn API over
-// device-resident GpuTensor buffers, plus a broad set of training- and
-// inference-only ops for transformers, diffusion U-Nets, and W8A16 quant.
+// Wraps the brotensor sibling library. brotensor exposes one unified tensor
+// type with a runtime Device tag and device-neutral ops; bro.tensor is the
+// GPU-resident face of it. The op surface is identical across CUDA (NVIDIA)
+// and Metal (Apple) backends — code written against bro.tensor runs unchanged
+// on either. Mirrors brotensor's CPU op surface over device-resident tensor
+// buffers, plus a broad set of training- and inference-only ops for
+// transformers, diffusion U-Nets, and W8A16 quant.
 //
 // Availability:
 //   bro.tensor.available  // boolean

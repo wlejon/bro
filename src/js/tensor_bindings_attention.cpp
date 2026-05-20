@@ -12,7 +12,7 @@ namespace bro::js {
 
 // ─── FP32 training-side self / cross attention ────────────────────────────
 
-// Inference convenience: self_attention_forward_gpu (no caches).
+// Inference convenience: self_attention_forward (no caches).
 static JSValue js_selfAttentionForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 8) return JS_ThrowTypeError(ctx,
         "selfAttentionForward(X,Wq,Wk,Wv,Wo,mask|null,numHeads,O)");
@@ -24,7 +24,7 @@ static JSValue js_selfAttentionForward(JSContext* ctx, JSValueConst, int argc, J
     if (!resolveDeviceMask(ctx, argv[5], mask, err)) return err;
     int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[6]);
     GT(O, 7, "selfAttentionForward");
-    nngpu::self_attention_forward_gpu(*X, *Wq, *Wk, *Wv, *Wo, mask, numHeads, *O);
+    nngpu::self_attention_forward(*X, *Wq, *Wk, *Wv, *Wo, mask, numHeads, *O);
     return JS_UNDEFINED;
 }
 
@@ -41,7 +41,7 @@ static JSValue js_selfAttentionForwardTrain(JSContext* ctx, JSValueConst, int ar
     GT(Qh,    7,  "selfAttentionForwardTrain"); GT(Kh,    8,  "selfAttentionForwardTrain");
     GT(Vh,    9,  "selfAttentionForwardTrain"); GT(Attnh, 10, "selfAttentionForwardTrain");
     GT(Yc,    11, "selfAttentionForwardTrain"); GT(O,     12, "selfAttentionForwardTrain");
-    nngpu::self_attention_forward_train_gpu(*X, *Wq, *Wk, *Wv, *Wo, mask, numHeads,
+    nngpu::self_attention_forward_train(*X, *Wq, *Wk, *Wv, *Wo, mask, numHeads,
                                             *Qh, *Kh, *Vh, *Attnh, *Yc, *O);
     return JS_UNDEFINED;
 }
@@ -62,7 +62,7 @@ static JSValue js_selfAttentionBackward(JSContext* ctx, JSValueConst, int argc, 
     GT(dX,   13, "selfAttentionBackward"); GT(dWq,  14, "selfAttentionBackward");
     GT(dWk,  15, "selfAttentionBackward"); GT(dWv,  16, "selfAttentionBackward");
     GT(dWo,  17, "selfAttentionBackward");
-    nngpu::self_attention_backward_gpu(*dO, *X, *Qh, *Kh, *Vh, *Attnh, *Yc,
+    nngpu::self_attention_backward(*dO, *X, *Qh, *Kh, *Vh, *Attnh, *Yc,
                                        *Wq, *Wk, *Wv, *Wo, mask, numHeads,
                                        *dX, *dWq, *dWk, *dWv, *dWo);
     return JS_UNDEFINED;
@@ -82,7 +82,7 @@ static JSValue js_crossAttentionForward(JSContext* ctx, JSValueConst, int argc, 
     if (!resolveDeviceMask(ctx, argv[6], mask, err)) return err;
     int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[7]);
     GT(O, 8, "crossAttentionForward");
-    nngpu::cross_attention_forward_gpu(*X, *C, *Wq, *Wk, *Wv, *Wo, mask, numHeads, *O);
+    nngpu::cross_attention_forward(*X, *C, *Wq, *Wk, *Wv, *Wo, mask, numHeads, *O);
     return JS_UNDEFINED;
 }
 
@@ -96,11 +96,11 @@ static JSValue js_crossAttentionForwardWithAttn(JSContext* ctx, JSValueConst, in
     GT(Wv,  4, "crossAttentionForwardWithAttn"); GT(Wo, 5, "crossAttentionForwardWithAttn");
     const float* mask = nullptr; JSValue err = JS_UNDEFINED;
     if (!resolveDeviceMask(ctx, argv[6], mask, err)) return err;
-    const nngpu::GpuTensor* bias = nullptr;
+    const nngpu::Tensor* bias = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[7], bias, err, "attnLogitBias")) return err;
     int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[8]);
     GT(O, 9, "crossAttentionForwardWithAttn"); GT(A, 10, "crossAttentionForwardWithAttn");
-    nngpu::cross_attention_forward_with_attn_gpu(*X, *C, *Wq, *Wk, *Wv, *Wo,
+    nngpu::cross_attention_forward_with_attn(*X, *C, *Wq, *Wk, *Wv, *Wo,
                                                  mask, bias, numHeads, *O, *A);
     return JS_UNDEFINED;
 }
@@ -119,7 +119,7 @@ static JSValue js_crossAttentionForwardTrain(JSContext* ctx, JSValueConst, int a
     GT(Qh,    8,  "crossAttentionForwardTrain"); GT(Kh,    9,  "crossAttentionForwardTrain");
     GT(Vh,    10, "crossAttentionForwardTrain"); GT(Attnh, 11, "crossAttentionForwardTrain");
     GT(Yc,    12, "crossAttentionForwardTrain"); GT(O,     13, "crossAttentionForwardTrain");
-    nngpu::cross_attention_forward_train_gpu(*X, *C, *Wq, *Wk, *Wv, *Wo, mask, numHeads,
+    nngpu::cross_attention_forward_train(*X, *C, *Wq, *Wk, *Wv, *Wo, mask, numHeads,
                                              *Qh, *Kh, *Vh, *Attnh, *Yc, *O);
     return JS_UNDEFINED;
 }
@@ -140,7 +140,7 @@ static JSValue js_crossAttentionBackward(JSContext* ctx, JSValueConst, int argc,
     GT(dX,    14, "crossAttentionBackward"); GT(dC,    15, "crossAttentionBackward");
     GT(dWq,   16, "crossAttentionBackward"); GT(dWk,   17, "crossAttentionBackward");
     GT(dWv,   18, "crossAttentionBackward"); GT(dWo,   19, "crossAttentionBackward");
-    nngpu::cross_attention_backward_gpu(*dO, *X, *C, *Qh, *Kh, *Vh, *Attnh, *Yc,
+    nngpu::cross_attention_backward(*dO, *X, *C, *Qh, *Kh, *Vh, *Attnh, *Yc,
                                         *Wq, *Wk, *Wv, *Wo, mask, numHeads,
                                         *dX, *dC, *dWq, *dWk, *dWv, *dWo);
     return JS_UNDEFINED;
@@ -157,7 +157,7 @@ static JSValue js_attentionTokenMoments(JSContext* ctx, JSValueConst, int argc, 
     JS_ToInt32(ctx, &hLat, argv[1]);
     JS_ToInt32(ctx, &wLat, argv[2]);
     GT(mass, 3, "attentionTokenMoments"); GT(cen, 4, "attentionTokenMoments");
-    nngpu::attention_token_moments_gpu(*A, hLat, wLat, *mass, *cen);
+    nngpu::attention_token_moments(*A, hLat, wLat, *mass, *cen);
     return JS_UNDEFINED;
 }
 
@@ -174,7 +174,7 @@ static JSValue js_flashAttentionForward(JSContext* ctx, JSValueConst, int argc, 
     int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[4]);
     bool causal = getBool(ctx, argv[5], false);
     GT(O, 6, "flashAttentionForward");
-    nngpu::flash_attention_forward_gpu(*Q, *K, *V, mask, numHeads, causal, *O);
+    nngpu::flash_attention_forward(*Q, *K, *V, mask, numHeads, causal, *O);
     return JS_UNDEFINED;
 }
 
@@ -193,7 +193,7 @@ static JSValue js_flashAttentionBackward(JSContext* ctx, JSValueConst, int argc,
     if (argc < 11) return JS_ThrowTypeError(ctx,
         "flashAttentionBackward(...,dQ,dK,dV)");
     GT(dV, 10, "flashAttentionBackward");
-    nngpu::flash_attention_backward_gpu(*Q, *K, *V, *O, *dO, mask, numHeads, causal,
+    nngpu::flash_attention_backward(*Q, *K, *V, *O, *dO, mask, numHeads, causal,
                                         *dQ, *dK, *dV);
     return JS_UNDEFINED;
 }
@@ -206,26 +206,26 @@ static JSValue js_flashAttentionQkvoForward(JSContext* ctx, JSValueConst, int ar
     ENSURE_INIT();
     GT(X, 0, "flashAttentionQkvoForward");
     JSValue err = JS_UNDEFINED;
-    const nngpu::GpuTensor* C = nullptr;
+    const nngpu::Tensor* C = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[1], C, err, "Ctx")) return err;
     GT(Wq, 2, "flashAttentionQkvoForward");
-    const nngpu::GpuTensor* bq = nullptr;
+    const nngpu::Tensor* bq = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[3], bq, err, "bq")) return err;
     GT(Wk, 4, "flashAttentionQkvoForward");
-    const nngpu::GpuTensor* bk = nullptr;
+    const nngpu::Tensor* bk = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[5], bk, err, "bk")) return err;
     GT(Wv, 6, "flashAttentionQkvoForward");
-    const nngpu::GpuTensor* bv = nullptr;
+    const nngpu::Tensor* bv = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[7], bv, err, "bv")) return err;
     GT(Wo, 8, "flashAttentionQkvoForward");
-    const nngpu::GpuTensor* bo = nullptr;
+    const nngpu::Tensor* bo = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[9], bo, err, "bo")) return err;
     const float* mask = nullptr;
     if (!resolveDeviceMask(ctx, argv[10], mask, err)) return err;
     int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[11]);
     bool causal = getBool(ctx, argv[12], false);
     GT(O, 13, "flashAttentionQkvoForward");
-    nngpu::flash_attention_qkvo_forward_gpu(*X, C, *Wq, bq, *Wk, bk, *Wv, bv, *Wo, bo,
+    nngpu::flash_attention_qkvo_forward(*X, C, *Wq, bq, *Wk, bk, *Wv, bv, *Wo, bo,
                                             mask, numHeads, causal, *O);
     return JS_UNDEFINED;
 }
@@ -235,7 +235,7 @@ static JSValue js_flashAttentionQkvoForward(JSContext* ctx, JSValueConst, int ar
 //   X, Wq, Wk, Wv, Wo, dO, numHeads, dX, dWq, dWk, dWv, dWo
 // Optional keys (default null/false):
 //   Ctx, bq, bk, bv, bo, mask, causal, dCtx, dbq, dbk, dbv, dbo
-static const nngpu::GpuTensor* getTensorProp(JSContext* ctx, JSValueConst obj,
+static const nngpu::Tensor* getTensorProp(JSContext* ctx, JSValueConst obj,
                                              const char* key, bool& ok, JSValue& err) {
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
     if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); ok = true; return nullptr; }
@@ -249,7 +249,7 @@ static const nngpu::GpuTensor* getTensorProp(JSContext* ctx, JSValueConst obj,
     ok = true;
     return gt;
 }
-static nngpu::GpuTensor* getTensorPropMut(JSContext* ctx, JSValueConst obj,
+static nngpu::Tensor* getTensorPropMut(JSContext* ctx, JSValueConst obj,
                                           const char* key, bool& ok, JSValue& err) {
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
     if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); ok = true; return nullptr; }
@@ -293,27 +293,27 @@ static JSValue js_flashAttentionQkvoBackward(JSContext* ctx, JSValueConst, int a
     JSValue err = JS_UNDEFINED;
     bool ok = true;
 
-    const nngpu::GpuTensor* X   = getTensorProp(ctx, opts, "X",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* C   = getTensorProp(ctx, opts, "Ctx", ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* Wq  = getTensorProp(ctx, opts, "Wq",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* bq  = getTensorProp(ctx, opts, "bq",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* Wk  = getTensorProp(ctx, opts, "Wk",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* bk  = getTensorProp(ctx, opts, "bk",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* Wv  = getTensorProp(ctx, opts, "Wv",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* bv  = getTensorProp(ctx, opts, "bv",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* Wo  = getTensorProp(ctx, opts, "Wo",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* bo  = getTensorProp(ctx, opts, "bo",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* dO  = getTensorProp(ctx, opts, "dO",  ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dX        = getTensorPropMut(ctx, opts, "dX",  ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dCtx      = getTensorPropMut(ctx, opts, "dCtx",ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dWq       = getTensorPropMut(ctx, opts, "dWq", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dbq       = getTensorPropMut(ctx, opts, "dbq", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dWk       = getTensorPropMut(ctx, opts, "dWk", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dbk       = getTensorPropMut(ctx, opts, "dbk", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dWv       = getTensorPropMut(ctx, opts, "dWv", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dbv       = getTensorPropMut(ctx, opts, "dbv", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dWo       = getTensorPropMut(ctx, opts, "dWo", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dbo       = getTensorPropMut(ctx, opts, "dbo", ok, err); if (!ok) return err;
+    const nngpu::Tensor* X   = getTensorProp(ctx, opts, "X",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* C   = getTensorProp(ctx, opts, "Ctx", ok, err); if (!ok) return err;
+    const nngpu::Tensor* Wq  = getTensorProp(ctx, opts, "Wq",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* bq  = getTensorProp(ctx, opts, "bq",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* Wk  = getTensorProp(ctx, opts, "Wk",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* bk  = getTensorProp(ctx, opts, "bk",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* Wv  = getTensorProp(ctx, opts, "Wv",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* bv  = getTensorProp(ctx, opts, "bv",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* Wo  = getTensorProp(ctx, opts, "Wo",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* bo  = getTensorProp(ctx, opts, "bo",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* dO  = getTensorProp(ctx, opts, "dO",  ok, err); if (!ok) return err;
+    nngpu::Tensor* dX        = getTensorPropMut(ctx, opts, "dX",  ok, err); if (!ok) return err;
+    nngpu::Tensor* dCtx      = getTensorPropMut(ctx, opts, "dCtx",ok, err); if (!ok) return err;
+    nngpu::Tensor* dWq       = getTensorPropMut(ctx, opts, "dWq", ok, err); if (!ok) return err;
+    nngpu::Tensor* dbq       = getTensorPropMut(ctx, opts, "dbq", ok, err); if (!ok) return err;
+    nngpu::Tensor* dWk       = getTensorPropMut(ctx, opts, "dWk", ok, err); if (!ok) return err;
+    nngpu::Tensor* dbk       = getTensorPropMut(ctx, opts, "dbk", ok, err); if (!ok) return err;
+    nngpu::Tensor* dWv       = getTensorPropMut(ctx, opts, "dWv", ok, err); if (!ok) return err;
+    nngpu::Tensor* dbv       = getTensorPropMut(ctx, opts, "dbv", ok, err); if (!ok) return err;
+    nngpu::Tensor* dWo       = getTensorPropMut(ctx, opts, "dWo", ok, err); if (!ok) return err;
+    nngpu::Tensor* dbo       = getTensorPropMut(ctx, opts, "dbo", ok, err); if (!ok) return err;
 
     const float* mask = nullptr;
     if (!getMaskProp(ctx, opts, "mask", mask, err)) return err;
@@ -325,7 +325,7 @@ static JSValue js_flashAttentionQkvoBackward(JSContext* ctx, JSValueConst, int a
     int32_t numHeads = getIntProp(ctx, opts, "numHeads", 1);
     bool causal = getBoolProp(ctx, opts, "causal", false);
 
-    nngpu::flash_attention_qkvo_backward_gpu(
+    nngpu::flash_attention_qkvo_backward(
         *X, C, *Wq, bq, *Wk, bk, *Wv, bv, *Wo, bo,
         mask, numHeads, causal,
         *dO, *dX, dCtx, *dWq, dbq, *dWk, dbk, *dWv, dbv, *dWo, dbo);
@@ -340,13 +340,13 @@ static JSValue js_flashAttentionProjectKv(JSContext* ctx, JSValueConst, int argc
     GT(C,  0, "flashAttentionProjectKv");
     GT(Wk, 1, "flashAttentionProjectKv");
     JSValue err = JS_UNDEFINED;
-    const nngpu::GpuTensor* bk = nullptr;
+    const nngpu::Tensor* bk = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[2], bk, err, "bk")) return err;
     GT(Wv, 3, "flashAttentionProjectKv");
-    const nngpu::GpuTensor* bv = nullptr;
+    const nngpu::Tensor* bv = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[4], bv, err, "bv")) return err;
     GT(Ko, 5, "flashAttentionProjectKv"); GT(Vo, 6, "flashAttentionProjectKv");
-    nngpu::flash_attention_project_kv_gpu(*C, *Wk, bk, *Wv, bv, *Ko, *Vo);
+    nngpu::flash_attention_project_kv(*C, *Wk, bk, *Wv, bv, *Ko, *Vo);
     return JS_UNDEFINED;
 }
 
@@ -361,17 +361,17 @@ static JSValue js_flashAttentionQWithKvCachedForward(JSContext* ctx, JSValueCons
     GT(V, 2, "flashAttentionQWithKvCachedForward");
     GT(Wq, 3, "flashAttentionQWithKvCachedForward");
     JSValue err = JS_UNDEFINED;
-    const nngpu::GpuTensor* bq = nullptr;
+    const nngpu::Tensor* bq = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[4], bq, err, "bq")) return err;
     GT(Wo, 5, "flashAttentionQWithKvCachedForward");
-    const nngpu::GpuTensor* bo = nullptr;
+    const nngpu::Tensor* bo = nullptr;
     if (!resolveOptionalConstGpuTensor(ctx, argv[6], bo, err, "bo")) return err;
     const float* mask = nullptr;
     if (!resolveDeviceMask(ctx, argv[7], mask, err)) return err;
     int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[8]);
     bool causal = getBool(ctx, argv[9], false);
     GT(O, 10, "flashAttentionQWithKvCachedForward");
-    nngpu::flash_attention_q_with_kv_cached_forward_gpu(*X, *K, *V, *Wq, bq, *Wo, bo,
+    nngpu::flash_attention_q_with_kv_cached_forward(*X, *K, *V, *Wq, bq, *Wo, bo,
                                                         mask, numHeads, causal, *O);
     return JS_UNDEFINED;
 }
@@ -388,7 +388,7 @@ static JSValue js_flashAttentionDecode(JSContext* ctx, JSValueConst, int argc, J
     JS_ToInt32(ctx, &validLen, argv[3]);
     JS_ToInt32(ctx, &numHeads, argv[4]);
     GT(O, 5, "flashAttentionDecode");
-    nngpu::flash_attention_decode_gpu(*Q, *Kc, *Vc, validLen, numHeads, *O);
+    nngpu::flash_attention_decode(*Q, *Kc, *Vc, validLen, numHeads, *O);
     return JS_UNDEFINED;
 }
 
@@ -401,7 +401,7 @@ static JSValue js_kvCacheAppend(JSContext* ctx, JSValueConst, int argc, JSValueC
     GT(Kn, 0, "kvCacheAppend"); GT(Vn, 1, "kvCacheAppend");
     int32_t curLen = 0; JS_ToInt32(ctx, &curLen, argv[2]);
     GT(Kc, 3, "kvCacheAppend"); GT(Vc, 4, "kvCacheAppend");
-    nngpu::kv_cache_append_gpu(*Kn, *Vn, curLen, *Kc, *Vc);
+    nngpu::kv_cache_append(*Kn, *Vn, curLen, *Kc, *Vc);
     return JS_UNDEFINED;
 }
 
@@ -422,19 +422,19 @@ static JSValue js_resblockForward(JSContext* ctx, JSValueConst, int argc, JSValu
     JSValueConst o = argv[0];
     JSValue err = JS_UNDEFINED;
     bool ok = true;
-    const nngpu::GpuTensor* X    = getTensorProp(ctx, o, "X",    ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* g1   = getTensorProp(ctx, o, "gamma1", ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b1g  = getTensorProp(ctx, o, "beta1",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* W1   = getTensorProp(ctx, o, "W1",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b1   = getTensorProp(ctx, o, "b1",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* tem  = getTensorProp(ctx, o, "t_emb_shift", ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* g2   = getTensorProp(ctx, o, "gamma2", ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b2g  = getTensorProp(ctx, o, "beta2",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* W2   = getTensorProp(ctx, o, "W2",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b2   = getTensorProp(ctx, o, "b2",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* Wsk  = getTensorProp(ctx, o, "Wskip",ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* bsk  = getTensorProp(ctx, o, "bskip",ok, err); if (!ok) return err;
-    nngpu::GpuTensor* Y          = getTensorPropMut(ctx, o, "Y", ok, err); if (!ok) return err;
+    const nngpu::Tensor* X    = getTensorProp(ctx, o, "X",    ok, err); if (!ok) return err;
+    const nngpu::Tensor* g1   = getTensorProp(ctx, o, "gamma1", ok, err); if (!ok) return err;
+    const nngpu::Tensor* b1g  = getTensorProp(ctx, o, "beta1",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* W1   = getTensorProp(ctx, o, "W1",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* b1   = getTensorProp(ctx, o, "b1",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* tem  = getTensorProp(ctx, o, "t_emb_shift", ok, err); if (!ok) return err;
+    const nngpu::Tensor* g2   = getTensorProp(ctx, o, "gamma2", ok, err); if (!ok) return err;
+    const nngpu::Tensor* b2g  = getTensorProp(ctx, o, "beta2",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* W2   = getTensorProp(ctx, o, "W2",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* b2   = getTensorProp(ctx, o, "b2",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* Wsk  = getTensorProp(ctx, o, "Wskip",ok, err); if (!ok) return err;
+    const nngpu::Tensor* bsk  = getTensorProp(ctx, o, "bskip",ok, err); if (!ok) return err;
+    nngpu::Tensor* Y          = getTensorPropMut(ctx, o, "Y", ok, err); if (!ok) return err;
     if (!X || !g1 || !b1g || !W1 || !g2 || !b2g || !W2 || !Y) {
         return JS_ThrowTypeError(ctx,
             "resblockForward: required X,gamma1,beta1,W1,gamma2,beta2,W2,Y missing");
@@ -448,7 +448,7 @@ static JSValue js_resblockForward(JSContext* ctx, JSValueConst, int argc, JSValu
     JSValue epsV = JS_GetPropertyStr(ctx, o, "eps");
     double eps = 1e-5; if (JS_IsNumber(epsV)) JS_ToFloat64(ctx, &eps, epsV);
     JS_FreeValue(ctx, epsV);
-    nngpu::resblock_forward_gpu(*X, *g1, *b1g, *W1, b1, tem,
+    nngpu::resblock_forward(*X, *g1, *b1g, *W1, b1, tem,
                                 *g2, *b2g, *W2, b2, Wsk, bsk,
                                 N, Cin, Cout, H, W, ng, (float)eps, *Y);
     return JS_UNDEFINED;
@@ -461,31 +461,31 @@ static JSValue js_resblockBackward(JSContext* ctx, JSValueConst, int argc, JSVal
     JSValueConst o = argv[0];
     JSValue err = JS_UNDEFINED;
     bool ok = true;
-    const nngpu::GpuTensor* X    = getTensorProp(ctx, o, "X",    ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* g1   = getTensorProp(ctx, o, "gamma1", ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b1g  = getTensorProp(ctx, o, "beta1",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* W1   = getTensorProp(ctx, o, "W1",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b1   = getTensorProp(ctx, o, "b1",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* tem  = getTensorProp(ctx, o, "t_emb_shift", ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* g2   = getTensorProp(ctx, o, "gamma2", ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b2g  = getTensorProp(ctx, o, "beta2",  ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* W2   = getTensorProp(ctx, o, "W2",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* b2   = getTensorProp(ctx, o, "b2",   ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* Wsk  = getTensorProp(ctx, o, "Wskip",ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* bsk  = getTensorProp(ctx, o, "bskip",ok, err); if (!ok) return err;
-    const nngpu::GpuTensor* dY   = getTensorProp(ctx, o, "dY",   ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dX         = getTensorPropMut(ctx, o, "dX", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dG1        = getTensorPropMut(ctx, o, "dGamma1", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dB1        = getTensorPropMut(ctx, o, "dBeta1",  ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dW1        = getTensorPropMut(ctx, o, "dW1", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* db1        = getTensorPropMut(ctx, o, "db1", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dtem       = getTensorPropMut(ctx, o, "dt_emb_shift", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dG2        = getTensorPropMut(ctx, o, "dGamma2", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dB2        = getTensorPropMut(ctx, o, "dBeta2",  ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dW2        = getTensorPropMut(ctx, o, "dW2", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* db2        = getTensorPropMut(ctx, o, "db2", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dWsk       = getTensorPropMut(ctx, o, "dWskip", ok, err); if (!ok) return err;
-    nngpu::GpuTensor* dbsk       = getTensorPropMut(ctx, o, "dbskip", ok, err); if (!ok) return err;
+    const nngpu::Tensor* X    = getTensorProp(ctx, o, "X",    ok, err); if (!ok) return err;
+    const nngpu::Tensor* g1   = getTensorProp(ctx, o, "gamma1", ok, err); if (!ok) return err;
+    const nngpu::Tensor* b1g  = getTensorProp(ctx, o, "beta1",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* W1   = getTensorProp(ctx, o, "W1",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* b1   = getTensorProp(ctx, o, "b1",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* tem  = getTensorProp(ctx, o, "t_emb_shift", ok, err); if (!ok) return err;
+    const nngpu::Tensor* g2   = getTensorProp(ctx, o, "gamma2", ok, err); if (!ok) return err;
+    const nngpu::Tensor* b2g  = getTensorProp(ctx, o, "beta2",  ok, err); if (!ok) return err;
+    const nngpu::Tensor* W2   = getTensorProp(ctx, o, "W2",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* b2   = getTensorProp(ctx, o, "b2",   ok, err); if (!ok) return err;
+    const nngpu::Tensor* Wsk  = getTensorProp(ctx, o, "Wskip",ok, err); if (!ok) return err;
+    const nngpu::Tensor* bsk  = getTensorProp(ctx, o, "bskip",ok, err); if (!ok) return err;
+    const nngpu::Tensor* dY   = getTensorProp(ctx, o, "dY",   ok, err); if (!ok) return err;
+    nngpu::Tensor* dX         = getTensorPropMut(ctx, o, "dX", ok, err); if (!ok) return err;
+    nngpu::Tensor* dG1        = getTensorPropMut(ctx, o, "dGamma1", ok, err); if (!ok) return err;
+    nngpu::Tensor* dB1        = getTensorPropMut(ctx, o, "dBeta1",  ok, err); if (!ok) return err;
+    nngpu::Tensor* dW1        = getTensorPropMut(ctx, o, "dW1", ok, err); if (!ok) return err;
+    nngpu::Tensor* db1        = getTensorPropMut(ctx, o, "db1", ok, err); if (!ok) return err;
+    nngpu::Tensor* dtem       = getTensorPropMut(ctx, o, "dt_emb_shift", ok, err); if (!ok) return err;
+    nngpu::Tensor* dG2        = getTensorPropMut(ctx, o, "dGamma2", ok, err); if (!ok) return err;
+    nngpu::Tensor* dB2        = getTensorPropMut(ctx, o, "dBeta2",  ok, err); if (!ok) return err;
+    nngpu::Tensor* dW2        = getTensorPropMut(ctx, o, "dW2", ok, err); if (!ok) return err;
+    nngpu::Tensor* db2        = getTensorPropMut(ctx, o, "db2", ok, err); if (!ok) return err;
+    nngpu::Tensor* dWsk       = getTensorPropMut(ctx, o, "dWskip", ok, err); if (!ok) return err;
+    nngpu::Tensor* dbsk       = getTensorPropMut(ctx, o, "dbskip", ok, err); if (!ok) return err;
     if (!X || !g1 || !b1g || !W1 || !g2 || !b2g || !W2 || !dY
         || !dX || !dG1 || !dB1 || !dW1 || !dG2 || !dB2 || !dW2) {
         return JS_ThrowTypeError(ctx,
@@ -500,7 +500,7 @@ static JSValue js_resblockBackward(JSContext* ctx, JSValueConst, int argc, JSVal
     JSValue epsV = JS_GetPropertyStr(ctx, o, "eps");
     double eps = 1e-5; if (JS_IsNumber(epsV)) JS_ToFloat64(ctx, &eps, epsV);
     JS_FreeValue(ctx, epsV);
-    nngpu::resblock_backward_gpu(*X, *g1, *b1g, *W1, b1, tem,
+    nngpu::resblock_backward(*X, *g1, *b1g, *W1, b1, tem,
                                  *g2, *b2g, *W2, b2, Wsk, bsk,
                                  N, Cin, Cout, H, W, ng, (float)eps,
                                  *dY, *dX, *dG1, *dB1, *dW1, db1, dtem,

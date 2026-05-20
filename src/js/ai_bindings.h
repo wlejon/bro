@@ -12,7 +12,7 @@ namespace brogameagent {
     namespace mcts { class Mcts; class IPrior; class IEvaluator; class ITeamEvaluator; class IRolloutPolicy; }
 }
 
-namespace brotensor { struct GpuTensor; }
+namespace brotensor { struct Tensor; }
 
 #include <memory>
 
@@ -62,10 +62,10 @@ void installNNBindings(JSContext* ctx, JSValue gameObj);
 /// is available, installs a stub `bro.tensor = { available: false }`.
 void installTensorBindings(JSContext* ctx);
 
-/// Unwrap an AIGpuTensor JS value to the underlying GpuTensor*. Returns
-/// nullptr if the value is not a GpuTensor wrapper or no GPU backend is
-/// available.
-::brotensor::GpuTensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v);
+/// Unwrap an AIGpuTensor JS value to the underlying brotensor::Tensor*.
+/// Returns nullptr if the value is not a GpuTensor wrapper or no GPU backend
+/// is available.
+::brotensor::Tensor* gpuTensorFromJS(JSContext* ctx, JSValueConst v);
 
 /// Unwrap helpers for cross-binding use (learn/belief bindings).
 brogameagent::nn::SingleHeroNet* nnSingleHeroNetFromJS(JSContext* ctx, JSValueConst v);
