@@ -28,6 +28,7 @@
 #include <brodiffusion/version.h>
 
 #include <brotensor/runtime.h>
+#include <brotensor/tensor.h>
 
 #include <cstdint>
 #include <exception>
@@ -58,6 +59,15 @@ struct PipelineWrapper {
 static int xattnBlocks(const PipelineWrapper* w) {
     return w->pipeline->unet().num_xattn_blocks();
 }
+
+// A mid-generation state: the working latent + scheduler progress. The
+// GenerateOptions captured at prime() are stored so stepOnce()/decode() need
+// no re-passing. The owning Pipeline is kept alive by a non-enumerable
+// __pipeline JS property on the wrapper object (set by prime()/clone()).
+struct PipelineStateWrapper {
+    bdp::PipelineState  state;
+    bdp::GenerateOptions opts;
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Small JS-value helpers
@@ -117,6 +127,35 @@ static void getSeed(JSContext* ctx, JSValueConst obj, const char* key,
         if (JS_ToInt64(ctx, &t, v) == 0) dst = (std::uint64_t)t;
     }
     JS_FreeValue(ctx, v);
+}
+
+// Read a Float32Array's element pointer + count. Returns nullptr if `v` is
+// not a Float32Array. The pointer is valid only for the current call.
+static const float* getFloatArray(JSContext* ctx, JSValueConst v, size_t& count) {
+    count = 0;
+    if (!JS_IsObject(v)) return nullptr;
+    size_t byteOff = 0, viewLen = 0, bytesPerEl = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, &bytesPerEl);
+    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return nullptr; }
+    size_t abufLen = 0;
+    std::uint8_t* p = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!p || bytesPerEl != sizeof(float)) return nullptr;
+    count = viewLen / sizeof(float);
+    return reinterpret_cast<const float*>(p + byteOff);
+}
+
+// Download a brotensor::Tensor to host FP32, converting FP16 bits as needed.
+// brodiffusion tensors carry the compute dtype — FP16 on a GPU backend.
+static std::vector<float> downloadTensorFloats(const brotensor::Tensor& t) {
+    if (t.dtype == brotensor::Dtype::FP16) {
+        std::vector<std::uint16_t> bits = t.to_host_vector_fp16();
+        std::vector<float> out(bits.size());
+        for (std::size_t i = 0; i < bits.size(); ++i)
+            out[i] = brotensor::fp16_bits_to_fp32(bits[i]);
+        return out;
+    }
+    return t.to_host_vector();
 }
 
 // Map a JS opts object onto brodiffusion's GenerateOptions (defaults preserved
@@ -352,13 +391,219 @@ static JSValue js_pipeline_config(JSContext* ctx, JSValueConst this_val,
     return o;
 }
 
+// prime(prompt, opts) -> PipelineState — begin a step-wise generation. The
+// opts are captured on the returned state so stepOnce()/decode() need none.
+static JSValue js_pipeline_prime(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "prime: not a Pipeline");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "prime: call loadWeights() first");
+
+    std::string prompt;
+    if (argc < 1 || !argStr(ctx, argv[0], prompt))
+        return JS_ThrowTypeError(ctx, "prime(prompt, opts?): prompt string required");
+    bdp::GenerateOptions opts =
+        parseGenerateOptions(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED);
+
+    try {
+        auto sw = std::make_unique<PipelineStateWrapper>();
+        sw->state = w->pipeline->prime(prompt, opts);
+        sw->opts  = opts;
+        JSValue js = qjsbind::wrap<PipelineStateWrapper>(ctx, sw.release());
+        // Retain the owning Pipeline so it cannot be GC'd while this state
+        // (or any clone) is alive. Non-enumerable: flags = 0.
+        JS_DefinePropertyValueStr(ctx, js, "__pipeline",
+                                  JS_DupValue(ctx, this_val), 0);
+        return js;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "prime: %s", e.what());
+    }
+}
+
 static void registerPipelineClass(JSContext* ctx) {
     qjsbind::Class<PipelineWrapper>(ctx, "DiffusionPipeline", qjsbind::NoGlobal)
         .method_raw("loadWeights",     js_pipeline_loadWeights,     3)
         .method_raw("applyLora",       js_pipeline_applyLora,       2)
         .method_raw("generate",        js_pipeline_generate,        2)
+        .method_raw("prime",           js_pipeline_prime,           2)
         .method_raw("numXAttnBlocks",  js_pipeline_numXAttnBlocks,  0)
         .method_raw("config",          js_pipeline_config,          0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PipelineState class methods (step-wise inspection API)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Resolve the owning Pipeline from a state's retained __pipeline handle.
+static bdp::Pipeline* pipelineOfState(JSContext* ctx, JSValueConst stateVal) {
+    JSValue p = JS_GetPropertyStr(ctx, stateVal, "__pipeline");
+    auto* pw = qjsbind::unwrap<PipelineWrapper>(ctx, p);
+    JS_FreeValue(ctx, p);
+    return pw ? pw->pipeline.get() : nullptr;
+}
+
+// stepOnce(ctrl?) -> { trace? } — advance one denoising step.
+//   ctrl.trace    bool — capture per-layer head-averaged attention maps
+//   ctrl.attnBias ({data:Float32Array, Lq, Lk} | null)[] — per-layer
+//                 pre-softmax logit bias; length must equal numXAttnBlocks().
+// Supplying attnBias forces trace mode internally (brodiffusion contract).
+static JSValue js_state_stepOnce(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* sw = qjsbind::unwrap<PipelineStateWrapper>(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "stepOnce: not a PipelineState");
+    bdp::Pipeline* pipe = pipelineOfState(ctx, this_val);
+    if (!pipe) return JS_ThrowInternalError(ctx, "stepOnce: pipeline handle lost");
+
+    JSValueConst ctrl = (argc >= 1) ? argv[0] : JS_UNDEFINED;
+    const bool wantTrace = JS_IsObject(ctrl) && getBool(ctx, ctrl, "trace");
+
+    // attn_logit_biases — owned tensors kept alive for the step_once call;
+    // ptrs is the parallel null-preserving pointer vector brodiffusion takes.
+    std::vector<brotensor::Tensor> owned;
+    std::vector<const brotensor::Tensor*> ptrs;
+    bool haveBias = false;
+    if (JS_IsObject(ctrl)) {
+        JSValue biasArr = JS_GetPropertyStr(ctx, ctrl, "attnBias");
+        if (!JS_IsUndefined(biasArr) && !JS_IsNull(biasArr)) {
+            haveBias = true;
+            const int n = pipe->unet().num_xattn_blocks();
+            std::uint32_t len = 0;
+            JSValue lenV = JS_GetPropertyStr(ctx, biasArr, "length");
+            JS_ToUint32(ctx, &len, lenV);
+            JS_FreeValue(ctx, lenV);
+            if ((int)len != n) {
+                JS_FreeValue(ctx, biasArr);
+                return JS_ThrowRangeError(ctx,
+                    "stepOnce: attnBias length %u must equal numXAttnBlocks() %d",
+                    len, n);
+            }
+            owned.reserve((std::size_t)n);
+            ptrs.reserve((std::size_t)n);
+            for (int i = 0; i < n; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, biasArr, (std::uint32_t)i);
+                if (JS_IsNull(e) || JS_IsUndefined(e)) {
+                    ptrs.push_back(nullptr);
+                    JS_FreeValue(ctx, e);
+                    continue;
+                }
+                int Lq = 0, Lk = 0;
+                getInt(ctx, e, "Lq", Lq);
+                getInt(ctx, e, "Lk", Lk);
+                JSValue dv = JS_GetPropertyStr(ctx, e, "data");
+                std::size_t cnt = 0;
+                const float* fp = getFloatArray(ctx, dv, cnt);
+                const bool ok = fp && Lq > 0 && Lk > 0 &&
+                                cnt == (std::size_t)Lq * (std::size_t)Lk;
+                if (!ok) {
+                    JS_FreeValue(ctx, dv);
+                    JS_FreeValue(ctx, e);
+                    JS_FreeValue(ctx, biasArr);
+                    return JS_ThrowTypeError(ctx,
+                        "stepOnce: attnBias[%d] must be "
+                        "{ data: Float32Array(Lq*Lk), Lq, Lk } or null", i);
+                }
+                owned.push_back(brotensor::Tensor::from_host(fp, Lq, Lk));
+                ptrs.push_back(&owned.back());
+                JS_FreeValue(ctx, dv);
+                JS_FreeValue(ctx, e);
+            }
+        }
+        JS_FreeValue(ctx, biasArr);
+    }
+
+    brodiffusion::unet::UNet::CrossAttnTrace trace;
+    brodiffusion::unet::UNet::CrossAttnTrace* tracePtr = wantTrace ? &trace : nullptr;
+    const std::vector<const brotensor::Tensor*>* biasPtr = haveBias ? &ptrs : nullptr;
+
+    try {
+        pipe->step_once(sw->state, sw->opts, tracePtr, biasPtr);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "stepOnce: %s", e.what());
+    }
+
+    JSValue res = JS_NewObject(ctx);
+    if (wantTrace) {
+        JSValue arr = JS_NewArray(ctx);
+        for (std::size_t i = 0; i < trace.size(); ++i) {
+            const brotensor::Tensor& t = trace[i];
+            JSValue entry = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, entry, "Lq", JS_NewInt32(ctx, t.rows));
+            JS_SetPropertyStr(ctx, entry, "Lk", JS_NewInt32(ctx, t.cols));
+            JS_SetPropertyStr(ctx, entry, "data",
+                qjsbind::make_float32_array(ctx, downloadTensorFloats(t)));
+            JS_SetPropertyUint32(ctx, arr, (std::uint32_t)i, entry);
+        }
+        JS_SetPropertyStr(ctx, res, "trace", arr);
+    }
+    return res;
+}
+
+// decode(opts?) -> { width, height, data } — VAE-decode the current latent.
+// opts.includeFp32 attaches the raw NCHW FP32 buffer as `fp32`.
+static JSValue js_state_decode(JSContext* ctx, JSValueConst this_val,
+                               int argc, JSValueConst* argv) {
+    auto* sw = qjsbind::unwrap<PipelineStateWrapper>(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "decode: not a PipelineState");
+    bdp::Pipeline* pipe = pipelineOfState(ctx, this_val);
+    if (!pipe) return JS_ThrowInternalError(ctx, "decode: pipeline handle lost");
+    const bool includeFp32 = argc >= 1 && JS_IsObject(argv[0]) &&
+                             getBool(ctx, argv[0], "includeFp32");
+    try {
+        std::vector<float> img = pipe->decode(sw->state);
+        return makeImageResult(ctx, img, sw->state.H_lat * 8,
+                               sw->state.W_lat * 8, includeFp32);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "decode: %s", e.what());
+    }
+}
+
+// latent() -> Float32Array — download the working latent (small; on demand).
+static JSValue js_state_latent(JSContext* ctx, JSValueConst this_val,
+                               int, JSValueConst*) {
+    auto* sw = qjsbind::unwrap<PipelineStateWrapper>(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "latent: not a PipelineState");
+    try {
+        return qjsbind::make_float32_array(ctx,
+                   downloadTensorFloats(sw->state.latent));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "latent: %s", e.what());
+    }
+}
+
+// clone() -> PipelineState — deep-copy the state (one latent clone). The
+// owning Pipeline handle is carried forward so the clone stays valid.
+static JSValue js_state_clone(JSContext* ctx, JSValueConst this_val,
+                              int, JSValueConst*) {
+    auto* sw = qjsbind::unwrap<PipelineStateWrapper>(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "clone: not a PipelineState");
+    try {
+        auto nw = std::make_unique<PipelineStateWrapper>();
+        nw->state = sw->state.clone();
+        nw->opts  = sw->opts;
+        JSValue js = qjsbind::wrap<PipelineStateWrapper>(ctx, nw.release());
+        // JS_GetPropertyStr returns a fresh ref; DefinePropertyValue consumes it.
+        JS_DefinePropertyValueStr(ctx, js, "__pipeline",
+                                  JS_GetPropertyStr(ctx, this_val, "__pipeline"), 0);
+        return js;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "clone: %s", e.what());
+    }
+}
+
+static void registerPipelineStateClass(JSContext* ctx) {
+    qjsbind::Class<PipelineStateWrapper>(ctx, "DiffusionPipelineState",
+                                         qjsbind::NoGlobal)
+        .get("stepIndex",    [](PipelineStateWrapper* s) { return s->state.step_index; })
+        .get("numSteps",     [](PipelineStateWrapper* s) { return s->state.n_steps; })
+        .get("done",         [](PipelineStateWrapper* s) {
+            return s->state.step_index >= s->state.n_steps; })
+        .get("latentWidth",  [](PipelineStateWrapper* s) { return s->state.W_lat; })
+        .get("latentHeight", [](PipelineStateWrapper* s) { return s->state.H_lat; })
+        .method_raw("stepOnce", js_state_stepOnce, 1)
+        .method_raw("decode",   js_state_decode,   1)
+        .method_raw("latent",   js_state_latent,   0)
+        .method_raw("clone",    js_state_clone,    0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -367,6 +612,7 @@ static void registerPipelineClass(JSContext* ctx) {
 
 void installDiffusionBindings(JSContext* ctx) {
     registerPipelineClass(ctx);
+    registerPipelineStateClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
