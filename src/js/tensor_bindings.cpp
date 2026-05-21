@@ -70,6 +70,7 @@ static nngpu::Dtype parseDtype(JSContext* ctx, JSValueConst v, nngpu::Dtype def)
         if (s) {
             if      (!std::strcmp(s, "fp32") || !std::strcmp(s, "f32")) out = nngpu::Dtype::FP32;
             else if (!std::strcmp(s, "fp16") || !std::strcmp(s, "f16")) out = nngpu::Dtype::FP16;
+            else if (!std::strcmp(s, "bf16"))                          out = nngpu::Dtype::BF16;
             else if (!std::strcmp(s, "int8") || !std::strcmp(s, "i8"))  out = nngpu::Dtype::INT8;
             JS_FreeCString(ctx, s);
         }
@@ -84,6 +85,7 @@ static const char* dtypeName(nngpu::Dtype dt) {
     switch (dt) {
         case nngpu::Dtype::FP32:  return "fp32";
         case nngpu::Dtype::FP16:  return "fp16";
+        case nngpu::Dtype::BF16:  return "bf16";
         case nngpu::Dtype::INT8:  return "int8";
         case nngpu::Dtype::INT32: return "int32";
     }

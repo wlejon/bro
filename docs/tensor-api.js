@@ -847,10 +847,18 @@ const hdr = f.header();
 /**
  * Upload one tensor as a GpuTensor. brotensor tensors are 2D; when rows/cols
  * are omitted the N-D source is flattened to (shape[0], numel/shape[0]).
- * Source dtype must be F16 or F32. Throws on an unknown name.
+ *
+ * The optional dtype string selects how the source is uploaded:
+ *   "native"  (default) — keep the file's dtype (F16/F32/BF16).
+ *   "compute"           — the backend's compute dtype: FP16 on a GPU build,
+ *                         FP32 on CPU. BF16 sources are converted. This is
+ *                         the model-loader path.
+ *   "fp16"              — always FP16, converting an F32 source.
+ * It may be passed in place of, or after, rows/cols. Throws on unknown name.
  */
-const W = f.get('model.layers.0.self_attn.q_proj.weight');
-const W2 = f.get('embedding.weight', 1024, 768);   // explicit 2D shape
+const W  = f.get('model.layers.0.self_attn.q_proj.weight');           // native
+const Wc = f.get('model.layers.0.self_attn.q_proj.weight', 'compute'); // → FP16 on GPU
+const W2 = f.get('embedding.weight', 1024, 768, 'compute'); // explicit 2D + dtype
 
 /** Release the mmap early. Also released automatically on GC. */
 f.close();

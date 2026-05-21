@@ -5,7 +5,8 @@
 //       handle.names()               -> [string, ...]
 //       handle.header()              -> { name: {dtype, shape:[...], nbytes}, ... }
 //                                       (metadata only — no payload read)
-//       handle.get(name, rows?, cols?) -> GpuTensor  (F16/F32 source only)
+//       handle.get(name, rows?, cols?, dtype?) -> GpuTensor
+//           dtype: "native" (default) | "compute" | "fp16"
 //       handle.close()               release the mmap early (also freed on GC)
 //
 //   bro.tensor.saveSafetensors(path, { name: GpuTensor, ... })
@@ -21,6 +22,7 @@
 #include <brotensor/safetensors.h>
 
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
@@ -169,9 +171,18 @@ static JSValue js_st_header(JSContext* ctx, JSValueConst this_val, int, JSValueC
     return obj;
 }
 
-// get(name, rows?, cols?) -> GpuTensor. brotensor tensors are 2D; when rows/
-// cols are omitted the N-D source is flattened to (shape[0], numel/shape[0]).
-// Source dtype must be F16 or F32 (brotensor::safetensors::upload's contract).
+// get(name, rows?, cols?, dtype?) -> GpuTensor. brotensor tensors are 2D;
+// when rows/cols are omitted the N-D source is flattened to
+// (shape[0], numel/shape[0]).
+//
+// dtype selects how the source is uploaded:
+//   "native"  (default) — keep the file's dtype (F16/F32/BF16 → upload()).
+//   "compute"           — the backend's compute dtype: FP16 on a GPU build,
+//                         FP32 on CPU. BF16 sources are converted. This is
+//                         the model-loader path (upload_compute()).
+//   "fp16"              — always FP16, converting an F32 source (upload_fp16()).
+// The string may be passed in place of, or after, rows/cols — get(name,
+// "compute") and get(name, rows, cols, "compute") both work.
 static JSValue js_st_get(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = qjsbind::unwrap<SafetensorsFileData>(ctx, this_val);
     if (!d || !d->file) return JS_ThrowTypeError(ctx, "get() on a closed safetensors file");
@@ -188,8 +199,22 @@ static JSValue js_st_get(JSContext* ctx, JSValueConst this_val, int argc, JSValu
         return JS_ThrowRangeError(ctx, "%s", msg.c_str());
     }
 
+    // Optional args: rows + cols (numbers) and a dtype selector (string).
+    // The string may appear anywhere in argv[1..]; the two numbers, if both
+    // present, are the explicit 2D shape.
+    enum { LD_NATIVE, LD_COMPUTE, LD_FP16 } mode = LD_NATIVE;
+    for (int i = 1; i < argc; ++i) {
+        if (!JS_IsString(argv[i])) continue;
+        const char* ds = JS_ToCString(ctx, argv[i]);
+        if (ds) {
+            if      (!std::strcmp(ds, "compute")) mode = LD_COMPUTE;
+            else if (!std::strcmp(ds, "fp16"))    mode = LD_FP16;
+            JS_FreeCString(ctx, ds);
+        }
+    }
+
     int32_t rows = 0, cols = 0;
-    if (argc >= 3 && !JS_IsUndefined(argv[1]) && !JS_IsUndefined(argv[2])) {
+    if (argc >= 3 && JS_IsNumber(argv[1]) && JS_IsNumber(argv[2])) {
         JS_ToInt32(ctx, &rows, argv[1]);
         JS_ToInt32(ctx, &cols, argv[2]);
     } else {
@@ -206,7 +231,11 @@ static JSValue js_st_get(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     BROTENSOR_ENSURE_INIT();
     auto* gt = new GpuTensorData();
     try {
-        stns::upload(*tv, rows, cols, gt->t);
+        switch (mode) {
+            case LD_COMPUTE: stns::upload_compute(*tv, rows, cols, gt->t); break;
+            case LD_FP16:    stns::upload_fp16(*tv, rows, cols, gt->t);    break;
+            default:         stns::upload(*tv, rows, cols, gt->t);         break;
+        }
     } catch (const std::exception& e) {
         delete gt;
         std::string msg = std::string("get: ") + e.what();
@@ -225,7 +254,7 @@ void installTensorSafetensorsOps(JSContext* ctx, JSValue gpuObj) {
         .method("close", [](SafetensorsFileData* d) { d->file.reset(); })
         .method_raw("names",  js_st_names,  0)
         .method_raw("header", js_st_header, 0)
-        .method_raw("get",    js_st_get,    3);
+        .method_raw("get",    js_st_get,    4);
 
     JS_SetPropertyStr(ctx, gpuObj, "openSafetensors",
         JS_NewCFunction(ctx, js_openSafetensors, "openSafetensors", 1));
