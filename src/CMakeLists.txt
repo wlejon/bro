@@ -33,3 +33,14 @@ endif()
 if(WIN32)
     target_link_libraries(bro PRIVATE ws2_32)
 endif()
+
+# Embed a Windows application manifest into every executable: opts into
+# Common-Controls v6 (themed native dialogs instead of Windows-95 grey) and
+# declares Windows 10/11 support. MSVC's manifest tool merges it with the
+# linker-generated manifest.
+if(MSVC)
+    foreach(_bro_target bro bro-headless bro-server)
+        target_sources(${_bro_target} PRIVATE
+                       ${CMAKE_CURRENT_SOURCE_DIR}/bro.manifest)
+    endforeach()
+endif()
