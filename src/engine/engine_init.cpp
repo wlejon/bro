@@ -68,6 +68,7 @@
 #include "util/time.h"
 
 #include <glad/gl.h>
+#include <cstdlib>
 #include <stdexcept>
 #include <utility>
 
@@ -468,6 +469,15 @@ Engine::Engine(const EngineConfig& config)
                 if (type == "2d") {
                     auto scene = std::make_unique<canvas::CanvasScene>(renderer_.get());
                     if (el) {
+                        // Seed the bitmap size from width/height attributes that
+                        // may have been assigned before getContext() ran. Without
+                        // this, an offscreen canvas (never in the DOM, so no
+                        // layout box to fall back on) silently defaults to
+                        // 300x150 and any larger drawing is cropped + rescaled.
+                        const std::string wAttr = el->getAttribute("width");
+                        const std::string hAttr = el->getAttribute("height");
+                        if (!wAttr.empty()) scene->setIntrinsicWidth(std::atoi(wAttr.c_str()));
+                        if (!hAttr.empty()) scene->setIntrinsicHeight(std::atoi(hAttr.c_str()));
                         scene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
                             auto* elem = static_cast<dom::Element*>(ud);
                             if (!elem->parentNode()) {
@@ -578,6 +588,12 @@ Engine::Engine(const EngineConfig& config)
             [this](JSContext* ctx, dom::Element* el, const std::string& type) -> JSValue {
                 auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
                 if (el) {
+                    // Honour width/height attributes set before getContext() —
+                    // see the matching comment in the GPU 2d factory above.
+                    const std::string wAttr = el->getAttribute("width");
+                    const std::string hAttr = el->getAttribute("height");
+                    if (!wAttr.empty()) canvasScene->setIntrinsicWidth(std::atoi(wAttr.c_str()));
+                    if (!hAttr.empty()) canvasScene->setIntrinsicHeight(std::atoi(hAttr.c_str()));
                     canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
                         auto* elem = static_cast<dom::Element*>(ud);
                         if (!elem->parentNode()) {
