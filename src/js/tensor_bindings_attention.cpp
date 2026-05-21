@@ -68,6 +68,35 @@ static JSValue js_selfAttentionBackward(JSContext* ctx, JSValueConst, int argc, 
     return JS_UNDEFINED;
 }
 
+// ─── T5-style self-attention with relative-position bias ──────────────────
+//
+// selfAttentionBiasForward(X, Wq, Wk, Wv, Wo, mask|null, attnBias|null,
+//                          numHeads, scale, O)
+//
+// Scaled self-attention with an optional additive per-head bias on the
+// pre-softmax scores — the encoder attention of a T5 text encoder.
+//   attnBias: optional (numHeads*L, L) FP32 tensor; row h*L+q holds head h's
+//             length-L bias for query q. null → plain scaled self-attention.
+//   scale:    QK-dot multiplier, applied before the bias (T5 uses 1.0).
+static JSValue js_selfAttentionBiasForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 10) return JS_ThrowTypeError(ctx,
+        "selfAttentionBiasForward(X,Wq,Wk,Wv,Wo,mask|null,attnBias|null,numHeads,scale,O)");
+    ENSURE_INIT();
+    GT(X,  0, "selfAttentionBiasForward"); GT(Wq, 1, "selfAttentionBiasForward");
+    GT(Wk, 2, "selfAttentionBiasForward"); GT(Wv, 3, "selfAttentionBiasForward");
+    GT(Wo, 4, "selfAttentionBiasForward");
+    const float* mask = nullptr; JSValue err = JS_UNDEFINED;
+    if (!resolveDeviceMask(ctx, argv[5], mask, err)) return err;
+    const nngpu::Tensor* attnBias = nullptr;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[6], attnBias, err, "attnBias")) return err;
+    int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[7]);
+    double scale = 1.0; JS_ToFloat64(ctx, &scale, argv[8]);
+    GT(O, 9, "selfAttentionBiasForward");
+    nngpu::self_attention_bias_forward(*X, *Wq, *Wk, *Wv, *Wo, mask, attnBias,
+                                       numHeads, (float)scale, *O);
+    return JS_UNDEFINED;
+}
+
 // ─── Cross-attention ──────────────────────────────────────────────────────
 
 // Inference (FP16) cross-attention — no caches exposed.
@@ -516,6 +545,7 @@ void installTensorAttentionOps(JSContext* ctx, JSValue gpuObj) {
     JS_SetPropertyStr(ctx, gpuObj, "selfAttentionForward",      JS_NewCFunction(ctx, js_selfAttentionForward,      "selfAttentionForward",       8));
     JS_SetPropertyStr(ctx, gpuObj, "selfAttentionForwardTrain", JS_NewCFunction(ctx, js_selfAttentionForwardTrain, "selfAttentionForwardTrain", 13));
     JS_SetPropertyStr(ctx, gpuObj, "selfAttentionBackward",     JS_NewCFunction(ctx, js_selfAttentionBackward,     "selfAttentionBackward",     18));
+    JS_SetPropertyStr(ctx, gpuObj, "selfAttentionBiasForward",  JS_NewCFunction(ctx, js_selfAttentionBiasForward,  "selfAttentionBiasForward",  10));
 
     // Cross-attention
     JS_SetPropertyStr(ctx, gpuObj, "crossAttentionForward",         JS_NewCFunction(ctx, js_crossAttentionForward,         "crossAttentionForward",          9));

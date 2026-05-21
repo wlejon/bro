@@ -361,6 +361,33 @@ gpu.buildCausalMaskRow(L, q, mask);
 
 
 // -----------------------------------------------------------------------------
+// T5-style self-attention with relative-position bias
+// -----------------------------------------------------------------------------
+//
+// Scaled self-attention with an optional additive per-head bias on the
+// pre-softmax scores — the encoder attention of a T5 text encoder. Unlike the
+// other attention ops it takes an explicit `scale` (T5 does NOT scale the QK
+// dot product, so pass 1.0) and an additive `attnBias`.
+//
+//   X:        (L, D) token activations; O resized + dtype-matched to X.
+//   Wq/Wk/Wv/Wo: (D, D) projection weights, same dtype as X.
+//   mask:     optional device key-validity mask (length L, 1 valid / 0 not),
+//             or null. Also gates padded query rows.
+//   attnBias: optional (numHeads*L, L) FP32 GpuTensor — row h*L+q holds head
+//             h's length-L bias for query q. null → plain scaled attention.
+//             T5's relative-position bias is built host-side (bucketed) and
+//             uploaded here. FP32 on every backend, regardless of X.dtype.
+//   scale:    QK-dot multiplier, applied before the bias.
+//
+// Dispatched on X.dtype (FP32 / FP16 / BF16); FP32 internal math. Scores are
+// materialised (L, L) per head — intended for encoder-length sequences
+// (T5 ≤ 512).
+gpu.selfAttentionBiasForward(X, Wq, Wk, Wv, Wo,
+                             /*mask|null*/ null, /*attnBias|null*/ bias,
+                             numHeads, /*scale*/ 1.0, O);
+
+
+// -----------------------------------------------------------------------------
 // Flash-attention family (FP16, recompute-based backward)
 // -----------------------------------------------------------------------------
 
@@ -765,6 +792,18 @@ gpu.flashAttentionQkvoInt8wFp16({
     Wo_int8, so, bo: null,
     mask: null, numHeads, causal: false, O,
 });
+
+/**
+ * W8A16 variant of selfAttentionBiasForward — the quantised T5 encoder
+ * attention. Each projection weight is an INT8 (D, D) matrix paired with an
+ * FP32 (D, 1) per-output-row dequant scale; activations stay FP16. `attnBias`
+ * is FP32 (numHeads*L, L) or null; `scale` is the pre-bias QK multiplier.
+ */
+gpu.selfAttentionBiasInt8wFp16(X,
+                               Wq_int8, sq, Wk_int8, sk,
+                               Wv_int8, sv, Wo_int8, so,
+                               /*mask|null*/ null, /*attnBias|null*/ bias,
+                               numHeads, /*scale*/ 1.0, O);
 
 
 // -----------------------------------------------------------------------------

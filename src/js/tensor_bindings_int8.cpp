@@ -311,6 +311,37 @@ static JSValue js_flashAttentionQkvoInt8wFp16(JSContext* ctx, JSValueConst, int 
     return JS_UNDEFINED;
 }
 
+// ─── W8A16 T5-style bias attention ────────────────────────────────────────
+//
+// selfAttentionBiasInt8wFp16(X, Wq_int8, sq, Wk_int8, sk, Wv_int8, sv,
+//                            Wo_int8, so, mask|null, attnBias|null,
+//                            numHeads, scale, O)
+//
+// W8A16 variant of selfAttentionBiasForward — the quantised T5 encoder
+// attention. Each projection weight is an INT8 (D, D) matrix paired with an
+// FP32 (D, 1) per-output-row dequant scale; activations stay FP16.
+static JSValue js_selfAttentionBiasInt8wFp16(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 14) return JS_ThrowTypeError(ctx,
+        "selfAttentionBiasInt8wFp16(X,Wq_int8,sq,Wk_int8,sk,Wv_int8,sv,Wo_int8,so,mask|null,attnBias|null,numHeads,scale,O)");
+    ENSURE_INIT();
+    GT(X,  0, "selfAttentionBiasInt8wFp16");
+    GT(Wq, 1, "selfAttentionBiasInt8wFp16"); GT(sq, 2, "selfAttentionBiasInt8wFp16");
+    GT(Wk, 3, "selfAttentionBiasInt8wFp16"); GT(sk, 4, "selfAttentionBiasInt8wFp16");
+    GT(Wv, 5, "selfAttentionBiasInt8wFp16"); GT(sv, 6, "selfAttentionBiasInt8wFp16");
+    GT(Wo, 7, "selfAttentionBiasInt8wFp16"); GT(so, 8, "selfAttentionBiasInt8wFp16");
+    JSValue err = JS_UNDEFINED;
+    const float* mask = nullptr;
+    if (!resolveDeviceMask(ctx, argv[9], mask, err)) return err;
+    const nngpu::Tensor* attnBias = nullptr;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[10], attnBias, err, "attnBias")) return err;
+    int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[11]);
+    double scale = 1.0; JS_ToFloat64(ctx, &scale, argv[12]);
+    GT(O, 13, "selfAttentionBiasInt8wFp16");
+    nngpu::self_attention_bias_int8w_fp16(*X, *Wq, *sq, *Wk, *sk, *Wv, *sv, *Wo, *so,
+                                          mask, attnBias, numHeads, (float)scale, *O);
+    return JS_UNDEFINED;
+}
+
 #undef GT
 #undef ENSURE_INIT
 
@@ -331,6 +362,8 @@ void installTensorInt8Ops(JSContext* ctx, JSValue gpuObj) {
         JS_NewCFunction(ctx, js_flashAttentionQWithKvCachedInt8wFp16, "flashAttentionQWithKvCachedInt8wFp16", 13));
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionQkvoInt8wFp16",
         JS_NewCFunction(ctx, js_flashAttentionQkvoInt8wFp16, "flashAttentionQkvoInt8wFp16", 1));
+    JS_SetPropertyStr(ctx, gpuObj, "selfAttentionBiasInt8wFp16",
+        JS_NewCFunction(ctx, js_selfAttentionBiasInt8wFp16, "selfAttentionBiasInt8wFp16", 14));
 }
 
 } // namespace bro::js
