@@ -2,6 +2,7 @@
 #include "util/asset_mounts.h"
 #include "js/ai_bindings.h"
 #include "js/diffusion_bindings.h"
+#include "js/imagebitmap_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/flora_bindings.h"
 #include "js/math_bindings.h"
@@ -238,6 +239,11 @@ void Worker::threadFunc()
     // sibling). Same binding as the main context; this worker owns its own
     // Pipeline. ---
     installDiffusionBindings(ctx);
+
+    // --- 3b''''. Install createImageBitmap / ImageBitmap. Workers that
+    // produce frames (e.g. the diffusion worker) build bitmaps here and
+    // transfer them to the main thread zero-copy. ---
+    ImageBitmapBindings::install(ctx);
 
     // --- 3c. Install bro.net bindings (own subscriber against shared
     // NetService). The service is thread-safe by design — commands/events

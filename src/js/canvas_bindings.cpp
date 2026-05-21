@@ -1,5 +1,6 @@
 #include "js/canvas_bindings.h"
 #include "js/image_bindings.h"
+#include "js/imagebitmap_bindings.h"
 #include "js/dom_bindings_internal.h"
 #include "canvas/canvas_scene.h"
 #include "canvas/canvas2d.h"
@@ -123,6 +124,25 @@ static JSValue js_drawImage(JSContext* ctx, JSValueConst this_val,
     if (!sc || argc < 3) return JS_UNDEFINED;
 
     auto F = [&](int i) { double v = 0; JS_ToFloat64(ctx, &v, argv[i]); return (float)v; };
+
+    // Fast path: source is an ImageBitmap. It is an immutable raster SkImage —
+    // draw it straight through; Ganesh uploads + caches the texture once, so
+    // redrawing the same bitmap (e.g. a scrubbed frame) costs no re-upload.
+    if (sk_sp<SkImage> bmp = ImageBitmapBindings::getImage(argv[0])) {
+        int sw = bmp->width(), sh = bmp->height();
+        if (argc >= 9) {
+            sc->drawImage(std::move(bmp),
+                          F(1), F(2), F(3), F(4), F(5), F(6), F(7), F(8));
+        } else if (argc >= 5) {
+            sc->drawImage(std::move(bmp),
+                          0, 0, (float)sw, (float)sh, F(1), F(2), F(3), F(4));
+        } else {
+            sc->drawImage(std::move(bmp),
+                          0, 0, (float)sw, (float)sh,
+                          F(1), F(2), (float)sw, (float)sh);
+        }
+        return JS_UNDEFINED;
+    }
 
     // Fast path: source is an HTMLCanvasElement. Snapshot its surface as an
     // SkImage (cached on the source scene, invalidated on mutation) and draw

@@ -13,8 +13,9 @@ namespace bro::js {
 /// deserialize extracts it and transfers ownership to a destination wrapper.
 struct TransferredObject {
     enum Type : uint8_t {
-        kNone = 0,
-        kMesh = 1,  // bromesh::MeshData*
+        kNone        = 0,
+        kMesh        = 1,  // bromesh::MeshData*
+        kImageBitmap = 2,  // SkImage* (one owned ref)
     };
 
     uint8_t type = kNone;

@@ -32,6 +32,7 @@
 #include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
+#include "js/imagebitmap_bindings.h"
 #include "js/video_bindings.h"
 #include "js/worker.h"
 #include "js/physics_bindings.h"
@@ -443,6 +444,7 @@ Engine::Engine(const EngineConfig& config)
     // 9c. Install Canvas 2D bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath, &assetMounts_);
+    js::ImageBitmapBindings::install(jsRuntime_->getContext());
     js::VideoBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::SceneBindings::setAppContext(manifest_.basePath, &assetMounts_);
     // screenshotCanvas works on both GPU-backed (windowed) and raster

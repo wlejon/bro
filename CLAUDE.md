@@ -134,6 +134,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/math-api.js` | `bro.math` — bromath types surfaced to JS (currently `SpatialHash3D`) |
 | `docs/noise-api.js` | `bro.noise` — FastNoise2 SIMD noise generation |
 | `docs/image-api.js` | `bro.image` — composable typed-array kernels (reduce, map, combine, lookup, stencil, resample); `bro.image.gpu.colormap` (WebGL2 path) |
+| `docs/imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap` — immutable pixels-to-drawable primitive; `drawImage` + WebGL `texImage2D` source; zero-copy Worker transfer |
 | `docs/scene-api.js` | `bro.scene` — 3D scene graph, shapes, sprites, meshes, physics nodes |
 | `docs/lighting-api.js` | PBR lighting — LightNode (dir/point/spot), materials, tonemap, ambient |
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |

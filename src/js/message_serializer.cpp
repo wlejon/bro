@@ -1,7 +1,9 @@
 #include "js/message_serializer.h"
 #include "js/mesh_bindings.h"
+#include "js/imagebitmap_bindings.h"
 #include <bromesh/mesh_data.h>
 #include "util/log.h"
+#include <include/core/SkImage.h>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -30,11 +32,18 @@ enum Tag : uint8_t {
     kTypedArray      = 0x0B,  // TypedArray: subtype + byte offset + length + ArrayBuffer
     kTransferMesh    = 0x0C,  // index into transferredObjects (zero-copy Mesh)
     kBigInt          = 0x0D,  // arbitrary-precision: decimal string representation
+    kTransferImageBitmap = 0x0E,  // index into transferredObjects (ImageBitmap)
 };
 
 // Deleter for MeshData* stored in TransferredObject (type=kMesh).
 static void deleteMeshData(void* p) {
     delete static_cast<bromesh::MeshData*>(p);
+}
+
+// Deleter for SkImage* stored in TransferredObject (type=kImageBitmap).
+// The slot owns exactly one ref; releasing it drops that ref.
+static void deleteSkImage(void* p) {
+    static_cast<SkImage*>(p)->unref();
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +206,37 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
         }
     }
 
+    // ImageBitmap — an immutable raster SkImage. Listed in the transfer list:
+    // moved zero-copy, source neutered. Not listed: structured-cloned — but the
+    // SkImage is immutable, so we ref-share it rather than copy the pixels
+    // (observationally identical to a deep copy, since it can never mutate).
+    {
+        JSClassID ibClassId = ImageBitmapBindings::classId();
+        if (ibClassId != 0 && JS_GetOpaque(val, ibClassId) != nullptr) {
+            bool transfer = false;
+            for (size_t i = 0; i < numTransfers; i++) {
+                if (JS_VALUE_GET_PTR(val) == JS_VALUE_GET_PTR(transfers[i])) {
+                    transfer = true;
+                    break;
+                }
+            }
+            sk_sp<SkImage> img = transfer
+                ? ImageBitmapBindings::takeImage(val)
+                : ImageBitmapBindings::getImage(val);
+            if (!img) {
+                JS_ThrowTypeError(ctx, "postMessage: ImageBitmap is closed");
+                return false;
+            }
+            uint32_t idx = static_cast<uint32_t>(transferObjs.size());
+            transferObjs.emplace_back(TransferredObject::kImageBitmap,
+                                      static_cast<void*>(img.release()),
+                                      &deleteSkImage);
+            w.u8(kTransferImageBitmap);
+            w.u32(idx);
+            return true;
+        }
+    }
+
     // ArrayBuffer — check transfer list first
     if (JS_IsArrayBuffer(val)) {
         for (size_t i = 0; i < numTransfers; i++) {
@@ -339,6 +379,7 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
     // or Mesh (true zero-copy transfer of the underlying bromesh::MeshData).
     std::vector<JSValue> transfers;
     JSClassID meshClassId = MeshBindings::classId();
+    JSClassID ibClassId   = ImageBitmapBindings::classId();
     if (!JS_IsUndefined(transferList) && JS_IsArray(transferList)) {
         JSValue lenVal = JS_GetPropertyStr(ctx, transferList, "length");
         uint32_t len;
@@ -350,10 +391,12 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
             bool isAB   = JS_IsArrayBuffer(transfers[i]);
             bool isMesh = meshClassId != 0 &&
                           JS_GetOpaque(transfers[i], meshClassId) != nullptr;
-            if (!isAB && !isMesh) {
+            bool isImageBitmap = ibClassId != 0 &&
+                          JS_GetOpaque(transfers[i], ibClassId) != nullptr;
+            if (!isAB && !isMesh && !isImageBitmap) {
                 for (uint32_t j = 0; j <= i; j++)
                     JS_FreeValue(ctx, transfers[j]);
-                JS_ThrowTypeError(ctx, "postMessage: transfer list must contain ArrayBuffers or Mesh objects");
+                JS_ThrowTypeError(ctx, "postMessage: transfer list must contain ArrayBuffers, Mesh, or ImageBitmap objects");
                 return false;
             }
         }
@@ -457,6 +500,18 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
         // hand it to a unique_ptr that the new JS Mesh will own on this thread.
         auto* raw = static_cast<bromesh::MeshData*>(obj.release());
         return MeshBindings::wrapMeshData(ctx, std::unique_ptr<bromesh::MeshData>(raw));
+    }
+    case kTransferImageBitmap: {
+        if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated imagebitmap transfer index");
+        uint32_t idx = r.u32();
+        if (idx >= msg.transferredObjects.size())
+            return JS_ThrowTypeError(ctx, "postMessage: invalid imagebitmap transfer index");
+        auto& obj = msg.transferredObjects[idx];
+        if (obj.type != TransferredObject::kImageBitmap || !obj.ptr)
+            return JS_ThrowTypeError(ctx, "postMessage: imagebitmap transfer slot already consumed");
+        // Adopt the single ref carried by the slot (sk_sp(T*) does not add one).
+        auto* raw = static_cast<SkImage*>(obj.release());
+        return ImageBitmapBindings::wrap(ctx, sk_sp<SkImage>(raw));
     }
     case kTypedArray: {
         if (!r.ok(1 + 4 + 4 + 4))

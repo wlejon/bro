@@ -1,6 +1,10 @@
 #include "js/image_bindings.h"
+#include "js/imagebitmap_bindings.h"
 #include "js/dom_bindings_internal.h"
 #include "canvas/canvas_scene.h"
+
+#include <include/core/SkImage.h>
+#include <include/core/SkImageInfo.h>
 
 #include <qjsbind/qjsbind.h>
 
@@ -239,6 +243,25 @@ bool ImageBindings::getImagePixels(JSValue val, ImagePixels& out) {
             const uint8_t* px = scene->snapshotPixels(w, h);
             if (px) {
                 out.data   = px;
+                out.width  = w;
+                out.height = h;
+                return true;
+            }
+        }
+    }
+
+    // 3) ImageBitmap — immutable raster SkImage. Read its RGBA into the owned
+    //    buffer. (drawImage has a faster path that draws the SkImage directly;
+    //    this serves the drawImage slow path and WebGL texImage2D.)
+    if (sk_sp<SkImage> bmp = ImageBitmapBindings::getImage(val)) {
+        int w = bmp->width(), h = bmp->height();
+        if (w > 0 && h > 0) {
+            SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType,
+                                                 kUnpremul_SkAlphaType);
+            out.owned.resize(static_cast<size_t>(w) * h * 4);
+            if (bmp->readPixels(nullptr, info, out.owned.data(),
+                                static_cast<size_t>(w) * 4, 0, 0)) {
+                out.data   = out.owned.data();
                 out.width  = w;
                 out.height = h;
                 return true;

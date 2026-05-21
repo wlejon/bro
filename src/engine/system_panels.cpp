@@ -28,6 +28,7 @@
 #include "js/dom_bindings.h"
 #include "js/canvas_bindings.h"
 #include "js/image_bindings.h"
+#include "js/imagebitmap_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/window_bindings.h"
 #include "js/settings_bindings.h"
@@ -261,6 +262,7 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         // so the factory can own the created CanvasScenes per-panel.
         js::CanvasBindings::install(doc.jsCtx);
         js::ImageBindings::install(doc.jsCtx, savedBasePath);
+        js::ImageBitmapBindings::install(doc.jsCtx);
 
         // Install __bro perf/nav object
         installBroObject(doc);
