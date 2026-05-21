@@ -3,8 +3,13 @@
 // =============================================================================
 //
 // Diffusion-model text-to-image inference, backed by the brodiffusion sibling
-// library (tokenizer + text encoder + U-Net + VAE, DDIM/LCM schedulers, LoRA,
-// INT8 quantization).
+// library. Two model families are supported:
+//   - Stable Diffusion 1.5 — CLIP text encoder + U-Net + VAE, DDIM/LCM
+//     schedulers, LoRA, INT8 quantization.
+//   - Flux — CLIP (pooled) + T5-XXL text encoders + Flux DiT denoiser + VAE,
+//     flow-match scheduler.
+// loadModel() takes a diffusers model directory and auto-detects the family;
+// createPipeline() builds the SD1.5 stack explicitly.
 //
 // The native Pipeline owns the multi-GB model weights. JavaScript never holds
 // or moves weight bytes — it holds an opaque *handle* (the Pipeline object).
@@ -45,8 +50,33 @@ const diffusion = {
   init() {},
 
   /**
-   * Create an inference Pipeline. Loads the CLIP tokenizer and builds the
-   * model graph (no weights yet — call pipeline.loadWeights()).
+   * Load a complete diffusers model directory and return a fully-ready
+   * Pipeline. The directory holds `model_index.json` plus one component
+   * subdir each (text_encoder/, unet/ or transformer/, vae/, tokenizer/,
+   * scheduler/, ...). The model family is auto-detected from `_class_name`:
+   *
+   *   - Stable Diffusion → CLIP tokenizer + U-Net + VAE
+   *   - Flux             → CLIP (pooled) + T5-XXL tokenizers/encoders +
+   *                        Flux DiT + VAE, flow-match scheduler
+   *
+   * Every weight and tokenizer is loaded by this call, so the returned
+   * Pipeline needs no loadWeights() — call generate()/prime() directly. This
+   * is the only way to run a Flux model. Blocking and slow (multi-GB read);
+   * run it in a Worker. Check pipeline.config().modelClass for the family.
+   *
+   * @param {string} modelDir - diffusers model directory root
+   * @returns {Pipeline}
+   *
+   * @example
+   *   const pipe = bro.diffusion.loadModel('/path/to/flux-schnell');
+   *   const img  = pipe.generate('a fox in autumn leaves', { steps: 4 });
+   */
+  loadModel(modelDir) {},
+
+  /**
+   * Create a Stable Diffusion 1.5 inference Pipeline. Loads the CLIP
+   * tokenizer and builds the model graph (no weights yet — call
+   * pipeline.loadWeights()). For Flux, use loadModel() instead.
    *
    * @param {object} opts
    * @param {string}  opts.vocabPath        - CLIP tokenizer vocab.json (required)
@@ -74,8 +104,9 @@ const diffusion = {
 // Pipeline
 // -----------------------------------------------------------------------------
 // Opaque handle to the native diffusion pipeline. The weights live inside it
-// and are freed when the handle is garbage-collected. Created only via
-// bro.diffusion.createPipeline().
+// and are freed when the handle is garbage-collected. Created via
+// bro.diffusion.loadModel() (any family, weights already loaded) or
+// bro.diffusion.createPipeline() (SD1.5, then call loadWeights()).
 
 class Pipeline {
 
@@ -151,16 +182,19 @@ class Pipeline {
 
   /**
    * Number of cross-attention (Transformer2D) blocks in the loaded model's
-   * U-Net. Meaningful only after loadWeights() (returns 1 before). This is
-   * the required length of a stepOnce() attnBias array and the length of a
-   * trace array.
+   * U-Net. Meaningful only after weights are loaded (returns 1 before). This
+   * is the required length of a stepOnce() attnBias array and the length of a
+   * trace array. Returns 0 for a Flux model (no U-Net cross-attention).
    * @returns {number}
    */
   numXAttnBlocks() {}
 
   /**
-   * Read-only snapshot of the resolved pipeline configuration.
-   * @returns {{scheduler:string, timeCondProjDim:number,
+   * Read-only snapshot of the resolved pipeline configuration. `modelClass`
+   * is 'StableDiffusion' or 'Flux'; `scheduler` is 'ddim', 'lcm', or
+   * 'flowmatch'. `timeCondProjDim`, `quantizeWeights`, and `numXAttnBlocks`
+   * describe the SD1.5 U-Net and read 0/false for a Flux model.
+   * @returns {{modelClass:string, scheduler:string, timeCondProjDim:number,
    *            quantizeWeights:boolean, numXAttnBlocks:number,
    *            weightsLoaded:boolean}}
    */

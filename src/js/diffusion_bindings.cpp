@@ -23,6 +23,8 @@
 #include <brotensor/safetensors.h>
 #include <brodiffusion/scheduler.h>
 #include <brodiffusion/lcm_scheduler.h>
+#include <brodiffusion/flow_match_scheduler.h>
+#include <brodiffusion/model_config.h>
 #include <brodiffusion/tokenizer.h>
 #include <brodiffusion/unet.h>
 #include <brodiffusion/version.h>
@@ -55,8 +57,12 @@ struct PipelineWrapper {
 
 // Cross-attention block count is only meaningful once weights are loaded —
 // num_xattn_blocks() counts the per-block Transformer2D vectors, which
-// load_weights() populates. Always query it live.
+// load_weights() populates. Always query it live. Flux has no UNet (its DiT
+// denoiser carries no Transformer2D blocks), so unet() would throw — report 0.
 static int xattnBlocks(const PipelineWrapper* w) {
+    if (w->pipeline->config().model_class !=
+        brodiffusion::ModelClass::StableDiffusion)
+        return 0;
     return w->pipeline->unet().num_xattn_blocks();
 }
 
@@ -265,6 +271,33 @@ static JSValue js_createPipeline(JSContext* ctx, JSValueConst, int argc,
     }
 }
 
+// bro.diffusion.loadModel(modelDir) -> Pipeline
+//   Load a complete diffusers model directory — `model_index.json` plus one
+//   component subdir each (text_encoder/, unet/ or transformer/, vae/,
+//   tokenizer/, scheduler/, ...). The model family is auto-detected from
+//   `_class_name`: a StableDiffusion directory builds the CLIP + UNet stack, a
+//   Flux directory builds CLIP (pooled) + the T5-XXL encoder + the Flux DiT.
+//   Every weight and tokenizer is loaded here — the returned Pipeline is fully
+//   ready, so call generate()/prime() directly (no loadWeights()/createPipeline).
+static JSValue js_loadModel(JSContext* ctx, JSValueConst, int argc,
+                            JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadModel(modelDir): path string required");
+    try {
+        brotensor::init();
+        auto w = std::make_unique<PipelineWrapper>();
+        // from_model_dir() returns by value; Pipeline is move-only, so the
+        // temporary moves into the heap-allocated wrapper slot.
+        w->pipeline = std::make_unique<bdp::Pipeline>(
+            bdp::Pipeline::from_model_dir(dir));
+        w->weights_loaded = true;
+        return qjsbind::wrap<PipelineWrapper>(ctx, w.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "loadModel: %s", e.what());
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Pipeline class methods
 // ═══════════════════════════════════════════════════════════════════════════
@@ -377,10 +410,15 @@ static JSValue js_pipeline_config(JSContext* ctx, JSValueConst this_val,
     auto* w = pipelineSelf(ctx, this_val);
     if (!w) return JS_ThrowTypeError(ctx, "config: not a Pipeline");
     const bdp::PipelineConfig& cfg = w->pipeline->config();
-    const bool lcm = std::holds_alternative<bdsch::LCMConfig>(cfg.scheduler);
+    const bool lcm  = std::holds_alternative<bdsch::LCMConfig>(cfg.scheduler);
+    const bool flow = std::holds_alternative<bdsch::FlowMatchConfig>(cfg.scheduler);
+    const char* schedName = lcm ? "lcm" : (flow ? "flowmatch" : "ddim");
+    const bool flux = cfg.model_class == brodiffusion::ModelClass::Flux;
 
     JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "scheduler", JS_NewString(ctx, lcm ? "lcm" : "ddim"));
+    JS_SetPropertyStr(ctx, o, "modelClass",
+                      JS_NewString(ctx, flux ? "Flux" : "StableDiffusion"));
+    JS_SetPropertyStr(ctx, o, "scheduler", JS_NewString(ctx, schedName));
     JS_SetPropertyStr(ctx, o, "timeCondProjDim",
                       JS_NewInt32(ctx, cfg.unet.time_cond_proj_dim));
     JS_SetPropertyStr(ctx, o, "quantizeWeights",
@@ -467,7 +505,12 @@ static JSValue js_state_stepOnce(JSContext* ctx, JSValueConst this_val,
         JSValue biasArr = JS_GetPropertyStr(ctx, ctrl, "attnBias");
         if (!JS_IsUndefined(biasArr) && !JS_IsNull(biasArr)) {
             haveBias = true;
-            const int n = pipe->unet().num_xattn_blocks();
+            // Flux has no UNet cross-attention blocks — n stays 0 so any
+            // supplied attnBias array trips the length check below with a
+            // clear message instead of throwing past the binding.
+            const int n = (pipe->config().model_class ==
+                           brodiffusion::ModelClass::StableDiffusion)
+                          ? pipe->unet().num_xattn_blocks() : 0;
             std::uint32_t len = 0;
             JSValue lenV = JS_GetPropertyStr(ctx, biasArr, "length");
             JS_ToUint32(ctx, &len, lenV);
@@ -629,6 +672,8 @@ void installDiffusionBindings(JSContext* ctx) {
                       JS_NewCFunction(ctx, js_init, "init", 0));
     JS_SetPropertyStr(ctx, diff, "createPipeline",
                       JS_NewCFunction(ctx, js_createPipeline, "createPipeline", 1));
+    JS_SetPropertyStr(ctx, diff, "loadModel",
+                      JS_NewCFunction(ctx, js_loadModel, "loadModel", 1));
     JS_SetPropertyStr(ctx, broObj, "diffusion", diff);
 
     JS_FreeValue(ctx, broObj);
