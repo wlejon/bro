@@ -125,6 +125,18 @@ t.download(ht);
  *   const u16 = t16.downloadFp16(); // returns fresh Uint16Array (bit pattern)
  */
 
+/**
+ * INT8 upload — pass an Int8Array of raw int8 weight bytes, typically the
+ * `weights` field of quantizeInt8PerRowHost(). This is the staging path for
+ * W8A16 weights: the only way to get quantised weights onto the device.
+ *
+ *   q8.uploadInt8(quant.weights);   // resizes destination to (rows, cols) INT8
+ *
+ * Keeps the destination's existing (rows, cols) when their product matches
+ * the element count; otherwise falls back to (n, 1). Pair the resulting
+ * tensor with an FP32 (out, 1) scales tensor for the matmulInt8wFp16 family.
+ */
+
 
 // -----------------------------------------------------------------------------
 // Dense + elementwise

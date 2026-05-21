@@ -184,6 +184,23 @@ static void registerClasses(JSContext* ctx) {
                 d->t = nngpu::Tensor::from_host_fp16(reinterpret_cast<const uint16_t*>(p), r, c);
                 return JS_UNDEFINED;
             }, 1)
+        // uploadInt8(int8Array): src holds raw int8 weight bytes — e.g. the
+        // `weights` field returned by quantizeInt8PerRowHost. Resizes the
+        // destination to (rows, cols, INT8); keeps the existing r*c when it
+        // matches the element count, otherwise falls back to (n, 1).
+        .method_raw("uploadInt8",
+            [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                auto* d = qjsbind::unwrap<GpuTensorData>(ctx, this_val);
+                if (!d || argc < 1) return JS_ThrowTypeError(ctx, "uploadInt8(int8Array)");
+                size_t bytes = 0;
+                uint8_t* p = getTypedArrayBytePtr(ctx, argv[0], bytes);
+                if (!p) return JS_ThrowTypeError(ctx, "uploadInt8(int8Array) — expected Int8Array");
+                int n = static_cast<int>(bytes);  // INT8 → 1 byte per element
+                int r = d->t.rows, c = d->t.cols;
+                if (r * c != n) { r = n; c = 1; }
+                d->t = nngpu::Tensor::from_host_int8(reinterpret_cast<const int8_t*>(p), r, c);
+                return JS_UNDEFINED;
+            }, 1)
         // downloadFp16(): sync + download FP16 bits into a fresh Uint16Array.
         .method_raw("downloadFp16",
             [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
