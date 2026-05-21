@@ -17,30 +17,77 @@ static SDL_Window* s_window = nullptr;
 static DialogBindings::TickCallback s_tickCb;
 
 // ---------------------------------------------------------------------------
-// Dialog result — written by callback thread, read by main thread
+// Path separator normalization
 // ---------------------------------------------------------------------------
 
+/// Windows' shell path parser (SHCreateItemFromParsingName — used by SDL's
+/// modern IFileDialog backend to honour a default location) only accepts
+/// backslash separators. A forward slash makes it fail, which silently drops
+/// SDL to its legacy SHBrowseForFolder/GetOpenFileName dialog. Normalize any
+/// path handed to SDL so the modern themed dialog is actually used.
+static std::string normalizeSeparators(std::string s)
+{
+#ifdef _WIN32
+    for (char& c : s) {
+        if (c == '/') c = '\\';
+    }
+#endif
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// Dialog result — written by the SDL dialog thread, read by the main thread
+// ---------------------------------------------------------------------------
+
+// SDL's Windows dialog backend can invoke the callback TWICE for one request:
+// when the modern IFileDialog path fails it reports the error through the
+// callback (filelist == NULL) and then falls back to the legacy dialog, which
+// invokes the callback a second time with the real result. The waiter must not
+// return — and destroy this stack object — while another callback is still
+// pending against it, or the second callback is a use-after-free.
+//
+// SDL issues at most two callbacks per request: exactly one for the modern
+// attempt, plus one for the legacy fallback if the modern attempt failed.
+// Every non-Windows backend invokes the callback exactly once.
+#ifdef _WIN32
+static constexpr int kMaxDialogCallbacks = 2;
+#else
+static constexpr int kMaxDialogCallbacks = 1;
+#endif
+
 struct DialogResult {
-    std::atomic<bool> ready{false};
-    std::vector<std::string> files;  // written by callback thread before `ready` release-store, read by main after acquire-load
+    std::atomic<bool> haveResult{false};  // a non-error callback delivered a path list
+    std::atomic<int>  callbackCount{0};   // number of times SDL invoked the callback
+    std::vector<std::string> files;       // written before haveResult release-store
 };
 
 static void dialogCallback(void* userdata, const char* const* filelist, int /*filter*/)
 {
     auto* result = static_cast<DialogResult*>(userdata);
+    // filelist == NULL is SDL signalling an error for *this* attempt. When the
+    // modern dialog errors this way SDL still falls back to the legacy dialog,
+    // so a NULL callback is not the final word — only a non-NULL filelist
+    // carries the actual result (an empty {NULL} list means the user cancelled).
     if (filelist) {
         for (const char* const* p = filelist; *p; ++p) {
             result->files.emplace_back(*p);
         }
+        result->haveResult.store(true, std::memory_order_release);
     }
-    result->ready.store(true, std::memory_order_release);
+    // Published last: a waiter observing this increment is guaranteed to see
+    // every preceding write from this invocation.
+    result->callbackCount.fetch_add(1, std::memory_order_release);
 }
 
 /// Spin-wait for the dialog result while keeping SDL's event loop alive
 /// and ticking JS timers so audio sequencer / timers keep running.
+///
+/// Returns once a real result has landed, or once every callback SDL can
+/// issue has landed (so nothing more can touch `result` after we return).
 static void waitForDialog(DialogResult& result)
 {
-    while (!result.ready.load(std::memory_order_acquire)) {
+    while (!result.haveResult.load(std::memory_order_acquire) &&
+           result.callbackCount.load(std::memory_order_acquire) < kMaxDialogCallbacks) {
         SDL_PumpEvents();
         if (s_tickCb) s_tickCb();
         SDL_Delay(8);
@@ -117,7 +164,7 @@ static JSValue js_showOpenFolderDialog(JSContext* ctx, JSValueConst /*this_val*/
     bool allowMany = false;
     if (argc >= 1 && JS_IsString(argv[0])) {
         const char* s = JS_ToCString(ctx, argv[0]);
-        if (s) { defaultLoc = s; JS_FreeCString(ctx, s); }
+        if (s) { defaultLoc = normalizeSeparators(s); JS_FreeCString(ctx, s); }
     }
     if (argc >= 2) {
         allowMany = JS_ToBool(ctx, argv[1]);
@@ -154,7 +201,7 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
     }
     if (argc >= 2 && JS_IsString(argv[1])) {
         const char* s = JS_ToCString(ctx, argv[1]);
-        if (s) { defaultLoc = s; JS_FreeCString(ctx, s); }
+        if (s) { defaultLoc = normalizeSeparators(s); JS_FreeCString(ctx, s); }
     }
 
     SDL_DialogFileFilter sdlFilter;
