@@ -289,6 +289,41 @@ gpu.matmulBackward(A, B, dC, dA, dB);
 gpu.ropeForward(X, headDim, numHeads, seqOffset, 10000.0, Y);
 gpu.ropeBackward(dY, headDim, numHeads, seqOffset, 10000.0, dX);
 
+/**
+ * RoPE with caller-supplied cos/sin tables. Same pair rotation as ropeForward,
+ * but θ is not derived from seqOffset/thetaBase — instead each row reads its
+ * angles from precomputed tables. Use this when the position schedule is
+ * irregular (packed sequences, 2D/3D RoPE) or shared across calls.
+ *   X / Y / dY / dX:    (L, numHeads * headDim)
+ *   cosTbl / sinTbl:    (L, headDim/2) — one angle row per token.
+ *   headDim must be even. Dispatched on X.dtype (FP32 / FP16 / BF16).
+ */
+gpu.ropeApply(X, cosTbl, sinTbl, headDim, numHeads, Y);
+gpu.ropeApplyBackward(dY, cosTbl, sinTbl, headDim, numHeads, dX);
+
+
+// -----------------------------------------------------------------------------
+// AdaLN modulation (DiT / SD3 / Flux)
+// -----------------------------------------------------------------------------
+
+/**
+ * Adaptive-LayerNorm modulation: Y = X * (1 + scale) + shift, with the
+ * per-channel scale / shift broadcast across every token row — the affine
+ * step every DiT block applies after norm().
+ *   X, Y:          (L, D) token activations.
+ *   scale, shift:  length-D vectors ((1,D) or (D,1)), same dtype/device as X.
+ * Y is resized + dtype-set to match X. Dispatched on X.dtype (FP32/FP16/BF16).
+ */
+gpu.modulate(X, scale, shift, Y);
+
+/**
+ * Broadcast channel-wise multiply: Y[l,d] = X[l,d] * v[d] — the DiT residual
+ * gate (`x = x + broadcastMul(sublayerOut, gate)`) and any per-channel
+ * rescale.
+ *   X, Y: (L, D).  v: length-D vector ((1,D) or (D,1)), same dtype/device as X.
+ */
+gpu.broadcastMul(X, v, Y);
+
 
 // -----------------------------------------------------------------------------
 // Reductions
@@ -869,3 +904,228 @@ f.close();
  * tensor's (rows, cols).
  */
 gpu.saveSafetensors('/path/to/out.safetensors', { weight: W, bias: b });
+
+
+// =============================================================================
+// brosoundml audio ops
+// =============================================================================
+//
+// The building blocks of Whisper / STT, TTS, neural-codec and vocoder models:
+// spectral transforms, the 1D convolution family, vocoder/codec activations,
+// codec quantization, resampling, and an autoregressive sampler. brotensor
+// implements this family on the CPU and both GPU backends.
+//
+// Complex tensor layout:
+//   There is no complex dtype. A complex spectrum of C bins over R rows is an
+//   ordinary FP32 (R, 2*C) tensor with the bin axis stored interleaved
+//   [re, im, re, im, ...]; real tensors keep the natural (R, C) shape.
+//
+// CUDA caveat:
+//   Every op below has a CUDA kernel EXCEPT `sampleLogits` — on a CUDA build it
+//   throws a clear error (it runs on the Metal backend). Everything else is
+//   backend-neutral.
+
+
+// -----------------------------------------------------------------------------
+// Spectral / FFT core
+// -----------------------------------------------------------------------------
+//
+// One signal per tensor row. "backward" normalisation (numpy default): the
+// forward transform is unscaled, the inverse is scaled by 1/N. fft / ifft have
+// no explicit backward — the adjoint of y = fft(x) is ifft(grad) scaled by N
+// (and vice versa). rfft / irfft DO have backward ops: their adjoints carry
+// bin weighting that is easy to get wrong by hand.
+
+gpu.fft(x, y);             // complex (R,2*N) -> complex (R,2*N)
+gpu.ifft(x, y);            // complex -> complex, scaled by 1/N
+gpu.rfft(x, y);            // real (R,L) -> half-spectrum complex (R,2*(L/2+1))
+gpu.irfft(x, L, y);        // half-spectrum -> real (R,L); L disambiguates length
+gpu.rfftBackward(dY, L, dX);   // adjoint of rfft; dX real (R,L)
+gpu.irfftBackward(dY, dX);     // adjoint of irfft; dX complex, L from dY.cols
+
+gpu.complexMul(a, b, y);                       // y = a * b per bin
+gpu.complexMulBackward(a, b, dY, dA, dB);      // dA/dB accumulated (pre-zero)
+gpu.complexAbs(z, y);                          // y = |z|, REAL (R,C)
+gpu.complexAbsBackward(z, dY, dZ);             // dZ overwritten
+gpu.complexAngle(z, y);                        // y = atan2(im, re); no backward
+gpu.complexFromPolar(mag, phase, y);           // y = mag * exp(i*phase)
+
+
+// -----------------------------------------------------------------------------
+// STFT / iSTFT
+// -----------------------------------------------------------------------------
+//
+// A length-L real signal is one row of an (N, L) tensor; the complex
+// spectrogram is (N*frames, 2*(nFft/2+1)) with each signal's frame block
+// stacked in order. `window` is a real (1, winLength) tensor; winLength <= nFft.
+// `center` reflect-pads the signal by nFft/2 each side (torch center=True);
+// `normalized` additionally scales by 1/sqrt(nFft). stft and istft are linear
+// but NOT mutual adjoints once the window + COLA normalisation are folded in,
+// so both backward ops are explicit.
+
+gpu.stft(signal, window, N, nFft, hopLength, winLength, center, normalized, spec);
+gpu.istft(spec, window, N, signalLen, nFft, hopLength, winLength,
+          center, normalized, signal);
+gpu.stftBackward(dSpec, window, N, signalLen, nFft, hopLength, winLength,
+                 center, normalized, dSignal);
+gpu.istftBackward(dSignal, window, N, signalLen, nFft, hopLength, winLength,
+                  center, normalized, dSpec);
+
+
+// -----------------------------------------------------------------------------
+// 1D convolution family (NCL)
+// -----------------------------------------------------------------------------
+//
+// Activations are (N, C * L) — the NCHW convention with the height axis
+// dropped; weights are OIL: (C_out, (C_in/groups) * kL). conv1d and its
+// backward halves are conv2d wrappers; conv_transpose1d, causalConv1dUpdate
+// and pad1d are genuine 1D kernels.
+//
+// pad1d `mode`: 0 = zero, 1 = reflect, 2 = replicate.
+
+gpu.pad1dForward(X, N, C, L, padLeft, padRight, mode, Y);
+gpu.pad1dBackward(dY, N, C, L, padLeft, padRight, mode, dX);
+
+gpu.conv1d(X, Wt, /*bias|null*/ null, N, C_in, L, C_out, kL,
+           stride, padding, dilation, groups, Y);
+gpu.conv1dBackwardInput(Wt, dY, N, C_in, L, C_out, kL,
+                        stride, padding, dilation, groups, dX);   // overwrite
+gpu.conv1dBackwardWeight(X, dY, N, C_in, L, C_out, kL,
+                         stride, padding, dilation, groups, dWt); // accumulate
+gpu.conv1dBackwardBias(dY, N, C_out, L_out, dB);                  // accumulate
+
+/** W8A16 1D conv. W_int8 is OIL INT8; scales is (C_out,1) FP32; activations FP16. */
+gpu.conv1dInt8wFp16(X, W_int8, scales, /*bias|null*/ null, N, C_in, L, C_out, kL,
+                    stride, padding, dilation, groups, Y);
+
+/**
+ * 1D transposed convolution — the upsampling primitive of every neural vocoder
+ * (HiFi-GAN, EnCodec/DAC decoders). Weight layout is input-channel-major:
+ * (C_in, (C_out/groups) * kL). `outputPadding` (< stride) disambiguates the
+ * output length, exactly torch's ConvTranspose1d arg.
+ */
+gpu.convTranspose1dForward(X, Wt, /*bias|null*/ null, N, C_in, L, C_out, kL,
+                           stride, padding, outputPadding, dilation, groups, Y);
+gpu.convTranspose1dBackwardInput(Wt, dY, N, C_in, L, C_out, kL,
+                                 stride, padding, outputPadding, dilation,
+                                 groups, dX);                       // overwrite
+gpu.convTranspose1dBackwardWeight(X, dY, N, C_in, L, C_out, kL,
+                                  stride, padding, outputPadding, dilation,
+                                  groups, dWt);                     // accumulate
+gpu.convTranspose1dBackwardBias(dY, N, C_out, L_out, dB);            // accumulate
+
+/**
+ * Causal 1D conv: left-pads the length axis by dilation*(kL-1) then runs a
+ * valid conv1d, so every output sample depends only on inputs at or before it.
+ * `scratch` is a caller-owned GpuTensor reused as the left-padded-input buffer
+ * (resized internally) — passing it in keeps the call allocation-free.
+ */
+gpu.causalConv1d(X, Wt, /*bias|null*/ null, N, C_in, L, C_out, kL,
+                 stride, dilation, groups, scratch, Y);
+
+/**
+ * One streaming step of a causal depthwise conv against a rolling state cache
+ * (streaming Whisper, real-time vocoders, Mamba's short conv). C channels in
+ * and out, one length-kL filter per channel. `state` holds (kL-1)*dilation
+ * samples of history — read AND overwritten; caller zero-initialises it.
+ *   X, Y:  (N, C * L_step)              new samples in / outputs out
+ *   Wt:    (C, kL)                      depthwise filter, one row per channel
+ *   state: (N, C * (kL-1)*dilation)     rolling history
+ */
+gpu.causalConv1dUpdate(X, Wt, /*bias|null*/ null, N, C, L_step, kL, dilation,
+                       state, Y);
+
+
+// -----------------------------------------------------------------------------
+// Vocoder / codec activations (NCL)
+// -----------------------------------------------------------------------------
+
+/**
+ * Snake activation (BigVGAN / DAC vocoder). Per-channel learnable alpha (and
+ * optional beta), broadcast across the (n, l) plane:
+ *   beta == null:  y = x + (1/alpha_c) * sin^2(alpha_c * x)
+ *   beta != null:  y = x + (1/beta_c)  * sin^2(alpha_c * x)
+ *   alpha / beta:  (C,1) or (1,C).  dAlpha / dBeta accumulated (pre-zero).
+ *   dBeta must be non-null exactly when beta is non-null.
+ */
+gpu.snakeForward(X, alpha, /*beta|null*/ null, N, C, L, Y);
+gpu.snakeBackward(X, alpha, /*beta|null*/ null, dY, N, C, L,
+                  dX, dAlpha, /*dBeta|null*/ null);
+
+gpu.eluForward(x, alpha, y);            // EnCodec activation; x>0 ? x : a*(e^x-1)
+gpu.eluBackward(x, dY, alpha, dX);
+gpu.leakyReluForward(x, negativeSlope, y);   // HiFi-GAN activation
+gpu.leakyReluBackward(x, dY, negativeSlope, dX);
+
+
+// -----------------------------------------------------------------------------
+// Codec quantization
+// -----------------------------------------------------------------------------
+//
+// The bottlenecks of neural audio codecs. Both backward ops are the
+// straight-through estimator — a plain identity passthrough (dX = dQuantized).
+
+/**
+ * Vector-quantization encode (VQ-VAE / residual-VQ). For each input row picks
+ * the L2-nearest codeword, emits its index and copies the codeword out.
+ *   x:         (N, D) FP32 input rows.
+ *   codebook:  (K, D) FP32 codewords.
+ *   indices:   (N, 1) INT32 — output, dtype-set to INT32.
+ *   quantized: (N, D) FP32 — output, codebook[indices[n]] per row.
+ */
+gpu.vqEncodeForward(x, codebook, indices, quantized);
+gpu.vqEncodeBackward(dQuantized, dX);
+
+/**
+ * Finite Scalar Quantization (NanoCodec). Each coordinate is snapped to one of
+ * L_d evenly spaced levels; the per-dim indices are packed mixed-radix.
+ *   x:             (N, D) FP32, assumed pre-bounded into [-1, 1].
+ *   levels:        (D, 1) INT32 per-dimension level count (each >= 2).
+ *   quantized:     (N, D) FP32 — output, dequantized values in [-1, 1].
+ *   packedIndices: (N, 1) INT32 — output, the mixed-radix packed code per row.
+ */
+gpu.fsqQuantizeForward(x, levels, quantized, packedIndices);
+gpu.fsqQuantizeBackward(dQuantized, dX);
+
+
+// -----------------------------------------------------------------------------
+// 1D resampling
+// -----------------------------------------------------------------------------
+//
+// Arbitrary-scale resampling along the length axis of an NCL tensor (sample-
+// rate conversion). align_corners=false convention. mode: 0 = nearest,
+// 1 = linear. The backward is the exact adjoint (overwrites dX).
+
+gpu.resample1dForward(X, N, C, L_in, L_out, mode, Y);
+gpu.resample1dBackward(dY, N, C, L_in, L_out, mode, dX);
+
+
+// -----------------------------------------------------------------------------
+// log / exp / round elementwise
+// -----------------------------------------------------------------------------
+//
+// FP32 elementwise scalar maps (log-mel spectrograms, log-domain losses). log
+// and exp backward read the raw forward input x; round backward is the
+// straight-through estimator and needs only dY. All backward ops overwrite dX.
+// The caller owns the x > 0 precondition for log — it is not guarded.
+
+gpu.logForward(x, y);       gpu.logBackward(x, dY, dX);
+gpu.expForward(x, y);       gpu.expBackward(x, dY, dX);
+gpu.roundForward(x, y);     gpu.roundBackward(dY, dX);   // round-half-to-even
+
+
+// -----------------------------------------------------------------------------
+// Autoregressive logit sampling
+// -----------------------------------------------------------------------------
+
+/**
+ * Per-row next-token sampler over an (N, V) logit matrix. Applies, in order:
+ * temperature scaling, softmax, top-k filter, top-p / nucleus filter,
+ * renormalize, inverse-CDF draw. temperature == 0 is deterministic argmax.
+ * `key` / `counter` seed the Philox 4x32-10 RNG (plain numbers, not tensors).
+ *   logits:  (N, V) FP32
+ *   indices: (N, 1) — output, one drawn token id per row.
+ *
+ * No CUDA kernel — runs on the Metal backend; throws on a CUDA build.
+ */
+gpu.sampleLogits(logits, temperature, topK, topP, key, counter, indices);
