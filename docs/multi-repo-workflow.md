@@ -64,7 +64,7 @@ else()
 endif()
 ```
 
-The same pattern is used for bromath, qjsbind, htmlayout, broaudio, bromesh, brogameagent, and brodiffusion.
+The same pattern is used for bromath, qjsbind, htmlayout, broaudio, bromesh, broflora, brogameagent, and brodiffusion.
 
 Note: bromath is pulled in transitively by several siblings (bromesh, brogameagent, etc.). bro's `third_party/CMakeLists.txt` guards the `add_subdirectory` with `if(NOT TARGET bromath)` so the first loader wins — overriding `BROMATH_DIR` only takes effect if bro is the first to add it.
 
@@ -123,7 +123,7 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `brotensor`, `brogameagent`, and `brodiffusion`.
+Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, and `brodiffusion`.
 
 ## Overriding Paths
 
@@ -137,6 +137,7 @@ cmake -B build \
     -DHTMLAYOUT_DIR=/path/to/htmlayout \
     -DBROAUDIO_DIR=/path/to/broaudio \
     -DBROMESH_DIR=/path/to/bromesh \
+    -DBROFLORA_DIR=/path/to/broflora \
     -DBROTENSOR_DIR=/path/to/brotensor \
     -DBROGAMEAGENT_DIR=/path/to/brogameagent \
     -DBRODIFFUSION_DIR=/path/to/brodiffusion
@@ -147,7 +148,7 @@ Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
 ```bash
 cmake -B build -DBROMATH_DIR=none -DQJSBIND_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
-               -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none
+               -DBROFLORA_DIR=none -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none
 ```
 
 ## Apps tree

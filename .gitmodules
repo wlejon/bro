@@ -34,3 +34,6 @@
 [submodule "third_party/brodiffusion"]
 	path = third_party/brodiffusion
 	url = git@github.com:wlejon/brodiffusion.git
+[submodule "third_party/broflora"]
+	path = third_party/broflora
+	url = git@github.com:wlejon/broflora.git
