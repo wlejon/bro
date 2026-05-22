@@ -58,11 +58,14 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 ## Architecture
 
 - **QuickJS** — JavaScript engine (ES2020+).
+- **bromath** — Header-only C++20 math: Vec/Quat/Mat, Color, AABB, easing curves. Used transitively by most siblings. See [bromath](https://github.com/wlejon/bromath).
 - **qjsbind** — Header-only C++20 binding library for exposing C++ classes/functions to QuickJS with automatic type conversion. See [qjsbind](https://github.com/wlejon/qjsbind).
 - **brokit** — Web-standard and system APIs (fetch, streams, storage, fs, crypto, events, and more). See [brokit](https://github.com/wlejon/brokit).
 - **htmlayout** — HTML5 parsing (gumbo), CSS parsing, selector matching, style cascade, and block/inline/flex layout. See [htmlayout](https://github.com/wlejon/htmlayout).
 - **broaudio** — Real-time audio engine. See [broaudio](https://github.com/wlejon/broaudio).
 - **bromesh** — Mesh generation, manipulation, analysis, and I/O. See [bromesh](https://github.com/wlejon/bromesh).
+- **broflora** — Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms. See [broflora](https://github.com/wlejon/broflora).
+- **brotensor** — Tensor type and device-neutral ops; CPU backend always built, CUDA/Metal additive and opt-in. Underpins brogameagent, brolm, and brodiffusion. See [brotensor](https://github.com/wlejon/brotensor).
 - **brogameagent** — Game AI: navmesh, A* pathfinding, steering, perception. See [brogameagent](https://github.com/wlejon/brogameagent).
 - **brolm** — Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion builds on. See [brolm](https://github.com/wlejon/brolm).
 - **brodiffusion** — Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. See [brodiffusion](https://github.com/wlejon/brodiffusion).
