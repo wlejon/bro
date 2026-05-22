@@ -68,6 +68,7 @@ add_library(bro_js STATIC
     tensor_bindings_diffusion.cpp
     tensor_bindings_int8.cpp
     tensor_bindings_safetensors.cpp
+    tensor_bindings_audio.cpp
     diffusion_bindings.cpp
     ai_learn_bindings.cpp
     ai_belief_bindings.cpp

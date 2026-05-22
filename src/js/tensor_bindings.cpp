@@ -981,6 +981,7 @@ void installTensorBindings(JSContext* ctx) {
     installTensorDiffusionOps(ctx, gpuObj);
     installTensorInt8Ops(ctx, gpuObj);
     installTensorSafetensorsOps(ctx, gpuObj);
+    installTensorAudioOps(ctx, gpuObj);
 
     // Install onto bro.tensor.
     JSValue global = JS_GetGlobalObject(ctx);

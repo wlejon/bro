@@ -184,6 +184,7 @@ void installTensorConvOps(JSContext* ctx, JSValue gpuObj);
 void installTensorDiffusionOps(JSContext* ctx, JSValue gpuObj);
 void installTensorInt8Ops(JSContext* ctx, JSValue gpuObj);
 void installTensorSafetensorsOps(JSContext* ctx, JSValue gpuObj);
+void installTensorAudioOps(JSContext* ctx, JSValue gpuObj);
 
 // ─── Common macros used by every TU ────────────────────────────────────────
 // (defined here rather than in each TU so the conventions stay synchronised)
