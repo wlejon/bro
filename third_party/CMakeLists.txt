@@ -150,6 +150,22 @@ else()
     add_subdirectory(brogameagent EXCLUDE_FROM_ALL)
 endif()
 
+# --- brolm (tokenizers + text encoders — diffusion's text frontend) ---
+# Prefer the standalone repo at ../brolm for local development.
+# Falls back to the git submodule at third_party/brolm.
+# MUST be added after brogameagent (which pulls in brotensor + bromath
+# transitively) and before brodiffusion (which depends on brolm). brolm's
+# CMake guards bromath/brotensor with if(NOT TARGET ...) so it reuses the
+# targets added above.
+set(BROLM_DIR "${CMAKE_SOURCE_DIR}/../brolm" CACHE PATH "Path to standalone brolm repo")
+if(EXISTS "${BROLM_DIR}/CMakeLists.txt")
+    message(STATUS "brolm: using standalone repo at ${BROLM_DIR}")
+    add_subdirectory("${BROLM_DIR}" "${CMAKE_BINARY_DIR}/brolm" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "brolm: using submodule at third_party/brolm")
+    add_subdirectory(brolm EXCLUDE_FROM_ALL)
+endif()
+
 # --- brodiffusion (Stable Diffusion 1.5 text-to-image inference) ---
 # Prefer the standalone repo at ../brodiffusion for local development.
 # Falls back to the git submodule at third_party/brodiffusion.

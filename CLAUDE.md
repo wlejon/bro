@@ -114,7 +114,8 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | broflora | `broflora` | Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms (standalone or submodule) |
 | brotensor | `brotensor` | Tensor + ops — one unified `brotensor::Tensor` (runtime `Device` tag), device-neutral ops behind a flat `brotensor::` namespace. CPU backend always built; CUDA + Metal additive/opt-in. Hard dependency of brogameagent (owns the Tensor type + CPU ops); loaded transitively |
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
-| brodiffusion | `brodiffusion` | Diffusion-model text-to-image inference: tokenizer + text encoder + U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. CPU FP32 by default; CUDA/Metal additive. Depends on bromath + brotensor (standalone or submodule) |
+| brolm | `brolm` | Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion consumes. Depends on bromath + brotensor (standalone or submodule) |
+| brodiffusion | `brodiffusion` | Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. Text encoders come from brolm. CPU FP32 by default; CUDA/Metal additive. Depends on bromath + brotensor + brolm (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
 | Skia | `skia` (imported) | Pre-built 2D rasterization binaries, auto-detected |

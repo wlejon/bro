@@ -25,7 +25,7 @@
 #include <brodiffusion/lcm_scheduler.h>
 #include <brodiffusion/flow_match_scheduler.h>
 #include <brodiffusion/model_config.h>
-#include <brodiffusion/tokenizer.h>
+#include <brolm/tokenizer.h>
 #include <brodiffusion/unet.h>
 #include <brodiffusion/version.h>
 
@@ -41,7 +41,7 @@
 
 namespace bdp   = brodiffusion::pipeline;
 namespace bds   = brotensor::safetensors;
-namespace bdc   = brodiffusion::clip;
+namespace bdc   = brolm::clip;
 namespace bdsch = brodiffusion::scheduler;
 
 namespace bro::js {
