@@ -55,15 +55,15 @@ struct PipelineWrapper {
     bool weights_loaded = false;   // guards generate()/prime() before loadWeights
 };
 
-// Cross-attention block count is only meaningful once weights are loaded —
-// num_xattn_blocks() counts the per-block Transformer2D vectors, which
-// load_weights() populates. Always query it live. Flux has no UNet (its DiT
-// denoiser carries no Transformer2D blocks), so unet() would throw — report 0.
+// Denoiser-generic count of traceable / steerable cross-attention blocks for
+// the loaded model. Delegates to Pipeline::num_xattn_blocks(), which routes to
+// the active denoiser: 16 for the SD1.5 UNet, 57 for the Flux DiT (19
+// double-stream + 38 single-stream joint-attention blocks), 0 for a denoiser
+// with no trace support. The count is only meaningful once weights are loaded
+// — it reflects the per-block attention vectors populated by load_weights() —
+// so always query it live.
 static int xattnBlocks(const PipelineWrapper* w) {
-    if (w->pipeline->config().model_class !=
-        brodiffusion::ModelClass::StableDiffusion)
-        return 0;
-    return w->pipeline->unet().num_xattn_blocks();
+    return w->pipeline->num_xattn_blocks();
 }
 
 // A mid-generation state: the working latent + scheduler progress. The
@@ -505,12 +505,11 @@ static JSValue js_state_stepOnce(JSContext* ctx, JSValueConst this_val,
         JSValue biasArr = JS_GetPropertyStr(ctx, ctrl, "attnBias");
         if (!JS_IsUndefined(biasArr) && !JS_IsNull(biasArr)) {
             haveBias = true;
-            // Flux has no UNet cross-attention blocks — n stays 0 so any
+            // Denoiser-generic block count: 16 for the SD1.5 UNet, 57 for the
+            // Flux DiT. A denoiser with no trace support reports 0, so any
             // supplied attnBias array trips the length check below with a
             // clear message instead of throwing past the binding.
-            const int n = (pipe->config().model_class ==
-                           brodiffusion::ModelClass::StableDiffusion)
-                          ? pipe->unet().num_xattn_blocks() : 0;
+            const int n = pipe->num_xattn_blocks();
             std::uint32_t len = 0;
             JSValue lenV = JS_GetPropertyStr(ctx, biasArr, "length");
             JS_ToUint32(ctx, &len, lenV);
@@ -555,8 +554,10 @@ static JSValue js_state_stepOnce(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(ctx, biasArr);
     }
 
-    brodiffusion::unet::UNet::CrossAttnTrace trace;
-    brodiffusion::unet::UNet::CrossAttnTrace* tracePtr = wantTrace ? &trace : nullptr;
+    // Denoiser-generic trace buffer: a vector of (Lq, Lk) attention tensors,
+    // one per cross-attention block, regardless of denoiser type (UNet or DiT).
+    brodiffusion::AttentionTrace trace;
+    brodiffusion::AttentionTrace* tracePtr = wantTrace ? &trace : nullptr;
     const std::vector<const brotensor::Tensor*>* biasPtr = haveBias ? &ptrs : nullptr;
 
     try {
