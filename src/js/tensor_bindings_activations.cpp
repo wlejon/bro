@@ -204,6 +204,62 @@ static JSValue js_buildCausalMaskRow(JSContext* ctx, JSValueConst, int argc, JSV
     return JS_UNDEFINED;
 }
 
+// ─── AdaLN modulation (DiT / SD3 / Flux) ──────────────────────────────────
+//
+// modulate: Y = X*(1+scale) + shift, scale/shift broadcast across token rows
+// — the affine step every DiT block applies after norm(). broadcastMul is the
+// DiT residual gate: Y[l,d] = X[l,d]*v[d]. Both dispatch on X.dtype.
+
+static JSValue js_modulate(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 4) return JS_ThrowTypeError(ctx, "modulate(X,scale,shift,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "modulate"); GT(scale, 1, "modulate");
+    GT(shift, 2, "modulate"); GT(Y, 3, "modulate");
+    nngpu::modulate(*X, *scale, *shift, *Y);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_broadcastMul(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "broadcastMul(X,v,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "broadcastMul"); GT(v, 1, "broadcastMul"); GT(Y, 2, "broadcastMul");
+    nngpu::broadcast_mul(*X, *v, *Y);
+    return JS_UNDEFINED;
+}
+
+// ─── RoPE with precomputed cos/sin tables ─────────────────────────────────
+//
+// Unlike ropeForward (which derives θ from seqOffset + thetaBase), ropeApply
+// takes caller-supplied cos/sin tables — one (row, headDim/2) entry per token.
+// Dispatched on X.dtype.
+
+static JSValue js_ropeApply(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 6) return JS_ThrowTypeError(ctx,
+        "ropeApply(X,cosTbl,sinTbl,headDim,numHeads,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "ropeApply"); GT(cosTbl, 1, "ropeApply"); GT(sinTbl, 2, "ropeApply");
+    int32_t headDim = 0, numHeads = 0;
+    JS_ToInt32(ctx, &headDim,  argv[3]);
+    JS_ToInt32(ctx, &numHeads, argv[4]);
+    GT(Y, 5, "ropeApply");
+    nngpu::rope_apply(*X, *cosTbl, *sinTbl, headDim, numHeads, *Y);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ropeApplyBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 6) return JS_ThrowTypeError(ctx,
+        "ropeApplyBackward(dY,cosTbl,sinTbl,headDim,numHeads,dX)");
+    ENSURE_INIT();
+    GT(dY, 0, "ropeApplyBackward"); GT(cosTbl, 1, "ropeApplyBackward");
+    GT(sinTbl, 2, "ropeApplyBackward");
+    int32_t headDim = 0, numHeads = 0;
+    JS_ToInt32(ctx, &headDim,  argv[3]);
+    JS_ToInt32(ctx, &numHeads, argv[4]);
+    GT(dX, 5, "ropeApplyBackward");
+    nngpu::rope_apply_backward(*dY, *cosTbl, *sinTbl, headDim, numHeads, *dX);
+    return JS_UNDEFINED;
+}
+
 #undef GT
 #undef ENSURE_INIT
 
@@ -237,6 +293,11 @@ void installTensorActivationOps(JSContext* ctx, JSValue gpuObj) {
     JS_SetPropertyStr(ctx, gpuObj, "ropeBackward",      JS_NewCFunction(ctx, js_ropeBackward,      "ropeBackward",      6));
 
     JS_SetPropertyStr(ctx, gpuObj, "buildCausalMaskRow",JS_NewCFunction(ctx, js_buildCausalMaskRow,"buildCausalMaskRow",3));
+
+    JS_SetPropertyStr(ctx, gpuObj, "modulate",          JS_NewCFunction(ctx, js_modulate,          "modulate",          4));
+    JS_SetPropertyStr(ctx, gpuObj, "broadcastMul",      JS_NewCFunction(ctx, js_broadcastMul,      "broadcastMul",      3));
+    JS_SetPropertyStr(ctx, gpuObj, "ropeApply",         JS_NewCFunction(ctx, js_ropeApply,         "ropeApply",         6));
+    JS_SetPropertyStr(ctx, gpuObj, "ropeApplyBackward", JS_NewCFunction(ctx, js_ropeApplyBackward, "ropeApplyBackward", 6));
 }
 
 } // namespace bro::js
