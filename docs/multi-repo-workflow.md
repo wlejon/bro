@@ -2,7 +2,7 @@
 
 bro depends on eleven sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
-An eleventh sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A twelfth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
