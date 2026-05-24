@@ -98,6 +98,19 @@ else()
     add_compile_options(-funsigned-char)
 endif()
 
+# Forward GPU options to brotensor's cache vars before third_party/ is added.
+# brotensor's backend is fixed at the first add_subdirectory() — and broimage
+# (added before brokit) pulls brotensor in earlier than brogameagent does.
+# Without this forwarding, brogameagent's later force-set would have no effect
+# because brotensor's target is already configured CPU-only.
+if(BROGAMEAGENT_WITH_CUDA)
+    set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
+elseif(BROGAMEAGENT_WITH_METAL)
+    set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
+endif()
+
 add_subdirectory(third_party)
 
 add_subdirectory(src)

@@ -54,6 +54,27 @@ if(NOT TARGET bromath)
     endif()
 endif()
 
+# --- broimage (image decode/encode + composable kernels) ---
+# Single home for image work that used to be duplicated across the stack
+# (bro's HTML Image decode, bro.image JS kernels in brokit, brolm/brodiffusion
+# host-side preprocessing). Depends on bromath (header-only, added above) and
+# brotensor (CPU + optional CUDA/Metal). brotensor's backend is decided at
+# first add_subdirectory(), so this block pulls brotensor in here; brogameagent
+# will reuse the same target later via if(NOT TARGET brotensor) guards. The
+# GPU cache vars are forwarded in bro's top-level CMakeLists.txt so a
+# BROGAMEAGENT_WITH_CUDA=ON build still picks the right brotensor backend.
+#
+# Must be added before brokit, because brokit's bro.image kernels delegate
+# into broimage.
+set(BROIMAGE_DIR "${CMAKE_SOURCE_DIR}/../broimage" CACHE PATH "Path to standalone broimage repo")
+if(EXISTS "${BROIMAGE_DIR}/CMakeLists.txt")
+    message(STATUS "broimage: using standalone repo at ${BROIMAGE_DIR}")
+    add_subdirectory("${BROIMAGE_DIR}" "${CMAKE_BINARY_DIR}/broimage" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "broimage: using submodule at third_party/broimage")
+    add_subdirectory(broimage EXCLUDE_FROM_ALL)
+endif()
+
 # --- brokit (JS runtime APIs) ---
 # Prefer the standalone repo at ../brokit for local development.
 # Falls back to the git submodule at third_party/brokit.
@@ -88,8 +109,13 @@ add_subdirectory(SDL EXCLUDE_FROM_ALL)
 add_subdirectory(glad EXCLUDE_FROM_ALL)
 
 # --- stb (single-file image loading + writing) ---
-add_library(stb_image STATIC stb/stb_image.cpp stb/stb_image_write.cpp)
-target_include_directories(stb_image PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/stb)
+# Guarded — broimage (added above) vendors its own stb_image with the same
+# target name, and its own CMake also guards with NOT TARGET stb_image so
+# either order is safe.
+if(NOT TARGET stb_image)
+    add_library(stb_image STATIC stb/stb_image.cpp stb/stb_image_write.cpp)
+    target_include_directories(stb_image PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/stb)
+endif()
 
 # --- broaudio (audio engine library) ---
 # Prefer the standalone repo at ../broaudio for local development.

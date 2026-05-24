@@ -116,6 +116,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
 | brolm | `brolm` | Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion consumes. Depends on bromath + brotensor (standalone or submodule) |
 | brodiffusion | `brodiffusion` | Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. Text encoders come from brolm. CPU FP32 by default; CUDA/Metal additive. Depends on bromath + brotensor + brolm (standalone or submodule) |
+| broimage | `broimage::broimage` | Image decode/encode (stb) + composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric (resize/crop/letterbox/flip/rotate), alpha-correct ops, color/HSV/sRGB, normalization with CLIP/ImageNet/SAM presets, NHWC↔NCHW preproc. Backs `bro.image` JS bindings (via brokit) and host-side preprocessing in brolm/brodiffusion. Depends on bromath + brotensor (standalone or submodule) |
 | brosoundml | `brosoundml` | Audio-ML model inference (TTS / STT / neural codec) composed from brotensor's FP32 audio op family (FFT/STFT, 1D conv, vocoder/codec activations, resampling, AR sampling). Depends on brotensor (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
