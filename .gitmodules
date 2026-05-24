@@ -40,3 +40,6 @@
 [submodule "third_party/brolm"]
 	path = third_party/brolm
 	url = git@github.com:wlejon/brolm.git
+[submodule "third_party/broimage"]
+	path = third_party/broimage
+	url = git@github.com:wlejon/broimage.git
