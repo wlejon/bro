@@ -53,7 +53,7 @@ On macOS, `tests/run_tests.sh` uses `mapfile` and needs bash 4+ (`brew install b
 
 ## Architecture
 
-Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~31K LOC of C++20.
+Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~94K LOC of C++20.
 
 **Stack:** QuickJS (JS engine) + qjsbind (C++/JS bindings) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + broaudio (audio engine) + bromesh (mesh generation/manipulation) + Jolt (physics) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 
@@ -116,6 +116,7 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
 | brolm | `brolm` | Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion consumes. Depends on bromath + brotensor (standalone or submodule) |
 | brodiffusion | `brodiffusion` | Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. Text encoders come from brolm. CPU FP32 by default; CUDA/Metal additive. Depends on bromath + brotensor + brolm (standalone or submodule) |
+| brosoundml | `brosoundml` | Audio-ML model inference (TTS / STT / neural codec) composed from brotensor's FP32 audio op family (FFT/STFT, 1D conv, vocoder/codec activations, resampling, AR sampling). Depends on brotensor (standalone or submodule) |
 | Jolt Physics | `Jolt::Jolt` | Rigid body physics engine (submodule) |
 | SDL3 | `SDL3::SDL3` | Windowing, input, GPU display (submodule, static) |
 | Skia | `skia` (imported) | Pre-built 2D rasterization binaries, auto-detected |

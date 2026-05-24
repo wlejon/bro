@@ -65,10 +65,11 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 - **broaudio** — Real-time audio engine. See [broaudio](https://github.com/wlejon/broaudio).
 - **bromesh** — Mesh generation, manipulation, analysis, and I/O. See [bromesh](https://github.com/wlejon/bromesh).
 - **broflora** — Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms. See [broflora](https://github.com/wlejon/broflora).
-- **brotensor** — Tensor type and device-neutral ops; CPU backend always built, CUDA/Metal additive and opt-in. Underpins brogameagent, brolm, and brodiffusion. See [brotensor](https://github.com/wlejon/brotensor).
+- **brotensor** — Tensor type and device-neutral ops; CPU backend always built, CUDA/Metal additive and opt-in. Underpins brogameagent, brolm, brodiffusion, and brosoundml. See [brotensor](https://github.com/wlejon/brotensor).
 - **brogameagent** — Game AI: navmesh, A* pathfinding, steering, perception. See [brogameagent](https://github.com/wlejon/brogameagent).
 - **brolm** — Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion builds on. See [brolm](https://github.com/wlejon/brolm).
 - **brodiffusion** — Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. See [brodiffusion](https://github.com/wlejon/brodiffusion).
+- **brosoundml** — Audio-ML model inference (TTS / STT / neural codec) built on brotensor's FP32 audio op family. See [brosoundml](https://github.com/wlejon/brosoundml).
 - **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
 - **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs.
 - **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU (D3D12 on Windows). The Skia-rasterized UI texture and the 3D scene layer are composited together through SDL_GPU pipelines.
@@ -131,7 +132,7 @@ For more elaborate setups — multiple apps under a project root with shared `li
 
 Annotated `.js` files in [docs/](docs/) — load them in your editor for JSDoc on every binding:
 
-`audio-api.js`, `mesh-api.js`, `scene-api.js`, `physics-api.js`, `terrain-api.js`, `ai-game-api.js`, `net-api.js`, `noise-api.js`, `worker-api.js`, `dialogs-api.js`, `menu-api.js`, `gizmo-api.js`, `crosshair-api.js`, `brokit-api.js`.
+`audio-api.js`, `mesh-api.js`, `flora-api.js`, `math-api.js`, `scene-api.js`, `lighting-api.js`, `physics-api.js`, `terrain-api.js`, `ai-game-api.js`, `tensor-api.js`, `diffusion-api.js`, `net-api.js`, `noise-api.js`, `worker-api.js`, `image-api.js`, `imagebitmap-api.js`, `video-api.js`, `dialogs-api.js`, `menu-api.js`, `gizmo-api.js`, `crosshair-api.js`, `brokit-api.js`.
 
 Plus [settings.md](docs/settings.md) (settings + action binding) and [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless).
 
