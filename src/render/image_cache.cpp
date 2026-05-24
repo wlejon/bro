@@ -7,7 +7,7 @@
 #include <include/core/SkData.h>
 #include <include/core/SkImageInfo.h>
 
-#include <stb_image.h>
+#include "broimage/decode.h"
 
 namespace bro::render {
 
@@ -32,20 +32,26 @@ sk_sp<SkImage> decodeImageBytes(const void* data, size_t len) {
         if (image) return image;
     }
 
-    // Fallback: decode via stb_image. Our Skia build may not link PNG/JPEG codecs.
-    int iw = 0, ih = 0, comp = 0;
-    unsigned char* pixels = stbi_load_from_memory(
-        static_cast<const stbi_uc*>(data), static_cast<int>(len), &iw, &ih, &comp, 4);
-    if (!pixels) {
-        LOG_WARN("decodeImageBytes: decode failed (len=%zu)", len);
+    // Fallback: decode via broimage (stb-backed). Our Skia build may not link
+    // PNG/JPEG codecs. Heap-allocated so the pixel buffer outlives this scope —
+    // SkBitmap::installPixels references the bytes zero-copy, and the release
+    // callback frees the Image when Skia is done with it.
+    auto* img = new broimage::Image();
+    std::string err;
+    if (!broimage::decode_memory(static_cast<const uint8_t*>(data), len, *img, &err)) {
+        LOG_WARN("decodeImageBytes: decode failed (len=%zu): %s", len, err.c_str());
+        delete img;
         return nullptr;
     }
 
-    SkImageInfo info = SkImageInfo::Make(iw, ih, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+    SkImageInfo info = SkImageInfo::Make(img->width, img->height,
+                                         kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
     SkBitmap bmp;
-    if (!bmp.installPixels(info, pixels, iw * 4,
-            [](void* px, void*) { stbi_image_free(px); }, nullptr)) {
-        stbi_image_free(pixels);
+    if (!bmp.installPixels(info, img->pixels.data(), img->width * 4,
+            [](void*, void* ctx) {
+                delete static_cast<broimage::Image*>(ctx);
+            }, img)) {
+        delete img;
         return nullptr;
     }
     bmp.setImmutable();

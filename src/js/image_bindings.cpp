@@ -11,7 +11,7 @@
 #include "util/asset_mounts.h"
 #include "util/log.h"
 
-#include <stb_image.h>
+#include "broimage/decode.h"
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -64,24 +64,20 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
     img->src = s;
     JS_FreeCString(ctx, s);
 
-    // Resolve path and load with stb_image
+    // Resolve path and decode via broimage (stb-backed; same RGBA-forced output
+    // and 1x1 white fallback the JS contract expects).
     std::string path = resolvePath(img->src);
-    int w = 0, h = 0, channels = 0;
-    unsigned char* pixels = stbi_load(path.c_str(), &w, &h, &channels, 4); // Force RGBA
-    if (pixels) {
-        img->width = w;
-        img->height = h;
-        img->pixels.assign(pixels, pixels + w * h * 4);
-        stbi_image_free(pixels);
-        img->complete = true;
-        LOG_INFO("Image loaded: %s (%dx%d)", img->src.c_str(), w, h);
+    broimage::Image decoded;
+    std::string err;
+    const bool ok = broimage::decode_file(path, decoded, &err);
+    img->width = decoded.width;
+    img->height = decoded.height;
+    img->pixels = std::move(decoded.pixels);
+    img->complete = true;
+    if (ok) {
+        LOG_INFO("Image loaded: %s (%dx%d)", img->src.c_str(), img->width, img->height);
     } else {
-        // Failed to load — use 1x1 white fallback
-        LOG_WARN("Image load failed: %s (%s)", path.c_str(), stbi_failure_reason());
-        img->width = 1;
-        img->height = 1;
-        img->pixels = {255, 255, 255, 255};
-        img->complete = true;
+        LOG_WARN("Image load failed: %s (%s)", path.c_str(), err.c_str());
     }
 
     // Fire onload callback if set
