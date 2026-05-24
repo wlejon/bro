@@ -920,10 +920,7 @@ gpu.saveSafetensors('/path/to/out.safetensors', { weight: W, bias: b });
 //   ordinary FP32 (R, 2*C) tensor with the bin axis stored interleaved
 //   [re, im, re, im, ...]; real tensors keep the natural (R, C) shape.
 //
-// CUDA caveat:
-//   Every op below has a CUDA kernel EXCEPT `sampleLogits` — on a CUDA build it
-//   throws a clear error (it runs on the Metal backend). Everything else is
-//   backend-neutral.
+// All ops below are backend-neutral — CPU, CUDA and Metal each have a kernel.
 
 
 // -----------------------------------------------------------------------------
@@ -1125,7 +1122,5 @@ gpu.roundForward(x, y);     gpu.roundBackward(dY, dX);   // round-half-to-even
  * `key` / `counter` seed the Philox 4x32-10 RNG (plain numbers, not tensors).
  *   logits:  (N, V) FP32
  *   indices: (N, 1) — output, one drawn token id per row.
- *
- * No CUDA kernel — runs on the Metal backend; throws on a CUDA build.
  */
 gpu.sampleLogits(logits, temperature, topK, topP, key, counter, indices);
