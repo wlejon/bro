@@ -10,8 +10,8 @@
 namespace bro::render {
 
 // Decode encoded image bytes (PNG/JPEG/etc) into an SkImage. Tries Skia's
-// built-in codecs first, then falls back to stb_image when the Skia build
-// lacks the codec. Returns nullptr on failure.
+// built-in codecs first, then falls back to broimage::decode_memory when
+// the Skia build lacks the codec. Returns nullptr on failure.
 sk_sp<SkImage> decodeImageBytes(const void* data, size_t len);
 
 // Per-renderer cache of decoded SkImages, keyed by a stable, process-unique

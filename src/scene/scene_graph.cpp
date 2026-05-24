@@ -702,7 +702,7 @@ void main() {
     vec3 d  = cubeDir(uFace, uv);
     float phi   = atan(d.z, d.x);
     float theta = asin(clamp(d.y, -1.0, 1.0));
-    // HDRIs from stb_image are uploaded top-down (row 0 = north pole),
+    // HDRIs from broimage are uploaded top-down (row 0 = north pole),
     // so the +Y direction must read v=0. Hence 0.5 - theta/PI.
     vec2 eq = vec2(phi / TWO_PI + 0.5, 0.5 - theta / PI);
     vec3 s = texture(uEquirect, eq).rgb;
@@ -1157,7 +1157,7 @@ void main() {
         float a = c.a * alpha;
         FragColor = vec4(c.rgb * a, a);
     } else if (uShapeMode == 4) {
-        // Textured with straight-alpha source (sprite RGBA from stb_image).
+        // Textured with straight-alpha source (sprite RGBA from broimage).
         vec4 tex = texture(uTex, vTexUV);
         float a = tex.a * uColor.a;
         if (a <= 0.0) discard;

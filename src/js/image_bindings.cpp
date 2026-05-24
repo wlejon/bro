@@ -54,7 +54,7 @@ static std::string resolvePath(const std::string& src) {
 // Complex property setters/methods needing raw signatures
 // -------------------------------------------------------------------------
 
-// src setter — loads image via stb_image and fires onload
+// src setter — decodes the image via broimage and fires onload
 static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
                                 int /*argc*/, JSValueConst* argv) {
     auto* img = qjsbind::unwrap<ID>(ctx, this_val);
@@ -155,7 +155,7 @@ void ImageBindings::install(JSContext* ctx, const std::string& basePath,
         .get("naturalHeight", [](ID* self) -> int { return self->height; })
         .get("complete", [](ID* self) -> bool { return self->complete; })
         .get("src", [](ID* self) -> std::string { return self->src; })
-        // src setter is complex (stb_image load + onload callback) — use prop with raw setter
+        // src setter is complex (decode + onload callback) — use prop with raw setter
         // We can't use .prop() with a raw setter, so register src getter above and
         // override with DefinePropertyGetSet below after the chain.
         .get("onload", [](ID* self, JSContext* ctx) -> JSValue {
@@ -213,7 +213,7 @@ JSValue ImageBindings::createImage(JSContext* ctx) {
 }
 
 bool ImageBindings::getImagePixels(JSValue val, ImagePixels& out) {
-    // 1) Loaded Image (PNG/JPG decoded via stb_image, or 1x1 fallback).
+    // 1) Loaded Image (PNG/JPG decoded via broimage, or 1x1 fallback).
     if (auto* img = qjsbind::unwrap<ID>(nullptr, val)) {
         if (img->complete && !img->pixels.empty()) {
             out.data   = img->pixels.data();
