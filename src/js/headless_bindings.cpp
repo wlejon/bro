@@ -10,13 +10,7 @@
 
 #include <qjsbind/qjsbind.h>
 
-#define STB_IMAGE_WRITE_STATIC
-#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
-// stb_image_write.h is implemented elsewhere (skia_backend / raster_renderer);
-// we only need the prototype here.
-extern "C" int stbi_write_png(char const* filename, int w, int h, int comp,
-                              const void* data, int stride_in_bytes);
-#endif
+#include "broimage/encode.h"
 
 #include <string>
 #include <sstream>
@@ -133,7 +127,7 @@ static JSValue js_screenshotCanvas(JSContext* ctx, JSValueConst, int argc, JSVal
     auto pixels = cs->getImageData(0, 0, w, h);
     if (pixels.empty()) { cleanup(); return JS_ThrowInternalError(ctx, "screenshotCanvas: read failed"); }
 
-    bool ok = stbi_write_png(path, w, h, 4, pixels.data(), w * 4) != 0;
+    bool ok = broimage::encode_png_file(path, pixels.data(), w, h, 4);
     cleanup();
     if (ok) return JS_TRUE;
     return JS_ThrowInternalError(ctx, "screenshotCanvas: write failed");

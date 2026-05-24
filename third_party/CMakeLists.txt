@@ -108,15 +108,6 @@ add_subdirectory(SDL EXCLUDE_FROM_ALL)
 # --- glad2 (OpenGL 3.3 Core loader) ---
 add_subdirectory(glad EXCLUDE_FROM_ALL)
 
-# --- stb (single-file image loading + writing) ---
-# Guarded — broimage (added above) vendors its own stb_image with the same
-# target name, and its own CMake also guards with NOT TARGET stb_image so
-# either order is safe.
-if(NOT TARGET stb_image)
-    add_library(stb_image STATIC stb/stb_image.cpp stb/stb_image_write.cpp)
-    target_include_directories(stb_image PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/stb)
-endif()
-
 # --- broaudio (audio engine library) ---
 # Prefer the standalone repo at ../broaudio for local development.
 # Falls back to the git submodule at third_party/broaudio.

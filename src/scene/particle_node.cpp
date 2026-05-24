@@ -2,7 +2,7 @@
 #include "scene/scene_graph.h"
 #include "canvas/canvas_scene.h"
 
-#include <stb_image.h>
+#include "broimage/decode.h"
 
 #include <algorithm>
 #include <cmath>
@@ -63,12 +63,11 @@ void ParticleNode::burst(int n) {
 
 void ParticleNode::ensureTextureLoaded() {
     if (texLoaded_ || texPath_.empty()) return;
-    int w = 0, h = 0, channels = 0;
-    unsigned char* data = stbi_load(texPath_.c_str(), &w, &h, &channels, 4);
-    if (data) {
-        texW_ = w; texH_ = h;
-        texPixels_.assign(data, data + w * h * 4);
-        stbi_image_free(data);
+    broimage::Image img;
+    if (broimage::decode_file(texPath_, img)) {
+        texW_ = img.width;
+        texH_ = img.height;
+        texPixels_ = std::move(img.pixels);
     }
     texLoaded_ = true;
 }

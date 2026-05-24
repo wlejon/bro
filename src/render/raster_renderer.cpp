@@ -21,7 +21,7 @@
 #include <include/effects/SkGradient.h>
 #include <include/core/SkMaskFilter.h>
 #include <include/core/SkBlurTypes.h>
-#include <stb_image_write.h>
+#include "broimage/encode.h"
 #ifdef _WIN32
 #include <include/ports/SkTypeface_win.h>
 #elif defined(__APPLE__)
@@ -702,7 +702,7 @@ bool RasterRenderer::saveScreenshot(const std::string& path) {
         }
     }
 
-    return stbi_write_png(path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
+    return broimage::encode_png_file(path, rgba.data(), w, h, 4);
 }
 
 std::vector<uint8_t> RasterRenderer::capturePixels() {

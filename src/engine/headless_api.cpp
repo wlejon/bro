@@ -30,7 +30,7 @@
 
 #include <broaudio/engine.h>
 
-#include <stb_image_write.h>
+#include "broimage/encode.h"
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
@@ -449,11 +449,11 @@ bool Engine::screenshot(const std::string& path) {
         auto pixels = renderUnifiedToPixels();
         if (pixels.empty()) return false;
         int w = viewportWidth_, h = viewportHeight_;
-        return stbi_write_png(path.c_str(), w, h, 4, pixels.data(), w * 4) != 0;
+        return broimage::encode_png_file(path, pixels.data(), w, h, 4);
     }
 
     // CPU path: fire rAF (with WebGL FBO bound), then draw directly to the
-    // raster Skia surface and save via stbi.
+    // raster Skia surface and save via broimage.
     {
         webgl::WebGL2RenderingContext* activeWebGL = nullptr;
         if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
@@ -585,7 +585,7 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
         memcpy(dst, src, cw * 4);
     }
 
-    return stbi_write_png(path.c_str(), cw, ch, 4, cropped.data(), cw * 4) != 0;
+    return broimage::encode_png_file(path, cropped.data(), cw, ch, 4);
 }
 
 dom::Element* Engine::querySelector(const std::string& selector) const {

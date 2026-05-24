@@ -6,7 +6,7 @@
 #include "util/log.h"
 #include "brogameagent/world.h"
 
-#include <stb_image.h>
+#include "broimage/decode.h"
 
 #include <algorithm>
 #include <cmath>
@@ -2110,27 +2110,29 @@ bool SceneGraph::loadEnvironment(const std::string& hdrPath) {
         return true;
     }
 
-    int w = 0, h = 0, ch = 0;
-    // stbi_loadf returns top-down float RGB(A); the convert shader's UV
-    // mapping (`0.5 - theta/PI`) is paired with this orientation.
-    float* data = stbi_loadf(hdrPath.c_str(), &w, &h, &ch, 3);
-    if (!data) {
-        LOG_ERROR("loadEnvironment: stbi_loadf failed for '%s': %s",
-                  hdrPath.c_str(), stbi_failure_reason());
+    // broimage::decode_file_f32 returns top-down float RGBA (4 channels — the
+    // alpha is unused by the cubemap conv shader, which samples .rgb). The
+    // shader's UV mapping (`0.5 - theta/PI`) is paired with this orientation.
+    broimage::ImageF32 hdr;
+    std::string err;
+    if (!broimage::decode_file_f32(hdrPath, hdr, &err)) {
+        LOG_ERROR("loadEnvironment: decode_file_f32 failed for '%s': %s",
+                  hdrPath.c_str(), err.c_str());
         return false;
     }
+    const int w = hdr.width;
+    const int h = hdr.height;
 
     // Upload the equirect as a temp 2D float texture.
     GLuint equirectTex = 0;
     glGenTextures(1, &equirectTex);
     glBindTexture(GL_TEXTURE_2D, equirectTex);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0, GL_RGB, GL_FLOAT, data);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, hdr.pixels.data());
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    stbi_image_free(data);
 
     // (Re)allocate the destination cubemap. 1024² per face matches a 4k
     // equirect's angular density (~11 texels/deg) so we don't downsample

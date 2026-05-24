@@ -4,8 +4,7 @@
 #include "svg/svg_renderer.h"
 #include "util/log.h"
 
-#include <stb_image.h>
-#include <stb_image_write.h>
+#include "broimage/encode.h"
 
 #include <cstring>
 #include <sstream>
@@ -1061,7 +1060,7 @@ bool SkiaRenderer::saveScreenshot(const std::string& path) {
         }
     }
 
-    return stbi_write_png(path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
+    return broimage::encode_png_file(path, rgba.data(), w, h, 4);
 }
 
 std::vector<uint8_t> SkiaRenderer::capturePixels() {

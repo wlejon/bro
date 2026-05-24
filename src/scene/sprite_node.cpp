@@ -2,7 +2,7 @@
 #include "scene/scene_graph.h"
 #include "canvas/canvas_scene.h"
 
-#include <stb_image.h>
+#include "broimage/decode.h"
 
 #include <algorithm>
 
@@ -139,13 +139,11 @@ void SpriteNode::materializeBillboard() {
     // this, world-anchored sprites that never went through the 2D path
     // would never have pixels in time for the billboard pass.
     if (!imageLoaded_ && !imagePath_.empty()) {
-        int w, h, channels;
-        unsigned char* data = stbi_load(imagePath_.c_str(), &w, &h, &channels, 4);
-        if (data) {
-            imgW_ = w;
-            imgH_ = h;
-            pixels_.assign(data, data + w * h * 4);
-            stbi_image_free(data);
+        broimage::Image img;
+        if (broimage::decode_file(imagePath_, img)) {
+            imgW_ = img.width;
+            imgH_ = img.height;
+            pixels_ = std::move(img.pixels);
             textureDirty_ = true;
         }
         imageLoaded_ = true;
@@ -204,13 +202,11 @@ void SpriteNode::onRender(SceneGraph& graph) {
 
     // Lazy-load image from path
     if (!imageLoaded_ && !imagePath_.empty()) {
-        int w, h, channels;
-        unsigned char* data = stbi_load(imagePath_.c_str(), &w, &h, &channels, 4);
-        if (data) {
-            imgW_ = w;
-            imgH_ = h;
-            pixels_.assign(data, data + w * h * 4);
-            stbi_image_free(data);
+        broimage::Image img;
+        if (broimage::decode_file(imagePath_, img)) {
+            imgW_ = img.width;
+            imgH_ = img.height;
+            pixels_ = std::move(img.pixels);
         }
         imageLoaded_ = true;
     }

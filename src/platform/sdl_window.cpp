@@ -3,7 +3,7 @@
 
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
-#include <stb_image.h>
+#include "broimage/decode.h"
 #include <stdexcept>
 
 namespace bro::platform {
@@ -146,23 +146,22 @@ std::vector<DisplayModeInfo> Window::getDisplayModes() const {
 
 void Window::setIcon(const std::string& pngPath) {
     if (!m_window) return;
-    int w = 0, h = 0, ch = 0;
-    unsigned char* px = stbi_load(pngPath.c_str(), &w, &h, &ch, 4);
-    if (!px) {
-        LOG_INFO("Window icon: could not load '%s' (%s)", pngPath.c_str(), stbi_failure_reason());
+    broimage::Image img;
+    std::string err;
+    if (!broimage::decode_file(pngPath, img, &err)) {
+        LOG_INFO("Window icon: could not load '%s' (%s)", pngPath.c_str(), err.c_str());
         return;
     }
-    SDL_Surface* surf = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_RGBA32, px, w * 4);
+    SDL_Surface* surf = SDL_CreateSurfaceFrom(img.width, img.height,
+        SDL_PIXELFORMAT_RGBA32, img.pixels.data(), img.width * 4);
     if (!surf) {
         LOG_ERROR("Window icon: SDL_CreateSurfaceFrom failed: %s", SDL_GetError());
-        stbi_image_free(px);
         return;
     }
     if (!SDL_SetWindowIcon(m_window, surf)) {
         LOG_ERROR("Window icon: SDL_SetWindowIcon failed: %s", SDL_GetError());
     }
     SDL_DestroySurface(surf);
-    stbi_image_free(px);
 }
 
 SDL_GLContext Window::createSharedContext() {

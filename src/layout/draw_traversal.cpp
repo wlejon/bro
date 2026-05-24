@@ -22,7 +22,7 @@
 #include <functional>
 #include <span>
 #include <sstream>
-#include <stb_image.h>
+#include "broimage/decode.h"
 
 
 namespace bro::layout {
@@ -2441,7 +2441,7 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
             }();
         int w = 0, h = 0, comp = 0;
         if (!bytes.empty() &&
-            stbi_info_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &comp)) {
+            broimage::probe_dimensions_memory(bytes.data(), bytes.size(), &w, &h, &comp)) {
             img.width = w;
             img.height = h;
         }
@@ -2483,7 +2483,7 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
     ifs.read(reinterpret_cast<char*>(img.data.data()), fileSize);
 
     int w = 0, h = 0, comp = 0;
-    if (stbi_info_from_memory(img.data.data(), static_cast<int>(img.data.size()), &w, &h, &comp)) {
+    if (broimage::probe_dimensions_memory(img.data.data(), img.data.size(), &w, &h, &comp)) {
         img.width = w;
         img.height = h;
     }

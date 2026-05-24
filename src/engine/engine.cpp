@@ -77,8 +77,6 @@
 #include "util/log.h"
 #include "util/time.h"
 
-#include <stb_image_write.h>
-
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkPaint.h>
