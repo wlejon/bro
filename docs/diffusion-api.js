@@ -147,6 +147,36 @@ class Pipeline {
   applyLora(path, scale) {}
 
   /**
+   * Register a ControlNet safetensors file. SD1.5 only — throws on Flux. Call
+   * after loadWeights(); stackable (call repeatedly to register multiple
+   * nets). The returned index is the position into GenerateOptions.controls
+   * and the addressing key for removeControlNet(). LCM and trace mode both
+   * work alongside ControlNets; INT8 + trace remains unsupported.
+   *
+   * @param {string} path  - ControlNet .safetensors file
+   * @param {object} [cfg] - non-default architecture overrides for unusual
+   *        checkpoints. The HF lllyasviel/sd-controlnet-* zoo uses defaults.
+   * @param {number} [cfg.inChannels]          - latent input channels (default 4)
+   * @param {number} [cfg.controlChannels]     - control image channels (default 3)
+   * @param {number} [cfg.layersPerBlock]      - resnet layers per down block (default 2)
+   * @param {number} [cfg.crossAttentionDim]   - CLIP context dim (default 768)
+   * @param {number} [cfg.transformerNumHeads] - transformer heads (default 8)
+   * @returns {number} index of the newly registered ControlNet
+   */
+  addControlNet(path, cfg) {}
+
+  /**
+   * Drop one registered ControlNet by index. Subsequent indices shift down.
+   * @param {number} index
+   */
+  removeControlNet(index) {}
+
+  /**
+   * Drop every registered ControlNet.
+   */
+  clearControlNets() {}
+
+  /**
    * One-shot text-to-image generation. Blocking — runs the full denoising
    * loop synchronously. Intended for a Worker thread; on the main thread use
    * the step-wise prime()/stepOnce()/decode() API so the event loop stays
@@ -194,9 +224,12 @@ class Pipeline {
    * is 'StableDiffusion' or 'Flux'; `scheduler` is 'ddim', 'lcm', or
    * 'flowmatch'. `timeCondProjDim`, `quantizeWeights`, and `numXAttnBlocks`
    * describe the SD1.5 U-Net and read 0/false for a Flux model.
+   * `numControlNets` is the current registered ControlNet count and
+   * `hasControlNet` is true iff that count is > 0.
    * @returns {{modelClass:string, scheduler:string, timeCondProjDim:number,
    *            quantizeWeights:boolean, numXAttnBlocks:number,
-   *            weightsLoaded:boolean}}
+   *            weightsLoaded:boolean, numControlNets:number,
+   *            hasControlNet:boolean}}
    */
   config() {}
 }
@@ -216,6 +249,48 @@ class Pipeline {
 //                           Pass a BigInt for seeds above 2^53.
 //   includeFp32    boolean  generate()/decode() only — also attach the raw
 //                           NCHW FP32 buffer ([-1,1]) to the result as `fp32`.
+//
+//   ── img2img / inpaint (SD1.5 only) ───────────────────────────────────────
+//   initImagePath  string   if set, prime() VAE-encodes this image and noises
+//                           it to the appropriate point in the schedule
+//                           instead of starting from pure Gaussian noise.
+//                           Decoded by broimage and resized to width×height.
+//   strength       number   0..1 — fraction of the schedule used for
+//                           denoising; higher = more freedom from the init.
+//                           Default 0.8. Ignored when initImagePath is empty.
+//   vaeEncodeSample boolean false (default) = use the VAE mean; true = sample
+//                           mean + exp(0.5*logvar)*eps from the schedule's
+//                           Philox stream. Ignored when initImagePath is empty.
+//   maskImagePath  string   inpaint mask path. Requires initImagePath. White
+//                           (>=128) = inpaint, black = keep. The unmasked
+//                           region is re-noised to the next timestep at each
+//                           step except the final one.
+//
+//   ── ControlNet (SD1.5 only) ──────────────────────────────────────────────
+//   controls       Array    one entry per registered ControlNet, in
+//                           registration order. Length must equal
+//                           pipeline.numControlNets() (brodiffusion throws
+//                           otherwise). Each entry:
+//                             imagePath   string   conditioning image path
+//                             scale       number   per-net conditioning_scale
+//                                                  (default 1.0; 0.0 disables)
+//                             startStep   number   schedule fraction in [0,1)
+//                                                  at which this net begins
+//                                                  contributing (default 0.0)
+//                             endStep     number   schedule fraction in (0,1]
+//                                                  at which this net stops
+//                                                  (default 1.0; half-open)
+//
+//   ── noise control (advanced) ─────────────────────────────────────────────
+//   noiseSource    string   'internal' (default, brotensor Philox) or
+//                           'torch' (bit-compatible with torch.randn for a
+//                           seeded reference run). Ignored when initNoise or
+//                           initImagePath is set.
+//   initNoise      Float32Array   explicit initial latent noise in raw N(0,1)
+//                           units, NCHW flat, length C_lat*(H/8)*(W/8).
+//                           Overrides noiseSource; cannot combine with
+//                           initImagePath. The scheduler's init_noise_sigma
+//                           is still applied on top.
 
 
 // -----------------------------------------------------------------------------

@@ -20,6 +20,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include <brodiffusion/pipeline.h>
+#include <brodiffusion/controlnet.h>
 #include <brotensor/safetensors.h>
 #include <brodiffusion/scheduler.h>
 #include <brodiffusion/lcm_scheduler.h>
@@ -166,6 +167,10 @@ static std::vector<float> downloadTensorFloats(const brotensor::Tensor& t) {
 
 // Map a JS opts object onto brodiffusion's GenerateOptions (defaults preserved
 // for absent keys). Shared by generate() and prime().
+//
+// The `controls` array maps one-to-one onto registered ControlNets — its
+// length must equal pipeline.numControlNets() at prime time. brodiffusion
+// validates this and throws clearly, so we don't pre-check here.
 static bdp::GenerateOptions parseGenerateOptions(JSContext* ctx, JSValueConst v) {
     bdp::GenerateOptions o;
     if (!JS_IsObject(v)) return o;
@@ -175,6 +180,62 @@ static bdp::GenerateOptions parseGenerateOptions(JSContext* ctx, JSValueConst v)
     getNum(ctx, v, "guidanceScale", o.guidance_scale);
     getStr(ctx, v, "negativePrompt", o.negative_prompt);
     getSeed(ctx, v, "seed", o.seed);
+
+    // ── img2img / inpaint ────────────────────────────────────────────────
+    getStr(ctx, v, "initImagePath", o.init_image_path);
+    getNum(ctx, v, "strength",      o.strength);
+    o.vae_encode_sample = getBool(ctx, v, "vaeEncodeSample", o.vae_encode_sample);
+    getStr(ctx, v, "maskImagePath", o.mask_image_path);
+
+    // ── noise source ─────────────────────────────────────────────────────
+    // 'internal' (default) or 'torch'. Ignored when initNoise / initImagePath
+    // is set; brodiffusion documents the precedence.
+    {
+        std::string ns;
+        if (getStr(ctx, v, "noiseSource", ns)) {
+            if (ns == "torch")    o.noise_source = bdp::NoiseSource::Torch;
+            else if (ns == "internal") o.noise_source = bdp::NoiseSource::Internal;
+        }
+    }
+    // initNoise: Float32Array of raw N(0,1) values, NCHW flat. Copied out of
+    // the typed array into the vector brodiffusion will consume.
+    {
+        JSValue nv = JS_GetPropertyStr(ctx, v, "initNoise");
+        if (!JS_IsUndefined(nv) && !JS_IsNull(nv)) {
+            std::size_t cnt = 0;
+            const float* fp = getFloatArray(ctx, nv, cnt);
+            if (fp && cnt > 0) o.init_noise.assign(fp, fp + cnt);
+        }
+        JS_FreeValue(ctx, nv);
+    }
+
+    // ── ControlNet inputs ────────────────────────────────────────────────
+    // [{ imagePath, scale?, startStep?, endStep? }, ...]; one entry per
+    // registered net. Defaults from brodiffusion's ControlNetInput are kept
+    // when fields are absent (scale=1.0, startStep=0.0, endStep=1.0).
+    {
+        JSValue cv = JS_GetPropertyStr(ctx, v, "controls");
+        if (JS_IsArray(cv)) {
+            std::uint32_t n = 0;
+            JSValue lenV = JS_GetPropertyStr(ctx, cv, "length");
+            JS_ToUint32(ctx, &n, lenV);
+            JS_FreeValue(ctx, lenV);
+            o.controls.reserve(n);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, cv, i);
+                bdp::ControlNetInput ci;
+                if (JS_IsObject(e)) {
+                    getStr(ctx, e, "imagePath", ci.image_path);
+                    getNum(ctx, e, "scale",     ci.scale);
+                    getNum(ctx, e, "startStep", ci.start_step);
+                    getNum(ctx, e, "endStep",   ci.end_step);
+                }
+                o.controls.push_back(std::move(ci));
+                JS_FreeValue(ctx, e);
+            }
+        }
+        JS_FreeValue(ctx, cv);
+    }
     return o;
 }
 
@@ -370,6 +431,77 @@ static JSValue js_pipeline_applyLora(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// addControlNet(path) -> number
+// addControlNet(path, cfg) -> number
+//   Register a ControlNet safetensors file. Returns the index used in
+//   GenerateOptions.controls. `cfg` is the optional ControlNetConfig — only
+//   needed for non-default checkpoint shapes; today we only forward a
+//   couple of fields that matter for SD1.5 zoo variants.
+// SD1.5 only — brodiffusion throws on Flux.
+static JSValue js_pipeline_addControlNet(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "addControlNet: not a Pipeline");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx,
+            "addControlNet: call loadWeights() / loadModel() first");
+
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx,
+            "addControlNet(path, cfg?): path string required");
+
+    try {
+        bds::File f = bds::File::open(path);
+        int idx;
+        if (argc >= 2 && JS_IsObject(argv[1])) {
+            brodiffusion::controlnet::ControlNetConfig cfg;
+            getInt(ctx, argv[1], "inChannels",          cfg.in_channels);
+            getInt(ctx, argv[1], "controlChannels",     cfg.control_channels);
+            getInt(ctx, argv[1], "layersPerBlock",      cfg.layers_per_block);
+            getInt(ctx, argv[1], "crossAttentionDim",   cfg.cross_attention_dim);
+            getInt(ctx, argv[1], "transformerNumHeads", cfg.transformer_num_heads);
+            idx = w->pipeline->add_controlnet(f, cfg);
+        } else {
+            idx = w->pipeline->add_controlnet(f);
+        }
+        return JS_NewInt32(ctx, idx);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "addControlNet: %s", e.what());
+    }
+}
+
+// removeControlNet(index) — drop one registered ControlNet; subsequent
+// indices shift down.
+static JSValue js_pipeline_removeControlNet(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "removeControlNet: not a Pipeline");
+    int32_t idx = -1;
+    if (argc < 1 || JS_ToInt32(ctx, &idx, argv[0]) != 0)
+        return JS_ThrowTypeError(ctx,
+            "removeControlNet(index): integer index required");
+    try {
+        w->pipeline->remove_controlnet(idx);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "removeControlNet: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// clearControlNets() — drop every registered ControlNet.
+static JSValue js_pipeline_clearControlNets(JSContext* ctx, JSValueConst this_val,
+                                            int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "clearControlNets: not a Pipeline");
+    try {
+        w->pipeline->clear_controlnets();
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "clearControlNets: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
 // generate(prompt, opts) -> { width, height, data } — one-shot txt2img.
 // Blocking; intended for a worker thread. The main thread should drive the
 // step-wise prime()/stepOnce()/decode() API instead.
@@ -426,6 +558,10 @@ static JSValue js_pipeline_config(JSContext* ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, o, "numXAttnBlocks",
                       JS_NewInt32(ctx, xattnBlocks(w)));
     JS_SetPropertyStr(ctx, o, "weightsLoaded", JS_NewBool(ctx, w->weights_loaded));
+    JS_SetPropertyStr(ctx, o, "numControlNets",
+                      JS_NewInt32(ctx, w->pipeline->num_controlnets()));
+    JS_SetPropertyStr(ctx, o, "hasControlNet",
+                      JS_NewBool(ctx, w->pipeline->has_controlnet()));
     return o;
 }
 
@@ -461,12 +597,15 @@ static JSValue js_pipeline_prime(JSContext* ctx, JSValueConst this_val,
 
 static void registerPipelineClass(JSContext* ctx) {
     qjsbind::Class<PipelineWrapper>(ctx, "DiffusionPipeline", qjsbind::NoGlobal)
-        .method_raw("loadWeights",     js_pipeline_loadWeights,     3)
-        .method_raw("applyLora",       js_pipeline_applyLora,       2)
-        .method_raw("generate",        js_pipeline_generate,        2)
-        .method_raw("prime",           js_pipeline_prime,           2)
-        .method_raw("numXAttnBlocks",  js_pipeline_numXAttnBlocks,  0)
-        .method_raw("config",          js_pipeline_config,          0);
+        .method_raw("loadWeights",        js_pipeline_loadWeights,        3)
+        .method_raw("applyLora",          js_pipeline_applyLora,          2)
+        .method_raw("addControlNet",      js_pipeline_addControlNet,      2)
+        .method_raw("removeControlNet",   js_pipeline_removeControlNet,   1)
+        .method_raw("clearControlNets",   js_pipeline_clearControlNets,   0)
+        .method_raw("generate",           js_pipeline_generate,           2)
+        .method_raw("prime",              js_pipeline_prime,              2)
+        .method_raw("numXAttnBlocks",     js_pipeline_numXAttnBlocks,     0)
+        .method_raw("config",             js_pipeline_config,             0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
