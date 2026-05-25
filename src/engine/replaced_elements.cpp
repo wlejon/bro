@@ -544,6 +544,42 @@ void dispatchDocMouseRelease(
             }
         }
 
+        // <details>/<summary> default action: clicking inside a <summary>
+        // toggles the [open] attribute on the parent <details>. Walk up from
+        // the click target so a click on text or icon inside the summary
+        // counts too — but only the first <summary> child of <details> is
+        // the disclosure handle (HTML spec). Skip when preventDefault'd.
+        if (!clickEvt.defaultPrevented() && target) {
+            for (auto* el = target; el; el = el->parentElement()) {
+                const auto& tag = el->tagName();
+                if (tag != "SUMMARY" && tag != "summary") continue;
+                auto* parent = el->parentElement();
+                if (!parent) break;
+                const auto& ptag = parent->tagName();
+                if (ptag != "DETAILS" && ptag != "details") break;
+                // First <summary> child only — others are inert per spec.
+                dom::Element* firstSummary = nullptr;
+                for (auto* c : parent->children()) {
+                    const auto& ct = c->tagName();
+                    if (ct == "SUMMARY" || ct == "summary") {
+                        firstSummary = c;
+                        break;
+                    }
+                }
+                if (firstSummary != el) break;
+                if (parent->hasAttribute("open")) {
+                    parent->removeAttribute("open");
+                } else {
+                    parent->setAttribute("open", "");
+                }
+                // Fire a non-bubbling "toggle" event for parity with HTML5.
+                dom::Event toggleEvt("toggle", false, false);
+                toggleEvt.setIsTrusted(true);
+                if (ctx.jsCtx) js::dispatchDomEvent(ctx.jsCtx, parent, toggleEvt);
+                break;
+            }
+        }
+
         if (state.clickCount == 2) {
             dom::MouseEvent dblEvt("dblclick", true, true);
             populate(dblEvt);

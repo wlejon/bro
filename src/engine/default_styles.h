@@ -135,6 +135,20 @@ template {
     display: none;
 }
 
+/* ---------- <details> / <summary> ---------- */
+/* When the <details> element is not open, hide everything except its
+   <summary>. Clicking the <summary> toggles the [open] attribute (see
+   the click handler in replaced_elements.cpp), and CSS does the rest. */
+
+details > summary {
+    display: block;
+    cursor: pointer;
+}
+
+details:not([open]) > *:not(summary) {
+    display: none;
+}
+
 /* ---------- Links ---------- */
 
 a {
