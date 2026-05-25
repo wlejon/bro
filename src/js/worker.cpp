@@ -4,6 +4,7 @@
 #include "js/diffusion_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
+#include "js/tts_bindings.h"
 #include "js/imagebitmap_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/flora_bindings.h"
@@ -249,7 +250,10 @@ void Worker::threadFunc()
     // --- 3b'''''. Install bro.stt (Whisper STT, brosoundml sibling). ---
     installSttBindings(ctx);
 
-    // --- 3b''''''. Install createImageBitmap / ImageBitmap. Workers that
+    // --- 3b''''''. Install bro.tts (Kokoro TTS, brosoundml sibling). ---
+    installTtsBindings(ctx);
+
+    // --- 3b'''''''. Install createImageBitmap / ImageBitmap. Workers that
     // produce frames (e.g. the diffusion worker) build bitmaps here and
     // transfer them to the main thread zero-copy. ---
     ImageBitmapBindings::install(ctx);

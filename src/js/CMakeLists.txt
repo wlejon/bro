@@ -72,6 +72,7 @@ add_library(bro_js STATIC
     diffusion_bindings.cpp
     lm_bindings.cpp
     stt_bindings.cpp
+    tts_bindings.cpp
     ai_learn_bindings.cpp
     ai_belief_bindings.cpp
     ai_extras_bindings.cpp

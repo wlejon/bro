@@ -48,6 +48,7 @@
 #include "js/diffusion_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
+#include "js/tts_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
 #include "js/server_bindings.h"
@@ -204,6 +205,11 @@ Engine::Engine(const EngineConfig& config)
     // bro.stt (Whisper STT via brosoundml + brolm siblings). CPU-only today;
     // audio must be 16 kHz mono FP32 — callers resample upstream.
     js::installSttBindings(jsRuntime_->getContext());
+
+    // bro.tts (Kokoro-82M TTS via brosoundml sibling). CPU-only today; emits
+    // mono 24 kHz FP32. G2P is the caller's responsibility — Kokoro takes
+    // already-tokenized phoneme ids.
+    js::installTtsBindings(jsRuntime_->getContext());
 
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());
