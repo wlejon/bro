@@ -47,6 +47,7 @@
 #include "js/ai_bindings.h"
 #include "js/diffusion_bindings.h"
 #include "js/lm_bindings.h"
+#include "js/stt_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
 #include "js/server_bindings.h"
@@ -199,6 +200,10 @@ Engine::Engine(const EngineConfig& config)
     // dispatch through GPU-only fused-dequant matmuls and throw at first
     // forward on a CPU-only build.
     js::installLmBindings(jsRuntime_->getContext());
+
+    // bro.stt (Whisper STT via brosoundml + brolm siblings). CPU-only today;
+    // audio must be 16 kHz mono FP32 — callers resample upstream.
+    js::installSttBindings(jsRuntime_->getContext());
 
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());

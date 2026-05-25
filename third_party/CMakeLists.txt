@@ -183,6 +183,21 @@ else()
     add_subdirectory(brolm EXCLUDE_FROM_ALL)
 endif()
 
+# --- brosoundml (audio-ML model inference — Whisper STT, Kokoro TTS) ---
+# Prefer the standalone repo at ../brosoundml for local development.
+# Falls back to the git submodule at third_party/brosoundml.
+# MUST be added after brolm: brosoundml's Whisper target depends on
+# brolm::whisper::Tokenizer. brosoundml's CMake guards bromath/brotensor with
+# if(NOT TARGET ...) so it reuses the targets brolm/brogameagent added.
+set(BROSOUNDML_DIR "${CMAKE_SOURCE_DIR}/../brosoundml" CACHE PATH "Path to standalone brosoundml repo")
+if(EXISTS "${BROSOUNDML_DIR}/CMakeLists.txt")
+    message(STATUS "brosoundml: using standalone repo at ${BROSOUNDML_DIR}")
+    add_subdirectory("${BROSOUNDML_DIR}" "${CMAKE_BINARY_DIR}/brosoundml" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "brosoundml: using submodule at third_party/brosoundml")
+    add_subdirectory(brosoundml EXCLUDE_FROM_ALL)
+endif()
+
 # --- brodiffusion (Stable Diffusion 1.5 text-to-image inference) ---
 # Prefer the standalone repo at ../brodiffusion for local development.
 # Falls back to the git submodule at third_party/brodiffusion.

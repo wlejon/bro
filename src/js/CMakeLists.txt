@@ -71,6 +71,7 @@ add_library(bro_js STATIC
     tensor_bindings_audio.cpp
     diffusion_bindings.cpp
     lm_bindings.cpp
+    stt_bindings.cpp
     ai_learn_bindings.cpp
     ai_belief_bindings.cpp
     ai_extras_bindings.cpp
@@ -86,6 +87,6 @@ target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # brolm is linked explicitly (not just transitively via brodiffusion):
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and
 # lm_bindings.cpp exposes brolm::qwen as bro.lm.
-target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_scene bro_net broaudio bro_webgl SDL3::SDL3 bromesh broflora brogameagent bro_video brolm brodiffusion broimage::broimage)
+target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_scene bro_net broaudio bro_webgl SDL3::SDL3 bromesh broflora brogameagent bro_video brolm brodiffusion brosoundml::brosoundml broimage::broimage)
 # QuickJS headers
 target_include_directories(bro_js PRIVATE ${CMAKE_SOURCE_DIR}/third_party/quickjs)
