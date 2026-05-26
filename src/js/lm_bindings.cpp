@@ -24,6 +24,7 @@
 #include <brotensor/runtime.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <exception>
 #include <memory>
 #include <string>
@@ -40,6 +41,7 @@ struct LMModelWrapper {
     std::unique_ptr<brolm::qwen::Qwen3Model> model;
     bool weights_loaded = false;
     int  cache_allocated_for = 0;
+    brotensor::Device device = brotensor::Device::CPU;
 };
 
 struct LMTokenizerWrapper {
@@ -90,6 +92,47 @@ static bool getBool(JSContext* ctx, JSValueConst obj, const char* key,
     if (!JS_IsUndefined(v) && !JS_IsNull(v)) out = JS_ToBool(ctx, v) == 1;
     JS_FreeValue(ctx, v);
     return out;
+}
+
+// Pick the default device — CUDA when available, else CPU. brotensor::init()
+// must have been called beforehand so the CUDA backend probe has run.
+static brotensor::Device autoDevice() {
+    return brotensor::is_available(brotensor::Device::CUDA)
+        ? brotensor::Device::CUDA
+        : brotensor::Device::CPU;
+}
+
+static const char* deviceName(brotensor::Device d) {
+    switch (d) {
+        case brotensor::Device::CUDA:  return "CUDA";
+        case brotensor::Device::Metal: return "Metal";
+        case brotensor::Device::CPU:   return "CPU";
+    }
+    return "?";
+}
+
+static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
+                           brotensor::Device& out, std::string& err) {
+    if (!JS_IsObject(opts)) return true;
+    JSValue v = JS_GetPropertyStr(ctx, opts, "device");
+    if (JS_IsUndefined(v) || JS_IsNull(v)) {
+        JS_FreeValue(ctx, v);
+        return true;
+    }
+    if (!JS_IsString(v)) {
+        JS_FreeValue(ctx, v);
+        err = "opts.device must be a string ('cpu' or 'cuda')";
+        return false;
+    }
+    const char* s = JS_ToCString(ctx, v);
+    std::string sv = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    if (sv == "cpu")  { out = brotensor::Device::CPU;  return true; }
+    if (sv == "cuda") { out = brotensor::Device::CUDA; return true; }
+    if (sv == "metal"){ out = brotensor::Device::Metal; return true; }
+    err = "opts.device must be 'cpu' or 'cuda' (got '" + sv + "')";
+    return false;
 }
 
 static const int32_t* getInt32Array(JSContext* ctx, JSValueConst v,
@@ -271,6 +314,7 @@ static JSValue js_model_allocateCache(JSContext* ctx, JSValueConst this_val,
     int32_t n = 0;
     JS_ToInt32(ctx, &n, argv[0]);
     try {
+        brotensor::DeviceScope scope(w->device);
         w->model->allocate_cache(n);
         w->cache_allocated_for = n;
     } catch (const std::exception& e) {
@@ -320,6 +364,7 @@ static JSValue js_model_generate(JSContext* ctx, JSValueConst this_val,
     }
 
     try {
+        brotensor::DeviceScope scope(w->device);
         auto ids = brolm::qwen::generate(*w->model, prompt, eos_id, opts);
         return qjsbind::make_int32_array(ctx, ids);
     } catch (const std::exception& e) {
@@ -354,29 +399,46 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
-// bro.lm.loadQwen(ggufPath) -> { model, tokenizer }
+// bro.lm.loadQwen(ggufPath, opts?) -> { model, tokenizer }
 //   Single-file Qwen3 loader. Opens a Qwen3 GGUF, builds the Qwen3Config from
 //   its metadata, constructs the decoder, loads the tensor weights, and reads
 //   the tokenizer's vocab + merges out of the same file. Both handles are
 //   bundled into one object so a caller can destructure them.
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   Qwen3Model takes the device implicitly via brotensor::default_device(),
+//   so we install a DeviceScope around construction + load_weights + cache
+//   allocation paths. Forward dispatches on the device the model's tensors
+//   live on, so no scope needed at generate() time.
 static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
                            int argc, JSValueConst* argv) {
     std::string path;
     if (argc < 1 || !argStr(ctx, argv[0], path))
-        return JS_ThrowTypeError(ctx, "loadQwen(ggufPath): path string required");
+        return JS_ThrowTypeError(ctx, "loadQwen(ggufPath, opts?): path string required");
     try {
         brotensor::init();
+        brotensor::Device dev = autoDevice();
+        if (argc >= 2) {
+            std::string err;
+            if (!parseDeviceOpt(ctx, argv[1], dev, err))
+                return JS_ThrowTypeError(ctx, "loadQwen: %s", err.c_str());
+        }
         brotensor::gguf::File f = brotensor::gguf::File::open(path);
         auto cfg = brolm::qwen::Qwen3Config::from_gguf(f);
 
         auto mw = std::make_unique<LMModelWrapper>();
-        mw->model = std::make_unique<brolm::qwen::Qwen3Model>(cfg);
-        mw->model->load_weights(f);
+        mw->device = dev;
+        {
+            brotensor::DeviceScope scope(dev);
+            mw->model = std::make_unique<brolm::qwen::Qwen3Model>(cfg);
+            mw->model->load_weights(f);
+        }
         mw->weights_loaded = true;
 
         auto tw = std::make_unique<LMTokenizerWrapper>();
         tw->tok = std::make_unique<brolm::qwen::Tokenizer>(
             brolm::qwen::Tokenizer::from_gguf(f));
+
+        std::fprintf(stderr, "[INFO] [lm] Qwen3 loaded on %s\n", deviceName(dev));
 
         JSValue out = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, out, "model",
@@ -434,7 +496,7 @@ void installLmBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, lm, "init",
         JS_NewCFunction(ctx, js_init, "init", 0));
     JS_SetPropertyStr(ctx, lm, "loadQwen",
-        JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 1));
+        JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
     JS_SetPropertyStr(ctx, lm, "loadTokenizer",
         JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
     JS_SetPropertyStr(ctx, broObj, "lm", lm);

@@ -23,6 +23,7 @@
 #include <brotensor/tensor.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -81,6 +82,50 @@ static bool getBool(JSContext* ctx, JSValueConst obj, const char* key,
     if (!JS_IsUndefined(v) && !JS_IsNull(v)) out = JS_ToBool(ctx, v) == 1;
     JS_FreeValue(ctx, v);
     return out;
+}
+
+// Pick the default device — CUDA when available, else CPU. brotensor::init()
+// must have been called beforehand so the CUDA backend probe has run.
+static brotensor::Device autoDevice() {
+    return brotensor::is_available(brotensor::Device::CUDA)
+        ? brotensor::Device::CUDA
+        : brotensor::Device::CPU;
+}
+
+static const char* deviceName(brotensor::Device d) {
+    switch (d) {
+        case brotensor::Device::CUDA:  return "CUDA";
+        case brotensor::Device::Metal: return "Metal";
+        case brotensor::Device::CPU:   return "CPU";
+    }
+    return "?";
+}
+
+// Parse opts.device. On success, writes the device into `out` and returns
+// true. On a missing key, leaves `out` untouched and returns true. On an
+// unknown value, sets `err` and returns false.
+static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
+                           brotensor::Device& out, std::string& err) {
+    if (!JS_IsObject(opts)) return true;
+    JSValue v = JS_GetPropertyStr(ctx, opts, "device");
+    if (JS_IsUndefined(v) || JS_IsNull(v)) {
+        JS_FreeValue(ctx, v);
+        return true;
+    }
+    if (!JS_IsString(v)) {
+        JS_FreeValue(ctx, v);
+        err = "opts.device must be a string ('cpu' or 'cuda')";
+        return false;
+    }
+    const char* s = JS_ToCString(ctx, v);
+    std::string sv = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    if (sv == "cpu")  { out = brotensor::Device::CPU;  return true; }
+    if (sv == "cuda") { out = brotensor::Device::CUDA; return true; }
+    if (sv == "metal"){ out = brotensor::Device::Metal; return true; }
+    err = "opts.device must be 'cpu' or 'cuda' (got '" + sv + "')";
+    return false;
 }
 
 // Read a Float32Array's element pointer + count. Returns nullptr if not a
@@ -366,19 +411,26 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
-// bro.stt.loadWhisper(modelDir) -> Whisper
+// bro.stt.loadWhisper(modelDir, opts?) -> Whisper
 //   modelDir contains config.json + model.safetensors (HF Whisper checkpoint).
-//   CPU-only — passing a non-CPU device throws inside brosoundml::Whisper::load.
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
 static JSValue js_loadWhisper(JSContext* ctx, JSValueConst,
                               int argc, JSValueConst* argv) {
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
-        return JS_ThrowTypeError(ctx, "loadWhisper(modelDir): path required");
+        return JS_ThrowTypeError(ctx, "loadWhisper(modelDir, opts?): path required");
     try {
         brotensor::init();
+        brotensor::Device dev = autoDevice();
+        if (argc >= 2) {
+            std::string err;
+            if (!parseDeviceOpt(ctx, argv[1], dev, err))
+                return JS_ThrowTypeError(ctx, "loadWhisper: %s", err.c_str());
+        }
         auto w = std::make_unique<WhisperWrapper>();
         w->whisper = std::make_unique<brosoundml::Whisper>();
-        w->whisper->load(dir, brotensor::Device::CPU);
+        w->whisper->load(dir, dev);
+        std::fprintf(stderr, "[INFO] [stt] Whisper loaded on %s\n", deviceName(dev));
         return qjsbind::wrap<WhisperWrapper>(ctx, w.release());
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "loadWhisper: %s", e.what());
@@ -426,7 +478,7 @@ void installSttBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, stt, "init",
         JS_NewCFunction(ctx, js_init, "init", 0));
     JS_SetPropertyStr(ctx, stt, "loadWhisper",
-        JS_NewCFunction(ctx, js_loadWhisper, "loadWhisper", 1));
+        JS_NewCFunction(ctx, js_loadWhisper, "loadWhisper", 2));
     JS_SetPropertyStr(ctx, stt, "loadTokenizer",
         JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
     JS_SetPropertyStr(ctx, broObj, "stt", stt);

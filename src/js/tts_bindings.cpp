@@ -17,13 +17,26 @@
 #include <brosoundml/kokoro.h>
 #include <brosoundml/audio.h>
 
+#include <brosoundml/g2p/lexicon.h>
+#include <brosoundml/g2p/morphology.h>
+#include <brosoundml/g2p/special_cases.h>
+#include <brosoundml/g2p/pos_tagger.h>
+#include <brosoundml/g2p/phoneme_adapter.h>
+#include <brosoundml/g2p/phonemizer.h>
+#include <brosoundml/detail/json.h>
+
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -35,6 +48,9 @@ namespace bro::js {
 
 struct KokoroWrapper {
     std::unique_ptr<brosoundml::Kokoro> kokoro;
+    // Lazily constructed on first encodePhonemes() call. Borrows the
+    // Kokoro instance's vocab map (lifetime tied to `kokoro` above).
+    std::unique_ptr<brosoundml::g2p::PhonemeAdapter> adapter;
 };
 
 struct VoiceWrapper {
@@ -59,6 +75,47 @@ static void getNum(JSContext* ctx, JSValueConst obj, const char* key,
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
     if (JS_IsNumber(v)) { double t = dst; JS_ToFloat64(ctx, &t, v); dst = (float)t; }
     JS_FreeValue(ctx, v);
+}
+
+// Pick the default device — CUDA when available, else CPU. brotensor::init()
+// must have been called beforehand so the CUDA backend probe has run.
+static brotensor::Device autoDevice() {
+    return brotensor::is_available(brotensor::Device::CUDA)
+        ? brotensor::Device::CUDA
+        : brotensor::Device::CPU;
+}
+
+static const char* deviceName(brotensor::Device d) {
+    switch (d) {
+        case brotensor::Device::CUDA:  return "CUDA";
+        case brotensor::Device::Metal: return "Metal";
+        case brotensor::Device::CPU:   return "CPU";
+    }
+    return "?";
+}
+
+static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
+                           brotensor::Device& out, std::string& err) {
+    if (!JS_IsObject(opts)) return true;
+    JSValue v = JS_GetPropertyStr(ctx, opts, "device");
+    if (JS_IsUndefined(v) || JS_IsNull(v)) {
+        JS_FreeValue(ctx, v);
+        return true;
+    }
+    if (!JS_IsString(v)) {
+        JS_FreeValue(ctx, v);
+        err = "opts.device must be a string ('cpu' or 'cuda')";
+        return false;
+    }
+    const char* s = JS_ToCString(ctx, v);
+    std::string sv = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, v);
+    if (sv == "cpu")  { out = brotensor::Device::CPU;  return true; }
+    if (sv == "cuda") { out = brotensor::Device::CUDA; return true; }
+    if (sv == "metal"){ out = brotensor::Device::Metal; return true; }
+    err = "opts.device must be 'cpu' or 'cuda' (got '" + sv + "')";
+    return false;
 }
 
 static const int32_t* getInt32Array(JSContext* ctx, JSValueConst v,
@@ -200,6 +257,29 @@ static JSValue js_kokoro_vocab(JSContext* ctx, JSValueConst this_val,
     return obj;
 }
 
+// encodePhonemes(ipa) -> Int32Array
+//   Runs only the codepoint→id stage via brosoundml::g2p::PhonemeAdapter
+//   against this Kokoro's vocab. Adapter is lazily built on first call and
+//   cached on the wrapper.
+static JSValue js_kokoro_encodePhonemes(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* w = kokoroSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encodePhonemes: not a Kokoro");
+    std::string ipa;
+    if (argc < 1 || !argStr(ctx, argv[0], ipa))
+        return JS_ThrowTypeError(ctx, "encodePhonemes(ipa): string required");
+    try {
+        if (!w->adapter) {
+            w->adapter = std::make_unique<brosoundml::g2p::PhonemeAdapter>(
+                w->kokoro->config().vocab);
+        }
+        auto ids = w->adapter->encode(ipa);
+        return qjsbind::make_int32_array(ctx, ids);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encodePhonemes: %s", e.what());
+    }
+}
+
 static void registerKokoroClass(JSContext* ctx) {
     qjsbind::Class<KokoroWrapper>(ctx, "Kokoro", qjsbind::NoGlobal)
         .get("loaded",       [](KokoroWrapper* w) { return w->kokoro->loaded(); })
@@ -208,9 +288,10 @@ static void registerKokoroClass(JSContext* ctx) {
         .get("hiddenDim",    [](KokoroWrapper* w) { return w->kokoro->config().hidden_dim; })
         .get("styleDim",     [](KokoroWrapper* w) { return w->kokoro->config().style_dim; })
         .get("nLayer",       [](KokoroWrapper* w) { return w->kokoro->config().n_layer; })
-        .method_raw("loadVoice",   js_kokoro_loadVoice,   1)
-        .method_raw("synthesize",  js_kokoro_synthesize,  3)
-        .method_raw("vocab",       js_kokoro_vocab,       0);
+        .method_raw("loadVoice",      js_kokoro_loadVoice,      1)
+        .method_raw("synthesize",     js_kokoro_synthesize,     3)
+        .method_raw("vocab",          js_kokoro_vocab,          0)
+        .method_raw("encodePhonemes", js_kokoro_encodePhonemes, 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -226,18 +307,178 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
-// bro.tts.loadKokoro(modelDir) -> Kokoro
-//   modelDir contains config.json + model.safetensors. CPU-only today.
+// ═══════════════════════════════════════════════════════════════════════════
+// G2P (text → phoneme ids) — module-scope lazy Phonemizer
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The Phonemizer holds non-owning pointers to five dependencies. We keep them
+// all alive in a single PhonemizerState that's lazy-built on first call to
+// bro.tts.phonemize() and re-built if bro.tts.setAssetRoot() is called.
+//
+// Required runtime assets:
+//   - <data_root>/g2p/lexicon_en_us.bin
+//   - <repo_root>/weights/pos_tagger/model.bin
+//   - <repo_root>/weights/kokoro/config.json    (for the phoneme vocab)
+//
+// Default search probes well-known sibling paths relative to the current
+// working directory. setAssetRoot(path) overrides the brosoundml repo root
+// (and implicitly the data root via the standard `../brosoundml-data` sibling).
+
+struct PhonemizerState {
+    // Vocab is owned here (extracted from kokoro config.json) and borrowed by
+    // the adapter; all the others borrow from each other.
+    std::unordered_map<std::string, int>          vocab;
+    std::unique_ptr<brosoundml::g2p::Lexicon>        lexicon;
+    std::unique_ptr<brosoundml::g2p::PosTagger>      tagger;
+    std::unique_ptr<brosoundml::g2p::Morphology>     morphology;
+    std::unique_ptr<brosoundml::g2p::SpecialCases>   special;
+    std::unique_ptr<brosoundml::g2p::PhonemeAdapter> adapter;
+    std::unique_ptr<brosoundml::g2p::Phonemizer>     phonemizer;
+};
+
+// Module-scope singletons. Reset when setAssetRoot() is called.
+static std::string                              g_assetRoot;      // brosoundml repo root
+static std::unique_ptr<PhonemizerState>         g_phonemizerState;
+
+static bool fileExists(const std::string& p) {
+    std::error_code ec;
+    return std::filesystem::exists(p, ec);
+}
+
+// Resolve the brosoundml repo root. Order:
+//   1. g_assetRoot (set via bro.tts.setAssetRoot)
+//   2. ../brosoundml relative to cwd
+//   3. ./brosoundml relative to cwd
+static std::string resolveBrosoundmlRoot() {
+    if (!g_assetRoot.empty()) return g_assetRoot;
+    for (const char* p : { "../brosoundml", "./brosoundml" }) {
+        if (fileExists(std::string(p) + "/weights/kokoro/config.json"))
+            return p;
+    }
+    return "../brosoundml";  // best guess — error reporter will mention it
+}
+
+// Resolve the brosoundml-data sibling. Sits next to the brosoundml repo.
+static std::string resolveBrosoundmlDataRoot() {
+    std::string root = resolveBrosoundmlRoot();
+    return root + "/../brosoundml-data";
+}
+
+static std::string slurpFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::ostringstream os;
+    os << f.rdbuf();
+    return os.str();
+}
+
+// Load the Kokoro phoneme vocab from <kokoro_dir>/config.json without
+// instantiating the heavy Kokoro model. Throws on parse failure.
+static std::unordered_map<std::string, int> loadKokoroVocab(
+        const std::string& configPath) {
+    namespace j = brosoundml::detail::json;
+    std::unordered_map<std::string, int> vocab;
+    const std::string text = slurpFile(configPath);
+    if (text.empty())
+        throw std::runtime_error("config.json empty or unreadable: " + configPath);
+    const j::Value root = j::parse(text);
+    const j::Value* v = root.find("vocab");
+    if (!v || !v->is_object())
+        throw std::runtime_error("config.json missing 'vocab' object: " + configPath);
+    for (const auto& m : v->as_object())
+        vocab.emplace(m.first, static_cast<int>(m.second.as_number()));
+    return vocab;
+}
+
+// Build the Phonemizer state from the resolved asset roots. Throws
+// std::runtime_error naming any missing asset.
+static std::unique_ptr<PhonemizerState> buildPhonemizerState() {
+    const std::string repo   = resolveBrosoundmlRoot();
+    const std::string data   = resolveBrosoundmlDataRoot();
+    const std::string lexBin = data + "/g2p/lexicon_en_us.bin";
+    const std::string posBin = repo + "/weights/pos_tagger/model.bin";
+    const std::string kokCfg = repo + "/weights/kokoro/config.json";
+
+    if (!fileExists(lexBin))
+        throw std::runtime_error("missing lexicon: " + lexBin
+            + " (set bro.tts.setAssetRoot('../brosoundml'))");
+    if (!fileExists(posBin))
+        throw std::runtime_error("missing POS tagger weights: " + posBin
+            + " (set bro.tts.setAssetRoot('../brosoundml'))");
+    if (!fileExists(kokCfg))
+        throw std::runtime_error("missing Kokoro config.json: " + kokCfg
+            + " (set bro.tts.setAssetRoot('../brosoundml'))");
+
+    auto st = std::make_unique<PhonemizerState>();
+    st->vocab      = loadKokoroVocab(kokCfg);
+    st->lexicon    = std::make_unique<brosoundml::g2p::Lexicon>(
+                        brosoundml::g2p::Lexicon::load(lexBin));
+    st->tagger     = std::make_unique<brosoundml::g2p::PosTagger>(
+                        brosoundml::g2p::PosTagger::load(posBin));
+    st->morphology = std::make_unique<brosoundml::g2p::Morphology>(*st->lexicon);
+    st->special    = std::make_unique<brosoundml::g2p::SpecialCases>(*st->lexicon);
+    st->adapter    = std::make_unique<brosoundml::g2p::PhonemeAdapter>(st->vocab);
+    st->phonemizer = std::make_unique<brosoundml::g2p::Phonemizer>(
+                        *st->tagger, *st->lexicon, *st->morphology,
+                        *st->special, *st->adapter);
+    return st;
+}
+
+// bro.tts.setAssetRoot(path)
+//   Override the brosoundml repo root used by the lazy Phonemizer. The data
+//   sibling is assumed at <path>/../brosoundml-data. Resets any cached state
+//   so the next phonemize() call rebuilds against the new root.
+static JSValue js_setAssetRoot(JSContext* ctx, JSValueConst,
+                               int argc, JSValueConst* argv) {
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx, "setAssetRoot(path): path string required");
+    g_assetRoot = std::move(path);
+    g_phonemizerState.reset();
+    return JS_UNDEFINED;
+}
+
+// bro.tts.phonemize(text, opts?) -> Int32Array
+//   Lazily constructs an English Phonemizer on first call. `opts.lang` is
+//   accepted but ignored — reserved for accent variants. Default is en-us.
+static JSValue js_phonemize(JSContext* ctx, JSValueConst,
+                            int argc, JSValueConst* argv) {
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "phonemize(text, opts?): text required");
+    // opts.lang is parsed but not yet acted on.
+    (void)argv;
+    try {
+        if (!g_phonemizerState) {
+            brotensor::init();
+            g_phonemizerState = buildPhonemizerState();
+        }
+        auto ids = g_phonemizerState->phonemizer->phonemize(text);
+        return qjsbind::make_int32_array(ctx, ids);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "phonemize: %s", e.what());
+    }
+}
+
+// bro.tts.loadKokoro(modelDir, opts?) -> Kokoro
+//   modelDir contains config.json + model.safetensors.
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
 static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
                              int argc, JSValueConst* argv) {
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
-        return JS_ThrowTypeError(ctx, "loadKokoro(modelDir): path required");
+        return JS_ThrowTypeError(ctx, "loadKokoro(modelDir, opts?): path required");
     try {
         brotensor::init();
+        brotensor::Device dev = autoDevice();
+        if (argc >= 2) {
+            std::string err;
+            if (!parseDeviceOpt(ctx, argv[1], dev, err))
+                return JS_ThrowTypeError(ctx, "loadKokoro: %s", err.c_str());
+        }
         auto w = std::make_unique<KokoroWrapper>();
         w->kokoro = std::make_unique<brosoundml::Kokoro>();
-        w->kokoro->load(dir, brotensor::Device::CPU);
+        w->kokoro->load(dir, dev);
+        std::fprintf(stderr, "[INFO] [tts] Kokoro loaded on %s\n", deviceName(dev));
         return qjsbind::wrap<KokoroWrapper>(ctx, w.release());
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "loadKokoro: %s", e.what());
@@ -264,13 +505,20 @@ void installTtsBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, tts, "init",
         JS_NewCFunction(ctx, js_init, "init", 0));
     JS_SetPropertyStr(ctx, tts, "loadKokoro",
-        JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 1));
+        JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 2));
+    JS_SetPropertyStr(ctx, tts, "phonemize",
+        JS_NewCFunction(ctx, js_phonemize, "phonemize", 2));
+    JS_SetPropertyStr(ctx, tts, "setAssetRoot",
+        JS_NewCFunction(ctx, js_setAssetRoot, "setAssetRoot", 1));
     JS_SetPropertyStr(ctx, broObj, "tts", tts);
 
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
 }
 
-void cleanupTtsBindings(JSContext* /*ctx*/) {}
+void cleanupTtsBindings(JSContext* /*ctx*/) {
+    g_phonemizerState.reset();
+    g_assetRoot.clear();
+}
 
 }  // namespace bro::js
