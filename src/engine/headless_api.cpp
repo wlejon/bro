@@ -16,6 +16,7 @@
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/worker.h"
+#include "js/wake_bindings.h"
 #include "js/net_bindings.h"
 #include "net/net_service.h"
 #include "dom/document.h"
@@ -239,6 +240,7 @@ void Engine::advanceTime(double ms) {
         timers_->fireAnimationFrames(virtualTime_);
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
+        bro::js::tickWake(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
 
         // Tick system panels so splash lifecycle (min-display + dismiss)

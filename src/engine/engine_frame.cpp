@@ -14,6 +14,7 @@
 #include "js/event_dispatch.h"
 #include "js/net_bindings.h"
 #include "js/worker.h"
+#include "js/wake_bindings.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
@@ -107,6 +108,9 @@ void Engine::run() {
 
             jsRuntime_->executePendingJobs();
             js::tickWorkers(jsRuntime_->getContext());
+            // Drain pending wake-word fires from the audio thread and run the
+            // JS onFire callback on this (main) thread.
+            js::tickWake(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
 
             if (netService_) {
@@ -379,6 +383,9 @@ void Engine::run() {
         // 3b. Run pending JS jobs (promises, etc.)
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
+        // Drain pending wake-word fires from the audio thread and run the
+        // JS onFire callback on this (main) thread.
+        js::tickWake(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
         if (netService_) {
             js::NetBindings::poll(jsRuntime_->getContext());

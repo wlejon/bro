@@ -49,6 +49,7 @@
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/wake_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
 #include "js/server_bindings.h"
@@ -296,6 +297,12 @@ Engine::Engine(const EngineConfig& config)
         audioEngine_->initHeadless();
     }
     js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
+
+    // bro.wake (brosoundml::WakeWord — streaming wake-word detection driven
+    // by broaudio's low-latency mic-frame hook). Must follow audio init so
+    // the binding can pass audioEngine_ in; the JS surface itself is inert
+    // until the app calls bro.wake.listen().
+    js::installWakeBindings(jsRuntime_->getContext(), audioEngine_.get());
 
     // Apply initial audio settings from persisted user overrides
     {
