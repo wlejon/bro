@@ -87,6 +87,18 @@ bro.wake.lastScore();    // most-recent per-frame sigmoid score, [0, 1].
 bro.wake.isActive();     // true between listen() and stop().
 bro.wake.isSuspended();  // true while suspend() is in effect.
 
+bro.wake.stats();        // diagnostic snapshot over the underlying broaudio
+                         // mic tap, or null when no detector is active:
+                         //   {
+                         //     framesDelivered:  N,    // tap callback invocations
+                         //     samplesDelivered: N,    // total resampled samples seen by feed()
+                         //     rollingPeak:      0.95, // post-AGC rolling peak observed by the tap
+                         //   }
+                         // Useful for verifying mic frames reach the detector
+                         // (framesDelivered climbing) and that the AGC is
+                         // lifting input toward training-distribution loudness
+                         // (rollingPeak ≈ 0.95).
+
 
 // ── Runtime tuning ──────────────────────────────────────────────────────────
 

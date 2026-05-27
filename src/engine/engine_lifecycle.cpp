@@ -21,6 +21,10 @@
 #include "js/ai_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/custom_elements.h"
+#include "js/wake_bindings.h"
+#include "js/stt_bindings.h"
+#include "js/lm_bindings.h"
+#include "js/tts_bindings.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
@@ -96,6 +100,15 @@ Engine::~Engine() {
     if (jsRuntime_) {
         JSContext* ctx = jsRuntime_->getContext();
         js::setElementFinalizerShutdown(true);
+        // Wake cleanup must run before audioEngine_.reset() — it detaches the
+        // mic-frame callback that drives WakeWord::feed on the audio thread.
+        // Leaving the callback attached lets the audio thread keep launching
+        // CUDA work into a brotensor context that's being torn down by static
+        // destructors, which has produced kernel-level driver faults on exit.
+        js::cleanupWakeBindings(ctx);
+        js::cleanupSttBindings(ctx);
+        js::cleanupLmBindings(ctx);
+        js::cleanupTtsBindings(ctx);
         js::cleanupWorkerBindings(ctx);
         js::ServerBindings::cleanup(ctx);
         js::NetBindings::cleanup(ctx);
