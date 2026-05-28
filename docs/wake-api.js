@@ -4,7 +4,7 @@
  * Always-on detector that fires a JS callback when a target keyword is
  * spoken. Backed by brosoundml::WakeWord (BC-ResNet-style streaming
  * convolutional classifier over log-mel features) and driven by broaudio's
- * low-latency mic-frame hook. Inference cost is ~0.26 ms / 10 ms frame on
+ * low-latency mic tap. Inference cost is ~0.26 ms / 10 ms frame on
  * CPU; the wake model stays loaded for the lifetime of the listen() call.
  *
  * Threading: WakeWord::feed() runs inline on the audio thread for sub-frame

@@ -16,7 +16,9 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <thread>
 
 namespace bro::js {
 
@@ -149,6 +151,20 @@ static JSValue js_flush(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
     engine->flush();
+    return JS_UNDEFINED;
+}
+
+// Real wall-clock sleep — the only thing in headless that pauses the JS
+// thread by actual time. Use when a probe needs to give a real subsystem
+// (mic, network, child process) time to do work; for time-dependent app
+// logic use advanceTime/sleep instead.
+static JSValue js_wallSleep(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "wallSleep() requires milliseconds argument");
+    double ms = 0.0;
+    if (JS_ToFloat64(ctx, &ms, argv[0])) return JS_EXCEPTION;
+    if (ms > 0.0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>(ms)));
+    }
     return JS_UNDEFINED;
 }
 
@@ -910,6 +926,7 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("advanceTime", js_advanceTime, 1)
         .function("flush", js_flush, 0)
         .function("sleep", js_advanceTime, 1)
+        .function("wallSleep", js_wallSleep, 1)
         .function("assert", js_assert, 2)
         // Mouse input simulation
         .function("mouseDown", js_mouseDown, 3)

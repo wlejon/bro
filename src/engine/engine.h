@@ -128,6 +128,14 @@ struct EngineConfig {
     std::string systemDirName = "system";
 
     DisplayMode displayMode = DisplayMode::Windowed;
+
+    /// Open the real SDL audio device even in headless mode. Default false:
+    /// headless uses broaudio::Engine::initHeadless() (no playback device, no
+    /// mic stream — scripts drive the mic via broaudio::Engine::injectMicSamples,
+    /// exposed as bro.mic.feed). Set true to open the real device and the
+    /// default recording stream — needed for reproducing live-mic behaviour
+    /// from a headless script.
+    bool realAudio = false;
     /// Show the startup splash screen (system/splash.html). Defaults to true
     /// for windowed, false for headless (splash is visual-only and its matrix
     /// animation leaks into early-frame screenshots if not given enough time

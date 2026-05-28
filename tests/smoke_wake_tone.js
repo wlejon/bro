@@ -12,8 +12,6 @@ const WEIGHTS = '../brosoundml/weights/wake/computer.bw';
 function assert(cond, msg) { if (!cond) throw new Error('assert: ' + msg); }
 
 const wakeRate = 16000;
-const MIC_RATE = 44100;
-const MIC_CHUNK = 128;
 
 function makeSine(durSec, hz, rate, peak) {
     const n = Math.floor(durSec * rate);
@@ -63,9 +61,7 @@ function runStream(samples, sampleRate, chunkSize) {
     for (let off = 0; off < samples.length; off += chunkSize) {
         const end = Math.min(off + chunkSize, samples.length);
         const chunk = samples.subarray(off, end);
-        const fired = (sampleRate === wakeRate)
-            ? bro.wake.feed(chunk)
-            : bro.wake.feed(chunk, sampleRate);
+        const fired = bro.wake.feed(chunk);
         if (fired) {
             fires++;
             if (firstFireMs < 0) firstFireMs = Math.round(1000 * end / sampleRate);
@@ -91,34 +87,6 @@ const CASES = [
 console.log('--- 16 kHz native (skips SDL resampler, exercises AGC + model only) ---');
 for (const c of CASES) {
     const r = runStream(c.samples, wakeRate, 160);
-    console.log(c.label.padEnd(38),
-        'fires=' + r.fires,
-        'peak=' + r.peak.toFixed(3),
-        'first_fire=' + (r.firstFireMs < 0 ? '—' : r.firstFireMs + 'ms'));
-}
-
-console.log('--- 44.1 kHz (full live-mic path through SDL resampler) ---');
-for (const c of CASES) {
-    // Re-synthesize at 44.1 kHz directly so the SDL resampler sees real high
-    // frequencies (a single hard-coded freq stays the same, but synthesising
-    // at the target rate lets the resampler do its actual job).
-    let samples;
-    if (c.label.startsWith('silence')) {
-        samples = new Float32Array(2 * MIC_RATE);
-    } else if (c.label.startsWith('440 Hz')) {
-        const peak = parseFloat(c.label.match(/0\.\d+/)[0]);
-        samples = makeSine(2.0, 440, MIC_RATE, peak);
-    } else if (c.label.startsWith('880 Hz')) {
-        samples = makeSine(2.0, 880, MIC_RATE, 0.30);
-    } else if (c.label.startsWith('2 kHz')) {
-        samples = makeSine(2.0, 2000, MIC_RATE, 0.30);
-    } else if (c.label.startsWith('white')) {
-        const peak = parseFloat(c.label.match(/0\.\d+/)[0]);
-        samples = makeWhiteNoise(2.0, MIC_RATE, peak);
-    } else {
-        samples = makeAmModulated(2.0, 500, 5, MIC_RATE, 0.30);
-    }
-    const r = runStream(samples, MIC_RATE, MIC_CHUNK);
     console.log(c.label.padEnd(38),
         'fires=' + r.fires,
         'peak=' + r.peak.toFixed(3),

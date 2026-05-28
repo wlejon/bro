@@ -52,6 +52,11 @@ struct WakeState {
     std::shared_ptr<brosoundml::WakeWord> wake;
     JSValue                                onFire = JS_UNDEFINED;
 
+    // Audio-thread-observed max of wake->last_score() across every feed()
+    // call. Lets a JS probe see every inference's score, not just the value
+    // that happens to be live when JS samples lastScore. Reset by listen().
+    std::atomic<int> scoreMaxX10000{0};
+
     // Audio thread → main thread fire counter.
     std::atomic<int> firePending{0};
 
@@ -251,6 +256,7 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         g_wake.onFire = JS_DupValue(ctx, onFireVal);
         g_wake.firePending.store(0, std::memory_order_relaxed);
         g_wake.suspended.store(false, std::memory_order_relaxed);
+        g_wake.scoreMaxX10000.store(0, std::memory_order_relaxed);
         g_wake.feedAgc.setConfig(wakeAgcConfig());
         g_wake.feedAgc.reset();
         JS_FreeValue(ctx, onFireVal);
@@ -271,7 +277,13 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
             [wakeRef](const float* samples, int n) {
                 if (g_wake.suspended.load(std::memory_order_relaxed)) return;
                 if (!wakeRef || n <= 0) return;
-                if (wakeRef->feed(samples, n)) {
+                const bool fired = wakeRef->feed(samples, n);
+                const float s = wakeRef->last_score();
+                int sx = static_cast<int>(s * 10000.0f);
+                int prev = g_wake.scoreMaxX10000.load(std::memory_order_relaxed);
+                while (sx > prev &&
+                       !g_wake.scoreMaxX10000.compare_exchange_weak(prev, sx)) {}
+                if (fired) {
                     g_wake.firePending.fetch_add(1, std::memory_order_relaxed);
                 }
             });
@@ -357,21 +369,24 @@ JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JS_SetPropertyStr(ctx, o, "samplesDelivered",
         JS_NewInt64(ctx, static_cast<int64_t>(s.samplesDelivered)));
     JS_SetPropertyStr(ctx, o, "rollingPeak", JS_NewFloat64(ctx, s.rollingPeak));
+    // Per-inference max observed since listen(). Captures transient score
+    // spikes that lastScore() misses when sampled at low cadence.
+    JS_SetPropertyStr(ctx, o, "scoreMax",
+        JS_NewFloat64(ctx,
+            g_wake.scoreMaxX10000.load(std::memory_order_relaxed) / 10000.0));
     return o;
 }
 
-// Manual feed for tests / scripted scenarios. Two modes:
+// Manual feed for tests / scripted scenarios. Samples must already be at the
+// wake model's native rate (pass it as the optional second arg to assert).
+// The binding copies into a local scratch buffer, runs its own per-call Agc
+// (state independent of the live tap, so scripted replay and the live mic keep
+// separate loudness histories), and forwards to WakeWord::feed. Returns whether
+// the model fired on this chunk.
 //
-//   1. sampleRate omitted or equal to the wake model's native rate: copy the
-//      samples into a local scratch buffer, run the binding's per-call Agc
-//      (independent state from the live tap), and forward to WakeWord::feed.
-//      Returns whether the model fired on this chunk.
-//
-//   2. sampleRate equal to the engine's mic rate: route through
-//      audioEngine->testFeedMicSamples, which dispatches to the same tap the
-//      live audio thread uses. Exercises broaudio's resample + AGC + feed
-//      path end-to-end. Returns whether the tap fired during this call,
-//      measured by the firePending delta.
+// To exercise broaudio's resample + AGC + chunk path with mic-rate audio, use
+// bro.mic instead — bro.wake.feed deliberately does not reach into the audio
+// engine's tap dispatch.
 JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!g_wake.wake)
         return JS_ThrowInternalError(ctx, "bro.wake.feed: no active detector");
@@ -389,41 +404,26 @@ JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     const int n = static_cast<int>(viewLen / sizeof(float));
     const int wakeRate = g_wake.wake->config().sample_rate;
 
-    int srcRate = wakeRate;
     if (argc >= 2 && JS_IsNumber(argv[1])) {
         int32_t r = 0; JS_ToInt32(ctx, &r, argv[1]);
-        if (r > 0) srcRate = r;
+        if (r > 0 && r != wakeRate) {
+            return JS_ThrowTypeError(ctx,
+                "bro.wake.feed: sampleRate=%d must equal the wake rate=%d "
+                "(use bro.mic to feed mic-rate audio through the resampler)",
+                r, wakeRate);
+        }
     }
 
     bool fired = false;
     try {
-        if (srcRate == wakeRate) {
-            if (static_cast<int>(g_wake.feedScratch.size()) < n) {
-                g_wake.feedScratch.resize(static_cast<std::size_t>(n));
-            }
-            std::memcpy(g_wake.feedScratch.data(), p + byteOff,
-                        static_cast<std::size_t>(n) * sizeof(float));
-            g_wake.feedAgc.apply(g_wake.feedScratch.data(), n, wakeRate);
-            fired = g_wake.wake->feed(g_wake.feedScratch.data(), n);
-            if (fired) g_wake.firePending.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            if (!g_wake.audioEngine) {
-                return JS_ThrowInternalError(ctx,
-                    "bro.wake.feed: audio engine not available");
-            }
-            const int engineRate = g_wake.audioEngine->sampleRate();
-            if (srcRate != engineRate) {
-                return JS_ThrowTypeError(ctx,
-                    "bro.wake.feed: sampleRate=%d must equal either wake rate=%d "
-                    "or engine mic rate=%d",
-                    srcRate, wakeRate, engineRate);
-            }
-            const int before = g_wake.firePending.load(std::memory_order_acquire);
-            g_wake.audioEngine->testFeedMicSamples(
-                reinterpret_cast<const float*>(p + byteOff), n);
-            const int after = g_wake.firePending.load(std::memory_order_acquire);
-            fired = (after > before);
+        if (static_cast<int>(g_wake.feedScratch.size()) < n) {
+            g_wake.feedScratch.resize(static_cast<std::size_t>(n));
         }
+        std::memcpy(g_wake.feedScratch.data(), p + byteOff,
+                    static_cast<std::size_t>(n) * sizeof(float));
+        g_wake.feedAgc.apply(g_wake.feedScratch.data(), n, wakeRate);
+        fired = g_wake.wake->feed(g_wake.feedScratch.data(), n);
+        if (fired) g_wake.firePending.fetch_add(1, std::memory_order_relaxed);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "bro.wake.feed: %s", e.what());
     }

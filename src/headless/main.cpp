@@ -178,6 +178,7 @@ int main(int argc, char* argv[]) {
             "\n"
             "Options:\n"
             "  --no-gpu              Disable GPU rendering (CPU-only, no WebGL)\n"
+            "  --audio               Open the real SDL audio device + mic (default: no device)\n"
             "  --width N             Viewport width (default: 1920)\n"
             "  --height N            Viewport height (default: 1080)\n"
             "  --splash              Show the startup splash (off by default in headless)\n"
@@ -193,6 +194,7 @@ int main(int argc, char* argv[]) {
 
     // Parse args
     bool useGPU = true;
+    bool realAudio = false;
     int width = 1920;
     int height = 1080;
     // Splash defaults off in headless — the splash canvas animation leaks
@@ -206,6 +208,8 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-gpu") == 0) {
             useGPU = false;
+        } else if (strcmp(argv[i], "--audio") == 0) {
+            realAudio = true;
         } else if (strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
             width = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
@@ -299,6 +303,7 @@ int main(int argc, char* argv[]) {
             }
         }
         config.displayMode = bro::engine::DisplayMode::Headless;
+        config.realAudio = realAudio;
         config.graphics.width = width;
         config.graphics.height = height;
         config.graphics.useGPU = useGPU;

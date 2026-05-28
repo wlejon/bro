@@ -15,6 +15,7 @@
 #include "js/net_bindings.h"
 #include "js/worker.h"
 #include "js/wake_bindings.h"
+#include "js/mic_bindings.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
@@ -111,6 +112,7 @@ void Engine::run() {
             // Drain pending wake-word fires from the audio thread and run the
             // JS onFire callback on this (main) thread.
             js::tickWake(jsRuntime_->getContext());
+            js::tickMic(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
 
             if (netService_) {
@@ -386,6 +388,7 @@ void Engine::run() {
         // Drain pending wake-word fires from the audio thread and run the
         // JS onFire callback on this (main) thread.
         js::tickWake(jsRuntime_->getContext());
+        js::tickMic(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
         if (netService_) {
             js::NetBindings::poll(jsRuntime_->getContext());

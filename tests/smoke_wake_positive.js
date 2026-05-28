@@ -5,8 +5,10 @@
 //   ./build/Debug/bro-headless.exe ../broworkshop tests/smoke_wake_positive.js
 //
 // Picks up a small selection of clean and noisy positives. Each is replayed
-// in 10 ms chunks at 16 kHz (the wake model's native rate). bro.wake.feed
-// drives the same code path the audio thread does, minus the SDL resampler.
+// in 10 ms chunks at 16 kHz (the wake model's native rate). bro.wake.feed runs
+// the binding's per-call AGC + WakeWord::feed — the wake-rate path. The SDL
+// resampler that the live mic uses is exercised separately, against broaudio's
+// shared tap, by tests/smoke_mic_chunks.js.
 
 const FS = require('node:fs');
 
@@ -16,8 +18,8 @@ const ROOT    = '../brosoundml-data/wake/computer/positives';
 const CLIPS = [
     'pos_af_bella_sp095_clean.wav',
     'pos_af_bella_sp085_clean.wav',
-    'pos_af_bella_sp095_pink_snr10.wav',
-    'pos_af_bella_sp095_white_snr20.wav',
+    'pos_af_bella_sp095_chan_pink_snr10.wav',
+    'pos_af_bella_sp095_chan_white_snr0.wav',
 ];
 
 function assert(cond, msg) { if (!cond) throw new Error('assert: ' + msg); }
@@ -47,28 +49,7 @@ function readWav16Mono(path) {
     throw new Error(path + ': no data chunk');
 }
 
-// Linear-interp upsample. Upsampling does NOT alias (no new high frequencies
-// are created), so a naive interp is acceptable here — the imaging artifacts
-// above the source nyquist get filtered out by the downstream SDL polyphase
-// resampler. Good enough to round-trip a 16 kHz positive through 44.1 kHz.
-function upsampleLinear(samples, fromRate, toRate) {
-    if (fromRate === toRate) return samples;
-    const ratio = fromRate / toRate;
-    const n = Math.floor(samples.length / ratio);
-    const out = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-        const x = i * ratio;
-        const i0 = Math.floor(x);
-        const i1 = Math.min(i0 + 1, samples.length - 1);
-        const f = x - i0;
-        out[i] = samples[i0] * (1 - f) + samples[i1] * f;
-    }
-    return out;
-}
-
 const wakeRate = 16000;
-const MIC_RATE = 44100;       // matches broaudio's default engine rate
-const MIC_CHUNK = 128;        // matches SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES
 
 function runClip(name, sampleRate, samples, chunkSize) {
     let fired_total = 0;
@@ -86,9 +67,7 @@ function runClip(name, sampleRate, samples, chunkSize) {
     for (let off = 0; off < samples.length; off += chunkSize) {
         const end = Math.min(off + chunkSize, samples.length);
         const chunk = samples.subarray(off, end);
-        const fired = (sampleRate === wakeRate)
-            ? bro.wake.feed(chunk)
-            : bro.wake.feed(chunk, sampleRate);
+        const fired = bro.wake.feed(chunk);
         if (fired) {
             fired_total++;
             if (first_fire_ms < 0) {
@@ -126,38 +105,6 @@ for (const name of CLIPS) {
     const scale = 0.10 / Math.max(cur_peak, 1e-9);
     for (let i = 0; i < wav.samples.length; i++) quiet[i] = wav.samples[i] * scale;
     const r = runClip(name, wakeRate, quiet, 160);
-    console.log(name.padEnd(48),
-        'fires=' + r.fired_total,
-        'peak=' + r.peak.toFixed(3),
-        'first_fire=' + (r.first_fire_ms < 0 ? '—' : r.first_fire_ms + 'ms'),
-        'len=' + (r.durMs/1000).toFixed(2) + 's');
-}
-
-console.log('--- 44.1 kHz upsampled, through SDL_AudioStream resampler ---');
-for (const name of CLIPS) {
-    const wav = readWav16Mono(ROOT + '/' + name);
-    const up  = upsampleLinear(wav.samples, wav.sampleRate, MIC_RATE);
-    const r   = runClip(name, MIC_RATE, up, MIC_CHUNK);
-    console.log(name.padEnd(48),
-        'fires=' + r.fired_total,
-        'peak=' + r.peak.toFixed(3),
-        'first_fire=' + (r.first_fire_ms < 0 ? '—' : r.first_fire_ms + 'ms'),
-        'len=' + (r.durMs/1000).toFixed(2) + 's');
-}
-
-console.log('--- 44.1 kHz upsampled and scaled to 0.10 peak (quiet mic, full path) ---');
-for (const name of CLIPS) {
-    const wav = readWav16Mono(ROOT + '/' + name);
-    const up  = upsampleLinear(wav.samples, wav.sampleRate, MIC_RATE);
-    let cur_peak = 0;
-    for (let i = 0; i < up.length; i++) {
-        const a = Math.abs(up[i]);
-        if (a > cur_peak) cur_peak = a;
-    }
-    const scale = 0.10 / Math.max(cur_peak, 1e-9);
-    const quiet = new Float32Array(up.length);
-    for (let i = 0; i < up.length; i++) quiet[i] = up[i] * scale;
-    const r = runClip(name, MIC_RATE, quiet, MIC_CHUNK);
     console.log(name.padEnd(48),
         'fires=' + r.fired_total,
         'peak=' + r.peak.toFixed(3),

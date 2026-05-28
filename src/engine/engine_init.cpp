@@ -50,6 +50,7 @@
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
 #include "js/wake_bindings.h"
+#include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
 #include "js/server_bindings.h"
@@ -291,7 +292,7 @@ Engine::Engine(const EngineConfig& config)
 
     // 4b. Audio engine + bindings
     audioEngine_ = std::make_unique<broaudio::Engine>();
-    if (displayMode_ == DisplayMode::Windowed) {
+    if (displayMode_ == DisplayMode::Windowed || config.realAudio) {
         audioEngine_->init();
     } else {
         audioEngine_->initHeadless();
@@ -299,10 +300,15 @@ Engine::Engine(const EngineConfig& config)
     js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
 
     // bro.wake (brosoundml::WakeWord — streaming wake-word detection driven
-    // by broaudio's low-latency mic-frame hook). Must follow audio init so
+    // by broaudio's low-latency mic tap). Must follow audio init so
     // the binding can pass audioEngine_ in; the JS surface itself is inert
     // until the app calls bro.wake.listen().
     js::installWakeBindings(jsRuntime_->getContext(), audioEngine_.get());
+
+    // bro.mic (general live-mic chunk consumer — the worked example of
+    // broaudio's chunkFrames feature). Same shape as wake: a mic tap on the
+    // audio thread, drained on the main thread. Inert until bro.mic.start().
+    js::installMicBindings(jsRuntime_->getContext(), audioEngine_.get());
 
     // Apply initial audio settings from persisted user overrides
     {

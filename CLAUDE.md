@@ -142,7 +142,8 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/lighting-api.js` | PBR lighting — LightNode (dir/point/spot), materials, tonemap, ambient |
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
-| `docs/wake-api.js` | `bro.wake` — streaming wake-word detection (brosoundml::WakeWord) driven by broaudio's mic-frame hook |
+| `docs/wake-api.js` | `bro.wake` — streaming wake-word detection (brosoundml::WakeWord) driven by broaudio's mic tap |
+| `docs/mic-api.js` | `bro.mic` — live mic chunk consumer: fixed-size frames (chunkFrames) from broaudio's mic tap, per-chunk peak/RMS, resample + AGC |
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
 | `docs/tensor-api.js` | `bro.tensor` — GPU tensor + ops (brotensor sibling, CUDA / Metal): GpuTensor, dense/elementwise/softmax/layernorm/attention/MHA/embedding/concat/optim ops, batched inference variants |
