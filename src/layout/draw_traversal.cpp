@@ -1023,18 +1023,77 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                     float iw = box.contentRect.width;
                     float ih = box.contentRect.height;
                     if (iw > 0 && ih > 0) {
+                        // CSS object-fit / object-position. The default (fill)
+                        // stretches the image to the content box. cover/contain/
+                        // none/scale-down preserve the intrinsic aspect ratio and
+                        // position the result via object-position (default
+                        // center). cover/none can overflow the content box, so we
+                        // clip to it.
+                        float dx = ix, dy = iy, dw = iw, dh = ih;
+                        float imgW = static_cast<float>(it->second.width);
+                        float imgH = static_cast<float>(it->second.height);
+                        std::string fit = "fill";
+                        if (auto ofIt = style.find("object-fit"); ofIt != style.end() && !ofIt->second.empty())
+                            fit = ofIt->second;
+                        bool needClip = false;
+                        if (fit != "fill" && imgW > 0 && imgH > 0) {
+                            float fitScale = 1.0f;
+                            if (fit == "contain") {
+                                fitScale = std::min(iw / imgW, ih / imgH);
+                            } else if (fit == "cover") {
+                                fitScale = std::max(iw / imgW, ih / imgH);
+                            } else if (fit == "none") {
+                                fitScale = 1.0f;
+                            } else if (fit == "scale-down") {
+                                fitScale = std::min(1.0f, std::min(iw / imgW, ih / imgH));
+                            }
+                            dw = imgW * fitScale;
+                            dh = imgH * fitScale;
+
+                            // object-position: place the scaled box within the
+                            // content box. Default "50% 50%". Each axis fraction
+                            // f maps the f-point of the image to the f-point of
+                            // the box: offset = (boxSize - drawSize) * f.
+                            float fx = 0.5f, fy = 0.5f;
+                            if (auto opIt = style.find("object-position");
+                                opIt != style.end() && !opIt->second.empty()) {
+                                std::istringstream iss(opIt->second);
+                                std::string t1, t2;
+                                iss >> t1; iss >> t2;
+                                auto axisFrac = [](const std::string& tok, bool isX, float def) -> float {
+                                    if (tok.empty()) return def;
+                                    if (tok == "left")   return isX ? 0.0f : def;
+                                    if (tok == "right")  return isX ? 1.0f : def;
+                                    if (tok == "top")    return isX ? def : 0.0f;
+                                    if (tok == "bottom") return isX ? def : 1.0f;
+                                    if (tok == "center") return 0.5f;
+                                    if (tok.back() == '%')
+                                        return std::strtof(tok.c_str(), nullptr) / 100.0f;
+                                    return def;  // px offsets unsupported → default
+                                };
+                                fx = axisFrac(t1, true, 0.5f);
+                                fy = axisFrac(t2.empty() ? t1 : t2, false, 0.5f);
+                            }
+                            dx = ix + (iw - dw) * fx;
+                            dy = iy + (ih - dh) * fy;
+                            needClip = (dw > iw + 0.5f) || (dh > ih + 0.5f) ||
+                                       dx < ix - 0.5f || dy < iy - 0.5f;
+                        }
+
+                        if (needClip) { renderer_->save(); renderer_->setClip(ix, iy, iw, ih); }
                         if (it->second.isSvg) {
-                            // Recorded; replayer re-parses and draws the SVG markup at content rect.
+                            // Recorded; replayer re-parses and draws the SVG markup at the fitted rect.
                             renderer_->drawSvgMarkup(
                                 reinterpret_cast<const char*>(it->second.data.data()),
                                 it->second.data.size(),
-                                ix, iy, iw, ih);
+                                dx, dy, dw, dh);
                         } else {
                             renderer_->drawImage(it->second.data.data(),
                                                  it->second.data.size(),
-                                                 ix, iy, iw, ih,
+                                                 dx, dy, dw, dh,
                                                  it->second.id);
                         }
+                        if (needClip) renderer_->restore();
                     }
                 }
             }
