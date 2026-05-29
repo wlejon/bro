@@ -21,6 +21,7 @@
 #include "layout/skia_text_metrics.h"
 #include "net/net_service.h"
 #include "physics/physics_world.h"
+#include "audio_inference/audio_inference.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "render/gl_context.h"
@@ -109,8 +110,10 @@ void Engine::run() {
 
             jsRuntime_->executePendingJobs();
             js::tickWorkers(jsRuntime_->getContext());
-            // Drain pending wake-word fires from the audio thread and run the
-            // JS onFire callback on this (main) thread.
+            // Wake the audio-inference worker to drain the mic rings and run its
+            // models off this thread, then deliver any results (wake fires) it
+            // published since last frame on this (main) thread.
+            if (audioInference_) audioInference_->signalPump();
             js::tickWake(jsRuntime_->getContext());
             js::tickMic(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
@@ -385,8 +388,10 @@ void Engine::run() {
         // 3b. Run pending JS jobs (promises, etc.)
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
-        // Drain pending wake-word fires from the audio thread and run the
-        // JS onFire callback on this (main) thread.
+        // Wake the audio-inference worker to drain the mic rings and run its
+        // models off this thread, then deliver any results (wake fires) it
+        // published since last frame on this (main) thread.
+        if (audioInference_) audioInference_->signalPump();
         js::tickWake(jsRuntime_->getContext());
         js::tickMic(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();

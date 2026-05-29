@@ -1,27 +1,48 @@
 // JS bindings for brosoundml::WakeWord — streaming wake-word detection.
 //
-// Installed onto bro.wake.* by installWakeBindings(). One detector at a
-// time per JS context (the typical app needs one wake phrase).
+// Installed onto bro.wake.* by installWakeBindings(). One detector at a time per
+// JS context (the typical app needs one wake phrase).
 //
-// Threading model:
-//   - bro.wake.listen() registers a broaudio MicTap configured for the wake
-//     model's expected sample rate, with AGC enabled (the brosoundml training
-//     pipeline peak-normalises every clip to 0.99, so live mic input has to
-//     be lifted to match). broaudio owns the SDL polyphase resampler and the
-//     AGC; the tap callback just runs WakeWord::feed() on the audio thread.
-//   - When feed() returns true (debounced event), the audio thread increments
-//     an atomic fire counter. No JS code runs on the audio thread.
-//   - The main thread drains the counter once per frame via tickWake() and
-//     invokes the stored JS onFire callback exactly once per pending fire.
+// bro.wake is a thin tenant of the engine's audio-inference subsystem
+// (engine::AudioInference). It holds no threading of its own — the subsystem
+// owns the worker thread; broaudio owns the real-time DSP. Three concerns, three
+// threads:
+//
+//   - PRODUCER (real-time audio thread): bro.wake.listen() registers a broaudio
+//     MicTap at the wake model's sample rate with AGC enabled (the brosoundml
+//     training pipeline peak-normalises every clip to ~0.99, so live mic input
+//     must be lifted to match). broaudio owns the polyphase resampler and the
+//     AGC — both CPU. The tap callback does the one thing an audio-thread
+//     callback may always safely do: copy the samples into a lock-free SPSC
+//     ring. It never touches the model, the GPU, or the heap, so it can never
+//     stall mic capture no matter what other threads (e.g. a worker running an
+//     8B LLM on CUDA) are doing on the device.
+//   - INFERENCE thread (engine::AudioInference worker; or, headless, the calling
+//     thread via stepInline()): drains the ring and runs WakeWord::feed() —
+//     which issues host-synchronizing CUDA (per-frame alloc/free + a logit
+//     read-back). Running it here keeps those syncs off BOTH the audio thread
+//     (no mic starvation) and the main thread (no UI hiccups during a response).
+//   - MAIN thread: tickWake() drains an atomic fire counter the inference thread
+//     publishes and invokes the JS onFire callback, so onFire always runs
+//     single-threaded with the rest of the app.
+//
+// The detector rolls continuously (we feed everything we drain); suspend() only
+// gates whether a fire is delivered to onFire, never whether audio is processed
+// — so there is no freeze/thaw of the streaming window.
 //
 // Lifetime:
-//   - The detector is stored as shared_ptr<WakeWord> in the binding state.
-//     The tap callback captures another shared_ptr so even if bro.wake.stop()
-//     drops the binding's reference while the audio thread is mid-feed(),
-//     the WakeWord stays alive until broaudio's RCU domain reclaims the
-//     previous tap list.
+//   - WakeWord (shared_ptr) is captured into the inference task's process
+//     closure, which the subsystem worker owns. The binding holds a second
+//     shared_ptr only for the atomic tunable setters / score reads, and drops it
+//     on stop() before the worker reclaims the task — so the model's destructor
+//     (and its CUDA frees) runs on the worker thread.
+//   - The ring (shared_ptr<PcmRing>) is held by both the binding and the tap
+//     callback, so a callback still in flight after stop()/re-listen() writes
+//     into its own (now unread) ring rather than racing a freshly installed one.
 
 #include "js/wake_bindings.h"
+
+#include "audio_inference/audio_inference.h"
 
 #include <broaudio/engine.h>
 #include <broaudio/mic_tap.h>
@@ -32,6 +53,7 @@
 #include <quickjs.h>
 
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -43,34 +65,51 @@ namespace bro::js {
 
 namespace {
 
+using engine::AudioInference;
+using engine::PcmRing;
+
 // TU-local singleton state — one wake-word detector per JS context. A second
 // listen() implicitly stop()s the previous detector.
 struct WakeState {
     broaudio::Engine* audioEngine = nullptr;
+    AudioInference*   inference   = nullptr;
     JSContext*        ctx         = nullptr;
 
+    // Held for the atomic tunable setters (set_threshold) and score reads. The
+    // inference task's process closure holds the strong ref that runs feed();
+    // this one is dropped on stop() so the model is destroyed on the worker.
     std::shared_ptr<brosoundml::WakeWord> wake;
     JSValue                                onFire = JS_UNDEFINED;
 
-    // Audio-thread-observed max of wake->last_score() across every feed()
-    // call. Lets a JS probe see every inference's score, not just the value
-    // that happens to be live when JS samples lastScore. Reset by listen().
+    // Published by the inference thread, drained by tickWake (main thread).
+    // scoreMaxX10000: max of wake->last_score()*10000 across every feed() since
+    // listen(), so a JS probe sees transient spikes a low-cadence lastScore()
+    // sample would miss. firePending: detected-and-not-suspended fires awaiting
+    // onFire delivery.
     std::atomic<int> scoreMaxX10000{0};
-
-    // Audio thread → main thread fire counter.
     std::atomic<int> firePending{0};
 
-    // Suspend gate read by the audio thread (relaxed).
+    // The SPSC ring carrying wake-rate PCM from the producer to the inference
+    // thread, and the AudioInference task that consumes it. Per-instance; the
+    // shared_ptr lets a late tap callback write safely after a re-listen.
+    std::shared_ptr<PcmRing>     ring;
+    AudioInference::TaskId       taskId = AudioInference::kInvalidTask;
+
+    // Action gate. Written by suspend()/resume() (main thread), read by the
+    // inference thread inside the process closure. When true the detector KEEPS
+    // feeding (the window must roll continuously so resume never faces a frozen
+    // or warmup-gapped window) but fires are not counted. It gates the action,
+    // not the audio.
     std::atomic<bool> suspended{false};
 
-    // The broaudio mic tap that drives this detector. kInvalidMicTapId when
-    // no detector is active.
+    // The broaudio mic tap that drives this detector. kInvalidMicTapId when no
+    // detector is active.
     broaudio::MicTapId tapId = broaudio::kInvalidMicTapId;
 
-    // Per-call Agc + scratch used by js_feed when the caller hands samples at
-    // the model's native rate. Main-thread only; lives separately from the
-    // tap's audio-thread AGC because the two streams (live mic vs scripted
-    // replay) have independent loudness histories.
+    // Per-call Agc + scratch used by js_feed when the caller hands samples at the
+    // model's native rate. Main-thread only; lives separately from the tap's
+    // audio-thread AGC because the two streams (live mic vs scripted replay) have
+    // independent loudness histories.
     broaudio::Agc      feedAgc{};
     std::vector<float> feedScratch;
 
@@ -81,13 +120,13 @@ WakeState g_wake;
 
 // Configure the AGC the wake tap installs into broaudio.
 //
-// brosoundml's wake training pipeline peak-normalises every clip to 0.99,
-// so BC-ResNet expects loud input. A real desktop mic typically delivers
-// peak 0.05–0.2 and never fires the model without normalisation.
+// brosoundml's wake training pipeline peak-normalises every clip to 0.99, so
+// BC-ResNet expects loud input. A real desktop mic typically delivers peak
+// 0.05–0.2 and never fires the model without normalisation.
 //
 // Half-life of 1 s bridges a typical word (300 ms speech + 700 ms silence)
-// without pumping within an utterance; the 0.01 gate keeps room hiss from
-// being amplified to speech-band loudness.
+// without pumping within an utterance; the 0.01 gate keeps room hiss from being
+// amplified to speech-band loudness.
 broaudio::AgcConfig wakeAgcConfig() {
     broaudio::AgcConfig c;
     c.targetPeak  = 0.95f;
@@ -99,17 +138,30 @@ broaudio::AgcConfig wakeAgcConfig() {
 
 void shutdownActiveDetector() {
     if (!g_wake.active) return;
+    // Stop the producer first so no more samples enter the ring.
     if (g_wake.audioEngine && g_wake.tapId != broaudio::kInvalidMicTapId) {
         g_wake.audioEngine->removeMicTap(g_wake.tapId);
     }
     g_wake.tapId = broaudio::kInvalidMicTapId;
+    // Unregister the inference task. The worker drops its strong ref to the
+    // model when it processes this; dropping ours here first means the worker
+    // holds the last ref, so the model's destructor (CUDA frees) runs there.
+    if (g_wake.inference && g_wake.taskId != AudioInference::kInvalidTask) {
+        g_wake.inference->removeTask(g_wake.taskId);
+    }
+    g_wake.taskId = AudioInference::kInvalidTask;
     g_wake.wake.reset();
     if (g_wake.ctx && !JS_IsUndefined(g_wake.onFire)) {
         JS_FreeValue(g_wake.ctx, g_wake.onFire);
         g_wake.onFire = JS_UNDEFINED;
     }
     g_wake.firePending.store(0, std::memory_order_relaxed);
+    g_wake.scoreMaxX10000.store(0, std::memory_order_relaxed);
     g_wake.suspended.store(false, std::memory_order_relaxed);
+    // Drop our reference to the ring. A tap callback still in flight holds its
+    // own shared_ptr, so it writes into the (now unread) ring safely; the buffer
+    // is freed once that callback returns and broaudio reclaims the tap.
+    g_wake.ring.reset();
     g_wake.feedAgc.reset();
     g_wake.feedScratch.clear();
     g_wake.active = false;
@@ -188,12 +240,42 @@ const char* deviceName(brotensor::Device d) {
     return "?";
 }
 
+// The inference task body. Runs on the AudioInference thread (or, headless, the
+// calling thread). `wake` is the strong ref that owns the model on the worker;
+// the closure reads/writes only g_wake's atomics, which live for the program's
+// lifetime, so a stale closure that runs once more before removal is harmless.
+AudioInference::ProcessFn makeProcess(std::shared_ptr<brosoundml::WakeWord> wake) {
+    return [wake](const float* samples, int n) {
+        bool fired = false;
+        try {
+            fired = wake->feed(samples, n);
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[ERROR] [wake] feed: %s\n", e.what());
+            return;
+        }
+        const int sx = static_cast<int>(wake->last_score() * 10000.0f);
+        int prev = g_wake.scoreMaxX10000.load(std::memory_order_relaxed);
+        while (sx > prev &&
+               !g_wake.scoreMaxX10000.compare_exchange_weak(
+                   prev, sx, std::memory_order_relaxed)) {
+            // prev reloaded by compare_exchange_weak on failure
+        }
+        if (fired && !g_wake.suspended.load(std::memory_order_relaxed)) {
+            g_wake.firePending.fetch_add(1, std::memory_order_release);
+        }
+    };
+}
+
 // ─── JS-callable functions ─────────────────────────────────────────────────
 
 JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!g_wake.audioEngine) {
         return JS_ThrowInternalError(ctx,
             "bro.wake.listen: audio engine not available");
+    }
+    if (!g_wake.inference) {
+        return JS_ThrowInternalError(ctx,
+            "bro.wake.listen: audio-inference subsystem not available");
     }
     if (argc < 1 || !JS_IsObject(argv[0])) {
         return JS_ThrowTypeError(ctx,
@@ -251,8 +333,16 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         }
         if (refractoryMs >= 0) wake->set_refractory_ms(refractoryMs);
 
+        // Ring spans ~2 s of wake-rate audio — orders of magnitude more than the
+        // one-or-two-frame consumer latency, so it only ever drops if the
+        // inference thread stalls for seconds.
+        const int wakeRate = wake->config().sample_rate;
+        auto ring = std::make_shared<PcmRing>(
+            static_cast<std::size_t>(wakeRate) * 2u);
+
         g_wake.ctx    = ctx;
         g_wake.wake   = wake;
+        g_wake.ring   = ring;
         g_wake.onFire = JS_DupValue(ctx, onFireVal);
         g_wake.firePending.store(0, std::memory_order_relaxed);
         g_wake.suspended.store(false, std::memory_order_relaxed);
@@ -261,31 +351,27 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         g_wake.feedAgc.reset();
         JS_FreeValue(ctx, onFireVal);
 
-        // Configure the tap. broaudio owns the resampler (mic rate → wake
-        // rate, polyphase windowed-sinc) and the AGC. The callback shrinks
-        // to: suspend gate + wake->feed + bump firePending on debounced
-        // fire. Everything else lives in broaudio.
+        // Register the inference task: drain `ring`, run feed() on the inference
+        // thread, publish fires. The closure captures a strong ref to the model.
+        g_wake.taskId = g_wake.inference->addTask(ring, makeProcess(wake));
+
+        // Configure the tap. broaudio owns the resampler (mic rate → wake rate,
+        // polyphase windowed-sinc) and the AGC — both CPU, real-time safe. The
+        // callback copies the samples into the SPSC ring; nothing else.
         broaudio::MicTapConfig tapCfg;
-        tapCfg.targetRate  = wake->config().sample_rate;
+        tapCfg.targetRate  = wakeRate;
         tapCfg.chunkFrames = 0;   // pass the resampler's natural cadence through
         tapCfg.agc         = true;
         tapCfg.agcCfg      = wakeAgcConfig();
 
-        auto wakeRef = wake;
+        // Capture the ring (not the model) — the audio thread must never touch
+        // the detector. The shared_ptr keeps this instance's ring alive for any
+        // callback still in flight after stop()/re-listen().
+        auto ringRef = ring;
         g_wake.tapId = g_wake.audioEngine->addMicTap(
             tapCfg,
-            [wakeRef](const float* samples, int n) {
-                if (g_wake.suspended.load(std::memory_order_relaxed)) return;
-                if (!wakeRef || n <= 0) return;
-                const bool fired = wakeRef->feed(samples, n);
-                const float s = wakeRef->last_score();
-                int sx = static_cast<int>(s * 10000.0f);
-                int prev = g_wake.scoreMaxX10000.load(std::memory_order_relaxed);
-                while (sx > prev &&
-                       !g_wake.scoreMaxX10000.compare_exchange_weak(prev, sx)) {}
-                if (fired) {
-                    g_wake.firePending.fetch_add(1, std::memory_order_relaxed);
-                }
+            [ringRef](const float* samples, int n) {
+                ringRef->write(samples, n);
             });
         if (g_wake.tapId == broaudio::kInvalidMicTapId) {
             shutdownActiveDetector();
@@ -294,15 +380,14 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         }
 
         // Mic capture must be running for the tap to receive frames. Safe to
-        // call when already started — getUserMedia in audio_bindings shares
-        // the same SDL stream.
+        // call when already started — getUserMedia in audio_bindings shares the
+        // same SDL stream.
         if (!g_wake.audioEngine->isMicCapturing()) {
             g_wake.audioEngine->startMicCapture();
         }
         g_wake.active = true;
 
         const int micRate  = g_wake.audioEngine->sampleRate();
-        const int wakeRate = wake->config().sample_rate;
         std::fprintf(stderr,
             "[INFO] [wake] listening (device=%s, threshold=%.3f, mic=%d Hz, model=%d Hz%s)\n",
             deviceName(dev), threshold, micRate, wakeRate,
@@ -321,11 +406,15 @@ JSValue js_stop(JSContext*, JSValueConst, int, JSValueConst*) {
 }
 
 JSValue js_suspend(JSContext*, JSValueConst, int, JSValueConst*) {
+    // Stop ACTING on fires (recording / thinking / speaking). The detector keeps
+    // feeding on the inference thread so its rolling window stays continuous.
     g_wake.suspended.store(true, std::memory_order_relaxed);
     return JS_UNDEFINED;
 }
 
 JSValue js_resume(JSContext*, JSValueConst, int, JSValueConst*) {
+    // Re-enable acting on fires. No reset: the window has been rolling the whole
+    // time, so it already reflects current audio and is warmed.
     g_wake.suspended.store(false, std::memory_order_relaxed);
     return JS_UNDEFINED;
 }
@@ -349,14 +438,15 @@ JSValue js_setThreshold(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     }
     double t = 0.0;
     JS_ToFloat64(ctx, &t, argv[0]);
+    // WakeWord setters are atomic; safe to call while the inference thread feeds.
     if (g_wake.wake) g_wake.wake->set_threshold(static_cast<float>(t));
     return JS_UNDEFINED;
 }
 
 // Diagnostic surface over the underlying broaudio mic tap. Returns
-// { framesDelivered, samplesDelivered, rollingPeak } or null when no tap is
-// installed. Lets a test or a debug UI confirm mic frames are reaching the
-// detector without instrumenting the binding.
+// { framesDelivered, samplesDelivered, rollingPeak, scoreMax } or null when no
+// tap is installed. Lets a test or a debug UI confirm mic frames are reaching
+// the detector without instrumenting the binding.
 JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     if (!g_wake.active || !g_wake.audioEngine ||
         g_wake.tapId == broaudio::kInvalidMicTapId) {
@@ -369,8 +459,8 @@ JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JS_SetPropertyStr(ctx, o, "samplesDelivered",
         JS_NewInt64(ctx, static_cast<int64_t>(s.samplesDelivered)));
     JS_SetPropertyStr(ctx, o, "rollingPeak", JS_NewFloat64(ctx, s.rollingPeak));
-    // Per-inference max observed since listen(). Captures transient score
-    // spikes that lastScore() misses when sampled at low cadence.
+    // Per-inference max observed since listen(). Captures transient score spikes
+    // that lastScore() misses when sampled at low cadence.
     JS_SetPropertyStr(ctx, o, "scoreMax",
         JS_NewFloat64(ctx,
             g_wake.scoreMaxX10000.load(std::memory_order_relaxed) / 10000.0));
@@ -378,18 +468,35 @@ JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 
 // Manual feed for tests / scripted scenarios. Samples must already be at the
-// wake model's native rate (pass it as the optional second arg to assert).
-// The binding copies into a local scratch buffer, runs its own per-call Agc
-// (state independent of the live tap, so scripted replay and the live mic keep
-// separate loudness histories), and forwards to WakeWord::feed. Returns whether
-// the model fired on this chunk.
+// wake model's native rate (pass it as the optional second arg to assert). The
+// binding copies into scratch and runs its own per-call Agc (state independent
+// of the live tap, so scripted replay and the live mic keep separate loudness
+// histories).
+//
+// Then it honours the one-thread-for-feed() invariant by mode:
+//   - Headless (no inference worker): the scripting thread IS the inference
+//     thread (stepInline runs here too), so feed() runs synchronously and the
+//     call returns whether it fired — the per-chunk contract scripted tests use.
+//   - Threaded (windowed/server): feed() may run only on the worker, so the
+//     samples are written into the SAME ring the live tap feeds and the fire
+//     surfaces via onFire on the next tickWake. Returns undefined.
+//
+// Refuses to run while live capture is active: that would make the ring a
+// two-producer race (the audio-thread tap + this call). Headless/offline has no
+// live capture.
 //
 // To exercise broaudio's resample + AGC + chunk path with mic-rate audio, use
 // bro.mic instead — bro.wake.feed deliberately does not reach into the audio
 // engine's tap dispatch.
 JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!g_wake.wake)
+    if (!g_wake.active || !g_wake.ring)
         return JS_ThrowInternalError(ctx, "bro.wake.feed: no active detector");
+    if (g_wake.audioEngine && g_wake.audioEngine->isMicCapturing()) {
+        return JS_ThrowInternalError(ctx,
+            "bro.wake.feed: cannot feed while live mic capture is active "
+            "(feed is for headless/offline use; the live tap already writes the "
+            "ring)");
+    }
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "bro.wake.feed(Float32Array, sampleRate?)");
     size_t byteOff = 0, viewLen = 0, bpe = 0;
@@ -402,7 +509,7 @@ JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(ctx, "bro.wake.feed: argument must be a Float32Array");
     }
     const int n = static_cast<int>(viewLen / sizeof(float));
-    const int wakeRate = g_wake.wake->config().sample_rate;
+    const int wakeRate = g_wake.wake ? g_wake.wake->config().sample_rate : 0;
 
     if (argc >= 2 && JS_IsNumber(argv[1])) {
         int32_t r = 0; JS_ToInt32(ctx, &r, argv[1]);
@@ -414,26 +521,43 @@ JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         }
     }
 
+    if (static_cast<int>(g_wake.feedScratch.size()) < n) {
+        g_wake.feedScratch.resize(static_cast<std::size_t>(n));
+    }
+    std::memcpy(g_wake.feedScratch.data(), p + byteOff,
+                static_cast<std::size_t>(n) * sizeof(float));
+    g_wake.feedAgc.apply(g_wake.feedScratch.data(), n, wakeRate);
+
+    // Threaded (windowed/server): hand off via the ring; the worker runs feed().
+    if (g_wake.inference && g_wake.inference->threaded()) {
+        g_wake.ring->write(g_wake.feedScratch.data(), n);
+        return JS_UNDEFINED;
+    }
+
+    // Headless: run feed() synchronously on this (the inference) thread and
+    // return whether it fired, mirroring the live path's bookkeeping.
     bool fired = false;
     try {
-        if (static_cast<int>(g_wake.feedScratch.size()) < n) {
-            g_wake.feedScratch.resize(static_cast<std::size_t>(n));
-        }
-        std::memcpy(g_wake.feedScratch.data(), p + byteOff,
-                    static_cast<std::size_t>(n) * sizeof(float));
-        g_wake.feedAgc.apply(g_wake.feedScratch.data(), n, wakeRate);
         fired = g_wake.wake->feed(g_wake.feedScratch.data(), n);
-        if (fired) g_wake.firePending.fetch_add(1, std::memory_order_relaxed);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "bro.wake.feed: %s", e.what());
+    }
+    const int sx = static_cast<int>(g_wake.wake->last_score() * 10000.0f);
+    if (sx > g_wake.scoreMaxX10000.load(std::memory_order_relaxed)) {
+        g_wake.scoreMaxX10000.store(sx, std::memory_order_relaxed);
+    }
+    if (fired && !g_wake.suspended.load(std::memory_order_relaxed)) {
+        g_wake.firePending.fetch_add(1, std::memory_order_release);
     }
     return JS_NewBool(ctx, fired);
 }
 
 } // namespace
 
-void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine) {
+void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine,
+                         engine::AudioInference* inference) {
     g_wake.audioEngine = audioEngine;
+    g_wake.inference   = inference;
     g_wake.ctx         = ctx;
 
     JSValue global = JS_GetGlobalObject(ctx);
@@ -473,9 +597,12 @@ void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine) {
 
 void tickWake(JSContext* ctx) {
     if (!g_wake.active) return;
+
+    // Deliver fires the inference thread published since last frame. Inference
+    // itself ran on the AudioInference worker (windowed/server) or inline during
+    // the headless pump — never here. This is pure main-thread result delivery.
     int fires = g_wake.firePending.exchange(0, std::memory_order_acquire);
-    if (fires <= 0) return;
-    if (JS_IsUndefined(g_wake.onFire)) return;
+    if (fires <= 0 || JS_IsUndefined(g_wake.onFire)) return;
     for (int i = 0; i < fires; ++i) {
         JSValue r = JS_Call(ctx, g_wake.onFire, JS_UNDEFINED, 0, nullptr);
         if (JS_IsException(r)) {
@@ -492,6 +619,7 @@ void tickWake(JSContext* ctx) {
 void cleanupWakeBindings(JSContext* /*ctx*/) {
     shutdownActiveDetector();
     g_wake.audioEngine = nullptr;
+    g_wake.inference   = nullptr;
     g_wake.ctx         = nullptr;
 }
 

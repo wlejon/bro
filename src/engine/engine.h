@@ -56,6 +56,7 @@ namespace bro::engine {
 
 class FramePresenter;
 class LayoutPipeline;
+class AudioInference;
 
 enum class DisplayMode { Windowed, Headless, Server };
 
@@ -649,6 +650,7 @@ private:
     OverlayManager overlayMgr_;
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
+    std::unique_ptr<AudioInference> audioInference_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
     std::unique_ptr<net::NetService> netService_;
     struct SceneGraphEntry {

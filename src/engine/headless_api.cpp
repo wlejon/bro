@@ -3,6 +3,7 @@
 
 #include "engine/engine.h"
 #include "physics/physics_world.h"
+#include "audio_inference/audio_inference.h"
 
 #include "observer_check.js.h"
 
@@ -241,6 +242,10 @@ void Engine::advanceTime(double ms) {
         timers_->fireAnimationFrames(virtualTime_);
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
+        // Run audio-inference models inline on this thread (headless has no
+        // worker thread — the parity convention, cf. physicsWorld_->stepInline)
+        // so wake fires are produced deterministically before we deliver them.
+        if (audioInference_) audioInference_->stepInline();
         bro::js::tickWake(jsRuntime_->getContext());
         bro::js::tickMic(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();

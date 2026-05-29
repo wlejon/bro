@@ -57,6 +57,7 @@
 #include "js/headless_bindings.h"
 
 #include "physics/physics_world.h"
+#include "audio_inference/audio_inference.h"
 #include "net/net_service.h"
 #include "scene/scene_graph.h"
 #include "api/api.h"
@@ -299,11 +300,20 @@ Engine::Engine(const EngineConfig& config)
     }
     js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
 
+    // Audio-inference subsystem: owns the background worker thread that runs
+    // audio-driven NN models (wake word today) off the audio thread and off the
+    // main thread. Threaded in Windowed/Server; pumped inline in Headless for
+    // deterministic tests — the same parity pattern as physicsWorld_ above.
+    audioInference_ = std::make_unique<AudioInference>();
+    if (displayMode_ != DisplayMode::Headless)
+        audioInference_->startThread();
+
     // bro.wake (brosoundml::WakeWord — streaming wake-word detection driven
-    // by broaudio's low-latency mic tap). Must follow audio init so
-    // the binding can pass audioEngine_ in; the JS surface itself is inert
-    // until the app calls bro.wake.listen().
-    js::installWakeBindings(jsRuntime_->getContext(), audioEngine_.get());
+    // by broaudio's low-latency mic tap, inference run by audioInference_).
+    // Must follow audio + inference init so the binding can wire both in; the
+    // JS surface itself is inert until the app calls bro.wake.listen().
+    js::installWakeBindings(jsRuntime_->getContext(), audioEngine_.get(),
+                            audioInference_.get());
 
     // bro.mic (general live-mic chunk consumer — the worked example of
     // broaudio's chunkFrames feature). Same shape as wake: a mic tap on the

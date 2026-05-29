@@ -33,6 +33,7 @@
 #include "render/recording_renderer.h"
 #include "scene/scene_graph.h"
 #include "physics/physics_world.h"
+#include "audio_inference/audio_inference.h"
 #include "net/net_service.h"
 #include "webgl/webgl2_context.h"
 #include "platform/event_loop.h"
@@ -102,12 +103,19 @@ Engine::~Engine() {
         JSContext* ctx = jsRuntime_->getContext();
         js::setElementFinalizerShutdown(true);
         // Wake/mic cleanup must run before audioEngine_.reset() — it removes
-        // the mic taps that drive WakeWord::feed / chunk delivery on the audio
-        // thread. Leaving a tap attached lets the audio thread keep launching
-        // CUDA work into a brotensor context that's being torn down by static
-        // destructors, which has produced kernel-level driver faults on exit.
+        // the mic taps that feed the audio-inference rings on the audio thread,
+        // and unregisters the wake task. Leaving a tap attached lets the audio
+        // thread keep writing rings, and leaving the inference worker running
+        // lets it keep launching CUDA work into a brotensor context that's being
+        // torn down by static destructors — which has produced kernel-level
+        // driver faults on exit.
         js::cleanupWakeBindings(ctx);
         js::cleanupMicBindings(ctx);
+        // Join the audio-inference worker now: the tap is detached (no more ring
+        // writes) and the wake task unregistered, so the worker drains its final
+        // command, destroys the model (its CUDA frees run on the worker thread),
+        // and exits before audio + brotensor teardown below.
+        if (audioInference_) audioInference_->shutdown();
         js::cleanupSttBindings(ctx);
         js::cleanupLmBindings(ctx);
         js::cleanupTtsBindings(ctx);
@@ -217,6 +225,8 @@ Engine::~Engine() {
     // destructors reference it (removeVoice, close).
     jsRuntime_.reset();
     physicsWorld_.reset();
+    // Worker already joined above (during binding cleanup); this just frees it.
+    audioInference_.reset();
     audioEngine_.reset();
     document_.reset();
     timers_.reset();
