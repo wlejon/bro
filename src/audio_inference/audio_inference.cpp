@@ -1,8 +1,10 @@
 #include "audio_inference/audio_inference.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <exception>
+#include <thread>
 #include <utility>
 
 namespace bro::engine {
@@ -127,41 +129,30 @@ void AudioInference::pumpTasks() {
 }
 
 void AudioInference::workerFunc() {
-    for (;;) {
-        // Block while idle; a signalPump()/shutdown() store + notify wakes us.
-        // If a store already moved state_ off kIdle, wait() returns at once —
-        // so there is no lost-wakeup window between the CAS below and here.
-        state_.wait(kIdle, std::memory_order_acquire);
-
-        const std::uint32_t s = state_.load(std::memory_order_acquire);
-        if (s == kShutdown) break;
-        if (s != kPump) continue;   // spurious
-
-        state_.store(kBusy, std::memory_order_release);
+    // Self-paced: we drain the rings and run inference on our OWN clock, fully
+    // independent of the render frame loop. The audio thread only ever writes the
+    // lock-free PcmRing (no signal, no syscall — it stays real-time pure); the
+    // main thread only delivers results (tickWake). Nothing throttles us when
+    // rendering hiccups, and we never burden a frame.
+    //
+    // A short fixed drain interval keeps detection latency low. Combined with the
+    // ~2 s ring, no samples are lost even if the frame loop stalls for the better
+    // part of a second — the requirement that wake reliability not be a function
+    // of frame rate. The exact OS sleep granularity is immaterial: any sub-second
+    // cadence drains well within the ring span, and an empty ring read is a no-op
+    // (pumpTasks early-outs), so idle cost is negligible.
+    using namespace std::chrono;
+    constexpr auto kDrainInterval = milliseconds(5);
+    while (state_.load(std::memory_order_acquire) != kShutdown) {
         drainCommands();
         pumpTasks();
-
-        // Return to idle unless a new pump (or shutdown) arrived while we were
-        // busy. If signalPump() overwrote kBusy with kPump, the CAS fails and we
-        // loop to service it; wait() at the top will not block (state != kIdle).
-        std::uint32_t expected = kBusy;
-        if (!state_.compare_exchange_strong(expected, kIdle,
-                                            std::memory_order_acq_rel)) {
-            if (expected == kShutdown) break;
-            // expected == kPump: fall through and loop again.
-        }
+        std::this_thread::sleep_for(kDrainInterval);
     }
 
     // Shutting down: apply any final commands, then destroy the tasks HERE so
     // each model's destructor (and its CUDA frees) runs on the worker thread.
     drainCommands();
     tasks_.clear();
-}
-
-void AudioInference::signalPump() {
-    if (!thread_.joinable()) return;   // headless / not threaded: stepInline() drives
-    state_.store(kPump, std::memory_order_release);
-    state_.notify_one();
 }
 
 void AudioInference::stepInline() {
@@ -172,8 +163,9 @@ void AudioInference::stepInline() {
 
 void AudioInference::shutdown() {
     if (thread_.joinable()) {
+        // The worker self-paces, so it isn't parked on the atomic — it observes
+        // kShutdown on its next drain tick (within one interval) and exits.
         state_.store(kShutdown, std::memory_order_release);
-        state_.notify_one();
         thread_.join();
         return;
     }

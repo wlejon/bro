@@ -111,10 +111,9 @@ void Engine::run() {
 
             jsRuntime_->executePendingJobs();
             js::tickWorkers(jsRuntime_->getContext());
-            // Wake the audio-inference worker to drain the mic rings and run its
-            // models off this thread, then deliver any results (wake fires) it
-            // published since last frame on this (main) thread.
-            if (audioInference_) audioInference_->signalPump();
+            // Deliver any results (wake fires) the self-paced audio-inference
+            // worker published since last frame on this (main) thread. The worker
+            // drains the mic rings on its own clock — it is not pumped from here.
             js::tickWake(jsRuntime_->getContext());
             js::tickMic(jsRuntime_->getContext());
             js::tickAsync(jsRuntime_->getContext());
@@ -390,10 +389,9 @@ void Engine::run() {
         // 3b. Run pending JS jobs (promises, etc.)
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
-        // Wake the audio-inference worker to drain the mic rings and run its
-        // models off this thread, then deliver any results (wake fires) it
-        // published since last frame on this (main) thread.
-        if (audioInference_) audioInference_->signalPump();
+        // Deliver any results (wake fires) the self-paced audio-inference worker
+        // published since last frame on this (main) thread. The worker drains the
+        // mic rings on its own clock — it is not pumped from here.
         js::tickWake(jsRuntime_->getContext());
         js::tickMic(jsRuntime_->getContext());
         js::tickAsync(jsRuntime_->getContext());

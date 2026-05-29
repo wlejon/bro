@@ -47,12 +47,16 @@ struct PcmRing {
 // VAD later — so NN inference stops being a special case wedged onto whichever
 // thread happened to deliver the samples.
 //
-// Threading mirrors bro::physics::PhysicsWorld exactly:
-//   - startThread() spawns the worker in Windowed/Server mode. The main thread
-//     wakes it once per frame with signalPump(); the worker drains the rings and
-//     runs the models a frame or two behind, like the render pipeline reading a
-//     slightly stale snapshot. The audio thread never wakes the worker (it stays
-//     real-time pure) — only the main thread does.
+// Threading:
+//   - startThread() spawns the worker in Windowed/Server mode. The worker is
+//     SELF-PACED: it drains the rings and runs the models on its own short clock,
+//     independent of the render frame loop. The audio thread only writes a
+//     tenant's lock-free PcmRing (it stays real-time pure, never signals); the
+//     main thread only delivers results (tickWake). So inference cadence does not
+//     track frame rate — rendering hiccups can neither throttle detection nor
+//     drop audio (the ~2 s ring covers a sub-second stall), and the worker never
+//     burdens a frame. (This is why it does NOT mirror PhysicsWorld's per-frame
+//     signalStep: a real-time audio model must not be gated on the frame loop.)
 //   - stepInline() runs the same pump synchronously on the calling thread for
 //     Headless mode (no worker thread), keeping scripted/virtual-time tests
 //     deterministic — the established headless convention (cf. PhysicsWorld::
@@ -96,10 +100,6 @@ public:
     // on its own thread. Safe to call with an unknown/stale id.
     void removeTask(TaskId id);
 
-    // Main thread, once per frame: wake the worker to pump. No-op when not
-    // threaded. Never blocks.
-    void signalPump();
-
     // Headless: drain rings + run process() for every task on the calling
     // thread. No-op when threaded.
     void stepInline();
@@ -131,11 +131,12 @@ private:
 
     void pushCommand(Command* c);
 
-    // Worker-thread state machine (std::atomic wait/notify — the physics
-    // pattern). kPump requests a drain; kBusy is set while pumping; the worker
-    // CAS-es back to kIdle unless a new kPump (or kShutdown) arrived meanwhile.
-    enum State : std::uint32_t { kIdle = 0, kPump = 1, kBusy = 2, kShutdown = 3 };
-    std::atomic<std::uint32_t> state_{kIdle};
+    // The worker self-paces (see workerFunc), so state_ is just a run/stop flag
+    // the main thread flips in shutdown(). There is no kPump/kBusy handshake —
+    // nothing signals the worker to drain; it drains on its own clock and reads
+    // this only to know when to exit.
+    enum State : std::uint32_t { kRunning = 0, kShutdown = 1 };
+    std::atomic<std::uint32_t> state_{kRunning};
 
     // Lock-free SPSC command ring of owning Command* (cf. js/message_queue.h).
     static constexpr std::size_t kCmdCap = 64;  // power of two; commands are rare

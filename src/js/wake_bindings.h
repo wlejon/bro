@@ -29,11 +29,12 @@ namespace bro::js {
 void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine,
                          engine::AudioInference* inference);
 
-// Per-frame pump. Drains the atomic fire counter published by the inference
-// thread and invokes the stored JS onFire callback once per pending fire.
-// Cheap when nothing is pending. Call from the main thread per frame, after the
-// inference subsystem has been pumped (signalPump in windowed, stepInline in
-// headless).
+// Per-frame result delivery. Drains the atomic fire counter published by the
+// inference thread and invokes the stored JS onFire callback once per pending
+// fire. Cheap when nothing is pending. Call from the main thread per frame. This
+// only delivers fires — the self-paced inference worker (windowed) drains the
+// mic ring and runs the model on its own clock; in headless, stepInline() drives
+// the pump on the calling thread.
 void tickWake(JSContext* ctx);
 
 // Symmetric cleanup hook. Detaches the mic tap, unregisters the inference task,
