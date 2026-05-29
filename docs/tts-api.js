@@ -41,16 +41,36 @@ const phonemeIds = bro.tts.phonemize('Hello, Bro.');
  * @param {string} dir            - Kokoro weights directory.
  * @param {Object} [opts]
  * @param {string} [opts.device='cuda'] - 'cuda' or 'cpu'.
- * @returns {KokoroModel}  - has .nTokens, .styleDim, .loadVoice(), .synthesize()
+ * @param {function} [opts.onReady]     - async load: onReady(kokoro).
+ * @param {function} [opts.onError]     - async load: onError(message).
+ * @returns {KokoroModel|AsyncHandle}   - the model (sync), or an AsyncHandle
+ *          (async, when opts.onReady is a function).
+ *
+ * Two modes:
+ *   - Sync (no onReady): blocks the JS thread until loaded, returns KokoroModel.
+ *   - Async (onReady is a function): the heavy load runs on a background thread;
+ *     onReady(kokoro) / onError(message) fire later on the JS thread. Returns an
+ *     AsyncHandle with .cancel() immediately.
  */
 const kokoro = bro.tts.loadKokoro('../brosoundml/weights/kokoro');
 // kokoro.nTokens === 178, kokoro.styleDim === 128
 
+// Async load:
+// bro.tts.loadKokoro('../brosoundml/weights/kokoro', {
+//     onReady: (k) => { kokoro = k; },
+//     onError: (msg) => console.error('kokoro load failed:', msg),
+// });
+
 /**
  * Load a voice embedding (.bin) for this model.
  *
- * @param {string} path - voice file, e.g. voices/af_heart.bin
- * @returns {Voice}      - { name, rows, cols } — pass to synthesize().
+ * @param {string} path             - voice file, e.g. voices/af_heart.bin
+ * @param {Object} [opts]
+ * @param {function} [opts.onReady] - async load: onReady(voice).
+ * @param {function} [opts.onError] - async load: onError(message).
+ * @returns {Voice|AsyncHandle}     - the voice (sync), or an AsyncHandle (async,
+ *          when opts.onReady is a function). Same sync/async convention as
+ *          loadKokoro; the lighter load also offered async for uniformity.
  */
 const voice = kokoro.loadVoice('../brosoundml/weights/kokoro/voices/af_heart.bin');
 
@@ -73,6 +93,40 @@ const voice = kokoro.loadVoice('../brosoundml/weights/kokoro/voices/af_heart.bin
 const out = kokoro.synthesize(phonemeIds, voice, { speed: 1.0 });
 console.log(`${out.samples.length} samples @ ${out.sampleRate} Hz`);
 // Write out.samples to a WAV, or feed into an AudioContext buffer for playback.
+
+
+// ── Async synthesize (non-blocking) ─────────────────────────────────────────
+
+/**
+ * bro.tts.synthesize(kokoro, phonemeIds, voice, opts) → AsyncHandle
+ *
+ * Runs Kokoro's forward pass on a background thread so the JS thread stays
+ * responsive. Synthesis is a single MONOLITHIC forward (no internal loop
+ * exposed), so there is no per-step streaming; cancellation (handle.cancel())
+ * drops the result — onDone still fires with { cancelled: true }.
+ *
+ * @param {KokoroModel} kokoro              - from loadKokoro().
+ * @param {Int32Array|number[]} phonemeIds  - from phonemize() (or a raw id list).
+ * @param {Voice}  voice                    - from loadVoice().
+ * @param {Object} [opts]
+ * @param {number}   [opts.speed=1.0]       - speaking-rate multiplier.
+ * @param {function} [opts.onDone]          - onDone(result, info) on the JS
+ *        thread, where result is the SAME shape the sync method returns —
+ *        { samples: Float32Array, sampleRate: number, durations: Int32Array } —
+ *        and info = { cancelled: boolean, error?: string }.
+ * @returns {AsyncHandle}  - { cancel(): void }. Rejects (throws) if another
+ *          synthesize()/op is already in flight on this model.
+ */
+const handle = bro.tts.synthesize(kokoro, phonemeIds, voice, {
+    speed: 1.0,
+    onDone: (result, info) => {
+        if (info.cancelled) return;
+        if (info.error) { console.error(info.error); return; }
+        console.log(`${result.samples.length} samples @ ${result.sampleRate} Hz`);
+        // result.durations: per-phoneme frame counts (see timing section below).
+    },
+});
+// handle.cancel();  // drop the in-flight synthesis; onDone fires cancelled:true
 
 // ── Word/phoneme timing from durations ───────────────────────────────────────
 // The output sample count is a fixed multiple of the summed frame count, so:

@@ -11,6 +11,7 @@
 // Output is mono 24 kHz FP32 in a Float32Array.
 
 #include "js/tts_bindings.h"
+#include "js/async_job.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -28,6 +29,7 @@
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -51,6 +53,11 @@ struct KokoroWrapper {
     // Lazily constructed on first encodePhonemes() call. Borrows the
     // Kokoro instance's vocab map (lifetime tied to `kokoro` above).
     std::unique_ptr<brosoundml::g2p::PhonemeAdapter> adapter;
+    brotensor::Device device = brotensor::Device::CPU;  // captured at load
+    // Set while an async bro.tts.synthesize() runs on this model's background
+    // thread; rejects a second concurrent op (the model is single-owner).
+    // Cleared on the JS thread when the job's done() fires.
+    std::atomic<bool> busy{false};
 };
 
 struct VoiceWrapper {
@@ -191,25 +198,95 @@ static KokoroWrapper* kokoroSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<KokoroWrapper>(ctx, this_val);
 }
 
-// loadVoice(path) -> Voice
+// State for an async kokoro.loadVoice: the work thread fills vw (or error); the
+// JS-thread done() wraps it and invokes onReady/onError. Holds a dup of the
+// Kokoro JS object so the model (whose load_voice() does the parse) stays alive.
+struct VoiceLoadState {
+    KokoroWrapper*                 kw = nullptr;
+    std::string                    path;
+    std::unique_ptr<VoiceWrapper>  vw;
+    JSValue kokoroRef = JS_UNDEFINED;
+    JSValue onReady   = JS_UNDEFINED;
+    JSValue onError   = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// loadVoice(path, opts?) -> Voice          (sync)
+//                        -> AsyncHandle     (async, if opts.onReady)
 //   Loads a raw little-endian FP32 voice pack (rows * voice_dim floats).
 //   Returns a Voice handle. PyTorch .pt voice packs must be pre-converted
 //   to this raw format by the caller (brosoundml deliberately doesn't
 //   pull in a pickle reader).
+//   opts.onReady(voice) / opts.onError(message): when onReady is a function the
+//   load runs on a background thread and these fire on the JS thread.
 static JSValue js_kokoro_loadVoice(JSContext* ctx, JSValueConst this_val,
                                    int argc, JSValueConst* argv) {
     auto* w = kokoroSelf(ctx, this_val);
     if (!w) return JS_ThrowTypeError(ctx, "loadVoice: not a Kokoro");
     std::string path;
     if (argc < 1 || !argStr(ctx, argv[0], path))
-        return JS_ThrowTypeError(ctx, "loadVoice(path): path string required");
-    try {
-        auto vw = std::make_unique<VoiceWrapper>();
-        vw->voice = w->kokoro->load_voice(path);
-        return qjsbind::wrap<VoiceWrapper>(ctx, vw.release());
-    } catch (const std::exception& e) {
-        return JS_ThrowInternalError(ctx, "loadVoice: %s", e.what());
+        return JS_ThrowTypeError(ctx, "loadVoice(path, opts?): path string required");
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path (back-compat) ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            auto vw = std::make_unique<VoiceWrapper>();
+            vw->voice = w->kokoro->load_voice(path);
+            return qjsbind::wrap<VoiceWrapper>(ctx, vw.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadVoice: %s", e.what());
+        }
     }
+
+    // ── Async path ──
+    auto ls = std::make_shared<VoiceLoadState>();
+    ls->kw        = w;
+    ls->path      = path;
+    ls->kokoroRef = JS_DupValue(ctx, this_val);  // keep the model alive
+    ls->hasReady  = true;
+    ls->onReady   = JS_DupValue(ctx, onReady);
+    ls->hasError  = JS_IsFunction(ctx, onError);
+    ls->onError   = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(ls->kw->device);
+        auto vw = std::make_unique<VoiceWrapper>();
+        vw->voice = ls->kw->kokoro->load_voice(ls->path);  // throws -> error
+        ls->vw = std::move(vw);
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->vw) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadVoice failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<VoiceWrapper>(c, ls->vw.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+        JS_FreeValue(c, ls->kokoroRef);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
 // synthesize(phonemeIds, voice, opts?) -> { samples, sampleRate, durations }
@@ -296,7 +373,7 @@ static void registerKokoroClass(JSContext* ctx) {
         .get("hiddenDim",    [](KokoroWrapper* w) { return w->kokoro->config().hidden_dim; })
         .get("styleDim",     [](KokoroWrapper* w) { return w->kokoro->config().style_dim; })
         .get("nLayer",       [](KokoroWrapper* w) { return w->kokoro->config().n_layer; })
-        .method_raw("loadVoice",      js_kokoro_loadVoice,      1)
+        .method_raw("loadVoice",      js_kokoro_loadVoice,      2)
         .method_raw("synthesize",     js_kokoro_synthesize,     3)
         .method_raw("vocab",          js_kokoro_vocab,          0)
         .method_raw("encodePhonemes", js_kokoro_encodePhonemes, 1);
@@ -467,30 +544,220 @@ static JSValue js_phonemize(JSContext* ctx, JSValueConst,
     }
 }
 
-// bro.tts.loadKokoro(modelDir, opts?) -> Kokoro
+// Build + load the Kokoro model from a checkpoint dir. Heavy + blocking (file
+// IO + GPU upload); shared by the sync and async loadKokoro paths. Throws on
+// error.
+static void buildKokoro(const std::string& dir, brotensor::Device dev,
+                        std::unique_ptr<KokoroWrapper>& w_out) {
+    auto w = std::make_unique<KokoroWrapper>();
+    w->device = dev;
+    w->kokoro = std::make_unique<brosoundml::Kokoro>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->kokoro->load(dir, dev);
+    }
+    std::fprintf(stderr, "[INFO] [tts] Kokoro loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+// State for an async loadKokoro.
+struct KokoroLoadState {
+    std::string                    dir;
+    brotensor::Device              dev = brotensor::Device::CPU;
+    std::unique_ptr<KokoroWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.tts.loadKokoro(modelDir, opts?) -> Kokoro         (sync)
+//                                     -> AsyncHandle     (async, if opts.onReady)
 //   modelDir contains config.json + model.safetensors.
 //   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.onReady(kokoro) / opts.onError(message): when onReady is a function the
+//   load runs on a background thread (non-blocking, parallelizable with other
+//   loads) and these fire on the JS thread.
 static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
                              int argc, JSValueConst* argv) {
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadKokoro(modelDir, opts?): path required");
-    try {
-        brotensor::init();
-        brotensor::Device dev = autoDevice();
-        if (argc >= 2) {
-            std::string err;
-            if (!parseDeviceOpt(ctx, argv[1], dev, err))
-                return JS_ThrowTypeError(ctx, "loadKokoro: %s", err.c_str());
-        }
-        auto w = std::make_unique<KokoroWrapper>();
-        w->kokoro = std::make_unique<brosoundml::Kokoro>();
-        w->kokoro->load(dir, dev);
-        std::fprintf(stderr, "[INFO] [tts] Kokoro loaded on %s\n", deviceName(dev));
-        return qjsbind::wrap<KokoroWrapper>(ctx, w.release());
-    } catch (const std::exception& e) {
-        return JS_ThrowInternalError(ctx, "loadKokoro: %s", e.what());
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadKokoro: %s", err.c_str());
     }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path (back-compat) ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<KokoroWrapper> w;
+            buildKokoro(dir, dev, w);
+            return qjsbind::wrap<KokoroWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadKokoro: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<KokoroLoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildKokoro(ls->dir, ls->dev, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadKokoro failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<KokoroWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Async synthesis — bro.tts.synthesize(kokoro, phonemeIds, voice, opts)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Runs Kokoro's forward pass on a background thread via the async-job runner, so
+// the JS thread stays responsive. Kokoro synthesis is a single monolithic
+// forward (no internal AR loop exposed), so there is no per-step streaming poll
+// and cancellation simply drops the result. Returns an AsyncHandle with
+// .cancel(); opts.onDone(result, info) fires once on the JS thread, where
+// result is { samples, sampleRate, durations } (same shape as the sync
+// synthesize() method) and info is { cancelled, error? }.
+
+// Shared between the work thread (sole writer) and the JS thread (sole reader /
+// caller of onDone). Held by shared_ptr.
+struct TtsJob {
+    std::vector<int32_t> ids;
+    float                speed = 1.0f;
+    VoiceWrapper*        vw = nullptr;             // borrowed via voiceRef dup
+    std::vector<float>   samples;                  // filled by work()
+    int                  sample_rate = 24000;      // filled by work()
+    std::vector<int32_t> durations;                // filled by work()
+    JSValue              onDone    = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
+    JSValue              kokoroRef = JS_UNDEFINED;  // dup of the kokoro JS object
+    JSValue              voiceRef  = JS_UNDEFINED;  // dup of the voice JS object
+    bool                 hasOnDone = false;
+};
+
+static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
+                                 int argc, JSValueConst* argv) {
+    if (argc < 3)
+        return JS_ThrowTypeError(ctx,
+            "synthesize(kokoro, phonemeIds, voice, opts?): kokoro, phonemeIds "
+            "and voice required");
+    auto* w = qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]);
+    if (!w) return JS_ThrowTypeError(ctx, "synthesize: arg 0 must be a Kokoro");
+
+    auto job = std::make_shared<TtsJob>();
+    job->ids = readIdArray(ctx, argv[1]);
+    if (job->ids.empty())
+        return JS_ThrowTypeError(ctx,
+            "synthesize: phonemeIds must be a non-empty Int32Array or number[]");
+
+    auto* vw = qjsbind::unwrap<VoiceWrapper>(ctx, argv[2]);
+    if (!vw)
+        return JS_ThrowTypeError(ctx,
+            "synthesize: voice must be a Voice (returned by loadVoice)");
+    job->vw = vw;
+
+    JSValue onDone = JS_UNDEFINED;
+    if (argc >= 4 && JS_IsObject(argv[3])) {
+        getNum(ctx, argv[3], "speed", job->speed);
+        onDone = JS_GetPropertyStr(ctx, argv[3], "onDone");
+    }
+
+    // Claim the model for this synthesis (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "synthesize: an operation is already in flight on this model");
+    }
+
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->kokoroRef  = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    job->voiceRef   = JS_DupValue(ctx, argv[2]);  // keep the voice alive
+    JS_FreeValue(ctx, onDone);
+
+    KokoroWrapper* mw = w;
+
+    // Background thread: run the (monolithic) forward and stash the waveform.
+    auto work = [job, mw](const std::atomic<bool>& /*cancel*/) {
+        brotensor::DeviceScope scope(mw->device);
+        std::vector<int32_t> pred_dur;
+        auto buf = mw->kokoro->synthesize(job->ids, job->vw->voice, job->speed,
+                                          &pred_dur);
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+        job->durations   = std::move(pred_dur);
+    };
+
+    // JS thread, once: build { samples, sampleRate, durations } + {cancelled,
+    // error}, hand them to onDone, free the dup'd values, release the model.
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            JS_SetPropertyStr(c, result, "durations",
+                qjsbind::make_int32_array(c, job->durations));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->kokoroRef);
+        JS_FreeValue(c, job->voiceRef);
+        mw->busy.store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -518,6 +785,8 @@ void installTtsBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_phonemize, "phonemize", 2));
     JS_SetPropertyStr(ctx, tts, "setAssetRoot",
         JS_NewCFunction(ctx, js_setAssetRoot, "setAssetRoot", 1));
+    JS_SetPropertyStr(ctx, tts, "synthesize",
+        JS_NewCFunction(ctx, js_tts_synthesize, "synthesize", 4));
     JS_SetPropertyStr(ctx, broObj, "tts", tts);
 
     JS_FreeValue(ctx, broObj);

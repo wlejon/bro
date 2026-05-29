@@ -11,6 +11,7 @@
 // hands back plain text.
 
 #include "js/stt_bindings.h"
+#include "js/async_job.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -22,6 +23,7 @@
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -38,6 +40,11 @@ namespace bro::js {
 
 struct WhisperWrapper {
     std::unique_ptr<brosoundml::Whisper> whisper;
+    brotensor::Device device = brotensor::Device::CPU;  // captured at load
+    // Set while an async bro.stt.transcribe() runs on this model's background
+    // thread; rejects a second concurrent op (the decoder + KV cache are
+    // single-owner). Cleared on the JS thread when the job's done() fires.
+    std::atomic<bool> busy{false};
 };
 
 struct WhisperTokenizerWrapper {
@@ -411,33 +418,134 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_UNDEFINED;
 }
 
-// bro.stt.loadWhisper(modelDir, opts?) -> Whisper
+// Build + load the Whisper model from a checkpoint dir. Heavy + blocking (file
+// IO + GPU upload); shared by the sync and async loadWhisper paths. Throws on
+// error.
+static void buildWhisper(const std::string& dir, brotensor::Device dev,
+                         std::unique_ptr<WhisperWrapper>& w_out) {
+    auto w = std::make_unique<WhisperWrapper>();
+    w->device  = dev;
+    w->whisper = std::make_unique<brosoundml::Whisper>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->whisper->load(dir, dev);
+    }
+    std::fprintf(stderr, "[INFO] [stt] Whisper loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+// State for an async loadWhisper: the work thread fills w (or error); the
+// JS-thread done() wraps it and invokes onReady/onError.
+struct WhisperLoadState {
+    std::string                     dir;
+    brotensor::Device               dev = brotensor::Device::CPU;
+    std::unique_ptr<WhisperWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.stt.loadWhisper(modelDir, opts?) -> Whisper          (sync)
+//                                      -> AsyncHandle       (async, if opts.onReady)
 //   modelDir contains config.json + model.safetensors (HF Whisper checkpoint).
 //   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.onReady(whisper) / opts.onError(message): when onReady is a function
+//   the load runs on a background thread (non-blocking, parallelizable with
+//   other loads) and these fire on the JS thread.
 static JSValue js_loadWhisper(JSContext* ctx, JSValueConst,
                               int argc, JSValueConst* argv) {
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadWhisper(modelDir, opts?): path required");
-    try {
-        brotensor::init();
-        brotensor::Device dev = autoDevice();
-        if (argc >= 2) {
-            std::string err;
-            if (!parseDeviceOpt(ctx, argv[1], dev, err))
-                return JS_ThrowTypeError(ctx, "loadWhisper: %s", err.c_str());
-        }
-        auto w = std::make_unique<WhisperWrapper>();
-        w->whisper = std::make_unique<brosoundml::Whisper>();
-        w->whisper->load(dir, dev);
-        std::fprintf(stderr, "[INFO] [stt] Whisper loaded on %s\n", deviceName(dev));
-        return qjsbind::wrap<WhisperWrapper>(ctx, w.release());
-    } catch (const std::exception& e) {
-        return JS_ThrowInternalError(ctx, "loadWhisper: %s", e.what());
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadWhisper: %s", err.c_str());
     }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path (back-compat) ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<WhisperWrapper> w;
+            buildWhisper(dir, dev, w);
+            return qjsbind::wrap<WhisperWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadWhisper: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<WhisperLoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildWhisper(ls->dir, ls->dev, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadWhisper failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<WhisperWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
-// bro.stt.loadTokenizer({ vocabPath, mergesPath }) -> WhisperTokenizer
+// Build the HF-format Whisper tokenizer (vocab.json + merges.txt). Cheap
+// relative to the model, but the async path keeps the loader API uniform.
+static void buildWhisperTokenizer(const std::string& vocab,
+                                  const std::string& merges,
+                                  std::unique_ptr<WhisperTokenizerWrapper>& tw_out) {
+    auto tw = std::make_unique<WhisperTokenizerWrapper>();
+    tw->tok = std::make_unique<brolm::whisper::Tokenizer>(
+        brolm::whisper::Tokenizer::load(vocab, merges));
+    tw_out = std::move(tw);
+}
+
+// State for an async loadTokenizer.
+struct WhisperTokLoadState {
+    std::string                              vocab, merges;
+    std::unique_ptr<WhisperTokenizerWrapper> tw;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.stt.loadTokenizer({ vocabPath, mergesPath, onReady?, onError? })
+//   -> WhisperTokenizer  (sync)
+//   -> AsyncHandle       (async, if onReady)
 static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
                                 int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsObject(argv[0]))
@@ -448,14 +556,155 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
         !getStr(ctx, argv[0], "mergesPath", merges))
         return JS_ThrowTypeError(ctx,
             "loadTokenizer: opts.vocabPath and opts.mergesPath required");
-    try {
-        auto tw = std::make_unique<WhisperTokenizerWrapper>();
-        tw->tok = std::make_unique<brolm::whisper::Tokenizer>(
-            brolm::whisper::Tokenizer::load(vocab, merges));
-        return qjsbind::wrap<WhisperTokenizerWrapper>(ctx, tw.release());
-    } catch (const std::exception& e) {
-        return JS_ThrowInternalError(ctx, "loadTokenizer: %s", e.what());
+
+    JSValue onReady = JS_GetPropertyStr(ctx, argv[0], "onReady");
+    JSValue onError = JS_GetPropertyStr(ctx, argv[0], "onError");
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path (back-compat) ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<WhisperTokenizerWrapper> tw;
+            buildWhisperTokenizer(vocab, merges, tw);
+            return qjsbind::wrap<WhisperTokenizerWrapper>(ctx, tw.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadTokenizer: %s", e.what());
+        }
     }
+
+    // ── Async path ──
+    auto ls = std::make_shared<WhisperTokLoadState>();
+    ls->vocab    = vocab;
+    ls->merges   = merges;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildWhisperTokenizer(ls->vocab, ls->merges, ls->tw);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->tw) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadTokenizer failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<WhisperTokenizerWrapper>(c, ls->tw.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Async transcription — bro.stt.transcribe(whisper, audio, promptIds, opts)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Runs Whisper's autoregressive decode on a background thread via the async-job
+// runner, so the JS thread stays responsive. Whisper's decode loop is internal
+// to brosoundml (not exposed step-by-step), so this is a monolithic op: there is
+// no per-token streaming poll, and cancellation simply drops the result. STT
+// runs once per turn (pre-reply), so this is sufficient. Returns an AsyncHandle
+// with .cancel(); opts.onDone(ids, info) fires once on the JS thread with info
+// being { cancelled, error? }.
+
+// Shared between the work thread (sole writer of token_ids) and the JS thread
+// (sole reader / caller of onDone). Held by shared_ptr.
+struct SttJob {
+    brosoundml::AudioBuffer audio;
+    std::vector<int32_t>    prompt;
+    int                     maxNew = 0;
+    std::vector<int32_t>    token_ids;          // filled by work()
+    JSValue                 onDone     = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
+    JSValue                 whisperRef = JS_UNDEFINED;  // dup of the whisper JS object
+    bool                    hasOnDone  = false;
+};
+
+static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
+                                 int argc, JSValueConst* argv) {
+    if (argc < 3)
+        return JS_ThrowTypeError(ctx,
+            "transcribe(whisper, audio, promptIds, opts?): whisper, audio and "
+            "promptIds required");
+    auto* w = qjsbind::unwrap<WhisperWrapper>(ctx, argv[0]);
+    if (!w) return JS_ThrowTypeError(ctx, "transcribe: arg 0 must be a Whisper");
+
+    auto job = std::make_shared<SttJob>();
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[1], job->audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    job->prompt = readIdArray(ctx, argv[2]);
+    if (job->prompt.empty())
+        return JS_ThrowTypeError(ctx,
+            "transcribe: promptIds must be a non-empty Int32Array or number[] "
+            "(use tokenizer.buildPrompt(lang, task))");
+
+    JSValue onDone = JS_UNDEFINED;
+    if (argc >= 4 && JS_IsObject(argv[3])) {
+        getInt(ctx, argv[3], "maxNewTokens", job->maxNew);
+        onDone = JS_GetPropertyStr(ctx, argv[3], "onDone");
+    }
+
+    // Claim the model for this transcription (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "transcribe: an operation is already in flight on this model");
+    }
+
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->whisperRef = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    JS_FreeValue(ctx, onDone);
+
+    WhisperWrapper* mw = w;
+
+    // Background thread: run the (monolithic) transcribe and stash the ids.
+    auto work = [job, mw](const std::atomic<bool>& /*cancel*/) {
+        brotensor::DeviceScope scope(mw->device);
+        auto out = mw->whisper->transcribe(job->audio, job->prompt, job->maxNew);
+        job->token_ids = std::move(out.token_ids);
+    };
+
+    // JS thread, once: hand the id array + {cancelled,error} to onDone, free the
+    // dup'd values, release the model.
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { arr, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->whisperRef);
+        mw->busy.store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -481,6 +730,8 @@ void installSttBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadWhisper, "loadWhisper", 2));
     JS_SetPropertyStr(ctx, stt, "loadTokenizer",
         JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
+    JS_SetPropertyStr(ctx, stt, "transcribe",
+        JS_NewCFunction(ctx, js_stt_transcribe, "transcribe", 4));
     JS_SetPropertyStr(ctx, broObj, "stt", stt);
 
     JS_FreeValue(ctx, broObj);
