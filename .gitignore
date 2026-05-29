@@ -1,7 +1,5 @@
 # Build
-build/
-build-debug/
-Build-release/
+/build*/
 out/
 cmake-build-*/
 *.bgar

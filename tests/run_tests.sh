@@ -12,8 +12,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEST_APP="$SCRIPT_DIR/test_app"
 
-# Find the headless binary
-if [[ -f "$PROJECT_DIR/build/Debug/bro-headless.exe" ]]; then
+# Find the headless binary. BRO_HEADLESS overrides auto-detection so the suite
+# can run against an arbitrary build dir or a packaged dist binary.
+if [[ -n "${BRO_HEADLESS:-}" ]]; then
+    BRO="$BRO_HEADLESS"
+    if [[ ! -x "$BRO" ]]; then
+        echo "ERROR: BRO_HEADLESS=$BRO is not an executable"
+        exit 1
+    fi
+elif [[ -f "$PROJECT_DIR/build/Debug/bro-headless.exe" ]]; then
     BRO="$PROJECT_DIR/build/Debug/bro-headless.exe"
 elif [[ -f "$PROJECT_DIR/build/Release/bro-headless.exe" ]]; then
     BRO="$PROJECT_DIR/build/Release/bro-headless.exe"
