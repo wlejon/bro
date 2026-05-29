@@ -402,7 +402,7 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 //
 // Required runtime assets:
 //   - <data_root>/g2p/lexicon_en_us.bin
-//   - <repo_root>/weights/pos_tagger/model.bin
+//   - <data_root>/pos_tagger/model.bin
 //   - <repo_root>/weights/kokoro/config.json    (for the phoneme vocab)
 //
 // Default search probes well-known sibling paths relative to the current
@@ -480,7 +480,7 @@ static std::unique_ptr<PhonemizerState> buildPhonemizerState() {
     const std::string repo   = resolveBrosoundmlRoot();
     const std::string data   = resolveBrosoundmlDataRoot();
     const std::string lexBin = data + "/g2p/lexicon_en_us.bin";
-    const std::string posBin = repo + "/weights/pos_tagger/model.bin";
+    const std::string posBin = data + "/pos_tagger/model.bin";
     const std::string kokCfg = repo + "/weights/kokoro/config.json";
 
     if (!fileExists(lexBin))
