@@ -372,6 +372,109 @@ static JSValue js_model_generate(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// Pull the last (vocab,) logits row from a (L, vocab) tensor to host FP32.
+// Mirrors brolm::qwen's internal download_fp32/last_row_fp32 (which are
+// TU-local in qwen_generate.cpp) so streaming here matches generate() exactly.
+static std::vector<float> lastRowFp32(const brotensor::Tensor& logits) {
+    const std::size_t vocab = static_cast<std::size_t>(logits.cols);
+    const std::size_t rows  = static_cast<std::size_t>(logits.rows);
+    const std::size_t n     = static_cast<std::size_t>(logits.size());
+    std::vector<float> all;
+    if (logits.dtype == brotensor::Dtype::FP16) {
+        std::vector<std::uint16_t> bits(n);
+        logits.copy_to_host_fp16(bits.data());
+        all.resize(n);
+        for (std::size_t i = 0; i < n; ++i)
+            all[i] = brotensor::fp16_bits_to_fp32(bits[i]);
+    } else {
+        all = logits.to_host_vector();
+    }
+    const std::size_t base = (rows - 1) * vocab;
+    return std::vector<float>(all.begin() + static_cast<std::ptrdiff_t>(base),
+                             all.begin() + static_cast<std::ptrdiff_t>(base + vocab));
+}
+
+// generateStream(promptIds, opts?, onToken) -> Int32Array (all new ids)
+//   Same prefill + decode loop as generate(), but invokes onToken(id) after
+//   each sampled token so callers can stream text as it's produced. The
+//   model's KV cache persists across the per-token forwards (forward() with
+//   L==1 appends one position), so this is O(n), not O(n^2). onToken may
+//   return false to stop early; the stopping token is still reported. The eos
+//   token is NOT passed to onToken nor included in the result.
+static JSValue js_model_generateStream(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* w = modelSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "generateStream: not an LMModel");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "generateStream: weights not loaded");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx,
+            "generateStream(promptIds, opts?, onToken): promptIds required");
+
+    std::vector<int32_t> prompt = readIdArray(ctx, argv[0]);
+    if (prompt.empty())
+        return JS_ThrowTypeError(ctx,
+            "generateStream: promptIds must be a non-empty Int32Array or number[]");
+
+    brolm::qwen::GenerateOptions opts;
+    int eos_id = -1;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        opts = parseGenerateOptions(ctx, argv[1]);
+        int tmp = -1;
+        getInt(ctx, argv[1], "eosId", tmp);
+        eos_id = tmp;
+    }
+
+    JSValueConst onToken = (argc >= 3) ? argv[2] : JS_UNDEFINED;
+    const bool hasCb = JS_IsFunction(ctx, onToken);
+    if (argc >= 3 && !hasCb)
+        return JS_ThrowTypeError(ctx, "generateStream: onToken must be a function");
+
+    std::vector<int32_t> generated;
+    if (opts.max_new_tokens <= 0)
+        return qjsbind::make_int32_array(ctx, generated);
+
+    try {
+        brotensor::DeviceScope scope(w->device);
+        const int vocab = w->model->config().vocab_size;
+        w->model->allocate_cache(static_cast<int>(prompt.size()) +
+                                 opts.max_new_tokens);
+        std::mt19937_64 rng(opts.sampling.seed);
+        const bool stop = opts.stop_on_eos && eos_id >= 0;
+
+        brotensor::Tensor logits;
+        w->model->forward(prompt.data(), static_cast<int>(prompt.size()), logits);
+        std::vector<float> row = lastRowFp32(logits);
+        int next = brolm::qwen::sample_token(row.data(), vocab, opts.sampling, rng);
+
+        while (true) {
+            if (stop && next == eos_id) break;
+            generated.push_back(static_cast<int32_t>(next));
+
+            if (hasCb) {
+                JSValue arg = JS_NewInt32(ctx, next);
+                JSValue ret = JS_Call(ctx, onToken, JS_UNDEFINED, 1, &arg);
+                JS_FreeValue(ctx, arg);
+                if (JS_IsException(ret)) return ret;  // propagate JS error
+                const bool keepGoing = JS_ToBool(ctx, ret) != 0 || JS_IsUndefined(ret);
+                JS_FreeValue(ctx, ret);
+                if (!keepGoing) break;
+            }
+
+            if (static_cast<int>(generated.size()) >= opts.max_new_tokens) break;
+
+            int32_t cur = generated.back();
+            w->model->forward(&cur, 1, logits);
+            row = lastRowFp32(logits);
+            next = brolm::qwen::sample_token(row.data(), vocab, opts.sampling, rng);
+        }
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "generateStream: %s", e.what());
+    }
+
+    return qjsbind::make_int32_array(ctx, generated);
+}
+
 static void registerModelClass(JSContext* ctx) {
     qjsbind::Class<LMModelWrapper>(ctx, "LMModel", qjsbind::NoGlobal)
         .get("vocabSize",  [](LMModelWrapper* w) { return w->model->config().vocab_size; })
@@ -379,9 +482,10 @@ static void registerModelClass(JSContext* ctx) {
         .get("numLayers",  [](LMModelWrapper* w) { return w->model->config().num_hidden_layers; })
         .get("maxSeqLen",  [](LMModelWrapper* w) { return w->model->config().max_position_embeddings; })
         .get("cacheLen",   [](LMModelWrapper* w) { return w->model->cache_len(); })
-        .method_raw("allocateCache", js_model_allocateCache, 1)
-        .method_raw("resetCache",    js_model_resetCache,    0)
-        .method_raw("generate",      js_model_generate,      2);
+        .method_raw("allocateCache",  js_model_allocateCache,  1)
+        .method_raw("resetCache",     js_model_resetCache,     0)
+        .method_raw("generate",       js_model_generate,       2)
+        .method_raw("generateStream", js_model_generateStream, 3);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
