@@ -43,3 +43,6 @@
 [submodule "third_party/broimage"]
 	path = third_party/broimage
 	url = git@github.com:wlejon/broimage.git
+[submodule "third_party/brosoundml"]
+	path = third_party/brosoundml
+	url = git@github.com:wlejon/brosoundml.git
