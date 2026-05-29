@@ -54,6 +54,7 @@ struct Cmd_Save              {};
 struct Cmd_Restore           {};
 struct Cmd_SaveLayerAlpha    { uint8_t alpha; };
 struct Cmd_SaveLayerWithFilter { uint32_t filtersOffset, filtersLen; float x, y, w, h; }; // arena: CssFilterParams[]
+struct Cmd_SaveLayerWithBlend  { BlendMode mode; };
 struct Cmd_Translate         { float dx, dy; };
 struct Cmd_Scale             { float sx, sy; };
 struct Cmd_Rotate            { float degrees; };
@@ -119,6 +120,7 @@ using DrawCommand = std::variant<
     Cmd_Restore,
     Cmd_SaveLayerAlpha,
     Cmd_SaveLayerWithFilter,
+    Cmd_SaveLayerWithBlend,
     Cmd_Translate,
     Cmd_Scale,
     Cmd_Rotate,

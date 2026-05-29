@@ -112,6 +112,27 @@ struct CssFilterParams {
     bromath::Color shadowColor = {0, 0, 0, 1};
 };
 
+// CSS mix-blend-mode values. Backends map these to their native blend modes
+// (e.g. SkBlendMode on Skia backends). `Normal` is plain source-over.
+enum class BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+};
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -247,6 +268,13 @@ public:
     // save().
     virtual void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                                      float x, float y, float w, float h) = 0;
+
+    // Save a layer composited onto the backdrop with the given CSS
+    // mix-blend-mode. Everything drawn until the matching restore() is grouped
+    // and blended against what's already on the canvas. The layer bounds are
+    // the current clip. Default falls back to a plain save() (normal
+    // source-over) so backends can adopt incrementally.
+    virtual void saveLayerWithBlend(BlendMode mode) { (void)mode; save(); }
 
     virtual void setClip(float x, float y, float w, float h) = 0;
     virtual void resetClip() = 0;

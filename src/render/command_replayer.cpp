@@ -84,6 +84,8 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                 dst_->saveLayerWithFilter(
                     buffer.spanAt<CssFilterParams>(c.filtersOffset, c.filtersLen),
                     c.x, c.y, c.w, c.h);
+            } else if constexpr (std::is_same_v<T, Cmd_SaveLayerWithBlend>) {
+                dst_->saveLayerWithBlend(c.mode);
             } else if constexpr (std::is_same_v<T, Cmd_Translate>) {
                 dst_->translate(c.dx, c.dy);
             } else if constexpr (std::is_same_v<T, Cmd_Scale>) {

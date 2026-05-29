@@ -698,6 +698,13 @@ void SkiaRenderer::saveLayerWithFilter(std::span<const CssFilterParams> filters,
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
 }
 
+void SkiaRenderer::saveLayerWithBlend(BlendMode mode) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setBlendMode(toSkBlendMode(mode));
+    canvas_->saveLayer(nullptr, &paint);
+}
+
 void SkiaRenderer::concat4x4(const float m[16]) {
     if (!canvas_) return;
     SkM44 mat(m[0], m[4], m[ 8], m[12],

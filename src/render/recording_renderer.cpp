@@ -279,6 +279,10 @@ void RecordingRenderer::saveLayerWithFilter(std::span<const CssFilterParams> fil
     cmd.x = x; cmd.y = y; cmd.w = w; cmd.h = h;
     buffer_->append(cmd);
 }
+void RecordingRenderer::saveLayerWithBlend(BlendMode mode) {
+    if (!buffer_) { measureRenderer_->saveLayerWithBlend(mode); return; }
+    buffer_->append(Cmd_SaveLayerWithBlend{mode});
+}
 void RecordingRenderer::setClip(float x, float y, float w, float h) {
     if (!buffer_) { measureRenderer_->setClip(x, y, w, h); return; }
     buffer_->append(Cmd_SetClip{x, y, w, h});

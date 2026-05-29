@@ -562,6 +562,12 @@ void RasterRenderer::saveLayerWithFilter(std::span<const CssFilterParams> filter
     SkRect bounds = SkRect::MakeXYWH(x, y, w, h);
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
 }
+void RasterRenderer::saveLayerWithBlend(BlendMode mode) {
+    if (!canvas_) return;
+    SkPaint paint;
+    paint.setBlendMode(toSkBlendMode(mode));
+    canvas_->saveLayer(nullptr, &paint);
+}
 void RasterRenderer::concat(float a, float b, float c, float d, float e, float f) {
     if (!canvas_) return;
     SkMatrix m = SkMatrix::MakeAll(a, c, e, b, d, f, 0, 0, 1);

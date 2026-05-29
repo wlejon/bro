@@ -141,4 +141,26 @@ sk_sp<SkImageFilter> BuildSkImageFilterChain(std::span<const CssFilterParams> fi
     return result;
 }
 
+SkBlendMode toSkBlendMode(BlendMode mode) {
+    switch (mode) {
+        case BlendMode::Multiply:   return SkBlendMode::kMultiply;
+        case BlendMode::Screen:     return SkBlendMode::kScreen;
+        case BlendMode::Overlay:    return SkBlendMode::kOverlay;
+        case BlendMode::Darken:     return SkBlendMode::kDarken;
+        case BlendMode::Lighten:    return SkBlendMode::kLighten;
+        case BlendMode::ColorDodge: return SkBlendMode::kColorDodge;
+        case BlendMode::ColorBurn:  return SkBlendMode::kColorBurn;
+        case BlendMode::HardLight:  return SkBlendMode::kHardLight;
+        case BlendMode::SoftLight:  return SkBlendMode::kSoftLight;
+        case BlendMode::Difference: return SkBlendMode::kDifference;
+        case BlendMode::Exclusion:  return SkBlendMode::kExclusion;
+        case BlendMode::Hue:        return SkBlendMode::kHue;
+        case BlendMode::Saturation: return SkBlendMode::kSaturation;
+        case BlendMode::Color:      return SkBlendMode::kColor;
+        case BlendMode::Luminosity: return SkBlendMode::kLuminosity;
+        case BlendMode::Normal:
+        default:                    return SkBlendMode::kSrcOver;
+    }
+}
+
 } // namespace bro::render

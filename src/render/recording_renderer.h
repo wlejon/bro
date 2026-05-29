@@ -106,6 +106,7 @@ public:
     void concat4x4(const float m[16]) override;
     void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                              float x, float y, float w, float h) override;
+    void saveLayerWithBlend(BlendMode mode) override;
     void setClip(float x, float y, float w, float h) override;
     void resetClip() override;
     void setClipPolygon(std::span<const PointF> points) override;

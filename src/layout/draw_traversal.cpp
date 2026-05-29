@@ -240,6 +240,27 @@ static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& va
     return result;
 }
 
+/// Map a CSS `mix-blend-mode` keyword to a render::BlendMode. Returns Normal
+/// for `normal`/unknown values.
+static render::BlendMode parseBlendMode(const std::string& v) {
+    if (v == "multiply")    return render::BlendMode::Multiply;
+    if (v == "screen")      return render::BlendMode::Screen;
+    if (v == "overlay")     return render::BlendMode::Overlay;
+    if (v == "darken")      return render::BlendMode::Darken;
+    if (v == "lighten")     return render::BlendMode::Lighten;
+    if (v == "color-dodge") return render::BlendMode::ColorDodge;
+    if (v == "color-burn")  return render::BlendMode::ColorBurn;
+    if (v == "hard-light")  return render::BlendMode::HardLight;
+    if (v == "soft-light")  return render::BlendMode::SoftLight;
+    if (v == "difference")  return render::BlendMode::Difference;
+    if (v == "exclusion")   return render::BlendMode::Exclusion;
+    if (v == "hue")         return render::BlendMode::Hue;
+    if (v == "saturation")  return render::BlendMode::Saturation;
+    if (v == "color")       return render::BlendMode::Color;
+    if (v == "luminosity")  return render::BlendMode::Luminosity;
+    return render::BlendMode::Normal;
+}
+
 /// Parse a CSS `clip-path: polygon(...)` value into vertex points (border-box
 /// relative). Returns empty when the value is none/auto/empty/unrecognized.
 /// Supports `polygon(<x1> <y1>, <x2> <y2>, ...)` with px or % units. Skips a
@@ -1439,25 +1460,32 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     while (!part.empty() && part.front() == ' ') part.erase(part.begin());
                     while (!part.empty() && part.back() == ' ') part.pop_back();
 
+                    // Pull up to two trailing position tokens (kept in order).
+                    std::vector<float> positions;
+                    for (int n = 0; n < 2; ++n) {
+                        size_t sp = part.find_last_of(' ');
+                        std::string tail = (sp == std::string::npos) ? part : part.substr(sp + 1);
+                        float frac;
+                        if (sp != std::string::npos && parsePosToken(tail, frac)) {
+                            positions.insert(positions.begin(), frac);
+                            part.erase(sp);
+                            while (!part.empty() && part.back() == ' ') part.pop_back();
+                        } else {
+                            break;
+                        }
+                    }
+
                     bromath::Color sc = cfromColor8({0, 0, 0, 255});
-                    float offset = -1;
-                    // Try to extract a percentage at the end
-                    auto pctPos = part.rfind('%');
-                    if (pctPos != std::string::npos) {
-                        // Find the number before %
-                        size_t numStart = pctPos;
-                        while (numStart > 0 && (std::isdigit(static_cast<unsigned char>(part[numStart-1])) || part[numStart-1] == '.' || part[numStart-1] == ' ')) --numStart;
-                        std::string pctStr = part.substr(numStart, pctPos - numStart);
-                        while (!pctStr.empty() && pctStr.front() == ' ') pctStr.erase(pctStr.begin());
-                        offset = std::strtof(pctStr.c_str(), nullptr) / 100.0f;
-                        part = part.substr(0, numStart);
-                        while (!part.empty() && part.back() == ' ') part.pop_back();
-                    }
                     tryParseColor(part, sc);
-                    if (offset < 0) {
-                        offset = numColors > 1 ? static_cast<float>(i - colorStart) / static_cast<float>(numColors - 1) : 0;
+
+                    if (positions.empty()) {
+                        float offset = numColors > 1
+                            ? static_cast<float>(i - colorStart) / static_cast<float>(numColors - 1)
+                            : 0.0f;
+                        stops.push_back({offset, sc});
+                    } else {
+                        for (float p : positions) stops.push_back({p, sc});
                     }
-                    stops.push_back({offset, sc});
                 }
 
                 if (stops.size() >= 2) {
@@ -2951,6 +2979,22 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     float rbw = rootBox.fullWidth();
     float rbh = rootBox.fullHeight();
 
+    // mix-blend-mode composites the ENTIRE stacking context against the
+    // backdrop. Push it as the outermost layer (before transform/opacity/
+    // filter) so the blended group includes all of the SC's painting, and tear
+    // it down last.
+    bool wrappedBlend = false;
+    {
+        auto mbIt = rootStyle.find("mix-blend-mode");
+        if (mbIt != rootStyle.end() && !mbIt->second.empty() && mbIt->second != "normal") {
+            render::BlendMode bm = parseBlendMode(mbIt->second);
+            if (bm != render::BlendMode::Normal) {
+                wrappedBlend = true;
+                renderer_->saveLayerWithBlend(bm);
+            }
+        }
+    }
+
     bool wrappedTransform = false;
     {
         auto trIt = rootStyle.find("transform");
@@ -3025,7 +3069,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
             }
         }
     }
-    bool didWrap = wrappedTransform || wrappedOpacity || wrappedFilter;
+    bool didWrap = wrappedBlend || wrappedTransform || wrappedOpacity || wrappedFilter;
     if (didWrap) scRootSkipWrap_.insert(sc->root);
 
     // Step 1: paint the SC root itself — its background, borders, and in-flow
@@ -3110,6 +3154,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
         if (wrappedFilter) renderer_->restore();
         if (wrappedOpacity) renderer_->restore();
         if (wrappedTransform) renderer_->restore();
+        if (wrappedBlend) renderer_->restore();
     }
 }
 

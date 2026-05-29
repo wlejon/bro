@@ -101,6 +101,7 @@ public:
     void concat4x4(const float m[16]) override;
     void saveLayerWithFilter(std::span<const CssFilterParams> filters,
                              float x, float y, float w, float h) override;
+    void saveLayerWithBlend(BlendMode mode) override;
     bool registerCustomFont(const std::string& family,
                             const void* data, size_t len,
                             int weight, bool italic) override;
