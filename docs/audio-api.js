@@ -568,7 +568,7 @@ class AudioContext {
   setPlaybackRegion(playbackId, startSample, endSample) {}
   /** @param {number} playbackId @param {number} rate - 1.0 = normal speed */ setPlaybackRate(playbackId, rate) {}
   /** @param {number} playbackId @param {number} pan - -1.0 to 1.0 */ setPlaybackPan(playbackId, pan) {}
-  /** @param {number} playbackId @returns {number} position in seconds */ getPlaybackPosition(playbackId) {}
+  /** @param {number} playbackId @returns {number} normalized position in the clip/region, [0,1) — multiply by the clip duration for seconds */ getPlaybackPosition(playbackId) {}
 
 
   // --- Offline Processing ---------------------------------------------------
