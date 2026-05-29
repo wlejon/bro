@@ -58,14 +58,27 @@ const voice = kokoro.loadVoice('../brosoundml/weights/kokoro/voices/af_heart.bin
 // ── Synthesize ──────────────────────────────────────────────────────────────
 
 /**
- * KokoroModel.synthesize(phonemeIds, voice, opts) → { samples, sampleRate }
+ * KokoroModel.synthesize(phonemeIds, voice, opts) → { samples, sampleRate, durations }
  *
  * @param {Int32Array|number[]} phonemeIds - from phonemize() (or a raw id list).
  * @param {Voice}  voice                   - from loadVoice().
  * @param {Object} [opts]
  * @param {number} [opts.speed=1.0]        - speaking-rate multiplier.
- * @returns {{ samples: Float32Array, sampleRate: number }}  24 kHz mono, [-1, 1].
+ * @returns {{ samples: Float32Array, sampleRate: number, durations: Int32Array }}
+ *          samples: 24 kHz mono, [-1, 1].
+ *          durations: per-phoneme frame counts, length = phonemeIds.length + 2
+ *          (Kokoro wraps the input as [BOS, ...ids, EOS]). Use these to recover
+ *          per-phoneme / per-word playback timing — see below.
  */
 const out = kokoro.synthesize(phonemeIds, voice, { speed: 1.0 });
 console.log(`${out.samples.length} samples @ ${out.sampleRate} Hz`);
 // Write out.samples to a WAV, or feed into an AudioContext buffer for playback.
+
+// ── Word/phoneme timing from durations ───────────────────────────────────────
+// The output sample count is a fixed multiple of the summed frame count, so:
+//   samplesPerFrame = out.samples.length / sum(out.durations)
+//   phoneme i (0-based in phonemeIds) spans durations[i+1] frames, starting at
+//   the cumulative frame offset; multiply frame offsets by samplesPerFrame /
+//   sampleRate for seconds. Words are separated by the inter-word space token
+//   (kokoro.vocab()[' ']) in the phoneme stream, so split phonemeIds on it to
+//   group per-word, then drive a highlight from audioCtx.getPlaybackPosition().

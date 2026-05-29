@@ -101,3 +101,40 @@ const newIds = model.generate(promptIds, {
 });
 const reply = tokenizer.decode(newIds);
 console.log(reply.trim());
+
+
+// ── Generate (streaming) ────────────────────────────────────────────────────
+
+/**
+ * QwenModel.generateStream(promptIds, opts, onToken) → number[]
+ *
+ *   Same prefill + decode loop as generate(), but invokes onToken(id) after
+ *   each sampled token so callers can stream text as it is produced. The KV
+ *   cache persists across the per-token forwards, so this is O(n) — do NOT
+ *   emulate streaming by calling generate() in a loop (it resets the cache and
+ *   re-prefills the prompt each call).
+ *
+ *   opts: same shape as generate() (maxNewTokens, eosId, sampling).
+ *   onToken(id): called once per generated token. Return false to stop early.
+ *                The eos token is neither passed to onToken nor included in the
+ *                returned ids.
+ *   Returns all newly generated ids (same as generate() would).
+ *
+ *   Tokens are byte-level BPE pieces that may be partial UTF-8, so decode
+ *   incrementally by accumulating ids and emitting the delta of the full decode
+ *   (rather than decoding one id at a time).
+ */
+const acc = [];
+let shown = '';
+model.generateStream(promptIds, {
+    maxNewTokens: 40,
+    eosId:        tokenizer.imEndId,
+    sampling:     { temperature: 0.7, topK: 40, topP: 0.95, seed: 42 },
+}, (id) => {
+    acc.push(id);
+    const text = tokenizer.decode(acc);
+    const delta = text.slice(shown.length);
+    shown = text;
+    if (delta) process.stdout.write(delta);   // or postMessage(delta) from a worker
+    return true;                              // return false to stop early
+});

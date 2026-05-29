@@ -164,9 +164,17 @@ class WorkerGlobalScope {
   //   bro.ai.game.* — navmesh, pathfinding, LOS, steering — same API as
   //                   the main thread. All state lives on JS objects, so
   //                   worker and main contexts have independent worlds.
+  //   bro.tensor.*  — GPU tensor + ops (brotensor).
+  //   bro.diffusion.* — diffusion-model inference (brodiffusion).
+  //   bro.lm.*      — Qwen3 text generation (brolm). Each worker owns its own
+  //                   model + KV cache.
+  //   bro.stt.* / bro.tts.* — Whisper STT / Kokoro TTS (brosoundml).
+  //                   Run heavy inference here to keep the main thread
+  //                   responsive; transfer Float32 audio buffers zero-copy.
+  //   ImageBitmap / createImageBitmap — build frames here, transfer to main.
   //
   // NOT available: window, document, DOM, canvas, scene, Worker (no nesting),
-  //                bro.physics, bro.audio
+  //                bro.physics, bro.audio (playback is main-thread only)
 }
 
 
