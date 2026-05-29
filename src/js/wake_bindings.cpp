@@ -244,10 +244,21 @@ const char* deviceName(brotensor::Device d) {
 // calling thread). `wake` is the strong ref that owns the model on the worker;
 // the closure reads/writes only g_wake's atomics, which live for the program's
 // lifetime, so a stale closure that runs once more before removal is harmless.
-AudioInference::ProcessFn makeProcess(std::shared_ptr<brosoundml::WakeWord> wake) {
-    return [wake](const float* samples, int n) {
+AudioInference::ProcessFn makeProcess(std::shared_ptr<brosoundml::WakeWord> wake,
+                                      brotensor::Device device) {
+    return [wake, device](const float* samples, int n) {
         bool fired = false;
         try {
+            // Run feed() under the model's device scope — exactly as the LLM/STT/
+            // TTS async workers do on their threads. brotensor's CUDA kernels
+            // launch on the THREAD-LOCAL current stream that DeviceScope sets up;
+            // without it this worker thread has no scope, so feed()'s per-frame
+            // logit read-backs (~100/s) fall onto the default stream, serialising
+            // against all other device work and host-syncing each call. That
+            // stalls real-time keep-up, the 2 s ring overflows, and PcmRing drops
+            // the NEWEST samples — i.e. the word being spoken — so the detector
+            // never sees a complete utterance even though audio is arriving.
+            brotensor::DeviceScope scope(device);
             fired = wake->feed(samples, n);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "[ERROR] [wake] feed: %s\n", e.what());
@@ -353,7 +364,7 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 
         // Register the inference task: drain `ring`, run feed() on the inference
         // thread, publish fires. The closure captures a strong ref to the model.
-        g_wake.taskId = g_wake.inference->addTask(ring, makeProcess(wake));
+        g_wake.taskId = g_wake.inference->addTask(ring, makeProcess(wake, dev));
 
         // Configure the tap. broaudio owns the resampler (mic rate → wake rate,
         // polyphase windowed-sinc) and the AGC — both CPU, real-time safe. The
