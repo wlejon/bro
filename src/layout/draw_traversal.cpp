@@ -1347,7 +1347,32 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     }
                 }
 
-                // Parse color stops
+                // Parse color stops. Each part is "<color> [<pos1>] [<pos2>]".
+                // The CSS double-position form (e.g. "#hex 0 40%") is shorthand
+                // for two stops of the same color, producing a hard band. We
+                // strip up to two trailing position tokens off the end (the
+                // color may itself contain spaces inside rgb()/hsl()), then emit
+                // one stop per position found.
+                //
+                // A position token is a number with an optional % suffix; "%"
+                // resolves to a fraction. Bare 0 → 0. Other units (px/deg) can't
+                // be resolved to a fraction here, so those stops fall back to an
+                // evenly-spaced auto offset (offset < 0).
+                auto parsePosToken = [](const std::string& t, float& outFrac) -> bool {
+                    if (t.empty()) return false;
+                    char* end = nullptr;
+                    float v = std::strtof(t.c_str(), &end);
+                    if (end == t.c_str()) return false;
+                    std::string unit(end);
+                    if (unit == "%") { outFrac = v / 100.0f; return true; }
+                    if (unit.empty()) {
+                        // Bare number: only 0 maps cleanly to a fraction.
+                        if (v == 0.0f) { outFrac = 0.0f; return true; }
+                        return false;  // bare non-zero (px-less length / deg) → auto
+                    }
+                    return false;  // px / deg / other → auto
+                };
+
                 std::vector<render::ColorStop> stops;
                 size_t numColors = parts.size() - colorStart;
                 for (size_t i = colorStart; i < parts.size(); ++i) {
