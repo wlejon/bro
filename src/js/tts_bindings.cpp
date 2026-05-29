@@ -212,8 +212,12 @@ static JSValue js_kokoro_loadVoice(JSContext* ctx, JSValueConst this_val,
     }
 }
 
-// synthesize(phonemeIds, voice, opts?) -> { samples: Float32Array, sampleRate }
+// synthesize(phonemeIds, voice, opts?) -> { samples, sampleRate, durations }
 //   opts.speed: duration multiplier (>1 faster, <1 slower; default 1.0).
+//   durations: Int32Array of per-phoneme frame counts (length = phonemeIds + 2
+//   for Kokoro's BOS/EOS wrap). Per-phoneme sample offset =
+//   frameOffset * (samples.length / sum(durations)); lets callers map phonemes
+//   (and, via the inter-word separator token, words) to playback time.
 static JSValue js_kokoro_synthesize(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     auto* w = kokoroSelf(ctx, this_val);
@@ -237,8 +241,12 @@ static JSValue js_kokoro_synthesize(JSContext* ctx, JSValueConst this_val,
         getNum(ctx, argv[2], "speed", speed);
 
     try {
-        auto buf = w->kokoro->synthesize(ids, vw->voice, speed);
-        return audioBufferToJs(ctx, buf);
+        std::vector<int32_t> pred_dur;
+        auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur);
+        JSValue out = audioBufferToJs(ctx, buf);
+        JS_SetPropertyStr(ctx, out, "durations",
+            qjsbind::make_int32_array(ctx, pred_dur));
+        return out;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesize: %s", e.what());
     }
