@@ -73,7 +73,7 @@ function writeWav16(path, samples, sampleRate) {
         if (s < -1) s = -1;
         dv.setInt16(44 + i * 2, Math.round(s * 32767), true);
     }
-    FS.writeFileSync(path, Buffer.from(buf));
+    FS.writeFileSync(path, new Uint8Array(buf));
 }
 
 function ms(t0) { return ((Date.now() - t0) / 1000).toFixed(2) + 's'; }

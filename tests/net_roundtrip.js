@@ -26,19 +26,29 @@ bro.net.ondisconnect = (connId, reason) => {
     console.log('[test] ondisconnect conn=' + connId + ' reason=' + reason);
 };
 
+// NetService runs on a real OS thread, so it needs wall-clock time to open
+// the socket and accept connections. advanceTime() only burns virtual time
+// (and drains the event queue) — it gives the real thread no time to work.
+// Pump both: wallSleep() lets the service thread make progress, advanceTime()
+// drains its event queue and fires the JS callbacks.
+function pump(realMs, virtualMs) {
+    wallSleep(realMs);
+    advanceTime(virtualMs);
+}
+
 console.log('[test] hosting on 27066');
 bro.net.host(27066);
 
-advanceTime(200);
+for (let i = 0; i < 40 && !bro.net.isHosting(); i++) pump(25, 25);
 gotHosting = bro.net.isHosting();
 console.log('[test] isHosting=' + gotHosting);
 
 console.log('[test] connecting to 127.0.0.1:27066');
 bro.net.connect('127.0.0.1:27066');
 
-// Pump enough virtual time for the service thread to accept + deliver
-// connect + echo the message back.
-for (let i = 0; i < 20; i++) advanceTime(50);
+// Pump until the service thread accepts the connection and echoes the
+// message back, or we time out.
+for (let i = 0; i < 40 && gotMessage === null; i++) pump(25, 25);
 
 assert(gotHosting, 'should be hosting');
 assert(gotConnect, 'should have received onconnect');
