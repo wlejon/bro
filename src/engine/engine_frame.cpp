@@ -15,6 +15,7 @@
 #include "js/net_bindings.h"
 #include "js/worker.h"
 #include "js/wake_bindings.h"
+#include "js/async_job.h"
 #include "js/mic_bindings.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
@@ -116,6 +117,7 @@ void Engine::run() {
             if (audioInference_) audioInference_->signalPump();
             js::tickWake(jsRuntime_->getContext());
             js::tickMic(jsRuntime_->getContext());
+            js::tickAsync(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
 
             if (netService_) {
@@ -394,6 +396,7 @@ void Engine::run() {
         if (audioInference_) audioInference_->signalPump();
         js::tickWake(jsRuntime_->getContext());
         js::tickMic(jsRuntime_->getContext());
+        js::tickAsync(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
         if (netService_) {
             js::NetBindings::poll(jsRuntime_->getContext());
@@ -688,6 +691,10 @@ void Engine::run() {
     }
 
     // --- Shutdown ---
+    // Cancel + join any in-flight async inference jobs (bro.lm/stt/tts) and free
+    // their callbacks on this (the owning) thread before the runtime is torn down.
+    if (jsRuntime_) js::shutdownAsyncJobs(jsRuntime_->getContext());
+
     if (physicsWorld_) physicsWorld_->shutdown();
 
     if (layoutPipeline_) layoutPipeline_->postShutdown();

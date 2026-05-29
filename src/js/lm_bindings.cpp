@@ -13,6 +13,7 @@
 // something this binding can paper over.
 
 #include "js/lm_bindings.h"
+#include "js/async_job.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -23,10 +24,12 @@
 #include <brotensor/gguf.h>
 #include <brotensor/runtime.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <memory>
+#include <random>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,6 +45,10 @@ struct LMModelWrapper {
     bool weights_loaded = false;
     int  cache_allocated_for = 0;
     brotensor::Device device = brotensor::Device::CPU;
+    // Set while an async bro.lm.generate() runs on this model's background
+    // thread; rejects a second concurrent generation (the model + KV cache are
+    // single-owner). Cleared on the JS thread when the job's done() fires.
+    std::atomic<bool> generating{false};
 };
 
 struct LMTokenizerWrapper {
@@ -513,46 +520,129 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 //   so we install a DeviceScope around construction + load_weights + cache
 //   allocation paths. Forward dispatches on the device the model's tensors
 //   live on, so no scope needed at generate() time.
+// Build the Qwen3 model + tokenizer from a GGUF on disk. Heavy + blocking (file
+// IO + GPU upload); shared by the sync and async loadQwen paths. Throws on error.
+static void buildQwen(const std::string& path, brotensor::Device dev,
+                      std::unique_ptr<LMModelWrapper>& mw_out,
+                      std::unique_ptr<LMTokenizerWrapper>& tw_out) {
+    brotensor::gguf::File f = brotensor::gguf::File::open(path);
+    auto cfg = brolm::qwen::Qwen3Config::from_gguf(f);
+
+    auto mw = std::make_unique<LMModelWrapper>();
+    mw->device = dev;
+    {
+        brotensor::DeviceScope scope(dev);
+        mw->model = std::make_unique<brolm::qwen::Qwen3Model>(cfg);
+        mw->model->load_weights(f);
+    }
+    mw->weights_loaded = true;
+
+    auto tw = std::make_unique<LMTokenizerWrapper>();
+    tw->tok = std::make_unique<brolm::qwen::Tokenizer>(
+        brolm::qwen::Tokenizer::from_gguf(f));
+
+    std::fprintf(stderr, "[INFO] [lm] Qwen3 loaded on %s\n", deviceName(dev));
+    mw_out = std::move(mw);
+    tw_out = std::move(tw);
+}
+
+// State for an async load: the work thread fills mw/tw (or error); the JS-thread
+// done() wraps them and invokes onReady/onError.
+struct QwenLoadState {
+    std::string                         path;
+    brotensor::Device                   dev = brotensor::Device::CPU;
+    std::unique_ptr<LMModelWrapper>     mw;
+    std::unique_ptr<LMTokenizerWrapper> tw;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.lm.loadQwen(ggufPath, opts?) -> { model, tokenizer }  (sync)
+//                                  -> AsyncHandle             (async, if opts.onReady)
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.onReady({model,tokenizer}) / opts.onError(message): when onReady is a
+//   function the load runs on a background thread (non-blocking, parallelizable
+//   with other loads) and these fire on the JS thread.
 static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
                            int argc, JSValueConst* argv) {
     std::string path;
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx, "loadQwen(ggufPath, opts?): path string required");
-    try {
-        brotensor::init();
-        brotensor::Device dev = autoDevice();
-        if (argc >= 2) {
-            std::string err;
-            if (!parseDeviceOpt(ctx, argv[1], dev, err))
-                return JS_ThrowTypeError(ctx, "loadQwen: %s", err.c_str());
-        }
-        brotensor::gguf::File f = brotensor::gguf::File::open(path);
-        auto cfg = brolm::qwen::Qwen3Config::from_gguf(f);
 
-        auto mw = std::make_unique<LMModelWrapper>();
-        mw->device = dev;
-        {
-            brotensor::DeviceScope scope(dev);
-            mw->model = std::make_unique<brolm::qwen::Qwen3Model>(cfg);
-            mw->model->load_weights(f);
-        }
-        mw->weights_loaded = true;
-
-        auto tw = std::make_unique<LMTokenizerWrapper>();
-        tw->tok = std::make_unique<brolm::qwen::Tokenizer>(
-            brolm::qwen::Tokenizer::from_gguf(f));
-
-        std::fprintf(stderr, "[INFO] [lm] Qwen3 loaded on %s\n", deviceName(dev));
-
-        JSValue out = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, out, "model",
-            qjsbind::wrap<LMModelWrapper>(ctx, mw.release()));
-        JS_SetPropertyStr(ctx, out, "tokenizer",
-            qjsbind::wrap<LMTokenizerWrapper>(ctx, tw.release()));
-        return out;
-    } catch (const std::exception& e) {
-        return JS_ThrowInternalError(ctx, "loadQwen: %s", e.what());
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadQwen: %s", err.c_str());
     }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path (back-compat) ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<LMModelWrapper>     mw;
+            std::unique_ptr<LMTokenizerWrapper> tw;
+            buildQwen(path, dev, mw, tw);
+            JSValue out = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, out, "model",
+                qjsbind::wrap<LMModelWrapper>(ctx, mw.release()));
+            JS_SetPropertyStr(ctx, out, "tokenizer",
+                qjsbind::wrap<LMTokenizerWrapper>(ctx, tw.release()));
+            return out;
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadQwen: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<QwenLoadState>();
+    ls->path     = path;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildQwen(ls->path, ls->dev, ls->mw, ls->tw);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->mw) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadQwen failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = JS_NewObject(c);
+            JS_SetPropertyStr(c, out, "model",
+                qjsbind::wrap<LMModelWrapper>(c, ls->mw.release()));
+            JS_SetPropertyStr(c, out, "tokenizer",
+                qjsbind::wrap<LMTokenizerWrapper>(c, ls->tw.release()));
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
 // bro.lm.loadTokenizer({ vocabPath, mergesPath }) -> LMTokenizer
@@ -581,6 +671,152 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Async streaming generation — bro.lm.generate(model, promptIds, opts)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Runs the same prefill + decode loop as generateStream(), but on a background
+// thread via the async-job runner, so the JS thread (and the app) stays
+// responsive and the generation is cancellable mid-loop. Returns an AsyncHandle
+// with .cancel(); opts.onToken(id) fires per token, opts.onDone(ids, info) once
+// at the end, both on the JS thread (drained by tickAsync). info is
+// { cancelled, error? }. This is the engine-owned replacement for a JS Worker +
+// blocking generateStream: the app just says "generate, here's how to stop".
+
+// Shared between the work thread (sole writer of the committed prefix) and the
+// JS thread (sole reader / caller of the JS callbacks). Held by shared_ptr.
+struct LmStream {
+    std::vector<int32_t> ids;            // reserved to maxNewTokens up front
+    std::atomic<size_t>  produced{0};    // committed prefix length (publish)
+    size_t               drained = 0;    // JS-thread cursor into ids
+    JSValue              onToken = JS_UNDEFINED;  // dup'd; JS_UNDEFINED if absent
+    JSValue              onDone  = JS_UNDEFINED;  // dup'd; JS_UNDEFINED if absent
+    JSValue              modelRef = JS_UNDEFINED; // dup of the model JS object
+    bool                 hasOnToken = false;
+    bool                 hasOnDone  = false;
+};
+
+static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
+                              int argc, JSValueConst* argv) {
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx,
+            "generate(model, promptIds, opts): model and promptIds required");
+    auto* w = qjsbind::unwrap<LMModelWrapper>(ctx, argv[0]);
+    if (!w) return JS_ThrowTypeError(ctx, "generate: arg 0 must be an LMModel");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "generate: weights not loaded");
+
+    std::vector<int32_t> prompt = readIdArray(ctx, argv[1]);
+    if (prompt.empty())
+        return JS_ThrowTypeError(ctx,
+            "generate: promptIds must be a non-empty Int32Array or number[]");
+
+    brolm::qwen::GenerateOptions opts;
+    int eos_id = -1;
+    JSValue onToken = JS_UNDEFINED, onDone = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        opts = parseGenerateOptions(ctx, argv[2]);
+        int tmp = -1;
+        getInt(ctx, argv[2], "eosId", tmp);
+        eos_id = tmp;
+        onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
+        onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
+    }
+    if (opts.max_new_tokens <= 0) {
+        JS_FreeValue(ctx, onToken);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowTypeError(ctx, "generate: opts.maxNewTokens must be > 0");
+    }
+
+    // Claim the model for this generation (single-owner; one in flight).
+    bool expected = false;
+    if (!w->generating.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onToken);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "generate: a generation is already in flight on this model");
+    }
+
+    auto st = std::make_shared<LmStream>();
+    st->hasOnToken = JS_IsFunction(ctx, onToken);
+    st->hasOnDone  = JS_IsFunction(ctx, onDone);
+    st->onToken    = st->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    st->onDone     = st->hasOnDone  ? JS_DupValue(ctx, onDone)  : JS_UNDEFINED;
+    st->modelRef   = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    st->ids.reserve(static_cast<size_t>(opts.max_new_tokens));
+    JS_FreeValue(ctx, onToken);
+    JS_FreeValue(ctx, onDone);
+
+    LMModelWrapper* mw = w;
+
+    // Background thread: prefill + greedy/sampled decode, publishing each token.
+    // Mirrors js_model_generateStream's loop exactly (eos excluded from output).
+    auto work = [st, mw, prompt = std::move(prompt), opts, eos_id]
+                (const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        const int vocab = mw->model->config().vocab_size;
+        mw->model->allocate_cache(static_cast<int>(prompt.size()) +
+                                  opts.max_new_tokens);
+        std::mt19937_64 rng(opts.sampling.seed);
+        const bool stop = opts.stop_on_eos && eos_id >= 0;
+
+        brotensor::Tensor logits;
+        mw->model->forward(prompt.data(), static_cast<int>(prompt.size()), logits);
+        std::vector<float> row = lastRowFp32(logits);
+        int next = brolm::qwen::sample_token(row.data(), vocab, opts.sampling, rng);
+
+        while (true) {
+            if (stop && next == eos_id) break;
+            st->ids.push_back(next);
+            st->produced.store(st->ids.size(), std::memory_order_release);
+            if (cancel.load(std::memory_order_acquire)) break;
+            if (static_cast<int>(st->ids.size()) >= opts.max_new_tokens) break;
+            int32_t cur = next;
+            mw->model->forward(&cur, 1, logits);
+            row = lastRowFp32(logits);
+            next = brolm::qwen::sample_token(row.data(), vocab, opts.sampling, rng);
+        }
+    };
+
+    // JS thread, per tick: deliver newly committed tokens to onToken.
+    auto poll = [st](JSContext* c) {
+        if (!st->hasOnToken) return;
+        const size_t n = st->produced.load(std::memory_order_acquire);
+        while (st->drained < n) {
+            JSValue arg = JS_NewInt32(c, st->ids[st->drained++]);
+            JSValue r = JS_Call(c, st->onToken, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(c, arg);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+        }
+    };
+
+    // JS thread, once: hand the full id array + {cancelled,error} to onDone,
+    // free the dup'd values, release the model.
+    auto done = [st, mw](JSContext* c, bool cancelled, const std::string& error) {
+        const size_t n = st->produced.load(std::memory_order_acquire);
+        if (st->hasOnDone) {
+            JSValue arr  = qjsbind::make_int32_array(c, st->ids.data(), n);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { arr, info };
+            JSValue r = JS_Call(c, st->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            JS_FreeValue(c, info);
+        }
+        if (st->hasOnToken) JS_FreeValue(c, st->onToken);
+        if (st->hasOnDone)  JS_FreeValue(c, st->onDone);
+        JS_FreeValue(c, st->modelRef);
+        mw->generating.store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -603,6 +839,8 @@ void installLmBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
     JS_SetPropertyStr(ctx, lm, "loadTokenizer",
         JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
+    JS_SetPropertyStr(ctx, lm, "generate",
+        JS_NewCFunction(ctx, js_lm_generate, "generate", 3));
     JS_SetPropertyStr(ctx, broObj, "lm", lm);
 
     JS_FreeValue(ctx, broObj);

@@ -19,6 +19,7 @@
 #include "js/worker.h"
 #include "js/wake_bindings.h"
 #include "js/mic_bindings.h"
+#include "js/async_job.h"
 #include "js/net_bindings.h"
 #include "net/net_service.h"
 #include "dom/document.h"
@@ -248,6 +249,7 @@ void Engine::advanceTime(double ms) {
         if (audioInference_) audioInference_->stepInline();
         bro::js::tickWake(jsRuntime_->getContext());
         bro::js::tickMic(jsRuntime_->getContext());
+        bro::js::tickAsync(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
 
         // Tick system panels so splash lifecycle (min-display + dismiss)

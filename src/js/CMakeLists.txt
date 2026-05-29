@@ -69,6 +69,7 @@ add_library(bro_js STATIC
     tensor_bindings_int8.cpp
     tensor_bindings_safetensors.cpp
     tensor_bindings_audio.cpp
+    async_job.cpp
     diffusion_bindings.cpp
     lm_bindings.cpp
     stt_bindings.cpp

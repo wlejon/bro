@@ -1,6 +1,7 @@
 #include "js/worker.h"
 #include "util/asset_mounts.h"
 #include "js/ai_bindings.h"
+#include "js/async_job.h"
 #include "js/diffusion_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
@@ -393,6 +394,11 @@ void Worker::threadFunc()
             runtime->executePendingJobs();
         }
 
+        // Deliver results from any in-flight async inference jobs (bro.lm/stt/
+        // tts) on this worker thread — streamed tokens + completion callbacks.
+        tickAsync(ctx);
+        runtime->executePendingJobs();
+
         // Rate-limit to the configured tick rate. At the default 1000 Hz
         // this sleeps ~1ms when idle (matching legacy behavior); at 60 Hz
         // it yields ~16ms, dramatically reducing CPU for server workers.
@@ -408,6 +414,9 @@ void Worker::threadFunc()
     }
 
     // --- 8. Cleanup ---
+    // Cancel + join in-flight async inference jobs and free their callbacks on
+    // this worker thread before the runtime is destroyed.
+    shutdownAsyncJobs(ctx);
     timers->clearAll(ctx);
     ServerBindings::cleanup(ctx);
     if (netService_) {
