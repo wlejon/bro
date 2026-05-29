@@ -148,6 +148,9 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
 | `docs/tensor-api.js` | `bro.tensor` — GPU tensor + ops (brotensor sibling, CUDA / Metal): GpuTensor, dense/elementwise/softmax/layernorm/attention/MHA/embedding/concat/optim ops, batched inference variants |
 | `docs/diffusion-api.js` | `bro.diffusion` — diffusion-model inference (brodiffusion sibling): Pipeline, one-shot generate, step-wise prime/stepOnce/decode, cross-attention trace + logit-bias steering, LoRA |
+| `docs/lm-api.js` | `bro.lm` — Qwen3 text generation (brolm sibling): loadQwen → model + tokenizer, KV cache, chat templating, sampled/greedy generate. CUDA by default |
+| `docs/stt-api.js` | `bro.stt` — Whisper speech-to-text (brosoundml sibling): loadWhisper + loadTokenizer, 16 kHz mono audio in, transcribe → token ids → text. CUDA by default |
+| `docs/tts-api.js` | `bro.tts` — Kokoro text-to-speech (brosoundml sibling): phonemize, loadKokoro + loadVoice, synthesize phoneme ids → 24 kHz mono PCM. CUDA by default |
 | `docs/brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals (fetch, crypto, WebSocket, streams, storage, etc.) |
 | `docs/physics-api.js` | `Physics` — Jolt rigid bodies, shapes, raycasts, contact events (paired with PhysicsNode) |
 | `docs/terrain-api.js` | `scene.createTerrain` — voxel terrain: noise config, chunk streaming, voxel edits, raycast |
