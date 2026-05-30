@@ -321,6 +321,13 @@ void main() {
     }
 
     vec3 N = normalize(vNormal);
+    // Two-sided thin surfaces (leaves, petals, fabric) expose their back face
+    // whenever the card faces away from the camera. The card bakes a single
+    // geometric normal (its +Y), so without this flip a back-facing leaf is lit
+    // by a normal pointing away from the viewer — randomly-oriented scattered
+    // foliage then lights up at random. Flip the shading normal to the side we
+    // actually see so lighting responds to the visible face.
+    if (uTwoSided == 1 && !gl_FrontFacing) N = -N;
     if (uHasTangent == 1 && uHasNormalMap == 1) {
         vec3 nTS = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
         mat3 TBN = mat3(normalize(vTangentW), normalize(vBitangentW), N);
