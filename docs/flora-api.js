@@ -274,7 +274,7 @@ world.emitPlantBloomAnchors;
  *     moduleMatureAge:number, pipeExp:number, leafDiameter:number,
  *     terrainAnchorWeight:number, maxSeedingSlope:number,
  *     distributionWeightCollisions:number, distributionWeightTropism:number,
- *     tropismCosTarget:number
+ *     orthotropy:number
  *   }
  * }|null}
  */

@@ -103,7 +103,7 @@ static void applySpeciesPartial(JSContext* ctx, JSValueConst spec,
     readFloatField(ctx, spec, "maxSeedingSlope",     s.maxSeedingSlope);
     readFloatField(ctx, spec, "distributionWeightCollisions", s.distributionWeightCollisions);
     readFloatField(ctx, spec, "distributionWeightTropism",    s.distributionWeightTropism);
-    readFloatField(ctx, spec, "tropismCosTarget",    s.tropismCosTarget);
+    readFloatField(ctx, spec, "orthotropy",          s.orthotropy);
 }
 
 // ── Prototype builder ──────────────────────────────────────────────────
@@ -539,7 +539,7 @@ static void installWorldClass(JSContext* ctx) {
         JS_SetPropertyStr(ctx, sp, "maxSeedingSlope",             JS_NewFloat64(ctx, s.maxSeedingSlope));
         JS_SetPropertyStr(ctx, sp, "distributionWeightCollisions",JS_NewFloat64(ctx, s.distributionWeightCollisions));
         JS_SetPropertyStr(ctx, sp, "distributionWeightTropism",   JS_NewFloat64(ctx, s.distributionWeightTropism));
-        JS_SetPropertyStr(ctx, sp, "tropismCosTarget",            JS_NewFloat64(ctx, s.tropismCosTarget));
+        JS_SetPropertyStr(ctx, sp, "orthotropy",                  JS_NewFloat64(ctx, s.orthotropy));
         JS_SetPropertyStr(ctx, o, "species", sp);
 
         return o;
