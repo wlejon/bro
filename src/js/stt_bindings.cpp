@@ -5,10 +5,11 @@
 // its tokenizer (brolm::whisper::Tokenizer) live behind opaque qjsbind
 // handles.
 //
-// brosoundml's Whisper currently requires Device::CPU; passing a GPU device
-// throws. transcribe() takes 16 kHz mono FP32 audio and returns the raw token
-// id stream — `transcribeText` adds the build_prompt / decode round-trip and
-// hands back plain text.
+// The model runs on GPU by default — loadWhisper places it on CUDA when a GPU
+// backend is available (pass opts.device 'cpu' to force CPU). transcribe()
+// takes 16 kHz mono FP32 audio and returns the raw token id stream —
+// `transcribeText` adds the build_prompt / decode round-trip and hands back
+// plain text.
 
 #include "js/stt_bindings.h"
 #include "js/async_job.h"

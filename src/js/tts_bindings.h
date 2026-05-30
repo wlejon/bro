@@ -16,7 +16,8 @@ namespace bro::js {
 // Output of synthesize() is a mono 24 kHz Float32Array, drop-in for an
 // AudioBuffer or a WAV write.
 //
-// CPU-only today — brosoundml::Kokoro::load throws on non-CPU devices.
+// Runs on GPU by default — loadKokoro places the model on CUDA when a GPU
+// backend is available (opts.device: 'cuda' | 'cpu' to override).
 void installTtsBindings(JSContext* ctx);
 
 // Symmetric cleanup hook. No-op today.

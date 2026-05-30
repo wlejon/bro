@@ -12,9 +12,10 @@ namespace bro::js {
 // WhisperTokenizer) and a one-call `bro.stt.loadWhisper(modelDir, opts)`
 // loader.
 //
-// CPU-only today — brosoundml::Whisper::load throws if asked for a non-CPU
-// device. Audio fed to transcribe() must be 16 kHz mono FP32; resampling
-// is the caller's responsibility (use brokit's resampler or bro.audio).
+// Runs on GPU by default — loadWhisper places the model on CUDA when a GPU
+// backend is available (opts.device: 'cuda' | 'cpu' to override). Audio fed to
+// transcribe() must be 16 kHz mono FP32; resampling is the caller's
+// responsibility (use brokit's resampler or bro.audio).
 void installSttBindings(JSContext* ctx);
 
 // Symmetric cleanup hook. No-op today.
