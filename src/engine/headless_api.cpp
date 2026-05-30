@@ -5,6 +5,9 @@
 #include "physics/physics_world.h"
 #include "audio_inference/audio_inference.h"
 
+#include <cstdio>
+#include <cstring>
+
 #include "observer_check.js.h"
 
 #include "render/renderer.h"
@@ -322,6 +325,101 @@ void Engine::advanceTime(double ms) {
             lastGCMs_ = virtualTime_;
         }
     }
+}
+
+// ── --fetch prefetch: download an app's declared models via bro.models ───────
+//
+// Evaluates a small driver that reads the manifest's "models" array and kicks
+// off bro.models.ensure(), recording terminal state on globals. We then pump
+// the JS job queue + brokit fetch tick (curl_multi) until it settles — the
+// same loop advanceTime() runs, minus the rendering/physics/audio steps a pure
+// download has no use for.
+int Engine::runModelFetch(const std::string& manifestPath) {
+    JSContext* ctx = jsRuntime_->getContext();
+
+    {
+        JSValue g = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, g, "__broFetchManifest",
+                          JS_NewString(ctx, manifestPath.c_str()));
+        JS_FreeValue(ctx, g);
+    }
+
+    static const char* kDriver = R"JS(
+    (function () {
+      globalThis.__broFetchState = 'pending';
+      try {
+        var fs = require('fs');
+        var manifest = JSON.parse(fs.readFileSync(globalThis.__broFetchManifest, 'utf8'));
+        var specs = (manifest && manifest.models) || [];
+        if (!specs.length) {
+          console.log('bro --fetch: no "models" declared in ' + globalThis.__broFetchManifest);
+          globalThis.__broFetchState = 'done';
+          return;
+        }
+        console.log('bro --fetch: ' + specs.length + ' file(s) -> ' + bro.models.cacheDir());
+        var lastId = '';
+        bro.models.ensure(specs, {
+          onProgress: function (p) {
+            if (p.cached) { console.log('  ' + p.id + '  (cached)'); return; }
+            if (p.id !== lastId) { console.log('  ' + p.id); lastId = p.id; }
+          }
+        }).then(function () {
+          globalThis.__broFetchState = 'done';
+        }).catch(function (e) {
+          globalThis.__broFetchError = String((e && e.message) || e);
+          globalThis.__broFetchState = 'error';
+        });
+      } catch (e) {
+        globalThis.__broFetchError = String((e && e.message) || e);
+        globalThis.__broFetchState = 'error';
+      }
+    })();
+    )JS";
+
+    JSValue r = JS_Eval(ctx, kDriver, std::strlen(kDriver),
+                        "bro:fetch-driver", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) {
+        js::Runtime::checkException(ctx, r);
+        JS_FreeValue(ctx, r);
+        return 1;
+    }
+    JS_FreeValue(ctx, r);
+
+    auto getGlobalStr = [&](const char* name) -> std::string {
+        JSValue g = JS_GetGlobalObject(ctx);
+        JSValue v = JS_GetPropertyStr(ctx, g, name);
+        const char* s = JS_ToCString(ctx, v);
+        std::string out = s ? s : "";
+        if (s) JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, g);
+        return out;
+    };
+    auto callTick = [&](const char* fn) {
+        JSValue g = JS_GetGlobalObject(ctx);
+        JSValue f = JS_GetPropertyStr(ctx, g, fn);
+        if (JS_IsFunction(ctx, f)) {
+            JSValue ret = JS_Call(ctx, f, JS_UNDEFINED, 0, nullptr);
+            JS_FreeValue(ctx, ret);
+        }
+        JS_FreeValue(ctx, f);
+        JS_FreeValue(ctx, g);
+    };
+
+    // The fetch tick's curl_multi_poll blocks up to 50 ms internally, so this
+    // loop throttles itself — it is not a hot spin.
+    while (getGlobalStr("__broFetchState") == "pending") {
+        jsRuntime_->executePendingJobs();
+        callTick("__brokit_fetch_tick");
+    }
+
+    if (getGlobalStr("__broFetchState") == "error") {
+        std::string err = getGlobalStr("__broFetchError");
+        std::fprintf(stderr, "bro --fetch failed: %s\n",
+                     err.empty() ? "(unknown error)" : err.c_str());
+        return 1;
+    }
+    return 0;
 }
 
 std::string Engine::eval(const std::string& code) {

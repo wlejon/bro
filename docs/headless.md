@@ -17,6 +17,7 @@ bro-headless [--no-gpu] [--width N] [--height N] <app-directory> [script.js | -e
 | Flag | Description |
 |------|-------------|
 | `--no-gpu` | Disable GPU rendering. Uses CPU-only Skia rasterizer (no WebGL, no scene layer compositing). For CI environments without a GPU. |
+| `--fetch` | Download the app's declared models (its `bro.json` `"models"` array) via `bro.models` into the shared cache, print per-file progress, and exit. Runs GPU-free; no UI. See `docs/models-api.js`. |
 | `--width N` | Viewport width in pixels (default: 1920) |
 | `--height N` | Viewport height in pixels (default: 1080) |
 

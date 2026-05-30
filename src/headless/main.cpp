@@ -201,6 +201,7 @@ int main(int argc, char* argv[]) {
     // into early screenshots (matrix glyphs at top of frame). Opt-in via
     // --splash if you specifically want to exercise the splash lifecycle.
     int cliSplash = -1;   // -1 unset, 0 off, 1 on
+    bool doFetch = false; // --fetch: download the app's declared models, exit
     std::string appDir;
     std::string scriptPath;
     std::vector<std::string> inlineExprs;
@@ -208,6 +209,8 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-gpu") == 0) {
             useGPU = false;
+        } else if (strcmp(argv[i], "--fetch") == 0) {
+            doFetch = true;
         } else if (strcmp(argv[i], "--audio") == 0) {
             realAudio = true;
         } else if (strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
@@ -306,7 +309,8 @@ int main(int argc, char* argv[]) {
         config.realAudio = realAudio;
         config.graphics.width = width;
         config.graphics.height = height;
-        config.graphics.useGPU = useGPU;
+        // A pure model download needs neither GPU nor display.
+        config.graphics.useGPU = useGPU && !doFetch;
         // Headless: splash defaults off; --splash opts in, --no-splash is
         // explicit-off (kept for symmetry with windowed bro).
         config.showSplash = (cliSplash == 1);
@@ -318,7 +322,10 @@ int main(int argc, char* argv[]) {
         auto* ctx = rt->getContext();
         bro::js::installHeadlessBindings(ctx, engine);
 
-        if (!inlineExprs.empty()) {
+        if (doFetch) {
+            // Prefetch the app's declared models (bro.json "models") and exit.
+            exitCode = engine->runModelFetch(config.appDir + "/bro.json");
+        } else if (!inlineExprs.empty()) {
             // -e mode: concatenate and eval
             std::ostringstream oss;
             for (size_t i = 0; i < inlineExprs.size(); ++i) {

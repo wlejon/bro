@@ -171,10 +171,12 @@ int main(int argc, char* argv[]) {
     // purpose, and --no-splash wins as a final override applied after).
     bool cliNoSplash = false;
     bool cliSplash   = false;
+    bool cliFetch    = false;   // --fetch: download the app's declared models, then exit
     std::vector<const char*> posArgs;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-splash") == 0)     cliNoSplash = true;
         else if (strcmp(argv[i], "--splash") == 0)   cliSplash   = true;
+        else if (strcmp(argv[i], "--fetch") == 0)    cliFetch    = true;
         else posArgs.push_back(argv[i]);
     }
 
@@ -332,6 +334,23 @@ int main(int argc, char* argv[]) {
     if (!config.projectRoot.empty()) setenv("BRO_PROJECT_ROOT", config.projectRoot.c_str(), 1);
     else unsetenv("BRO_PROJECT_ROOT");
 #endif
+
+    // --fetch: download the app's declared models (bro.json "models") and exit,
+    // without opening a window. A pure download needs neither GPU nor display,
+    // so run a headless, GPU-free engine just long enough to drive bro.models.
+    if (cliFetch) {
+        config.displayMode = bro::engine::DisplayMode::Headless;
+        config.graphics.useGPU = false;
+        config.showSplash = false;
+        try {
+            bro::engine::Engine engine(config);
+            engine.run();  // headless: initial layout, returns immediately
+            return engine.runModelFetch(config.appDir + "/bro.json");
+        } catch (const std::exception& e) {
+            LOG_ERROR("Fatal: %s", e.what());
+            return 1;
+        }
+    }
 
     try {
         bro::engine::Engine engine(config);

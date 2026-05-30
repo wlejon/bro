@@ -527,16 +527,17 @@ static JSValue js_loadWhisper(JSContext* ctx, JSValueConst,
 // relative to the model, but the async path keeps the loader API uniform.
 static void buildWhisperTokenizer(const std::string& vocab,
                                   const std::string& merges,
+                                  const std::string& addedTokens,
                                   std::unique_ptr<WhisperTokenizerWrapper>& tw_out) {
     auto tw = std::make_unique<WhisperTokenizerWrapper>();
     tw->tok = std::make_unique<brolm::whisper::Tokenizer>(
-        brolm::whisper::Tokenizer::load(vocab, merges));
+        brolm::whisper::Tokenizer::load(vocab, merges, addedTokens));
     tw_out = std::move(tw);
 }
 
 // State for an async loadTokenizer.
 struct WhisperTokLoadState {
-    std::string                              vocab, merges;
+    std::string                              vocab, merges, addedTokens;
     std::unique_ptr<WhisperTokenizerWrapper> tw;
     JSValue onReady = JS_UNDEFINED;
     JSValue onError = JS_UNDEFINED;
@@ -557,6 +558,11 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
         return JS_ThrowTypeError(ctx,
             "loadTokenizer: opts.vocabPath and opts.mergesPath required");
 
+    // Optional: an upstream openai/whisper added_tokens.json carrying the
+    // "<|...|>" specials. Absent for the converted (merged) layout.
+    std::string addedTokens;
+    getStr(ctx, argv[0], "addedTokensPath", addedTokens);
+
     JSValue onReady = JS_GetPropertyStr(ctx, argv[0], "onReady");
     JSValue onError = JS_GetPropertyStr(ctx, argv[0], "onError");
     const bool async = JS_IsFunction(ctx, onReady);
@@ -567,7 +573,7 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
         JS_FreeValue(ctx, onError);
         try {
             std::unique_ptr<WhisperTokenizerWrapper> tw;
-            buildWhisperTokenizer(vocab, merges, tw);
+            buildWhisperTokenizer(vocab, merges, addedTokens, tw);
             return qjsbind::wrap<WhisperTokenizerWrapper>(ctx, tw.release());
         } catch (const std::exception& e) {
             return JS_ThrowInternalError(ctx, "loadTokenizer: %s", e.what());
@@ -578,6 +584,7 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
     auto ls = std::make_shared<WhisperTokLoadState>();
     ls->vocab    = vocab;
     ls->merges   = merges;
+    ls->addedTokens = addedTokens;
     ls->hasReady = true;
     ls->onReady  = JS_DupValue(ctx, onReady);
     ls->hasError = JS_IsFunction(ctx, onError);
@@ -586,7 +593,7 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
     JS_FreeValue(ctx, onError);
 
     auto work = [ls](const std::atomic<bool>&) {
-        buildWhisperTokenizer(ls->vocab, ls->merges, ls->tw);  // throws -> error
+        buildWhisperTokenizer(ls->vocab, ls->merges, ls->addedTokens, ls->tw);  // throws -> error
     };
     auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
         if (!error.empty() || !ls->tw) {

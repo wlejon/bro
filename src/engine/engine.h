@@ -237,6 +237,12 @@ public:
     /// In windowed mode this is a no-op.
     void advanceTime(double ms);
 
+    /// Download the models declared in an app's bro.json "models" array via
+    /// bro.models.ensure(), blocking (pumping the fetch loop) until complete.
+    /// Used by the `--fetch` CLI prefetch mode. Returns a process exit code
+    /// (0 = all present/downloaded, 1 = error).
+    int runModelFetch(const std::string& manifestPath);
+
     /// Evaluate JS code and return the string result.
     std::string eval(const std::string& code);
 
