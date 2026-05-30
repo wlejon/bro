@@ -220,6 +220,56 @@ static void readShadow(JSContext* ctx, JSValueConst opts, broflora::ShadowGrid& 
     JS_FreeValue(ctx, sv);
 }
 
+// ── Built-in prototypes ────────────────────────────────────────────────
+// Serialise a C++ broflora prototype into the same spec object
+// buildPrototype() reads, so the library factories stay the single source
+// of truth and the returned value drops straight into world.addPrototype().
+static JSValue protoToSpec(JSContext* ctx, const broflora::BranchModulePrototype& p) {
+    JSValue o = JS_NewObject(ctx);
+    if (p.name) JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, p.name));
+
+    JSValue nodes = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < p.nodes.size(); ++i) {
+        const auto& nd = p.nodes[i];
+        JSValue nv = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, nv, "position",   makeVec3(ctx, nd.position));
+        JS_SetPropertyStr(ctx, nv, "ageAtBirth", JS_NewFloat64(ctx, nd.ageAtBirth));
+        JS_SetPropertyStr(ctx, nv, "lengthMax",  JS_NewFloat64(ctx, nd.lengthMax));
+        JS_SetPropertyStr(ctx, nv, "thickening", JS_NewFloat64(ctx, nd.thickening));
+        JS_SetPropertyUint32(ctx, nodes, i, nv);
+    }
+    JS_SetPropertyStr(ctx, o, "nodes", nodes);
+
+    JSValue edges = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < p.edges.size(); ++i) {
+        JSValue ev = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, ev, 0, JS_NewInt32(ctx, (int32_t)p.edges[i].a));
+        JS_SetPropertyUint32(ctx, ev, 1, JS_NewInt32(ctx, (int32_t)p.edges[i].b));
+        JS_SetPropertyUint32(ctx, edges, i, ev);
+    }
+    JS_SetPropertyStr(ctx, o, "edges", edges);
+    JS_SetPropertyStr(ctx, o, "rootNode", JS_NewInt32(ctx, (int32_t)p.rootNode));
+
+    JSValue terms = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < p.terminalNodes.size(); ++i)
+        JS_SetPropertyUint32(ctx, terms, i, JS_NewInt32(ctx, (int32_t)p.terminalNodes[i]));
+    JS_SetPropertyStr(ctx, o, "terminalNodes", terms);
+    return o;
+}
+
+static JSValue protoStraight(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    return protoToSpec(ctx, broflora::straightModule());
+}
+static JSValue protoFork(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    return protoToSpec(ctx, broflora::forkModule());
+}
+static JSValue protoWhorl(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    uint32_t arms = 3; double spread = 0.55;
+    if (argc >= 1 && !JS_IsUndefined(argv[0])) JS_ToUint32(ctx, &arms, argv[0]);
+    if (argc >= 2 && !JS_IsUndefined(argv[1])) JS_ToFloat64(ctx, &spread, argv[1]);
+    return protoToSpec(ctx, broflora::whorlModule(arms, (float)spread));
+}
+
 // ── Factory ────────────────────────────────────────────────────────────
 
 static JSValue createWorld(JSContext* ctx, JSValueConst /*this_val*/,
@@ -565,6 +615,17 @@ void FloraBindings::install(JSContext* ctx) {
 
     JSValue createFn = JS_NewCFunction(ctx, createWorld, "createWorld", 1);
     JS_SetPropertyStr(ctx, floraObj, "createWorld", createFn);
+
+    // bro.flora.prototypes.{straight,fork,whorl} — ready-made specs that
+    // drop straight into world.addPrototype(...).
+    JSValue protos = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, protos, "straight",
+                      JS_NewCFunction(ctx, protoStraight, "straight", 0));
+    JS_SetPropertyStr(ctx, protos, "fork",
+                      JS_NewCFunction(ctx, protoFork, "fork", 0));
+    JS_SetPropertyStr(ctx, protos, "whorl",
+                      JS_NewCFunction(ctx, protoWhorl, "whorl", 2));
+    JS_SetPropertyStr(ctx, floraObj, "prototypes", protos);
 
     JS_FreeValue(ctx, floraObj);
     JS_FreeValue(ctx, broObj);

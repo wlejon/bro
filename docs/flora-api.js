@@ -80,6 +80,27 @@ const protoY = world.addPrototype({
 });
 
 /**
+ * Built-in prototype specs — ready-made branch modules so you don't have
+ * to hand-author node/edge graphs (and the basipetal parent<child edge
+ * ordering they require). Each returns a plain spec object that drops
+ * straight into world.addPrototype(...).
+ *
+ *   bro.flora.prototypes.straight()            single segment (juvenile pole)
+ *   bro.flora.prototypes.fork()                planar two-terminal "Y"
+ *   bro.flora.prototypes.whorl(arms?, spread?) short trunk + `arms` (2..8,
+ *                                              default 3) shoots spread in
+ *                                              3D and pitched out by `spread`
+ *                                              (0..1, default 0.55). The
+ *                                              workhorse for full, rounded
+ *                                              crowns — every spawn adds
+ *                                              `arms` shoots so the crown
+ *                                              fills volumetrically.
+ */
+bro.flora.prototypes;
+
+const protoWhorl = world.addPrototype(bro.flora.prototypes.whorl(4, 0.7));
+
+/**
  * Register a Voronoi site in (determinacy D, apicalControl λ) space.
  * Spawning picks the nearest site to the local (D', λ) of the parent
  * module. Two-plus sites are typical so module selection has somewhere
