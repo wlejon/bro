@@ -25,12 +25,33 @@
 const phonemeIds = bro.tts.phonemize('Hello, Bro.');
 
 /**
- * Override where the phonemizer loads its lexicon/assets from. Optional —
- * defaults resolve against the app's asset mounts.
+ * Override the brosoundml repo root the phonemizer derives its assets from.
+ * The g2p data root is assumed at <dir>/../brosoundml-data and the Kokoro
+ * config at <dir>/weights/kokoro/config.json. Optional — defaults resolve
+ * against well-known sibling paths. Clears any prior setAssets() override.
  *
  * @param {string} dir
  */
-// bro.tts.setAssetRoot('/lib/kokoro');
+// bro.tts.setAssetRoot('../brosoundml');
+
+/**
+ * Set explicit phonemizer asset paths — use this to load from a flat per-user
+ * cache that doesn't follow the dev sibling layout. Any explicit file path
+ * overrides the root-derived default; omitted keys are left unchanged. Takes
+ * precedence over setAssetRoot(). Resets cached state so the next phonemize()
+ * rebuilds.
+ *
+ * @param {Object} opts
+ * @param {string} [opts.root]         - sibling-layout base for any asset not given explicitly.
+ * @param {string} [opts.lexicon]      - path to g2p lexicon_en_us.bin.
+ * @param {string} [opts.posTagger]    - path to the POS-tagger model.bin.
+ * @param {string} [opts.kokoroConfig] - path to the Kokoro config.json (phoneme vocab).
+ */
+// bro.tts.setAssets({
+//   lexicon:      cacheDir + '/datasets/wlejon/brosoundml-data/g2p/lexicon_en_us.bin',
+//   posTagger:    cacheDir + '/datasets/wlejon/brosoundml-data/pos_tagger/model.bin',
+//   kokoroConfig: kokoroDir + '/config.json',
+// });
 
 
 // ── Load model + voice ──────────────────────────────────────────────────────

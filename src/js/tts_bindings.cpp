@@ -398,16 +398,20 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 //
 // The Phonemizer holds non-owning pointers to five dependencies. We keep them
 // all alive in a single PhonemizerState that's lazy-built on first call to
-// bro.tts.phonemize() and re-built if bro.tts.setAssetRoot() is called.
+// bro.tts.phonemize() and re-built when setAssetRoot()/setAssets() is called.
 //
 // Required runtime assets:
-//   - <data_root>/g2p/lexicon_en_us.bin
-//   - <data_root>/pos_tagger/model.bin
-//   - <repo_root>/weights/kokoro/config.json    (for the phoneme vocab)
+//   - the g2p lexicon          (sibling default: <data_root>/g2p/lexicon_en_us.bin)
+//   - the POS-tagger weights    (sibling default: <data_root>/pos_tagger/model.bin)
+//   - the Kokoro config.json    (sibling default: <repo_root>/weights/kokoro/config.json)
+//                               (read only for the phoneme vocab)
 //
-// Default search probes well-known sibling paths relative to the current
-// working directory. setAssetRoot(path) overrides the brosoundml repo root
-// (and implicitly the data root via the standard `../brosoundml-data` sibling).
+// Path resolution, highest precedence first:
+//   1. explicit per-asset paths set via bro.tts.setAssets({lexicon, posTagger,
+//      kokoroConfig}) — for loading from a flat per-user cache
+//   2. the sibling layout rooted at setAssetRoot(path) (data root derived as
+//      <path>/../brosoundml-data)
+//   3. a default search of well-known sibling paths relative to the cwd
 
 struct PhonemizerState {
     // Vocab is owned here (extracted from kokoro config.json) and borrowed by
@@ -421,8 +425,14 @@ struct PhonemizerState {
     std::unique_ptr<brosoundml::g2p::Phonemizer>     phonemizer;
 };
 
-// Module-scope singletons. Reset when setAssetRoot() is called.
-static std::string                              g_assetRoot;      // brosoundml repo root
+// Module-scope singletons. Reset when setAssetRoot()/setAssets() is called.
+// g_assetRoot drives the default sibling-layout derivation; the explicit
+// override paths below (when non-empty) take precedence so the phonemizer can
+// load from a flat per-user cache that doesn't follow the dev sibling layout.
+static std::string                              g_assetRoot;        // brosoundml repo root
+static std::string                              g_lexiconPath;      // explicit g2p lexicon override
+static std::string                              g_posPath;          // explicit POS-tagger override
+static std::string                              g_kokoroConfigPath; // explicit Kokoro config.json override
 static std::unique_ptr<PhonemizerState>         g_phonemizerState;
 
 static bool fileExists(const std::string& p) {
@@ -479,19 +489,23 @@ static std::unordered_map<std::string, int> loadKokoroVocab(
 static std::unique_ptr<PhonemizerState> buildPhonemizerState() {
     const std::string repo   = resolveBrosoundmlRoot();
     const std::string data   = resolveBrosoundmlDataRoot();
-    const std::string lexBin = data + "/g2p/lexicon_en_us.bin";
-    const std::string posBin = data + "/pos_tagger/model.bin";
-    const std::string kokCfg = repo + "/weights/kokoro/config.json";
+    // Explicit overrides (bro.tts.setAssets) win; otherwise derive from the
+    // sibling layout rooted at g_assetRoot / the default search.
+    const std::string lexBin = !g_lexiconPath.empty()      ? g_lexiconPath
+                                                           : data + "/g2p/lexicon_en_us.bin";
+    const std::string posBin = !g_posPath.empty()          ? g_posPath
+                                                           : data + "/pos_tagger/model.bin";
+    const std::string kokCfg = !g_kokoroConfigPath.empty() ? g_kokoroConfigPath
+                                                           : repo + "/weights/kokoro/config.json";
 
+    const char* hint = " (pass an explicit path via bro.tts.setAssets({...}) "
+                       "or a sibling root via bro.tts.setAssetRoot)";
     if (!fileExists(lexBin))
-        throw std::runtime_error("missing lexicon: " + lexBin
-            + " (set bro.tts.setAssetRoot('../brosoundml'))");
+        throw std::runtime_error("missing lexicon: " + lexBin + hint);
     if (!fileExists(posBin))
-        throw std::runtime_error("missing POS tagger weights: " + posBin
-            + " (set bro.tts.setAssetRoot('../brosoundml'))");
+        throw std::runtime_error("missing POS tagger weights: " + posBin + hint);
     if (!fileExists(kokCfg))
-        throw std::runtime_error("missing Kokoro config.json: " + kokCfg
-            + " (set bro.tts.setAssetRoot('../brosoundml'))");
+        throw std::runtime_error("missing Kokoro config.json: " + kokCfg + hint);
 
     auto st = std::make_unique<PhonemizerState>();
     st->vocab      = loadKokoroVocab(kokCfg);
@@ -510,28 +524,59 @@ static std::unique_ptr<PhonemizerState> buildPhonemizerState() {
 
 // bro.tts.setAssetRoot(path)
 //   Override the brosoundml repo root used by the lazy Phonemizer. The data
-//   sibling is assumed at <path>/../brosoundml-data. Resets any cached state
-//   so the next phonemize() call rebuilds against the new root.
+//   sibling is assumed at <path>/../brosoundml-data and the Kokoro config at
+//   <path>/weights/kokoro/config.json. Clears any explicit setAssets() paths
+//   (full reset to sibling-layout mode) and the cached state so the next
+//   phonemize() call rebuilds against the new root.
 static JSValue js_setAssetRoot(JSContext* ctx, JSValueConst,
                                int argc, JSValueConst* argv) {
     std::string path;
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx, "setAssetRoot(path): path string required");
     g_assetRoot = std::move(path);
+    g_lexiconPath.clear();
+    g_posPath.clear();
+    g_kokoroConfigPath.clear();
     g_phonemizerState.reset();
     return JS_UNDEFINED;
 }
 
-// bro.tts.phonemize(text, opts?) -> Int32Array
-//   Lazily constructs an English Phonemizer on first call. `opts.lang` is
-//   accepted but ignored — reserved for accent variants. Default is en-us.
+// bro.tts.setAssets(opts)
+//   Set explicit phonemizer asset paths, for loading from a flat per-user cache
+//   that doesn't follow the dev sibling layout. opts may contain any of:
+//     { root, lexicon, posTagger, kokoroConfig }
+//   An explicit file path (lexicon/posTagger/kokoroConfig) overrides the
+//   root-derived default for that asset; `root` sets the sibling-layout base
+//   used for any asset not given explicitly. Omitted keys are left unchanged.
+//   Resets cached state so the next phonemize() rebuilds.
+static JSValue js_setAssets(JSContext* ctx, JSValueConst,
+                            int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setAssets(opts): options object required");
+    auto getStr = [&](const char* key, std::string& out) {
+        JSValue v = JS_GetPropertyStr(ctx, argv[0], key);
+        std::string s;
+        if (JS_IsString(v) && argStr(ctx, v, s)) out = std::move(s);
+        JS_FreeValue(ctx, v);
+    };
+    getStr("root", g_assetRoot);
+    getStr("lexicon", g_lexiconPath);
+    getStr("posTagger", g_posPath);
+    getStr("kokoroConfig", g_kokoroConfigPath);
+    g_phonemizerState.reset();
+    return JS_UNDEFINED;
+}
+
+// bro.tts.phonemize(text) -> Int32Array
+//   Lazily constructs the in-tree English (en-us) Phonemizer on first call and
+//   returns Kokoro phoneme ids. The frontend is English-only today; there is no
+//   language/accent option (a non-English g2p would need its own lexicon + POS
+//   model). Kept single-arg so a future opts can be added without a break.
 static JSValue js_phonemize(JSContext* ctx, JSValueConst,
                             int argc, JSValueConst* argv) {
     std::string text;
     if (argc < 1 || !argStr(ctx, argv[0], text))
-        return JS_ThrowTypeError(ctx, "phonemize(text, opts?): text required");
-    // opts.lang is parsed but not yet acted on.
-    (void)argv;
+        return JS_ThrowTypeError(ctx, "phonemize(text): text required");
     try {
         if (!g_phonemizerState) {
             brotensor::init();
@@ -785,6 +830,8 @@ void installTtsBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_phonemize, "phonemize", 2));
     JS_SetPropertyStr(ctx, tts, "setAssetRoot",
         JS_NewCFunction(ctx, js_setAssetRoot, "setAssetRoot", 1));
+    JS_SetPropertyStr(ctx, tts, "setAssets",
+        JS_NewCFunction(ctx, js_setAssets, "setAssets", 1));
     JS_SetPropertyStr(ctx, tts, "synthesize",
         JS_NewCFunction(ctx, js_tts_synthesize, "synthesize", 4));
     JS_SetPropertyStr(ctx, broObj, "tts", tts);
@@ -796,6 +843,9 @@ void installTtsBindings(JSContext* ctx) {
 void cleanupTtsBindings(JSContext* /*ctx*/) {
     g_phonemizerState.reset();
     g_assetRoot.clear();
+    g_lexiconPath.clear();
+    g_posPath.clear();
+    g_kokoroConfigPath.clear();
 }
 
 }  // namespace bro::js
