@@ -624,12 +624,13 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Runs Whisper's autoregressive decode on a background thread via the async-job
-// runner, so the JS thread stays responsive. Whisper's decode loop is internal
-// to brosoundml (not exposed step-by-step), so this is a monolithic op: there is
-// no per-token streaming poll, and cancellation simply drops the result. STT
-// runs once per turn (pre-reply), so this is sufficient. Returns an AsyncHandle
-// with .cancel(); opts.onDone(ids, info) fires once on the JS thread with info
-// being { cancelled, error? }.
+// runner, so the JS thread stays responsive. There is no per-token streaming
+// poll (the ids are delivered once at the end), but cancellation is real:
+// brosoundml's greedy loop checks the async-job cancel flag once per token, so
+// .cancel() stops the decode within ~1 token and frees the model's busy lock
+// rather than running to completion. Returns an AsyncHandle with .cancel();
+// opts.onDone(ids, info) fires once on the JS thread with info being
+// { cancelled, error? }.
 
 // Shared between the work thread (sole writer of token_ids) and the JS thread
 // (sole reader / caller of onDone). Held by shared_ptr.
@@ -684,10 +685,17 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
 
     WhisperWrapper* mw = w;
 
-    // Background thread: run the (monolithic) transcribe and stash the ids.
-    auto work = [job, mw](const std::atomic<bool>& /*cancel*/) {
+    // Background thread: run the transcribe and stash the ids. A barge-in
+    // flips the async-job cancel flag; Whisper's greedy decode polls it once
+    // per token and returns early, so the GPU stops and the model's `busy`
+    // lock is released promptly (the result is discarded by `done`). The check
+    // runs synchronously inside transcribe(), so capturing `cancel` by
+    // reference is safe.
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
-        auto out = mw->whisper->transcribe(job->audio, job->prompt, job->maxNew);
+        auto out = mw->whisper->transcribe(
+            job->audio, job->prompt, job->maxNew,
+            [&cancel] { return cancel.load(std::memory_order_acquire); });
         job->token_ids = std::move(out.token_ids);
     };
 

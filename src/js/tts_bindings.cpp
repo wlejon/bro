@@ -698,12 +698,14 @@ static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Runs Kokoro's forward pass on a background thread via the async-job runner, so
-// the JS thread stays responsive. Kokoro synthesis is a single monolithic
-// forward (no internal AR loop exposed), so there is no per-step streaming poll
-// and cancellation simply drops the result. Returns an AsyncHandle with
-// .cancel(); opts.onDone(result, info) fires once on the JS thread, where
-// result is { samples, sampleRate, durations } (same shape as the sync
-// synthesize() method) and info is { cancelled, error? }.
+// the JS thread stays responsive. Kokoro has no autoregressive loop, so there
+// is no per-step streaming poll, but cancellation is real: brosoundml checks the
+// async-job cancel flag between pipeline stages and inside the generator's
+// upsample loop, so .cancel() aborts synthesis (returning an empty buffer) and
+// frees the model's busy lock rather than running to completion. Returns an
+// AsyncHandle with .cancel(); opts.onDone(result, info) fires once on the JS
+// thread, where result is { samples, sampleRate, durations } (same shape as the
+// sync synthesize() method) and info is { cancelled, error? }.
 
 // Shared between the work thread (sole writer) and the JS thread (sole reader /
 // caller of onDone). Held by shared_ptr.
@@ -763,12 +765,19 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
 
     KokoroWrapper* mw = w;
 
-    // Background thread: run the (monolithic) forward and stash the waveform.
-    auto work = [job, mw](const std::atomic<bool>& /*cancel*/) {
+    // Background thread: run the forward and stash the waveform. A barge-in
+    // flips the async-job cancel flag; Kokoro polls it between pipeline stages
+    // and inside the generator's upsample loop, returning an empty buffer so
+    // the GPU stops and the model's `busy` lock is released promptly (the
+    // empty/cancelled result is discarded by `done`). The check runs
+    // synchronously inside synthesize(), so capturing `cancel` by reference is
+    // safe.
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
         std::vector<int32_t> pred_dur;
-        auto buf = mw->kokoro->synthesize(job->ids, job->vw->voice, job->speed,
-                                          &pred_dur);
+        auto buf = mw->kokoro->synthesize(
+            job->ids, job->vw->voice, job->speed, &pred_dur,
+            [&cancel] { return cancel.load(std::memory_order_acquire); });
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
         job->durations   = std::move(pred_dur);
