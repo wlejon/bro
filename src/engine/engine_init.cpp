@@ -46,7 +46,6 @@
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
 #include "js/diffusion_bindings.h"
-#include "js/models_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
@@ -199,11 +198,6 @@ Engine::Engine(const EngineConfig& config)
     // drives the step-wise inspection API; workers install the same binding
     // for fast full generation.
     js::installDiffusionBindings(jsRuntime_->getContext());
-
-    // bro.models (on-demand model-weight fetch + cache). Lets a distributed
-    // build acquire weights from their upstream HF homes at first run; in a
-    // source checkout it resolves to the dev sibling paths instead.
-    js::installModelsBindings(jsRuntime_->getContext());
 
     // bro.lm (Qwen3 LLM inference via brolm sibling). Always real — brolm's
     // CPU backend is always built. GGUF quant weights (Q4_K/Q6_K/Q8_0)

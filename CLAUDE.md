@@ -143,7 +143,6 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/wake-api.js` | `bro.wake` — streaming wake-word detection (brosoundml::WakeWord) driven by broaudio's mic tap |
-| `docs/models-api.js` | `bro.models` — on-demand model-weight fetch + cache from upstream HF (ensure/resolve/cacheDir), bro.json `models` array, `bro --fetch <app>` prefetch |
 | `docs/mic-api.js` | `bro.mic` — live mic chunk consumer: fixed-size frames (chunkFrames) from broaudio's mic tap, per-chunk peak/RMS, resample + AGC |
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
