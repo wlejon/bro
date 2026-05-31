@@ -17,8 +17,8 @@ namespace bro::js {
 //     world.step(dt)
 //     world.emitMesh(sides=6) -> Mesh
 //     world.emitSegments() -> Array<{from, to, radius, depth, parent}>
-//     world.emitFoliage()  -> Array<{mass, age01, vigor01, light01, senescence01, isTerminal}>
-//     world.emitBloomAnchors() -> Array<{position, normal, age01, vigor01, senescence01}>
+//     world.emitFoliage()  -> Array<{mass, age01, vigor01, light01, lightExposure01, senescence01, isTerminal}>
+//     world.emitBloomAnchors() -> Array<{position, normal, age01, vigor01, lightExposure01, senescence01}>
 //     world.validate() -> string|null
 //     get simTime, plantCount, prototypeCount
 class FloraBindings {

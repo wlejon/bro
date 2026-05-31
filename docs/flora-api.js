@@ -201,7 +201,13 @@ world.emitSegments;
  * are in [0,1] (or [0,2] for age01) so they can drive vertex attributes
  * or scatter density without normalisation.
  *
- * @returns {Array<{mass:number, age01:number, vigor01:number, light01:number, senescence01:number, isTerminal:boolean}>}
+ * `light01` is the shade-tolerance-adjusted light (Q_eff) the sim runs on —
+ * a tolerant species floors it near 1.0. `lightExposure01` is the RAW
+ * illumination Q·Q_G before that lerp, so it carries the true shadow
+ * gradient (~1 in sun, →0 deep in a closed canopy) — use it (not light01)
+ * to carve foliage/bloom density by actual shade.
+ *
+ * @returns {Array<{mass:number, age01:number, vigor01:number, light01:number, lightExposure01:number, senescence01:number, isTerminal:boolean}>}
  */
 world.emitFoliage;
 
@@ -215,7 +221,7 @@ const fol  = world.emitFoliage();
  * plants. Feed to bromesh.packAnchors to thin overlapping candidates,
  * then instance a flower mesh at each survivor.
  *
- * @returns {Array<{position:number[], normal:number[], age01:number, vigor01:number, senescence01:number}>}
+ * @returns {Array<{position:number[], normal:number[], age01:number, vigor01:number, lightExposure01:number, senescence01:number}>}
  */
 world.emitBloomAnchors;
 

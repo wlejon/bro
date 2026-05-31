@@ -402,6 +402,7 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, s.age01));
             JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, s.vigor01));
             JS_SetPropertyStr(ctx, o, "light01",      JS_NewFloat64(ctx, s.light01));
+            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, s.lightExposure01));
             JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, s.senescence01));
             JS_SetPropertyStr(ctx, o, "isTerminal",   JS_NewBool(ctx, s.isTerminal));
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
@@ -420,6 +421,7 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyStr(ctx, o, "normal",       makeVec3(ctx, a.normal));
             JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, a.age01));
             JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, a.vigor01));
+            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, a.lightExposure01));
             JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, a.senescence01));
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
         }
@@ -467,6 +469,7 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, s.age01));
             JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, s.vigor01));
             JS_SetPropertyStr(ctx, o, "light01",      JS_NewFloat64(ctx, s.light01));
+            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, s.lightExposure01));
             JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, s.senescence01));
             JS_SetPropertyStr(ctx, o, "isTerminal",   JS_NewBool(ctx, s.isTerminal));
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
@@ -485,6 +488,7 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyStr(ctx, o, "normal",       makeVec3(ctx, a.normal));
             JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, a.age01));
             JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, a.vigor01));
+            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, a.lightExposure01));
             JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, a.senescence01));
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
         }
