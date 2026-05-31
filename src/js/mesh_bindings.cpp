@@ -1016,6 +1016,24 @@ static void readLeafPlacementOptions(JSContext* ctx, JSValueConst o,
     opts.dedupRadius    = (float)objNum(ctx, o, "dedupRadius",     opts.dedupRadius);
     opts.seed           = (uint64_t)objNum(ctx, o, "seed", (double)opts.seed);
 
+    // Per-segment density multiplier (lockstep with the segments array).
+    JSValue dw = JS_GetPropertyStr(ctx, o, "densityWeight");
+    if (JS_IsArray(dw)) {
+        uint32_t n = 0;
+        JSValue lenV = JS_GetPropertyStr(ctx, dw, "length");
+        JS_ToUint32(ctx, &n, lenV);
+        JS_FreeValue(ctx, lenV);
+        opts.densityWeight.resize(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, dw, i);
+            double v = 0.0;
+            JS_ToFloat64(ctx, &v, e);
+            opts.densityWeight[i] = (float)v;
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, dw);
+
     // Obstacle / keep-out fields (see CapsuleField). The avoid pointer's
     // lifetime is the JS wrapper's lifetime, which persists for the duration
     // of the call because the option object holds a reference.

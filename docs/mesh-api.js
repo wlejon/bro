@@ -1820,6 +1820,12 @@ class CapsuleField {
 //   minDepth=1          skip segments with depth below this
 //   terminalOnly=false  only on chain tips
 //   perUnitLength=20    average leaves per unit of segment length
+//   densityWeight=[]    optional per-segment density multiplier, lockstep with
+//                       `segments`. Scales perUnitLength per segment: 0 = bare,
+//                       1 = full, >1 over-packs; empty = uniform. The hook for
+//                       light/vigor-driven foliage — pass broflora's per-segment
+//                       FoliageSample.mass so shaded shoots go bare and lit
+//                       crowns stay lush.
 //   densityFalloff=0    >0 biases samples toward the tip
 //   upBias=0.5          0 = radial-out, 1 = world-up forward (phototropism)
 //   tiltJitter=0.3      radians ± random pitch around branch tangent
