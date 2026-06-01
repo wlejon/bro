@@ -802,7 +802,7 @@ static void buildQwenTts(const std::string& dir, brotensor::Device dev,
     w_out = std::move(w);
 }
 
-struct QwenLoadState {
+struct QwenTtsLoadState {
     std::string                     dir;
     brotensor::Device               dev = brotensor::Device::CPU;
     std::unique_ptr<QwenTtsWrapper> w;
@@ -854,7 +854,7 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
     }
 
     // ── Async path ──
-    auto ls = std::make_shared<QwenLoadState>();
+    auto ls = std::make_shared<QwenTtsLoadState>();
     ls->dir      = dir;
     ls->dev      = dev;
     ls->hasReady = true;
