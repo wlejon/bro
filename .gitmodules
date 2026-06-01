@@ -46,3 +46,6 @@
 [submodule "third_party/brosoundml"]
 	path = third_party/brosoundml
 	url = git@github.com:wlejon/brosoundml.git
+[submodule "third_party/brovisionml"]
+	path = third_party/brovisionml
+	url = git@github.com:wlejon/brovisionml.git
