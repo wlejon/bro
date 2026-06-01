@@ -1,0 +1,200 @@
+/**
+ * bro.vision — Vision-model inference (brovisionml sibling)
+ *
+ * Image-understanding models that take pixels in and emit masks / maps /
+ * boxes: promptable segmentation (SAM), monocular depth (Depth-Anything-V2),
+ * surface normals (DSINE), and the ControlNet conditioning annotators — soft
+ * edges (HED), line drawing (lineart), straight lines (MLSD), body pose
+ * (OpenPose), semantic segmentation (SegFormer).
+ *
+ * Backed by brovisionml on top of brotensor + broimage. Models run on CUDA by
+ * default — pass { device: 'cpu' } to force the CPU backend. brovisionml ships
+ * code only; you supply the weight directories (HF safetensors checkpoints).
+ *
+ * ── Inputs ──
+ * Every model takes an image as either:
+ *   - an `ImageBitmap` (from createImageBitmap / a canvas / a Worker), or
+ *   - an ImageData-shaped `{ data, width, height }` where `data` is an RGBA
+ *     Uint8Array / Uint8ClampedArray (e.g. ctx.getImageData(...)).
+ *
+ * ── Outputs ──
+ * Dense-map results come back as BOTH a drawable `ImageBitmap` (grayscale /
+ * colorized, ready for drawImage, WebGL texImage2D, or a bro.diffusion
+ * conditioning input) AND the raw typed-array data (Float32Array / Uint8Array).
+ *
+ * ── Sync vs async ──
+ * Heavy work (load, SAM's image encode, every inference call, "segment
+ * everything") runs on a background thread when you pass a callback —
+ * loaders take opts.onReady/onError; inference takes opts.onDone — keeping the
+ * JS thread responsive (the same convention bro.stt / bro.tts / bro.lm use).
+ * The async call returns an AsyncHandle with `.cancel()`; onDone(result, info)
+ * fires once on the JS thread with info = { cancelled, error? }. With no
+ * callback the op runs inline and returns its result directly.
+ *
+ * Only one heavy op may be in flight per model at a time (the decoder / device
+ * state is single-owner); a second concurrent call throws.
+ */
+
+
+// ── Init ────────────────────────────────────────────────────────────────────
+
+/**
+ * Initialize brotensor (probes the CUDA backend). Idempotent and thread-safe.
+ * Optional — every loadXxx calls it — but useful to warm up explicitly.
+ */
+bro.vision.init();
+
+
+// ── SAM (Segment Anything) ────────────────────────────────────────────────
+
+/**
+ * Load a SAM checkpoint (dir holding model.safetensors).
+ * @param {string} dir
+ * @param {Object} [opts]
+ * @param {string} [opts.variant='vit_h']  'vit_h' | 'vit_l' | 'vit_b'
+ * @param {string} [opts.device='cuda']    'cuda' | 'cpu'
+ * @param {function} [opts.onReady]         async load: onReady(sam)
+ * @param {function} [opts.onError]         async load: onError(message)
+ * @returns {Sam|AsyncHandle}
+ */
+const sam = bro.vision.loadSam('weights/sam-vit-base', { variant: 'vit_b' });
+sam.device;    // 'CUDA'
+sam.hasImage;  // false until setImage()
+
+/**
+ * Sam.setImage(image, opts?) — run the slow ViT encode once; the embedding is
+ * cached for subsequent segment() calls. Heavy — pass opts.onDone to run async.
+ * @returns {undefined|AsyncHandle}
+ */
+sam.setImage(img);  // sync; or sam.setImage(img, { onDone: () => {...} })
+
+/**
+ * Sam.segment(opts) — cheap per-prompt decode against the cached embedding.
+ * Synchronous. Coordinates are ORIGINAL-image pixels.
+ * @param {Object} opts
+ * @param {number[][]} [opts.points]  [[x,y], ...] click points
+ * @param {number[]}   [opts.labels]  [1,0,...] 1=foreground 0=background
+ *                                     (defaults to all-foreground)
+ * @param {number[][]} [opts.boxes]   [[x1,y1,x2,y2], ...]
+ * @param {boolean}    [opts.multimask=true]  return 3 ranked proposals vs 1
+ * @returns {{ num, width, height, best,
+ *             masks: Array<{ iou, data: Uint8Array, image: ImageBitmap }> }}
+ *   `data` is a binary h*w mask (1=foreground); `image` is a translucent
+ *   colored overlay; `best` indexes the highest-IoU mask.
+ */
+const seg = sam.segment({ points: [[320, 240]], labels: [1] });
+const best = seg.masks[seg.best];   // best.iou, best.data, best.image
+
+/**
+ * Sam.segmentEverything(image, opts?) — the automatic mask generator
+ * ("segment everything"): a regular point grid → multi-mask proposals →
+ * IoU / stability filtering → box-NMS. Heavy — pass opts.onDone for async.
+ * @param {Object} [opts]  pointsPerSide(32), pointsPerBatch(64),
+ *   predIouThresh(0.88), stabilityThresh(0.95), boxNmsThresh(0.7),
+ *   cropNLayers(0), minMaskRegionArea(0)
+ * @returns {{ width, height, masks: Array<{ data, image, bbox:[x,y,w,h], area,
+ *             predictedIou, stabilityScore, point:[x,y] }> }}  sorted by area.
+ */
+sam.segmentEverything(img, { pointsPerSide: 32, onDone: (r) => { /* r.masks */ } });
+
+
+// ── Depth-Anything-V2 ─────────────────────────────────────────────────────
+
+/**
+ * @param {string} dir
+ * @param {Object} [opts]  variant 'small'(default)|'base'|'large'; device; onReady/onError
+ * @returns {DepthEstimator|AsyncHandle}
+ */
+const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small');
+
+/**
+ * DepthEstimator.estimate(image, opts?)
+ * @param {Object} [opts]  invert(false) — flip grayscale; onDone — run async
+ * @returns {{ width, height, depth: Float32Array, image: ImageBitmap, min, max }}
+ *   `depth` is relative inverse-depth (nearer = larger; NOT metric); `image`
+ *   is the min-max-normalized grayscale map (brighter = nearer by default).
+ */
+const dm = depth.estimate(img);   // dm.depth, dm.image, dm.min, dm.max
+
+
+// ── DSINE — surface normals ────────────────────────────────────────────────
+
+/**
+ * @param {string} dir
+ * @param {Object} [opts]  fov(60) — assumed field-of-view for synthesized
+ *   intrinsics; device; onReady/onError
+ * @returns {NormalEstimator|AsyncHandle}
+ */
+const normals = bro.vision.loadNormal('weights/dsine');
+
+/**
+ * NormalEstimator.estimate(image, opts?)
+ * @param {Object} [opts]  fx,fy,cx,cy — explicit pinhole intrinsics (else
+ *   synthesized from fov); onDone — run async
+ * @returns {{ width, height, normals: Float32Array(3*h*w, planar NCHW),
+ *             image: ImageBitmap }}
+ *   Each pixel is a unit normal in CAMERA space (nx,ny,nz); `image` maps it to
+ *   RGB via (n+1)/2 (the usual blue-ish normal map).
+ */
+const nm = normals.estimate(img);
+
+
+// ── ControlNet annotators (HED / lineart / MLSD / OpenPose / SegFormer) ──────
+
+/**
+ * HED soft edges — bro.vision.loadHed(dir, { resolution?(0=native), device, onReady })
+ * SoftEdgeDetector.detect(image, opts?{onDone}) →
+ *   { width, height, edge: Float32Array([0,1]), image: ImageBitmap (grayscale) }
+ */
+const hed = bro.vision.loadHed('weights/hed');
+const edges = hed.detect(img);   // edges.edge, edges.image
+
+/**
+ * Lineart — bro.vision.loadLineart(dir, { resolution?, invert?(true), device, onReady })
+ * LineartDetector.detect(image, opts?{onDone}) →
+ *   { width, height, line: Float32Array([0,1]), image: ImageBitmap }
+ *   invert (default) gives bright lines on a dark field — the ControlNet convention.
+ */
+const lineart = bro.vision.loadLineart('weights/lineart');
+const lines = lineart.detect(img);
+
+/**
+ * MLSD straight lines — bro.vision.loadMlsd(dir, { scoreThr?(0.1), distThr?(0.1), device, onReady })
+ * MLSDdetector.detect(image, opts?{onDone}) →
+ *   { width, height, segments: [{x1,y1,x2,y2,score}], image: ImageBitmap (white lines) }
+ *   segment coords are ORIGINAL-image pixels.
+ */
+const mlsd = bro.vision.loadMlsd('weights/mlsd');
+const segs = mlsd.detect(img);   // segs.segments, segs.image
+
+/**
+ * OpenPose body pose — bro.vision.loadOpenpose(dir, { resolution?(512), device, onReady })
+ * OpenposeDetector.detect(image, opts?{onDone}) →
+ *   { width, height,
+ *     bodies: [{ keypoints: [{x,y,score,present}×18], totalScore, totalParts }],
+ *     image: ImageBitmap (canonical colored pose sticks) }
+ *   keypoints are normalized [0,1] over the detect-res canvas (COCO-18 order).
+ *   Body-only (no hands/face), matching the ControlNet openpose control image.
+ */
+const openpose = bro.vision.loadOpenpose('weights/openpose');
+const pose = openpose.detect(img);   // pose.bodies, pose.image
+
+/**
+ * SegFormer semantic segmentation — bro.vision.loadSegformer(dir, { device, onReady })
+ *   dir holds model.safetensors + config.json (e.g. segformer-b0-finetuned-ade-512-512).
+ * SegformerDetector.detect(image, opts?{onDone}) →
+ *   { width, height, classes: Uint8Array(ADE20K ids 0..149),
+ *     image: ImageBitmap (ADE20K-palette colorized) }
+ */
+const segformer = bro.vision.loadSegformer('weights/segformer-b0-ade');
+const sem = segformer.detect(img);   // sem.classes, sem.image
+
+
+// ── Pipe an annotator into bro.diffusion ─────────────────────────────────────
+//
+// The five ControlNet annotators produce conditioning images that feed
+// bro.diffusion directly — the annotator's `image` ImageBitmap is exactly the
+// control input a ControlNet-conditioned generate expects.
+//
+//   const cond = bro.vision.loadHed('weights/hed').detect(photo).image;
+//   // → use `cond` as the ControlNet conditioning image in bro.diffusion
