@@ -191,6 +191,108 @@ static JSValue js_sequenceToNchw(JSContext* ctx, JSValueConst, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+// ─── interp2d (bilinear/bicubic resample, NCHW) ───────────────────────────
+//
+// interp2dForward(X, N, C, H_in, W_in, H_out, W_out, mode, Y)
+// interp2dAlignCornersForward(X, N, C, H_in, W_in, H_out, W_out, mode, Y)
+//
+// mode: 0 nearest, 1 bilinear, 2 bicubic (a=-0.5, PIL), 3 bicubic (a=-0.75,
+// torch/OpenCV). The align-corners variant uses the corner-aligned source
+// mapping (torch align_corners=True) DPT-style depth/seg heads need; modes
+// 0/1/2 only. Both are inference-only (no backward binding).
+#define INTERP2D_FWD(jsName, fn)                                                 \
+    static JSValue js_##jsName(JSContext* ctx, JSValueConst, int argc,           \
+                               JSValueConst* argv) {                             \
+        if (argc < 9) return JS_ThrowTypeError(ctx,                              \
+            #jsName "(X,N,C,H_in,W_in,H_out,W_out,mode,Y)");                     \
+        ENSURE_INIT();                                                           \
+        GT(X, 0, #jsName);                                                       \
+        int32_t N=0,C=0,Hin=0,Win=0,Hout=0,Wout=0,mode=1;                        \
+        JS_ToInt32(ctx, &N,    argv[1]);                                         \
+        JS_ToInt32(ctx, &C,    argv[2]);                                         \
+        JS_ToInt32(ctx, &Hin,  argv[3]);                                         \
+        JS_ToInt32(ctx, &Win,  argv[4]);                                         \
+        JS_ToInt32(ctx, &Hout, argv[5]);                                         \
+        JS_ToInt32(ctx, &Wout, argv[6]);                                         \
+        JS_ToInt32(ctx, &mode, argv[7]);                                         \
+        GT(Y, 8, #jsName);                                                       \
+        nngpu::fn(*X, N, C, Hin, Win, Hout, Wout, mode, *Y);                     \
+        return JS_UNDEFINED;                                                     \
+    }
+
+INTERP2D_FWD(interp2dForward,             interp2d_forward)
+INTERP2D_FWD(interp2dAlignCornersForward, interp2d_align_corners_forward)
+
+#undef INTERP2D_FWD
+
+// ─── unfold2d (spatial-preserving neighborhood im2col, NCHW) ───────────────
+//
+// unfold2dForward(X, N, C, H, W, kH, kW, sH, sW, padT, padB, padL, padR, mode, Y)
+// mode: 0 zero, 1 reflect, 2 replicate. Inference-only.
+static JSValue js_unfold2dForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 15) return JS_ThrowTypeError(ctx,
+        "unfold2dForward(X,N,C,H,W,kH,kW,sH,sW,padT,padB,padL,padR,mode,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "unfold2dForward");
+    int32_t N=0,C=0,H=0,W=0,kH=0,kW=0,sH=1,sW=1,pt=0,pb=0,pl=0,pr=0,mode=0;
+    JS_ToInt32(ctx, &N,    argv[1]);
+    JS_ToInt32(ctx, &C,    argv[2]);
+    JS_ToInt32(ctx, &H,    argv[3]);
+    JS_ToInt32(ctx, &W,    argv[4]);
+    JS_ToInt32(ctx, &kH,   argv[5]);
+    JS_ToInt32(ctx, &kW,   argv[6]);
+    JS_ToInt32(ctx, &sH,   argv[7]);
+    JS_ToInt32(ctx, &sW,   argv[8]);
+    JS_ToInt32(ctx, &pt,   argv[9]);
+    JS_ToInt32(ctx, &pb,   argv[10]);
+    JS_ToInt32(ctx, &pl,   argv[11]);
+    JS_ToInt32(ctx, &pr,   argv[12]);
+    JS_ToInt32(ctx, &mode, argv[13]);
+    GT(Y, 14, "unfold2dForward");
+    nngpu::unfold2d_forward(*X, N, C, H, W, kH, kW, sH, sW, pt, pb, pl, pr, mode, *Y);
+    return JS_UNDEFINED;
+}
+
+// ─── l2_normalize_nchw (per-pixel channel-axis unit normalize) ─────────────
+//
+// l2NormalizeNchwForward(X, N, C, H, W, eps, Y)
+static JSValue js_l2NormalizeNchwForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 7) return JS_ThrowTypeError(ctx,
+        "l2NormalizeNchwForward(X,N,C,H,W,eps,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "l2NormalizeNchwForward");
+    int32_t N=0,C=0,H=0,W=0;
+    double eps = 1e-12;
+    JS_ToInt32(ctx, &N, argv[1]);
+    JS_ToInt32(ctx, &C, argv[2]);
+    JS_ToInt32(ctx, &H, argv[3]);
+    JS_ToInt32(ctx, &W, argv[4]);
+    JS_ToFloat64(ctx, &eps, argv[5]);
+    GT(Y, 6, "l2NormalizeNchwForward");
+    nngpu::l2_normalize_nchw_forward(*X, N, C, H, W, static_cast<float>(eps), *Y);
+    return JS_UNDEFINED;
+}
+
+// ─── convex_upsample (RAFT-style learned mask upsample, NCHW) ──────────────
+//
+// convexUpsampleForward(X, Mask, N, C, H, W, scale, Y)
+// Mask: (N, 9*scale*scale*H*W), torch (N,9,k,k,H,W) layout. Inference-only.
+static JSValue js_convexUpsampleForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 8) return JS_ThrowTypeError(ctx,
+        "convexUpsampleForward(X,Mask,N,C,H,W,scale,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "convexUpsampleForward"); GT(Mask, 1, "convexUpsampleForward");
+    int32_t N=0,C=0,H=0,W=0,scale=1;
+    JS_ToInt32(ctx, &N,     argv[2]);
+    JS_ToInt32(ctx, &C,     argv[3]);
+    JS_ToInt32(ctx, &H,     argv[4]);
+    JS_ToInt32(ctx, &W,     argv[5]);
+    JS_ToInt32(ctx, &scale, argv[6]);
+    GT(Y, 7, "convexUpsampleForward");
+    nngpu::convex_upsample_forward(*X, *Mask, N, C, H, W, scale, *Y);
+    return JS_UNDEFINED;
+}
+
 #undef GT
 #undef ENSURE_INIT
 
@@ -209,6 +311,12 @@ void installTensorConvOps(JSContext* ctx, JSValue gpuObj) {
 
     JS_SetPropertyStr(ctx, gpuObj, "nchwToSequence", JS_NewCFunction(ctx, js_nchwToSequence, "nchwToSequence", 6));
     JS_SetPropertyStr(ctx, gpuObj, "sequenceToNchw", JS_NewCFunction(ctx, js_sequenceToNchw, "sequenceToNchw", 6));
+
+    JS_SetPropertyStr(ctx, gpuObj, "interp2dForward",             JS_NewCFunction(ctx, js_interp2dForward,             "interp2dForward",              9));
+    JS_SetPropertyStr(ctx, gpuObj, "interp2dAlignCornersForward", JS_NewCFunction(ctx, js_interp2dAlignCornersForward, "interp2dAlignCornersForward",  9));
+    JS_SetPropertyStr(ctx, gpuObj, "unfold2dForward",             JS_NewCFunction(ctx, js_unfold2dForward,             "unfold2dForward",             15));
+    JS_SetPropertyStr(ctx, gpuObj, "l2NormalizeNchwForward",      JS_NewCFunction(ctx, js_l2NormalizeNchwForward,      "l2NormalizeNchwForward",       7));
+    JS_SetPropertyStr(ctx, gpuObj, "convexUpsampleForward",       JS_NewCFunction(ctx, js_convexUpsampleForward,       "convexUpsampleForward",        8));
 }
 
 } // namespace bro::js

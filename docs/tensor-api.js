@@ -446,6 +446,19 @@ gpu.selfAttentionBiasForward(X, Wq, Wk, Wv, Wo,
 gpu.flashAttentionForward(Q, K, V, mask, numHeads, /*causal*/ false, O);
 
 /**
+ * Sliding-window causal self-attention (FP32). Q/K/V already projected as
+ * (L, numHeads*headDim). Always causal: the Lq queries sit at the last Lq
+ * positions of a length-Lk sequence (q_offset = Lk - Lq) and each attends keys
+ * [max(0, pos-window+1), pos]. `window <= 0` is unbounded causal.
+ *   - Lq == Lk: prefill / codec sliding window.
+ *   - Lq  < Lk: incremental decode of an Lq-token block over a K/V cache
+ *               (Lq == 1, window <= 0 attends the whole cache).
+ * Supports GQA — K/V may carry fewer heads than Q. The local attention used by
+ * streaming codecs (Qwen3-TTS / Mimi). Inference-only.
+ */
+gpu.flashAttentionWindowedForward(Q, K, V, mask, numHeads, /*window*/ 0, O);
+
+/**
  * Bare FlashAttention backward — recompute-based; no per-call caches saved
  * by the forward. dQ/dK/dV are overwritten.
  */
@@ -580,6 +593,39 @@ gpu.nchwToSequence(X, N, C, H, W, Y);
 
 // X: (N * H * W, C)  →  Y: (N, C * H * W)
 gpu.sequenceToNchw(X, N, C, H, W, Y);
+
+
+// -----------------------------------------------------------------------------
+// Spatial resample / unfold / normalize (NCHW) — vision post-processing
+// -----------------------------------------------------------------------------
+//
+// Inference-only building blocks for depth / surface-normal / optical-flow
+// heads (DPT, DSINE, RAFT). All take NCHW packed as (N, C*H*W); Y is resized +
+// dtype-set to X. FP32 on CPU; FP32/FP16(/BF16) on CUDA, dispatched on X.dtype.
+
+// Resample H_in×W_in → H_out×W_out. mode: 0 nearest, 1 bilinear,
+// 2 bicubic a=-0.5 (PIL), 3 bicubic a=-0.75 (torch/OpenCV). Half-pixel mapping.
+gpu.interp2dForward(X, N, C, H_in, W_in, H_out, W_out, /*mode*/ 1, Y);
+
+// Same, but corner-aligned mapping (torch align_corners=True) — the convention
+// DPT / Depth-Anything fusion + final upsamples use. modes 0/1/2 only.
+gpu.interp2dAlignCornersForward(X, N, C, H_in, W_in, H_out, W_out, /*mode*/ 1, Y);
+
+// Neighborhood unfold (spatial-preserving im2col): each output pixel gathers
+// its kH×kW window into a channel block. mode: 0 zero, 1 reflect, 2 replicate.
+// Y: (N, C*kH*kW * H_out*W_out). stride 1 + pad (k-1)/2 keeps the grid size.
+gpu.unfold2dForward(X, N, C, H, W, kH, kW, sH, sW, padT, padB, padL, padR,
+                    /*mode*/ 0, Y);
+
+// Per-pixel L2 normalize over the channel axis (unit-length direction field):
+//   Y[n,:,h,w] = X[n,:,h,w] / max(||X[n,:,h,w]||, eps)
+gpu.l2NormalizeNchwForward(X, N, C, H, W, /*eps*/ 1e-12, Y);
+
+// RAFT-style convex (learned-mask) upsample: each low-res pixel expands to a
+// scale×scale block, every fine pixel a softmax-weighted blend of the 3×3
+// low-res neighborhood. Mask: (N, 9*scale*scale*H*W), torch (N,9,k,k,H,W).
+// Y: (N, C*(scale*H)*(scale*W)).
+gpu.convexUpsampleForward(X, Mask, N, C, H, W, /*scale*/ 8, Y);
 
 
 // -----------------------------------------------------------------------------

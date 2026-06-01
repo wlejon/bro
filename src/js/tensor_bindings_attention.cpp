@@ -207,6 +207,27 @@ static JSValue js_flashAttentionForward(JSContext* ctx, JSValueConst, int argc, 
     return JS_UNDEFINED;
 }
 
+// Sliding-window causal self-attention (FP32). Q/K/V already projected,
+// (L, numHeads*headDim). Always causal; queries occupy the last Lq positions
+// of a length-Lk sequence (q_offset = Lk - Lq), so Lq < Lk is incremental
+// decode over a K/V cache. window <= 0 is unbounded causal. Supports GQA when
+// K/V carry fewer heads than Q.
+//   flashAttentionWindowedForward(Q, K, V, mask|null, numHeads, window, O)
+static JSValue js_flashAttentionWindowedForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 7) return JS_ThrowTypeError(ctx,
+        "flashAttentionWindowedForward(Q,K,V,mask|null,numHeads,window,O)");
+    ENSURE_INIT();
+    GT(Q, 0, "flashAttentionWindowedForward"); GT(K, 1, "flashAttentionWindowedForward");
+    GT(V, 2, "flashAttentionWindowedForward");
+    const float* mask = nullptr; JSValue err = JS_UNDEFINED;
+    if (!resolveDeviceMask(ctx, argv[3], mask, err)) return err;
+    int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[4]);
+    int32_t window = 0; JS_ToInt32(ctx, &window, argv[5]);
+    GT(O, 6, "flashAttentionWindowedForward");
+    nngpu::flash_attention_windowed_forward(*Q, *K, *V, mask, numHeads, window, *O);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_flashAttentionBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 10) return JS_ThrowTypeError(ctx,
         "flashAttentionBackward(Q,K,V,O,dO,mask|null,numHeads,causal,dQ,dK,dV)");
@@ -557,6 +578,7 @@ void installTensorAttentionOps(JSContext* ctx, JSValue gpuObj) {
 
     // Flash attention
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionForward",            JS_NewCFunction(ctx, js_flashAttentionForward,            "flashAttentionForward",             7));
+    JS_SetPropertyStr(ctx, gpuObj, "flashAttentionWindowedForward",    JS_NewCFunction(ctx, js_flashAttentionWindowedForward,    "flashAttentionWindowedForward",     7));
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionBackward",           JS_NewCFunction(ctx, js_flashAttentionBackward,           "flashAttentionBackward",           11));
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionQkvoForward",        JS_NewCFunction(ctx, js_flashAttentionQkvoForward,        "flashAttentionQkvoForward",        14));
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionQkvoBackward",       JS_NewCFunction(ctx, js_flashAttentionQkvoBackward,       "flashAttentionQkvoBackward",        1));
