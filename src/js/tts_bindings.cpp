@@ -16,6 +16,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include <brosoundml/kokoro.h>
+#include <brosoundml/qwen_tts.h>
 #include <brosoundml/audio.h>
 
 #include <brosoundml/g2p/lexicon.h>
@@ -63,6 +64,24 @@ struct KokoroWrapper {
 struct VoiceWrapper {
     brosoundml::Voice voice;
 };
+
+// Qwen3-TTS — text-driven (no phoneme frontend, no voice pack). Holds the
+// pipeline (Talker + Code Predictor + bundled codec) and the device it loaded
+// on. Like Kokoro it is single-owner: `busy` rejects a second concurrent op.
+struct QwenTtsWrapper {
+    std::unique_ptr<brosoundml::QwenTts> qwen;
+    brotensor::Device device = brotensor::Device::CPU;  // captured at load
+    std::atomic<bool> busy{false};
+};
+
+static const char* qwenVariantName(brosoundml::QwenTtsVariant v) {
+    switch (v) {
+        case brosoundml::QwenTtsVariant::Base:        return "base";
+        case brosoundml::QwenTtsVariant::CustomVoice: return "customvoice";
+        case brosoundml::QwenTtsVariant::VoiceDesign: return "voicedesign";
+    }
+    return "?";
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -380,6 +399,76 @@ static void registerKokoroClass(JSContext* ctx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// QwenTts methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+static QwenTtsWrapper* qwenSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<QwenTtsWrapper>(ctx, this_val);
+}
+
+// Read opts.speaker / opts.language (both optional strings). Defaults match
+// QwenTts::synthesize: speaker "" (the model resolves the first preset only if
+// it has speakers), language "english".
+static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
+                              std::string& speaker, std::string& language) {
+    if (!JS_IsObject(opts)) return;
+    JSValue sp = JS_GetPropertyStr(ctx, opts, "speaker");
+    std::string s;
+    if (JS_IsString(sp) && argStr(ctx, sp, s)) speaker = std::move(s);
+    JS_FreeValue(ctx, sp);
+    JSValue lg = JS_GetPropertyStr(ctx, opts, "language");
+    std::string l;
+    if (JS_IsString(lg) && argStr(ctx, lg, l)) language = std::move(l);
+    JS_FreeValue(ctx, lg);
+}
+
+// qwen.synthesize(text, opts?) -> { samples, sampleRate }      (sync, blocking)
+//   opts.speaker:  preset speaker name (CustomVoice; e.g. 'serena').
+//   opts.language: 'english' (default), 'chinese', 'auto', ...
+//   The async, cancellable form is bro.tts.synthesize(qwen, text, opts).
+static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "synthesize: not a QwenTts");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "synthesize(text, opts?): text string required");
+    std::string speaker, language = "english";
+    if (argc >= 2) readQwenSynthOpts(ctx, argv[1], speaker, language);
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto buf = w->qwen->synthesize(text, speaker, language);
+        return audioBufferToJs(ctx, buf);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "synthesize: %s", e.what());
+    }
+}
+
+// speakers() -> string[]
+//   Preset CustomVoice speaker names (empty for Base / VoiceDesign).
+static JSValue js_qwen_speakers(JSContext* ctx, JSValueConst this_val,
+                                int, JSValueConst*) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "speakers: not a QwenTts");
+    auto names = w->qwen->speakers();
+    JSValue arr = JS_NewArray(ctx);
+    for (std::uint32_t i = 0; i < names.size(); ++i)
+        JS_SetPropertyUint32(ctx, arr, i, JS_NewString(ctx, names[i].c_str()));
+    return arr;
+}
+
+static void registerQwenClass(JSContext* ctx) {
+    qjsbind::Class<QwenTtsWrapper>(ctx, "QwenTts", qjsbind::NoGlobal)
+        .get("loaded",     [](QwenTtsWrapper* w) { return w->qwen->loaded(); })
+        .get("sampleRate", [](QwenTtsWrapper* w) { return w->qwen->config().sample_rate; })
+        .get("variant",    [](QwenTtsWrapper* w) {
+            return std::string(qwenVariantName(w->qwen->config().variant)); })
+        .get("modelSize",  [](QwenTtsWrapper* w) { return w->qwen->config().model_size; })
+        .method_raw("synthesize", js_qwen_synthesize, 2)
+        .method_raw("speakers",   js_qwen_speakers,   0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // bro.tts free functions
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -694,7 +783,116 @@ static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// QwenTts loader
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Build + load a Qwen3-TTS model from a checkpoint dir (config.json +
+// model.safetensors + vocab.json + merges.txt + speech_tokenizer/). Heavy +
+// blocking; shared by the sync and async loadQwen paths. Throws on error.
+static void buildQwenTts(const std::string& dir, brotensor::Device dev,
+                         std::unique_ptr<QwenTtsWrapper>& w_out) {
+    auto w = std::make_unique<QwenTtsWrapper>();
+    w->device = dev;
+    w->qwen = std::make_unique<brosoundml::QwenTts>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->qwen->load(dir, dev);
+    }
+    std::fprintf(stderr, "[INFO] [tts] Qwen3-TTS loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+struct QwenLoadState {
+    std::string                     dir;
+    brotensor::Device               dev = brotensor::Device::CPU;
+    std::unique_ptr<QwenTtsWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.tts.loadQwen(modelDir, opts?) -> QwenTts          (sync)
+//                                   -> AsyncHandle       (async, if opts.onReady)
+//   modelDir holds config.json + model.safetensors + vocab.json + merges.txt and
+//   the bundled speech_tokenizer/ codec. Unlike Kokoro, Qwen3-TTS is text-driven
+//   end-to-end — no phonemize() / loadVoice() step.
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.onReady(qwen) / opts.onError(message): when onReady is a function the
+//   load runs on a background thread and these fire on the JS thread.
+static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
+                           int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadQwen(modelDir, opts?): path required");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadQwen: %s", err.c_str());
+    }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<QwenTtsWrapper> w;
+            buildQwenTts(dir, dev, w);
+            return qjsbind::wrap<QwenTtsWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadQwen: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<QwenLoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildQwenTts(ls->dir, ls->dev, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadQwen failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<QwenTtsWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Async synthesis — bro.tts.synthesize(kokoro, phonemeIds, voice, opts)
+//                   bro.tts.synthesize(qwen, text, opts)
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Runs Kokoro's forward pass on a background thread via the async-job runner, so
@@ -722,14 +920,112 @@ struct TtsJob {
     bool                 hasOnDone = false;
 };
 
+// Shared by the QwenTts async synthesize path. The work thread is the sole
+// writer of samples/sample_rate; the JS thread reads them in done().
+struct QwenSynthJob {
+    std::string        text;
+    std::string        speaker;
+    std::string        language = "english";
+    std::vector<float> samples;                  // filled by work()
+    int                sample_rate = 24000;       // filled by work()
+    JSValue            onDone  = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
+    JSValue            qwenRef = JS_UNDEFINED;     // dup of the qwen JS object
+    bool               hasOnDone = false;
+};
+
+// bro.tts.synthesize(qwen, text, opts?) -> AsyncHandle
+//   Runs QwenTts::synthesize on a background thread; opts.onDone(result, info)
+//   fires once on the JS thread (result = { samples, sampleRate }, info =
+//   { cancelled, error? }). .cancel() flips the per-frame cancel flag in the AR
+//   loop, which returns an empty buffer (info.cancelled = true) and releases the
+//   model. opts.speaker / opts.language select the preset voice and language.
+static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
+                                        JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]);  // non-null (caller)
+    std::string text;
+    if (argc < 2 || !argStr(ctx, argv[1], text))
+        return JS_ThrowTypeError(ctx,
+            "synthesize(qwen, text, opts?): text string required");
+
+    auto job = std::make_shared<QwenSynthJob>();
+    job->text = std::move(text);
+
+    JSValue onDone = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        readQwenSynthOpts(ctx, argv[2], job->speaker, job->language);
+        onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
+    }
+
+    // Claim the model for this synthesis (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "synthesize: an operation is already in flight on this model");
+    }
+
+    job->hasOnDone = JS_IsFunction(ctx, onDone);
+    job->onDone    = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->qwenRef   = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    JS_FreeValue(ctx, onDone);
+
+    QwenTtsWrapper* mw = w;
+
+    // Background thread: run the AR loop, polling the async-job cancel flag once
+    // per frame (QwenTts::synthesize returns an empty buffer on cancel).
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        auto buf = mw->qwen->synthesize(
+            job->text, job->speaker, job->language,
+            [&cancel] { return cancel.load(std::memory_order_acquire); });
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->qwenRef);
+        mw->busy.store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
 static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
                                  int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx,
+            "synthesize(model, ...): a Kokoro or QwenTts model is required");
+
+    // Dispatch on model type. QwenTts is text-driven — synthesize(qwen, text,
+    // opts?). Kokoro takes phoneme ids — synthesize(kokoro, phonemeIds, voice).
+    if (qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]))
+        return js_qwen_synthesize_async(ctx, argc, argv);
+
+    auto* w = qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]);
+    if (!w) return JS_ThrowTypeError(ctx,
+        "synthesize: arg 0 must be a Kokoro or QwenTts");
     if (argc < 3)
         return JS_ThrowTypeError(ctx,
             "synthesize(kokoro, phonemeIds, voice, opts?): kokoro, phonemeIds "
             "and voice required");
-    auto* w = qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]);
-    if (!w) return JS_ThrowTypeError(ctx, "synthesize: arg 0 must be a Kokoro");
 
     auto job = std::make_shared<TtsJob>();
     job->ids = readIdArray(ctx, argv[1]);
@@ -821,6 +1117,7 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
 void installTtsBindings(JSContext* ctx) {
     registerVoiceClass(ctx);
     registerKokoroClass(ctx);
+    registerQwenClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -835,6 +1132,8 @@ void installTtsBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_init, "init", 0));
     JS_SetPropertyStr(ctx, tts, "loadKokoro",
         JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 2));
+    JS_SetPropertyStr(ctx, tts, "loadQwen",
+        JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
     JS_SetPropertyStr(ctx, tts, "phonemize",
         JS_NewCFunction(ctx, js_phonemize, "phonemize", 2));
     JS_SetPropertyStr(ctx, tts, "setAssetRoot",

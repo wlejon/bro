@@ -1,15 +1,23 @@
 /**
- * bro.tts — Text-to-speech (Kokoro)
+ * bro.tts — Text-to-speech (Kokoro + Qwen3-TTS)
  *
- * Synthesizes 24 kHz mono speech from a phoneme-id sequence and a voice
- * embedding. Backed by brosoundml (audio-ML inference) on top of brotensor.
- * Defaults to CUDA; pass { device: 'cpu' } to force the CPU backend.
+ * Synthesizes 24 kHz mono speech. Backed by brosoundml (audio-ML inference) on
+ * top of brotensor. Defaults to CUDA; pass { device: 'cpu' } to force the CPU
+ * backend. Two pipelines are exposed:
  *
- * Kokoro is phoneme-driven, not text-driven: it takes phoneme ids, not raw
- * text. Use bro.tts.phonemize(text) to convert a string into the id sequence
- * Kokoro expects, then synthesize() with a loaded voice. (You can also feed a
- * known-good id sequence directly — see tests/smoke_voice_pipeline.js, which
- * reads one from the model's ids.txt.)
+ *   Kokoro (loadKokoro) — the 82M phoneme-driven pipeline. It takes phoneme
+ *   ids, not raw text: use bro.tts.phonemize(text) to convert a string into the
+ *   id sequence Kokoro expects, then synthesize() with a loaded voice. (You can
+ *   also feed a known-good id sequence directly — see
+ *   tests/smoke_voice_pipeline.js, which reads one from the model's ids.txt.)
+ *
+ *   Qwen3-TTS (loadQwen) — the 12 Hz multi-codebook model. Text-driven
+ *   end-to-end: no phonemize() step, no voice pack. Pick a preset CustomVoice
+ *   speaker by name (opts.speaker); synthesize() takes the raw string. See the
+ *   "Qwen3-TTS" section at the bottom of this file.
+ *
+ * bro.tts.synthesize(model, ...) is the async, cancellable entry point for both
+ * — it dispatches on the model type (Kokoro vs QwenTts).
  */
 
 
@@ -157,3 +165,83 @@ const handle = bro.tts.synthesize(kokoro, phonemeIds, voice, {
 //   sampleRate for seconds. Words are separated by the inter-word space token
 //   (kokoro.vocab()[' ']) in the phoneme stream, so split phonemeIds on it to
 //   group per-word, then drive a highlight from audioCtx.getPlaybackPosition().
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Qwen3-TTS (12 Hz multi-codebook) — text in, speech out
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Qwen3-TTS is text-driven end-to-end: no phonemize(), no voice pack. The model
+// runs its own Qwen-BPE tokenizer + an autoregressive Talker / Code Predictor
+// over a 12.5 Hz code stream, then a bundled codec decodes to 24 kHz mono. Pick
+// a voice by preset speaker name (CustomVoice). Like Kokoro it defaults to CUDA.
+
+/**
+ * Load a Qwen3-TTS model from a weights directory.
+ *
+ * @param {string} dir            - model dir: config.json + model.safetensors +
+ *        vocab.json + merges.txt + the bundled speech_tokenizer/ codec.
+ * @param {Object} [opts]
+ * @param {string} [opts.device='cuda'] - 'cuda' or 'cpu'.
+ * @param {function} [opts.onReady]     - async load: onReady(qwen).
+ * @param {function} [opts.onError]     - async load: onError(message).
+ * @returns {QwenTtsModel|AsyncHandle}  - the model (sync), or an AsyncHandle
+ *          (async, when opts.onReady is a function). Same sync/async convention
+ *          as loadKokoro.
+ *
+ * QwenTtsModel getters: .loaded, .sampleRate (24000), .variant
+ * ('customvoice' | 'base' | 'voicedesign'), .modelSize ('0b6' | '1b7').
+ * QwenTtsModel.speakers() -> string[]  (preset names; empty for non-CustomVoice).
+ */
+const qwen = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice');
+// qwen.speakers() === ['serena', 'ethan', ...]; qwen.sampleRate === 24000
+
+// Async load:
+// bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice', {
+//     onReady: (q) => { qwen = q; },
+//     onError: (msg) => console.error('qwen load failed:', msg),
+// });
+
+/**
+ * QwenTtsModel.synthesize(text, opts?) → { samples, sampleRate }   (sync, blocking)
+ *
+ * @param {string} text                  - the text to speak.
+ * @param {Object} [opts]
+ * @param {string} [opts.speaker]        - preset speaker name (see .speakers()).
+ * @param {string} [opts.language='english'] - 'english' | 'chinese' | 'auto' | ...
+ * @returns {{ samples: Float32Array, sampleRate: number }} - 24 kHz mono, [-1, 1].
+ *
+ * No durations: Qwen3-TTS is autoregressive over codec frames, not phonemes, so
+ * there is no per-phoneme timing array (unlike Kokoro).
+ */
+const qout = qwen.synthesize('Hello there.', { speaker: 'serena', language: 'english' });
+console.log(`${qout.samples.length} samples @ ${qout.sampleRate} Hz`);
+
+/**
+ * bro.tts.synthesize(qwen, text, opts) → AsyncHandle   (non-blocking, cancellable)
+ *
+ * Runs the autoregressive loop on a background thread; the cancel flag is polled
+ * once per 12.5 Hz frame, so handle.cancel() aborts mid-utterance (returns an
+ * empty buffer, onDone fires { cancelled: true }) — real barge-in, not a
+ * post-hoc discard.
+ *
+ * @param {QwenTtsModel} qwen     - from loadQwen().
+ * @param {string} text           - the text to speak.
+ * @param {Object} [opts]
+ * @param {string} [opts.speaker] - preset speaker name.
+ * @param {string} [opts.language='english']
+ * @param {function} [opts.onDone] - onDone(result, info) on the JS thread, where
+ *        result = { samples: Float32Array, sampleRate: number } and
+ *        info = { cancelled: boolean, error?: string }.
+ * @returns {AsyncHandle}  - { cancel(): void }. Rejects (throws) if another op is
+ *          already in flight on this model.
+ */
+const qhandle = bro.tts.synthesize(qwen, 'Hello there.', {
+    speaker: 'serena',
+    onDone: (result, info) => {
+        if (info.cancelled) return;
+        if (info.error) { console.error(info.error); return; }
+        console.log(`${result.samples.length} samples @ ${result.sampleRate} Hz`);
+    },
+});
+// qhandle.cancel();  // abort mid-utterance; onDone fires cancelled:true
