@@ -6,6 +6,7 @@
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/vision_bindings.h"
 #include "js/imagebitmap_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/flora_bindings.h"
@@ -253,6 +254,11 @@ void Worker::threadFunc()
 
     // --- 3b''''''. Install bro.tts (Kokoro TTS, brosoundml sibling). ---
     installTtsBindings(ctx);
+
+    // --- 3b''''''ᵛ. Install bro.vision (vision-ML inference, brovisionml
+    // sibling). Same binding as the main context; dense-map results build
+    // ImageBitmaps, so this is installed alongside ImageBitmap below. ---
+    installVisionBindings(ctx);
 
     // --- 3b'''''''. Install createImageBitmap / ImageBitmap. Workers that
     // produce frames (e.g. the diffusion worker) build bitmaps here and

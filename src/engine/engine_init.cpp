@@ -49,6 +49,7 @@
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/vision_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
@@ -213,6 +214,11 @@ Engine::Engine(const EngineConfig& config)
     // mono 24 kHz FP32. G2P is the caller's responsibility — Kokoro takes
     // already-tokenized phoneme ids.
     js::installTtsBindings(jsRuntime_->getContext());
+
+    // bro.vision (vision-ML inference via brovisionml sibling). GPU by default;
+    // SAM segmentation + Depth-Anything depth (+ the ControlNet annotators).
+    // Heavy ops run on a background thread when given an onReady/onDone callback.
+    js::installVisionBindings(jsRuntime_->getContext());
 
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());

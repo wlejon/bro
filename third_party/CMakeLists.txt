@@ -215,6 +215,24 @@ else()
     add_subdirectory(brodiffusion EXCLUDE_FROM_ALL)
 endif()
 
+# --- brovisionml (vision-ML inference — SAM, depth, normals, ControlNet annotators) ---
+# Prefer the standalone repo at ../brovisionml for local development.
+# Falls back to the git submodule at third_party/brovisionml.
+# Depends on bromath + brotensor + broimage; all three are already targets by
+# this point (broimage at the top of this file pulls brotensor + bromath in,
+# and brogameagent force-sets the BROTENSOR_WITH_CUDA/_METAL cache vars).
+# brovisionml's CMake guards all three with if(NOT TARGET ...) so it reuses
+# those targets and reads those cache vars. It ships its own DSINE CUDA kernels
+# gated on BROTENSOR_WITH_CUDA, so a GPU build compiles them automatically.
+set(BROVISIONML_DIR "${CMAKE_SOURCE_DIR}/../brovisionml" CACHE PATH "Path to standalone brovisionml repo")
+if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")
+    message(STATUS "brovisionml: using standalone repo at ${BROVISIONML_DIR}")
+    add_subdirectory("${BROVISIONML_DIR}" "${CMAKE_BINARY_DIR}/brovisionml" EXCLUDE_FROM_ALL)
+else()
+    message(STATUS "brovisionml: using submodule at third_party/brovisionml")
+    add_subdirectory(brovisionml EXCLUDE_FROM_ALL)
+endif()
+
 # --- Jolt Physics ---
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
 set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)          # don't clobber bro's flags
