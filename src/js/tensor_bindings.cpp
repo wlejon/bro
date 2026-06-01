@@ -861,6 +861,103 @@ static JSValue js_argmaxRows(JSContext* ctx, JSValueConst, int argc, JSValueCons
     return JS_UNDEFINED;
 }
 
+// ─── row gather / scatter / top-k ──────────────────────────────────────────
+static JSValue js_gatherRows(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "gatherRows(X,Idx,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "gatherRows"); GT(Idx, 1, "gatherRows"); GT(Y, 2, "gatherRows");
+    nngpu::gather_rows(*X, *Idx, *Y);
+    return JS_UNDEFINED;
+}
+static JSValue js_scatterRowsAdd(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 4) return JS_ThrowTypeError(ctx, "scatterRowsAdd(dY,Idx,R,dX)");
+    ENSURE_INIT();
+    GT(dY, 0, "scatterRowsAdd"); GT(Idx, 1, "scatterRowsAdd");
+    int32_t R = 0; JS_ToInt32(ctx, &R, argv[2]);
+    GT(dX, 3, "scatterRowsAdd");
+    nngpu::scatter_rows_add(*dY, *Idx, R, *dX);
+    return JS_UNDEFINED;
+}
+static JSValue js_topKRows(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 4) return JS_ThrowTypeError(ctx, "topKRows(X,k,Vals,Idx)");
+    ENSURE_INIT();
+    GT(X, 0, "topKRows");
+    int32_t k = 1; JS_ToInt32(ctx, &k, argv[1]);
+    GT(Vals, 2, "topKRows"); GT(Idx, 3, "topKRows");
+    nngpu::top_k_rows(*X, k, *Vals, *Idx);
+    return JS_UNDEFINED;
+}
+
+// ─── batched layernorm with training caches ────────────────────────────────
+// layernormForwardBatchedWithCaches(X, gamma, beta, Y, Xhat, Mean, Rstd, eps)
+static JSValue js_layernormForwardBatchedWithCaches(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 8) return JS_ThrowTypeError(ctx,
+        "layernormForwardBatchedWithCaches(X,gamma,beta,Y,Xhat,Mean,Rstd,eps)");
+    ENSURE_INIT();
+    GT(X, 0, "layernormFwdCaches"); GT(gamma, 1, "layernormFwdCaches"); GT(beta, 2, "layernormFwdCaches");
+    GT(Y, 3, "layernormFwdCaches"); GT(Xhat, 4, "layernormFwdCaches");
+    GT(Mean, 5, "layernormFwdCaches"); GT(Rstd, 6, "layernormFwdCaches");
+    double eps = 1e-5; JS_ToFloat64(ctx, &eps, argv[7]);
+    nngpu::layernorm_forward_batched_with_caches(*X, *gamma, *beta, *Y, *Xhat, *Mean, *Rstd, (float)eps);
+    return JS_UNDEFINED;
+}
+// layernormBackwardBatchedWithCaches(dY, Xhat, gamma, Rstd, dX, dGamma, dBeta)
+static JSValue js_layernormBackwardBatchedWithCaches(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 7) return JS_ThrowTypeError(ctx,
+        "layernormBackwardBatchedWithCaches(dY,Xhat,gamma,Rstd,dX,dGamma,dBeta)");
+    ENSURE_INIT();
+    GT(dY, 0, "layernormBwdCaches"); GT(Xhat, 1, "layernormBwdCaches"); GT(gamma, 2, "layernormBwdCaches");
+    GT(Rstd, 3, "layernormBwdCaches"); GT(dX, 4, "layernormBwdCaches");
+    GT(dGamma, 5, "layernormBwdCaches"); GT(dBeta, 6, "layernormBwdCaches");
+    nngpu::layernorm_backward_batched_with_caches(*dY, *Xhat, *gamma, *Rstd, *dX, *dGamma, *dBeta);
+    return JS_UNDEFINED;
+}
+
+// ─── counter-based RNG (key/counter are BigInt or Number) + init ───────────
+static JSValue js_randUniform(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "randUniform(key,counter,Y)");
+    ENSURE_INIT();
+    uint64_t key = getU64(ctx, argv[0]), counter = getU64(ctx, argv[1]);
+    GT(Y, 2, "randUniform");
+    nngpu::rand_uniform(key, counter, *Y);
+    return JS_UNDEFINED;
+}
+static JSValue js_randn(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "randn(key,counter,Y)");
+    ENSURE_INIT();
+    uint64_t key = getU64(ctx, argv[0]), counter = getU64(ctx, argv[1]);
+    GT(Y, 2, "randn");
+    nngpu::randn(key, counter, *Y);
+    return JS_UNDEFINED;
+}
+static JSValue js_randBernoulli(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 4) return JS_ThrowTypeError(ctx, "randBernoulli(p,key,counter,Y)");
+    ENSURE_INIT();
+    double p = 0.5; JS_ToFloat64(ctx, &p, argv[0]);
+    uint64_t key = getU64(ctx, argv[1]), counter = getU64(ctx, argv[2]);
+    GT(Y, 3, "randBernoulli");
+    nngpu::rand_bernoulli((float)p, key, counter, *Y);
+    return JS_UNDEFINED;
+}
+static JSValue js_randnTruncated(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 5) return JS_ThrowTypeError(ctx, "randnTruncated(lo,hi,key,counter,Y)");
+    ENSURE_INIT();
+    double lo=-2, hi=2; JS_ToFloat64(ctx, &lo, argv[0]); JS_ToFloat64(ctx, &hi, argv[1]);
+    uint64_t key = getU64(ctx, argv[2]), counter = getU64(ctx, argv[3]);
+    GT(Y, 4, "randnTruncated");
+    nngpu::randn_truncated((float)lo, (float)hi, key, counter, *Y);
+    return JS_UNDEFINED;
+}
+// xavierInit(W, rngState) → advanced rngState (BigInt). Fills W with Xavier-uniform.
+static JSValue js_xavierInit(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "xavierInit(W,rngState)");
+    ENSURE_INIT();
+    GT(W, 0, "xavierInit");
+    uint64_t state = getU64(ctx, argv[1]);
+    nngpu::xavier_init(*W, state);
+    return JS_NewBigUint64(ctx, state);
+}
+
 // Dtype enum constants exposed as bro.tensor.dtype.{fp32, fp16, int8}.
 static void installDtypeEnum(JSContext* ctx, JSValue gpuObj) {
     JSValue dt = JS_NewObject(ctx);
@@ -973,6 +1070,17 @@ void installTensorBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, gpuObj, "sumRows",    JS_NewCFunction(ctx, js_sumRows,    "sumRows",    2));
     JS_SetPropertyStr(ctx, gpuObj, "sumCols",    JS_NewCFunction(ctx, js_sumCols,    "sumCols",    2));
     JS_SetPropertyStr(ctx, gpuObj, "argmaxRows", JS_NewCFunction(ctx, js_argmaxRows, "argmaxRows", 2));
+
+    JS_SetPropertyStr(ctx, gpuObj, "gatherRows",     JS_NewCFunction(ctx, js_gatherRows,     "gatherRows",     3));
+    JS_SetPropertyStr(ctx, gpuObj, "scatterRowsAdd", JS_NewCFunction(ctx, js_scatterRowsAdd, "scatterRowsAdd", 4));
+    JS_SetPropertyStr(ctx, gpuObj, "topKRows",       JS_NewCFunction(ctx, js_topKRows,       "topKRows",       4));
+    JS_SetPropertyStr(ctx, gpuObj, "layernormForwardBatchedWithCaches",  JS_NewCFunction(ctx, js_layernormForwardBatchedWithCaches,  "layernormForwardBatchedWithCaches",  8));
+    JS_SetPropertyStr(ctx, gpuObj, "layernormBackwardBatchedWithCaches", JS_NewCFunction(ctx, js_layernormBackwardBatchedWithCaches, "layernormBackwardBatchedWithCaches", 7));
+    JS_SetPropertyStr(ctx, gpuObj, "randUniform",    JS_NewCFunction(ctx, js_randUniform,    "randUniform",    3));
+    JS_SetPropertyStr(ctx, gpuObj, "randn",          JS_NewCFunction(ctx, js_randn,          "randn",          3));
+    JS_SetPropertyStr(ctx, gpuObj, "randBernoulli",  JS_NewCFunction(ctx, js_randBernoulli,  "randBernoulli",  4));
+    JS_SetPropertyStr(ctx, gpuObj, "randnTruncated", JS_NewCFunction(ctx, js_randnTruncated, "randnTruncated", 5));
+    JS_SetPropertyStr(ctx, gpuObj, "xavierInit",     JS_NewCFunction(ctx, js_xavierInit,     "xavierInit",     2));
 
     // Delegate the other clusters.
     installTensorActivationOps(ctx, gpuObj);

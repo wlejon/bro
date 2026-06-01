@@ -260,10 +260,93 @@ static JSValue js_ropeApplyBackward(JSContext* ctx, JSValueConst, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+// ─── l2_norm (gated-deltanet per-head last-dim normalize, fwd/bwd) ─────────
+// Distinct from l2NormalizeNchwForward (channel-axis NCHW): here the unit axis
+// is head_dim within an (L, num_heads*head_dim) layout.
+// l2NormForward(X, headDim, numHeads, eps, Y)
+static JSValue js_l2NormForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 5) return JS_ThrowTypeError(ctx, "l2NormForward(X,headDim,numHeads,eps,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "l2NormForward");
+    int32_t headDim=0,numHeads=1; double eps=1e-6;
+    JS_ToInt32(ctx, &headDim, argv[1]); JS_ToInt32(ctx, &numHeads, argv[2]);
+    JS_ToFloat64(ctx, &eps, argv[3]);
+    GT(Y, 4, "l2NormForward");
+    nngpu::l2_norm_forward(*X, headDim, numHeads, (float)eps, *Y);
+    return JS_UNDEFINED;
+}
+static JSValue js_l2NormBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 6) return JS_ThrowTypeError(ctx, "l2NormBackward(X,headDim,numHeads,eps,dY,dX)");
+    ENSURE_INIT();
+    GT(X, 0, "l2NormBackward");
+    int32_t headDim=0,numHeads=1; double eps=1e-6;
+    JS_ToInt32(ctx, &headDim, argv[1]); JS_ToInt32(ctx, &numHeads, argv[2]);
+    JS_ToFloat64(ctx, &eps, argv[3]);
+    GT(dY, 4, "l2NormBackward"); GT(dX, 5, "l2NormBackward");
+    nngpu::l2_norm_backward(*X, headDim, numHeads, (float)eps, *dY, *dX);
+    return JS_UNDEFINED;
+}
+
+// ─── losses ────────────────────────────────────────────────────────────────
+// bceWithLogitsFusedBatched(logits, target, mask|null, posWeight, probs, dLogits, lossPerSample)
+// mask is an optional device-pointer (float) GpuTensor over the batch*L grid.
+static JSValue js_bceWithLogitsFusedBatched(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 7) return JS_ThrowTypeError(ctx,
+        "bceWithLogitsFusedBatched(logits,target,mask|null,posWeight,probs,dLogits,lossPerSample)");
+    ENSURE_INIT();
+    GT(logits, 0, "bceWithLogitsFusedBatched"); GT(target, 1, "bceWithLogitsFusedBatched");
+    const float* mask = nullptr; JSValue err = JS_UNDEFINED;
+    if (!resolveDeviceMask(ctx, argv[2], mask, err)) return err;
+    double posWeight = 1.0; JS_ToFloat64(ctx, &posWeight, argv[3]);
+    GT(probs, 4, "bceWithLogitsFusedBatched"); GT(dLogits, 5, "bceWithLogitsFusedBatched");
+    GT(loss, 6, "bceWithLogitsFusedBatched");
+    nngpu::bce_with_logits_fused_batched(*logits, *target, mask, (float)posWeight,
+                                         *probs, *dLogits, *loss);
+    return JS_UNDEFINED;
+}
+
+// softmaxXentSegment(logits, target, probs, dLogits, n, mask|null) — HOST
+// Float32Array buffers; probs/dLogits are written in place. Returns the loss.
+static JSValue js_softmaxXentSegment(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 5) return JS_ThrowTypeError(ctx,
+        "softmaxXentSegment(logits,target,probs,dLogits,n,mask|null)");
+    ENSURE_INIT();
+    size_t c0=0,c1=0,c2=0,c3=0,cm=0;
+    const float* logits = getFloatArrayPtr(ctx, argv[0], c0);
+    const float* target = getFloatArrayPtr(ctx, argv[1], c1);
+    float* probs        = getFloatArrayPtr(ctx, argv[2], c2);
+    float* dLogits      = getFloatArrayPtr(ctx, argv[3], c3);
+    if (!logits || !target || !probs || !dLogits)
+        return JS_ThrowTypeError(ctx, "softmaxXentSegment — logits/target/probs/dLogits must be Float32Array");
+    int32_t n = 0; JS_ToInt32(ctx, &n, argv[4]);
+    const float* mask = (argc > 5) ? getFloatArrayPtr(ctx, argv[5], cm) : nullptr;
+    float loss = nngpu::softmax_xent_segment(logits, target, probs, dLogits, n, mask);
+    return JS_NewFloat64(ctx, loss);
+}
+
+// mseScalar(pred, target) → [loss, dPred]. Scalar MSE with its gradient.
+static JSValue js_mseScalar(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "mseScalar(pred,target)");
+    double pred=0, target=0;
+    JS_ToFloat64(ctx, &pred, argv[0]); JS_ToFloat64(ctx, &target, argv[1]);
+    float dPred = 0.0f;
+    float loss = nngpu::mse_scalar((float)pred, (float)target, dPred);
+    JSValue arr = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, loss));
+    JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, dPred));
+    return arr;
+}
+
 #undef GT
 #undef ENSURE_INIT
 
 void installTensorActivationOps(JSContext* ctx, JSValue gpuObj) {
+    JS_SetPropertyStr(ctx, gpuObj, "l2NormForward",  JS_NewCFunction(ctx, js_l2NormForward,  "l2NormForward",  5));
+    JS_SetPropertyStr(ctx, gpuObj, "l2NormBackward", JS_NewCFunction(ctx, js_l2NormBackward, "l2NormBackward", 6));
+    JS_SetPropertyStr(ctx, gpuObj, "bceWithLogitsFusedBatched", JS_NewCFunction(ctx, js_bceWithLogitsFusedBatched, "bceWithLogitsFusedBatched", 7));
+    JS_SetPropertyStr(ctx, gpuObj, "softmaxXentSegment", JS_NewCFunction(ctx, js_softmaxXentSegment, "softmaxXentSegment", 6));
+    JS_SetPropertyStr(ctx, gpuObj, "mseScalar",      JS_NewCFunction(ctx, js_mseScalar,      "mseScalar",      2));
+
     JS_SetPropertyStr(ctx, gpuObj, "siluForward",      JS_NewCFunction(ctx, js_siluForward,      "siluForward",      2));
     JS_SetPropertyStr(ctx, gpuObj, "siluBackward",     JS_NewCFunction(ctx, js_siluBackward,     "siluBackward",     3));
     JS_SetPropertyStr(ctx, gpuObj, "geluForward",      JS_NewCFunction(ctx, js_geluForward,      "geluForward",      2));

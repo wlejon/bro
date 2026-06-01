@@ -558,10 +558,156 @@ static JSValue js_resblockBackward(JSContext* ctx, JSValueConst, int argc, JSVal
     return JS_UNDEFINED;
 }
 
+// ─── SAM / ViTDet decomposed 2D rel-pos self-attention ─────────────────────
+// selfAttentionDecomposedRelPosForward(
+//   X, Wq,bq|null, Wk,bk|null, Wv,bv|null, Wo,bo|null, relPosH, relPosW,
+//   numHeads, gridH, gridW, scale, O)
+static JSValue js_selfAttentionDecomposedRelPosForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 16) return JS_ThrowTypeError(ctx,
+        "selfAttentionDecomposedRelPosForward(X,Wq,bq|null,Wk,bk|null,Wv,bv|null,Wo,bo|null,relPosH,relPosW,numHeads,gridH,gridW,scale,O)");
+    ENSURE_INIT();
+    GT(X, 0, "decomposedRelPos"); GT(Wq, 1, "decomposedRelPos");
+    GT(Wk, 3, "decomposedRelPos"); GT(Wv, 5, "decomposedRelPos"); GT(Wo, 7, "decomposedRelPos");
+    GT(relH, 9, "decomposedRelPos"); GT(relW, 10, "decomposedRelPos");
+    JSValue err = JS_UNDEFINED;
+    const nngpu::Tensor *bq=nullptr,*bk=nullptr,*bv=nullptr,*bo=nullptr;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[2], bq, err, "bq")) return err;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[4], bk, err, "bk")) return err;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[6], bv, err, "bv")) return err;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[8], bo, err, "bo")) return err;
+    int32_t numHeads=1, gridH=0, gridW=0; double scale=1.0;
+    JS_ToInt32(ctx, &numHeads, argv[11]); JS_ToInt32(ctx, &gridH, argv[12]);
+    JS_ToInt32(ctx, &gridW, argv[13]);    JS_ToFloat64(ctx, &scale, argv[14]);
+    GT(O, 15, "decomposedRelPos");
+    nngpu::self_attention_decomposed_rel_pos_forward(*X, *Wq, bq, *Wk, bk, *Wv, bv, *Wo, bo,
+        *relH, *relW, numHeads, gridH, gridW, (float)scale, *O);
+    return JS_UNDEFINED;
+}
+// + window arg between gridW and scale (argv[14]); scale at 15, O at 16.
+static JSValue js_selfAttentionDecomposedRelPosWindowedForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 17) return JS_ThrowTypeError(ctx,
+        "selfAttentionDecomposedRelPosWindowedForward(X,Wq,bq|null,Wk,bk|null,Wv,bv|null,Wo,bo|null,relPosH,relPosW,numHeads,gridH,gridW,window,scale,O)");
+    ENSURE_INIT();
+    GT(X, 0, "decomposedRelPosWindowed"); GT(Wq, 1, "decomposedRelPosWindowed");
+    GT(Wk, 3, "decomposedRelPosWindowed"); GT(Wv, 5, "decomposedRelPosWindowed"); GT(Wo, 7, "decomposedRelPosWindowed");
+    GT(relH, 9, "decomposedRelPosWindowed"); GT(relW, 10, "decomposedRelPosWindowed");
+    JSValue err = JS_UNDEFINED;
+    const nngpu::Tensor *bq=nullptr,*bk=nullptr,*bv=nullptr,*bo=nullptr;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[2], bq, err, "bq")) return err;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[4], bk, err, "bk")) return err;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[6], bv, err, "bv")) return err;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[8], bo, err, "bo")) return err;
+    int32_t numHeads=1, gridH=0, gridW=0, window=0; double scale=1.0;
+    JS_ToInt32(ctx, &numHeads, argv[11]); JS_ToInt32(ctx, &gridH, argv[12]);
+    JS_ToInt32(ctx, &gridW, argv[13]);    JS_ToInt32(ctx, &window, argv[14]);
+    JS_ToFloat64(ctx, &scale, argv[15]);
+    GT(O, 16, "decomposedRelPosWindowed");
+    nngpu::self_attention_decomposed_rel_pos_windowed_forward(*X, *Wq, bq, *Wk, bk, *Wv, bv, *Wo, bo,
+        *relH, *relW, numHeads, gridH, gridW, window, (float)scale, *O);
+    return JS_UNDEFINED;
+}
+
+// ─── packed variable-length attention (Qwen-VL window attn) ────────────────
+// cuSeqlens* are INT32 device-pointer GpuTensors (length batch+1 prefix sums).
+// flashAttentionVarlenForward(Q,K,V,cuSeqQ,cuSeqK,batch,maxQ,maxK,numHeads,headDim,causal,O)
+static JSValue js_flashAttentionVarlenForward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 12) return JS_ThrowTypeError(ctx,
+        "flashAttentionVarlenForward(Q,K,V,cuSeqQ,cuSeqK,batch,maxQ,maxK,numHeads,headDim,causal,O)");
+    ENSURE_INIT();
+    GT(Q, 0, "flashAttentionVarlenForward"); GT(K, 1, "flashAttentionVarlenForward");
+    GT(V, 2, "flashAttentionVarlenForward");
+    JSValue err = JS_UNDEFINED; const int32_t *cuQ=nullptr,*cuK=nullptr;
+    if (!resolveDeviceI32(ctx, argv[3], cuQ, err, "cuSeqlensQ")) return err;
+    if (!resolveDeviceI32(ctx, argv[4], cuK, err, "cuSeqlensK")) return err;
+    int32_t batch=0,maxQ=0,maxK=0,numHeads=1,headDim=0;
+    JS_ToInt32(ctx, &batch, argv[5]);    JS_ToInt32(ctx, &maxQ, argv[6]);
+    JS_ToInt32(ctx, &maxK, argv[7]);     JS_ToInt32(ctx, &numHeads, argv[8]);
+    JS_ToInt32(ctx, &headDim, argv[9]);
+    bool causal = getBool(ctx, argv[10], false);
+    GT(O, 11, "flashAttentionVarlenForward");
+    nngpu::flash_attention_varlen_forward(*Q, *K, *V, cuQ, cuK, batch, maxQ, maxK,
+                                          numHeads, headDim, causal, *O);
+    return JS_UNDEFINED;
+}
+static JSValue js_flashAttentionVarlenBackward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 16) return JS_ThrowTypeError(ctx,
+        "flashAttentionVarlenBackward(Q,K,V,O,dO,cuSeqQ,cuSeqK,batch,maxQ,maxK,numHeads,headDim,causal,dQ,dK,dV)");
+    ENSURE_INIT();
+    GT(Q, 0, "flashAttentionVarlenBackward"); GT(K, 1, "flashAttentionVarlenBackward");
+    GT(V, 2, "flashAttentionVarlenBackward"); GT(O, 3, "flashAttentionVarlenBackward");
+    GT(dO, 4, "flashAttentionVarlenBackward");
+    JSValue err = JS_UNDEFINED; const int32_t *cuQ=nullptr,*cuK=nullptr;
+    if (!resolveDeviceI32(ctx, argv[5], cuQ, err, "cuSeqlensQ")) return err;
+    if (!resolveDeviceI32(ctx, argv[6], cuK, err, "cuSeqlensK")) return err;
+    int32_t batch=0,maxQ=0,maxK=0,numHeads=1,headDim=0;
+    JS_ToInt32(ctx, &batch, argv[7]);    JS_ToInt32(ctx, &maxQ, argv[8]);
+    JS_ToInt32(ctx, &maxK, argv[9]);     JS_ToInt32(ctx, &numHeads, argv[10]);
+    JS_ToInt32(ctx, &headDim, argv[11]);
+    bool causal = getBool(ctx, argv[12], false);
+    GT(dQ, 13, "flashAttentionVarlenBackward"); GT(dK, 14, "flashAttentionVarlenBackward");
+    GT(dV, 15, "flashAttentionVarlenBackward");
+    nngpu::flash_attention_varlen_backward(*Q, *K, *V, *O, *dO, cuQ, cuK, batch, maxQ, maxK,
+                                           numHeads, headDim, causal, *dQ, *dK, *dV);
+    return JS_UNDEFINED;
+}
+
+// ─── gated delta rule (linear attention — Qwen3-Next) ──────────────────────
+// gatedDeltaRule{Chunked,Step}(Q,K,V,aRaw,beta,logA,numHeads,d_k,d_v,state,O)
+#define GATED_DELTA_OP(jsName, fn)                                              \
+    static JSValue js_##jsName(JSContext* ctx, JSValueConst, int argc,          \
+                               JSValueConst* argv) {                            \
+        if (argc < 11) return JS_ThrowTypeError(ctx,                            \
+            #jsName "(Q,K,V,aRaw,beta,logA,numHeads,d_k,d_v,state,O)");         \
+        ENSURE_INIT();                                                          \
+        GT(Q, 0, #jsName); GT(K, 1, #jsName); GT(V, 2, #jsName);                \
+        GT(aRaw, 3, #jsName); GT(beta, 4, #jsName); GT(logA, 5, #jsName);       \
+        int32_t numHeads=1,d_k=0,d_v=0;                                         \
+        JS_ToInt32(ctx, &numHeads, argv[6]);                                    \
+        JS_ToInt32(ctx, &d_k, argv[7]); JS_ToInt32(ctx, &d_v, argv[8]);         \
+        GT(state, 9, #jsName); GT(O, 10, #jsName);                              \
+        nngpu::fn(*Q, *K, *V, *aRaw, *beta, *logA, numHeads, d_k, d_v, *state, *O); \
+        return JS_UNDEFINED;                                                    \
+    }
+GATED_DELTA_OP(gatedDeltaRuleChunked, gated_delta_rule_chunked)
+GATED_DELTA_OP(gatedDeltaRuleStep,    gated_delta_rule_step)
+#undef GATED_DELTA_OP
+
+// ─── M-RoPE (Qwen-VL multimodal rotary) ────────────────────────────────────
+// posT/posH/posW are INT32 device-pointer GpuTensors.
+// ropeApplyMrope(X,cosT,sinT,cosH,sinH,cosW,sinW,posT,posH,posW,headDim,numHeads,d_t,d_h,d_w,Y)
+static JSValue js_ropeApplyMrope(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 16) return JS_ThrowTypeError(ctx,
+        "ropeApplyMrope(X,cosT,sinT,cosH,sinH,cosW,sinW,posT,posH,posW,headDim,numHeads,d_t,d_h,d_w,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "ropeApplyMrope");
+    GT(cosT, 1, "ropeApplyMrope"); GT(sinT, 2, "ropeApplyMrope");
+    GT(cosH, 3, "ropeApplyMrope"); GT(sinH, 4, "ropeApplyMrope");
+    GT(cosW, 5, "ropeApplyMrope"); GT(sinW, 6, "ropeApplyMrope");
+    JSValue err = JS_UNDEFINED; const int32_t *posT=nullptr,*posH=nullptr,*posW=nullptr;
+    if (!resolveDeviceI32(ctx, argv[7], posT, err, "posT")) return err;
+    if (!resolveDeviceI32(ctx, argv[8], posH, err, "posH")) return err;
+    if (!resolveDeviceI32(ctx, argv[9], posW, err, "posW")) return err;
+    int32_t headDim=0,numHeads=1,d_t=0,d_h=0,d_w=0;
+    JS_ToInt32(ctx, &headDim, argv[10]); JS_ToInt32(ctx, &numHeads, argv[11]);
+    JS_ToInt32(ctx, &d_t, argv[12]); JS_ToInt32(ctx, &d_h, argv[13]); JS_ToInt32(ctx, &d_w, argv[14]);
+    GT(Y, 15, "ropeApplyMrope");
+    nngpu::rope_apply_mrope(*X, *cosT, *sinT, *cosH, *sinH, *cosW, *sinW,
+                            posT, posH, posW, headDim, numHeads, d_t, d_h, d_w, *Y);
+    return JS_UNDEFINED;
+}
+
 #undef GT
 #undef ENSURE_INIT
 
 void installTensorAttentionOps(JSContext* ctx, JSValue gpuObj) {
+    JS_SetPropertyStr(ctx, gpuObj, "selfAttentionDecomposedRelPosForward",         JS_NewCFunction(ctx, js_selfAttentionDecomposedRelPosForward,         "selfAttentionDecomposedRelPosForward",         16));
+    JS_SetPropertyStr(ctx, gpuObj, "selfAttentionDecomposedRelPosWindowedForward", JS_NewCFunction(ctx, js_selfAttentionDecomposedRelPosWindowedForward, "selfAttentionDecomposedRelPosWindowedForward", 17));
+    JS_SetPropertyStr(ctx, gpuObj, "flashAttentionVarlenForward",  JS_NewCFunction(ctx, js_flashAttentionVarlenForward,  "flashAttentionVarlenForward",  12));
+    JS_SetPropertyStr(ctx, gpuObj, "flashAttentionVarlenBackward", JS_NewCFunction(ctx, js_flashAttentionVarlenBackward, "flashAttentionVarlenBackward", 16));
+    JS_SetPropertyStr(ctx, gpuObj, "gatedDeltaRuleChunked",        JS_NewCFunction(ctx, js_gatedDeltaRuleChunked,        "gatedDeltaRuleChunked",        11));
+    JS_SetPropertyStr(ctx, gpuObj, "gatedDeltaRuleStep",           JS_NewCFunction(ctx, js_gatedDeltaRuleStep,           "gatedDeltaRuleStep",           11));
+    JS_SetPropertyStr(ctx, gpuObj, "ropeApplyMrope",               JS_NewCFunction(ctx, js_ropeApplyMrope,               "ropeApplyMrope",               16));
+
     // Self-attention
     JS_SetPropertyStr(ctx, gpuObj, "selfAttentionForward",      JS_NewCFunction(ctx, js_selfAttentionForward,      "selfAttentionForward",       8));
     JS_SetPropertyStr(ctx, gpuObj, "selfAttentionForwardTrain", JS_NewCFunction(ctx, js_selfAttentionForwardTrain, "selfAttentionForwardTrain", 13));

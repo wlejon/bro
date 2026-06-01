@@ -342,10 +342,87 @@ static JSValue js_selfAttentionBiasInt8wFp16(JSContext* ctx, JSValueConst, int a
     return JS_UNDEFINED;
 }
 
+// ─── GGUF k-quant dequant (Q4_K / Q6_K / Q8_0 → FP16) ──────────────────────
+#define DEQUANT_OP(jsName, fn)                                                  \
+    static JSValue js_##jsName(JSContext* ctx, JSValueConst, int argc,          \
+                               JSValueConst* argv) {                            \
+        if (argc < 2) return JS_ThrowTypeError(ctx, #jsName "(W_q, W_fp16)");   \
+        ENSURE_INIT();                                                          \
+        GT(Wq, 0, #jsName); GT(Wf, 1, #jsName);                                 \
+        nngpu::fn(*Wq, *Wf);                                                    \
+        return JS_UNDEFINED;                                                    \
+    }
+DEQUANT_OP(dequantQ4kToFp16,  dequant_q4k_to_fp16)
+DEQUANT_OP(dequantQ6kToFp16,  dequant_q6k_to_fp16)
+DEQUANT_OP(dequantQ8_0ToFp16, dequant_q8_0_to_fp16)
+#undef DEQUANT_OP
+
+// ─── k-quant weight-only linear (W=GGUF k-quant, X/Y FP16) ─────────────────
+// linearForwardQ*kFp16(W_q, bias|null, x, y) — single-token (x: D, y: Dout).
+// linearForwardBatchedQ*kFp16(W_q, bias|null, X_BD, Y_BD) — batched rows.
+#define QLINEAR_OP(jsName, fn)                                                  \
+    static JSValue js_##jsName(JSContext* ctx, JSValueConst, int argc,          \
+                               JSValueConst* argv) {                            \
+        if (argc < 4) return JS_ThrowTypeError(ctx, #jsName "(W_q,bias|null,X,Y)"); \
+        ENSURE_INIT();                                                          \
+        GT(Wq, 0, #jsName);                                                     \
+        JSValue err = JS_UNDEFINED; const nngpu::Tensor* bias = nullptr;        \
+        if (!resolveOptionalConstGpuTensor(ctx, argv[1], bias, err, "bias")) return err; \
+        GT(X, 2, #jsName); GT(Y, 3, #jsName);                                   \
+        nngpu::fn(*Wq, bias, *X, *Y);                                           \
+        return JS_UNDEFINED;                                                    \
+    }
+QLINEAR_OP(linearForwardQ4kFp16,         linear_forward_q4k_fp16)
+QLINEAR_OP(linearForwardQ6kFp16,         linear_forward_q6k_fp16)
+QLINEAR_OP(linearForwardQ8_0Fp16,        linear_forward_q8_0_fp16)
+QLINEAR_OP(linearForwardBatchedQ4kFp16,  linear_forward_batched_q4k_fp16)
+QLINEAR_OP(linearForwardBatchedQ6kFp16,  linear_forward_batched_q6k_fp16)
+QLINEAR_OP(linearForwardBatchedQ8_0Fp16, linear_forward_batched_q8_0_fp16)
+#undef QLINEAR_OP
+
+// ─── conv3d W8A16 (INT8 weight, FP16 activation), N,C,T,H,W ─────────────────
+static JSValue js_conv3dInt8wFp16Forward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 24) return JS_ThrowTypeError(ctx,
+        "conv3dInt8wFp16Forward(X,W_int8,scales,bias|null,N,C_in,T,H,W,C_out,kT,kH,kW,sT,sH,sW,pT,pH,pW,dT,dH,dW,groups,Y)");
+    ENSURE_INIT();
+    GT(X, 0, "conv3dInt8wFp16Forward"); GT(Wq, 1, "conv3dInt8wFp16Forward");
+    GT(scales, 2, "conv3dInt8wFp16Forward");
+    JSValue err = JS_UNDEFINED; const nngpu::Tensor* bias = nullptr;
+    if (!resolveOptionalConstGpuTensor(ctx, argv[3], bias, err, "bias")) return err;
+    int32_t N=0,Cin=0,T=0,H=0,W=0,Cout=0,kT=0,kH=0,kW=0;
+    int32_t sT=1,sH=1,sW=1,pT=0,pH=0,pW=0,dT=1,dH=1,dW=1,groups=1;
+    JS_ToInt32(ctx, &N, argv[4]);   JS_ToInt32(ctx, &Cin, argv[5]);
+    JS_ToInt32(ctx, &T, argv[6]);   JS_ToInt32(ctx, &H, argv[7]);
+    JS_ToInt32(ctx, &W, argv[8]);   JS_ToInt32(ctx, &Cout, argv[9]);
+    JS_ToInt32(ctx, &kT, argv[10]); JS_ToInt32(ctx, &kH, argv[11]);
+    JS_ToInt32(ctx, &kW, argv[12]); JS_ToInt32(ctx, &sT, argv[13]);
+    JS_ToInt32(ctx, &sH, argv[14]); JS_ToInt32(ctx, &sW, argv[15]);
+    JS_ToInt32(ctx, &pT, argv[16]); JS_ToInt32(ctx, &pH, argv[17]);
+    JS_ToInt32(ctx, &pW, argv[18]); JS_ToInt32(ctx, &dT, argv[19]);
+    JS_ToInt32(ctx, &dH, argv[20]); JS_ToInt32(ctx, &dW, argv[21]);
+    JS_ToInt32(ctx, &groups, argv[22]);
+    GT(Y, 23, "conv3dInt8wFp16Forward");
+    nngpu::conv3d_int8w_fp16_forward(*X, *Wq, *scales, bias, N, Cin, T, H, W,
+                                     Cout, kT, kH, kW, sT, sH, sW, pT, pH, pW,
+                                     dT, dH, dW, groups, *Y);
+    return JS_UNDEFINED;
+}
+
 #undef GT
 #undef ENSURE_INIT
 
 void installTensorInt8Ops(JSContext* ctx, JSValue gpuObj) {
+    JS_SetPropertyStr(ctx, gpuObj, "dequantQ4kToFp16",  JS_NewCFunction(ctx, js_dequantQ4kToFp16,  "dequantQ4kToFp16",  2));
+    JS_SetPropertyStr(ctx, gpuObj, "dequantQ6kToFp16",  JS_NewCFunction(ctx, js_dequantQ6kToFp16,  "dequantQ6kToFp16",  2));
+    JS_SetPropertyStr(ctx, gpuObj, "dequantQ8_0ToFp16", JS_NewCFunction(ctx, js_dequantQ8_0ToFp16, "dequantQ8_0ToFp16", 2));
+    JS_SetPropertyStr(ctx, gpuObj, "linearForwardQ4kFp16",         JS_NewCFunction(ctx, js_linearForwardQ4kFp16,         "linearForwardQ4kFp16",         4));
+    JS_SetPropertyStr(ctx, gpuObj, "linearForwardQ6kFp16",         JS_NewCFunction(ctx, js_linearForwardQ6kFp16,         "linearForwardQ6kFp16",         4));
+    JS_SetPropertyStr(ctx, gpuObj, "linearForwardQ8_0Fp16",        JS_NewCFunction(ctx, js_linearForwardQ8_0Fp16,        "linearForwardQ8_0Fp16",        4));
+    JS_SetPropertyStr(ctx, gpuObj, "linearForwardBatchedQ4kFp16",  JS_NewCFunction(ctx, js_linearForwardBatchedQ4kFp16,  "linearForwardBatchedQ4kFp16",  4));
+    JS_SetPropertyStr(ctx, gpuObj, "linearForwardBatchedQ6kFp16",  JS_NewCFunction(ctx, js_linearForwardBatchedQ6kFp16,  "linearForwardBatchedQ6kFp16",  4));
+    JS_SetPropertyStr(ctx, gpuObj, "linearForwardBatchedQ8_0Fp16", JS_NewCFunction(ctx, js_linearForwardBatchedQ8_0Fp16, "linearForwardBatchedQ8_0Fp16", 4));
+    JS_SetPropertyStr(ctx, gpuObj, "conv3dInt8wFp16Forward",       JS_NewCFunction(ctx, js_conv3dInt8wFp16Forward,       "conv3dInt8wFp16Forward",      24));
+
     JS_SetPropertyStr(ctx, gpuObj, "quantizeInt8PerRowHost",
         JS_NewCFunction(ctx, js_quantizeInt8PerRowHost, "quantizeInt8PerRowHost", 3));
     JS_SetPropertyStr(ctx, gpuObj, "matmulInt8wFp16",

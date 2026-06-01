@@ -1170,3 +1170,183 @@ gpu.roundForward(x, y);     gpu.roundBackward(dY, dX);   // round-half-to-even
  *   indices: (N, 1) — output, one drawn token id per row.
  */
 gpu.sampleLogits(logits, temperature, topK, topP, key, counter, indices);
+
+
+// =============================================================================
+// Pooling, pad/crop, transpose-conv, conv3d, windowing, batch-norm (NCHW)
+// =============================================================================
+//
+// NCHW packed as (N, C*...). Y/dX resized + dtype-set to the input. FP32 on
+// CPU; FP32/FP16 on CUDA where the backend supports it.
+
+// Max pool: Idx (INT32) records the argmax position the backward scatters into.
+gpu.maxPool2dForward(X, N, C, H, W, kH, kW, sH, sW, padH, padW, Y, Idx);
+gpu.maxPool2dBackward(dY, Idx, N, C, H, W, H_out, W_out, dX);   // overwrite
+
+// Adaptive average pool — output region per pixel follows PyTorch's formula.
+gpu.adaptiveAvgPool2dForward(X, N, C, H, W, H_out, W_out, Y);
+gpu.adaptiveAvgPool2dBackward(dY, N, C, H, W, H_out, W_out, dX);
+
+// Spatial pad / crop. pad2d mode: 0 zero, 1 reflect, 2 replicate.
+gpu.pad2dForward(X, N, C, H, W, padT, padB, padL, padR, /*mode*/ 0, Y);
+gpu.pad2dBackward(dY, N, C, H, W, padT, padB, padL, padR, /*mode*/ 0, dX);
+gpu.slice2dForward(X, N, C, H, W, h0, w0, H_out, W_out, Y);     // crop region
+gpu.slice2dBackward(dY, N, C, H, W, h0, w0, H_out, W_out, dX);  // zero + scatter
+
+// Transposed conv2d (fractionally-strided) — forward + per-input/weight/bias bwd.
+gpu.convTranspose2dForward(X, Wt, /*bias|null*/ null,
+                           N, C_in, H, W, C_out, kH, kW,
+                           sH, sW, pH, pW, opH, opW, dH, dW, groups, Y);
+gpu.convTranspose2dBackwardInput(Wt, dY, N, C_in, H, W, C_out, kH, kW,
+                                 sH, sW, pH, pW, opH, opW, dH, dW, groups, dX);
+gpu.convTranspose2dBackwardWeight(X, dY, N, C_in, H, W, C_out, kH, kW,
+                                  sH, sW, pH, pW, opH, opW, dH, dW, groups, dWt);
+gpu.convTranspose2dBackwardBias(dY, N, C_out, H_out, W_out, dB);
+
+// conv3d (N,C,T,H,W) — FP32 forward, and INT8-weight / FP16-activation variant.
+gpu.conv3dForward(X, Wt, /*bias|null*/ null,
+                  N, C_in, T, H, W, C_out, kT, kH, kW,
+                  sT, sH, sW, pT, pH, pW, dT, dH, dW, groups, Y);
+gpu.conv3dInt8wFp16Forward(X, W_int8, scales, /*bias|null*/ null,
+                           N, C_in, T, H, W, C_out, kT, kH, kW,
+                           sT, sH, sW, pT, pH, pW, dT, dH, dW, groups, Y);
+
+// Window partition / reverse (Swin/SAM) + Qwen-VL 2x2 spatial token merge.
+gpu.windowPartitionForward(X, N, C, H, W, window, Y);
+gpu.windowReverseForward(X, N, C, H, W, window, Y);
+gpu.spatialMerge2x2Forward(X, N, C, H, W, Y);   // (N,C,H,W) -> (N,4C,H/2,W/2)
+
+// Batch norm. Forward updates running stats + saves mean/rstd for backward;
+// inference uses the frozen running stats.
+gpu.batchNormForward(X, gamma, beta, runningMean, runningVar,
+                     N, C, H, W, eps, momentum, Y, savedMean, savedRstd);
+gpu.batchNormBackward(X, gamma, savedMean, savedRstd, dY,
+                      N, C, H, W, dX, dGamma, dBeta);
+gpu.batchNormInference(X, gamma, beta, runningMean, runningVar,
+                       N, C, H, W, eps, Y);
+
+
+// =============================================================================
+// Image preprocessing
+// =============================================================================
+
+// Per-channel (x - mean) / std on an NCHW image (CLIP/ImageNet/SAM normalize).
+// mean / std are length-C tensors.
+gpu.imageNormalize(X, mean, std, N, C, H, W, Y);
+
+// Decode + layout: HWC uint8 bytes -> NCHW FP32 with y = x*scale + bias.
+// `srcUint8` is a host Uint8Array of N*H*W*C bytes.
+gpu.imageU8ToF32NhwcToNchw(srcUint8, N, H, W, C, /*scale*/ 1/255, /*bias*/ 0, Y);
+
+
+// =============================================================================
+// k-quant (GGUF) weight inference
+// =============================================================================
+//
+// Dequant a GGUF k-quant weight block to FP16, or run a weight-only-quant
+// linear directly (W stays k-quant, X/Y FP16). Batched variants take (B, D).
+
+gpu.dequantQ4kToFp16(W_q4k, W_fp16);
+gpu.dequantQ6kToFp16(W_q6k, W_fp16);
+gpu.dequantQ8_0ToFp16(W_q8, W_fp16);
+
+gpu.linearForwardQ4kFp16(W_q4k, /*bias|null*/ null, x, y);            // single row
+gpu.linearForwardQ6kFp16(W_q6k, /*bias|null*/ null, x, y);
+gpu.linearForwardQ8_0Fp16(W_q8, /*bias|null*/ null, x, y);
+gpu.linearForwardBatchedQ4kFp16(W_q4k, /*bias|null*/ null, X_BD, Y_BD);
+gpu.linearForwardBatchedQ6kFp16(W_q6k, /*bias|null*/ null, X_BD, Y_BD);
+gpu.linearForwardBatchedQ8_0Fp16(W_q8, /*bias|null*/ null, X_BD, Y_BD);
+
+
+// =============================================================================
+// Specialized attention
+// =============================================================================
+
+/**
+ * SAM / ViTDet decomposed 2D relative-position self-attention. A token maps to
+ * grid coords over a (gridH, gridW) patch grid; the rel-pos bias is factored
+ * into length-gridH and length-gridW tables (never materialised L×L). Each bias
+ * (bq/bk/bv/bo) is optional. relPosH: (2*gridH-1, headDim), relPosW likewise.
+ * The windowed variant runs it independently per window×window tile.
+ */
+gpu.selfAttentionDecomposedRelPosForward(
+    X, Wq, bq, Wk, bk, Wv, bv, Wo, bo, relPosH, relPosW,
+    numHeads, gridH, gridW, /*scale*/ 1/Math.sqrt(headDim), O);
+gpu.selfAttentionDecomposedRelPosWindowedForward(
+    X, Wq, bq, Wk, bk, Wv, bv, Wo, bo, relPosH, relPosW,
+    numHeads, gridH, gridW, window, /*scale*/ 1/Math.sqrt(headDim), O);
+
+/**
+ * Packed variable-length attention (Qwen-VL window attn). Sequences are packed
+ * contiguously; cuSeqlensQ / cuSeqlensK are INT32 device-pointer GpuTensors of
+ * length batch+1 (prefix sums) — pass an INT32 tensor whose .data is the device
+ * buffer. No cross-sequence attention.
+ */
+gpu.flashAttentionVarlenForward(Q, K, V, cuSeqlensQ, cuSeqlensK,
+                                batch, maxSeqQ, maxSeqK, numHeads, headDim, causal, O);
+gpu.flashAttentionVarlenBackward(Q, K, V, O, dO, cuSeqlensQ, cuSeqlensK,
+                                 batch, maxSeqQ, maxSeqK, numHeads, headDim, causal,
+                                 dQ, dK, dV);
+
+/**
+ * Gated delta rule (linear attention — Qwen3-Next). `state` is the recurrent
+ * (d_k, d_v) memory, read + written in place. Chunked processes a whole block;
+ * step advances one token.
+ */
+gpu.gatedDeltaRuleChunked(Q, K, V, aRaw, beta, logA, numHeads, d_k, d_v, state, O);
+gpu.gatedDeltaRuleStep(Q, K, V, aRaw, beta, logA, numHeads, d_k, d_v, state, O);
+
+/**
+ * Qwen-VL multimodal M-RoPE: separate cos/sin tables and INT32 device-pointer
+ * position buffers for the temporal / height / width axes; d_t + d_h + d_w =
+ * headDim/2 rotary pairs.
+ */
+gpu.ropeApplyMrope(X, cosT, sinT, cosH, sinH, cosW, sinW,
+                   posT, posH, posW, headDim, numHeads, d_t, d_h, d_w, Y);
+
+
+// =============================================================================
+// Normalize / loss helpers
+// =============================================================================
+
+// Per-head last-dim L2 normalize over an (L, numHeads*headDim) layout
+// (gated-deltanet QK-norm). Distinct from l2NormalizeNchwForward (channel axis).
+gpu.l2NormForward(X, headDim, numHeads, eps, Y);
+gpu.l2NormBackward(X, headDim, numHeads, eps, dY, dX);
+
+// Fused numerically-stable BCE-with-logits over a (B, L) batch. `mask` is an
+// optional device-pointer (float) GpuTensor; writes probs, dLogits, and a
+// per-sample loss vector.
+gpu.bceWithLogitsFusedBatched(logits, target, /*mask|null*/ null, posWeight,
+                              probs, dLogits, lossPerSample);
+
+// Single-segment softmax cross-entropy over HOST Float32Arrays (probs/dLogits
+// written in place; optional host mask). Returns the scalar loss.
+const loss = gpu.softmaxXentSegment(logits, target, probs, dLogits, n, /*mask|null*/ null);
+
+// Scalar MSE: returns [loss, dPred].
+const [mseLoss, dPred] = gpu.mseScalar(pred, target);
+
+
+// =============================================================================
+// Row gather/scatter, top-k, training-cache layernorm, RNG, init
+// =============================================================================
+
+gpu.gatherRows(X, idxAsInt32, Y);              // Y[i] = X[Idx[i]]
+gpu.scatterRowsAdd(dY, idxAsInt32, R, dX);     // dX (R rows) zeroed then += dY
+gpu.topKRows(X, k, Vals, Idx);                 // per-row top-k, descending; Idx INT32
+
+// Layernorm that saves Xhat / Mean / Rstd caches for an exact training backward.
+gpu.layernormForwardBatchedWithCaches(X, gamma, beta, Y, Xhat, Mean, Rstd, eps);
+gpu.layernormBackwardBatchedWithCaches(dY, Xhat, gamma, Rstd, dX, dGamma, dBeta);
+
+// Counter-based (Philox) RNG — deterministic in (key, counter). key/counter are
+// BigInt or Number; fills the destination tensor.
+gpu.randUniform(key, counter, Y);              // U[0,1)
+gpu.randn(key, counter, Y);                    // standard normal
+gpu.randBernoulli(p, key, counter, Y);         // 1 w.p. p
+gpu.randnTruncated(lo, hi, key, counter, Y);   // normal truncated to [lo,hi]
+
+// Xavier-uniform fill. Takes an RNG state (BigInt/Number), returns the advanced
+// state as a BigInt — thread it through successive inits.
+let rngState = gpu.xavierInit(W, rngState);

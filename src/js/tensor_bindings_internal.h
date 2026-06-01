@@ -129,6 +129,29 @@ inline bool resolveOptionalConstGpuTensor(JSContext* ctx, JSValueConst v,
     return ok;
 }
 
+// Read a JS value as uint64 — accepts a BigInt (full 64-bit range) or a
+// plain Number (safe-integer seeds). Used for RNG keys/counters/state.
+inline uint64_t getU64(JSContext* ctx, JSValueConst v) {
+    if (JS_IsBigInt(v)) { uint64_t x = 0; JS_ToBigUint64(ctx, &x, v); return x; }
+    int64_t x = 0; JS_ToInt64(ctx, &x, v); return static_cast<uint64_t>(x);
+}
+
+// Resolve a GpuTensor arg to a raw device int32 pointer (cu_seqlens / M-RoPE
+// position buffers — INT32, same device-pointer convention as `d_mask`).
+// null/undefined → nullptr. Anything but a GpuTensor throws TypeError.
+inline bool resolveDeviceI32(JSContext* ctx, JSValueConst v,
+                             const int32_t*& out_ptr, JSValue& thrown_err,
+                             const char* label) {
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { out_ptr = nullptr; return true; }
+    auto* gt = gpuTensorFromJSLocal(ctx, v);
+    if (!gt) {
+        thrown_err = JS_ThrowTypeError(ctx, "%s must be null or an INT32 GpuTensor (device pointer)", label);
+        return false;
+    }
+    out_ptr = static_cast<const int32_t*>(gt->data);
+    return true;
+}
+
 // Boolean arg with default.
 inline bool getBool(JSContext* ctx, JSValueConst v, bool def) {
     if (JS_IsUndefined(v) || JS_IsNull(v)) return def;
