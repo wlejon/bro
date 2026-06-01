@@ -27,6 +27,12 @@
 #include <brovisionml/depth_anything.h>
 #include <brovisionml/sam.h>
 #include <brovisionml/sam_amg.h>
+#include <brovisionml/dsine.h>
+#include <brovisionml/hed.h>
+#include <brovisionml/lineart.h>
+#include <brovisionml/mlsd.h>
+#include <brovisionml/openpose.h>
+#include <brovisionml/segformer.h>
 
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
@@ -257,6 +263,53 @@ static JSValue makeMaskBitmap(JSContext* ctx, const std::uint8_t* mask,
     return makeBitmap(ctx, rgba.data(), w, h);
 }
 
+// A scalar map already in [0,1] (edge / line probability) → grayscale
+// ImageBitmap, no min-max rescale. `invert` flips (1 - v).
+static JSValue makeUnitScalarBitmap(JSContext* ctx, const std::vector<float>& map,
+                                    int w, int h, bool invert) {
+    std::vector<std::uint8_t> rgba(static_cast<size_t>(w) * h * 4);
+    for (size_t i = 0; i < map.size(); ++i) {
+        float v = std::clamp(map[i], 0.0f, 1.0f);
+        if (invert) v = 1.0f - v;
+        int g = std::clamp((int)std::lround(v * 255.0f), 0, 255);
+        rgba[4 * i + 0] = (std::uint8_t)g;
+        rgba[4 * i + 1] = (std::uint8_t)g;
+        rgba[4 * i + 2] = (std::uint8_t)g;
+        rgba[4 * i + 3] = 255;
+    }
+    return makeBitmap(ctx, rgba.data(), w, h);
+}
+
+// A planar NCHW (3,H,W) unit-normal map → RGB ImageBitmap via (n+1)/2.
+static JSValue makeNormalBitmap(JSContext* ctx, const std::vector<float>& nchw,
+                                int w, int h) {
+    const size_t plane = static_cast<size_t>(w) * h;
+    std::vector<std::uint8_t> rgba(plane * 4);
+    for (size_t i = 0; i < plane; ++i) {
+        for (int c = 0; c < 3; ++c) {
+            float n = nchw[c * plane + i];
+            int v = std::clamp((int)std::lround((n + 1.0f) * 0.5f * 255.0f), 0, 255);
+            rgba[4 * i + c] = (std::uint8_t)v;
+        }
+        rgba[4 * i + 3] = 255;
+    }
+    return makeBitmap(ctx, rgba.data(), w, h);
+}
+
+// An interleaved HxWx3 RGB buffer → ImageBitmap (expands to RGBA, α=255).
+static JSValue makeBitmapRGB(JSContext* ctx, const std::uint8_t* rgb,
+                             int w, int h) {
+    const size_t plane = static_cast<size_t>(w) * h;
+    std::vector<std::uint8_t> rgba(plane * 4);
+    for (size_t i = 0; i < plane; ++i) {
+        rgba[4 * i + 0] = rgb[3 * i + 0];
+        rgba[4 * i + 1] = rgb[3 * i + 1];
+        rgba[4 * i + 2] = rgb[3 * i + 2];
+        rgba[4 * i + 3] = 255;
+    }
+    return makeBitmap(ctx, rgba.data(), w, h);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Async-op runner. Wraps the launchAsyncJob boilerplate the bindings repeat:
 // run `compute` (heavy, background thread, throws on error) then `build` (JS
@@ -318,6 +371,82 @@ static JSValue runVisionOp(JSContext* ctx, JSValueConst onDoneVal,
 static JSValue getOnDone(JSContext* ctx, JSValueConst opts) {
     if (!JS_IsObject(opts)) return JS_UNDEFINED;
     return JS_GetPropertyStr(ctx, opts, "onDone");
+}
+
+// Generic model loader. `build` (captures dir + config read off opts on the JS
+// thread) constructs + loads + migrates the wrapper; it is heavy and may throw.
+// With opts.onReady a function the build runs on a background thread and
+// onReady(model)/onError(msg) fire on the JS thread; otherwise it runs inline
+// and returns the wrapped model. Shared by every loadXxx below.
+template <class W>
+static JSValue loadModel(JSContext* ctx, const char* fnName, JSValueConst opts,
+                         std::function<std::unique_ptr<W>()> build) {
+    JSValue onReady = JS_IsObject(opts) ? JS_GetPropertyStr(ctx, opts, "onReady")
+                                        : JS_UNDEFINED;
+    JSValue onError = JS_IsObject(opts) ? JS_GetPropertyStr(ctx, opts, "onError")
+                                        : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            return qjsbind::wrap<W>(ctx, build().release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "%s: %s", fnName, e.what());
+        }
+    }
+
+    struct LS {
+        std::function<std::unique_ptr<W>()> build;
+        std::unique_ptr<W> w;
+        JSValue onReady = JS_UNDEFINED, onError = JS_UNDEFINED;
+        bool hasError = false;
+    };
+    auto ls = std::make_shared<LS>();
+    ls->build = std::move(build);
+    ls->onReady = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) { ls->w = ls->build(); };
+    auto done = [ls](JSContext* c, bool, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "load failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<W>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// Resolve the load device: CUDA when available, overridable via opts.device.
+// Throws a JS exception (returns false) on a bad opts.device string.
+static bool resolveDevice(JSContext* ctx, const char* fnName, JSValueConst opts,
+                          brotensor::Device& dev, JSValue& thrown) {
+    brotensor::init();
+    dev = autoDevice();
+    std::string err;
+    if (!parseDeviceOpt(ctx, opts, dev, err)) {
+        thrown = JS_ThrowTypeError(ctx, "%s: %s", fnName, err.c_str());
+        return false;
+    }
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -923,6 +1052,613 @@ static JSValue js_loadSam(JSContext* ctx, JSValueConst, int argc,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Single-image detector boilerplate, shared by the dense/structured detectors
+// below (DSINE, HED, lineart, MLSD, OpenPose, SegFormer). Each Job type holds
+// `w` (the wrapper), `rgba` / `in_w` / `in_h` (the decoded image) and `selfRef`
+// (a dup of the JS handle kept alive across the async op).
+// ═══════════════════════════════════════════════════════════════════════════
+
+template <class W, class Job>
+static bool prepDetect(JSContext* ctx, JSValueConst this_val, W* w,
+                       JSValueConst imgArg, Job& job, const char* fnName,
+                       JSValue& thrown) {
+    job.w = w;
+    std::string err;
+    if (!readImageArg(ctx, imgArg, job.rgba, job.in_w, job.in_h, err)) {
+        thrown = JS_ThrowTypeError(ctx, "%s: %s", fnName, err.c_str());
+        return false;
+    }
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        thrown = JS_ThrowInternalError(ctx,
+            "%s: an operation is already in flight on this model", fnName);
+        return false;
+    }
+    job.selfRef = JS_DupValue(ctx, this_val);
+    return true;
+}
+
+template <class Job>
+static ReleaseFn makeRelease(JSContext* ctx, std::shared_ptr<Job> job) {
+    return [job, ctx]() {
+        job->w->busy.store(false, std::memory_order_release);
+        JS_FreeValue(ctx, job->selfRef);
+    };
+}
+
+// ── DSINE — surface normals ─────────────────────────────────────────────────
+
+struct VisionNormalWrapper {
+    std::unique_ptr<brovisionml::dsine::NormalEstimator> est;
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> busy{false};
+};
+
+struct NormalJob {
+    VisionNormalWrapper*      w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    bool  hasIntrinsics = false;
+    float fx = 0, fy = 0, cx = 0, cy = 0;
+    brovisionml::dsine::NormalMap nm;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// NormalEstimator.estimate(image, opts?) → { width, height,
+//   normals: Float32Array(3*h*w, planar NCHW unit normals), image: ImageBitmap }
+//   opts.fx/fy/cx/cy: explicit pinhole intrinsics (else synthesized from fov).
+static JSValue js_normal_estimate(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionNormalWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "estimate: not a NormalEstimator");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "estimate(image, opts?): image required");
+    auto job = std::make_shared<NormalJob>();
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "estimate", thrown))
+        return thrown;
+
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    if (JS_IsObject(opts)) {
+        JSValue fxv = JS_GetPropertyStr(ctx, opts, "fx");
+        if (JS_IsNumber(fxv)) {
+            job->hasIntrinsics = true;
+            getFloat(ctx, opts, "fx", job->fx);
+            getFloat(ctx, opts, "fy", job->fy);
+            getFloat(ctx, opts, "cx", job->cx);
+            getFloat(ctx, opts, "cy", job->cy);
+        }
+        JS_FreeValue(ctx, fxv);
+    }
+    JSValue onDone = getOnDone(ctx, opts);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(job->w->device);
+        job->nm = job->hasIntrinsics
+            ? job->w->est->estimate(job->rgba.data(), job->in_w, job->in_h, 4,
+                                    job->fx, job->fy, job->cx, job->cy)
+            : job->w->est->estimate(job->rgba.data(), job->in_w, job->in_h, 4);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& nm = job->nm;
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "width",   JS_NewInt32(c, nm.width));
+        JS_SetPropertyStr(c, res, "height",  JS_NewInt32(c, nm.height));
+        JS_SetPropertyStr(c, res, "normals", qjsbind::make_float32_array(c, nm.normals));
+        JS_SetPropertyStr(c, res, "image",
+            makeNormalBitmap(c, nm.normals, nm.width, nm.height));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerNormalClass(JSContext* ctx) {
+    qjsbind::Class<VisionNormalWrapper>(ctx, "NormalEstimator", qjsbind::NoGlobal)
+        .get("device", [](VisionNormalWrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .method_raw("estimate", js_normal_estimate, 2);
+}
+
+static JSValue js_loadNormal(JSContext* ctx, JSValueConst, int argc,
+                             JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadNormal(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadNormal", opts, dev, thrown)) return thrown;
+    float fov = 60.0f;
+    getFloat(ctx, opts, "fov", fov);
+    return loadModel<VisionNormalWrapper>(ctx, "loadNormal", opts,
+        [dir, dev, fov]() {
+            auto w = std::make_unique<VisionNormalWrapper>();
+            w->device = dev;
+            brovisionml::dsine::DsineConfig cfg; cfg.fov_deg = fov;
+            w->est = std::make_unique<brovisionml::dsine::NormalEstimator>(cfg);
+            brotensor::DeviceScope scope(dev);
+            w->est->load(dir);
+            w->est->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] DSINE loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
+// ── HED — soft edges ────────────────────────────────────────────────────────
+
+struct VisionHedWrapper {
+    std::unique_ptr<brovisionml::hed::SoftEdgeDetector> det;
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> busy{false};
+};
+
+struct HedJob {
+    VisionHedWrapper*         w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    brovisionml::hed::EdgeMap em;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// SoftEdgeDetector.detect(image, opts?) → { width, height,
+//   edge: Float32Array(h*w, [0,1]), image: ImageBitmap (grayscale) }
+static JSValue js_hed_detect(JSContext* ctx, JSValueConst this_val,
+                             int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionHedWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "detect: not a SoftEdgeDetector");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "detect(image, opts?): image required");
+    auto job = std::make_shared<HedJob>();
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "detect", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(job->w->device);
+        job->em = job->w->det->detect(job->rgba.data(), job->in_w, job->in_h, 4);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& em = job->em;
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "width",  JS_NewInt32(c, em.width));
+        JS_SetPropertyStr(c, res, "height", JS_NewInt32(c, em.height));
+        JS_SetPropertyStr(c, res, "edge",   qjsbind::make_float32_array(c, em.edge));
+        JS_SetPropertyStr(c, res, "image",
+            makeUnitScalarBitmap(c, em.edge, em.width, em.height, false));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerHedClass(JSContext* ctx) {
+    qjsbind::Class<VisionHedWrapper>(ctx, "SoftEdgeDetector", qjsbind::NoGlobal)
+        .get("device", [](VisionHedWrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .method_raw("detect", js_hed_detect, 2);
+}
+
+static JSValue js_loadHed(JSContext* ctx, JSValueConst, int argc,
+                          JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadHed(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadHed", opts, dev, thrown)) return thrown;
+    int resolution = 0;
+    getInt(ctx, opts, "resolution", resolution);
+    return loadModel<VisionHedWrapper>(ctx, "loadHed", opts,
+        [dir, dev, resolution]() {
+            auto w = std::make_unique<VisionHedWrapper>();
+            w->device = dev;
+            brovisionml::hed::HedConfig cfg; cfg.detect_resolution = resolution;
+            w->det = std::make_unique<brovisionml::hed::SoftEdgeDetector>(cfg);
+            brotensor::DeviceScope scope(dev);
+            w->det->load(dir);
+            w->det->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] HED loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
+// ── Lineart — line drawing ──────────────────────────────────────────────────
+
+struct VisionLineartWrapper {
+    std::unique_ptr<brovisionml::lineart::LineartDetector> det;
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> busy{false};
+};
+
+struct LineartJob {
+    VisionLineartWrapper*     w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    brovisionml::lineart::LineMap lm;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// LineartDetector.detect(image, opts?) → { width, height,
+//   line: Float32Array(h*w, [0,1]), image: ImageBitmap (grayscale) }
+static JSValue js_lineart_detect(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionLineartWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "detect: not a LineartDetector");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "detect(image, opts?): image required");
+    auto job = std::make_shared<LineartJob>();
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "detect", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(job->w->device);
+        job->lm = job->w->det->detect(job->rgba.data(), job->in_w, job->in_h, 4);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& lm = job->lm;
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "width",  JS_NewInt32(c, lm.width));
+        JS_SetPropertyStr(c, res, "height", JS_NewInt32(c, lm.height));
+        JS_SetPropertyStr(c, res, "line",   qjsbind::make_float32_array(c, lm.line));
+        JS_SetPropertyStr(c, res, "image",
+            makeUnitScalarBitmap(c, lm.line, lm.width, lm.height, false));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerLineartClass(JSContext* ctx) {
+    qjsbind::Class<VisionLineartWrapper>(ctx, "LineartDetector", qjsbind::NoGlobal)
+        .get("device", [](VisionLineartWrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .method_raw("detect", js_lineart_detect, 2);
+}
+
+static JSValue js_loadLineart(JSContext* ctx, JSValueConst, int argc,
+                              JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadLineart(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadLineart", opts, dev, thrown)) return thrown;
+    int resolution = 0;
+    getInt(ctx, opts, "resolution", resolution);
+    const bool invert = getBool(ctx, opts, "invert", true);
+    return loadModel<VisionLineartWrapper>(ctx, "loadLineart", opts,
+        [dir, dev, resolution, invert]() {
+            auto w = std::make_unique<VisionLineartWrapper>();
+            w->device = dev;
+            brovisionml::lineart::LineartConfig cfg;
+            cfg.detect_resolution = resolution;
+            cfg.invert = invert;
+            w->det = std::make_unique<brovisionml::lineart::LineartDetector>(cfg);
+            brotensor::DeviceScope scope(dev);
+            w->det->load(dir);
+            w->det->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] lineart loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
+// ── MLSD — straight line segments ───────────────────────────────────────────
+
+struct VisionMlsdWrapper {
+    std::unique_ptr<brovisionml::mlsd::MLSDdetector> det;
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> busy{false};
+};
+
+struct MlsdJob {
+    VisionMlsdWrapper*        w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    brovisionml::mlsd::LineMap lm;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// Rasterize a white segment onto an RGBA buffer (clipped Bresenham).
+static void drawSegment(std::vector<std::uint8_t>& rgba, int w, int h,
+                        int x0, int y0, int x1, int y1) {
+    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int e = dx + dy;
+    for (;;) {
+        if (x0 >= 0 && x0 < w && y0 >= 0 && y0 < h) {
+            size_t i = (static_cast<size_t>(y0) * w + x0) * 4;
+            rgba[i] = rgba[i+1] = rgba[i+2] = rgba[i+3] = 255;
+        }
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * e;
+        if (e2 >= dy) { e += dy; x0 += sx; }
+        if (e2 <= dx) { e += dx; y0 += sy; }
+    }
+}
+
+// MLSDdetector.detect(image, opts?) → { width, height,
+//   segments: [{ x1, y1, x2, y2, score }], image: ImageBitmap (white lines) }
+static JSValue js_mlsd_detect(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionMlsdWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "detect: not an MLSDdetector");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "detect(image, opts?): image required");
+    auto job = std::make_shared<MlsdJob>();
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "detect", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(job->w->device);
+        job->lm = job->w->det->detect(job->rgba.data(), job->in_w, job->in_h, 4);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& lm = job->lm;
+        JSValue segs = JS_NewArray(c);
+        std::vector<std::uint8_t> rgba(static_cast<size_t>(lm.width) * lm.height * 4, 0);
+        for (std::uint32_t i = 0; i < lm.segments.size(); ++i) {
+            const auto& s = lm.segments[i];
+            JSValue so = JS_NewObject(c);
+            JS_SetPropertyStr(c, so, "x1", JS_NewFloat64(c, s.x1));
+            JS_SetPropertyStr(c, so, "y1", JS_NewFloat64(c, s.y1));
+            JS_SetPropertyStr(c, so, "x2", JS_NewFloat64(c, s.x2));
+            JS_SetPropertyStr(c, so, "y2", JS_NewFloat64(c, s.y2));
+            JS_SetPropertyStr(c, so, "score", JS_NewFloat64(c, s.score));
+            JS_SetPropertyUint32(c, segs, i, so);
+            drawSegment(rgba, lm.width, lm.height,
+                        (int)std::lround(s.x1), (int)std::lround(s.y1),
+                        (int)std::lround(s.x2), (int)std::lround(s.y2));
+        }
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "width",    JS_NewInt32(c, lm.width));
+        JS_SetPropertyStr(c, res, "height",   JS_NewInt32(c, lm.height));
+        JS_SetPropertyStr(c, res, "segments", segs);
+        JS_SetPropertyStr(c, res, "image", makeBitmap(c, rgba.data(), lm.width, lm.height));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerMlsdClass(JSContext* ctx) {
+    qjsbind::Class<VisionMlsdWrapper>(ctx, "MLSDdetector", qjsbind::NoGlobal)
+        .get("device", [](VisionMlsdWrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .method_raw("detect", js_mlsd_detect, 2);
+}
+
+static JSValue js_loadMlsd(JSContext* ctx, JSValueConst, int argc,
+                           JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadMlsd(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadMlsd", opts, dev, thrown)) return thrown;
+    brovisionml::mlsd::MlsdConfig cfg;
+    getFloat(ctx, opts, "scoreThr", cfg.score_thr);
+    getFloat(ctx, opts, "distThr",  cfg.dist_thr);
+    return loadModel<VisionMlsdWrapper>(ctx, "loadMlsd", opts,
+        [dir, dev, cfg]() {
+            auto w = std::make_unique<VisionMlsdWrapper>();
+            w->device = dev;
+            w->det = std::make_unique<brovisionml::mlsd::MLSDdetector>(cfg);
+            brotensor::DeviceScope scope(dev);
+            w->det->load(dir);
+            w->det->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] MLSD loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
+// ── OpenPose — body pose ────────────────────────────────────────────────────
+
+struct VisionOpenposeWrapper {
+    std::unique_ptr<brovisionml::openpose::OpenposeDetector> det;
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> busy{false};
+};
+
+struct OpenposeJob {
+    VisionOpenposeWrapper*    w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    brovisionml::openpose::PoseResult pose;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// OpenposeDetector.detect(image, opts?) → { width, height,
+//   bodies: [{ keypoints: [{x,y,score,present}×18], totalScore, totalParts }],
+//   image: ImageBitmap (canonical colored pose sticks) }
+static JSValue js_openpose_detect(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionOpenposeWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "detect: not an OpenposeDetector");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "detect(image, opts?): image required");
+    auto job = std::make_shared<OpenposeJob>();
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "detect", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(job->w->device);
+        job->pose = job->w->det->detect(job->rgba.data(), job->in_w, job->in_h, 4);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& pose = job->pose;
+        JSValue bodies = JS_NewArray(c);
+        for (std::uint32_t b = 0; b < pose.bodies.size(); ++b) {
+            const auto& body = pose.bodies[b];
+            JSValue kps = JS_NewArray(c);
+            for (std::uint32_t k = 0; k < body.keypoints.size(); ++k) {
+                const auto& kp = body.keypoints[k];
+                JSValue ko = JS_NewObject(c);
+                JS_SetPropertyStr(c, ko, "x", JS_NewFloat64(c, kp.x));
+                JS_SetPropertyStr(c, ko, "y", JS_NewFloat64(c, kp.y));
+                JS_SetPropertyStr(c, ko, "score", JS_NewFloat64(c, kp.score));
+                JS_SetPropertyStr(c, ko, "present", JS_NewBool(c, kp.present));
+                JS_SetPropertyUint32(c, kps, k, ko);
+            }
+            JSValue bo = JS_NewObject(c);
+            JS_SetPropertyStr(c, bo, "keypoints", kps);
+            JS_SetPropertyStr(c, bo, "totalScore", JS_NewFloat64(c, body.total_score));
+            JS_SetPropertyStr(c, bo, "totalParts", JS_NewInt32(c, body.total_parts));
+            JS_SetPropertyUint32(c, bodies, b, bo);
+        }
+        auto canvas = brovisionml::openpose::OpenposeDetector::draw(pose);
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "width",  JS_NewInt32(c, pose.width));
+        JS_SetPropertyStr(c, res, "height", JS_NewInt32(c, pose.height));
+        JS_SetPropertyStr(c, res, "bodies", bodies);
+        JS_SetPropertyStr(c, res, "image",
+            makeBitmapRGB(c, canvas.data(), pose.width, pose.height));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerOpenposeClass(JSContext* ctx) {
+    qjsbind::Class<VisionOpenposeWrapper>(ctx, "OpenposeDetector", qjsbind::NoGlobal)
+        .get("device", [](VisionOpenposeWrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .method_raw("detect", js_openpose_detect, 2);
+}
+
+static JSValue js_loadOpenpose(JSContext* ctx, JSValueConst, int argc,
+                               JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadOpenpose(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadOpenpose", opts, dev, thrown)) return thrown;
+    brovisionml::openpose::OpenposeConfig cfg;
+    getInt(ctx, opts, "resolution", cfg.detect_resolution);
+    return loadModel<VisionOpenposeWrapper>(ctx, "loadOpenpose", opts,
+        [dir, dev, cfg]() {
+            auto w = std::make_unique<VisionOpenposeWrapper>();
+            w->device = dev;
+            w->det = std::make_unique<brovisionml::openpose::OpenposeDetector>(cfg);
+            brotensor::DeviceScope scope(dev);
+            w->det->load(dir);
+            w->det->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] OpenPose loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
+// ── SegFormer — semantic segmentation ───────────────────────────────────────
+
+struct VisionSegformerWrapper {
+    std::unique_ptr<brovisionml::segformer::SegformerDetector> det;
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> busy{false};
+};
+
+struct SegformerJob {
+    VisionSegformerWrapper*   w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    brovisionml::segformer::SegMap seg;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// SegformerDetector.detect(image, opts?) → { width, height,
+//   classes: Uint8Array(h*w, ADE20K ids 0..149),
+//   image: ImageBitmap (ADE20K-palette colorized) }
+static JSValue js_segformer_detect(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionSegformerWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "detect: not a SegformerDetector");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "detect(image, opts?): image required");
+    auto job = std::make_shared<SegformerJob>();
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "detect", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(job->w->device);
+        job->seg = job->w->det->detect(job->rgba.data(), job->in_w, job->in_h, 4);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& seg = job->seg;
+        auto rgb = brovisionml::segformer::SegformerDetector::colorize(seg);
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "width",   JS_NewInt32(c, seg.width));
+        JS_SetPropertyStr(c, res, "height",  JS_NewInt32(c, seg.height));
+        JS_SetPropertyStr(c, res, "classes",
+            makeUint8Array(c, seg.classes.data(), seg.classes.size()));
+        JS_SetPropertyStr(c, res, "image",
+            makeBitmapRGB(c, rgb.data(), seg.width, seg.height));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerSegformerClass(JSContext* ctx) {
+    qjsbind::Class<VisionSegformerWrapper>(ctx, "SegformerDetector", qjsbind::NoGlobal)
+        .get("device", [](VisionSegformerWrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .method_raw("detect", js_segformer_detect, 2);
+}
+
+static JSValue js_loadSegformer(JSContext* ctx, JSValueConst, int argc,
+                                JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadSegformer(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadSegformer", opts, dev, thrown)) return thrown;
+    return loadModel<VisionSegformerWrapper>(ctx, "loadSegformer", opts,
+        [dir, dev]() {
+            auto w = std::make_unique<VisionSegformerWrapper>();
+            w->device = dev;
+            w->det = std::make_unique<brovisionml::segformer::SegformerDetector>();
+            brotensor::DeviceScope scope(dev);
+            w->det->load(dir);
+            w->det->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] SegFormer loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // bro.vision free functions + install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -938,6 +1674,12 @@ static JSValue js_init(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 void installVisionBindings(JSContext* ctx) {
     registerDepthClass(ctx);
     registerSamClass(ctx);
+    registerNormalClass(ctx);
+    registerHedClass(ctx);
+    registerLineartClass(ctx);
+    registerMlsdClass(ctx);
+    registerOpenposeClass(ctx);
+    registerSegformerClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -954,6 +1696,18 @@ void installVisionBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadDepth, "loadDepth", 2));
     JS_SetPropertyStr(ctx, vision, "loadSam",
         JS_NewCFunction(ctx, js_loadSam, "loadSam", 2));
+    JS_SetPropertyStr(ctx, vision, "loadNormal",
+        JS_NewCFunction(ctx, js_loadNormal, "loadNormal", 2));
+    JS_SetPropertyStr(ctx, vision, "loadHed",
+        JS_NewCFunction(ctx, js_loadHed, "loadHed", 2));
+    JS_SetPropertyStr(ctx, vision, "loadLineart",
+        JS_NewCFunction(ctx, js_loadLineart, "loadLineart", 2));
+    JS_SetPropertyStr(ctx, vision, "loadMlsd",
+        JS_NewCFunction(ctx, js_loadMlsd, "loadMlsd", 2));
+    JS_SetPropertyStr(ctx, vision, "loadOpenpose",
+        JS_NewCFunction(ctx, js_loadOpenpose, "loadOpenpose", 2));
+    JS_SetPropertyStr(ctx, vision, "loadSegformer",
+        JS_NewCFunction(ctx, js_loadSegformer, "loadSegformer", 2));
     JS_SetPropertyStr(ctx, broObj, "vision", vision);
 
     JS_FreeValue(ctx, broObj);
