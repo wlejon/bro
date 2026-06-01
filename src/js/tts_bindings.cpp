@@ -406,11 +406,13 @@ static QwenTtsWrapper* qwenSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<QwenTtsWrapper>(ctx, this_val);
 }
 
-// Read opts.speaker / opts.language (both optional strings). Defaults match
-// QwenTts::synthesize: speaker "" (the model resolves the first preset only if
-// it has speakers), language "english".
+// Read opts.speaker / opts.language / opts.instruct (all optional strings).
+// Defaults match QwenTts::synthesize: speaker "" (the model resolves the first
+// preset only if it has speakers), language "english", instruct "" (no voice
+// instruction — the VoiceDesign description, or the 1.7B CustomVoice instruct).
 static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
-                              std::string& speaker, std::string& language) {
+                              std::string& speaker, std::string& language,
+                              std::string& instruct) {
     if (!JS_IsObject(opts)) return;
     JSValue sp = JS_GetPropertyStr(ctx, opts, "speaker");
     std::string s;
@@ -420,11 +422,17 @@ static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
     std::string l;
     if (JS_IsString(lg) && argStr(ctx, lg, l)) language = std::move(l);
     JS_FreeValue(ctx, lg);
+    JSValue ins = JS_GetPropertyStr(ctx, opts, "instruct");
+    std::string i;
+    if (JS_IsString(ins) && argStr(ctx, ins, i)) instruct = std::move(i);
+    JS_FreeValue(ctx, ins);
 }
 
 // qwen.synthesize(text, opts?) -> { samples, sampleRate }      (sync, blocking)
 //   opts.speaker:  preset speaker name (CustomVoice; e.g. 'serena').
 //   opts.language: 'english' (default), 'chinese', 'auto', ...
+//   opts.instruct: natural-language voice description (VoiceDesign; ignored by
+//                  the 0.6B CustomVoice checkpoint).
 //   The async, cancellable form is bro.tts.synthesize(qwen, text, opts).
 static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
                                   int argc, JSValueConst* argv) {
@@ -433,15 +441,23 @@ static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
     std::string text;
     if (argc < 1 || !argStr(ctx, argv[0], text))
         return JS_ThrowTypeError(ctx, "synthesize(text, opts?): text string required");
-    std::string speaker, language = "english";
-    if (argc >= 2) readQwenSynthOpts(ctx, argv[1], speaker, language);
+    std::string speaker, language = "english", instruct;
+    if (argc >= 2) readQwenSynthOpts(ctx, argv[1], speaker, language, instruct);
     try {
         brotensor::DeviceScope scope(w->device);
-        auto buf = w->qwen->synthesize(text, speaker, language);
+        auto buf = w->qwen->synthesize(text, speaker, language, instruct);
         return audioBufferToJs(ctx, buf);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesize: %s", e.what());
     }
+}
+
+// Marshal a std::vector<std::string> to a JS string[].
+static JSValue stringVecToJs(JSContext* ctx, const std::vector<std::string>& v) {
+    JSValue arr = JS_NewArray(ctx);
+    for (std::uint32_t i = 0; i < v.size(); ++i)
+        JS_SetPropertyUint32(ctx, arr, i, JS_NewString(ctx, v[i].c_str()));
+    return arr;
 }
 
 // speakers() -> string[]
@@ -450,11 +466,30 @@ static JSValue js_qwen_speakers(JSContext* ctx, JSValueConst this_val,
                                 int, JSValueConst*) {
     auto* w = qwenSelf(ctx, this_val);
     if (!w) return JS_ThrowTypeError(ctx, "speakers: not a QwenTts");
-    auto names = w->qwen->speakers();
-    JSValue arr = JS_NewArray(ctx);
-    for (std::uint32_t i = 0; i < names.size(); ++i)
-        JS_SetPropertyUint32(ctx, arr, i, JS_NewString(ctx, names[i].c_str()));
-    return arr;
+    return stringVecToJs(ctx, w->qwen->speakers());
+}
+
+// languages() -> string[]
+//   Selectable language names for synthesize() (dialects excluded; "auto" is
+//   always valid but not listed). Same for every variant.
+static JSValue js_qwen_languages(JSContext* ctx, JSValueConst this_val,
+                                 int, JSValueConst*) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "languages: not a QwenTts");
+    return stringVecToJs(ctx, w->qwen->languages());
+}
+
+// speakerDialect(name) -> string
+//   The dialect tag of a preset speaker ("sichuan_dialect" / "beijing_dialect"),
+//   or "" if the speaker is not a dialect voice / is unknown.
+static JSValue js_qwen_speaker_dialect(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "speakerDialect: not a QwenTts");
+    std::string name;
+    if (argc < 1 || !argStr(ctx, argv[0], name))
+        return JS_ThrowTypeError(ctx, "speakerDialect(name): name string required");
+    return JS_NewString(ctx, w->qwen->speaker_dialect(name).c_str());
 }
 
 static void registerQwenClass(JSContext* ctx) {
@@ -464,8 +499,10 @@ static void registerQwenClass(JSContext* ctx) {
         .get("variant",    [](QwenTtsWrapper* w) {
             return std::string(qwenVariantName(w->qwen->config().variant)); })
         .get("modelSize",  [](QwenTtsWrapper* w) { return w->qwen->config().model_size; })
-        .method_raw("synthesize", js_qwen_synthesize, 2)
-        .method_raw("speakers",   js_qwen_speakers,   0);
+        .method_raw("synthesize",     js_qwen_synthesize,      2)
+        .method_raw("speakers",       js_qwen_speakers,        0)
+        .method_raw("languages",      js_qwen_languages,       0)
+        .method_raw("speakerDialect", js_qwen_speaker_dialect, 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -926,6 +963,7 @@ struct QwenSynthJob {
     std::string        text;
     std::string        speaker;
     std::string        language = "english";
+    std::string        instruct;                  // VoiceDesign voice description
     std::vector<float> samples;                  // filled by work()
     int                sample_rate = 24000;       // filled by work()
     JSValue            onDone  = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
@@ -952,7 +990,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
 
     JSValue onDone = JS_UNDEFINED;
     if (argc >= 3 && JS_IsObject(argv[2])) {
-        readQwenSynthOpts(ctx, argv[2], job->speaker, job->language);
+        readQwenSynthOpts(ctx, argv[2], job->speaker, job->language, job->instruct);
         onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
     }
 
@@ -976,7 +1014,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
         auto buf = mw->qwen->synthesize(
-            job->text, job->speaker, job->language,
+            job->text, job->speaker, job->language, job->instruct,
             [&cancel] { return cancel.load(std::memory_order_acquire); });
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;

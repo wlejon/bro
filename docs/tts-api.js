@@ -12,9 +12,13 @@
  *   tests/smoke_voice_pipeline.js, which reads one from the model's ids.txt.)
  *
  *   Qwen3-TTS (loadQwen) — the 12 Hz multi-codebook model. Text-driven
- *   end-to-end: no phonemize() step, no voice pack. Pick a preset CustomVoice
- *   speaker by name (opts.speaker); synthesize() takes the raw string. See the
- *   "Qwen3-TTS" section at the bottom of this file.
+ *   end-to-end: no phonemize() step, no voice pack. Two variants, picked by the
+ *   checkpoint you load:
+ *     • CustomVoice — choose a preset speaker by name (opts.speaker).
+ *     • VoiceDesign — describe the voice in natural language (opts.instruct),
+ *       e.g. "a warm, low-pitched elderly storyteller". No presets.
+ *   synthesize() takes the raw string either way. See the "Qwen3-TTS" section at
+ *   the bottom of this file.
  *
  * bro.tts.synthesize(model, ...) is the async, cancellable entry point for both
  * — it dispatches on the model type (Kokoro vs QwenTts).
@@ -173,8 +177,9 @@ const handle = bro.tts.synthesize(kokoro, phonemeIds, voice, {
 //
 // Qwen3-TTS is text-driven end-to-end: no phonemize(), no voice pack. The model
 // runs its own Qwen-BPE tokenizer + an autoregressive Talker / Code Predictor
-// over a 12.5 Hz code stream, then a bundled codec decodes to 24 kHz mono. Pick
-// a voice by preset speaker name (CustomVoice). Like Kokoro it defaults to CUDA.
+// over a 12.5 Hz code stream, then a bundled codec decodes to 24 kHz mono. Voice
+// is chosen per variant: a preset speaker name (CustomVoice) or a natural-
+// language description (VoiceDesign). Like Kokoro it defaults to CUDA.
 
 /**
  * Load a Qwen3-TTS model from a weights directory.
@@ -191,10 +196,23 @@ const handle = bro.tts.synthesize(kokoro, phonemeIds, voice, {
  *
  * QwenTtsModel getters: .loaded, .sampleRate (24000), .variant
  * ('customvoice' | 'base' | 'voicedesign'), .modelSize ('0b6' | '1b7').
- * QwenTtsModel.speakers() -> string[]  (preset names; empty for non-CustomVoice).
+ * QwenTtsModel methods:
+ *   .speakers()           -> string[]  preset speaker names (CustomVoice; empty
+ *                                       for VoiceDesign / Base).
+ *   .languages()          -> string[]  selectable language names for opts.language
+ *                                       (dialects excluded; "auto" always valid).
+ *   .speakerDialect(name) -> string    a preset speaker's dialect tag
+ *                                       ("sichuan_dialect" / "beijing_dialect"),
+ *                                       or "" if it isn't a dialect voice.
  */
 const qwen = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice');
-// qwen.speakers() === ['serena', 'ethan', ...]; qwen.sampleRate === 24000
+// qwen.speakers()  === ['serena', 'vivian', 'ryan', ...]; qwen.sampleRate === 24000
+// qwen.languages() === ['english', 'chinese', 'german', ...]
+
+// VoiceDesign (1.7B) is loaded the same way; it just has no presets and takes a
+// description instead of a speaker (see synthesize opts.instruct below):
+// const vd = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/1.7B-voicedesign');
+// vd.variant === 'voicedesign'; vd.speakers() === []
 
 // Async load:
 // bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice', {
@@ -207,7 +225,11 @@ const qwen = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice')
  *
  * @param {string} text                  - the text to speak.
  * @param {Object} [opts]
- * @param {string} [opts.speaker]        - preset speaker name (see .speakers()).
+ * @param {string} [opts.speaker]        - preset speaker name (CustomVoice; see
+ *        .speakers()). Ignored by VoiceDesign.
+ * @param {string} [opts.instruct]       - natural-language voice description
+ *        (VoiceDesign), e.g. 'a warm, low-pitched elderly storyteller'. Ignored
+ *        by the 0.6B CustomVoice checkpoint.
  * @param {string} [opts.language='english'] - 'english' | 'chinese' | 'auto' | ...
  * @returns {{ samples: Float32Array, sampleRate: number }} - 24 kHz mono, [-1, 1].
  *
@@ -216,6 +238,10 @@ const qwen = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice')
  */
 const qout = qwen.synthesize('Hello there.', { speaker: 'serena', language: 'english' });
 console.log(`${qout.samples.length} samples @ ${qout.sampleRate} Hz`);
+
+// VoiceDesign: same call, but describe the voice instead of naming a speaker.
+// const vout = vd.synthesize('Hello there.',
+//     { instruct: 'a warm, low-pitched elderly storyteller', language: 'english' });
 
 /**
  * bro.tts.synthesize(qwen, text, opts) → AsyncHandle   (non-blocking, cancellable)
@@ -228,7 +254,8 @@ console.log(`${qout.samples.length} samples @ ${qout.sampleRate} Hz`);
  * @param {QwenTtsModel} qwen     - from loadQwen().
  * @param {string} text           - the text to speak.
  * @param {Object} [opts]
- * @param {string} [opts.speaker] - preset speaker name.
+ * @param {string} [opts.speaker]  - preset speaker name (CustomVoice).
+ * @param {string} [opts.instruct] - natural-language voice description (VoiceDesign).
  * @param {string} [opts.language='english']
  * @param {function} [opts.onDone] - onDone(result, info) on the JS thread, where
  *        result = { samples: Float32Array, sampleRate: number } and
