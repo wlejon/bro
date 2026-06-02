@@ -2487,6 +2487,24 @@ static JSValue js_sg_setTiltShift(JSContext* ctx, JSValueConst this_val, int arg
     return JS_UNDEFINED;
 }
 
+// setBloom({enabled, threshold, intensity, strength}) — HDR highlight glow.
+static JSValue js_sg_setBloom(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst opts = argv[0];
+    bool enabled = false;
+    JSValue ev = JS_GetPropertyStr(ctx, opts, "enabled");
+    if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
+    JS_FreeValue(ctx, ev);
+
+    double threshold = jsGetProp(ctx, opts, "threshold", 1.0);
+    double intensity = jsGetProp(ctx, opts, "intensity", 0.6);
+    double strength  = jsGetProp(ctx, opts, "strength",  2.0);
+    g->setBloom(enabled, (float)threshold, (float)intensity, (float)strength);
+    return JS_UNDEFINED;
+}
+
 // unprojectLocal(x, y) → { origin:[x,y,z], dir:[x,y,z] } | null
 static JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -3315,6 +3333,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setCamera", js_sg_setCamera, 1)
         .method_raw("setFog", js_sg_setFog, 1)
         .method_raw("setTiltShift", js_sg_setTiltShift, 1)
+        .method_raw("setBloom", js_sg_setBloom, 1)
         .method_raw("setEnvironment", js_sg_setEnvironment, 1)
         .method_raw("syncPhysics", js_sg_syncPhysics, 0)
         .method_raw("raycast", js_sg_raycast, 2)

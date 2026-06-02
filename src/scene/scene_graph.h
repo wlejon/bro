@@ -246,6 +246,21 @@ public:
     }
     bool tiltShiftEnabled() const { return tiltEnabled_; }
 
+    /// HDR bloom: bright areas (luminance above `threshold`) bleed a soft glow,
+    /// added back in HDR before tonemap so highlights bloom filmically. Off by
+    /// default (intensity 0 leaves the tonemap pass unchanged).
+    ///   enabled   — toggle the bright-pass + blur.
+    ///   threshold — luminance above which a fragment contributes (HDR, ~1.0+).
+    ///   intensity — additive scale of the blurred bloom in HDR.
+    ///   strength  — blur radius multiplier (texels at half-res).
+    void setBloom(bool enabled, float threshold, float intensity, float strength) {
+        bloomEnabled_   = enabled;
+        bloomThreshold_ = threshold;
+        bloomIntensity_ = intensity;
+        bloomStrength_  = strength;
+    }
+    bool bloomEnabled() const { return bloomEnabled_; }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.
@@ -352,6 +367,13 @@ private:
     GLuint finalColorTex() const {
         return (tiltActive_ && postColorTex_) ? postColorTex_ : tonemapColorTex_;
     }
+
+    // --- Bloom pre-pass (HDR, runs before tonemap) ---
+    void ensureBloomPipeline();
+    void ensureBloomFBOs();
+    void destroyBloomFBOs();
+    // Bright-pass + blur into bloomTex_[0]; returns true if a glow is ready.
+    bool runBloomPrePass();
 
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
@@ -603,6 +625,8 @@ private:
     GLint tmUExposure_ = -1;
     GLint tmUGamma_ = -1;
     GLint tmUMode_ = -1;
+    GLint tmUBloomTex_ = -1;
+    GLint tmUBloomIntensity_ = -1;
 
     // --- Tilt-shift DOF post pass ---
     // Params (see setTiltShift). Disabled by default so the pass is a no-op
@@ -637,6 +661,22 @@ private:
     GLint  tsUFeather_     = -1;
     GLint  tsUSaturation_  = -1;
     GLint  tsUContrast_    = -1;
+
+    // --- HDR bloom pre-pass ---
+    bool  bloomEnabled_   = false;
+    float bloomThreshold_ = 1.0f;
+    float bloomIntensity_ = 0.0f;
+    float bloomStrength_  = 2.0f;
+    bool  bloomActive_    = false;   // bloom ready in bloomTex_[0] this frame
+
+    // Half-res HDR (RGBA16F) bright-pass + ping-pong blur.
+    GLuint bloomFBO_[2] = {0, 0};
+    GLuint bloomTex_[2] = {0, 0};
+    int    bloomWidth_  = 0, bloomHeight_ = 0;
+
+    GLuint bloomBrightProgram_ = 0;
+    GLint  bbpUTex_       = -1;
+    GLint  bbpUThreshold_ = -1;
 
     // --- Shadow pipeline state ---
     // Hard cap: 16 atlas tiles. A typical scene budget is 1 directional

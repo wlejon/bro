@@ -638,6 +638,8 @@ static const char* kTonemapFragSrc = R"(
 #version 330 core
 in vec2 vUV;
 uniform sampler2D uTex;
+uniform sampler2D uBloomTex;
+uniform float uBloomIntensity;   // 0 = bloom off
 uniform float uExposure;
 uniform float uGamma;
 uniform int   uMode;   // 0 = linear clamp, 1 = Reinhard, 2 = ACES
@@ -655,7 +657,9 @@ vec3 aces(vec3 x) {
 
 void main() {
     vec4 src = texture(uTex, vUV);
-    vec3 c = src.rgb * uExposure;
+    // Add the blurred bright-pass in HDR so highlights bloom before tonemap.
+    vec3 hdr = src.rgb + texture(uBloomTex, vUV).rgb * uBloomIntensity;
+    vec3 c = hdr * uExposure;
     if (uMode == 2)      c = aces(c);
     else if (uMode == 1) c = c / (c + vec3(1.0));
     else                 c = clamp(c, 0.0, 1.0);
@@ -738,6 +742,25 @@ void main() {
     c = mix(vec3(luma), c, uSaturation);
     c = (c - 0.5) * uContrast + 0.5;
     FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+)";
+
+// Bloom bright-pass: keep the HDR energy above a luminance threshold, soft
+// knee, write HDR. Blurred afterward with the shared separable Gaussian and
+// added back in the tonemap pass. Shares kPostVertSrc.
+static const char* kBloomBrightFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+uniform float uThreshold;
+out vec4 FragColor;
+
+void main() {
+    vec3 c = texture(uTex, vUV).rgb;
+    float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    // Soft knee around the threshold so the bloom onset isn't a hard edge.
+    float k = clamp((luma - uThreshold) / max(uThreshold, 1e-3), 0.0, 1.0);
+    FragColor = vec4(c * k, 1.0);
 }
 )";
 
@@ -1286,6 +1309,8 @@ SceneGraph::~SceneGraph() {
     destroyTiltShiftFBOs();
     if (blurProgram_) { glDeleteProgram(blurProgram_); blurProgram_ = 0; }
     if (tiltProgram_) { glDeleteProgram(tiltProgram_); tiltProgram_ = 0; }
+    destroyBloomFBOs();
+    if (bloomBrightProgram_) { glDeleteProgram(bloomBrightProgram_); bloomBrightProgram_ = 0; }
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
     if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }
@@ -1974,6 +1999,8 @@ void SceneGraph::ensureTonemapPipeline() {
     tmUExposure_ = glGetUniformLocation(tonemapProgram_, "uExposure");
     tmUGamma_    = glGetUniformLocation(tonemapProgram_, "uGamma");
     tmUMode_     = glGetUniformLocation(tonemapProgram_, "uMode");
+    tmUBloomTex_       = glGetUniformLocation(tonemapProgram_, "uBloomTex");
+    tmUBloomIntensity_ = glGetUniformLocation(tonemapProgram_, "uBloomIntensity");
 
     static const float quadVerts[12] = {
         -1.0f, -1.0f,  1.0f, -1.0f,  1.0f,  1.0f,
@@ -2075,6 +2102,10 @@ void SceneGraph::runTonemapPass() {
     ensureTonemapFBO();
     if (!tonemapProgram_ || !tonemapFBO_) return;
 
+    // Bright-pass + blur the HDR mesh target before resolving, so the tonemap
+    // draw can add the glow in HDR. Leaves bloomActive_/bloomTex_ ready.
+    const bool haveBloom = runBloomPrePass();
+
     glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
     glViewport(0, 0, tonemapFBOWidth_, tonemapFBOHeight_);
     glDisable(GL_DEPTH_TEST);
@@ -2086,6 +2117,12 @@ void SceneGraph::runTonemapPass() {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, meshColorTex_);
     glUniform1i(tmUTex_, 0);
+    // Bloom on unit 1 — bind a valid texture even when off (intensity 0).
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, haveBloom ? bloomTex_[0] : meshColorTex_);
+    glUniform1i(tmUBloomTex_, 1);
+    glUniform1f(tmUBloomIntensity_, haveBloom ? bloomIntensity_ : 0.0f);
+    glActiveTexture(GL_TEXTURE0);
     glUniform1f(tmUExposure_, exposure_);
     glUniform1f(tmUGamma_, gamma_);
     glUniform1i(tmUMode_, static_cast<int>(toneMap_));
@@ -2095,6 +2132,123 @@ void SceneGraph::runTonemapPass() {
     glBindVertexArray(0);
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ---------------------------------------------------------------------------
+// HDR bloom pre-pass
+// ---------------------------------------------------------------------------
+
+void SceneGraph::ensureBloomPipeline() {
+    ensureTiltShiftPipeline();   // shares the separable-blur program + quad VAO
+    if (bloomBrightProgram_) return;
+
+    GLuint vs = compileShader(GL_VERTEX_SHADER,   kPostVertSrc);
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kBloomBrightFragSrc);
+    if (vs && fs) {
+        bloomBrightProgram_ = glCreateProgram();
+        glAttachShader(bloomBrightProgram_, vs);
+        glAttachShader(bloomBrightProgram_, fs);
+        glLinkProgram(bloomBrightProgram_);
+        GLint ok = 0;
+        glGetProgramiv(bloomBrightProgram_, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            char log[512];
+            glGetProgramInfoLog(bloomBrightProgram_, sizeof(log), nullptr, log);
+            LOG_ERROR("Bloom bright-pass link error: %s", log);
+            glDeleteProgram(bloomBrightProgram_);
+            bloomBrightProgram_ = 0;
+        } else {
+            bbpUTex_       = glGetUniformLocation(bloomBrightProgram_, "uTex");
+            bbpUThreshold_ = glGetUniformLocation(bloomBrightProgram_, "uThreshold");
+        }
+    }
+    if (vs) glDeleteShader(vs);
+    if (fs) glDeleteShader(fs);
+}
+
+void SceneGraph::ensureBloomFBOs() {
+    if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return;
+    const int hw = std::max(1, canvasWidth_ / 2);
+    const int hh = std::max(1, canvasHeight_ / 2);
+    if (bloomFBO_[0] && bloomWidth_ == hw && bloomHeight_ == hh) return;
+    destroyBloomFBOs();
+
+    bloomWidth_  = hw;
+    bloomHeight_ = hh;
+    for (int i = 0; i < 2; ++i) {
+        glGenFramebuffers(1, &bloomFBO_[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO_[i]);
+        glGenTextures(1, &bloomTex_[i]);
+        glBindTexture(GL_TEXTURE_2D, bloomTex_[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, hw, hh, 0,
+                     GL_RGBA, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               bloomTex_[i], 0);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("Bloom FBO %d incomplete: 0x%x", i, status);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneGraph::destroyBloomFBOs() {
+    for (int i = 0; i < 2; ++i) {
+        if (bloomTex_[i]) { glDeleteTextures(1, &bloomTex_[i]); bloomTex_[i] = 0; }
+        if (bloomFBO_[i]) { glDeleteFramebuffers(1, &bloomFBO_[i]); bloomFBO_[i] = 0; }
+    }
+    bloomWidth_ = bloomHeight_ = 0;
+}
+
+bool SceneGraph::runBloomPrePass() {
+    bloomActive_ = false;
+    if (!bloomEnabled_ || bloomIntensity_ <= 0.0f || !meshColorTex_) return false;
+
+    ensureBloomPipeline();
+    ensureBloomFBOs();
+    if (!bloomBrightProgram_ || !blurProgram_ || !bloomFBO_[0]) return false;
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, bloomWidth_, bloomHeight_);
+    glBindVertexArray(tonemapVAO_);
+    glActiveTexture(GL_TEXTURE0);
+
+    // Bright-pass: HDR mesh → bloomTex_[0].
+    glUseProgram(bloomBrightProgram_);
+    glUniform1i(bbpUTex_, 0);
+    glUniform1f(bbpUThreshold_, bloomThreshold_);
+    glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO_[0]);
+    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Separable Gaussian (shared blur program): [0] -H-> [1] -V-> [0].
+    const float rx = bloomStrength_ / static_cast<float>(bloomWidth_);
+    const float ry = bloomStrength_ / static_cast<float>(bloomHeight_);
+    glUseProgram(blurProgram_);
+    glUniform1i(blUTex_, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO_[1]);
+    glBindTexture(GL_TEXTURE_2D, bloomTex_[0]);
+    glUniform2f(blUDir_, rx, 0.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO_[0]);
+    glBindTexture(GL_TEXTURE_2D, bloomTex_[1]);
+    glUniform2f(blUDir_, 0.0f, ry);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    bloomActive_ = true;
+    return true;
 }
 
 // ---------------------------------------------------------------------------

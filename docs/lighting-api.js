@@ -18,8 +18,9 @@
 // Their world position comes from the node transform; Directional and Spot
 // lights additionally use an explicit `direction` vector.
 //
-// Bloom and clustered light culling are deferred to later milestones. See
-// scene-api.js for the non-lighting surface.
+// HDR bloom is available via scene.setBloom (see scene-api.js); clustered
+// light culling is deferred to a later milestone. See scene-api.js for the
+// non-lighting surface, including the tilt-shift DOF post pass.
 //
 // =============================================================================
 

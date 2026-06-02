@@ -451,6 +451,20 @@ class SceneGraph {
    */
   setTiltShift(opts) {}
 
+  /**
+   * HDR bloom. Fragments whose HDR luminance exceeds `threshold` bleed a soft
+   * glow that's added back in HDR before tonemap, so bright emissives and
+   * specular hits bloom filmically. Pair with emissive materials or a bright
+   * sun. Off by default (enabled=false leaves the tonemap pass untouched).
+   *
+   * @param {Object} opts
+   * @param {boolean} [opts.enabled=false]   - toggle the bright-pass + blur.
+   * @param {number}  [opts.threshold=1.0]   - HDR luminance cutoff (~1.0+).
+   * @param {number}  [opts.intensity=0.6]   - additive scale of the glow.
+   * @param {number}  [opts.strength=2.0]    - blur radius multiplier.
+   */
+  setBloom(opts) {}
+
   /** Read-only view matrix as 16-element column-major array. */
   get viewMatrix() {}
 
