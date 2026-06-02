@@ -1,6 +1,7 @@
 #include "js/worker.h"
 #include "util/asset_mounts.h"
 #include "js/ai_bindings.h"
+#include "js/gpu_bindings.h"
 #include "js/async_job.h"
 #include "js/diffusion_bindings.h"
 #include "js/lm_bindings.h"
@@ -237,7 +238,9 @@ void Worker::threadFunc()
     // No engine dependency; all state lives on JS-owned wrapper objects. ---
     AIBindings::install(ctx);
 
-    // --- 3b''. Install bro.tensor (GPU tensor + ops, brotensor sibling). ---
+    // --- 3b''. Install bro.gpu (runtime backend probe) + bro.tensor (GPU
+    // tensor + ops, brotensor sibling). ---
+    installGpuBindings(ctx);
     installTensorBindings(ctx);
 
     // --- 3b'''. Install bro.diffusion (diffusion-model inference, brodiffusion

@@ -45,6 +45,7 @@
 #include "js/math_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
+#include "js/gpu_bindings.h"
 #include "js/diffusion_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
@@ -189,6 +190,11 @@ Engine::Engine(const EngineConfig& config)
 
     // AI bindings (game agent: navgrid, pathfinding, steering — all modes)
     js::AIBindings::install(jsRuntime_->getContext());
+
+    // bro.gpu (runtime backend probe via brotensor). Always present — reports
+    // whether the ML loaders below will default to a GPU or fall back to CPU,
+    // so apps can warn before loading a large model on CPU.
+    js::installGpuBindings(jsRuntime_->getContext());
 
     // bro.tensor (GPU tensor + ops via brotensor sibling). Real bindings when
     // a backend is enabled at configure time; stub `{ available: false }` otherwise.

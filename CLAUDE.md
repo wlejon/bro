@@ -147,6 +147,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/mic-api.js` | `bro.mic` — live mic chunk consumer: fixed-size frames (chunkFrames) from broaudio's mic tap, per-chunk peak/RMS, resample + AGC |
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
+| `docs/gpu-api.js` | `bro.gpu` — always-present runtime backend probe (brotensor): `available`, `backend` ('cuda'/'metal'/'cpu'), `devices`. Honest signal for "will an ML model run on GPU or fall back to CPU" — gate large-model loads on it |
 | `docs/tensor-api.js` | `bro.tensor` — GPU tensor + ops (brotensor sibling, CUDA / Metal): GpuTensor, dense/elementwise/softmax/layernorm/attention/MHA/embedding/concat/optim ops, batched inference variants |
 | `docs/diffusion-api.js` | `bro.diffusion` — diffusion-model inference (brodiffusion sibling): Pipeline, one-shot generate, step-wise prime/stepOnce/decode, cross-attention trace + logit-bias steering, LoRA |
 | `docs/lm-api.js` | `bro.lm` — Qwen3 text generation (brolm sibling): loadQwen → model + tokenizer, KV cache, chat templating, sampled/greedy generate. CUDA by default |
