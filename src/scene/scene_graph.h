@@ -222,6 +222,30 @@ public:
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }
 
+    /// Screen-space tilt-shift depth-of-field, applied after tonemap on the
+    /// LDR result. A horizontal band stays sharp; the scene blurs toward the
+    /// top and bottom edges, the cue that reads as "miniature". Off by default
+    /// (enabled=false leaves the pipeline untouched).
+    ///   enabled      — toggle the whole pass.
+    ///   focusCenter  — band center in [0,1] vertical screen space (0.5 = mid).
+    ///   focusWidth   — half-height of the fully-sharp band (UV units).
+    ///   feather      — blur ramp distance past the band edge (UV units).
+    ///   strength     — blur radius multiplier (texels at half-res).
+    ///   saturation   — chroma boost for the toy look (1.0 = unchanged).
+    ///   contrast     — contrast boost (1.0 = unchanged).
+    void setTiltShift(bool enabled, float focusCenter, float focusWidth,
+                      float feather, float strength, float saturation,
+                      float contrast) {
+        tiltEnabled_     = enabled;
+        tiltFocusCenter_ = focusCenter;
+        tiltFocusWidth_  = focusWidth;
+        tiltFeather_     = feather;
+        tiltStrength_    = strength;
+        tiltSaturation_  = saturation;
+        tiltContrast_    = contrast;
+    }
+    bool tiltShiftEnabled() const { return tiltEnabled_; }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.
@@ -317,6 +341,17 @@ private:
     void ensureTonemapFBO();
     void destroyTonemapFBO();
     void runTonemapPass();
+
+    // --- Tilt-shift DOF post pass (lazy init) ---
+    void ensureTiltShiftPipeline();
+    void ensureTiltShiftFBOs();
+    void destroyTiltShiftFBOs();
+    void runTiltShiftPass();
+    // Texture the compositor / readback should consume this frame: the
+    // tilt-shift output when the pass ran, else the raw tonemap output.
+    GLuint finalColorTex() const {
+        return (tiltActive_ && postColorTex_) ? postColorTex_ : tonemapColorTex_;
+    }
 
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
@@ -568,6 +603,40 @@ private:
     GLint tmUExposure_ = -1;
     GLint tmUGamma_ = -1;
     GLint tmUMode_ = -1;
+
+    // --- Tilt-shift DOF post pass ---
+    // Params (see setTiltShift). Disabled by default so the pass is a no-op
+    // and the compositor reads tonemapColorTex_ unchanged.
+    bool  tiltEnabled_     = false;
+    float tiltFocusCenter_ = 0.5f;
+    float tiltFocusWidth_  = 0.12f;
+    float tiltFeather_     = 0.25f;
+    float tiltStrength_    = 2.0f;
+    float tiltSaturation_  = 1.0f;
+    float tiltContrast_    = 1.0f;
+    // Set true by runTiltShiftPass when it produced postColorTex_ this frame;
+    // finalColorTex() keys off it. Cleared when the pass is skipped.
+    bool  tiltActive_      = false;
+
+    // Separable-blur ping-pong (half-res) + full-res composite target.
+    GLuint blurFBO_[2]   = {0, 0};
+    GLuint blurTex_[2]   = {0, 0};
+    int    blurWidth_    = 0, blurHeight_ = 0;
+    GLuint postFBO_      = 0;
+    GLuint postColorTex_ = 0;
+    int    postWidth_    = 0, postHeight_ = 0;
+
+    GLuint blurProgram_  = 0;
+    GLint  blUTex_       = -1;
+    GLint  blUDir_       = -1;   // texel step * radius (vec2)
+    GLuint tiltProgram_  = 0;
+    GLint  tsUSharp_     = -1;
+    GLint  tsUBlur_      = -1;
+    GLint  tsUFocusCenter_ = -1;
+    GLint  tsUFocusWidth_  = -1;
+    GLint  tsUFeather_     = -1;
+    GLint  tsUSaturation_  = -1;
+    GLint  tsUContrast_    = -1;
 
     // --- Shadow pipeline state ---
     // Hard cap: 16 atlas tiles. A typical scene budget is 1 directional

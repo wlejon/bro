@@ -666,6 +666,81 @@ void main() {
 }
 )";
 
+// -----------------------------------------------------------------------------
+// Tilt-shift DOF: a 9-tap separable Gaussian (ping-pong, half-res) plus a
+// composite that lerps sharp→blurred by vertical distance from a focus band
+// and applies a saturation/contrast boost for the miniature look. All in LDR,
+// after tonemap. The fullscreen-quad VAO is shared with the tonemap pass
+// (same `layout(location=0) in vec2 aPos`).
+// -----------------------------------------------------------------------------
+
+static const char* kPostVertSrc = R"(
+#version 330 core
+layout(location = 0) in vec2 aPos;
+out vec2 vUV;
+void main() {
+    vUV = aPos * 0.5 + 0.5;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+static const char* kBlurFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+uniform vec2 uDir;        // texel step * radius, along blur axis
+out vec4 FragColor;
+
+// Normalized 9-tap Gaussian (sigma ~ 2).
+const float w0 = 0.2270270270;
+const float w1 = 0.1945945946;
+const float w2 = 0.1216216216;
+const float w3 = 0.0540540541;
+const float w4 = 0.0162162162;
+
+void main() {
+    vec3 c = texture(uTex, vUV).rgb * w0;
+    c += texture(uTex, vUV + uDir * 1.0).rgb * w1;
+    c += texture(uTex, vUV - uDir * 1.0).rgb * w1;
+    c += texture(uTex, vUV + uDir * 2.0).rgb * w2;
+    c += texture(uTex, vUV - uDir * 2.0).rgb * w2;
+    c += texture(uTex, vUV + uDir * 3.0).rgb * w3;
+    c += texture(uTex, vUV - uDir * 3.0).rgb * w3;
+    c += texture(uTex, vUV + uDir * 4.0).rgb * w4;
+    c += texture(uTex, vUV - uDir * 4.0).rgb * w4;
+    FragColor = vec4(c, 1.0);
+}
+)";
+
+static const char* kTiltCompositeFragSrc = R"(
+#version 330 core
+in vec2 vUV;
+uniform sampler2D uSharp;
+uniform sampler2D uBlur;
+uniform float uFocusCenter;
+uniform float uFocusWidth;
+uniform float uFeather;
+uniform float uSaturation;
+uniform float uContrast;
+out vec4 FragColor;
+
+void main() {
+    vec3 sharp = texture(uSharp, vUV).rgb;
+    vec3 blur  = texture(uBlur,  vUV).rgb;
+
+    // Vertical distance from the sharp band → blur weight.
+    float d = abs(vUV.y - uFocusCenter);
+    float t = smoothstep(uFocusWidth, uFocusWidth + uFeather, d);
+    vec3 c = mix(sharp, blur, t);
+
+    // Miniature grade: punch chroma, then contrast around mid-gray.
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    c = mix(vec3(luma), c, uSaturation);
+    c = (c - 0.5) * uContrast + 0.5;
+    FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+}
+)";
+
 // ---------------------------------------------------------------------------
 // Equirectangular HDR → cubemap conversion. One vertex shader (NDC quad),
 // one fragment shader that's invoked once per cube face. uFace selects the
@@ -1208,6 +1283,9 @@ SceneGraph::~SceneGraph() {
     if (tonemapProgram_) { glDeleteProgram(tonemapProgram_); tonemapProgram_ = 0; }
     if (tonemapVBO_) { glDeleteBuffers(1, &tonemapVBO_); tonemapVBO_ = 0; }
     if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
+    destroyTiltShiftFBOs();
+    if (blurProgram_) { glDeleteProgram(blurProgram_); blurProgram_ = 0; }
+    if (tiltProgram_) { glDeleteProgram(tiltProgram_); tiltProgram_ = 0; }
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
     if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }
@@ -1957,9 +2035,13 @@ void SceneGraph::destroyTonemapFBO() {
 }
 
 std::vector<uint8_t> SceneGraph::readTonemapPixelsRGBA(int& outW, int& outH) {
-    outW = tonemapFBOWidth_;
-    outH = tonemapFBOHeight_;
-    if (!tonemapFBO_ || outW <= 0 || outH <= 0) {
+    // Prefer the tilt-shift output when that pass ran this frame, so direct
+    // readback matches what the compositor shows.
+    const bool usePost = tiltActive_ && postFBO_;
+    const GLuint readFBO = usePost ? postFBO_ : tonemapFBO_;
+    outW = usePost ? postWidth_  : tonemapFBOWidth_;
+    outH = usePost ? postHeight_ : tonemapFBOHeight_;
+    if (!readFBO || outW <= 0 || outH <= 0) {
         outW = outH = 0;
         return {};
     }
@@ -1967,7 +2049,7 @@ std::vector<uint8_t> SceneGraph::readTonemapPixelsRGBA(int& outW, int& outH) {
     std::vector<uint8_t> px(static_cast<size_t>(outW) * outH * 4);
     GLint prevReadFBO = 0;
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevReadFBO);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, tonemapFBO_);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, readFBO);
     GLint prevAlign = 4;
     glGetIntegerv(GL_PACK_ALIGNMENT, &prevAlign);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -2013,6 +2095,191 @@ void SceneGraph::runTonemapPass() {
     glBindVertexArray(0);
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Tilt-shift DOF post pass
+// ---------------------------------------------------------------------------
+
+void SceneGraph::ensureTiltShiftPipeline() {
+    if (blurProgram_ && tiltProgram_) return;
+
+    if (!blurProgram_) {
+        GLuint vs = compileShader(GL_VERTEX_SHADER,   kPostVertSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, kBlurFragSrc);
+        if (vs && fs) {
+            blurProgram_ = glCreateProgram();
+            glAttachShader(blurProgram_, vs);
+            glAttachShader(blurProgram_, fs);
+            glLinkProgram(blurProgram_);
+            GLint ok = 0;
+            glGetProgramiv(blurProgram_, GL_LINK_STATUS, &ok);
+            if (!ok) {
+                char log[512];
+                glGetProgramInfoLog(blurProgram_, sizeof(log), nullptr, log);
+                LOG_ERROR("Blur program link error: %s", log);
+                glDeleteProgram(blurProgram_);
+                blurProgram_ = 0;
+            } else {
+                blUTex_ = glGetUniformLocation(blurProgram_, "uTex");
+                blUDir_ = glGetUniformLocation(blurProgram_, "uDir");
+            }
+        }
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+    }
+
+    if (!tiltProgram_) {
+        GLuint vs = compileShader(GL_VERTEX_SHADER,   kPostVertSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, kTiltCompositeFragSrc);
+        if (vs && fs) {
+            tiltProgram_ = glCreateProgram();
+            glAttachShader(tiltProgram_, vs);
+            glAttachShader(tiltProgram_, fs);
+            glLinkProgram(tiltProgram_);
+            GLint ok = 0;
+            glGetProgramiv(tiltProgram_, GL_LINK_STATUS, &ok);
+            if (!ok) {
+                char log[512];
+                glGetProgramInfoLog(tiltProgram_, sizeof(log), nullptr, log);
+                LOG_ERROR("Tilt-shift program link error: %s", log);
+                glDeleteProgram(tiltProgram_);
+                tiltProgram_ = 0;
+            } else {
+                tsUSharp_       = glGetUniformLocation(tiltProgram_, "uSharp");
+                tsUBlur_        = glGetUniformLocation(tiltProgram_, "uBlur");
+                tsUFocusCenter_ = glGetUniformLocation(tiltProgram_, "uFocusCenter");
+                tsUFocusWidth_  = glGetUniformLocation(tiltProgram_, "uFocusWidth");
+                tsUFeather_     = glGetUniformLocation(tiltProgram_, "uFeather");
+                tsUSaturation_  = glGetUniformLocation(tiltProgram_, "uSaturation");
+                tsUContrast_    = glGetUniformLocation(tiltProgram_, "uContrast");
+            }
+        }
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+    }
+}
+
+void SceneGraph::ensureTiltShiftFBOs() {
+    if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return;
+
+    const int hw = std::max(1, canvasWidth_ / 2);
+    const int hh = std::max(1, canvasHeight_ / 2);
+
+    if (blurFBO_[0] && blurWidth_ == hw && blurHeight_ == hh &&
+        postFBO_ && postWidth_ == canvasWidth_ && postHeight_ == canvasHeight_) {
+        return;
+    }
+    destroyTiltShiftFBOs();
+
+    // Half-res ping-pong blur targets.
+    blurWidth_  = hw;
+    blurHeight_ = hh;
+    for (int i = 0; i < 2; ++i) {
+        glGenFramebuffers(1, &blurFBO_[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, blurFBO_[i]);
+        glGenTextures(1, &blurTex_[i]);
+        glBindTexture(GL_TEXTURE_2D, blurTex_[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, hw, hh, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               blurTex_[i], 0);
+    }
+
+    // Full-res composite target.
+    postWidth_  = canvasWidth_;
+    postHeight_ = canvasHeight_;
+    glGenFramebuffers(1, &postFBO_);
+    glBindFramebuffer(GL_FRAMEBUFFER, postFBO_);
+    glGenTextures(1, &postColorTex_);
+    glBindTexture(GL_TEXTURE_2D, postColorTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, postWidth_, postHeight_, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           postColorTex_, 0);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOG_ERROR("Tilt-shift FBO incomplete: 0x%x", status);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneGraph::destroyTiltShiftFBOs() {
+    for (int i = 0; i < 2; ++i) {
+        if (blurTex_[i]) { glDeleteTextures(1, &blurTex_[i]); blurTex_[i] = 0; }
+        if (blurFBO_[i]) { glDeleteFramebuffers(1, &blurFBO_[i]); blurFBO_[i] = 0; }
+    }
+    if (postColorTex_) { glDeleteTextures(1, &postColorTex_); postColorTex_ = 0; }
+    if (postFBO_)      { glDeleteFramebuffers(1, &postFBO_); postFBO_ = 0; }
+    blurWidth_ = blurHeight_ = 0;
+    postWidth_ = postHeight_ = 0;
+}
+
+void SceneGraph::runTiltShiftPass() {
+    tiltActive_ = false;
+    if (!tiltEnabled_ || !tonemapColorTex_) return;
+
+    ensureTiltShiftPipeline();
+    ensureTiltShiftFBOs();
+    if (!blurProgram_ || !tiltProgram_ || !postFBO_ || !blurFBO_[0]) return;
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindVertexArray(tonemapVAO_);
+
+    // --- Downsample + separable Gaussian (sharp → blurTex_[1]) -------------
+    const float rx = tiltStrength_ / static_cast<float>(blurWidth_);
+    const float ry = tiltStrength_ / static_cast<float>(blurHeight_);
+    glUseProgram(blurProgram_);
+    glUniform1i(blUTex_, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glViewport(0, 0, blurWidth_, blurHeight_);
+
+    // Horizontal: full-res tonemap → blurTex_[0]
+    glBindFramebuffer(GL_FRAMEBUFFER, blurFBO_[0]);
+    glBindTexture(GL_TEXTURE_2D, tonemapColorTex_);
+    glUniform2f(blUDir_, rx, 0.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Vertical: blurTex_[0] → blurTex_[1]
+    glBindFramebuffer(GL_FRAMEBUFFER, blurFBO_[1]);
+    glBindTexture(GL_TEXTURE_2D, blurTex_[0]);
+    glUniform2f(blUDir_, 0.0f, ry);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // --- Composite (sharp + blur → postColorTex_) --------------------------
+    glUseProgram(tiltProgram_);
+    glBindFramebuffer(GL_FRAMEBUFFER, postFBO_);
+    glViewport(0, 0, postWidth_, postHeight_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tonemapColorTex_);
+    glUniform1i(tsUSharp_, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, blurTex_[1]);
+    glUniform1i(tsUBlur_, 1);
+    glUniform1f(tsUFocusCenter_, tiltFocusCenter_);
+    glUniform1f(tsUFocusWidth_, tiltFocusWidth_);
+    glUniform1f(tsUFeather_, tiltFeather_);
+    glUniform1f(tsUSaturation_, tiltSaturation_);
+    glUniform1f(tsUContrast_, tiltContrast_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    tiltActive_ = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -3522,6 +3789,12 @@ void SceneGraph::render() {
                 glUseProgram(0);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
             }
+
+            // --- Tilt-shift DOF post pass ------------------------------------
+            // Runs on the finished LDR frame (tonemap + any overlay) and, when
+            // enabled, produces postColorTex_ for the compositor via
+            // finalColorTex(). No-op (clears tiltActive_) when disabled.
+            runTiltShiftPass();
         }
     }
 
@@ -3550,7 +3823,7 @@ void SceneGraph::render() {
     // We hand over the tonemapped LDR texture; if tonemap hasn't run (no
     // 3D content this frame) we pass 0 to clear.
     if (fboTexCb_) {
-        fboTexCb_(hasMeshContent_ ? tonemapColorTex_ : 0);
+        fboTexCb_(hasMeshContent_ ? finalColorTex() : 0);
     }
 }
 

@@ -432,6 +432,25 @@ class SceneGraph {
    */
   setFog(opts) {}
 
+  /**
+   * Screen-space tilt-shift depth-of-field — the "miniature" / toy-model look.
+   * Applied as a post pass on the tonemapped LDR frame: a horizontal band stays
+   * sharp while the scene blurs toward the top and bottom edges, with an
+   * optional saturation/contrast push for the candy-diorama feel. Reads best on
+   * a high, distant, looking-down camera. Off by default; pass { enabled: false }
+   * (or omit `enabled`) to disable.
+   *
+   * @param {Object} opts
+   * @param {boolean} [opts.enabled=false]    - toggle the whole pass.
+   * @param {number}  [opts.focusCenter=0.5]  - sharp-band center, 0 (bottom) → 1 (top).
+   * @param {number}  [opts.focusWidth=0.12]  - half-height of the fully-sharp band (UV units).
+   * @param {number}  [opts.feather=0.25]     - blur ramp distance past the band edge (UV units).
+   * @param {number}  [opts.strength=2.0]     - blur radius multiplier.
+   * @param {number}  [opts.saturation=1.0]   - chroma boost (1.0 = unchanged).
+   * @param {number}  [opts.contrast=1.0]     - contrast boost (1.0 = unchanged).
+   */
+  setTiltShift(opts) {}
+
   /** Read-only view matrix as 16-element column-major array. */
   get viewMatrix() {}
 

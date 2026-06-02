@@ -2462,6 +2462,31 @@ static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
+// setTiltShift({enabled, focusCenter, focusWidth, feather, strength,
+//               saturation, contrast}) — screen-space miniature DOF.
+// Passing { enabled: false } (or omitting enabled) turns the pass off.
+static JSValue js_sg_setTiltShift(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst opts = argv[0];
+    bool enabled = false;
+    JSValue ev = JS_GetPropertyStr(ctx, opts, "enabled");
+    if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
+    JS_FreeValue(ctx, ev);
+
+    double focusCenter = jsGetProp(ctx, opts, "focusCenter", 0.5);
+    double focusWidth  = jsGetProp(ctx, opts, "focusWidth",  0.12);
+    double feather     = jsGetProp(ctx, opts, "feather",     0.25);
+    double strength    = jsGetProp(ctx, opts, "strength",    2.0);
+    double saturation  = jsGetProp(ctx, opts, "saturation",  1.0);
+    double contrast    = jsGetProp(ctx, opts, "contrast",    1.0);
+    g->setTiltShift(enabled, (float)focusCenter, (float)focusWidth,
+                    (float)feather, (float)strength, (float)saturation,
+                    (float)contrast);
+    return JS_UNDEFINED;
+}
+
 // unprojectLocal(x, y) → { origin:[x,y,z], dir:[x,y,z] } | null
 static JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -3289,6 +3314,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("destroyNode", js_sg_destroyNode, 1)
         .method_raw("setCamera", js_sg_setCamera, 1)
         .method_raw("setFog", js_sg_setFog, 1)
+        .method_raw("setTiltShift", js_sg_setTiltShift, 1)
         .method_raw("setEnvironment", js_sg_setEnvironment, 1)
         .method_raw("syncPhysics", js_sg_syncPhysics, 0)
         .method_raw("raycast", js_sg_raycast, 2)
