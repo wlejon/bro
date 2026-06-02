@@ -122,7 +122,10 @@ const dm = depth.estimate(img);   // dm.depth, dm.image, dm.min, dm.max
 /**
  * @param {string} dir
  * @param {Object} [opts]  fov(60) — assumed field-of-view for synthesized
- *   intrinsics; device; onReady/onError
+ *   intrinsics; maxResolution(0=native) — cap the longer side: larger images are
+ *   downscaled before inference and the normal map upscaled + re-normalized back
+ *   (the OOM guard for big images; DSINE is capped, not tiled, because its
+ *   geometry is conditioned on global intrinsics); device; onReady/onError
  * @returns {NormalEstimator|AsyncHandle}
  */
 const normals = bro.vision.loadNormal('weights/dsine');
@@ -142,18 +145,29 @@ const nm = normals.estimate(img);
 // ── ControlNet annotators (HED / lineart / MLSD / OpenPose / SegFormer) ──────
 
 /**
- * HED soft edges — bro.vision.loadHed(dir, { resolution?(0=native), device, onReady })
+ * HED soft edges — bro.vision.loadHed(dir,
+ *   { resolution?(0=native), tile?(0=off), overlap?(0), device, onReady })
  * SoftEdgeDetector.detect(image, opts?{onDone}) →
  *   { width, height, edge: Float32Array([0,1]), image: ImageBitmap (grayscale) }
+ *
+ *   For large images, set `tile` (working tile size in px, e.g. 512) + `overlap`
+ *   (shared px, e.g. 64): HED runs each overlapping tile at native detail and
+ *   feather-blends them into one full-res map at bounded memory. HED is a local
+ *   FCN so the blend is seamless. When tiling is active each tile runs native, so
+ *   `resolution` (the non-tiled longer-side cap) is ignored.
  */
 const hed = bro.vision.loadHed('weights/hed');
 const edges = hed.detect(img);   // edges.edge, edges.image
 
 /**
- * Lineart — bro.vision.loadLineart(dir, { resolution?, invert?(true), device, onReady })
+ * Lineart — bro.vision.loadLineart(dir,
+ *   { resolution?, invert?(true), tile?(0=off), overlap?(0), device, onReady })
  * LineartDetector.detect(image, opts?{onDone}) →
  *   { width, height, line: Float32Array([0,1]), image: ImageBitmap }
  *   invert (default) gives bright lines on a dark field — the ControlNet convention.
+ *   `tile`/`overlap` work as in loadHed: tile large images and feather-blend the
+ *   per-tile line maps (the generator is a local FCN; invert commutes with the
+ *   blend). When tiling is active each tile runs native, so `resolution` is ignored.
  */
 const lineart = bro.vision.loadLineart('weights/lineart');
 const lines = lineart.detect(img);

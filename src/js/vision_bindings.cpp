@@ -1173,11 +1173,15 @@ static JSValue js_loadNormal(JSContext* ctx, JSValueConst, int argc,
     if (!resolveDevice(ctx, "loadNormal", opts, dev, thrown)) return thrown;
     float fov = 60.0f;
     getFloat(ctx, opts, "fov", fov);
+    int maxResolution = 0;
+    getInt(ctx, opts, "maxResolution", maxResolution);
     return loadModel<VisionNormalWrapper>(ctx, "loadNormal", opts,
-        [dir, dev, fov]() {
+        [dir, dev, fov, maxResolution]() {
             auto w = std::make_unique<VisionNormalWrapper>();
             w->device = dev;
-            brovisionml::dsine::DsineConfig cfg; cfg.fov_deg = fov;
+            brovisionml::dsine::DsineConfig cfg;
+            cfg.fov_deg = fov;
+            cfg.max_resolution = maxResolution;
             w->est = std::make_unique<brovisionml::dsine::NormalEstimator>(cfg);
             brotensor::DeviceScope scope(dev);
             w->est->load(dir);
@@ -1254,13 +1258,18 @@ static JSValue js_loadHed(JSContext* ctx, JSValueConst, int argc,
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadHed", opts, dev, thrown)) return thrown;
-    int resolution = 0;
+    int resolution = 0, tile = 0, overlap = 0;
     getInt(ctx, opts, "resolution", resolution);
+    getInt(ctx, opts, "tile", tile);
+    getInt(ctx, opts, "overlap", overlap);
     return loadModel<VisionHedWrapper>(ctx, "loadHed", opts,
-        [dir, dev, resolution]() {
+        [dir, dev, resolution, tile, overlap]() {
             auto w = std::make_unique<VisionHedWrapper>();
             w->device = dev;
-            brovisionml::hed::HedConfig cfg; cfg.detect_resolution = resolution;
+            brovisionml::hed::HedConfig cfg;
+            cfg.detect_resolution = resolution;
+            cfg.tile.tile = tile;
+            cfg.tile.overlap = overlap;
             w->det = std::make_unique<brovisionml::hed::SoftEdgeDetector>(cfg);
             brotensor::DeviceScope scope(dev);
             w->det->load(dir);
@@ -1337,16 +1346,20 @@ static JSValue js_loadLineart(JSContext* ctx, JSValueConst, int argc,
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadLineart", opts, dev, thrown)) return thrown;
-    int resolution = 0;
+    int resolution = 0, tile = 0, overlap = 0;
     getInt(ctx, opts, "resolution", resolution);
+    getInt(ctx, opts, "tile", tile);
+    getInt(ctx, opts, "overlap", overlap);
     const bool invert = getBool(ctx, opts, "invert", true);
     return loadModel<VisionLineartWrapper>(ctx, "loadLineart", opts,
-        [dir, dev, resolution, invert]() {
+        [dir, dev, resolution, invert, tile, overlap]() {
             auto w = std::make_unique<VisionLineartWrapper>();
             w->device = dev;
             brovisionml::lineart::LineartConfig cfg;
             cfg.detect_resolution = resolution;
             cfg.invert = invert;
+            cfg.tile.tile = tile;
+            cfg.tile.overlap = overlap;
             w->det = std::make_unique<brovisionml::lineart::LineartDetector>(cfg);
             brotensor::DeviceScope scope(dev);
             w->det->load(dir);
