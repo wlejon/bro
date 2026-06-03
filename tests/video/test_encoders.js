@@ -53,6 +53,28 @@ const webmStat = fs.statSync(webmPath);
 assert(webmStat.size > 100, 'webm has content, size = ' + webmStat.size);
 
 // =========================================================================
+// VideoEncoder — Opus audio path (deliberately non-frame-aligned length so
+// the final partial packet is zero-padded and tagged with DiscardPadding).
+// 24000 Hz, 20 ms packets => 480 samples/frame; 30000 is 62.5 frames.
+// =========================================================================
+const webmAudioPath = path.join(tmpDir, 'bro_test_audio_' + Date.now() + '.webm');
+const aenc = new VideoEncoder({
+    path: webmAudioPath, width: W, height: H, fps: FPS,
+    quality: 'realtime',
+    audioSampleRate: 24000, audioChannels: 1, audioBitrateKbps: 96,
+});
+for (let f = 0; f < 6; ++f) aenc.addFrameRGBA(frame);
+const pcm = new Float32Array(30000);
+for (let i = 0; i < pcm.length; ++i) pcm[i] = Math.sin(2 * Math.PI * 440 * i / 24000) * 0.25;
+const audioOk = aenc.addAudioFramesPCM(pcm);
+assert(audioOk === true || audioOk === undefined, 'addAudioFramesPCM ok');
+aenc.finish();
+assert(aenc.lastError === '', 'no encoder error after audio finish: ' + aenc.lastError);
+assert(fs.existsSync(webmAudioPath), 'webm+audio file written');
+assert(fs.statSync(webmAudioPath).size > 100, 'webm+audio has content');
+try { fs.unlinkSync(webmAudioPath); } catch (e) {}
+
+// =========================================================================
 // VideoEncoder error: dims must be even (4:2:0 chroma)
 // =========================================================================
 let threw = false;

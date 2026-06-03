@@ -209,6 +209,7 @@ public:
             opus_encoder_ctl(opusEnc_, OPUS_GET_LOOKAHEAD(&lookahead));
             const int preSkip48k = static_cast<int>(
                 static_cast<int64_t>(lookahead) * 48000 / cfg_.audioSampleRate);
+            audioPreSkip48k_ = preSkip48k;
 
             audioTrackId_ = segment_.AddAudioTrack(cfg_.audioSampleRate,
                                                    cfg_.audioChannels, 0);
@@ -328,11 +329,25 @@ public:
             }
         }
 
-        // Drain any partial Opus frame, zero-padded.
+        // Drain any partial Opus frame, zero-padded up to a full packet. Tag
+        // the block with DiscardPadding so the decoder drops the trailing
+        // silence and the track ends at the intended sample count. The amount
+        // to discard is the zero fill MINUS the encoder pre-skip: the decoder
+        // only emits (fed - preSkip) samples, so the last preSkip samples of
+        // real audio are still in the pipeline and the tail is already that
+        // much shorter. Computed in the Opus 48 kHz output domain, clamped ≥ 0.
         if (opusEnc_ && !audioPcmBuf_.empty()) {
             const int ch = cfg_.audioChannels;
+            const int validPerCh = static_cast<int>(audioPcmBuf_.size() / ch);
+            const int padPerCh = audioFrameSize_ - validPerCh;   // zero-filled tail
             audioPcmBuf_.resize(static_cast<size_t>(audioFrameSize_) * ch, 0.0f);
-            if (!encodeOpusFrame(audioPcmBuf_.data(), audioFrameSize_)) ok = false;
+            const int64_t padPer48k =
+                static_cast<int64_t>(padPerCh) * 48000 / cfg_.audioSampleRate;
+            int64_t discard48k = padPer48k - audioPreSkip48k_;
+            if (discard48k < 0) discard48k = 0;
+            const int64_t discardNs = discard48k * 1'000'000'000LL / 48000;
+            if (!encodeOpusFrame(audioPcmBuf_.data(), audioFrameSize_, discardNs))
+                ok = false;
             audioPcmBuf_.clear();
         }
 
@@ -369,7 +384,8 @@ private:
     // Pull all available packets from the encoder and mux them. Returns true
     // if at least one packet was consumed (used by the flush loop to know
     // whether to feed another null image).
-    bool encodeOpusFrame(const float* pcm, int frameSize) {
+    bool encodeOpusFrame(const float* pcm, int frameSize,
+                         int64_t discardPaddingNs = 0) {
         const int n = opus_encode_float(opusEnc_, pcm, frameSize,
                                         audioOutBuf_.data(),
                                         static_cast<opus_int32>(audioOutBuf_.size()));
@@ -385,7 +401,7 @@ private:
             static_cast<uint64_t>(audioFramesEncoded_) * 1'000'000'000ULL /
             static_cast<uint64_t>(cfg_.audioSampleRate);
         enqueuePacket(pts_ns, audioTrackId_, /*isKey=*/true,
-                      audioOutBuf_.data(), static_cast<size_t>(n));
+                      audioOutBuf_.data(), static_cast<size_t>(n), discardPaddingNs);
         audioFramesEncoded_ += frameSize;
         return true;
     }
@@ -398,14 +414,17 @@ private:
         uint64_t pts_ns;
         uint64_t trackId;
         bool isKey;
+        int64_t discardPaddingNs;
         std::vector<uint8_t> data;
     };
     void enqueuePacket(uint64_t pts_ns, uint64_t trackId, bool isKey,
-                       const uint8_t* buf, size_t len) {
+                       const uint8_t* buf, size_t len,
+                       int64_t discardPaddingNs = 0) {
         PendingPacket p;
         p.pts_ns = pts_ns;
         p.trackId = trackId;
         p.isKey = isKey;
+        p.discardPaddingNs = discardPaddingNs;
         p.data.assign(buf, buf + len);
         pending_.push_back(std::move(p));
     }
@@ -415,8 +434,13 @@ private:
                 return a.pts_ns < b.pts_ns;
             });
         for (auto& p : pending_) {
-            if (!segment_.AddFrame(p.data.data(), p.data.size(),
-                                   p.trackId, p.pts_ns, p.isKey)) {
+            const bool wrote = p.discardPaddingNs > 0
+                ? segment_.AddFrameWithDiscardPadding(
+                      p.data.data(), p.data.size(), p.discardPaddingNs,
+                      p.trackId, p.pts_ns, p.isKey)
+                : segment_.AddFrame(p.data.data(), p.data.size(),
+                                    p.trackId, p.pts_ns, p.isKey);
+            if (!wrote) {
                 setErr("Segment::AddFrame failed during flush");
                 return false;
             }
@@ -460,6 +484,7 @@ private:
     uint64_t audioTrackId_ = 0;
 
     OpusEncoder* opusEnc_ = nullptr;
+    int audioPreSkip48k_ = 0;           // encoder lookahead, in 48 kHz samples
     int audioFrameSize_ = 0;            // samples per channel per Opus packet
     int64_t audioFramesEncoded_ = 0;    // running PTS in input samples
     std::vector<float> audioPcmBuf_;    // interleaved staging for partial fills
