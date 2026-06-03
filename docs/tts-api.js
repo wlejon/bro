@@ -244,6 +244,32 @@ console.log(`${qout.samples.length} samples @ ${qout.sampleRate} Hz`);
 //     { instruct: 'a warm, low-pitched elderly storyteller', language: 'english' });
 
 /**
+ * QwenTtsModel.synthesizeClone(text, refPath, opts?) → { samples, sampleRate }  (sync, blocking)
+ *
+ * Zero-shot voice clone — synthesize `text` in the voice of a reference clip.
+ * BASE VARIANT ONLY: load the Base checkpoint (e.g. '…/qwen-tts/0.6B-Base'),
+ * which bundles the ECAPA-TDNN speaker encoder. The reference WAV is read,
+ * downmixed + resampled to 24 kHz internally, encoded to a speaker x-vector,
+ * and spliced into the Talker prefill where a CustomVoice preset token would
+ * sit (x-vector-only enrollment — no reference transcript needed).
+ *
+ * @param {string} text      - the text to speak.
+ * @param {string} refPath   - path to a 16-bit PCM WAV of the voice to clone
+ *        (mono or stereo, any sample rate; downmixed/resampled internally).
+ * @param {Object} [opts]
+ * @param {string} [opts.language='english'] - 'english' | 'chinese' | 'auto' | ...
+ * @returns {{ samples: Float32Array, sampleRate: number }} - 24 kHz mono, [-1, 1].
+ *
+ * Throws if no model is loaded, the checkpoint is not a Base variant (no speaker
+ * encoder), or the WAV can't be read. (Like synthesize(), there is no per-phoneme
+ * duration array — recover caption word timing from the audio envelope.)
+ */
+const cloned = qwen.synthesizeClone('Hello there.', 'weights/myvoice.wav', { language: 'english' });
+// Requires the Base checkpoint:
+// const qbase = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-Base');
+// qbase.variant === 'base'
+
+/**
  * bro.tts.synthesize(qwen, text, opts) → AsyncHandle   (non-blocking, cancellable)
  *
  * Runs the autoregressive loop on a background thread; the cancel flag is polled

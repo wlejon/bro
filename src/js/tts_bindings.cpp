@@ -452,6 +452,38 @@ static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// qwen.synthesizeClone(text, refPath, opts?) -> { samples, sampleRate }  (sync, blocking)
+//   Zero-shot voice clone (Base variant only): synthesize `text` in the voice of
+//   a reference WAV at `refPath`. The clip is encoded to an ECAPA-TDNN speaker
+//   x-vector and spliced into the Talker prefill. opts.language: 'english'
+//   (default), 'chinese', 'auto', ...  Throws if the loaded checkpoint is not a
+//   Base variant (no speaker encoder) or the WAV can't be read.
+static JSValue js_qwen_synthesize_clone(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "synthesizeClone: not a QwenTts");
+    std::string text, refPath;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "synthesizeClone(text, refPath, opts?): text string required");
+    if (argc < 2 || !argStr(ctx, argv[1], refPath))
+        return JS_ThrowTypeError(ctx, "synthesizeClone(text, refPath, opts?): refPath (WAV path) string required");
+    std::string language = "english";
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        JSValue lv = JS_GetPropertyStr(ctx, argv[2], "language");
+        std::string l;
+        if (JS_IsString(lv) && argStr(ctx, lv, l)) language = std::move(l);
+        JS_FreeValue(ctx, lv);
+    }
+    try {
+        brotensor::DeviceScope scope(w->device);
+        brosoundml::AudioBuffer ref = brosoundml::read_wav(refPath);
+        auto buf = w->qwen->synthesize_clone(text, ref, language);
+        return audioBufferToJs(ctx, buf);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "synthesizeClone: %s", e.what());
+    }
+}
+
 // Marshal a std::vector<std::string> to a JS string[].
 static JSValue stringVecToJs(JSContext* ctx, const std::vector<std::string>& v) {
     JSValue arr = JS_NewArray(ctx);
@@ -499,7 +531,8 @@ static void registerQwenClass(JSContext* ctx) {
         .get("variant",    [](QwenTtsWrapper* w) {
             return std::string(qwenVariantName(w->qwen->config().variant)); })
         .get("modelSize",  [](QwenTtsWrapper* w) { return w->qwen->config().model_size; })
-        .method_raw("synthesize",     js_qwen_synthesize,      2)
+        .method_raw("synthesize",      js_qwen_synthesize,       2)
+        .method_raw("synthesizeClone", js_qwen_synthesize_clone, 3)
         .method_raw("speakers",       js_qwen_speakers,        0)
         .method_raw("languages",      js_qwen_languages,       0)
         .method_raw("speakerDialect", js_qwen_speaker_dialect, 1);
