@@ -575,13 +575,15 @@ void main() {
 // runtime so the two shaders cannot drift apart accidentally.
 static std::string makeMeshInstancedFragSrc() {
     std::string s = kMeshFragSrc;
-    // Add vInstColor input + uAtlasGrid + uAlphaCutoff uniforms alongside
-    // the existing varyings.
+    // Add the instance-only varying + uniform alongside the existing
+    // varyings. uAlphaCutoff is already declared (and applied) by the base
+    // kMeshFragSrc, so re-declaring it here would be a GLSL redeclaration
+    // error — inject only what's unique to the instanced path.
     const std::string anchor1 = "in vec3 vBitangentW;";
     auto p = s.find(anchor1);
     if (p != std::string::npos) {
         s.insert(p + anchor1.size(),
-                 "\nin vec4 vInstColor;\nuniform vec2 uAtlasGrid;\nuniform float uAlphaCutoff;");
+                 "\nin vec4 vInstColor;\nuniform vec2 uAtlasGrid;");
     }
     // Replace the baseColor texture sample so it can pick a sub-rect of the
     // texture when uAtlasGrid > 1. Only the baseColor sampler uses atlas UV;
@@ -609,13 +611,13 @@ static std::string makeMeshInstancedFragSrc() {
     }
     // Multiply the resolved baseColor by the instance RGB tint right after
     // the base-color/alpha resolution block. Alpha is reserved for the atlas
-    // index — never multiplied into baseAlpha.
+    // index — never multiplied into baseAlpha. The alpha-cutoff discard is
+    // inherited from the base shader, so it is not re-injected here.
     const std::string anchor3 = "        baseAlpha = uColor.a;\n    }\n";
     p = s.find(anchor3);
     if (p != std::string::npos) {
         s.insert(p + anchor3.size(),
-                 "    baseColor *= vInstColor.rgb;\n"
-                 "    if (uAlphaCutoff > 0.0 && baseAlpha < uAlphaCutoff) discard;\n");
+                 "    baseColor *= vInstColor.rgb;\n");
     }
     return s;
 }
