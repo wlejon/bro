@@ -3,6 +3,7 @@
 out/
 cmake-build-*/
 *.bgar
+.devlog
 
 /node_modules/
 .shots

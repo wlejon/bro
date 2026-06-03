@@ -998,6 +998,41 @@ static JSValue jsw_getTransform(JSContext* ctx, JSValueConst thisVal, int argc, 
     return worldGetTransform(ctx, w, tag);
 }
 
+// Bulk transform readout for a sandbox world — mirrors Physics.getAllTransforms
+// for the default world. Returns a Float32Array packed [tag, px,py,pz,
+// qx,qy,qz,qw, ...] at stride 8. One allocation, no per-body JS objects —
+// preferred when syncing many bodies per frame (e.g. thousands of instanced
+// rigid bodies into a single InstancedMeshNode).
+static JSValue jsw_getAllTransforms(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world) return JS_NewArrayBufferCopy(ctx, nullptr, 0);
+    size_t count = w->bodyTags.size();
+    size_t stride = 8;
+    std::vector<float> buf(count * stride);
+    size_t i = 0;
+    auto& bi = w->world->system().GetBodyInterfaceNoLock();
+    for (auto& [key, tag] : w->bodyTags) {
+        JPH::BodyID id(key);
+        auto pos = bi.GetPosition(id);
+        auto rot = bi.GetRotation(id);
+        float* p = buf.data() + i * stride;
+        p[0] = static_cast<float>(tag);
+        p[1] = pos.GetX(); p[2] = pos.GetY(); p[3] = pos.GetZ();
+        p[4] = rot.GetX(); p[5] = rot.GetY(); p[6] = rot.GetZ(); p[7] = rot.GetW();
+        i++;
+    }
+    size_t byteLen = buf.size() * sizeof(float);
+    JSValue ab = JS_NewArrayBufferCopy(ctx, reinterpret_cast<uint8_t*>(buf.data()), byteLen);
+    if (JS_IsException(ab)) return JS_EXCEPTION;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue f32ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
+    JSValue result = JS_CallConstructor(ctx, f32ctor, 1, &ab);
+    JS_FreeValue(ctx, f32ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, ab);
+    return result;
+}
+
 static JSValue jsw_getVelocity(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w || !w->world || argc < 1) return JS_UNDEFINED;
@@ -1204,6 +1239,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("destroyAll", 0, jsw_destroyAll),
     JS_CFUNC_DEF("destroy", 0, jsw_destroy),
     JS_CFUNC_DEF("getTransform", 1, jsw_getTransform),
+    JS_CFUNC_DEF("getAllTransforms", 0, jsw_getAllTransforms),
     JS_CFUNC_DEF("getVelocity", 1, jsw_getVelocity),
     JS_CFUNC_DEF("setPosition", 4, jsw_setPosition),
     JS_CFUNC_DEF("setLinearVelocity", 4, jsw_setLinearVelocity),
