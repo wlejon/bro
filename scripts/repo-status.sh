@@ -39,7 +39,7 @@ done
 # Sibling libraries: <name> => standalone at ../<name>, submodule at third_party/<name>.
 SIBLINGS=(
     bromath qjsbind brokit htmlayout broaudio bromesh broflora
-    brotensor brogameagent brolm brodiffusion broimage brosoundml
+    brotensor brogameagent brolm brodiffusion broimage brosoundml brovisionml
 )
 
 # ANSI colors (disabled when not a tty).

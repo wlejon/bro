@@ -35,7 +35,7 @@ $ProjectsRoot = (Resolve-Path (Join-Path $BroRoot '..')).Path
 # Sibling libraries: <name> => standalone at ..\<name>, submodule at third_party\<name>.
 $Siblings = @(
     'bromath', 'qjsbind', 'brokit', 'htmlayout', 'broaudio', 'bromesh', 'broflora',
-    'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml'
+    'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml', 'brovisionml'
 )
 
 # Run a git command in a repo, returning trimmed stdout (errors swallowed).

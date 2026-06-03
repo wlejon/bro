@@ -1,8 +1,8 @@
 # Multi-Repo Workflow: bro + sibling libraries
 
-bro depends on thirteen sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
+bro depends on fourteen sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
-A fourteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A fifteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -19,6 +19,7 @@ A fourteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** a
 | **brodiffusion** | `../brodiffusion` | `third_party/brodiffusion` |
 | **broimage** | `../broimage` | `third_party/broimage` |
 | **brosoundml** | `../brosoundml` | `third_party/brosoundml` |
+| **brovisionml** | `../brovisionml` | `third_party/brovisionml` |
 
 ## Directory Layout
 
@@ -38,7 +39,8 @@ D:/projects/
 │       ├── brolm/                # submodule (CI / fallback)
 │       ├── brodiffusion/         # submodule (CI / fallback)
 │       ├── broimage/             # submodule (CI / fallback)
-│       └── brosoundml/           # submodule (CI / fallback)
+│       ├── brosoundml/           # submodule (CI / fallback)
+│       └── brovisionml/          # submodule (CI / fallback)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── qjsbind/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
@@ -52,6 +54,7 @@ D:/projects/
 ├── brodiffusion/                 # standalone repo (preferred for dev)
 ├── broimage/                     # standalone repo (preferred for dev)
 ├── brosoundml/                   # standalone repo (preferred for dev)
+├── brovisionml/                  # standalone repo (preferred for dev)
 └── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
 ```
 
@@ -73,7 +76,7 @@ else()
 endif()
 ```
 
-The same pattern is used for bromath, qjsbind, htmlayout, broaudio, bromesh, broflora, brogameagent, brolm, brodiffusion, and brosoundml.
+The same pattern is used for bromath, qjsbind, htmlayout, broaudio, bromesh, broflora, brogameagent, brolm, brodiffusion, brosoundml, and brovisionml.
 
 Note: bromath is pulled in transitively by several siblings (bromesh, brogameagent, etc.). bro's `third_party/CMakeLists.txt` guards the `add_subdirectory` with `if(NOT TARGET bromath)` so the first loader wins — overriding `BROMATH_DIR` only takes effect if bro is the first to add it.
 
@@ -86,6 +89,8 @@ Note: bromath is pulled in transitively by several siblings (bromesh, brogameage
 **broimage** (image decode/encode + composable kernels) is the single home for image work that used to be duplicated across the stack: brokit's `bro.image` JS kernels, bro's HTML `Image` decode, brolm's CLIP/SAM/VLM host-side resize + normalize, and brodiffusion's pixel preprocessing. It depends on `bromath` + `brotensor` (the tensor adapter forwards `image_normalize` / `image_u8_to_f32_nhwc_to_nchw` to brotensor when the destination is a GPU `Tensor`). bro's `third_party/CMakeLists.txt` adds broimage **before brokit** because brokit's image kernels link against `broimage::broimage`. Because broimage is the first loader of brotensor in that ordering, bro's top-level `CMakeLists.txt` forwards `BROGAMEAGENT_WITH_CUDA` / `_WITH_METAL` to `BROTENSOR_WITH_CUDA` / `_WITH_METAL` cache vars *before* `add_subdirectory(third_party)`, so a GPU build still picks the right brotensor backend. broimage also vendors its own `stb_image` static lib (with a `if(NOT TARGET stb_image)` guard); bro's own `stb_image` declaration is guarded to match, so either load order works.
 
 **brosoundml** (audio-ML model inference — Whisper STT, Kokoro TTS, neural codec, streaming wake-word) depends on `brotensor` for its FP32 audio op family (FFT/STFT, 1D conv, vocoder/codec activations, resampling, AR sampling) and on `brolm` for its Whisper text tokenizer. Its `third_party/CMakeLists.txt` block **must be added after brolm's**: brosoundml's Whisper target links `brolm::whisper::Tokenizer`, and brosoundml guards `bromath`/`brotensor` with `if(NOT TARGET ...)` so it reuses the targets brolm/brogameagent already added. It backs the `bro.stt`, `bro.tts`, and `bro.wake` JS bindings. Like brodiffusion, its CPU path is always built, so the bindings are always real; a GPU build (`-DBROGAMEAGENT_WITH_CUDA=ON`) additionally compiles its fused CUDA kernels.
+
+**brovisionml** (vision-model inference — SAM segmentation, Depth-Anything-V2 depth, DSINE surface normals, and the ControlNet conditioning annotators: HED, lineart, MLSD, OpenPose, SegFormer) depends on `bromath` + `brotensor` + `broimage`. By the time its `third_party/CMakeLists.txt` block is added (after brodiffusion) all three are already targets: broimage at the top of the file pulls in brotensor + bromath, and brogameagent force-sets the `BROTENSOR_WITH_CUDA/_METAL` cache vars. brovisionml guards all three with `if(NOT TARGET ...)`, so it reuses those targets and reads those cache vars. It backs the `bro.vision` JS bindings — image in (ImageBitmap / ImageData) → ImageBitmap + typed-array out. Like brodiffusion, its CPU path is always built, so the binding is always real; it ships its own DSINE CUDA kernels gated on `BROTENSOR_WITH_CUDA`, so a GPU build (`-DBROGAMEAGENT_WITH_CUDA=ON`) compiles them automatically.
 
 ## Day-to-Day Development
 
@@ -138,7 +143,7 @@ git add third_party/brokit
 git commit -m "Update brokit: add new API"
 ```
 
-Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, and `brosoundml`.
+Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, and `brovisionml`.
 
 ## Overriding Paths
 
@@ -158,7 +163,8 @@ cmake -B build \
     -DBROLM_DIR=/path/to/brolm \
     -DBRODIFFUSION_DIR=/path/to/brodiffusion \
     -DBROIMAGE_DIR=/path/to/broimage \
-    -DBROSOUNDML_DIR=/path/to/brosoundml
+    -DBROSOUNDML_DIR=/path/to/brosoundml \
+    -DBROVISIONML_DIR=/path/to/brovisionml
 ```
 
 Setting any `*_DIR` to a nonexistent path forces the submodule fallback:
@@ -168,7 +174,7 @@ cmake -B build -DBROMATH_DIR=none -DQJSBIND_DIR=none -DBROKIT_DIR=none \
                -DHTMLAYOUT_DIR=none -DBROAUDIO_DIR=none -DBROMESH_DIR=none \
                -DBROFLORA_DIR=none -DBROTENSOR_DIR=none -DBROGAMEAGENT_DIR=none \
                -DBROLM_DIR=none -DBRODIFFUSION_DIR=none -DBROIMAGE_DIR=none \
-               -DBROSOUNDML_DIR=none
+               -DBROSOUNDML_DIR=none -DBROVISIONML_DIR=none
 ```
 
 ## Apps tree
