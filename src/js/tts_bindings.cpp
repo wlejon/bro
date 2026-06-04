@@ -206,7 +206,13 @@ static void registerVoiceClass(JSContext* ctx) {
     qjsbind::Class<VoiceWrapper>(ctx, "Voice", qjsbind::NoGlobal)
         .get("name", [](VoiceWrapper* w) { return w->voice.name; })
         .get("rows", [](VoiceWrapper* w) { return w->voice.packs.rows; })
-        .get("cols", [](VoiceWrapper* w) { return w->voice.packs.cols; });
+        .get("cols", [](VoiceWrapper* w) { return w->voice.packs.cols; })
+        // The full style table as a Float32Array (rows*cols, row-major). Lets
+        // the app read a pack's style vectors out to blend/perturb them and
+        // feed the result back through kokoro.createVoice().
+        .get("data", [](VoiceWrapper* w, JSContext* c) -> JSValue {
+            return qjsbind::make_float32_array(c, w->voice.packs.to_host_vector());
+        });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -306,6 +312,49 @@ static JSValue js_kokoro_loadVoice(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(c, ls->kokoroRef);
     };
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// createVoice(data, name?) -> Voice
+//   Build a voice from raw style floats instead of a file, so the app can
+//   author or blend voices and play them through synthesize()/synthesizeTraced().
+//   `data` is a Float32Array (or number[]): either voice_dim (= 2*style_dim)
+//   values — a single style point broadcast across all length rows — or a whole
+//   multiple of voice_dim for a full rows*voice_dim table.
+static JSValue js_kokoro_createVoice(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* w = kokoroSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createVoice: not a Kokoro");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "createVoice(data, name?): data required");
+
+    std::vector<float> data = qjsbind::read_float32_array(ctx, argv[0]);
+    if (data.empty() && JS_IsArray(argv[0])) {       // accept a plain number[]
+        std::uint32_t n = 0;
+        JSValue lv = JS_GetPropertyStr(ctx, argv[0], "length");
+        JS_ToUint32(ctx, &n, lv);
+        JS_FreeValue(ctx, lv);
+        data.reserve(n);
+        for (std::uint32_t i = 0; i < n; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, argv[0], i);
+            double d = 0; JS_ToFloat64(ctx, &d, e);
+            JS_FreeValue(ctx, e);
+            data.push_back(static_cast<float>(d));
+        }
+    }
+    if (data.empty())
+        return JS_ThrowTypeError(ctx,
+            "createVoice: data must be a non-empty Float32Array or number[]");
+
+    std::string name = "custom";
+    if (argc >= 2) { std::string s; if (argStr(ctx, argv[1], s)) name = s; }
+
+    try {
+        auto vw = std::make_unique<VoiceWrapper>();
+        vw->voice = w->kokoro->make_voice(data, name);
+        return qjsbind::wrap<VoiceWrapper>(ctx, vw.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "createVoice: %s", e.what());
+    }
 }
 
 // synthesize(phonemeIds, voice, opts?) -> { samples, sampleRate, durations }
@@ -446,6 +495,7 @@ static void registerKokoroClass(JSContext* ctx) {
         .get("styleDim",     [](KokoroWrapper* w) { return w->kokoro->config().style_dim; })
         .get("nLayer",       [](KokoroWrapper* w) { return w->kokoro->config().n_layer; })
         .method_raw("loadVoice",      js_kokoro_loadVoice,      2)
+        .method_raw("createVoice",    js_kokoro_createVoice,    2)
         .method_raw("synthesize",     js_kokoro_synthesize,     3)
         .method_raw("synthesizeTraced", js_kokoro_synthesizeTraced, 3)
         .method_raw("vocab",          js_kokoro_vocab,          0)
