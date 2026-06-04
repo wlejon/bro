@@ -225,13 +225,14 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
     JS_FreeValue(ctx, observers);
     JS_FreeValue(ctx, global);
 
+    std::string text = jsToStdString(ctx, val);
     if (hasObservers) {
         JSValue removedArr = JS_NewArray(ctx);
         uint32_t rmIdx = 0;
         for (auto* child : el->childNodes()) {
             JS_SetPropertyUint32(ctx, removedArr, rmIdx++, wrapAnyNode(ctx, child));
         }
-        el->setTextContent(jsToStdString(ctx, val));
+        el->setTextContent(text);
         JSValue addedArr = JS_NewArray(ctx);
         uint32_t addIdx = 0;
         for (auto* child : el->childNodes()) {
@@ -242,18 +243,24 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(ctx, addedArr);
         JS_FreeValue(ctx, removedArr);
     } else {
-        el->setTextContent(jsToStdString(ctx, val));
+        el->setTextContent(text);
     }
-    auto& style = el->computedStyle();
-    // Check overflow-y first, then overflow shorthand
-    auto oyIt = style.find("overflow-y");
-    std::string ov = (oyIt != style.end()) ? oyIt->second : "";
-    if (ov.empty()) {
-        auto oIt = style.find("overflow");
-        ov = (oIt != style.end()) ? oIt->second : "visible";
-    }
-    if (ov != "visible" && ov != "initial") {
-        el->setScrollToBottom(true);
+    // A scroll container gets stuck to the bottom when text is appended into it
+    // (the log/console pattern). But clearing it — textContent = "" — is the
+    // opposite intent: it must NOT auto-scroll, or a subsequent rebuild via
+    // appendChild lands scrolled to the bottom. So only stick on non-empty text.
+    if (!text.empty()) {
+        auto& style = el->computedStyle();
+        // Check overflow-y first, then overflow shorthand
+        auto oyIt = style.find("overflow-y");
+        std::string ov = (oyIt != style.end()) ? oyIt->second : "";
+        if (ov.empty()) {
+            auto oIt = style.find("overflow");
+            ov = (oIt != style.end()) ? oIt->second : "visible";
+        }
+        if (ov != "visible" && ov != "initial") {
+            el->setScrollToBottom(true);
+        }
     }
     return JS_UNDEFINED;
 }
