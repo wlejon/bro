@@ -1,27 +1,38 @@
-// Build the kokoro-lab voice-space basis (PCA over the clean swept Kokoro
-// styles) + pack the ECAPA->style bridge into a compact binary. Pure Node — no
-// bro/model needed; it only reshapes data we already produced under
-// D:/projects/voice-sweep into two app-side assets:
+// Build the Kokoro voice-space basis (PCA over the clean swept Kokoro styles) +
+// pack the ECAPA->style bridge into a compact binary. Pure Node — no bro/model
+// needed; it only reshapes data we already produced under D:/projects/voice-sweep
+// into two artifacts that live alongside the Kokoro model (kokoro/ in
+// brosoundml-data, and the dev weights dir so kokoro-lab finds them next to the
+// model it already loads):
 //
-//   voicebasis.json  — mean + top-K principal axes of the 256-D Kokoro style
-//                      space (orthonormal, std-scaled), the 28 named anchors
-//                      expressed in those axes, the realizable per-axis range,
-//                      and each axis' strongest correlate among the measured
-//                      attributes (f0/energy/rate/...). This is what turns 256
-//                      opaque dims into a handful of meaningful sliders.
-//   bridge.f32       — the linear ridge x(1024)->style(256): little-endian
-//                      [int32 D, int32 M, f32 xm[D], f32 ym[M], f32 B[D*M]].
+//   voice_basis.json  — mean + top-K principal axes of the 256-D Kokoro style
+//                       space (orthonormal, std-scaled), the 28 named anchors
+//                       expressed in those axes, the realizable per-axis range,
+//                       and each axis' strongest correlate among the measured
+//                       attributes (f0/energy/rate/...). Turns 256 opaque dims
+//                       into a handful of meaningful sliders.
+//   voice_bridge.bin  — the linear ridge x(1024)->style(256): little-endian
+//                       [int32 D, int32 M, f32 xm[D], f32 ym[M], f32 B[D*M]].
+//                       Clones a real clip (ECAPA x-vector) into the style space.
 //
 // Run:  node bro/tests/_voice_basis.js
-// Writes both into broworkshop/demos/kokoro-lab/ (the app loads them at start).
 
 const fs = require('fs');
-const path = require('path');
 
 const SWEEP_DIR = 'D:/projects/voice-sweep';
-const OUT_DIR = path.resolve(__dirname, '../../broworkshop/demos/kokoro-lab');
+// Canonical home (published to the HF dataset) + the dev model dir the app reads.
+const DATA_DIR = 'D:/projects/brosoundml-data/kokoro';
+const MODEL_DIR = 'D:/projects/brosoundml/weights/kokoro';
 const K = 20;                              // exported principal axes (sliders)
 const DIM = 256;
+
+// write a file into both the canonical data dir and the dev model dir
+function writeBoth(name, data) {
+  for (const dir of [DATA_DIR, MODEL_DIR]) {
+    try { fs.writeFileSync(dir + '/' + name, data); }
+    catch (e) { console.log('  (skip ' + dir + ': ' + e.message + ')'); }
+  }
+}
 
 // ── load the clean swept styles + their measured attributes ─────────────────
 const sweep = fs.readFileSync(SWEEP_DIR + '/sweep.jsonl', 'utf8')
@@ -145,10 +156,11 @@ const basis = {
   attrHint,
   names, anchors,
 };
-fs.writeFileSync(OUT_DIR + '/voicebasis.json', JSON.stringify(basis));
-console.log('wrote voicebasis.json (' + (fs.statSync(OUT_DIR + '/voicebasis.json').size / 1024).toFixed(0) + ' KB)');
+const basisJson = JSON.stringify(basis);
+writeBoth('voice_basis.json', basisJson);
+console.log('wrote voice_basis.json (' + (basisJson.length / 1024).toFixed(0) + ' KB) to', DATA_DIR, '+', MODEL_DIR);
 
-// ── pack the bridge into bridge.f32 ─────────────────────────────────────────
+// ── pack the bridge into voice_bridge.bin ───────────────────────────────────
 const br = JSON.parse(fs.readFileSync(SWEEP_DIR + '/bridge.json', 'utf8'));
 const D = br.D, M = br.M;
 const buf = new ArrayBuffer(8 + 4 * (D + M + D * M));
@@ -156,6 +168,6 @@ const iv = new Int32Array(buf, 0, 2); iv[0] = D; iv[1] = M;
 let off = 8;
 const put = (a, n) => { const f = new Float32Array(buf, off, n); for (let i = 0; i < n; i++) f[i] = a[i]; off += 4 * n; };
 put(br.xm, D); put(br.ym, M); put(br.B, D * M);
-fs.writeFileSync(OUT_DIR + '/bridge.f32', new Uint8Array(buf));
-console.log('wrote bridge.f32 (' + (buf.byteLength / 1048576).toFixed(2) + ' MB) · D=' + D + ' M=' + M);
+writeBoth('voice_bridge.bin', new Uint8Array(buf));
+console.log('wrote voice_bridge.bin (' + (buf.byteLength / 1048576).toFixed(2) + ' MB) · D=' + D + ' M=' + M);
 console.log('DONE');
