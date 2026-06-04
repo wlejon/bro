@@ -348,6 +348,59 @@ static JSValue js_kokoro_synthesize(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// synthesizeTraced(phonemeIds, voice, opts?)
+//   -> { samples, sampleRate, durations, stages: [{ name, h, w, data }] }
+//   Same as synthesize() but also returns each pipeline intermediate (see
+//   KokoroTrace) as a row-major (h x w) Float32Array, for visualization. The
+//   model is run synchronously; the extra cost is one host copy per stage.
+static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* w = kokoroSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "synthesizeTraced: not a Kokoro");
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx,
+            "synthesizeTraced(phonemeIds, voice, opts?): phonemeIds and voice required");
+
+    std::vector<int32_t> ids = readIdArray(ctx, argv[0]);
+    if (ids.empty())
+        return JS_ThrowTypeError(ctx,
+            "synthesizeTraced: phonemeIds must be a non-empty Int32Array or number[]");
+
+    auto* vw = qjsbind::unwrap<VoiceWrapper>(ctx, argv[1]);
+    if (!vw)
+        return JS_ThrowTypeError(ctx,
+            "synthesizeTraced: voice must be a Voice (returned by loadVoice)");
+
+    float speed = 1.0f;
+    if (argc >= 3 && JS_IsObject(argv[2]))
+        getNum(ctx, argv[2], "speed", speed);
+
+    try {
+        std::vector<int32_t> pred_dur;
+        brosoundml::KokoroTrace tr;
+        auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur, {}, &tr);
+        JSValue out = audioBufferToJs(ctx, buf);
+        JS_SetPropertyStr(ctx, out, "durations",
+            qjsbind::make_int32_array(ctx, pred_dur));
+
+        JSValue stages = JS_NewArray(ctx);
+        std::uint32_t i = 0;
+        for (const auto& s : tr.stages) {
+            JSValue st = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, st, "name", JS_NewString(ctx, s.name.c_str()));
+            JS_SetPropertyStr(ctx, st, "h",    JS_NewInt32(ctx, s.h));
+            JS_SetPropertyStr(ctx, st, "w",    JS_NewInt32(ctx, s.w));
+            JS_SetPropertyStr(ctx, st, "data",
+                qjsbind::make_float32_array(ctx, s.data));
+            JS_SetPropertyUint32(ctx, stages, i++, st);
+        }
+        JS_SetPropertyStr(ctx, out, "stages", stages);
+        return out;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "synthesizeTraced: %s", e.what());
+    }
+}
+
 // vocab() -> { phoneme: id, ... }
 //   Returns the phoneme->id map from KokoroConfig. Empty when the model
 //   directory's config.json omits it.
@@ -394,6 +447,7 @@ static void registerKokoroClass(JSContext* ctx) {
         .get("nLayer",       [](KokoroWrapper* w) { return w->kokoro->config().n_layer; })
         .method_raw("loadVoice",      js_kokoro_loadVoice,      2)
         .method_raw("synthesize",     js_kokoro_synthesize,     3)
+        .method_raw("synthesizeTraced", js_kokoro_synthesizeTraced, 3)
         .method_raw("vocab",          js_kokoro_vocab,          0)
         .method_raw("encodePhonemes", js_kokoro_encodePhonemes, 1);
 }
