@@ -397,11 +397,31 @@ static JSValue js_kokoro_synthesize(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// Build a JS array of { name, h, w, data } stage objects from a KokoroTrace.
+// Shared by the sync (synthesizeTraced) and async (bro.tts.synthesize, trace:true)
+// paths. The trace's per-stage host copies are already made during synthesize();
+// this just wraps each as a row-major Float32Array for the renderer.
+static JSValue traceStagesToJs(JSContext* ctx, const brosoundml::KokoroTrace& tr) {
+    JSValue stages = JS_NewArray(ctx);
+    std::uint32_t i = 0;
+    for (const auto& s : tr.stages) {
+        JSValue st = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, st, "name", JS_NewString(ctx, s.name.c_str()));
+        JS_SetPropertyStr(ctx, st, "h",    JS_NewInt32(ctx, s.h));
+        JS_SetPropertyStr(ctx, st, "w",    JS_NewInt32(ctx, s.w));
+        JS_SetPropertyStr(ctx, st, "data", qjsbind::make_float32_array(ctx, s.data));
+        JS_SetPropertyUint32(ctx, stages, i++, st);
+    }
+    return stages;
+}
+
 // synthesizeTraced(phonemeIds, voice, opts?)
 //   -> { samples, sampleRate, durations, stages: [{ name, h, w, data }] }
 //   Same as synthesize() but also returns each pipeline intermediate (see
 //   KokoroTrace) as a row-major (h x w) Float32Array, for visualization. The
 //   model is run synchronously; the extra cost is one host copy per stage.
+//   For a non-blocking variant, use bro.tts.synthesize(kokoro, ids, voice,
+//   { trace: true, onDone }) — same stages, built on a background thread.
 static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
     auto* w = kokoroSelf(ctx, this_val);
@@ -432,18 +452,7 @@ static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
         JS_SetPropertyStr(ctx, out, "durations",
             qjsbind::make_int32_array(ctx, pred_dur));
 
-        JSValue stages = JS_NewArray(ctx);
-        std::uint32_t i = 0;
-        for (const auto& s : tr.stages) {
-            JSValue st = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, st, "name", JS_NewString(ctx, s.name.c_str()));
-            JS_SetPropertyStr(ctx, st, "h",    JS_NewInt32(ctx, s.h));
-            JS_SetPropertyStr(ctx, st, "w",    JS_NewInt32(ctx, s.w));
-            JS_SetPropertyStr(ctx, st, "data",
-                qjsbind::make_float32_array(ctx, s.data));
-            JS_SetPropertyUint32(ctx, stages, i++, st);
-        }
-        JS_SetPropertyStr(ctx, out, "stages", stages);
+        JS_SetPropertyStr(ctx, out, "stages", traceStagesToJs(ctx, tr));
         return out;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesizeTraced: %s", e.what());
@@ -1119,6 +1128,8 @@ struct TtsJob {
     std::vector<float>   samples;                  // filled by work()
     int                  sample_rate = 24000;      // filled by work()
     std::vector<int32_t> durations;                // filled by work()
+    bool                 wantTrace = false;         // opts.trace — capture stages
+    brosoundml::KokoroTrace trace;                  // filled by work() if wantTrace
     JSValue              onDone    = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
     JSValue              kokoroRef = JS_UNDEFINED;  // dup of the kokoro JS object
     JSValue              voiceRef  = JS_UNDEFINED;  // dup of the voice JS object
@@ -1248,6 +1259,9 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
     JSValue onDone = JS_UNDEFINED;
     if (argc >= 4 && JS_IsObject(argv[3])) {
         getNum(ctx, argv[3], "speed", job->speed);
+        JSValue tv = JS_GetPropertyStr(ctx, argv[3], "trace");
+        job->wantTrace = JS_ToBool(ctx, tv) == 1;   // opts.trace: also return stages
+        JS_FreeValue(ctx, tv);
         onDone = JS_GetPropertyStr(ctx, argv[3], "onDone");
     }
 
@@ -1279,7 +1293,8 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         std::vector<int32_t> pred_dur;
         auto buf = mw->kokoro->synthesize(
             job->ids, job->vw->voice, job->speed, &pred_dur,
-            [&cancel] { return cancel.load(std::memory_order_acquire); });
+            [&cancel] { return cancel.load(std::memory_order_acquire); },
+            job->wantTrace ? &job->trace : nullptr);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
         job->durations   = std::move(pred_dur);
@@ -1296,6 +1311,9 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
                 JS_NewInt32(c, job->sample_rate));
             JS_SetPropertyStr(c, result, "durations",
                 qjsbind::make_int32_array(c, job->durations));
+            if (job->wantTrace && !cancelled && error.empty())
+                JS_SetPropertyStr(c, result, "stages",
+                    traceStagesToJs(c, job->trace));
             JSValue info = JS_NewObject(c);
             JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
             if (!error.empty())

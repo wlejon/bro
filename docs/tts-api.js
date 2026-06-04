@@ -143,10 +143,15 @@ console.log(`${out.samples.length} samples @ ${out.sampleRate} Hz`);
  * @param {Voice}  voice                    - from loadVoice().
  * @param {Object} [opts]
  * @param {number}   [opts.speed=1.0]       - speaking-rate multiplier.
+ * @param {boolean}  [opts.trace=false]     - also capture the pipeline trace.
+ *        When true, result additionally carries `stages` — the same
+ *        [{ name, h, w, data }] array the synchronous synthesizeTraced() returns
+ *        — built on the background thread, so you get the visualization tensors
+ *        without blocking the JS thread. Omitted on a cancelled/errored result.
  * @param {function} [opts.onDone]          - onDone(result, info) on the JS
  *        thread, where result is the SAME shape the sync method returns —
- *        { samples: Float32Array, sampleRate: number, durations: Int32Array } —
- *        and info = { cancelled: boolean, error?: string }.
+ *        { samples: Float32Array, sampleRate: number, durations: Int32Array }
+ *        (+ stages when opts.trace) — and info = { cancelled: boolean, error?: string }.
  * @returns {AsyncHandle}  - { cancel(): void }. Rejects (throws) if another
  *          synthesize()/op is already in flight on this model.
  */
