@@ -78,6 +78,31 @@ public:
     bool isRasterIdle() const { return worker_.isIdle(); }
     bool isRasterBusyOrRequested() const { return worker_.isBusyOrRequested(); }
 
+    /// Drop every reference to a CanvasScene that is about to be destroyed from
+    /// the front (composable) buffer, so compositeLayers can't dereference a
+    /// freed scene. A canvas layer recorded in an earlier frame still names the
+    /// scene by raw pointer; if the scene's element is detached and the engine
+    /// erases the scene this frame, the live front-buffer view would dangle.
+    ///
+    /// Only the front buffer needs scrubbing: the worker writes exclusively to
+    /// the back buffer, and a stale back buffer is always rewritten by the
+    /// worker (which skips detached scenes at record time) before it can be
+    /// flipped to front. So the front buffer is the only buffer composite ever
+    /// reads, and scrubbing it here races nothing on the worker thread.
+    void forgetCanvasScene(const canvas::CanvasScene* scene) {
+        int f = front_.load(std::memory_order_acquire);
+        auto scrub = [scene](std::vector<UILayer>& layers) {
+            for (auto& l : layers) {
+                if (l.canvasScene == scene) {
+                    l.canvasScene = nullptr;
+                    l.texture = 0;
+                }
+            }
+        };
+        scrub(buffers_[f].appLayers);
+        scrub(buffers_[f].systemLayers);
+    }
+
     // ---- worker (raster) thread ----
 
     /// Block until either a request arrives or shutdown is signaled.

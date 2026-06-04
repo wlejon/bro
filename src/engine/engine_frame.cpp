@@ -619,6 +619,15 @@ void Engine::run() {
             cs->setViewportScroll(scrollY_);
             cs->checkDetached();
         }
+        // Before destroying any detached scene, drop references to it from the
+        // composable layer view (`layers`, captured this frame from the front
+        // buffer). That view was recorded in an earlier frame, when the scene
+        // was still attached, so it still names the scene by raw pointer — and
+        // compositeLayers below would dereference the freed scene without this.
+        for (auto& cs : canvasScenes_) {
+            if (cs->isDetached() && framePresenter_)
+                framePresenter_->forgetCanvasScene(cs.get());
+        }
         canvasScenes_.erase(
             std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
                 [](auto& cs) { return cs->isDetached(); }),
