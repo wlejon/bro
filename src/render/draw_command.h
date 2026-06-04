@@ -87,6 +87,11 @@ struct Cmd_LayerBreak {
     void* canvasScene;           // canvas::CanvasScene* when kind==Canvas2D
     unsigned int directTexture;  // GL texture id when kind==WebGL
     float x, y, w, h;            // ignored for HtmlSurface
+    // Active overflow/scroll clip at the layer-break point, in the same
+    // untransformed pixel space as x/y/w/h. The canvas/WebGL layer is a
+    // separate composited quad that bypasses the Skia clip stack, so the
+    // compositor re-applies this as a GL scissor. clipW < 0 ⇒ unclipped.
+    float clipX = 0, clipY = 0, clipW = -1, clipH = -1;
 };
 
 // System-panel canvas: composite the canvas scene's snapshot onto the current

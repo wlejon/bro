@@ -106,9 +106,15 @@ public:
     // into separate layers around canvas/WebGL elements.
     // For Canvas2D: scene is non-null, directTexture is 0.
     // For WebGL: scene is null, directTexture is the FBO color texture.
+    // (clipX..clipH) is the active overflow/scroll clip at the break point, in
+    // the same untransformed pixel space as (x..h). clipW < 0 ⇒ unclipped. The
+    // canvas/WebGL layer is composited as a separate quad that bypasses the
+    // Skia clip stack, so the compositor re-applies this clip as a GL scissor.
     using LayerBreakCallback = std::function<void(canvas::CanvasScene* scene,
                                                    unsigned int directTexture,
-                                                   float x, float y, float w, float h)>;
+                                                   float x, float y, float w, float h,
+                                                   float clipX, float clipY,
+                                                   float clipW, float clipH)>;
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
 
     // Viewport. `top` is the Y position in the output surface where the
@@ -169,6 +175,19 @@ private:
 
     std::unordered_map<std::string, CachedImage> imageCache_;
     LayerBreakCallback layerBreakCb_;
+
+    // Running stack of axis-aligned overflow/scroll clip rects (each already
+    // intersected with the one below it, so the top is the effective clip).
+    // Mirrors the renderer_ clip saves contributed by ancestor `overflow`
+    // boxes and the SC walker's pushClips, so a canvas/WebGL layer break can
+    // report the clip the compositor must scissor to. Rounded corners and
+    // clip-path polygons are not tracked (scissor can't express them).
+    struct ClipBox { float x, y, w, h; };
+    std::vector<ClipBox> clipRectStack_;
+    void pushClipRect(float x, float y, float w, float h);
+    void popClipRect() { if (!clipRectStack_.empty()) clipRectStack_.pop_back(); }
+    // Effective clip for the current point. Returns false when unclipped.
+    bool currentClipRect(float& x, float& y, float& w, float& h) const;
 };
 
 } // namespace bro::layout

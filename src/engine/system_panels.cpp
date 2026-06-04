@@ -1011,7 +1011,9 @@ void Engine::drawSystemPanelDoc(render::Renderer* renderer,
     traversal.setLayerBreakCallback(
         [renderer, recorder, panelGr](canvas::CanvasScene* scene,
                                        unsigned int /*tex*/,
-                                       float x, float y, float w, float h) {
+                                       float x, float y, float w, float h,
+                                       float /*clipX*/, float /*clipY*/,
+                                       float /*clipW*/, float /*clipH*/) {
             if (!scene || !renderer) return;
             if (w <= 0 || h <= 0) return;
             if (recorder) {

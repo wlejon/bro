@@ -24,6 +24,10 @@ struct UILayer {
     GLuint texture = 0;
     canvas::CanvasScene* canvasScene = nullptr;
     float cx = 0, cy = 0, cw = 0, ch = 0;
+    // Overflow/scroll clip for Canvas layers, in top-left pixel space. The
+    // canvas quad is composited outside the Skia clip stack, so the compositor
+    // scissors to this rect. clipW < 0 ⇒ unclipped.
+    float clipX = 0, clipY = 0, clipW = -1, clipH = -1;
 };
 
 /// Double-buffered slot. The main thread *writes* the command buffers (record

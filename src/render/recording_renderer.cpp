@@ -361,8 +361,11 @@ void RecordingRenderer::endFrame() {
 
 void RecordingRenderer::recordLayerBreak(int kind, void* canvasScene,
                                          unsigned int directTexture,
-                                         float x, float y, float w, float h) {
-    buffer_->append(Cmd_LayerBreak{kind, canvasScene, directTexture, x, y, w, h});
+                                         float x, float y, float w, float h,
+                                         float clipX, float clipY,
+                                         float clipW, float clipH) {
+    buffer_->append(Cmd_LayerBreak{kind, canvasScene, directTexture, x, y, w, h,
+                                   clipX, clipY, clipW, clipH});
 }
 
 void RecordingRenderer::recordBlitCanvasInline(void* canvasScene,

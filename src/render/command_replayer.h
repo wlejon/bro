@@ -23,7 +23,9 @@ class CommandReplayer {
 public:
     using LayerBreakHandler = std::function<void(int kind, void* canvasScene,
                                                   unsigned int directTexture,
-                                                  float x, float y, float w, float h)>;
+                                                  float x, float y, float w, float h,
+                                                  float clipX, float clipY,
+                                                  float clipW, float clipH)>;
     using BlitCanvasInlineHandler = std::function<void(void* canvasScene,
                                                         float x, float y, float w, float h)>;
 

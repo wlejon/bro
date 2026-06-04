@@ -128,7 +128,9 @@ public:
     // crosses a canvas/WebGL boundary. Not on the Renderer interface; the
     // engine wires the callback to call this directly.
     void recordLayerBreak(int kind, void* canvasScene, unsigned int directTexture,
-                          float x, float y, float w, float h);
+                          float x, float y, float w, float h,
+                          float clipX = 0, float clipY = 0,
+                          float clipW = -1, float clipH = -1);
 
     // Inline canvas blit — system panels composite their canvas scene onto
     // the current surface instead of breaking into a separate layer.

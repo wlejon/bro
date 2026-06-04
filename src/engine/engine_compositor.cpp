@@ -23,6 +23,8 @@
 #include <glad/gl.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <utility>
 
@@ -150,11 +152,13 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     // the actual GPU surface management.
     drawTraversal_->setLayerBreakCallback(
         [this](canvas::CanvasScene* scene, unsigned int directTexture,
-               float x, float y, float w, float h) {
+               float x, float y, float w, float h,
+               float clipX, float clipY, float clipW, float clipH) {
             int kind = scene ? render::Cmd_LayerBreak::Canvas2D
                              : render::Cmd_LayerBreak::WebGL;
             recordingRenderer_->recordLayerBreak(
-                kind, scene, directTexture, x, y, w, h);
+                kind, scene, directTexture, x, y, w, h,
+                clipX, clipY, clipW, clipH);
         });
 
     if (document_ && document_->documentElement()) {
@@ -225,7 +229,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     render::CommandReplayer replayer(renderer);
     replayer.setLayerBreakHandler(
         [&](int kind, void* scenePtr, unsigned int directTexture,
-            float x, float y, float w, float h) {
+            float x, float y, float w, float h,
+            float clipX, float clipY, float clipW, float clipH) {
             int prevIdx = htmlLayerIdx;
             htmlLayerIdx++;
             while (htmlLayerIdx >= static_cast<int>(pool.size())) {
@@ -245,6 +250,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
             canvasLayer.texture = directTexture;
             canvasLayer.cx = x; canvasLayer.cy = y;
             canvasLayer.cw = w; canvasLayer.ch = h;
+            canvasLayer.clipX = clipX; canvasLayer.clipY = clipY;
+            canvasLayer.clipW = clipW; canvasLayer.clipH = clipH;
             outLayers.push_back(std::move(canvasLayer));
             (void)kind;
         });
@@ -329,7 +336,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     render::CommandReplayer replayer(renderer);
     replayer.setLayerBreakHandler(
         [&](int kind, void* /*scene*/, unsigned int /*tex*/,
-            float, float, float, float) {
+            float, float, float, float, float, float, float, float) {
             if (kind != render::Cmd_LayerBreak::HtmlSurface) return;
             // Capture current panel into a UILayer, advance to next surface.
             if (grCtx) grCtx->flush(pool[panelIdx].surface.get());
@@ -432,6 +439,22 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 float v0 = layer.canvasScene ? 0.0f : 1.0f;
                 float v1 = layer.canvasScene ? 1.0f : 0.0f;
 
+                // Canvas/WebGL layers composite outside the Skia clip stack, so
+                // re-apply any ancestor overflow/scroll clip as a GL scissor.
+                // Clip space is top-left pixels; scissor is bottom-left window
+                // coords, so flip Y. clipW < 0 ⇒ unclipped.
+                bool scissored = false;
+                if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                    int sx = static_cast<int>(std::floor(layer.clipX));
+                    int sw = static_cast<int>(std::ceil(layer.clipX + layer.clipW)) - sx;
+                    int syTop = static_cast<int>(std::floor(layer.clipY));
+                    int sh = static_cast<int>(std::ceil(layer.clipY + layer.clipH)) - syTop;
+                    int sy = viewportHeight_ - (syTop + sh);
+                    glEnable(GL_SCISSOR_TEST);
+                    glScissor(sx, sy, std::max(0, sw), std::max(0, sh));
+                    scissored = true;
+                }
+
                 render::TextureVertex quad[6] = {
                     {cx,    cy,    0, v0}, {cx+cw, cy,    1, v0}, {cx+cw, cy+ch, 1, v1},
                     {cx,    cy,    0, v0}, {cx+cw, cy+ch, 1, v1}, {cx,    cy+ch, 0, v1},
@@ -439,6 +462,8 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
                 glBindTexture(GL_TEXTURE_2D, tex);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                if (scissored) glDisable(GL_SCISSOR_TEST);
             }
         }
     }

@@ -410,6 +410,29 @@ bool createsStackingContext(dom::Element* elem, bool isRoot) {
 
 } // namespace
 
+void DrawTraversal::pushClipRect(float x, float y, float w, float h) {
+    // Intersect with the current effective clip so the new top stays the
+    // running intersection (empty intersections collapse to zero area).
+    if (!clipRectStack_.empty()) {
+        const ClipBox& t = clipRectStack_.back();
+        float nx = std::max(x, t.x);
+        float ny = std::max(y, t.y);
+        float nr = std::min(x + w, t.x + t.w);
+        float nb = std::min(y + h, t.y + t.h);
+        w = std::max(0.0f, nr - nx);
+        h = std::max(0.0f, nb - ny);
+        x = nx; y = ny;
+    }
+    clipRectStack_.push_back({x, y, w, h});
+}
+
+bool DrawTraversal::currentClipRect(float& x, float& y, float& w, float& h) const {
+    if (clipRectStack_.empty()) return false;
+    const ClipBox& t = clipRectStack_.back();
+    x = t.x; y = t.y; w = t.w; h = t.h;
+    return true;
+}
+
 void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
                          int viewportW, int viewportH, int viewportTop) {
     if (!root || !renderer_) return;
@@ -425,6 +448,7 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     // would remain in skipSet_ and be skipped by the in-flow walker even
     // though it's no longer in the SC tree — its content would vanish.
     skipSet_.clear();
+    clipRectStack_.clear();
 
     // Build the stacking-context tree (CSS 2.1 Appendix E), then paint in the
     // seven-step order. Each SC root paints its own box first, then recurses
@@ -929,6 +953,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             renderer_->setClipRRect(bx, by, bw, bh, clipRadii);
         else
             renderer_->setClip(bx, by, bw, bh);
+        // Track the rect so a canvas/WebGL layer break in this subtree can
+        // report the clip the compositor must scissor to (rounded corners are
+        // approximated by their bounding box).
+        pushClipRect(bx, by, bw, bh);
     }
 
     // SVG elements render their own children via the SVG pipeline — skip DOM traversal
@@ -939,6 +967,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         }
         if (needsClip) {
             renderer_->restore();
+            popClipRect();
         }
         if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
@@ -950,18 +979,24 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // Canvas/WebGL/SceneGraph elements: trigger a layer break so the compositor
     // can interleave canvas textures with HTML layers in document order.
     // SceneGraph check must come first since scene elements also have a canvasScene.
+    // Active overflow/scroll clip for any layer-break quad in this subtree.
+    // The compositor draws canvas/WebGL layers as standalone quads outside the
+    // Skia clip stack, so we hand it the clip explicitly. clipW < 0 ⇒ none.
+    float lbCX = 0, lbCY = 0, lbCW = -1, lbCH = -1;
+    bool haveLBClip = currentClipRect(lbCX, lbCY, lbCW, lbCH);
+    if (!haveLBClip) { lbCW = -1; lbCH = -1; }
     if (elem->sceneGraph() && visible) {
         // 3D mesh FBO layer (texture ID stored on element by scene graph render)
         unsigned int fboTex = elem->sceneGraphFBOTexture();
         if (fboTex && layerBreakCb_) {
-            layerBreakCb_(nullptr, fboTex, x, y, w, h);
+            layerBreakCb_(nullptr, fboTex, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
         // 2D canvas layer (for ShapeNode/SpriteNode content)
         if (elem->canvasScene() && layerBreakCb_) {
             auto* scene = static_cast<canvas::CanvasScene*>(elem->canvasScene());
-            layerBreakCb_(scene, 0, x, y, w, h);
+            layerBreakCb_(scene, 0, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
-        if (needsClip) renderer_->restore();
+        if (needsClip) { renderer_->restore(); popClipRect(); }
         if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
@@ -971,9 +1006,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (elem->canvasScene() && visible) {
         auto* scene = static_cast<canvas::CanvasScene*>(elem->canvasScene());
         if (layerBreakCb_) {
-            layerBreakCb_(scene, 0, x, y, w, h);
+            layerBreakCb_(scene, 0, x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
-        if (needsClip) renderer_->restore();
+        if (needsClip) { renderer_->restore(); popClipRect(); }
         if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
@@ -983,9 +1018,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (elem->webglContext() && visible) {
         auto* webglCtx = static_cast<webgl::WebGL2RenderingContext*>(elem->webglContext());
         if (layerBreakCb_) {
-            layerBreakCb_(nullptr, webglCtx->colorTexture(), x, y, w, h);
+            layerBreakCb_(nullptr, webglCtx->colorTexture(), x, y, w, h,
+                          lbCX, lbCY, lbCW, lbCH);
         }
-        if (needsClip) renderer_->restore();
+        if (needsClip) { renderer_->restore(); popClipRect(); }
         if (hasClipPath) renderer_->restore();
         if (hasFilter) renderer_->restore();
         if (hasOpacity) renderer_->restore();
@@ -1132,6 +1168,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
 
     if (needsClip) {
         renderer_->restore();
+        popClipRect();
     }
     if (hasClipPath) renderer_->restore();
     if (hasFilter) renderer_->restore();
@@ -3096,10 +3133,14 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
                 renderer_->setClipRRect(c.bx, c.by, c.bw, c.bh, c.radii);
             else
                 renderer_->setClip(c.bx, c.by, c.bw, c.bh);
+            // Mirror onto the layer-break clip stack so a canvas/WebGL break in
+            // an out-of-line (positioned / nested-SC) subtree still scissors to
+            // the ancestor overflow clip the compositor would otherwise ignore.
+            pushClipRect(c.bx, c.by, c.bw, c.bh);
         }
     };
     auto popClips = [this](const std::vector<ClipRect>& clips) {
-        for (size_t i = 0; i < clips.size(); ++i) renderer_->restore();
+        for (size_t i = 0; i < clips.size(); ++i) { renderer_->restore(); popClipRect(); }
     };
     for (auto* c : negSCs) {
         pushClips(c->ancestorClips);
