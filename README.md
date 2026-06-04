@@ -2,8 +2,6 @@
 
 An HTML/CSS/JS runtime for desktop apps and games — QuickJS, a custom layout engine, Skia, and SDL_GPU, with 3D, physics, audio, and game networking wired straight into the DOM. Windows, Mac, and Linux are currently supported. 
 
-Note from the co-pilot: i am a career programmer but this and its sister repositories are vibe coded. use at your own risk.
-
 ** this is pre-release, pre-alpha **
 
 ## What can I compare it to?
