@@ -1200,6 +1200,9 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the model BEFORE invoking onDone so the callback may start the
+        // next synth on this same model without tripping the in-flight guard.
+        mw->busy.store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -1219,7 +1222,6 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
         }
         if (job->hasOnDone) JS_FreeValue(c, job->onDone);
         JS_FreeValue(c, job->qwenRef);
-        mw->busy.store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
@@ -1303,6 +1305,12 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
     // JS thread, once: build { samples, sampleRate, durations } + {cancelled,
     // error}, hand them to onDone, free the dup'd values, release the model.
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the model BEFORE invoking onDone so the callback can start the
+        // next synth on this same model without tripping the single-in-flight
+        // guard (e.g. kokoro-lab's fast audio pass immediately chaining a trace
+        // pass). The result's host data is already copied off `job`, so a new
+        // op claiming the model can't disturb what onDone is reading here.
+        mw->busy.store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -1328,7 +1336,6 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         if (job->hasOnDone) JS_FreeValue(c, job->onDone);
         JS_FreeValue(c, job->kokoroRef);
         JS_FreeValue(c, job->voiceRef);
-        mw->busy.store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
