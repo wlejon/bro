@@ -4,6 +4,7 @@
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
 #include "broimage/decode.h"
+#include <algorithm>
 #include <stdexcept>
 
 namespace bro::platform {
@@ -39,6 +40,35 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
     if (!m_window) {
         LOG_ERROR("Failed to create SDL window: %s", SDL_GetError());
         throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+    }
+
+    // Clamp a visible window to the display's usable area so the whole window —
+    // title bar and borders included — fits on screen. The requested size is a
+    // client-area size in physical pixels (Windows/X11 deal in device pixels),
+    // so a default like 1920x1080 plus chrome overshoots smaller or DPI-scaled
+    // desktops and lands partly off-screen. SDL_GetDisplayUsableBounds already
+    // excludes the taskbar; subtracting the border sizes accounts for chrome.
+    if (!hidden) {
+        SDL_DisplayID disp = SDL_GetDisplayForWindow(m_window);
+        SDL_Rect usable{};
+        if (disp && SDL_GetDisplayUsableBounds(disp, &usable)) {
+            int top = 0, left = 0, bottom = 0, right = 0;
+            SDL_GetWindowBordersSize(m_window, &top, &left, &bottom, &right);
+            int maxW = usable.w - left - right;
+            int maxH = usable.h - top - bottom;
+            int clampedW = std::min<int>(static_cast<int>(m_width), std::max(1, maxW));
+            int clampedH = std::min<int>(static_cast<int>(m_height), std::max(1, maxH));
+            if (clampedW != static_cast<int>(m_width) ||
+                clampedH != static_cast<int>(m_height)) {
+                LOG_INFO("Clamped window from %ux%u to %dx%d to fit display %dx%d",
+                         m_width, m_height, clampedW, clampedH, usable.w, usable.h);
+                SDL_SetWindowSize(m_window, clampedW, clampedH);
+                m_width = static_cast<uint32_t>(clampedW);
+                m_height = static_cast<uint32_t>(clampedH);
+            }
+            SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED,
+                                  SDL_WINDOWPOS_CENTERED);
+        }
     }
 
     // Create OpenGL context
