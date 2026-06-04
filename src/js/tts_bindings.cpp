@@ -588,6 +588,36 @@ static JSValue js_qwen_synthesize_clone(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// qwen.embedSpeaker(audio, opts?) -> Float32Array(enc_dim)   (sync, Base only)
+//   Encode mono PCM to the ECAPA-TDNN speaker x-vector (1024-D) — the same
+//   enrollment synthesizeClone does, on its own. audio: Float32Array of mono
+//   samples; opts.sampleRate: input rate (default 24000, resampled to the
+//   encoder's 24 kHz as needed). The audio->identity front-end for harvesting
+//   speaker embeddings to train a voice/style adapter. Throws if the loaded
+//   checkpoint is not a Base variant.
+static JSValue js_qwen_embed_speaker(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "embedSpeaker: not a QwenTts");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "embedSpeaker(audio, opts?): audio required");
+    std::vector<float> audio = qjsbind::read_float32_array(ctx, argv[0]);
+    if (audio.empty())
+        return JS_ThrowTypeError(ctx,
+            "embedSpeaker: audio must be a non-empty Float32Array");
+    float sr = 24000.0f;
+    if (argc >= 2 && JS_IsObject(argv[1])) getNum(ctx, argv[1], "sampleRate", sr);
+    try {
+        brotensor::DeviceScope scope(w->device);
+        brosoundml::AudioBuffer ref;
+        ref.samples     = std::move(audio);
+        ref.sample_rate = static_cast<int>(sr);
+        return qjsbind::make_float32_array(ctx, w->qwen->embed_speaker(ref));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "embedSpeaker: %s", e.what());
+    }
+}
+
 // Marshal a std::vector<std::string> to a JS string[].
 static JSValue stringVecToJs(JSContext* ctx, const std::vector<std::string>& v) {
     JSValue arr = JS_NewArray(ctx);
@@ -637,6 +667,7 @@ static void registerQwenClass(JSContext* ctx) {
         .get("modelSize",  [](QwenTtsWrapper* w) { return w->qwen->config().model_size; })
         .method_raw("synthesize",      js_qwen_synthesize,       2)
         .method_raw("synthesizeClone", js_qwen_synthesize_clone, 3)
+        .method_raw("embedSpeaker",    js_qwen_embed_speaker,    2)
         .method_raw("speakers",       js_qwen_speakers,        0)
         .method_raw("languages",      js_qwen_languages,       0)
         .method_raw("speakerDialect", js_qwen_speaker_dialect, 1);
