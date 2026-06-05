@@ -6,6 +6,7 @@
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
 #include "scene/instanced_mesh_node.h"
+#include "scene/gaussian_splat_node.h"
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
@@ -44,6 +45,7 @@ public:
     PhysicsNode* createPhysicsNode(const std::string& name = "");
     MeshNode* createMesh(const std::string& name = "");
     InstancedMeshNode* createInstancedMesh(const std::string& name = "");
+    GaussianSplatNode* createGaussianSplat(const std::string& name = "");
     HtmlNode* createHtml(const std::string& name = "");
     LightNode* createLight(const std::string& name = "");
     ParticleNode* createParticles(const std::string& name = "");
@@ -340,6 +342,7 @@ private:
     void renderMeshNode(MeshNode* mesh);
     void renderInstancedMeshNode(InstancedMeshNode* mesh);
     void ensureInstancedMeshPipeline();
+    void renderGaussianSplatNodes();
     void renderBillboardNode(SceneNode* node);
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
 

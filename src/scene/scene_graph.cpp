@@ -1372,6 +1372,13 @@ InstancedMeshNode* SceneGraph::createInstancedMesh(const std::string& name) {
     return ptr;
 }
 
+GaussianSplatNode* SceneGraph::createGaussianSplat(const std::string& name) {
+    auto node = std::make_unique<GaussianSplatNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
 HtmlNode* SceneGraph::createHtml(const std::string& name) {
     auto node = std::make_unique<HtmlNode>(name);
     auto* ptr = node.get();
@@ -3702,12 +3709,14 @@ void SceneGraph::render() {
     // they share the same setup path.
     bool hasMeshNodes = false;
     bool hasInstancedMeshNodes = false;
+    bool hasSplatNodes = false;
     bool hasBillboardNodes = false;
     bool hasLightIcons = false;
     for (auto& [id, node] : nodes_) {
         if (!node->visible()) continue;
         if (node->type() == SceneNode::Type::Mesh) hasMeshNodes = true;
         else if (node->type() == SceneNode::Type::InstancedMesh) hasInstancedMeshNodes = true;
+        else if (node->type() == SceneNode::Type::GaussianSplat) hasSplatNodes = true;
         else if (node->hasWorldAnchor())           hasBillboardNodes = true;
         else if (showLightIcons_ && node->type() == SceneNode::Type::Light) hasLightIcons = true;
     }
@@ -3718,7 +3727,7 @@ void SceneGraph::render() {
     if (gizmoProvider_) gizmoMeshes = gizmoProvider_(this);
     const bool hasGizmo = !gizmoMeshes.empty();
 
-    const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
+    const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasSplatNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
                        && canvasWidth_ > 0 && canvasHeight_ > 0;
 
     if (has3D) {
@@ -3839,6 +3848,13 @@ void SceneGraph::render() {
 
                     glDisable(GL_CULL_FACE);
                 }
+            }
+
+            // --- Gaussian splat pass ---------------------------------------
+            // After opaque geometry so splats depth-test against it; sorted +
+            // blended internally (see renderGaussianSplatNodes).
+            if (hasSplatNodes) {
+                renderGaussianSplatNodes();
             }
 
             // --- Billboard pass --------------------------------------------
@@ -4289,6 +4305,37 @@ void SceneGraph::renderInstancedMeshNode(InstancedMeshNode* mesh) {
     }
 
     if (ds) glEnable(GL_CULL_FACE);
+}
+
+// ---------------------------------------------------------------------------
+// Gaussian splat rendering
+// ---------------------------------------------------------------------------
+// Splats are order-dependent transparency: depth-test against the opaque mesh
+// FBO (so geometry occludes them) but don't write depth (splats blend over
+// each other in CPU-sorted back-to-front order). Premultiplied "over" matches
+// the fragment shader's premultiplied output and the billboard/Skia composite.
+void SceneGraph::renderGaussianSplatNodes() {
+    const float eye[3] = {cameraEye_.x, cameraEye_.y, cameraEye_.z};
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_CULL_FACE);
+
+    for (auto& [id, node] : nodes_) {
+        if (!node->visible()) continue;
+        if (node->type() != SceneNode::Type::GaussianSplat) continue;
+        static_cast<GaussianSplatNode*>(node.get())->draw(
+            viewMatrix_.data, projectionMatrix_.data, eye,
+            meshFBOWidth_, meshFBOHeight_);
+    }
+
+    // Restore the depth-write default the opaque passes expect.
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
 }
 
 // ---------------------------------------------------------------------------

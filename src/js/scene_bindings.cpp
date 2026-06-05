@@ -11,6 +11,7 @@
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
 #include "scene/instanced_mesh_node.h"
+#include "scene/gaussian_splat_node.h"
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
@@ -27,6 +28,7 @@
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/analysis/raycast.h>
 #include <bromesh/analysis/bvh.h>
+#include <bromesh/io/splat_ply.h>
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
@@ -1669,6 +1671,60 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         applyTex("metallicRoughnessTexture", &scene::MeshNode::setMetallicRoughnessTexture);
         applyTex("occlusionTexture",         &scene::MeshNode::setOcclusionTexture);
         applyTex("emissiveTexture",          &scene::MeshNode::setEmissiveTexture);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// createGaussianSplat({path, x, y, z, scale, name})
+// Loads a 3D Gaussian Splat .ply and renders it with EWA splatting via
+// GaussianSplatNode. `path` is resolved against the app base dir + mounts.
+static JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createGaussianSplat();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        JSValue pathVal = JS_GetPropertyStr(ctx, opts, "path");
+        if (JS_IsString(pathVal)) {
+            std::string path = resolveAppPath(jsStr(ctx, pathVal));
+            auto cloud = bromesh::loadSplatPLY(path);
+            if (cloud.empty()) {
+                LOG_WARN("createGaussianSplat: failed to load splat ply '%s'", path.c_str());
+            } else {
+                auto b = cloud.bounds();
+                LOG_INFO("createGaussianSplat: loaded %zu splats (SH deg %d) from '%s'\n"
+                         "  bounds min=(%.3f %.3f %.3f) max=(%.3f %.3f %.3f) center=(%.3f %.3f %.3f)",
+                         cloud.count(), cloud.shDegree, path.c_str(),
+                         b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z,
+                         (b.min.x + b.max.x) * 0.5f, (b.min.y + b.max.y) * 0.5f,
+                         (b.min.z + b.max.z) * 0.5f);
+                node->setCloud(std::move(cloud));
+            }
+        }
+        JS_FreeValue(ctx, pathVal);
+
+        double x = jsGetProp(ctx, opts, "x", 0);
+        double y = jsGetProp(ctx, opts, "y", 0);
+        double z = jsGetProp(ctx, opts, "z", 0);
+        node->setPosition((float)x, (float)y, (float)z);
+
+        JSValue scaleVal = JS_GetPropertyStr(ctx, opts, "scale");
+        if (!JS_IsUndefined(scaleVal)) {
+            double s = 1;
+            JS_ToFloat64(ctx, &s, scaleVal);
+            node->setScale((float)s, (float)s, (float)s);
+        }
+        JS_FreeValue(ctx, scaleVal);
     }
 
     return wrapNode(ctx, node, g);
@@ -3318,6 +3374,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createPhysicsNode", js_sg_createPhysicsNode, 1)
         .method_raw("createMesh", js_sg_createMesh, 1)
         .method_raw("createInstancedMesh", js_sg_createInstancedMesh, 1)
+        .method_raw("createGaussianSplat", js_sg_createGaussianSplat, 1)
         .method_raw("createHtmlNode", js_sg_createHtml, 1)
         .method_raw("createLight", js_sg_createLight, 1)
         .method_raw("createParticles", js_sg_createParticles, 1)
