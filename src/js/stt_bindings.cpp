@@ -92,12 +92,12 @@ static bool getBool(JSContext* ctx, JSValueConst obj, const char* key,
     return out;
 }
 
-// Pick the default device — CUDA when available, else CPU. brotensor::init()
-// must have been called beforehand so the CUDA backend probe has run.
+// Pick the default device — CUDA, then Metal, then CPU. brotensor::init()
+// must have been called beforehand so the GPU backend probes have run.
 static brotensor::Device autoDevice() {
-    return brotensor::is_available(brotensor::Device::CUDA)
-        ? brotensor::Device::CUDA
-        : brotensor::Device::CPU;
+    if (brotensor::is_available(brotensor::Device::CUDA))  return brotensor::Device::CUDA;
+    if (brotensor::is_available(brotensor::Device::Metal)) return brotensor::Device::Metal;
+    return brotensor::Device::CPU;
 }
 
 static const char* deviceName(brotensor::Device d) {
@@ -122,7 +122,7 @@ static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
     }
     if (!JS_IsString(v)) {
         JS_FreeValue(ctx, v);
-        err = "opts.device must be a string ('cpu' or 'cuda')";
+        err = "opts.device must be a string ('cpu', 'cuda', or 'metal')";
         return false;
     }
     const char* s = JS_ToCString(ctx, v);
@@ -132,7 +132,7 @@ static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
     if (sv == "cpu")  { out = brotensor::Device::CPU;  return true; }
     if (sv == "cuda") { out = brotensor::Device::CUDA; return true; }
     if (sv == "metal"){ out = brotensor::Device::Metal; return true; }
-    err = "opts.device must be 'cpu' or 'cuda' (got '" + sv + "')";
+    err = "opts.device must be 'cpu', 'cuda', or 'metal' (got '" + sv + "')";
     return false;
 }
 
