@@ -459,6 +459,57 @@ static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// decodeFrom(voice, asr, F0, N, nPhonemes, opts?)
+//   -> { samples, sampleRate, stages? }
+//   Re-decode from EDITED intermediates — the prosody-editing entry point. asr,
+//   F0 and N are the 'asr', 'F0_pred' and 'N_pred' Float32Array stages from a
+//   prior synthesizeTraced(); edit any of them and re-run only the decoder back
+//   half (skips plBERT / encoders / predictor). nPhonemes is the 'phonemes'
+//   stage length (picks the voice style row). total is inferred as F0.length/2;
+//   asr must be hiddenDim*total. opts.trace true returns the back-half stages.
+static JSValue js_kokoro_decodeFrom(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* w = kokoroSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "decodeFrom: not a Kokoro");
+    if (argc < 5)
+        return JS_ThrowTypeError(ctx,
+            "decodeFrom(voice, asr, F0, N, nPhonemes, opts?): need voice, asr, F0, N, nPhonemes");
+
+    auto* vw = qjsbind::unwrap<VoiceWrapper>(ctx, argv[0]);
+    if (!vw)
+        return JS_ThrowTypeError(ctx, "decodeFrom: voice must be a Voice (from createVoice/loadVoice)");
+
+    std::vector<float> asr = qjsbind::read_float32_array(ctx, argv[1]);
+    std::vector<float> F0  = qjsbind::read_float32_array(ctx, argv[2]);
+    std::vector<float> N   = qjsbind::read_float32_array(ctx, argv[3]);
+    if (asr.empty() || F0.empty() || N.empty())
+        return JS_ThrowTypeError(ctx, "decodeFrom: asr, F0 and N must be non-empty Float32Arrays");
+    if (F0.size() % 2 != 0)
+        return JS_ThrowTypeError(ctx, "decodeFrom: F0 length must be even (2*total)");
+
+    int32_t nph = 0; JS_ToInt32(ctx, &nph, argv[4]);
+    const int total = static_cast<int>(F0.size() / 2);
+
+    bool want_trace = false;
+    if (argc >= 6 && JS_IsObject(argv[5])) {
+        JSValue tv = JS_GetPropertyStr(ctx, argv[5], "trace");
+        want_trace = JS_ToBool(ctx, tv) > 0;
+        JS_FreeValue(ctx, tv);
+    }
+
+    try {
+        brosoundml::KokoroTrace tr;
+        auto buf = w->kokoro->decode_from(vw->voice, nph, asr, total, F0, N, {},
+                                          want_trace ? &tr : nullptr);
+        JSValue out = audioBufferToJs(ctx, buf);
+        if (want_trace)
+            JS_SetPropertyStr(ctx, out, "stages", traceStagesToJs(ctx, tr));
+        return out;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "decodeFrom: %s", e.what());
+    }
+}
+
 // vocab() -> { phoneme: id, ... }
 //   Returns the phoneme->id map from KokoroConfig. Empty when the model
 //   directory's config.json omits it.
@@ -507,6 +558,7 @@ static void registerKokoroClass(JSContext* ctx) {
         .method_raw("createVoice",    js_kokoro_createVoice,    2)
         .method_raw("synthesize",     js_kokoro_synthesize,     3)
         .method_raw("synthesizeTraced", js_kokoro_synthesizeTraced, 3)
+        .method_raw("decodeFrom",     js_kokoro_decodeFrom,     6)
         .method_raw("vocab",          js_kokoro_vocab,          0)
         .method_raw("encodePhonemes", js_kokoro_encodePhonemes, 1);
 }
