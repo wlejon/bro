@@ -1713,6 +1713,45 @@ static JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val,
         }
         JS_FreeValue(ctx, pathVal);
 
+        // In-memory cloud — the SoA typed arrays bro.triposplat.generate returns
+        // ({ positions, scales, rotations, opacities, sh, shDegree }). Field
+        // layout already matches bromesh::GaussianSplatCloud, so this is a copy.
+        JSValue cloudVal = JS_GetPropertyStr(ctx, opts, "cloud");
+        if (JS_IsObject(cloudVal)) {
+            auto readF32 = [&](const char* key, std::vector<float>& dst) {
+                JSValue v = JS_GetPropertyStr(ctx, cloudVal, key);
+                std::size_t off = 0, len = 0, bpe = 0;
+                JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &len, &bpe);
+                if (!JS_IsException(ab)) {
+                    std::size_t blen = 0;
+                    std::uint8_t* p = JS_GetArrayBuffer(ctx, &blen, ab);
+                    if (p && len > 0) {
+                        const float* f = reinterpret_cast<const float*>(p + off);
+                        dst.assign(f, f + len / sizeof(float));
+                    }
+                } else {
+                    JS_FreeValue(ctx, JS_GetException(ctx));
+                }
+                JS_FreeValue(ctx, ab);
+                JS_FreeValue(ctx, v);
+            };
+            bromesh::GaussianSplatCloud cloud;
+            readF32("positions", cloud.positions);
+            readF32("scales",    cloud.scales);
+            readF32("rotations", cloud.rotations);
+            readF32("opacities", cloud.opacities);
+            readF32("sh",        cloud.sh);
+            cloud.shDegree = (int)jsGetProp(ctx, cloudVal, "shDegree", 0);
+            if (cloud.empty()) {
+                LOG_WARN("createGaussianSplat: opts.cloud has no positions");
+            } else {
+                LOG_INFO("createGaussianSplat: %zu splats from in-memory cloud (SH deg %d)",
+                         cloud.count(), cloud.shDegree);
+                node->setCloud(std::move(cloud));
+            }
+        }
+        JS_FreeValue(ctx, cloudVal);
+
         double x = jsGetProp(ctx, opts, "x", 0);
         double y = jsGetProp(ctx, opts, "y", 0);
         double z = jsGetProp(ctx, opts, "z", 0);

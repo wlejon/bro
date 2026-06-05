@@ -555,14 +555,17 @@ static JSValue js_windowReverseForward(JSContext* ctx, JSValueConst, int argc, J
     return JS_UNDEFINED;
 }
 static JSValue js_spatialMerge2x2Forward(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 6) return JS_ThrowTypeError(ctx, "spatialMerge2x2Forward(X,N,C,H,W,Y)");
+    if (argc < 6) return JS_ThrowTypeError(ctx, "spatialMerge2x2Forward(X,N,C,H,W,Y,channelMajor?)");
     ENSURE_INIT();
     GT(X, 0, "spatialMerge2x2Forward");
     int32_t N=0,C=0,H=0,W=0;
     JS_ToInt32(ctx, &N, argv[1]); JS_ToInt32(ctx, &C, argv[2]);
     JS_ToInt32(ctx, &H, argv[3]); JS_ToInt32(ctx, &W, argv[4]);
     GT(Y, 5, "spatialMerge2x2Forward");
-    nngpu::spatial_merge_2x2_forward(*X, N, C, H, W, *Y);
+    // Optional ordering flag: false (default) = block-major c_out=block*C+c_in
+    // (Qwen-VL); true = channel-major c_out=c_in*4+block (torch pixel_unshuffle).
+    bool channelMajor = (argc > 6) && (JS_ToBool(ctx, argv[6]) == 1);
+    nngpu::spatial_merge_2x2_forward(*X, N, C, H, W, channelMajor, *Y);
     return JS_UNDEFINED;
 }
 

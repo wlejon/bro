@@ -7,6 +7,7 @@
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/triposplat_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/imagebitmap_bindings.h"
 #include "js/mesh_bindings.h"
@@ -262,6 +263,11 @@ void Worker::threadFunc()
     // sibling). Same binding as the main context; dense-map results build
     // ImageBitmaps, so this is installed alongside ImageBitmap below. ---
     installVisionBindings(ctx);
+
+    // --- 3b''''''ᵛⁱ. Install bro.triposplat (single-image -> 3D Gaussian Splat,
+    // composed over brovisionml + brodiffusion). Runs the heavy pipeline; a
+    // worker is the idiomatic place to keep the UI responsive. ---
+    installTriposplatBindings(ctx);
 
     // --- 3b'''''''. Install createImageBitmap / ImageBitmap. Workers that
     // produce frames (e.g. the diffusion worker) build bitmaps here and

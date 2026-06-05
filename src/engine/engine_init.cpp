@@ -50,6 +50,7 @@
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/triposplat_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/mic_bindings.h"
@@ -225,6 +226,11 @@ Engine::Engine(const EngineConfig& config)
     // SAM segmentation + Depth-Anything depth (+ the ControlNet annotators).
     // Heavy ops run on a background thread when given an onReady/onDone callback.
     js::installVisionBindings(jsRuntime_->getContext());
+
+    // bro.triposplat (single-image -> 3D Gaussian Splat). Composition layer over
+    // DINOv3 (brovisionml) + Flux.2 VAE / flow DiT / octree decoder (brodiffusion);
+    // emits a Gaussian cloud for the scene GaussianSplatNode. GPU by default.
+    js::installTriposplatBindings(jsRuntime_->getContext());
 
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());
