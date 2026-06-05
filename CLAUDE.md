@@ -53,7 +53,7 @@ On macOS, `tests/run_tests.sh` uses `mapfile` and needs bash 4+ (`brew install b
 
 ## Architecture
 
-Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~94K LOC of C++20.
+Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~103K LOC of C++20.
 
 **Stack:** QuickJS (JS engine) + qjsbind (C++/JS bindings) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + broaudio (audio engine) + bromesh (mesh generation/manipulation) + Jolt (physics) + Skia (raster rendering) + SDL3 (windowing + GPU display)
 

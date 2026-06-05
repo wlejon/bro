@@ -51,6 +51,8 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 
 **Beyond the web** — 3D scene graph with mesh rendering and terrain (`bro.scene`), Jolt rigid-body physics with contact events, Web Audio with synthesis / effects / spatial / MIDI (broaudio), mesh generation and CSG (bromesh), navmesh and A* pathfinding (`bro.ai.game`), game networking over GameNetworkingSockets (`bro.net`), native file dialogs, native menu bars, 3D transform gizmos, native crosshair.
 
+**On-device AI/ML** — GPU-accelerated model inference wired into JS, CUDA/Metal with a CPU fallback (`bro.gpu` probes the live backend): text generation with Qwen3 (`bro.lm`), text-to-image diffusion with U-Net/VAE, LoRA, and schedulers (`bro.diffusion`), text-to-speech via Kokoro and Qwen3-TTS (`bro.tts`), Whisper speech-to-text (`bro.stt`), streaming wake-word and live mic capture (`bro.wake` / `bro.mic`), and vision models — SAM segmentation, depth, surface normals, ControlNet annotators (`bro.vision`). A unified tensor type and op set (`bro.tensor`) and composable image kernels (`bro.image`) underpin them.
+
 **For development** — Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing. See [docs/headless.md](docs/headless.md). Line-coverage reports via OpenCppCoverage are wired up for bro and every sibling — `pwsh scripts/coverage.ps1` in any repo. See [docs/coverage.md](docs/coverage.md).
 
 ## Architecture
@@ -68,6 +70,7 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 - **brolm** — Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion builds on. See [brolm](https://github.com/wlejon/brolm).
 - **brodiffusion** — Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. See [brodiffusion](https://github.com/wlejon/brodiffusion).
 - **brosoundml** — Audio-ML model inference (TTS / STT / neural codec) built on brotensor's FP32 audio op family. See [brosoundml](https://github.com/wlejon/brosoundml).
+- **brovisionml** — Vision-model inference: SAM segmentation, Depth-Anything-V2 depth, DSINE surface normals, and the ControlNet conditioning annotators (HED, lineart, MLSD, OpenPose, SegFormer). See [brovisionml](https://github.com/wlejon/brovisionml).
 - **broimage** — Image decode/encode (stb) plus composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric ops, alpha-correct compositing, color/HSV/sRGB, normalization presets, and NHWC↔NCHW preproc. Backs `bro.image` and host-side preprocessing in brolm/brodiffusion. See [broimage](https://github.com/wlejon/broimage).
 - **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
 - **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs.
@@ -131,7 +134,7 @@ For more elaborate setups — multiple apps under a project root with shared `li
 
 Annotated `.js` files in [docs/](docs/) — load them in your editor for JSDoc on every binding:
 
-`audio-api.js`, `mesh-api.js`, `flora-api.js`, `math-api.js`, `scene-api.js`, `lighting-api.js`, `physics-api.js`, `terrain-api.js`, `ai-game-api.js`, `tensor-api.js`, `diffusion-api.js`, `net-api.js`, `noise-api.js`, `worker-api.js`, `image-api.js`, `imagebitmap-api.js`, `video-api.js`, `dialogs-api.js`, `menu-api.js`, `gizmo-api.js`, `crosshair-api.js`, `brokit-api.js`.
+`audio-api.js`, `mesh-api.js`, `flora-api.js`, `math-api.js`, `scene-api.js`, `lighting-api.js`, `physics-api.js`, `terrain-api.js`, `ai-game-api.js`, `gpu-api.js`, `tensor-api.js`, `lm-api.js`, `diffusion-api.js`, `tts-api.js`, `stt-api.js`, `wake-api.js`, `mic-api.js`, `vision-api.js`, `net-api.js`, `noise-api.js`, `worker-api.js`, `image-api.js`, `imagebitmap-api.js`, `video-api.js`, `dialogs-api.js`, `menu-api.js`, `gizmo-api.js`, `crosshair-api.js`, `brokit-api.js`.
 
 Plus [settings.md](docs/settings.md) (settings + action binding) and [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless).
 
