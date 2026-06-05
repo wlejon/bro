@@ -185,8 +185,15 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
         setCursorPos(static_cast<int>(strlen(buf)));
         r.handled = true;
         r.dispatchInput = true;
-    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER ||
-               keycode == SDLK_ESCAPE) {
+    } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
+        // Enter does NOT blur a single-line text input (matches browsers).
+        // Mark it handled so the keydown is still delivered to this element's
+        // own listeners — form/app code commonly submits on Enter — while
+        // focus is retained so the user can keep typing afterward. Blurring
+        // here previously left the control unfocused but still the document's
+        // activeElement, wedging all further text entry until a click.
+        r.handled = true;
+    } else if (keycode == SDLK_ESCAPE) {
         setFocused(false);
         r.handled = true;
         r.unfocus = true;

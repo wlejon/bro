@@ -1160,6 +1160,11 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
     }
     if (r.unfocus) {
         dispatchFocusEvents(el, nullptr);
+        // Keep the document's active element in sync with the control's focus
+        // flag. Without this the field stays activeElement while its control
+        // reports unfocused, so handleTextInput drops every keystroke and the
+        // field appears dead until the user clicks elsewhere.
+        if (document_) document_->setActiveElement(nullptr);
         safeStopTextInput(window_.get());
     }
     if (r.handled) {
