@@ -191,8 +191,15 @@ public:
     void setSvgControl(std::unique_ptr<layout::ElSvg> ctrl);
     void setVideoControl(std::unique_ptr<layout::ElVideo> ctrl);
 
-    // Canvas scene (opaque pointer — set by engine, read by draw traversal)
-    void setCanvasScene(void* scene) { canvasScene_ = scene; }
+    // Canvas scene (opaque pointer — set by engine, read by draw traversal).
+    // The optional onDestroy hook is invoked from ~Element so the backing
+    // CanvasScene can drop its dangling pointer to this Element the instant it
+    // is freed — including the deferred-free path (drainPendingFrees), which
+    // destroys the Element without waiting for the JS wrapper to be GC'd.
+    void setCanvasScene(void* scene, void (*onDestroy)(void*) = nullptr) {
+        canvasScene_ = scene;
+        canvasSceneOnDestroy_ = onDestroy;
+    }
     void* canvasScene() const { return canvasScene_; }
 
     // WebGL context (opaque pointer — set by engine, read by draw traversal)
@@ -248,6 +255,7 @@ private:
     std::unique_ptr<layout::ElVideo> videoControl_;
     std::string customValidity_;
     void* canvasScene_ = nullptr;
+    void (*canvasSceneOnDestroy_)(void*) = nullptr;
     void* webglContext_ = nullptr;
     void* sceneGraph_ = nullptr;
     unsigned int sceneGraphFBOTex_ = 0;

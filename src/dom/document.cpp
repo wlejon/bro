@@ -116,6 +116,7 @@ void Document::parse(const std::string& html, const std::string& authorCss,
         }
     }
     pendingFrees_.clear();
+    pendingSet_.clear();
     ownedNodes_.clear();
     cascade_.clear();
 
@@ -476,17 +477,26 @@ void Document::freeNode(Node* node) {
     auto it = ownedNodes_.find(node);
     if (it != ownedNodes_.end()) {
         pendingFrees_.push_back(std::move(it->second));
+        pendingSet_.insert(node);
         ownedNodes_.erase(it);
     }
 }
 
 void Document::drainPendingFrees() {
     pendingFrees_.clear();
+    pendingSet_.clear();
 }
 
 bool Document::ownsNode(const Node* n) const {
     if (!n) return false;
     return ownedNodes_.find(const_cast<Node*>(n)) != ownedNodes_.end();
+}
+
+bool Document::isNodeLive(const Node* n) const {
+    if (!n) return false;
+    Node* key = const_cast<Node*>(n);
+    return ownedNodes_.find(key) != ownedNodes_.end() ||
+           pendingSet_.find(key) != pendingSet_.end();
 }
 
 // ---------------------------------------------------------------------------

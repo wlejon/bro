@@ -76,7 +76,19 @@ void Node::insertBefore(Node* newChild, Node* refChild) {
 // Element implementations
 // ---------------------------------------------------------------------------
 
-Element::~Element() { magic_ = 0xDEAD; }
+Element::~Element() {
+    // Tell the backing CanvasScene (if any) that its Element is gone, so it
+    // drops the layout/detached callbacks that aim at this object before the
+    // memory is reclaimed. Without this, a scene whose Element is destroyed via
+    // the deferred-free path (drainPendingFrees) — rather than the JS GC
+    // finalizer — would dereference freed memory on the next frame's
+    // prepareAndSignal()/checkDetached(). The engine clears canvasScene_ when it
+    // reclaims a scene first, so this never calls into a freed scene.
+    if (canvasScene_ && canvasSceneOnDestroy_) {
+        canvasSceneOnDestroy_(canvasScene_);
+    }
+    magic_ = 0xDEAD;
+}
 
 std::string Element::resolveUrl(const std::string& src) const {
     if (src.size() >= 2 && src[1] == ':') return src;                 // Windows absolute

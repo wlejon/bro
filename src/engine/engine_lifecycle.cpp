@@ -83,8 +83,34 @@ Engine::~Engine() {
     // Destroy scene graphs before canvas scenes (they hold canvas pointers)
     sceneGraphs_.clear();
 
-    // Canvas threads are stopped by ~CanvasScene (unique_ptr destruction)
+    // Release threaded scenes' GPU resources on the shared worker and stop it
+    // before destroying the scenes (the frame loop's shutdown normally did this
+    // already; this is a no-op then, and a safety net for early-teardown paths).
+    if (canvasRasterThread_ && canvasRasterThread_->started()) {
+        for (auto& cs : canvasScenes_) {
+            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
+        }
+        for (auto& cs : canvasScenesDetached_) {
+            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
+        }
+        canvasRasterThread_->stop();
+    }
+    // Sever Element->scene back-links before destroying the scenes. The
+    // Document (and its Elements) outlives this point — it is reset far below —
+    // so its ~Element would otherwise invoke the on-destroy hook
+    // (onBackingElementDestroyed) against a freed scene. The backing Elements
+    // are still alive here, so this is safe to touch.
+    for (auto& cs : canvasScenes_) {
+        if (cs) if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
+            el->setCanvasScene(nullptr);
+    }
+    for (auto& cs : canvasScenesDetached_) {
+        if (cs) if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
+            el->setCanvasScene(nullptr);
+    }
+    canvasScenesDetached_.clear();
     canvasScenes_.clear();
+    canvasRasterThread_.reset();
 
     // WebGL contexts (unique_ptr destruction handles cleanup)
     webglEntries_.clear();

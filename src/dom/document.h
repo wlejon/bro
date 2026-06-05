@@ -62,6 +62,13 @@ public:
     // hit-test results — before dereferencing them.
     bool ownsNode(const Node* n) const;
 
+    // True if `n` points at a node whose memory is still alive — either owned
+    // (in the tree / offscreen) or queued in pendingFrees_ but not yet drained.
+    // Both checks are pointer-value lookups, so this is safe to call on a
+    // possibly-dangling pointer: it never dereferences `n`. CanvasScene uses it
+    // to decide whether its raw backing-Element pointer is safe to touch.
+    bool isNodeLive(const Node* n) const;
+
     // Queries
     Element* getElementById(const std::string& id);
     Element* querySelector(const std::string& selector);
@@ -196,6 +203,10 @@ private:
     // Nodes moved out of ownedNodes_ by freeNode() but not yet destroyed.
     // Drained by the engine when no other thread is reading the DOM.
     std::vector<std::unique_ptr<Node>> pendingFrees_;
+    // Pointer-value index of the nodes currently in pendingFrees_, so liveness
+    // of a raw Node* can be answered without dereferencing it. Kept in sync
+    // with pendingFrees_ (insert in freeNode, cleared in drainPendingFrees).
+    std::unordered_set<Node*> pendingSet_;
 
     // Persistent layout tree (see layoutRoot()).
     std::unique_ptr<layout::LayoutNodeAdapter> layoutRoot_;

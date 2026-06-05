@@ -557,9 +557,13 @@ Engine::Engine(const EngineConfig& config)
                             while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
                             return n->tagName() != "html" && n->tagName() != "HTML";
                         }, el);
+                        scene->setLiveCheck([](void* doc, void* node) -> bool {
+                            return static_cast<dom::Document*>(doc)->isNodeLive(
+                                static_cast<dom::Element*>(node));
+                        }, el->document());
                     }
                     auto* ptr = scene.get();
-                    if (el) el->setCanvasScene(ptr);
+                    if (el) el->setCanvasScene(ptr, &canvas::CanvasScene::onBackingElementDestroyed);
                     addCanvasScene(std::move(scene));
                     return js::CanvasBindings::wrapContext2D(ctx, ptr);
                 }
@@ -604,9 +608,13 @@ Engine::Engine(const EngineConfig& config)
                             while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
                             return n->tagName() != "html" && n->tagName() != "HTML";
                         }, el);
+                        canvasScene->setLiveCheck([](void* doc, void* node) -> bool {
+                            return static_cast<dom::Document*>(doc)->isNodeLive(
+                                static_cast<dom::Element*>(node));
+                        }, el->document());
                     }
                     auto* csPtr = canvasScene.get();
-                    if (el) el->setCanvasScene(csPtr);
+                    if (el) el->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
                     addCanvasScene(std::move(canvasScene));
 
                     // Size to element layout (fall back to viewport)
@@ -672,9 +680,13 @@ Engine::Engine(const EngineConfig& config)
                         while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
                         return n->tagName() != "html" && n->tagName() != "HTML";
                     }, el);
+                    canvasScene->setLiveCheck([](void* doc, void* node) -> bool {
+                        return static_cast<dom::Document*>(doc)->isNodeLive(
+                            static_cast<dom::Element*>(node));
+                    }, el->document());
                 }
                 auto* csPtr = canvasScene.get();
-                if (el) el->setCanvasScene(csPtr);
+                if (el) el->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
                 canvasScene->init(nullptr);
                 canvasScenes_.push_back(std::move(canvasScene));
                 if (type == "scene") {

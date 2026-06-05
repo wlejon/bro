@@ -317,9 +317,13 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
                         while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
                         return n->tagName() != "html" && n->tagName() != "HTML";
                     }, el);
+                    scene->setLiveCheck([](void* doc, void* node) -> bool {
+                        return static_cast<dom::Document*>(doc)->isNodeLive(
+                            static_cast<dom::Element*>(node));
+                    }, el->document());
                 }
                 auto* ptr = scene.get();
-                if (el) el->setCanvasScene(ptr);
+                if (el) el->setCanvasScene(ptr, &canvas::CanvasScene::onBackingElementDestroyed);
                 d.canvasScenes.push_back(std::move(scene));
                 return js::CanvasBindings::wrapContext2D(fctx, ptr);
             });

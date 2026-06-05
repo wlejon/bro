@@ -181,13 +181,21 @@ void Engine::run() {
     // geometry in those handlers). The main loop below re-layouts on demand
     // via dirty tracking, so there is nothing to lay out here.
 
-    // Start canvas threads for any existing canvas scenes that weren't
-    // threaded at addCanvasScene time. Main thread creates each shared
-    // context; startThread blocks until the worker MakeCurrents it.
-    for (auto& cs : canvasScenes_) {
-        if (cs && !cs->isThreaded()) {
-            auto ctx = window_->createSharedContext();
-            if (ctx) cs->startThread(ctx, window_->getSDLWindow());
+    // Shared canvas-raster worker: one GL context + thread that rasterizes
+    // every threaded canvas scene. Create it once here, while quiescent (before
+    // the raster thread starts below), so canvas churn never creates/destroys a
+    // GL context on the hot path — the create/destroy-vs-raster overlap was a
+    // Windows/NVIDIA crash. Then bind any scenes already created during load.
+    {
+        auto ctx = window_->createSharedContext();
+        if (ctx) {
+            canvasRasterThread_ = std::make_unique<canvas::CanvasRasterThread>();
+            canvasRasterThread_->start(ctx, window_->getSDLWindow());
+        }
+    }
+    if (canvasRasterThread_ && canvasRasterThread_->started()) {
+        for (auto& cs : canvasScenes_) {
+            if (cs && !cs->isThreaded()) cs->bindRasterThread(canvasRasterThread_.get());
         }
     }
 
@@ -284,6 +292,23 @@ void Engine::run() {
         //     `layers` stays as the last claimed view and we composite that.
         framePresenter_->consumeIfReady();
         auto layers = framePresenter_->currentLayers();
+
+        // 0c. Drain detached canvas scenes deferred from a previous frame. This
+        //     is the only point where the raster worker is guaranteed idle and
+        //     both layer buffers are stable, so it is safe to scrub a scene's
+        //     raw pointer from both buffers before destroying it. If the worker
+        //     is still busy this frame the scenes simply wait — they stay alive,
+        //     and the per-scene liveness guard keeps prepareAndSignal safe.
+        if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) {
+            for (auto& cs : canvasScenesDetached_) {
+                framePresenter_->forgetCanvasSceneAllBuffers(cs.get());
+                // Release GPU resources on the worker that owns them before the
+                // unique_ptr dtor runs on this (main) thread.
+                if (cs->isThreaded() && canvasRasterThread_)
+                    canvasRasterThread_->releaseScene(cs.get());
+            }
+            canvasScenesDetached_.clear();
+        }
 
         // 1. Poll platform events
         eventLoop_->pollEvents();
@@ -625,13 +650,32 @@ void Engine::run() {
         // was still attached, so it still names the scene by raw pointer — and
         // compositeLayers below would dereference the freed scene without this.
         for (auto& cs : canvasScenes_) {
-            if (cs->isDetached() && framePresenter_)
+            if (!cs->isDetached()) continue;
+            if (framePresenter_)
                 framePresenter_->forgetCanvasScene(cs.get());
+            // This scene is being reclaimed. If its backing Element is still
+            // alive (orphaned from the DOM but not yet freed), sever the
+            // Element's back-pointer so its eventual ~Element doesn't invoke
+            // the on-destroy hook against this now-freed scene. backingElement()
+            // is null once onElementFinalized() has run (Element freed first),
+            // so this only fires in the scene-reclaimed-first ordering.
+            if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
+                el->setCanvasScene(nullptr);
         }
-        canvasScenes_.erase(
-            std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
-                [](auto& cs) { return cs->isDetached(); }),
-            canvasScenes_.end());
+        // Move detached scenes out of the active list, but do NOT destroy them
+        // here: the raster worker may have recorded a scene's raw pointer into
+        // the back buffer this very frame, and that buffer becomes the front
+        // buffer next frame. Destroying now would leave prepareAndSignal /
+        // compositeLayers dereferencing a freed scene. They are scrubbed from
+        // both buffers and freed at frame top once the worker is idle.
+        for (auto it = canvasScenes_.begin(); it != canvasScenes_.end(); ) {
+            if ((*it)->isDetached()) {
+                canvasScenesDetached_.push_back(std::move(*it));
+                it = canvasScenes_.erase(it);
+            } else {
+                ++it;
+            }
+        }
 
         // 5e. Set viewport and clear.
         glViewport(0, 0, viewportWidth_, viewportHeight_);
@@ -715,10 +759,18 @@ void Engine::run() {
         rasterGLContext_ = nullptr;
     }
 
-    // Stop canvas threads before GL context cleanup.
-    for (auto& cs : canvasScenes_) {
-        if (cs) cs->stopThread();
+    // Release every threaded scene's GPU resources on the shared worker (where
+    // they live), then stop the worker, before GL context cleanup.
+    if (canvasRasterThread_ && canvasRasterThread_->started()) {
+        for (auto& cs : canvasScenes_) {
+            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
+        }
+        for (auto& cs : canvasScenesDetached_) {
+            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
+        }
+        canvasRasterThread_->stop();
     }
+    canvasScenesDetached_.clear();
 
     SDL_RemoveEventWatch(modalEventWatcher, this);
 }

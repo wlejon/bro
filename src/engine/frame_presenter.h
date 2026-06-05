@@ -103,6 +103,28 @@ public:
         scrub(buffers_[f].systemLayers);
     }
 
+    /// Drop every reference to a CanvasScene from BOTH layer buffers. Unlike
+    /// forgetCanvasScene (front only), this also scrubs the back buffer, which
+    /// the raster worker writes — so the caller MUST guarantee the worker is
+    /// idle (e.g. at frame top after consumeIfReady). Used by the deferred
+    /// canvas-scene free: a scene recorded into the back buffer this frame
+    /// becomes the front buffer next frame, so its raw pointer can outlive a
+    /// front-only scrub. We clear both buffers before the scene is destroyed.
+    void forgetCanvasSceneAllBuffers(const canvas::CanvasScene* scene) {
+        auto scrub = [scene](std::vector<UILayer>& layers) {
+            for (auto& l : layers) {
+                if (l.canvasScene == scene) {
+                    l.canvasScene = nullptr;
+                    l.texture = 0;
+                }
+            }
+        };
+        for (auto& buf : buffers_) {
+            scrub(buf.appLayers);
+            scrub(buf.systemLayers);
+        }
+    }
+
     // ---- worker (raster) thread ----
 
     /// Block until either a request arrives or shutdown is signaled.

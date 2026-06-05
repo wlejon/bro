@@ -67,8 +67,11 @@ CanvasScene::CanvasScene(render::Renderer* renderer)
 }
 
 CanvasScene::~CanvasScene() {
-    stopThread();
-    cleanup();
+    // Threaded scenes have their GPU resources freed on the shared worker
+    // (CanvasRasterThread::releaseScene) before the engine destroys them — we
+    // must not touch GL from here (wrong thread/context). Non-threaded scenes
+    // own their surface on this thread, so clean up directly.
+    if (!threaded_) cleanup();
 }
 
 void CanvasScene::cleanup() {
@@ -90,142 +93,87 @@ void CanvasScene::cleanup() {
 // Threading
 // ---------------------------------------------------------------------------
 
-void CanvasScene::startThread(SDL_GLContext glCtx, SDL_Window* win) {
-    if (threaded_ || !glCtx || !win) return;
-    canvasGLContext_ = glCtx;
-    threaded_ = true;
-    canvasReady_.store(false, std::memory_order_relaxed);
+// Worker-thread render body: ensure the surface, replay staged commands, and
+// refresh the snapshot if one was requested. Runs ON the shared worker thread
+// (CanvasRasterThread::threadFunc), where this scene's GrContext is current.
+void CanvasScene::renderOnWorker(GrDirectContext* grctx, int w, int h) {
+    grContext_ = grctx;          // pin the surface to the worker's context
+    ensureSurface(w, h);
 
-    canvasThread_ = std::thread(&CanvasScene::canvasThreadFunc, this, win);
+    if (grContext_) grContext_->resetContext();
 
-    // Block until the worker has completed SDL_GL_MakeCurrent on its context.
-    // This is the serialization Windows/NVIDIA drivers need (no concurrent
-    // wgl*Context calls against the same HDC) and costs nothing on other
-    // platforms. It is NOT a mutex — just a one-shot atomic handshake.
-    canvasReady_.wait(false, std::memory_order_acquire);
-}
+    flushStagedCommands();
 
-void CanvasScene::stopThread() {
-    if (!threaded_) return;
-    worker_.postShutdown();
-    if (canvasThread_.joinable()) {
-        canvasThread_.join();
-    }
-    threadGrContext_.reset();
-    if (canvasGLContext_) {
-        SDL_GL_DestroyContext(canvasGLContext_);
-        canvasGLContext_ = nullptr;
-    }
-    threaded_ = false;
-}
-
-void CanvasScene::canvasThreadFunc(SDL_Window* win) {
-    // The context was created by the main thread (required on macOS where
-    // SDL_GL_CreateContext calls AppKit). Here we only make it current on
-    // this worker thread — a thread-local GL operation on every platform.
-    SDL_GL_MakeCurrent(win, canvasGLContext_);
-
-    // Signal main before doing anything more so it can proceed to the next
-    // canvas. After this point the main thread may call SDL_GL_CreateContext
-    // again for another canvas; that's safe because our MakeCurrent has
-    // completed and Skia's per-thread GL state tracking only touches our
-    // own context from here on.
-    canvasReady_.store(true, std::memory_order_release);
-    canvasReady_.notify_one();
-
-    threadGrContext_ = render::SkiaRenderer::createGrContext();
-    if (!threadGrContext_) {
-        LOG_ERROR("Canvas thread: failed to create GrDirectContext");
-        return;
-    }
-    // Wire this thread's GrContext for surface creation
-    grContext_ = threadGrContext_.get();
-
-    LOG_INFO("Canvas thread started");
-
-    while (worker_.waitForRequest()) {
-        worker_.markBusy();
-
-        int cw = sharedCanvasWidth_.load(std::memory_order_relaxed);
-        int ch = sharedCanvasHeight_.load(std::memory_order_relaxed);
-
-        ensureSurface(cw, ch);
-
-        if (threadGrContext_) {
-            threadGrContext_->resetContext();
+    if (dirty_) {
+        dirty_ = false;
+        if (grContext_) {
+            grContext_->flushAndSubmit();
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
+    }
 
-        flushStagedCommands();
-
-        if (dirty_) {
-            dirty_ = false;
-            if (threadGrContext_) {
-                threadGrContext_->flushAndSubmit();
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            }
-        }
-
-        // Snapshot readback (canvas-as-source for drawImage / getImageData).
-        // Done on the worker because the surface is Ganesh-backed against
-        // this thread's GrContext — readPixels from the main thread would
-        // cross GL contexts. The bytes copy into a portable raster SkImage
-        // so destination scenes can blit it through their own GrContext.
-        if (snapshotRequested_.load(std::memory_order_acquire)) {
-            int sw = surfWidth_;
-            int sh = surfHeight_;
-            if (surface_ && sw > 0 && sh > 0) {
-                if (threadGrContext_) threadGrContext_->resetContext();
-                snapshot_.assign(static_cast<size_t>(sw) * sh * 4, 0);
-                auto info = SkImageInfo::Make(sw, sh, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
-                bool ok = surface_->readPixels(info, snapshot_.data(), sw * 4, 0, 0);
-                if (ok) {
-                    auto data = SkData::MakeWithCopy(snapshot_.data(), snapshot_.size());
-                    snapshotImage_ = SkImages::RasterFromData(info, data, sw * 4);
-                    snapshotW_ = sw;
-                    snapshotH_ = sh;
-                    snapshotValid_ = true;
-                    snapshotImageValid_ = static_cast<bool>(snapshotImage_);
-                } else {
-                    snapshotImage_.reset();
-                    snapshotValid_ = false;
-                    snapshotImageValid_ = false;
-                }
+    // Snapshot readback (canvas-as-source for drawImage / getImageData). Done
+    // here because the surface is Ganesh-backed against this worker's GrContext
+    // — readPixels from the main thread would cross GL contexts. The bytes copy
+    // into a portable raster SkImage so destination scenes can blit it.
+    if (snapshotRequested_.load(std::memory_order_acquire)) {
+        int sw = surfWidth_;
+        int sh = surfHeight_;
+        if (surface_ && sw > 0 && sh > 0) {
+            if (grContext_) grContext_->resetContext();
+            snapshot_.assign(static_cast<size_t>(sw) * sh * 4, 0);
+            auto info = SkImageInfo::Make(sw, sh, kRGBA_8888_SkColorType, kUnpremul_SkAlphaType);
+            bool ok = surface_->readPixels(info, snapshot_.data(), sw * 4, 0, 0);
+            if (ok) {
+                auto data = SkData::MakeWithCopy(snapshot_.data(), snapshot_.size());
+                snapshotImage_ = SkImages::RasterFromData(info, data, sw * 4);
+                snapshotW_ = sw;
+                snapshotH_ = sh;
+                snapshotValid_ = true;
+                snapshotImageValid_ = static_cast<bool>(snapshotImage_);
             } else {
-                snapshot_.clear();
                 snapshotImage_.reset();
                 snapshotValid_ = false;
                 snapshotImageValid_ = false;
             }
-            snapshotRequested_.store(false, std::memory_order_release);
+        } else {
+            snapshot_.clear();
+            snapshotImage_.reset();
+            snapshotValid_ = false;
+            snapshotImageValid_ = false;
         }
-
-        // GL fence — guarantees GPU commands complete before main thread
-        // samples the texture. FrameWorker handles publish + shutdown race.
-        GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();
-        worker_.publishResult(fence);
+        snapshotRequested_.store(false, std::memory_order_release);
     }
+}
 
-    // Cleanup GL resources on this thread's context
+// Worker-thread teardown: free GPU resources on the context that created them.
+void CanvasScene::releaseGpuResources() {
     surface_.reset();
-    threadGrContext_->flushAndSubmit();
+    snapshotImage_.reset();
+    snapshotImageValid_ = false;
+    snapshotValid_ = false;
+    if (grContext_) grContext_->flushAndSubmit();
+    if (gpuFBO_)    { glDeleteFramebuffers(1, &gpuFBO_); gpuFBO_ = 0; }
+    if (glTexture_) { glDeleteTextures(1, &glTexture_);  glTexture_ = 0; }
+    surfWidth_ = surfHeight_ = 0;
+    texWidth_ = texHeight_ = 0;
     grContext_ = nullptr;
-
-    SDL_GL_MakeCurrent(win, nullptr);
-    LOG_INFO("Canvas thread stopped");
 }
 
 void CanvasScene::prepareAndSignal() {
-    if (!threaded_) return;
-
-    // Only signal when canvas thread is idle
-    if (!worker_.isIdle()) return;
+    if (!threaded_ || !rasterThread_) return;
 
     // Check if element was removed from the DOM. Offscreen canvases (created
     // via document.createElement and never appended) read as orphaned from
-    // frame one even though they're being used as sprite atlases — defer the
-    // signal until the canvas has been seen attached at least once.
+    // frame one even though they're being used as sprite atlases — defer until
+    // the canvas has been seen attached at least once.
     if (detachedCb_) {
+        // The backing Element may have been freed (deferred-free / pointer
+        // reuse) since this scene was last touched. backingElementAlive() is a
+        // pointer-value liveness check that never dereferences it, so it is
+        // safe even on a dangling pointer — this is the guard for the
+        // use-after-free that crashed here on rapid canvas churn.
+        if (!backingElementAlive()) { onElementFinalized(); return; }
         bool orphaned = detachedCb_(detachedUd_);
         if (!orphaned) everAttached_ = true;
         if (orphaned && everAttached_) {
@@ -235,11 +183,9 @@ void CanvasScene::prepareAndSignal() {
     }
 
     // Query element layout position (main thread, DOM access). The displayed
-    // size on screen still comes from layout, but the bitmap (surface) size
-    // uses queryLayoutWidth/Height so that an intrinsic canvas.width/height
-    // attribute beats the layout box. Without this, the threaded layout
-    // pipeline can lag a frame behind a JS attribute change and we'd publish
-    // the previous asset's size to the canvas thread.
+    // size still comes from layout, but the bitmap (surface) size uses
+    // queryLayoutWidth/Height so an intrinsic canvas.width/height attribute
+    // beats the layout box.
     float layoutX = 0, layoutY = 0, layoutW = 0, layoutH = 0;
     if (layoutCb_) {
         layoutCb_(layoutUd_, layoutX, layoutY, layoutW, layoutH);
@@ -252,51 +198,105 @@ void CanvasScene::prepareAndSignal() {
     int canvasH = queryLayoutHeight();
     if (canvasW <= 0 || canvasH <= 0) return;
 
-    // Only signal if there's work to do (commands or resize)
+    // Only rasterize if there's work to do (commands or resize).
     bool needsResize = (canvasW != surfWidth_ || canvasH != surfHeight_);
     if (commands_.empty() && !needsResize) return;
 
-    // Swap commands to staged buffer (main thread only touches both when idle)
-    std::swap(commands_, stagedCommands_);
-
-    sharedCanvasWidth_.store(canvasW, std::memory_order_relaxed);
-    sharedCanvasHeight_.store(canvasH, std::memory_order_relaxed);
-    worker_.postRequest();
-}
-
-void CanvasScene::consumeFence() {
-    if (!threaded_) return;
-    if (worker_.isResultReady()) {
-        worker_.tryClaimResult();
-    } else if (worker_.isBusyOrRequested()) {
-        // Canvas thread still working — wait for it to finish, then claim.
-        worker_.waitUntilIdle();
-    }
+    // Swap commands to the staged buffer the worker replays, then rasterize
+    // synchronously on the shared worker (blocks until the fence is consumed).
+    if (!commands_.empty()) std::swap(commands_, stagedCommands_);
+    rasterThread_->render(this, canvasW, canvasH);
 }
 
 void CanvasScene::flushSync() {
-    if (!threaded_) {
+    if (!threaded_ || !rasterThread_) {
         flushCommands();
         return;
     }
+    int cw = queryLayoutWidth();
+    int ch = queryLayoutHeight();
+    if (cw <= 0 || ch <= 0) return;
+    // Swap any pending commands; render() also services a pending snapshot.
+    if (!commands_.empty()) std::swap(commands_, stagedCommands_);
+    rasterThread_->render(this, cw, ch);
+}
 
-    // Wait for any in-flight work, then claim its result.
-    worker_.waitUntilIdle();
+// ---------------------------------------------------------------------------
+// CanvasRasterThread — one persistent canvas-raster worker (shared by scenes)
+// ---------------------------------------------------------------------------
 
-    // Now idle — swap commands and signal. Also signal when a snapshot has
-    // been requested with no pending commands, so the worker can run the
-    // readback on its own GrContext rather than the main thread reading a
-    // surface owned by a different GL context.
-    bool snapshotPending = snapshotRequested_.load(std::memory_order_acquire);
-    if (!commands_.empty() || snapshotPending) {
-        int cw = queryLayoutWidth();
-        int ch = queryLayoutHeight();
-        if (!commands_.empty()) std::swap(commands_, stagedCommands_);
-        sharedCanvasWidth_.store(cw, std::memory_order_relaxed);
-        sharedCanvasHeight_.store(ch, std::memory_order_relaxed);
-        worker_.postRequest();
-        worker_.waitUntilIdle();
+void CanvasRasterThread::start(SDL_GLContext glCtx, SDL_Window* win) {
+    if (started_ || !glCtx || !win) return;
+    glCtx_ = glCtx;
+    started_ = true;
+    ready_.store(false, std::memory_order_relaxed);
+    thread_ = std::thread(&CanvasRasterThread::threadFunc, this, win);
+    // Block until the worker has MakeCurrent'd its context — the Windows/NVIDIA
+    // "no concurrent wgl*Context against the same HDC" serialization. Created
+    // once here, while quiescent, so it never overlaps the raster thread.
+    ready_.wait(false, std::memory_order_acquire);
+}
+
+void CanvasRasterThread::stop() {
+    if (!started_) return;
+    worker_.postShutdown();
+    if (thread_.joinable()) thread_.join();
+    if (glCtx_) {
+        SDL_GL_DestroyContext(glCtx_);
+        glCtx_ = nullptr;
     }
+    started_ = false;
+}
+
+void CanvasRasterThread::render(CanvasScene* scene, int w, int h) {
+    if (!started_ || !scene) return;
+    worker_.waitUntilIdle();             // ensure free (claims any prior fence)
+    job_ = scene; jobW_ = w; jobH_ = h; jobKind_ = JobKind::Render;
+    worker_.postRequest();
+    worker_.waitUntilIdle();             // wait for completion + claim the fence
+}
+
+void CanvasRasterThread::releaseScene(CanvasScene* scene) {
+    if (!started_ || !scene) return;
+    worker_.waitUntilIdle();
+    job_ = scene; jobKind_ = JobKind::Release;
+    worker_.postRequest();
+    worker_.waitUntilIdle();
+}
+
+void CanvasRasterThread::threadFunc(SDL_Window* win) {
+    SDL_GL_MakeCurrent(win, glCtx_);
+    // Signal the main thread that MakeCurrent is done before any further GL.
+    ready_.store(true, std::memory_order_release);
+    ready_.notify_one();
+
+    grContext_ = render::SkiaRenderer::createGrContext();
+    if (!grContext_) {
+        LOG_ERROR("Canvas raster thread: failed to create GrDirectContext");
+        return;
+    }
+    LOG_INFO("Canvas raster thread started");
+
+    while (worker_.waitForRequest()) {
+        worker_.markBusy();
+        CanvasScene* s = job_;
+        if (s) {
+            if (jobKind_ == JobKind::Render)
+                s->renderOnWorker(grContext_.get(), jobW_, jobH_);
+            else
+                s->releaseGpuResources();
+        }
+        // GL fence — guarantees GPU commands complete before the main thread
+        // samples the texture. FrameWorker handles publish + shutdown race.
+        GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+        worker_.publishResult(fence);
+    }
+
+    grContext_->flushAndSubmit();
+    grContext_.reset();
+    SDL_GL_MakeCurrent(win, nullptr);
+    LOG_INFO("Canvas raster thread stopped");
 }
 
 void CanvasScene::stageCommandsForRaster() {
@@ -1439,6 +1439,7 @@ void CanvasScene::rasterize(render::GLContext* gl) {
 
     // Check if element was removed from the DOM. See note in prepareAndSignal.
     if (detachedCb_) {
+        if (!backingElementAlive()) { onElementFinalized(); return; }
         bool orphaned = detachedCb_(detachedUd_);
         if (!orphaned) everAttached_ = true;
         if (orphaned && everAttached_) {

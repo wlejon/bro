@@ -41,7 +41,7 @@ namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::net { class NetService; }
 namespace bro::scene { class SceneGraph; class HtmlNode; }
-namespace bro::canvas { class CanvasScene; }
+namespace bro::canvas { class CanvasScene; class CanvasRasterThread; }
 
 namespace bro::platform {
     class Window;
@@ -467,11 +467,14 @@ private:
         bool active = true;
         JSContext* jsCtx = nullptr;
         std::unique_ptr<js::Timers> timers;
+        // 2D canvas contexts owned by this panel (inline-blit at layer break).
+        // Declared before `document` so it is destroyed *after* it: the panel's
+        // Elements (owned by `document`) fire CanvasScene::onElementFinalized via
+        // their on-destroy hook, which must run while the scenes are still alive.
+        std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
         std::unique_ptr<dom::Document> document;
         JSValue broPerfObj = JS_UNDEFINED;
         MouseDispatchState mouseState;  // per-doc click/dblclick tracking
-        // 2D canvas contexts owned by this panel (inline-blit at layer break).
-        std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
     };
 
     void initSystemPanels();
@@ -596,6 +599,17 @@ private:
     AppManifest manifest_;
     util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
+    // Detached scenes awaiting destruction. A scene whose element was removed is
+    // moved here (out of canvasScenes_) rather than freed immediately, because
+    // the raster worker may have recorded its raw pointer into the back buffer
+    // this frame — which becomes the front buffer next frame. They are scrubbed
+    // from both layer buffers and destroyed at frame top, once the worker is
+    // idle. See the drain in Engine::run().
+    std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenesDetached_;
+    // Shared canvas-raster worker (windowed): one persistent GL context + thread
+    // that rasterizes every threaded CanvasScene. Created once at run() start so
+    // canvas churn never creates/destroys GL contexts on the hot path.
+    std::unique_ptr<canvas::CanvasRasterThread> canvasRasterThread_;
 
     // WebGL contexts (owned by engine, associated with canvas elements)
     struct WebGLEntry {

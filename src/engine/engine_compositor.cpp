@@ -33,17 +33,14 @@ namespace bro::engine {
 void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     if (scene) {
         scene->init(gl_.get());
-        // In windowed GPU mode, each canvas gets its own thread with a shared
-        // GL context + GrDirectContext for parallel rasterization.
+        // Windowed GPU mode: bind to the shared canvas-raster worker. No GL
+        // context is created here — the worker's context was created once at
+        // run() start — so registering a canvas never races the raster thread.
+        // (If the worker isn't up yet, e.g. a scene created during app load,
+        // run()'s init binds it once the worker exists.)
         if (displayMode_ == DisplayMode::Windowed && window_) {
-            // Context creation on the main thread (macOS/AppKit requirement);
-            // startThread() blocks until the worker has MakeCurrent'd it, so
-            // the next createSharedContext call cannot overlap with a worker's
-            // wgl*Context call (Windows/NVIDIA requirement).
-            auto ctx = window_->createSharedContext();
-            if (ctx) {
-                scene->startThread(ctx, window_->getSDLWindow());
-            }
+            if (canvasRasterThread_)
+                scene->bindRasterThread(canvasRasterThread_.get());
         } else {
             // Headless / CPU fallback: use renderer's GrContext directly
             auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());

@@ -30,6 +30,8 @@ namespace bro::render { class GLContext; }
 
 namespace bro::canvas {
 
+class CanvasRasterThread;
+
 /// Deferred canvas command — recorded during JS, replayed during rasterize().
 struct CanvasCmd {
     enum Type : uint8_t {
@@ -74,6 +76,16 @@ public:
     using DetachedCallback = bool(*)(void* userdata);
     void setDetachedCallback(DetachedCallback cb, void* ud) { detachedCb_ = cb; detachedUd_ = ud; }
 
+    // Liveness predicate for the backing Element. The detached/layout
+    // callbacks above hold a raw dom::Element* as their userdata; that Element
+    // can be freed (deferred-free / pointer reuse) while this scene survives.
+    // This predicate answers "is the Element pointer still alive?" via a
+    // pointer-value lookup that never dereferences it (Document::isNodeLive),
+    // so the per-frame callbacks can be gated on it instead of trusting the
+    // raw pointer. liveUd_ is the owning Document.
+    using LiveCheckCallback = bool(*)(void* doc, void* node);
+    void setLiveCheck(LiveCheckCallback cb, void* doc) { liveCb_ = cb; liveUd_ = doc; }
+
     void init(render::GLContext* gl) { gl_ = gl; }
 
     /// Set Ganesh GPU context for GPU-accelerated canvas rendering.
@@ -90,31 +102,45 @@ public:
 
     // --- Threading (windowed GPU mode) ---
 
-    /// Start a dedicated canvas thread using the given shared GL context.
-    /// The context must be created on the main thread (via
-    /// Window::createSharedContext()) — macOS requires SDL_GL_CreateContext
-    /// on the main thread because the Cocoa backend calls AppKit during
-    /// context creation. startThread() blocks the caller until the worker
-    /// has completed SDL_GL_MakeCurrent on the given context, so subsequent
-    /// SDL_GL_CreateContext calls on the main thread never overlap with a
-    /// worker's wgl*Context calls (Windows/NVIDIA requirement).
-    void startThread(SDL_GLContext glCtx, SDL_Window* win);
+    /// Bind this scene to the engine's shared canvas-raster worker (one
+    /// persistent GL context + thread, created once). All GPU work for this
+    /// scene then runs on that worker. Passing nullptr leaves the scene in the
+    /// non-threaded (inline) path. This replaced the old one-thread-and-context-
+    /// per-canvas model, whose context create/destroy on the hot path raced the
+    /// raster thread's GL on shared contexts (a Windows/NVIDIA crash under
+    /// canvas churn).
+    void bindRasterThread(CanvasRasterThread* rt) {
+        rasterThread_ = rt;
+        threaded_ = (rt != nullptr);
+    }
 
-    /// Stop the canvas thread and destroy the GL context.
-    void stopThread();
-
-    /// Main thread: query layout, swap commands, signal canvas thread.
-    /// No-op if not threaded or no work to do.
+    /// Main thread: query layout, swap commands, and rasterize this scene on
+    /// the shared worker (synchronous: returns once the GPU fence is consumed).
+    /// No-op if not threaded or there is no work to do.
     void prepareAndSignal();
 
-    /// Main thread: if canvas thread has a texture ready, consume the GL fence.
-    void consumeFence();
+    /// Main thread: kept for API symmetry. prepareAndSignal already waits on the
+    /// worker, so there is nothing left to consume here.
+    void consumeFence() {}
 
-    /// Synchronously flush all pending commands (blocks until canvas thread idle).
-    /// Used by getImageData() which needs immediate surface access.
+    /// Synchronously flush all pending commands. Routes through the shared
+    /// worker when threaded; otherwise replays inline. Used by getImageData().
     void flushSync();
 
     bool isThreaded() const { return threaded_; }
+
+    // --- Shared-worker entry points (called ON the canvas-raster worker thread
+    //     by CanvasRasterThread; never call these from the main thread for a
+    //     threaded scene). ---
+
+    /// Worker thread: ensure the surface, replay staged commands, and (when a
+    /// snapshot was requested) refresh the host-side pixel snapshot. `grctx` is
+    /// the worker's GrContext; the scene pins its surface to it.
+    void renderOnWorker(GrDirectContext* grctx, int w, int h);
+
+    /// Worker thread: free this scene's GPU resources (SkSurface / FBO /
+    /// texture) on the context that created them, before the scene is destroyed.
+    void releaseGpuResources();
 
     render::Renderer* renderer() const { return renderer_; }
     int width() const { return queryLayoutWidth(); }
@@ -308,6 +334,10 @@ public:
     void clearDirty() { dirty_ = false; }
     void checkDetached() {
         if (!detachedCb_) return;
+        // The Element backing detachedUd_ may have been freed out from under us
+        // (deferred-free / pointer reuse). Finalize instead of dereferencing a
+        // dead pointer.
+        if (!backingElementAlive()) { onElementFinalized(); return; }
         bool orphaned = detachedCb_(detachedUd_);
         // An offscreen canvas (document.createElement('canvas') with no
         // appendChild) reads as orphaned from frame one, but the JS side is
@@ -330,10 +360,31 @@ public:
         layoutUd_ = nullptr;
     }
 
-private:
-    /// Canvas thread entry point.
-    void canvasThreadFunc(SDL_Window* win);
+    /// Trampoline suitable as dom::Element's canvas-scene on-destroy hook
+    /// (Element holds the scene as an opaque void*). Invoked from ~Element.
+    static void onBackingElementDestroyed(void* scene) {
+        if (scene) static_cast<CanvasScene*>(scene)->onElementFinalized();
+    }
 
+    /// The Element this scene's callbacks point at (the detached/layout
+    /// userdata), or null once the Element has been finalized. The engine uses
+    /// this to clear the Element's back-pointer before reclaiming the scene, so
+    /// a later ~Element never calls onElementFinalized() on freed memory.
+    void* backingElement() const { return detachedUd_; }
+
+    /// True if the backing Element pointer is safe to dereference — it is still
+    /// a live node owned-or-pending in its Document. Returns false once the
+    /// Element has been finalized (null userdata) or freed (not live). The
+    /// liveness check never dereferences the pointer, so this is safe to call
+    /// even if the Element was already destroyed. With no predicate set
+    /// (headless tests that never wire one), falls back to the null check.
+    bool backingElementAlive() const {
+        if (!detachedUd_) return false;
+        if (liveCb_ && !liveCb_(liveUd_, detachedUd_)) return false;
+        return true;
+    }
+
+private:
     /// Replay all deferred commands onto the Skia canvas.
     void flushCommands();
     /// Replay staged commands (canvas thread path).
@@ -358,6 +409,8 @@ private:
     void* layoutUd_ = nullptr;
     DetachedCallback detachedCb_ = nullptr;
     void* detachedUd_ = nullptr;
+    LiveCheckCallback liveCb_ = nullptr;
+    void* liveUd_ = nullptr;
     float viewportScrollY_ = 0;
     bool detached_ = false;
     bool everAttached_ = false;
@@ -440,22 +493,61 @@ private:
 
     // --- Canvas thread state ---
     bool threaded_ = false;
-    render::FrameWorker worker_;
-    // Snapshot fields the main thread publishes before signaling the worker.
-    // The FrameWorker state release/acquire pair orders these with respect
-    // to the worker reading them.
-    std::atomic<int> sharedCanvasWidth_{0};
-    std::atomic<int> sharedCanvasHeight_{0};
-    // Main thread sets before signaling; worker reads under acquire and
-    // refreshes snapshot_/snapshotImage_ on the worker thread (where the
-    // surface's GrContext lives). Cleared by the worker once the snapshot
-    // has been written.
+    // The engine's shared canvas-raster worker, or null when non-threaded
+    // (headless / CPU). Owned by the engine, outlives the scene.
+    CanvasRasterThread* rasterThread_ = nullptr;
+    // Main thread sets before a flushSync; the worker reads it and refreshes
+    // snapshot_/snapshotImage_ on the worker thread (where the surface's
+    // GrContext lives). Cleared by the worker once the snapshot is written.
     std::atomic<bool> snapshotRequested_{false};
-    std::atomic<bool> canvasReady_{false};
-    std::thread canvasThread_;
-    SDL_GLContext canvasGLContext_ = nullptr;
-    sk_sp<GrDirectContext> threadGrContext_;
     std::vector<CanvasCmd> stagedCommands_;
+};
+
+/// One persistent canvas-raster worker: its own GL context + GrDirectContext +
+/// OS thread, created once and reused for the engine's lifetime. CanvasScenes
+/// bind to it and are rasterized one at a time on its thread. This replaces the
+/// old one-GL-context-and-thread-per-canvas model, whose create/destroy on the
+/// hot path raced the raster thread's GL on shared contexts (a Windows/NVIDIA
+/// crash under canvas churn). One worker means canvas rasterization is
+/// serialized; a pool of these can be slotted in behind the same interface if
+/// cross-canvas parallelism is needed.
+class CanvasRasterThread {
+public:
+    /// Main thread: take ownership of an already-created shared GL context and
+    /// spin the worker. Blocks until the worker has SDL_GL_MakeCurrent'd it and
+    /// built its GrContext (the Windows/NVIDIA "no concurrent wgl*Context"
+    /// guarantee — the context is created once here, while quiescent).
+    void start(SDL_GLContext glCtx, SDL_Window* win);
+
+    /// Main thread: stop + join the worker and destroy its GL context. Every
+    /// scene bound to this worker must have been released (releaseScene) first.
+    void stop();
+
+    bool started() const { return started_; }
+
+    /// Main thread: rasterize `scene` (size w×h) on this worker, blocking until
+    /// the GPU fence is consumed.
+    void render(CanvasScene* scene, int w, int h);
+
+    /// Main thread: free a scene's GPU resources on this worker's context, where
+    /// they were created. Call before destroying the scene.
+    void releaseScene(CanvasScene* scene);
+
+private:
+    void threadFunc(SDL_Window* win);
+
+    enum class JobKind { Render, Release };
+    std::thread thread_;
+    SDL_GLContext glCtx_ = nullptr;
+    sk_sp<GrDirectContext> grContext_;
+    render::FrameWorker worker_;
+    std::atomic<bool> ready_{false};
+    bool started_ = false;
+    // Job published before postRequest; read by the worker under the
+    // FrameWorker state acquire.
+    CanvasScene* job_ = nullptr;
+    int jobW_ = 0, jobH_ = 0;
+    JobKind jobKind_ = JobKind::Render;
 };
 
 } // namespace bro::canvas
