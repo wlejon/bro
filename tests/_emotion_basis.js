@@ -17,9 +17,14 @@
 // shift (per-actor mean removed, so it's emotion not identity):
 //   full[e]  = mean_sc(style | e) - mean_sc(style | NEU)
 //   resid[e] = full[e] with the voice_basis attribute (prosody) axes projected
-//              out — the NOVEL timbre Tier-0's pitch/energy/rate can't reach.
-// resid is the Tier-1 primitive (full double-drives prosody via the predictor, so
-// it saturates — that's Tier-0's job). Applied as: style += alpha * resid[e].
+//              out — timbre only.
+// The lab applies `full` (style += alpha * full[e]): its prosody-correlated
+// components feed Kokoro's duration/F0/energy predictor, so the model renders
+// emotional PITCH/ENERGY/PACE *and* timbre in one move — the legible signal.
+// resid alone (prosody projected out) moves timbre but the predicted prosody
+// barely budges (measured: f0/energy within a few %), so it doesn't read as the
+// emotion; it's kept in the artifact for experiments. defaultAlpha is calibrated
+// against `full` (~0.55σ), since that's what's applied.
 //
 // Run:  node bro/tests/_emotion_basis.js
 
@@ -30,7 +35,8 @@ const DATA_DIR  = 'D:/projects/brosoundml-data/kokoro';
 const MODEL_DIR = 'D:/projects/brosoundml/weights/kokoro';
 const SOURCE = 'ESD (English, studio)';
 const LABELS = { ANG: 'angry', SAD: 'sad', HAP: 'happy', FEA: 'fearful', DIS: 'disgust', SUR: 'surprise', NEU: 'neutral' };
-const TARGET_SIGMA = 0.7;     // timbre-σ that intensity 1.0 aims for (per-emotion default alpha)
+const TARGET_SIGMA = 0.55;    // σ of the FULL emotion shift that the default intensity aims for
+                              // (full carries the audible prosody; calibrated per-emotion below)
 
 function writeBoth(name, data) {
   for (const dir of [DATA_DIR, MODEL_DIR]) {
@@ -95,10 +101,10 @@ for (const e of EMOS) {
   full[e] = round(f, 6); resid[e] = round(r, 6);
   sigmaFull[e]  = +sigmaOf(f).toFixed(4);
   sigmaResid[e] = +sigmaOf(r).toFixed(4);
-  defaultAlpha[e] = +Math.max(1, Math.min(5, TARGET_SIGMA / (sigmaResid[e] || 1))).toFixed(2);
+  defaultAlpha[e] = +Math.max(0.5, Math.min(4, TARGET_SIGMA / (sigmaFull[e] || 1))).toFixed(2);
 }
 
-console.log('\nemotion        full σ   resid σ   default α (resid)   clips');
+console.log('\nemotion        full σ   resid σ   default α (full)    clips');
 for (const e of EMOS)
   console.log('  ' + (LABEL[e] + ' (' + e + ')').padEnd(16) + String(sigmaFull[e]).padEnd(8) + String(sigmaResid[e]).padEnd(10) + String(defaultAlpha[e]).padEnd(18) + count[e]);
 
