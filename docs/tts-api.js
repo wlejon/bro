@@ -283,7 +283,8 @@ const cloned = qwen.synthesizeClone('Hello there.', 'weights/myvoice.wav', { lan
  * loading all of Qwen-Base. `dir` is the ~18 MB artifact (config.json +
  * model.safetensors) at brosoundml-data/qwen-tts/speaker-encoder; the x-vector it
  * produces is bit-identical to qwen.embedSpeaker on the full Base checkpoint.
- * Host-side (CPU), so there is no device option.
+ * Loading the artifact is cheap; the convolution stack that embedSpeaker runs
+ * lives on the default device (GPU when available), in FP32.
  *
  * @param {string} dir       - the speaker-encoder artifact directory.
  * @param {Object} [opts]
@@ -293,10 +294,16 @@ const cloned = qwen.synthesizeClone('Hello there.', 'weights/myvoice.wav', { lan
  * @returns {SpeakerEncoder|AsyncHandle} - handle with:
  *   enc.embedSpeaker(audio, opts?) → Float32Array(encDim)  (alias: enc.embed)
  *     audio: Float32Array of mono samples; opts.sampleRate (default 24000,
- *     resampled to 24 kHz as needed). Drop-in for qwen.embedSpeaker.
+ *     resampled to 24 kHz as needed). Drop-in for qwen.embedSpeaker. The ECAPA
+ *     forward is a multi-GFLOP conv stack: pass opts.onDone(embedding) to run it
+ *     on a background thread (returns an AsyncHandle), opts.onError(message) for
+ *     failures. Without onDone it runs synchronously and returns the Float32Array.
  *   enc.encDim, enc.sampleRate, enc.loaded — read-only props.
  */
 const enc = bro.tts.loadSpeakerEncoder('../brosoundml-data/qwen-tts/speaker-encoder');
+// async (recommended — keeps the UI responsive):
+enc.embedSpeaker(monoSamples, { sampleRate: 24000, onDone: (xvec) => {/* Float32Array(1024) */} });
+// sync:
 const xvec = enc.embedSpeaker(monoSamples, { sampleRate: 24000 });  // Float32Array(1024)
 
 /**

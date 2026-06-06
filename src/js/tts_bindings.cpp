@@ -736,11 +736,28 @@ static SpeakerEncoderWrapper* speakerSelf(JSContext* ctx, JSValueConst this_val)
     return qjsbind::unwrap<SpeakerEncoderWrapper>(ctx, this_val);
 }
 
+// State for an async embedSpeaker. Holds a strong ref to the SpeakerEncoder JS
+// object so the borrowed `w` pointer stays valid across the worker thread.
+struct SpkEmbedState {
+    SpeakerEncoderWrapper* w = nullptr;
+    JSValue            self       = JS_UNDEFINED;
+    std::vector<float> audio;
+    int                sampleRate = 24000;
+    std::vector<float> out;
+    JSValue onDone  = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasError = false;
+};
+
 // enc.embedSpeaker(audio, opts?) -> Float32Array(enc_dim)   (sync)
+//                                -> AsyncHandle             (async, if opts.onDone)
 //   Encode mono PCM to the ECAPA-TDNN speaker x-vector (1024-D) — the same
 //   enrollment QwenTts does, but from the standalone ~18 MB artifact. audio:
 //   Float32Array of mono samples; opts.sampleRate: input rate (default 24000,
 //   resampled to the encoder's 24 kHz as needed). Drop-in for qwen.embedSpeaker.
+//   The forward pass runs on the encoder's device (GPU when available). It is a
+//   multi-GFLOP convolution stack, so opts.onDone(embedding) / opts.onError(msg)
+//   run it on a background thread (firing on the JS thread) to keep the UI live.
 static JSValue js_speaker_embed(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv) {
     auto* w = speakerSelf(ctx, this_val);
@@ -752,16 +769,68 @@ static JSValue js_speaker_embed(JSContext* ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx,
             "embedSpeaker: audio must be a non-empty Float32Array");
     float sr = 24000.0f;
-    if (argc >= 2 && JS_IsObject(argv[1])) getNum(ctx, argv[1], "sampleRate", sr);
-    try {
-        brotensor::DeviceScope scope(brotensor::Device::CPU);  // host-side enroll
-        brosoundml::AudioBuffer ref;
-        ref.samples     = std::move(audio);
-        ref.sample_rate = static_cast<int>(sr);
-        return qjsbind::make_float32_array(ctx, w->enc->embed(ref));
-    } catch (const std::exception& e) {
-        return JS_ThrowInternalError(ctx, "embedSpeaker: %s", e.what());
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    if (haveOpts) getNum(ctx, argv[1], "sampleRate", sr);
+
+    JSValue onDone  = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onDone")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onDone);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onError);
+        try {
+            brosoundml::AudioBuffer ref;
+            ref.samples     = std::move(audio);
+            ref.sample_rate = static_cast<int>(sr);
+            return qjsbind::make_float32_array(ctx, w->enc->embed(ref));
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "embedSpeaker: %s", e.what());
+        }
     }
+
+    // ── Async path ──
+    auto st = std::make_shared<SpkEmbedState>();
+    st->w          = w;
+    st->self       = JS_DupValue(ctx, this_val);   // keep the encoder alive
+    st->audio      = std::move(audio);
+    st->sampleRate = static_cast<int>(sr);
+    st->onDone     = JS_DupValue(ctx, onDone);
+    st->hasError   = JS_IsFunction(ctx, onError);
+    st->onError    = st->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [st](const std::atomic<bool>&) {
+        brosoundml::AudioBuffer ref;
+        ref.samples     = std::move(st->audio);
+        ref.sample_rate = st->sampleRate;
+        st->out = st->w->enc->embed(ref);   // throws -> error
+    };
+    auto done = [st](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty()) {
+            if (st->hasError) {
+                JSValue e = JS_NewString(c, error.c_str());
+                JSValue r = JS_Call(c, st->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue arr = qjsbind::make_float32_array(c, st->out);
+            JSValue r = JS_Call(c, st->onDone, JS_UNDEFINED, 1, &arr);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+        }
+        JS_FreeValue(c, st->onDone);
+        if (st->hasError) JS_FreeValue(c, st->onError);
+        JS_FreeValue(c, st->self);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
 static void registerSpeakerEncoderClass(JSContext* ctx) {
@@ -1215,16 +1284,17 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Build + load a standalone speaker encoder from an artifact dir (config.json +
-// model.safetensors). Host-side; cheap (~18 MB). Throws on error.
+// model.safetensors). Cheap I/O (~18 MB); the encoder places its conv stack on
+// the default device (GPU when available) — so DON'T wrap this in a CPU
+// DeviceScope, or load()'s default_device() query would pin it to CPU. Throws
+// on error.
 static void buildSpeakerEncoder(const std::string& dir,
                                 std::unique_ptr<SpeakerEncoderWrapper>& w_out) {
     auto w = std::make_unique<SpeakerEncoderWrapper>();
     w->enc = std::make_unique<brosoundml::SpeakerEncoder>();
-    {
-        brotensor::DeviceScope scope(brotensor::Device::CPU);
-        w->enc->load(dir);
-    }
-    std::fprintf(stderr, "[INFO] [tts] speaker encoder loaded (host-side)\n");
+    w->enc->load(dir);
+    std::fprintf(stderr, "[INFO] [tts] speaker encoder loaded (device=%s)\n",
+                 brotensor::device_name(brotensor::default_device()));
     w_out = std::move(w);
 }
 
