@@ -275,6 +275,31 @@ const cloned = qwen.synthesizeClone('Hello there.', 'weights/myvoice.wav', { lan
 // qbase.variant === 'base'
 
 /**
+ * bro.tts.loadSpeakerEncoder(dir, opts?) → SpeakerEncoder   (sync)
+ *                                        → AsyncHandle       (async, if opts.onReady)
+ *
+ * The standalone ECAPA-TDNN speaker encoder on its own — for harvesting a voice's
+ * x-vector (e.g. to drive a style adapter like Kokoro's voice_bridge) WITHOUT
+ * loading all of Qwen-Base. `dir` is the ~18 MB artifact (config.json +
+ * model.safetensors) at brosoundml-data/qwen-tts/speaker-encoder; the x-vector it
+ * produces is bit-identical to qwen.embedSpeaker on the full Base checkpoint.
+ * Host-side (CPU), so there is no device option.
+ *
+ * @param {string} dir       - the speaker-encoder artifact directory.
+ * @param {Object} [opts]
+ * @param {function} [opts.onReady] - onReady(enc): when present, loads on a
+ *        background thread and returns an AsyncHandle instead of the encoder.
+ * @param {function} [opts.onError] - onError(message) on the JS thread.
+ * @returns {SpeakerEncoder|AsyncHandle} - handle with:
+ *   enc.embedSpeaker(audio, opts?) → Float32Array(encDim)  (alias: enc.embed)
+ *     audio: Float32Array of mono samples; opts.sampleRate (default 24000,
+ *     resampled to 24 kHz as needed). Drop-in for qwen.embedSpeaker.
+ *   enc.encDim, enc.sampleRate, enc.loaded — read-only props.
+ */
+const enc = bro.tts.loadSpeakerEncoder('../brosoundml-data/qwen-tts/speaker-encoder');
+const xvec = enc.embedSpeaker(monoSamples, { sampleRate: 24000 });  // Float32Array(1024)
+
+/**
  * bro.tts.synthesize(qwen, text, opts) → AsyncHandle   (non-blocking, cancellable)
  *
  * Runs the autoregressive loop on a background thread; the cancel flag is polled

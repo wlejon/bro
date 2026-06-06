@@ -17,6 +17,7 @@
 
 #include <brosoundml/kokoro.h>
 #include <brosoundml/qwen_tts.h>
+#include <brosoundml/speaker_encoder.h>
 #include <brosoundml/audio.h>
 
 #include <brosoundml/g2p/lexicon.h>
@@ -72,6 +73,13 @@ struct QwenTtsWrapper {
     std::unique_ptr<brosoundml::QwenTts> qwen;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
     std::atomic<bool> busy{false};
+};
+
+// Standalone ECAPA-TDNN speaker encoder (bro.tts.loadSpeakerEncoder) — the
+// voice-clone enrollment front-end on its own, without loading all of Qwen-Base.
+// Host-side CPU; no device state.
+struct SpeakerEncoderWrapper {
+    std::unique_ptr<brosoundml::SpeakerEncoder> enc;
 };
 
 static const char* qwenVariantName(brosoundml::QwenTtsVariant v) {
@@ -722,6 +730,49 @@ static JSValue js_qwen_speaker_dialect(JSContext* ctx, JSValueConst this_val,
     return JS_NewString(ctx, w->qwen->speaker_dialect(name).c_str());
 }
 
+// ─── SpeakerEncoder handle ──────────────────────────────────────────────────
+
+static SpeakerEncoderWrapper* speakerSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<SpeakerEncoderWrapper>(ctx, this_val);
+}
+
+// enc.embedSpeaker(audio, opts?) -> Float32Array(enc_dim)   (sync)
+//   Encode mono PCM to the ECAPA-TDNN speaker x-vector (1024-D) — the same
+//   enrollment QwenTts does, but from the standalone ~18 MB artifact. audio:
+//   Float32Array of mono samples; opts.sampleRate: input rate (default 24000,
+//   resampled to the encoder's 24 kHz as needed). Drop-in for qwen.embedSpeaker.
+static JSValue js_speaker_embed(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* w = speakerSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "embedSpeaker: not a SpeakerEncoder");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "embedSpeaker(audio, opts?): audio required");
+    std::vector<float> audio = qjsbind::read_float32_array(ctx, argv[0]);
+    if (audio.empty())
+        return JS_ThrowTypeError(ctx,
+            "embedSpeaker: audio must be a non-empty Float32Array");
+    float sr = 24000.0f;
+    if (argc >= 2 && JS_IsObject(argv[1])) getNum(ctx, argv[1], "sampleRate", sr);
+    try {
+        brotensor::DeviceScope scope(brotensor::Device::CPU);  // host-side enroll
+        brosoundml::AudioBuffer ref;
+        ref.samples     = std::move(audio);
+        ref.sample_rate = static_cast<int>(sr);
+        return qjsbind::make_float32_array(ctx, w->enc->embed(ref));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "embedSpeaker: %s", e.what());
+    }
+}
+
+static void registerSpeakerEncoderClass(JSContext* ctx) {
+    qjsbind::Class<SpeakerEncoderWrapper>(ctx, "SpeakerEncoder", qjsbind::NoGlobal)
+        .get("loaded",     [](SpeakerEncoderWrapper* w) { return w->enc->loaded(); })
+        .get("encDim",     [](SpeakerEncoderWrapper* w) { return w->enc->enc_dim(); })
+        .get("sampleRate", [](SpeakerEncoderWrapper* w) { return w->enc->sample_rate(); })
+        .method_raw("embedSpeaker", js_speaker_embed, 2)
+        .method_raw("embed",        js_speaker_embed, 2);
+}
+
 static void registerQwenClass(JSContext* ctx) {
     qjsbind::Class<QwenTtsWrapper>(ctx, "QwenTts", qjsbind::NoGlobal)
         .get("loaded",     [](QwenTtsWrapper* w) { return w->qwen->loaded(); })
@@ -1160,6 +1211,106 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SpeakerEncoder loader
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Build + load a standalone speaker encoder from an artifact dir (config.json +
+// model.safetensors). Host-side; cheap (~18 MB). Throws on error.
+static void buildSpeakerEncoder(const std::string& dir,
+                                std::unique_ptr<SpeakerEncoderWrapper>& w_out) {
+    auto w = std::make_unique<SpeakerEncoderWrapper>();
+    w->enc = std::make_unique<brosoundml::SpeakerEncoder>();
+    {
+        brotensor::DeviceScope scope(brotensor::Device::CPU);
+        w->enc->load(dir);
+    }
+    std::fprintf(stderr, "[INFO] [tts] speaker encoder loaded (host-side)\n");
+    w_out = std::move(w);
+}
+
+struct SpeakerEncoderLoadState {
+    std::string                          dir;
+    std::unique_ptr<SpeakerEncoderWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.tts.loadSpeakerEncoder(dir, opts?) -> SpeakerEncoder       (sync)
+//                                        -> AsyncHandle          (async, if opts.onReady)
+//   dir holds config.json + model.safetensors — the standalone ECAPA-TDNN
+//   speaker encoder (brosoundml-data/qwen-tts/speaker-encoder). Loading just this
+//   enrolls a voice-clone reference clip without pulling in all of Qwen-Base.
+//   The returned handle exposes embedSpeaker(audio, opts?) -> Float32Array. The
+//   encoder runs host-side, so there is no device option.
+//   opts.onReady(enc) / opts.onError(message): when onReady is a function the
+//   load runs on a background thread and these fire on the JS thread.
+static JSValue js_loadSpeakerEncoder(JSContext* ctx, JSValueConst,
+                                     int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx,
+            "loadSpeakerEncoder(dir, opts?): path required");
+
+    brotensor::init();
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<SpeakerEncoderWrapper> w;
+            buildSpeakerEncoder(dir, w);
+            return qjsbind::wrap<SpeakerEncoderWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadSpeakerEncoder: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<SpeakerEncoderLoadState>();
+    ls->dir      = dir;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildSpeakerEncoder(ls->dir, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadSpeakerEncoder failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<SpeakerEncoderWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Async synthesis — bro.tts.synthesize(kokoro, phonemeIds, voice, opts)
 //                   bro.tts.synthesize(qwen, text, opts)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1404,6 +1555,7 @@ void installTtsBindings(JSContext* ctx) {
     registerVoiceClass(ctx);
     registerKokoroClass(ctx);
     registerQwenClass(ctx);
+    registerSpeakerEncoderClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -1420,6 +1572,8 @@ void installTtsBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 2));
     JS_SetPropertyStr(ctx, tts, "loadQwen",
         JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
+    JS_SetPropertyStr(ctx, tts, "loadSpeakerEncoder",
+        JS_NewCFunction(ctx, js_loadSpeakerEncoder, "loadSpeakerEncoder", 2));
     JS_SetPropertyStr(ctx, tts, "phonemize",
         JS_NewCFunction(ctx, js_phonemize, "phonemize", 2));
     JS_SetPropertyStr(ctx, tts, "setAssetRoot",

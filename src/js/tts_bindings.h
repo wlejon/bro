@@ -13,6 +13,9 @@ namespace bro::js {
 //   QwenTts via bro.tts.loadQwen(modelDir) — Qwen3-TTS, the 12 Hz
 //     multi-codebook model. Text-driven end-to-end (no phoneme frontend, no
 //     voice pack); preset CustomVoice speakers via opts.speaker.
+//   SpeakerEncoder via bro.tts.loadSpeakerEncoder(dir) — the standalone
+//     ECAPA-TDNN x-vector extractor (~18 MB artifact). embedSpeaker(audio)
+//     enrolls a voice-clone reference without loading all of Qwen-Base.
 //
 // Kokoro takes already-tokenized phoneme ids. A G2P frontend is wired in via
 // bro.tts.phonemize(text) (brosoundml's in-tree English Phonemizer) and via
