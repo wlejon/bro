@@ -386,6 +386,7 @@ static JSValue js_kokoro_synthesize(JSContext* ctx, JSValueConst this_val,
         getNum(ctx, argv[2], "speed", speed);
 
     try {
+        brotensor::DeviceScope scope(w->device);   // ops create tensors on the model's device
         std::vector<int32_t> pred_dur;
         auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur);
         JSValue out = audioBufferToJs(ctx, buf);
@@ -445,6 +446,7 @@ static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
         getNum(ctx, argv[2], "speed", speed);
 
     try {
+        brotensor::DeviceScope scope(w->device);   // ops create tensors on the model's device
         std::vector<int32_t> pred_dur;
         brosoundml::KokoroTrace tr;
         auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur, {}, &tr);
@@ -498,6 +500,7 @@ static JSValue js_kokoro_decodeFrom(JSContext* ctx, JSValueConst this_val,
     }
 
     try {
+        brotensor::DeviceScope scope(w->device);   // ops create tensors on the model's device
         brosoundml::KokoroTrace tr;
         auto buf = w->kokoro->decode_from(vw->voice, nph, asr, total, F0, N, {},
                                           want_trace ? &tr : nullptr);
