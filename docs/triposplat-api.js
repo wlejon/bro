@@ -20,10 +20,12 @@
 // run generate() inside a Worker to keep the UI responsive — the binding is
 // installed in the worker context too.
 //
-// NOTE: the upstream BiRefNet background-removal preprocessor is not yet ported,
-// so the best results come from an image whose subject is already isolated on a
-// (near-)black background; the built-in preprocessor only cover-fits to 1024²
-// and composites the alpha matte over black.
+// Background removal: pass the optional `birefnet` checkpoint to load() and the
+// upstream BiRefNet (Swin-L + ASPP-deformable) matte is predicted per image and
+// used to isolate the subject before the cover-fit / composite-over-black step.
+// Without it, the preprocessor only cover-fits to 1024² and composites the
+// image's own alpha over black — so give a pre-masked / foreground-on-black
+// image for the best result.
 
 // -----------------------------------------------------------------------------
 // bro.triposplat
@@ -42,6 +44,9 @@ bro.triposplat.init = function () {};
  * @param {string} paths.vae      Flux.2 VAE safetensors (brodiffusion weights).
  * @param {string} paths.flow     flow-DiT safetensors (brodiffusion weights).
  * @param {string} paths.decoder  octree-decoder safetensors (brodiffusion weights).
+ * @param {string} [paths.birefnet] Optional BiRefNet bg-removal safetensors
+ *        (brovisionml weights). When given, generate() replaces the input alpha
+ *        with BiRefNet's predicted matte before compositing.
  * @param {string} [paths.device] "cuda" | "metal" | "cpu". Default: best available.
  * @returns {TripoSplatPipeline}
  */

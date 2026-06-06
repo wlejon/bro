@@ -16,6 +16,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include <brovisionml/dinov3.h>
+#include <brovisionml/birefnet.h>
 
 #include <brodiffusion/triposplat/vae_encoder.h>
 #include <brodiffusion/triposplat/flow_model.h>
@@ -45,6 +46,7 @@ namespace bt  = ::brotensor;
 namespace st  = ::brotensor::safetensors;
 namespace tsp = ::brodiffusion::triposplat;
 namespace dv3 = ::brovisionml::dinov3;
+namespace brn = ::brovisionml::birefnet;
 
 // ─── TU-local helpers (static: avoids the cross-TU ODR clash that bites helper
 //     functions with external linkage in bro::js) ──────────────────────────────
@@ -201,6 +203,7 @@ struct TripoSplatWrapper {
     std::unique_ptr<tsp::Flux2VaeEncoder>       vae;
     std::unique_ptr<tsp::FlowDiT>               flow;
     std::unique_ptr<tsp::OctreeGaussianDecoder> decoder;
+    std::unique_ptr<brn::BiRefNet>              rmbg;   // optional bg-removal
     bt::Device device = bt::Device::CPU;
 };
 
@@ -231,6 +234,24 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     std::string err;
     if (!tsReadImage(ctx, argv[0], rgba, iw, ih, err))
         return JS_ThrowTypeError(ctx, "triposplat: %s", err.c_str());
+    // Optional BiRefNet bg-removal: replace the image alpha with the predicted
+    // matte so the composite-over-black isolates the subject.
+    if (w->rmbg) {
+        try {
+            std::vector<float> rgb(static_cast<std::size_t>(iw) * ih * 3);
+            for (std::size_t i = 0; i < static_cast<std::size_t>(iw) * ih; ++i) {
+                rgb[i * 3 + 0] = rgba[i * 4 + 0];
+                rgb[i * 3 + 1] = rgba[i * 4 + 1];
+                rgb[i * 3 + 2] = rgba[i * 4 + 2];
+            }
+            brn::Matte m = w->rmbg->removeBackground(rgb.data(), iw, ih, /*rgbIs255=*/true);
+            for (std::size_t i = 0; i < m.alpha.size(); ++i)
+                rgba[i * 4 + 3] = static_cast<std::uint8_t>(
+                    std::min(std::max(m.alpha[i], 0.0f), 1.0f) * 255.0f + 0.5f);
+        } catch (const std::exception& e) {
+            return JS_ThrowTypeError(ctx, "triposplat: birefnet: %s", e.what());
+        }
+    }
     std::vector<float> rgb01;
     tsPreprocess(rgba, iw, ih, rgb01);
 
@@ -380,6 +401,16 @@ JSValue tsLoad(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 
         w->decoder = std::make_unique<tsp::OctreeGaussianDecoder>();
         { st::File f = st::File::open(p_dec); w->decoder->load_weights(f); }
+
+        // Optional BiRefNet background removal (preprocessor). When given, the
+        // input image's alpha is replaced by BiRefNet's predicted matte before
+        // the cover-fit / composite-over-black step.
+        std::string p_rmbg;
+        if (tsGetStr(ctx, argv[0], "birefnet", p_rmbg) && !p_rmbg.empty()) {
+            w->rmbg = std::make_unique<brn::BiRefNet>();
+            w->rmbg->load(p_rmbg);
+            w->rmbg->to(device);
+        }
 
         return qjsbind::wrap<TripoSplatWrapper>(ctx, w.release());
     } catch (const std::exception& e) {
